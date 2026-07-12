@@ -2,6 +2,8 @@
 
 Status: **Backend extracted and verified working.** Android/desktop-packaging build not yet run (no toolchain invoked in this pass — see "Unresolved issues").
 
+> **Update (Phase 2B — Retail Extraction Completion and Parity Hardening):** every item this report originally flagged as "Deferred / not yet located" or "Unresolved" for import/export, localization, and Windows packaging has since been closed. See `docs/migration/retail-phase-2b-validation-report.md` for what was done, `docs/migration/retail-parity-matrix.md` for the area-by-area final status, and `docs/build/retail-windows-build-report.md` for the real PyInstaller build (one bug found and fixed: static-asset 404s under `sys.frozen`, root-caused to `Path(__file__)` being unreliable inside a PyInstaller archive). Test total after Phase 2B: **116/116 passing** (this report's original 73 + 25 new import/export + 18 new localization). The remaining open items from Phase 2 below are historical context for what Phase 2B started from — read the Phase 2B validation report for current status before acting on anything marked "not yet located" or "deferred" here.
+
 ## Result summary
 
 `products/retail/` is now an independently runnable Flask backend + frontend for Aura Retail, requiring only `commercial_runtime/` from the rest of `aura-fullsuits` (no dependency on Action Aura Enterprise's `core/`, `api/`, or `database/` packages). All 73 ported tests pass against it (26 pricing/dashboard + 47 security), run from a clean venv with only `requirements/development.txt` installed.

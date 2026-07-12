@@ -23,8 +23,9 @@ venv/
 
 # Node / web tooling (owner dashboard frontend)
 node_modules/
-dist/
-build/
+/dist/
+/build/
+.venv_test/
 
 # Android
 android/.gradle/
