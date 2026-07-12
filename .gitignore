@@ -1,0 +1,45 @@
+# Environments / secrets
+.env
+*.local.env
+android/keystore.properties
+android/local.properties
+*.jks
+*.keystore
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Databases (dev artifacts — never ship real customer data)
+*.db
+*.sqlite
+*.sqlite3
+!products/*/database/schema.py
+!products/*/database/seed.py
+
+# Node / web tooling (owner dashboard frontend)
+node_modules/
+dist/
+build/
+
+# Android
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+android/.idea/
+*.iml
+android/.cxx/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log

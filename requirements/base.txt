@@ -1,0 +1,11 @@
+# Shared by Retail and Clinic product backends.
+# Curated from Action Aura Enterprise's requirements.txt — see docs/migration/dependency-map.md §1.
+# Deliberately excludes: flask-socketio/python-socketio/simple-websocket/eventlet, pandas
+# (not confirmed used by Retail/Clinic core flows; re-add only if a real dependency surfaces).
+flask==3.0.3
+werkzeug==3.0.3
+flask-cors==4.0.1
+flask-login==0.6.3
+openpyxl==3.1.2
+waitress==3.0.0
+requests==2.32.3

@@ -1,0 +1,8 @@
+[project]
+name = "aura-fullsuits"
+version = "0.1.0"
+description = "Aura Retail, Aura Clinic, and the Aura Owner Control Center — extracted commercial suite."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["products/retail/tests", "products/clinic/tests", "tests", "owner_control_center/tests"]

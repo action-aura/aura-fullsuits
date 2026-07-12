@@ -1,0 +1,3 @@
+-r base.txt
+# No additional third-party dependencies identified for Retail beyond base.txt
+# (Retail uses stdlib sqlite3, no ORM in the source implementation).
