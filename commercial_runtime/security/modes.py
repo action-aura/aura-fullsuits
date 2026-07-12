@@ -44,3 +44,14 @@ def retail_demo_mode_enabled() -> bool:
     non-frozen process with AURA_RETAIL_DEMO_MODE=1 explicitly set. Always
     False in a shipped exe/APK, no matter the environment."""
     return (not IS_FROZEN) and os.environ.get("AURA_RETAIL_DEMO_MODE") == "1"
+
+
+def clinic_demo_mode_enabled() -> bool:
+    """Gates the clinic demo-seed/demo-wipe routes. Phase 3 addition -- the
+    source clinic_api.py's demo-wipe/demo-seed routes had NO gate at all
+    (any authenticated clinic user could wipe every patient/appointment/
+    invoice for their company with a single unconfirmed request); this
+    mirrors the retail_demo_mode_enabled() pattern that already protects the
+    same class of route for Retail. True only for a non-frozen process with
+    AURA_CLINIC_DEMO_MODE=1 explicitly set. Always False in a shipped exe/APK."""
+    return (not IS_FROZEN) and os.environ.get("AURA_CLINIC_DEMO_MODE") == "1"
