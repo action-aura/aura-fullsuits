@@ -49,6 +49,10 @@ All routes above additionally require `@mt_login_required` (valid session) and `
 6. A disabled user (`status='disabled'`) is rejected by `mt_login_required` (checks `status` on every request, not just at login) — verified.
 7. Cross-tenant isolation: a second clinic installation session cannot see or affect another company's patients/appointments (`company_id` scoping verified end-to-end, including on the newly-hardened demo-wipe).
 
+## IDOR class of bug found by automated security review — fixed, not just documented
+
+Unlike item 5 (a genuine gap left open), this one was fixed: seven create/link routes (`create_visit`, `add_note`, `add_followup`, `create_prescription`, `create_invoice`, `create_lab_expense`, `create_appointment`/`update_appointment`, and `record_payment`) accepted a foreign-key id (`patient_id`/`visit_id`/`invoice_id`/`doctor_id`) from the request without verifying it belonged to the caller's own company — carried forward verbatim from source, where it also exists. `record_payment` was the worst case: its SELECT and UPDATE against `clinic_invoices` had no `company_id` filter at all, so any authenticated user of any company could mark another company's invoice paid. Fixed with a new `_owned()` ownership-check helper called at the top of every affected route (404 if the referenced id isn't the caller's). 9 regression tests added. See `docs/migration/clinic-source-inventory.md` item 5c and `docs/migration/clinic-extraction-report.md` for the full account.
+
 ## Item 5 above — flagged, not silently fixed
 
 Wiring `session_version` comparison into the login-check decorators would change authentication behavior for *both* Retail and Clinic (it lives in the shared `commercial_runtime/identity/mt_auth.py`), is not something the source implementation actually does today (so "preserve source behavior" argues against silently adding it), and is exactly the kind of cross-product behavioral change the task's Retail-freeze rule is meant to prevent from happening as a side effect of Clinic work. Documented here as a real, verified gap for a future security-hardening phase — not fixed in Phase 3.

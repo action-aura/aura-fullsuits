@@ -2,11 +2,17 @@
 Aura Clinic -- Clinic & Patient Management API.
 
 Extracted verbatim (business logic unchanged) from Action Aura Enterprise's
-api/subsystems/clinic_api.py -- see docs/migration/clinic-extraction-report.md.
-Three documented corrective fixes applied in Phase 3 (each with a test):
-stack-trace-to-client removed from create_patient's error response,
-prescriptions.items_json now written as real JSON, and the internal
-event-bus URL is configurable (off by default) instead of hardcoded.
+api/subsystems/clinic_api.py -- see docs/migration/clinic-extraction-report.md
+for the full list of documented corrective fixes applied in Phase 3 (each
+with a test): stack-trace-to-client removed from create_patient's error
+response; prescriptions.items_json now written as real JSON; the internal
+event-bus URL is configurable (off by default) instead of hardcoded;
+demo-wipe/demo-seed hardened (mode gate + admin-only + confirmation token +
+full company scoping, closing a cross-tenant data-destruction gap);
+create_patient/create_appointment validate their required fields upfront
+(closing a connection-leak-on-crash bug); and a cross-tenant IDOR
+(insecure direct object reference) across 8 routes was fixed via the
+_owned() helper below (see its docstring).
 """
 import os
 import time, requests
@@ -50,6 +56,28 @@ def _emit(event, payload):
             'company_id': _cid(), 'payload': payload
         }, timeout=1)
     except Exception: pass
+
+def _owned(conn, table, row_id, cid):
+    """Phase 3 security fix: verifies a foreign-key id (patient_id, visit_id,
+    invoice_id, ...) supplied by the caller actually belongs to the caller's
+    own company before it is used to create or link a new record.
+
+    The source implementation inserted these foreign ids directly with no
+    ownership check at all -- e.g. add_note(vid) tagged the new note with
+    the CALLER's company_id but never verified `vid` (the visit) belonged
+    to that company, so any authenticated Company A user could attach a
+    clinical note, follow-up, prescription, invoice, or payment to a
+    Company B patient/visit/invoice simply by guessing or incrementing an
+    integer id. record_payment was the worst case: it read AND wrote a
+    `clinic_invoices` row with no `company_id` filter at all on either
+    statement, so any authenticated user of ANY company could mark ANY
+    other company's invoice paid. Found by an automated security review of
+    this extraction's commits, not by the original test suite -- see
+    docs/migration/clinic-extraction-report.md and
+    docs/security/clinic-rbac-matrix.md."""
+    if row_id is None:
+        return False
+    return conn.execute(f"SELECT 1 FROM {table} WHERE id=? AND company_id=?", (row_id, cid)).fetchone() is not None
 
 # ─── Dashboard ────────────────────────────────────────────────────────────────
 
@@ -282,6 +310,14 @@ def create_appointment():
     if not data.get('patient_id'):
         return jsonify({'status': 'error', 'message': 'patient_id is required'}), 400
     conn = get_clinic_conn()
+    # Phase 3 security fix: verify patient_id/doctor_id belong to this
+    # company -- see _owned()'s docstring.
+    if not _owned(conn, 'clinic_patients', data.get('patient_id'), cid):
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Patient not found'}), 404
+    if data.get('doctor_id') is not None and not _owned(conn, 'clinic_doctors', data.get('doctor_id'), cid):
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Doctor not found'}), 404
     # Double-booking check
     clash = conn.execute("""
         SELECT id FROM clinic_appointments
@@ -311,6 +347,11 @@ def update_appointment(aid):
     cid = _cid()
     conn = get_clinic_conn()
     fields = {k: v for k, v in data.items() if k in ['status','appointment_dt','doctor_id','reason','notes']}
+    # Phase 3 security fix: a reassigned doctor_id must belong to this
+    # company -- see _owned()'s docstring.
+    if fields.get('doctor_id') is not None and not _owned(conn, 'clinic_doctors', fields.get('doctor_id'), cid):
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Doctor not found'}), 404
     if fields:
         sets = ', '.join(f'{k}=?' for k in fields)
         conn.execute(f'UPDATE clinic_appointments SET {sets} WHERE id=? AND company_id=?',
@@ -341,6 +382,18 @@ def create_visit():
     data = request.json or {}
     cid = _cid()
     conn = get_clinic_conn()
+    # Phase 3 security fix: verify every referenced foreign id belongs to
+    # this company before linking a new visit to it -- see _owned()'s
+    # docstring for the vulnerability this closes.
+    if not _owned(conn, 'clinic_patients', data.get('patient_id'), cid):
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Patient not found'}), 404
+    if data.get('doctor_id') is not None and not _owned(conn, 'clinic_doctors', data.get('doctor_id'), cid):
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Doctor not found'}), 404
+    if data.get('appointment_id') is not None and not _owned(conn, 'clinic_appointments', data.get('appointment_id'), cid):
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Appointment not found'}), 404
     cur = conn.cursor()
     cur.execute("""INSERT INTO clinic_visits
         (company_id,patient_id,doctor_id,appointment_id,status,created_by)
@@ -400,6 +453,11 @@ def add_note(vid):
     data = request.json or {}
     cid = _cid()
     conn = get_clinic_conn()
+    # Phase 3 security fix: `vid` came straight from the URL with no check
+    # that the visit belongs to this company -- see _owned()'s docstring.
+    if not _owned(conn, 'clinic_visits', vid, cid):
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Visit not found'}), 404
     cur = conn.cursor()
     cur.execute("INSERT INTO clinic_visit_notes (visit_id,company_id,note_type,content,created_by) VALUES (?,?,?,?,?)",
                 (vid, cid, data.get('note_type', 'general'), data.get('content', ''), _uid()))
@@ -433,6 +491,14 @@ def add_followup(pid):
     data = request.json or {}
     cid = _cid()
     conn = get_clinic_conn()
+    # Phase 3 security fix: `pid` came straight from the URL with no check
+    # that the patient belongs to this company -- see _owned()'s docstring.
+    if not _owned(conn, 'clinic_patients', pid, cid):
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Patient not found'}), 404
+    if data.get('visit_id') is not None and not _owned(conn, 'clinic_visits', data.get('visit_id'), cid):
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Visit not found'}), 404
     cur = conn.cursor()
     cur.execute("""INSERT INTO clinic_followups
         (company_id,patient_id,visit_id,followup_date,weight,blood_pressure,temperature,progress,notes,created_by)
@@ -558,6 +624,11 @@ def create_lab_expense():
     data = request.json or {}
     cid = _cid()
     conn = get_clinic_conn()
+    # Phase 3 security fix: patient_id is optional here, but when provided
+    # it must belong to this company -- see _owned()'s docstring.
+    if data.get('patient_id') is not None and not _owned(conn, 'clinic_patients', data.get('patient_id'), cid):
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Patient not found'}), 404
     cur = conn.cursor()
     amount = float(data.get('amount') or 0)
     exp_date = data.get('expense_date') or datetime.now().strftime('%Y-%m-%d')
@@ -606,6 +677,17 @@ def create_invoice():
     data = request.json or {}
     cid = _cid()
     conn = get_clinic_conn()
+    # Phase 3 security fix: patient_id/visit_id/prescription_id are optional
+    # here, but when provided they must belong to this company -- see
+    # _owned()'s docstring.
+    for _field, _table, _label in (
+        ('patient_id', 'clinic_patients', 'Patient'),
+        ('visit_id', 'clinic_visits', 'Visit'),
+        ('prescription_id', 'clinic_prescriptions', 'Prescription'),
+    ):
+        if data.get(_field) is not None and not _owned(conn, _table, data.get(_field), cid):
+            conn.close()
+            return jsonify({'status': 'error', 'message': f'{_label} not found'}), 404
     cur = conn.cursor()
     # Unique even when several invoices are created within the same second
     # (invoice_number is UNIQUE — a bare int(time.time()) would collide).
@@ -704,14 +786,22 @@ def record_payment():
     data = request.json or {}
     cid = _cid()
     conn = get_clinic_conn()
+    # Phase 3 security fix: this was the worst instance of the tenant
+    # -isolation gap described in _owned()'s docstring -- the SELECT and
+    # UPDATE below had NO company_id filter at all, so any authenticated
+    # user of ANY company could read another company's invoice total and
+    # mark it paid. Now verified upfront.
+    if not _owned(conn, 'clinic_invoices', data.get('invoice_id'), cid):
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Invoice not found'}), 404
     cur = conn.cursor()
     cur.execute("INSERT INTO clinic_payments (company_id,invoice_id,amount_paid,method,reference,created_by) VALUES (?,?,?,?,?,?)",
                 (cid, data.get('invoice_id'), data.get('amount'), data.get('method','cash'), data.get('reference',''), _uid()))
     pay_id = cur.lastrowid
-    inv = conn.execute("SELECT total FROM clinic_invoices WHERE id=?", (data.get('invoice_id'),)).fetchone()
-    paid = conn.execute("SELECT COALESCE(SUM(amount_paid),0) FROM clinic_payments WHERE invoice_id=?", (data.get('invoice_id'),)).fetchone()[0]
+    inv = conn.execute("SELECT total FROM clinic_invoices WHERE id=? AND company_id=?", (data.get('invoice_id'), cid)).fetchone()
+    paid = conn.execute("SELECT COALESCE(SUM(amount_paid),0) FROM clinic_payments WHERE invoice_id=? AND company_id=?", (data.get('invoice_id'), cid)).fetchone()[0]
     status = 'paid' if inv and paid >= inv['total'] else 'partial'
-    conn.execute("UPDATE clinic_invoices SET status=?, amount_paid=? WHERE id=?", (status, paid, data.get('invoice_id')))
+    conn.execute("UPDATE clinic_invoices SET status=?, amount_paid=? WHERE id=? AND company_id=?", (status, paid, data.get('invoice_id'), cid))
     _audit(conn, 'PaymentRecorded', 'payment', pay_id)
     conn.commit(); conn.close()
     _emit('ClinicPaymentReceived', {'payment_id': pay_id, 'amount': data.get('amount')})
@@ -727,6 +817,14 @@ def create_prescription():
     data = request.json or {}
     cid = _cid()
     conn = get_clinic_conn()
+    # Phase 3 security fix: verify patient_id (required) and visit_id
+    # (optional) belong to this company -- see _owned()'s docstring.
+    if not _owned(conn, 'clinic_patients', data.get('patient_id'), cid):
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Patient not found'}), 404
+    if data.get('visit_id') is not None and not _owned(conn, 'clinic_visits', data.get('visit_id'), cid):
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Visit not found'}), 404
     cur = conn.cursor()
     # Phase 3 fix: the source wrote str(list) (Python repr, e.g. single-quoted)
     # instead of real JSON -- the frontend already has to work around this

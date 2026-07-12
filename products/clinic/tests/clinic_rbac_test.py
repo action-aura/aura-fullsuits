@@ -272,6 +272,110 @@ def test_cross_company_patient_isolation():
     assert 'Company A Patient' not in names_b
 
 
+# ── IDOR regression: found by an automated security review of the initial
+# extraction commits, not by the original test suite. Every create/link
+# route that accepts a foreign-key id (patient_id/visit_id/invoice_id/
+# doctor_id) from the request must verify that id belongs to the caller's
+# own company before using it -- see clinic_api.py's _owned() docstring. ──
+
+def test_cannot_create_visit_for_another_companys_patient():
+    admin_a, cid_a = _make_admin_client()
+    admin_b, cid_b = _make_admin_client()
+    p_b = admin_b.post('/api/sub/clinic/patients', json={'name': 'B Patient'}).get_json()['data']
+    r = admin_a.post('/api/sub/clinic/visits', json={'patient_id': p_b['id']})
+    assert r.status_code == 404
+
+
+def test_cannot_add_note_to_another_companys_visit():
+    admin_a, cid_a = _make_admin_client()
+    admin_b, cid_b = _make_admin_client()
+    doctor_b = _make_staff_client(admin_b, 'doctor')
+    p_b = admin_b.post('/api/sub/clinic/patients', json={'name': 'B Patient For Note'}).get_json()['data']
+    v_b = admin_b.post('/api/sub/clinic/visits', json={'patient_id': p_b['id']}).get_json()['data']
+
+    doctor_a = _make_staff_client(admin_a, 'doctor')
+    r = doctor_a.post(f'/api/sub/clinic/visits/{v_b["id"]}/notes', json={'content': 'attempted cross-tenant note'})
+    assert r.status_code == 404
+
+    # Confirm no note actually landed against Company B's visit.
+    detail = admin_b.get(f'/api/sub/clinic/visits/{v_b["id"]}').get_json()['data']
+    assert not any('attempted cross-tenant' in (n.get('content') or '') for n in detail['notes'])
+
+
+def test_cannot_add_followup_to_another_companys_patient():
+    admin_a, cid_a = _make_admin_client()
+    admin_b, cid_b = _make_admin_client()
+    p_b = admin_b.post('/api/sub/clinic/patients', json={'name': 'B Patient For Followup'}).get_json()['data']
+    r = admin_a.post(f'/api/sub/clinic/patients/{p_b["id"]}/followups', json={'progress': 'x'})
+    assert r.status_code == 404
+
+
+def test_cannot_create_prescription_for_another_companys_patient():
+    admin_a, cid_a = _make_admin_client()
+    admin_b, cid_b = _make_admin_client()
+    p_b = admin_b.post('/api/sub/clinic/patients', json={'name': 'B Patient For Rx'}).get_json()['data']
+    r = admin_a.post('/api/sub/clinic/prescriptions', json={'patient_id': p_b['id'], 'items': []})
+    assert r.status_code == 404
+
+
+def test_cannot_create_invoice_for_another_companys_patient():
+    admin_a, cid_a = _make_admin_client()
+    admin_b, cid_b = _make_admin_client()
+    p_b = admin_b.post('/api/sub/clinic/patients', json={'name': 'B Patient For Invoice'}).get_json()['data']
+    r = admin_a.post('/api/sub/clinic/invoices', json={'patient_id': p_b['id'], 'items': [{'qty': 1, 'unit_price': 10}]})
+    assert r.status_code == 404
+
+
+def test_cannot_record_payment_against_another_companys_invoice():
+    """Regression for the most severe finding: record_payment previously had
+    NO company_id filter on either its read or its write, so any
+    authenticated user of any company could mark another company's invoice
+    paid."""
+    admin_a, cid_a = _make_admin_client()
+    admin_b, cid_b = _make_admin_client()
+    p_b = admin_b.post('/api/sub/clinic/patients', json={'name': 'B Patient For Payment'}).get_json()['data']
+    inv_b = admin_b.post('/api/sub/clinic/invoices', json={
+        'patient_id': p_b['id'], 'items': [{'qty': 1, 'unit_price': 100}], 'tax_rate': 0,
+    }).get_json()['data']
+
+    r = admin_a.post('/api/sub/clinic/payments', json={'invoice_id': inv_b['id'], 'amount': 100})
+    assert r.status_code == 404
+
+    # Confirm Company B's invoice was NOT marked paid by the attacker.
+    detail = admin_b.get(f'/api/sub/clinic/invoices/{inv_b["id"]}').get_json()['data']
+    assert detail['invoice']['status'] == 'unpaid'
+    assert detail['payments'] == []
+
+
+def test_cannot_create_lab_expense_for_another_companys_patient():
+    admin_a, cid_a = _make_admin_client()
+    admin_b, cid_b = _make_admin_client()
+    p_b = admin_b.post('/api/sub/clinic/patients', json={'name': 'B Patient For Lab'}).get_json()['data']
+    r = admin_a.post('/api/sub/clinic/lab-expenses', json={'patient_id': p_b['id'], 'lab_name': 'X', 'test_name': 'Y', 'amount': 10})
+    assert r.status_code == 404
+
+
+def test_cannot_create_appointment_for_another_companys_patient():
+    admin_a, cid_a = _make_admin_client()
+    admin_b, cid_b = _make_admin_client()
+    p_b = admin_b.post('/api/sub/clinic/patients', json={'name': 'B Patient For Appt'}).get_json()['data']
+    r = admin_a.post('/api/sub/clinic/appointments', json={'patient_id': p_b['id'], 'appointment_dt': '2026-09-01 09:00'})
+    assert r.status_code == 404
+
+
+def test_cannot_reassign_appointment_to_another_companys_doctor():
+    admin_a, cid_a = _make_admin_client()
+    admin_b, cid_b = _make_admin_client()
+    doc_b = admin_b.post('/api/sub/clinic/doctors', json={'name': 'Dr. B'}).get_json()['data']
+    p_a = admin_a.post('/api/sub/clinic/patients', json={'name': 'A Patient For Reassign'}).get_json()['data']
+    appt_a = admin_a.post('/api/sub/clinic/appointments', json={
+        'patient_id': p_a['id'], 'appointment_dt': '2026-09-02 09:00',
+    }).get_json()['data']
+
+    r = admin_a.patch(f'/api/sub/clinic/appointments/{appt_a["id"]}', json={'doctor_id': doc_b['id']})
+    assert r.status_code == 404
+
+
 def test_demo_wipe_scoped_to_own_company_only():
     """Phase 3 hardening regression: confirms the fixed demo-wipe no longer
     deletes other tenants' data (see clinic-source-inventory.md defect #5)."""

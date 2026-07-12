@@ -50,6 +50,14 @@ Additional checks performed (not in the original 13, done for extra confidence, 
 
 Same posture as Retail's Phase 2B build report: no custom icon, no code signing, no Inno Setup installer wrapper — this validates the raw PyInstaller output only. `pandas`/`eventlet`/`flask_socketio`/`python_socketio` explicitly excluded (not needed by Clinic).
 
+## Post-fix rebuild (IDOR security fix)
+
+A cross-tenant IDOR vulnerability across 8 routes (see `docs/migration/clinic-extraction-report.md` item 6) was found by an automated security review **after** the build and smoke test above had already passed. The package was rebuilt from the fixed source and re-verified:
+
+- Build: succeeded again, no new issues.
+- Re-verification: onboarded a Company A admin, created a patient, confirmed the basic patient/dashboard workflow still functions correctly post-fix. Then directly provisioned a second (Company B) admin account in the packaged install's own `registry.db` and, as Company B, attempted `POST /api/sub/clinic/visits` referencing Company A's patient id — **received 404 "Patient not found"**, confirming the fix holds in the actual packaged executable, not just in the test suite.
+- The dist/build artifacts from this rebuild were removed after verification (not committed — matches the "no build caches" rule).
+
 ## Conclusion
 
 The Windows package **builds and runs successfully**, with a full clean-install-through-restart lifecycle verified end to end, including the onboarding wizard (which Retail's Phase 2B smoke test did not exercise, since Retail's onboarding surface doesn't exist yet — see clinic-extraction-report.md). This is a raw PyInstaller onedir build, not a signed installer.
