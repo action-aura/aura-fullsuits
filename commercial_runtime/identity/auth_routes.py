@@ -61,6 +61,35 @@ def logout():
     return jsonify({'success': True})
 
 
+@auth_bp.route('/api/auth/language', methods=['POST'])
+def set_language():
+    """Persist the logged-in user's UI language (en/ar) to their account.
+
+    Extracted from api/standalone_auth.py's `set_language` (the file whose
+    own docstring says it is "what the shipped Retail/Clinic standalone
+    products actually run") -- only this one route was ported; the rest of
+    that 698-line file (onboarding wizard, employee management) is a
+    separate, larger scope not covered by Phase 2B and is flagged in
+    docs/migration/retail-parity-matrix.md rather than silently dropped."""
+    from commercial_runtime.identity.registry_db import get_conn
+    data = request.get_json(silent=True) or {}
+    lang = data.get('language', 'en')
+    if lang not in ('en', 'ar'):
+        lang = 'en'
+    uid = session.get('mt_user_id')
+    if not uid:
+        # Pre-login: the client's localStorage already holds the choice.
+        return jsonify({'success': True, 'language': lang})
+    try:
+        conn = get_conn()
+        conn.execute("UPDATE users SET language=? WHERE id=?", (lang, uid))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    return jsonify({'success': True, 'language': lang})
+
+
 @auth_bp.route('/api/auth/active-modules', methods=['GET'])
 def get_active_modules():
     """Return the list of modules this installation is licensed for. In a
