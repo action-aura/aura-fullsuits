@@ -15,9 +15,20 @@ import sys
 from datetime import timedelta
 from pathlib import Path
 
-BACKEND_DIR = Path(__file__).resolve().parent
+# Path resolution must not rely on Path(__file__) alone: in a PyInstaller
+# build this module is compiled into the bundled archive (not collected as a
+# loose file), so __file__ does not reliably resolve to a real directory on
+# disk -- it broke static-file serving (frontend/locales/*, i18n.js all 404'd)
+# until this was caught by an actual packaged-exe smoke test. sys._MEIPASS
+# is PyInstaller's own answer to "where are my bundled files," and matches
+# the same frozen-detection pattern already used by config.py (BASE_DIR).
+if getattr(sys, 'frozen', False):
+    SUITE_ROOT = Path(sys._MEIPASS)
+    BACKEND_DIR = SUITE_ROOT / 'products' / 'retail' / 'backend'
+else:
+    BACKEND_DIR = Path(__file__).resolve().parent
+    SUITE_ROOT = BACKEND_DIR.parent.parent.parent
 PRODUCT_DIR = BACKEND_DIR.parent
-SUITE_ROOT = PRODUCT_DIR.parent.parent
 
 for _p in (str(SUITE_ROOT), str(BACKEND_DIR)):
     if _p not in sys.path:
@@ -61,9 +72,11 @@ from commercial_runtime.identity.auth_routes import auth_bp
 from commercial_runtime.identity.registry_db import init_registry_db
 from database.schema import init_retail
 from api.retail_api import retail_bp
+from api.import_api import import_bp
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(retail_bp)
+app.register_blueprint(import_bp)
 
 
 def init_app():
