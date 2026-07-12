@@ -4,14 +4,22 @@ Aura FullSuits -- multi-tenant registry database (trimmed).
 Owns the tables that back tenant identity, licensing, and audit for every
 product in this suite: `users` (multi-tenant accounts), `company_modules`
 (per-tenant product/module licensing), `user_permissions` (per-user subsystem
-access), `audit_logs` (append-oriented security/audit trail).
+access), `audit_logs` (append-oriented security/audit trail), `secure_links`
+(one-time employee-invite tokens), `company_settings` (locale/business
+fields written by onboarding).
 
 This is a deliberately trimmed extraction of Action Aura Enterprise's
 database/registry_db.py (which owns ~20 tables for the full platform --
 EIP module catalog, document flow, numbering sequences, custom fields, etc.
 that Retail/Clinic never touch). Only the tables actually read/written by
-commercial_runtime.identity.mt_auth and commercial_runtime.security.audit are
-kept here. See docs/migration/dependency-map.md §1.
+commercial_runtime.identity.{mt_auth,auth_routes} and
+commercial_runtime.security.audit are kept here. See
+docs/migration/dependency-map.md §1 and docs/migration/clinic-source-inventory.md.
+
+`secure_links` and `company_settings` were added in Phase 3 (Clinic) --
+additive only, does not change any existing table used by Retail. Retail's
+116-test suite was rerun after this change and passes unmodified (see
+docs/migration/retail-extraction-report.md).
 """
 import os
 import sqlite3
@@ -95,6 +103,33 @@ def init_registry_db():
             subsystem       TEXT NOT NULL,
             access_level    TEXT DEFAULT 'none',
             UNIQUE(user_id, subsystem)
+        )
+    ''')
+
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS secure_links (
+            id              TEXT PRIMARY KEY,
+            company_id      TEXT NOT NULL,
+            token_hash      TEXT NOT NULL,
+            email_target    TEXT NOT NULL,
+            expires_at      TEXT NOT NULL,
+            is_used         INTEGER DEFAULT 0,
+            created_at      TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS company_settings (
+            id              TEXT PRIMARY KEY,
+            company_id      TEXT NOT NULL UNIQUE,
+            country         TEXT,
+            timezone        TEXT,
+            currency        TEXT,
+            currency_symbol TEXT,
+            business_type   TEXT,
+            language        TEXT DEFAULT 'en',
+            date_format     TEXT,
+            fiscal_year_start TEXT
         )
     ''')
 

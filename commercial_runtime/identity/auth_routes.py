@@ -67,10 +67,9 @@ def set_language():
 
     Extracted from api/standalone_auth.py's `set_language` (the file whose
     own docstring says it is "what the shipped Retail/Clinic standalone
-    products actually run") -- only this one route was ported; the rest of
-    that 698-line file (onboarding wizard, employee management) is a
-    separate, larger scope not covered by Phase 2B and is flagged in
-    docs/migration/retail-parity-matrix.md rather than silently dropped."""
+    products actually run"). The rest of that 698-line file (onboarding
+    wizard, employee management) was ported in Phase 3 -- see
+    commercial_runtime/identity/onboarding_routes.py."""
     from commercial_runtime.identity.registry_db import get_conn
     data = request.get_json(silent=True) or {}
     lang = data.get('language', 'en')
