@@ -1,0 +1,795 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
+package com.actionaura.retail.ui.screens
+
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.ShoppingCart
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.actionaura.retail.net.*
+import com.actionaura.retail.ui.components.EmptyState
+import com.actionaura.retail.ui.components.GlowCard
+import com.actionaura.retail.ui.components.pulseGlow
+import com.actionaura.retail.ui.i18n.amount
+import com.actionaura.retail.ui.i18n.fmtQty
+import com.actionaura.retail.ui.i18n.money
+import com.actionaura.retail.ui.i18n.parseIntFlexible
+import com.actionaura.retail.ui.i18n.parseNum
+import com.actionaura.retail.ui.i18n.tr
+import kotlinx.coroutines.launch
+import java.util.UUID
+
+// ── Category color tiles (offline "product image" treatment) ──────────────────
+private val catPalette = listOf(
+    Color(0xFF6366F1), Color(0xFF14B8A6), Color(0xFFF59E0B), Color(0xFFEC4899),
+    Color(0xFF10B981), Color(0xFF38BDF8), Color(0xFFA855F7), Color(0xFFEF4444),
+)
+private fun catColor(key: String?): Color {
+    val k = key ?: ""
+    return catPalette[(k.hashCode().let { if (it < 0) -it else it }) % catPalette.size]
+}
+
+// A parked POS cart (Hold / Resume). Held in a process-wide singleton so parked
+// sales survive navigating away from POS while the app is running.
+data class HeldSale(val id: Long, val items: Map<Int, Double>, val total: Double, val count: Int)
+object HeldSales { val list = androidx.compose.runtime.mutableStateListOf<HeldSale>() }
+
+@Composable
+fun PosScreen(snackbar: SnackbarHostState) {
+    var products by remember { mutableStateOf<List<Product>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var query by remember { mutableStateOf("") }
+    var category by remember { mutableStateOf("All") }
+    val cart = remember { mutableStateMapOf<Int, Double>() } // productId -> qty
+    var showCart by remember { mutableStateOf(false) }
+    var charging by remember { mutableStateOf(false) }
+    var successTotal by remember { mutableStateOf<Double?>(null) }
+    var showScanner by remember { mutableStateOf(false) }
+    var lastScanned by remember { mutableStateOf<String?>(null) }
+    var paymentMethod by remember { mutableStateOf("cash") }
+    var showHeld by remember { mutableStateOf(false) }
+    var customers by remember { mutableStateOf<List<Customer>>(emptyList()) }
+    var customer by remember { mutableStateOf<Customer?>(null) }   // null = walk-in
+    var customerMenu by remember { mutableStateOf(false) }
+    var downPayment by remember { mutableStateOf("") }             // optional paid-now on a credit sale
+    var payMethods by remember { mutableStateOf<List<PayMethod>>(emptyList()) }  // configurable tenders
+    val scope = rememberCoroutineScope()
+
+    suspend fun load() { products = try { ApiClient.get().products().data } catch (e: Exception) { emptyList() } }
+    suspend fun loadCustomers() { customers = try { ApiClient.get().customers().data } catch (e: Exception) { emptyList() } }
+    suspend fun loadMethods() { payMethods = try { ApiClient.get().payMethods().data } catch (e: Exception) { emptyList() } }
+    LaunchedEffect(Unit) { loading = true; load(); loadCustomers(); loadMethods(); loading = false }
+
+    val byId = products.associateBy { it.id }
+    val total = cart.entries.sumOf { (id, qty) -> (byId[id]?.sell_price ?: 0.0) * qty }
+    val count = cart.values.sumOf { it }.toInt()
+
+    // Stock guard: never let the cart exceed what's actually on hand. Returns false
+    // (and adds nothing) when the next unit would oversell.
+    fun addOne(p: Product): Boolean {
+        val current = cart[p.id] ?: 0.0
+        if (current + 1 > p.total_stock) return false
+        cart[p.id] = current + 1
+        return true
+    }
+
+    // Park the current cart so another sale can be rung up, then resumed later.
+    fun holdCurrent() {
+        if (cart.isEmpty()) return
+        val t = cart.entries.sumOf { (id, q) -> (byId[id]?.sell_price ?: 0.0) * q }
+        val c = cart.values.sumOf { it }.toInt()
+        HeldSales.list.add(HeldSale(System.currentTimeMillis(), cart.toMap(), t, c))
+        cart.clear()
+    }
+    fun resumeHeld(h: HeldSale) {
+        if (cart.isNotEmpty()) holdCurrent()   // park whatever is in the cart first
+        cart.clear(); cart.putAll(h.items)
+        HeldSales.list.remove(h)
+        showHeld = false
+    }
+
+    val categories = remember(products) {
+        listOf("All") + products.mapNotNull { it.category_name?.takeIf { c -> c.isNotBlank() } }.distinct()
+    }
+    val filtered = products.filter {
+        (category == "All" || it.category_name == category) &&
+            (query.isBlank() || (it.name ?: "").contains(query, true) || (it.sku ?: "").contains(query, true))
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(
+                    value = query, onValueChange = { query = it },
+                    placeholder = { Text(tr("Search products")) },
+                    leadingIcon = { Icon(Icons.Default.Search, null) },
+                    singleLine = true, shape = RoundedCornerShape(28.dp),
+                    modifier = Modifier.weight(1f),
+                )
+                // Optional camera scan — manual search above always remains available.
+                FilledTonalIconButton(
+                    onClick = { showScanner = true }, modifier = Modifier.size(52.dp),
+                ) { Icon(Icons.Default.QrCodeScanner, contentDescription = tr("Scan barcode")) }
+                if (HeldSales.list.isNotEmpty()) {
+                    FilledTonalButton(onClick = { showHeld = true }) { Text(tr("Held") + " ${HeldSales.list.size}") }
+                }
+            }
+            if (categories.size > 1) {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(categories) { c ->
+                        FilterChip(selected = category == c, onClick = { category = c }, label = { Text(c) })
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+
+            when {
+                loading -> SkeletonGrid()
+                filtered.isEmpty() -> EmptyState(
+                    icon = Icons.Default.Inventory2,
+                    title = if (products.isEmpty()) tr("No products yet") else tr("No matches"),
+                    subtitle = if (products.isEmpty()) tr("Add products to start selling.")
+                               else tr("Try another search or category."),
+                )
+                else -> LazyVerticalGrid(
+                    columns = GridCells.Adaptive(160.dp),
+                    contentPadding = PaddingValues(12.dp, 0.dp, 12.dp, 110.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    items(filtered, key = { it.id }) { p ->
+                        ProductTile(p, inCart = (cart[p.id] ?: 0.0).toInt(),
+                            onAdd = { if (!addOne(p)) scope.launch { snackbar.showSnackbar(tr("Only %s in stock").format(fmtQty(p.total_stock))) } })
+                    }
+                }
+            }
+        }
+
+        // Animated floating cart bar
+        AnimatedVisibility(
+            visible = count > 0,
+            enter = slideInVertically(tween(280)) { it } + fadeIn(),
+            exit = slideOutVertically(tween(220)) { it } + fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            Surface(
+                color = MaterialTheme.colorScheme.primary, shadowElevation = 0.dp,
+                modifier = Modifier.fillMaxWidth().padding(12.dp)
+                    .pulseGlow(MaterialTheme.colorScheme.primary, MaterialTheme.shapes.large),
+                shape = MaterialTheme.shapes.large,
+                onClick = { showCart = true },
+            ) {
+                Row(Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(Icons.Default.ShoppingCart, null, tint = MaterialTheme.colorScheme.onPrimary)
+                        Surface(color = MaterialTheme.colorScheme.onPrimary, shape = CircleShape,
+                            modifier = Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-8).dp)) {
+                            Text("$count", color = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp))
+                        }
+                    }
+                    Spacer(Modifier.width(14.dp))
+                    Text(tr("View cart"), color = MaterialTheme.colorScheme.onPrimary,
+                        fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    Text(money(total), color = MaterialTheme.colorScheme.onPrimary,
+                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        // Payment success overlay
+        AnimatedVisibility(successTotal != null, enter = fadeIn(), exit = fadeOut()) {
+            PaymentSuccess(total = successTotal ?: 0.0, onNewSale = { successTotal = null })
+        }
+    }
+
+    if (showCart) {
+        val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(onDismissRequest = { showCart = false }, sheetState = sheet) {
+            Column(Modifier.padding(20.dp).padding(bottom = 24.dp)) {
+                Text(tr("Current Sale"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(10.dp))
+                // Customer (required for credit; walk-in otherwise)
+                Box {
+                    OutlinedButton(onClick = { customerMenu = true }, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Default.Person, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(customer?.name ?: tr("Walk-in customer"), modifier = Modifier.weight(1f))
+                        Icon(Icons.Default.ArrowDropDown, null)
+                    }
+                    DropdownMenu(expanded = customerMenu, onDismissRequest = { customerMenu = false }) {
+                        DropdownMenuItem(text = { Text(tr("Walk-in (no customer)")) },
+                            onClick = { customer = null; customerMenu = false })
+                        customers.forEach { c ->
+                            DropdownMenuItem(text = { Text(c.name ?: "—") },
+                                onClick = { customer = c; customerMenu = false })
+                        }
+                    }
+                }
+                customer?.let { c ->
+                    if (c.credit_balance > 0.005 || (c.credit_mode ?: "none") != "none") {
+                        Text(
+                            tr("Outstanding") + " ${money(c.credit_balance)}" +
+                                when (c.credit_mode) {
+                                    "limited" -> " · " + tr("limit") + " ${money(c.credit_limit)}"
+                                    "unlimited" -> " · " + tr("unlimited credit")
+                                    "none" -> " · " + tr("no credit")
+                                    else -> ""
+                                },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp, start = 4.dp),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                LazyColumn(Modifier.heightIn(max = 340.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(cart.keys.toList()) { id ->
+                        val p = byId[id] ?: return@items
+                        val qty = cart[id] ?: 0.0
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(40.dp).clip(RoundedCornerShape(10.dp))
+                                .background(catColor(p.category_name).copy(alpha = 0.18f)),
+                                contentAlignment = Alignment.Center) {
+                                Text((p.name ?: "?").take(1).uppercase(), color = catColor(p.category_name),
+                                    fontWeight = FontWeight.Bold)
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(p.name ?: "—", fontWeight = FontWeight.Medium, maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis)
+                                Text(money(p.sell_price), style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            FilledTonalIconButton(onClick = {
+                                val n = qty - 1; if (n <= 0) cart.remove(id) else cart[id] = n
+                            }, modifier = Modifier.size(34.dp)) { Icon(Icons.Default.Remove, "−") }
+                            Text(fmtQty(qty), fontWeight = FontWeight.Bold,
+                                modifier = Modifier.widthIn(min = 28.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                            FilledTonalIconButton(onClick = {
+                                if (!addOne(p)) scope.launch { snackbar.showSnackbar(tr("Max stock: %s").format(fmtQty(p.total_stock))) }
+                            }, modifier = Modifier.size(34.dp)) { Icon(Icons.Default.Add, "+") }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(10.dp))
+                Row {
+                    Text(tr("Total"), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    Text(money(total), style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                }
+                Spacer(Modifier.height(14.dp))
+                Text(tr("Payment method"), style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(6.dp))
+                // Tenders come from the configurable payment-methods list (Settings); "Credit"
+                // (on account) is always appended. Falls back to a basic set if none load.
+                // The display label is translated; the value sent to the server stays English.
+                val payOptions = (
+                    if (payMethods.isNotEmpty()) payMethods.mapNotNull { it.name }.map { it to it.lowercase() }
+                    else listOf("Cash" to "cash", "Card" to "card", "Transfer" to "transfer")
+                ) + ("Credit" to "credit")
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(payOptions) { (label, value) ->
+                        FilterChip(selected = paymentMethod == value, onClick = { paymentMethod = value },
+                            label = { Text(tr(label)) })
+                    }
+                }
+                if (paymentMethod == "credit") {
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(downPayment, { downPayment = it },
+                        label = { Text(tr("Paid now (optional) — rest goes on credit")) }, singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth())
+                }
+                Spacer(Modifier.height(16.dp))
+                OutlinedButton(onClick = { holdCurrent(); showCart = false },
+                    modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(tr("Hold sale (park for later)")) }
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        val pm = paymentMethod
+                        val cust = customer
+                        if (pm == "credit" && cust == null) {
+                            scope.launch { snackbar.showSnackbar(tr("Select a customer for credit sales (walk-in not allowed)")) }
+                        } else {
+                            charging = true
+                            val saleTotal = total
+                            // Credit = on account; an optional down-payment is taken now (clamped to total).
+                            val paidNow = if (pm == "credit") (parseNum(downPayment)?.coerceIn(0.0, saleTotal) ?: 0.0) else saleTotal
+                            val items = cart.entries.map { (id, qty) ->
+                                SaleItemReq(id, qty, byId[id]?.sell_price ?: 0.0)
+                            }
+                            scope.launch {
+                                try {
+                                    val r = ApiClient.get().createSale(CreateSaleRequest(
+                                        subtotal = saleTotal, total = saleTotal, amount_paid = paidNow,
+                                        payment_method = pm, customer_id = cust?.id,
+                                        items = items, idempotency_key = UUID.randomUUID().toString()))
+                                    if (r.status == "success") {
+                                        cart.clear(); showCart = false; successTotal = saleTotal
+                                        paymentMethod = "cash"; customer = null; downPayment = ""
+                                        r.data?.warning?.takeIf { it.isNotBlank() }?.let { snackbar.showSnackbar(it) }
+                                        load(); loadCustomers()   // refresh stock + customer balances
+                                    } else snackbar.showSnackbar(r.message ?: tr("Sale failed"))
+                                } catch (e: Exception) { snackbar.showSnackbar(tr("Couldn't reach the server")) }
+                                finally { charging = false }
+                            }
+                        }
+                    },
+                    enabled = !charging, modifier = Modifier.fillMaxWidth().height(54.dp),
+                ) {
+                    if (charging) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary)
+                    else Text(tr("Charge") + "  " + money(total), style = MaterialTheme.typography.labelLarge)
+                }
+            }
+        }
+    }
+
+    if (showHeld) {
+        ModalBottomSheet(onDismissRequest = { showHeld = false }) {
+            Column(Modifier.padding(20.dp).padding(bottom = 24.dp)) {
+                Text(tr("Held sales"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(4.dp))
+                Text(tr("Resuming parks the current cart first, so nothing is lost."),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(12.dp))
+                if (HeldSales.list.isEmpty())
+                    Text(tr("No held sales."), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                HeldSales.list.toList().forEach { h ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(tr("%d item(s)").format(h.count), fontWeight = FontWeight.Bold)
+                            Text(money(h.total), style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        TextButton(onClick = { HeldSales.list.remove(h) }) { Text(tr("Discard")) }
+                        Spacer(Modifier.width(4.dp))
+                        Button(onClick = { resumeHeld(h) }) { Text(tr("Resume")) }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showScanner) {
+        // Continuous scanning: scan item after item; the running total updates live on the
+        // scanner overlay; "Done" closes the camera and opens the cart to charge/invoice.
+        val scanStatus = (if (lastScanned != null) "$lastScanned   " else "") +
+            tr("%d item(s)").format(count) + " · " + money(total)
+        BarcodeScannerDialog(
+            continuous = true,
+            statusText = scanStatus,
+            onResult = { code ->
+                val p = products.firstOrNull {
+                    it.barcode?.equals(code, ignoreCase = true) == true ||
+                        it.sku?.equals(code, ignoreCase = true) == true
+                }
+                if (p != null) {
+                    lastScanned = if (addOne(p)) "✓ ${p.name}"
+                                  else "✗ ${p.name}: " + tr("Only %s in stock").format(fmtQty(p.total_stock))
+                } else {
+                    lastScanned = "✗ " + tr("Not found:") + " $code"
+                }
+            },
+            onDismiss = {
+                showScanner = false
+                lastScanned = null
+                if (count > 0) showCart = true   // proceed to the cart to complete the sale
+            },
+        )
+    }
+}
+
+@Composable
+private fun ProductTile(p: Product, inCart: Int, onAdd: () -> Unit) {
+    val accent = catColor(p.category_name)
+    val stock = p.total_stock
+
+    GlowCard(glow = accent, shape = RoundedCornerShape(16.dp), onClick = onAdd) {
+        Box(
+            Modifier.fillMaxWidth().height(84.dp)
+                .background(Brush.linearGradient(listOf(accent.copy(alpha = 0.85f), accent.copy(alpha = 0.5f)))),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text((p.name ?: "?").take(1).uppercase(), color = Color.White,
+                style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.ExtraBold)
+            if (inCart > 0) {
+                Surface(color = MaterialTheme.colorScheme.surface, shape = CircleShape, shadowElevation = 2.dp,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(6.dp)) {
+                    Text("$inCart", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
+                }
+            }
+            StockBadge(stock, Modifier.align(Alignment.BottomStart).padding(6.dp))
+        }
+        Column(Modifier.padding(12.dp)) {
+            if (!p.category_name.isNullOrBlank()) {
+                Text(p.category_name!!.uppercase(), style = MaterialTheme.typography.labelSmall,
+                    color = accent, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(2.dp))
+            }
+            Text(p.name ?: "—", style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis, minLines = 2)
+            Spacer(Modifier.height(6.dp))
+            Text(money(p.sell_price), style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+private fun StockBadge(stock: Double, modifier: Modifier = Modifier) {
+    val (label, color) = when {
+        stock <= 0 -> tr("Out") to Color(0xFFEF4444)
+        stock <= 5 -> (tr("Low") + " · ${fmtQty(stock)}") to Color(0xFFF59E0B)
+        else -> tr("%s in stock").format(fmtQty(stock)) to Color(0xFF10B981)
+    }
+    Surface(color = color, shape = RoundedCornerShape(20.dp), modifier = modifier) {
+        Text(label, color = Color.White, style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
+    }
+}
+
+@Composable
+private fun PaymentSuccess(total: Double, onNewSale: () -> Unit) {
+    val check = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        check.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow))
+    }
+    Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center) {
+            Box(Modifier.size(110.dp).scale(check.value)
+                .pulseGlow(Color(0xFF10B981), CircleShape).clip(CircleShape)
+                .background(Color(0xFF10B981)), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(60.dp))
+            }
+            Spacer(Modifier.height(24.dp))
+            Text(tr("Payment successful"), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            Text(money(total) + " " + tr("collected"), style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(36.dp))
+            Button(onClick = onNewSale, modifier = Modifier.fillMaxWidth().height(54.dp)) {
+                Text(tr("New Sale"), style = MaterialTheme.typography.labelLarge)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SkeletonGrid() {
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(160.dp),
+        contentPadding = PaddingValues(12.dp, 0.dp, 12.dp, 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        items(8) {
+            ElevatedCard {
+                Column {
+                    com.actionaura.retail.ui.components.SkeletonBox(
+                        Modifier.fillMaxWidth().height(84.dp), corner = 0.dp)
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        com.actionaura.retail.ui.components.SkeletonBox(Modifier.fillMaxWidth(0.5f).height(10.dp))
+                        com.actionaura.retail.ui.components.SkeletonBox(Modifier.fillMaxWidth(0.9f).height(14.dp))
+                        com.actionaura.retail.ui.components.SkeletonBox(Modifier.fillMaxWidth(0.4f).height(16.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ProductsScreen(snackbar: SnackbarHostState) {
+    var products by remember { mutableStateOf<List<Product>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var showAdd by remember { mutableStateOf(false) }
+    var editProduct by remember { mutableStateOf<Product?>(null) }
+    val scope = rememberCoroutineScope()
+
+    suspend fun load() { products = try { ApiClient.get().products().data } catch (e: Exception) { emptyList() } }
+    LaunchedEffect(Unit) { loading = true; load(); loading = false }
+
+    Box(Modifier.fillMaxSize()) {
+        when {
+            loading -> com.actionaura.retail.ui.components.SkeletonList(count = 8, modifier = Modifier.fillMaxSize())
+            products.isEmpty() -> EmptyState(
+                icon = Icons.Default.Inventory2,
+                title = tr("No products yet"),
+                subtitle = tr("Add your first product to start selling."),
+                ctaText = tr("Add Product"), onCta = { showAdd = true },
+            )
+            else -> LazyColumn(contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 96.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                items(products, key = { it.id }) { p ->
+                    ElevatedCard(onClick = { editProduct = p }, modifier = Modifier.fillMaxWidth()) {
+                        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(46.dp).clip(RoundedCornerShape(12.dp))
+                                .background(catColor(p.category_name).copy(alpha = 0.18f)),
+                                contentAlignment = Alignment.Center) {
+                                Text((p.name ?: "?").take(1).uppercase(), color = catColor(p.category_name),
+                                    fontWeight = FontWeight.Bold)
+                            }
+                            Spacer(Modifier.width(14.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(p.name ?: "—", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                Text("${p.sku ?: ""}  ·  ${p.category_name ?: "—"}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(money(p.sell_price), style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                Spacer(Modifier.height(4.dp))
+                                StockBadge(p.total_stock)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        ExtendedFloatingActionButton(
+            onClick = { showAdd = true },
+            icon = { Icon(Icons.Default.Add, null) }, text = { Text(tr("Add Product")) },
+            modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
+        )
+    }
+
+    if (showAdd) {
+        AddProductSheet(
+            onDismiss = { showAdd = false },
+            onCreated = {
+                showAdd = false
+                scope.launch { snackbar.showSnackbar(tr("Product added")); loading = true; load(); loading = false }
+            },
+        )
+    }
+
+    if (editProduct != null) {
+        EditProductSheet(
+            product = editProduct!!,
+            onDismiss = { editProduct = null },
+            onSaved = { msg ->
+                editProduct = null
+                scope.launch { snackbar.showSnackbar(msg); loading = true; load(); loading = false }
+            },
+        )
+    }
+}
+
+@Composable
+private fun EditProductSheet(product: Product, onDismiss: () -> Unit, onSaved: (String) -> Unit) {
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+    var name by remember { mutableStateOf(product.name ?: "") }
+    var price by remember { mutableStateOf(if (product.sell_price > 0) product.sell_price.toString() else "") }
+    var cost by remember { mutableStateOf(if (product.cost_price > 0) product.cost_price.toString() else "") }
+    var tax by remember { mutableStateOf(if (product.tax_rate > 0) product.tax_rate.toString() else "") }
+    var reorder by remember { mutableStateOf(product.reorder_level.toString()) }
+    var barcode by remember { mutableStateOf(product.barcode ?: "") }
+    var unit by remember { mutableStateOf(product.unit ?: "pcs") }
+    var adjust by remember { mutableStateOf("") }          // +add / -remove stock
+    var saving by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val numeric = androidx.compose.foundation.text.KeyboardOptions(
+        keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal)
+    val signed = androidx.compose.foundation.text.KeyboardOptions(
+        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
+        Column(Modifier.padding(20.dp).padding(bottom = 24.dp)
+            .verticalScroll(rememberScrollState())) {
+            Text(tr("Edit Product"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("${product.sku ?: ""} · ${fmtQty(product.total_stock)} ${product.unit ?: "pcs"} " + tr("in stock"),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(16.dp))
+            OutlinedTextField(name, { name = it }, label = { Text(tr("Product name *")) },
+                singleLine = true, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(price, { price = it }, label = { Text(tr("Sell price")) },
+                    singleLine = true, keyboardOptions = numeric, modifier = Modifier.weight(1f))
+                OutlinedTextField(cost, { cost = it }, label = { Text(tr("Cost price")) },
+                    singleLine = true, keyboardOptions = numeric, modifier = Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(tax, { tax = it }, label = { Text(tr("Tax %")) },
+                    singleLine = true, keyboardOptions = numeric, modifier = Modifier.weight(1f))
+                OutlinedTextField(reorder, { reorder = it }, label = { Text(tr("Reorder level")) },
+                    singleLine = true, keyboardOptions = numeric, modifier = Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(barcode, { barcode = it }, label = { Text(tr("Barcode")) },
+                    singleLine = true, modifier = Modifier.weight(1f))
+                UnitPicker(unit, { unit = it }, Modifier.weight(1f))
+            }
+
+            Spacer(Modifier.height(20.dp))
+            Text(tr("Adjust stock"), fontWeight = FontWeight.Bold)
+            Text(tr("Enter a positive number to add stock, negative to remove."),
+                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(adjust, { adjust = it }, label = { Text(tr("e.g. +50 or -3")) },
+                singleLine = true, keyboardOptions = signed, modifier = Modifier.fillMaxWidth())
+
+            if (error != null) { Spacer(Modifier.height(10.dp)); Text(error!!, color = MaterialTheme.colorScheme.error) }
+            Spacer(Modifier.height(20.dp))
+            Button(
+                onClick = {
+                    if (name.isBlank()) { error = tr("Product name is required"); return@Button }
+                    saving = true; error = null
+                    scope.launch {
+                        try {
+                            val r = ApiClient.get().updateProduct(product.id, UpdateProductRequest(
+                                name = name.trim(),
+                                sell_price = parseNum(price) ?: 0.0,
+                                cost_price = parseNum(cost) ?: 0.0,
+                                tax_rate = parseNum(tax) ?: 0.0,
+                                reorder_level = parseIntFlexible(reorder) ?: 0,
+                                barcode = barcode.trim(), unit = unit))
+                            val adj = parseNum(adjust)
+                            if (r.status == "success" && adj != null && adj != 0.0) {
+                                ApiClient.get().adjustStock(product.id, AdjustStockRequest(adj))
+                            }
+                            if (r.status == "success") onSaved(tr("Product updated"))
+                            else { error = r.message ?: tr("Couldn't save"); saving = false }
+                        } catch (e: Exception) { error = tr("Couldn't reach the server"); saving = false }
+                    }
+                },
+                enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp),
+            ) {
+                if (saving) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onPrimary)
+                else Text(tr("Save Changes"), style = MaterialTheme.typography.labelLarge)
+            }
+        }
+    }
+}
+
+private val productUnits = listOf("pcs", "kg", "g", "L", "ml", "box", "pack", "dozen", "pair", "m")
+
+@Composable
+private fun UnitPicker(unit: String, onUnit: (String) -> Unit, modifier: Modifier = Modifier) {
+    var open by remember { mutableStateOf(false) }
+    Box(modifier) {
+        OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth().height(56.dp)) {
+            Text(tr("Unit:") + " $unit", modifier = Modifier.weight(1f))
+            Icon(Icons.Default.ArrowDropDown, null)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            productUnits.forEach { u ->
+                DropdownMenuItem(text = { Text(u) }, onClick = { onUnit(u); open = false })
+            }
+        }
+    }
+}
+
+@Composable
+private fun AddProductSheet(onDismiss: () -> Unit, onCreated: () -> Unit) {
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var name by remember { mutableStateOf("") }
+    var sku by remember { mutableStateOf("") }
+    var price by remember { mutableStateOf("") }
+    var cost by remember { mutableStateOf("") }
+    var stock by remember { mutableStateOf("") }
+    var unit by remember { mutableStateOf("pcs") }
+    var saving by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var showScan by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val numeric = androidx.compose.foundation.text.KeyboardOptions(
+        keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal)
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
+        Column(Modifier.padding(20.dp).padding(bottom = 24.dp)) {
+            Text(tr("Add Product"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(16.dp))
+            OutlinedTextField(name, { name = it }, label = { Text(tr("Product name *")) },
+                singleLine = true, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(sku, { sku = it }, label = { Text(tr("SKU / barcode *")) },
+                singleLine = true, modifier = Modifier.fillMaxWidth(),
+                trailingIcon = {
+                    IconButton(onClick = { showScan = true }) {
+                        Icon(Icons.Default.QrCodeScanner, contentDescription = tr("Scan barcode"))
+                    }
+                })
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(price, { price = it }, label = { Text(tr("Sell price")) },
+                    singleLine = true, keyboardOptions = numeric, modifier = Modifier.weight(1f))
+                OutlinedTextField(cost, { cost = it }, label = { Text(tr("Cost price")) },
+                    singleLine = true, keyboardOptions = numeric, modifier = Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(stock, { stock = it }, label = { Text(tr("Initial stock")) },
+                    singleLine = true, keyboardOptions = numeric, modifier = Modifier.weight(1f))
+                UnitPicker(unit, { unit = it }, Modifier.weight(1f))
+            }
+            if (error != null) { Spacer(Modifier.height(10.dp)); Text(error!!, color = MaterialTheme.colorScheme.error) }
+            Spacer(Modifier.height(20.dp))
+            Button(onClick = {
+                if (name.isBlank() || sku.isBlank()) { error = tr("Name and SKU are required"); return@Button }
+                saving = true; error = null
+                scope.launch {
+                    try {
+                        val r = ApiClient.get().createProduct(CreateProductRequest(
+                            name = name.trim(), sku = sku.trim(),
+                            sell_price = parseNum(price) ?: 0.0,
+                            cost_price = parseNum(cost) ?: 0.0,
+                            initial_stock = parseNum(stock) ?: 0.0, unit = unit))
+                        if (r.status == "success") onCreated() else error = r.message ?: tr("Couldn't save")
+                    } catch (e: Exception) { error = tr("Couldn't reach the server") } finally { saving = false }
+                }
+            }, enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                if (saving) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onPrimary)
+                else Text(tr("Save Product"), style = MaterialTheme.typography.labelLarge)
+            }
+
+            if (showScan) {
+                BarcodeScannerDialog(
+                    onResult = { code -> sku = code.trim(); showScan = false },
+                    onDismiss = { showScan = false },
+                )
+            }
+        }
+    }
+}
