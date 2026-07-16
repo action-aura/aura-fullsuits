@@ -247,11 +247,19 @@ def init_clinic():
         "ALTER TABLE clinic_invoices ADD COLUMN prescription_id INTEGER",
         "ALTER TABLE clinic_invoices ADD COLUMN accounting_synced INTEGER DEFAULT 0",
         "ALTER TABLE clinic_prescriptions ADD COLUMN invoice_id INTEGER",
+        # Wave 0 (AUDIT-012): duplicate-payment protection needs a column to
+        # de-duplicate on. SQLite can't add a UNIQUE column via ALTER TABLE,
+        # so a partial unique index (below) does the enforcement instead.
+        "ALTER TABLE clinic_payments ADD COLUMN idempotency_key TEXT",
     ):
         try:
             cur.execute(_alter)
         except Exception:
             pass  # column already exists
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_clinic_payments_idempotency "
+        "ON clinic_payments(idempotency_key) WHERE idempotency_key IS NOT NULL"
+    )
     conn.commit()
     if cur.execute("SELECT COUNT(*) FROM clinic_patients").fetchone()[0] == 0 and not _is_standalone():
         _seed_clinic(conn, cur)

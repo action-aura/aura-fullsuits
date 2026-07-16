@@ -16,6 +16,7 @@ _owned() helper below (see its docstring).
 """
 import os
 import time, requests
+from decimal import Decimal, ROUND_HALF_UP
 from flask import Blueprint, request, jsonify, session
 from commercial_runtime.identity.mt_auth import mt_login_required, mt_require_subsystem, require_clinic_role
 from database.schema import get_clinic_conn, sub_create, init_clinic
@@ -689,37 +690,44 @@ def create_invoice():
             conn.close()
             return jsonify({'status': 'error', 'message': f'{_label} not found'}), 404
     cur = conn.cursor()
-    # Unique even when several invoices are created within the same second
-    # (invoice_number is UNIQUE — a bare int(time.time()) would collide).
-    inv_no = f'INV-C-{int(time.time())}-{random.randint(100, 999)}'
-    items = data.get('items', [])
-    subtotal = sum(i.get('qty', 1) * i.get('unit_price', 0) for i in items)
-    # Discount applied before tax (tax-after-discount), mirroring the POS fix.
-    discount = float(data.get('discount') or 0)
-    if discount < 0: discount = 0
-    if discount > subtotal: discount = subtotal
-    taxable = subtotal - discount
-    tax = round(taxable * float(data.get('tax_rate') or 0), 2)
-    total = round(taxable + tax, 2)
-    cur.execute("""INSERT INTO clinic_invoices
-        (company_id,invoice_number,patient_id,visit_id,subtotal,discount,tax,total,status,notes,prescription_id,created_by)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (cid, inv_no, data.get('patient_id'), data.get('visit_id'), subtotal, discount, tax, total,
-         'unpaid', data.get('notes', ''), data.get('prescription_id'), _uid()))
-    inv_id = cur.lastrowid
-    # If this invoice was generated from a prescription, link it back (tester #13).
-    if data.get('prescription_id'):
-        try:
+    try:
+        # Wave 0 (AUDIT-018): header insert + line-item inserts + the
+        # prescription back-link now happen inside one transaction -- a
+        # mid-loop failure previously could leave an invoice header with no
+        # line items and no rollback.
+        conn.execute("BEGIN IMMEDIATE")
+        # Unique even when several invoices are created within the same second
+        # (invoice_number is UNIQUE — a bare int(time.time()) would collide).
+        inv_no = f'INV-C-{int(time.time())}-{random.randint(100, 999)}'
+        items = data.get('items', [])
+        subtotal = sum(i.get('qty', 1) * i.get('unit_price', 0) for i in items)
+        # Discount applied before tax (tax-after-discount), mirroring the POS fix.
+        discount = float(data.get('discount') or 0)
+        if discount < 0: discount = 0
+        if discount > subtotal: discount = subtotal
+        taxable = subtotal - discount
+        tax = round(taxable * float(data.get('tax_rate') or 0), 2)
+        total = round(taxable + tax, 2)
+        cur.execute("""INSERT INTO clinic_invoices
+            (company_id,invoice_number,patient_id,visit_id,subtotal,discount,tax,total,status,notes,prescription_id,created_by)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (cid, inv_no, data.get('patient_id'), data.get('visit_id'), subtotal, discount, tax, total,
+             'unpaid', data.get('notes', ''), data.get('prescription_id'), _uid()))
+        inv_id = cur.lastrowid
+        # If this invoice was generated from a prescription, link it back (tester #13).
+        if data.get('prescription_id'):
             conn.execute("UPDATE clinic_prescriptions SET invoice_id=? WHERE id=? AND company_id=?",
                          (inv_id, data['prescription_id'], cid))
-        except Exception:
-            pass
-    for item in items:
-        cur.execute("INSERT INTO clinic_invoice_items (invoice_id,service_id,description,qty,unit_price,line_total) VALUES (?,?,?,?,?,?)",
-                    (inv_id, item.get('service_id'), item.get('description',''), item.get('qty',1),
-                     item.get('unit_price',0), item.get('qty',1)*item.get('unit_price',0)))
-    _audit(conn, 'InvoiceCreated', 'invoice', inv_id)
-    conn.commit(); conn.close()
+        for item in items:
+            cur.execute("INSERT INTO clinic_invoice_items (invoice_id,service_id,description,qty,unit_price,line_total) VALUES (?,?,?,?,?,?)",
+                        (inv_id, item.get('service_id'), item.get('description',''), item.get('qty',1),
+                         item.get('unit_price',0), item.get('qty',1)*item.get('unit_price',0)))
+        _audit(conn, 'InvoiceCreated', 'invoice', inv_id)
+        conn.commit()
+    except Exception as e:
+        conn.rollback(); conn.close()
+        return jsonify({'status': 'error', 'message': f'Could not create invoice: {e}'}), 500
+    conn.close()
     _emit('ClinicInvoiceIssued', {'invoice_id': inv_id, 'total': total})
     # Mirror into the Accounting invoice system so clinic billing also lands in the
     # company books — this is the "linked to both invoice systems" requirement (#13);
@@ -783,29 +791,95 @@ def get_invoice(inv_id):
 @mt_login_required
 @mt_require_subsystem('clinic')
 def record_payment():
+    """Server-validated, idempotent payment recording (Wave 0, AUDIT-011/AUDIT-012).
+
+    amount must parse as a positive Decimal and must not exceed the invoice's
+    current outstanding balance -- this product has no customer-credit ledger,
+    so an overpayment is rejected outright rather than silently accepted (see
+    docs/corrections/wave0/clinic-payment-correction.md). An idempotency_key
+    makes a retried/double-submitted request return the original payment
+    instead of creating a second one. The payment insert and the invoice
+    status/amount_paid update happen inside one transaction (AUDIT-018) --
+    previously neither validation nor atomicity existed here at all.
+    """
     data = request.json or {}
     cid = _cid()
+    invoice_id = data.get('invoice_id')
     conn = get_clinic_conn()
     # Phase 3 security fix: this was the worst instance of the tenant
     # -isolation gap described in _owned()'s docstring -- the SELECT and
     # UPDATE below had NO company_id filter at all, so any authenticated
     # user of ANY company could read another company's invoice total and
     # mark it paid. Now verified upfront.
-    if not _owned(conn, 'clinic_invoices', data.get('invoice_id'), cid):
+    if not _owned(conn, 'clinic_invoices', invoice_id, cid):
         conn.close()
         return jsonify({'status': 'error', 'message': 'Invoice not found'}), 404
-    cur = conn.cursor()
-    cur.execute("INSERT INTO clinic_payments (company_id,invoice_id,amount_paid,method,reference,created_by) VALUES (?,?,?,?,?,?)",
-                (cid, data.get('invoice_id'), data.get('amount'), data.get('method','cash'), data.get('reference',''), _uid()))
-    pay_id = cur.lastrowid
-    inv = conn.execute("SELECT total FROM clinic_invoices WHERE id=? AND company_id=?", (data.get('invoice_id'), cid)).fetchone()
-    paid = conn.execute("SELECT COALESCE(SUM(amount_paid),0) FROM clinic_payments WHERE invoice_id=? AND company_id=?", (data.get('invoice_id'), cid)).fetchone()[0]
-    status = 'paid' if inv and paid >= inv['total'] else 'partial'
-    conn.execute("UPDATE clinic_invoices SET status=?, amount_paid=? WHERE id=? AND company_id=?", (status, paid, data.get('invoice_id'), cid))
-    _audit(conn, 'PaymentRecorded', 'payment', pay_id)
-    conn.commit(); conn.close()
-    _emit('ClinicPaymentReceived', {'payment_id': pay_id, 'amount': data.get('amount')})
-    return jsonify({'status': 'success', 'data': {'id': pay_id, 'invoice_status': status}})
+
+    idem = data.get('idempotency_key')
+    if idem:
+        existing = conn.execute("SELECT id FROM clinic_payments WHERE idempotency_key=?", (idem,)).fetchone()
+        if existing:
+            inv_now = conn.execute("SELECT status FROM clinic_invoices WHERE id=?", (invoice_id,)).fetchone()
+            conn.close()
+            return jsonify({'status': 'success', 'data': {
+                'id': existing['id'], 'invoice_status': inv_now['status'] if inv_now else None,
+            }})
+
+    try:
+        amount_dec = Decimal(str(data.get('amount')))
+    except Exception:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Payment amount must be a number.'}), 400
+    if amount_dec <= 0:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Payment amount must be greater than zero.'}), 400
+    amount = float(amount_dec.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+
+    try:
+        # BEGIN IMMEDIATE: two payment requests against the same invoice
+        # racing each other must not both read the same "outstanding
+        # balance" snapshot before either has committed.
+        conn.execute("BEGIN IMMEDIATE")
+        inv = conn.execute("SELECT total FROM clinic_invoices WHERE id=? AND company_id=?", (invoice_id, cid)).fetchone()
+        if not inv:
+            conn.rollback(); conn.close()
+            return jsonify({'status': 'error', 'message': 'Invoice not found'}), 404
+
+        already_paid = conn.execute(
+            "SELECT COALESCE(SUM(amount_paid),0) FROM clinic_payments WHERE invoice_id=? AND company_id=?",
+            (invoice_id, cid)
+        ).fetchone()[0]
+        total_dec = Decimal(str(inv['total']))
+        outstanding = float((total_dec - Decimal(str(already_paid))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+        if amount > outstanding + 0.005:
+            conn.rollback(); conn.close()
+            return jsonify({'status': 'error', 'message':
+                f'Payment of {amount:.2f} exceeds the outstanding balance of {outstanding:.2f}. '
+                'This product has no customer-credit ledger, so overpayment cannot be accepted.'}), 400
+
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO clinic_payments (company_id,invoice_id,amount_paid,method,reference,created_by,idempotency_key) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (cid, invoice_id, amount, data.get('method', 'cash'), data.get('reference', ''), _uid(), idem))
+        pay_id = cur.lastrowid
+        paid = float((Decimal(str(already_paid)) + Decimal(str(amount))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+        status = 'paid' if paid >= float(total_dec) - 0.005 else 'partial'
+        conn.execute("UPDATE clinic_invoices SET status=?, amount_paid=? WHERE id=? AND company_id=?",
+                     (status, paid, invoice_id, cid))
+        _audit(conn, 'PaymentRecorded', 'payment', pay_id)
+        conn.commit()
+    except Exception as e:
+        conn.rollback(); conn.close()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+    conn.close()
+    _emit('ClinicPaymentReceived', {'payment_id': pay_id, 'amount': amount})
+    return jsonify({'status': 'success', 'data': {
+        'id': pay_id, 'invoice_id': invoice_id, 'amount': amount, 'total_paid': paid,
+        'outstanding_balance': round(float(total_dec) - paid, 2),
+        'invoice_status': status, 'idempotency_key': idem,
+    }})
 
 # ─── Prescriptions ────────────────────────────────────────────────────────────
 
