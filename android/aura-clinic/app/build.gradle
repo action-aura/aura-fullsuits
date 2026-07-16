@@ -1,0 +1,203 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'org.jetbrains.kotlin.plugin.compose'
+    id 'com.chaquo.python'
+}
+
+// aura-fullsuits root = the new source of truth. Independent of, and never reads
+// from, the original AuraEnterprise repository. android/aura-clinic/app -> aura-clinic
+// -> android -> aura-fullsuits, so two levels up from this project's dir.
+// See docs/android/android-migration-plan.md.
+def suiteRoot = rootProject.projectDir.parentFile.parentFile
+def stagedPyOut = "${buildDir}/staged-python"      // staged backend + commercial_runtime (git-ignored)
+def stagedAssetsOut = "${buildDir}/staged-assets"  // staged bundle assets (git-ignored)
+
+// ── Signing (reads android/aura-clinic/keystore.properties if present; never commit it) ──
+def keystorePropsFile = rootProject.file("keystore.properties")
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystoreProps.load(new FileInputStream(keystorePropsFile))
+}
+
+android {
+    namespace 'com.actionaura.clinic'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.actionaura.clinic"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0.0"
+
+        ndk {
+            // Chaquopy's Python 3.12 ships only these ABIs.
+            abiFilters "arm64-v8a", "x86_64"
+        }
+
+        // Commercial-identity placeholder (Phase 4G). Real tenant_id / license key /
+        // installation_id are intentionally NOT embedded at build time -- see
+        // com.actionaura.clinic.identity.CommercialIdentity and
+        // docs/android/android-migration-plan.md.
+        buildConfigField "String", "PRODUCT_CODE", "\"AURA_CLINIC\""
+    }
+
+    // ── Python (Chaquopy) ───────────────────────────────────────────────────────
+    chaquopy {
+        defaultConfig {
+            version "3.12"
+            pip {
+                // Trimmed to what products/clinic/backend + commercial_runtime actually
+                // import (verified by import scan) -- openpyxl/requests/flask-login/
+                // flask-socketio/pandas from the monolith's requirements.txt are unused here.
+                install "Flask==3.0.3"
+                install "Werkzeug==3.0.3"
+                install "flask-cors==4.0.1"
+                install "waitress==3.0.0"
+            }
+        }
+    }
+
+    // Staged backend is added as an extra Python source root (Chaquopy reads
+    // android.sourceSets.*.python), so `import app`, `import commercial_runtime...`
+    // resolve the same way products/clinic/desktop/launcher_clinic.py does.
+    // main.py / android_platform.py stay in the default src/main/python.
+    sourceSets {
+        getByName("main") {
+            python { srcDir stagedPyOut }
+            assets.srcDir stagedAssetsOut
+        }
+    }
+
+    // ── Build types ──────────────────────────────────────────────────────────────
+    buildTypes {
+        debug {
+            applicationIdSuffix ".debug"
+            debuggable true
+            buildConfigField "String", "BUILD_ENV", "\"debug\""
+        }
+        // Internal pre-release channel: release-shaped (non-debuggable) but signed
+        // with a separate/no key -- for install-and-verify testing only, never shipped.
+        staging {
+            initWith debug
+            applicationIdSuffix ".staging"
+            debuggable false
+            matchingFallbacks = ['debug']
+            buildConfigField "String", "BUILD_ENV", "\"staging\""
+            // initWith(debug) also copies debug's signingConfig (the auto-generated
+            // Android debug key) -- override it so staging matches release's signing
+            // behavior (production key if present, else genuinely unsigned) instead
+            // of silently shipping debug-signed builds.
+            signingConfig null
+            if (keystorePropsFile.exists()) {
+                signingConfig signingConfigs.release
+            }
+        }
+        release {
+            minifyEnabled false   // Chaquopy; keep simple for first releases
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            buildConfigField "String", "BUILD_ENV", "\"release\""
+            if (keystorePropsFile.exists()) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePropsFile.exists()) {
+                storeFile rootProject.file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+    buildFeatures {
+        compose true
+        buildConfig true
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+
+    // ── Jetpack Compose (native UI) ──────────────────────────────────────────
+    def composeBom = platform('androidx.compose:compose-bom:2024.09.03')
+    implementation composeBom
+    implementation 'androidx.activity:activity-compose:1.9.3'
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.ui:ui-graphics'
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.compose.material:material-icons-extended'
+    implementation 'androidx.navigation:navigation-compose:2.8.3'
+    implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.8.6'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6'
+
+    // ── Networking to the embedded local Flask server ────────────────────────
+    implementation 'com.squareup.retrofit2:retrofit:2.11.0'
+    implementation 'com.squareup.retrofit2:converter-gson:2.11.0'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
+
+    implementation 'io.coil-kt:coil-compose:2.7.0'
+
+    // No CameraX / ML Kit: Aura Clinic has no barcode/camera feature (retail-only).
+
+    constraints {
+        implementation('org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.0.21')
+        implementation('org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.0.21')
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Staging tasks — assemble the backend + web assets from aura-fullsuits/products
+//  and aura-fullsuits/commercial_runtime. The original AuraEnterprise repo is never
+//  referenced (Phase 4Q independence requirement).
+// ─────────────────────────────────────────────────────────────────────────────
+
+tasks.register('stageAuraPython', Copy) {
+    description "Copy products/clinic/backend + commercial_runtime from aura-fullsuits."
+    doFirst { delete stagedPyOut }
+    into stagedPyOut
+    from("${suiteRoot}/products/clinic/backend") {
+        into 'products/clinic/backend'
+        exclude '**/__pycache__/**', '**/*.pyc'
+    }
+    from("${suiteRoot}/commercial_runtime") {
+        into 'commercial_runtime'
+        exclude '**/__pycache__/**', '**/*.pyc'
+    }
+}
+
+tasks.register('stageAuraAssets', Copy) {
+    description "Stage the bundle assets extracted by AssetInstaller.java on first run."
+    def dest = "${stagedAssetsOut}/bundle"
+    doFirst { delete stagedAssetsOut }
+    into dest
+    from("${suiteRoot}/products/clinic/frontend")
+}
+
+// Wire staging into the build graph with EXPLICIT task dependencies (Gradle fails
+// the build if a task consumes another task's output dir without declaring it).
+tasks.matching { it.name.startsWith('merge') && it.name.endsWith('PythonSources') }
+        .configureEach { dependsOn 'stageAuraPython' }
+
+afterEvaluate {
+    tasks.named('preBuild').configure { dependsOn 'stageAuraPython', 'stageAuraAssets' }
+    android.applicationVariants.all { variant ->
+        tasks.named("merge${variant.name.capitalize()}Assets").configure {
+            dependsOn 'stageAuraAssets'
+        }
+    }
+}
