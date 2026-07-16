@@ -577,6 +577,17 @@ def receive_purchase_order(po_id):
 @mt_login_required
 @mt_require_subsystem('retail')
 def create_sale():
+    """Server-authoritative sale creation (Wave 0 correction, AUDIT-002/AUDIT-003).
+
+    The client may send only commercial intent: product_id + quantity per
+    line, an optional per-line discount_pct (clamped, never trusted as a
+    currency amount), payment_method/amount_paid (tender), customer_id,
+    branch_id, and idempotency_key. unit_price, tax_rate, line_total,
+    subtotal, discount_amount, tax_amount, and total are IGNORED if a client
+    sends them -- they are resolved/computed here from the product table and
+    core.retail.pricing, never from the request body. See
+    docs/architecture/financial-authority-contracts.md.
+    """
     data = request.json or {}
     cid  = _cid()
     conn = get_retail_conn()
@@ -590,18 +601,84 @@ def create_sale():
                 conn.close()
                 return jsonify({'status': 'success', 'data': {'id': ex['id'], 'sale_number': ex['sale_number']}})
 
-        conn.execute("BEGIN TRANSACTION")
+        items_in = data.get('items') or []
+        if not items_in:
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'No items in sale.'}), 400
+
+        # BEGIN IMMEDIATE takes the write lock up front so a concurrent sale
+        # can't read the same "stock is sufficient" snapshot before either
+        # has committed -- the second request blocks here until the first
+        # finishes, then re-checks stock against the now-updated balance
+        # (AUDIT-009: rapid repeated requests must not oversell).
+        conn.execute("BEGIN IMMEDIATE")
         # Stamp the sale in LOCAL time (the column default is UTC; all report queries
         # filter by local date — keeping them consistent avoids late-night sales
         # falling on the wrong day).
         now_local = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        subtotal  = float(data.get('subtotal', 0))
-        discount  = float(data.get('discount_amount', 0))
-        tax       = float(data.get('tax_amount', 0))
-        total     = _money(data.get('total', 0))
+        bid = int(data.get('branch_id') or _default_branch(conn, cid))
+        mode = _settings(conn, cid).get('tax_calculation_mode', tax_engine.DEFAULT_MODE)
+
+        # ── Resolve authoritative line data (server is the sole financial
+        # authority -- AUDIT-002/AUDIT-003). unit_price/tax_rate always come
+        # from the product row; only quantity and discount_pct are accepted
+        # as client-submitted commercial intent, and discount_pct is clamped.
+        resolved_lines = []
+        subtotal = discount = tax = total = Decimal('0')
+        for item in items_in:
+            pid = item.get('product_id')
+            product = cur.execute(
+                "SELECT id, name, sell_price, tax_rate, status FROM products WHERE id=? AND company_id=?",
+                (pid, cid)
+            ).fetchone()
+            if not product:
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error', 'message': f'Product {pid} not found.'}), 400
+            if product['status'] != 'active':
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error', 'message': f'Product "{product["name"]}" is not available for sale.'}), 400
+
+            try:
+                qty = float(item.get('quantity'))
+            except (TypeError, ValueError):
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error', 'message': 'Invalid quantity.'}), 400
+            if qty <= 0:
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error', 'message': 'Quantity must be greater than zero.'}), 400
+
+            balance = cur.execute(
+                "SELECT quantity_on_hand FROM inventory_balances WHERE company_id=? AND product_id=? AND branch_id=?",
+                (cid, pid, bid)
+            ).fetchone()
+            on_hand = float(balance['quantity_on_hand']) if balance else 0.0
+            if qty > on_hand:
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error',
+                                 'message': f'Insufficient stock for "{product["name"]}" (have {on_hand}, requested {qty}).'}), 400
+
+            discount_pct = tax_engine.clamp_discount_pct(item.get('discount_pct', 0))
+            unit_price = float(product['sell_price'])
+            tax_rate = float(product['tax_rate'])
+            calc = tax_engine.calculate_line(unit_price, qty, discount_pct, tax_rate, mode=mode)
+
+            resolved_lines.append({
+                'product_id': pid, 'quantity': qty, 'unit_price': unit_price,
+                'discount_pct': discount_pct, 'tax_rate': tax_rate,
+                'line_total': calc['taxable_amount'], 'branch_id': bid,
+            })
+            subtotal += Decimal(str(calc['gross']))
+            discount += Decimal(str(calc['discount_amount']))
+            tax      += Decimal(str(calc['tax']))
+            total    += Decimal(str(calc['total']))
+
+        subtotal = float(subtotal.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+        discount = float(discount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+        tax      = float(tax.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+        total    = float(total.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+
         paid      = _money(data.get('amount_paid', total))
         change    = max(0.0, _money(paid - total))
-        bid       = int(data.get('branch_id') or _default_branch(conn, cid))
         pm        = data.get('payment_method', 'cash')
         customer_id = data.get('customer_id')
         balance_due = _money(total - paid)
@@ -621,16 +698,16 @@ def create_sale():
                 conn.rollback(); conn.close()
                 return jsonify({'status': 'error', 'message': 'Customer not found.'}), 404
             settings = _settings(conn, cid)
-            mode = cust['credit_mode'] or settings['default_credit_mode']
+            credit_mode = cust['credit_mode'] or settings['default_credit_mode']
             try:
                 limit = float(cust['credit_limit'] if cust['credit_limit'] is not None else (settings['default_credit_limit'] or 0))
             except Exception:
                 limit = 0.0
             cur_bal = float(cust['credit_balance'] or 0)
-            if mode == 'none':
+            if credit_mode == 'none':
                 conn.rollback(); conn.close()
                 return jsonify({'status': 'error', 'message': 'This customer is not allowed to buy on credit.'}), 400
-            if mode == 'limited' and (cur_bal + balance_due) > limit + 0.005:
+            if credit_mode == 'limited' and (cur_bal + balance_due) > limit + 0.005:
                 if settings['enforce_credit_limit'] == 'block':
                     conn.rollback(); conn.close()
                     return jsonify({'status': 'error',
@@ -650,14 +727,12 @@ def create_sale():
               pm, idem, data.get('notes',''), now_local, due_date))
         sale_id = cur.lastrowid
 
-        for item in data.get('items', []):
-            pid = item['product_id']
-            qty = float(item['quantity'])
+        for line in resolved_lines:
+            pid, qty = line['product_id'], line['quantity']
             cur.execute("""
                 INSERT INTO sale_items (sale_id,product_id,quantity,unit_price,discount_pct,tax_rate,line_total)
                 VALUES (?,?,?,?,?,?,?)
-            """, (sale_id, pid, qty, item.get('unit_price',0),
-                  item.get('discount_pct',0), item.get('tax_rate',0), item.get('line_total',0)))
+            """, (sale_id, pid, qty, line['unit_price'], line['discount_pct'], line['tax_rate'], line['line_total']))
             cur.execute("""
                 INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,created_by)
                 VALUES (?,?,?,'sale_out',?,?,?)
@@ -689,8 +764,11 @@ def create_sale():
                                  'payment_method': pm})
         return jsonify({'status': 'success', 'data': {
             'id': sale_id, 'sale_number': sale_number,
+            'idempotency_key': idem, 'currency': _settings(conn, cid)['base_currency'],
+            'subtotal': subtotal, 'discount_amount': discount, 'tax_amount': tax,
             'change': round(change, 2), 'total': round(total, 2),
-            'balance_due': balance_due, 'warning': warning,
+            'amount_paid': paid, 'balance_due': balance_due, 'warning': warning,
+            'lines': resolved_lines, 'calculation_version': tax_engine.CALCULATION_VERSION,
         }})
     except Exception as e:
         conn.rollback()
@@ -759,35 +837,120 @@ def list_returns():
 @mt_login_required
 @mt_require_subsystem('retail')
 def create_return():
+    """Server-authoritative return creation (Wave 0 correction, AUDIT-004).
+
+    The client sends only sale_id + {product_id, quantity} per line. unit_price/
+    discount_pct/tax_rate/line_total, if sent, are IGNORED -- refund figures are
+    always recomputed from the ORIGINAL sale_items row for that sale+product,
+    proportionally to the quantity actually being returned, so tax and discount
+    reverse correctly (previously the return's own refund_amount silently
+    excluded tax entirely -- see docs/audit/03-retail-financial-audit.md and
+    docs/corrections/wave0/retail-return-correction.md for the resulting,
+    intentional refund_amount semantics change and the tests updated to match).
+    Every return must reference a real sale belonging to this company, and the
+    requested quantity (net of anything already returned against that same
+    sale+product) may never exceed what was actually sold.
+    """
     data   = request.json or {}
     cid    = _cid()
     items  = data.get('items', [])
     if not items:
         return jsonify({'status': 'error', 'message': 'No items to return'}), 400
+
+    sale_id = data.get('sale_id')
     conn = get_retail_conn()
+    _ensure_credit_schema(conn)
     cur  = conn.cursor()
     try:
-        ret_num = f'RET-{int(time.time())}'
-        refund  = sum(float(i.get('line_total',0)) for i in items)
-        bid     = data.get('branch_id') or _default_branch(conn, cid)
+        idem = data.get('idempotency_key')
+        if idem:
+            ex = cur.execute("SELECT id,return_number FROM returns WHERE idempotency_key=?", (idem,)).fetchone()
+            if ex:
+                conn.close()
+                return jsonify({'status': 'success', 'data': {'id': ex['id'], 'return_number': ex['return_number']}})
+
+        sale = cur.execute("SELECT id, branch_id FROM sales WHERE id=? AND company_id=?", (sale_id, cid)).fetchone()
+        if not sale:
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'Original sale not found.'}), 404
+
+        # BEGIN IMMEDIATE: two returns against the same sale+product racing each
+        # other must not both read the same "remaining returnable" snapshot.
+        conn.execute("BEGIN IMMEDIATE")
+        bid = sale['branch_id'] or data.get('branch_id') or _default_branch(conn, cid)
+        mode = _settings(conn, cid).get('tax_calculation_mode', tax_engine.DEFAULT_MODE)
+
+        resolved_items = []
+        refund_total = Decimal('0')
+        for item in items:
+            pid = item.get('product_id')
+            try:
+                qty = float(item.get('quantity'))
+            except (TypeError, ValueError):
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error', 'message': 'Invalid return quantity.'}), 400
+            if qty <= 0:
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error', 'message': 'Return quantity must be greater than zero.'}), 400
+
+            sold = cur.execute(
+                "SELECT quantity, unit_price, discount_pct, tax_rate FROM sale_items "
+                "WHERE sale_id=? AND product_id=?", (sale_id, pid)
+            ).fetchone()
+            if not sold:
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error', 'message': f'Product {pid} was not part of sale {sale_id}.'}), 400
+
+            already_returned = cur.execute(
+                "SELECT COALESCE(SUM(ri.quantity),0) FROM return_items ri "
+                "JOIN returns r ON ri.return_id = r.id "
+                "WHERE r.sale_id=? AND ri.product_id=? AND r.company_id=?",
+                (sale_id, pid, cid)
+            ).fetchone()[0]
+            remaining = float(sold['quantity']) - float(already_returned or 0)
+            if qty > remaining + 0.0001:
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error', 'message':
+                    f'Cannot return {qty} of product {pid}: only {remaining} remain returnable '
+                    f'(sold {sold["quantity"]}, already returned {already_returned}).'}), 400
+
+            calc = tax_engine.calculate_line(
+                float(sold['unit_price']), qty, float(sold['discount_pct'] or 0),
+                float(sold['tax_rate'] or 0), mode=mode)
+            resolved_items.append({
+                'product_id': pid, 'quantity': qty, 'unit_price': float(sold['unit_price']),
+                'discount_amount': calc['discount_amount'], 'tax_amount': calc['tax'],
+                'line_total': calc['total'],
+            })
+            refund_total += Decimal(str(calc['total']))
+
+        refund = float(refund_total.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+        # returns.return_number carries a bare (not company-scoped) UNIQUE
+        # constraint, but _next_ref()'s counter resets per company -- two
+        # different companies' first return would otherwise both generate
+        # "RET-000001" and collide in this shared multi-tenant database.
+        # Appending a company fragment keeps the sequential part
+        # human-readable/searchable while guaranteeing global uniqueness
+        # without altering the shared _next_ref helper or its format for
+        # other doc types (out of scope for this correction).
+        ret_num = f"{_next_ref(conn, cid, 'return')}-{str(cid)[:8]}"
         # Write LOCAL time, not the UTC CURRENT_TIMESTAMP default: the dashboard nets
         # returns out of today's revenue by local date(created_at), so a UTC timestamp
         # would file a late-evening return under the wrong day and leave the KPI stale.
         now_local = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         cur.execute("""
             INSERT INTO returns (company_id,return_number,sale_id,branch_id,cashier,
-                                 reason,refund_method,refund_amount,status,created_at)
-            VALUES (?,?,?,?,?,?,?,?,'completed',?)
-        """, (cid, ret_num, data.get('sale_id'), bid, _uid(),
-              data.get('reason','Customer return'), data.get('refund_method','cash'), refund, now_local))
+                                 reason,refund_method,refund_amount,status,idempotency_key,created_at)
+            VALUES (?,?,?,?,?,?,?,?,'completed',?,?)
+        """, (cid, ret_num, sale_id, bid, _uid(),
+              data.get('reason','Customer return'), data.get('refund_method','cash'), refund, idem, now_local))
         ret_id = cur.lastrowid
-        for item in items:
-            pid = item['product_id']
-            qty = float(item['quantity'])
+        for line in resolved_items:
+            pid, qty = line['product_id'], line['quantity']
             cur.execute("""
                 INSERT INTO return_items (return_id,product_id,quantity,unit_price,line_total)
                 VALUES (?,?,?,?,?)
-            """, (ret_id, pid, qty, item.get('unit_price',0), item.get('line_total',0)))
+            """, (ret_id, pid, qty, line['unit_price'], line['line_total']))
             cur.execute("""
                 INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
                 VALUES (?,?,?,0)
@@ -801,8 +964,12 @@ def create_return():
                 VALUES (?,?,?,'return_in',?,?,?)
             """, (cid, pid, bid, qty, ret_num, _uid()))
         _audit(conn, 'RETURN_PROCESSED', 'return', ret_id, f'{ret_num} refund={refund}')
-        conn.commit(); conn.close()
-        return jsonify({'status': 'success', 'data': {'id': ret_id, 'return_number': ret_num, 'refund_amount': round(refund,2)}})
+        conn.commit()
+        return jsonify({'status': 'success', 'data': {
+            'id': ret_id, 'return_number': ret_num, 'refund_amount': round(refund, 2),
+            'idempotency_key': idem, 'items': resolved_items,
+            'calculation_version': tax_engine.CALCULATION_VERSION,
+        }})
     except Exception as e:
         conn.rollback(); conn.close()
         return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -1033,6 +1200,15 @@ def _ensure_credit_schema(conn):
     addcol('purchase_orders', 'amount_paid', "REAL DEFAULT 0")
     addcol('purchase_orders', 'payment_status', "TEXT DEFAULT 'unpaid'")  # paid | partial | unpaid/credit
     addcol('purchase_orders', 'due_date', "TEXT")
+    # Wave 0 (AUDIT-004): returns need the same duplicate-submission protection
+    # sales already had. SQLite can't add a UNIQUE column via ALTER TABLE, so a
+    # partial unique index does the job instead (NULLs -- pre-Wave-0 rows -- are
+    # exempt, matching sqlite's own UNIQUE-column NULL semantics).
+    addcol('returns', 'idempotency_key', "TEXT")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_returns_idempotency "
+        "ON returns(idempotency_key) WHERE idempotency_key IS NOT NULL"
+    )
     conn.commit()
     _CREDIT_SCHEMA_READY = True
 

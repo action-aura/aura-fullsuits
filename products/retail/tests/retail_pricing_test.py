@@ -313,7 +313,14 @@ def test_partial_return():
     rconn.close()
 
     ret = _create_return(client, sale['id'], pid, quantity=1, unit_price=100.0, line_total=100.0)
-    assert ret['refund_amount'] == 100.0
+    # Wave 0 / AUDIT-004 intentional rule change: refund_amount is now
+    # recomputed server-side from the ORIGINAL sale_items row (unit_price,
+    # discount_pct, tax_rate) and includes tax, since the customer paid tax
+    # on this line -- a full refund must return the tax too, not just the
+    # pre-tax taxable amount. The sold item here has tax_rate=15, so 1 unit
+    # at $100 refunds $115, not $100. See
+    # docs/corrections/wave0/retail-return-correction.md.
+    assert ret['refund_amount'] == 115.0
 
     rconn = get_retail_conn()
     after = rconn.execute(
@@ -327,7 +334,8 @@ def test_full_return():
     client, cid, pid, _bid = _make_admin_and_client()
     sale, calc = _create_sale(client, pid, quantity=2, discount_pct=0)
     ret = _create_return(client, sale['id'], pid, quantity=2, unit_price=100.0, line_total=200.0)
-    assert ret['refund_amount'] == 200.0
+    # Wave 0 / AUDIT-004: tax-inclusive refund (2 * $115), see test_partial_return.
+    assert ret['refund_amount'] == 230.0
 
 
 def test_multi_line_return():
@@ -366,7 +374,9 @@ def test_multi_line_return():
         "reason": "multi-line test",
     })
     assert r2.status_code == 200, r2.get_json()
-    assert r2.get_json()["data"]["refund_amount"] == 200.0
+    # Wave 0 / AUDIT-004: tax-inclusive refund -- line 1 ($100 * 1, 15% tax)
+    # refunds $115, line 2 ($50 * 2, 15% tax) refunds $115, total $230.
+    assert r2.get_json()["data"]["refund_amount"] == 230.0
 
 
 # ── Dashboard / revenue regression coverage ─────────────────────────────────
@@ -397,7 +407,10 @@ def test_revenue_becoming_negative_is_not_clamped():
 
     d = _dashboard(client)
     assert d["today_sales"] < 0, d
-    assert d["today_sales"] == pytest.approx(115.0 - 100.0 - 500.0, abs=0.01)
+    # Wave 0 / AUDIT-004: the real return above now refunds $115 (tax-inclusive,
+    # see test_partial_return), not $100 -- so today_sales = 115 (sale) - 115
+    # (real return) - 500 (raw-inserted extra return) = -500.
+    assert d["today_sales"] == pytest.approx(115.0 - 115.0 - 500.0, abs=0.01)
 
 
 def test_dashboard_breakdown_internally_consistent():
@@ -416,4 +429,5 @@ def test_dashboard_breakdown_internally_consistent():
     ).fetchone()[0]
     rconn.close()
     assert gross_from_net_plus_returns == pytest.approx(true_gross, abs=0.01)
-    assert d["today_returns"] == pytest.approx(100.0, abs=0.01)
+    # Wave 0 / AUDIT-004: tax-inclusive refund, see test_partial_return.
+    assert d["today_returns"] == pytest.approx(115.0, abs=0.01)
