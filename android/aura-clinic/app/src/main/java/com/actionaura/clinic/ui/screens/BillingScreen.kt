@@ -1,0 +1,203 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
+package com.actionaura.clinic.ui.screens
+
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.actionaura.clinic.net.ApiClient
+import com.actionaura.clinic.net.Invoice
+import com.actionaura.clinic.ui.components.EmptyState
+import com.actionaura.clinic.ui.components.SkeletonList
+import kotlinx.coroutines.launch
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BillingScreen(snackbar: SnackbarHostState) {
+    var items by remember { mutableStateOf<List<Invoice>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var refreshing by remember { mutableStateOf(false) }
+    var showInvoice by remember { mutableStateOf(false) }
+    var payInvoice by remember { mutableStateOf<Invoice?>(null) }
+    val scope = rememberCoroutineScope()
+
+    suspend fun load() { items = try { ApiClient.get().invoices().data } catch (e: Exception) { emptyList() } }
+    LaunchedEffect(Unit) { loading = true; load(); loading = false }
+
+    Box(Modifier.fillMaxSize()) {
+        PullToRefreshBox(
+            isRefreshing = refreshing,
+            onRefresh = { scope.launch { refreshing = true; load(); refreshing = false } },
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            if (loading && items.isEmpty()) {
+                SkeletonList(count = 6, modifier = Modifier.fillMaxSize())
+            } else if (items.isEmpty()) {
+                EmptyState(
+                    icon = Icons.Default.ReceiptLong,
+                    title = "No invoices yet",
+                    subtitle = "Create an invoice to start billing patients.",
+                    ctaText = "New Invoice", onCta = { showInvoice = true },
+                )
+            } else {
+                LazyColumn(contentPadding = PaddingValues(16.dp, 12.dp, 16.dp, 96.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    items(items, key = { it.id }) { inv ->
+                        ElevatedCard(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(inv.invoice_number ?: "Invoice", style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                                    StatusChip(inv.status ?: "unpaid")
+                                }
+                                Spacer(Modifier.height(6.dp))
+                                Text(inv.patient_name ?: "—", style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Spacer(Modifier.height(8.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("Total $%.2f".format(inv.total), fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.weight(1f))
+                                    Text("Paid $%.2f".format(inv.amount_paid),
+                                        color = MaterialTheme.colorScheme.primary)
+                                }
+                                if ((inv.status ?: "") != "paid") {
+                                    Spacer(Modifier.height(10.dp))
+                                    FilledTonalButton(onClick = { payInvoice = inv }) { Text("Record Payment") }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        ExtendedFloatingActionButton(
+            onClick = { showInvoice = true },
+            icon = { Icon(Icons.Default.Add, null) }, text = { Text("New Invoice") },
+            modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
+        )
+    }
+
+    if (showInvoice) {
+        NewInvoiceSheet(
+            onDismiss = { showInvoice = false },
+            onCreated = { showInvoice = false; scope.launch { snackbar.showSnackbar("Invoice created"); load() } },
+        )
+    }
+    payInvoice?.let { inv ->
+        PaymentSheet(
+            invoice = inv,
+            onDismiss = { payInvoice = null },
+            onPaid = { payInvoice = null; scope.launch { snackbar.showSnackbar("Payment recorded"); load() } },
+        )
+    }
+}
+
+@Composable
+private fun NewInvoiceSheet(onDismiss: () -> Unit, onCreated: () -> Unit) {
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var patients by remember { mutableStateOf<List<com.actionaura.clinic.net.Patient>>(emptyList()) }
+    var patientId by remember { mutableStateOf<Int?>(null) }
+    var desc by remember { mutableStateOf("") }
+    var qty by remember { mutableStateOf("1") }
+    var price by remember { mutableStateOf("") }
+    var discount by remember { mutableStateOf("0") }
+    var taxPct by remember { mutableStateOf("0") }
+    var saving by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) { patients = try { ApiClient.get().patients().data } catch (e: Exception) { emptyList() } }
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
+        Column(Modifier.padding(20.dp).padding(bottom = 24.dp)) {
+            Text("New Invoice", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(16.dp))
+            LabeledDropdown("Patient", patients.map { it.id to (it.name ?: "#${it.id}") }, patientId) { patientId = it }
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(desc, { desc = it }, label = { Text("Service / item *") },
+                singleLine = true, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(qty, { qty = it }, label = { Text("Qty") }, singleLine = true, modifier = Modifier.weight(1f))
+                OutlinedTextField(price, { price = it }, label = { Text("Unit price") }, singleLine = true, modifier = Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(discount, { discount = it }, label = { Text("Discount $") }, singleLine = true, modifier = Modifier.weight(1f))
+                OutlinedTextField(taxPct, { taxPct = it }, label = { Text("Tax %") }, singleLine = true, modifier = Modifier.weight(1f))
+            }
+            if (error != null) { Spacer(Modifier.height(10.dp)); Text(error!!, color = MaterialTheme.colorScheme.error) }
+            Spacer(Modifier.height(20.dp))
+            Button(onClick = {
+                val pr = price.toDoubleOrNull()
+                if (patientId == null || desc.isBlank() || pr == null) { error = "Patient, item and price required"; return@Button }
+                saving = true; error = null
+                scope.launch {
+                    try {
+                        val r = ApiClient.get().createInvoice(com.actionaura.clinic.net.CreateInvoiceRequest(
+                            patient_id = patientId!!,
+                            items = listOf(com.actionaura.clinic.net.InvoiceItemReq(desc.trim(), qty.toDoubleOrNull() ?: 1.0, pr)),
+                            discount = discount.toDoubleOrNull() ?: 0.0,
+                            tax_rate = (taxPct.toDoubleOrNull() ?: 0.0) / 100.0))
+                        if (r.status == "success") onCreated() else error = r.message ?: "Couldn't create"
+                    } catch (e: Exception) { error = "Couldn't reach the server" } finally { saving = false }
+                }
+            }, enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                if (saving) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onPrimary)
+                else Text("Create Invoice", style = MaterialTheme.typography.labelLarge)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PaymentSheet(invoice: Invoice, onDismiss: () -> Unit, onPaid: () -> Unit) {
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val due = (invoice.total - invoice.amount_paid).coerceAtLeast(0.0)
+    var amount by remember { mutableStateOf("%.2f".format(due)) }
+    var method by remember { mutableStateOf("cash") }
+    var saving by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
+        Column(Modifier.padding(20.dp).padding(bottom = 24.dp)) {
+            Text("Record Payment", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("${invoice.invoice_number ?: ""} · due $%.2f".format(due),
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(16.dp))
+            OutlinedTextField(amount, { amount = it }, label = { Text("Amount") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(12.dp))
+            LabeledDropdown("Method", listOf(0 to "cash", 1 to "card", 2 to "insurance", 3 to "bank_transfer"),
+                when (method) { "card" -> 1; "insurance" -> 2; "bank_transfer" -> 3; else -> 0 }) {
+                method = listOf("cash", "card", "insurance", "bank_transfer")[it]
+            }
+            Spacer(Modifier.height(20.dp))
+            Button(onClick = {
+                val amt = amount.toDoubleOrNull() ?: return@Button
+                saving = true
+                scope.launch {
+                    try {
+                        ApiClient.get().createPayment(com.actionaura.clinic.net.CreatePaymentRequest(
+                            invoice_id = invoice.id, amount = amt, method = method))
+                        onPaid()
+                    } catch (e: Exception) { saving = false }
+                }
+            }, enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                if (saving) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onPrimary)
+                else Text("Record Payment", style = MaterialTheme.typography.labelLarge)
+            }
+        }
+    }
+}
