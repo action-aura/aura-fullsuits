@@ -864,7 +864,11 @@ def create_return():
     try:
         idem = data.get('idempotency_key')
         if idem:
-            ex = cur.execute("SELECT id,return_number FROM returns WHERE idempotency_key=?", (idem,)).fetchone()
+            # company_id-scoped: an unscoped lookup would let a caller who
+            # somehow knew/guessed another company's idempotency_key read
+            # back that company's return id/number.
+            ex = cur.execute("SELECT id,return_number FROM returns WHERE idempotency_key=? AND company_id=?",
+                              (idem, cid)).fetchone()
             if ex:
                 conn.close()
                 return jsonify({'status': 'success', 'data': {'id': ex['id'], 'return_number': ex['return_number']}})

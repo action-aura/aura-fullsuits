@@ -726,7 +726,14 @@ def create_invoice():
         conn.commit()
     except Exception as e:
         conn.rollback(); conn.close()
-        return jsonify({'status': 'error', 'message': f'Could not create invoice: {e}'}), 500
+        # Never echo the raw exception to the client -- a SQL-bind error can
+        # embed request values (patient name/notes/etc) as literals in its
+        # message, which is exactly the information-disclosure class the
+        # Phase 3 fix to create_patient() already remediated (see that
+        # function's own comment). Log server-side only.
+        import logging
+        logging.getLogger('aura.clinic').error('create_invoice failed: %s', e)
+        return jsonify({'status': 'error', 'message': 'Could not create invoice.'}), 500
     conn.close()
     _emit('ClinicInvoiceIssued', {'invoice_id': inv_id, 'total': total})
     # Mirror into the Accounting invoice system so clinic billing also lands in the
@@ -817,9 +824,15 @@ def record_payment():
 
     idem = data.get('idempotency_key')
     if idem:
-        existing = conn.execute("SELECT id FROM clinic_payments WHERE idempotency_key=?", (idem,)).fetchone()
+        # company_id-scoped: an unscoped lookup here would let a caller who
+        # somehow knew or guessed another company's idempotency_key read
+        # back that company's payment id/invoice status.
+        existing = conn.execute(
+            "SELECT id FROM clinic_payments WHERE idempotency_key=? AND company_id=?", (idem, cid)
+        ).fetchone()
         if existing:
-            inv_now = conn.execute("SELECT status FROM clinic_invoices WHERE id=?", (invoice_id,)).fetchone()
+            inv_now = conn.execute("SELECT status FROM clinic_invoices WHERE id=? AND company_id=?",
+                                    (invoice_id, cid)).fetchone()
             conn.close()
             return jsonify({'status': 'success', 'data': {
                 'id': existing['id'], 'invoice_status': inv_now['status'] if inv_now else None,
@@ -871,7 +884,11 @@ def record_payment():
         conn.commit()
     except Exception as e:
         conn.rollback(); conn.close()
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        # Same information-disclosure concern as create_invoice()'s handler
+        # above -- log server-side only, never echo the raw exception.
+        import logging
+        logging.getLogger('aura.clinic').error('record_payment failed: %s', e)
+        return jsonify({'status': 'error', 'message': 'Could not record payment.'}), 500
 
     conn.close()
     _emit('ClinicPaymentReceived', {'payment_id': pay_id, 'amount': amount})

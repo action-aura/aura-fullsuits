@@ -37,6 +37,12 @@ def _conn(name):
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
     c.execute("PRAGMA busy_timeout=30000")
+    # Wave 0 (AUDIT-016): every declared FOREIGN KEY in this schema was
+    # previously decorative -- SQLite defaults enforcement to OFF, and this
+    # was the only connection factory in the file, so it was never turned on
+    # anywhere. Set on every connection (SQLite does not persist this setting
+    # in the database file itself; it must be set per-connection, every time).
+    c.execute("PRAGMA foreign_keys=ON")
     return c
 
 
