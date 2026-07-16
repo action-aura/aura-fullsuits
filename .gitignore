@@ -1,8 +1,8 @@
 # Environments / secrets
 .env
 *.local.env
-android/keystore.properties
-android/local.properties
+android/*/keystore.properties
+android/*/local.properties
 *.jks
 *.keystore
 
@@ -27,14 +27,16 @@ node_modules/
 /build/
 .venv_test/
 
-# Android
-android/.gradle/
-android/app/build/
-android/build/
-android/local.properties
-android/.idea/
+# Android (two independent projects: android/aura-retail, android/aura-clinic)
+android/*/.gradle/
+android/*/app/build/
+android/*/build/
+android/*/local.properties
+android/*/.idea/
 *.iml
-android/.cxx/
+android/*/.cxx/
+# APK/AAB build outputs are not committed by policy -- see docs/android/*
+android/*/app/build/outputs/
 
 # OS/editor
 .DS_Store
