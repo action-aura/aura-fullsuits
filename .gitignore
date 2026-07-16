@@ -38,6 +38,9 @@ android/*/.cxx/
 # APK/AAB build outputs are not committed by policy -- see docs/android/*
 android/*/app/build/outputs/
 
+# Audit-only temp artifacts (Phase 3.5) -- never committed, ephemeral only
+.audit-temp/
+
 # OS/editor
 .DS_Store
 Thumbs.db
