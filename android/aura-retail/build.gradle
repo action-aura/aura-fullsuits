@@ -1,0 +1,17 @@
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url "https://chaquo.com/maven" }
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.5.2'
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.21'
+        classpath 'org.jetbrains.kotlin:compose-compiler-gradle-plugin:2.0.21'
+        classpath 'com.chaquo.python:gradle:16.0.0'
+    }
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}
