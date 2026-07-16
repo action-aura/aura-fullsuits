@@ -109,15 +109,30 @@ def create_admin():
 
     conn = get_conn()
     try:
+        # BEGIN IMMEDIATE takes the write lock up front (rather than on the
+        # first write, as a bare BEGIN would) so two concurrent onboarding
+        # requests can't both observe "no admin exists yet" and both proceed
+        # -- the second one blocks here until the first commits or rolls
+        # back, then re-reads a world where an admin now exists.
+        conn.execute("BEGIN IMMEDIATE")
+
         existing_admin = conn.execute(
             "SELECT id, password_hash FROM users WHERE role='admin' LIMIT 1"
         ).fetchone()
         if existing_admin and existing_admin['password_hash'] not in ('', 'PENDING', None, 'null', 'NULL'):
+            conn.rollback()
             return jsonify({'error': 'An admin account already exists. Please login.'}), 409
+
+        # Reject a genuine email collision with an unrelated account instead
+        # of silently deleting it -- only the pending-admin row being
+        # replaced (if any) may share this email.
+        email_owner = conn.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
+        if email_owner and (not existing_admin or email_owner['id'] != existing_admin['id']):
+            conn.rollback()
+            return jsonify({'error': 'This email is already registered to another account.'}), 400
 
         if existing_admin:
             conn.execute("DELETE FROM users WHERE role='admin'")
-        conn.execute("DELETE FROM users WHERE email=?", (email,))
 
         company_id = cfg.get('company_id') or hashlib.md5(email.encode()).hexdigest()
         user_id    = str(uuid.uuid4())
@@ -129,6 +144,22 @@ def create_admin():
             VALUES (?, ?, 'ADMIN-0001', ?, ?, 'admin', 'active', 0)
         """, (user_id, company_id, email, pwd_hash))
 
+        # Kept inside the same transaction as the user insert -- either both
+        # land or neither does, so a mid-onboarding failure can never leave
+        # an admin account with no matching company_settings row.
+        conn.execute("""
+            INSERT OR REPLACE INTO company_settings
+              (id, company_id, country, timezone, currency, business_type, language)
+            VALUES (?,?,?,?,?,?,?)
+        """, (str(uuid.uuid4()), company_id, country, timezone, currency, business_type, language))
+
+        conn.commit()
+
+        # config.json is not part of the DB transaction (it's a file, not a
+        # SQL statement) -- written only after the DB commit succeeds, so a
+        # DB-side failure never leaves a stray config.json update behind.
+        # The DB remains the single source of truth either way (see
+        # onboarding_status()'s own docstring).
         _write_config({
             'company_id':          company,
             'admin_email':         email,
@@ -139,15 +170,6 @@ def create_admin():
             'business_type':       business_type,
             'language':            language,
         })
-        try:
-            conn.execute("""
-                INSERT OR REPLACE INTO company_settings
-                  (id, company_id, country, timezone, currency, business_type, language)
-                VALUES (?,?,?,?,?,?,?)
-            """, (str(uuid.uuid4()), company_id, country, timezone, currency, business_type, language))
-        except Exception:
-            pass
-        conn.commit()
 
         _security_audit(company_id, user_id, ADMIN_CREATED, context={'email': email, 'company': company})
 
@@ -162,6 +184,13 @@ def create_admin():
             'user': {'id': user_id, 'email': email, 'role': 'admin', 'company': company}
         })
     except Exception as e:
+        # Safe even if the transaction already committed above (nothing left
+        # to roll back in that case) -- guards the pre-commit failure path,
+        # which is the one that must never leave a partial user/company row.
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         return jsonify({'error': str(e)}), 500
     finally:
         conn.close()

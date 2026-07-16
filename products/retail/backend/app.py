@@ -69,12 +69,14 @@ def _no_cache(response):
 
 
 from commercial_runtime.identity.auth_routes import auth_bp
+from commercial_runtime.identity.onboarding_routes import onboarding_bp
 from commercial_runtime.identity.registry_db import init_registry_db
 from database.schema import init_retail
 from api.retail_api import retail_bp
 from api.import_api import import_bp
 
 app.register_blueprint(auth_bp)
+app.register_blueprint(onboarding_bp)
 app.register_blueprint(retail_bp)
 app.register_blueprint(import_bp)
 
