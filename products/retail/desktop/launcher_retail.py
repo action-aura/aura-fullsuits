@@ -64,15 +64,37 @@ def _find_free_port(start=DEFAULT_PORT, stop=DEFAULT_PORT + 20):
 
 
 def _wait_for_server(url, timeout=45.0):
+    # TEMPORARY DIAGNOSTIC INSTRUMENTATION -- Phase 3.7 Step 1 reproduction.
+    # Logs proxy env + per-attempt exception type/message/status, no secrets
+    # or business data. Removed once root cause is confirmed (see
+    # docs/corrections/launcher/pre-fix-reproduction.md).
     import urllib.request
     import urllib.error
+    log.info(f'[DIAG] readiness URL={url} timeout={timeout}')
+    log.info(f'[DIAG] proxy env: HTTP_PROXY={os.environ.get("HTTP_PROXY")!r} '
+             f'HTTPS_PROXY={os.environ.get("HTTPS_PROXY")!r} NO_PROXY={os.environ.get("NO_PROXY")!r}')
+    try:
+        import socket as _s
+        log.info(f'[DIAG] getaddrinfo(127.0.0.1): {_s.getaddrinfo("127.0.0.1", None)}')
+    except Exception as _e:
+        log.info(f'[DIAG] getaddrinfo failed: {_e!r}')
     deadline = time.time() + timeout
+    attempt = 0
+    start = time.time()
     while time.time() < deadline:
+        attempt += 1
+        t0 = time.time()
         try:
-            urllib.request.urlopen(url, timeout=2)
+            resp = urllib.request.urlopen(url, timeout=2)
+            log.info(f'[DIAG] attempt={attempt} elapsed={t0-start:.2f}s SUCCESS status={resp.status}')
             return True
-        except (urllib.error.URLError, OSError):
+        except urllib.error.HTTPError as e:
+            log.info(f'[DIAG] attempt={attempt} elapsed={t0-start:.2f}s HTTPError code={e.code} reason={e.reason!r}')
             time.sleep(0.4)
+        except (urllib.error.URLError, OSError) as e:
+            log.info(f'[DIAG] attempt={attempt} elapsed={t0-start:.2f}s {type(e).__name__}: {e!r}')
+            time.sleep(0.4)
+    log.info(f'[DIAG] TIMED OUT after {attempt} attempts, {time.time()-start:.2f}s elapsed')
     return False
 
 
