@@ -78,15 +78,30 @@ def start_server(files_dir: str, port: int = 5000) -> int:
 
 
 def wait_until_ready(port: int, timeout: float = 45.0) -> bool:
-    """Block until the server answers (used by Kotlin before showing the UI)."""
-    url = f'http://{HOST}:{port}/'
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    """Block until the server answers (used by Kotlin before showing the UI).
+
+    Phase 4K: polls the unauthenticated GET /api/health endpoint, not the
+    bare "/" path -- Retail's app.py has never served "/" (static_url_path
+    is "/static", not "/"), so a check against it would 404 every single
+    attempt and always time out regardless of actual server health. This
+    is the identical defect and fix already proven on Windows (see
+    docs/corrections/launcher/root-cause-analysis.md and
+    commercial_runtime/launcher_support.py) -- Android's main.py was
+    migrated before that correction existed and carried the same bug.
+    Uses time.monotonic() (not time.time()) so a wall-clock adjustment
+    mid-startup cannot corrupt the deadline.
+    """
+    url = f'http://{HOST}:{port}/api/health'
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         try:
-            urllib.request.urlopen(url, timeout=2)
-            return True
+            with urllib.request.urlopen(url, timeout=2) as resp:
+                status = getattr(resp, 'status', None) or resp.getcode()
+                if status == 200:
+                    return True
         except (urllib.error.URLError, OSError):
-            time.sleep(0.4)
+            pass
+        time.sleep(0.4)
     return False
 
 
