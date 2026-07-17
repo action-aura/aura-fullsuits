@@ -1,18 +1,20 @@
 # Master Defect Registry
 
-29 issues. Full structured data (all fields) in `22-master-defect-registry.json`
+30 issues (AUDIT-030 added in Phase 3.7, launcher corrective wave — see
+below). Full structured data (all fields) in `22-master-defect-registry.json`
 and `22-master-defect-registry.csv` — this document is a human-readable index.
-Severity: **P0**=3, **P1**=4, **P2**=11, **P3**=6, **P4**=5.
+Severity: **P0**=4, **P1**=4, **P2**=11, **P3**=6, **P4**=5.
 Release blockers (Gate 3, paid SMB): AUDIT-001, 002, 003, 004, 011, 012, 019,
-022, 023.
+022, 023, 030.
 
-## P0 — Catastrophic (3)
+## P0 — Catastrophic (4)
 
 | ID | Title | Product | Confidence |
 |---|---|---|---|
 | AUDIT-001 | Retail has no self-service onboarding/first-user path (any platform) | Retail | PROVEN |
 | AUDIT-002 | Android Retail POS omits tax and discount on every sale | Retail/Android | PROVEN |
 | AUDIT-004 | `create_return()` has no validation against the original sale (linkage/quantity/duplicate) | Retail | PROVEN |
+| AUDIT-030 | Both Windows launchers' startup readiness check polls a route no server has ever served, killing or orphaning a healthy server | Retail+Clinic | PROVEN |
 
 ## P1 — Critical (4)
 
@@ -59,6 +61,19 @@ Release blockers (Gate 3, paid SMB): AUDIT-001, 002, 003, 004, 011, 012, 019,
 | AUDIT-025 | App version numbers not synchronized across platforms | Both |
 | AUDIT-028 | `delete_product`'s branch-decision query not company-scoped (not exploitable) | Retail |
 | AUDIT-029 | Secret-key file's `chmod` call is a no-op on Windows | Both |
+
+## Phase 3.7 corrective status: AUDIT-030 (launcher watchdog, added and fixed same phase)
+
+AUDIT-030 was discovered during the Wave 0 Windows packaged smoke test
+(both launchers' server-readiness check always failed, killing or
+orphaning an otherwise healthy server ~45s after a successful start — see
+`docs/corrections/launcher/`), assigned a stable ID, classified
+release-blocking, then fixed and verified within the same corrective
+phase (Phase 3.7): `status: FIXED_AND_VERIFIED_LAUNCHER_PHASE` in the
+`.json`/`.csv` copies. Root cause confirmed with direct evidence (not
+inferred), fix verified by 15 unit tests plus a real 10+ minute packaged
+long-run smoke test for both products. See
+`docs/corrections/launcher/WINDOWS-LAUNCHER-CORRECTIVE-HANDOVER.md`.
 
 ## Wave 0 corrective status (added; original findings above are unchanged)
 

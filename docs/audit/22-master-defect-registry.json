@@ -1,6 +1,6 @@
 {
   "generated_by": "Phase 3.5 audit",
-  "issue_count": 29,
+  "issue_count": 30,
   "issues": [
     {
       "issue_id": "AUDIT-001",
@@ -1030,6 +1030,42 @@
       "estimated_effort": "XS",
       "confidence": "PROVEN",
       "status": "OPEN"
+    },
+    {
+      "issue_id": "AUDIT-030",
+      "title": "Both Windows launchers' startup readiness check polls a route no server has ever served, always timing out and killing (or orphaning) a healthy server",
+      "product": "Retail+Clinic",
+      "platform": "Windows",
+      "version": "aura-fullsuits HEAD (post corrective-wave0-stop-ship-complete)",
+      "component": "products/{retail,clinic}/desktop/launcher_{retail,clinic}.py _wait_for_server()",
+      "category": "reliability",
+      "severity": "P0",
+      "release_blocker": true,
+      "enterprise_blocker": true,
+      "customer_impact": "Total for the packaged Windows desktop experience -- a real customer double-clicking the shipped exe would, ~45 seconds after a successful start, either see the app killed with a generic error, or (in a non-interactive/no-desktop-session launch context) get a silently orphaned server process with no visible window at all.",
+      "financial_impact": "None directly (does not corrupt data or misstate money), but blocks all use of the Windows packaged product.",
+      "privacy_impact": "None",
+      "data_integrity_impact": "None observed -- the server itself was healthy and the database was never touched by this defect.",
+      "security_impact": "Secondary finding: the failure path's blocking MessageBoxW call could prevent sys.exit(1) from ever running in a non-interactive launch context, leaving an orphaned, unmanaged server process bound to a loopback port indefinitely.",
+      "reproducibility": "Always (100%, structural) -- 107/107 (Retail) and 97/97 (Clinic) readiness attempts failed identically in direct reproduction.",
+      "reproduction_steps": "Launch the packaged AuraRetail.exe/AuraClinic.exe with a throwaway AURA_APP_DATA directory; observe the server start and answer real API requests via an independent curl process within seconds, while the launcher's own internal readiness check (polling bare 'http://127.0.0.1:<port>') fails every single attempt with HTTPError 404 for the full 45s timeout, then calls _fatal().",
+      "expected_result": "The launcher recognizes its own server as ready within a few seconds and proceeds to open the application window.",
+      "actual_result": "Every readiness attempt returned HTTP 404 (no route was ever registered for '/'), so the check never succeeded regardless of actual server health; _fatal() then either killed the process or, when its blocking MessageBoxW call could not return (no interactive desktop session), left the process running unmanaged.",
+      "evidence": "docs/corrections/launcher/pre-fix-reproduction.md, docs/corrections/launcher/root-cause-analysis.md",
+      "source_file": "products/retail/desktop/launcher_retail.py; products/clinic/desktop/launcher_clinic.py",
+      "source_line": "_wait_for_server() (readiness URL construction) and _fatal() (MessageBoxW call)",
+      "affected_database_tables": "N/A",
+      "affected_api_routes": "N/A (fixed by adding GET /api/health to both products' app.py)",
+      "affected_ui_screens": "The entire desktop application window/launch flow for both products.",
+      "test_coverage": "None prior to this phase -- no test in the repository exercised either launcher script's main() entry point (all existing tests boot app.py directly via Flask.test_client(), never launcher_retail.py/launcher_clinic.py).",
+      "suspected_root_cause": "CONFIRMED, not suspected: _wait_for_server(url) was called with url = f'http://{HOST}:{port}' (the bare root path), and neither app.py has ever registered a route for '/' (static_url_path is '/static', not '/'). See root-cause-analysis.md for the full disproof of every alternative hypothesis (proxy, IPv6, threading, port mismatch, race).",
+      "recommended_fix_direction": "Add a dedicated unauthenticated GET /api/health endpoint and point the readiness check at it; use a monotonic clock and an explicit no-proxy opener; distinguish process-exited/health-endpoint-error/timeout failure reasons; bound the failure dialog so it cannot block process exit indefinitely.",
+      "recommended_test_after_fix": "Dependency-injected unit tests against the extracted readiness-check logic, plus a real packaged long-run (10+ minute) smoke test proving the server remains reachable well past the old 43-45s failure window and survives a clean shutdown/restart cycle.",
+      "dependency_on_other_issue": "None (Retail/Clinic launchers are independent of the Wave 0 financial/data-safety fixes; discovered while re-verifying those fixes in the packaged artifact)",
+      "estimated_effort": "S",
+      "confidence": "PROVEN",
+      "status": "FIXED_AND_VERIFIED_LAUNCHER_PHASE",
+      "phase37_resolution": "commits 074ed8b (reproduction), 6a7dbda (fix: /api/health + commercial_runtime/launcher_support.py + explicit LauncherState lifecycle + bounded failure dialog), 47d421a (15 unit tests, all passing); real packaged rebuild + 10+ minute long-run smoke test for both products (docs/corrections/launcher/packaged-long-run-smoke-report.md) -- readiness now achieved in ~2.5s/2 attempts (first launch) and ~1.5s/1 attempt (after restart), both products ran 10+ minutes without incident, clean shutdown with zero orphan processes, full data persistence across restart, PRAGMA integrity_check ok on both databases. Tag windows-launcher-watchdog-corrected."
     }
   ]
 }

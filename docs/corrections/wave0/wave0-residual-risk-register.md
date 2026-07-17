@@ -63,19 +63,14 @@ fix was confirmed present and working in the actual packaged artifact
 rejected, Clinic duplicate payment deduplicated, onboarding works, backup
 creation works, no DB corruption after a hard process kill).
 
-**New defect found by this smoke test, not yet fixed**:
-`launcher_retail.py`'s (and by the same pattern, `launcher_clinic.py`'s)
-`_wait_for_server()` readiness watchdog incorrectly declared a working
-server dead ~43 seconds after a successful start and killed the process,
-even though the server was independently confirmed reachable via `curl`
-during that same window. Root cause not confirmed within the smoke test's
-time budget (a Windows-registry proxy interaction with `urllib` inside the
-frozen build is a plausible but unverified hypothesis). This is a real,
-reproducible defect in the launcher's own self-check, separate from the
-actual HTTP server and from every AUDIT item this wave targeted. **Not
-fixed in this wave** — recommended as a P1/P2 item for the next wave, since
-it can cause a real end-user's packaged app to shut itself down shortly
-after a successful launch.
+**Update (2026-07-17, Phase 3.7 — CLOSED)**: this defect was assigned
+`AUDIT-030`, confirmed release-blocking, root-caused with direct evidence,
+fixed, and verified with a real 10+ minute packaged long-run smoke test
+for both products. See `docs/corrections/launcher/` (root cause: the
+readiness check polled the bare `/` path, which no route has ever served —
+not a proxy issue, disproven with logged evidence) and
+`docs/audit/22-master-defect-registry.*` (AUDIT-030). No longer an open
+residual risk.
 
 ## Android client not touched
 
