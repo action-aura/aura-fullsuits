@@ -37,7 +37,7 @@ for _p in (str(SUITE_ROOT), str(BACKEND_DIR)):
 from flask import Flask
 from flask_cors import CORS
 
-from config import SECRET_KEY
+from config import SECRET_KEY, DATABASE_DIR, APP_VERSION
 
 app = Flask(__name__, static_folder=str(PRODUCT_DIR / 'frontend'), static_url_path='/static')
 
@@ -74,11 +74,13 @@ from commercial_runtime.identity.registry_db import init_registry_db
 from database.schema import init_retail
 from api.retail_api import retail_bp
 from api.import_api import import_bp
+from commercial_runtime.backup.routes import make_backup_blueprint
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(onboarding_bp)
 app.register_blueprint(retail_bp)
 app.register_blueprint(import_bp)
+app.register_blueprint(make_backup_blueprint('retail', DATABASE_DIR, APP_VERSION))
 
 
 def init_app():
