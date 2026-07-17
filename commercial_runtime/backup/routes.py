@@ -17,6 +17,7 @@ import os
 import logging
 
 from flask import Blueprint, request, jsonify, session, send_from_directory
+from werkzeug.utils import secure_filename
 
 from commercial_runtime.backup.service import (
     create_backup, restore_backup, BackupError, is_safe_backup_dir,
@@ -26,8 +27,13 @@ log = logging.getLogger('aura.backup')
 
 
 def _require_admin():
-    if session.get('is_demo_mode'):
-        return None
+    # Deliberately no demo-mode bypass here, unlike mt_login_required's
+    # `session.get('is_demo_mode')` carve-out -- that flag is never actually
+    # set anywhere in this codebase today (it's vestigial from the source
+    # monolith), but backup/restore is destructive enough (restore replaces
+    # live databases) that it must always require a real authenticated admin
+    # session, even if some future code path starts setting that flag for
+    # convenience on lower-risk routes.
     if 'mt_user_id' not in session:
         return jsonify({'error': 'Authentication required', 'code': 401}), 401
     if session.get('mt_role') != 'admin':
@@ -108,7 +114,13 @@ def make_backup_blueprint(product_code, database_dir, app_version, default_backu
         try:
             if upload is not None:
                 os.makedirs(backup_dir, exist_ok=True)
-                cleanup_path = os.path.join(backup_dir, f'.upload-{os.getpid()}-{upload.filename or "backup"}.zip')
+                # secure_filename() strips path separators and ".." segments
+                # -- upload.filename is attacker-controlled (the client sets
+                # it in the multipart request) and was previously
+                # interpolated into the save path unsanitized, which would
+                # let a filename like "../../evil" write outside backup_dir.
+                safe_upload_name = secure_filename(upload.filename or '') or 'backup'
+                cleanup_path = os.path.join(backup_dir, f'.upload-{os.getpid()}-{safe_upload_name}.zip')
                 upload.save(cleanup_path)
                 source_path = cleanup_path
             else:

@@ -15,6 +15,7 @@ partial file behind when a source database is missing.
 Run:
     pytest products/retail/tests/retail_backup_restore_test.py -v
 """
+import io
 import os
 import shutil
 import sqlite3
@@ -243,3 +244,39 @@ def test_backup_create_endpoint_requires_admin_role():
     client.post('/api/auth/login', json={'email': email, 'password': password})
     r = client.post('/api/backup/create')
     assert r.status_code == 403
+
+
+def test_restore_upload_filename_is_sanitized_against_path_traversal():
+    """Regression: request.files['file'].filename is attacker-controlled and
+    was previously interpolated unsanitized into the server-side save path
+    -- a filename like "../../evil" must not escape the backup directory."""
+    from commercial_runtime.identity.registry_db import get_conn as registry_conn
+    from commercial_runtime.security.passwords import hash_password
+    email = f"backup-admin-{uuid.uuid4().hex[:8]}@test.local"
+    password = "AdminPW12345"
+    company_id = str(uuid.uuid4())
+    user_id = str(uuid.uuid4())
+    conn = registry_conn()
+    conn.execute(
+        "INSERT INTO users (id, company_id, employee_id, email, password_hash, role, status, require_password_change) "
+        "VALUES (?,?,?,?,?,?,?,0)",
+        (user_id, company_id, "EMP-0003", email, hash_password(password), "admin", "active"),
+    )
+    conn.commit()
+    conn.close()
+
+    client = _flask_app.test_client()
+    client.post('/api/auth/login', json={'email': email, 'password': password})
+
+    escape_target = DATA.parent / 'traversal-canary.zip'
+    try:
+        r = client.post('/api/backup/restore', data={
+            'file': (io.BytesIO(b'not a real zip'), '../../../../traversal-canary.zip'),
+        }, content_type='multipart/form-data')
+        # Malformed zip content -> rejected, but the important assertion is
+        # that nothing was ever written outside the backup directory.
+        assert r.status_code in (400, 500)
+        assert not escape_target.exists(), "upload must never be saved outside the backup directory"
+    finally:
+        if escape_target.exists():
+            escape_target.unlink()
