@@ -60,6 +60,27 @@ Release blockers (Gate 3, paid SMB): AUDIT-001, 002, 003, 004, 011, 012, 019,
 | AUDIT-028 | `delete_product`'s branch-decision query not company-scoped (not exploitable) | Retail |
 | AUDIT-029 | Secret-key file's `chmod` call is a no-op on Windows | Both |
 
+## Wave 0 corrective status (added; original findings above are unchanged)
+
+The stop-ship P0/P1 set plus directly-dependent issues were corrected in
+Phase 3.6 ("Corrective Wave 0"). Full per-issue resolution evidence
+(commit, test, doc) is recorded in the `status`/`wave0_resolution` fields
+of the `.json`/`.csv` copies of this registry, and narrated in
+`docs/corrections/wave0/`. Summary:
+
+| ID | Wave 0 status |
+|---|---|
+| AUDIT-001, 002, 003, 004, 005, 006, 008, 009 | FIXED_AND_VERIFIED_WAVE0 |
+| AUDIT-011, 012, 016, 018, 019 | FIXED_AND_VERIFIED_WAVE0 |
+| AUDIT-010 | DEFERRED_WAVE0 (Option B — see `docs/corrections/wave0/wave0-residual-risk-register.md`) |
+| all other IDs (007, 013, 014, 015, 017, 020–029) | unchanged, still OPEN — out of Wave 0 scope |
+
+This does **not** mean either product has cleared its release gates —
+AUDIT-022/023 (unsigned Windows/Android builds) remain OPEN and are named
+release blockers in this same registry. See
+`docs/corrections/wave0/WAVE0-CORRECTIVE-HANDOVER.md` for the honest
+overall status.
+
 ## Notes on this registry
 
 - **Every issue is marked PROVEN** (or, for AUDIT-026's scale-impact claim,

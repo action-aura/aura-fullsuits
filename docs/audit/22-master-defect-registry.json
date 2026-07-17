@@ -35,7 +35,8 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "XS",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "FIXED_AND_VERIFIED_WAVE0",
+      "wave0_resolution": "commit 7d05a93; docs/corrections/wave0/retail-onboarding-correction.md; tests: retail_onboarding_wave0_test.py (8 passing)"
     },
     {
       "issue_id": "AUDIT-002",
@@ -70,7 +71,8 @@
       "dependency_on_other_issue": "AUDIT-003",
       "estimated_effort": "M",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "FIXED_AND_VERIFIED_WAVE0",
+      "wave0_resolution": "commit 53911a9; docs/corrections/wave0/retail-financial-authority-correction.md; tests: retail_financial_authority_test.py::test_android_style_zero_tax_payload_still_computes_real_tax"
     },
     {
       "issue_id": "AUDIT-003",
@@ -105,7 +107,8 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "M",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "FIXED_AND_VERIFIED_WAVE0",
+      "wave0_resolution": "commit 53911a9; docs/corrections/wave0/retail-financial-authority-correction.md; tests: retail_financial_authority_test.py::test_server_ignores_manipulated_totals_and_unit_price"
     },
     {
       "issue_id": "AUDIT-004",
@@ -140,7 +143,8 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "M",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "FIXED_AND_VERIFIED_WAVE0",
+      "wave0_resolution": "commit 53911a9; docs/corrections/wave0/retail-return-correction.md; tests: retail_returns_wave0_test.py (10 passing)"
     },
     {
       "issue_id": "AUDIT-005",
@@ -175,7 +179,8 @@
       "dependency_on_other_issue": "AUDIT-003 (should be fixed as part of the same server-side-computation change)",
       "estimated_effort": "S",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "FIXED_AND_VERIFIED_WAVE0",
+      "wave0_resolution": "commit 53911a9; discount clamped via pricing.clamp_discount_pct(); tests: retail_financial_authority_test.py::test_discount_over_100_percent_is_clamped_not_rejected / ::test_negative_discount_is_clamped_to_zero"
     },
     {
       "issue_id": "AUDIT-006",
@@ -210,7 +215,8 @@
       "dependency_on_other_issue": "AUDIT-003",
       "estimated_effort": "XS",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "FIXED_AND_VERIFIED_WAVE0",
+      "wave0_resolution": "commit 53911a9; core/retail/pricing.py rewritten to Decimal + ROUND_HALF_UP; 26/26 retail_pricing_test.py still pass"
     },
     {
       "issue_id": "AUDIT-007",
@@ -280,7 +286,8 @@
       "dependency_on_other_issue": "AUDIT-003 (fix together)",
       "estimated_effort": "XS",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "FIXED_AND_VERIFIED_WAVE0",
+      "wave0_resolution": "commit 53911a9; create_sale() rejects non-numeric/<=0 quantity; tests: retail_financial_authority_test.py::test_zero_and_negative_quantity_rejected"
     },
     {
       "issue_id": "AUDIT-009",
@@ -315,7 +322,8 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "S",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "FIXED_AND_VERIFIED_WAVE0",
+      "wave0_resolution": "commit 53911a9; BEGIN IMMEDIATE + stock check in create_sale(); tests: retail_financial_authority_test.py::test_insufficient_stock_rejected_and_does_not_touch_inventory"
     },
     {
       "issue_id": "AUDIT-010",
@@ -350,7 +358,8 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "S",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "DEFERRED_WAVE0",
+      "wave0_resolution": "Decision: Option B (defer). See docs/corrections/wave0/wave0-residual-risk-register.md -- P3, not release/enterprise blocker, isolated-per-file strategy remains the trusted baseline (263/263 tests pass)"
     },
     {
       "issue_id": "AUDIT-011",
@@ -385,7 +394,8 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "S",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "FIXED_AND_VERIFIED_WAVE0",
+      "wave0_resolution": "commit 8f315ab; docs/corrections/wave0/clinic-payment-correction.md; tests: clinic_payment_wave0_test.py (9 passing)"
     },
     {
       "issue_id": "AUDIT-012",
@@ -420,7 +430,8 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "S",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "FIXED_AND_VERIFIED_WAVE0",
+      "wave0_resolution": "commit 8f315ab; docs/corrections/wave0/clinic-payment-correction.md; tests: clinic_payment_wave0_test.py::test_duplicate_idempotency_key_returns_original_payment_only"
     },
     {
       "issue_id": "AUDIT-013",
@@ -560,7 +571,8 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "XS",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "FIXED_AND_VERIFIED_WAVE0",
+      "wave0_resolution": "commit 57a3048; docs/corrections/wave0/data-integrity-correction.md; PRAGMA foreign_keys=ON on every Retail connection"
     },
     {
       "issue_id": "AUDIT-017",
@@ -630,7 +642,8 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "S",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "FIXED_AND_VERIFIED_WAVE0",
+      "wave0_resolution": "commit 8f315ab; docs/corrections/wave0/clinic-payment-correction.md; BEGIN IMMEDIATE wraps create_invoice/record_payment; tests: clinic_payment_wave0_test.py::test_invoice_creation_is_atomic_no_header_without_lines"
     },
     {
       "issue_id": "AUDIT-019",
@@ -665,7 +678,8 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "L",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "FIXED_AND_VERIFIED_WAVE0",
+      "wave0_resolution": "commit 4f37e5d, 27dc45b; docs/corrections/wave0/backup-and-restore-foundation.md; tests: retail_backup_restore_test.py (12 passing), clinic_backup_restore_test.py (4 passing)"
     },
     {
       "issue_id": "AUDIT-020",
