@@ -167,6 +167,7 @@ private fun PaymentSheet(invoice: Invoice, onDismiss: () -> Unit, onPaid: () -> 
     var amount by remember { mutableStateOf("%.2f".format(due)) }
     var method by remember { mutableStateOf("cash") }
     var saving by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
@@ -182,16 +183,31 @@ private fun PaymentSheet(invoice: Invoice, onDismiss: () -> Unit, onPaid: () -> 
                 when (method) { "card" -> 1; "insurance" -> 2; "bank_transfer" -> 3; else -> 0 }) {
                 method = listOf("cash", "card", "insurance", "bank_transfer")[it]
             }
+            if (error != null) {
+                Spacer(Modifier.height(10.dp))
+                Text(error!!, color = MaterialTheme.colorScheme.error)
+            }
             Spacer(Modifier.height(20.dp))
             Button(onClick = {
                 val amt = amount.toDoubleOrNull() ?: return@Button
-                saving = true
+                saving = true; error = null
                 scope.launch {
                     try {
-                        ApiClient.get().createPayment(com.actionaura.clinic.net.CreatePaymentRequest(
-                            invoice_id = invoice.id, amount = amt, method = method))
-                        onPaid()
-                    } catch (e: Exception) { saving = false }
+                        // Commercial intent only (invoice_id, amount, method,
+                        // idempotency_key) -- the server is the sole authority
+                        // on whether this amount is accepted (Wave 0,
+                        // AUDIT-011/012: rejects <= 0 and any overpayment
+                        // beyond the outstanding balance). The response's
+                        // own outstanding_balance/invoice_status/total_paid
+                        // are what should ultimately be displayed, not a
+                        // locally-computed equivalent -- onPaid() triggers
+                        // the caller to reload the invoice from the server.
+                        val r = ApiClient.get().createPayment(com.actionaura.clinic.net.CreatePaymentRequest(
+                            invoice_id = invoice.id, amount = amt, method = method,
+                            idempotency_key = java.util.UUID.randomUUID().toString()))
+                        if (r.status == "success") onPaid()
+                        else { error = r.message ?: "Payment could not be recorded."; saving = false }
+                    } catch (e: Exception) { error = "Couldn't reach the server"; saving = false }
                 }
             }, enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 if (saving) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,

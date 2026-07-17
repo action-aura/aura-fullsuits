@@ -655,7 +655,16 @@ def create_lab_expense():
             'reference': f'CLINIC-LAB-{le_id}',
         })
     except Exception as e:
-        print(f'[clinic] lab expense accounting sync skipped: {e}')
+        # Phase 4I: never interpolate the raw exception -- lab_name/test_name
+        # can be sensitive (a lab test name can itself reveal a medical
+        # condition), and a SQL-bind error can embed request values as
+        # literals in its message (the same class of leak already fixed for
+        # create_patient/create_invoice/record_payment's own primary
+        # exception handlers). Log only the exception type; on Android this
+        # print() would otherwise be forwarded to Logcat by Chaquopy.
+        import logging
+        logging.getLogger('aura.clinic').warning(
+            'lab expense accounting sync skipped: %s', type(e).__name__)
     return jsonify({'status': 'success', 'data': {'id': le_id}})
 
 @clinic_bp.route('/lab-expenses/<int:le_id>', methods=['DELETE'])
@@ -764,7 +773,16 @@ def create_invoice():
         _c.execute("UPDATE clinic_invoices SET accounting_synced=1 WHERE id=?", (inv_id,))
         _c.commit(); _c.close()
     except Exception as e:
-        print(f'[clinic] invoice accounting sync skipped: {e}')
+        # Phase 4I: never interpolate the raw exception -- this block just
+        # looked up the patient's real name into `_pname`, so a SQL-bind
+        # error embedding request values in its message would leak PII into
+        # this log line (the same class of leak already fixed for
+        # create_patient/create_invoice/record_payment's own primary
+        # exception handlers). Log only the exception type; on Android this
+        # print() would otherwise be forwarded to Logcat by Chaquopy.
+        import logging
+        logging.getLogger('aura.clinic').warning(
+            'invoice accounting sync skipped: %s', type(e).__name__)
     return jsonify({'status': 'success', 'data': {'id': inv_id, 'invoice_number': inv_no, 'total': total}})
 
 @clinic_bp.route('/invoices', methods=['GET'])

@@ -135,7 +135,30 @@ data class CreateInvoiceRequest(
     val patient_id: Int, val items: List<InvoiceItemReq>,
     val discount: Double = 0.0, val tax_rate: Double = 0.0, val notes: String = "",
 )
-data class CreatePaymentRequest(val invoice_id: Int, val amount: Double, val method: String = "cash")
+// Commercial intent only: invoice_id, requested amount, method, and an
+// idempotency_key (required for real duplicate-submission protection --
+// a double-tap on "Record Payment" must not create two payments). The
+// server validates amount > 0 and <= outstanding balance and is the sole
+// authority on whether this is accepted (Wave 0, AUDIT-011/012). See
+// docs/architecture/financial-authority-contracts.md.
+data class CreatePaymentRequest(
+    val invoice_id: Int, val amount: Double, val method: String = "cash",
+    val idempotency_key: String,
+)
+
+// Mirrors the authoritative Clinic payment response contract -- every
+// field here is server-computed/persisted; the client must display these
+// values, never a locally-derived equivalent (e.g. invoice.total -
+// invoice.amount_paid computed before submission is a PREVIEW only).
+// Named distinctly from the pre-existing (unrelated, Retail-derived)
+// PaymentResult/PaymentResultResponse below, which back the AR
+// customer/supplier/PO payment endpoints, not invoice billing.
+data class ClinicPaymentResult(
+    val id: Int = 0, val invoice_id: Int = 0, val amount: Double = 0.0,
+    val total_paid: Double = 0.0, val outstanding_balance: Double = 0.0,
+    val invoice_status: String? = null, val idempotency_key: String? = null,
+)
+data class CreatePaymentResponse(val status: String = "", val message: String? = null, val data: ClinicPaymentResult? = null)
 
 // ── Lab expenses ──────────────────────────────────────────────────────────────
 data class LabExpense(

@@ -63,7 +63,7 @@ interface AuraApi {
     suspend fun createInvoice(@Body body: CreateInvoiceRequest): CreatedResponse
 
     @POST("api/sub/clinic/payments")
-    suspend fun createPayment(@Body body: CreatePaymentRequest): CreatedResponse
+    suspend fun createPayment(@Body body: CreatePaymentRequest): CreatePaymentResponse
 
     // Lab expenses
     @GET("api/sub/clinic/lab-expenses")
