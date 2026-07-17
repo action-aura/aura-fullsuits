@@ -154,6 +154,10 @@ dependencies {
 
     // No CameraX / ML Kit: Aura Clinic has no barcode/camera feature (retail-only).
 
+    // ── Unit/contract tests (JVM, no device/emulator needed) ─────────────────
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'com.google.code.gson:gson:2.11.0'
+
     constraints {
         implementation('org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.0.21')
         implementation('org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.0.21')
