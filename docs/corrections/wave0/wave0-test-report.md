@@ -54,13 +54,13 @@ altered.
 
 ## Windows packaged smoke test
 
-**Not re-run in this wave.** Backend behavior changed (create_sale,
-create_return, onboarding, Clinic payments/invoices, new backup/restore
-routes) — a packaged-exe smoke test is warranted before any release
-decision, but building and smoke-testing the frozen `.exe` for both
-products was judged out of scope for this corrective pass given the time
-budget; it is listed as a required follow-up before Wave 0's fixes can be
-considered release-validated end-to-end (see `wave0-residual-risk-register.md`).
+**Re-run (2026-07-17, Wave 0 integration addendum)**. Both products'
+PyInstaller builds were rebuilt and smoke-tested as real running `.exe`
+processes — see `docs/build/wave0-windows-packaged-smoke-test.md` for the
+full step-by-step results. Every Wave 0 fix was confirmed present in the
+packaged artifact. One new defect was found (a launcher self-check
+watchdog that can kill an already-working server) — not fixed in this
+wave, tracked in `wave0-residual-risk-register.md`.
 
 ## Android contract/build check
 

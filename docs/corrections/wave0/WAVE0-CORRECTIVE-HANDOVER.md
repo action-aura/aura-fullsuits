@@ -72,9 +72,13 @@ intentional updates in `retail_pricing_test.py` for the tax-inclusive
 refund semantics correction (AUDIT-004) — no test was deleted. Full
 breakdown in `wave0-test-report.md`.
 
-Windows packaged smoke test: **not re-run this wave** (backend behavior
-changed; this is a named residual risk, not an oversight). Android
-build/contract check: **not applicable** — no Android source was modified.
+Windows packaged smoke test: **re-run as a same-day follow-up** (2026-07-17,
+Wave 0 integration addendum) — both products rebuilt and smoke-tested as
+real packaged executables, every Wave 0 fix confirmed present in the
+artifact, one new non-financial defect found (launcher readiness watchdog
+can kill a working server) and tracked, not fixed. See
+`docs/build/wave0-windows-packaged-smoke-test.md`. Android build/contract
+check: **not applicable** — no Android source was modified.
 
 ## Security review findings (both addressed same-day, before this handover)
 

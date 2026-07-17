@@ -35,6 +35,8 @@ a = Analysis(
         'commercial_runtime.security.passwords',
         'commercial_runtime.security.audit',
         'commercial_runtime.security.modes',
+        'commercial_runtime.backup.service',
+        'commercial_runtime.backup.routes',
         'api.clinic_api',
         'database.schema',
     ],

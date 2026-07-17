@@ -53,13 +53,29 @@ not a bug — but it means legitimate future business needs (e.g. clinic
 patient credit accounts, retail walk-in partial-payment tracking outside
 AR) are unsupported today and were not designed for in this wave.
 
-## Windows packaged smoke test not re-run
+## Windows packaged smoke test — now closed, one new defect found
 
-Backend behavior changed materially in this wave (sale/return/onboarding/
-payment routes, new backup/restore routes). The frozen `.exe` build for
-either product was not rebuilt or smoke-tested against these changes.
-**This must happen before any pilot/release decision** — Wave 0 alone does
-not constitute release validation.
+**Update (2026-07-17, Wave 0 integration addendum)**: both products were
+rebuilt (`docs/build/wave0-windows-packaged-smoke-test.md`) and
+smoke-tested as packaged executables. Every Wave 0 financial/data-safety
+fix was confirmed present and working in the actual packaged artifact
+(Android-style zero-tax payload correctly taxed, Clinic overpayment
+rejected, Clinic duplicate payment deduplicated, onboarding works, backup
+creation works, no DB corruption after a hard process kill).
+
+**New defect found by this smoke test, not yet fixed**:
+`launcher_retail.py`'s (and by the same pattern, `launcher_clinic.py`'s)
+`_wait_for_server()` readiness watchdog incorrectly declared a working
+server dead ~43 seconds after a successful start and killed the process,
+even though the server was independently confirmed reachable via `curl`
+during that same window. Root cause not confirmed within the smoke test's
+time budget (a Windows-registry proxy interaction with `urllib` inside the
+frozen build is a plausible but unverified hypothesis). This is a real,
+reproducible defect in the launcher's own self-check, separate from the
+actual HTTP server and from every AUDIT item this wave targeted. **Not
+fixed in this wave** — recommended as a P1/P2 item for the next wave, since
+it can cause a real end-user's packaged app to shut itself down shortly
+after a successful launch.
 
 ## Android client not touched
 
