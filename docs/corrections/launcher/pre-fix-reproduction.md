@@ -87,3 +87,15 @@ launcher files once the root cause was confirmed (see the fix commit) —
 it is not present in the corrected, shipped launcher code. The throwaway
 `AURA_APP_DATA` directories and log files used for this reproduction were
 deleted after this document was written. No synthetic data was committed.
+
+**Security note (found by automated review of the reproduction commit)**:
+the temporary diagnostic instrumentation logged the raw *values* of
+`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` to `startup.log`, not just whether
+they were set. In this environment all three were `None`, so no credential
+was actually captured -- but a real proxy URL can embed a username/password
+(`http://user:pass@proxy:8080`), and logging that verbatim to a file would
+be an information-disclosure bug on a customer machine with such a proxy
+configured. The permanent, corrected launcher code (see
+`launcher-readiness-design.md`) does not log proxy environment variables
+at all, in either value or presence form -- this pattern is called out
+here so it is not reintroduced by a future diagnostic pass.

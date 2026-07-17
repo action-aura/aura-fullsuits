@@ -34,7 +34,7 @@ for _p in (str(SUITE_ROOT), str(BACKEND_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from flask import Flask
+from flask import Flask, jsonify
 from flask_cors import CORS
 
 from config import SECRET_KEY, DATABASE_DIR, APP_VERSION
@@ -66,6 +66,19 @@ def _no_cache(response):
         response.headers['Pragma'] = 'no-cache'
         response.headers['Expires'] = '-1'
     return response
+
+
+@app.route('/api/health', methods=['GET'])
+def _health():
+    """Unauthenticated local liveness/readiness probe (Phase 3.7, launcher
+    corrective wave). Reveals no business data, no auth state, no
+    filesystem paths -- deliberately the only thing the desktop launcher's
+    startup readiness check is allowed to depend on. Do not gate this
+    behind mt_login_required; the launcher polls it before any session
+    could exist. See docs/corrections/launcher/root-cause-analysis.md for
+    why the previous readiness check (bare GET on "/", which no route ever
+    served) always 404'd and falsely triggered the startup watchdog."""
+    return jsonify({'status': 'ok'}), 200
 
 
 from commercial_runtime.identity.auth_routes import auth_bp

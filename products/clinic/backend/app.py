@@ -25,7 +25,7 @@ for _p in (str(SUITE_ROOT), str(BACKEND_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from flask import Flask
+from flask import Flask, jsonify
 from flask_cors import CORS
 
 from config import SECRET_KEY, DATABASE_DIR, APP_VERSION
@@ -50,6 +50,15 @@ def _no_cache(response):
         response.headers['Pragma'] = 'no-cache'
         response.headers['Expires'] = '-1'
     return response
+
+
+@app.route('/api/health', methods=['GET'])
+def _health():
+    """Unauthenticated local liveness/readiness probe (Phase 3.7, launcher
+    corrective wave). Mirrors products/retail/backend/app.py's _health() --
+    see that function's docstring and
+    docs/corrections/launcher/root-cause-analysis.md for why this exists."""
+    return jsonify({'status': 'ok'}), 200
 
 
 from commercial_runtime.identity.auth_routes import auth_bp

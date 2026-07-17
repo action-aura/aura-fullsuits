@@ -5,6 +5,12 @@ Identical structure to products/retail/desktop/launcher_retail.py -- see
 that file's docstring for the full rationale (native pywebview window,
 single-instance guard, Edge/Chrome --app fallback, default-browser
 fallback). Only the app name, mutex name, and imported server module differ.
+
+Phase 3.7 correction: see launcher_retail.py's docstring and
+docs/corrections/launcher/root-cause-analysis.md -- the readiness check
+used to poll "/" (never served by any route) and always failed; it now
+targets /api/health via commercial_runtime.launcher_support, with an
+explicit lifecycle state machine and a time-bounded failure dialog.
 """
 import os
 import sys
@@ -16,11 +22,19 @@ import logging
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent / 'backend'
-if str(BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(BACKEND_DIR))
+SUITE_ROOT = BACKEND_DIR.parent.parent.parent
+for _p in (str(SUITE_ROOT), str(BACKEND_DIR)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
-HOST = '127.0.0.1'
+from commercial_runtime.launcher_support import (  # noqa: E402
+    LauncherState, check_readiness, health_url, show_fatal_dialog,
+)
+
+APP_NAME = 'Aura Clinic'
+HOST = '127.0.0.1'  # loopback only -- never bind a LAN-accessible interface
 DEFAULT_PORT = 5000
+READY_TIMEOUT_SECONDS = 45.0
 
 os.environ.setdefault('AURA_STANDALONE', '1' if getattr(sys, 'frozen', False) else '0')
 
@@ -39,8 +53,16 @@ logging.basicConfig(
     ],
 )
 log = logging.getLogger('aura-clinic-launcher')
-log.info('Aura Clinic launcher starting.')
+log.info(f'{APP_NAME} launcher starting.')
 log.info(f'App data: {_app_data}')
+
+_state = LauncherState.NOT_STARTED
+
+
+def _set_state(new_state: LauncherState):
+    global _state
+    log.info(f'[state] {_state.value} -> {new_state.value}')
+    _state = new_state
 
 
 def _find_free_port(start=DEFAULT_PORT, stop=DEFAULT_PORT + 20):
@@ -52,41 +74,6 @@ def _find_free_port(start=DEFAULT_PORT, stop=DEFAULT_PORT + 20):
             except OSError:
                 continue
     return None
-
-
-def _wait_for_server(url, timeout=45.0):
-    # TEMPORARY DIAGNOSTIC INSTRUMENTATION -- Phase 3.7 Step 1 reproduction.
-    # Logs proxy env + per-attempt exception type/message/status, no secrets
-    # or business data. Removed once root cause is confirmed (see
-    # docs/corrections/launcher/pre-fix-reproduction.md).
-    import urllib.request
-    import urllib.error
-    log.info(f'[DIAG] readiness URL={url} timeout={timeout}')
-    log.info(f'[DIAG] proxy env: HTTP_PROXY={os.environ.get("HTTP_PROXY")!r} '
-             f'HTTPS_PROXY={os.environ.get("HTTPS_PROXY")!r} NO_PROXY={os.environ.get("NO_PROXY")!r}')
-    try:
-        import socket as _s
-        log.info(f'[DIAG] getaddrinfo(127.0.0.1): {_s.getaddrinfo("127.0.0.1", None)}')
-    except Exception as _e:
-        log.info(f'[DIAG] getaddrinfo failed: {_e!r}')
-    deadline = time.time() + timeout
-    attempt = 0
-    start = time.time()
-    while time.time() < deadline:
-        attempt += 1
-        t0 = time.time()
-        try:
-            resp = urllib.request.urlopen(url, timeout=2)
-            log.info(f'[DIAG] attempt={attempt} elapsed={t0-start:.2f}s SUCCESS status={resp.status}')
-            return True
-        except urllib.error.HTTPError as e:
-            log.info(f'[DIAG] attempt={attempt} elapsed={t0-start:.2f}s HTTPError code={e.code} reason={e.reason!r}')
-            time.sleep(0.4)
-        except (urllib.error.URLError, OSError) as e:
-            log.info(f'[DIAG] attempt={attempt} elapsed={t0-start:.2f}s {type(e).__name__}: {e!r}')
-            time.sleep(0.4)
-    log.info(f'[DIAG] TIMED OUT after {attempt} attempts, {time.time()-start:.2f}s elapsed')
-    return False
 
 
 def _run_server(port):
@@ -139,15 +126,20 @@ def _open_app_window(url):
         return None
 
 
-def _fatal(message: str):
-    log.error(message)
+def _message_box(title, message):
+    import ctypes
+    ctypes.windll.user32.MessageBoxW(0, message, title, 0x10)
+
+
+def _fatal(message: str, reason_code: str):
+    """See launcher_retail.py's _fatal() docstring -- identical bounded,
+    non-blocking failure-dialog behavior."""
+    _set_state(LauncherState.FAILED)
+    log.error(f'[{reason_code}] {message}')
     if getattr(sys, 'frozen', False):
-        try:
-            import ctypes
-            ctypes.windll.user32.MessageBoxW(
-                0, message + '\n\nSee logs\\startup.log for details.', 'Aura Clinic', 0x10)
-        except Exception:
-            pass
+        full_message = f'{message}\n\nReference: {reason_code}\nSee logs\\startup.log for details.'
+        show_fatal_dialog(APP_NAME, full_message, _message_box)
+    _set_state(LauncherState.STOPPED)
     sys.exit(1)
 
 
@@ -155,7 +147,7 @@ def _run_native_window(url: str) -> bool:
     try:
         import webview
         log.info('Opening native application window (pywebview / WebView2).')
-        webview.create_window('Aura Clinic', url, width=1400, height=900,
+        webview.create_window(APP_NAME, url, width=1400, height=900,
                                text_select=True, zoomable=True)
         webview.start()
         log.info('Native application window closed.')
@@ -173,44 +165,65 @@ def main():
             try:
                 import ctypes
                 ctypes.windll.user32.MessageBoxW(
-                    0, 'Aura Clinic is already running.\nLook for its window (check the taskbar).',
-                    'Aura Clinic', 0x40)
+                    0, f'{APP_NAME} is already running.\nLook for its window (check the taskbar).',
+                    APP_NAME, 0x40)
             except Exception:
                 pass
         sys.exit(0)
 
+    _set_state(LauncherState.STARTING)
+
     port = _find_free_port()
     if port is None:
         _fatal(f'No free network port was available (tried {DEFAULT_PORT}-{DEFAULT_PORT + 20}). '
-               'Another copy of Aura Clinic may still be running -- close it and try again.')
+               'Another copy of Aura Clinic may still be running -- close it and try again.',
+               reason_code='PORT_UNAVAILABLE')
+        return
 
     server_thread = threading.Thread(target=_run_server, args=(port,), daemon=True)
     server_thread.start()
 
-    url = f'http://{HOST}:{port}'
-    log.info(f'Waiting for server at {url} (up to 45 s)...')
-    if not _wait_for_server(url):
-        _fatal('The Aura Clinic server did not start in time.')
+    url = health_url(HOST, port)
+    log.info(f'Waiting for readiness at {url} (up to {READY_TIMEOUT_SECONDS:.0f}s)...')
+    result = check_readiness(
+        url, timeout_seconds=READY_TIMEOUT_SECONDS,
+        is_process_alive=server_thread.is_alive,
+    )
+    log.info(f'Readiness check result: {result}')
 
-    log.info('Server ready -- launching application window.')
-
-    if _run_native_window(url):
-        log.info('Application closed.')
+    if not result.ready:
+        reason_map = {
+            'process_exited': 'SERVER_PROCESS_EXITED',
+            'health_endpoint_error': 'HEALTH_ENDPOINT_ERROR',
+            'not_ready_timeout': 'STARTUP_TIMEOUT',
+        }
+        _fatal(f'The Aura Clinic server did not become ready in time ({result.detail})',
+               reason_code=reason_map.get(result.reason, 'STARTUP_TIMEOUT'))
         return
 
-    proc = _open_app_window(url)
-    if proc is not None:
-        log.info('Opened dedicated app window (Edge/Chrome --app mode).')
-    else:
-        log.warning('No Chromium browser found -- falling back to default browser.')
-        webbrowser.open(url)
+    _set_state(LauncherState.READY)
+    log.info(f'Server ready after {result.attempts} attempt(s), {result.elapsed:.2f}s -- launching application window.')
 
-    try:
-        while server_thread.is_alive():
-            time.sleep(1)
-    except KeyboardInterrupt:
-        pass
+    _set_state(LauncherState.UI_RUNNING)
+    if _run_native_window(f'http://{HOST}:{port}'):
+        log.info('Application closed.')
+    else:
+        proc = _open_app_window(f'http://{HOST}:{port}')
+        if proc is not None:
+            log.info('Opened dedicated app window (Edge/Chrome --app mode).')
+        else:
+            log.warning('No Chromium browser found -- falling back to default browser.')
+            webbrowser.open(f'http://{HOST}:{port}')
+
+        try:
+            while server_thread.is_alive():
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+
+    _set_state(LauncherState.STOPPING)
     log.info('Application closed.')
+    _set_state(LauncherState.STOPPED)
 
 
 if __name__ == '__main__':

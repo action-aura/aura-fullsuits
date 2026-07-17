@@ -41,6 +41,7 @@ a = Analysis(
         'commercial_runtime.security.modes',
         'commercial_runtime.backup.service',
         'commercial_runtime.backup.routes',
+        'commercial_runtime.launcher_support',
         'api.retail_api',
         'api.import_api',
         'database.schema',
