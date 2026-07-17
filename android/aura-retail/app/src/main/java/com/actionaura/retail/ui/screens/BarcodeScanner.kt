@@ -171,7 +171,8 @@ private fun CameraPreview(continuous: Boolean, onBarcode: (String) -> Unit) {
                     processFrame(scanner, proxy) { code ->
                         if (continuous) {
                             val now = android.os.SystemClock.elapsedRealtime()
-                            val dup = code == lastCode.get() && (now - lastAt.get()) < 1500L
+                            val dup = com.actionaura.retail.barcode.isDuplicateScan(
+                                code, lastCode.get(), lastAt.get(), now)
                             if (!dup) {
                                 lastCode.set(code); lastAt.set(now)
                                 ContextCompat.getMainExecutor(ctx).execute { onBarcode(code) }

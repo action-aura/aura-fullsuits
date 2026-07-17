@@ -45,6 +45,7 @@ import com.actionaura.retail.ui.theme.Info
 import com.actionaura.retail.ui.theme.Success
 import com.actionaura.retail.ui.theme.Warning
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 private fun money(v: Double) = String.format(java.util.Locale.US, "$%.2f", v)
 private fun shortDate(s: String?) = (s ?: "").replace("T", " ").take(16)
@@ -471,13 +472,14 @@ private fun ProcessReturnSheet(onDismiss: () -> Unit, onDone: () -> Unit) {
                         val s = sale ?: return@Button
                         val items = lines.mapIndexedNotNull { i, ln ->
                             val q = (parseNum(retQty[i]) ?: 0.0).coerceIn(0.0, ln.quantity)
-                            if (q > 0.0) ReturnItemReq(ln.product_id, q, ln.unit_price, q * ln.unit_price) else null
+                            if (q > 0.0) ReturnItemReq(ln.product_id, q) else null
                         }
                         if (items.isEmpty()) { err = tr("Choose a quantity to return"); return@Button }
                         saving = true; err = null
                         scope.launch {
                             try {
-                                val r = ApiClient.get().createReturn(CreateReturnRequest(s.id, reason, refund, items))
+                                val r = ApiClient.get().createReturn(
+                                    CreateReturnRequest(s.id, reason, refund, items, UUID.randomUUID().toString()))
                                 if (r.status == "success") onDone() else { err = r.message ?: tr("Couldn't process"); saving = false }
                             } catch (e: Exception) { err = tr("Couldn't reach the server"); saving = false }
                         }

@@ -177,7 +177,7 @@ interface AuraApi {
     suspend fun returns(): ReturnsResponse
 
     @POST("api/sub/retail/returns")
-    suspend fun createReturn(@Body body: CreateReturnRequest): CreatedResponse
+    suspend fun createReturn(@Body body: CreateReturnRequest): CreateReturnResponse
 
     // Reports (period stats)
     @GET("api/sub/retail/reports/summary")

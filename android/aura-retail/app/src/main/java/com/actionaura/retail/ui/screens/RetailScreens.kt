@@ -341,20 +341,35 @@ fun PosScreen(snackbar: SnackbarHostState) {
                             scope.launch { snackbar.showSnackbar(tr("Select a customer for credit sales (walk-in not allowed)")) }
                         } else {
                             charging = true
-                            val saleTotal = total
-                            // Credit = on account; an optional down-payment is taken now (clamped to total).
-                            val paidNow = if (pm == "credit") (parseNum(downPayment)?.coerceIn(0.0, saleTotal) ?: 0.0) else saleTotal
-                            val items = cart.entries.map { (id, qty) ->
-                                SaleItemReq(id, qty, byId[id]?.sell_price ?: 0.0)
-                            }
+                            // `total` here is a local, pre-tax, pre-discount PREVIEW only
+                            // (Phase 4D classification A) -- used to clamp the optional
+                            // credit down-payment and nothing else. It is never sent as
+                            // an authoritative financial field and never persisted/
+                            // displayed as the sale's actual total; only the backend's
+                            // response (r.data.total below) is.
+                            val previewTotal = total
+                            val paidNow = if (pm == "credit") (parseNum(downPayment)?.coerceIn(0.0, previewTotal) ?: 0.0) else previewTotal
+                            // Commercial intent only: product_id + quantity per line (no
+                            // discount-entry UI exists in this source, so discount_pct
+                            // stays at its default of 0). unit_price/tax_rate/subtotal/
+                            // discount_amount/tax_amount/total are never sent -- the
+                            // server always resolves/computes them from the product row
+                            // and ignores any client-submitted equivalent (Wave 0,
+                            // AUDIT-002/003). See docs/architecture/financial-authority-contracts.md.
+                            val items = cart.entries.map { (id, qty) -> SaleItemReq(id, qty) }
                             scope.launch {
                                 try {
                                     val r = ApiClient.get().createSale(CreateSaleRequest(
-                                        subtotal = saleTotal, total = saleTotal, amount_paid = paidNow,
-                                        payment_method = pm, customer_id = cust?.id,
+                                        amount_paid = paidNow, payment_method = pm, customer_id = cust?.id,
                                         items = items, idempotency_key = UUID.randomUUID().toString()))
                                     if (r.status == "success") {
-                                        cart.clear(); showCart = false; successTotal = saleTotal
+                                        // Authoritative result: always the backend's own
+                                        // response, never the local preview above -- this is
+                                        // what fixes the historical Android zero-tax defect
+                                        // (AUDIT-002), since previewTotal never included tax
+                                        // or a server-validated discount at all.
+                                        val authoritativeTotal = r.data?.total ?: previewTotal
+                                        cart.clear(); showCart = false; successTotal = authoritativeTotal
                                         paymentMethod = "cash"; customer = null; downPayment = ""
                                         r.data?.warning?.takeIf { it.isNotBlank() }?.let { snackbar.showSnackbar(it) }
                                         load(); loadCustomers()   // refresh stock + customer balances
@@ -409,10 +424,7 @@ fun PosScreen(snackbar: SnackbarHostState) {
             continuous = true,
             statusText = scanStatus,
             onResult = { code ->
-                val p = products.firstOrNull {
-                    it.barcode?.equals(code, ignoreCase = true) == true ||
-                        it.sku?.equals(code, ignoreCase = true) == true
-                }
+                val p = com.actionaura.retail.barcode.findProductByCode(products, code)
                 if (p != null) {
                     lastScanned = if (addOne(p)) "✓ ${p.name}"
                                   else "✗ ${p.name}: " + tr("Only %s in stock").format(fmtQty(p.total_stock))

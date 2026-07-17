@@ -175,15 +175,38 @@ data class UpdateProductRequest(
 data class AdjustStockRequest(val quantity: Double, val reason: String = "Manual correction")
 data class StockAdjustResponse(val status: String = "", val new_stock: Double = 0.0, val message: String? = null)
 
-data class SaleItemReq(val product_id: Int, val quantity: Double, val unit_price: Double)
+// Commercial intent only (Wave 0 / Phase 4D financial-authority contract --
+// see docs/architecture/financial-authority-contracts.md). product_id and
+// quantity are the only per-line fields the server accepts as intent;
+// discount_pct is the only other client-settable per-line field, and there
+// is no discount-entry UI in this source yet (NOT PRESENT IN SOURCE -- not
+// added in this migration phase), so it always defaults to 0 here.
+// unit_price/tax_rate/line_total are never sent -- the server always
+// resolves them from the product row, never from the request body.
+data class SaleItemReq(val product_id: Int, val quantity: Double, val discount_pct: Double = 0.0)
+
+// subtotal/discount_amount/tax_amount/total are deliberately NOT fields
+// here (Wave 0: the server computes and ignores any client-submitted
+// values for these -- sending them at all would misleadingly imply the
+// client has a say in them). amount_paid is legitimate tender input.
 data class CreateSaleRequest(
-    val subtotal: Double, val discount_amount: Double = 0.0, val tax_amount: Double = 0.0,
-    val total: Double, val amount_paid: Double, val payment_method: String = "cash",
+    val amount_paid: Double, val payment_method: String = "cash",
     val items: List<SaleItemReq>, val idempotency_key: String,
     val customer_id: Int? = null, val due_date: String? = null,
 )
-data class SaleResult(val id: Int = 0, val sale_number: String? = null,
-    val balance_due: Double = 0.0, val warning: String? = null)
+
+// Mirrors the authoritative response contract in
+// docs/architecture/financial-authority-contracts.md -- every financial
+// field here is server-computed; the client must display these values
+// verbatim, never a locally-computed equivalent.
+data class SaleResult(
+    val id: Int = 0, val sale_number: String? = null,
+    val subtotal: Double = 0.0, val discount_amount: Double = 0.0,
+    val tax_amount: Double = 0.0, val total: Double = 0.0,
+    val amount_paid: Double = 0.0, val change: Double = 0.0,
+    val balance_due: Double = 0.0, val warning: String? = null,
+    val calculation_version: String? = null,
+)
 data class SaleResponse(val status: String = "", val message: String? = null, val data: SaleResult? = null)
 
 // ── Retail customers + credit (Accounts Receivable) ──────────────────────────
@@ -321,8 +344,33 @@ data class Return(
 )
 data class ReturnsResponse(val status: String = "", val data: List<Return> = emptyList())
 
-data class ReturnItemReq(val product_id: Int, val quantity: Double, val unit_price: Double, val line_total: Double)
+// Commercial intent only: product_id + quantity per line. unit_price/
+// line_total are never sent -- the server always recomputes the refund
+// from the ORIGINAL sale_items row for that sale+product (Wave 0,
+// AUDIT-004), proportional to the quantity being returned, tax-inclusive.
+// See docs/corrections/wave0/retail-return-correction.md.
+data class ReturnItemReq(val product_id: Int, val quantity: Double)
 data class CreateReturnRequest(
     val sale_id: Int, val reason: String = "Customer return",
     val refund_method: String = "cash", val items: List<ReturnItemReq>,
+    // Required for real duplicate-submission protection (a double-tap on
+    // "Process refund" must not create two returns) -- the source app
+    // never generated one at all, so no return request was ever
+    // deduplicated client-side prior to this phase.
+    val idempotency_key: String,
 )
+
+// Server-computed, tax-inclusive refund breakdown -- mirrors
+// docs/architecture/financial-authority-contracts.md's Retail return
+// contract. The client must display refund_amount from here, never a
+// locally-summed estimate, once the return has actually been submitted.
+data class ReturnItemResult(
+    val product_id: Int = 0, val quantity: Double = 0.0, val unit_price: Double = 0.0,
+    val discount_amount: Double = 0.0, val tax_amount: Double = 0.0, val line_total: Double = 0.0,
+)
+data class ReturnResult(
+    val id: Int = 0, val return_number: String? = null,
+    val refund_amount: Double = 0.0, val idempotency_key: String? = null,
+    val items: List<ReturnItemResult> = emptyList(), val calculation_version: String? = null,
+)
+data class CreateReturnResponse(val status: String = "", val message: String? = null, val data: ReturnResult? = null)
