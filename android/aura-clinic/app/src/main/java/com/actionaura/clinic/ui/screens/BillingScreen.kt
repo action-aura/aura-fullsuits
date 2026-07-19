@@ -2,6 +2,7 @@
 
 package com.actionaura.clinic.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -24,11 +25,19 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BillingScreen(snackbar: SnackbarHostState) {
+    // Phase 4M: invoice list is patient-linked financial data -- excluded
+    // from screenshots/recent-apps while visible.
+    com.actionaura.clinic.ui.components.SecureScreen()
     var items by remember { mutableStateOf<List<Invoice>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var showInvoice by remember { mutableStateOf(false) }
     var payInvoice by remember { mutableStateOf<Invoice?>(null) }
+    // Wave 1A follow-up: invoice cards showed a summary only, with no way to
+    // drill into line items or payment history even though the backend's
+    // GET /invoices/{id} already returns both -- found live on a real device
+    // when a tester tried to inspect an invoice they'd just paid.
+    var detailInvoice by remember { mutableStateOf<Invoice?>(null) }
     val scope = rememberCoroutineScope()
 
     suspend fun load() { items = try { ApiClient.get().invoices().data } catch (e: Exception) { emptyList() } }
@@ -53,7 +62,9 @@ fun BillingScreen(snackbar: SnackbarHostState) {
                 LazyColumn(contentPadding = PaddingValues(16.dp, 12.dp, 16.dp, 96.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     items(items, key = { it.id }) { inv ->
-                        ElevatedCard(Modifier.fillMaxWidth()) {
+                        ElevatedCard(
+                            Modifier.fillMaxWidth().clickable { detailInvoice = inv },
+                        ) {
                             Column(Modifier.padding(16.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(inv.invoice_number ?: "Invoice", style = MaterialTheme.typography.titleMedium,
@@ -99,6 +110,94 @@ fun BillingScreen(snackbar: SnackbarHostState) {
             onDismiss = { payInvoice = null },
             onPaid = { payInvoice = null; scope.launch { snackbar.showSnackbar("Payment recorded"); load() } },
         )
+    }
+    detailInvoice?.let { inv ->
+        InvoiceDetailSheet(
+            invoice = inv,
+            onDismiss = { detailInvoice = null },
+            onRecordPayment = { detailInvoice = null; payInvoice = inv },
+        )
+    }
+}
+
+@Composable
+private fun InvoiceDetailSheet(invoice: Invoice, onDismiss: () -> Unit, onRecordPayment: () -> Unit) {
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var detail by remember { mutableStateOf<com.actionaura.clinic.net.InvoiceDetail?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(invoice.id) {
+        loading = true
+        try { detail = ApiClient.get().invoiceDetail(invoice.id).data }
+        catch (e: Exception) { error = com.actionaura.clinic.net.paymentErrorMessage(e) }
+        loading = false
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
+        Column(Modifier.padding(20.dp).padding(bottom = 24.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(invoice.invoice_number ?: "Invoice", style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                StatusChip(invoice.status ?: "unpaid")
+            }
+            Text(invoice.patient_name ?: "—", style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(16.dp))
+
+            when {
+                loading -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(Modifier.size(28.dp))
+                }
+                error != null -> Text(error!!, color = MaterialTheme.colorScheme.error)
+                else -> {
+                    Text("Items", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(6.dp))
+                    detail?.items?.forEach { it ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            Text("${it.description ?: "—"} × ${it.qty}", modifier = Modifier.weight(1f))
+                            Text("$%.2f".format(it.line_total))
+                        }
+                    }
+                    if (detail?.items.isNullOrEmpty()) Text("No line items", color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                    Spacer(Modifier.height(16.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(12.dp))
+                    Row(Modifier.fillMaxWidth()) {
+                        Text("Total", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        Text("$%.2f".format(invoice.total), fontWeight = FontWeight.Bold)
+                    }
+                    Row(Modifier.fillMaxWidth()) {
+                        Text("Paid", modifier = Modifier.weight(1f))
+                        Text("$%.2f".format(invoice.amount_paid), color = MaterialTheme.colorScheme.primary)
+                    }
+                    Row(Modifier.fillMaxWidth()) {
+                        Text("Balance due", modifier = Modifier.weight(1f))
+                        Text("$%.2f".format((invoice.total - invoice.amount_paid).coerceAtLeast(0.0)))
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+                    Text("Payment history", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(6.dp))
+                    detail?.payments?.forEach { p ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            Text("${p.method ?: "cash"}   ${p.created_at ?: ""}", modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("$%.2f".format(p.amount_paid))
+                        }
+                    }
+                    if (detail?.payments.isNullOrEmpty()) Text("No payments recorded", color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                    if ((invoice.status ?: "") != "paid") {
+                        Spacer(Modifier.height(20.dp))
+                        Button(onClick = onRecordPayment, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                            Text("Record Payment")
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -207,7 +306,17 @@ private fun PaymentSheet(invoice: Invoice, onDismiss: () -> Unit, onPaid: () -> 
                             idempotency_key = java.util.UUID.randomUUID().toString()))
                         if (r.status == "success") onPaid()
                         else { error = r.message ?: "Payment could not be recorded."; saving = false }
-                    } catch (e: Exception) { error = "Couldn't reach the server"; saving = false }
+                    } catch (e: Exception) {
+                        // MOB-003: real backend rejections (400/404/500) arrive here as
+                        // HttpException, not as an r.status=="error" response above --
+                        // Retrofit throws for any non-2xx status on a plain-body suspend
+                        // function. paymentErrorMessage() classifies the real reason
+                        // (zero/negative amount, malformed amount, overpayment, missing
+                        // invoice, server error, network failure) instead of always
+                        // showing a generic message for what is often a correct rejection.
+                        error = com.actionaura.clinic.net.paymentErrorMessage(e)
+                        saving = false
+                    }
                 }
             }, enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 if (saving) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,
