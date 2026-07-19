@@ -7,6 +7,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.EventAvailable
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -31,33 +33,92 @@ fun AppointmentsScreen(snackbar: SnackbarHostState) {
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var showBook by remember { mutableStateOf(false) }
+    var showDayPicker by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val today = remember { SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()) }
+    val todayFmt = remember { SimpleDateFormat("yyyy-MM-dd", Locale.US) }
+    val today = remember { todayFmt.format(Date()) }
+    // Wave 1A follow-up (found alongside MOB-005): booking worked, but the
+    // screen could only ever show *today's* schedule with no way to see
+    // anything booked ahead -- a real appointment for tomorrow was
+    // permanently invisible with no way to browse forward at all. Fixed by
+    // switching the default view to "upcoming from a start date onward"
+    // (backend `from_date`, unbounded except a 200-row safety cap) instead
+    // of an exact single-day match. The date picker only moves *where the
+    // window starts* -- it never narrows the view back down to one day.
+    var fromDate by remember { mutableStateOf(today) }
+    val fromCal = remember(fromDate) {
+        java.util.Calendar.getInstance().apply { time = todayFmt.parse(fromDate) ?: Date() }
+    }
 
     suspend fun load() {
-        items = try { ApiClient.get().appointments(date = today).data } catch (e: Exception) { emptyList() }
+        items = try { ApiClient.get().appointments(fromDate = fromDate).data } catch (e: Exception) { emptyList() }
     }
-    LaunchedEffect(Unit) { loading = true; load(); loading = false }
+    LaunchedEffect(fromDate) { loading = true; load(); loading = false }
+
+    if (showDayPicker) {
+        val state = androidx.compose.material3.rememberDatePickerState(initialSelectedDateMillis = fromCal.timeInMillis)
+        DatePickerDialog(
+            onDismissRequest = { showDayPicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    state.selectedDateMillis?.let { ms ->
+                        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+                        cal.timeInMillis = ms
+                        fromDate = todayFmt.format(cal.time)
+                    }
+                    showDayPicker = false
+                }) { Text("OK") }
+            },
+            dismissButton = { TextButton(onClick = { showDayPicker = false }) { Text("Cancel") } },
+        ) { DatePicker(state = state) }
+    }
 
     Box(Modifier.fillMaxSize()) {
+        androidx.compose.foundation.layout.Column(Modifier.fillMaxSize()) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = { showDayPicker = true }, modifier = Modifier.weight(1f)) {
+                    Text(
+                        if (fromDate == today) "Upcoming (from today)" else "Upcoming from $fromDate",
+                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+                    )
+                }
+                if (fromDate != today) TextButton(onClick = { fromDate = today }) { Text("Today") }
+            }
         PullToRefreshBox(
             isRefreshing = refreshing,
             onRefresh = { scope.launch { refreshing = true; load(); refreshing = false } },
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.weight(1f),
         ) {
             if (loading && items.isEmpty()) {
                 SkeletonList(count = 6, modifier = Modifier.fillMaxSize())
             } else if (items.isEmpty()) {
                 EmptyState(
                     icon = Icons.Default.EventAvailable,
-                    title = "No appointments today",
-                    subtitle = "Booked appointments for today will show up here.",
+                    title = if (fromDate == today) "No upcoming appointments" else "No appointments from $fromDate onward",
+                    subtitle = "Booked appointments will show up here.",
                     ctaText = "Book", onCta = { showBook = true },
                 )
             } else {
                 LazyColumn(contentPadding = PaddingValues(16.dp, 12.dp, 16.dp, 96.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(items, key = { it.id }) { a ->
+                    var lastDateHeader = ""
+                    items.forEach { a ->
+                        val dayPart = (a.appointment_dt ?: "").take(10)
+                        if (dayPart.isNotEmpty() && dayPart != lastDateHeader) {
+                            lastDateHeader = dayPart
+                            item(key = "hdr-$dayPart") {
+                                Text(
+                                    if (dayPart == today) "Today" else dayPart,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+                                )
+                            }
+                        }
+                        item(key = a.id) {
                         ElevatedCard(Modifier.fillMaxWidth()) {
                             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Avatar(a.patient_name)
@@ -79,6 +140,8 @@ fun AppointmentsScreen(snackbar: SnackbarHostState) {
                 }
             }
         }
+        }
+        }
         ExtendedFloatingActionButton(
             onClick = { showBook = true },
             icon = { Icon(Icons.Default.Add, null) }, text = { Text("Book") },
@@ -89,19 +152,37 @@ fun AppointmentsScreen(snackbar: SnackbarHostState) {
     if (showBook) {
         BookAppointmentSheet(
             onDismiss = { showBook = false },
-            onBooked = { showBook = false; scope.launch { snackbar.showSnackbar("Appointment booked"); load() } },
+            onBooked = { bookedDate ->
+                showBook = false
+                scope.launch {
+                    snackbar.showSnackbar("Appointment booked")
+                    if (bookedDate != null && bookedDate < fromDate) fromDate = bookedDate else load()
+                }
+            },
         )
     }
 }
 
 @Composable
-private fun BookAppointmentSheet(onDismiss: () -> Unit, onBooked: () -> Unit) {
+private fun BookAppointmentSheet(onDismiss: () -> Unit, onBooked: (bookedDate: String?) -> Unit) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var patients by remember { mutableStateOf<List<com.actionaura.clinic.net.Patient>>(emptyList()) }
     var doctors by remember { mutableStateOf<List<com.actionaura.clinic.net.Doctor>>(emptyList()) }
     var patientId by remember { mutableStateOf<Int?>(null) }
     var doctorId by remember { mutableStateOf<Int?>(null) }
-    var dt by remember { mutableStateOf("") }
+    // MOB-005 (Wave 1A, found on a real device): this used to be a raw free-text
+    // field ("YYYY-MM-DD HH:MM") with no validation. A real typed entry
+    // ("2026-7-18", missing zero-padding and the time) saved successfully
+    // (the backend only validates patient_id) but then never matched any
+    // date(appointment_dt)=? schedule query again -- the appointment silently
+    // vanished from the app while still sitting in the database. Fixed by
+    // replacing free text with native date/time pickers so a malformed
+    // string can never be constructed in the first place.
+    var dateMillis by remember { mutableStateOf<Long?>(null) }
+    var hour by remember { mutableStateOf<Int?>(null) }
+    var minute by remember { mutableStateOf<Int?>(null) }
+    var showDatePicker by remember { mutableStateOf(false) }
+    var showTimePicker by remember { mutableStateOf(false) }
     var reason by remember { mutableStateOf("") }
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -110,6 +191,39 @@ private fun BookAppointmentSheet(onDismiss: () -> Unit, onBooked: () -> Unit) {
     LaunchedEffect(Unit) {
         patients = try { ApiClient.get().patients().data } catch (e: Exception) { emptyList() }
         doctors = try { ApiClient.get().doctors().data } catch (e: Exception) { emptyList() }
+    }
+
+    fun formattedDt(): String? {
+        val ms = dateMillis ?: return null
+        val h = hour ?: return null
+        val m = minute ?: return null
+        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        cal.timeInMillis = ms
+        val datePart = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(cal.time)
+        return "%s %02d:%02d".format(datePart, h, m)
+    }
+
+    if (showDatePicker) {
+        val state = androidx.compose.material3.rememberDatePickerState(initialSelectedDateMillis = dateMillis)
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(onClick = { dateMillis = state.selectedDateMillis; showDatePicker = false }) { Text("OK") }
+            },
+            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Cancel") } },
+        ) { DatePicker(state = state) }
+    }
+    if (showTimePicker) {
+        val state = androidx.compose.material3.rememberTimePickerState(
+            initialHour = hour ?: 9, initialMinute = minute ?: 0, is24Hour = true)
+        AlertDialog(
+            onDismissRequest = { showTimePicker = false },
+            confirmButton = {
+                TextButton(onClick = { hour = state.hour; minute = state.minute; showTimePicker = false }) { Text("OK") }
+            },
+            dismissButton = { TextButton(onClick = { showTimePicker = false }) { Text("Cancel") } },
+            text = { TimePicker(state = state) },
+        )
     }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
@@ -121,21 +235,32 @@ private fun BookAppointmentSheet(onDismiss: () -> Unit, onBooked: () -> Unit) {
             Spacer(Modifier.height(12.dp))
             LabeledDropdown("Doctor", doctors.map { it.id to (it.name ?: "#${it.id}") }, doctorId) { doctorId = it }
             Spacer(Modifier.height(12.dp))
-            OutlinedTextField(dt, { dt = it }, label = { Text("Date & time (YYYY-MM-DD HH:MM)") },
-                singleLine = true, modifier = Modifier.fillMaxWidth())
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(onClick = { showDatePicker = true }, modifier = Modifier.weight(1f)) {
+                    Text(dateMillis?.let {
+                        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+                        cal.timeInMillis = it
+                        SimpleDateFormat("yyyy-MM-dd", Locale.US).format(cal.time)
+                    } ?: "Pick date")
+                }
+                OutlinedButton(onClick = { showTimePicker = true }, modifier = Modifier.weight(1f)) {
+                    Text(if (hour != null && minute != null) "%02d:%02d".format(hour, minute) else "Pick time")
+                }
+            }
             Spacer(Modifier.height(12.dp))
             OutlinedTextField(reason, { reason = it }, label = { Text("Reason") }, modifier = Modifier.fillMaxWidth())
             if (error != null) { Spacer(Modifier.height(10.dp)); Text(error!!, color = MaterialTheme.colorScheme.error) }
             Spacer(Modifier.height(20.dp))
             Button(onClick = {
-                if (patientId == null || dt.isBlank()) { error = "Pick a patient and enter date/time"; return@Button }
+                val dtValue = formattedDt()
+                if (patientId == null || dtValue == null) { error = "Pick a patient, date, and time"; return@Button }
                 saving = true; error = null
                 scope.launch {
                     try {
                         val r = ApiClient.get().createAppointment(com.actionaura.clinic.net.CreateAppointmentRequest(
-                            patient_id = patientId!!, doctor_id = doctorId, appointment_dt = dt.trim(), reason = reason.trim()))
-                        if (r.status == "success") onBooked() else error = r.message ?: "Couldn't book"
-                    } catch (e: Exception) { error = "Couldn't reach the server" } finally { saving = false }
+                            patient_id = patientId!!, doctor_id = doctorId, appointment_dt = dtValue, reason = reason.trim()))
+                        if (r.status == "success") onBooked(dtValue.substring(0, 10)) else error = r.message ?: "Couldn't book"
+                    } catch (e: Exception) { error = com.actionaura.clinic.net.appointmentErrorMessage(e) } finally { saving = false }
                 }
             }, enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 if (saving) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,
