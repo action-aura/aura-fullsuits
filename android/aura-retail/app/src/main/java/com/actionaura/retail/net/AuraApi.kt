@@ -185,4 +185,14 @@ interface AuraApi {
 
     @GET("api/sub/retail/reports/payment-methods")
     suspend fun reportPaymentMethods(@Query("days") days: Int = 30): PaymentMethodsResponse
+
+    // Backup / restore (Wave 1A -- admin-only, see commercial_runtime/backup/routes.py)
+    @POST("api/backup/create")
+    suspend fun createBackup(): CreateBackupResponse
+
+    @GET("api/backup/list")
+    suspend fun listBackups(): ListBackupsResponse
+
+    @POST("api/backup/restore")
+    suspend fun restoreBackup(@Body body: RestoreBackupRequest): RestoreBackupResponse
 }

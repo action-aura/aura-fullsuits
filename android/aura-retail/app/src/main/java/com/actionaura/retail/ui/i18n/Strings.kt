@@ -405,4 +405,18 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Terms of service" to "شروط الخدمة",
     " — coming soon" to " — قريبًا",
     "Choose language" to "اختر اللغة",
+
+    // ── Backup & restore (Wave 1A / Part G) ─────────────────────────────────────
+    "Create backup" to "إنشاء نسخة احتياطية",
+    "Restore backup" to "استعادة نسخة احتياطية",
+    "Backup created" to "تم إنشاء النسخة الاحتياطية",
+    "Restore this backup?" to "استعادة هذه النسخة الاحتياطية؟",
+    "This will replace all current data on this device with the backup's data. This cannot be undone." to "سيؤدي هذا إلى استبدال جميع البيانات الحالية على هذا الجهاز ببيانات النسخة الاحتياطية. لا يمكن التراجع عن هذا.",
+    "Restore complete. Restart the app to continue." to "اكتملت الاستعادة. أعد تشغيل التطبيق للمتابعة.",
+    "Admin access required" to "مطلوب صلاحية المسؤول",
+    "Only an administrator account can create or restore backups." to "يمكن لحساب المسؤول فقط إنشاء أو استعادة النسخ الاحتياطية.",
+    "No backups yet" to "لا توجد نسخ احتياطية بعد",
+    "Create a backup above to see it listed here." to "أنشئ نسخة احتياطية أعلاه لتظهر هنا.",
+    "The backup could not be processed." to "تعذّرت معالجة النسخة الاحتياطية.",
+    "Cancel" to "إلغاء",
 )

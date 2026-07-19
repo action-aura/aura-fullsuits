@@ -49,8 +49,15 @@ fun AppRoot() {
             ServerBootstrap.start(ctx)
             val needsSetup = try { ApiClient.get().onboardingStatus().needs_setup } catch (e: Exception) { false }
             if (needsSetup) Phase.SETUP
-            else if (try { ApiClient.get().session().authenticated } catch (e: Exception) { false }) Phase.READY
-            else Phase.LOGIN
+            else {
+                val session = try { ApiClient.get().session() } catch (e: Exception) { null }
+                if (session?.authenticated == true) {
+                    // Admin-gating state (Wave 1A, Part G), derived from the
+                    // same session check that already gates navigation.
+                    RetailSession.update(session.user)
+                    Phase.READY
+                } else Phase.LOGIN
+            }
         } catch (e: Exception) { Phase.LOGIN }
     }
 
@@ -120,7 +127,6 @@ private fun MainShell(onLogout: () -> Unit) {
     var aiOpen by remember { mutableStateOf(false) }
 
     val title = when (route) {
-        "settings" -> "Settings"
         "reports" -> "Reports"
         "transactions" -> "Transactions"
         "returns" -> "Returns"
@@ -141,15 +147,16 @@ private fun MainShell(onLogout: () -> Unit) {
             ModalDrawerSheet {
                 Spacer(Modifier.height(16.dp))
                 Text("  Action Aura", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(16.dp))
-                NavigationDrawerItem(label = { Text(tr("Settings")) }, selected = route == "settings",
+                NavigationDrawerItem(label = { Text(tr("Settings")) }, selected = route == "retail_settings",
                     icon = { Icon(Icons.Default.Settings, null) },
-                    onClick = { scope.launch { drawerState.close() }; nav.navigate("settings") })
+                    onClick = { scope.launch { drawerState.close() }; nav.navigate("retail_settings") })
                 NavigationDrawerItem(label = { Text(tr("Log out")) }, selected = false,
                     icon = { Icon(Icons.Default.ExitToApp, null) },
                     onClick = {
                         scope.launch {
                             drawerState.close()
                             try { ApiClient.get().logout() } catch (_: Exception) {}
+                            RetailSession.reset()
                             onLogout()
                         }
                     })
@@ -273,7 +280,8 @@ private fun retailGraph(b: NavGraphBuilder, nav: androidx.navigation.NavControll
     b.composable("payables") { PayablesScreen(snackbar) }
     b.composable("cash_summary") { DailyCashScreen(snackbar) }
     b.composable("aging") { AgingScreen(snackbar) }
-    b.composable("retail_settings") { RetailSettingsScreen(snackbar) }
+    b.composable("retail_settings") { RetailSettingsScreen(snackbar, onOpenBackup = { nav.navigate("backup") }) }
+    b.composable("backup") { com.actionaura.retail.ui.screens.BackupRestoreScreen(onBack = { nav.popBackStack() }, snackbar = snackbar) }
 }
 
 @Composable

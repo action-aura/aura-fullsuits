@@ -1118,7 +1118,7 @@ fun AgingScreen(snackbar: SnackbarHostState) {
 //  RETAIL SETTINGS — credit enforcement, defaults, currency, payment methods
 // ══════════════════════════════════════════════════════════════════════════════
 @Composable
-fun RetailSettingsScreen(snackbar: SnackbarHostState) {
+fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit = {}) {
     var s by remember { mutableStateOf(CreditSettings()) }
     var methods by remember { mutableStateOf<List<PayMethod>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -1199,6 +1199,13 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState) {
                     catch (e: Exception) { snackbar.showSnackbar(tr("Couldn't add")) }
                 }
             }, modifier = Modifier.height(52.dp)) { Text(tr("Add")) }
+        }
+
+        if (com.actionaura.retail.ui.RetailSession.isAdmin) {
+            SectionHeader(tr("Backup & restore"))
+            OutlinedButton(onClick = onOpenBackup, modifier = Modifier.fillMaxWidth().height(50.dp)) {
+                Text(tr("Backup & restore"))
+            }
         }
     }
 }

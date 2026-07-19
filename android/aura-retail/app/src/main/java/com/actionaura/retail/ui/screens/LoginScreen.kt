@@ -34,7 +34,12 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
         scope.launch {
             try {
                 val r = ApiClient.get().login(LoginRequest(email.trim(), password))
-                if (r.success) onLoggedIn() else error = r.error ?: tr("Invalid credentials")
+                if (r.success) {
+                    // Wave 1A, Part G: populate admin-gating state at login,
+                    // not just on cold-start session restore.
+                    com.actionaura.retail.ui.RetailSession.update(r.user)
+                    onLoggedIn()
+                } else error = r.error ?: tr("Invalid credentials")
             } catch (e: Exception) {
                 error = tr("Couldn't reach the server. Try again.")
             } finally { loading = false }
