@@ -348,7 +348,18 @@ fun PosScreen(snackbar: SnackbarHostState) {
                             // displayed as the sale's actual total; only the backend's
                             // response (r.data.total below) is.
                             val previewTotal = total
-                            val paidNow = if (pm == "credit") (parseNum(downPayment)?.coerceIn(0.0, previewTotal) ?: 0.0) else previewTotal
+                            // MOB-001 fix: for anything other than an explicit credit
+                            // down-payment, amount_paid must be omitted (null), not
+                            // previewTotal -- previewTotal is pre-tax/pre-discount, so
+                            // sending it as "amount paid" on a taxed sale always
+                            // under-reports the tender, which the server correctly
+                            // read as a partial payment and rejected as an implicit
+                            // credit sale requiring a customer (reproduced on a real
+                            // device: every taxed product's "cash" checkout failed this
+                            // way). Omitting it lets the server default amount_paid to
+                            // its own computed, authoritative total -- guaranteeing a
+                            // "pay in full" sale is always recorded as fully paid.
+                            val paidNow: Double? = if (pm == "credit") (parseNum(downPayment)?.coerceIn(0.0, previewTotal) ?: 0.0) else null
                             // Commercial intent only: product_id + quantity per line (no
                             // discount-entry UI exists in this source, so discount_pct
                             // stays at its default of 0). unit_price/tax_rate/subtotal/

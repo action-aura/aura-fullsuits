@@ -188,9 +188,18 @@ data class SaleItemReq(val product_id: Int, val quantity: Double, val discount_p
 // subtotal/discount_amount/tax_amount/total are deliberately NOT fields
 // here (Wave 0: the server computes and ignores any client-submitted
 // values for these -- sending them at all would misleadingly imply the
-// client has a say in them). amount_paid is legitimate tender input.
+// client has a say in them). amount_paid is legitimate tender input, but
+// nullable: the client cannot know the tax-inclusive authoritative total
+// in advance (that's the whole point of server-side tax resolution), so a
+// "pay in full" cash/card/etc. sale must omit amount_paid entirely and let
+// the server default it to the computed total (retail_api.py:
+// `data.get('amount_paid', total)`) -- sending a client-guessed pre-tax
+// amount here (a real Wave 1A device bug, MOB-001) caused the server to
+// see an underpayment and reject the sale as an implicit credit sale
+// requiring a customer, on every taxed product. Only an explicit partial
+// down-payment (credit sales) should ever populate this field.
 data class CreateSaleRequest(
-    val amount_paid: Double, val payment_method: String = "cash",
+    val amount_paid: Double? = null, val payment_method: String = "cash",
     val items: List<SaleItemReq>, val idempotency_key: String,
     val customer_id: Int? = null, val due_date: String? = null,
 )
@@ -374,3 +383,23 @@ data class ReturnResult(
     val items: List<ReturnItemResult> = emptyList(), val calculation_version: String? = null,
 )
 data class CreateReturnResponse(val status: String = "", val message: String? = null, val data: ReturnResult? = null)
+
+// ── Backup / restore (Wave 1A, Part G) ──────────────────────────────────────
+// Mirrors commercial_runtime/backup/routes.py exactly -- admin-only backend
+// endpoints (Wave 0 / Phase 3.7), unchanged by this UI. Note `status` here
+// is "ok"/"error" (not "success"/"error" like the rest of this API).
+data class BackupManifest(
+    val product_code: String? = null, val schema_version: Int = 0,
+    val app_version: String? = null, val created_at: String? = null,
+)
+data class CreateBackupResponse(
+    val status: String = "", val message: String? = null,
+    val filename: String? = null, val manifest: BackupManifest? = null,
+)
+data class BackupEntry(val filename: String = "", val size: Long = 0, val modified_at: Double = 0.0)
+data class ListBackupsResponse(val status: String = "", val message: String? = null, val backups: List<BackupEntry> = emptyList())
+data class RestoreBackupRequest(val filename: String)
+data class RestoreBackupResponse(
+    val status: String = "", val message: String? = null,
+    val restored: List<String> = emptyList(), val rollback_dir: String? = null,
+)
