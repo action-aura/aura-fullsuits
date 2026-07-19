@@ -38,7 +38,7 @@ interface AuraApi {
 
     // Appointments
     @GET("api/sub/clinic/appointments")
-    suspend fun appointments(@Query("date") date: String? = null, @Query("q") q: String? = null): AppointmentsResponse
+    suspend fun appointments(@Query("date") date: String? = null, @Query("q") q: String? = null, @Query("from_date") fromDate: String? = null): AppointmentsResponse
 
     // Prescriptions
     @GET("api/sub/clinic/prescriptions")
@@ -47,6 +47,9 @@ interface AuraApi {
     // Invoices
     @GET("api/sub/clinic/invoices")
     suspend fun invoices(): InvoicesResponse
+
+    @GET("api/sub/clinic/invoices/{id}")
+    suspend fun invoiceDetail(@Path("id") id: Int): InvoiceDetailResponse
 
     // Doctors / services
     @GET("api/sub/clinic/doctors")
@@ -185,4 +188,14 @@ interface AuraApi {
 
     @GET("api/sub/retail/reports/payment-methods")
     suspend fun reportPaymentMethods(@Query("days") days: Int = 30): PaymentMethodsResponse
+
+    // Backup / restore (Phase 4L / Wave 1A -- admin-only, see commercial_runtime/backup/routes.py)
+    @POST("api/backup/create")
+    suspend fun createBackup(): CreateBackupResponse
+
+    @GET("api/backup/list")
+    suspend fun listBackups(): ListBackupsResponse
+
+    @POST("api/backup/restore")
+    suspend fun restoreBackup(@Body body: RestoreBackupRequest): RestoreBackupResponse
 }

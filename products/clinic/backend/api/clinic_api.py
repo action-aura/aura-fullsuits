@@ -267,6 +267,7 @@ def list_appointments():
     cid = _cid()
     conn = get_clinic_conn()
     q = request.args.get('q', '').strip()
+    from_date = request.args.get('from_date', '').strip()
     if q:
         # Search mode: match patient name/phone or appointment reason across ALL dates
         # (booking search, tester request #1). Date filter is ignored while searching.
@@ -278,6 +279,19 @@ def list_appointments():
             WHERE a.company_id=? AND (p.name LIKE ? OR p.phone LIKE ? OR a.reason LIKE ?)
             ORDER BY a.appointment_dt DESC LIMIT 200
         """, (cid, like, like, like)).fetchall()
+    elif from_date:
+        # Upcoming mode (Wave 1A follow-up): the exact-day filter below has no
+        # way to see anything beyond a single date at a time -- a real device
+        # tester booked an appointment for tomorrow and it was invisible from
+        # today's view with no way to browse forward except one day at a
+        # time. This returns every appointment from from_date onward.
+        rows = conn.execute("""
+            SELECT a.*, p.name as patient_name, p.phone as patient_phone
+            FROM clinic_appointments a
+            LEFT JOIN clinic_patients p ON a.patient_id = p.id
+            WHERE a.company_id=? AND date(a.appointment_dt)>=?
+            ORDER BY a.appointment_dt LIMIT 200
+        """, (cid, from_date)).fetchall()
     else:
         date = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
         rows = conn.execute("""

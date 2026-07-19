@@ -113,6 +113,24 @@ data class Invoice(
 )
 data class InvoicesResponse(val status: String = "", val data: List<Invoice> = emptyList())
 
+// ── Invoice drill-down (Wave 1A follow-up: the invoice list had no way to
+// see line items or payment history -- the backend's GET /invoices/{id}
+// already returns them, the app just never called it). ──
+data class InvoiceItem(
+    val id: Int = 0, val description: String? = null, val qty: Double = 1.0,
+    val unit_price: Double = 0.0, val line_total: Double = 0.0,
+)
+data class Payment(
+    val id: Int = 0, val amount_paid: Double = 0.0, val method: String? = null,
+    val reference: String? = null, val created_at: String? = null,
+)
+data class InvoiceDetail(
+    val invoice: Invoice? = null,
+    val items: List<InvoiceItem> = emptyList(),
+    val payments: List<Payment> = emptyList(),
+)
+data class InvoiceDetailResponse(val status: String = "", val data: InvoiceDetail? = null)
+
 data class PatientDetail(
     val patient: Patient? = null,
     val visits: List<Visit> = emptyList(),
@@ -348,4 +366,24 @@ data class ReturnItemReq(val product_id: Int, val quantity: Double, val unit_pri
 data class CreateReturnRequest(
     val sale_id: Int, val reason: String = "Customer return",
     val refund_method: String = "cash", val items: List<ReturnItemReq>,
+)
+
+// ── Backup / restore (Phase 4L / Wave 1A, Part L) ───────────────────────────
+// Mirrors commercial_runtime/backup/routes.py exactly -- admin-only backend
+// endpoints (Wave 0 / Phase 3.7), unchanged by this UI. Note `status` here
+// is "ok"/"error" (not "success"/"error" like the rest of this API).
+data class BackupManifest(
+    val product_code: String? = null, val schema_version: Int = 0,
+    val app_version: String? = null, val created_at: String? = null,
+)
+data class CreateBackupResponse(
+    val status: String = "", val message: String? = null,
+    val filename: String? = null, val manifest: BackupManifest? = null,
+)
+data class BackupEntry(val filename: String = "", val size: Long = 0, val modified_at: Double = 0.0)
+data class ListBackupsResponse(val status: String = "", val message: String? = null, val backups: List<BackupEntry> = emptyList())
+data class RestoreBackupRequest(val filename: String)
+data class RestoreBackupResponse(
+    val status: String = "", val message: String? = null,
+    val restored: List<String> = emptyList(), val rollback_dir: String? = null,
 )
