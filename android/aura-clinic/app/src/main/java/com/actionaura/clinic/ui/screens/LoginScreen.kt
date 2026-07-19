@@ -34,9 +34,14 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
         scope.launch {
             try {
                 val r = ApiClient.get().login(LoginRequest(email.trim(), password))
-                if (r.success) onLoggedIn() else error = r.error ?: tr("Invalid credentials")
+                if (r.success) {
+                    // Phase 4K: populate role-gating state at the moment of login,
+                    // not just on cold-start session restore.
+                    com.actionaura.clinic.ui.ClinicSession.update(r.user)
+                    onLoggedIn()
+                } else error = r.error ?: tr("Invalid credentials")
             } catch (e: Exception) {
-                error = tr("Couldn't reach the server. Try again.")
+                error = com.actionaura.clinic.net.loginErrorMessage(e)
             } finally { loading = false }
         }
     }
