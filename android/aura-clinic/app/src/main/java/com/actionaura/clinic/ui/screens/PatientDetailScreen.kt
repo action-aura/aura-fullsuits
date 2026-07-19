@@ -16,6 +16,11 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun PatientDetailScreen(patientId: Int) {
+    // Phase 4M: patient name/notes/visits/prescriptions/invoices are all
+    // rendered on this one screen -- excluded from screenshots and the
+    // recent-apps thumbnail while visible. See
+    // docs/mobile/wave1a/clinic-screen-protection-decision.md.
+    com.actionaura.clinic.ui.components.SecureScreen()
     var detail by remember { mutableStateOf<PatientDetail?>(null) }
     var prescriptions by remember { mutableStateOf<List<Prescription>>(emptyList()) }
     var invoices by remember { mutableStateOf<List<Invoice>>(emptyList()) }
