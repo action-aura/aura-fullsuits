@@ -49,12 +49,26 @@ android {
             version "3.12"
             pip {
                 // Trimmed to what products/clinic/backend + commercial_runtime actually
-                // import (verified by import scan) -- openpyxl/requests/flask-login/
-                // flask-socketio/pandas from the monolith's requirements.txt are unused here.
+                // import -- openpyxl/flask-login/flask-socketio/pandas from the
+                // monolith's requirements.txt are unused here.
+                //
+                // MOB-002 (Wave 1A, found on a real device): the original import
+                // scan that produced this list missed clinic_api.py's compound
+                // `import time, requests` statement (a single line importing two
+                // modules), so `requests` was wrongly marked unused and omitted.
+                // requests is used by _emit()'s best-effort event-bus POST (gated
+                // behind AURA_EVENT_BUS_URL, off by default) -- but the import
+                // itself is unconditional at module load, so app.py's import chain
+                // (app -> api.clinic_api -> requests) failed with
+                // ModuleNotFoundError on every real launch, meaning the embedded
+                // backend never started on Android at all. Retail's build.gradle
+                // already had this correctly (retail_api.py has the identical
+                // pattern) -- Clinic's list was simply wrong.
                 install "Flask==3.0.3"
                 install "Werkzeug==3.0.3"
                 install "flask-cors==4.0.1"
                 install "waitress==3.0.0"
+                install "requests==2.32.3"
             }
         }
     }
