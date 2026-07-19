@@ -175,6 +175,11 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Enter email and password" to "أدخل البريد الإلكتروني وكلمة المرور",
     "Invalid credentials" to "بيانات الدخول غير صحيحة",
     "Couldn't reach the server. Try again." to "تعذّر الوصول إلى الخادم. حاول مرة أخرى.",
+    "Incorrect email or password." to "البريد الإلكتروني أو كلمة المرور غير صحيحة.",
+    "This account has been disabled. Contact your administrator." to "تم تعطيل هذا الحساب. تواصل مع المسؤول.",
+    "Too many failed attempts. Please wait and try again." to "محاولات فاشلة كثيرة جدًا. انتظر ثم حاول مرة أخرى.",
+    "Enter your email and password." to "أدخل بريدك الإلكتروني وكلمة المرور.",
+    "Couldn't sign in. Please try again." to "تعذّر تسجيل الدخول. حاول مرة أخرى.",
     "Sign in to your workspace" to "سجّل الدخول إلى مساحة عملك",
     "Email" to "البريد الإلكتروني",
     "Password" to "كلمة المرور",
@@ -405,4 +410,35 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Terms of service" to "شروط الخدمة",
     " — coming soon" to " — قريبًا",
     "Choose language" to "اختر اللغة",
+
+    // ── Payment error messages (Wave 1A / MOB-003) ──────────────────────────────
+    "This invoice could not be found. It may have been removed." to "لم يتم العثور على هذه الفاتورة. ربما تمت إزالتها.",
+    "Enter a payment amount greater than zero." to "أدخل مبلغ دفع أكبر من صفر.",
+    "Enter a valid payment amount." to "أدخل مبلغ دفع صالح.",
+    "This amount is more than what's owed on this invoice." to "هذا المبلغ أكبر من المستحق على هذه الفاتورة.",
+    "Something went wrong on the server. Please try again." to "حدث خطأ في الخادم. يرجى المحاولة مرة أخرى.",
+    "The payment could not be processed." to "تعذّرت معالجة الدفعة.",
+    "The server took too long to respond. Please try again." to "استغرق الخادم وقتًا طويلاً للاستجابة. يرجى المحاولة مرة أخرى.",
+    "Couldn't reach the server. Check your connection and try again." to "تعذّر الوصول إلى الخادم. تحقق من اتصالك وحاول مرة أخرى.",
+    "Something went wrong. Please try again." to "حدث خطأ ما. يرجى المحاولة مرة أخرى.",
+    "That patient or doctor could not be found." to "لم يتم العثور على هذا المريض أو الطبيب.",
+    "This doctor already has an appointment at that time." to "لدى هذا الطبيب موعد آخر في هذا الوقت.",
+    "Pick a patient and a valid date and time." to "اختر مريضًا وتاريخًا ووقتًا صالحين.",
+    "Couldn't book the appointment. Please try again." to "تعذّر حجز الموعد. يرجى المحاولة مرة أخرى.",
+
+    // ── Backup & restore (Wave 1A / Part L, closes AUDIT-027's placeholder) ────
+    "Create backup" to "إنشاء نسخة احتياطية",
+    "Restore backup" to "استعادة نسخة احتياطية",
+    "Backup created" to "تم إنشاء النسخة الاحتياطية",
+    "Restore this backup?" to "استعادة هذه النسخة الاحتياطية؟",
+    "This will replace all current data on this device with the backup's data. This cannot be undone." to "سيؤدي هذا إلى استبدال جميع البيانات الحالية على هذا الجهاز ببيانات النسخة الاحتياطية. لا يمكن التراجع عن هذا.",
+    "Restore complete. Restart the app to continue." to "اكتملت الاستعادة. أعد تشغيل التطبيق للمتابعة.",
+    "Admin access required" to "مطلوب صلاحية المسؤول",
+    "Select backup file" to "اختر ملف النسخة الاحتياطية",
+    "No backups yet" to "لا توجد نسخ احتياطية بعد",
+
+    // ── Role-aware navigation (Wave 1A / Part K) ────────────────────────────────
+    "Doctor" to "طبيب",
+    "Secretary" to "سكرتير",
+    "Admin" to "مسؤول",
 )

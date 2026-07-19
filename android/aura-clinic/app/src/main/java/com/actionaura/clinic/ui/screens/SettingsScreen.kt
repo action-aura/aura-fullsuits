@@ -22,7 +22,7 @@ import com.actionaura.clinic.ui.i18n.tr
 import kotlinx.coroutines.launch
 
 @Composable
-fun SettingsScreen(snackbar: SnackbarHostState) {
+fun SettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit = {}) {
     val ctx = LocalContext.current
     var notifications by remember { mutableStateOf(true) }
     var biometric by remember { mutableStateOf(false) }
@@ -46,7 +46,13 @@ fun SettingsScreen(snackbar: SnackbarHostState) {
             SettingToggle(Icons.Default.Fingerprint, tr("Biometric lock"),
                 tr("Unlock with fingerprint"), biometric) { biometric = it }
             SettingRow(Icons.Default.Lock, tr("Change password"), null) { soon(tr("Change password")) }
-            SettingRow(Icons.Default.Backup, tr("Backup & restore"), null) { soon(tr("Backup & restore")) }
+            // Phase 4L / Wave 1A: was a "coming soon" placeholder (AUDIT-027),
+            // now wired to the real, admin-gated Wave 0 backup/restore
+            // endpoints -- see BackupRestoreScreen.kt. Visible to all staff
+            // (matches this row's existing visibility) but the screen itself
+            // only shows backup/restore actions to an admin session; the
+            // backend independently enforces the same gate.
+            SettingRow(Icons.Default.Backup, tr("Backup & restore"), null) { onOpenBackup() }
         }
 
         SettingsGroup(tr("About")) {

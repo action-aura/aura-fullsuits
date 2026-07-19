@@ -49,8 +49,16 @@ fun AppRoot() {
             ServerBootstrap.start(ctx)
             val needsSetup = try { ApiClient.get().onboardingStatus().needs_setup } catch (e: Exception) { false }
             if (needsSetup) Phase.SETUP
-            else if (try { ApiClient.get().session().authenticated } catch (e: Exception) { false }) Phase.READY
-            else Phase.LOGIN
+            else {
+                val session = try { ApiClient.get().session() } catch (e: Exception) { null }
+                if (session?.authenticated == true) {
+                    // Role-gating state (Phase 4K) derived from the same session
+                    // check that already gates navigation -- never assumed, never
+                    // defaulted to Admin.
+                    ClinicSession.update(session.user)
+                    Phase.READY
+                } else Phase.LOGIN
+            }
         } catch (e: Exception) { Phase.LOGIN }
     }
 
@@ -152,6 +160,7 @@ private fun MainShell(onLogout: () -> Unit) {
                         scope.launch {
                             drawerState.close()
                             try { ApiClient.get().logout() } catch (_: Exception) {}
+                            ClinicSession.reset()
                             onLogout()
                         }
                     })
@@ -271,7 +280,8 @@ private fun clinicGraph(b: NavGraphBuilder, nav: androidx.navigation.NavControll
     b.composable("doctors") { DoctorsScreen() }
     b.composable("lab") { LabExpensesScreen(snackbar) }
     b.composable("prescriptions") { PrescriptionsScreen() }
-    b.composable("settings") { SettingsScreen(snackbar) }
+    b.composable("settings") { SettingsScreen(snackbar, onOpenBackup = { nav.navigate("backup") }) }
+    b.composable("backup") { BackupRestoreScreen(onBack = { nav.popBackStack() }, snackbar = snackbar) }
 }
 
 @Composable
