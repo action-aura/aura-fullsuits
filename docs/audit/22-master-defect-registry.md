@@ -7,6 +7,14 @@ Severity: **P0**=4, **P1**=4, **P2**=11, **P3**=6, **P4**=5.
 Release blockers (Gate 3, paid SMB): AUDIT-001, 002, 003, 004, 011, 012, 019,
 022, 023, 030.
 
+**As of Wave 1C (see the "Wave 1C re-audit status" section below): of the
+original 10 named release blockers, 9 are FIXED_AND_VERIFIED (independently
+re-proven this wave for 001/002/003/004/011/012/019/023/030), and 1
+(AUDIT-022) is FIXED_WITH_LIMITATION -- the installer half is fixed, Windows
+signing remains open by explicit disclosed choice.** This line is kept
+unedited above as the original Phase 3.5 finding for historical accuracy;
+current status is authoritative in the Wave 1C section, not here.
+
 ## P0 — Catastrophic (4)
 
 | ID | Title | Product | Confidence |
@@ -95,6 +103,23 @@ AUDIT-022/023 (unsigned Windows/Android builds) remain OPEN and are named
 release blockers in this same registry. See
 `docs/corrections/wave0/WAVE0-CORRECTIVE-HANDOVER.md` for the honest
 overall status.
+
+## Wave 1C re-audit status (added; original Phase 3.5 findings and Wave 0/launcher status above are unchanged)
+
+Every issue was reviewed again this wave against current evidence, not assumed carried-forward. Full per-issue `wave1c_status`/`wave1c_note` fields are in the `.json`/`.csv` copies. Summary:
+
+| Wave 1C status | IDs |
+|---|---|
+| FIXED_AND_VERIFIED_WAVE1C_REVERIFIED (independently re-proven this wave with a fresh test or code re-inspection, not just re-read from a prior doc) | AUDIT-001, 002, 003, 004, 009, 010, 011, 012, 018, 019, 021, 023, 027, 030 |
+| FIXED_WAVE0_NOT_REVERIFIED_WAVE1C (still fixed per Wave 0; existing suite still passing, but not independently re-adversarially-tested this wave) | AUDIT-005, 006, 008, 016 |
+| FIXED_WAVE1B_NOT_REVERIFIED_WAVE1C | AUDIT-025 |
+| FIXED_WITH_LIMITATION (partially fixed -- see note) | AUDIT-022 (installer: fixed; signing: still deliberately unsigned) |
+| OPEN_DOCUMENTED_DESIGN (present, but confirmed a deliberate, documented product behavior, not an unnoticed bug) | AUDIT-020 |
+| OPEN (unchanged, not in this wave's scope) | AUDIT-007, 013, 014, 015, 017, 024, 026, 028, 029 |
+
+**AUDIT-010 correction**: Wave 0 deferred this (Option B). Wave 1B's TEST-001 fix (`products/run_all_tests.py` per-file subprocess isolation) subsequently fixed it properly, not left deferred -- this wave's `wave1c_status` reflects that supersession rather than repeating the stale "deferred" label.
+
+**AUDIT-022 correction**: Originally a combined "unsigned + no installer" finding. Wave 1B built real installers for both products (the "no installer" half is fixed, re-verified this wave in `windows-release-gate-report.md`). The "unsigned" half remains open by explicit, disclosed choice (no certificate purchased) -- see that same report's signing-impact section. Recorded as `FIXED_WITH_LIMITATION`, not silently closed.
 
 ## Notes on this registry
 

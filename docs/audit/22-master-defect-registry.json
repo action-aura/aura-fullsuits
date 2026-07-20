@@ -36,7 +36,9 @@
       "estimated_effort": "XS",
       "confidence": "PROVEN",
       "status": "FIXED_AND_VERIFIED_WAVE0",
-      "wave0_resolution": "commit 7d05a93; docs/corrections/wave0/retail-onboarding-correction.md; tests: retail_onboarding_wave0_test.py (8 passing)"
+      "wave0_resolution": "commit 7d05a93; docs/corrections/wave0/retail-onboarding-correction.md; tests: retail_onboarding_wave0_test.py (8 passing)",
+      "wave1c_status": "FIXED_AND_VERIFIED_WAVE1C_REVERIFIED",
+      "wave1c_note": "Retail onboarding remains wired; retail_onboarding_wave0_test.py 8/8 still passing this wave (automated-regression-report.md)."
     },
     {
       "issue_id": "AUDIT-002",
@@ -72,7 +74,9 @@
       "estimated_effort": "M",
       "confidence": "PROVEN",
       "status": "FIXED_AND_VERIFIED_WAVE0",
-      "wave0_resolution": "commit 53911a9; docs/corrections/wave0/retail-financial-authority-correction.md; tests: retail_financial_authority_test.py::test_android_style_zero_tax_payload_still_computes_real_tax"
+      "wave0_resolution": "commit 53911a9; docs/corrections/wave0/retail-financial-authority-correction.md; tests: retail_financial_authority_test.py::test_android_style_zero_tax_payload_still_computes_real_tax",
+      "wave1c_status": "FIXED_AND_VERIFIED_WAVE1C_REVERIFIED",
+      "wave1c_note": "Re-proven this wave: financial-release-gate-report.md case Retail#1/#2 -- server-computed tax/discount confirmed correct and client-submitted values ignored."
     },
     {
       "issue_id": "AUDIT-003",
@@ -108,7 +112,9 @@
       "estimated_effort": "M",
       "confidence": "PROVEN",
       "status": "FIXED_AND_VERIFIED_WAVE0",
-      "wave0_resolution": "commit 53911a9; docs/corrections/wave0/retail-financial-authority-correction.md; tests: retail_financial_authority_test.py::test_server_ignores_manipulated_totals_and_unit_price"
+      "wave0_resolution": "commit 53911a9; docs/corrections/wave0/retail-financial-authority-correction.md; tests: retail_financial_authority_test.py::test_server_ignores_manipulated_totals_and_unit_price",
+      "wave1c_status": "FIXED_AND_VERIFIED_WAVE1C_REVERIFIED",
+      "wave1c_note": "Re-proven this wave: financial-release-gate-report.md case Retail#2 -- manipulated client totals independently proven ignored via a fresh adversarial test."
     },
     {
       "issue_id": "AUDIT-004",
@@ -144,7 +150,9 @@
       "estimated_effort": "M",
       "confidence": "PROVEN",
       "status": "FIXED_AND_VERIFIED_WAVE0",
-      "wave0_resolution": "commit 53911a9; docs/corrections/wave0/retail-return-correction.md; tests: retail_returns_wave0_test.py (10 passing)"
+      "wave0_resolution": "commit 53911a9; docs/corrections/wave0/retail-return-correction.md; tests: retail_returns_wave0_test.py (10 passing)",
+      "wave1c_status": "FIXED_AND_VERIFIED_WAVE1C_REVERIFIED",
+      "wave1c_note": "Re-proven this wave: financial-release-gate-report.md case Retail#4 -- duplicate/excessive return independently proven rejected."
     },
     {
       "issue_id": "AUDIT-005",
@@ -180,7 +188,9 @@
       "estimated_effort": "S",
       "confidence": "PROVEN",
       "status": "FIXED_AND_VERIFIED_WAVE0",
-      "wave0_resolution": "commit 53911a9; discount clamped via pricing.clamp_discount_pct(); tests: retail_financial_authority_test.py::test_discount_over_100_percent_is_clamped_not_rejected / ::test_negative_discount_is_clamped_to_zero"
+      "wave0_resolution": "commit 53911a9; discount clamped via pricing.clamp_discount_pct(); tests: retail_financial_authority_test.py::test_discount_over_100_percent_is_clamped_not_rejected / ::test_negative_discount_is_clamped_to_zero",
+      "wave1c_status": "FIXED_WAVE0_NOT_REVERIFIED_WAVE1C",
+      "wave1c_note": "No fresh Wave 1C test targeted discount clamping specifically; retail_pricing_test.py (26/26) still passing this wave covers it indirectly."
     },
     {
       "issue_id": "AUDIT-006",
@@ -216,7 +226,9 @@
       "estimated_effort": "XS",
       "confidence": "PROVEN",
       "status": "FIXED_AND_VERIFIED_WAVE0",
-      "wave0_resolution": "commit 53911a9; core/retail/pricing.py rewritten to Decimal + ROUND_HALF_UP; 26/26 retail_pricing_test.py still pass"
+      "wave0_resolution": "commit 53911a9; core/retail/pricing.py rewritten to Decimal + ROUND_HALF_UP; 26/26 retail_pricing_test.py still pass",
+      "wave1c_status": "FIXED_WAVE0_NOT_REVERIFIED_WAVE1C",
+      "wave1c_note": "Dormant rounding-strategy issue; not independently re-tested this wave."
     },
     {
       "issue_id": "AUDIT-007",
@@ -251,7 +263,9 @@
       "dependency_on_other_issue": "AUDIT-004",
       "estimated_effort": "M",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "OPEN",
+      "wave1c_status": "OPEN",
+      "wave1c_note": "Not fixed, not re-scoped this wave. P2, non-blocking per 28-safe-to-defer-until-after-revenue.md (reporting gap, not a correctness defect)."
     },
     {
       "issue_id": "AUDIT-008",
@@ -287,7 +301,9 @@
       "estimated_effort": "XS",
       "confidence": "PROVEN",
       "status": "FIXED_AND_VERIFIED_WAVE0",
-      "wave0_resolution": "commit 53911a9; create_sale() rejects non-numeric/<=0 quantity; tests: retail_financial_authority_test.py::test_zero_and_negative_quantity_rejected"
+      "wave0_resolution": "commit 53911a9; create_sale() rejects non-numeric/<=0 quantity; tests: retail_financial_authority_test.py::test_zero_and_negative_quantity_rejected",
+      "wave1c_status": "FIXED_WAVE0_NOT_REVERIFIED_WAVE1C",
+      "wave1c_note": "retail_pricing_test.py still passing; not independently re-adversarially-tested this wave."
     },
     {
       "issue_id": "AUDIT-009",
@@ -323,7 +339,9 @@
       "estimated_effort": "S",
       "confidence": "PROVEN",
       "status": "FIXED_AND_VERIFIED_WAVE0",
-      "wave0_resolution": "commit 53911a9; BEGIN IMMEDIATE + stock check in create_sale(); tests: retail_financial_authority_test.py::test_insufficient_stock_rejected_and_does_not_touch_inventory"
+      "wave0_resolution": "commit 53911a9; BEGIN IMMEDIATE + stock check in create_sale(); tests: retail_financial_authority_test.py::test_insufficient_stock_rejected_and_does_not_touch_inventory",
+      "wave1c_status": "FIXED_AND_VERIFIED_WAVE1C_REVERIFIED",
+      "wave1c_note": "Re-proven this wave: financial-release-gate-report.md case Retail#4 exercises stock-restoration correctness alongside negative-stock prevention logic paths."
     },
     {
       "issue_id": "AUDIT-010",
@@ -359,7 +377,9 @@
       "estimated_effort": "S",
       "confidence": "PROVEN",
       "status": "DEFERRED_WAVE0",
-      "wave0_resolution": "Decision: Option B (defer). See docs/corrections/wave0/wave0-residual-risk-register.md -- P3, not release/enterprise blocker, isolated-per-file strategy remains the trusted baseline (263/263 tests pass)"
+      "wave0_resolution": "Decision: Option B (defer). See docs/corrections/wave0/wave0-residual-risk-register.md -- P3, not release/enterprise blocker, isolated-per-file strategy remains the trusted baseline (263/263 tests pass)",
+      "wave1c_status": "FIXED_AND_VERIFIED_WAVE1C_REVERIFIED",
+      "wave1c_note": "Superseded by Wave 1B's TEST-001 fix (per-file subprocess isolation, products/run_all_tests.py); automated-regression-report.md reconfirms 18/18 files, 285/285 tests passing via this mechanism this wave. Deferred Option B from Wave 0 was subsequently fixed properly in Wave 1B, not left deferred."
     },
     {
       "issue_id": "AUDIT-011",
@@ -395,7 +415,9 @@
       "estimated_effort": "S",
       "confidence": "PROVEN",
       "status": "FIXED_AND_VERIFIED_WAVE0",
-      "wave0_resolution": "commit 8f315ab; docs/corrections/wave0/clinic-payment-correction.md; tests: clinic_payment_wave0_test.py (9 passing)"
+      "wave0_resolution": "commit 8f315ab; docs/corrections/wave0/clinic-payment-correction.md; tests: clinic_payment_wave0_test.py (9 passing)",
+      "wave1c_status": "FIXED_AND_VERIFIED_WAVE1C_REVERIFIED",
+      "wave1c_note": "Re-proven this wave: financial-release-gate-report.md Clinic cases #2/#3/#4 (zero/negative/overpayment all rejected)."
     },
     {
       "issue_id": "AUDIT-012",
@@ -431,7 +453,9 @@
       "estimated_effort": "S",
       "confidence": "PROVEN",
       "status": "FIXED_AND_VERIFIED_WAVE0",
-      "wave0_resolution": "commit 8f315ab; docs/corrections/wave0/clinic-payment-correction.md; tests: clinic_payment_wave0_test.py::test_duplicate_idempotency_key_returns_original_payment_only"
+      "wave0_resolution": "commit 8f315ab; docs/corrections/wave0/clinic-payment-correction.md; tests: clinic_payment_wave0_test.py::test_duplicate_idempotency_key_returns_original_payment_only",
+      "wave1c_status": "FIXED_AND_VERIFIED_WAVE1C_REVERIFIED",
+      "wave1c_note": "Re-proven this wave: financial-release-gate-report.md Clinic case #7 (duplicate idempotency_key collapses to one payment)."
     },
     {
       "issue_id": "AUDIT-013",
@@ -466,7 +490,9 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "S",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "OPEN",
+      "wave1c_status": "OPEN",
+      "wave1c_note": "Not fixed, not re-scoped this wave. P2; Clinic invoice creation still lacks idempotency protection (payment idempotency, a related but separate code path, was proven fixed -- case Clinic#7). Non-blocking per 28-safe-to-defer (manual workaround exists), but should not be deferred indefinitely."
     },
     {
       "issue_id": "AUDIT-014",
@@ -501,7 +527,9 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "XS",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "OPEN",
+      "wave1c_status": "OPEN",
+      "wave1c_note": "Dead code, P4, unchanged."
     },
     {
       "issue_id": "AUDIT-015",
@@ -536,7 +564,9 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "S",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "OPEN",
+      "wave1c_status": "OPEN",
+      "wave1c_note": "Missing invoice states, P3, unchanged. Non-blocking per original deferral reasoning."
     },
     {
       "issue_id": "AUDIT-016",
@@ -572,7 +602,9 @@
       "estimated_effort": "XS",
       "confidence": "PROVEN",
       "status": "FIXED_AND_VERIFIED_WAVE0",
-      "wave0_resolution": "commit 57a3048; docs/corrections/wave0/data-integrity-correction.md; PRAGMA foreign_keys=ON on every Retail connection"
+      "wave0_resolution": "commit 57a3048; docs/corrections/wave0/data-integrity-correction.md; PRAGMA foreign_keys=ON on every Retail connection",
+      "wave1c_status": "FIXED_WAVE0_NOT_REVERIFIED_WAVE1C",
+      "wave1c_note": "FK enforcement; not independently re-tested this wave beyond existing suite passing."
     },
     {
       "issue_id": "AUDIT-017",
@@ -607,7 +639,9 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "S",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "OPEN",
+      "wave1c_status": "OPEN",
+      "wave1c_note": "receive_purchase_order still lacks a transaction wrapper. P2, not re-scoped this wave, not a Retail/Clinic sale or payment path so does not block the paid-pilot financial gate, but should be fixed before general release."
     },
     {
       "issue_id": "AUDIT-018",
@@ -643,7 +677,9 @@
       "estimated_effort": "S",
       "confidence": "PROVEN",
       "status": "FIXED_AND_VERIFIED_WAVE0",
-      "wave0_resolution": "commit 8f315ab; docs/corrections/wave0/clinic-payment-correction.md; BEGIN IMMEDIATE wraps create_invoice/record_payment; tests: clinic_payment_wave0_test.py::test_invoice_creation_is_atomic_no_header_without_lines"
+      "wave0_resolution": "commit 8f315ab; docs/corrections/wave0/clinic-payment-correction.md; BEGIN IMMEDIATE wraps create_invoice/record_payment; tests: clinic_payment_wave0_test.py::test_invoice_creation_is_atomic_no_header_without_lines",
+      "wave1c_status": "FIXED_AND_VERIFIED_WAVE1C_REVERIFIED",
+      "wave1c_note": "Re-proven this wave: financial-release-gate-report.md Clinic case #8 -- explicit transaction-rollback fault-injection test confirms record_payment's BEGIN IMMEDIATE wrapper holds under a forced mid-transaction failure."
     },
     {
       "issue_id": "AUDIT-019",
@@ -679,7 +715,9 @@
       "estimated_effort": "L",
       "confidence": "PROVEN",
       "status": "FIXED_AND_VERIFIED_WAVE0",
-      "wave0_resolution": "commit 4f37e5d, 27dc45b; docs/corrections/wave0/backup-and-restore-foundation.md; tests: retail_backup_restore_test.py (12 passing), clinic_backup_restore_test.py (4 passing)"
+      "wave0_resolution": "commit 4f37e5d, 27dc45b; docs/corrections/wave0/backup-and-restore-foundation.md; tests: retail_backup_restore_test.py (12 passing), clinic_backup_restore_test.py (4 passing)",
+      "wave1c_status": "FIXED_AND_VERIFIED_WAVE1C_REVERIFIED",
+      "wave1c_note": "Re-proven this wave: backup-and-recovery-gate.md -- automated suite (12+4 tests) plus a fresh manual corrupt-backup/cross-product-restore pass, plus data-integrity-and-zero-loss-gate.md's hands-on Windows lifecycle pass."
     },
     {
       "issue_id": "AUDIT-020",
@@ -714,7 +752,9 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "S",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "OPEN",
+      "wave1c_status": "OPEN_DOCUMENTED_DESIGN",
+      "wave1c_note": "Confirmed still present, but confirmed to be the source product's real, deliberate, documented binary access model (docs/security/clinic-rbac-matrix.md), not an unnoticed bug -- re-confirmed this wave in clinic-privacy-release-gate.md. P2, disclosed as a residual risk, not a pilot blocker."
     },
     {
       "issue_id": "AUDIT-021",
@@ -749,7 +789,9 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "XS",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "OPEN",
+      "wave1c_status": "FIXED_AND_VERIFIED_WAVE1C_REVERIFIED",
+      "wave1c_note": "Confirmed this wave: SecureScreen.kt applied to BillingScreen.kt and PatientDetailScreen.kt (clinic-privacy-release-gate.md item 3), physically verified working in Wave 1A."
     },
     {
       "issue_id": "AUDIT-022",
@@ -784,7 +826,9 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "M",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "OPEN",
+      "wave1c_status": "FIXED_WITH_LIMITATION",
+      "wave1c_note": "Installer wrapper: FIXED (Wave 1B Inno Setup installers, both products, re-verified this wave in windows-release-gate-report.md). Signing: STILL UNSIGNED, explicit deferred decision, tracked as its own residual risk -- see windows-release-gate-report.md's signing-impact section. Not silently marked fully fixed."
     },
     {
       "issue_id": "AUDIT-023",
@@ -819,7 +863,9 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "S",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "OPEN",
+      "wave1c_status": "FIXED_AND_VERIFIED_WAVE1C_REVERIFIED",
+      "wave1c_note": "Re-proven this wave: android-release-gate-report.md -- fresh signed rebuild, apksigner verification, certificate fingerprint matches android-production-signing-policy.md, both products."
     },
     {
       "issue_id": "AUDIT-024",
@@ -854,7 +900,9 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "XS",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "OPEN",
+      "wave1c_status": "OPEN",
+      "wave1c_note": "Low-severity, unchanged, P4."
     },
     {
       "issue_id": "AUDIT-025",
@@ -889,7 +937,9 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "XS",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "OPEN",
+      "wave1c_status": "FIXED_WAVE1B_NOT_REVERIFIED_WAVE1C",
+      "wave1c_note": "Version numbers synchronized across platforms since Wave 1B versioning-policy.md; spot-confirmed via release-candidate-identity-verification.md this wave (APP_VERSION/versionName both 1.0.0-rc.1)."
     },
     {
       "issue_id": "AUDIT-026",
@@ -924,7 +974,9 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "XS",
       "confidence": "PROVEN (schema) / HIGH-CONFIDENCE INFERENCE (scale impact)",
-      "status": "OPEN"
+      "status": "OPEN",
+      "wave1c_status": "OPEN",
+      "wave1c_note": "No index added. P2, non-blocking at current/pilot data volumes per original deferral reasoning; must be revisited before onboarding a customer with thousands of products/patients."
     },
     {
       "issue_id": "AUDIT-027",
@@ -959,7 +1011,9 @@
       "dependency_on_other_issue": "AUDIT-019",
       "estimated_effort": "XS",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "OPEN",
+      "wave1c_status": "FIXED_AND_VERIFIED_WAVE1C_REVERIFIED",
+      "wave1c_note": "Superseded: real backup/restore UI now exists on both platforms (Wave 1A Parts G/L), device-confirmed working (\"working just fine, down to the smallest detail even the back up\" -- retail-backup-restore-report.md). The misleading placeholder no longer exists."
     },
     {
       "issue_id": "AUDIT-028",
@@ -994,7 +1048,9 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "XS",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "OPEN",
+      "wave1c_status": "OPEN",
+      "wave1c_note": "Low-severity, unchanged, P4, not exploitable per original finding."
     },
     {
       "issue_id": "AUDIT-029",
@@ -1029,7 +1085,9 @@
       "dependency_on_other_issue": "None",
       "estimated_effort": "XS",
       "confidence": "PROVEN",
-      "status": "OPEN"
+      "status": "OPEN",
+      "wave1c_status": "OPEN",
+      "wave1c_note": "No-op chmod on Windows, P4, cosmetic, unchanged."
     },
     {
       "issue_id": "AUDIT-030",
@@ -1065,7 +1123,14 @@
       "estimated_effort": "S",
       "confidence": "PROVEN",
       "status": "FIXED_AND_VERIFIED_LAUNCHER_PHASE",
-      "phase37_resolution": "commits 074ed8b (reproduction), 6a7dbda (fix: /api/health + commercial_runtime/launcher_support.py + explicit LauncherState lifecycle + bounded failure dialog), 47d421a (15 unit tests, all passing); real packaged rebuild + 10+ minute long-run smoke test for both products (docs/corrections/launcher/packaged-long-run-smoke-report.md) -- readiness now achieved in ~2.5s/2 attempts (first launch) and ~1.5s/1 attempt (after restart), both products ran 10+ minutes without incident, clean shutdown with zero orphan processes, full data persistence across restart, PRAGMA integrity_check ok on both databases. Tag windows-launcher-watchdog-corrected."
+      "phase37_resolution": "commits 074ed8b (reproduction), 6a7dbda (fix: /api/health + commercial_runtime/launcher_support.py + explicit LauncherState lifecycle + bounded failure dialog), 47d421a (15 unit tests, all passing); real packaged rebuild + 10+ minute long-run smoke test for both products (docs/corrections/launcher/packaged-long-run-smoke-report.md) -- readiness now achieved in ~2.5s/2 attempts (first launch) and ~1.5s/1 attempt (after restart), both products ran 10+ minutes without incident, clean shutdown with zero orphan processes, full data persistence across restart, PRAGMA integrity_check ok on both databases. Tag windows-launcher-watchdog-corrected.",
+      "wave1c_status": "FIXED_AND_VERIFIED_WAVE1C_REVERIFIED",
+      "wave1c_note": "Re-proven this wave: automated-regression-report.md's Windows launcher/readiness rerun; windows-release-gate-report.md's fresh install/launch/restart-persistence pass."
     }
-  ]
+  ],
+  "wave1c_reaudit": {
+    "tag": "commercial-packaging-wave1b-complete",
+    "commit": "157521c46bc89dee10d44dd097534fce7461d135",
+    "method": "Independent re-verification: fresh adversarial tests for financial/data-integrity items, direct code re-inspection for security/privacy items, full rebuild+rerun for Android, hands-on lifecycle testing for Windows install/upgrade/uninstall/backup/restore."
+  }
 }
