@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -77,7 +78,10 @@ fun PosScreen(snackbar: SnackbarHostState) {
     val cart = remember { mutableStateMapOf<Int, Double>() } // productId -> qty
     var showCart by remember { mutableStateOf(false) }
     var charging by remember { mutableStateOf(false) }
-    var successTotal by remember { mutableStateOf<Double?>(null) }
+    // Wave 1B (Part O): holds the full authoritative SaleResult (not just its
+    // total) so the success screen can offer a real receipt -- every field
+    // shown there is this server response, never a locally-recomputed value.
+    var successSale by remember { mutableStateOf<com.actionaura.retail.net.SaleResult?>(null) }
     var showScanner by remember { mutableStateOf(false) }
     var lastScanned by remember { mutableStateOf<String?>(null) }
     var paymentMethod by remember { mutableStateOf("cash") }
@@ -105,6 +109,22 @@ fun PosScreen(snackbar: SnackbarHostState) {
         if (current + 1 > p.total_stock) return false
         cart[p.id] = current + 1
         return true
+    }
+
+    // Wave 1B (Part L/M): a completed USB/Bluetooth HID scan (MainActivity's
+    // dispatchKeyEvent -> HidScanBus) is routed through the exact same
+    // lookup+add-to-cart logic as a CameraX/ML Kit camera scan below --
+    // neither the cart nor the cashier can tell which physical source a
+    // given scan came from, by design.
+    LaunchedEffect(com.actionaura.retail.barcode.HidScanBus.lastScan) {
+        val event = com.actionaura.retail.barcode.HidScanBus.lastScan ?: return@LaunchedEffect
+        val p = com.actionaura.retail.barcode.findProductByCode(products, event.code)
+        if (p != null) {
+            lastScanned = if (addOne(p)) "✓ ${p.name}"
+                          else "✗ ${p.name}: " + tr("Only %s in stock").format(fmtQty(p.total_stock))
+        } else {
+            lastScanned = "✗ " + tr("Not found:") + " ${event.code}"
+        }
     }
 
     // Park the current cart so another sale can be rung up, then resumed later.
@@ -222,8 +242,8 @@ fun PosScreen(snackbar: SnackbarHostState) {
         }
 
         // Payment success overlay
-        AnimatedVisibility(successTotal != null, enter = fadeIn(), exit = fadeOut()) {
-            PaymentSuccess(total = successTotal ?: 0.0, onNewSale = { successTotal = null })
+        AnimatedVisibility(successSale != null, enter = fadeIn(), exit = fadeOut()) {
+            PaymentSuccess(sale = successSale ?: com.actionaura.retail.net.SaleResult(), onNewSale = { successSale = null })
         }
     }
 
@@ -379,8 +399,7 @@ fun PosScreen(snackbar: SnackbarHostState) {
                                         // what fixes the historical Android zero-tax defect
                                         // (AUDIT-002), since previewTotal never included tax
                                         // or a server-validated discount at all.
-                                        val authoritativeTotal = r.data?.total ?: previewTotal
-                                        cart.clear(); showCart = false; successTotal = authoritativeTotal
+                                        cart.clear(); showCart = false; successSale = r.data
                                         paymentMethod = "cash"; customer = null; downPayment = ""
                                         r.data?.warning?.takeIf { it.isNotBlank() }?.let { snackbar.showSnackbar(it) }
                                         load(); loadCustomers()   // refresh stock + customer balances
@@ -504,8 +523,9 @@ private fun StockBadge(stock: Double, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun PaymentSuccess(total: Double, onNewSale: () -> Unit) {
+private fun PaymentSuccess(sale: com.actionaura.retail.net.SaleResult, onNewSale: () -> Unit) {
     val check = remember { Animatable(0f) }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(Unit) {
         check.animateTo(1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow))
     }
@@ -520,14 +540,49 @@ private fun PaymentSuccess(total: Double, onNewSale: () -> Unit) {
             Spacer(Modifier.height(24.dp))
             Text(tr("Payment successful"), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
-            Text(money(total) + " " + tr("collected"), style = MaterialTheme.typography.titleMedium,
+            Text(money(sale.total) + " " + tr("collected"), style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(4.dp))
+            sale.sale_number?.let {
+                Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             Spacer(Modifier.height(36.dp))
+            // Wave 1B (Part O): no direct thermal-printer protocol on Android
+            // this wave (no hardware to verify against) -- the honest,
+            // real fallback is a receipt text shared via the OS share sheet,
+            // which can itself target a print service, a printing app, chat,
+            // email, etc. Every value is `sale`, the server's own response.
+            OutlinedButton(onClick = { shareReceipt(ctx, sale) }, modifier = Modifier.fillMaxWidth().height(54.dp)) {
+                Icon(Icons.Default.Share, null); Spacer(Modifier.width(8.dp)); Text(tr("Share Receipt"))
+            }
+            Spacer(Modifier.height(12.dp))
             Button(onClick = onNewSale, modifier = Modifier.fillMaxWidth().height(54.dp)) {
                 Text(tr("New Sale"), style = MaterialTheme.typography.labelLarge)
             }
         }
     }
+}
+
+// Wave 1B (Part O/P): plain-text receipt built exclusively from `sale`
+// (the authoritative server response) -- see PaymentSuccess's docstring.
+// No direct USB/Bluetooth thermal printing is implemented or claimed here;
+// see docs/hardware/receipt-printer-compatibility-matrix.md.
+private fun shareReceipt(ctx: android.content.Context, sale: com.actionaura.retail.net.SaleResult) {
+    val text = buildString {
+        appendLine("Aura Retail")
+        sale.sale_number?.let { appendLine("Receipt #$it") }
+        appendLine("Subtotal: ${money(sale.subtotal)}")
+        if (sale.discount_amount > 0) appendLine("Discount: -${money(sale.discount_amount)}")
+        if (sale.tax_amount > 0) appendLine("Tax: ${money(sale.tax_amount)}")
+        appendLine("Total: ${money(sale.total)}")
+        appendLine("Paid: ${money(sale.amount_paid)}")
+        if (sale.change > 0) appendLine("Change: ${money(sale.change)}")
+    }
+    val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(android.content.Intent.EXTRA_TEXT, text)
+    }
+    ctx.startActivity(android.content.Intent.createChooser(intent, "Share receipt"))
 }
 
 @Composable
