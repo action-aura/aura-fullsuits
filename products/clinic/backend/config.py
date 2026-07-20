@@ -24,6 +24,9 @@ SECRET_KEY = get_or_create_secret_key(_app_data)
 
 IS_DEMO_MODE = not os.path.exists(os.path.join(_app_data, 'config.json'))
 
-APP_VERSION = '0.1.0'
+APP_VERSION = '1.0.0-rc.1'
+PRODUCT_CODE = 'AURA_CLINIC'
+
+from commercial_runtime.backup.service import SCHEMA_VERSION
 
 IS_STANDALONE = bool(getattr(sys, 'frozen', False)) or os.environ.get('AURA_STANDALONE') == '1'

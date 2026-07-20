@@ -81,6 +81,22 @@ def _health():
     return jsonify({'status': 'ok'}), 200
 
 
+@app.route('/api/version', methods=['GET'])
+def _version():
+    """Release metadata for the About screen / release-manifest tooling
+    (Wave 1B). Separate from /api/health on purpose -- that route's
+    contract is frozen for the launcher's readiness probe (see its
+    docstring); this one is free to grow."""
+    from config import SCHEMA_VERSION, CALCULATION_VERSION, PRODUCT_CODE
+    return jsonify({
+        'product_code': PRODUCT_CODE,
+        'product_name': 'Aura Retail',
+        'app_version': APP_VERSION,
+        'schema_version': SCHEMA_VERSION,
+        'calculation_version': CALCULATION_VERSION,
+    }), 200
+
+
 from commercial_runtime.identity.auth_routes import auth_bp
 from commercial_runtime.identity.onboarding_routes import onboarding_bp
 from commercial_runtime.identity.registry_db import init_registry_db

@@ -27,7 +27,11 @@ SECRET_KEY = get_or_create_secret_key(_app_data)
 
 IS_DEMO_MODE = not os.path.exists(os.path.join(_app_data, 'config.json'))
 
-APP_VERSION = '0.1.0'
+APP_VERSION = '1.0.0-rc.1'
+PRODUCT_CODE = 'AURA_RETAIL'
+
+from commercial_runtime.backup.service import SCHEMA_VERSION
+from core.retail.pricing import CALCULATION_VERSION
 
 # Packaged customer build (frozen .exe, or Android via AURA_STANDALONE=1) is
 # always STANDALONE -> no sample/seed data is inserted, every install starts clean.
