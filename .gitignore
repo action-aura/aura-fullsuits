@@ -27,6 +27,9 @@ node_modules/
 /build/
 .venv_test/
 
+# Windows PyInstaller build outputs (never commit built exes -- see docs/release/wave1b)
+products/*/packaging/dist/
+
 # Android (two independent projects: android/aura-retail, android/aura-clinic)
 android/*/.gradle/
 android/*/app/build/
