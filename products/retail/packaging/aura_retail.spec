@@ -69,6 +69,7 @@ exe = EXE(
     strip=False,
     upx=(os.environ.get('AURA_SPEC_UPX', '1') == '1'),
     console=False,
+    version=os.path.join(os.path.dirname(os.path.abspath(SPEC)), 'version_info.txt'),
 )
 
 coll = COLLECT(
