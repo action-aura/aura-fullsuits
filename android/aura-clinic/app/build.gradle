@@ -28,8 +28,8 @@ android {
         applicationId "com.actionaura.clinic"
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName "1.0.0"
+        versionCode 2
+        versionName "1.0.0-rc.1"
 
         ndk {
             // Chaquopy's Python 3.12 ships only these ABIs.
@@ -85,6 +85,22 @@ android {
     }
 
     // ── Build types ──────────────────────────────────────────────────────────────
+    // Wave 1B fix: must come before buildTypes -- Groovy evaluates this
+    // closure top to bottom, and buildTypes below references
+    // signingConfigs.release. This was masked until now because
+    // keystore.properties never existed, so the `if (keystorePropsFile.exists())`
+    // guard always short-circuited before the broken reference was reached.
+    signingConfigs {
+        release {
+            if (keystorePropsFile.exists()) {
+                storeFile rootProject.file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix ".debug"
@@ -114,17 +130,6 @@ android {
             buildConfigField "String", "BUILD_ENV", "\"release\""
             if (keystorePropsFile.exists()) {
                 signingConfig signingConfigs.release
-            }
-        }
-    }
-
-    signingConfigs {
-        release {
-            if (keystorePropsFile.exists()) {
-                storeFile rootProject.file(keystoreProps['storeFile'])
-                storePassword keystoreProps['storePassword']
-                keyAlias keystoreProps['keyAlias']
-                keyPassword keystoreProps['keyPassword']
             }
         }
     }
