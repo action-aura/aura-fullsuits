@@ -823,7 +823,7 @@ const RetailSystem = {
         // if the receipt modal hiccups — then show the receipt + refresh.
         this._clearCart();
         this._loadPOSData();
-        this._showReceipt(data.data, payload);
+        this._showReceipt(data.data);
       } else {
         SubsystemApp.showToast(data.message || 'Checkout failed', 'error');
         if (btn) { btn.textContent = `Charge — ${this._fmt(total)}`; btn.disabled = false; }
@@ -833,7 +833,23 @@ const RetailSystem = {
     }
   },
 
-  _showReceipt(saleData, payload) {
+  // Wave 1B (Part P): every value below reads from `saleData` -- the
+  // server's authoritative POST /api/sub/retail/sales response -- never
+  // from `payload` (what the client submitted) or `this._cart` (the
+  // client's pre-submit working state). Before this wave, the modal used
+  // payload.total for Total and this._cart for line items, which could
+  // silently diverge from what the server actually recorded (the same
+  // class of bug as MOB-001 -- a client-side value standing in for the
+  // authoritative one). `saleData.lines` (present on every real sale
+  // response) is used for the line items instead of the client's cart.
+  _showReceipt(saleData) {
+    // Wave 1B security fix: stored on `this`, not interpolated into the
+    // onclick attribute below -- embedding JSON.stringify(saleData) directly
+    // into an inline HTML attribute is an injection risk if any field (e.g.
+    // a product name an admin typed) contains a quote or HTML-special
+    // character. The button now references this stored value by name only;
+    // no untrusted data is ever placed inside attribute text.
+    this._lastSaleData = saleData;
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
     overlay.innerHTML = `
@@ -842,26 +858,84 @@ const RetailSystem = {
         <h3 style="margin:0 0 6px">Sale Complete!</h3>
         <p style="color:var(--text-muted);margin:0 0 20px">Receipt #${saleData.sale_number}</p>
         <div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:16px;text-align:left;margin-bottom:20px">
-          ${this._cart.map(i=>`<div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px">
-            <span style="color:#94a3b8">${i.name} ×${i.quantity}</span>
+          ${(saleData.lines||[]).map(i=>`<div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px">
+            <span style="color:#94a3b8">${i.name || ('#'+i.product_id)} ×${i.quantity}</span>
             <span style="color:#fff">${this._fmt(i.line_total)}</span>
           </div>`).join('')}
           <div style="border-top:1px dashed rgba(255,255,255,0.1);margin:10px 0;padding-top:10px">
             <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
-              <span style="color:#94a3b8">Total</span><span style="color:#fff;font-weight:700">${this._fmt(payload.total)}</span>
+              <span style="color:#94a3b8">Total</span><span style="color:#fff;font-weight:700">${this._fmt(saleData.total)}</span>
             </div>
             ${saleData.change > 0 ? `<div style="display:flex;justify-content:space-between;font-size:13px">
               <span style="color:#94a3b8">Change</span><span style="color:#10b981;font-weight:700">${this._fmt(saleData.change)}</span>
             </div>` : ''}
-            <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:4px">
-              <span style="color:#94a3b8">Method</span><span style="color:#38bdf8">${payload.payment_method}</span>
-            </div>
           </div>
         </div>
-        <button class="ret-btn ret-btn-primary" style="width:100%" onclick="this.closest('.ret-modal-overlay').remove()">New Sale</button>
+        <div style="display:flex;gap:10px">
+          <button class="ret-btn ret-btn-ghost" style="flex:1" onclick="RetailSystem._printReceipt(RetailSystem._lastSaleData)">🖨️ Print</button>
+          <button class="ret-btn ret-btn-primary" style="flex:1" onclick="this.closest('.ret-modal-overlay').remove()">New Sale</button>
+        </div>
       </div>`;
     document.body.appendChild(overlay);
     setTimeout(() => overlay.remove(), 8000);
+  },
+
+  // ══ RECEIPT PRINTING (Wave 1B, Part O/P) ═════════════════════════════════
+  // Uses the OS print spooler via a hidden iframe + window.print() -- works
+  // with any Windows-installed printer (thermal via its own driver, a
+  // regular document printer, or a PDF printer), no ESC/POS protocol needed.
+  // Every field is read directly from `saleData` (see _showReceipt's
+  // docstring) -- this function does not compute or re-derive any total.
+  _printerCfg() {
+    try { return Object.assign({ paperWidth: '80mm' }, JSON.parse(localStorage.getItem('aura_printer_cfg') || '{}')); }
+    catch (e) { return { paperWidth: '80mm' }; }
+  },
+  savePrinterCfg(cfg) { try { localStorage.setItem('aura_printer_cfg', JSON.stringify(cfg)); } catch (e) {} },
+
+  _printReceipt(saleData) {
+    const cfg = this._printerCfg();
+    const widthMm = cfg.paperWidth === '58mm' ? 58 : 80;
+    const lines = (saleData.lines || []).map(i => `
+      <div class="rcpt-line">
+        <span>${(i.name || ('#'+i.product_id))} ×${i.quantity}</span>
+        <span>${this._fmt(i.line_total)}</span>
+      </div>`).join('');
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Receipt ${saleData.sale_number}</title>
+      <style>
+        @page { size: ${widthMm}mm auto; margin: 2mm; }
+        body { font-family: 'Courier New', monospace; width: ${widthMm}mm; margin: 0; font-size: 12px; }
+        .rcpt-center { text-align: center; }
+        .rcpt-line { display: flex; justify-content: space-between; }
+        .rcpt-hr { border-top: 1px dashed #000; margin: 6px 0; }
+        .rcpt-bold { font-weight: bold; }
+      </style></head><body>
+      <div class="rcpt-center rcpt-bold">Aura Retail</div>
+      <div class="rcpt-center">Receipt #${saleData.sale_number}</div>
+      <div class="rcpt-center">${saleData.created_at || new Date().toLocaleString()}</div>
+      <div class="rcpt-hr"></div>
+      ${lines}
+      <div class="rcpt-hr"></div>
+      <div class="rcpt-line"><span>Subtotal</span><span>${this._fmt(saleData.subtotal)}</span></div>
+      ${saleData.discount_amount > 0 ? `<div class="rcpt-line"><span>Discount</span><span>-${this._fmt(saleData.discount_amount)}</span></div>` : ''}
+      ${saleData.tax_amount > 0 ? `<div class="rcpt-line"><span>Tax</span><span>${this._fmt(saleData.tax_amount)}</span></div>` : ''}
+      <div class="rcpt-line rcpt-bold"><span>Total</span><span>${this._fmt(saleData.total)}</span></div>
+      <div class="rcpt-line"><span>Paid</span><span>${this._fmt(saleData.amount_paid)}</span></div>
+      ${saleData.change > 0 ? `<div class="rcpt-line"><span>Change</span><span>${this._fmt(saleData.change)}</span></div>` : ''}
+      <div class="rcpt-hr"></div>
+      <div class="rcpt-center">Thank you</div>
+      </body></html>`;
+
+    let frame = document.getElementById('ret-print-frame');
+    if (!frame) {
+      frame = document.createElement('iframe');
+      frame.id = 'ret-print-frame';
+      frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+      document.body.appendChild(frame);
+    }
+    const doc = frame.contentWindow.document;
+    doc.open(); doc.write(html); doc.close();
+    // Give the iframe a tick to lay out before invoking the print dialog.
+    setTimeout(() => { try { frame.contentWindow.focus(); frame.contentWindow.print(); } catch (e) {} }, 150);
   },
 
   // ── PRODUCTS ──────────────────────────────────────────────────────────────
@@ -1862,6 +1936,27 @@ const RetailSystem = {
             </select>
           </div>
         </div>
+
+        <!-- Receipt Printer (Wave 1B, Part O/P/Q) -->
+        <div class="sub-chart-card">
+          <div class="sub-chart-title" style="margin-bottom:14px">🖨️ Receipt Printer</div>
+          <p style="color:var(--text-muted);font-size:12px;margin:0 0 14px">
+            Uses your Windows-installed printer through the normal print dialog — works with a
+            thermal receipt printer (via its own Windows driver), a regular printer, or a PDF
+            printer. There is no separate USB/Bluetooth thermal protocol implemented.
+          </p>
+          <div class="ret-field">
+            <label>Paper Width</label>
+            <select id="pr-width">
+              <option value="80mm" ${(this._printerCfg().paperWidth !== '58mm') ? 'selected' : ''}>80mm (standard)</option>
+              <option value="58mm" ${(this._printerCfg().paperWidth === '58mm') ? 'selected' : ''}>58mm (compact)</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:6px">
+            <button class="ret-btn ret-btn-ghost" style="flex:1" onclick="RetailSystem._savePrinterSettings()">Save</button>
+            <button class="ret-btn ret-btn-primary" style="flex:1" onclick="RetailSystem._testPrint()">Test Print</button>
+          </div>
+        </div>
       </div>`;
 
     // Live status refresh while the page is open.
@@ -1934,6 +2029,24 @@ const RetailSystem = {
     this.saveScannerCfg(Object.assign({}, this._scannerDefaults));
     SubsystemApp.showToast('Scanner settings reset to defaults', 'success');
     this._renderScannerSettings(document.getElementById('sub-content'));
+  },
+
+  _savePrinterSettings() {
+    const width = document.getElementById('pr-width')?.value === '58mm' ? '58mm' : '80mm';
+    this.savePrinterCfg({ paperWidth: width });
+    SubsystemApp.showToast('Printer settings saved', 'success');
+  },
+
+  // Uses clearly-marked synthetic data (never a real sale) so testing the
+  // print path never risks printing/exposing real customer or financial
+  // records -- matches this project's synthetic-test-data convention.
+  _testPrint() {
+    this._printReceipt({
+      sale_number: 'TEST-0000',
+      created_at: new Date().toLocaleString(),
+      lines: [{ name: 'Test Product (sample)', quantity: 1, line_total: 10 }],
+      subtotal: 10, discount_amount: 0, tax_amount: 0, total: 10, amount_paid: 10, change: 0,
+    });
   },
 };
 
