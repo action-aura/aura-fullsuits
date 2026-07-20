@@ -65,23 +65,34 @@ def _set_state(new_state: LauncherState):
     _state = new_state
 
 
-def _find_free_port(start=DEFAULT_PORT, stop=DEFAULT_PORT + 20):
+def _bind_free_socket(start=DEFAULT_PORT, stop=DEFAULT_PORT + 20):
+    """Bind and start listening on the first free loopback port, returning
+    the live socket (not just the port number). See launcher_retail.py's
+    identical function for the full rationale: on Windows, bind() alone
+    does not guarantee exclusive port ownership, and a separate
+    test-then-release-then-rebind gap is its own race window. Binding once
+    here and handing this exact socket to waitress closes both.
+    """
     for port in range(start, stop):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind((HOST, port))
-                return port
-            except OSError:
-                continue
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        try:
+            s.bind((HOST, port))
+            s.listen(128)
+            return s
+        except OSError:
+            s.close()
+            continue
     return None
 
 
-def _run_server(port):
+def _run_server(sock):
     import app as clinic_app
     clinic_app.init_app()
     from waitress import serve as _serve
-    log.info(f'Starting server on http://{HOST}:{port}')
-    _serve(clinic_app.app, host=HOST, port=port, threads=12,
+    log.info(f'Starting server on http://{HOST}:{sock.getsockname()[1]}')
+    _serve(clinic_app.app, sockets=[sock], threads=12,
            channel_timeout=120, connection_limit=200, _quiet=True)
 
 
@@ -173,14 +184,15 @@ def main():
 
     _set_state(LauncherState.STARTING)
 
-    port = _find_free_port()
-    if port is None:
+    sock = _bind_free_socket()
+    if sock is None:
         _fatal(f'No free network port was available (tried {DEFAULT_PORT}-{DEFAULT_PORT + 20}). '
                'Another copy of Aura Clinic may still be running -- close it and try again.',
                reason_code='PORT_UNAVAILABLE')
         return
+    port = sock.getsockname()[1]
 
-    server_thread = threading.Thread(target=_run_server, args=(port,), daemon=True)
+    server_thread = threading.Thread(target=_run_server, args=(sock,), daemon=True)
     server_thread.start()
 
     url = health_url(HOST, port)
@@ -199,6 +211,24 @@ def main():
         }
         _fatal(f'The Aura Clinic server did not become ready in time ({result.detail})',
                reason_code=reason_map.get(result.reason, 'STARTUP_TIMEOUT'))
+        return
+
+    # Defense in depth against the port-race scenario _bind_free_socket()
+    # closes above -- see launcher_retail.py's identical check for the full
+    # rationale. /api/health alone cannot distinguish products (both return
+    # the same generic {"status":"ok"}); /api/version can.
+    try:
+        import json
+        import urllib.request
+        with urllib.request.urlopen(f'http://{HOST}:{port}/api/version', timeout=5) as resp:
+            product_code = json.loads(resp.read()).get('product_code')
+    except Exception as exc:
+        product_code = None
+        log.warning(f'Could not verify product identity at http://{HOST}:{port}/api/version: {exc}')
+    if product_code != 'AURA_CLINIC':
+        _fatal(f'Port {port} answered as "{product_code}", not Aura Clinic -- another Aura '
+               'product is using this port. Close all Aura applications and try again.',
+               reason_code='WRONG_PRODUCT_ON_PORT')
         return
 
     _set_state(LauncherState.READY)

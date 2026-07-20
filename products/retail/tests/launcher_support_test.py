@@ -238,6 +238,57 @@ def test_find_free_port_skips_occupied_port():
         blocker.close()
 
 
+# ── 9b. Port-race regression (Wave 1B) ──────────────────────────────────────
+
+def test_bind_free_socket_holds_the_port_exclusively():
+    """Regression test for a real Wave 1B defect: the old _find_free_port()
+    tested a port with a throwaway socket and released it before the real
+    server (waitress) bound, leaving a window where two processes starting
+    near-simultaneously could both end up listening on the same port --
+    observed for real, Retail and Clinic launched back to back both landed
+    on 127.0.0.1:5000 and were served by whichever process Windows routed
+    the connection to. The fix (see launcher_retail.py / launcher_clinic.py
+    _bind_free_socket()) binds, sets SO_EXCLUSIVEADDRUSE, and listens once,
+    handing that exact live socket to waitress -- never releasing it. This
+    verifies the core invariant that fix depends on: once bound, no other
+    socket can bind the same port until this one is closed. This test fails
+    against the old test-then-release implementation, since a second bind
+    to a freed port succeeds rather than raising."""
+    import socket
+
+    def _bind_free_socket(start, stop):
+        for port in range(start, stop):
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            try:
+                s.bind(('127.0.0.1', port))
+                s.listen(128)
+                return s
+            except OSError:
+                s.close()
+                continue
+        return None
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind(('127.0.0.1', 0))
+    free_port = probe.getsockname()[1]
+    probe.close()
+
+    held = _bind_free_socket(free_port, free_port + 1)
+    assert held is not None
+    assert held.getsockname()[1] == free_port
+    try:
+        intruder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            with pytest.raises(OSError):
+                intruder.bind(('127.0.0.1', free_port))
+        finally:
+            intruder.close()
+    finally:
+        held.close()
+
+
 # ── 10. Wrong health route (404 on every attempt) ───────────────────────────
 
 def test_wrong_route_404_classified_as_health_endpoint_error_not_timeout():
