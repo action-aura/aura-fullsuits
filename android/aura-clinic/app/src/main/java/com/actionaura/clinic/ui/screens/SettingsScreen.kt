@@ -56,7 +56,7 @@ fun SettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit = {}) {
         }
 
         SettingsGroup(tr("About")) {
-            SettingRow(Icons.Default.Info, tr("Version"), "2.5.0-beta.1") {}
+            SettingRow(Icons.Default.Info, tr("Version"), com.actionaura.clinic.BuildConfig.VERSION_NAME) {}
             SettingRow(Icons.Default.PrivacyTip, tr("Privacy policy"), null) { soon(tr("Privacy policy")) }
             SettingRow(Icons.Default.Description, tr("Terms of service"), null) { soon(tr("Terms of service")) }
         }

@@ -61,7 +61,7 @@ fun SetupScreen(onDone: () -> Unit) {
                         singleLine = true, modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(12.dp))
                     OutlinedTextField(company, { company = it },
-                        label = { Text("Clinic / practice name") },
+                        label = { Text(tr("Clinic / practice name")) },
                         singleLine = true, modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(12.dp))
                     OutlinedTextField(email, { email = it }, label = { Text(tr("Email")) }, singleLine = true,

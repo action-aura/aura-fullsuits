@@ -74,7 +74,7 @@ fun DashboardScreen(onNavigate: (String) -> Unit) {
         Column {
             Text(tr(greeting), style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("Your clinic at a glance",
+            Text(tr("Your clinic at a glance"),
                 style = MaterialTheme.typography.headlineMedium.copy(brush = auroraBrush()),
                 fontWeight = FontWeight.ExtraBold)
         }
@@ -82,9 +82,9 @@ fun DashboardScreen(onNavigate: (String) -> Unit) {
         // Quick actions
         SectionHeader(tr("Quick actions"))
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            QuickAction("Add Patient", Icons.Default.PersonAdd, Modifier.weight(1f)) { onNavigate("patients") }
-            QuickAction("Book", Icons.Default.EventAvailable, Modifier.weight(1f)) { onNavigate("appointments") }
-            QuickAction("Invoice", Icons.Default.ReceiptLong, Modifier.weight(1f)) { onNavigate("billing") }
+            QuickAction(tr("Add Patient"), Icons.Default.PersonAdd, Modifier.weight(1f)) { onNavigate("patients") }
+            QuickAction(tr("Book"), Icons.Default.EventAvailable, Modifier.weight(1f)) { onNavigate("appointments") }
+            QuickAction(tr("Invoice"), Icons.Default.ReceiptLong, Modifier.weight(1f)) { onNavigate("billing") }
         }
 
         SectionHeader(tr("Today"))
@@ -99,15 +99,15 @@ fun DashboardScreen(onNavigate: (String) -> Unit) {
 private fun ClinicMetrics(s: ClinicStats) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Metric("Appointments", animatedInt(s.today_appointments).toString(), "Scheduled today",
+            Metric(tr("Appointments"), animatedInt(s.today_appointments).toString(), tr("Scheduled today"),
                 MaterialTheme.colorScheme.primary, Modifier.weight(1f))
-            Metric("Waiting", animatedInt(s.waiting).toString(), "Checked in", Warning, Modifier.weight(1f))
+            Metric(tr("Waiting"), animatedInt(s.waiting).toString(), tr("Checked in"), Warning, Modifier.weight(1f))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Metric("Active Visits", animatedInt(s.active_visits).toString(), "In consultation", Info, Modifier.weight(1f))
-            Metric("Revenue", money(s.today_revenue), "Collected today", Success, Modifier.weight(1f))
+            Metric(tr("Active Visits"), animatedInt(s.active_visits).toString(), tr("In consultation"), Info, Modifier.weight(1f))
+            Metric(tr("Revenue"), money(s.today_revenue), tr("Collected today"), Success, Modifier.weight(1f))
         }
-        Metric("Total Patients", animatedInt(s.total_patients).toString(), "All time",
+        Metric(tr("Total Patients"), animatedInt(s.total_patients).toString(), tr("All time"),
             MaterialTheme.colorScheme.primary, Modifier.fillMaxWidth())
     }
 }

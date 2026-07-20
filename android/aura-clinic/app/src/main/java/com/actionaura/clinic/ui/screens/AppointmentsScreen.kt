@@ -22,6 +22,7 @@ import com.actionaura.clinic.net.Appointment
 import com.actionaura.clinic.ui.components.Avatar
 import com.actionaura.clinic.ui.components.EmptyState
 import com.actionaura.clinic.ui.components.SkeletonList
+import com.actionaura.clinic.ui.i18n.tr
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -67,9 +68,9 @@ fun AppointmentsScreen(snackbar: SnackbarHostState) {
                         fromDate = todayFmt.format(cal.time)
                     }
                     showDayPicker = false
-                }) { Text("OK") }
+                }) { Text(tr("OK")) }
             },
-            dismissButton = { TextButton(onClick = { showDayPicker = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { showDayPicker = false }) { Text(tr("Cancel")) } },
         ) { DatePicker(state = state) }
     }
 
@@ -81,11 +82,11 @@ fun AppointmentsScreen(snackbar: SnackbarHostState) {
             ) {
                 TextButton(onClick = { showDayPicker = true }, modifier = Modifier.weight(1f)) {
                     Text(
-                        if (fromDate == today) "Upcoming (from today)" else "Upcoming from $fromDate",
+                        if (fromDate == today) tr("Upcoming (from today)") else tr("Upcoming from") + " $fromDate",
                         style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
                     )
                 }
-                if (fromDate != today) TextButton(onClick = { fromDate = today }) { Text("Today") }
+                if (fromDate != today) TextButton(onClick = { fromDate = today }) { Text(tr("Today")) }
             }
         PullToRefreshBox(
             isRefreshing = refreshing,
@@ -97,9 +98,9 @@ fun AppointmentsScreen(snackbar: SnackbarHostState) {
             } else if (items.isEmpty()) {
                 EmptyState(
                     icon = Icons.Default.EventAvailable,
-                    title = if (fromDate == today) "No upcoming appointments" else "No appointments from $fromDate onward",
-                    subtitle = "Booked appointments will show up here.",
-                    ctaText = "Book", onCta = { showBook = true },
+                    title = if (fromDate == today) tr("No upcoming appointments") else tr("No appointments from") + " $fromDate " + tr("onward"),
+                    subtitle = tr("Booked appointments will show up here."),
+                    ctaText = tr("Book"), onCta = { showBook = true },
                 )
             } else {
                 LazyColumn(contentPadding = PaddingValues(16.dp, 12.dp, 16.dp, 96.dp),
@@ -111,7 +112,7 @@ fun AppointmentsScreen(snackbar: SnackbarHostState) {
                             lastDateHeader = dayPart
                             item(key = "hdr-$dayPart") {
                                 Text(
-                                    if (dayPart == today) "Today" else dayPart,
+                                    if (dayPart == today) tr("Today") else dayPart,
                                     style = MaterialTheme.typography.labelLarge,
                                     color = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
@@ -125,7 +126,7 @@ fun AppointmentsScreen(snackbar: SnackbarHostState) {
                                 Spacer(Modifier.width(14.dp))
                                 Column(Modifier.weight(1f)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(a.patient_name ?: "Patient", style = MaterialTheme.typography.titleMedium,
+                                        Text(a.patient_name ?: tr("Patient"), style = MaterialTheme.typography.titleMedium,
                                             fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                                         StatusChip(a.status ?: "scheduled")
                                     }
@@ -144,7 +145,7 @@ fun AppointmentsScreen(snackbar: SnackbarHostState) {
         }
         ExtendedFloatingActionButton(
             onClick = { showBook = true },
-            icon = { Icon(Icons.Default.Add, null) }, text = { Text("Book") },
+            icon = { Icon(Icons.Default.Add, null) }, text = { Text(tr("Book")) },
             modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
         )
     }
@@ -155,7 +156,7 @@ fun AppointmentsScreen(snackbar: SnackbarHostState) {
             onBooked = { bookedDate ->
                 showBook = false
                 scope.launch {
-                    snackbar.showSnackbar("Appointment booked")
+                    snackbar.showSnackbar(tr("Appointment booked"))
                     if (bookedDate != null && bookedDate < fromDate) fromDate = bookedDate else load()
                 }
             },
@@ -208,9 +209,9 @@ private fun BookAppointmentSheet(onDismiss: () -> Unit, onBooked: (bookedDate: S
         DatePickerDialog(
             onDismissRequest = { showDatePicker = false },
             confirmButton = {
-                TextButton(onClick = { dateMillis = state.selectedDateMillis; showDatePicker = false }) { Text("OK") }
+                TextButton(onClick = { dateMillis = state.selectedDateMillis; showDatePicker = false }) { Text(tr("OK")) }
             },
-            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text(tr("Cancel")) } },
         ) { DatePicker(state = state) }
     }
     if (showTimePicker) {
@@ -219,9 +220,9 @@ private fun BookAppointmentSheet(onDismiss: () -> Unit, onBooked: (bookedDate: S
         AlertDialog(
             onDismissRequest = { showTimePicker = false },
             confirmButton = {
-                TextButton(onClick = { hour = state.hour; minute = state.minute; showTimePicker = false }) { Text("OK") }
+                TextButton(onClick = { hour = state.hour; minute = state.minute; showTimePicker = false }) { Text(tr("OK")) }
             },
-            dismissButton = { TextButton(onClick = { showTimePicker = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { showTimePicker = false }) { Text(tr("Cancel")) } },
             text = { TimePicker(state = state) },
         )
     }
@@ -229,11 +230,11 @@ private fun BookAppointmentSheet(onDismiss: () -> Unit, onBooked: (bookedDate: S
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
         androidx.compose.foundation.layout.Column(
             Modifier.padding(20.dp).padding(bottom = 24.dp)) {
-            Text("Book Appointment", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(tr("Book Appointment"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(16.dp))
-            LabeledDropdown("Patient", patients.map { it.id to (it.name ?: "#${it.id}") }, patientId) { patientId = it }
+            LabeledDropdown(tr("Patient"), patients.map { it.id to (it.name ?: "#${it.id}") }, patientId) { patientId = it }
             Spacer(Modifier.height(12.dp))
-            LabeledDropdown("Doctor", doctors.map { it.id to (it.name ?: "#${it.id}") }, doctorId) { doctorId = it }
+            LabeledDropdown(tr("Doctor"), doctors.map { it.id to (it.name ?: "#${it.id}") }, doctorId) { doctorId = it }
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(onClick = { showDatePicker = true }, modifier = Modifier.weight(1f)) {
@@ -241,31 +242,31 @@ private fun BookAppointmentSheet(onDismiss: () -> Unit, onBooked: (bookedDate: S
                         val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
                         cal.timeInMillis = it
                         SimpleDateFormat("yyyy-MM-dd", Locale.US).format(cal.time)
-                    } ?: "Pick date")
+                    } ?: tr("Pick date"))
                 }
                 OutlinedButton(onClick = { showTimePicker = true }, modifier = Modifier.weight(1f)) {
-                    Text(if (hour != null && minute != null) "%02d:%02d".format(hour, minute) else "Pick time")
+                    Text(if (hour != null && minute != null) "%02d:%02d".format(hour, minute) else tr("Pick time"))
                 }
             }
             Spacer(Modifier.height(12.dp))
-            OutlinedTextField(reason, { reason = it }, label = { Text("Reason") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(reason, { reason = it }, label = { Text(tr("Reason")) }, modifier = Modifier.fillMaxWidth())
             if (error != null) { Spacer(Modifier.height(10.dp)); Text(error!!, color = MaterialTheme.colorScheme.error) }
             Spacer(Modifier.height(20.dp))
             Button(onClick = {
                 val dtValue = formattedDt()
-                if (patientId == null || dtValue == null) { error = "Pick a patient, date, and time"; return@Button }
+                if (patientId == null || dtValue == null) { error = tr("Pick a patient, date, and time"); return@Button }
                 saving = true; error = null
                 scope.launch {
                     try {
                         val r = ApiClient.get().createAppointment(com.actionaura.clinic.net.CreateAppointmentRequest(
                             patient_id = patientId!!, doctor_id = doctorId, appointment_dt = dtValue, reason = reason.trim()))
-                        if (r.status == "success") onBooked(dtValue.substring(0, 10)) else error = r.message ?: "Couldn't book"
+                        if (r.status == "success") onBooked(dtValue.substring(0, 10)) else error = r.message ?: tr("Couldn't book")
                     } catch (e: Exception) { error = com.actionaura.clinic.net.appointmentErrorMessage(e) } finally { saving = false }
                 }
             }, enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 if (saving) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,
                     color = MaterialTheme.colorScheme.onPrimary)
-                else Text("Book", style = MaterialTheme.typography.labelLarge)
+                else Text(tr("Book"), style = MaterialTheme.typography.labelLarge)
             }
         }
     }

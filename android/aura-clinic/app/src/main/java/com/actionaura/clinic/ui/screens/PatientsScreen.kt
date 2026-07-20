@@ -25,6 +25,7 @@ import com.actionaura.clinic.ui.components.Avatar
 import com.actionaura.clinic.ui.components.EmptyState
 import com.actionaura.clinic.ui.components.GlowCard
 import com.actionaura.clinic.ui.components.SkeletonList
+import com.actionaura.clinic.ui.i18n.tr
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -52,7 +53,7 @@ fun PatientsScreen(onOpenPatient: (Int) -> Unit, snackbar: SnackbarHostState) {
             // Sticky search
             OutlinedTextField(
                 value = query, onValueChange = { query = it },
-                placeholder = { Text("Search name, phone, code") },
+                placeholder = { Text(tr("Search name, phone, code")) },
                 leadingIcon = { Icon(Icons.Default.Search, null) },
                 singleLine = true, shape = RoundedCornerShape(28.dp),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
@@ -68,10 +69,10 @@ fun PatientsScreen(onOpenPatient: (Int) -> Unit, snackbar: SnackbarHostState) {
                 } else if (patients.isEmpty()) {
                     EmptyState(
                         icon = Icons.Default.PersonAdd,
-                        title = if (query.isBlank()) "No patients yet" else "No matches",
-                        subtitle = if (query.isBlank()) "Start by adding your first patient."
-                                   else "Try a different name, phone or code.",
-                        ctaText = if (query.isBlank()) "Add Patient" else null,
+                        title = if (query.isBlank()) tr("No patients yet") else tr("No matches"),
+                        subtitle = if (query.isBlank()) tr("Start by adding your first patient.")
+                                   else tr("Try a different name, phone or code."),
+                        ctaText = if (query.isBlank()) tr("Add Patient") else null,
                         onCta = if (query.isBlank()) ({ showAdd = true }) else null,
                     )
                 } else {
@@ -89,7 +90,7 @@ fun PatientsScreen(onOpenPatient: (Int) -> Unit, snackbar: SnackbarHostState) {
 
         ExtendedFloatingActionButton(
             onClick = { showAdd = true },
-            icon = { Icon(Icons.Default.Add, null) }, text = { Text("Add Patient") },
+            icon = { Icon(Icons.Default.Add, null) }, text = { Text(tr("Add Patient")) },
             modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
         )
     }
@@ -99,7 +100,7 @@ fun PatientsScreen(onOpenPatient: (Int) -> Unit, snackbar: SnackbarHostState) {
             onDismiss = { showAdd = false },
             onCreated = {
                 showAdd = false
-                scope.launch { snackbar.showSnackbar("Patient added"); loading = true; load(); loading = false }
+                scope.launch { snackbar.showSnackbar(tr("Patient added")); loading = true; load(); loading = false }
             },
         )
     }
@@ -118,12 +119,12 @@ private fun PatientCard(p: Patient, onOpen: () -> Unit) {
                     StatusChip(p.status ?: "active")
                 }
                 Spacer(Modifier.height(4.dp))
-                Text("${p.patient_code ?: ""}   ·   ${p.phone ?: "no phone"}",
+                Text("${p.patient_code ?: ""}   ·   ${p.phone ?: tr("no phone")}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (!p.blood_type.isNullOrBlank() && p.blood_type != "N/A") {
                     Spacer(Modifier.height(2.dp))
-                    Text("Blood type ${p.blood_type}", style = MaterialTheme.typography.labelMedium,
+                    Text(tr("Blood type") + " ${p.blood_type}", style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -141,7 +142,7 @@ fun StatusChip(status: String) {
         else -> MaterialTheme.colorScheme.secondary
     }
     Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(20.dp)) {
-        Text(status, color = color, style = MaterialTheme.typography.labelMedium,
+        Text(tr(status), color = color, style = MaterialTheme.typography.labelMedium,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
     }
 }
@@ -161,22 +162,22 @@ private fun AddPatientSheet(onDismiss: () -> Unit, onCreated: () -> Unit) {
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
         Column(Modifier.padding(20.dp).padding(bottom = 24.dp)) {
-            Text("Add Patient", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(tr("Add Patient"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(16.dp))
-            OutlinedTextField(name, { name = it }, label = { Text("Full name *") },
+            OutlinedTextField(name, { name = it }, label = { Text(tr("Full name *")) },
                 singleLine = true, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(12.dp))
-            OutlinedTextField(phone, { phone = it }, label = { Text("Phone") },
+            OutlinedTextField(phone, { phone = it }, label = { Text(tr("Phone")) },
                 singleLine = true, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(gender, { gender = it }, label = { Text("Gender") },
+                OutlinedTextField(gender, { gender = it }, label = { Text(tr("Gender")) },
                     singleLine = true, modifier = Modifier.weight(1f))
-                OutlinedTextField(blood, { blood = it }, label = { Text("Blood type") },
+                OutlinedTextField(blood, { blood = it }, label = { Text(tr("Blood type")) },
                     singleLine = true, modifier = Modifier.weight(1f))
             }
             Spacer(Modifier.height(12.dp))
-            OutlinedTextField(notes, { notes = it }, label = { Text("Notes (allergies, conditions)") },
+            OutlinedTextField(notes, { notes = it }, label = { Text(tr("Notes (allergies, conditions)")) },
                 modifier = Modifier.fillMaxWidth(), minLines = 2)
             if (error != null) {
                 Spacer(Modifier.height(10.dp)); Text(error!!, color = MaterialTheme.colorScheme.error)
@@ -184,22 +185,22 @@ private fun AddPatientSheet(onDismiss: () -> Unit, onCreated: () -> Unit) {
             Spacer(Modifier.height(20.dp))
             Button(
                 onClick = {
-                    if (name.isBlank()) { error = "Name is required"; return@Button }
+                    if (name.isBlank()) { error = tr("Name is required"); return@Button }
                     saving = true; error = null
                     scope.launch {
                         try {
                             val r = ApiClient.get().createPatient(CreatePatientRequest(
                                 name = name.trim(), phone = phone.trim(), gender = gender.trim(),
                                 blood_type = blood.trim(), notes = notes.trim()))
-                            if (r.status == "success") onCreated() else error = r.message ?: "Couldn't save"
-                        } catch (e: Exception) { error = "Couldn't reach the server" } finally { saving = false }
+                            if (r.status == "success") onCreated() else error = r.message ?: tr("Couldn't save")
+                        } catch (e: Exception) { error = tr("Couldn't reach the server") } finally { saving = false }
                     }
                 },
                 enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp),
             ) {
                 if (saving) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,
                     color = MaterialTheme.colorScheme.onPrimary)
-                else Text("Save Patient", style = MaterialTheme.typography.labelLarge)
+                else Text(tr("Save Patient"), style = MaterialTheme.typography.labelLarge)
             }
         }
     }

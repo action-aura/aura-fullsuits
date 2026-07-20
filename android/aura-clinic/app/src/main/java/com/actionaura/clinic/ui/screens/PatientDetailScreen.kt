@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.actionaura.clinic.net.*
+import com.actionaura.clinic.ui.i18n.tr
 import kotlinx.coroutines.launch
 
 @Composable
@@ -42,11 +43,11 @@ fun PatientDetailScreen(patientId: Int) {
     }
     val p = detail?.patient
     if (p == null) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Patient not found") }
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(tr("Patient not found")) }
         return
     }
 
-    val tabs = listOf("Overview", "Visits", "Prescriptions", "Invoices", "Notes")
+    val tabs = listOf(tr("Overview"), tr("Visits"), tr("Prescriptions"), tr("Invoices"), tr("Notes"))
     val pager = rememberPagerState(pageCount = { tabs.size })
     val scope = rememberCoroutineScope()
 
@@ -56,7 +57,7 @@ fun PatientDetailScreen(patientId: Int) {
             Text(p.name ?: "—", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("${p.patient_code ?: ""}   ·   ${p.phone ?: "no phone"}",
+                Text("${p.patient_code ?: ""}   ·   ${p.phone ?: tr("no phone")}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
                 StatusChip(p.status ?: "active")
@@ -85,28 +86,28 @@ fun PatientDetailScreen(patientId: Int) {
 
 @Composable private fun OverviewTab(p: Patient) {
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { InfoRow("Gender", p.gender) }
-        item { InfoRow("Date of birth", p.dob) }
-        item { InfoRow("Blood type", p.blood_type) }
-        item { InfoRow("Email", p.email) }
-        item { InfoRow("Status", p.status) }
+        item { InfoRow(tr("Gender"), p.gender) }
+        item { InfoRow(tr("Date of birth"), p.dob) }
+        item { InfoRow(tr("Blood type"), p.blood_type) }
+        item { InfoRow(tr("Email"), p.email) }
+        item { InfoRow(tr("Status"), p.status) }
     }
 }
 
 @Composable private fun VisitsTab(visits: List<Visit>) {
-    if (visits.isEmpty()) { EmptyTab("No visits yet"); return }
+    if (visits.isEmpty()) { EmptyTab(tr("No visits yet")); return }
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         items(visits, key = { it.id }) { v ->
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Visit #${v.id}", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        Text(tr("Visit") + " #${v.id}", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                         StatusChip(v.status ?: "")
                     }
                     Spacer(Modifier.height(4.dp))
                     Text(v.created_at?.take(10) ?: "—", style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (!v.diagnosis.isNullOrBlank()) Text("Dx: ${v.diagnosis}", style = MaterialTheme.typography.bodyMedium)
+                    if (!v.diagnosis.isNullOrBlank()) Text(tr("Dx") + ": ${v.diagnosis}", style = MaterialTheme.typography.bodyMedium)
                 }
             }
         }
@@ -114,12 +115,12 @@ fun PatientDetailScreen(patientId: Int) {
 }
 
 @Composable private fun PrescriptionsTab(rx: List<Prescription>) {
-    if (rx.isEmpty()) { EmptyTab("No prescriptions"); return }
+    if (rx.isEmpty()) { EmptyTab(tr("No prescriptions")); return }
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         items(rx, key = { it.id }) { r ->
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp)) {
-                    Text("Rx #${r.id}", fontWeight = FontWeight.SemiBold)
+                    Text(tr("Rx") + " #${r.id}", fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(4.dp))
                     Text(r.notes ?: (r.items_json ?: "—"), style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -132,17 +133,17 @@ fun PatientDetailScreen(patientId: Int) {
 }
 
 @Composable private fun InvoicesTab(inv: List<Invoice>) {
-    if (inv.isEmpty()) { EmptyTab("No invoices"); return }
+    if (inv.isEmpty()) { EmptyTab(tr("No invoices")); return }
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         items(inv, key = { it.id }) { i ->
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(i.invoice_number ?: "Invoice", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        Text(i.invoice_number ?: tr("Invoice"), fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                         StatusChip(i.status ?: "")
                     }
                     Spacer(Modifier.height(4.dp))
-                    Text("Total $%.2f   ·   Paid $%.2f".format(i.total, i.amount_paid),
+                    Text(tr("Total") + " $%.2f   ·   ".format(i.total) + tr("Paid") + " $%.2f".format(i.amount_paid),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -153,7 +154,7 @@ fun PatientDetailScreen(patientId: Int) {
 
 @Composable private fun NotesTab(p: Patient) {
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        if (p.notes.isNullOrBlank()) EmptyTab("No notes")
+        if (p.notes.isNullOrBlank()) EmptyTab(tr("No notes"))
         else ElevatedCard(Modifier.fillMaxWidth()) { Text(p.notes, Modifier.padding(16.dp)) }
     }
 }

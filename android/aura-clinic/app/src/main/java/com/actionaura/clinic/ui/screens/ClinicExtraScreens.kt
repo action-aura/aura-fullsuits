@@ -18,6 +18,7 @@ import com.actionaura.clinic.net.*
 import com.actionaura.clinic.ui.components.Avatar
 import com.actionaura.clinic.ui.components.EmptyState
 import com.actionaura.clinic.ui.components.SkeletonList
+import com.actionaura.clinic.ui.i18n.tr
 import kotlinx.coroutines.launch
 
 @Composable
@@ -28,7 +29,7 @@ fun DoctorsScreen() {
         loading = true; docs = try { ApiClient.get().doctors().data } catch (e: Exception) { emptyList() }; loading = false
     }
     ListScaffold(loading, docs.isEmpty(), Icons.Default.MedicalServices,
-        "No doctors yet", "Doctors you add will appear here and can be assigned to appointments.") {
+        tr("No doctors yet"), tr("Doctors you add will appear here and can be assigned to appointments.")) {
         items(docs, key = { it.id }) { d ->
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -53,11 +54,11 @@ fun PrescriptionsScreen() {
         loading = true; rx = try { ApiClient.get().prescriptions().data } catch (e: Exception) { emptyList() }; loading = false
     }
     ListScaffold(loading, rx.isEmpty(), Icons.Default.Medication,
-        "No prescriptions yet", "Prescriptions you write during visits will be listed here.") {
+        tr("No prescriptions yet"), tr("Prescriptions you write during visits will be listed here.")) {
         items(rx, key = { it.id }) { r ->
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp)) {
-                    Text("Rx #${r.id}  ·  Patient #${r.patient_id ?: "—"}", fontWeight = FontWeight.SemiBold)
+                    Text(tr("Rx") + " #${r.id}  ·  " + tr("Patient") + " #${r.patient_id ?: "—"}", fontWeight = FontWeight.SemiBold)
                     Text(r.notes ?: (r.items_json ?: "—"), style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -77,8 +78,8 @@ fun LabExpensesScreen(snackbar: SnackbarHostState) {
 
     Box(Modifier.fillMaxSize()) {
         ListScaffold(loading, items.isEmpty(), Icons.Default.Science,
-            "No lab expenses yet", "Track external lab costs by recording them here.",
-            ctaText = "Record Expense", onCta = { showAdd = true }) {
+            tr("No lab expenses yet"), tr("Track external lab costs by recording them here."),
+            ctaText = tr("Record Expense"), onCta = { showAdd = true }) {
             items(items, key = { it.id }) { e ->
                 ElevatedCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
@@ -95,7 +96,7 @@ fun LabExpensesScreen(snackbar: SnackbarHostState) {
             }
         }
         ExtendedFloatingActionButton(
-            onClick = { showAdd = true }, icon = { Icon(Icons.Default.Add, null) }, text = { Text("Record") },
+            onClick = { showAdd = true }, icon = { Icon(Icons.Default.Add, null) }, text = { Text(tr("Record")) },
             modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
         )
     }
@@ -108,15 +109,15 @@ fun LabExpensesScreen(snackbar: SnackbarHostState) {
         var saving by remember { mutableStateOf(false) }
         ModalBottomSheet(onDismissRequest = { showAdd = false }, sheetState = sheet) {
             Column(Modifier.padding(20.dp).padding(bottom = 24.dp)) {
-                Text("Record Lab Expense", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(tr("Record Lab Expense"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(16.dp))
-                OutlinedTextField(lab, { lab = it }, label = { Text("Lab name *") }, singleLine = true,
+                OutlinedTextField(lab, { lab = it }, label = { Text(tr("Lab name *")) }, singleLine = true,
                     modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.height(12.dp))
-                OutlinedTextField(test, { test = it }, label = { Text("Test") }, singleLine = true,
+                OutlinedTextField(test, { test = it }, label = { Text(tr("Test")) }, singleLine = true,
                     modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.height(12.dp))
-                OutlinedTextField(amount, { amount = it }, label = { Text("Amount") }, singleLine = true,
+                OutlinedTextField(amount, { amount = it }, label = { Text(tr("Amount")) }, singleLine = true,
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                         keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth())
@@ -129,13 +130,13 @@ fun LabExpensesScreen(snackbar: SnackbarHostState) {
                             ApiClient.get().createLabExpense(CreateLabExpenseRequest(
                                 lab_name = lab.trim(), test_name = test.trim(),
                                 amount = amount.toDoubleOrNull() ?: 0.0))
-                            showAdd = false; snackbar.showSnackbar("Lab expense recorded"); load()
-                        } catch (e: Exception) { snackbar.showSnackbar("Couldn't save") } finally { saving = false }
+                            showAdd = false; snackbar.showSnackbar(tr("Lab expense recorded")); load()
+                        } catch (e: Exception) { snackbar.showSnackbar(tr("Couldn't save")) } finally { saving = false }
                     }
                 }, enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                     if (saving) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,
                         color = MaterialTheme.colorScheme.onPrimary)
-                    else Text("Save", style = MaterialTheme.typography.labelLarge)
+                    else Text(tr("Save"), style = MaterialTheme.typography.labelLarge)
                 }
             }
         }

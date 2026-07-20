@@ -127,6 +127,12 @@ private fun MainShell(onLogout: () -> Unit) {
     val scope = rememberCoroutineScope()
     var aiOpen by remember { mutableStateOf(false) }
 
+    // Kept as raw English keys here -- the actual translation happens once,
+    // at the single render site (Text(tr(title), ...) below), matching how
+    // tabs' bottom-nav labels are already handled. Wrapping in tr() at both
+    // this assignment AND the render site would just be a harmless no-op
+    // (tr() on already-translated text falls through unchanged), but keeping
+    // exactly one tr() call per string is less confusing to read.
     val title = when (route) {
         "settings" -> "Settings"
         "doctors" -> "Doctors"
@@ -141,13 +147,13 @@ private fun MainShell(onLogout: () -> Unit) {
             ModalDrawerSheet {
                 Spacer(Modifier.height(16.dp))
                 Text("  Action Aura", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(16.dp))
-                NavigationDrawerItem(label = { Text("Doctors") }, selected = false,
+                NavigationDrawerItem(label = { Text(tr("Doctors")) }, selected = false,
                     icon = { Icon(Icons.Default.MedicalServices, null) },
                     onClick = { scope.launch { drawerState.close() }; nav.navigate("doctors") })
-                NavigationDrawerItem(label = { Text("Lab Expenses") }, selected = false,
+                NavigationDrawerItem(label = { Text(tr("Lab Expenses")) }, selected = false,
                     icon = { Icon(Icons.Default.Science, null) },
                     onClick = { scope.launch { drawerState.close() }; nav.navigate("lab") })
-                NavigationDrawerItem(label = { Text("Prescriptions") }, selected = false,
+                NavigationDrawerItem(label = { Text(tr("Prescriptions")) }, selected = false,
                     icon = { Icon(Icons.Default.Medication, null) },
                     onClick = { scope.launch { drawerState.close() }; nav.navigate("prescriptions") })
                 HorizontalDivider(Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
@@ -234,7 +240,10 @@ private fun AiSheet(onDismiss: () -> Unit, snackbar: SnackbarHostState) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     var prompt by remember { mutableStateOf("") }
-    val suggestions = listOf("Summarize today's clinic", "Unpaid invoices", "Who is waiting now?", "This week's revenue")
+    val suggestions = listOf(
+        tr("Summarize today's clinic"), tr("Unpaid invoices"),
+        tr("Who is waiting now?"), tr("This week's revenue"),
+    )
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
         Column(Modifier.padding(20.dp).padding(bottom = 24.dp)) {
@@ -262,7 +271,7 @@ private fun AiSheet(onDismiss: () -> Unit, snackbar: SnackbarHostState) {
                 trailingIcon = {
                     IconButton(onClick = {
                         scope.launch { onDismiss(); snackbar.showSnackbar(tr("Aura AI is coming soon ✨")) }
-                    }) { Icon(Icons.Default.Send, "Send", tint = MaterialTheme.colorScheme.primary) }
+                    }) { Icon(Icons.Default.Send, tr("Send"), tint = MaterialTheme.colorScheme.primary) }
                 },
             )
         }

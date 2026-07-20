@@ -20,6 +20,7 @@ import com.actionaura.clinic.net.ApiClient
 import com.actionaura.clinic.net.Invoice
 import com.actionaura.clinic.ui.components.EmptyState
 import com.actionaura.clinic.ui.components.SkeletonList
+import com.actionaura.clinic.ui.i18n.tr
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -54,9 +55,9 @@ fun BillingScreen(snackbar: SnackbarHostState) {
             } else if (items.isEmpty()) {
                 EmptyState(
                     icon = Icons.Default.ReceiptLong,
-                    title = "No invoices yet",
-                    subtitle = "Create an invoice to start billing patients.",
-                    ctaText = "New Invoice", onCta = { showInvoice = true },
+                    title = tr("No invoices yet"),
+                    subtitle = tr("Create an invoice to start billing patients."),
+                    ctaText = tr("New Invoice"), onCta = { showInvoice = true },
                 )
             } else {
                 LazyColumn(contentPadding = PaddingValues(16.dp, 12.dp, 16.dp, 96.dp),
@@ -67,7 +68,7 @@ fun BillingScreen(snackbar: SnackbarHostState) {
                         ) {
                             Column(Modifier.padding(16.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(inv.invoice_number ?: "Invoice", style = MaterialTheme.typography.titleMedium,
+                                    Text(inv.invoice_number ?: tr("Invoice"), style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                                     StatusChip(inv.status ?: "unpaid")
                                 }
@@ -76,14 +77,14 @@ fun BillingScreen(snackbar: SnackbarHostState) {
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Spacer(Modifier.height(8.dp))
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text("Total $%.2f".format(inv.total), fontWeight = FontWeight.SemiBold,
+                                    Text(tr("Total") + " $%.2f".format(inv.total), fontWeight = FontWeight.SemiBold,
                                         modifier = Modifier.weight(1f))
-                                    Text("Paid $%.2f".format(inv.amount_paid),
+                                    Text(tr("Paid") + " $%.2f".format(inv.amount_paid),
                                         color = MaterialTheme.colorScheme.primary)
                                 }
                                 if ((inv.status ?: "") != "paid") {
                                     Spacer(Modifier.height(10.dp))
-                                    FilledTonalButton(onClick = { payInvoice = inv }) { Text("Record Payment") }
+                                    FilledTonalButton(onClick = { payInvoice = inv }) { Text(tr("Record Payment")) }
                                 }
                             }
                         }
@@ -93,7 +94,7 @@ fun BillingScreen(snackbar: SnackbarHostState) {
         }
         ExtendedFloatingActionButton(
             onClick = { showInvoice = true },
-            icon = { Icon(Icons.Default.Add, null) }, text = { Text("New Invoice") },
+            icon = { Icon(Icons.Default.Add, null) }, text = { Text(tr("New Invoice")) },
             modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
         )
     }
@@ -101,14 +102,14 @@ fun BillingScreen(snackbar: SnackbarHostState) {
     if (showInvoice) {
         NewInvoiceSheet(
             onDismiss = { showInvoice = false },
-            onCreated = { showInvoice = false; scope.launch { snackbar.showSnackbar("Invoice created"); load() } },
+            onCreated = { showInvoice = false; scope.launch { snackbar.showSnackbar(tr("Invoice created")); load() } },
         )
     }
     payInvoice?.let { inv ->
         PaymentSheet(
             invoice = inv,
             onDismiss = { payInvoice = null },
-            onPaid = { payInvoice = null; scope.launch { snackbar.showSnackbar("Payment recorded"); load() } },
+            onPaid = { payInvoice = null; scope.launch { snackbar.showSnackbar(tr("Payment recorded")); load() } },
         )
     }
     detailInvoice?.let { inv ->
@@ -137,7 +138,7 @@ private fun InvoiceDetailSheet(invoice: Invoice, onDismiss: () -> Unit, onRecord
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
         Column(Modifier.padding(20.dp).padding(bottom = 24.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(invoice.invoice_number ?: "Invoice", style = MaterialTheme.typography.titleLarge,
+                Text(invoice.invoice_number ?: tr("Invoice"), style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                 StatusChip(invoice.status ?: "unpaid")
             }
@@ -151,7 +152,7 @@ private fun InvoiceDetailSheet(invoice: Invoice, onDismiss: () -> Unit, onRecord
                 }
                 error != null -> Text(error!!, color = MaterialTheme.colorScheme.error)
                 else -> {
-                    Text("Items", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Text(tr("Items"), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(6.dp))
                     detail?.items?.forEach { it ->
                         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
@@ -159,26 +160,26 @@ private fun InvoiceDetailSheet(invoice: Invoice, onDismiss: () -> Unit, onRecord
                             Text("$%.2f".format(it.line_total))
                         }
                     }
-                    if (detail?.items.isNullOrEmpty()) Text("No line items", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (detail?.items.isNullOrEmpty()) Text(tr("No line items"), color = MaterialTheme.colorScheme.onSurfaceVariant)
 
                     Spacer(Modifier.height(16.dp))
                     HorizontalDivider()
                     Spacer(Modifier.height(12.dp))
                     Row(Modifier.fillMaxWidth()) {
-                        Text("Total", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        Text(tr("Total"), fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                         Text("$%.2f".format(invoice.total), fontWeight = FontWeight.Bold)
                     }
                     Row(Modifier.fillMaxWidth()) {
-                        Text("Paid", modifier = Modifier.weight(1f))
+                        Text(tr("Paid"), modifier = Modifier.weight(1f))
                         Text("$%.2f".format(invoice.amount_paid), color = MaterialTheme.colorScheme.primary)
                     }
                     Row(Modifier.fillMaxWidth()) {
-                        Text("Balance due", modifier = Modifier.weight(1f))
+                        Text(tr("Balance due"), modifier = Modifier.weight(1f))
                         Text("$%.2f".format((invoice.total - invoice.amount_paid).coerceAtLeast(0.0)))
                     }
 
                     Spacer(Modifier.height(16.dp))
-                    Text("Payment history", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Text(tr("Payment history"), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(6.dp))
                     detail?.payments?.forEach { p ->
                         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
@@ -187,12 +188,12 @@ private fun InvoiceDetailSheet(invoice: Invoice, onDismiss: () -> Unit, onRecord
                             Text("$%.2f".format(p.amount_paid))
                         }
                     }
-                    if (detail?.payments.isNullOrEmpty()) Text("No payments recorded", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (detail?.payments.isNullOrEmpty()) Text(tr("No payments recorded"), color = MaterialTheme.colorScheme.onSurfaceVariant)
 
                     if ((invoice.status ?: "") != "paid") {
                         Spacer(Modifier.height(20.dp))
                         Button(onClick = onRecordPayment, modifier = Modifier.fillMaxWidth().height(52.dp)) {
-                            Text("Record Payment")
+                            Text(tr("Record Payment"))
                         }
                     }
                 }
@@ -218,27 +219,27 @@ private fun NewInvoiceSheet(onDismiss: () -> Unit, onCreated: () -> Unit) {
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
         Column(Modifier.padding(20.dp).padding(bottom = 24.dp)) {
-            Text("New Invoice", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(tr("New Invoice"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(16.dp))
-            LabeledDropdown("Patient", patients.map { it.id to (it.name ?: "#${it.id}") }, patientId) { patientId = it }
+            LabeledDropdown(tr("Patient"), patients.map { it.id to (it.name ?: "#${it.id}") }, patientId) { patientId = it }
             Spacer(Modifier.height(12.dp))
-            OutlinedTextField(desc, { desc = it }, label = { Text("Service / item *") },
+            OutlinedTextField(desc, { desc = it }, label = { Text(tr("Service / item *")) },
                 singleLine = true, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(qty, { qty = it }, label = { Text("Qty") }, singleLine = true, modifier = Modifier.weight(1f))
-                OutlinedTextField(price, { price = it }, label = { Text("Unit price") }, singleLine = true, modifier = Modifier.weight(1f))
+                OutlinedTextField(qty, { qty = it }, label = { Text(tr("Qty")) }, singleLine = true, modifier = Modifier.weight(1f))
+                OutlinedTextField(price, { price = it }, label = { Text(tr("Unit price")) }, singleLine = true, modifier = Modifier.weight(1f))
             }
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(discount, { discount = it }, label = { Text("Discount $") }, singleLine = true, modifier = Modifier.weight(1f))
-                OutlinedTextField(taxPct, { taxPct = it }, label = { Text("Tax %") }, singleLine = true, modifier = Modifier.weight(1f))
+                OutlinedTextField(discount, { discount = it }, label = { Text(tr("Discount") + " $") }, singleLine = true, modifier = Modifier.weight(1f))
+                OutlinedTextField(taxPct, { taxPct = it }, label = { Text(tr("Tax") + " %") }, singleLine = true, modifier = Modifier.weight(1f))
             }
             if (error != null) { Spacer(Modifier.height(10.dp)); Text(error!!, color = MaterialTheme.colorScheme.error) }
             Spacer(Modifier.height(20.dp))
             Button(onClick = {
                 val pr = price.toDoubleOrNull()
-                if (patientId == null || desc.isBlank() || pr == null) { error = "Patient, item and price required"; return@Button }
+                if (patientId == null || desc.isBlank() || pr == null) { error = tr("Patient, item and price required"); return@Button }
                 saving = true; error = null
                 scope.launch {
                     try {
@@ -247,13 +248,13 @@ private fun NewInvoiceSheet(onDismiss: () -> Unit, onCreated: () -> Unit) {
                             items = listOf(com.actionaura.clinic.net.InvoiceItemReq(desc.trim(), qty.toDoubleOrNull() ?: 1.0, pr)),
                             discount = discount.toDoubleOrNull() ?: 0.0,
                             tax_rate = (taxPct.toDoubleOrNull() ?: 0.0) / 100.0))
-                        if (r.status == "success") onCreated() else error = r.message ?: "Couldn't create"
-                    } catch (e: Exception) { error = "Couldn't reach the server" } finally { saving = false }
+                        if (r.status == "success") onCreated() else error = r.message ?: tr("Couldn't create")
+                    } catch (e: Exception) { error = tr("Couldn't reach the server") } finally { saving = false }
                 }
             }, enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 if (saving) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,
                     color = MaterialTheme.colorScheme.onPrimary)
-                else Text("Create Invoice", style = MaterialTheme.typography.labelLarge)
+                else Text(tr("Create Invoice"), style = MaterialTheme.typography.labelLarge)
             }
         }
     }
@@ -271,14 +272,14 @@ private fun PaymentSheet(invoice: Invoice, onDismiss: () -> Unit, onPaid: () -> 
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
         Column(Modifier.padding(20.dp).padding(bottom = 24.dp)) {
-            Text("Record Payment", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text("${invoice.invoice_number ?: ""} · due $%.2f".format(due),
+            Text(tr("Record Payment"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("${invoice.invoice_number ?: ""} · " + tr("due") + " $%.2f".format(due),
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(16.dp))
-            OutlinedTextField(amount, { amount = it }, label = { Text("Amount") }, singleLine = true,
+            OutlinedTextField(amount, { amount = it }, label = { Text(tr("Amount")) }, singleLine = true,
                 modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(12.dp))
-            LabeledDropdown("Method", listOf(0 to "cash", 1 to "card", 2 to "insurance", 3 to "bank_transfer"),
+            LabeledDropdown(tr("Method"), listOf(0 to tr("cash"), 1 to tr("card"), 2 to tr("insurance"), 3 to tr("bank_transfer")),
                 when (method) { "card" -> 1; "insurance" -> 2; "bank_transfer" -> 3; else -> 0 }) {
                 method = listOf("cash", "card", "insurance", "bank_transfer")[it]
             }
@@ -305,7 +306,7 @@ private fun PaymentSheet(invoice: Invoice, onDismiss: () -> Unit, onPaid: () -> 
                             invoice_id = invoice.id, amount = amt, method = method,
                             idempotency_key = java.util.UUID.randomUUID().toString()))
                         if (r.status == "success") onPaid()
-                        else { error = r.message ?: "Payment could not be recorded."; saving = false }
+                        else { error = r.message ?: tr("Payment could not be recorded."); saving = false }
                     } catch (e: Exception) {
                         // MOB-003: real backend rejections (400/404/500) arrive here as
                         // HttpException, not as an r.status=="error" response above --
@@ -321,7 +322,7 @@ private fun PaymentSheet(invoice: Invoice, onDismiss: () -> Unit, onPaid: () -> 
             }, enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 if (saving) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,
                     color = MaterialTheme.colorScheme.onPrimary)
-                else Text("Record Payment", style = MaterialTheme.typography.labelLarge)
+                else Text(tr("Record Payment"), style = MaterialTheme.typography.labelLarge)
             }
         }
     }
