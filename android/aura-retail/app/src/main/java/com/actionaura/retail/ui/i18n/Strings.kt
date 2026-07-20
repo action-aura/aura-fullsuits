@@ -96,6 +96,7 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Your store at a glance" to "متجرك في لمحة",
     "Quick actions" to "إجراءات سريعة",
     "New Sale" to "بيع جديد",
+    "Share Receipt" to "مشاركة الإيصال",
     "Today" to "اليوم",
     "Today's Sales" to "مبيعات اليوم",
     "Revenue today" to "إيرادات اليوم",

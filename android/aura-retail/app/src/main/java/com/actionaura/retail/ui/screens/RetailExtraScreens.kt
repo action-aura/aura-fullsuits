@@ -2,11 +2,13 @@
 
 package com.actionaura.retail.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -29,6 +31,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -38,6 +41,8 @@ import com.actionaura.retail.ui.components.EmptyState
 import com.actionaura.retail.ui.components.GlowCard
 import com.actionaura.retail.ui.components.SectionHeader
 import com.actionaura.retail.ui.components.SkeletonList
+import com.actionaura.retail.ui.i18n.AppLang
+import com.actionaura.retail.ui.i18n.AppLocale
 import com.actionaura.retail.ui.i18n.fmtQty
 import com.actionaura.retail.ui.i18n.parseNum
 import com.actionaura.retail.ui.i18n.tr
@@ -1119,6 +1124,14 @@ fun AgingScreen(snackbar: SnackbarHostState) {
 // ══════════════════════════════════════════════════════════════════════════════
 @Composable
 fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit = {}) {
+    // Real gap found live on-device (Wave 1B): the tr()/AppLocale mechanism
+    // already worked (Login and elsewhere used it), but there was no reachable
+    // way to actually switch language -- the only language-switcher UI lived
+    // in SettingsScreen.kt, a file never wired to any nav route (this
+    // RetailSettingsScreen, in this file, is the real routed "retail_settings"
+    // screen). Mirrors Clinic's working SettingsScreen.kt picker.
+    val ctx = LocalContext.current
+    var showLanguage by remember { mutableStateOf(false) }
     var s by remember { mutableStateOf(CreditSettings()) }
     var methods by remember { mutableStateOf<List<PayMethod>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -1139,6 +1152,19 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        SectionHeader(tr("Language"))
+        GlowCard(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.fillMaxWidth().clickable { showLanguage = true }.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(tr("Language"), Modifier.weight(1f))
+                Text(AppLocale.lang.nativeName, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(8.dp))
+                Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
         SectionHeader(tr("Credit policy"))
         Text(tr("Default credit mode for new customers"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         val modes = listOf("none" to tr("No credit"), "limited" to tr("Limited"), "unlimited" to tr("Unlimited"))
@@ -1207,6 +1233,45 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
                 Text(tr("Backup & restore"))
             }
         }
+
+        SectionHeader(tr("About"))
+        GlowCard(Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(tr("Version"), Modifier.weight(1f))
+                Text(com.actionaura.retail.BuildConfig.VERSION_NAME, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+
+    if (showLanguage) {
+        AlertDialog(
+            onDismissRequest = { showLanguage = false },
+            title = { Text(tr("Choose language")) },
+            text = {
+                Column {
+                    AppLang.entries.forEach { lang ->
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .selectable(selected = AppLocale.lang == lang, onClick = {
+                                    AppLocale.set(ctx, lang)
+                                    showLanguage = false
+                                })
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = AppLocale.lang == lang, onClick = {
+                                AppLocale.set(ctx, lang); showLanguage = false
+                            })
+                            Spacer(Modifier.width(8.dp))
+                            Text(lang.nativeName, style = MaterialTheme.typography.bodyLarge)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showLanguage = false }) { Text(tr("Done")) }
+            },
+        )
     }
 }
 
