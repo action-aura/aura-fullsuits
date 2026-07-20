@@ -1,0 +1,33 @@
+# UTF-8
+#
+# PyInstaller Windows version resource for AuraClinic.exe (Wave 1B).
+# Kept in sync with products/clinic/backend/config.py's APP_VERSION and
+# docs/release/versioning-policy.md -- update both together.
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo(
+      [
+      StringTable(
+        u'040904B0',
+        [StringStruct(u'CompanyName', u'Action Aura'),
+        StringStruct(u'FileDescription', u'Aura Clinic'),
+        StringStruct(u'FileVersion', u'1.0.0.0'),
+        StringStruct(u'InternalName', u'AuraClinic'),
+        StringStruct(u'LegalCopyright', u'© Action Aura'),
+        StringStruct(u'OriginalFilename', u'AuraClinic.exe'),
+        StringStruct(u'ProductName', u'Aura Clinic'),
+        StringStruct(u'ProductVersion', u'1.0.0-rc.1')])
+      ]),
+    VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
+  ]
+)
