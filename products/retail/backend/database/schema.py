@@ -26,6 +26,10 @@ else:
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 
+# Wave 1B (Part K): see products/clinic/backend/database/schema.py's
+# identical CLINIC_SCHEMA_VERSION for the full rationale.
+RETAIL_SCHEMA_VERSION = 1
+
 
 def _get_path(name):
     os.makedirs(SUBSYS_DIR, exist_ok=True)
@@ -277,6 +281,19 @@ def init_retail():
     );
     """)
     conn.commit()
+
+    # Wave 1B (Part K): infrastructure ready for the first real Retail schema
+    # change (none exist yet -- unlike Clinic, which already has real ALTERs).
+    # Mirrors products/clinic/backend/database/schema.py's identical pattern;
+    # see commercial_runtime/security/migration_safety.py. The no-op
+    # migrate_fn below is intentional, not a placeholder to "fill in later" --
+    # add real ALTER statements to it (and bump RETAIL_SCHEMA_VERSION) the
+    # day Retail's schema actually needs to change.
+    from commercial_runtime.security.migration_safety import ensure_schema_version
+    ensure_schema_version(
+        conn, _get_path('retail'), RETAIL_SCHEMA_VERSION, lambda c: None,
+        backup_dir=os.path.join(BASE_DIR, 'migration_backups'),
+    )
 
     if cur.execute("SELECT COUNT(*) FROM branches").fetchone()[0] == 0 and not _is_standalone():
         _seed_retail(conn, cur)

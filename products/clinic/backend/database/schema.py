@@ -31,6 +31,13 @@ else:
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 
+# Wave 1B (Part K): tracked via SQLite's own PRAGMA user_version, not a
+# custom table -- see commercial_runtime/security/migration_safety.py.
+# Represents "every ALTER in _apply_clinic_alters below has been applied."
+# Bump this (and add the new ALTER to that function) for any future schema
+# change; never lower it or reuse a number.
+CLINIC_SCHEMA_VERSION = 1
+
 
 def _get_path(name):
     os.makedirs(SUBSYS_DIR, exist_ok=True)
@@ -241,26 +248,41 @@ def init_clinic():
         FOREIGN KEY (patient_id) REFERENCES clinic_patients(id)
     );
     """)
-    for _alter in (
-        "ALTER TABLE clinic_invoices ADD COLUMN discount REAL DEFAULT 0",
-        "ALTER TABLE clinic_invoices ADD COLUMN notes TEXT",
-        "ALTER TABLE clinic_invoices ADD COLUMN prescription_id INTEGER",
-        "ALTER TABLE clinic_invoices ADD COLUMN accounting_synced INTEGER DEFAULT 0",
-        "ALTER TABLE clinic_prescriptions ADD COLUMN invoice_id INTEGER",
-        # Wave 0 (AUDIT-012): duplicate-payment protection needs a column to
-        # de-duplicate on. SQLite can't add a UNIQUE column via ALTER TABLE,
-        # so a partial unique index (below) does the enforcement instead.
-        "ALTER TABLE clinic_payments ADD COLUMN idempotency_key TEXT",
-    ):
-        try:
-            cur.execute(_alter)
-        except Exception:
-            pass  # column already exists
-    cur.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_clinic_payments_idempotency "
-        "ON clinic_payments(idempotency_key) WHERE idempotency_key IS NOT NULL"
+    # Wave 1B (Part K): these ALTERs used to run unconditionally on every
+    # launch with no pre-migration backup. Now gated behind PRAGMA
+    # user_version via ensure_schema_version() -- a real migration (and its
+    # safety backup) only happens once, the first time a build carrying
+    # CLINIC_SCHEMA_VERSION reaches an older database; every launch after
+    # that takes the fast no-op path. See
+    # commercial_runtime/security/migration_safety.py and
+    # docs/release/wave1b/schema-migration-and-data-safety-report.md.
+    def _apply_clinic_alters(migrating_conn):
+        mcur = migrating_conn.cursor()
+        for _alter in (
+            "ALTER TABLE clinic_invoices ADD COLUMN discount REAL DEFAULT 0",
+            "ALTER TABLE clinic_invoices ADD COLUMN notes TEXT",
+            "ALTER TABLE clinic_invoices ADD COLUMN prescription_id INTEGER",
+            "ALTER TABLE clinic_invoices ADD COLUMN accounting_synced INTEGER DEFAULT 0",
+            "ALTER TABLE clinic_prescriptions ADD COLUMN invoice_id INTEGER",
+            # Wave 0 (AUDIT-012): duplicate-payment protection needs a column to
+            # de-duplicate on. SQLite can't add a UNIQUE column via ALTER TABLE,
+            # so a partial unique index (below) does the enforcement instead.
+            "ALTER TABLE clinic_payments ADD COLUMN idempotency_key TEXT",
+        ):
+            try:
+                mcur.execute(_alter)
+            except Exception:
+                pass  # column already exists
+        mcur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_clinic_payments_idempotency "
+            "ON clinic_payments(idempotency_key) WHERE idempotency_key IS NOT NULL"
+        )
+
+    from commercial_runtime.security.migration_safety import ensure_schema_version
+    ensure_schema_version(
+        conn, _get_path('clinic'), CLINIC_SCHEMA_VERSION, _apply_clinic_alters,
+        backup_dir=os.path.join(BASE_DIR, 'migration_backups'),
     )
-    conn.commit()
     if cur.execute("SELECT COUNT(*) FROM clinic_patients").fetchone()[0] == 0 and not _is_standalone():
         _seed_clinic(conn, cur)
     conn.close()
