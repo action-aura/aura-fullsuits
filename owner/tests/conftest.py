@@ -146,3 +146,115 @@ def login_and_verify_mfa(client, email, password="Sup3r-Str0ng-Pass!"):
     page = client.get("/auth/mfa-verify")
     csrf = get_csrf(page.get_data(as_text=True))
     return client.post("/auth/mfa-verify", data={"csrf_token": csrf, "code": totp_code()})
+
+
+# -- Phase 6 helpers -----------------------------------------------------
+
+@pytest.fixture()
+def signing_key(app):
+    """Generates and activates a real Ed25519 signing key for this test,
+    under the isolated OWNER_TEST_SIGNING_KEY_DIRECTORY (never the dev/prod
+    directory)."""
+    with app.app_context():
+        from app.licensing_service.signing import activate_signing_key, generate_signing_key
+
+        row = generate_signing_key(app.config["SIGNING_KEY_DIRECTORY"])
+        activate_signing_key(app.config["SIGNING_KEY_DIRECTORY"], row.key_id)
+        return row.key_id
+
+
+def make_license(app, actor_id, *, device_limit=1, product_code="AURA_CLINIC", plan_code=None):
+    """Creates a real customer -> subscription(ACTIVE) -> issued license chain
+    and returns (license_id, full_key)."""
+    with app.app_context():
+        import uuid as uuid_mod
+
+        from app.extensions import db_session
+        from app.licensing.services import create_license, issue_license_key
+        from app.models.catalog import Plan, Product
+        from app.models.customers import Customer
+        from app.subscriptions.services import create_subscription, transition_subscription
+        from sqlalchemy import select
+
+        product = db_session.execute(select(Product).where(Product.product_code == product_code)).scalars().first()
+        plan_code = plan_code or f"TESTPLAN-{uuid_mod.uuid4().hex[:8]}"
+        plan = Plan(plan_code=plan_code, product_id=product.id, name=plan_code, billing_model="PILOT", currency="USD")
+        customer = Customer(legal_name=f"Test Co {uuid_mod.uuid4().hex[:8]}")
+        db_session.add_all([plan, customer])
+        db_session.commit()
+
+        sub = create_subscription({"customer_id": customer.id, "product_id": product.id, "plan_id": plan.id}, actor_id)
+        transition_subscription(sub, "ACTIVE", actor_id)
+
+        lic = create_license(
+            {"customer_id": customer.id, "subscription_id": sub.id, "product_id": product.id, "plan_id": plan.id,
+             "allowed_platforms": "WINDOWS,ANDROID", "device_limit": device_limit},
+            actor_id,
+        )
+        lic, full_key = issue_license_key(lic, app.config["LICENSE_PEPPER"], str(uuid_mod.uuid4()), actor_id)
+        return lic.id, full_key
+
+
+def make_device_keypair():
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    return Ed25519PrivateKey.generate()
+
+
+def public_key_b64(private_key) -> str:
+    import base64
+
+    from cryptography.hazmat.primitives import serialization
+
+    return base64.b64encode(
+        private_key.public_key().public_bytes(encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw)
+    ).decode("ascii")
+
+
+def sign_body(private_key, body: dict) -> dict:
+    import base64
+
+    from app.licensing_service.canonical import canonicalize_bytes
+
+    signable = {k: v for k, v in body.items() if k != "signature"}
+    signature = private_key.sign(canonicalize_bytes(signable))
+    return {**body, "signature": base64.b64encode(signature).decode("ascii")}
+
+
+def build_activation_body(private_key, *, full_key: str, installation_id: str, product_code="AURA_CLINIC", platform="WINDOWS", **overrides) -> dict:
+    import uuid as uuid_mod
+    from datetime import datetime, timezone
+
+    body = {
+        "contract_version": "v1",
+        "request_id": str(uuid_mod.uuid4()),
+        "correlation_id": str(uuid_mod.uuid4()),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "nonce": uuid_mod.uuid4().hex,
+        "product_code": product_code,
+        "platform": platform,
+        "app_version": "1.0.0-test",
+        "installation_id": installation_id,
+        "device_public_key": public_key_b64(private_key),
+        "device_public_key_algorithm": "ed25519",
+        "license_key": full_key,
+        "idempotency_key": str(uuid_mod.uuid4()),
+    }
+    body.update(overrides)
+    return sign_body(private_key, body)
+
+
+def build_checkin_body(private_key, *, installation_id: str, **overrides) -> dict:
+    import uuid as uuid_mod
+    from datetime import datetime, timezone
+
+    body = {
+        "contract_version": "v1",
+        "request_id": str(uuid_mod.uuid4()),
+        "correlation_id": str(uuid_mod.uuid4()),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "nonce": uuid_mod.uuid4().hex,
+        "installation_id": installation_id,
+    }
+    body.update(overrides)
+    return sign_body(private_key, body)

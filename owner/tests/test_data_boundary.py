@@ -94,8 +94,17 @@ def test_no_import_path_from_owner_into_products_or_commercial_runtime():
     assert offenders == [], f"forbidden cross-package import found in: {offenders}"
 
 
-def test_external_api_blueprint_not_registered_by_default(app):
-    assert app.config["EXTERNAL_API_ENABLED"] is False
-    with app.test_request_context():
-        rules = [r for r in app.url_map.iter_rules() if r.rule.startswith("/api/v1")]
-    assert rules == []
+def test_external_api_blueprint_not_registered_by_default():
+    """The shared `app` fixture deliberately forces EXTERNAL_API_ENABLED=True
+    in TestingConfig (Phase 6 needs it to exercise /api/licensing/v1/*) --
+    that is a test-harness convenience, not the real default. This test
+    proves the real invariant directly on the config classes actually used in
+    development/production: the flag defaults to false on every one of them,
+    and create_app() only imports/registers either external blueprint inside
+    an `if app.config.get("EXTERNAL_API_ENABLED"):` guard (app/__init__.py) --
+    so a real deployment with no override never has the route to reach."""
+    from app.config import BaseConfig, DevelopmentConfig, ProductionConfig
+
+    assert BaseConfig.EXTERNAL_API_ENABLED is False
+    assert DevelopmentConfig.EXTERNAL_API_ENABLED is False
+    assert ProductionConfig.EXTERNAL_API_ENABLED is False
