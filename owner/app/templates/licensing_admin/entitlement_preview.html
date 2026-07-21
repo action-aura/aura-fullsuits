@@ -1,0 +1,14 @@
+{% extends "layout/base.html" %}
+{% block title %}Entitlement Resolution Preview{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Entitlement resolution -- {{ license.customer.legal_name }}</h2>
+  <table>
+    <tr><th>Entitlement</th><th>Resolved value</th><th>Source</th></tr>
+    {% for code, entry in resolved.items()|sort %}
+    <tr><td>{{ code }}</td><td>{{ entry.value }}</td><td><span class="badge">{{ entry._source }}</span></td></tr>
+    {% endfor %}
+  </table>
+  <p style="color:#6b7785;font-size:0.85rem;">Source is internal diagnostic detail only -- never sent to a client in a signed assertion.</p>
+</div>
+{% endblock %}

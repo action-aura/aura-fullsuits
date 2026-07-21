@@ -1,0 +1,29 @@
+{% extends "layout/base.html" %}
+{% block title %}Device Keys{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Device public keys</h2>
+  <table>
+    <tr><th>Fingerprint</th><th>Algorithm</th><th>Status</th><th>Installation</th><th>Last proof</th><th></th></tr>
+    {% for k in rows %}
+    <tr>
+      <td><code style="font-size:0.72rem;">{{ k.fingerprint[:16] }}...</code></td>
+      <td>{{ k.algorithm }}</td>
+      <td><span class="badge {{ 'active' if k.status == 'ACTIVE' else ('danger' if k.status == 'REVOKED' else 'draft') }}">{{ k.status }}</span></td>
+      <td>{{ (k.installation_id|string)[:8] }}</td>
+      <td>{{ k.last_proof_at or "-" }}</td>
+      <td>
+        {% if k.status == "ACTIVE" %}
+        <form class="inline" method="post" action="{{ url_for('licensing_admin.revoke_device_key', device_key_id=k.id) }}"
+              onsubmit="return confirm('Revoke this device key? The device will be unable to check in until it re-activates with a new key.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="danger">Revoke</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}<tr><td colspan="6" class="empty">No device keys registered yet.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

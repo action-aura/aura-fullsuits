@@ -50,6 +50,20 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("system.manage_settings", "SYSTEM", "Change system settings"),
     ("system.backup", "SYSTEM", "Trigger an Owner database backup"),
     ("system.restore", "SYSTEM", "Restore the Owner database"),
+    # Phase 6 -- Licensing & Activation Service
+    ("activation_service.view", "ACTIVATION_SERVICE", "View activation service status/health"),
+    ("activation_service.manage", "ACTIVATION_SERVICE", "Enable/configure the external activation API"),
+    ("activation_requests.view", "ACTIVATION_SERVICE", "View recent activation/check-in requests"),
+    ("activation_requests.review", "ACTIVATION_SERVICE", "Review/annotate activation requests"),
+    ("device_keys.view", "ACTIVATION_SERVICE", "View device public-key status"),
+    ("device_keys.revoke", "ACTIVATION_SERVICE", "Revoke a device public key"),
+    ("signing_keys.view_public_metadata", "ACTIVATION_SERVICE", "View signing-key public metadata"),
+    ("signing_keys.manage", "ACTIVATION_SERVICE", "Generate/activate/rotate/revoke signing keys"),
+    ("offline_policies.view", "ACTIVATION_SERVICE", "View offline-grace policies"),
+    ("offline_policies.manage", "ACTIVATION_SERVICE", "Assign/edit offline-grace policies"),
+    ("entitlement_resolution.preview", "ACTIVATION_SERVICE", "Preview entitlement resolution for a license"),
+    ("licenses.reactivate", "LICENSES", "Reactivate a suspended license"),
+    ("installations.replace_device", "INSTALLATIONS", "Replace a device on an installation"),
 ]
 
 # code -> permission codes. SUPER_ADMIN gets every permission automatically
@@ -82,6 +96,9 @@ ROLES: dict[str, dict] = {
             "subscriptions.view",
             "licenses.view",
             "installations.view", "installations.register", "installations.update", "installations.suspend",
+            "installations.replace_device",
+            "activation_service.view", "activation_requests.view", "device_keys.view",
+            # No signing-key management, no plan/entitlement changes, no license-secret issuance (Part S).
         ],
     },
     "FINANCE": {
@@ -99,6 +116,8 @@ ROLES: dict[str, dict] = {
         "description": "Read-only access to approved non-sensitive internal metadata.",
         "permissions": [
             "catalog.view", "customers.view", "subscriptions.view", "licenses.view", "installations.view",
+            "activation_service.view", "activation_requests.view", "device_keys.view",
+            "signing_keys.view_public_metadata", "offline_policies.view",
         ],
     },
 }

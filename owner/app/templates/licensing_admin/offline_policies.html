@@ -1,0 +1,21 @@
+{% extends "layout/base.html" %}
+{% block title %}Offline Policies{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Offline-grace policies</h2>
+  <table>
+    <tr><th>Code</th><th>Check-in interval</th><th>Offline grace</th><th>Warning starts</th><th>Hard expiry behavior</th></tr>
+    {% for p in policies %}
+    <tr>
+      <td>{{ p.policy_code }} (v{{ p.policy_version }})</td>
+      <td>{{ p.check_in_interval_seconds }}s</td>
+      <td>{{ p.offline_grace_seconds }}s</td>
+      <td>{{ p.warning_start_seconds }}s before grace ends</td>
+      <td>{{ p.hard_expiry_behavior }}</td>
+    </tr>
+    {% else %}<tr><td colspan="5" class="empty">No offline policies seeded yet -- run `flask seed-offline-policy`.</td></tr>
+    {% endfor %}
+  </table>
+  <p style="color:#6b7785;font-size:0.85rem;">Policy is DEFINED and RETURNED to clients only -- Phase 6 does not enforce it inside Retail or Clinic.</p>
+</div>
+{% endblock %}

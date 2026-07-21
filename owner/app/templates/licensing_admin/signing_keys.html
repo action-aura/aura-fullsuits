@@ -1,0 +1,51 @@
+{% extends "layout/base.html" %}
+{% block title %}Signing Keys{% endblock %}
+{% block content %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <h2>Server signing keys</h2>
+    <div>
+      <form class="inline" method="post" action="{{ url_for('licensing_admin.generate_signing_key') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="secondary">Generate new (DRAFT)</button>
+      </form>
+      <form class="inline" method="post" action="{{ url_for('licensing_admin.rotate_signing_key') }}"
+            onsubmit="return confirm('Rotate to a brand-new active signing key? The previous key remains valid for already-issued assertions.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="reason" value="manual_rotation_from_ui">
+        <button type="submit">Rotate now</button>
+      </form>
+    </div>
+  </div>
+  <p style="color:#6b7785;font-size:0.85rem;">Private key material is never shown here or stored in the database -- only public metadata.</p>
+  <table>
+    <tr><th>Key ID</th><th>Algorithm</th><th>Status</th><th>Activated</th><th>Retired</th><th></th></tr>
+    {% for k in keys %}
+    <tr>
+      <td><code style="font-size:0.75rem;">{{ k.key_id }}</code></td>
+      <td>{{ k.algorithm }}</td>
+      <td><span class="badge {{ 'active' if k.status == 'ACTIVE' else ('danger' if k.status == 'REVOKED' else 'draft') }}">{{ k.status }}</span></td>
+      <td>{{ k.activated_at or "-" }}</td>
+      <td>{{ k.retired_at or "-" }}</td>
+      <td>
+        {% if k.status == "DRAFT" %}
+        <form class="inline" method="post" action="{{ url_for('licensing_admin.activate_signing_key', key_id=k.key_id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="secondary">Activate</button>
+        </form>
+        {% endif %}
+        {% if k.status in ("ACTIVE", "RETIRED") %}
+        <form class="inline" method="post" action="{{ url_for('licensing_admin.revoke_signing_key', key_id=k.key_id) }}"
+              onsubmit="return confirm('Revoke this key? Assertions signed by it will no longer verify -- use only for compromise response.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="reason" value="revoked_via_admin_ui">
+          <button type="submit" class="danger">Revoke</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}<tr><td colspan="6" class="empty">No signing keys yet -- generate one to enable the external API.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}
