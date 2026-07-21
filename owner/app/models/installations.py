@@ -46,6 +46,8 @@ class Installation(Base, UUIDPKMixin, TimestampMixin):
 
     customer: Mapped["Customer"] = relationship()  # noqa: F821
     product: Mapped["Product"] = relationship()  # noqa: F821
+    platform: Mapped["Platform"] = relationship()  # noqa: F821 -- added Phase 6, no schema change (FK already existed)
+    license: Mapped["License | None"] = relationship()  # noqa: F821 -- added Phase 6, no schema change (FK already existed)
     devices: Mapped[list["DeviceRecord"]] = relationship(back_populates="installation", cascade="all, delete-orphan")
     # No delete-orphan on the audit-trail relationships (status_history,
     # activation_events) -- must never silently vanish if an Installation

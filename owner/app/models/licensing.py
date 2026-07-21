@@ -36,7 +36,11 @@ class License(Base, UUIDPKMixin, TimestampMixin):
     )
     key_prefix: Mapped[str | None] = mapped_column(String(32))  # e.g. AURA-CLN-1 -- safe to display always
     key_suffix_masked: Mapped[str | None] = mapped_column(String(16))  # last 4 chars only, e.g. ****WXYZ
-    key_secret_hmac: Mapped[str | None] = mapped_column(String(128))  # HMAC-SHA256(pepper, secret) -- never reversible
+    # HMAC-SHA256(pepper, secret) -- never reversible. Unique+indexed as of
+    # Phase 6: activation must look up a license by its submitted key's HMAC
+    # (Postgres allows multiple NULLs under a unique constraint, so DRAFT
+    # licenses with no issued key yet are unaffected).
+    key_secret_hmac: Mapped[str | None] = mapped_column(String(128), unique=True)
     key_format_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     replaced_by_license_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_licenses.id"))
     revocation_reason: Mapped[str | None] = mapped_column(Text)
@@ -46,6 +50,7 @@ class License(Base, UUIDPKMixin, TimestampMixin):
     subscription: Mapped["Subscription"] = relationship()  # noqa: F821
     product: Mapped["Product"] = relationship()  # noqa: F821
     plan: Mapped["Plan"] = relationship()  # noqa: F821
+    allowed_release_channel: Mapped["ReleaseChannel | None"] = relationship()  # noqa: F821 -- added Phase 6, no schema change
     # No delete-orphan on the audit-trail relationships (status_history,
     # issuance_events) -- these must never silently vanish if a License row
     # is ever deleted. entitlements is normal child detail, not a history

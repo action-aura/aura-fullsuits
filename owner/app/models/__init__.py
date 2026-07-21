@@ -8,6 +8,7 @@ from app.models import subscriptions  # noqa: F401
 from app.models import licensing  # noqa: F401
 from app.models import installations  # noqa: F401
 from app.models import audit  # noqa: F401
+from app.models import licensing_service  # noqa: F401
 
 from app.models.staff import (  # noqa: F401
     Role,
@@ -56,3 +57,17 @@ from app.models.installations import (  # noqa: F401
     ActivationEvent,
 )
 from app.models.audit import AuditLog, SecurityEvent, SystemSetting, DatabaseBackupRecord  # noqa: F401
+from app.models.licensing_service import (  # noqa: F401
+    SigningKey,
+    DevicePublicKey,
+    ActivationRequest,
+    SignedAssertion,
+    EntitlementSnapshot,
+    ExternalIdempotencyRecord,
+    OfflinePolicy,
+    LicenseOfflinePolicyAssignment,
+    SecurityNonceRecord,
+    KeyRotationEvent,
+    RateLimitCounter,
+    ServiceHealthEvent,
+)
