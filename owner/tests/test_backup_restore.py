@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import tempfile
 
 import pytest
@@ -109,3 +110,26 @@ def test_backup_route_requires_super_admin_permission_and_recent_auth(app, clien
     force_login(client, app, staff_id)
     resp = client.post("/system/backups", data={"csrf_token": "x"})
     assert resp.status_code in (400, 403)
+
+
+def test_password_never_appears_in_subprocess_argv(app, seeded, backup_dir, monkeypatch):
+    """Credential-exposure regression: the DB password must be passed via the
+    PGPASSWORD env var of the subprocess call, never as a command-line
+    argument (which would be visible to other local users/processes)."""
+    staff_id = make_staff(app, "b7@example.com")
+    captured = {}
+    real_run = subprocess.run
+
+    def spy(cmd, *args, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env")
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr("app.system.backup.subprocess.run", spy)
+    with app.app_context():
+        from app.system.backup import create_backup
+
+        create_backup(backup_dir, staff_id)
+
+    assert "aura_owner_dev" not in " ".join(captured["cmd"])
+    assert captured["env"].get("PGPASSWORD") == "aura_owner_dev"

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import subprocess
 from datetime import datetime, timezone
 
@@ -31,12 +32,22 @@ def _pg_bin(tool: str) -> str:
     return os.path.join(bin_dir, tool) if bin_dir else tool
 
 
-def _libpq_url() -> str:
-    """pg_dump/pg_restore don't understand the '+psycopg' SQLAlchemy dialect
-    suffix -- strip it down to a plain libpq-compatible URL. Must render with
-    the real password: str(engine.url) masks it as '***' by design."""
-    uri = get_engine().url.render_as_string(hide_password=False)
-    return uri.replace("postgresql+psycopg://", "postgresql://")
+def _connection_args_and_env() -> tuple[list[str], dict]:
+    """Connection args for pg_dump/pg_restore WITHOUT the password ever
+    appearing in argv (visible to other local users/processes via `ps`/Task
+    Manager). The password is passed only via the PGPASSWORD environment
+    variable of this one subprocess call, not the URL string."""
+    url = get_engine().url
+    args = ["--host", url.host or "localhost", "--port", str(url.port or 5432), "--username", url.username, "--dbname", url.database]
+    env = {**os.environ, "PGPASSWORD": url.password or ""}
+    return args, env
+
+
+def _redact_credential_leakage(text: str) -> str:
+    """Defense in depth: some libpq error messages can echo connection
+    details back. Strip anything that looks like a password= fragment before
+    it is ever stored or audited."""
+    return re.sub(r"password\s*=\s*\S+", "password=<redacted>", text, flags=re.IGNORECASE)
 
 
 def _sha256_of_file(path: str) -> str:
@@ -59,27 +70,29 @@ def create_backup(backup_dir: str, initiated_by_staff_user_id, label: str = "man
     filename = f"aura-owner-backup-{label}-{timestamp}.dump"
     file_path = os.path.join(backup_dir, filename)
 
-    cmd = [_pg_bin("pg_dump"), "--format=custom", "--file", file_path, _libpq_url()]
+    conn_args, conn_env = _connection_args_and_env()
+    cmd = [_pg_bin("pg_dump"), "--format=custom", "--file", file_path, *conn_args]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=conn_env)
     except (OSError, subprocess.SubprocessError) as exc:
+        safe_error = _redact_credential_leakage(str(exc))
         record = DatabaseBackupRecord(
             file_path=file_path, owner_app_version=APP_VERSION, schema_revision=_current_schema_revision(),
-            checksum_sha256="", status="FAILED", initiated_by_staff_user_id=initiated_by_staff_user_id, error_detail=str(exc),
+            checksum_sha256="", status="FAILED", initiated_by_staff_user_id=initiated_by_staff_user_id, error_detail=safe_error,
         )
         db_session.add(record)
         db_session.commit()
         audit_record(
             actor_staff_user_id=initiated_by_staff_user_id, actor_role_snapshot=None, action_code="OWNER_DB_BACKUP_FAILED",
-            entity_type="database_backup", entity_public_id=str(record.id), result="FAILURE", reason=str(exc),
+            entity_type="database_backup", entity_public_id=str(record.id), result="FAILURE", reason=safe_error,
         )
-        raise BackupError(str(exc)) from exc
+        raise BackupError(safe_error) from exc
 
     if result.returncode != 0 or not os.path.exists(file_path):
         record = DatabaseBackupRecord(
             file_path=file_path, owner_app_version=APP_VERSION, schema_revision=_current_schema_revision(),
             checksum_sha256="", status="FAILED", initiated_by_staff_user_id=initiated_by_staff_user_id,
-            error_detail=(result.stderr or "pg_dump failed")[:2000],
+            error_detail=_redact_credential_leakage((result.stderr or "pg_dump failed")[:2000]),
         )
         db_session.add(record)
         db_session.commit()
@@ -135,18 +148,18 @@ def restore_backup(backup_record: DatabaseBackupRecord, backup_dir: str, initiat
     db_session.remove()
     get_engine().dispose()
 
-    cmd = [
-        _pg_bin("pg_restore"), "--clean", "--if-exists", "--no-owner", "--dbname", _libpq_url(), backup_record_file_path,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    conn_args, conn_env = _connection_args_and_env()
+    cmd = [_pg_bin("pg_restore"), "--clean", "--if-exists", "--no-owner", *conn_args, backup_record_file_path]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=conn_env)
     if result.returncode != 0:
+        safe_error = _redact_credential_leakage((result.stderr or "pg_restore failed")[:2000])
         audit_record(
             actor_staff_user_id=initiated_by_staff_user_id, actor_role_snapshot=None, action_code="OWNER_DB_RESTORE_FAILED",
             entity_type="database_backup", entity_public_id=backup_record_id, result="FAILURE",
-            reason=(result.stderr or "pg_restore failed")[:2000],
+            reason=safe_error,
             after_state={"pre_restore_safety_backup_id": pre_restore_id},
         )
-        raise RestoreError((result.stderr or "pg_restore failed")[:2000])
+        raise RestoreError(safe_error)
 
     audit_record(
         actor_staff_user_id=initiated_by_staff_user_id, actor_role_snapshot=None, action_code="OWNER_DB_RESTORE_SUCCEEDED",

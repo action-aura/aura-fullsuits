@@ -173,6 +173,27 @@ def test_mfa_verify_brute_force_locked_out(app, client, seeded):
     assert b"Too many attempts" in resp.data
 
 
+def test_backup_creation_hard_requires_super_admin_flag_not_just_permission(app, client, seeded):
+    """Authorization-gate-parity: create_backup_route must hard-check
+    is_super_admin the same way restore_backup_route does, not rely solely on
+    the system.backup permission grant."""
+    from tests.conftest import force_login
+
+    # A hypothetical non-Super-Admin account that was (mis)granted system.backup
+    # directly via a role would still be blocked at the route level.
+    staff_id = make_staff(app, "notsuperadmin@example.com", role_codes=["SUPER_ADMIN"])
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.staff import StaffUser
+
+        staff = db_session.get(StaffUser, staff_id)
+        staff.is_super_admin = False  # role grants full permissions, but the boolean flag is what the route checks
+        db_session.commit()
+    force_login(client, app, staff_id)
+    resp = client.post("/system/backups", data={"csrf_token": "x"})
+    assert resp.status_code in (400, 403)
+
+
 def test_reenrolling_mfa_while_logged_in_requires_recent_auth(app, client, seeded):
     staff_id = make_staff(app, "reenroll@example.com", super_admin=True, mfa=True)
     from tests.conftest import login_and_verify_mfa

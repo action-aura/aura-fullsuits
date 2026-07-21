@@ -28,6 +28,8 @@ def list_backups():
 @require_recent_auth
 def create_backup_route():
     actor = load_current_staff()
+    if not actor.is_super_admin:
+        return jsonify({"error": "forbidden -- database backup requires Super Admin"}), 403
     try:
         create_backup(current_app.config["BACKUP_DIRECTORY"], actor.id)
     except BackupError as exc:
