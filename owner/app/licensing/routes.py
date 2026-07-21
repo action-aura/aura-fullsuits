@@ -20,7 +20,7 @@ from app.licensing.services import (
 from app.models.customers import Customer
 from app.models.licensing import License
 from app.models.subscriptions import Subscription
-from app.security.rbac import require_permission, require_recent_auth
+from app.security.rbac import require_login, require_permission, require_recent_auth
 
 bp = Blueprint("licensing", __name__, url_prefix="/licenses")
 
@@ -99,7 +99,7 @@ def issue(license_id):
 
 
 @bp.route("/<uuid:license_id>/transition", methods=["POST"])
-@require_permission("licenses.suspend")
+@require_login
 @require_recent_auth
 def transition(license_id):
     actor = load_current_staff()
@@ -107,7 +107,11 @@ def transition(license_id):
     if license_row is None:
         return jsonify({"error": "not_found"}), 404
     to_status = request.form.get("to_status")
-    permission_by_target = {"REVOKED": "licenses.revoke", "SUSPENDED": "licenses.suspend", "ACTIVE": "licenses.suspend"}
+    # ACTIVE requires licenses.reactivate specifically (Part Q) -- reactivating
+    # a suspended license is a distinct, more sensitive action than the
+    # suspend/revoke path and must not be reachable by whoever merely holds
+    # licenses.suspend.
+    permission_by_target = {"REVOKED": "licenses.revoke", "SUSPENDED": "licenses.suspend", "ACTIVE": "licenses.reactivate"}
     from app.security.rbac import get_staff_permission_codes
 
     if permission_by_target.get(to_status) not in get_staff_permission_codes(actor):
