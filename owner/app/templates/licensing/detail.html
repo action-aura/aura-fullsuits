@@ -1,0 +1,71 @@
+{% extends "layout/base.html" %}
+{% block title %}License{% endblock %}
+{% block content %}
+{% if revealed_key %}
+<div class="card" style="border:2px solid #b3261e;">
+  <h2>License key -- shown once</h2>
+  <p><strong>Copy this now. It will never be displayed again.</strong></p>
+  <p><code style="font-size:1.1rem;">{{ revealed_key }}</code></p>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>{{ license.customer.legal_name }} -- {{ license.product.product_code }} <span class="badge {{ 'active' if license.status in ('ACTIVE','ISSUED') else ('danger' if license.status == 'REVOKED' else 'draft') }}">{{ license.status }}</span></h2>
+  <dl class="kv">
+    <dt>Masked key</dt><dd>{% if license.key_prefix %}<code class="masked">{{ license.key_prefix }}-...{{ license.key_suffix_masked }}</code>{% else %}<span class="empty">not issued</span>{% endif %}</dd>
+    <dt>Allowed platforms</dt><dd>{{ license.allowed_platforms }}</dd>
+    <dt>Device limit</dt><dd>{{ license.device_limit }}</dd>
+    <dt>Valid from / until</dt><dd>{{ license.valid_from or "-" }} / {{ license.valid_until or "-" }}</dd>
+  </dl>
+</div>
+
+{% if license.status == "DRAFT" %}
+<div class="card">
+  <h3>Issue key</h3>
+  <p>Issuing requires a fresh MFA confirmation. The full key is shown exactly once.</p>
+  <form method="post" action="{{ url_for('licensing.issue', license_id=license.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="idempotency_key" value="{{ issue_idempotency_key }}">
+    <button type="submit">Issue license key</button>
+  </form>
+</div>
+{% endif %}
+
+{% if allowed_transitions %}
+<div class="card">
+  <h3>Change status</h3>
+  <form method="post" action="{{ url_for('licensing.transition', license_id=license.id) }}"
+        onsubmit="return confirm('Change license status? This may affect any activated installation.');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <select name="to_status">
+      {% for s in allowed_transitions %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+    </select>
+    <label>Reason</label><input name="reason">
+    <div style="margin-top:0.5rem;"><button type="submit">Apply</button></div>
+  </form>
+</div>
+{% endif %}
+
+{% if license.status in ("ACTIVE","ISSUED","SUSPENDED","EXPIRED") %}
+<div class="card">
+  <h3>Replace license</h3>
+  <p>Creates a new DRAFT license and revokes/replaces this one.</p>
+  <form method="post" action="{{ url_for('licensing.replace', license_id=license.id) }}"
+        onsubmit="return confirm('Replace this license with a new one?');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="danger">Replace</button>
+  </form>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>Status history</h3>
+  <table>
+    <tr><th>From</th><th>To</th><th>When</th><th>Reason</th></tr>
+    {% for h in license.status_history|sort(attribute="created_at", reverse=True) %}
+    <tr><td>{{ h.from_status or "-" }}</td><td>{{ h.to_status }}</td><td>{{ h.created_at }}</td><td>{{ h.reason or "-" }}</td></tr>
+    {% else %}<tr><td colspan="4" class="empty">No status changes yet.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,134 @@
+"""License routes (Part N/O). Issuance and full-key reveal require recent MFA
+re-authentication (Part F)."""
+from __future__ import annotations
+
+import uuid
+
+from flask import Blueprint, current_app, jsonify, redirect, render_template, request, url_for
+from sqlalchemy import select
+
+from app.auth.session import load_current_staff
+from app.extensions import db_session
+from app.licensing.services import (
+    VALID_TRANSITIONS,
+    InvalidLicenseTransitionError,
+    create_license,
+    issue_license_key,
+    replace_license,
+    transition_license,
+)
+from app.models.customers import Customer
+from app.models.licensing import License
+from app.models.subscriptions import Subscription
+from app.security.rbac import require_permission, require_recent_auth
+
+bp = Blueprint("licensing", __name__, url_prefix="/licenses")
+
+
+@bp.route("", methods=["GET"])
+@require_permission("licenses.view")
+def list_licenses():
+    status_filter = request.args.get("status")
+    stmt = select(License).order_by(License.created_at.desc())
+    if status_filter:
+        stmt = stmt.where(License.status == status_filter)
+    licenses = db_session.execute(stmt).scalars().all()
+    return render_template("licensing/list.html", licenses=licenses, status_filter=status_filter)
+
+
+@bp.route("/new", methods=["GET"])
+@require_permission("licenses.create")
+def new_form():
+    subscriptions = db_session.execute(select(Subscription)).scalars().all()
+    return render_template("licensing/new.html", subscriptions=subscriptions)
+
+
+@bp.route("", methods=["POST"])
+@require_permission("licenses.create")
+def create():
+    actor = load_current_staff()
+    subscription = db_session.get(Subscription, request.form.get("subscription_id"))
+    if subscription is None:
+        return jsonify({"error": "invalid_subscription"}), 400
+    license_row = create_license(
+        {
+            "customer_id": subscription.customer_id,
+            "subscription_id": subscription.id,
+            "product_id": subscription.product_id,
+            "plan_id": subscription.plan_id,
+            "allowed_platforms": request.form.get("allowed_platforms", "WINDOWS,ANDROID"),
+            "device_limit": int(request.form.get("device_limit", "1")),
+        },
+        actor.id,
+    )
+    return redirect(url_for("licensing.detail", license_id=license_row.id))
+
+
+@bp.route("/<uuid:license_id>", methods=["GET"])
+@require_permission("licenses.view")
+def detail(license_id):
+    license_row = db_session.get(License, license_id)
+    if license_row is None:
+        return jsonify({"error": "not_found"}), 404
+    allowed_transitions = sorted(VALID_TRANSITIONS.get(license_row.status, set()))
+    # revealed_key is only ever populated inline by issue() below -- reloading this page never re-shows a full key.
+    return render_template(
+        "licensing/detail.html", license=license_row, revealed_key=None,
+        allowed_transitions=allowed_transitions, issue_idempotency_key=str(uuid.uuid4()),
+    )
+
+
+@bp.route("/<uuid:license_id>/issue", methods=["POST"])
+@require_permission("licenses.issue")
+@require_recent_auth
+def issue(license_id):
+    actor = load_current_staff()
+    license_row = db_session.get(License, license_id)
+    if license_row is None:
+        return jsonify({"error": "not_found"}), 404
+    idempotency_key = request.form.get("idempotency_key") or request.headers.get("Idempotency-Key")
+    if not idempotency_key:
+        return jsonify({"error": "idempotency_key_required"}), 400
+    try:
+        license_row, full_key = issue_license_key(license_row, current_app.config["LICENSE_PEPPER"], idempotency_key, actor.id)
+    except InvalidLicenseTransitionError as exc:
+        return jsonify({"error": str(exc)}), 400
+    allowed_transitions = sorted(VALID_TRANSITIONS.get(license_row.status, set()))
+    # full_key is shown exactly once, in this response only -- reloading /licenses/<id> never shows it again.
+    return render_template("licensing/detail.html", license=license_row, revealed_key=full_key, allowed_transitions=allowed_transitions)
+
+
+@bp.route("/<uuid:license_id>/transition", methods=["POST"])
+@require_permission("licenses.suspend")
+@require_recent_auth
+def transition(license_id):
+    actor = load_current_staff()
+    license_row = db_session.get(License, license_id)
+    if license_row is None:
+        return jsonify({"error": "not_found"}), 404
+    to_status = request.form.get("to_status")
+    permission_by_target = {"REVOKED": "licenses.revoke", "SUSPENDED": "licenses.suspend", "ACTIVE": "licenses.suspend"}
+    from app.security.rbac import get_staff_permission_codes
+
+    if permission_by_target.get(to_status) not in get_staff_permission_codes(actor):
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        transition_license(license_row, to_status, actor.id, request.form.get("reason"))
+    except InvalidLicenseTransitionError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return redirect(url_for("licensing.detail", license_id=license_id))
+
+
+@bp.route("/<uuid:license_id>/replace", methods=["POST"])
+@require_permission("licenses.replace")
+@require_recent_auth
+def replace(license_id):
+    actor = load_current_staff()
+    license_row = db_session.get(License, license_id)
+    if license_row is None:
+        return jsonify({"error": "not_found"}), 404
+    try:
+        new_license = replace_license(license_row, actor.id)
+    except InvalidLicenseTransitionError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return redirect(url_for("licensing.detail", license_id=new_license.id))
