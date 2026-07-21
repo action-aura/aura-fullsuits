@@ -1,0 +1,59 @@
+{% extends "layout/base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Overview</h2>
+  <div class="kv">
+    <dt>Total customers</dt><dd>{{ summary.total_customers }}</dd>
+    <dt>Pilot customers</dt><dd>{{ summary.pilot_customers }}</dd>
+    <dt>Active customers</dt><dd>{{ summary.active_customers }}</dd>
+    <dt>Active subscriptions</dt><dd>{{ summary.active_subscriptions }}</dd>
+    <dt>Subscriptions expiring in 7 days</dt><dd>{{ summary.expiring_7 }}</dd>
+    <dt>Subscriptions expiring in 30 days</dt><dd>{{ summary.expiring_30 }}</dd>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Subscriptions by product</h3>
+  <table>
+    <tr><th>Product</th><th>Count</th></tr>
+    {% for name, count in summary.subs_by_product.items() %}<tr><td>{{ name }}</td><td>{{ count }}</td></tr>
+    {% else %}<tr><td colspan="2" class="empty">No subscriptions yet.</td></tr>{% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <h3>Licenses by status</h3>
+  <table>
+    <tr><th>Status</th><th>Count</th></tr>
+    {% for status, count in summary.licenses_by_status.items() %}<tr><td>{{ status }}</td><td>{{ count }}</td></tr>
+    {% else %}<tr><td colspan="2" class="empty">No licenses yet.</td></tr>{% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <h3>Active installations by product</h3>
+  <table>
+    <tr><th>Product</th><th>Count</th></tr>
+    {% for name, count in summary.active_installations_by_product.items() %}<tr><td>{{ name }}</td><td>{{ count }}</td></tr>
+    {% else %}<tr><td colspan="2" class="empty">No active installations yet.</td></tr>{% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <h3>Latest Owner database backup</h3>
+  {% if summary.latest_backup %}
+  <p><span class="badge {{ 'success' if summary.latest_backup.status == 'SUCCESS' else 'danger' }}">{{ summary.latest_backup.status }}</span> {{ summary.latest_backup.created_at }}</p>
+  {% else %}<p class="empty">No backup has been taken yet.</p>{% endif %}
+</div>
+
+<div class="card">
+  <h3>Recent staff actions</h3>
+  <table>
+    <tr><th>When</th><th>Action</th><th>Entity</th></tr>
+    {% for a in summary.recent_staff_actions %}
+    <tr><td>{{ a.created_at }}</td><td>{{ a.action_code }}</td><td>{{ a.entity_type }}</td></tr>
+    {% else %}<tr><td colspan="3" class="empty">No activity yet.</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

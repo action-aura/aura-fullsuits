@@ -1,0 +1,29 @@
+{% extends "layout/base.html" %}
+{% block title %}Audit log{% endblock %}
+{% block content %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <h2>Audit log (most recent 500)</h2>
+    <div>
+      <a class="btn secondary" href="{{ url_for('audit.verify_chain_route') }}">Verify hash chain</a>
+      <form class="inline" method="post" action="{{ url_for('audit.export') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit">Export CSV</button>
+      </form>
+    </div>
+  </div>
+  <table>
+    <tr><th>When</th><th>Actor</th><th>Action</th><th>Entity</th><th>Result</th></tr>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.created_at }}</td>
+      <td>{{ r.actor_staff_user_id or "system" }}</td>
+      <td>{{ r.action_code }}</td>
+      <td>{{ r.entity_type }} {{ (r.entity_public_id or "")[:8] }}</td>
+      <td><span class="badge {{ 'success' if r.result == 'SUCCESS' else 'danger' }}">{{ r.result }}</span></td>
+    </tr>
+    {% else %}<tr><td colspan="5" class="empty">No audit events yet.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

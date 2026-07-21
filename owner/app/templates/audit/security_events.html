@@ -1,0 +1,14 @@
+{% extends "layout/base.html" %}
+{% block title %}Security events{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Security events (most recent 500)</h2>
+  <table>
+    <tr><th>When</th><th>Type</th><th>Staff</th><th>IP</th><th>Detail</th></tr>
+    {% for r in rows %}
+    <tr><td>{{ r.created_at }}</td><td>{{ r.event_type }}</td><td>{{ r.staff_user_id or "-" }}</td><td>{{ r.ip_address or "-" }}</td><td>{{ r.detail or "-" }}</td></tr>
+    {% else %}<tr><td colspan="5" class="empty">No security events recorded yet.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}
