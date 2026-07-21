@@ -42,6 +42,7 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.audit.routes import bp as audit_bp
     from app.releases.routes import bp as releases_bp
     from app.system import bp as system_bp
+    from app.licensing_admin import bp as licensing_admin_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(staff_bp)
@@ -54,14 +55,24 @@ def create_app(config_name: str | None = None) -> Flask:
     app.register_blueprint(audit_bp)
     app.register_blueprint(releases_bp)
     app.register_blueprint(system_bp)
+    app.register_blueprint(licensing_admin_bp)
 
     if app.config.get("EXTERNAL_API_ENABLED"):
         from app.api.routes import bp as external_api_bp
+        from app.api_external.routes import bp as licensing_api_bp
 
         app.register_blueprint(external_api_bp)
+        app.register_blueprint(licensing_api_bp)
+        # CSRF tokens are a session-cookie-based browser defense; this API is
+        # authenticated by device Ed25519 signatures + nonces instead (Part
+        # L), consumed by non-browser clients with no session to carry a
+        # token in. Exempting is correct here, not a weakening -- replay.py's
+        # nonce+timestamp+signature checks are this API's actual CSRF-
+        # equivalent protection.
+        csrf.exempt(licensing_api_bp)
     # else: no external API blueprint is ever registered -- there is no route
-    # for an external activation request to reach (Part R), not merely a
-    # disabled check inside one.
+    # for an external activation/check-in/deactivation request to reach
+    # (Part B/R), not merely a disabled check inside one.
 
     from app.cli import register_cli
 
