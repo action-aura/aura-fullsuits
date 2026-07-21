@@ -1,0 +1,121 @@
+"""Flask CLI commands: Super Admin bootstrap, RBAC seeding, release-manifest import."""
+from __future__ import annotations
+
+import getpass
+import json
+
+import click
+from flask import Flask
+from sqlalchemy import select
+
+from app.audit.services import record as audit_record
+from app.catalog.services import import_release_manifest, seed_canonical_catalog
+from app.extensions import db_session
+from app.models.staff import Permission, Role, RolePermission, StaffUser
+from app.security.passwords import PasswordPolicyError, hash_password
+from app.staff.seed_data import PERMISSIONS, ROLES
+
+
+def register_cli(app: Flask) -> None:
+    @app.cli.command("seed-rbac")
+    def seed_rbac():
+        """Seed the canonical permission and role catalog (idempotent)."""
+        existing_perms = {p.code: p for p in db_session.execute(select(Permission)).scalars().all()}
+        for code, category, description in PERMISSIONS:
+            if code not in existing_perms:
+                existing_perms[code] = Permission(code=code, category=category, description=description)
+                db_session.add(existing_perms[code])
+        db_session.flush()
+
+        existing_roles = {r.code: r for r in db_session.execute(select(Role)).scalars().all()}
+        for code, definition in ROLES.items():
+            role = existing_roles.get(code)
+            if role is None:
+                role = Role(code=code, name=definition["name"], description=definition["description"], is_system_role=True)
+                db_session.add(role)
+                db_session.flush()
+                existing_roles[code] = role
+
+            wanted_codes = (
+                set(existing_perms.keys()) if definition["permissions"] == "*" else set(definition["permissions"])
+            )
+            have_codes = {
+                rp.permission.code
+                for rp in db_session.execute(select(RolePermission).where(RolePermission.role_id == role.id)).scalars()
+            }
+            for missing_code in wanted_codes - have_codes:
+                db_session.add(RolePermission(role_id=role.id, permission_id=existing_perms[missing_code].id))
+        db_session.commit()
+        click.echo(f"Seeded {len(existing_perms)} permissions and {len(existing_roles)} roles.")
+
+    @app.cli.command("seed-catalog")
+    def seed_catalog():
+        """Seed canonical products/platforms/release channels/entitlement
+        definitions/DRAFT add-ons (idempotent, no fake customer data)."""
+        result = seed_canonical_catalog()
+        click.echo(json.dumps(result))
+
+    @app.cli.command("create-superadmin")
+    @click.option("--email", prompt=True)
+    @click.option("--display-name", prompt="Display name")
+    @click.option("--non-interactive", is_flag=True, default=False, help="Read password from OWNER_BOOTSTRAP_PASSWORD env var instead of a prompt.")
+    def create_superadmin(email: str, display_name: str, non_interactive: bool):
+        """Create the first Super Admin. Refuses if any Super Admin already exists.
+        Never prints the password. Records a bootstrap security/audit event."""
+        existing = db_session.execute(select(StaffUser).where(StaffUser.is_super_admin.is_(True))).scalars().first()
+        if existing is not None:
+            raise click.ClickException("A Super Admin already exists -- refusing to bootstrap a second one via this command.")
+
+        if non_interactive:
+            import os
+
+            password = os.environ.get("OWNER_BOOTSTRAP_PASSWORD", "")
+            if not password:
+                raise click.ClickException("OWNER_BOOTSTRAP_PASSWORD is not set.")
+        else:
+            password = getpass.getpass("Password: ")
+            confirm = getpass.getpass("Confirm password: ")
+            if password != confirm:
+                raise click.ClickException("Passwords did not match.")
+
+        try:
+            password_hash = hash_password(password)
+        except PasswordPolicyError as exc:
+            raise click.ClickException(str(exc))
+
+        staff = StaffUser(
+            email=email.strip().lower(),
+            display_name=display_name,
+            password_hash=password_hash,
+            is_super_admin=True,
+            mfa_required=True,
+        )
+        db_session.add(staff)
+        db_session.flush()
+
+        role = db_session.execute(select(Role).where(Role.code == "SUPER_ADMIN")).scalars().first()
+        if role is not None:
+            from app.models.staff import StaffRoleAssignment
+
+            db_session.add(StaffRoleAssignment(staff_user_id=staff.id, role_id=role.id))
+        db_session.commit()
+
+        audit_record(
+            actor_staff_user_id=staff.id,
+            actor_role_snapshot="SUPER_ADMIN",
+            action_code="SUPERADMIN_BOOTSTRAPPED",
+            entity_type="staff_user",
+            entity_public_id=str(staff.id),
+        )
+        click.echo(f"Super Admin created: {staff.email} ({staff.id}). MFA enrollment is required at first login.")
+
+    @app.cli.command("import-release-manifest")
+    @click.argument("manifest_path", type=click.Path(exists=True))
+    def import_release_manifest_cmd(manifest_path: str):
+        """Import product/version release metadata from a JSON manifest.
+        Never uploads or stores customer data; rejects duplicate conflicting
+        release records; never silently overwrites an existing release."""
+        with open(manifest_path, "r", encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        result = import_release_manifest(manifest, actor_staff_user_id=None)
+        click.echo(json.dumps(result, indent=2, default=str))

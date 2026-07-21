@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}Aura Owner{% endblock %} -- Aura Owner Control Center</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root { --border:#d8dee4; --muted:#6b7785; --accent:#2452b8; --danger:#b3261e; --bg:#f6f8fa; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: var(--bg); color: #1c2530; }
+    header.topbar { background: #101826; color: #fff; padding: 0.6rem 1rem; display: flex; align-items: center; justify-content: space-between; }
+    header.topbar a { color: #fff; text-decoration: none; margin-right: 1rem; font-size: 0.92rem; }
+    header.topbar a.brand { font-weight: 700; font-size: 1rem; }
+    nav.tabs { display: flex; flex-wrap: wrap; gap: 0; background: #16202f; padding: 0 1rem; }
+    nav.tabs a { color: #c7d0dc; text-decoration: none; padding: 0.5rem 0.75rem; font-size: 0.85rem; }
+    nav.tabs a:hover { color: #fff; background: #223049; }
+    main { max-width: 1100px; margin: 1.25rem auto; padding: 0 1rem; }
+    .card { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; }
+    .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.72rem; font-weight: 600; background: #e7ecf3; color: #33455e; }
+    .badge.active, .badge.confirmed, .badge.success, .badge.ok { background: #dcf3e2; color: #1c6b34; }
+    .badge.warn, .badge.pending, .badge.draft { background: #fbeecb; color: #8a5c00; }
+    .badge.danger, .badge.revoked, .badge.failed, .badge.disabled { background: #fbdcda; color: #8a2119; }
+    form.inline { display: inline; }
+    input, select, textarea { padding: 0.4rem 0.5rem; border: 1px solid var(--border); border-radius: 5px; font-size: 0.9rem; width: 100%; }
+    label { display: block; font-size: 0.82rem; color: var(--muted); margin: 0.5rem 0 0.2rem; }
+    button, .btn { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 0.45rem 0.9rem; font-size: 0.85rem; cursor: pointer; text-decoration: none; display: inline-block; }
+    button.danger, .btn.danger { background: var(--danger); }
+    button.secondary, .btn.secondary { background: #fff; color: var(--accent); border: 1px solid var(--accent); }
+    .error { background: #fbdcda; color: #8a2119; padding: 0.5rem 0.75rem; border-radius: 6px; margin-bottom: 0.75rem; font-size: 0.85rem; }
+    .empty { color: var(--muted); font-style: italic; padding: 1rem 0; }
+    .filters { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; align-items: end; }
+    .kv { display: grid; grid-template-columns: 200px 1fr; gap: 0.3rem 1rem; font-size: 0.9rem; }
+    .kv dt { color: var(--muted); }
+    code.masked { background: #eef1f5; padding: 0.15rem 0.4rem; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div><a class="brand" href="{{ url_for('dashboard.index') }}">Aura Owner Control Center</a></div>
+    <div>
+      {% if staff %}
+        <span>{{ staff.display_name }}</span>
+        <form class="inline" method="post" action="{{ url_for('auth.logout') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="secondary">Log out</button>
+        </form>
+      {% endif %}
+    </div>
+  </header>
+  {% if staff %}
+  <nav class="tabs">
+    <a href="{{ url_for('dashboard.index') }}">Dashboard</a>
+    <a href="{{ url_for('customers.list_customers') }}">Customers</a>
+    <a href="{{ url_for('catalog.index') }}">Catalog</a>
+    <a href="{{ url_for('subscriptions.list_subscriptions') }}">Subscriptions</a>
+    <a href="{{ url_for('licensing.list_licenses') }}">Licenses</a>
+    <a href="{{ url_for('installations.list_installations') }}">Installations</a>
+    <a href="{{ url_for('staff.list_staff') }}">Staff</a>
+    <a href="{{ url_for('audit.list_audit') }}">Audit Log</a>
+    <a href="{{ url_for('audit.security_events') }}">Security Events</a>
+    <a href="{{ url_for('system.list_backups') }}">Backups</a>
+    <a href="{{ url_for('auth.change_password_form') }}">Account</a>
+  </nav>
+  {% endif %}
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

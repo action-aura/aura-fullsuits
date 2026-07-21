@@ -44,6 +44,10 @@ android/*/app/build/outputs/
 # Audit-only temp artifacts (Phase 3.5) -- never committed, ephemeral only
 .audit-temp/
 
+# Aura Owner -- PostgreSQL backup artifacts (Phase 5, Part Y) -- never committed
+owner/var/backups/
+*.dump
+
 # OS/editor
 .DS_Store
 Thumbs.db

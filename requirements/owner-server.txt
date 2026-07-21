@@ -2,9 +2,13 @@
 flask==3.0.3
 werkzeug==3.0.3
 flask-cors==4.0.1
+flask-wtf==1.2.1
 psycopg[binary]==3.2.1
 sqlalchemy==2.0.32
 alembic==1.13.2
 argon2-cffi==23.1.0
 pyjwt==2.9.0
+pyotp==2.9.0
+cryptography==43.0.1
 gunicorn==22.0.0
+jsonschema==4.23.0
