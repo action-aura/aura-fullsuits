@@ -1,3 +1,7 @@
+# Phase 6 (Licensing & Activation Service) needs no additional service here --
+# replay protection, distributed rate limiting, and idempotency are all
+# PostgreSQL-backed (docs/owner/phase6/cryptographic-design-decision.md
+# ADR-6.3), not Redis. Signing keys persist on a named volume, not in Postgres.
 services:
   db:
     image: postgres:17
@@ -24,6 +28,9 @@ services:
     environment:
       OWNER_ENV: development
       OWNER_DATABASE_URL: postgresql+psycopg://aura_owner:aura_owner_dev@db:5432/aura_owner_dev
+      OWNER_SIGNING_KEY_DIRECTORY: /app/var/signing-keys
+    volumes:
+      - owner_signing_keys:/app/var/signing-keys
     ports:
       - "5551:5000"
     depends_on:
@@ -33,7 +40,13 @@ services:
       sh -c "python -m alembic upgrade head &&
              flask seed-rbac &&
              flask seed-catalog &&
+             flask seed-offline-policy &&
              gunicorn --bind 0.0.0.0:5000 --workers 2 'app:create_app()'"
 
 volumes:
   owner_pg_data:
+  # Ed25519 signing private keys (Phase 6, Part I) -- deliberately a SEPARATE
+  # named volume from owner_pg_data, never inside the database. Back this up
+  # via a separate, explicitly secured process before any real deployment
+  # (see docs/owner/phase6/server-signing-key-management.md).
+  owner_signing_keys:
