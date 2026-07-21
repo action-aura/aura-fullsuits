@@ -11,6 +11,8 @@ from sqlalchemy import select
 from app.audit.services import record as audit_record
 from app.catalog.services import import_release_manifest, seed_canonical_catalog
 from app.extensions import db_session
+from app.licensing_service import signing as signing_service
+from app.licensing_service.offline_policy import seed_default_offline_policy
 from app.models.staff import Permission, Role, RolePermission, StaffUser
 from app.security.passwords import PasswordPolicyError, hash_password
 from app.staff.seed_data import PERMISSIONS, ROLES
@@ -119,3 +121,47 @@ def register_cli(app: Flask) -> None:
             manifest = json.load(fh)
         result = import_release_manifest(manifest, actor_staff_user_id=None)
         click.echo(json.dumps(result, indent=2, default=str))
+
+    @app.cli.command("seed-offline-policy")
+    def seed_offline_policy_cmd():
+        """Seed the default offline-grace policy (idempotent, safe non-unlimited defaults)."""
+        policy = seed_default_offline_policy()
+        click.echo(f"Default offline policy ready: {policy.policy_code} (v{policy.policy_version})")
+
+    @app.cli.group("licensing")
+    def licensing_group():
+        """Server signing-key management for the Phase 6 Licensing & Activation Service."""
+
+    @licensing_group.command("generate-signing-key")
+    def generate_signing_key_cmd():
+        """Generates a new Ed25519 signing key pair in DRAFT status. Never
+        prints private-key material -- only the new key ID."""
+        row = signing_service.generate_signing_key(app.config["SIGNING_KEY_DIRECTORY"])
+        click.echo(f"Generated signing key {row.key_id} (status=DRAFT). Activate it with 'flask licensing activate-signing-key {row.key_id}'.")
+
+    @licensing_group.command("activate-signing-key")
+    @click.argument("key_id")
+    def activate_signing_key_cmd(key_id: str):
+        """Activates a DRAFT/RETIRED key as the current signing key, retiring whichever key was previously active."""
+        row = signing_service.activate_signing_key(app.config["SIGNING_KEY_DIRECTORY"], key_id)
+        click.echo(f"Activated signing key {row.key_id}.")
+
+    @licensing_group.command("rotate-signing-key")
+    @click.option("--reason", default="scheduled_rotation")
+    def rotate_signing_key_cmd(reason: str):
+        """Generates a fresh signing key and activates it in one step, retiring the previous active key (which remains verifiable)."""
+        row = signing_service.rotate_signing_key(app.config["SIGNING_KEY_DIRECTORY"], reason)
+        click.echo(f"Rotated to new signing key {row.key_id}. Previous active key retired (still verifiable).")
+
+    @licensing_group.command("export-public-keys")
+    def export_public_keys_cmd():
+        """Prints the public key set as JSON -- the same shape served by GET /api/licensing/v1/signing-keys."""
+        click.echo(json.dumps(signing_service.export_public_keys(), indent=2))
+
+    @licensing_group.command("verify-signing-key-health")
+    def verify_signing_key_health_cmd():
+        """Runs a real sign/verify round-trip against the active key and reports OK/FAILED."""
+        result = signing_service.verify_signing_key_health(app.config["SIGNING_KEY_DIRECTORY"])
+        click.echo(json.dumps(result))
+        if result["status"] != "OK":
+            raise click.ClickException(result["detail"])

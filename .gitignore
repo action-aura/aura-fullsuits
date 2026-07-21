@@ -48,6 +48,14 @@ android/*/app/build/outputs/
 owner/var/backups/
 *.dump
 
+# Aura Owner -- server signing private keys and simulator device private keys
+# (Phase 6, Parts I/U) -- NEVER committed under any circumstances
+owner/var/signing-keys/
+owner/var/signing-keys-test/
+*.pem
+owner/tools/activation_simulator/.device/
+owner/tools/activation_simulator/**/*.key
+
 # OS/editor
 .DS_Store
 Thumbs.db
