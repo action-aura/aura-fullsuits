@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aura-owner.internal/contracts/installation-registration-v1.schema.json",
+  "title": "Installation Registration v1",
+  "description": "INACTIVE specification only (Part R). Live route (Part R prototype) returns 501 not_implemented_in_phase_5 for this contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["product_code", "platform", "installation_label", "contract_version"],
+  "properties": {
+    "product_code": { "type": "string", "enum": ["AURA_RETAIL", "AURA_CLINIC"] },
+    "platform": { "type": "string", "enum": ["WINDOWS", "ANDROID"] },
+    "app_version": { "type": "string" },
+    "installation_label": { "type": "string" },
+    "device_public_key": { "type": "string" },
+    "fingerprint_hash": { "type": "string" },
+    "contract_version": { "type": "string", "const": "v1" }
+  }
+}

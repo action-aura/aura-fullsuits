@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aura-owner.internal/contracts/activation-request-v1.schema.json",
+  "title": "Activation Request v1",
+  "description": "INACTIVE specification only (Part R). No live route accepts this in Phase 5.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["product_code", "platform", "app_version", "license_key", "device_public_key", "fingerprint_hash", "timestamp", "request_nonce", "contract_version"],
+  "properties": {
+    "product_code": { "type": "string", "enum": ["AURA_RETAIL", "AURA_CLINIC"] },
+    "platform": { "type": "string", "enum": ["WINDOWS", "ANDROID"] },
+    "app_version": { "type": "string" },
+    "release_channel": { "type": "string" },
+    "installation_id": { "type": "string", "format": "uuid" },
+    "license_key": { "type": "string", "description": "The full license key, presented once for activation only -- never logged." },
+    "device_public_key": { "type": "string" },
+    "fingerprint_hash": { "type": "string", "description": "Privacy-safe device fingerprint hash, not a raw hardware identifier." },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "request_nonce": { "type": "string" },
+    "contract_version": { "type": "string", "const": "v1" }
+  }
+}

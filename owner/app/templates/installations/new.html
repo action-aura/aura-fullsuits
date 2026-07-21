@@ -1,0 +1,23 @@
+{% extends "layout/base.html" %}
+{% block title %}Register installation{% endblock %}
+{% block content %}
+<div class="card" style="max-width:480px;">
+  <h2>Register installation</h2>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="license_id">License</label>
+    <select id="license_id" name="license_id" required>
+      {% for l in licenses %}<option value="{{ l.id }}">{{ l.customer.legal_name }} -- {{ l.product.product_code }} ({{ l.key_prefix }})</option>{% endfor %}
+    </select>
+    <label for="platform_id">Platform</label>
+    <select id="platform_id" name="platform_id" required>
+      {% for p in platforms %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+    </select>
+    <label for="installation_label">Installation label</label>
+    <input id="installation_label" name="installation_label" placeholder="e.g. Front desk PC">
+    <label for="device_label">Device label</label>
+    <input id="device_label" name="device_label">
+    <div style="margin-top:1rem;"><button type="submit">Register</button></div>
+  </form>
+</div>
+{% endblock %}

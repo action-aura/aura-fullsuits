@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aura-owner.internal/contracts/activation-response-v1.schema.json",
+  "title": "Activation Response v1",
+  "description": "INACTIVE specification only (Part R). No live route returns this in Phase 5.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["activation_result", "license_status", "server_timestamp", "correlation_id"],
+  "properties": {
+    "activation_result": { "type": "string", "enum": ["APPROVED", "REJECTED", "PENDING"] },
+    "license_status": { "type": "string" },
+    "valid_from": { "type": ["string", "null"], "format": "date" },
+    "valid_until": { "type": ["string", "null"], "format": "date" },
+    "offline_grace_policy": { "type": "object", "additionalProperties": false, "properties": {
+      "grace_days": { "type": "integer" }
+    } },
+    "enabled_entitlements": { "type": "array", "items": { "type": "object" } },
+    "allowed_device_count": { "type": "integer" },
+    "allowed_release_channel": { "type": "string" },
+    "server_timestamp": { "type": "string", "format": "date-time" },
+    "signed_response_metadata": { "type": ["string", "null"] },
+    "correlation_id": { "type": "string" }
+  }
+}

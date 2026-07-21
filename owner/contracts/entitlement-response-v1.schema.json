@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aura-owner.internal/contracts/entitlement-response-v1.schema.json",
+  "title": "Entitlement Response v1",
+  "description": "INACTIVE specification only (Part R). Mirrors app.api.serializers.serialize_entitlement_response.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["entitlements", "server_timestamp", "correlation_id"],
+  "properties": {
+    "entitlements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entitlement_code", "value_type", "value"],
+        "properties": {
+          "entitlement_code": { "type": "string" },
+          "value_type": { "type": "string", "enum": ["boolean", "integer", "string", "list", "date"] },
+          "value": {}
+        }
+      }
+    },
+    "server_timestamp": { "type": ["string", "null"], "format": "date-time" },
+    "correlation_id": { "type": ["string", "null"] }
+  }
+}

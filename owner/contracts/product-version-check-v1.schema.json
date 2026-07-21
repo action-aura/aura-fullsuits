@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aura-owner.internal/contracts/product-version-check-v1.schema.json",
+  "title": "Product Version Check v1",
+  "description": "Mirrors the live (flag-gated) GET /api/v1/product-version-check response shape -- app.api.serializers.serialize_product_version_check_response.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["product_code", "platform", "version", "is_current_stable", "is_deprecated"],
+  "properties": {
+    "product_code": { "type": "string" },
+    "platform": { "type": "string" },
+    "version": { "type": "string" },
+    "release_channel": { "type": ["string", "null"] },
+    "is_current_stable": { "type": "boolean" },
+    "is_deprecated": { "type": "boolean" },
+    "server_timestamp": { "type": ["string", "null"], "format": "date-time" }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aura-owner.internal/contracts/license-check-response-v1.schema.json",
+  "title": "License Check Response v1",
+  "description": "INACTIVE specification only (Part R). Mirrors app.api.serializers.serialize_license_check_response's fixed allowlist.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["license_id", "status", "allowed_platforms", "device_limit", "entitlements", "server_timestamp", "correlation_id"],
+  "properties": {
+    "license_id": { "type": "string", "format": "uuid" },
+    "status": { "type": "string" },
+    "valid_from": { "type": ["string", "null"], "format": "date" },
+    "valid_until": { "type": ["string", "null"], "format": "date" },
+    "allowed_platforms": { "type": "string" },
+    "device_limit": { "type": "integer" },
+    "entitlements": { "type": "array", "items": { "type": "object" } },
+    "server_timestamp": { "type": ["string", "null"], "format": "date-time" },
+    "correlation_id": { "type": ["string", "null"] }
+  }
+}

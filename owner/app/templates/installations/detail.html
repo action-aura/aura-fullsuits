@@ -1,0 +1,41 @@
+{% extends "layout/base.html" %}
+{% block title %}Installation{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ installation.installation_label or installation.id }} <span class="badge {{ 'active' if installation.status == 'ACTIVE' else 'draft' }}">{{ installation.status }}</span></h2>
+  <dl class="kv">
+    <dt>Customer</dt><dd>{{ installation.customer.legal_name }}</dd>
+    <dt>Product</dt><dd>{{ installation.product.product_code }}</dd>
+    <dt>Device label</dt><dd>{{ installation.device_label or "-" }}</dd>
+    <dt>App version</dt><dd>{{ installation.app_version or "-" }}</dd>
+    <dt>First registered</dt><dd>{{ installation.first_registered_at }}</dd>
+    <dt>Last check-in</dt><dd>{{ installation.last_check_in_at or "Never" }}</dd>
+  </dl>
+</div>
+
+{% if allowed_transitions %}
+<div class="card">
+  <h3>Change status</h3>
+  <form method="post" action="{{ url_for('installations.transition', installation_id=installation.id) }}"
+        onsubmit="return confirm('Change installation status?');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <select name="to_status">
+      {% for s in allowed_transitions %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+    </select>
+    <label>Reason</label><input name="reason">
+    <div style="margin-top:0.5rem;"><button type="submit">Apply</button></div>
+  </form>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>Activation events</h3>
+  <table>
+    <tr><th>Type</th><th>Result</th><th>When</th></tr>
+    {% for e in installation.activation_events|sort(attribute="created_at", reverse=True) %}
+    <tr><td>{{ e.event_type }}</td><td>{{ e.result }}</td><td>{{ e.created_at }}</td></tr>
+    {% else %}<tr><td colspan="3" class="empty">No activation events yet.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}
