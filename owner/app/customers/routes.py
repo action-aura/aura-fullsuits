@@ -75,7 +75,12 @@ def update(customer_id):
     customer = db_session.get(Customer, customer_id)
     if customer is None:
         return jsonify({"error": "not_found"}), 404
-    fields = {k: v for k, v in request.form.items() if k in ("legal_name", "trade_name", "lifecycle_status", "city", "country")}
+    # lifecycle_status is deliberately excluded here -- status changes only
+    # happen through the dedicated archive() route, gated on the more specific
+    # customers.archive permission. Allowing it through this generic update
+    # would let anyone with only customers.update silently reach the same
+    # effect as customers.archive.
+    fields = {k: v for k, v in request.form.items() if k in ("legal_name", "trade_name", "city", "country")}
     update_customer(customer, fields, actor.id)
     return redirect(url_for("customers.detail", customer_id=customer_id))
 

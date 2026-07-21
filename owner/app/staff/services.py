@@ -17,6 +17,23 @@ from app.security.tokens import generate_token, hash_token
 INVITATION_TTL_SECONDS = 60 * 60 * 24 * 3  # 3 days
 
 
+class SelfEscalationError(ValueError):
+    """Raised when a non-Super-Admin actor attempts to grant the SUPER_ADMIN
+    role, whether via direct role assignment or an invitation. Enforced here,
+    in the service layer, as a second, structural check independent of
+    whatever permission a role happens to be granted at any given time --
+    holding staff.assign_roles/staff.create alone must never be sufficient to
+    mint a new Super Admin."""
+
+
+def _assert_not_granting_super_admin_unless_actor_is_one(role_codes, actor_staff_user_id: uuid.UUID) -> None:
+    if "SUPER_ADMIN" not in role_codes:
+        return
+    actor = db_session.get(StaffUser, actor_staff_user_id) if actor_staff_user_id else None
+    if actor is None or not actor.is_super_admin:
+        raise SelfEscalationError("Only an existing Super Admin may grant the SUPER_ADMIN role.")
+
+
 def create_staff_from_invitation(invitation: StaffInvitation, display_name: str, password_hash: str) -> StaffUser:
     staff = StaffUser(email=invitation.email.strip().lower(), display_name=display_name, password_hash=password_hash)
     db_session.add(staff)
@@ -30,6 +47,7 @@ def create_staff_from_invitation(invitation: StaffInvitation, display_name: str,
 
 
 def create_invitation(email: str, role_codes: list[str], invited_by_staff_user_id: uuid.UUID) -> tuple[StaffInvitation, str]:
+    _assert_not_granting_super_admin_unless_actor_is_one(role_codes, invited_by_staff_user_id)
     raw_token = generate_token()
     invitation = StaffInvitation(
         email=email.strip().lower(),
@@ -64,6 +82,7 @@ def revoke_invitation(invitation: StaffInvitation, actor_staff_user_id: uuid.UUI
 
 
 def assign_roles(staff: StaffUser, role_codes: list[str], actor_staff_user_id: uuid.UUID) -> None:
+    _assert_not_granting_super_admin_unless_actor_is_one(role_codes, actor_staff_user_id)
     before = sorted(a.role.code for a in staff.role_assignments)
     for assignment in list(staff.role_assignments):
         db_session.delete(assignment)

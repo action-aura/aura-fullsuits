@@ -47,12 +47,11 @@ class Installation(Base, UUIDPKMixin, TimestampMixin):
     customer: Mapped["Customer"] = relationship()  # noqa: F821
     product: Mapped["Product"] = relationship()  # noqa: F821
     devices: Mapped[list["DeviceRecord"]] = relationship(back_populates="installation", cascade="all, delete-orphan")
-    status_history: Mapped[list["InstallationStatusHistory"]] = relationship(
-        back_populates="installation", cascade="all, delete-orphan"
-    )
-    activation_events: Mapped[list["ActivationEvent"]] = relationship(
-        back_populates="installation", cascade="all, delete-orphan"
-    )
+    # No delete-orphan on the audit-trail relationships (status_history,
+    # activation_events) -- must never silently vanish if an Installation
+    # row is ever deleted.
+    status_history: Mapped[list["InstallationStatusHistory"]] = relationship(back_populates="installation")
+    activation_events: Mapped[list["ActivationEvent"]] = relationship(back_populates="installation")
 
 
 class InstallationStatusHistory(Base, UUIDPKMixin, TimestampMixin):

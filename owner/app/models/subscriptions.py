@@ -50,9 +50,11 @@ class Subscription(Base, UUIDPKMixin, TimestampMixin):
     addons: Mapped[list["SubscriptionAddon"]] = relationship(
         back_populates="subscription", cascade="all, delete-orphan"
     )
-    status_history: Mapped[list["SubscriptionStatusHistory"]] = relationship(
-        back_populates="subscription", cascade="all, delete-orphan"
-    )
+    # No delete-orphan here, deliberately: status_history is an audit trail
+    # (Part T) -- it must never silently vanish as a side effect of deleting
+    # its parent subscription (no route does this today, but the ORM
+    # relationship itself should not make that easy in the future either).
+    status_history: Mapped[list["SubscriptionStatusHistory"]] = relationship(back_populates="subscription")
 
 
 class SubscriptionItem(Base, UUIDPKMixin, TimestampMixin):

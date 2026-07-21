@@ -12,6 +12,7 @@ from app.auth.services import authenticate, find_staff_by_email
 from app.auth.session import (
     COOKIE_NAME,
     create_session,
+    has_recent_auth,
     load_current_staff,
     mark_mfa_verified,
     revoke_session,
@@ -29,6 +30,7 @@ from app.security.mfa import (
     verify_totp_code,
 )
 from app.security.passwords import PasswordPolicyError, hash_password, verify_password
+from app.security.ratelimit import is_locked_out, record_attempt
 from app.security.rbac import require_login
 from app.security.tokens import hash_token
 
@@ -36,6 +38,14 @@ bp = Blueprint("auth", __name__, url_prefix="/auth")
 
 _PENDING_MFA_SESSION_KEY = "pending_mfa_staff_id"
 _PENDING_MFA_TTL_SECONDS = 300
+
+
+def _safe_next(value: str | None) -> str | None:
+    """Only ever redirect to a same-site relative path -- rejects absolute
+    URLs and protocol-relative '//host' values to prevent open redirect."""
+    if not value or not value.startswith("/") or value.startswith("//"):
+        return None
+    return value
 
 
 @bp.route("/login", methods=["GET"])
@@ -80,7 +90,7 @@ def login_submit():
         entity_type="staff_user",
         entity_public_id=str(staff.id),
     )
-    response = redirect(request.args.get("next") or url_for("dashboard.index"))
+    response = redirect(_safe_next(request.args.get("next")) or url_for("dashboard.index"))
     response.set_cookie(
         COOKIE_NAME, raw_token, httponly=True, samesite="Lax", secure=current_app.config["SESSION_COOKIE_SECURE"]
     )
@@ -110,13 +120,22 @@ def mfa_verify_submit():
     staff = _pending_mfa_staff()
     if staff is None:
         return redirect(url_for("auth.login_form"))
+
+    max_attempts = current_app.config["LOGIN_MAX_ATTEMPTS"]
+    lockout_seconds = current_app.config["LOGIN_LOCKOUT_SECONDS"]
+    if is_locked_out(staff.email, request.remote_addr, max_attempts, lockout_seconds):
+        record_attempt(staff.email, request.remote_addr, success=False, reason="mfa_locked_out")
+        return render_template("auth/mfa_verify.html", error="Too many attempts -- try again later."), 401
+
     code = request.form.get("code", "")
     raw_secret = decrypt_totp_secret(staff.mfa_credential.totp_secret_encrypted, current_app.config["SECRET_KEY"])
     ok = raw_secret is not None and verify_totp_code(raw_secret, code)
     if not ok:
         ok = _consume_recovery_code(staff, code)
     if not ok:
+        record_attempt(staff.email, request.remote_addr, success=False, reason="mfa_invalid_code")
         return render_template("auth/mfa_verify.html", error="Invalid code."), 401
+    record_attempt(staff.email, request.remote_addr, success=True)
 
     session.pop(_PENDING_MFA_SESSION_KEY, None)
     session.pop("pending_mfa_expires", None)
@@ -157,10 +176,34 @@ def _consume_recovery_code(staff: StaffUser, code: str) -> bool:
     return False
 
 
+def _enroll_eligible_staff() -> StaffUser | None:
+    """A staff account may enroll/re-enroll MFA when: (a) mid-login, MFA is
+    freshly forced and no session exists yet, (b) already logged in with NO
+    existing MFA credential (first-time voluntary enrollment -- nothing to
+    prove recent possession of yet), or (c) already logged in WITH an
+    existing credential AND a recent MFA confirmation. Re-enrolling an
+    account that already has MFA, from a session with no recent
+    confirmation, is refused -- otherwise a hijacked session could silently
+    swap in an attacker's MFA device and lock the real owner out."""
+    pending = _pending_mfa_staff()
+    if pending is not None:
+        return pending
+    current = load_current_staff()
+    if current is None:
+        return None
+    if current.mfa_credential is None:
+        return current
+    if has_recent_auth():
+        return current
+    return None
+
+
 @bp.route("/mfa-enroll", methods=["GET"])
 def mfa_enroll_form():
-    staff = _pending_mfa_staff() or load_current_staff()
+    staff = _enroll_eligible_staff()
     if staff is None:
+        if load_current_staff() is not None:
+            return redirect(url_for("auth.reauth_form", next=request.path))
         return redirect(url_for("auth.login_form"))
     raw_secret = generate_totp_secret()
     session["enroll_secret"] = raw_secret
@@ -170,8 +213,10 @@ def mfa_enroll_form():
 
 @bp.route("/mfa-enroll", methods=["POST"])
 def mfa_enroll_submit():
-    staff = _pending_mfa_staff() or load_current_staff()
+    staff = _enroll_eligible_staff()
     if staff is None:
+        if load_current_staff() is not None:
+            return redirect(url_for("auth.reauth_form", next=request.path))
         return redirect(url_for("auth.login_form"))
     raw_secret = session.get("enroll_secret")
     code = request.form.get("code", "")
@@ -258,7 +303,7 @@ def reauth_submit():
             "auth/reauth.html", error="Invalid code.", next=request.form.get("next", "/")
         ), 401
     mark_mfa_verified()
-    return redirect(request.form.get("next") or url_for("dashboard.index"))
+    return redirect(_safe_next(request.form.get("next")) or url_for("dashboard.index"))
 
 
 @bp.route("/logout", methods=["POST"])

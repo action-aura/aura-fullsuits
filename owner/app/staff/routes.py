@@ -8,7 +8,7 @@ from app.auth.session import load_current_staff
 from app.extensions import db_session
 from app.models.staff import Role, StaffInvitation, StaffUser
 from app.security.rbac import require_permission, require_recent_auth
-from app.staff.services import assign_roles, create_invitation, disable_staff, reset_mfa, revoke_invitation
+from app.staff.services import SelfEscalationError, assign_roles, create_invitation, disable_staff, reset_mfa, revoke_invitation
 
 bp = Blueprint("staff", __name__, url_prefix="/staff")
 
@@ -35,11 +35,15 @@ def detail(staff_id):
 
 @bp.route("/invite", methods=["POST"])
 @require_permission("staff.create")
+@require_recent_auth
 def invite():
     actor = load_current_staff()
     email = request.form.get("email", "").strip()
     role_codes = request.form.getlist("role_codes")
-    invitation, raw_token = create_invitation(email, role_codes, actor.id)
+    try:
+        invitation, raw_token = create_invitation(email, role_codes, actor.id)
+    except SelfEscalationError as exc:
+        return jsonify({"error": str(exc)}), 403
     link = url_for("auth.accept_invitation_form", token=raw_token, _external=True)
     return render_template("staff/invitation_created.html", invitation=invitation, link=link)
 
@@ -64,7 +68,10 @@ def update_roles(staff_id):
     if staff is None:
         return jsonify({"error": "not_found"}), 404
     role_codes = request.form.getlist("role_codes")
-    assign_roles(staff, role_codes, actor.id)
+    try:
+        assign_roles(staff, role_codes, actor.id)
+    except SelfEscalationError as exc:
+        return jsonify({"error": str(exc)}), 403
     return redirect(url_for("staff.detail", staff_id=staff_id))
 
 

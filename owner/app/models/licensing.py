@@ -46,15 +46,15 @@ class License(Base, UUIDPKMixin, TimestampMixin):
     subscription: Mapped["Subscription"] = relationship()  # noqa: F821
     product: Mapped["Product"] = relationship()  # noqa: F821
     plan: Mapped["Plan"] = relationship()  # noqa: F821
-    status_history: Mapped[list["LicenseStatusHistory"]] = relationship(
-        back_populates="license", cascade="all, delete-orphan"
-    )
+    # No delete-orphan on the audit-trail relationships (status_history,
+    # issuance_events) -- these must never silently vanish if a License row
+    # is ever deleted. entitlements is normal child detail, not a history
+    # trail, so it keeps delete-orphan.
+    status_history: Mapped[list["LicenseStatusHistory"]] = relationship(back_populates="license")
     entitlements: Mapped[list["LicenseEntitlement"]] = relationship(
         back_populates="license", cascade="all, delete-orphan"
     )
-    issuance_events: Mapped[list["LicenseKeyIssuanceEvent"]] = relationship(
-        back_populates="license", cascade="all, delete-orphan"
-    )
+    issuance_events: Mapped[list["LicenseKeyIssuanceEvent"]] = relationship(back_populates="license")
 
 
 class LicenseStatusHistory(Base, UUIDPKMixin, TimestampMixin):
