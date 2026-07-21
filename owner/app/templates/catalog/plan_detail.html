@@ -1,0 +1,30 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ plan.name }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ plan.name }} ({{ plan.plan_code }})</h2>
+  <dl class="kv">
+    <dt>Billing model</dt><dd>{{ plan.billing_model }}</dd>
+    <dt>Status</dt><dd><span class="badge">{{ plan.lifecycle_status }}</span></dd>
+    <dt>Included devices</dt><dd>{{ plan.included_device_count }}</dd>
+  </dl>
+</div>
+<div class="card">
+  <h3>Price history</h3>
+  <table>
+    <tr><th>Base price</th><th>Currency</th><th>Effective from</th><th>Effective until</th></tr>
+    {% for pr in plan.prices|sort(attribute="effective_from", reverse=True) %}
+    <tr><td>{{ pr.base_price }}</td><td>{{ pr.currency }}</td><td>{{ pr.effective_from }}</td><td>{{ pr.effective_until or "current" }}</td></tr>
+    {% else %}<tr><td colspan="4" class="empty">No price set yet.</td></tr>
+    {% endfor %}
+  </table>
+  <h4>Add a new price (never overwrites history)</h4>
+  <form method="post" action="{{ url_for('catalog.add_price', plan_id=plan.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Base price</label><input name="base_price" type="number" step="0.01" required>
+    <label>Currency</label><input name="currency" value="{{ plan.currency }}" required>
+    <label>Effective from</label><input name="effective_from" type="date" required>
+    <div style="margin-top:1rem;"><button type="submit">Add price</button></div>
+  </form>
+</div>
+{% endblock %}

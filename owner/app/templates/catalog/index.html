@@ -1,0 +1,73 @@
+{% extends "layout/base.html" %}
+{% block title %}Catalog{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Products</h2>
+  <table>
+    <tr><th>Code</th><th>Name</th><th>Commercial status</th><th>Sellable</th></tr>
+    {% for p in products %}
+    <tr><td>{{ p.product_code }}</td><td>{{ p.name }}</td><td><span class="badge">{{ p.commercial_status }}</span></td><td>{{ "Yes" if p.is_sellable else "No" }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <h2>Plans</h2>
+    <a class="btn" href="{{ url_for('catalog.new_plan_form') }}">New plan</a>
+  </div>
+  <table>
+    <tr><th>Code</th><th>Name</th><th>Billing model</th><th>Status</th><th></th></tr>
+    {% for p in plans %}
+    <tr><td>{{ p.plan_code }}</td><td>{{ p.name }}</td><td>{{ p.billing_model }}</td><td><span class="badge">{{ p.lifecycle_status }}</span></td>
+      <td><a href="{{ url_for('catalog.plan_detail', plan_id=p.id) }}">View</a></td></tr>
+    {% else %}<tr><td colspan="5" class="empty">No plans yet.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <h2>Add-ons</h2>
+  <table>
+    <tr><th>Code</th><th>Name</th><th>Availability</th><th></th></tr>
+    {% for a in addons %}
+    <tr>
+      <td>{{ a.addon_code }}</td><td>{{ a.name }}</td>
+      <td><span class="badge {{ 'active' if a.availability_status == 'AVAILABLE' else 'draft' }}">{{ a.availability_status }}</span></td>
+      <td>
+        <form class="inline" method="post" action="{{ url_for('catalog.update_addon_availability', addon_id=a.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <select name="status" onchange="this.form.submit()">
+            {% for s in ["DRAFT","PLANNED","PILOT","AVAILABLE","RETIRED"] %}
+            <option value="{{ s }}" {% if s == a.availability_status %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <h2>Entitlement definitions</h2>
+  <table>
+    <tr><th>Code</th><th>Type</th><th>Description</th></tr>
+    {% for e in entitlements %}
+    <tr><td>{{ e.entitlement_code }}</td><td>{{ e.value_type }}</td><td>{{ e.description }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <h2>Recently imported versions</h2>
+  <table>
+    <tr><th>Product</th><th>Platform</th><th>Version</th><th>Checksum</th><th>Imported</th></tr>
+    {% for v in versions %}
+    <tr><td>{{ v.product.product_code }}</td><td>{{ v.platform.platform_code }}</td><td>{{ v.version }}</td>
+      <td><code style="font-size:0.75rem;">{{ (v.artifact_checksum_sha256 or "")[:16] }}...</code></td><td>{{ v.imported_at }}</td></tr>
+    {% else %}<tr><td colspan="5" class="empty">No versions imported yet -- use `flask import-release-manifest`.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

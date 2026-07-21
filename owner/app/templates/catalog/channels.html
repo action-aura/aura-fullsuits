@@ -1,0 +1,13 @@
+{% extends "layout/base.html" %}
+{% block title %}Release channels{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Release channels</h2>
+  <table>
+    <tr><th>Code</th><th>Name</th></tr>
+    {% for c in channels %}
+    <tr><td>{{ c.channel_code }}</td><td>{{ c.name }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}
