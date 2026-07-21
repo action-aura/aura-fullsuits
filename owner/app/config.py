@@ -47,6 +47,23 @@ class BaseConfig:
 
     WTF_CSRF_TIME_LIMIT = None
 
+    # -- Phase 6: Licensing & Activation Service --
+    EXTERNAL_API_BIND_HOST = os.environ.get("OWNER_EXTERNAL_API_BIND_HOST", "127.0.0.1")
+    EXTERNAL_API_ALLOWED_CONTRACTS = os.environ.get("OWNER_EXTERNAL_API_ALLOWED_CONTRACTS", "v1").split(",")
+    SIGNING_KEY_DIRECTORY = os.environ.get(
+        "OWNER_SIGNING_KEY_DIRECTORY", os.path.join(os.getcwd(), "var", "signing-keys")
+    )
+    REPLAY_PROTECTION_REQUIRED = os.environ.get("OWNER_REPLAY_PROTECTION_REQUIRED", "true").lower() == "true"
+    DISTRIBUTED_RATE_LIMIT_REQUIRED = (
+        os.environ.get("OWNER_DISTRIBUTED_RATE_LIMIT_REQUIRED", "true").lower() == "true"
+    )
+    ACTIVATION_TIMESTAMP_SKEW_SECONDS = int(os.environ.get("OWNER_ACTIVATION_TIMESTAMP_SKEW_SECONDS", "300"))
+    NONCE_TTL_SECONDS = int(os.environ.get("OWNER_NONCE_TTL_SECONDS", "600"))
+    ASSERTION_TTL_SECONDS = int(os.environ.get("OWNER_ASSERTION_TTL_SECONDS", "86400"))
+    DEFAULT_OFFLINE_GRACE_SECONDS = int(os.environ.get("OWNER_DEFAULT_OFFLINE_GRACE_SECONDS", str(14 * 86400)))
+    MAX_REQUEST_BYTES = int(os.environ.get("OWNER_MAX_REQUEST_BYTES", str(64 * 1024)))
+    MAX_CONTENT_LENGTH = MAX_REQUEST_BYTES
+
     @classmethod
     def validate(cls) -> None:
         if cls.ENV == "development" or cls.TESTING:
@@ -55,6 +72,32 @@ class BaseConfig:
         if missing:
             raise ConfigError(
                 f"Refusing to start: missing required secret(s) for OWNER_ENV={cls.ENV!r}: {', '.join(missing)}"
+            )
+        if cls.EXTERNAL_API_ENABLED:
+            cls.validate_external_api_production()
+
+    @classmethod
+    def validate_external_api_production(cls) -> None:
+        """Part AB/W: production-like external API mode must fail closed, not
+        merely log a warning, when any of these hold."""
+        if cls.ENV == "development" or cls.TESTING:
+            return
+        problems = []
+        if not cls.LICENSE_PEPPER or "insecure" in cls.LICENSE_PEPPER:
+            problems.append("OWNER_LICENSE_PEPPER is missing or a known-insecure default value")
+        if not os.path.isdir(cls.SIGNING_KEY_DIRECTORY):
+            problems.append(f"OWNER_SIGNING_KEY_DIRECTORY does not exist: {cls.SIGNING_KEY_DIRECTORY}")
+        if not cls.REPLAY_PROTECTION_REQUIRED:
+            problems.append("OWNER_REPLAY_PROTECTION_REQUIRED must be true when the external API is enabled")
+        if not cls.DISTRIBUTED_RATE_LIMIT_REQUIRED:
+            problems.append("OWNER_DISTRIBUTED_RATE_LIMIT_REQUIRED must be true when the external API is enabled")
+        if cls.DEBUG:
+            problems.append("DEBUG must be false when the external API is enabled in a non-development environment")
+        if not cls.SESSION_COOKIE_SECURE:
+            problems.append("SESSION_COOKIE_SECURE must be true when the external API is enabled")
+        if problems:
+            raise ConfigError(
+                "Refusing to start with OWNER_EXTERNAL_API_ENABLED=true: " + "; ".join(problems)
             )
 
 
@@ -66,6 +109,9 @@ class DevelopmentConfig(BaseConfig):
         "OWNER_DATABASE_URL", "postgresql+psycopg://aura_owner:aura_owner_dev@localhost:5432/aura_owner_dev"
     )
     LICENSE_PEPPER = os.environ.get("OWNER_LICENSE_PEPPER", "dev-only-insecure-pepper-do-not-use-in-production")
+    SIGNING_KEY_DIRECTORY = os.environ.get(
+        "OWNER_SIGNING_KEY_DIRECTORY", os.path.join(os.getcwd(), "var", "signing-keys")
+    )
 
 
 class TestingConfig(BaseConfig):
@@ -79,6 +125,15 @@ class TestingConfig(BaseConfig):
     LICENSE_PEPPER = "test-license-pepper"
     LOGIN_MAX_ATTEMPTS = 5
     WTF_CSRF_ENABLED = True
+    SIGNING_KEY_DIRECTORY = os.environ.get(
+        "OWNER_TEST_SIGNING_KEY_DIRECTORY", os.path.join(os.getcwd(), "var", "signing-keys-test")
+    )
+    REPLAY_PROTECTION_REQUIRED = True
+    DISTRIBUTED_RATE_LIMIT_REQUIRED = True
+    # The external API is exercised directly by the test suite (Part Y) --
+    # always on in TESTING regardless of the OWNER_EXTERNAL_API_ENABLED env
+    # var, so `pytest` alone is sufficient to prove the whole surface works.
+    EXTERNAL_API_ENABLED = True
 
 
 class ProductionConfig(BaseConfig):
