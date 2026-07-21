@@ -1,0 +1,46 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ staff.display_name }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ staff.display_name }}</h2>
+  <dl class="kv">
+    <dt>Email</dt><dd>{{ staff.email }}</dd>
+    <dt>Status</dt><dd>{% if staff.is_active and not staff.disabled_at %}<span class="badge active">Active</span>{% else %}<span class="badge disabled">Disabled ({{ staff.disabled_reason }})</span>{% endif %}</dd>
+    <dt>Super Admin</dt><dd>{{ "Yes" if staff.is_super_admin else "No" }}</dd>
+    <dt>MFA</dt><dd>{% if staff.mfa_credential and staff.mfa_credential.confirmed %}<span class="badge active">Enrolled</span>{% else %}<span class="badge warn">Not enrolled</span>{% endif %}</dd>
+    <dt>Roles</dt><dd>{% for a in staff.role_assignments %}<span class="badge">{{ a.role.code }}</span> {% else %}<span class="empty">None</span>{% endfor %}</dd>
+    <dt>Last login</dt><dd>{{ staff.last_login_at or "Never" }}</dd>
+  </dl>
+</div>
+
+<div class="card">
+  <h3>Change roles</h3>
+  <p>Changing roles requires a fresh MFA confirmation and immediately revokes all of this account's active sessions.</p>
+  <form method="post" action="{{ url_for('staff.update_roles', staff_id=staff.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% for role in roles %}
+      <label style="display:inline-block;margin-right:1rem;font-weight:normal;color:inherit;">
+        <input type="checkbox" name="role_codes" value="{{ role.code }}" style="width:auto;"
+          {% if staff.role_assignments|selectattr("role.code","equalto",role.code)|list %}checked{% endif %}> {{ role.code }}
+      </label>
+    {% endfor %}
+    <div style="margin-top:1rem;"><button type="submit">Save roles</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Account actions</h3>
+  <form class="inline" method="post" action="{{ url_for('staff.reset_mfa_route', staff_id=staff.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="secondary">Reset MFA</button>
+  </form>
+  {% if staff.is_active and not staff.disabled_at %}
+  <form class="inline" method="post" action="{{ url_for('staff.disable', staff_id=staff.id) }}"
+        onsubmit="return confirm('Disable this staff account? This revokes all of its active sessions immediately.');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="reason" value="Disabled by administrator">
+    <button type="submit" class="danger">Disable account</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

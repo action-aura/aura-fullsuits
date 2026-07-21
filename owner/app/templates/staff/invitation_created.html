@@ -1,0 +1,11 @@
+{% extends "layout/base.html" %}
+{% block title %}Invitation created{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Invitation created for {{ invitation.email }}</h2>
+  <p>Copy this one-time link and send it to them manually (no email delivery is wired up in this phase):</p>
+  <p><code style="word-break:break-all;">{{ link }}</code></p>
+  <p>Expires: {{ invitation.expires_at }}</p>
+  <a class="btn" href="{{ url_for('staff.list_staff') }}">Back to staff</a>
+</div>
+{% endblock %}
