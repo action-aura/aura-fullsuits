@@ -1,20 +1,21 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aura-owner.internal/contracts/license-check-response-v1.schema.json",
-  "title": "License Check Response v1",
-  "description": "INACTIVE specification only (Part R). Mirrors app.api.serializers.serialize_license_check_response's fixed allowlist.",
+  "title": "License/Installation Check-In Response v1",
+  "description": "LIVE as of Phase 6. Matches app/licensing_service/checkin.py's response dict.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["license_id", "status", "allowed_platforms", "device_limit", "entitlements", "server_timestamp", "correlation_id"],
+  "required": ["contract_version", "response_id", "correlation_id", "server_timestamp", "result", "reason_code", "decision"],
   "properties": {
-    "license_id": { "type": "string", "format": "uuid" },
-    "status": { "type": "string" },
-    "valid_from": { "type": ["string", "null"], "format": "date" },
-    "valid_until": { "type": ["string", "null"], "format": "date" },
-    "allowed_platforms": { "type": "string" },
-    "device_limit": { "type": "integer" },
-    "entitlements": { "type": "array", "items": { "type": "object" } },
-    "server_timestamp": { "type": ["string", "null"], "format": "date-time" },
-    "correlation_id": { "type": ["string", "null"] }
+    "contract_version": { "type": "string", "const": "v1" },
+    "response_id": { "type": "string" },
+    "correlation_id": { "type": ["string", "null"] },
+    "server_timestamp": { "type": "string", "format": "date-time" },
+    "result": { "type": "string", "enum": ["SUCCESS", "FAILURE"] },
+    "reason_code": { "type": "string" },
+    "decision": { "type": "string", "enum": ["APPROVED", "REJECTED"] },
+    "signed_assertion": { "type": "object", "description": "Present only on SUCCESS -- a freshly issued assertion, refreshed on every successful check-in." },
+    "signing_key_id": { "type": "string" },
+    "assertion_version": { "type": "integer" }
   }
 }

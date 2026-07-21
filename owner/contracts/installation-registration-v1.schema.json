@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aura-owner.internal/contracts/installation-registration-v1.schema.json",
   "title": "Installation Registration v1",
-  "description": "INACTIVE specification only (Part R). Live route (Part R prototype) returns 501 not_implemented_in_phase_5 for this contract.",
+  "description": "Still INACTIVE as a standalone endpoint in Phase 6 (POST /api/v1/installation-registration, app/api/routes.py, still returns 501). Phase 6's real activation flow (activation-request-v1.schema.json) registers the installation IMPLICITLY as part of a successful activation -- there is deliberately no separate registration call in the live protocol. This schema remains as a specification for a possible future explicit-registration variant, not something any current client should call.",
   "type": "object",
   "additionalProperties": false,
   "required": ["product_code", "platform", "installation_label", "contract_version"],

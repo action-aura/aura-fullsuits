@@ -1,19 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aura-owner.internal/contracts/license-check-request-v1.schema.json",
-  "title": "License Check Request v1",
-  "description": "INACTIVE specification only (Part R).",
+  "title": "License/Installation Check-In Request v1",
+  "description": "LIVE as of Phase 6 -- POST /api/licensing/v1/check-ins (and its alias /activations/check). Matches app/licensing_service/checkin.py::REQUIRED_FIELDS exactly. Deliberately has NO license_key field -- authentication is via the device's already-registered Ed25519 key, not the license key (Principle 3).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["product_code", "platform", "installation_id", "timestamp", "request_nonce", "contract_version"],
+  "required": ["contract_version", "request_id", "correlation_id", "timestamp", "nonce", "installation_id", "signature"],
   "properties": {
-    "product_code": { "type": "string", "enum": ["AURA_RETAIL", "AURA_CLINIC"] },
-    "platform": { "type": "string", "enum": ["WINDOWS", "ANDROID"] },
-    "app_version": { "type": "string" },
-    "release_channel": { "type": "string" },
-    "installation_id": { "type": "string", "format": "uuid" },
+    "contract_version": { "type": "string", "const": "v1" },
+    "request_id": { "type": "string" },
+    "correlation_id": { "type": "string" },
     "timestamp": { "type": "string", "format": "date-time" },
-    "request_nonce": { "type": "string" },
-    "contract_version": { "type": "string", "const": "v1" }
+    "nonce": { "type": "string", "minLength": 16, "maxLength": 64, "description": "Single-use per (nonce, scope='check_in')." },
+    "installation_id": { "type": "string", "description": "The SERVER-assigned public installation ID returned by the original activation response." },
+    "signature": { "type": "string", "description": "base64 Ed25519 signature, verified against the device's registered (not resubmitted) public key." }
   }
 }

@@ -2,23 +2,40 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aura-owner.internal/contracts/activation-response-v1.schema.json",
   "title": "Activation Response v1",
-  "description": "INACTIVE specification only (Part R). No live route returns this in Phase 5.",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["activation_result", "license_status", "server_timestamp", "correlation_id"],
-  "properties": {
-    "activation_result": { "type": "string", "enum": ["APPROVED", "REJECTED", "PENDING"] },
-    "license_status": { "type": "string" },
-    "valid_from": { "type": ["string", "null"], "format": "date" },
-    "valid_until": { "type": ["string", "null"], "format": "date" },
-    "offline_grace_policy": { "type": "object", "additionalProperties": false, "properties": {
-      "grace_days": { "type": "integer" }
-    } },
-    "enabled_entitlements": { "type": "array", "items": { "type": "object" } },
-    "allowed_device_count": { "type": "integer" },
-    "allowed_release_channel": { "type": "string" },
-    "server_timestamp": { "type": "string", "format": "date-time" },
-    "signed_response_metadata": { "type": ["string", "null"] },
-    "correlation_id": { "type": "string" }
-  }
+  "description": "LIVE as of Phase 6. Success shape matches app/licensing_service/activation.py's response dict; error shape matches app/api_external/routes.py::_error_response.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "response_id", "correlation_id", "server_timestamp", "result", "reason_code", "decision", "installation_id", "signed_assertion", "signing_key_id", "assertion_version"],
+      "properties": {
+        "contract_version": { "type": "string", "const": "v1" },
+        "response_id": { "type": "string" },
+        "correlation_id": { "type": ["string", "null"] },
+        "server_timestamp": { "type": "string", "format": "date-time" },
+        "result": { "type": "string", "const": "SUCCESS" },
+        "reason_code": { "type": "string", "const": "ACTIVATION_APPROVED" },
+        "decision": { "type": "string", "const": "APPROVED" },
+        "installation_id": { "type": "string", "description": "Server-assigned public UUID -- persist this, not the client-generated request installation_id." },
+        "signed_assertion": { "type": "object" },
+        "signing_key_id": { "type": "string" },
+        "assertion_version": { "type": "integer" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "response_id", "correlation_id", "server_timestamp", "result", "reason_code", "decision", "retry_guidance"],
+      "properties": {
+        "contract_version": { "type": "string", "const": "v1" },
+        "response_id": { "type": "string" },
+        "correlation_id": { "type": ["string", "null"] },
+        "server_timestamp": { "type": "string", "format": "date-time" },
+        "result": { "type": "string", "const": "FAILURE" },
+        "reason_code": { "type": "string", "description": "A PUBLIC reason code only -- see external-api-reason-code-catalog.md." },
+        "decision": { "type": "string", "const": "REJECTED" },
+        "retry_guidance": { "type": "string", "enum": ["safe_to_retry_with_backoff", "do_not_retry_without_correction"] }
+      }
+    }
+  ]
 }

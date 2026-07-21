@@ -1,26 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aura-owner.internal/contracts/entitlement-response-v1.schema.json",
-  "title": "Entitlement Response v1",
-  "description": "INACTIVE specification only (Part R). Mirrors app.api.serializers.serialize_entitlement_response.",
+  "title": "Entitlement Snapshot v1",
+  "description": "LIVE as of Phase 6, but not exposed as a standalone endpoint -- this exact shape is embedded as the `entitlements` field inside every signed assertion payload (see signed-assertion-design.md). Matches app/licensing_service/entitlements.py::resolve_entitlements()'s output (include_source=False, the client-facing form -- the internal _source field is never included here).",
   "type": "object",
-  "additionalProperties": false,
-  "required": ["entitlements", "server_timestamp", "correlation_id"],
-  "properties": {
-    "entitlements": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["entitlement_code", "value_type", "value"],
-        "properties": {
-          "entitlement_code": { "type": "string" },
-          "value_type": { "type": "string", "enum": ["boolean", "integer", "string", "list", "date"] },
-          "value": {}
-        }
-      }
-    },
-    "server_timestamp": { "type": ["string", "null"], "format": "date-time" },
-    "correlation_id": { "type": ["string", "null"] }
+  "description_note": "Keys are entitlement_code strings (e.g. 'max_devices', 'backup_enabled'); values are typed per the entitlement's value_type (boolean/integer/string/list/date). Deny-by-default: every known entitlement code is always present, with a safe default value if nothing resolved it.",
+  "additionalProperties": {
+    "description": "One of: boolean, integer, string, array of strings, or an ISO-8601 date string (or null for an unresolved date-typed entitlement)."
   }
 }

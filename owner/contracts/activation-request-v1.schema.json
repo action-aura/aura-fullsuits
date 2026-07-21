@@ -2,21 +2,30 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aura-owner.internal/contracts/activation-request-v1.schema.json",
   "title": "Activation Request v1",
-  "description": "INACTIVE specification only (Part R). No live route accepts this in Phase 5.",
+  "description": "LIVE as of Phase 6, gated behind OWNER_EXTERNAL_API_ENABLED=false by default. Matches app/licensing_service/activation.py::REQUIRED_FIELDS exactly.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["product_code", "platform", "app_version", "license_key", "device_public_key", "fingerprint_hash", "timestamp", "request_nonce", "contract_version"],
+  "required": [
+    "contract_version", "request_id", "correlation_id", "timestamp", "nonce",
+    "product_code", "platform", "app_version", "installation_id",
+    "device_public_key", "device_public_key_algorithm", "license_key",
+    "idempotency_key", "signature"
+  ],
   "properties": {
+    "contract_version": { "type": "string", "const": "v1" },
+    "request_id": { "type": "string" },
+    "correlation_id": { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time", "description": "Timezone-aware ISO-8601. Must be within OWNER_ACTIVATION_TIMESTAMP_SKEW_SECONDS of server time." },
+    "nonce": { "type": "string", "minLength": 16, "maxLength": 64, "description": "Single-use per (nonce, scope='activation')." },
     "product_code": { "type": "string", "enum": ["AURA_RETAIL", "AURA_CLINIC"] },
     "platform": { "type": "string", "enum": ["WINDOWS", "ANDROID"] },
     "app_version": { "type": "string" },
     "release_channel": { "type": "string" },
-    "installation_id": { "type": "string", "format": "uuid" },
-    "license_key": { "type": "string", "description": "The full license key, presented once for activation only -- never logged." },
-    "device_public_key": { "type": "string" },
-    "fingerprint_hash": { "type": "string", "description": "Privacy-safe device fingerprint hash, not a raw hardware identifier." },
-    "timestamp": { "type": "string", "format": "date-time" },
-    "request_nonce": { "type": "string" },
-    "contract_version": { "type": "string", "const": "v1" }
+    "installation_id": { "type": "string", "description": "Client-generated local identifier. The server response returns a DIFFERENT, server-assigned installation_id to use for all future calls." },
+    "device_public_key": { "type": "string", "description": "base64 of the raw 32-byte Ed25519 public key." },
+    "device_public_key_algorithm": { "type": "string", "const": "ed25519" },
+    "license_key": { "type": "string", "description": "The full plaintext license key -- this request only. Never persisted, logged, or returned. See owner-license-key-design.md and external-api-forbidden-data-report.md." },
+    "idempotency_key": { "type": "string", "description": "Same key on a legitimate retry -> identical logical result, no extra device slot consumed." },
+    "signature": { "type": "string", "description": "base64 Ed25519 signature over the canonical form (app/licensing_service/canonical.py) of every other field in this object." }
   }
 }
