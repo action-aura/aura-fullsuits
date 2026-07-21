@@ -1,0 +1,23 @@
+{% extends "layout/base.html" %}
+{% block title %}New subscription{% endblock %}
+{% block content %}
+<div class="card" style="max-width:480px;">
+  <h2>New subscription</h2>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="customer_id">Customer</label>
+    <select id="customer_id" name="customer_id" required>
+      {% for c in customers %}<option value="{{ c.id }}">{{ c.legal_name }}</option>{% endfor %}
+    </select>
+    <label for="plan_id">Plan</label>
+    <select id="plan_id" name="plan_id" required>
+      {% for p in plans %}<option value="{{ p.id }}">{{ p.name }} ({{ p.plan_code }})</option>{% endfor %}
+    </select>
+    <label for="billing_cycle">Billing cycle</label>
+    <input id="billing_cycle" name="billing_cycle" placeholder="e.g. annual">
+    <label for="device_allowance">Device allowance</label>
+    <input id="device_allowance" name="device_allowance" type="number" min="1">
+    <div style="margin-top:1rem;"><button type="submit">Create (starts as DRAFT)</button></div>
+  </form>
+</div>
+{% endblock %}
