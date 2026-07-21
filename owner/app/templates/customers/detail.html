@@ -1,0 +1,51 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ customer.legal_name }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ customer.legal_name }} <span class="badge">{{ customer.lifecycle_status }}</span></h2>
+  <dl class="kv">
+    <dt>Trade name</dt><dd>{{ customer.trade_name or "-" }}</dd>
+    <dt>Country / City</dt><dd>{{ customer.country or "-" }} / {{ customer.city or "-" }}</dd>
+    <dt>Registration ref</dt><dd>{{ customer.commercial_registration_reference or "-" }}</dd>
+  </dl>
+  {% if customer.lifecycle_status != "ARCHIVED" %}
+  <form method="post" action="{{ url_for('customers.archive', customer_id=customer.id) }}"
+        onsubmit="return confirm('Archive this customer? Records are kept, not deleted.');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="danger">Archive</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3>Contacts</h3>
+  <table>
+    <tr><th>Name</th><th>Title</th><th>Email</th><th>Phone</th><th>Primary</th></tr>
+    {% for c in customer.contacts %}
+    <tr><td>{{ c.name }}</td><td>{{ c.title or "-" }}</td><td>{{ c.business_email or "-" }}</td><td>{{ c.business_phone or "-" }}</td><td>{{ "Yes" if c.is_primary else "" }}</td></tr>
+    {% else %}<tr><td colspan="5" class="empty">No contacts yet.</td></tr>
+    {% endfor %}
+  </table>
+  <form method="post" action="{{ url_for('customers.add_contact_route', customer_id=customer.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Name</label><input name="name" required>
+    <label>Title</label><input name="title">
+    <label>Email</label><input name="business_email" type="email">
+    <label>Phone</label><input name="business_phone">
+    <div style="margin-top:0.5rem;"><button type="submit">Add contact</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Internal notes</h3>
+  {% for n in customer.notes|sort(attribute="created_at", reverse=True) %}
+  <p style="border-bottom:1px solid #eee;padding-bottom:0.4rem;">{{ n.body }}<br><small style="color:#6b7785;">{{ n.created_at }}</small></p>
+  {% else %}<p class="empty">No notes yet.</p>
+  {% endfor %}
+  <form method="post" action="{{ url_for('customers.add_note_route', customer_id=customer.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <textarea name="body" rows="3" required></textarea>
+    <div style="margin-top:0.5rem;"><button type="submit">Add note</button></div>
+  </form>
+</div>
+{% endblock %}
