@@ -1,0 +1,16 @@
+{% extends "layout/base.html" %}
+{% block title %}Confirm identity{% endblock %}
+{% block content %}
+<div class="card" style="max-width:380px;margin:2rem auto;">
+  <h2>Confirm your identity</h2>
+  <p>This action requires a fresh MFA confirmation.</p>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label for="code">6-digit code</label>
+    <input id="code" name="code" required autofocus autocomplete="one-time-code">
+    <div style="margin-top:1rem;"><button type="submit">Confirm</button></div>
+  </form>
+</div>
+{% endblock %}

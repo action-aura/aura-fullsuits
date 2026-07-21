@@ -1,0 +1,16 @@
+{% extends "layout/base.html" %}
+{% block title %}Login{% endblock %}
+{% block content %}
+<div class="card" style="max-width:380px;margin:2rem auto;">
+  <h2>Aura Owner Control Center</h2>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="email">Email</label>
+    <input id="email" type="email" name="email" required autofocus>
+    <label for="password">Password</label>
+    <input id="password" type="password" name="password" required>
+    <div style="margin-top:1rem;"><button type="submit">Log in</button></div>
+  </form>
+</div>
+{% endblock %}
