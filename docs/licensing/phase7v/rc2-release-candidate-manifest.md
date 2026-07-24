@@ -1,5 +1,11 @@
 # Phase 7V — rc.2 Release-Candidate Manifest
 
+> **Phase 7V-F update:** all four artifacts below were rebuilt again in Phase 7V-F (a real P0 fix
+> in the trusted-time mechanism, plus Android `cryptography`/lint fixes, required new builds) —
+> the checksums below are superseded. See
+> `docs/licensing/phase7v-final/final-artifact-reconfirmation.md` for the current checksums. This
+> document preserved unmodified below for history.
+
 Commit as of this manifest: `869887a5bf20b7abdb13887cf1c13a4c69d06e63` (docs commit will follow;
 final commit hash recorded in `PHASE7V-RELEASE-VALIDATION-HANDOVER.md`).
 Build timestamp: 2026-07-24 (this session).

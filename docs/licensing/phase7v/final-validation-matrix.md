@@ -1,5 +1,10 @@
 # Phase 7V — Final Validation Matrix (Part Q)
 
+> **Phase 7V-F update:** see `docs/licensing/phase7v-final/final-validation-matrix.md` for the
+> current matrix — Retail Windows upgrade and live restricted-mode rows below moved from NOT
+> VERIFIED to PASS, and a real P0 in trusted-time offline enforcement was found and fixed. This
+> document preserved unmodified below for history.
+
 Legend: **PASS** / **FAIL** / **NOT VERIFIED** / **N/A**. No mandatory row is marked PASS without
 evidence cited elsewhere in `docs/licensing/phase7v/`.
 

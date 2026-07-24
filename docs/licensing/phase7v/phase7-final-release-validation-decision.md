@@ -1,5 +1,14 @@
 # Phase 7 — Final Release Validation Decision (Phase 7V, Part S)
 
+> **Phase 7V-F update (superseding addendum, does not erase this record):** a follow-up session
+> (Phase 7V-F) found and fixed a real P0 defect in the trusted-time offline-enforcement mechanism
+> that this document's "RESTRICTED state was not live-exercised" note (below) had flagged as an
+> open question — RESTRICTED is now proven reachable live, and the underlying bug that made it
+> effectively unreachable during any continuous outage is fixed. Phase 7V-F also completed the
+> Retail Windows rc.1→rc.2 upgrade this document lists as not verified. See
+> `docs/licensing/phase7v-final/phase7-final-release-validation-decision-v2.md` for the final,
+> current verdict. This original document is preserved unmodified below for history.
+
 Evaluated separately per the governing spec's required breakdown.
 
 ## 1. Clinic Windows rc.2 — CONDITIONAL PASS

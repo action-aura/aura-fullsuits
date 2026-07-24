@@ -1,5 +1,12 @@
 # Phase 7V — Residual Risk Register
 
+> **Phase 7V-F update:** risk #1 below (no physical Android device) was partially closed —
+> a device connected, Clinic's physical signed upgrade was completed, and this exposed a real P0
+> in the trusted-time mechanism (now fixed). Retail's physical work and the remainder of Clinic's
+> physical lifecycle stayed open due to the device disconnecting mid-session. See
+> `docs/licensing/phase7v-final/final-residual-risk-register.md` for the current, complete list.
+> This document preserved unmodified below for history.
+
 | # | Risk | Severity | Status |
 |---|---|---|---|
 | 1 | No physical Android device validated this session — real hardware may surface issues (touch/UI, real network stack, real Keystore hardware behavior, real signed-upgrade install flow) that emulated/source-level testing cannot | **P1** (blocks final tag) | Open — requires a connected, authorized device |
