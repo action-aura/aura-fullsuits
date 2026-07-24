@@ -5,9 +5,11 @@ this backs up Owner's own PostgreSQL database only, via pg_dump/pg_restore.
 """
 from __future__ import annotations
 
+import glob
 import hashlib
 import os
 import re
+import shutil
 import subprocess
 from datetime import datetime, timezone
 
@@ -17,6 +19,11 @@ from app.models.audit import DatabaseBackupRecord
 
 APP_VERSION = "phase5-foundation"
 SCHEMA_REVISION_UNKNOWN = "unknown"
+
+# Windows PostgreSQL installer (EnterpriseDB) always lays out versioned
+# installs here; newest version first so a multi-version machine picks the
+# most recently installed server's tools.
+_WINDOWS_PG_INSTALL_GLOB = "C:/Program Files/PostgreSQL/*/bin"
 
 
 class BackupError(RuntimeError):
@@ -28,8 +35,36 @@ class RestoreError(RuntimeError):
 
 
 def _pg_bin(tool: str) -> str:
+    """Resolve pg_dump/pg_restore. Discovery order: explicit
+    OWNER_PG_BIN_DIR override, then PATH, then standard Windows
+    PostgreSQL install locations (newest version first). Raises
+    BackupError with an actionable message if the tool can't be found
+    anywhere, rather than handing subprocess a bare name that fails with
+    an opaque WinError 2."""
     bin_dir = os.environ.get("OWNER_PG_BIN_DIR", "")
-    return os.path.join(bin_dir, tool) if bin_dir else tool
+    if bin_dir:
+        candidate = os.path.join(bin_dir, f"{tool}.exe" if os.name == "nt" else tool)
+        if os.path.isfile(candidate):
+            return candidate
+        raise BackupError(
+            f"OWNER_PG_BIN_DIR is set to '{bin_dir}' but '{tool}' was not found there. "
+            f"Fix or unset OWNER_PG_BIN_DIR."
+        )
+
+    on_path = shutil.which(tool)
+    if on_path:
+        return on_path
+
+    if os.name == "nt":
+        for install_dir in sorted(glob.glob(_WINDOWS_PG_INSTALL_GLOB), reverse=True):
+            candidate = os.path.join(install_dir, f"{tool}.exe")
+            if os.path.isfile(candidate):
+                return candidate
+
+    raise BackupError(
+        f"Could not locate '{tool}'. Install PostgreSQL client tools matching the server "
+        f"version, or set OWNER_PG_BIN_DIR to the directory containing {tool}."
+    )
 
 
 def _connection_args_and_env() -> tuple[list[str], dict]:
@@ -71,10 +106,10 @@ def create_backup(backup_dir: str, initiated_by_staff_user_id, label: str = "man
     file_path = os.path.join(backup_dir, filename)
 
     conn_args, conn_env = _connection_args_and_env()
-    cmd = [_pg_bin("pg_dump"), "--format=custom", "--file", file_path, *conn_args]
     try:
+        cmd = [_pg_bin("pg_dump"), "--format=custom", "--file", file_path, *conn_args]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=conn_env)
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, subprocess.SubprocessError, BackupError) as exc:
         safe_error = _redact_credential_leakage(str(exc))
         record = DatabaseBackupRecord(
             file_path=file_path, owner_app_version=APP_VERSION, schema_revision=_current_schema_revision(),
