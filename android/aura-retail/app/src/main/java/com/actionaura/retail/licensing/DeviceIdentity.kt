@@ -1,6 +1,7 @@
 package com.actionaura.retail.licensing
 
 import android.content.Context
+import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import com.google.crypto.tink.subtle.Ed25519Sign
@@ -127,12 +128,18 @@ class AndroidKeystoreWrapper : KeyWrapper {
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
             .setKeySize(256)
             .apply {
-                try {
-                    setIsStrongBoxBacked(true)
-                } catch (_: Throwable) {
-                    // Not all API levels/builders expose this -- ignored,
-                    // the key is still hardware-backed via the standard TEE
-                    // path if StrongBox isn't available.
+                // setIsStrongBoxBacked requires API 28; this app's minSdk is
+                // 26, so a version check (not just try/catch) is required --
+                // lint's NewApi check does not treat try/catch as a valid
+                // guard for a call that isn't resolvable on older API levels.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    try {
+                        setIsStrongBoxBacked(true)
+                    } catch (_: Throwable) {
+                        // Declared API 28+ but not all real devices expose
+                        // StrongBox hardware -- falls back to the standard
+                        // TEE-backed path if unavailable.
+                    }
                 }
             }
             .build()
