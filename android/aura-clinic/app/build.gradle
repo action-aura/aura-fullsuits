@@ -79,6 +79,20 @@ android {
                 install "flask-cors==4.0.1"
                 install "waitress==3.0.0"
                 install "requests==2.32.3"
+                // Phase 7V-F (found via physical-device testing): Phase 7's
+                // commercial_runtime/licensing_contracts/assertion_verifier.py
+                // and device_identity.py both import `cryptography` for
+                // Ed25519 signature verification -- this list was never
+                // updated when that package was added, so app.py's import
+                // chain failed with ModuleNotFoundError('cryptography') on
+                // every real device launch, taking the whole embedded server
+                // down silently. Same class of gap as MOB-002 above.
+                // No version pin -- 43.0.1 has no Chaquopy pre-built wheel
+                // for this Python/ABI combo (falls back to a source build
+                // needing a Rust cross-compiler, unavailable here). Chaquopy
+                // resolves this to whichever version it has a real
+                // pre-built wheel for (42.0.8 as of this build).
+                install "cryptography"
             }
         }
     }

@@ -67,6 +67,17 @@ android {
                 install "waitress==3.0.0"
                 install "openpyxl==3.1.2"
                 install "requests==2.32.3"
+                // Phase 7V-F: see aura-clinic/app/build.gradle's identical
+                // block for the full rationale -- commercial_runtime/
+                // licensing_contracts imports `cryptography`, which was
+                // never added here, crashing app.py's import chain on every
+                // real device launch (found via physical-device testing).
+                // No version pin -- 43.0.1 has no Chaquopy pre-built wheel
+                // for this Python/ABI combo (falls back to a source build
+                // needing a Rust cross-compiler, unavailable here). Chaquopy
+                // resolves this to whichever version it has a real
+                // pre-built wheel for (42.0.8 as of this build).
+                install "cryptography"
             }
         }
     }
