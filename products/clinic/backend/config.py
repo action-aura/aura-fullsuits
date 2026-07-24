@@ -37,7 +37,16 @@ IS_STANDALONE = bool(getattr(sys, 'frozen', False)) or os.environ.get('AURA_STAN
 # escape hatch, trust anchor resolved via the package's own __file__ rather
 # than BASE_DIR since BASE_DIR is products/clinic/backend, not the suite root).
 OWNER_LICENSING_BASE_URL = os.environ.get('AURA_OWNER_LICENSING_URL', '')
-OWNER_LICENSING_VERIFY_TLS = os.environ.get('AURA_OWNER_LICENSING_INSECURE') != '1'
+# Phase 7V Part G: AURA_OWNER_LICENSING_INSECURE is a source/dev-only escape
+# hatch for testing against a local Owner instance without a real cert. A
+# frozen (PyInstaller-packaged) commercial build must never honor it -- an
+# environment variable set on a customer machine (accidentally, or by a
+# well-meaning support technician debugging connectivity) must not be able to
+# silently disable TLS verification for real activation traffic. Frozen
+# builds always verify_tls=True regardless of what the env var says.
+OWNER_LICENSING_VERIFY_TLS = True if getattr(sys, 'frozen', False) else (
+    os.environ.get('AURA_OWNER_LICENSING_INSECURE') != '1'
+)
 OWNER_LICENSING_TIMEOUT_SECONDS = float(os.environ.get('AURA_OWNER_LICENSING_TIMEOUT_SECONDS', '10'))
 
 import commercial_runtime.licensing_contracts as _licensing_contracts_pkg

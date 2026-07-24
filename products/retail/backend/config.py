@@ -46,8 +46,15 @@ IS_STANDALONE = bool(getattr(sys, 'frozen', False)) or os.environ.get('AURA_STAN
 # an authorized configuration step, not an ordinary end-user text field.
 OWNER_LICENSING_BASE_URL = os.environ.get('AURA_OWNER_LICENSING_URL', '')
 # Dev-only escape hatch for a local Owner instance without a certificate --
-# never set AURA_OWNER_LICENSING_INSECURE=1 in a commercial build.
-OWNER_LICENSING_VERIFY_TLS = os.environ.get('AURA_OWNER_LICENSING_INSECURE') != '1'
+# never set AURA_OWNER_LICENSING_INSECURE=1 in a commercial build. Phase 7V
+# Part G: this was previously honored unconditionally, meaning an env var set
+# on a customer machine could silently disable TLS verification for real
+# activation traffic against a frozen .exe. A frozen build now always
+# verifies TLS regardless of this variable; only unfrozen (source/dev) runs
+# honor the escape hatch.
+OWNER_LICENSING_VERIFY_TLS = True if getattr(sys, 'frozen', False) else (
+    os.environ.get('AURA_OWNER_LICENSING_INSECURE') != '1'
+)
 OWNER_LICENSING_TIMEOUT_SECONDS = float(os.environ.get('AURA_OWNER_LICENSING_TIMEOUT_SECONDS', '10'))
 # One shared trust anchor for both products (it names which Owner signing
 # keys are trusted, not which product is asking) -- generated once by
