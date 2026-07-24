@@ -44,6 +44,13 @@ SUITES = {
     'retail': ROOT / 'products' / 'retail' / 'tests',
     'clinic': ROOT / 'products' / 'clinic' / 'tests',
     'commercial_runtime': ROOT / 'commercial_runtime' / 'tests',
+    # Phase 7 -- product-side licensing domain (docs/licensing/phase7/). A
+    # separate key from 'commercial_runtime' (not merged into that dir)
+    # because it has its own large, fast-growing test surface and mirroring
+    # the retail/clinic/commercial_runtime split at this level lets
+    # `python products/run_all_tests.py licensing_contracts` run just this
+    # suite the same way `... retail` already does.
+    'licensing_contracts': ROOT / 'commercial_runtime' / 'licensing_contracts' / 'tests',
 }
 
 

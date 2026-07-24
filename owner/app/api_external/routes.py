@@ -16,7 +16,7 @@ from app.licensing_service.checkin import CheckInRejected, process_checkin
 from app.licensing_service.deactivation import DeactivationRejected, process_deactivation
 from app.licensing_service.health import is_service_ready, public_service_info
 from app.licensing_service.reason_codes import to_public_reason_code
-from app.licensing_service.signing import export_public_keys
+from app.licensing_service.signing import export_signed_keyset_manifest
 
 bp = Blueprint("api_external_licensing", __name__, url_prefix="/api/licensing/v1")
 
@@ -177,7 +177,7 @@ def signing_keys():
         resp, status = _error_response("RATE_LIMITED", 429)
         resp.headers["Retry-After"] = str(exc.retry_after_seconds)
         return resp, status
-    response = jsonify({"schema_version": 1, "keys": export_public_keys()})
+    response = jsonify(export_signed_keyset_manifest(current_app.config["SIGNING_KEY_DIRECTORY"]))
     response.headers["Cache-Control"] = "public, max-age=300"
     return response, 200
 

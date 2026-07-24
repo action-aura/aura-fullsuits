@@ -55,9 +55,14 @@ def _run_server(port: int):
            channel_timeout=120, connection_limit=200, _quiet=True)
 
 
-def start_server(files_dir: str, port: int = 5000) -> int:
+def start_server(files_dir: str, port: int = 5000, owner_base_url: str = '', internal_shared_secret: str = '') -> int:
     """Start the embedded Flask server. Called once from Kotlin with the app's
-    private filesDir. Returns the actual port the server is bound to. Idempotent."""
+    private filesDir. Returns the actual port the server is bound to. Idempotent.
+
+    owner_base_url/internal_shared_secret (Phase 7 Part H): threaded in from
+    ServerBootstrap.kt the same way filesDir already is -- see
+    android/aura-clinic's identical main.py docstring for the full rationale.
+    """
     with _lock:
         if _state['port']:
             return _state['port']
@@ -69,6 +74,11 @@ def start_server(files_dir: str, port: int = 5000) -> int:
         os.environ['AURA_BUNDLE_DIR'] = paths['bundle']
         os.environ['AURA_APP_DATA'] = paths['data']
         os.environ['AURA_STANDALONE'] = '1'
+        os.environ['AURA_PLATFORM'] = 'ANDROID'
+        if owner_base_url:
+            os.environ['AURA_OWNER_LICENSING_URL'] = owner_base_url
+        if internal_shared_secret:
+            os.environ['AURA_INTERNAL_SHARED_SECRET'] = internal_shared_secret
 
         actual = _find_free_port(port, port + 20) or port
         t = threading.Thread(target=_run_server, args=(actual,), daemon=True)

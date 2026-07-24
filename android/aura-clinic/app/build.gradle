@@ -28,8 +28,8 @@ android {
         applicationId "com.actionaura.clinic"
         minSdk 26
         targetSdk 34
-        versionCode 2
-        versionName "1.0.0-rc.1"
+        versionCode 3
+        versionName "1.0.0-rc.2"
 
         ndk {
             // Chaquopy's Python 3.12 ships only these ABIs.
@@ -41,6 +41,16 @@ android {
         // com.actionaura.clinic.identity.CommercialIdentity and
         // docs/android/android-migration-plan.md.
         buildConfigField "String", "PRODUCT_CODE", "\"AURA_CLINIC\""
+
+        // Phase 7 Part H -- Owner licensing endpoint. Empty by default: an
+        // unconfigured build leaves the embedded backend's /api/licensing/*
+        // routes reporting NOT_CONFIGURED (never a hidden fallback URL --
+        // see products/clinic/backend/config.py's identical rationale).
+        // Overridden per real build via -PownerLicensingBaseUrl=... (gradle
+        // property, e.g. from a CI secret or local.properties), never
+        // hardcoded here.
+        buildConfigField "String", "OWNER_LICENSING_BASE_URL",
+                "\"${project.findProperty('ownerLicensingBaseUrl') ?: ''}\""
     }
 
     // ── Python (Chaquopy) ───────────────────────────────────────────────────────
@@ -168,14 +178,41 @@ dependencies {
     implementation 'com.squareup.retrofit2:converter-gson:2.11.0'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
+    // Declared directly (not just relied on transitively via converter-gson
+    // above) because com.actionaura.clinic.licensing.DeviceIdentity imports
+    // com.google.gson.Gson directly -- a real pure-JVM JSON library, unlike
+    // org.json.JSONObject, which is an Android-platform-stubbed class whose
+    // methods throw "not mocked" under plain JUnit (found the hard way while
+    // getting DeviceIdentityTest running -- see
+    // docs/licensing/phase7/android-device-key-storage-design.md).
+    implementation 'com.google.code.gson:gson:2.11.0'
 
     implementation 'io.coil-kt:coil-compose:2.7.0'
 
     // No CameraX / ML Kit: Aura Clinic has no barcode/camera feature (retail-only).
 
+    // ── Phase 7 licensing: Ed25519 device identity ────────────────────────────
+    // Pure-JVM Ed25519 (Tink's own implementation, not delegated to the
+    // platform keystore) -- AndroidKeystore's native Ed25519 support only
+    // arrived at API 33 and is inconsistent across OEMs below/around that
+    // line; this app's minSdk is 26. See
+    // docs/licensing/phase7/android-device-key-storage-design.md (ADR-7.1).
+    // AndroidKeystore itself is still used, but only to wrap the generated
+    // Ed25519 private key at rest with a non-exportable AES-256-GCM key --
+    // that part of the platform keystore (symmetric key generation/storage)
+    // has been reliable back to API 23, unlike Ed25519 signing keys.
+    implementation 'com.google.crypto.tink:tink-android:1.15.0'
+
     // ── Unit/contract tests (JVM, no device/emulator needed) ─────────────────
     testImplementation 'junit:junit:4.13.2'
-    testImplementation 'com.google.code.gson:gson:2.11.0'
+    // gson is already on the test classpath via the `implementation` entry
+    // above (Gradle's Android plugin puts implementation deps on the test
+    // classpath automatically) -- no separate testImplementation needed.
+    testImplementation 'com.google.truth:truth:1.4.4'
+    // Real local HTTP server for OwnerClientTest -- exercises real OkHttp
+    // request/response handling (retry, backoff, Retry-After, timeouts)
+    // against actual sockets, not a mocked OkHttpClient.
+    testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
 
     constraints {
         implementation('org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.0.21')

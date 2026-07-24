@@ -19,11 +19,40 @@ import time, requests
 from decimal import Decimal, ROUND_HALF_UP
 from flask import Blueprint, request, jsonify, session
 from commercial_runtime.identity.mt_auth import mt_login_required, mt_require_subsystem, require_clinic_role
+from commercial_runtime.licensing_contracts.flask_guard import make_capability_guard
 from database.schema import get_clinic_conn, sub_create, init_clinic
 from datetime import datetime, timedelta
 import random
+from config import DATABASE_DIR
 
 clinic_bp = Blueprint('clinic_api', __name__, url_prefix='/api/sub/clinic')
+
+# Phase 7 Part T -- the one enforcement choke point every mutation route
+# below is guarded with. See docs/licensing/phase7/
+# clinic-restriction-capability-matrix.md for the full route-to-capability
+# mapping and the reasoning behind each allow/block decision (grounded in
+# reading these handlers, not assumed).
+require_license_capability = make_capability_guard(os.path.dirname(DATABASE_DIR))
+
+# Capabilities that remain available once licensing enters a restricted
+# state (RESTRICTED/SUSPENDED/REVOKED/EXPIRED/... -- see
+# commercial_runtime/licensing_contracts/state_machine.py's
+# DATA_PRESERVED_FAMILY): read access plus the narrow set of continuity-of-
+# care actions Part Q's own text calls out ("a narrowly scoped emergency
+# clinical note or completion of an already open encounter"). Everything
+# else -- new patient/appointment/visit/invoice/payment creation, staff/
+# settings changes, destructive deletes -- is blocked.
+CLINIC_RESTRICTED_ALLOWLIST = frozenset({
+    "clinic.records.read",
+    "clinic.visit.update",
+    "clinic.notes.create",
+    "clinic.prescription.create",
+    "clinic.appointment.checkin",
+    "clinic.patient.update",
+    "clinic.backup.create",
+    "clinic.backup.restore",
+    "clinic.data.export",
+})
 
 # ── Auto-init: ensure clinic tables exist on first import ─────────────────────
 # Redundant with app.py's explicit init_app() -> init_clinic() call, kept for
@@ -131,6 +160,7 @@ def list_patients():
 @clinic_bp.route('/patients', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('clinic')
+@require_license_capability("clinic.patient.create", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def create_patient():
     data = request.json or {}
     cid = _cid()
@@ -202,6 +232,7 @@ def get_patient(pid):
 @clinic_bp.route('/patients/<int:pid>', methods=['PATCH'])
 @mt_login_required
 @mt_require_subsystem('clinic')
+@require_license_capability("clinic.patient.update", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def update_patient(pid):
     data = request.json or {}
     cid = _cid()
@@ -218,6 +249,7 @@ def update_patient(pid):
 @clinic_bp.route('/patients/<int:pid>', methods=['DELETE'])
 @mt_login_required
 @mt_require_subsystem('clinic')
+@require_license_capability("clinic.patient.delete", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def delete_patient(pid):
     """Delete a patient. Default is a SOFT delete (status='archived') so medical and
     financial history is preserved and the action is reversible. Pass ?hard=1 to
@@ -307,6 +339,7 @@ def list_appointments():
 @clinic_bp.route('/appointments', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('clinic')
+@require_license_capability("clinic.appointment.create", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def create_appointment():
     data = request.json or {}
     cid = _cid()
@@ -357,6 +390,7 @@ def create_appointment():
 @clinic_bp.route('/appointments/<int:aid>', methods=['PATCH'])
 @mt_login_required
 @mt_require_subsystem('clinic')
+@require_license_capability("clinic.appointment.update", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def update_appointment(aid):
     data = request.json or {}
     cid = _cid()
@@ -379,6 +413,7 @@ def update_appointment(aid):
 @clinic_bp.route('/appointments/<int:aid>/checkin', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('clinic')
+@require_license_capability("clinic.appointment.checkin", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def checkin(aid):
     cid = _cid()
     conn = get_clinic_conn()
@@ -393,6 +428,7 @@ def checkin(aid):
 @clinic_bp.route('/visits', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('clinic')
+@require_license_capability("clinic.visit.create", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def create_visit():
     data = request.json or {}
     cid = _cid()
@@ -441,6 +477,7 @@ def get_visit(vid):
 @mt_login_required
 @mt_require_subsystem('clinic')
 @require_clinic_role('doctor')   # diagnosis/treatment is doctor (or admin) work
+@require_license_capability("clinic.visit.update", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def update_visit(vid):
     data = request.json or {}
     cid = _cid()
@@ -464,6 +501,7 @@ def update_visit(vid):
 @mt_login_required
 @mt_require_subsystem('clinic')
 @require_clinic_role('doctor')   # clinical notes — doctor (or admin)
+@require_license_capability("clinic.notes.create", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def add_note(vid):
     data = request.json or {}
     cid = _cid()
@@ -502,6 +540,7 @@ def list_followups(pid):
 @mt_login_required
 @mt_require_subsystem('clinic')
 @require_clinic_role('doctor')   # clinical follow-up content — doctor (or admin)
+@require_license_capability("clinic.followup.create", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def add_followup(pid):
     data = request.json or {}
     cid = _cid()
@@ -532,6 +571,7 @@ def add_followup(pid):
 @mt_login_required
 @mt_require_subsystem('clinic')
 @require_clinic_role('doctor')
+@require_license_capability("clinic.followup.create", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def delete_followup(fid):
     cid = _cid()
     conn = get_clinic_conn()
@@ -557,6 +597,7 @@ def list_doctors():
 @clinic_bp.route('/doctors', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('clinic')
+@require_license_capability("clinic.staff.manage", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def create_doctor():
     data = request.json or {}
     cid = _cid()
@@ -576,6 +617,7 @@ def create_doctor():
 @clinic_bp.route('/doctors/<int:did>', methods=['PATCH'])
 @mt_login_required
 @mt_require_subsystem('clinic')
+@require_license_capability("clinic.staff.manage", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def update_doctor(did):
     data = request.json or {}
     cid = _cid()
@@ -605,6 +647,7 @@ def list_services():
 @clinic_bp.route('/services', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('clinic')
+@require_license_capability("clinic.settings.update", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def create_service():
     data = request.json or {}
     cid = _cid()
@@ -635,6 +678,7 @@ def list_lab_expenses():
 @clinic_bp.route('/lab-expenses', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('clinic')
+@require_license_capability("clinic.invoice.create", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def create_lab_expense():
     data = request.json or {}
     cid = _cid()
@@ -684,6 +728,7 @@ def create_lab_expense():
 @clinic_bp.route('/lab-expenses/<int:le_id>', methods=['DELETE'])
 @mt_login_required
 @mt_require_subsystem('clinic')
+@require_license_capability("clinic.invoice.create", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def delete_lab_expense(le_id):
     cid = _cid()
     conn = get_clinic_conn()
@@ -697,6 +742,7 @@ def delete_lab_expense(le_id):
 @clinic_bp.route('/invoices', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('clinic')
+@require_license_capability("clinic.invoice.create", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def create_invoice():
     data = request.json or {}
     cid = _cid()
@@ -829,6 +875,7 @@ def get_invoice(inv_id):
 @clinic_bp.route('/payments', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('clinic')
+@require_license_capability("clinic.payment.record", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def record_payment():
     """Server-validated, idempotent payment recording (Wave 0, AUDIT-011/AUDIT-012).
 
@@ -936,6 +983,7 @@ def record_payment():
 @mt_login_required
 @mt_require_subsystem('clinic')
 @require_clinic_role('doctor')   # prescribing is doctor (or admin) only
+@require_license_capability("clinic.prescription.create", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def create_prescription():
     data = request.json or {}
     cid = _cid()
@@ -1088,6 +1136,7 @@ _WIPE_STATEMENTS = (
 @clinic_bp.route('/demo-wipe', methods=['DELETE'])
 @mt_login_required
 @mt_require_subsystem('clinic')
+@require_license_capability("clinic.settings.update", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def demo_wipe():
     for guard in (_require_clinic_demo_mode(), _require_company_admin(), _require_confirmation('WIPE', _cid())):
         if guard is not None:
@@ -1116,6 +1165,7 @@ def demo_wipe():
 @clinic_bp.route('/demo-seed', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('clinic')
+@require_license_capability("clinic.settings.update", restricted_mode_allowlist=CLINIC_RESTRICTED_ALLOWLIST)
 def demo_seed():
     for guard in (_require_clinic_demo_mode(), _require_company_admin(), _require_confirmation('SEED', _cid())):
         if guard is not None:

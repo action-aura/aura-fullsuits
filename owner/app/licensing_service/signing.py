@@ -21,6 +21,7 @@ from sqlalchemy import select
 
 from app.audit.services import record as audit_record
 from app.extensions import db_session
+from app.licensing_service.canonical import canonicalize_bytes
 from app.models.licensing_service import KeyRotationEvent, SigningKey
 
 _KEY_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -196,6 +197,48 @@ def export_public_keys() -> list[dict]:
         }
         for r in rows
     ]
+
+
+def export_signed_keyset_manifest(key_directory: str) -> dict:
+    """Phase 7 Part D addition -- wraps export_public_keys() in a signed
+    envelope so a product client can admit a rotation without ever trusting
+    a key "because the endpoint says it's active" (Part D item 9). Additive
+    only: every field export_public_keys()'s caller already relied on
+    (schema_version, keys) is unchanged; manifest_version/issued_at/
+    signed_by_key_id/signature are new fields layered on top, never a
+    replacement of the existing shape.
+
+    Signed by whichever key is currently ACTIVE -- the same key a product
+    already trusts (either as its bundled build-time anchor, or as the most
+    recently rotation-admitted key), continuing the same chain of trust
+    rather than introducing a separate manifest-signing key. If no key is
+    currently ACTIVE (e.g. mid-rotation gap), the manifest fields are
+    omitted rather than failing the whole endpoint -- a client's
+    OwnerTrustStore.admit_manifest() safely discards an unsigned/malformed
+    manifest, so raw key discovery still degrades gracefully without a hard
+    503 on this particular route.
+    """
+    keys = export_public_keys()
+    active = get_active_signing_key()
+    base = {"schema_version": 1, "keys": keys}
+    if active is None:
+        return base
+
+    issued_at = datetime.now(timezone.utc).isoformat()
+    signable = {"manifest_version": 1, "issued_at": issued_at, "keys": keys}
+    try:
+        private_key = load_private_key(key_directory, active.key_id)
+    except SigningKeyError:
+        return base
+
+    signature = private_key.sign(canonicalize_bytes(signable))
+    return {
+        **base,
+        "manifest_version": 1,
+        "issued_at": issued_at,
+        "signed_by_key_id": active.key_id,
+        "signature": base64.b64encode(signature).decode("ascii"),
+    }
 
 
 def verify_signing_key_health(key_directory: str) -> dict:

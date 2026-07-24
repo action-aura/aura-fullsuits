@@ -280,8 +280,11 @@ private fun retailGraph(b: NavGraphBuilder, nav: androidx.navigation.NavControll
     b.composable("payables") { PayablesScreen(snackbar) }
     b.composable("cash_summary") { DailyCashScreen(snackbar) }
     b.composable("aging") { AgingScreen(snackbar) }
-    b.composable("retail_settings") { RetailSettingsScreen(snackbar, onOpenBackup = { nav.navigate("backup") }) }
+    b.composable("retail_settings") {
+        RetailSettingsScreen(snackbar, onOpenBackup = { nav.navigate("backup") }, onOpenLicensing = { nav.navigate("licensing") })
+    }
     b.composable("backup") { com.actionaura.retail.ui.screens.BackupRestoreScreen(onBack = { nav.popBackStack() }, snackbar = snackbar) }
+    b.composable("licensing") { com.actionaura.retail.ui.screens.LicensingScreen(onBack = { nav.popBackStack() }, snackbar = snackbar) }
 }
 
 @Composable

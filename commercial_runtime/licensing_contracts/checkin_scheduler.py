@@ -1,0 +1,242 @@
+"""LicenseCheckInScheduler (Part L/M) -- the orchestrator that ties every
+other Part C module together into one check-in cycle: call Owner, verify
+the response independently, evaluate offline policy, persist state, record
+events. This is the one place all of that happens -- routes/UI call
+run_once() (or let start() schedule it), never re-implement any piece of
+this sequence themselves.
+"""
+from __future__ import annotations
+
+import threading
+from datetime import datetime, timezone
+from typing import Optional
+
+from .assertion_verifier import AssertionVerificationError, verify_assertion
+from .client import LicensingClient, LicensingClientError
+from .events import LicensingEventRecorder
+from .policy_evaluator import evaluate as evaluate_policy
+from .state_machine import LicenseState
+from .state_repository import LicenseStateRecord, LicenseStateRepository
+from .trust_store import OwnerTrustStore
+from .trusted_time import TrustedTimeAnchor, new_anchor, rehydrate_anchor
+
+# States in which there is no installation_id yet to check in with --
+# run_once() is a no-op (by design, not an error) in these states.
+_NOT_YET_ACTIVATED = frozenset(
+    {LicenseState.NOT_CONFIGURED, LicenseState.ACTIVATION_REQUIRED, LicenseState.ACTIVATING}
+)
+
+# State-entry events (Part W) fired the first time a check-in cycle lands on
+# that state, keyed by the target LicenseState.
+_STATE_ENTRY_EVENTS = {
+    LicenseState.ACTIVE_OFFLINE: "OFFLINE_MODE_ENTERED",
+    LicenseState.WARNING: "WARNING_ENTERED",
+    LicenseState.GRACE_PERIOD: "GRACE_ENTERED",
+    LicenseState.RESTRICTED: "RESTRICTED_MODE_ENTERED",
+    LicenseState.SUSPENDED: "LICENSE_SUSPENDED",
+    LicenseState.REVOKED: "LICENSE_REVOKED",
+    LicenseState.EXPIRED: "LICENSE_EXPIRED",
+    LicenseState.CLOCK_REVIEW_REQUIRED: "CLOCK_REVIEW_REQUIRED",
+}
+
+
+class LicenseCheckInScheduler:
+    def __init__(
+        self,
+        *,
+        client: LicensingClient,
+        signer,
+        trust_store: OwnerTrustStore,
+        state_repository: LicenseStateRepository,
+        event_recorder: LicensingEventRecorder,
+        product_code: str,
+        platform: str,
+        device_public_key_fingerprint: str,
+        local_safety_ceiling_seconds: Optional[int] = None,
+    ):
+        self._client = client
+        self._signer = signer
+        self._trust_store = trust_store
+        self._state_repository = state_repository
+        self._events = event_recorder
+        self._product_code = product_code
+        self._platform = platform
+        self._device_fingerprint = device_public_key_fingerprint
+        self._safety_ceiling = local_safety_ceiling_seconds
+        self._timer: Optional[threading.Timer] = None
+        self._stopped = threading.Event()
+
+    def run_once(self) -> LicenseState:
+        """Windows path: this process owns the device key, so it also owns
+        the HTTP call. Android never calls this -- see
+        ingest_checkin_response()/reevaluate_only() below."""
+        record = self._state_repository.load()
+        if record is None or LicenseState(record.current_state) in _NOT_YET_ACTIVATED:
+            return LicenseState(record.current_state) if record else LicenseState.NOT_CONFIGURED
+
+        self._refresh_trust_manifest_best_effort()
+
+        try:
+            response = self._client.check_in(installation_id=record.owner_installation_id, signer=self._signer)
+        except LicensingClientError:
+            self._events.record("CHECK_IN_FAILED")
+            return self.reevaluate_only(checkin_ok=False)
+
+        return self.ingest_checkin_response(response)
+
+    def ingest_checkin_response(self, response: dict) -> LicenseState:
+        """Android path (Part U): the Kotlin layer already made the signed
+        HTTP call to Owner and hands the RAW, UNTRUSTED response here over
+        the localhost sync endpoint. Independently re-verified from scratch,
+        exactly as run_once() verifies a response it fetched itself --
+        nothing about Kotlin's own opinion of the outcome is trusted."""
+        record = self._state_repository.load()
+        if record is None or LicenseState(record.current_state) in _NOT_YET_ACTIVATED:
+            return LicenseState(record.current_state) if record else LicenseState.NOT_CONFIGURED
+
+        checkin_ok = False
+        envelope = response.get("signed_assertion") if response else None
+        if envelope is None:
+            self._events.record("CHECK_IN_FAILED")
+        else:
+            try:
+                verified = verify_assertion(
+                    envelope,
+                    trust_store=self._trust_store,
+                    expected_product_code=self._product_code,
+                    expected_platform=self._platform,
+                    expected_installation_id=record.owner_installation_id,
+                    expected_device_key_fingerprint=self._device_fingerprint,
+                    trusted_now=datetime.now(timezone.utc),
+                )
+            except AssertionVerificationError:
+                # Retain the previous valid assertion (Part L) -- do not
+                # overwrite record with anything from this response.
+                self._events.record("ASSERTION_REJECTED")
+            else:
+                checkin_ok = True
+                self._events.record("CHECK_IN_SUCCEEDED")
+                self._events.record("ASSERTION_ACCEPTED")
+                record = self._persist_fresh_assertion(record, envelope, verified)
+
+        new_state = self._reevaluate(record, checkin_ok)
+        self._apply_state_transition(record, new_state)
+        return new_state
+
+    def reevaluate_only(self, *, checkin_ok: bool = False) -> LicenseState:
+        """No network call at all -- re-runs offline-policy evaluation
+        against the currently stored assertion and elapsed trusted time.
+        Used for: a failed check-in attempt (Windows, above), and Android's
+        periodic local re-check (app foreground, no fresh network round
+        trip needed to notice a WARNING/GRACE_PERIOD/RESTRICTED boundary
+        has been crossed purely by time passing)."""
+        record = self._state_repository.load()
+        if record is None or LicenseState(record.current_state) in _NOT_YET_ACTIVATED:
+            return LicenseState(record.current_state) if record else LicenseState.NOT_CONFIGURED
+        new_state = self._reevaluate(record, checkin_ok)
+        self._apply_state_transition(record, new_state)
+        return new_state
+
+    def start(self, interval_seconds: int) -> None:
+        self._stopped.clear()
+        self._schedule_next(interval_seconds)
+
+    def stop(self) -> None:
+        self._stopped.set()
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
+
+    def _schedule_next(self, interval_seconds: int) -> None:
+        if self._stopped.is_set():
+            return
+
+        def _tick():
+            try:
+                self.run_once()
+            finally:
+                self._schedule_next(interval_seconds)
+
+        self._timer = threading.Timer(interval_seconds, _tick)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _refresh_trust_manifest_best_effort(self) -> None:
+        try:
+            manifest = self._client.fetch_signing_keys()
+        except LicensingClientError:
+            return
+        try:
+            self._trust_store.admit_manifest(manifest)
+        except Exception:
+            return  # malformed manifest -- never let this break the check-in cycle
+
+    def _persist_fresh_assertion(self, record: LicenseStateRecord, envelope: dict, verified) -> LicenseStateRecord:
+        import json
+
+        payload = verified.payload
+        record.assertion_envelope_json = json.dumps(envelope)
+        record.assertion_id = payload.get("assertion_id")
+        record.assertion_issued_at = payload.get("issued_at")
+        record.assertion_not_before = payload.get("not_before")
+        record.assertion_expires_at = payload.get("expires_at")
+        record.trusted_time_anchor_server_time = payload.get("issued_at")
+        record.last_successful_checkin_at = datetime.now(timezone.utc).isoformat()
+        record.last_sync_result = "SUCCESS"
+        record.license_status = verified.evidence.license_status
+        record.installation_status = verified.evidence.installation_status
+        record.subscription_status = verified.evidence.subscription_status
+        record.entitlements_json = json.dumps(payload.get("entitlements", {}))
+        record.offline_policy_json = json.dumps(payload.get("offline_policy", {}))
+        self._state_repository.save(record)
+        return record
+
+    def _reevaluate(self, record: LicenseStateRecord, checkin_ok: bool) -> LicenseState:
+        if record.assertion_envelope_json is None:
+            # Never successfully activated far enough to have an assertion
+            # at all -- nothing to evaluate against.
+            return LicenseState(record.current_state)
+
+        import json
+
+        envelope = json.loads(record.assertion_envelope_json)
+        try:
+            verified = verify_assertion(
+                envelope,
+                trust_store=self._trust_store,
+                expected_product_code=self._product_code,
+                expected_platform=self._platform,
+                expected_installation_id=record.owner_installation_id,
+                expected_device_key_fingerprint=self._device_fingerprint,
+                trusted_now=datetime.now(timezone.utc),
+            )
+        except AssertionVerificationError:
+            self._events.record("LOCAL_STATE_CORRUPT")
+            return LicenseState.LOCAL_STATE_CORRUPT
+
+        anchor = self._resolve_anchor(record)
+        last_checkin = (
+            datetime.fromisoformat(record.last_successful_checkin_at)
+            if record.last_successful_checkin_at
+            else verified.evidence.not_before
+        )
+        return evaluate_policy(
+            evidence=verified.evidence,
+            anchor=anchor,
+            local_wall_clock_now=datetime.now(timezone.utc),
+            last_successful_checkin_at=last_checkin,
+            last_checkin_attempt_ok=checkin_ok,
+            local_safety_ceiling_seconds=self._safety_ceiling,
+        )
+
+    def _resolve_anchor(self, record: LicenseStateRecord) -> TrustedTimeAnchor:
+        if record.trusted_time_anchor_server_time:
+            return rehydrate_anchor(datetime.fromisoformat(record.trusted_time_anchor_server_time))
+        return new_anchor(datetime.now(timezone.utc))
+
+    def _apply_state_transition(self, record: LicenseStateRecord, new_state: LicenseState) -> None:
+        if new_state.value != record.current_state:
+            event_type = _STATE_ENTRY_EVENTS.get(new_state)
+            if event_type:
+                self._events.record(event_type)
+            self._state_repository.update_state(new_state.value)

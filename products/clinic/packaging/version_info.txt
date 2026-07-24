@@ -26,7 +26,7 @@ VSVersionInfo(
         StringStruct(u'LegalCopyright', u'© Action Aura'),
         StringStruct(u'OriginalFilename', u'AuraClinic.exe'),
         StringStruct(u'ProductName', u'Aura Clinic'),
-        StringStruct(u'ProductVersion', u'1.0.0-rc.1')])
+        StringStruct(u'ProductVersion', u'1.0.0-rc.2')])
       ]),
     VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
   ]

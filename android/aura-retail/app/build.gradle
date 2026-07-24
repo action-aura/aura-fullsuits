@@ -28,8 +28,8 @@ android {
         applicationId "com.actionaura.retail"
         minSdk 26
         targetSdk 34
-        versionCode 2
-        versionName "1.0.0-rc.1"
+        versionCode 3
+        versionName "1.0.0-rc.2"
 
         ndk {
             // Chaquopy's Python 3.12 ships only these ABIs.
@@ -41,6 +41,16 @@ android {
         // com.actionaura.retail.identity.CommercialIdentity and
         // docs/android/android-migration-plan.md.
         buildConfigField "String", "PRODUCT_CODE", "\"AURA_RETAIL\""
+
+        // Phase 7 Part H -- Owner licensing endpoint. Empty by default: an
+        // unconfigured build leaves the embedded backend's /api/licensing/*
+        // routes reporting NOT_CONFIGURED (never a hidden fallback URL --
+        // see products/retail/backend/config.py's identical rationale).
+        // Overridden per real build via -PownerLicensingBaseUrl=... (gradle
+        // property, e.g. from a CI secret or local.properties), never
+        // hardcoded here.
+        buildConfigField "String", "OWNER_LICENSING_BASE_URL",
+                "\"${project.findProperty('ownerLicensingBaseUrl') ?: ''}\""
     }
 
     // ── Python (Chaquopy) ───────────────────────────────────────────────────────
@@ -156,6 +166,14 @@ dependencies {
     implementation 'com.squareup.retrofit2:converter-gson:2.11.0'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
+    // Declared directly (not just relied on transitively via converter-gson
+    // above) because com.actionaura.retail.licensing.DeviceIdentity imports
+    // com.google.gson.Gson directly -- a real pure-JVM JSON library, unlike
+    // org.json.JSONObject, which is an Android-platform-stubbed class whose
+    // methods throw "not mocked" under plain JUnit. Same fix as Clinic's
+    // build.gradle -- see
+    // docs/licensing/phase7/android-device-key-storage-design.md.
+    implementation 'com.google.code.gson:gson:2.11.0'
 
     implementation 'io.coil-kt:coil-compose:2.7.0'
 
@@ -167,10 +185,19 @@ dependencies {
     implementation "androidx.camera:camera-view:$camerax"
     implementation 'com.google.mlkit:barcode-scanning:17.3.0'
 
+    // ── Phase 7 licensing: Ed25519 device identity ────────────────────────────
+    // Mirrors Clinic's identical addition -- see that build.gradle's comment
+    // and docs/licensing/phase7/android-device-key-storage-design.md
+    // (ADR-7.1) for the full rationale.
+    implementation 'com.google.crypto.tink:tink-android:1.15.0'
+
     // ── Unit/contract tests (JVM, no device/emulator needed) ─────────────────
     testImplementation 'junit:junit:4.13.2'
-    testImplementation 'com.google.code.gson:gson:2.11.0'
+    // gson is already on the test classpath via the `implementation` entry
+    // above -- no separate testImplementation needed.
     testImplementation 'com.google.truth:truth:1.4.4'
+    // Real local HTTP server for OwnerClientTest -- mirrors Clinic's identical addition.
+    testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
 
     constraints {
         implementation('org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.0.21')

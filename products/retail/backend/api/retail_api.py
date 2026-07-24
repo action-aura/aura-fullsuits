@@ -13,11 +13,38 @@ import requests
 from decimal import Decimal, ROUND_HALF_UP
 from flask import Blueprint, request, jsonify, session
 from commercial_runtime.identity.mt_auth import mt_login_required, mt_require_subsystem
+from commercial_runtime.licensing_contracts.flask_guard import make_capability_guard
 from database.schema import get_retail_conn, sub_create
 from datetime import datetime, timedelta
 from core.retail import pricing as tax_engine
+from config import DATABASE_DIR
 
 retail_bp = Blueprint('retail_api', __name__, url_prefix='/api/sub/retail')
+
+# Phase 7 Part T -- the one enforcement choke point every mutation route
+# below is guarded with. See docs/licensing/phase7/
+# retail-restriction-capability-matrix.md for the full route-to-capability
+# mapping and the reasoning behind each allow/block decision (grounded in
+# reading these handlers, not assumed).
+require_license_capability = make_capability_guard(os.path.dirname(DATABASE_DIR))
+
+# Capabilities that remain available once licensing enters a restricted
+# state. Read access plus returns (server-authoritative reversal of an
+# existing sale -- a lawful refund obligation) plus customer payments
+# (paying down existing debt, cash-flow positive, goodwill-critical) --
+# see the matrix doc's "Decision" section for the reasoning behind each.
+# Everything else -- new sales, new products/suppliers/customers, stock
+# adjustment, purchasing, outbound supplier/PO payments, settings/staff
+# changes -- is blocked.
+RETAIL_RESTRICTED_ALLOWLIST = frozenset({
+    "retail.records.read",
+    "retail.report.view",
+    "retail.return.create",
+    "retail.customer.payment.record",
+    "retail.backup.create",
+    "retail.backup.restore",
+    "retail.data.export",
+})
 
 # ── Session helpers ────────────────────────────────────────────────────────────
 def _cid():
@@ -178,6 +205,7 @@ def list_categories():
 @retail_bp.route('/categories', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.product.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def create_category():
     data = request.json or {}
     if not data.get('name'):
@@ -214,6 +242,7 @@ def list_products():
 @retail_bp.route('/products', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.product.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def create_product():
     data = request.json or {}
     cid  = _cid()
@@ -259,6 +288,7 @@ def create_product():
 @retail_bp.route('/products/<int:pid>', methods=['PATCH'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.product.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def update_product(pid):
     data = request.json or {}
     cid  = _cid()
@@ -277,6 +307,7 @@ def update_product(pid):
 @retail_bp.route('/products/<int:pid>', methods=['DELETE'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.product.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def delete_product(pid):
     cid = _cid()
     conn = get_retail_conn()
@@ -297,6 +328,7 @@ def delete_product(pid):
 @retail_bp.route('/products/<int:pid>/stock-adjust', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.stock.adjust", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def adjust_stock(pid):
     data = request.json or {}
     cid  = _cid()
@@ -358,6 +390,7 @@ def list_customers():
 @retail_bp.route('/customers', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.customer.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def create_customer():
     data = request.json or {}
     if not data.get('name'):
@@ -375,6 +408,7 @@ def create_customer():
 @retail_bp.route('/customers/<int:cust_id>', methods=['PATCH'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.customer.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def update_customer(cust_id):
     data = request.json or {}
     cid  = _cid()
@@ -426,6 +460,7 @@ def list_suppliers():
 @retail_bp.route('/suppliers', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.supplier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def create_supplier():
     data = request.json or {}
     if not data.get('name'):
@@ -443,6 +478,7 @@ def create_supplier():
 @retail_bp.route('/suppliers/<int:sid>', methods=['PATCH'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.supplier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def update_supplier(sid):
     data = request.json or {}
     cid  = _cid()
@@ -476,6 +512,7 @@ def list_purchase_orders():
 @retail_bp.route('/purchase-orders', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.purchase.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def create_purchase_order():
     data = request.json or {}
     cid  = _cid()
@@ -536,6 +573,7 @@ def get_purchase_order(po_id):
 @retail_bp.route('/purchase-orders/<int:po_id>/receive', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.purchase.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def receive_purchase_order(po_id):
     """Mark PO as received and add stock to inventory."""
     cid  = _cid()
@@ -576,6 +614,7 @@ def receive_purchase_order(po_id):
 @retail_bp.route('/sales', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.sale.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def create_sale():
     """Server-authoritative sale creation (Wave 0 correction, AUDIT-002/AUDIT-003).
 
@@ -836,6 +875,7 @@ def list_returns():
 @retail_bp.route('/returns', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.return.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def create_return():
     """Server-authoritative return creation (Wave 0 correction, AUDIT-004).
 
@@ -1104,6 +1144,7 @@ def list_branches():
 @retail_bp.route('/branches', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def create_branch():
     data = request.json or {}
     if not data.get('name'):
@@ -1265,6 +1306,7 @@ def credit_settings_get():
 @retail_bp.route('/settings/credit', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def credit_settings_set():
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
@@ -1296,6 +1338,7 @@ def tax_settings_get():
 @retail_bp.route('/settings/tax', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def tax_settings_set():
     cid = _cid(); data = request.json or {}
     if 'tax_calculation_mode' not in data:
@@ -1328,6 +1371,7 @@ def payment_methods_list():
 @retail_bp.route('/payment-methods', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def payment_methods_add():
     cid = _cid(); data = request.json or {}
     if not data.get('name'):
@@ -1379,6 +1423,7 @@ def customer_statement(cust_id):
 @retail_bp.route('/customers/<int:cust_id>/payments', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.customer.payment.record", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def customer_payment(cust_id):
     cid = _cid(); data = request.json or {}
     amt = _money(data.get('amount', 0))
@@ -1439,6 +1484,7 @@ def supplier_statement(sid):
 @retail_bp.route('/suppliers/<int:sid>/payments', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.supplier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def supplier_payment(sid):
     cid = _cid(); data = request.json or {}
     amt = _money(data.get('amount', 0))
@@ -1461,6 +1507,7 @@ def supplier_payment(sid):
 @retail_bp.route('/purchase-orders/<int:po_id>/pay', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.purchase.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def pay_purchase_order(po_id):
     cid = _cid(); data = request.json or {}
     amt = _money(data.get('amount', 0))
@@ -1539,6 +1586,7 @@ def aging_report():
 @retail_bp.route('/payments/<int:pid>/void', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def void_payment(pid):
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
@@ -1637,6 +1685,7 @@ _WIPE_STATEMENTS = (
 @retail_bp.route('/demo-wipe', methods=['DELETE'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def demo_wipe():
     for guard in (_require_retail_demo_mode(), _require_company_admin(), _require_confirmation('WIPE', _cid())):
         if guard is not None:
@@ -1665,6 +1714,7 @@ def demo_wipe():
 @retail_bp.route('/demo-seed', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def demo_seed():
     for guard in (_require_retail_demo_mode(), _require_company_admin(), _require_confirmation('SEED', _cid())):
         if guard is not None:

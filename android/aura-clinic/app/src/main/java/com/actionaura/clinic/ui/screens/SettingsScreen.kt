@@ -22,7 +22,7 @@ import com.actionaura.clinic.ui.i18n.tr
 import kotlinx.coroutines.launch
 
 @Composable
-fun SettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit = {}) {
+fun SettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit = {}, onOpenLicensing: () -> Unit = {}) {
     val ctx = LocalContext.current
     var notifications by remember { mutableStateOf(true) }
     var biometric by remember { mutableStateOf(false) }
@@ -56,6 +56,7 @@ fun SettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit = {}) {
         }
 
         SettingsGroup(tr("About")) {
+            SettingRow(Icons.Default.VerifiedUser, tr("Licensing"), null) { onOpenLicensing() }
             SettingRow(Icons.Default.Info, tr("Version"), com.actionaura.clinic.BuildConfig.VERSION_NAME) {}
             SettingRow(Icons.Default.PrivacyTip, tr("Privacy policy"), null) { soon(tr("Privacy policy")) }
             SettingRow(Icons.Default.Description, tr("Terms of service"), null) { soon(tr("Terms of service")) }

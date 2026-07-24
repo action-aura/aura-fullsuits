@@ -29,6 +29,14 @@ DATA = Path(tempfile.mkdtemp(prefix="aura_clinic_workflow_"))
 os.environ.update(AURA_STANDALONE="1", AURA_BUNDLE_DIR=str(BACKEND_DIR), AURA_APP_DATA=str(DATA))
 os.environ.pop("AURA_DEV", None)
 
+from commercial_runtime.licensing_contracts.test_support import seed_active_license  # noqa: E402
+
+# This suite tests clinical workflow correctness, not licensing enforcement
+# (Phase 7 Part T's capability guard has its own dedicated tests) -- seed a
+# valid ACTIVE_ONLINE license state so the guarded mutation routes below are
+# reachable at all.
+seed_active_license(str(DATA), product_code="AURA_CLINIC", platform="WINDOWS")
+
 import app as _app_module  # noqa: E402
 
 app = _app_module.init_app()

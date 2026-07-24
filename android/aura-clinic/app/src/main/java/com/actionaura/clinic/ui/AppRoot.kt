@@ -289,8 +289,11 @@ private fun clinicGraph(b: NavGraphBuilder, nav: androidx.navigation.NavControll
     b.composable("doctors") { DoctorsScreen() }
     b.composable("lab") { LabExpensesScreen(snackbar) }
     b.composable("prescriptions") { PrescriptionsScreen() }
-    b.composable("settings") { SettingsScreen(snackbar, onOpenBackup = { nav.navigate("backup") }) }
+    b.composable("settings") {
+        SettingsScreen(snackbar, onOpenBackup = { nav.navigate("backup") }, onOpenLicensing = { nav.navigate("licensing") })
+    }
     b.composable("backup") { BackupRestoreScreen(onBack = { nav.popBackStack() }, snackbar = snackbar) }
+    b.composable("licensing") { LicensingScreen(onBack = { nav.popBackStack() }, snackbar = snackbar) }
 }
 
 @Composable

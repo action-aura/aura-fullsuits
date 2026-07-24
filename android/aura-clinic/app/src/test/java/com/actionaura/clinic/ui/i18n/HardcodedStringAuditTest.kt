@@ -73,6 +73,14 @@ class HardcodedStringAuditTest {
         "\"Settings\"", "\"Doctors\"", "\"Lab Expenses\"", "\"Prescriptions\"", "\"Patient\"",
         // Brand names, never translated (matches "Action Aura" elsewhere).
         "\"Action Aura\"", "\"Aura AI\"",
+        // Phase 7: LicensingScreen.kt's bare LicenseState/Owner-protocol code
+        // comparisons (state == "SUCCESS", state in setOf("RESTRICTED", ...))
+        // -- these match commercial_runtime/licensing_contracts/state_machine.py's
+        // enum values and Owner's response "result" field verbatim; they are
+        // protocol identifiers being compared, not prose. The one label actually
+        // shown to the user for each state is separately translated inline in
+        // stateLabel() (tr("Restricted") etc.), same as this list's other entries.
+        "\"SUCCESS\"", "\"RESTRICTED\"", "\"WARNING\"", "\"SUSPENDED\"", "\"REVOKED\"", "\"EXPIRED\"",
     )
 
     @Test

@@ -40,6 +40,9 @@ DATA = Path(tempfile.mkdtemp(prefix="aura_retail_i18n_"))
 os.environ.update(AURA_STANDALONE="1", AURA_BUNDLE_DIR=str(BACKEND_DIR), AURA_APP_DATA=str(DATA))
 os.environ.pop("AURA_DEV", None)
 
+from commercial_runtime.licensing_contracts.test_support import seed_active_license  # noqa: E402
+seed_active_license(str(DATA), product_code="AURA_RETAIL", platform="WINDOWS")
+
 import app as _app_module  # noqa: E402
 
 app = _app_module.init_app()

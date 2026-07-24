@@ -1123,7 +1123,7 @@ fun AgingScreen(snackbar: SnackbarHostState) {
 //  RETAIL SETTINGS — credit enforcement, defaults, currency, payment methods
 // ══════════════════════════════════════════════════════════════════════════════
 @Composable
-fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit = {}) {
+fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit = {}, onOpenLicensing: () -> Unit = {}) {
     // Real gap found live on-device (Wave 1B): the tr()/AppLocale mechanism
     // already worked (Login and elsewhere used it), but there was no reachable
     // way to actually switch language -- the only language-switcher UI lived
@@ -1231,6 +1231,17 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
             SectionHeader(tr("Backup & restore"))
             OutlinedButton(onClick = onOpenBackup, modifier = Modifier.fillMaxWidth().height(50.dp)) {
                 Text(tr("Backup & restore"))
+            }
+        }
+
+        SectionHeader(tr("Licensing"))
+        GlowCard(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.fillMaxWidth().clickable(onClick = onOpenLicensing).padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(tr("Licensing"), Modifier.weight(1f))
+                Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
 

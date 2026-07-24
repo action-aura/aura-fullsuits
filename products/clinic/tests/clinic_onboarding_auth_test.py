@@ -39,6 +39,9 @@ DATA = Path(tempfile.mkdtemp(prefix="aura_clinic_onboarding_"))
 (DATA / "database" / "subsystems").mkdir(parents=True, exist_ok=True)
 os.environ.update(AURA_STANDALONE="1", AURA_BUNDLE_DIR=str(BACKEND_DIR), AURA_APP_DATA=str(DATA))
 os.environ.pop("AURA_DEV", None)
+
+from commercial_runtime.licensing_contracts.test_support import seed_active_license  # noqa: E402
+seed_active_license(str(DATA), product_code="AURA_CLINIC", platform="WINDOWS")
 os.environ.pop("AURA_CLINIC_DEMO_MODE", None)
 
 import app as _app_module  # noqa: E402

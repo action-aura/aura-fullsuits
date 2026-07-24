@@ -28,7 +28,11 @@ for _p in (str(SUITE_ROOT), str(BACKEND_DIR)):
 from flask import Flask, jsonify
 from flask_cors import CORS
 
-from config import SECRET_KEY, DATABASE_DIR, APP_VERSION
+from config import (
+    SECRET_KEY, DATABASE_DIR, APP_VERSION,
+    OWNER_LICENSING_BASE_URL, OWNER_LICENSING_VERIFY_TLS, OWNER_LICENSING_TIMEOUT_SECONDS,
+    LICENSING_TRUST_ANCHOR_PATH, LICENSING_PLATFORM, LICENSING_INTERNAL_SHARED_SECRET,
+)
 
 app = Flask(__name__, static_folder=str(PRODUCT_DIR / 'frontend'), static_url_path='/static')
 
@@ -81,11 +85,38 @@ from commercial_runtime.identity.registry_db import init_registry_db
 from database.schema import init_clinic
 from api.clinic_api import clinic_bp
 from commercial_runtime.backup.routes import make_backup_blueprint
+from commercial_runtime.licensing_contracts.device_identity import WindowsDpapiDeviceIdentityProvider
+from commercial_runtime.licensing_contracts.android_bridge_identity import AndroidBridgeDeviceIdentityProvider
+from commercial_runtime.licensing_contracts.routes import make_licensing_blueprint
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(onboarding_bp)
 app.register_blueprint(clinic_bp)
 app.register_blueprint(make_backup_blueprint('clinic', DATABASE_DIR, APP_VERSION))
+
+# Part H: Android's main.py sets AURA_PLATFORM='ANDROID' before importing this
+# module -- Windows (unset, defaults to 'WINDOWS') keeps making its own signed
+# Owner calls directly via /activate|/check-in|/deactivate; Android instead
+# relies on Kotlin (which holds the real device key) to call Owner and hand
+# the raw response to the /_internal/sync-* routes below for independent
+# verification (Part U). internal_shared_secret is only ever set on Android.
+if LICENSING_PLATFORM == 'ANDROID':
+    _licensing_device_identity_factory = AndroidBridgeDeviceIdentityProvider
+else:
+    _licensing_device_identity_factory = WindowsDpapiDeviceIdentityProvider
+
+app.register_blueprint(make_licensing_blueprint(
+    product_code='AURA_CLINIC',
+    platform=LICENSING_PLATFORM,
+    app_version=APP_VERSION,
+    app_data_dir=str(Path(DATABASE_DIR).parent),
+    owner_base_url=OWNER_LICENSING_BASE_URL,
+    verify_tls=OWNER_LICENSING_VERIFY_TLS,
+    timeout_seconds=OWNER_LICENSING_TIMEOUT_SECONDS,
+    trust_anchor_path=Path(LICENSING_TRUST_ANCHOR_PATH),
+    device_identity_factory=_licensing_device_identity_factory,
+    internal_shared_secret=LICENSING_INTERNAL_SHARED_SECRET,
+))
 
 
 def init_app():

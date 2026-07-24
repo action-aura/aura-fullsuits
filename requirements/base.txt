@@ -9,3 +9,11 @@ flask-login==0.6.3
 openpyxl==3.1.2
 waitress==3.0.0
 requests==2.32.3
+
+# Phase 7 -- Licensing & Activation product-side integration (Windows device
+# identity signing, Owner assertion verification). Same pin as
+# requirements/owner-server.txt so both sides of the protocol run identical
+# Ed25519 behavior. Not used on Android -- Chaquopy's own pip list stays
+# separate (android/aura-*/app/build.gradle), see
+# docs/licensing/phase7/android-device-key-storage-design.md for why.
+cryptography==43.0.1
