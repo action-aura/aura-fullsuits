@@ -85,8 +85,6 @@ from commercial_runtime.identity.registry_db import init_registry_db
 from database.schema import init_clinic
 from api.clinic_api import clinic_bp
 from commercial_runtime.backup.routes import make_backup_blueprint
-from commercial_runtime.licensing_contracts.device_identity import WindowsDpapiDeviceIdentityProvider
-from commercial_runtime.licensing_contracts.android_bridge_identity import AndroidBridgeDeviceIdentityProvider
 from commercial_runtime.licensing_contracts.routes import make_licensing_blueprint
 
 app.register_blueprint(auth_bp)
@@ -101,8 +99,16 @@ app.register_blueprint(make_backup_blueprint('clinic', DATABASE_DIR, APP_VERSION
 # the raw response to the /_internal/sync-* routes below for independent
 # verification (Part U). internal_shared_secret is only ever set on Android.
 if LICENSING_PLATFORM == 'ANDROID':
+    # Lazy import: WindowsDpapiDeviceIdentityProvider's module pulls in the
+    # `cryptography` package, which is Windows-only in this build (Android
+    # uses Tink instead, see Phase 7 Part F) -- an eager top-level import of
+    # it on Android crashed the whole app.py import with
+    # ModuleNotFoundError('cryptography'), taking the entire embedded server
+    # down silently (found via physical-device testing, Phase 7V-F).
+    from commercial_runtime.licensing_contracts.android_bridge_identity import AndroidBridgeDeviceIdentityProvider
     _licensing_device_identity_factory = AndroidBridgeDeviceIdentityProvider
 else:
+    from commercial_runtime.licensing_contracts.device_identity import WindowsDpapiDeviceIdentityProvider
     _licensing_device_identity_factory = WindowsDpapiDeviceIdentityProvider
 
 app.register_blueprint(make_licensing_blueprint(

@@ -108,8 +108,6 @@ from database.schema import init_retail
 from api.retail_api import retail_bp
 from api.import_api import import_bp
 from commercial_runtime.backup.routes import make_backup_blueprint
-from commercial_runtime.licensing_contracts.device_identity import WindowsDpapiDeviceIdentityProvider
-from commercial_runtime.licensing_contracts.android_bridge_identity import AndroidBridgeDeviceIdentityProvider
 from commercial_runtime.licensing_contracts.routes import make_licensing_blueprint
 
 app.register_blueprint(auth_bp)
@@ -119,10 +117,15 @@ app.register_blueprint(import_bp)
 app.register_blueprint(make_backup_blueprint('retail', DATABASE_DIR, APP_VERSION))
 
 # Part H: see products/clinic/backend/app.py's identical block for the full
-# rationale.
+# rationale. Lazy-imported (Phase 7V-F): WindowsDpapiDeviceIdentityProvider
+# pulls in the Windows-only `cryptography` package; an eager top-level
+# import crashed the whole app.py import on Android with
+# ModuleNotFoundError('cryptography'), found via physical-device testing.
 if LICENSING_PLATFORM == 'ANDROID':
+    from commercial_runtime.licensing_contracts.android_bridge_identity import AndroidBridgeDeviceIdentityProvider
     _licensing_device_identity_factory = AndroidBridgeDeviceIdentityProvider
 else:
+    from commercial_runtime.licensing_contracts.device_identity import WindowsDpapiDeviceIdentityProvider
     _licensing_device_identity_factory = WindowsDpapiDeviceIdentityProvider
 
 app.register_blueprint(make_licensing_blueprint(
