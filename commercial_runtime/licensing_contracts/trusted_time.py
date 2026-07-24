@@ -47,6 +47,49 @@ def rehydrate_anchor(server_time: datetime) -> TrustedTimeAnchor:
     return new_anchor(server_time)
 
 
+# Phase 7V-F: process-lifetime cache so the SAME TrustedTimeAnchor object
+# (and thus the SAME monotonic_at_anchor pin) is reused across every caller
+# that resolves an anchor for a given installation, for as long as the
+# persisted server_time hasn't changed (i.e. no new successful sync has
+# happened). Discovered via live production-like validation: routes.py
+# deliberately builds a fresh request-scoped object graph on every HTTP call
+# (so config/key changes take effect without a restart), and
+# rehydrate_anchor() re-pins monotonic_at_anchor to "right now" every time
+# it's called -- calling it lazily, on whatever request happens to be first
+# to ask after an outage began, silently collapses elapsed offline duration
+# back to ~0 no matter how much real time has actually passed, because the
+# pin only captures a valid "how long ago was server_time" relationship if
+# it's taken at the SAME moment server_time was actually established. The
+# fix: whoever persists a fresh trusted_time_anchor_server_time (activation,
+# a successful check-in) must also populate this cache synchronously, at
+# that exact moment -- see cache_fresh_anchor(). Every later resolution
+# (get_cached_anchor()) then correctly measures real elapsed monotonic time
+# from that instant, until the next successful sync replaces it.
+_ANCHOR_CACHE: dict = {}
+
+
+def cache_fresh_anchor(cache_key, server_time: datetime) -> TrustedTimeAnchor:
+    """Call synchronously at the moment server_time is persisted (activation
+    or a successful check-in) -- this is the only place a monotonic pin can
+    correctly correspond to "server_time == real now"."""
+    anchor = new_anchor(server_time)
+    _ANCHOR_CACHE[cache_key] = (server_time.isoformat(), anchor)
+    return anchor
+
+
+def get_cached_or_rehydrate_anchor(cache_key, server_time_iso: str) -> TrustedTimeAnchor:
+    """Reuse the cached anchor if server_time hasn't changed since it was
+    cached; otherwise fall back to rehydrate_anchor() (e.g. after a process
+    restart with no successful sync yet in this process -- the residual gap
+    documented in phase7v-final/final-residual-risk-register.md)."""
+    cached = _ANCHOR_CACHE.get(cache_key)
+    if cached is not None and cached[0] == server_time_iso:
+        return cached[1]
+    anchor = rehydrate_anchor(datetime.fromisoformat(server_time_iso))
+    _ANCHOR_CACHE[cache_key] = (server_time_iso, anchor)
+    return anchor
+
+
 def trusted_now(anchor: TrustedTimeAnchor) -> datetime:
     elapsed = time.monotonic() - anchor.monotonic_at_anchor
     if elapsed < 0:

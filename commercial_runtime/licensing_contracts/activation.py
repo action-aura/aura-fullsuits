@@ -18,6 +18,7 @@ from .client import LicensingClient, LicensingClientError
 from .events import LicensingEventRecorder
 from .state_machine import LicenseState
 from .state_repository import LICENSING_SCHEMA_VERSION, LicenseStateRecord, LicenseStateRepository
+from .trusted_time import cache_fresh_anchor
 from .trust_store import OwnerTrustStore
 
 
@@ -164,6 +165,11 @@ def ingest_activation_response(
         offline_policy_json=json.dumps(payload.get("offline_policy", {})),
     )
     state_repository.save(record)
+
+    # Phase 7V-F: pin the trusted-time anchor synchronously, right here --
+    # see checkin_scheduler.py's _persist_fresh_assertion for the full
+    # rationale (this is the activation-time counterpart of that fix).
+    cache_fresh_anchor(owner_installation_id, datetime.fromisoformat(record.trusted_time_anchor_server_time))
 
     event_recorder.record("ACTIVATION_SUCCEEDED")
     event_recorder.record("ASSERTION_ACCEPTED")

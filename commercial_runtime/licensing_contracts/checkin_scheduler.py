@@ -18,7 +18,7 @@ from .policy_evaluator import evaluate as evaluate_policy
 from .state_machine import LicenseState
 from .state_repository import LicenseStateRecord, LicenseStateRepository
 from .trust_store import OwnerTrustStore
-from .trusted_time import TrustedTimeAnchor, new_anchor, rehydrate_anchor
+from .trusted_time import TrustedTimeAnchor, cache_fresh_anchor, get_cached_or_rehydrate_anchor, new_anchor
 
 # States in which there is no installation_id yet to check in with --
 # run_once() is a no-op (by design, not an error) in these states.
@@ -189,6 +189,21 @@ class LicenseCheckInScheduler:
         record.entitlements_json = json.dumps(payload.get("entitlements", {}))
         record.offline_policy_json = json.dumps(payload.get("offline_policy", {}))
         self._state_repository.save(record)
+
+        # Phase 7V-F: pin the trusted-time anchor synchronously, right here,
+        # at the one moment trusted_time_anchor_server_time is guaranteed to
+        # equal real "now" (a live successful sync just happened). See
+        # trusted_time.py's cache_fresh_anchor()/get_cached_or_rehydrate_
+        # anchor() docstrings for why this cannot be done lazily on first
+        # later access. Must use record.trusted_time_anchor_server_time
+        # (Owner's issued_at) as the cached anchor's server_time -- that is
+        # exactly the value later lookups key on -- while still capturing
+        # monotonic_at_anchor fresh, right now (this is the one moment that
+        # pairing is valid).
+        cache_fresh_anchor(
+            record.owner_installation_id,
+            datetime.fromisoformat(record.trusted_time_anchor_server_time),
+        )
         return record
 
     def _reevaluate(self, record: LicenseStateRecord, checkin_ok: bool) -> LicenseState:
@@ -230,9 +245,26 @@ class LicenseCheckInScheduler:
         )
 
     def _resolve_anchor(self, record: LicenseStateRecord) -> TrustedTimeAnchor:
-        if record.trusted_time_anchor_server_time:
-            return rehydrate_anchor(datetime.fromisoformat(record.trusted_time_anchor_server_time))
-        return new_anchor(datetime.now(timezone.utc))
+        """Phase 7V-F fix (found via live production-like validation):
+        routes.py deliberately builds a fresh LicenseCheckInScheduler on
+        every request (so config/key changes take effect without a
+        restart), which means an anchor cached only on `self` never
+        survives between check-ins. The process-lifetime cache in
+        trusted_time.py reuses the same monotonic pin (established
+        synchronously at the moment of the last successful sync -- see
+        _persist_fresh_assertion / activation.py's identical call) as long
+        as the persisted server_time hasn't changed, which is what actually
+        lets elapsed monotonic time accumulate across repeated failed
+        check-ins. If this process never itself witnessed the sync that
+        produced the persisted server_time (e.g. a restart with no
+        successful sync yet in this process), this correctly falls back to
+        rehydrate_anchor() -- a real, narrower residual gap, documented in
+        phase7v-final/final-residual-risk-register.md.
+        """
+        if not record.trusted_time_anchor_server_time:
+            return new_anchor(datetime.now(timezone.utc))
+        cache_key = record.owner_installation_id or record.id
+        return get_cached_or_rehydrate_anchor(cache_key, record.trusted_time_anchor_server_time)
 
     def _apply_state_transition(self, record: LicenseStateRecord, new_state: LicenseState) -> None:
         if new_state.value != record.current_state:

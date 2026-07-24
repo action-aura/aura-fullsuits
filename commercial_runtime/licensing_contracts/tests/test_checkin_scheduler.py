@@ -103,6 +103,19 @@ class FakeClient:
         return self._signing_keys_response
 
 
+@pytest.fixture(autouse=True)
+def _clear_anchor_cache():
+    """The process-lifetime anchor cache (Phase 7V-F, trusted_time.py) is
+    module-level global state keyed by installation id -- every test in
+    this file reuses the same INSTALLATION_ID constant, so without clearing
+    it a cached anchor from one test would leak into the next."""
+    from commercial_runtime.licensing_contracts import trusted_time
+
+    trusted_time._ANCHOR_CACHE.clear()
+    yield
+    trusted_time._ANCHOR_CACHE.clear()
+
+
 @pytest.fixture
 def owner_key():
     return Ed25519PrivateKey.generate()
@@ -324,6 +337,59 @@ def test_reevaluate_only_does_not_call_client(owner_key, trust_store, state_repo
     scheduler.reevaluate_only(checkin_ok=False)
 
     assert client.checkin_calls == 0
+
+
+def test_elapsed_offline_time_accumulates_across_separate_scheduler_instances(
+    owner_key, trust_store, state_repo, events, monkeypatch
+):
+    """Phase 7V-F regression: routes.py builds a brand-new
+    LicenseCheckInScheduler on every single HTTP request (by design, so a
+    corrected config takes effect without a restart) -- so a real
+    installation's "did Owner ever come back" evaluation happens across many
+    separate scheduler instances over real wall-clock time, never one
+    long-lived object. Before the fix, _resolve_anchor() called
+    rehydrate_anchor() fresh on every instance, which re-pins the monotonic
+    reference to "right now" every time -- so trusted_now() always collapsed
+    back to the persisted (unchanged, since Owner is unreachable)
+    trusted_time_anchor_server_time, and elapsed offline duration could
+    never advance no matter how much real time passed. This test simulates
+    two separate scheduler instances (matching the real per-request
+    pattern) evaluating the SAME persisted record, with a real gap of
+    monotonic time between them, and asserts the second instance sees the
+    gap reflected in its evaluation -- proving the anchor is cached across
+    instances (keyed by installation id + unchanged server_time), not
+    re-pinned fresh each time.
+    """
+    import json
+    import time as time_module
+
+    envelope = _envelope(owner_key, "owner-1", _payload(expires_at=(NOW + timedelta(days=1)).isoformat()))
+    _seed_activated_record(
+        state_repo,
+        assertion_envelope_json=json.dumps(envelope),
+        trusted_time_anchor_server_time=NOW.isoformat(),
+        last_successful_checkin_at=NOW.isoformat(),
+    )
+    client = FakeClient(checkin_responses=[LicensingClientError("NETWORK_UNAVAILABLE", "down")])
+
+    # First instance (e.g. the first failed check-in request) pins the anchor.
+    scheduler_a = _scheduler(client, trust_store, state_repo, events)
+    fake_monotonic = [1000.0]
+    monkeypatch.setattr(time_module, "monotonic", lambda: fake_monotonic[0])
+    scheduler_a.run_once()
+
+    # A second, independently-constructed instance (the NEXT HTTP request,
+    # some real time later) must see that elapsed time -- not reset to zero.
+    fake_monotonic[0] = 1000.0 + 40.0  # 40 real seconds later, Owner still down
+    client2 = FakeClient(checkin_responses=[LicensingClientError("NETWORK_UNAVAILABLE", "down")])
+    scheduler_b = _scheduler(client2, trust_store, state_repo, events)
+    anchor = scheduler_b._resolve_anchor(state_repo.load())
+    from commercial_runtime.licensing_contracts.trusted_time import trusted_now
+
+    observed_now = trusted_now(anchor)
+    # Must reflect the real 40s gap, not collapse back to the original
+    # anchor.server_time (which the pre-fix behavior always did).
+    assert observed_now >= NOW + timedelta(seconds=39)
 
 
 def test_reevaluate_only_before_activation_is_noop(trust_store, state_repo, events):
