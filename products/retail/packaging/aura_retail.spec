@@ -22,13 +22,26 @@ DESKTOP = os.path.join(ROOT, 'products', 'retail', 'desktop')
 
 block_cipher = None
 
+# Phase 7V Part F -- trust_anchor.json (scripts/generate_trust_anchor.py's
+# output) is never picked up by PyInstaller's module-import analysis since
+# it's plain JSON data, not a .py module -- it must be listed explicitly here
+# or a commercial build silently ships with NO way to verify any Owner
+# response, and every activation attempt fails. Gitignored, build-time-only
+# (a release engineer runs generate_trust_anchor.py against the real Owner
+# instance being released against before cutting this build), so only
+# included when present -- a dev/source build without one is still valid.
+_trust_anchor = os.path.join(ROOT, 'commercial_runtime', 'licensing_contracts', 'trust_anchor.json')
+_licensing_datas = []
+if os.path.exists(_trust_anchor):
+    _licensing_datas.append((_trust_anchor, os.path.join('commercial_runtime', 'licensing_contracts')))
+
 a = Analysis(
     [os.path.join(DESKTOP, 'launcher_retail.py')],
     pathex=[ROOT, BACKEND],
     binaries=[],
     datas=[
         (FRONTEND, os.path.join('products', 'retail', 'frontend')),
-    ],
+    ] + _licensing_datas,
     hiddenimports=[
         'flask', 'flask_cors', 'werkzeug', 'waitress',
         'commercial_runtime.identity.mt_auth',
