@@ -180,6 +180,28 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
         )
     ).scalars().first()
 
+    if existing_installation is None:
+        # The client-generated installation_id is fresh on every activation
+        # attempt by protocol design (activation-protocol-v1.md), so it alone
+        # cannot detect a retry of a request whose SUCCESS response the
+        # client never received (a real, confirmed-in-production failure
+        # mode over an unreliable transport -- Phase 7V-A). The device key
+        # fingerprint IS stable across attempts (it is the device's
+        # persistent identity) and is globally unique in this table, so use
+        # it as the fallback retry signal: if this exact device is already
+        # an ACTIVE installation on THIS license, this is that same device
+        # retrying, not a new device -- reuse its installation rather than
+        # colliding on the fingerprint UNIQUE constraint below.
+        existing_device_key = device_identity.get_device_key_by_fingerprint(
+            device_identity.fingerprint_of(body["device_public_key"])
+        )
+        if (
+            existing_device_key is not None
+            and existing_device_key.status == "ACTIVE"
+            and existing_device_key.installation.license_id == locked_license.id
+        ):
+            existing_installation = existing_device_key.installation
+
     if existing_installation is not None:
         # Same client-generated installation_id reactivating -- reuse it, do
         # not consume an additional slot. A DIFFERENT device attempting to

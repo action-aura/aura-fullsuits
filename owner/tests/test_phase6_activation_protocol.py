@@ -153,6 +153,38 @@ def test_idempotent_retry_returns_same_result_no_extra_slot(app, client, seeded,
         assert count == 1  # the retry did not consume a second slot
 
 
+def test_same_device_key_retry_with_fresh_installation_id_reuses_installation(app, client, seeded, signing_key):
+    """Phase 7V-A: the client-generated installation_id is fresh on every
+    activation attempt by protocol design, so a retry after a lost SUCCESS
+    response (the client never saw the first attempt succeed) arrives with a
+    DIFFERENT installation_id but the SAME device key. Before this fix, this
+    crashed with an unhandled UniqueViolation on the device-key fingerprint
+    (globally unique) instead of being recognized as the same device."""
+    actor_id = make_staff(app, "actor9b@example.com")
+    license_id, full_key = make_license(app, actor_id, device_limit=1)
+    private_key = make_device_keypair()
+
+    body1 = build_activation_body(private_key, full_key=full_key, installation_id="dev-009b-attempt-1")
+    resp1 = _activate(client, body1)
+    assert resp1.status_code == 200
+    data1 = resp1.get_json()
+
+    body2 = build_activation_body(private_key, full_key=full_key, installation_id="dev-009b-attempt-2")
+    resp2 = _activate(client, body2)
+    assert resp2.status_code == 200
+    data2 = resp2.get_json()
+
+    assert data1["installation_id"] == data2["installation_id"]  # same server-side installation reused
+
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.installations import Installation
+        from sqlalchemy import select
+
+        count = len(db_session.execute(select(Installation).where(Installation.license_id == license_id)).scalars().all())
+        assert count == 1  # the retry did not consume a second device-limit slot
+
+
 def test_replay_of_identical_signed_request_rejected(app, client, seeded, signing_key):
     actor_id = make_staff(app, "actor10@example.com")
     license_id, full_key = make_license(app, actor_id, device_limit=2)

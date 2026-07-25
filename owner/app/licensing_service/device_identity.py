@@ -82,6 +82,18 @@ def get_active_device_key(installation_id) -> DevicePublicKey | None:
     ).scalars().first()
 
 
+def get_device_key_by_fingerprint(fingerprint: str) -> DevicePublicKey | None:
+    """fingerprint is globally UNIQUE (one physical device identity maps to
+    at most one row ever) -- used to recognize a device retrying activation
+    under a fresh self-generated installation_id (the client-generated
+    installation_id is fresh on every attempt by protocol design, so it
+    cannot be used alone to detect a retry of a request whose response the
+    client never received)."""
+    return db_session.execute(
+        select(DevicePublicKey).where(DevicePublicKey.fingerprint == fingerprint)
+    ).scalars().first()
+
+
 def get_most_recent_device_key(installation_id) -> DevicePublicKey | None:
     """Regardless of status -- used only where an already-revoked key must
     still be verifiable against (an idempotent retry of the very deactivation
