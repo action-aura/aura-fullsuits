@@ -132,6 +132,32 @@ def test_not_yet_valid_assertion_rejected(owner_key, trust_store):
     assert exc.value.reason_code == "ASSERTION_NOT_YET_VALID"
 
 
+def test_small_clock_skew_within_tolerance_accepted(owner_key, trust_store):
+    """Phase 7V-A: a real physical Android device's clock was confirmed
+    ~1 second behind the signing host's, which -- before this tolerance
+    existed -- rejected every genuinely valid, freshly-issued assertion as
+    ASSERTION_NOT_YET_VALID. A modest clock-skew allowance (mirroring
+    Owner's own ACTIVATION_TIMESTAMP_SKEW_SECONDS concept for request
+    timestamps) must accept a small amount of client/server clock drift on
+    both the not_before and expires_at boundaries."""
+    env = _envelope(
+        owner_key, "owner-1",
+        _payload(
+            not_before=(NOW + timedelta(seconds=30)).isoformat(),
+            expires_at=(NOW - timedelta(seconds=30)).isoformat(),
+        ),
+    )
+    result = _verify(env, trust_store)
+    assert result.signing_key_id == "owner-1"
+
+
+def test_clock_skew_beyond_tolerance_still_rejected(owner_key, trust_store):
+    env = _envelope(owner_key, "owner-1", _payload(not_before=(NOW + timedelta(minutes=5)).isoformat()))
+    with pytest.raises(AssertionVerificationError) as exc:
+        _verify(env, trust_store)
+    assert exc.value.reason_code == "ASSERTION_NOT_YET_VALID"
+
+
 def test_wrong_product_rejected(owner_key, trust_store):
     env = _envelope(owner_key, "owner-1", _payload(product_code="AURA_CLINIC"))
     with pytest.raises(AssertionVerificationError) as exc:

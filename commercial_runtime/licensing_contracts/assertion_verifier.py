@@ -8,7 +8,19 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+# Real client devices routinely have a system clock a few seconds off from
+# Owner's (timezone database staleness, imperfect NTP sync, no NTP at all on
+# some Android builds) -- confirmed via physical Phase 7V-A testing, where a
+# real device clock merely ~1 second behind the signing host caused every
+# activation to be rejected as ASSERTION_NOT_YET_VALID despite a genuinely
+# valid, freshly-issued assertion. This tolerance only widens the validity
+# WINDOW boundary by a small, fixed amount on both ends -- it does not weaken
+# signature verification, replay protection, or any authorization check, and
+# mirrors the same clock-skew-tolerance concept Owner's own request-timestamp
+# check already uses (ACTIVATION_TIMESTAMP_SKEW_SECONDS).
+CLOCK_SKEW_TOLERANCE_SECONDS = 60
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -151,9 +163,10 @@ def verify_assertion(
     if not_before.tzinfo is None or expires_at.tzinfo is None:
         raise AssertionVerificationError("ASSERTION_VERIFICATION_FAILED", "Assertion dates must be timezone-aware.")
 
-    if trusted_now < not_before:
+    tolerance = timedelta(seconds=CLOCK_SKEW_TOLERANCE_SECONDS)
+    if trusted_now < not_before - tolerance:
         raise AssertionVerificationError("ASSERTION_NOT_YET_VALID", "Assertion is not yet valid.")
-    if trusted_now > expires_at:
+    if trusted_now > expires_at + tolerance:
         raise AssertionVerificationError("ASSERTION_EXPIRED", "Assertion has expired.")
 
     if payload.get("product_code") != expected_product_code:
