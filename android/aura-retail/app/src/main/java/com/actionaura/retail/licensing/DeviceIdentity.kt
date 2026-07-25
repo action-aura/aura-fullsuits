@@ -115,12 +115,8 @@ class AndroidKeystoreWrapper : KeyWrapper {
         }
     }
 
-    private fun getOrCreateWrappingKey(): SecretKey {
-        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        (keyStore.getKey(WRAPPING_KEY_ALIAS, null) as? SecretKey)?.let { return it }
-
-        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
-        val spec = KeyGenParameterSpec.Builder(
+    private fun buildWrappingKeySpec(strongBox: Boolean): KeyGenParameterSpec =
+        KeyGenParameterSpec.Builder(
             WRAPPING_KEY_ALIAS,
             KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
         )
@@ -132,19 +128,36 @@ class AndroidKeystoreWrapper : KeyWrapper {
                 // 26, so a version check (not just try/catch) is required --
                 // lint's NewApi check does not treat try/catch as a valid
                 // guard for a call that isn't resolvable on older API levels.
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    try {
-                        setIsStrongBoxBacked(true)
-                    } catch (_: Throwable) {
-                        // Declared API 28+ but not all real devices expose
-                        // StrongBox hardware -- falls back to the standard
-                        // TEE-backed path if unavailable.
-                    }
+                if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    setIsStrongBoxBacked(true)
                 }
             }
             .build()
-        generator.init(spec)
-        return generator.generateKey()
+
+    private fun getOrCreateWrappingKey(): SecretKey {
+        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        (keyStore.getKey(WRAPPING_KEY_ALIAS, null) as? SecretKey)?.let { return it }
+
+        // setIsStrongBoxBacked() itself never throws -- it only sets a flag
+        // on the builder. The real "is StrongBox hardware present" check
+        // happens inside generateKey(), which is why the fallback has to
+        // wrap generateKey() itself, not the builder call (a real device
+        // without StrongBox hardware -- confirmed via physical Phase 7V-A
+        // testing -- throws StrongBoxUnavailableException here, which a
+        // try/catch around setIsStrongBoxBacked() alone never catches).
+        return try {
+            val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+            generator.init(buildWrappingKeySpec(strongBox = true))
+            generator.generateKey()
+        } catch (_: Throwable) {
+            // StrongBoxUnavailableException (API 28+ only -- caught as
+            // Throwable, not by name, so this compiles/verifies fine at
+            // minSdk 26) is what a real device without StrongBox hardware
+            // throws here, confirmed via physical Phase 7V-A testing.
+            val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+            generator.init(buildWrappingKeySpec(strongBox = false))
+            generator.generateKey()
+        }
     }
 }
 
