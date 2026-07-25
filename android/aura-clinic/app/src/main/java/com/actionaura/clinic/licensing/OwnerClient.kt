@@ -69,69 +69,94 @@ class OwnerClient(
         licenseKey: String,
         idempotencyKey: String,
         identity: DeviceIdentity,
-    ): Map<String, Any?> {
-        val body = linkedMapOf<String, Any?>(
-            "contract_version" to CONTRACT_VERSION,
-            "request_id" to UUID.randomUUID().toString(),
-            "correlation_id" to UUID.randomUUID().toString(),
-            "timestamp" to Instant.now().toString(),
-            "nonce" to newNonce(),
-            "product_code" to productCode,
-            "platform" to platform,
-            "app_version" to appVersion,
-            "release_channel" to releaseChannel,
-            "installation_id" to installationId,
-            "device_public_key" to devicePublicKeyB64,
-            "device_public_key_algorithm" to "ed25519",
-            "license_key" to licenseKey,
-            "idempotency_key" to idempotencyKey,
-        )
+    ): String {
+        var lastBody: LinkedHashMap<String, Any?>? = null
         try {
-            return postSigned("/activations", body, identity)
+            return requestRaw("POST", "/activations") {
+                val body = linkedMapOf<String, Any?>(
+                    "contract_version" to CONTRACT_VERSION,
+                    "request_id" to UUID.randomUUID().toString(),
+                    "correlation_id" to UUID.randomUUID().toString(),
+                    "timestamp" to Instant.now().toString(),
+                    "nonce" to newNonce(),
+                    "product_code" to productCode,
+                    "platform" to platform,
+                    "app_version" to appVersion,
+                    "release_channel" to releaseChannel,
+                    "installation_id" to installationId,
+                    "device_public_key" to devicePublicKeyB64,
+                    "device_public_key_algorithm" to "ed25519",
+                    "license_key" to licenseKey,
+                    "idempotency_key" to idempotencyKey,
+                )
+                lastBody = body
+                sign(body, identity)
+            }
         } finally {
             // Discard the local reference to the full license key as soon
             // as this call returns (Part G) -- defense in depth on top of
             // the caller's own responsibility to clear its copy.
-            body["license_key"] = null
+            lastBody?.set("license_key", null)
         }
     }
 
-    fun checkIn(installationId: String, identity: DeviceIdentity): Map<String, Any?> {
-        val body = linkedMapOf<String, Any?>(
-            "contract_version" to CONTRACT_VERSION,
-            "request_id" to UUID.randomUUID().toString(),
-            "correlation_id" to UUID.randomUUID().toString(),
-            "timestamp" to Instant.now().toString(),
-            "nonce" to newNonce(),
-            "installation_id" to installationId,
-        )
-        return postSigned("/check-ins", body, identity)
+    fun checkIn(installationId: String, identity: DeviceIdentity): String =
+        requestRaw("POST", "/check-ins") {
+            val body = linkedMapOf<String, Any?>(
+                "contract_version" to CONTRACT_VERSION,
+                "request_id" to UUID.randomUUID().toString(),
+                "correlation_id" to UUID.randomUUID().toString(),
+                "timestamp" to Instant.now().toString(),
+                "nonce" to newNonce(),
+                "installation_id" to installationId,
+            )
+            sign(body, identity)
+        }
+
+    fun deactivate(installationId: String, idempotencyKey: String, identity: DeviceIdentity): String =
+        requestRaw("POST", "/deactivations") {
+            val body = linkedMapOf<String, Any?>(
+                "contract_version" to CONTRACT_VERSION,
+                "request_id" to UUID.randomUUID().toString(),
+                "correlation_id" to UUID.randomUUID().toString(),
+                "timestamp" to Instant.now().toString(),
+                "nonce" to newNonce(),
+                "installation_id" to installationId,
+                "idempotency_key" to idempotencyKey,
+            )
+            sign(body, identity)
+        }
+
+    fun fetchSigningKeys(): Map<String, Any?> = parseJson(requestRaw("GET", "/signing-keys", null))
+
+    fun fetchServiceInfo(): Map<String, Any?> = parseJson(requestRaw("GET", "/service-info", null))
+
+    private fun parseJson(bodyString: String): Map<String, Any?> {
+        val type = object : TypeToken<Map<String, Any?>>() {}.type
+        return gson.fromJson(bodyString, type)
     }
 
-    fun deactivate(installationId: String, idempotencyKey: String, identity: DeviceIdentity): Map<String, Any?> {
-        val body = linkedMapOf<String, Any?>(
-            "contract_version" to CONTRACT_VERSION,
-            "request_id" to UUID.randomUUID().toString(),
-            "correlation_id" to UUID.randomUUID().toString(),
-            "timestamp" to Instant.now().toString(),
-            "nonce" to newNonce(),
-            "installation_id" to installationId,
-            "idempotency_key" to idempotencyKey,
-        )
-        return postSigned("/deactivations", body, identity)
-    }
-
-    fun fetchSigningKeys(): Map<String, Any?> = request("GET", "/signing-keys", null)
-
-    fun fetchServiceInfo(): Map<String, Any?> = request("GET", "/service-info", null)
-
-    private fun postSigned(path: String, body: LinkedHashMap<String, Any?>, identity: DeviceIdentity): Map<String, Any?> {
+    private fun sign(body: LinkedHashMap<String, Any?>, identity: DeviceIdentity): LinkedHashMap<String, Any?> {
         val canonicalBytes = canonicalizeBytes(body)
         body["signature"] = identity.sign(canonicalBytes)
-        return request("POST", path, body)
+        return body
     }
 
-    private fun request(method: String, path: String, body: Map<String, Any?>?): Map<String, Any?> {
+    /** Returns Owner's response body VERBATIM, never parsed-then-reserialized.
+     * Critical for the signed calls (activate/checkIn/deactivate): their
+     * response bodies are forwarded to the embedded Python backend's
+     * /_internal/sync-* routes for independent signature re-verification
+     * against the exact bytes Owner signed. Parsing into a Map<String, Any?>
+     * via Gson and re-serializing (as this code used to do) silently
+     * corrupts every JSON number -- Gson's generic Object deserialization
+     * represents them all as Double, so an integer field like `30` comes
+     * back out as `30.0` -- which changes the canonical byte sequence and
+     * makes a genuinely-valid signature verify as invalid (confirmed via
+     * physical Phase 7V-A testing: fingerprints/installation_id matched
+     * exactly, only the signature itself failed). Forwarding the raw string
+     * makes this a non-issue: the bytes Python re-verifies are byte-for-byte
+     * what Owner sent. */
+    private fun requestRaw(method: String, path: String, bodyProvider: (() -> Map<String, Any?>)? = null): String {
         val url = config.baseUrl.trimEnd('/') + path
         var lastError: OwnerClientError? = null
 
@@ -142,6 +167,17 @@ class OwnerClient(
                 sleepFn(minOf(delay + jitter, config.retryMaxBackoffMillis))
             }
 
+            // Every attempt -- including retries -- gets a freshly built (and,
+            // for signed calls, freshly nonce'd + re-signed) body. Resending
+            // the exact same nonce on a retry is unsafe: if an earlier attempt
+            // actually reached Owner and was processed (its nonce consumed)
+            // but the response was then lost client-side (a real failure mode
+            // confirmed via physical Phase 7V-A testing over an unreliable
+            // transport), Owner's replay protection correctly -- and
+            // permanently -- rejects the identical nonce on retry as
+            // NONCE_REUSED, which would otherwise strand every retry after a
+            // single lost response.
+            val body = bodyProvider?.invoke()
             val requestBuilder = Request.Builder().url(url)
             when {
                 body != null -> requestBuilder.post(gson.toJson(body).toRequestBody("application/json".toMediaType()))
@@ -161,11 +197,11 @@ class OwnerClient(
                     } else {
                         val bodyString = response.body?.string() ?: ""
                         try {
-                            val type = object : TypeToken<Map<String, Any?>>() {}.type
-                            RequestOutcome.Success(gson.fromJson(bodyString, type))
+                            parseJson(bodyString) // validate only -- discard the parsed copy
                         } catch (exc: Exception) {
                             throw MalformedResponseError("MALFORMED_RESPONSE", "Response was not valid JSON: ${exc.message}")
                         }
+                        RequestOutcome.Success(bodyString)
                     }
                 }
             } catch (exc: SocketTimeoutException) {
@@ -189,7 +225,7 @@ class OwnerClient(
     }
 
     private sealed class RequestOutcome {
-        data class Success(val value: Map<String, Any?>) : RequestOutcome()
+        data class Success(val value: String) : RequestOutcome()
         data class Retry(val error: NetworkError) : RequestOutcome()
     }
 

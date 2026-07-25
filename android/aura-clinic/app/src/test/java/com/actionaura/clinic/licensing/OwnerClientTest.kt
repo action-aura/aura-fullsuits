@@ -1,6 +1,8 @@
 package com.actionaura.clinic.licensing
 
 import com.google.common.truth.Truth.assertThat
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
@@ -64,6 +66,11 @@ class OwnerClientTest {
         return OwnerClient(config, sleepFn = { /* no real sleeping in tests */ })
     }
 
+    private fun parseJson(raw: String): Map<String, Any?> {
+        val type = object : TypeToken<Map<String, Any?>>() {}.type
+        return Gson().fromJson(raw, type)
+    }
+
     @Test
     fun `activate sends signed request and parses response`() {
         server.enqueue(
@@ -84,7 +91,16 @@ class OwnerClientTest {
             identity = identity,
         )
 
-        assertThat(result["reason_code"]).isEqualTo("ACTIVATION_APPROVED")
+        assertThat(parseJson(result)["reason_code"]).isEqualTo("ACTIVATION_APPROVED")
+        // The response is returned VERBATIM, not parsed-then-reserialized --
+        // this is the whole point of the fix (Phase 7V-A): Python's
+        // independent signature re-verification needs the exact bytes Owner
+        // sent, and a Gson Map<String, Any?> round-trip silently turns
+        // integers into doubles, which would invalidate a genuinely-valid
+        // signature.
+        assertThat(result).isEqualTo(
+            """{"result":"SUCCESS","reason_code":"ACTIVATION_APPROVED","installation_id":"owner-inst-1"}"""
+        )
         val sentRequest = server.takeRequest()
         assertThat(sentRequest.path).isEqualTo("/api/licensing/v1/activations")
         assertThat(sentRequest.body.readUtf8()).contains("\"license_key\":\"AURA-CLINIC-XXXX-YYYY\"")
@@ -106,7 +122,7 @@ class OwnerClientTest {
 
         val result = client().checkIn(installationId = "inst-1", identity = identity)
 
-        assertThat(result["result"]).isEqualTo("SUCCESS")
+        assertThat(parseJson(result)["result"]).isEqualTo("SUCCESS")
         assertThat(server.requestCount).isEqualTo(2)
     }
 
@@ -128,7 +144,7 @@ class OwnerClientTest {
             MockResponse().setResponseCode(400).setBody("""{"result":"REJECTED","reason_code":"INVALID_SIGNATURE"}""")
         )
         val result = client().checkIn(installationId = "inst-1", identity = identity)
-        assertThat(result["reason_code"]).isEqualTo("INVALID_SIGNATURE")
+        assertThat(parseJson(result)["reason_code"]).isEqualTo("INVALID_SIGNATURE")
         assertThat(server.requestCount).isEqualTo(1)
     }
 
