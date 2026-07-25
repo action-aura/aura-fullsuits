@@ -10,6 +10,7 @@ from flask import Flask
 from commercial_runtime.licensing_contracts.canonical import canonicalize_bytes
 from commercial_runtime.licensing_contracts.device_identity import WindowsDpapiDeviceIdentityProvider
 from commercial_runtime.licensing_contracts.routes import make_licensing_blueprint
+from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
 
 pytestmark = pytest.mark.skipif(
     __import__("sys").platform != "win32", reason="Uses the real Windows DPAPI device identity provider as a stand-in signer."
@@ -195,6 +196,54 @@ def test_internal_sync_activation_rejects_forged_assertion_even_with_correct_sec
 
     status_resp = client.get("/api/licensing/status")
     assert status_resp.get_json()["current_state"] == "NOT_CONFIGURED"
+
+
+def test_internal_reevaluate_rejects_missing_secret(app_with_secret):
+    client = app_with_secret.test_client()
+    resp = client.post("/api/licensing/_internal/reevaluate", json={})
+    assert resp.status_code == 403
+
+
+def test_internal_reevaluate_advances_stuck_state_without_a_fresh_checkin(app_with_secret, owner_key, tmp_path):
+    # Phase 7V-A gate I: Android's OwnerClient makes its own HTTP call and,
+    # on failure, never goes through the scheduler at all (unlike Windows'
+    # run_once()) -- so without this route, current_state would stay stuck
+    # at whatever was last persisted no matter how much trusted time has
+    # actually elapsed. Uses a short policy and back-dates the persisted
+    # last_successful_checkin_at (exactly what real elapsed wall-clock time
+    # would otherwise do) so elapsed_offline already exceeds grace+retry --
+    # no sleeping/time-mocking needed to observe RESTRICTED.
+    provider, meta = _generate_device_key(app_with_secret, tmp_path)
+    short_policy = _standard_policy()
+    short_policy.update(
+        check_in_interval_seconds=10, retry_interval_seconds=5, offline_grace_seconds=30, warning_start_seconds=20
+    )
+    payload = _payload(
+        "owner-assigned-inst-1",
+        meta.public_key_fingerprint,
+        offline_policy=short_policy,
+    )
+    envelope = _envelope(owner_key, "owner-1", payload)
+    client = app_with_secret.test_client()
+    client.post(
+        "/api/licensing/_internal/sync-activation",
+        json={"result": "SUCCESS", "installation_id": "owner-assigned-inst-1", "signed_assertion": envelope},
+        headers={"X-Aura-Internal-Secret": SHARED_SECRET},
+    )
+
+    db_path = tmp_path / "appdata" / "database" / "subsystems" / "licensing.db"
+    repo = LicenseStateRepository(db_path)
+    record = repo.load()
+    record.last_successful_checkin_at = (NOW - timedelta(seconds=300)).isoformat()
+    repo.save(record)
+
+    resp = client.post(
+        "/api/licensing/_internal/reevaluate",
+        json={},
+        headers={"X-Aura-Internal-Secret": SHARED_SECRET},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["current_state"] == "RESTRICTED"
 
 
 def test_internal_sync_deactivation_succeeds(app_with_secret, owner_key, tmp_path):

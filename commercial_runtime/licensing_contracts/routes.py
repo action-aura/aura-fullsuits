@@ -265,6 +265,39 @@ def _register_internal_sync_routes(
         new_state = scheduler.ingest_checkin_response(owner_response)
         return jsonify(present_status(state_repository.load())), 200
 
+    @bp.route("/_internal/reevaluate", methods=["POST"])
+    def internal_reevaluate():
+        """Android path for the offline-policy re-check the Windows
+        run_once() gets for free on every failed check-in (see
+        checkin_scheduler.LicenseCheckInScheduler.run_once()'s except
+        branch). Android's OwnerClient makes its own HTTP call and never
+        goes through run_once(), so a failed check-in attempt would
+        otherwise never call evaluate() at all and current_state would
+        stay stuck at whatever was last persisted, no matter how much
+        trusted time has actually elapsed (Phase 7V-A gate I). Makes no
+        Owner network call itself -- purely re-runs evaluate() against the
+        already-stored assertion and elapsed trusted time, exactly like
+        reevaluate_only() does for Windows."""
+        if not _authorized():
+            return jsonify({"reason_code": "INVALID_REQUEST", "detail": "Unauthorized."}), 403
+
+        state_repository, event_recorder, trust_store, signer, _client = build_context()
+        if not signer.has_key() or state_repository.load() is None:
+            return jsonify({"current_state": "ACTIVATION_REQUIRED"}), 200
+
+        scheduler = LicenseCheckInScheduler(
+            client=None,  # never used -- reevaluate_only() makes no Owner call
+            signer=signer,
+            trust_store=trust_store,
+            state_repository=state_repository,
+            event_recorder=event_recorder,
+            product_code=product_code,
+            platform=platform,
+            device_public_key_fingerprint=_device_fingerprint(signer),
+        )
+        scheduler.reevaluate_only(checkin_ok=False)
+        return jsonify(present_status(state_repository.load())), 200
+
     @bp.route("/_internal/sync-deactivation", methods=["POST"])
     def internal_sync_deactivation():
         if not _authorized():
