@@ -1,45 +1,46 @@
 # Phase 7V-A — Final Artifact Reconfirmation (Part R)
 
-Supersedes `docs/licensing/phase7v-final/final-artifact-reconfirmation.md`'s Android checksums.
-These are the truly-final Clinic/Retail Android artifacts: rebuilt after all six fixes in
-`bugs-found-and-fixed.md` (including the Part I offline-lifecycle fix), with the temporary
-`PHASE7VADIAG5` diagnostic print removed, `testReleaseUnitTest` + `lintRelease` both green, and
-`assembleRelease` + `bundleRelease` both green for both products.
+**Supersedes the earlier version of this document from this same round.** That version's
+checksums were built with a URL missing the required `/api/licensing/v1` path suffix (see
+`residual-risks.md`'s corrected root-cause note) — a validation-session build-command mistake, not
+a product defect. These are the genuinely final artifacts: same six fixes, same diagnostic
+removed, rebuilt one more time with the corrected Owner URL and confirmed reachable over a real
+network round-trip (both LAN and loopback+`adb reverse`) before these checksums were taken.
 
 ## Android
 
 | Artifact | SHA-256 |
 |---|---|
-| Clinic APK (`app-release.apk`) | `493a846ab628ee94b2faf48d50518261c93788f2b51e10c09ee57ed690234b58` |
-| Clinic AAB (`app-release.aab`) | `cf392ccb8038411305a3b16c95767ea9c3da0adffabec3d1f74933738ff9c290` |
-| Retail APK (`app-release.apk`) | `a7b3d10f224202bf5a2b8cd29430344de8db13ec97c2061f234d71c20531219b` |
-| Retail AAB (`app-release.aab`) | `1b9d570e7f04b8a2e1a29e473ae2031912323b56b7ef28fecca99d96360bc98d` |
+| Clinic APK (`app-release.apk`) | `2bf78bb70b58b61ce4a5a52586125f83884960109f7c585fac402167f2e16085` |
+| Clinic AAB (`app-release.aab`) | `0a4d471e9301761dd6b359bfb2a9f449e620dbce012b034e1f1ecdbbb22e31de` |
+| Retail APK (`app-release.apk`) | `3b074e211a91f15803642f6292e1f20f393f8e015b1cf2f0dedeabb7134f3f9d` |
+| Retail AAB (`app-release.aab`) | `95b60704a8c1c08b3e7da01e2def124d7928f07cf8895af8348a5e41336bb146` |
 
-Both built with `-PownerLicensingBaseUrl=http://127.0.0.1:19101` (validation-only; a local test
-Owner instance, not a real production endpoint — matches the same pattern used throughout Phase
-7V, not a new departure).
+Built with `-PownerLicensingBaseUrl=http://127.0.0.1:19101/api/licensing/v1` — the full path
+including Owner's `/api/licensing/v1` blueprint prefix (validation-only; a local test Owner
+instance, not a real production endpoint).
 
 ## Certificate continuity — reconfirmed
 
-`apksigner verify --print-certs` on both final APKs:
+- Clinic: SHA-256 `35508048cee7776ca94a45a9f04c6a870edf98729429482a8ad44e89dd0bbbf2`
+- Retail: SHA-256 `cae6b18450c14a71eba47545e5b3ba52089eef0397d5881f4c1dc7d5a4b7d32d`
 
-- Clinic: `CN=Action Aura, OU=Aura Clinic` — SHA-256 `35508048cee7776ca94a45a9f04c6a870edf98729429482a8ad44e89dd0bbbf2`
-- Retail: `CN=Action Aura, OU=Aura Retail` — SHA-256 `cae6b18450c14a71eba47545e5b3ba52089eef0397d5881f4c1dc7d5a4b7d32d`
-
-Both exactly match `rc2-release-candidate-manifest.md`'s original rc.1-continuity record and every
-earlier rc.2 build this whole Phase 7V effort. No production signing key was regenerated at any
-point.
+Both exactly match rc.1 and every earlier build this whole Phase 7V effort. No production signing
+key was regenerated at any point, including during this round's LAN-based retest (which used a
+throwaway, never-committed APK variant — see `residual-risks.md`).
 
 ## Reconfirmed for this final round
 
 - Package IDs unchanged (`com.actionaura.clinic`, `com.actionaura.retail`).
 - `versionName "1.0.0-rc.2"`, `versionCode 3` — unchanged.
-- `network_security_config.xml` unchanged and reviewed: cleartext permitted only to
-  `127.0.0.1`/`localhost`, `base-config cleartextTrafficPermitted="false"` for everything else. No
-  weakening at any point this session, including during the LAN-detour investigation (which was
-  abandoned specifically to avoid needing this).
+- `network_security_config.xml` for both products confirmed byte-identical to the committed
+  version (cleartext permitted only to `127.0.0.1`/`localhost`) — the temporary LAN-IP widening
+  used mid-round for the connectivity retest was reverted via `git checkout` before this final
+  build, confirmed via `git status` showing a clean working tree at that point.
 - No debug build, no test bypass, no synthetic-data shortcut baked into either artifact.
-- No secrets in logcat across the full physical test session (see `final-decision.md`'s Part O).
+- No secrets in logcat across the full physical test session.
+- Physically confirmed reachable end-to-end over the real network this round (see
+  `final-decision.md`) — both loopback (`adb reverse`) and LAN transport.
 
 ## Not overwritten
 

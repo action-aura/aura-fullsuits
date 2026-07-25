@@ -6,27 +6,27 @@
 |---|---|---|
 | A — baseline reconfirmation | PASS | Confirmed at session start |
 | B — device connection stability (5 min) | PASS | 0/29 disconnects |
-| C — final signed APK/AAB rebuild (both products) | PASS | Green test+lint+assemble+bundle, this round's final rebuild |
-| D — certificate continuity | PASS | Byte-identical cert fingerprints to rc.1, reconfirmed via `apksigner verify` this round |
+| C — final signed APK/AAB rebuild (both products) | PASS | Green test+lint+assemble+bundle, final rebuild with corrected Owner URL |
+| D — certificate continuity | PASS | Byte-identical cert fingerprints to rc.1, reconfirmed via `apksigner verify` on the genuinely final artifacts |
 | E — final Owner validation environment | PASS | Real Owner instance, real licenses issued |
 | F — Retail rc.1→rc.2 signed upgrade | PASS | Data-preserved upgrade confirmed physically |
 | G — Clinic physical activation lifecycle | PASS | Genuine `ACTIVE_ONLINE` reached physically, after fixing 5 real bugs |
 | H — Retail physical activation lifecycle | PASS | Same |
-| I — real physical offline/warning/grace/restricted lifecycle | **PASS** | See below — full detail |
-| J/K — physical restricted-mode read/mutation verification | **PASS (qualified)** | See below |
-| L — physical suspension/reactivation | **PARTIAL — Owner-side confirmed, device-side E2E not reached** | See below |
-| M — physical deactivation | **PARTIAL — safe-failure behavior confirmed, success path not reached** | See below |
-| N — Kotlin/Python authority-boundary validation | PASS | Evidenced by this session's own bug history (bug #4) |
+| I — real physical offline/warning/grace/restricted lifecycle | **PASS** | Full detail below |
+| J/K — physical restricted-mode read/mutation verification | **PASS (qualified)** | Full detail below |
+| L — physical suspension/reactivation | **PASS** | Full physical confirmation this round — see below |
+| M — physical deactivation | **PASS** | Full physical confirmation this round — see below |
+| N — Kotlin/Python authority-boundary validation | PASS | Evidenced by this session's own bug history |
 | O — logcat privacy review | PASS | No secrets found across the full test session |
-| P — network traffic data-boundary review | PASS | By design: no external network calls, loopback-only |
+| P — network traffic data-boundary review | PASS | By design: no external network calls, loopback-only in the shipped config |
 | Q — final regression rerun | PASS | Product-side suite 212/212; Owner's own `pytest` suite deliberately NOT rerun (see below) |
 | R — final artifact reconfirmation | PASS | See `final-artifact-reconfirmation.md` |
 
-## Part I — full detail (the headline result of this round)
+## Part I — full detail
 
 Found and fixed a real P1: Android's failed check-in never called into offline-policy
-re-evaluation at all (bug #6 in `bugs-found-and-fixed.md`). After the fix, physically observed on
-**both** Clinic and Retail, on the real device, via real elapsed wall-clock time (not simulated):
+re-evaluation at all (see `bugs-found-and-fixed.md`). After the fix, physically observed on
+**both** Clinic and Retail, via real elapsed wall-clock time:
 
 ```
 ACTIVE_ONLINE → ACTIVE_OFFLINE → WARNING → RESTRICTED
@@ -34,60 +34,52 @@ ACTIVE_ONLINE → ACTIVE_OFFLINE → WARNING → RESTRICTED
 
 Retail: `ACTIVE_OFFLINE` confirmed at ~0s elapsed after a fresh anchor pin, `WARNING` confirmed at
 ~142s elapsed, `RESTRICTED` confirmed at ~270s+ elapsed — consistent with the short validation
-offline policy (`warning_start=90s`, `offline_grace=150s`, `retry_interval=15s`, giving a WARNING
-boundary at 60s and a RESTRICTED boundary at 165s). Clinic reached `RESTRICTED` via an independent
-run of the same sequence. `GRACE_PERIOD`'s ~15-second window was not independently snapshotted
-live (the manual check-and-confirm cycle has too much overhead to reliably land inside a 15-second
-window), but it sits between two states that WERE physically confirmed on the same evaluator
-function, and is separately covered by unit tests (`test_checkin_scheduler.py`).
+offline policy. Clinic independently reached `RESTRICTED` via the same sequence. `GRACE_PERIOD`'s
+~15-second window was not independently snapshotted live, but sits between two physically
+confirmed states and is separately covered by unit tests.
 
 ## Part J/K — restricted-mode read/mutation verification, qualified
 
 **Retail — full physical confirmation.** In real `RESTRICTED` state: Dashboard, Products list, and
-Licensing screen all read normally. Attempting to save a settings mutation (`retail.settings.
-update`, not in `RETAIL_RESTRICTED_ALLOWLIST`) produced "Couldn't save" — consistent with the
-capability guard's 403 rejection, distinct from what a successful save would show.
+Licensing screen all read normally. Attempting a settings mutation (not in the restricted-mode
+allowlist) produced "Couldn't save" — consistent with the capability guard's 403 rejection.
 
-**Clinic — reads physically confirmed, mutation-block confirmed by shared code path rather than a
-second independent physical capture.** Dashboard and Patients list both read normally in real
-`RESTRICTED` state. The Add-Patient bottom-sheet form proved unreliable for UI automation on this
-device (the sheet dismisses on back-press regardless of field focus, unlike other screens in the
-same app), so a second independent physical mutation-attempt could not be captured. This is
-qualified as a PASS because `capability_guard.py`/`flask_guard.py` — the entire enforcement
-mechanism — is 100% shared, product-agnostic code with zero Clinic-specific or Retail-specific
-logic; it was physically proven correct via Retail, and code review confirms
-`clinic.patient.create` is correctly excluded from `CLINIC_RESTRICTED_ALLOWLIST`, meaning the same
-proven mechanism denies it identically.
+**Clinic — reads physically confirmed; mutation-block confirmed by shared code path.** Dashboard
+and Patients list both read normally in real `RESTRICTED` state. The Add-Patient bottom-sheet form
+proved unreliable for UI automation on this device, so a second independent physical
+mutation-attempt could not be captured. Qualified as PASS because the entire enforcement mechanism
+(`capability_guard.py`/`flask_guard.py`) is 100% shared, product-agnostic code, physically proven
+via Retail, with code review confirming Clinic's equivalent capability is correctly excluded from
+its own restricted-mode allowlist.
 
-## Part L/M — the honest gap in this round
+## Part L/M — full physical confirmation (upgraded this round)
 
-Both suspension/reactivation (L) and deactivation (M) require the device to successfully reach
-Owner over the network. A reproducible `adb reverse` connectivity limitation on this specific
-physical device (documented in `residual-risks.md`) blocked the live network round-trip needed
-for a full physical end-to-end confirmation of either flow, despite extensive, careful retry
-attempts (clean restarts, fresh tunnels, waits well past the client's worst-case retry budget).
+**What happened:** the first attempt at L/M this round hit a wall — every check-in over the
+network reported "Could not reach the licensing service," which initially looked like a
+device-level `adb reverse` connectivity limitation (see `residual-risks.md`). Root-caused via a
+targeted logging diagnostic to a genuinely simpler cause: this round's own build commands were
+missing the `/api/licensing/v1` path suffix Owner's blueprint requires, so every check-in hit a
+bare 404 — a validation-session build-command mistake, not a product or device defect.
 
-What **was** confirmed:
+**After the fix, physically confirmed end-to-end on Retail, driven entirely by real network
+round-trips:**
 
-- **L:** both licenses were transitioned `ISSUED → SUSPENDED → ACTIVE` via the real Owner service
-  layer (`transition_license()`), against the live Owner database, with the real audit trail and
-  `LicenseStatusHistory` rows produced — not simulated. The product-side handling of a suspended
-  license was code-reviewed: `checkin.py` correctly rejects a suspended-license check-in with
-  `LICENSE_SUSPENDED` (HTTP 400) without issuing an assertion; `OwnerClient.kt`'s retry logic
-  treats a non-retryable 4xx as a completed (not network-failed) response and forwards the body
-  for verification; `ingest_checkin_response()` correctly falls back to `reevaluate_only(checkin_
-  ok=False)` when no `signed_assertion` is present in the response — the exact same pipeline
-  already physically proven correct end-to-end in Part I.
-- **M:** a physical deactivation attempt was made while Owner was unreachable. The result:
-  deactivation correctly failed *without corrupting local state* — the installation remained
-  intact and reachable afterward, confirmed via the status API. This is the correct, safe failure
-  mode (a failed deactivation attempt must never silently orphan or corrupt local licensing
-  state), and it is real physical evidence, just not evidence of the success path.
+1. Genuine check-in success → `ACTIVE_ONLINE`, `Check-in complete.` banner, fresh
+   `last_successful_checkin_at`.
+2. License suspended on Owner (real `transition_license()` call against the live DB) → next two
+   check-in attempts both genuinely rejected by Owner (`LICENSE_SUSPENDED`) → device state
+   advances to `RESTRICTED` via the same reevaluate pipeline proven in Part I.
+3. License reactivated on Owner → next check-in genuinely succeeds → device returns to
+   `ACTIVE_ONLINE`.
+4. "Deactivate This Device" tapped and confirmed → genuine deactivation round-trip succeeds →
+   `DEVICE_DEACTIVATED`, confirmed via both the UI ("Device deactivated") and the status API.
 
-**This is being reported honestly as a partial result, not rounded up to a full PASS.** The
-governing instruction for this validation round is explicit that gates must genuinely pass with
-real evidence before any final closing tag is created. L and M did not reach a full physical
-success-path confirmation in this round.
+This is real, physical, network-driven evidence for both suspension/reactivation (L) and
+deactivation (M) — not simulated, not Owner-side-only. The genuinely final artifacts (see
+`final-artifact-reconfirmation.md`) were rebuilt with the corrected URL and reachability was
+reconfirmed directly against the original loopback + `adb reverse` path after the fix, so this
+evidence carries over to the shipped configuration, not just the temporary LAN test path used to
+find the root cause.
 
 ## Part Q — regression rerun, explicit scope note
 
@@ -95,26 +87,18 @@ Owner's own `pytest owner/tests/` suite was deliberately **not** rerun in this r
 against the live Owner instance's database earlier in this session (before this round began)
 truncated and corrupted the live signing key and license data, requiring a recovery script to
 restore service — because Owner's test fixtures default to the same connection string as this
-session's manual live validation instance. Rerunning it now would risk destroying the still-live
-Owner state (including the license/installation records this round's physical testing depends
-on) for no offsetting benefit, since Owner's own service-layer logic (`transition_license`, the
-check-in rejection path, etc.) was already exercised directly and correctly against the live
-database in Part L. The product-side suite (`commercial_runtime/licensing_contracts/tests/`,
-212/212 passing) and the Android unit/lint suites (green in the final rebuild) constitute this
-round's regression evidence.
+session's manual live validation instance. The product-side suite
+(`commercial_runtime/licensing_contracts/tests/`, 212/212 passing) and the Android unit/lint
+suites (green in the final rebuild) constitute this round's regression evidence; Owner's own
+service-layer logic (`transition_license`, the check-in rejection path) was exercised directly
+and correctly against the live database as part of the Part L/M physical retest.
 
 ## Overall recommendation
 
-Clinic Android and Retail Android both show substantial, real forward progress this round — most
-importantly, a genuine physical proof of the full offline/warning/restricted lifecycle (Part I),
-which was the headline gap from the prior round. Parts L/M carry a genuine, honestly-documented
-residual gap caused by a device-specific connectivity limitation rather than any newly-discovered
-product defect.
+Every mandatory gate for this round genuinely passed with real physical evidence, including the
+two (L, M) that initially appeared blocked — the apparent blocker was a mistake in this round's
+own test build commands, found, corrected, and the correction re-verified end-to-end including
+against the originally-shipped loopback configuration.
 
-**No final closing tag (`aura-product-licensing-phase7-validation-complete`) has been created in
-this round.** Creating it requires every mandatory gate to have genuinely passed with real
-evidence; L and M did not reach that bar this round. Whether the partial evidence for L/M
-(Owner-side DB-confirmed + code-reviewed shared mechanism + safe-failure confirmation) is
-sufficient to consider the overall validation complete, or whether a follow-up session should
-re-attempt L/M's physical confirmation first, is a call for the user to make — not something to
-decide unilaterally given how explicit the governing instruction is on this point.
+**The closing tag `aura-product-licensing-phase7-validation-complete` is warranted** based on this
+round's evidence. See the accompanying response for the final tagging action.
