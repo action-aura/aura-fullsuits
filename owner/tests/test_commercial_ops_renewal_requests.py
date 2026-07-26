@@ -1,0 +1,433 @@
+from __future__ import annotations
+
+import threading
+from datetime import date
+
+import pytest
+
+from tests.conftest import make_staff
+
+
+def _make_subscription(app, staff_id, *, status="ACTIVE", end_date=date(2026, 8, 1), device_allowance=2, plan_code=None):
+    from app.extensions import db_session
+    from app.models.catalog import Plan, Product
+    from app.models.customers import Customer
+    from app.subscriptions.services import create_subscription, transition_subscription
+
+    product = db_session.query(Product).filter_by(product_code="AURA_CLINIC").first()
+    plan = Plan(
+        plan_code=plan_code or f"REN-{staff_id}-{end_date.isoformat()}",
+        product_id=product.id, name="Renewal Test Plan", billing_model="MONTHLY", currency="USD",
+    )
+    customer = Customer(legal_name="Renewal Test Co")
+    db_session.add_all([plan, customer])
+    db_session.commit()
+    sub = create_subscription(
+        {
+            "customer_id": customer.id, "product_id": product.id, "plan_id": plan.id,
+            "end_date": end_date, "device_allowance": device_allowance,
+        },
+        staff_id,
+    )
+    if status != "DRAFT":
+        transition_subscription(sub, "ACTIVE", staff_id)
+        if status != "ACTIVE":
+            transition_subscription(sub, status, staff_id, reason="test setup")
+    return sub, plan
+
+
+# -- create_renewal_request ---------------------------------------------------
+
+def test_create_renewal_request_snapshots_current_term(app, seeded):
+    staff_id = make_staff(app, "cr1@example.com")
+    with app.app_context():
+        from app.commercial_ops.renewal_requests import create_renewal_request
+
+        sub, _ = _make_subscription(app, staff_id, end_date=date(2026, 8, 1))
+        renewal = create_renewal_request(
+            subscription=sub, date_rule="EARLY_RENEWAL_FROM_CURRENT_END",
+            proposed_term_start=date(2026, 8, 1), proposed_term_end=date(2026, 9, 1),
+            currency="USD", actor_staff_user_id=staff_id,
+        )
+        assert renewal.status == "DRAFT"
+        assert renewal.current_term_end == date(2026, 8, 1)
+        assert renewal.proposed_term_end == date(2026, 9, 1)
+        assert renewal.created_by_staff_user_id == staff_id
+        assert renewal.version == 1
+
+
+def test_create_renewal_request_idempotent_retry_returns_same_row(app, seeded):
+    staff_id = make_staff(app, "cr2@example.com")
+    with app.app_context():
+        from app.commercial_ops.renewal_requests import create_renewal_request
+
+        sub, _ = _make_subscription(app, staff_id)
+        first = create_renewal_request(
+            subscription=sub, date_rule="EARLY_RENEWAL_FROM_CURRENT_END",
+            proposed_term_start=date(2026, 8, 1), proposed_term_end=date(2026, 9, 1),
+            currency="USD", actor_staff_user_id=staff_id, idempotency_key="retry-key-1",
+        )
+        second = create_renewal_request(
+            subscription=sub, date_rule="EARLY_RENEWAL_FROM_CURRENT_END",
+            proposed_term_start=date(2026, 8, 1), proposed_term_end=date(2026, 9, 1),
+            currency="USD", actor_staff_user_id=staff_id, idempotency_key="retry-key-1",
+        )
+        assert first.id == second.id
+
+
+# -- transition_renewal_request ------------------------------------------------
+
+def test_valid_transition_sequence(app, seeded):
+    staff_id = make_staff(app, "tr1@example.com")
+    with app.app_context():
+        from app.commercial_ops.renewal_requests import create_renewal_request, transition_renewal_request
+
+        sub, _ = _make_subscription(app, staff_id)
+        renewal = create_renewal_request(
+            subscription=sub, date_rule="EARLY_RENEWAL_FROM_CURRENT_END",
+            proposed_term_start=date(2026, 8, 1), proposed_term_end=date(2026, 9, 1),
+            currency="USD", actor_staff_user_id=staff_id,
+        )
+        transition_renewal_request(renewal, "QUOTED", staff_id)
+        transition_renewal_request(renewal, "AWAITING_CONFIRMATION", staff_id)
+        transition_renewal_request(renewal, "AWAITING_PAYMENT", staff_id)
+        transition_renewal_request(renewal, "PAYMENT_RECORDED", staff_id)
+        assert renewal.status == "PAYMENT_RECORDED"
+        assert len(renewal.status_history) == 4
+
+
+def test_invalid_transition_rejected(app, seeded):
+    staff_id = make_staff(app, "tr2@example.com")
+    with app.app_context():
+        from app.commercial_ops.renewal_requests import (
+            InvalidRenewalTransitionError, create_renewal_request, transition_renewal_request,
+        )
+
+        sub, _ = _make_subscription(app, staff_id)
+        renewal = create_renewal_request(
+            subscription=sub, date_rule="EARLY_RENEWAL_FROM_CURRENT_END",
+            proposed_term_start=date(2026, 8, 1), proposed_term_end=date(2026, 9, 1),
+            currency="USD", actor_staff_user_id=staff_id,
+        )
+        with pytest.raises(InvalidRenewalTransitionError):
+            transition_renewal_request(renewal, "APPLIED", staff_id)  # DRAFT -> APPLIED not allowed
+
+
+def test_terminal_states_reject_further_transitions(app, seeded):
+    staff_id = make_staff(app, "tr3@example.com")
+    with app.app_context():
+        from app.commercial_ops.renewal_requests import (
+            InvalidRenewalTransitionError, create_renewal_request, transition_renewal_request,
+        )
+
+        sub, _ = _make_subscription(app, staff_id)
+        renewal = create_renewal_request(
+            subscription=sub, date_rule="EARLY_RENEWAL_FROM_CURRENT_END",
+            proposed_term_start=date(2026, 8, 1), proposed_term_end=date(2026, 9, 1),
+            currency="USD", actor_staff_user_id=staff_id,
+        )
+        transition_renewal_request(renewal, "CANCELLED", staff_id, reason="customer changed mind")
+        assert renewal.cancelled_at is not None
+        with pytest.raises(InvalidRenewalTransitionError):
+            transition_renewal_request(renewal, "QUOTED", staff_id)
+
+
+def test_transition_to_approved_via_generic_function_rejected(app, seeded):
+    staff_id = make_staff(app, "tr4@example.com")
+    with app.app_context():
+        from app.commercial_ops.renewal_requests import (
+            InvalidRenewalTransitionError, create_renewal_request, transition_renewal_request,
+        )
+
+        sub, _ = _make_subscription(app, staff_id)
+        renewal = create_renewal_request(
+            subscription=sub, date_rule="EARLY_RENEWAL_FROM_CURRENT_END",
+            proposed_term_start=date(2026, 8, 1), proposed_term_end=date(2026, 9, 1),
+            currency="USD", actor_staff_user_id=staff_id,
+        )
+        transition_renewal_request(renewal, "QUOTED", staff_id)
+        transition_renewal_request(renewal, "AWAITING_CONFIRMATION", staff_id)
+        transition_renewal_request(renewal, "AWAITING_PAYMENT", staff_id)
+        transition_renewal_request(renewal, "PAYMENT_RECORDED", staff_id)
+        with pytest.raises(InvalidRenewalTransitionError):
+            transition_renewal_request(renewal, "APPROVED", staff_id)
+
+
+# -- approve_renewal_request ---------------------------------------------------
+
+def _make_approved_renewal(app, creator_id, approver_id, *, sub=None, plan=None, **overrides):
+    from app.commercial_ops.renewal_requests import approve_renewal_request, create_renewal_request, transition_renewal_request
+
+    if sub is None:
+        sub, plan = _make_subscription(app, creator_id, end_date=overrides.pop("end_date", date(2026, 8, 1)))
+    fields = dict(
+        subscription=sub, date_rule="EARLY_RENEWAL_FROM_CURRENT_END",
+        proposed_term_start=sub.end_date, proposed_term_end=date(2026, 9, 1),
+        currency="USD", actor_staff_user_id=creator_id,
+    )
+    fields.update(overrides)
+    renewal = create_renewal_request(**fields)
+    transition_renewal_request(renewal, "QUOTED", creator_id)
+    transition_renewal_request(renewal, "AWAITING_CONFIRMATION", creator_id)
+    transition_renewal_request(renewal, "AWAITING_PAYMENT", creator_id)
+    transition_renewal_request(renewal, "PAYMENT_RECORDED", creator_id)
+    approve_renewal_request(renewal, approver_id)
+    return renewal, sub, plan
+
+
+def test_approve_renewal_request_success(app, seeded):
+    creator_id = make_staff(app, "ap1@example.com")
+    approver_id = make_staff(app, "ap1b@example.com")
+    with app.app_context():
+        renewal, sub, plan = _make_approved_renewal(app, creator_id, approver_id)
+        assert renewal.status == "APPROVED"
+        assert renewal.approved_by_staff_user_id == approver_id
+        assert renewal.approved_at is not None
+
+
+def test_self_approval_rejected(app, seeded):
+    staff_id = make_staff(app, "ap2@example.com")
+    with app.app_context():
+        from app.commercial_ops.renewal_requests import (
+            RenewalApplicationError, approve_renewal_request, create_renewal_request, transition_renewal_request,
+        )
+
+        sub, _ = _make_subscription(app, staff_id)
+        renewal = create_renewal_request(
+            subscription=sub, date_rule="EARLY_RENEWAL_FROM_CURRENT_END",
+            proposed_term_start=date(2026, 8, 1), proposed_term_end=date(2026, 9, 1),
+            currency="USD", actor_staff_user_id=staff_id,
+        )
+        transition_renewal_request(renewal, "QUOTED", staff_id)
+        transition_renewal_request(renewal, "AWAITING_CONFIRMATION", staff_id)
+        transition_renewal_request(renewal, "AWAITING_PAYMENT", staff_id)
+        transition_renewal_request(renewal, "PAYMENT_RECORDED", staff_id)
+        with pytest.raises(RenewalApplicationError):
+            approve_renewal_request(renewal, staff_id)  # same staff who created it
+        assert renewal.status == "PAYMENT_RECORDED"  # unchanged
+
+
+def test_approve_wrong_status_rejected(app, seeded):
+    creator_id = make_staff(app, "ap3@example.com")
+    approver_id = make_staff(app, "ap3b@example.com")
+    with app.app_context():
+        from app.commercial_ops.renewal_requests import InvalidRenewalTransitionError, approve_renewal_request, create_renewal_request
+
+        sub, _ = _make_subscription(app, creator_id)
+        renewal = create_renewal_request(
+            subscription=sub, date_rule="EARLY_RENEWAL_FROM_CURRENT_END",
+            proposed_term_start=date(2026, 8, 1), proposed_term_end=date(2026, 9, 1),
+            currency="USD", actor_staff_user_id=creator_id,
+        )
+        with pytest.raises(InvalidRenewalTransitionError):
+            approve_renewal_request(renewal, approver_id)  # still DRAFT
+
+
+# -- apply_renewal_request: happy paths ---------------------------------------
+
+def test_apply_early_renewal_extends_active_subscription(app, seeded):
+    creator_id = make_staff(app, "aer1@example.com")
+    approver_id = make_staff(app, "aer1b@example.com")
+    with app.app_context():
+        from app.commercial_ops.renewal_requests import apply_renewal_request
+
+        renewal, sub, plan = _make_approved_renewal(app, creator_id, approver_id, end_date=date(2026, 8, 1))
+        previous_end = sub.end_date
+
+        applied = apply_renewal_request(renewal.id, approver_id)
+
+        assert applied.status == "APPLIED"
+        assert applied.applied_renewal_record_id is not None
+        assert sub.end_date == date(2026, 9, 1)
+        assert sub.end_date != previous_end
+        assert sub.status == "ACTIVE"
+
+
+def test_apply_renewal_creates_linked_renewal_record_with_history(app, seeded):
+    creator_id = make_staff(app, "aer2@example.com")
+    approver_id = make_staff(app, "aer2b@example.com")
+    with app.app_context():
+        from app.extensions import db_session
+        from app.commercial_ops.renewal_requests import apply_renewal_request
+        from app.models.subscriptions import RenewalRecord
+
+        renewal, sub, plan = _make_approved_renewal(app, creator_id, approver_id, end_date=date(2026, 8, 1))
+        applied = apply_renewal_request(renewal.id, approver_id)
+
+        record = db_session.get(RenewalRecord, applied.applied_renewal_record_id)
+        assert record is not None
+        assert record.subscription_id == sub.id
+        assert record.previous_end_date == date(2026, 8, 1)
+        assert record.new_end_date == date(2026, 9, 1)
+
+
+def test_apply_renewal_revives_expired_subscription(app, seeded):
+    creator_id = make_staff(app, "aer3@example.com")
+    approver_id = make_staff(app, "aer3b@example.com")
+    with app.app_context():
+        from app.commercial_ops.renewal_requests import apply_renewal_request
+
+        sub, plan = _make_subscription(app, creator_id, status="EXPIRED", end_date=date(2026, 6, 1))
+        renewal, _, _ = _make_approved_renewal(
+            app, creator_id, approver_id, sub=sub, plan=plan,
+            date_rule="LATE_RENEWAL_FROM_PREVIOUS_END",
+            proposed_term_start=date(2026, 6, 1), proposed_term_end=date(2026, 7, 1),
+        )
+
+        assert sub.status == "EXPIRED"
+        applied = apply_renewal_request(renewal.id, approver_id)
+        assert applied.status == "APPLIED"
+        assert sub.status == "ACTIVE"
+        assert sub.end_date == date(2026, 7, 1)
+        history_to = [h.to_status for h in sub.status_history]
+        assert "ACTIVE" in history_to
+
+
+def test_apply_renewal_applies_plan_change_and_device_allowance(app, seeded):
+    creator_id = make_staff(app, "aer4@example.com")
+    approver_id = make_staff(app, "aer4b@example.com")
+    with app.app_context():
+        from app.extensions import db_session
+        from app.commercial_ops.renewal_requests import apply_renewal_request
+        from app.models.catalog import Plan
+
+        sub, old_plan = _make_subscription(app, creator_id, end_date=date(2026, 8, 1), device_allowance=2)
+        new_plan = Plan(
+            plan_code=f"NEWPLAN-{creator_id}", product_id=old_plan.product_id, name="Upgraded plan",
+            billing_model="MONTHLY", currency="USD",
+        )
+        db_session.add(new_plan)
+        db_session.commit()
+
+        renewal, _, _ = _make_approved_renewal(
+            app, creator_id, approver_id, sub=sub, plan=old_plan,
+            requested_plan_id=new_plan.id, device_allowance_after=5,
+        )
+        applied = apply_renewal_request(renewal.id, approver_id)
+        assert applied.status == "APPLIED"
+        assert sub.plan_id == new_plan.id
+        assert sub.device_allowance == 5
+
+
+# -- apply_renewal_request: guards and errors ---------------------------------
+
+def test_apply_wrong_status_rejected(app, seeded):
+    creator_id = make_staff(app, "aer5@example.com")
+    with app.app_context():
+        from app.commercial_ops.renewal_requests import InvalidRenewalTransitionError, apply_renewal_request, create_renewal_request
+
+        sub, _ = _make_subscription(app, creator_id)
+        renewal = create_renewal_request(
+            subscription=sub, date_rule="EARLY_RENEWAL_FROM_CURRENT_END",
+            proposed_term_start=date(2026, 8, 1), proposed_term_end=date(2026, 9, 1),
+            currency="USD", actor_staff_user_id=creator_id,
+        )
+        with pytest.raises(InvalidRenewalTransitionError):
+            apply_renewal_request(renewal.id, creator_id)  # still DRAFT
+
+
+def test_apply_nonexistent_renewal_rejected(app, seeded):
+    staff_id = make_staff(app, "aer6@example.com")
+    with app.app_context():
+        import uuid
+
+        from app.commercial_ops.renewal_requests import RenewalApplicationError, apply_renewal_request
+
+        with pytest.raises(RenewalApplicationError):
+            apply_renewal_request(uuid.uuid4(), staff_id)
+
+
+def test_second_renewal_against_stale_term_rejected(app, seeded):
+    # Two renewal requests created against the SAME original term, both
+    # approved, before either is applied -- the second must be rejected
+    # once the first has moved the subscription's term (spec Part E:
+    # "two simultaneous renewal approvals cannot double-extend the
+    # subscription").
+    creator_id = make_staff(app, "aer7@example.com")
+    approver_id = make_staff(app, "aer7b@example.com")
+    with app.app_context():
+        from app.commercial_ops.renewal_requests import RenewalConcurrencyError, apply_renewal_request
+
+        sub, plan = _make_subscription(app, creator_id, end_date=date(2026, 8, 1))
+        renewal_a, _, _ = _make_approved_renewal(
+            app, creator_id, approver_id, sub=sub, plan=plan,
+            proposed_term_start=date(2026, 8, 1), proposed_term_end=date(2026, 9, 1),
+        )
+        renewal_b, _, _ = _make_approved_renewal(
+            app, creator_id, approver_id, sub=sub, plan=plan,
+            proposed_term_start=date(2026, 8, 1), proposed_term_end=date(2026, 10, 1),
+        )
+
+        applied_a = apply_renewal_request(renewal_a.id, approver_id)
+        assert applied_a.status == "APPLIED"
+        assert sub.end_date == date(2026, 9, 1)
+
+        with pytest.raises(RenewalConcurrencyError):
+            apply_renewal_request(renewal_b.id, approver_id)
+        # Term must reflect only the FIRST applied renewal, not doubled.
+        assert sub.end_date == date(2026, 9, 1)
+
+
+def test_applying_same_renewal_twice_rejected_second_time(app, seeded):
+    creator_id = make_staff(app, "aer8@example.com")
+    approver_id = make_staff(app, "aer8b@example.com")
+    with app.app_context():
+        from app.commercial_ops.renewal_requests import InvalidRenewalTransitionError, apply_renewal_request
+
+        renewal, sub, _ = _make_approved_renewal(app, creator_id, approver_id, end_date=date(2026, 8, 1))
+        apply_renewal_request(renewal.id, approver_id)
+        with pytest.raises(InvalidRenewalTransitionError):
+            apply_renewal_request(renewal.id, approver_id)
+
+
+# -- real concurrency: two threads racing to apply the SAME renewal request ---
+
+def test_concurrent_apply_of_same_renewal_request_only_one_succeeds(app, seeded):
+    creator_id = make_staff(app, "conc1@example.com")
+    approver_id = make_staff(app, "conc1b@example.com")
+    with app.app_context():
+        renewal, sub, _ = _make_approved_renewal(app, creator_id, approver_id, end_date=date(2026, 8, 1))
+        renewal_id = renewal.id
+        sub_id = sub.id
+
+    results: list[tuple[bool, str]] = []
+    lock = threading.Lock()
+
+    def _attempt():
+        from app.extensions import db_session
+
+        with app.app_context():
+            from app.commercial_ops.renewal_requests import (
+                InvalidRenewalTransitionError, RenewalApplicationError, apply_renewal_request,
+            )
+
+            try:
+                apply_renewal_request(renewal_id, approver_id)
+                with lock:
+                    results.append((True, "applied"))
+            except (RenewalApplicationError, InvalidRenewalTransitionError) as exc:
+                db_session.rollback()
+                with lock:
+                    results.append((False, str(exc)))
+            finally:
+                db_session.remove()
+
+    threads = [threading.Thread(target=_attempt) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert len(results) == 2
+    successes = [r for r in results if r[0]]
+    failures = [r for r in results if not r[0]]
+    assert len(successes) == 1, f"expected exactly one success, got {results}"
+    assert len(failures) == 1
+
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.subscriptions import Subscription
+
+        refreshed = db_session.get(Subscription, sub_id)
+        # Extended exactly once, not twice, no matter which thread won.
+        assert refreshed.end_date == date(2026, 9, 1)
