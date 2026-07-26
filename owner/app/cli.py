@@ -1,8 +1,10 @@
-"""Flask CLI commands: Super Admin bootstrap, RBAC seeding, release-manifest import."""
+"""Flask CLI commands: Super Admin bootstrap, RBAC seeding, release-manifest
+import, Phase 8 commercial-operations jobs."""
 from __future__ import annotations
 
 import getpass
 import json
+from datetime import date
 
 import click
 from flask import Flask
@@ -165,3 +167,42 @@ def register_cli(app: Flask) -> None:
         click.echo(json.dumps(result))
         if result["status"] != "OK":
             raise click.ClickException(result["detail"])
+
+    @app.cli.group("commercial")
+    def commercial_group():
+        """Phase 8 commercial-operations jobs (Parts G/I/J/R)."""
+
+    @commercial_group.command("expiry-scan")
+    @click.option("--apply", "apply_", is_flag=True, default=False, help="Actually write notifications/transitions. Default is dry-run (report only).")
+    @click.option("--as-of", default=None, help="ISO date to evaluate against (default: today).")
+    def expiry_scan_cmd(apply_: bool, as_of: str | None):
+        """Warning notifications + date-driven PAST_DUE/EXPIRED transitions
+        (Parts G/H/I). Report-only unless --apply is given -- this also
+        covers what the governing spec calls "notification-scan": the same
+        walk over subscriptions generates both the warning notifications
+        and the status transitions in one pass, since they share the same
+        per-subscription policy resolution and date arithmetic."""
+        from app.commercial_ops.expiry_scan import run_expiry_scan
+
+        as_of_date = date.fromisoformat(as_of) if as_of else None
+        result = run_expiry_scan(as_of=as_of_date, dry_run=not apply_)
+        click.echo(
+            json.dumps(
+                {
+                    "as_of": result.as_of.isoformat(),
+                    "dry_run": result.dry_run,
+                    "scanned_count": result.scanned_count,
+                    "notifications_created": result.notifications_created,
+                    "notifications_deduped": result.notifications_deduped,
+                    "transitioned_to_past_due": result.transitioned_to_past_due,
+                    "transitioned_to_expired": result.transitioned_to_expired,
+                    "findings": [
+                        {"subscription_id": f.subscription_id, "action": f.action, "detail": f.detail}
+                        for f in result.findings
+                    ]
+                    if result.dry_run
+                    else [],
+                },
+                indent=2,
+            )
+        )
