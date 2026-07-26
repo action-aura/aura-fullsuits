@@ -60,6 +60,16 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
 # module's own approval/payment/recent-auth-gated pipeline).
 _REVIVABLE_SUBSCRIPTION_STATUSES = frozenset({"EXPIRED", "PAST_DUE", "SUSPENDED"})
 
+# Milestone 4, Part M: a PILOT subscription "graduating" to a paid ACTIVE
+# term via an applied renewal -- conceptually different from reviving a
+# lapsed/blocked subscription (a pilot was never inactive), but the same
+# apply-time bookkeeping. PILOT -> ACTIVE was already permitted in the
+# shared subscriptions.services.VALID_TRANSITIONS table before Phase 8 (not
+# something this module widens), so this constant exists purely for
+# clarity of intent, not as a security boundary the way
+# _REVIVABLE_SUBSCRIPTION_STATUSES is.
+_GRADUATING_SUBSCRIPTION_STATUSES = frozenset({"PILOT"})
+
 
 class InvalidRenewalTransitionError(ValueError):
     pass
@@ -281,7 +291,7 @@ def apply_renewal_request(renewal_request_id, actor_staff_user_id) -> RenewalReq
     if renewal.device_allowance_after is not None:
         subscription.device_allowance = renewal.device_allowance_after
 
-    if previous_subscription_status in _REVIVABLE_SUBSCRIPTION_STATUSES:
+    if previous_subscription_status in _REVIVABLE_SUBSCRIPTION_STATUSES | _GRADUATING_SUBSCRIPTION_STATUSES:
         # Deliberately NOT consulted against subscriptions.services.
         # VALID_TRANSITIONS here (security fix -- see that table's own
         # comment on its "EXPIRED" entry): this module's own
@@ -289,7 +299,10 @@ def apply_renewal_request(renewal_request_id, actor_staff_user_id) -> RenewalReq
         # for which prior states a renewal may revive, precisely so that
         # widening the SHARED table (consulted by the loosely-gated generic
         # transition route) can never accidentally open this path up
-        # outside the renewal-approval pipeline.
+        # outside the renewal-approval pipeline. _GRADUATING_SUBSCRIPTION_
+        # STATUSES (PILOT) is included here too since a pilot conversion
+        # needs the exact same "flip to ACTIVE + write history" bookkeeping
+        # as a revival, even though PILOT -> ACTIVE was never restricted.
         db_session.add(
             SubscriptionStatusHistory(
                 subscription_id=subscription.id,
