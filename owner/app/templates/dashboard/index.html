@@ -14,6 +14,18 @@
 </div>
 
 <div class="card">
+  <h3>Commercial operations</h3>
+  <div class="kv">
+    <dt>Open notifications</dt><dd>{{ summary.open_notifications }}</dd>
+    <dt>Renewals awaiting finance approval</dt><dd>{{ summary.renewals_awaiting_approval }}</dd>
+    <dt>Pilots needing action</dt><dd>{{ summary.pilots_needing_action }}</dd>
+    <dt>Activations pending manual review</dt><dd>{{ summary.pending_activations }}</dd>
+    <dt>Active emergency extensions</dt><dd>{{ summary.active_emergency_extensions }}</dd>
+    <dt>Active device-slot exceptions</dt><dd>{{ summary.active_device_slot_exceptions }}</dd>
+  </div>
+</div>
+
+<div class="card">
   <h3>Subscriptions by product</h3>
   <table>
     <tr><th>Product</th><th>Count</th></tr>

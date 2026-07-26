@@ -7,8 +7,10 @@ from datetime import date, timedelta
 from sqlalchemy import func, select
 
 from app.extensions import db_session
+from app.models.activation_governance import DeviceSlotException, PendingActivation
 from app.models.audit import AuditLog, DatabaseBackupRecord, SecurityEvent
 from app.models.catalog import Product
+from app.models.commercial_ops import EmergencyExtension, InternalNotification, PilotRecord, RenewalRequest
 from app.models.customers import Customer
 from app.models.installations import Installation
 from app.models.licensing import License
@@ -72,6 +74,17 @@ def get_dashboard_summary() -> dict:
         select(DatabaseBackupRecord).order_by(DatabaseBackupRecord.created_at.desc()).limit(1)
     ).scalars().first()
 
+    # Phase 8 -- commercial-operations metadata only (counts, never
+    # per-customer financial detail or PII beyond what the rest of this
+    # summary already surfaces): open notifications, workflow items
+    # awaiting a human decision, and active exceptional-override counts.
+    open_notifications = count(select(InternalNotification).where(InternalNotification.status.in_(("OPEN", "IN_PROGRESS"))))
+    renewals_awaiting_approval = count(select(RenewalRequest).where(RenewalRequest.status == "PAYMENT_RECORDED"))
+    pilots_needing_action = count(select(PilotRecord).where(PilotRecord.status.in_(("DRAFT", "APPROVED"))))
+    pending_activations = count(select(PendingActivation).where(PendingActivation.status == "PENDING_REVIEW"))
+    active_emergency_extensions = count(select(EmergencyExtension).where(EmergencyExtension.status == "ACTIVE"))
+    active_device_slot_exceptions = count(select(DeviceSlotException).where(DeviceSlotException.status == "ACTIVE"))
+
     return {
         "total_customers": total_customers,
         "pilot_customers": pilot_customers,
@@ -85,4 +98,10 @@ def get_dashboard_summary() -> dict:
         "recent_security_events": recent_security_events,
         "recent_staff_actions": recent_staff_actions,
         "latest_backup": latest_backup,
+        "open_notifications": open_notifications,
+        "renewals_awaiting_approval": renewals_awaiting_approval,
+        "pilots_needing_action": pilots_needing_action,
+        "pending_activations": pending_activations,
+        "active_emergency_extensions": active_emergency_extensions,
+        "active_device_slot_exceptions": active_device_slot_exceptions,
     }
