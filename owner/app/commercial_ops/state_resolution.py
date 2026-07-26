@@ -34,7 +34,7 @@ device locally decided."
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from enum import Enum
 
@@ -82,10 +82,49 @@ def resolve_commercial_state(
     license_valid_until: date | None,
     as_of: date,
     cancellation_effective_date: date | None = None,
+    emergency_extension_active: bool = False,
 ) -> CommercialStateDecision:
     """Pure function. `license_status` is `None` when no license has been
     issued for this subscription yet -- a real, valid state (`NO_LICENSE`),
-    not an error."""
+    not an error.
+
+    `emergency_extension_active` (Part N, Milestone 4): caller-supplied --
+    this function stays I/O-free and never queries EmergencyExtension
+    itself (see commercial_ops/emergency_extensions.py's
+    is_emergency_extension_active(), the only place that looks the row up).
+    When True, overrides denial of assertion issuance/check-in on the
+    decision this function would otherwise return -- EXCEPT REVOKED, which
+    is resolved and returned before this flag is even consulted, so an
+    emergency extension can never override an explicit security
+    revocation."""
+    decision = _resolve_base(
+        subscription_status=subscription_status,
+        license_status=license_status,
+        subscription_end_date=subscription_end_date,
+        license_valid_until=license_valid_until,
+        as_of=as_of,
+        cancellation_effective_date=cancellation_effective_date,
+    )
+    if emergency_extension_active and decision.state != CommercialState.REVOKED:
+        decision = replace(
+            decision,
+            may_issue_assertion=True,
+            may_check_in_existing_installation=True,
+            required_action=None,
+            reason_code=f"{decision.reason_code}_EMERGENCY_EXTENSION_ACTIVE",
+        )
+    return decision
+
+
+def _resolve_base(
+    *,
+    subscription_status: str,
+    license_status: str | None,
+    subscription_end_date: date | None,
+    license_valid_until: date | None,
+    as_of: date,
+    cancellation_effective_date: date | None = None,
+) -> CommercialStateDecision:
 
     # REVOKED always wins -- an explicit signed security decision, never
     # overridden by a still-ACTIVE subscription (spec Part I: "a revoked
