@@ -84,3 +84,89 @@ def test_payment_status_validated(app, seeded):
             assert False, "should have raised"
         except ValueError:
             pass
+
+
+def test_correct_payment_writes_correction_history_row(app, seeded):
+    # Phase 8 Part F: correcting a payment must create a correction record,
+    # not just overwrite the live row -- see docs/owner/phase8/
+    # phase8-scope-and-baseline.md's Milestone 1 gap note.
+    staff_id = make_staff(app, "x6@example.com")
+    with app.app_context():
+        from decimal import Decimal
+        from datetime import date
+
+        from app.subscriptions.services import correct_payment, record_payment
+
+        sub = _make_subscription(app, staff_id)
+        payment = record_payment(
+            {
+                "customer_id": sub.customer_id, "subscription_id": sub.id, "amount": Decimal("10"),
+                "currency": "USD", "payment_date": date.today(), "status": "PENDING",
+                "internal_note": "awaiting bank confirmation",
+            },
+            staff_id,
+        )
+
+        correct_payment(payment, "CONFIRMED", "bank confirmed transfer", staff_id)
+
+        assert payment.status == "CONFIRMED"
+        assert payment.internal_note == "bank confirmed transfer"
+        assert payment.verified_by_staff_user_id == staff_id
+
+        assert len(payment.correction_history) == 1
+        entry = payment.correction_history[0]
+        assert entry.previous_status == "PENDING"
+        assert entry.new_status == "CONFIRMED"
+        assert entry.previous_internal_note == "awaiting bank confirmation"
+        assert entry.correction_note == "bank confirmed transfer"
+        assert entry.corrected_by_staff_user_id == staff_id
+
+
+def test_correct_payment_twice_preserves_full_history_not_just_latest(app, seeded):
+    staff_id = make_staff(app, "x7@example.com")
+    with app.app_context():
+        from decimal import Decimal
+        from datetime import date
+
+        from app.subscriptions.services import correct_payment, record_payment
+
+        sub = _make_subscription(app, staff_id)
+        payment = record_payment(
+            {
+                "customer_id": sub.customer_id, "subscription_id": sub.id, "amount": Decimal("10"),
+                "currency": "USD", "payment_date": date.today(), "status": "PENDING",
+            },
+            staff_id,
+        )
+
+        correct_payment(payment, "CONFIRMED", "first correction", staff_id)
+        correct_payment(payment, "REFUNDED", "customer requested refund", staff_id)
+
+        assert payment.status == "REFUNDED"
+        assert len(payment.correction_history) == 2
+        assert payment.correction_history[0].previous_status == "PENDING"
+        assert payment.correction_history[0].new_status == "CONFIRMED"
+        assert payment.correction_history[1].previous_status == "CONFIRMED"
+        assert payment.correction_history[1].new_status == "REFUNDED"
+
+
+def test_correct_payment_invalid_status_still_rejected(app, seeded):
+    staff_id = make_staff(app, "x8@example.com")
+    with app.app_context():
+        from decimal import Decimal
+        from datetime import date
+
+        from app.subscriptions.services import correct_payment, record_payment
+
+        sub = _make_subscription(app, staff_id)
+        payment = record_payment(
+            {
+                "customer_id": sub.customer_id, "subscription_id": sub.id, "amount": Decimal("10"),
+                "currency": "USD", "payment_date": date.today(), "status": "PENDING",
+            },
+            staff_id,
+        )
+        with pytest.raises(ValueError):
+            correct_payment(payment, "NOT_A_REAL_STATUS", "oops", staff_id)
+        # No correction row written for a rejected correction attempt.
+        assert len(payment.correction_history) == 0

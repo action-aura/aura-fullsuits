@@ -143,3 +143,11 @@ class PaymentRecord(Base, UUIDPKMixin, TimestampMixin):
 
     customer: Mapped["Customer"] = relationship()  # noqa: F821
     subscription: Mapped[Subscription | None] = relationship()
+    # No delete-orphan (Phase 8 Part F: correction history is an audit
+    # trail, must never silently vanish if a PaymentRecord row is ever
+    # deleted -- same reasoning as every other *_status_history table in
+    # this codebase). Defined in app/models/commercial_ops.py; referenced
+    # here by string to avoid a circular import between the two modules.
+    correction_history: Mapped[list["PaymentCorrectionHistory"]] = relationship(  # noqa: F821
+        back_populates="payment_record"
+    )

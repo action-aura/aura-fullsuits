@@ -5,6 +5,7 @@ from datetime import date
 
 from app.audit.services import record as audit_record
 from app.extensions import db_session
+from app.models.commercial_ops import PaymentCorrectionHistory
 from app.models.subscriptions import PaymentRecord, RenewalRecord, Subscription, SubscriptionStatusHistory
 
 VALID_TRANSITIONS: dict[str, set[str]] = {
@@ -123,9 +124,26 @@ def correct_payment(payment: PaymentRecord, new_status: str, note: str, actor_st
     if new_status not in PAYMENT_STATUSES:
         raise ValueError(f"Invalid payment status: {new_status}")
     before = payment.status
+    before_note = payment.internal_note
     payment.status = new_status
     payment.verified_by_staff_user_id = actor_staff_user_id
     payment.internal_note = note
+    # Phase 8 Part F: "correcting a payment must create a correction record
+    # or history entry... no hard overwrite of verified financial
+    # metadata." payment.status/internal_note still describe the record's
+    # current state (a correction legitimately changes those), but this row
+    # preserves what they were immediately before this specific correction,
+    # so the full correction history remains reconstructable.
+    db_session.add(
+        PaymentCorrectionHistory(
+            payment_record_id=payment.id,
+            previous_status=before,
+            new_status=new_status,
+            previous_internal_note=before_note,
+            correction_note=note,
+            corrected_by_staff_user_id=actor_staff_user_id,
+        )
+    )
     db_session.commit()
     audit_record(
         actor_staff_user_id=actor_staff_user_id,
