@@ -72,6 +72,15 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("emergency_extensions.view", "SUBSCRIPTIONS", "View emergency commercial extensions"),
     ("emergency_extensions.create", "SUBSCRIPTIONS", "Create an emergency commercial extension"),
     ("emergency_extensions.revoke", "SUBSCRIPTIONS", "Revoke an emergency commercial extension"),
+    # Phase 8 Milestone 5 -- manual activation approval and device-slot operations.
+    # Deliberately NOT assigned to any role below except via the SUPER_ADMIN
+    # wildcard: changing the activation mode itself changes the security
+    # posture of every future activation for a product.
+    ("activation_policy.manage", "ACTIVATION_SERVICE", "Configure a product's activation mode (automatic/manual-approval/risk-review)"),
+    ("pending_activations.view", "ACTIVATION_SERVICE", "View activations awaiting manual approval"),
+    ("pending_activations.decide", "ACTIVATION_SERVICE", "Approve or reject a pending activation"),
+    ("device_slot_exceptions.view", "INSTALLATIONS", "View temporary device-slot exceptions"),
+    ("device_slot_exceptions.manage", "INSTALLATIONS", "Create/revoke a temporary device-slot exception"),
 ]
 
 # code -> permission codes. SUPER_ADMIN gets every permission automatically
@@ -108,6 +117,8 @@ ROLES: dict[str, dict] = {
             "installations.replace_device",
             "activation_service.view", "activation_requests.view", "device_keys.view",
             "pilots.view",
+            "pending_activations.view", "pending_activations.decide",
+            "device_slot_exceptions.view", "device_slot_exceptions.manage",
             # No signing-key management, no plan/entitlement changes, no license-secret issuance (Part S).
         ],
     },
@@ -129,6 +140,7 @@ ROLES: dict[str, dict] = {
             "activation_service.view", "activation_requests.view", "device_keys.view",
             "signing_keys.view_public_metadata", "offline_policies.view",
             "pilots.view",
+            "pending_activations.view", "device_slot_exceptions.view",
         ],
     },
 }

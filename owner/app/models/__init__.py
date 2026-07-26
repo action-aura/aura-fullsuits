@@ -10,6 +10,7 @@ from app.models import installations  # noqa: F401
 from app.models import audit  # noqa: F401
 from app.models import licensing_service  # noqa: F401
 from app.models import commercial_ops  # noqa: F401
+from app.models import activation_governance  # noqa: F401
 
 from app.models.staff import (  # noqa: F401
     Role,
@@ -68,6 +69,11 @@ from app.models.commercial_ops import (  # noqa: F401
     PilotStatusHistory,
     PilotExtension,
     EmergencyExtension,
+)
+from app.models.activation_governance import (  # noqa: F401
+    ActivationPolicy,
+    PendingActivation,
+    DeviceSlotException,
 )
 from app.models.licensing_service import (  # noqa: F401
     SigningKey,
