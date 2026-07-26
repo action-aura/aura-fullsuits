@@ -33,6 +33,23 @@ class ActivationFailed(Exception):
         self.reason_code = reason_code
 
 
+class ActivationPending(Exception):
+    """Phase 8 Part O/U: Owner accepted the request but is holding it for
+    manual approval/risk review (`result: "PENDING"` -- see
+    owner/contracts/activation-response-v1.schema.json's third branch).
+    Deliberately NOT a subclass of ActivationFailed -- this is not a
+    failure, and a caller that only catches ActivationFailed must not
+    accidentally treat "awaiting a human decision" as "rejected." The UI
+    layer should show a distinct "activation awaiting approval" screen and
+    may retry later (`retry_guidance` on the Owner response is always
+    "safe_to_retry_with_backoff" for this branch)."""
+
+    def __init__(self, reason_code: str, installation_id: Optional[str], message: str):
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.installation_id = installation_id
+
+
 @dataclass(frozen=True)
 class ActivationResult:
     state: LicenseState
@@ -111,6 +128,16 @@ def ingest_activation_response(
     whether activation succeeded is trusted; the verification below is the
     only thing that grants ACTIVE_ONLINE.
     """
+    if response.get("result") == "PENDING":
+        # Not a failure -- no assertion exists yet to persist or verify.
+        # Nothing about local state changes; the next activation retry
+        # (same idempotency_key, Owner-side self-healing -- see Phase 8
+        # Milestone 5's design doc) is what eventually resolves this.
+        reason_code = response.get("reason_code", "ACTIVATION_PENDING_REVIEW")
+        installation_id = response.get("installation_id")
+        event_recorder.record("ACTIVATION_PENDING", {"reason_code": reason_code})
+        raise ActivationPending(reason_code, installation_id, "Activation is awaiting manual review.")
+
     if response.get("result") != "SUCCESS":
         reason_code = response.get("reason_code", "ACTIVATION_REJECTED")
         event_recorder.record("ACTIVATION_FAILED", {"reason_code": reason_code})

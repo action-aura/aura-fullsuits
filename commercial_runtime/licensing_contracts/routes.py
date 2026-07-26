@@ -23,7 +23,7 @@ from typing import Callable, Optional
 
 from flask import Blueprint, current_app, jsonify, request
 
-from .activation import ActivationFailed, ingest_activation_response, perform_activation
+from .activation import ActivationFailed, ActivationPending, ingest_activation_response, perform_activation
 from .checkin_scheduler import LicenseCheckInScheduler
 from .client import LicensingClient, LicensingClientConfig
 from .deactivation import DeactivationFailed, ingest_deactivation_response, perform_deactivation
@@ -135,6 +135,8 @@ def make_licensing_blueprint(
                 license_key=license_key,
                 device_public_key_fingerprint=_device_fingerprint(signer),
             )
+        except ActivationPending as exc:
+            return jsonify({"result": "PENDING", "reason_code": exc.reason_code, "installation_id": exc.installation_id, "detail": str(exc)}), 202
         except ActivationFailed as exc:
             return jsonify({"reason_code": exc.reason_code, "detail": str(exc)}), 400
         finally:
@@ -239,6 +241,8 @@ def _register_internal_sync_routes(
                 platform=platform,
                 device_public_key_fingerprint=_device_fingerprint(signer),
             )
+        except ActivationPending as exc:
+            return jsonify({"result": "PENDING", "reason_code": exc.reason_code, "installation_id": exc.installation_id, "detail": str(exc)}), 202
         except ActivationFailed as exc:
             return jsonify({"reason_code": exc.reason_code, "detail": str(exc)}), 400
         return jsonify({"result": "SUCCESS", "state": result.state.value, "installation_id": result.owner_installation_id}), 200

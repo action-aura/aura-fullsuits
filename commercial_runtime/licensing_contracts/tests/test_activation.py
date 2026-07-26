@@ -5,7 +5,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 
-from commercial_runtime.licensing_contracts.activation import ActivationFailed, perform_activation
+from commercial_runtime.licensing_contracts.activation import ActivationFailed, ActivationPending, perform_activation
 from commercial_runtime.licensing_contracts.canonical import canonicalize_bytes
 from commercial_runtime.licensing_contracts.client import LicensingClientError
 from commercial_runtime.licensing_contracts.events import LicensingEventRecorder
@@ -262,3 +262,33 @@ def test_ingest_activation_response_rejects_malformed_response(trust_store, stat
             device_public_key_fingerprint=DEVICE_FINGERPRINT,
         )
     assert exc.value.reason_code == "MALFORMED_RESPONSE"
+
+
+def test_pending_activation_raises_activation_pending_not_failed(trust_store, state_repo, events):
+    """Phase 8 Part O: PENDING is not a failure -- must raise a distinct
+    exception type, never ActivationFailed, so a caller that only catches
+    ActivationFailed does not mistakenly treat an awaiting-approval
+    activation as rejected."""
+    client = FakeClient(response={"result": "PENDING", "reason_code": "ACTIVATION_PENDING_REVIEW", "installation_id": "owner-assigned-inst-2"})
+    with pytest.raises(ActivationPending) as exc:
+        _activate(client, trust_store, state_repo, events)
+    assert exc.value.reason_code == "ACTIVATION_PENDING_REVIEW"
+    assert exc.value.installation_id == "owner-assigned-inst-2"
+    assert state_repo.load() is None
+    assert "ACTIVATION_PENDING" in [e.event_type for e in events.recent()]
+    assert "ACTIVATION_FAILED" not in [e.event_type for e in events.recent()]
+
+
+def test_ingest_activation_response_pending_raises_and_persists_nothing(trust_store, state_repo, events):
+    with pytest.raises(ActivationPending) as exc:
+        ingest_activation_response(
+            {"result": "PENDING", "reason_code": "ACTIVATION_PENDING_REVIEW", "installation_id": "owner-assigned-inst-3"},
+            trust_store=trust_store,
+            state_repository=state_repo,
+            event_recorder=events,
+            product_code="AURA_RETAIL",
+            platform="WINDOWS",
+            device_public_key_fingerprint=DEVICE_FINGERPRINT,
+        )
+    assert exc.value.installation_id == "owner-assigned-inst-3"
+    assert state_repo.load() is None
