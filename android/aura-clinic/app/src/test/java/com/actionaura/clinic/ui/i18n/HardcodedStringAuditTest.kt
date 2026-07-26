@@ -81,6 +81,12 @@ class HardcodedStringAuditTest {
         // shown to the user for each state is separately translated inline in
         // stateLabel() (tr("Restricted") etc.), same as this list's other entries.
         "\"SUCCESS\"", "\"RESTRICTED\"", "\"WARNING\"", "\"SUSPENDED\"", "\"REVOKED\"", "\"EXPIRED\"",
+        // Phase 8 Part O: Owner's activation response "result" field can
+        // also be "PENDING" (manual-approval/risk-review gate) -- same
+        // protocol-identifier comparison as the values above, not prose.
+        // The one label shown to the user is separately translated inline
+        // via tr("This activation is awaiting manual approval...").
+        "\"PENDING\"",
     )
 
     @Test
