@@ -1,10 +1,19 @@
 """Installation, device, and activation-event services (Part P/Q)."""
 from __future__ import annotations
 
+from sqlalchemy import select
+
 from app.audit.services import record as audit_record
 from app.extensions import db_session
 from app.models.base import utcnow
 from app.models.installations import ActivationEvent, DeviceRecord, Installation, InstallationStatusHistory
+
+# Statuses that occupy a License's device_limit slot. Shared by the
+# activation protocol's device-limit check (licensing_service/activation.py),
+# the manual-approval recheck (commercial_ops/activation_policy.py), and the
+# over-limit scan (commercial_ops/device_slot_ops.py) -- one definition, not
+# three copies that could silently drift apart.
+SLOT_CONSUMING_STATUSES = ("REGISTERED", "PENDING_ACTIVATION", "ACTIVE", "SUSPENDED")
 
 VALID_TRANSITIONS: dict[str, set[str]] = {
     "REGISTERED": {"PENDING_ACTIVATION", "ACTIVE", "SUSPENDED", "DEACTIVATED"},
@@ -92,6 +101,15 @@ def record_activation_event(
     db_session.add(event)
     db_session.commit()
     return event
+
+
+def count_slot_consuming_installations(license_id, *, exclude_installation_id=None) -> int:
+    stmt = select(Installation).where(
+        Installation.license_id == license_id, Installation.status.in_(SLOT_CONSUMING_STATUSES)
+    )
+    if exclude_installation_id is not None:
+        stmt = stmt.where(Installation.id != exclude_installation_id)
+    return len(db_session.execute(stmt).scalars().all())
 
 
 def register_device(installation: Installation, device_label: str | None, fingerprint_hash: str | None, actor_staff_user_id) -> DeviceRecord:
