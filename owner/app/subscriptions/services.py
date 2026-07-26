@@ -14,7 +14,16 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
     "ACTIVE": {"PAST_DUE", "SUSPENDED", "EXPIRED", "CANCELLED"},
     "PAST_DUE": {"ACTIVE", "SUSPENDED", "EXPIRED", "CANCELLED"},
     "SUSPENDED": {"ACTIVE", "CANCELLED", "EXPIRED"},
-    "EXPIRED": set(),
+    # Phase 8 Part C/AB (Scenario 2, "renewal after expiry"): an EXPIRED
+    # subscription is revivable by an applied renewal -- previously
+    # terminal, which would have made that scenario impossible. Only
+    # apply_renewal_request() (owner/app/commercial_ops/renewal_requests.py)
+    # exercises this transition in practice; the state machine itself
+    # allows it generically, consistent with every other transition here
+    # (the state machine defines what is *possible*, not who is allowed to
+    # trigger it -- that's the route-level RBAC layer's job, same as
+    # ACTIVE -> SUSPENDED).
+    "EXPIRED": {"ACTIVE"},
     "CANCELLED": set(),
     "COMPLETED": set(),
 }
