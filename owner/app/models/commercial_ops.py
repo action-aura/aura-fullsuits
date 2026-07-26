@@ -322,3 +322,178 @@ class InternalNotification(Base, UUIDPKMixin, TimestampMixin):
     subscription: Mapped["Subscription | None"] = relationship()  # noqa: F821
     license: Mapped["License | None"] = relationship()  # noqa: F821
     installation: Mapped["Installation | None"] = relationship()  # noqa: F821
+
+
+# -- Milestone 4: pilot lifecycle + emergency extensions (Parts M/N) --------
+
+PILOT_STATUSES = ("DRAFT", "APPROVED", "ACTIVE", "EXTENDED", "CONVERTED", "COMPLETED", "CANCELLED")
+
+EMERGENCY_EXTENSION_STATUSES = ("ACTIVE", "EXPIRED", "REVOKED")
+
+
+class PilotRecord(Base, UUIDPKMixin, TimestampMixin):
+    """Part M. Pilot-specific metadata layered ON TOP of an existing
+    Subscription (which must already be in PILOT status, created the
+    normal way via create_subscription()/transition_subscription() --
+    this table does not duplicate or replace Subscription, it only adds
+    the fields a pilot needs that a regular paid subscription doesn't:
+    allowed workflows, success criteria, exit plan, extension tracking.
+
+    Conversion to paid is deliberately NOT implemented as a standalone
+    action on this table -- it is done by creating and applying a real
+    RenewalRequest through the existing Milestone 2 pipeline (full
+    separation-of-duties, payment-confirmation, and recent-auth gates),
+    exactly as Part M requires ("explicit paid plan... confirmed
+    commercial record... no silent conversion"). `mark_pilot_converted()`
+    (commercial_ops/pilot_lifecycle.py) only updates THIS table's
+    bookkeeping after that renewal has genuinely been APPLIED -- it never
+    grants paid status by itself.
+    """
+
+    __tablename__ = "owner_pilot_records"
+
+    subscription_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_subscriptions.id"), unique=True, nullable=False
+    )
+    customer_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_products.id"), nullable=False)
+    platform_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_platforms.id"))
+
+    pilot_start: Mapped[date] = mapped_column(Date, nullable=False)
+    pilot_end: Mapped[date] = mapped_column(Date, nullable=False)
+
+    allowed_device_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    allowed_workflows: Mapped[list | None] = mapped_column(JSONB)
+    support_level: Mapped[str | None] = mapped_column(String(32))
+
+    sales_owner_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
+    )
+    support_owner_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
+    )
+
+    agreed_limitations: Mapped[str | None] = mapped_column(Text)
+    success_criteria: Mapped[str | None] = mapped_column(Text)
+    review_date: Mapped[date | None] = mapped_column(Date)
+    exit_rollback_plan: Mapped[str | None] = mapped_column(Text)
+
+    # "PENDING" until complete_pilot()/mark_pilot_converted() records the
+    # actual outcome -- see PILOT_CONVERSION_DECISIONS.
+    conversion_decision: Mapped[str] = mapped_column(String(32), default="PENDING", nullable=False)
+
+    # Part M: "no indefinite rolling pilot" -- a hard, explicit ceiling
+    # checked by extend_pilot(), not just a convention.
+    extension_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_extensions_allowed: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+
+    status: Mapped[str] = mapped_column(String(16), default="DRAFT", nullable=False)
+
+    created_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
+    )
+    approved_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
+    )
+    converted_renewal_request_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_renewal_requests.id")
+    )
+
+    # Optimistic lock -- same reasoning as RenewalRequest.version: two
+    # concurrent extend/convert/cancel attempts on the same pilot must not
+    # silently overwrite each other.
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    subscription: Mapped["Subscription"] = relationship()  # noqa: F821
+    customer: Mapped["Customer"] = relationship()  # noqa: F821
+    product: Mapped["Product"] = relationship()  # noqa: F821
+    status_history: Mapped[list["PilotStatusHistory"]] = relationship(back_populates="pilot_record")
+    extensions: Mapped[list["PilotExtension"]] = relationship(back_populates="pilot_record")
+
+    __mapper_args__ = {"version_id_col": version}
+
+
+class PilotStatusHistory(Base, UUIDPKMixin, TimestampMixin):
+    __tablename__ = "owner_pilot_status_history"
+
+    pilot_record_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_pilot_records.id"), nullable=False
+    )
+    from_status: Mapped[str | None] = mapped_column(String(16))
+    to_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    changed_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
+    )
+    reason: Mapped[str | None] = mapped_column(Text)
+
+    pilot_record: Mapped[PilotRecord] = relationship(back_populates="status_history")
+
+
+class PilotExtension(Base, UUIDPKMixin, TimestampMixin):
+    """Append-only extension history (Part M: "extension history" is a
+    required field on the pilot record -- modeled here as its own table,
+    matching this codebase's established history-table pattern, rather
+    than a JSON blob column)."""
+
+    __tablename__ = "owner_pilot_extensions"
+
+    pilot_record_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_pilot_records.id"), nullable=False
+    )
+    extension_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    previous_end_date: Mapped[date] = mapped_column(Date, nullable=False)
+    new_end_date: Mapped[date] = mapped_column(Date, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    approved_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
+    )
+
+    pilot_record: Mapped[PilotRecord] = relationship(back_populates="extensions")
+
+
+class EmergencyExtension(Base, UUIDPKMixin, TimestampMixin):
+    """Part N. An explicit, short-lived, permission-controlled,
+    MFA-protected (enforced at the route layer, see
+    commercial_ops/routes.py) override that keeps a subscription's
+    commercial state usable despite its underlying Subscription/License
+    status -- for exceptional support cases only. NOT a bypass: it never
+    modifies Subscription/License/RenewalRecord rows, never marks a
+    payment confirmed, and is explicitly checked AFTER `REVOKED` in
+    `resolve_commercial_state()` (Milestone 1) so it can never override an
+    explicit security revocation.
+    """
+
+    __tablename__ = "owner_emergency_extensions"
+
+    subscription_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_subscriptions.id"), nullable=False
+    )
+    license_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_licenses.id"))
+
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    incident_reference: Mapped[str | None] = mapped_column(String(128))
+
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Hard cap enforced by create_emergency_extension() -- see
+    # MAX_EMERGENCY_EXTENSION_HOURS in commercial_ops/emergency_extensions.py.
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    # None = every installation under this subscription/license; otherwise
+    # a JSON list of installation IDs (Part N: "device scope").
+    device_scope: Mapped[list | None] = mapped_column(JSONB)
+
+    status: Mapped[str] = mapped_column(String(16), default="ACTIVE", nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
+    )
+    revocation_reason: Mapped[str | None] = mapped_column(Text)
+
+    created_by_staff_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id"), nullable=False
+    )
+
+    subscription: Mapped["Subscription"] = relationship()  # noqa: F821
+    license: Mapped["License | None"] = relationship()  # noqa: F821

@@ -64,6 +64,10 @@ from app.models.commercial_ops import (  # noqa: F401
     PaymentCorrectionHistory,
     CommercialPolicy,
     InternalNotification,
+    PilotRecord,
+    PilotStatusHistory,
+    PilotExtension,
+    EmergencyExtension,
 )
 from app.models.licensing_service import (  # noqa: F401
     SigningKey,

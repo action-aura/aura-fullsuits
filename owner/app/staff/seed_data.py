@@ -64,6 +64,14 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("entitlement_resolution.preview", "ACTIVATION_SERVICE", "Preview entitlement resolution for a license"),
     ("licenses.reactivate", "LICENSES", "Reactivate a suspended license"),
     ("installations.replace_device", "INSTALLATIONS", "Replace a device on an installation"),
+    # Phase 8 Milestone 4 -- pilot lifecycle and emergency extensions.
+    ("pilots.view", "SUBSCRIPTIONS", "View pilot records"),
+    ("pilots.manage", "SUBSCRIPTIONS", "Create/approve/activate/extend/complete/cancel pilot records"),
+    # Deliberately NOT assigned to any role below except via the SUPER_ADMIN
+    # wildcard -- spec Part N: "Super Admin or narrowly authorized role."
+    ("emergency_extensions.view", "SUBSCRIPTIONS", "View emergency commercial extensions"),
+    ("emergency_extensions.create", "SUBSCRIPTIONS", "Create an emergency commercial extension"),
+    ("emergency_extensions.revoke", "SUBSCRIPTIONS", "Revoke an emergency commercial extension"),
 ]
 
 # code -> permission codes. SUPER_ADMIN gets every permission automatically
@@ -85,6 +93,7 @@ ROLES: dict[str, dict] = {
             "subscriptions.view", "subscriptions.create", "subscriptions.update", "subscriptions.renew",
             "licenses.view", "licenses.create",
             "installations.view",
+            "pilots.view", "pilots.manage",
         ],
     },
     "SUPPORT": {
@@ -98,6 +107,7 @@ ROLES: dict[str, dict] = {
             "installations.view", "installations.register", "installations.update", "installations.suspend",
             "installations.replace_device",
             "activation_service.view", "activation_requests.view", "device_keys.view",
+            "pilots.view",
             # No signing-key management, no plan/entitlement changes, no license-secret issuance (Part S).
         ],
     },
@@ -118,6 +128,7 @@ ROLES: dict[str, dict] = {
             "catalog.view", "customers.view", "subscriptions.view", "licenses.view", "installations.view",
             "activation_service.view", "activation_requests.view", "device_keys.view",
             "signing_keys.view_public_metadata", "offline_policies.view",
+            "pilots.view",
         ],
     },
 }
