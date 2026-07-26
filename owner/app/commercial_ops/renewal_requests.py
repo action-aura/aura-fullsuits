@@ -51,10 +51,13 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
     "VOIDED": set(),
 }
 
-# Subscription statuses a renewal is allowed to revive back to ACTIVE.
-# Cross-checked against subscriptions.services.VALID_TRANSITIONS at apply
-# time too (belt and suspenders -- if that table is ever narrowed, this
-# module fails closed rather than silently applying an now-disallowed move).
+# Subscription statuses a renewal is allowed to revive back to ACTIVE. The
+# sole authority for this decision -- deliberately NOT cross-checked
+# against subscriptions.services.VALID_TRANSITIONS (see that table's own
+# comment on its "EXPIRED" entry for why: that table is also consulted by
+# the generic, loosely-gated POST /subscriptions/<id>/transition route, so
+# widening it to permit a revival would open the same move up outside this
+# module's own approval/payment/recent-auth-gated pipeline).
 _REVIVABLE_SUBSCRIPTION_STATUSES = frozenset({"EXPIRED", "PAST_DUE", "SUSPENDED"})
 
 
@@ -279,13 +282,14 @@ def apply_renewal_request(renewal_request_id, actor_staff_user_id) -> RenewalReq
         subscription.device_allowance = renewal.device_allowance_after
 
     if previous_subscription_status in _REVIVABLE_SUBSCRIPTION_STATUSES:
-        from app.subscriptions.services import VALID_TRANSITIONS as SUBSCRIPTION_TRANSITIONS
-
-        if "ACTIVE" not in SUBSCRIPTION_TRANSITIONS.get(previous_subscription_status, set()):
-            raise RenewalApplicationError(
-                f"Cannot revive subscription from {previous_subscription_status} via renewal -- "
-                "not an allowed subscription transition."
-            )
+        # Deliberately NOT consulted against subscriptions.services.
+        # VALID_TRANSITIONS here (security fix -- see that table's own
+        # comment on its "EXPIRED" entry): this module's own
+        # _REVIVABLE_SUBSCRIPTION_STATUSES allowlist is the sole authority
+        # for which prior states a renewal may revive, precisely so that
+        # widening the SHARED table (consulted by the loosely-gated generic
+        # transition route) can never accidentally open this path up
+        # outside the renewal-approval pipeline.
         db_session.add(
             SubscriptionStatusHistory(
                 subscription_id=subscription.id,

@@ -14,16 +14,27 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
     "ACTIVE": {"PAST_DUE", "SUSPENDED", "EXPIRED", "CANCELLED"},
     "PAST_DUE": {"ACTIVE", "SUSPENDED", "EXPIRED", "CANCELLED"},
     "SUSPENDED": {"ACTIVE", "CANCELLED", "EXPIRED"},
-    # Phase 8 Part C/AB (Scenario 2, "renewal after expiry"): an EXPIRED
-    # subscription is revivable by an applied renewal -- previously
-    # terminal, which would have made that scenario impossible. Only
-    # apply_renewal_request() (owner/app/commercial_ops/renewal_requests.py)
-    # exercises this transition in practice; the state machine itself
-    # allows it generically, consistent with every other transition here
-    # (the state machine defines what is *possible*, not who is allowed to
-    # trigger it -- that's the route-level RBAC layer's job, same as
-    # ACTIVE -> SUSPENDED).
-    "EXPIRED": {"ACTIVE"},
+    # EXPIRED stays terminal HERE deliberately (security fix, Phase 8
+    # Milestone 2 follow-up): this table is consulted by
+    # transition_subscription(), which the generic POST
+    # /subscriptions/<id>/transition route calls with a caller-supplied
+    # to_status, gated only by subscriptions.update -- no recent-auth/MFA,
+    # no separation-of-duties, no payment check. Widening this entry to
+    # allow EXPIRED -> ACTIVE (as an earlier version of this commit did)
+    # would let any staff member with that one permission revive an
+    # expired subscription for free through that route, completely
+    # bypassing the whole renewal-approval pipeline
+    # (owner/app/commercial_ops/renewal_requests.py) Milestone 2 built
+    # specifically to gate that action. Reviving an EXPIRED subscription is
+    # ONLY possible through apply_renewal_request(), which does not call
+    # transition_subscription() or consult this table at all -- it checks
+    # its own private _REVIVABLE_SUBSCRIPTION_STATUSES allowlist and writes
+    # the SubscriptionStatusHistory row directly, inside the same guarded,
+    # audited, MFA-gated transaction that also fixes up the term dates (an
+    # EXPIRED subscription revived without new term dates would just be
+    # ACTIVE with a past end_date, a broken state this table's generic
+    # caller has no way to prevent).
+    "EXPIRED": set(),
     "CANCELLED": set(),
     "COMPLETED": set(),
 }

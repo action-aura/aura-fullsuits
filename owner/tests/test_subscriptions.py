@@ -64,6 +64,30 @@ def test_cancellation_from_terminal_state_rejected(app, seeded):
             transition_subscription(sub, "ACTIVE", staff_id)  # CANCELLED is terminal
 
 
+def test_expired_stays_terminal_for_generic_transition(app, seeded):
+    # Security regression test: EXPIRED must stay terminal for
+    # transition_subscription() itself (the generic function the
+    # loosely-gated POST /subscriptions/<id>/transition route calls with a
+    # caller-supplied to_status). Reviving an EXPIRED subscription is only
+    # ever allowed through apply_renewal_request()
+    # (owner/app/commercial_ops/renewal_requests.py), which does NOT call
+    # transition_subscription() -- see that module's own comments. An
+    # earlier version of this table allowed EXPIRED -> ACTIVE generically,
+    # which would have let any staff member with just subscriptions.update
+    # (no MFA, no separation-of-duties, no payment check) revive an
+    # expired subscription for free through the generic route, bypassing
+    # the entire renewal-approval pipeline.
+    staff_id = make_staff(app, "x9@example.com")
+    with app.app_context():
+        from app.subscriptions.services import InvalidTransitionError, transition_subscription
+
+        sub = _make_subscription(app, staff_id)
+        transition_subscription(sub, "ACTIVE", staff_id)
+        transition_subscription(sub, "EXPIRED", staff_id, reason="term ended")
+        with pytest.raises(InvalidTransitionError):
+            transition_subscription(sub, "ACTIVE", staff_id)
+
+
 def test_payment_status_validated(app, seeded):
     staff_id = make_staff(app, "x5@example.com")
     with app.app_context():
