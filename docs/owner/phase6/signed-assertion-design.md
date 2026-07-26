@@ -16,6 +16,19 @@ The signature covers the canonical-serialized `payload` object only (`licensing_
 `assertion_id`, `issuer` (`"aura-owner"`), `product_code`, `license_public_id`, `installation_public_id`, `platform`, `app_version_policy`, `release_channel`, `issued_at`, `not_before`, `expires_at`, `license_status`, `installation_status`, `subscription_status`, `allowed_device_count`, `device_key_fingerprint`, `entitlements` (the immutable snapshot from `entitlements.py`), `offline_policy`, `contract_version`.
 Explicitly never included: license key, license HMAC, pepper, payment data, tax identifiers, patient/sales/inventory data, local database metadata -- enforced by the same allowlist-guard pattern as Phase 5's `api/serializers.py::_guard` (extended, not replaced, with Phase 6 forbidden markers).
 
+**Phase 8 Part W addendum (Milestone 7):** nine commercial-state fields added on top of the list
+above, resolved fresh by `commercial_ops/assertion_fields.py::resolve_commercial_assertion_fields()`
+on every call to `build_assertion_payload()` (activation AND check-in, never cached, never stored
+separately) -- `commercial_policy_version`, `renewal_status` (latest `RenewalRequest.status` for the
+subscription, or `"NONE"`), `plan_code`, `term_start`, `term_end`, `past_due_since` (only set while
+currently `PAST_DUE`), `commercial_grace_end` (`past_due_since + CommercialPolicy.payment_grace_days`,
+only set when both are resolvable), `pilot_status` (the subscription's `PilotRecord.status`, if any),
+`emergency_extension_id` (the currently-ACTIVE, unexpired `EmergencyExtension` id, if any). All nine
+pass the same forbidden-marker guard as every other field. No product-side (Kotlin/Windows) typed
+model exists for the assertion payload -- Android forwards the raw envelope to the embedded Python
+backend untouched, and the Windows desktop app already reads Python dict keys directly -- so this is
+purely additive with zero client-side parsing changes required.
+
 ## Verification (both server-side test harness and the simulator)
 `assertions.py::verify_assertion(envelope)`: (1) look up the public key for `signing_key_id` among *all* keys ever published (including retired-but-not-revoked ones, so an assertion issued before a rotation remains verifiable through its own `expires_at`), (2) reject if the key's status is `REVOKED`, (3) recompute `canonical(payload)` and verify the Ed25519 signature, (4) check `not_before <= now <= expires_at`. Any failure returns a specific, non-forgeable-hint reason -- never partial trust.
 

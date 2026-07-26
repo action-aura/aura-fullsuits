@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from cryptography.exceptions import InvalidSignature
 from sqlalchemy import select
 
+from app.commercial_ops.assertion_fields import resolve_commercial_assertion_fields
 from app.extensions import db_session
 from app.licensing_service.canonical import canonicalize_bytes
 from app.licensing_service.signing import SigningKeyError, get_active_signing_key, load_private_key, load_public_key
@@ -59,6 +60,12 @@ def build_assertion_payload(
         "offline_policy": offline_policy,
         "contract_version": contract_version,
     }
+    # Phase 8 Part W: commercial_policy_version/renewal_status/plan_code/
+    # term_start/term_end/past_due_since/commercial_grace_end/pilot_status/
+    # emergency_extension_id -- resolved fresh from current commercial
+    # state on every call (activation AND check-in both call this
+    # function), never cached or stored separately from the values above.
+    payload.update(resolve_commercial_assertion_fields(license_row.subscription, as_of=now))
     return _guard_payload(payload)
 
 
