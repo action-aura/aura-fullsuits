@@ -139,6 +139,11 @@ fun LicensingScreen(onBack: () -> Unit, snackbar: SnackbarHostState) {
                             }
                             if (result["result"] == "SUCCESS") {
                                 infoMessage = tr("Activation successful.")
+                            } else if (result["result"] == "PENDING") {
+                                // Phase 8 Part O: Owner is holding this activation for
+                                // manual approval, not rejecting it -- a distinct,
+                                // non-error state. Not treated as failure.
+                                infoMessage = tr("This activation is awaiting manual approval. We'll keep checking automatically -- no action needed right now.")
                             } else {
                                 val reason = result["reason_code"] as? String ?: "ACTIVATION_REJECTED"
                                 errorMessage = REASON_MESSAGES[reason]?.let { tr(it) } ?: tr(REASON_MESSAGES.getValue("ACTIVATION_REJECTED"))

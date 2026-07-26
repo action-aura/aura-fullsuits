@@ -177,6 +177,13 @@
       input.value = '';
       if (status === 200 && body.result === 'SUCCESS') {
         showMessage('Activation successful.', 'info');
+      } else if (status === 202 && body.result === 'PENDING') {
+        // Phase 8 Part O: Owner is holding this activation for manual
+        // approval, not rejecting it -- a distinct, non-error state.
+        showMessage(
+          "This activation is awaiting manual approval. We'll keep checking automatically -- no action needed right now.",
+          'info',
+        );
       } else {
         const reason = body.reason_code || 'ACTIVATION_REJECTED';
         showMessage(REASON_MESSAGES[reason] || REASON_MESSAGES.ACTIVATION_REJECTED, 'error');

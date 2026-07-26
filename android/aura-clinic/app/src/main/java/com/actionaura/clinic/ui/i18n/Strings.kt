@@ -580,6 +580,8 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "License key" to "مفتاح الترخيص",
     "Activate" to "تفعيل",
     "Activation successful." to "تم التفعيل بنجاح.",
+    "This activation is awaiting manual approval. We'll keep checking automatically -- no action needed right now." to
+        "هذا التفعيل بانتظار الموافقة اليدوية. سنواصل التحقق تلقائيًا - لا حاجة لأي إجراء الآن.",
     "Please check the information entered." to "يرجى التحقق من المعلومات المدخلة.",
     "This license key could not be activated. Double-check the key and try again, or contact support." to
         "تعذر تفعيل مفتاح الترخيص هذا. تحقق من المفتاح وحاول مرة أخرى، أو تواصل مع الدعم.",
