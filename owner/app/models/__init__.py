@@ -62,6 +62,8 @@ from app.models.commercial_ops import (  # noqa: F401
     RenewalRequest,
     RenewalRequestStatusHistory,
     PaymentCorrectionHistory,
+    CommercialPolicy,
+    InternalNotification,
 )
 from app.models.licensing_service import (  # noqa: F401
     SigningKey,

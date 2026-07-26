@@ -23,8 +23,8 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPKMixin
@@ -193,3 +193,132 @@ class PaymentCorrectionHistory(Base, UUIDPKMixin, TimestampMixin):
     )
 
     payment_record: Mapped["PaymentRecord"] = relationship(back_populates="correction_history")  # noqa: F821
+
+
+# -- Milestone 3: commercial policy + internal notifications (Parts G/H/I) --
+
+NOTIFICATION_STATUSES = ("OPEN", "ACKNOWLEDGED", "IN_PROGRESS", "RESOLVED", "DISMISSED", "EXPIRED")
+
+
+class CommercialPolicy(Base, UUIDPKMixin, TimestampMixin):
+    """Part I: the COMMERCIAL policy (warning schedule, past-due timing,
+    grace, auto-expiry) -- deliberately a completely separate concept and
+    a separate table from `commercial_runtime.licensing_contracts`'s
+    TECHNICAL offline policy (`owner_offline_policies`, Phase 6/7:
+    check-in interval, offline grace, warning-before-restricted). Part I is
+    explicit these must never be conflated: an Owner outage is not unpaid
+    status, an unpaid status is not a cryptographic failure, and a
+    subscription's commercial term expiring is not the same event as an
+    installation's locally-cached assertion going stale. This table only
+    ever drives Subscription.status transitions and notification
+    generation (`commercial_ops/expiry_scan.py`); it has no field that
+    reaches the product side directly -- entitlements/assertions still flow
+    through the existing Phase 6/7 pipeline exactly as before.
+
+    Resolved per-subscription via `product_id` (one policy per product,
+    plus a `product_id IS NULL` global default as fallback) -- see
+    `commercial_ops/commercial_policy.py`'s `resolve_policy_for_subscription()`.
+    Deliberately NOT a foreign key on `Subscription` itself in this
+    milestone: policy resolution is a lookup, not a stored assignment, so
+    changing a policy's rules retroactively affects every subscription
+    using it without a separate migration to touch every existing
+    subscription row.
+    """
+
+    __tablename__ = "owner_commercial_policies"
+
+    policy_code: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    product_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_products.id"))
+    policy_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    # Part G: expiry-warning schedule. Days-before-end-date, descending
+    # (e.g. [30, 14, 7, 3, 1, 0]) -- not hardcoded anywhere in code, per
+    # Part G's own instruction.
+    warning_offsets_days: Mapped[list] = mapped_column(JSONB, nullable=False)
+    notify_role_codes: Mapped[list] = mapped_column(JSONB, nullable=False)
+    requires_customer_contact: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Part I: past-due/grace timing. 0 = subscription goes straight from
+    # ACTIVE to EXPIRED with no PAST_DUE interim state.
+    past_due_start_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    payment_grace_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Whether the scan job (commercial_ops/expiry_scan.py) may itself
+    # transition PAST_DUE -> EXPIRED once payment_grace_days has fully
+    # elapsed. This is safe for an automated job specifically because
+    # EXPIRED is a purely date-driven, non-discretionary fact (the term
+    # ended) that only ever RESTRICTS future commercial operation and never
+    # touches customer data (Principle 1) -- unlike SUSPENSION or
+    # reviving an already-EXPIRED subscription, both of which remain
+    # staff-only actions (see commercial_ops/renewal_requests.py's own
+    # comment on why EXPIRED stays terminal in the SHARED subscription
+    # transition table).
+    auto_expire_after_grace: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    effective_date: Mapped[date] = mapped_column(Date, nullable=False)
+    retired_date: Mapped[date | None] = mapped_column(Date)
+    created_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
+    )
+
+    product: Mapped["Product | None"] = relationship()  # noqa: F821
+
+
+class InternalNotification(Base, UUIDPKMixin, TimestampMixin):
+    """Part H: the internal Action Aura notification center. Deliberately
+    internal-only -- no WhatsApp/SMS/email delivery adapter exists or is
+    wired up in this milestone (Part G/H are explicit: internal
+    notifications only; a future outbound-delivery adapter may be defined
+    later but must remain inactive)."""
+
+    __tablename__ = "owner_internal_notifications"
+
+    notification_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)  # INFO/WARNING/CRITICAL
+
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_customers.id"))
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_subscriptions.id"))
+    license_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_licenses.id"))
+    installation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_installations.id"))
+
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Deliberately plain, pre-composed safe text (Part Y: "no unrestricted
+    # internal notes in signed assertions" -- and more broadly here, no
+    # patient/business data ever flows into a notification body; callers
+    # that build the message are responsible for only including the safe
+    # metadata this module's own docstrings enumerate).
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+
+    assigned_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
+    )
+    assigned_role_code: Mapped[str | None] = mapped_column(String(32))
+
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    acknowledged_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
+    )
+    resolution: Mapped[str | None] = mapped_column(Text)
+
+    source_policy_code: Mapped[str | None] = mapped_column(String(64))
+
+    # The idempotency mechanism this whole table's safety rests on (Part H:
+    # "deduplicate repeated scheduler runs... no notification flood").
+    # Format is the creating caller's choice (expiry_scan.py uses
+    # f"{notification_type}:{subscription_id}:{offset_days}") -- the
+    # UNIQUE constraint is what actually guarantees a second scan run for
+    # the same subscription at the same warning offset never creates a
+    # duplicate row, not any application-level check-then-insert (which
+    # would itself be a race).
+    dedup_key: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+
+    status: Mapped[str] = mapped_column(String(16), default="OPEN", nullable=False)
+
+    customer: Mapped["Customer | None"] = relationship()  # noqa: F821
+    subscription: Mapped["Subscription | None"] = relationship()  # noqa: F821
+    license: Mapped["License | None"] = relationship()  # noqa: F821
+    installation: Mapped["Installation | None"] = relationship()  # noqa: F821
