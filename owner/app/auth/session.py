@@ -38,6 +38,22 @@ def create_session(staff_user: StaffUser) -> str:
     )
     db_session.add(record)
     db_session.commit()
+    # The caller's response cookie will carry THIS session's token from here
+    # on, but the request already in flight was received with the PRIOR
+    # cookie (if any) -- request.cookies never reflects a cookie this same
+    # response is only now about to set. Without this, a same-request
+    # follow-up call like mark_mfa_verified() (auth/routes.py's
+    # mfa_verify_submit, which deliberately rotates the session on
+    # privilege escalation from pre-MFA to post-MFA as a session-fixation
+    # defense) would fall through to load_current_staff()'s cookie lookup,
+    # find the OLD pre-MFA session instead, and mark that one -- leaving
+    # the NEW session (the one the client actually ends up holding) never
+    # marked as recently-authenticated. Caching the just-created session
+    # onto `g` here makes "the session I just created is the current
+    # session for the rest of this request" hold unconditionally, for
+    # every caller, not just this one call site.
+    g.staff_session = record
+    g.staff_user = staff_user
     return raw_token
 
 
