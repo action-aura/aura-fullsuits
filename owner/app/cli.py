@@ -207,6 +207,39 @@ def register_cli(app: Flask) -> None:
             )
         )
 
+    @commercial_group.command("reconcile")
+    @click.option("--apply", "apply_", is_flag=True, default=False, help="Actually write notifications. Default is dry-run (report only).")
+    @click.option("--as-of", default=None, help="ISO date to evaluate the state-inconsistency check against (default: today).")
+    def reconcile_cmd(apply_: bool, as_of: str | None):
+        """Cross-record consistency and stalled-workflow detection (Part Q).
+        Report-only unless --apply is given. NEVER mutates any commercial
+        record itself -- only ever surfaces a notification for a human to
+        act on."""
+        from app.commercial_ops.reconciliation import run_reconciliation
+
+        as_of_date = date.fromisoformat(as_of) if as_of else None
+        result = run_reconciliation(as_of=as_of_date, dry_run=not apply_)
+        click.echo(
+            json.dumps(
+                {
+                    "as_of": result.as_of.isoformat(),
+                    "dry_run": result.dry_run,
+                    "licenses_checked": result.licenses_checked,
+                    "renewals_checked": result.renewals_checked,
+                    "pending_activations_checked": result.pending_activations_checked,
+                    "notifications_created": result.notifications_created,
+                    "notifications_deduped": result.notifications_deduped,
+                    "findings": [
+                        {"check": f.check, "entity_type": f.entity_type, "entity_id": f.entity_id, "detail": f.detail}
+                        for f in result.findings
+                    ]
+                    if result.dry_run
+                    else [],
+                },
+                indent=2,
+            )
+        )
+
     @commercial_group.command("device-limit-scan")
     @click.option("--apply", "apply_", is_flag=True, default=False, help="Actually write notifications. Default is dry-run (report only).")
     @click.option("--as-of", default=None, help="ISO date to evaluate against (default: today).")
