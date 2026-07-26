@@ -206,3 +206,38 @@ def register_cli(app: Flask) -> None:
                 indent=2,
             )
         )
+
+    @commercial_group.command("device-limit-scan")
+    @click.option("--apply", "apply_", is_flag=True, default=False, help="Actually write notifications. Default is dry-run (report only).")
+    @click.option("--as-of", default=None, help="ISO date to evaluate against (default: today).")
+    def device_limit_scan_cmd(apply_: bool, as_of: str | None):
+        """Over-limit device-slot detection (Part P). Report-only unless
+        --apply is given. NEVER deactivates or replaces any installation
+        itself -- only ever creates an internal notification for a human to
+        act on via release_device_slot()/replace_device_slot() or a
+        device-allowance renewal."""
+        from app.commercial_ops.device_slot_ops import scan_over_limit_licenses
+
+        as_of_date = date.fromisoformat(as_of) if as_of else None
+        result = scan_over_limit_licenses(as_of=as_of_date, dry_run=not apply_)
+        click.echo(
+            json.dumps(
+                {
+                    "as_of": result.as_of.isoformat(),
+                    "dry_run": result.dry_run,
+                    "scanned_count": result.scanned_count,
+                    "notifications_created": result.notifications_created,
+                    "notifications_deduped": result.notifications_deduped,
+                    "findings": [
+                        {
+                            "license_id": f.license_id, "active_count": f.active_count,
+                            "effective_limit": f.effective_limit, "dedup_key": f.dedup_key,
+                        }
+                        for f in result.findings
+                    ]
+                    if result.dry_run
+                    else [],
+                },
+                indent=2,
+            )
+        )

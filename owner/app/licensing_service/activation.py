@@ -15,7 +15,10 @@ from datetime import date, datetime, timezone
 from sqlalchemy import select
 
 from app.audit.services import record as audit_record
+from app.commercial_ops.activation_policy import create_pending_activation, resolve_activation_mode
+from app.commercial_ops.device_slot_ops import resolve_effective_device_limit
 from app.extensions import db_session
+from app.installations.services import count_slot_consuming_installations
 from app.licensing_service import device_identity, idempotency, replay
 from app.licensing_service.assertions import build_assertion_payload, persist_assertion, sign_assertion
 from app.licensing_service.canonical import canonicalize, canonicalize_bytes
@@ -28,7 +31,6 @@ from app.models.licensing_service import ActivationRequest
 from app.security.license_keys import hash_license_secret
 
 SUPPORTED_CONTRACT_VERSIONS = ("v1",)
-_SLOT_CONSUMING_STATUSES = ("REGISTERED", "PENDING_ACTIVATION", "ACTIVE", "SUSPENDED")
 
 
 class ActivationRejected(Exception):
@@ -212,16 +214,22 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
             raise ActivationRejected("DEVICE_KEY_MISMATCH")
         installation = existing_installation
     else:
-        active_count = db_session.execute(
-            select(Installation).where(Installation.license_id == locked_license.id, Installation.status.in_(_SLOT_CONSUMING_STATUSES))
-        ).scalars().all()
-        if len(active_count) >= locked_license.device_limit:
+        active_count = count_slot_consuming_installations(locked_license.id)
+        if active_count >= resolve_effective_device_limit(locked_license):
             raise ActivationRejected("DEVICE_LIMIT_REACHED")
+        # Part O: a brand-new registration is gated by the product's
+        # configured activation mode. AUTOMATIC (the default whenever no
+        # ActivationPolicy row exists -- i.e. every installation ever
+        # activated before Phase 8) goes straight to ACTIVE exactly as
+        # before; MANUAL_APPROVAL/RISK_REVIEW hold it in PENDING_ACTIVATION
+        # below instead of signing an assertion.
+        activation_mode = resolve_activation_mode(product.id)
         installation = Installation(
             customer_id=locked_license.customer_id, subscription_id=locked_license.subscription_id,
             license_id=locked_license.id, product_id=product.id, platform_id=platform.id,
             installation_label=body["installation_id"], app_version=body["app_version"],
-            status="ACTIVE", first_registered_at=datetime.now(timezone.utc),
+            status="ACTIVE" if activation_mode == "AUTOMATIC" else "PENDING_ACTIVATION",
+            first_registered_at=datetime.now(timezone.utc),
         )
         db_session.add(installation)
         db_session.flush()
@@ -229,6 +237,19 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
 
     installation.last_check_in_at = datetime.now(timezone.utc)
     installation.activation_count += 1
+
+    if installation.status == "PENDING_ACTIVATION":
+        # Still awaiting a staff decision -- applies whether this
+        # installation was just created under a gating policy or is a
+        # retry of an earlier gated request that hasn't been decided yet.
+        # Deliberately NEVER forced to ACTIVE here the way a reused
+        # installation normally would be below (Part O: no bypass via
+        # retry).
+        return _pending_review_response(
+            body=body, source_ip=source_ip, product=product, platform=platform,
+            license_row=locked_license, installation=installation, fingerprint=fingerprint,
+        )
+
     if installation.status not in ("ACTIVE",):
         installation.status = "ACTIVE"
 
@@ -295,6 +316,65 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
         actor_staff_user_id=None, actor_role_snapshot=None, action_code="ACTIVATION_ACCEPTED",
         entity_type="installation", entity_public_id=str(installation.id),
         after_state={"license_id": str(locked_license.id), "product_code": product.product_code},
+        correlation_id=body.get("correlation_id"),
+    )
+    return response
+
+
+def _pending_review_response(
+    *, body: dict, source_ip: str | None, product: Product, platform: Platform,
+    license_row: License, installation: Installation, fingerprint: str,
+) -> dict:
+    """Part O: the manual-approval/risk-review branch. No assertion is
+    built or signed here -- see `PendingActivation`'s own docstring for why
+    that's deliberate. This is a NEW, additive response shape (not
+    previously reachable, since no ActivationPolicy row ever existed before
+    Phase 8, and none exists today unless Owner staff explicitly create
+    one) -- see `docs/owner/phase8/manual-activation-and-device-slots.md`
+    for why product clients must not have MANUAL_APPROVAL/RISK_REVIEW
+    enabled against them until Milestone 7 ships the matching Kotlin/Windows
+    handling."""
+    device_fingerprint = device_identity.fingerprint_of(body["device_public_key"])
+    pending = create_pending_activation(
+        installation=installation, license_id=license_row.id, product_id=product.id, platform_id=platform.id,
+        mode=resolve_activation_mode(product.id), request_id=body["request_id"],
+        correlation_id=body.get("correlation_id"), device_key_fingerprint=device_fingerprint,
+    )
+    db_session.add(
+        ActivationRequest(
+            request_id=body["request_id"], correlation_id=body.get("correlation_id"), event_type="ACTIVATION",
+            product_id=product.id, platform_id=platform.id, license_id=license_row.id, installation_id=installation.id,
+            device_key_fingerprint=device_fingerprint, source_ip=source_ip,
+            result="PENDING", reason_code="ACTIVATION_PENDING_REVIEW",
+        )
+    )
+    db_session.commit()
+
+    response = {
+        "contract_version": body["contract_version"],
+        "response_id": str(pending.id),
+        "correlation_id": body.get("correlation_id"),
+        "server_timestamp": datetime.now(timezone.utc).isoformat(),
+        "result": "PENDING",
+        "reason_code": "ACTIVATION_PENDING_REVIEW",
+        "decision": "PENDING_REVIEW",
+        "installation_id": str(installation.id),
+        "retry_guidance": "safe_to_retry_with_backoff",
+    }
+    # Deliberately NO cached_response_json: unlike SUCCESS/FAILURE (settled
+    # facts), PENDING describes an in-progress state that changes without a
+    # new client request. A retry with the same idempotency_key must
+    # re-observe current reality -- see idempotency.check_idempotency()'s
+    # early-return guard, which only short-circuits when a cached response
+    # body is present. Once a staff decision lands, the identical retry
+    # naturally reaches the ACTIVE/APPROVED path (self-healing) or the
+    # rejected/deactivated path.
+    idempotency.record_idempotency(body["idempotency_key"], "ACTIVATION", fingerprint, str(installation.id), "PENDING")
+
+    audit_record(
+        actor_staff_user_id=None, actor_role_snapshot=None, action_code="ACTIVATION_PENDING_REVIEW",
+        entity_type="installation", entity_public_id=str(installation.id),
+        after_state={"license_id": str(license_row.id), "product_code": product.product_code},
         correlation_id=body.get("correlation_id"),
     )
     return response

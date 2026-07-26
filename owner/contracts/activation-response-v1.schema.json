@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aura-owner.internal/contracts/activation-response-v1.schema.json",
   "title": "Activation Response v1",
-  "description": "LIVE as of Phase 6. Success shape matches app/licensing_service/activation.py's response dict; error shape matches app/api_external/routes.py::_error_response.",
+  "description": "LIVE as of Phase 6; PENDING branch added Phase 8 Milestone 5 (Part O). Success shape matches app/licensing_service/activation.py's response dict; error shape matches app/api_external/routes.py::_error_response. The PENDING branch is only ever produced when Owner staff have explicitly configured a non-AUTOMATIC ActivationPolicy for a product -- see docs/owner/phase8/manual-activation-and-device-slots.md. Do not enable that policy against a real client build before Milestone 7 ships matching Kotlin/Windows handling.",
   "oneOf": [
     {
       "type": "object",
@@ -35,6 +35,22 @@
         "reason_code": { "type": "string", "description": "A PUBLIC reason code only -- see external-api-reason-code-catalog.md." },
         "decision": { "type": "string", "const": "REJECTED" },
         "retry_guidance": { "type": "string", "enum": ["safe_to_retry_with_backoff", "do_not_retry_without_correction"] }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "response_id", "correlation_id", "server_timestamp", "result", "reason_code", "decision", "installation_id", "retry_guidance"],
+      "properties": {
+        "contract_version": { "type": "string", "const": "v1" },
+        "response_id": { "type": "string" },
+        "correlation_id": { "type": ["string", "null"] },
+        "server_timestamp": { "type": "string", "format": "date-time" },
+        "result": { "type": "string", "const": "PENDING" },
+        "reason_code": { "type": "string", "const": "ACTIVATION_PENDING_REVIEW" },
+        "decision": { "type": "string", "const": "PENDING_REVIEW" },
+        "installation_id": { "type": "string", "description": "Server-assigned public UUID -- persist this; retry activation with it to learn the eventual decision (self-healing on the same idempotency_key)." },
+        "retry_guidance": { "type": "string", "const": "safe_to_retry_with_backoff" }
       }
     }
   ]

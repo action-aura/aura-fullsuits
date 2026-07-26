@@ -45,8 +45,32 @@ def record_idempotency(
     idempotency_key: str, operation_type: str, request_fingerprint: str, result_reference: str | None,
     response_status: str, cached_response_json: str | None = None,
 ) -> ExternalIdempotencyRecord:
+    """INSERTs a fresh record for the common case (one key, one terminal
+    result, forever). UPDATEs in place when a record for this
+    (key, operation_type) already exists -- the only way that happens is a
+    prior PENDING write (Phase 8 Part O: manual activation approval leaves
+    a non-terminal record with no `cached_response_json` so a retry can
+    re-observe reality, see `licensing_service/activation.py`'s
+    `_pending_review_response()`) now being finalized to SUCCESS/FAILURE.
+    Every pre-Phase-8 caller only ever calls this once per key, so for them
+    `existing` is always None and behavior is unchanged."""
     key_hash = _hash(idempotency_key)
     fingerprint_hash = _hash(request_fingerprint)
+    existing = db_session.execute(
+        select(ExternalIdempotencyRecord).where(
+            ExternalIdempotencyRecord.idempotency_key_hash == key_hash,
+            ExternalIdempotencyRecord.operation_type == operation_type,
+        )
+    ).scalars().first()
+    if existing is not None:
+        existing.request_fingerprint_hash = fingerprint_hash
+        existing.result_reference = result_reference
+        existing.response_status = response_status
+        existing.cached_response_json = cached_response_json
+        existing.expires_at = datetime.now(timezone.utc) + timedelta(seconds=IDEMPOTENCY_RECORD_TTL_SECONDS)
+        db_session.commit()
+        return existing
+
     row = ExternalIdempotencyRecord(
         idempotency_key_hash=key_hash,
         operation_type=operation_type,
