@@ -52,17 +52,43 @@ call, per spec Part E step 22 ("commit once"). `record_renewal()` (the existing 
 is deliberately *not* called from inside this transaction, since it commits on its own; the
 equivalent logic is inlined instead.
 
-## Renewal after expiry: widening the subscription state machine
+## Renewal after expiry: EXPIRED stays terminal in the SHARED state machine, on purpose
 
 Scenario 2 of the governing spec's Part AB ("renewal after expiry") requires an `EXPIRED`
-subscription to become `ACTIVE` again. Before this milestone, `EXPIRED` was a terminal state in
-`owner/app/subscriptions/services.py`'s `VALID_TRANSITIONS` (`"EXPIRED": set()`), which would have
-made that scenario structurally impossible. Widened to `"EXPIRED": {"ACTIVE"}` — the state machine
-now defines what's *possible*; who is *allowed* to trigger it is the route-level RBAC layer's job,
-consistent with every other transition in that table (e.g. `ACTIVE -> SUSPENDED` is also generic,
-gated by permission checks elsewhere, not by the transition table itself). In practice only
-`apply_renewal_request()` exercises this path today. Full Owner regression suite reconfirmed green
-after this change.
+subscription to become `ACTIVE` again. The first version of this milestone widened
+`owner/app/subscriptions/services.py`'s `VALID_TRANSITIONS["EXPIRED"]` from `set()` to `{"ACTIVE"}`
+to allow it, reasoning (incorrectly) that "the state machine defines what's possible, RBAC decides
+who's allowed" — the same pattern every other entry in that table follows.
+
+**That reasoning didn't hold here, and a security review caught it before it went further.** That
+table is consulted by `transition_subscription()`, which the pre-existing, generic
+`POST /subscriptions/<id>/transition` route calls directly with a caller-supplied `to_status` —
+gated only by `subscriptions.update`, with no recent-auth/MFA, no separation-of-duties, and no
+payment check. Widening the table meant any staff member holding just that one permission could
+revive an expired subscription for free through that route, completely bypassing the
+renewal-approval pipeline this milestone exists to build — and would leave the subscription
+`ACTIVE` with a stale past `end_date`, since that route never touches term dates at all.
+
+**Reverted.** `EXPIRED` is terminal again in the shared table. Reviving an EXPIRED subscription is
+possible only through `apply_renewal_request()`, which was already checking its own private
+`_REVIVABLE_SUBSCRIPTION_STATUSES` allowlist and writing the `SubscriptionStatusHistory` row
+directly — it never actually needed the shared table's permission; the redundant "belt and
+suspenders" cross-check against it (also removed) was the actual mistake. A regression test
+(`test_expired_stays_terminal_for_generic_transition`) now guards against re-introducing this.
+Full Owner regression suite reconfirmed green (262/262) after the revert.
+
+**The lesson, stated plainly for future milestones**: "the state machine defines what's possible,
+RBAC decides who's allowed" only holds when *every* caller of that state machine goes through an
+RBAC layer with the right strength for the transition in question. It breaks the moment one
+transition (EXPIRED→ACTIVE, needing MFA + separation-of-duties + a payment record) has stricter
+requirements than another transition in the *same* shared table (ACTIVE→SUSPENDED, a plain
+permission check) — widening the table for the strict case silently weakens it for every other
+caller reachable through the loose one. Milestones 3-5 will each add more of these
+higher-assurance transitions (suspension lift, emergency extension, pilot conversion); the
+pattern going forward is what `apply_renewal_request()` already does: keep any transition that
+needs stronger guarantees than the generic route provides *out* of the shared table entirely, and
+enforce it in a private, purpose-built allowlist inside the function that actually carries the
+stronger guarantees.
 
 ## A real pre-existing bug found and fixed: MFA session mix-up
 
