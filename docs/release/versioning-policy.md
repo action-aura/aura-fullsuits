@@ -71,5 +71,43 @@ No existing rc.1 build artifact under `dist/` is overwritten by this bump -- rc.
 
 There is currently no dedicated "About" screen in either product's frontend (`products/retail/frontend/`, `products/clinic/frontend/`) -- neither product had one before Phase 7, and `/api/version` had no UI consumer at all (only the Windows launcher's own port-identity check calls it). Rather than build a new standalone About screen purely to satisfy the version-display requirement, Phase 7's Part G "License Status" screen (which needs to show product/version context anyway) is the surface where the current version becomes user-visible for the first time -- tracked in `docs/licensing/phase7/phase7-implementation-plan.md`, not silently dropped.
 
+## Phase 8V-P bump (Commercial Operations UI + PENDING-activation product UX)
+
+All four artifact families moved `1.0.0-rc.2` -> `1.0.0-rc.3` at the start of Phase 8V-P's physical
+validation pass, per the "if current product artifacts differ from the final Phase 7 rc.2 artifacts
+in shipped code or contracts, use the next release-candidate version" rule above:
+
+| Product | Platform | Version |
+|---|---|---|
+| Aura Retail | Windows | 1.0.0-rc.3 |
+| Aura Retail | Android | 1.0.0-rc.3 (versionCode 4) |
+| Aura Clinic | Windows | 1.0.0-rc.3 |
+| Aura Clinic | Android | 1.0.0-rc.3 (versionCode 4) |
+
+Shipped code genuinely changed since rc.2: Phase 8 Milestone 7 added the `ActivationPending`
+handling path (`commercial_runtime/licensing_contracts/activation.py`) and a new user-facing
+"awaiting manual approval" message on both Android (`LicensingScreen.kt`, both products) and Windows
+(`licensing.js`, both products); Phase 8V-P's own security review additionally fixed a real
+assertion-verification allowlist gap in `commercial_runtime` that ships inside every product build.
+Both are real behavior changes to code every build embeds, not documentation-only changes, so per the
+bumping rules this is at minimum a PATCH-shaped rc bump — following Phase 7's own precedent of using
+the plain `rc.N` bump for a licensing-related shipped-code change rather than a MINOR/MAJOR jump.
+
+`SCHEMA_VERSION`/`LICENSING_SCHEMA_VERSION` are unchanged at `1` — every new Phase 8 field (Owner-side
+`owner_*` tables, and the nine new assertion payload fields) lives in already-existing JSON/JSONB
+columns on both sides, never a new SQL column in the local product schema.
+
+Updated in all six canonical sources: `products/retail/backend/config.py`,
+`products/clinic/backend/config.py`, `android/aura-retail/app/build.gradle`,
+`android/aura-clinic/app/build.gradle`, `products/retail/packaging/version_info.txt`,
+`products/clinic/packaging/version_info.txt`, plus both `.iss` installer scripts (this document's own
+rc.2 entry notes that file was missed once already — not missed this time). No `dist/` artifact from
+rc.2 is overwritten; rc.3 artifacts are produced fresh alongside them.
+
+The Android `versionCode`/`versionName` bump landed as a source-only change in this pass (no
+physical Android device was available in this session to build-and-validate a new APK/AAB against —
+see `docs/owner/phase8vp/physical-device-readiness.md`); the Windows side was built, installed, and
+exercised for real this same pass — see `docs/owner/phase8vp/final-artifact-build-report.md`.
+
 ## Every release artifact must expose (verified this wave)
 Product name, product code, version name, version code/build number, schema version, financial contract version (Retail only), release channel (`rc` for this wave), build timestamp, Git commit, environment, architecture — see `release-candidate-manifest.md` for the generated instance of this per artifact.
