@@ -103,3 +103,19 @@ not a hidden gap: every capability behind it is fully built, tested, and callabl
 `aura-owner-commercial-ops-phase8-conditional-complete` — reflects genuine, real, tested completion
 of the backend/service layer and cross-platform PENDING-handling foundation, explicitly conditional
 on the UI and physical-validation work in the section above.
+
+## Phase 8V update (additive — this section only, historical verdict above unchanged)
+
+Phase 8V (`docs/owner/phase8v/`) closed item 1 above in full (the entire internal Owner UI backlog,
+real RBAC/MFA/audit-tested) and made real, wire-level progress on item 3 (3 of 7 Part AB scenarios
+now have genuine cross-package HTTP proof, not just backend-service tests — see
+`docs/owner/phase8v/validation-scenarios-evidence.md`). It also found and fixed a real defect
+(`commercial_runtime`'s client-side assertion allowlist rejecting every Milestone 7 field) that this
+document's own original evidence could not have caught, since no test at the time exercised the real
+cross-package wire path — see `docs/owner/phase8v/phase8v-security-review.md`.
+
+**This tag still represents the correct state of the world.** Item 2 (physical Android/Windows
+validation of all 7 scenarios) remains genuinely open — Phase 8V disclosed, before starting any
+work, that no physical device is available in that session's environment, and did not fabricate that
+evidence. The conditional qualifier stays until a session with device access completes items 2-3.
+See `docs/owner/phase8v/phase8-final-decision.md` for the full accounting.
