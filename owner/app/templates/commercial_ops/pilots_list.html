@@ -1,0 +1,31 @@
+{% extends "layout/base.html" %}
+{% block title %}Pilots{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Pilots</h2>
+  <div class="filters">
+    <form method="get">
+      <label>Status</label>
+      <select name="status" onchange="this.form.submit()">
+        <option value="">All</option>
+        {% for s in ["DRAFT","APPROVED","ACTIVE","EXTENDED","CONVERTED","COMPLETED","CANCELLED"] %}
+        <option value="{{ s }}" {{ "selected" if status_filter == s else "" }}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </form>
+  </div>
+  <table>
+    <tr><th>Customer</th><th>Subscription</th><th>Status</th><th>Pilot window</th><th>Extensions</th></tr>
+    {% for p in pilots %}
+    <tr>
+      <td>{{ p.customer.legal_name }}</td>
+      <td><a href="{{ url_for('subscriptions.detail', subscription_id=p.subscription_id) }}">{{ p.subscription_id }}</a></td>
+      <td><span class="badge {{ 'active' if p.status in ['ACTIVE','EXTENDED'] else ('active' if p.status == 'CONVERTED' else 'draft') }}">{{ p.status }}</span></td>
+      <td>{{ p.pilot_start }} &rarr; {{ p.pilot_end }}</td>
+      <td>{{ p.extension_count }}/{{ p.max_extensions_allowed }}</td>
+      <td><a class="btn secondary" href="{{ url_for('commercial_ops_ui.pilot_detail', pilot_id=p.id) }}">View</a></td>
+    </tr>
+    {% else %}<tr><td colspan="6" class="empty">No pilots yet.</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

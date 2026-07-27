@@ -1,0 +1,35 @@
+{% extends "layout/base.html" %}
+{% block title %}Activation review{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Activation review <span class="badge {{ 'pending' if pending.status == 'PENDING_REVIEW' else ('active' if pending.status == 'APPROVED' else 'danger') }}">{{ pending.status }}</span></h2>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <dl class="kv">
+    <dt>Installation</dt><dd><a href="{{ url_for('installations.detail', installation_id=pending.installation_id) }}">{{ pending.installation_id }}</a></dd>
+    <dt>License</dt><dd><a href="{{ url_for('licensing.detail', license_id=pending.license_id) }}">{{ pending.license_id }}</a></dd>
+    <dt>Product</dt><dd>{{ pending.installation.product.name if pending.installation and pending.installation.product else pending.product_id }}</dd>
+    <dt>Platform</dt><dd>{{ pending.installation.platform.platform_code if pending.installation and pending.installation.platform else pending.platform_id }}</dd>
+    <dt>App version</dt><dd>{{ pending.installation.app_version if pending.installation else "-" }}</dd>
+    <dt>Device public-key fingerprint</dt><dd><code class="masked">{{ pending.device_key_fingerprint or "-" }}</code></dd>
+    <dt>Gating mode</dt><dd>{{ pending.mode }}</dd>
+    <dt>Requested</dt><dd>{{ pending.created_at }}</dd>
+    <dt>Decision</dt><dd>{% if pending.decided_at %}{{ pending.status }} by {{ pending.decided_by_staff_user_id }} at {{ pending.decided_at }} -- {{ pending.decision_reason or "-" }}{% else %}not yet decided{% endif %}</dd>
+  </dl>
+  <p class="empty">No license key, key material, or unrestricted raw request is ever shown here.</p>
+</div>
+
+{% if pending.status == "PENDING_REVIEW" %}
+<div class="card">
+  <h3>Decision</h3>
+  <form method="post" action="{{ url_for('commercial_ops_ui.approve_pending_activation_route', pending_id=pending.id) }}" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" onclick="return confirm('Approve this activation? This requires recent authentication.');">Approve</button>
+  </form>
+  <form method="post" action="{{ url_for('commercial_ops_ui.reject_pending_activation_route', pending_id=pending.id) }}" style="margin-top:0.5rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Reason (required)</label><input name="reason" required>
+    <button type="submit" class="danger" onclick="return confirm('Reject this activation?');">Reject</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

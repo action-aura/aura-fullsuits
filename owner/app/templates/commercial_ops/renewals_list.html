@@ -1,0 +1,31 @@
+{% extends "layout/base.html" %}
+{% block title %}Renewals{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Renewal requests</h2>
+  <div class="filters">
+    <form method="get">
+      <label>Status</label>
+      <select name="status" onchange="this.form.submit()">
+        <option value="">All</option>
+        {% for s in ["DRAFT","QUOTED","AWAITING_CONFIRMATION","AWAITING_PAYMENT","PAYMENT_RECORDED","APPROVED","APPLIED","REJECTED","CANCELLED","VOIDED"] %}
+        <option value="{{ s }}" {{ "selected" if status_filter == s else "" }}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </form>
+  </div>
+  <table>
+    <tr><th>Customer</th><th>Subscription</th><th>Status</th><th>Proposed term</th><th>Created</th></tr>
+    {% for r in renewals %}
+    <tr>
+      <td>{{ r.customer.legal_name }}</td>
+      <td><a href="{{ url_for('subscriptions.detail', subscription_id=r.subscription_id) }}">{{ r.subscription_id }}</a></td>
+      <td><span class="badge {{ 'active' if r.status == 'APPLIED' else ('danger' if r.status in ['REJECTED','VOIDED'] else 'pending') }}">{{ r.status }}</span></td>
+      <td>{{ r.proposed_term_start or "-" }} &rarr; {{ r.proposed_term_end or "-" }}</td>
+      <td>{{ r.created_at }}</td>
+      <td><a class="btn secondary" href="{{ url_for('commercial_ops_ui.renewal_detail', renewal_id=r.id) }}">View</a></td>
+    </tr>
+    {% else %}<tr><td colspan="6" class="empty">No renewal requests yet.</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

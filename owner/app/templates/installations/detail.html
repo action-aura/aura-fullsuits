@@ -3,6 +3,7 @@
 {% block content %}
 <div class="card">
   <h2>{{ installation.installation_label or installation.id }} <span class="badge {{ 'active' if installation.status == 'ACTIVE' else 'draft' }}">{{ installation.status }}</span></h2>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
   <dl class="kv">
     <dt>Customer</dt><dd>{{ installation.customer.legal_name }}</dd>
     <dt>Product</dt><dd>{{ installation.product.product_code }}</dd>
@@ -24,6 +25,24 @@
     </select>
     <label>Reason</label><input name="reason">
     <div style="margin-top:0.5rem;"><button type="submit">Apply</button></div>
+  </form>
+</div>
+{% endif %}
+
+{% if installation.status not in ["DEACTIVATED", "REPLACED"] %}
+<div class="card">
+  <h3>Device-slot operations (Phase 8)</h3>
+  <p class="empty">These require a reason and are the recommended path (over the generic status
+  change above) for releasing or replacing a device slot -- the audit record is more specific.</p>
+  <form method="post" action="{{ url_for('commercial_ops_ui.release_installation', installation_id=installation.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Release this slot -- reason (required)</label><input name="reason" required>
+    <button type="submit" class="danger" onclick="return confirm('Release this device slot? The installation will be deactivated.');">Release slot</button>
+  </form>
+  <form method="post" action="{{ url_for('commercial_ops_ui.replace_installation', installation_id=installation.id) }}" style="margin-top:0.5rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Mark replaced -- reason (required)</label><input name="reason" required>
+    <button type="submit" onclick="return confirm('Mark this installation replaced? A new activation will be needed on the replacement device.');">Mark replaced</button>
   </form>
 </div>
 {% endif %}

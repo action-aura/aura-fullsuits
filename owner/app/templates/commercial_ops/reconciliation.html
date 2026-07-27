@@ -1,0 +1,31 @@
+{% extends "layout/base.html" %}
+{% block title %}Reconciliation{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Reconciliation {{ "(notifications written)" if applied else "(dry run -- nothing written)" }}</h2>
+  <dl class="kv">
+    <dt>As of</dt><dd>{{ result.as_of }}</dd>
+    <dt>Licenses checked</dt><dd>{{ result.licenses_checked }}</dd>
+    <dt>Renewals checked</dt><dd>{{ result.renewals_checked }}</dd>
+    <dt>Pending activations checked</dt><dd>{{ result.pending_activations_checked }}</dd>
+    <dt>Notifications created</dt><dd>{{ result.notifications_created }}</dd>
+    <dt>Notifications deduped</dt><dd>{{ result.notifications_deduped }}</dd>
+  </dl>
+  {% if not applied %}
+  <form method="post" action="{{ url_for('commercial_ops_ui.reconciliation_run') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" onclick="return confirm('Write notifications for every finding below? This never mutates any commercial record itself.');">Run and write notifications</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3>Findings</h3>
+  <table>
+    <tr><th>Check</th><th>Entity type</th><th>Entity</th><th>Detail</th></tr>
+    {% for f in result.findings %}
+    <tr><td>{{ f.check }}</td><td>{{ f.entity_type }}</td><td>{{ f.entity_id }}</td><td>{{ f.detail }}</td></tr>
+    {% else %}<tr><td colspan="4" class="empty">No findings -- everything reconciles.</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

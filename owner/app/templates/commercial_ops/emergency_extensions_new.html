@@ -1,0 +1,22 @@
+{% extends "layout/base.html" %}
+{% block title %}New emergency extension{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Create emergency extension</h2>
+  <p class="error" style="background:#fbeecb;color:#8a5c00;">This is an explicit, short-lived,
+  audited override for exceptional support cases only -- it is NOT a bypass. It never modifies the
+  subscription's paid term or marks any payment confirmed, and it can never restore a REVOKED
+  license.</p>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form method="post" action="{{ url_for('commercial_ops_ui.create_emergency_extension_route') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Subscription ID</label>
+    <input name="subscription_id" value="{{ subscription.id if subscription else '' }}" required>
+    <label>License ID (optional)</label><input name="license_id">
+    <label>Reason (required)</label><input name="reason" required>
+    <label>Incident / reference</label><input name="incident_reference">
+    <label>Duration (hours, capped at {{ max_hours or 72 }})</label><input name="duration_hours" type="number" min="1" max="{{ max_hours or 72 }}" required>
+    <div style="margin-top:0.5rem;"><button type="submit" onclick="return confirm('Create this emergency extension? This action is audited.');">Create extension</button></div>
+  </form>
+</div>
+{% endblock %}

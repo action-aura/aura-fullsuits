@@ -7,6 +7,12 @@
     <dt>Start / End</dt><dd>{{ subscription.start_date or "-" }} / {{ subscription.end_date or "-" }}</dd>
     <dt>Device allowance</dt><dd>{{ subscription.device_allowance or "-" }}</dd>
   </dl>
+  <p>
+    <a href="{{ url_for('commercial_ops_ui.subscription_timeline', subscription_id=subscription.id) }}">Commercial timeline</a>
+    &middot; <a href="{{ url_for('commercial_ops_ui.new_renewal_form', subscription_id=subscription.id) }}">Create renewal (Phase 8 workflow)</a>
+    {% if subscription.status == "PILOT" %}&middot; <a href="{{ url_for('commercial_ops_ui.new_pilot_form', subscription_id=subscription.id) }}">Create pilot record</a>{% endif %}
+    &middot; <a href="{{ url_for('commercial_ops_ui.new_emergency_extension_form', subscription_id=subscription.id) }}">Create emergency extension</a>
+  </p>
   {% if allowed_transitions %}
   <form method="post" action="{{ url_for('subscriptions.transition', subscription_id=subscription.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

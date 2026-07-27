@@ -1,0 +1,35 @@
+{% extends "layout/base.html" %}
+{% block title %}New renewal{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Create renewal request</h2>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  {% if subscription %}
+  <form method="post" action="{{ url_for('commercial_ops_ui.create_renewal') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="subscription_id" value="{{ subscription.id }}">
+    <p>Customer: <strong>{{ subscription.customer.legal_name }}</strong> -- current plan
+      <strong>{{ subscription.plan.name }}</strong>, current end date
+      <strong>{{ subscription.end_date or "-" }}</strong>.</p>
+    <label>Date rule</label>
+    <select name="date_rule">
+      <option value="EARLY_RENEWAL_FROM_CURRENT_END">Early renewal (from current end date)</option>
+      <option value="LATE_RENEWAL_FROM_APPROVAL_DATE">Late renewal (from approval date)</option>
+    </select>
+    <label>Proposed term start</label><input name="proposed_term_start" type="date" required>
+    <label>Proposed term end</label><input name="proposed_term_end" type="date" required>
+    <label>Currency</label><input name="currency" value="USD" required>
+    <label>Requested plan (leave blank to keep current plan)</label>
+    <select name="requested_plan_id">
+      <option value="">-- keep current plan --</option>
+      {% for p in plans %}<option value="{{ p.id }}">{{ p.name }} ({{ p.plan_code }})</option>{% endfor %}
+    </select>
+    <label>Commercial amount</label><input name="commercial_amount" type="number" step="0.01">
+    <label>Device allowance after (leave blank to keep unchanged)</label><input name="device_allowance_after" type="number" min="1">
+    <label>Reason</label><input name="reason">
+    <label>Notes</label><textarea name="notes"></textarea>
+    <div style="margin-top:0.5rem;"><button type="submit">Create renewal request</button></div>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

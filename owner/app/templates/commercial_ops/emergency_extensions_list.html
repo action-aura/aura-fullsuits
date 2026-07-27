@@ -1,0 +1,30 @@
+{% extends "layout/base.html" %}
+{% block title %}Emergency extensions{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Emergency extensions</h2>
+  <div class="filters">
+    <form method="get">
+      <label>Status</label>
+      <select name="status" onchange="this.form.submit()">
+        {% for s in ["ACTIVE","REVOKED",""] %}
+        <option value="{{ s }}" {{ "selected" if status_filter == s else "" }}>{{ s or "All" }}</option>
+        {% endfor %}
+      </select>
+    </form>
+  </div>
+  <table>
+    <tr><th>Subscription</th><th>Status</th><th>Starts</th><th>Expires</th><th>Reason</th></tr>
+    {% for e in extensions %}
+    <tr>
+      <td><a href="{{ url_for('subscriptions.detail', subscription_id=e.subscription_id) }}">{{ e.subscription_id }}</a></td>
+      <td><span class="badge {{ 'active' if e.status == 'ACTIVE' else 'danger' }}">{{ e.status }}</span></td>
+      <td>{{ e.starts_at }}</td>
+      <td>{{ e.expires_at }}</td>
+      <td>{{ e.reason }}</td>
+      <td><a class="btn secondary" href="{{ url_for('commercial_ops_ui.emergency_extension_detail', extension_id=e.id) }}">View</a></td>
+    </tr>
+    {% else %}<tr><td colspan="6" class="empty">No emergency extensions.</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

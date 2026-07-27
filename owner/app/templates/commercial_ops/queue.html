@@ -1,0 +1,31 @@
+{% extends "layout/base.html" %}
+{% block title %}My queue{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Operational queue -- {{ role_code }}</h2>
+  {% if available_roles|length > 1 %}
+  <div class="filters">
+    {% for r in available_roles %}
+    <a class="btn {{ 'secondary' if r != role_code else '' }}" href="{{ url_for('commercial_ops_ui.queue_view', role=r) }}">{{ r }}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <dl class="kv">
+    {% for key, count in snapshot.counts.items() %}
+    <dt>{{ key.replace('_', ' ')|title }}</dt><dd>{{ count }}</dd>
+    {% endfor %}
+  </dl>
+</div>
+
+{% for category, rows in snapshot.items.items() %}
+<div class="card">
+  <h3>{{ category.replace('_', ' ')|title }}</h3>
+  <table>
+    <tr>{% for key in (rows[0].keys() if rows else ["id"]) %}<th>{{ key }}</th>{% endfor %}</tr>
+    {% for row in rows %}
+    <tr>{% for key, value in row.items() %}<td>{{ value }}</td>{% endfor %}</tr>
+    {% else %}<tr><td class="empty">Nothing here right now.</td></tr>{% endfor %}
+  </table>
+</div>
+{% endfor %}
+{% endblock %}

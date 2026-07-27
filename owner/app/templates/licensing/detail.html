@@ -17,6 +17,7 @@
     <dt>Device limit</dt><dd>{{ license.device_limit }}</dd>
     <dt>Valid from / until</dt><dd>{{ license.valid_from or "-" }} / {{ license.valid_until or "-" }}</dd>
   </dl>
+  <p><a href="{{ url_for('commercial_ops_ui.license_slot_exceptions', license_id=license.id) }}">Device-slot exceptions</a></p>
 </div>
 
 {% if license.status == "DRAFT" %}
