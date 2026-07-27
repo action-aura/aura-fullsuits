@@ -68,3 +68,12 @@ real defect that would have broken production activation), and an honest, eviden
 of exactly what remains before Phase 8 can be called unconditionally complete. The remaining gap is
 narrow and specific: a session with physical Android device access, running the same seven scenarios
 this phase already validated at the service/wire level, on real hardware.
+
+## Phase 8V-P update (additive — this section only, verdict above unchanged)
+
+`docs/owner/phase8vp/` closed the Windows half of that gap for real: 6 of 7 scenarios now have full
+real-installed-product, real-Owner-server, real-cryptography evidence (not a test harness), and
+found + fixed a genuine P0-class production defect (`DEVICE_ALREADY_REGISTERED`) plus two real
+environment gaps along the way. The remaining gap narrowed to exactly one thing: physical Android
+device access. See `docs/owner/phase8vp/phase8-final-unconditional-decision.md` for the full
+per-dimension accounting. Still no final tag — same reason, smaller gap.

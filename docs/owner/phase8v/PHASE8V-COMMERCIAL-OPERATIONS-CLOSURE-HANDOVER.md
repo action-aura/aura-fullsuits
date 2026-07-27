@@ -66,3 +66,10 @@ physically, capture real logcat/Windows-log evidence, visually confirm the new P
 message renders correctly, then write the closing decision doc that finally drops the "conditional"
 qualifier. Everything that closing session needs (routes, templates, services, tests, the real
 wire-level proof for 3 of 7 scenarios) is already built, tested, and waiting.
+
+## Phase 8V-P update (additive)
+
+Done, for Windows: `docs/owner/phase8vp/` — real installed products, real Owner server, 6 of 7
+scenarios fully real end-to-end, one real P0 found and fixed. See
+`docs/owner/phase8vp/PHASE8VP-PHYSICAL-COMMERCIAL-CLOSURE-HANDOVER.md`. Only physical Android device
+access remains before Phase 8's final tag.
