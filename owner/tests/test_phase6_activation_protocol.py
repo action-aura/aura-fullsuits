@@ -125,6 +125,28 @@ def test_device_limit_reached(app, client, seeded, signing_key):
     assert resp2.get_json()["reason_code"] == "DEVICE_LIMIT_REACHED"
 
 
+def test_same_device_activating_a_different_license_rejected_cleanly(app, client, seeded, signing_key):
+    """Phase 8V-P: found by real installed-product testing. A device already
+    holding an ACTIVE key on one license used to crash Owner with an
+    unhandled 500 (owner_device_public_keys.fingerprint UNIQUE violation)
+    when it tried to activate a second, different license -- the reuse
+    check only matched same-device-same-license, so a same-device-
+    different-license attempt fell through to the "brand new device"
+    branch and tried to INSERT a fingerprint that already existed. Must now
+    reject cleanly instead of crashing."""
+    actor_id = make_staff(app, "actor8b@example.com")
+    license_id_1, full_key_1 = make_license(app, actor_id, device_limit=2)
+    license_id_2, full_key_2 = make_license(app, actor_id, device_limit=2)
+
+    private_key = make_device_keypair()
+    resp1 = _activate(client, build_activation_body(private_key, full_key=full_key_1, installation_id="dev-008c"))
+    assert resp1.status_code == 200
+
+    resp2 = _activate(client, build_activation_body(private_key, full_key=full_key_2, installation_id="dev-008d"))
+    assert resp2.status_code == 400
+    assert resp2.get_json()["reason_code"] == "DEVICE_ALREADY_REGISTERED"
+
+
 def test_idempotent_retry_returns_same_result_no_extra_slot(app, client, seeded, signing_key):
     actor_id = make_staff(app, "actor9@example.com")
     license_id, full_key = make_license(app, actor_id, device_limit=1)

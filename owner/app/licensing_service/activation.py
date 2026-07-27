@@ -214,6 +214,29 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
             raise ActivationRejected("DEVICE_KEY_MISMATCH")
         installation = existing_installation
     else:
+        # Phase 8V-P: found by real product testing. device_public_keys.
+        # fingerprint is globally UNIQUE (by design -- see
+        # device_identity.py) but this same physical device may already
+        # hold an ACTIVE key bound to a DIFFERENT license (e.g. activating
+        # a second, distinct license on a machine that already has one
+        # active) -- the reuse check above only matches when it's the SAME
+        # license, so this case falls through to the "brand-new
+        # registration" branch below, which used to call
+        # register_device_key() unconditionally and crash with an
+        # unhandled IntegrityError (500) on the fingerprint's UNIQUE
+        # constraint. Reject cleanly instead: this device's identity is
+        # already spoken for elsewhere, and reassigning it silently would
+        # violate the same "no silent identity change" principle
+        # device-slot-ops (Milestone 5) already enforces for staff-driven
+        # replacement -- freeing it up is an explicit, staff-mediated
+        # release_device_slot()/replace_device_slot() action, never an
+        # automatic side effect of a second activation attempt.
+        existing_device_key_elsewhere = device_identity.get_device_key_by_fingerprint(
+            device_identity.fingerprint_of(body["device_public_key"])
+        )
+        if existing_device_key_elsewhere is not None and existing_device_key_elsewhere.status == "ACTIVE":
+            raise ActivationRejected("DEVICE_ALREADY_REGISTERED")
+
         active_count = count_slot_consuming_installations(locked_license.id)
         if active_count >= resolve_effective_device_limit(locked_license):
             raise ActivationRejected("DEVICE_LIMIT_REACHED")
