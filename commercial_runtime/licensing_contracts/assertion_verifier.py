@@ -77,6 +77,25 @@ ALLOWED_PAYLOAD_FIELDS = frozenset(
         "entitlements",
         "offline_policy",
         "contract_version",
+        # Phase 8 Part W (Milestone 7): commercial-state fields resolved by
+        # Owner's commercial_ops/assertion_fields.py and merged into every
+        # assertion payload since. Discovered missing here by Phase 8V's
+        # live-wire scenario test (test_phase8v_scenario_live_server.py) --
+        # without these, this allowlist rejected every assertion issued
+        # after Milestone 7 shipped, which would have silently broken every
+        # real activation/check-in. Milestone 7's own claim of "zero
+        # client-side parsing changes required" was correct for typed
+        # deserialization (neither platform types this payload) but missed
+        # this package's separate, stricter allowlist gate.
+        "commercial_policy_version",
+        "renewal_status",
+        "plan_code",
+        "term_start",
+        "term_end",
+        "past_due_since",
+        "commercial_grace_end",
+        "pilot_status",
+        "emergency_extension_id",
     }
 )
 
