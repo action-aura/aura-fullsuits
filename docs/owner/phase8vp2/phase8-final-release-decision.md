@@ -57,6 +57,14 @@ undocumented precondition was found: the rc.3 artifacts referenced above have an
 suites reconfirmed at the same HEAD with no drift. See
 `docs/owner/phase8vp3/phase8-final-decision.md`. Still no final tag.
 
+## Phase 8V-P4 update (additive)
+
+A physical device finally connected. Real signed rc.3 rebuild, real physical activation (both
+products), real early-renewal and pilot-conversion scenarios fully proven end to end, three more
+scenarios partially proven. See
+`docs/owner/phase8vp4/phase8-final-unconditional-decision.md`. Still CONDITIONAL PASS, still no
+final tag -- narrower gap than ever, not yet closed.
+
 ## Recommended next session's exact scope
 
 Connect a physical Android device. Confirm `adb devices -l` shows `device`. Install the already-built

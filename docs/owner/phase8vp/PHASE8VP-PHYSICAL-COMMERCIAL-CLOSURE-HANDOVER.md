@@ -1,11 +1,11 @@
 # Phase 8V-P — Team Handover: Physical Commercial Closure
 
-> **Superseded pointer (additive, this note only):** Phase 8V-P2
-> (`docs/owner/phase8vp2/PHASE8VP2-FINAL-ANDROID-CLOSURE-HANDOVER.md`) fixed Scenario 7's remaining
-> gap for real, added a `flask commercial preflight` environment-safety command, and built +
-> certificate-verified final signed Android rc.3 artifacts. Read that handover first if you're
-> picking up the work today — this document is still accurate for everything it describes, just no
-> longer the newest starting point.
+> **Superseded pointer (additive, this note only):** Phase 8V-P4
+> (`docs/owner/phase8vp4/PHASE8VP4-FINAL-PHYSICAL-CLOSURE-HANDOVER.md`) is the current starting
+> point — a physical Android device finally connected and both products were really, physically
+> activated for the first time. Read that handover first if you're picking up the work today.
+> (Phase 8V-P2 in between fixed Scenario 7's remaining Owner-side gap for real and added a
+> `flask commercial preflight` environment-safety command — still accurate, just no longer newest.)
 
 **Read this first.** This is the entry point for anyone picking up this work — it tells you exactly
 where things stand, what's already proven, what's blocked, and the exact next step. Everything else

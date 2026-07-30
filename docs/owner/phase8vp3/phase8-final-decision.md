@@ -50,6 +50,13 @@ sessions: no Android device has been connected in this environment. The existing
 Nothing about the Android-physical gap itself narrowed -- it is exactly as open as it was, because it
 depends on hardware, not software.
 
+## Phase 8V-P4 update (additive)
+
+A physical device connected in Phase 8V-P4 -- the gap this document describes started closing for
+real. See `docs/owner/phase8vp4/phase8-final-unconditional-decision.md` for the full accounting.
+Still CONDITIONAL PASS; still no final tag; several scenarios remain partially or fully unverified
+from that device.
+
 ## Recommended next session's exact scope
 
 Connect a physical Android device. Confirm `adb devices -l` shows `device`. Rebuild both products
