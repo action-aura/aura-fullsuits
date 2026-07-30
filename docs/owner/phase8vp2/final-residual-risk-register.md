@@ -10,6 +10,12 @@
 | 6 | Windows installers unsigned | Known, disclosed since Wave 1B | Unchanged |
 | 7 | Retail Android licensing screen has no Arabic coverage | Low | Carried forward |
 | 8 | `super_admin_mfa_required` preflight WARNING for `phase8vp-admin@example.com` | None (expected) | By design -- synthetic local test account, documented in the Phase 8V-P handover |
+| 9 | Current rc.3 artifacts have `OWNER_LICENSING_BASE_URL=""` baked in | Blocks physical licensing validation specifically | **Found in Phase 8V-P3.** Expected/by-design, not a defect; one-command rebuild fix documented in `docs/owner/phase8vp3/artifact-verification.md` |
+
+## Phase 8V-P3 update (additive)
+
+Still no device (third consecutive session) -- see `docs/owner/phase8vp3/final-residual-risk-register.md`
+for the full current register. Item 9 above is this session's one new finding.
 
 ## Three real environment/logic defects found and fixed across Phase 8V-P and Phase 8V-P2 (not risks -- closed)
 

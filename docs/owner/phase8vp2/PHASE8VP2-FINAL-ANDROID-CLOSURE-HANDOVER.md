@@ -1,5 +1,11 @@
 # Phase 8V-P2 — Handover
 
+> **Superseded pointer (additive):** Phase 8V-P3
+> (`docs/owner/phase8vp3/PHASE8VP3-PHYSICAL-ANDROID-CLOSURE-HANDOVER.md`) found one more real
+> precondition -- the rc.3 artifacts below need a rebuild with `-PownerLicensingBaseUrl=...` before a
+> physical licensing session -- and reconfirmed everything else unchanged (still no device, third
+> session running). Read that handover first if picking up the work today.
+
 ## One-paragraph status
 
 The last real Owner-side defect blocking Phase 8 (Scenario 7's device-allowance sync gap) is now

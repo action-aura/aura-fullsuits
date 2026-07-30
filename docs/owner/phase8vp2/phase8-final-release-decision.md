@@ -47,6 +47,16 @@ Android device access." This session closed the first part completely:
 The second part -- physical Android device access -- remains exactly as open as it was, because it
 depends on hardware this environment does not have, not on anything resolvable in software.
 
+## Phase 8V-P3 update (additive -- this section only, verdicts above unchanged)
+
+No device connected in Phase 8V-P3 either (third consecutive session). One real, previously
+undocumented precondition was found: the rc.3 artifacts referenced above have an empty (by-design)
+`OWNER_LICENSING_BASE_URL` compiled in and need a one-command rebuild with
+`-PownerLicensingBaseUrl=...` before a real licensing device session -- see
+`docs/owner/phase8vp3/artifact-verification.md` for the exact command. Owner and commercial_runtime
+suites reconfirmed at the same HEAD with no drift. See
+`docs/owner/phase8vp3/phase8-final-decision.md`. Still no final tag.
+
 ## Recommended next session's exact scope
 
 Connect a physical Android device. Confirm `adb devices -l` shows `device`. Install the already-built
