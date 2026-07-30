@@ -240,6 +240,20 @@ def register_cli(app: Flask) -> None:
             )
         )
 
+    @commercial_group.command("preflight")
+    def commercial_preflight_cmd():
+        """Phase 8V-P2 Part C: deterministic trust-anchor + permission-seed
+        environment check. Read-only, no secrets printed. Exits nonzero on
+        any blocking mismatch -- run this before any real activation/
+        renewal validation session, and especially before building a
+        product installer that will embed the current trust_anchor.json."""
+        from app.commercial_ops.preflight import run_preflight
+
+        result = run_preflight(key_directory=app.config["SIGNING_KEY_DIRECTORY"])
+        click.echo(json.dumps(result.as_dict(), indent=2))
+        if not result.ok:
+            raise click.ClickException("Preflight FAILED -- see checks above.")
+
     @commercial_group.command("device-limit-scan")
     @click.option("--apply", "apply_", is_flag=True, default=False, help="Actually write notifications. Default is dry-run (report only).")
     @click.option("--as-of", default=None, help="ISO date to evaluate against (default: today).")
