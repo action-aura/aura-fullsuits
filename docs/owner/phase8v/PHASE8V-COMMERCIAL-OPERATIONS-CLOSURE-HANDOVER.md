@@ -73,3 +73,11 @@ Done, for Windows: `docs/owner/phase8vp/` — real installed products, real Owne
 scenarios fully real end-to-end, one real P0 found and fixed. See
 `docs/owner/phase8vp/PHASE8VP-PHYSICAL-COMMERCIAL-CLOSURE-HANDOVER.md`. Only physical Android device
 access remains before Phase 8's final tag.
+
+## Phase 8V-P2 update (additive)
+
+Done: Scenario 7's remaining conditional gap fixed for real, a new `flask commercial preflight`
+command added (already found and fixed a third real environment defect), final signed Android rc.3
+artifacts built and certificate-verified for both products. See
+`docs/owner/phase8vp2/PHASE8VP2-FINAL-ANDROID-CLOSURE-HANDOVER.md` — the current starting point for
+anyone picking up this work. Only physical Android device access remains before Phase 8's final tag.

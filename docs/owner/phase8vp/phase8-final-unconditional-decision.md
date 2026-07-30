@@ -61,3 +61,14 @@ Connect a physical Android device, build rc.3 APK/AAB for both products, install
 scenarios physically (all already proven at the service/Windows tier — the device session's job is
 narrowly to confirm the identical behavior on real hardware), capture logcat, then write the closing
 decision that finally drops "conditional." Nothing else.
+
+## Phase 8V-P2 update (additive — this section only, verdicts above unchanged)
+
+Done: `docs/owner/phase8vp2/` — Scenario 7's disclosed feature gap (row 4/Part row above) is now
+genuinely fixed (real Owner defect: `Subscription.device_allowance` never propagated to
+`License.device_limit` on a renewal), with 8 automated tests plus a live-database re-verification. A
+new `flask commercial preflight` command now exists and, in real use, found and fixed a third real
+environment defect (a `SUPER_ADMIN` role missing 10 permission mappings). Both products' final signed
+Android rc.3 APK/AAB artifacts are now built and certificate-continuity-verified. The remaining gap
+is unchanged and singular: physical Android device access. See
+`docs/owner/phase8vp2/phase8-final-release-decision.md` for the full accounting. Still no final tag.

@@ -77,3 +77,11 @@ found + fixed a genuine P0-class production defect (`DEVICE_ALREADY_REGISTERED`)
 environment gaps along the way. The remaining gap narrowed to exactly one thing: physical Android
 device access. See `docs/owner/phase8vp/phase8-final-unconditional-decision.md` for the full
 per-dimension accounting. Still no final tag — same reason, smaller gap.
+
+## Phase 8V-P2 update (additive — this section only, verdict above unchanged)
+
+`docs/owner/phase8vp2/` closed Scenario 7's remaining conditional-pass gap for real (a genuine Owner
+service defect, not merely a workaround), added a `flask commercial preflight` command that found and
+fixed a third real environment defect, and built + certificate-verified final signed Android rc.3
+artifacts for both products. The remaining gap is unchanged: physical Android device access. See
+`docs/owner/phase8vp2/phase8-final-release-decision.md`. Still no final tag.
