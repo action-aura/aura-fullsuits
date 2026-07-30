@@ -431,3 +431,186 @@ def test_concurrent_apply_of_same_renewal_request_only_one_succeeds(app, seeded)
         refreshed = db_session.get(Subscription, sub_id)
         # Extended exactly once, not twice, no matter which thread won.
         assert refreshed.end_date == date(2026, 9, 1)
+
+
+# -- Phase 8V-P2 Scenario 7: device_allowance -> License.device_limit sync ----
+# Real gap found during Phase 8V-P physical validation: apply_renewal_request()
+# updated Subscription.device_allowance but never propagated it to
+# License.device_limit, the field every real device-limit check actually
+# enforces. See docs/owner/phase8vp2/scenario7-gap-root-cause.md.
+
+def _make_license_for_subscription(app, sub, plan, staff_id, *, device_limit):
+    from app.extensions import db_session
+    from app.licensing.services import create_license, issue_license_key
+
+    lic = create_license(
+        {
+            "customer_id": sub.customer_id, "subscription_id": sub.id, "product_id": sub.product_id,
+            "plan_id": plan.id, "allowed_platforms": "WINDOWS,ANDROID", "device_limit": device_limit,
+        },
+        staff_id,
+    )
+    lic, _ = issue_license_key(lic, app.config["LICENSE_PEPPER"], f"scenario7-{lic.id}", staff_id)
+    db_session.commit()
+    return lic
+
+
+def _activate_installation(app, lic, staff_id, *, label):
+    from app.extensions import db_session
+    from app.installations.services import register_installation
+    from app.models.catalog import Platform
+
+    platform_id = db_session.query(Platform).filter_by(platform_code="WINDOWS").first().id
+    installation = register_installation(
+        {"customer_id": lic.customer_id, "license_id": lic.id, "product_id": lic.product_id,
+         "platform_id": platform_id, "installation_label": label},
+        staff_id,
+    )
+    installation.status = "ACTIVE"
+    db_session.commit()
+    return installation
+
+
+def test_apply_downgrade_syncs_license_device_limit(app, seeded):
+    creator_id = make_staff(app, "s7a@example.com")
+    approver_id = make_staff(app, "s7a-b@example.com")
+    with app.app_context():
+        from app.commercial_ops.renewal_requests import apply_renewal_request
+        from app.licensing_service.activation import count_slot_consuming_installations
+        from app.commercial_ops.device_slot_ops import resolve_effective_device_limit
+
+        sub, plan = _make_subscription(app, creator_id, end_date=date(2026, 8, 1), device_allowance=2)
+        lic = _make_license_for_subscription(app, sub, plan, creator_id, device_limit=2)
+        _activate_installation(app, lic, creator_id, label="dev-1")
+        _activate_installation(app, lic, creator_id, label="dev-2")
+
+        renewal, _, _ = _make_approved_renewal(
+            app, creator_id, approver_id, sub=sub, plan=plan, device_allowance_after=1,
+        )
+        applied = apply_renewal_request(renewal.id, approver_id)
+        assert applied.status == "APPLIED"
+        assert sub.device_allowance == 1
+
+        # The field every real device-limit check enforces must now match --
+        # this is the exact gap Phase 8V-P found and left unfixed.
+        assert lic.device_limit == 1
+        assert resolve_effective_device_limit(lic) == 1
+
+        # Both pre-existing installations remain untouched -- a lowered
+        # allowance never silently deactivates an already-active device.
+        assert count_slot_consuming_installations(lic.id) == 2
+
+
+def test_apply_downgrade_does_not_touch_installations(app, seeded):
+    creator_id = make_staff(app, "s7b@example.com")
+    approver_id = make_staff(app, "s7b-b@example.com")
+    with app.app_context():
+        from app.extensions import db_session
+        from app.commercial_ops.renewal_requests import apply_renewal_request
+        from app.models.installations import Installation
+
+        sub, plan = _make_subscription(app, creator_id, end_date=date(2026, 8, 1), device_allowance=2)
+        lic = _make_license_for_subscription(app, sub, plan, creator_id, device_limit=2)
+        installation = _activate_installation(app, lic, creator_id, label="dev-1")
+
+        renewal, _, _ = _make_approved_renewal(
+            app, creator_id, approver_id, sub=sub, plan=plan, device_allowance_after=0,
+        )
+        apply_renewal_request(renewal.id, approver_id)
+
+        refreshed = db_session.get(Installation, installation.id)
+        assert refreshed.status == "ACTIVE"
+
+
+def test_apply_downgrade_syncs_every_license_under_the_subscription(app, seeded):
+    # A subscription can back more than one License row (e.g. one per
+    # platform/product line issued separately) -- all of them must move
+    # together, not just the first one found.
+    creator_id = make_staff(app, "s7c@example.com")
+    approver_id = make_staff(app, "s7c-b@example.com")
+    with app.app_context():
+        from app.commercial_ops.renewal_requests import apply_renewal_request
+
+        sub, plan = _make_subscription(app, creator_id, end_date=date(2026, 8, 1), device_allowance=3)
+        lic_a = _make_license_for_subscription(app, sub, plan, creator_id, device_limit=3)
+        lic_b = _make_license_for_subscription(app, sub, plan, creator_id, device_limit=3)
+
+        renewal, _, _ = _make_approved_renewal(
+            app, creator_id, approver_id, sub=sub, plan=plan, device_allowance_after=1,
+        )
+        apply_renewal_request(renewal.id, approver_id)
+
+        assert lic_a.device_limit == 1
+        assert lic_b.device_limit == 1
+
+
+def test_apply_downgrade_unchanged_limit_creates_no_audit_noise(app, seeded):
+    creator_id = make_staff(app, "s7d@example.com")
+    approver_id = make_staff(app, "s7d-b@example.com")
+    with app.app_context():
+        from app.extensions import db_session
+        from app.commercial_ops.renewal_requests import apply_renewal_request
+        from app.models.audit import AuditLog
+
+        sub, plan = _make_subscription(app, creator_id, end_date=date(2026, 8, 1), device_allowance=2)
+        lic = _make_license_for_subscription(app, sub, plan, creator_id, device_limit=2)
+
+        renewal, _, _ = _make_approved_renewal(
+            app, creator_id, approver_id, sub=sub, plan=plan, device_allowance_after=2,
+        )
+        apply_renewal_request(renewal.id, approver_id)
+
+        rows = db_session.query(AuditLog).filter_by(
+            action_code="LICENSE_DEVICE_LIMIT_SYNCED", entity_public_id=str(lic.id)
+        ).all()
+        assert rows == []
+
+
+def test_apply_downgrade_writes_device_limit_sync_audit_entry(app, seeded):
+    creator_id = make_staff(app, "s7e@example.com")
+    approver_id = make_staff(app, "s7e-b@example.com")
+    with app.app_context():
+        from app.extensions import db_session
+        from app.commercial_ops.renewal_requests import apply_renewal_request
+        from app.models.audit import AuditLog
+
+        sub, plan = _make_subscription(app, creator_id, end_date=date(2026, 8, 1), device_allowance=2)
+        lic = _make_license_for_subscription(app, sub, plan, creator_id, device_limit=2)
+
+        renewal, _, _ = _make_approved_renewal(
+            app, creator_id, approver_id, sub=sub, plan=plan, device_allowance_after=1,
+        )
+        apply_renewal_request(renewal.id, approver_id)
+
+        row = db_session.query(AuditLog).filter_by(
+            action_code="LICENSE_DEVICE_LIMIT_SYNCED", entity_public_id=str(lic.id)
+        ).one()
+        assert row.before_state_redacted == {"device_limit": 2}
+        assert row.after_state_redacted == {"device_limit": 1}
+
+
+def test_apply_downgrade_new_activation_blocked_by_synced_limit(app, seeded):
+    # End-to-end proof the sync actually enforces: a genuinely new device
+    # activation attempt against the now-lower limit is rejected, exactly
+    # like the pre-existing over-limit-scan evidence already proved for a
+    # manually-edited device_limit -- this time reached via a real renewal.
+    creator_id = make_staff(app, "s7f@example.com")
+    approver_id = make_staff(app, "s7f-b@example.com")
+    with app.app_context():
+        from app.extensions import db_session
+        from app.commercial_ops.renewal_requests import apply_renewal_request
+        from app.licensing_service.activation import count_slot_consuming_installations
+        from app.commercial_ops.device_slot_ops import resolve_effective_device_limit
+        from app.models.licensing import License
+
+        sub, plan = _make_subscription(app, creator_id, end_date=date(2026, 8, 1), device_allowance=2)
+        lic = _make_license_for_subscription(app, sub, plan, creator_id, device_limit=2)
+        _activate_installation(app, lic, creator_id, label="dev-1")
+
+        renewal, _, _ = _make_approved_renewal(
+            app, creator_id, approver_id, sub=sub, plan=plan, device_allowance_after=1,
+        )
+        apply_renewal_request(renewal.id, approver_id)
+
+        locked = db_session.get(License, lic.id)
+        assert count_slot_consuming_installations(locked.id) >= resolve_effective_device_limit(locked)

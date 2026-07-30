@@ -36,6 +36,7 @@ from app.audit.services import record as audit_record
 from app.extensions import db_session
 from app.models.base import utcnow
 from app.models.commercial_ops import RenewalRequest, RenewalRequestStatusHistory
+from app.models.licensing import License
 from app.models.subscriptions import RenewalRecord, Subscription, SubscriptionStatusHistory
 
 VALID_TRANSITIONS: dict[str, set[str]] = {
@@ -281,6 +282,7 @@ def apply_renewal_request(renewal_request_id, actor_staff_user_id) -> RenewalReq
     previous_end_date = subscription.end_date
     previous_plan_id = subscription.plan_id
     previous_subscription_status = subscription.status
+    device_limit_changes: list[tuple] = []
 
     subscription.end_date = renewal.proposed_term_end
     if subscription.start_date is None:
@@ -290,6 +292,32 @@ def apply_renewal_request(renewal_request_id, actor_staff_user_id) -> RenewalReq
         subscription.plan_id = renewal.requested_plan_id
     if renewal.device_allowance_after is not None:
         subscription.device_allowance = renewal.device_allowance_after
+        # Phase 8V-P2: found by the Phase 8V-P physical validation session
+        # (Scenario 7). `License.device_limit` -- the field every real
+        # device-limit check actually enforces (activation.py,
+        # device_slot_ops.resolve_effective_device_limit()) -- must mirror
+        # the subscription's new commercial device allowance the moment a
+        # renewal is applied, exactly like plan_id and end_date already do
+        # above. This deliberately does NOT touch any Installation row: an
+        # existing active device is never silently kicked off by a lowered
+        # allowance -- new-activation blocking and overage remediation are
+        # `scan_over_limit_licenses()`'s job (device_slot_ops.py), run
+        # separately and already correct. Locked with FOR UPDATE, same as
+        # activation.py's own License lock, so a concurrent activation
+        # attempt against this exact license serializes against this write
+        # rather than racing it.
+        # audit_record() commits on its own (Part T) -- it must NOT be
+        # called yet, this whole function commits exactly once, below. Just
+        # collect what changed here; the audit rows are written after that
+        # single commit, alongside the existing RENEWAL_APPLIED entry.
+        licenses_for_subscription = db_session.execute(
+            select(License).where(License.subscription_id == subscription.id).with_for_update()
+        ).scalars().all()
+        for license_row in licenses_for_subscription:
+            if license_row.device_limit == renewal.device_allowance_after:
+                continue
+            device_limit_changes.append((license_row.id, license_row.device_limit, renewal.device_allowance_after))
+            license_row.device_limit = renewal.device_allowance_after
 
     if previous_subscription_status in _REVIVABLE_SUBSCRIPTION_STATUSES | _GRADUATING_SUBSCRIPTION_STATUSES:
         # Deliberately NOT consulted against subscriptions.services.
@@ -364,4 +392,15 @@ def apply_renewal_request(renewal_request_id, actor_staff_user_id) -> RenewalReq
             "subscription_status": subscription.status,
         },
     )
+    for license_id, previous_device_limit, new_device_limit in device_limit_changes:
+        audit_record(
+            actor_staff_user_id=actor_staff_user_id,
+            actor_role_snapshot=None,
+            action_code="LICENSE_DEVICE_LIMIT_SYNCED",
+            entity_type="license",
+            entity_public_id=str(license_id),
+            before_state={"device_limit": previous_device_limit},
+            after_state={"device_limit": new_device_limit},
+            reason=f"Renewal request {renewal.id} applied.",
+        )
     return renewal
