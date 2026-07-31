@@ -1,9 +1,22 @@
 # Phase 9 — Backup Policy
 
-## What is backed up (real, `deploy/staging/backup.py`)
+## Real discovery mid-phase: reused existing infrastructure instead of duplicating it
+
+`owner/app/system/backup.py` (Part Y, pre-existing) already implements a more mature
+`create_backup()`/`restore_backup()` than this phase's original standalone script: correct
+`pg_dump`/`pg_restore` resolution (including the real Windows PostgreSQL install path), the password
+passed only via `PGPASSWORD` env (never in argv/`ps`-visible), credential-leakage redaction on error
+text, SHA-256 checksum, and a `DatabaseBackupRecord` (audit-linked, via the real hash-chained audit
+log) for every attempt. `deploy/staging/backup.py` was revised to be a thin wrapper — a real Flask app
+context + a call to `create_backup(..., initiated_by_staff_user_id=None)` (the same system-initiated
+actor pattern already used elsewhere for automated actions) — rather than re-implementing `pg_dump`
+invocation. Re-verified for real after the revision: real backup run against the real staging DB,
+real `SUCCESS` `DatabaseBackupRecord` row, real `OWNER_DB_BACKUP_SUCCEEDED` audit event.
+
+## What is backed up (real, `deploy/staging/backup.py` delegating to `owner/app/system/backup.py`)
 
 - PostgreSQL: full `pg_dump -F c` (custom format — supports selective restore and is materially
-  smaller than plain SQL for this schema).
+  smaller than plain SQL for this schema), via the real, existing, audit-linked `create_backup()`.
 - Signing-key **metadata** (file names + sizes only) — real code, deliberately not the private key
   bytes. The private key itself lives on a Docker named volume
   (`owner_signing_keys_staging`) and must be backed up via a separate, more tightly access-controlled

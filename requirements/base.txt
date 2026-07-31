@@ -2,13 +2,13 @@
 # Curated from Action Aura Enterprise's requirements.txt — see docs/migration/dependency-map.md §1.
 # Deliberately excludes: flask-socketio/python-socketio/simple-websocket/eventlet, pandas
 # (not confirmed used by Retail/Clinic core flows; re-add only if a real dependency surfaces).
-flask==3.0.3
-werkzeug==3.0.3
-flask-cors==4.0.1
+flask==3.1.3
+werkzeug==3.1.6
+flask-cors==6.0.0
 flask-login==0.6.3
 openpyxl==3.1.2
-waitress==3.0.0
-requests==2.32.3
+waitress==3.0.1
+requests==2.33.0
 
 # Phase 7 -- Licensing & Activation product-side integration (Windows device
 # identity signing, Owner assertion verification). Same pin as
@@ -16,4 +16,4 @@ requests==2.32.3
 # Ed25519 behavior. Not used on Android -- Chaquopy's own pip list stays
 # separate (android/aura-*/app/build.gradle), see
 # docs/licensing/phase7/android-device-key-storage-design.md for why.
-cryptography==43.0.1
+cryptography==48.0.1
