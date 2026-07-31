@@ -76,6 +76,18 @@ regression run of the full existing suite plus everything added in Wave 0.
 | Formal accessibility review | Both | Never assessed in any phase to date (`15`) | None | M |
 | `commercial_runtime/licensing_contracts/` — wire actual enforcement | Both | Explicitly out of scope for every phase to date, including this one — noted here only as the eventual Wave 3+ destination for that scaffolding | None | XL |
 
+## Phase 9 update (additive — this table above is not rewritten, items below are now real)
+
+Two items this table lists as outstanding were closed for real in Phase 9:
+"Structured observability (metrics, health endpoint)" — real `/health/live`/`/health/ready` +
+structured/redacted logging now exist (`docs/owner/phase9/observability-architecture.md`,
+`health-readiness-contract.md`); "Formal disaster-recovery documentation + tested restore drills" — a
+real backup was taken and a real restore drill performed against an isolated database, with a measured
+2-second restore time (`docs/owner/phase9/restore-drill-report.md`,
+`disaster-recovery-runbook.md`). Both real deployment (real remote host/TLS) and a live metrics/
+alerting *system* (as opposed to the underlying signals, which are real) remain open — see
+`docs/owner/phase9/final-residual-risk-register.md`.
+
 ## Recommended execution order (top-level)
 
 Wave 0 (stop-ship) → Wave 1 (first-sale blockers) → Wave 2 (commercial

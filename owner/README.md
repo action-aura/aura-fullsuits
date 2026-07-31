@@ -78,9 +78,36 @@ python -m pytest owner/tests/ -q
 
 See `docs/owner/phase5/owner-test-report.md` for the full test report.
 
+## Staging (Phase 9)
+
+A hardened staging deployment path exists: `owner/Dockerfile.staging` +
+`docker-compose.staging.yml` (repo root), real `/health/live`/`/health/ready`,
+real structured/redacted logging, a real backup+restore drill, and a real
+scheduler for the commercial scan jobs. See `docs/owner/phase9/
+PHASE9-SECURE-STAGING-AND-PILOT-READINESS-HANDOVER.md` for what was actually
+verified (locally, natively, this machine has no cloud/VPS/Docker Engine)
+versus what remains NOT VERIFIED (a real remote host, real public TLS, real
+containerized deployment). As of Phase 9, staging is **not yet actually
+deployed anywhere reachable** -- the capability is real and tested, the real
+deployment is not.
+
+## Running the full product test matrix (not just Owner)
+
+`python products/run_all_tests.py` (optionally `retail`/`clinic`/
+`commercial_runtime`/`licensing_contracts` to scope it) is the one supported
+command for Retail/Clinic -- runs each test file in its own subprocess,
+deliberately, because `config.py`/`registry_db.py`/`schema.py` resolve
+`AURA_APP_DATA` once at import time (correct for a real single process, not
+safe to collect many test files into one `pytest` invocation). See
+`docs/owner/phase9/retail-test-isolation-root-cause.md` before "fixing" this
+any other way.
+
 ## What this is NOT
 
 Not connected to Retail or Clinic. Not enforcing any license inside either
-product. Not deployed anywhere. Not internet-reachable. Not collecting
-telemetry. See `docs/owner/phase5/owner-foundation-scope.md` and
-`docs/owner/phase5/owner-residual-risk-register.md`.
+product. Not internet-reachable. Not collecting telemetry. Not deployed to
+any real remote host as of Phase 9 (see Staging section above -- the
+capability exists, the real deployment does not). See
+`docs/owner/phase5/owner-foundation-scope.md` and
+`docs/owner/phase5/owner-residual-risk-register.md` for the original Phase 5
+scope this statement is inherited from.

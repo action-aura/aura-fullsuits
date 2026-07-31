@@ -35,3 +35,14 @@ Customer business data (products, sales, patients, invoices, etc.) stays local t
 ## Status
 
 Under active extraction from Action Aura Enterprise. See `docs/migration/extraction-plan.md` for phase sequencing and `docs/migration/source-inventory.md` for what has moved so far.
+
+## Current phase status (additive note, does not supersede the above — the repository layout above
+reflects an earlier planning stage; the real current directories are `owner/`, `products/retail/`,
+`products/clinic/`, `commercial_runtime/`, `android/`)
+
+Commercial licensing/operations (Phase 8) is complete —
+`docs/owner/phase8vp9/phase8-final-unconditional-decision-vp9.md`. Secure staging infrastructure and
+operational hardening (Phase 9) reached CONDITIONAL PASS — real work (structured logging, dependency-
+vulnerability remediation, real backup/restore, real scheduler, real capacity testing) verified against
+a real local staging database and process; real remote deployment remains NOT VERIFIED (no cloud/VPS/
+domain available in that session). See `docs/owner/phase9/PHASE9-SECURE-STAGING-AND-PILOT-READINESS-HANDOVER.md`.
