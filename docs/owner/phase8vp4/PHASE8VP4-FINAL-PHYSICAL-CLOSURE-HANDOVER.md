@@ -86,6 +86,17 @@ VPS/payment-gateway/WhatsApp/SMS/Aura-Core additions. Not publicly deployed, not
 not internet-scale, not ready for unsupervised public release, not yet ready for a controlled paid
 pilot (Phase 8 itself remains conditional).
 
+## Phase 8V-P6 successor (additive pointer)
+
+Phase 8V-P6 (`docs/owner/phase8vp6/`) fixed and physically proved the two P1-class commercial-
+enforcement gaps that Phase 8V-P5 found but could not close: `Subscription.status`/license `SUSPENDED`
+were already signed into every assertion but never consulted locally, and `EmergencyExtension` records
+had no functional effect on local grace. Both are now wired, tested (17 new tests, 960/960 total
+regression), and physically proven on a rebuilt device with unconfounded wire evidence. Scenario 2
+(Retail), 6, 7, stale-assertion, backup/restore/export, and Clinic invoice/payment remain open --
+CONDITIONAL PASS continues, final tag still withheld. See
+`docs/owner/phase8vp6/phase8vp6-final-decision.md` for current, authoritative status.
+
 ## Phase 8V-P5 successor (additive pointer)
 
 Phase 8V-P5 (`docs/owner/phase8vp5/`) continued this exact closure effort on the same physical device.

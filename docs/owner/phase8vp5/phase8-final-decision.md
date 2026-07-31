@@ -1,5 +1,16 @@
 # Phase 8V-P5 — Final Phase 8 Decision
 
+## Later update (Phase 8V-P6, additive)
+
+Both of the two P1-class gaps this document names as blockers (Scenario 5's "structural non-wiring"
+finding, and the underlying reason Scenario 2/3 could never reach real commercial `RESTRICTED`) are now
+**fixed, tested, and physically proven** as of Phase 8V-P6 -- see
+`docs/owner/phase8vp6/phase8vp6-final-decision.md` for the current, authoritative status. This
+document's own historical verdict and evidence stand unchanged below; the final unconditional tag
+remained withheld after Phase 8V-P6 too, for different, narrower reasons (Scenario 2 Retail, 6, 7,
+stale-assertion, backup/restore/export, invoice/payment still unverified) -- the architectural doubt
+this document raised no longer applies.
+
 ## Overall verdict: **CONDITIONAL PASS continues — final unconditional tag WITHHELD**
 
 The existing tag `aura-owner-commercial-ops-phase8-conditional-complete` remains the accurate marker of
