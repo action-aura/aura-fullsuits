@@ -28,8 +28,8 @@ android {
         applicationId "com.actionaura.retail"
         minSdk 26
         targetSdk 34
-        versionCode 4
-        versionName "1.0.0-rc.3"
+        versionCode 5
+        versionName "1.0.0-rc.4"
 
         ndk {
             // Chaquopy's Python 3.12 ships only these ABIs.

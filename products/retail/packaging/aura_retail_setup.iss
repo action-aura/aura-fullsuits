@@ -17,7 +17,7 @@
 ; installer touches user data is the explicit, opt-in "delete my data"
 ; uninstall step below, which requires a typed confirmation.
 
-#define AppVersion "1.0.0-rc.3"
+#define AppVersion "1.0.0-rc.4"
 #define AppId "{{A039EDA8-410E-4400-B3A5-A7CD4AF7F437}"
 #define DistDir "..\..\..\dist\AuraRetail"
 
