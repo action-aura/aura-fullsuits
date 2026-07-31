@@ -103,6 +103,25 @@ def test_valid_assertion_verifies(owner_key, trust_store):
     assert result.signing_key_id == "owner-1"
 
 
+def test_commercial_grace_end_absent_parses_to_none(owner_key, trust_store):
+    env = _envelope(owner_key, "owner-1", _payload())
+    result = _verify(env, trust_store)
+    assert result.evidence.commercial_grace_end is None
+
+
+def test_commercial_grace_end_present_parses_as_aware_datetime(owner_key, trust_store):
+    grace_end = NOW + timedelta(days=3)
+    env = _envelope(owner_key, "owner-1", _payload(commercial_grace_end=grace_end.isoformat()))
+    result = _verify(env, trust_store)
+    assert result.evidence.commercial_grace_end == grace_end
+
+
+def test_malformed_commercial_grace_end_rejected(owner_key, trust_store):
+    env = _envelope(owner_key, "owner-1", _payload(commercial_grace_end="not-a-date"))
+    with pytest.raises(AssertionVerificationError):
+        _verify(env, trust_store)
+
+
 def test_unknown_signing_key_rejected(owner_key, trust_store):
     env = _envelope(owner_key, "some-other-key", _payload())
     with pytest.raises(AssertionVerificationError) as exc:

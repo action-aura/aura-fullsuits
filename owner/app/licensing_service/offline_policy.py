@@ -93,3 +93,24 @@ def serialize_policy(policy: OfflinePolicy) -> dict:
         "emergency_extension_allowed": policy.emergency_extension_allowed,
         "emergency_extension_until": policy.emergency_extension_until.isoformat() if policy.emergency_extension_until else None,
     }
+
+
+def serialize_policy_for_subscription(policy: OfflinePolicy, subscription_id, *, now=None) -> dict:
+    """Phase 8V-P6: functional emergency-extension wiring (Part E). Same as
+    serialize_policy(), except the two emergency_extension_* fields are
+    overridden -- in the returned dict only, never on the stored OfflinePolicy
+    row, which may be shared by policy_code across many licenses -- when
+    subscription_id has a real, currently-ACTIVE, unexpired EmergencyExtension
+    (commercial_ops.emergency_extensions.EmergencyExtension, the audited,
+    MFA-gated business record). See docs/owner/phase8vp6/
+    emergency-extension-wiring-design.md for why this is computed fresh, per
+    request, rather than persisted anywhere."""
+    from app.commercial_ops.emergency_extensions import get_active_extension
+    from app.models.base import utcnow
+
+    serialized = serialize_policy(policy)
+    active_extension = get_active_extension(subscription_id, now=now or utcnow())
+    if active_extension is not None:
+        serialized["emergency_extension_allowed"] = True
+        serialized["emergency_extension_until"] = active_extension.expires_at.isoformat()
+    return serialized

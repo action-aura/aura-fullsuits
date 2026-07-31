@@ -36,6 +36,87 @@ def test_valid_checkin_no_license_key_required(app, client, seeded, signing_key)
     assert "signed_assertion" in data
 
 
+def test_checkin_embeds_active_emergency_extension_without_mutating_stored_policy(app, client, seeded, signing_key):
+    # Phase 8V-P6 (Part E): the real functional wiring fix. A genuine,
+    # active EmergencyExtension for this installation's subscription must
+    # appear in the signed check-in assertion's offline_policy fields --
+    # and the stored OfflinePolicy row itself must remain untouched (proving
+    # this is a per-request override, not a global mutation that could leak
+    # to another license sharing the same policy code).
+    actor_id = make_staff(app, "ci-ext@example.com")
+    license_id, installation_id, private_key = _do_activation(app, client, actor_id)
+
+    with app.app_context():
+        from app.commercial_ops.emergency_extensions import create_emergency_extension
+        from app.extensions import db_session
+        from app.licensing_service.offline_policy import get_policy_for_license, seed_default_offline_policy
+        from app.models.licensing import License
+
+        seed_default_offline_policy()
+        lic = db_session.get(License, license_id)
+        stored_policy_before = get_policy_for_license(lic)
+        assert stored_policy_before.emergency_extension_until is None
+
+        ext = create_emergency_extension(
+            subscription=lic.subscription, reason="Phase 8V-P6 regression test", duration_hours=1,
+            actor_staff_user_id=actor_id, incident_reference="INC-P6-TEST",
+        )
+        expected_until = ext.expires_at.isoformat()
+
+    resp = _checkin(client, build_checkin_body(private_key, installation_id=installation_id))
+    assert resp.status_code == 200
+    policy_payload = resp.get_json()["signed_assertion"]["payload"]["offline_policy"]
+    assert policy_payload["emergency_extension_allowed"] is True
+    assert policy_payload["emergency_extension_until"] == expected_until
+
+    with app.app_context():
+        lic = db_session.get(License, license_id)
+        stored_policy_after = get_policy_for_license(lic)
+        # Unchanged -- the override was never persisted to the stored row.
+        assert stored_policy_after.emergency_extension_until is None
+        assert stored_policy_after.emergency_extension_allowed is False
+
+
+def test_checkin_no_active_extension_leaves_policy_unchanged(app, client, seeded, signing_key):
+    actor_id = make_staff(app, "ci-noext@example.com")
+    _, installation_id, private_key = _do_activation(app, client, actor_id)
+
+    resp = _checkin(client, build_checkin_body(private_key, installation_id=installation_id))
+    assert resp.status_code == 200
+    policy_payload = resp.get_json()["signed_assertion"]["payload"]["offline_policy"]
+    assert policy_payload["emergency_extension_allowed"] is False
+    assert policy_payload["emergency_extension_until"] is None
+
+
+def test_checkin_reflects_real_subscription_expiry_while_license_stays_active(app, client, seeded, signing_key):
+    # Phase 8V-P6 root cause: License.status can legitimately remain ACTIVE
+    # (history preserved) while Subscription.status moves to EXPIRED --
+    # checkin.py must still issue a fresh assertion (not a bare 400 with no
+    # assertion at all) whose subscription_status field reflects reality, so
+    # the client-side policy evaluator's new commercial-restriction logic has
+    # something real to act on.
+    actor_id = make_staff(app, "ci-subexp@example.com")
+    license_id, installation_id, private_key = _do_activation(app, client, actor_id)
+
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.licensing import License
+        from app.subscriptions.services import transition_subscription
+
+        lic = db_session.get(License, license_id)
+        license_status_before = lic.status
+        assert license_status_before in ("ACTIVE", "ISSUED")
+        transition_subscription(lic.subscription, "EXPIRED", actor_id, reason="Phase 8V-P6 regression test")
+
+    resp = _checkin(client, build_checkin_body(private_key, installation_id=installation_id))
+    assert resp.status_code == 200
+    payload = resp.get_json()["signed_assertion"]["payload"]
+    assert payload["subscription_status"] == "EXPIRED"
+    with app.app_context():
+        lic = db_session.get(License, license_id)
+        assert lic.status == license_status_before  # license history genuinely preserved, not silently overwritten
+
+
 def test_checkin_device_key_mismatch_rejected(app, client, seeded, signing_key):
     actor_id = make_staff(app, "ci2@example.com")
     _, installation_id, _ = _do_activation(app, client, actor_id)

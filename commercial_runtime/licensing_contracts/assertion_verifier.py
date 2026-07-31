@@ -223,6 +223,17 @@ def verify_assertion(
             "ASSERTION_VERIFICATION_FAILED", f"Malformed or unsafe offline_policy: {exc}"
         ) from exc
 
+    try:
+        commercial_grace_end = (
+            datetime.fromisoformat(payload["commercial_grace_end"])
+            if payload.get("commercial_grace_end")
+            else None
+        )
+    except ValueError as exc:
+        raise AssertionVerificationError(
+            "ASSERTION_VERIFICATION_FAILED", f"Malformed commercial_grace_end: {exc}"
+        ) from exc
+
     evidence = AssertionEvidence(
         not_before=not_before,
         expires_at=expires_at,
@@ -230,6 +241,7 @@ def verify_assertion(
         installation_status=payload.get("installation_status", ""),
         subscription_status=payload.get("subscription_status", ""),
         offline_policy=offline_policy,
+        commercial_grace_end=commercial_grace_end,
     )
 
     return VerifiedAssertion(payload=payload, evidence=evidence, signing_key_id=signing_key_id)

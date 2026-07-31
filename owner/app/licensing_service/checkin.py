@@ -19,7 +19,7 @@ from app.licensing_service import device_identity, replay
 from app.licensing_service.assertions import build_assertion_payload, persist_assertion, sign_assertion
 from app.licensing_service.canonical import canonicalize_bytes
 from app.licensing_service.entitlements import resolve_entitlements
-from app.licensing_service.offline_policy import get_policy_for_license, serialize_policy
+from app.licensing_service.offline_policy import get_policy_for_license, serialize_policy_for_subscription
 from app.models.installations import ActivationEvent, Installation
 from app.models.licensing_service import ActivationRequest
 
@@ -108,9 +108,16 @@ def process_checkin(body: dict, *, source_ip: str | None, config: dict) -> dict:
 
     entitlements = resolve_entitlements(license_row, datetime.now(timezone.utc))
     offline_policy = get_policy_for_license(license_row)
+    # Phase 8V-P6 (Part E): functional emergency-extension wiring -- overrides
+    # the emergency_extension_* fields in this assertion only when this
+    # subscription has a real, active, audited extension; never mutates the
+    # stored (possibly-shared) OfflinePolicy row.
+    serialized_policy = serialize_policy_for_subscription(
+        offline_policy, license_row.subscription_id, now=datetime.now(timezone.utc)
+    )
     payload = build_assertion_payload(
         license_row=license_row, installation_row=installation, device_fingerprint=device_key.fingerprint,
-        entitlements=entitlements, offline_policy=serialize_policy(offline_policy),
+        entitlements=entitlements, offline_policy=serialized_policy,
         contract_version=body["contract_version"], ttl_seconds=config["assertion_ttl_seconds"],
     )
     envelope = sign_assertion(payload, config["signing_key_directory"])

@@ -23,7 +23,7 @@ from app.licensing_service import device_identity, idempotency, replay
 from app.licensing_service.assertions import build_assertion_payload, persist_assertion, sign_assertion
 from app.licensing_service.canonical import canonicalize, canonicalize_bytes
 from app.licensing_service.entitlements import resolve_entitlements
-from app.licensing_service.offline_policy import get_policy_for_license, serialize_policy
+from app.licensing_service.offline_policy import get_policy_for_license, serialize_policy_for_subscription
 from app.models.catalog import Platform, Product, ReleaseChannel
 from app.models.installations import ActivationEvent, Installation
 from app.models.licensing import License
@@ -290,10 +290,15 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
     # Step 21: signed assertion
     offline_policy = get_policy_for_license(locked_license)
     device_key = device_identity.get_active_device_key(installation.id)
+    # Phase 8V-P6 (Part E): same functional emergency-extension wiring as
+    # checkin.py -- see offline_policy.py::serialize_policy_for_subscription().
+    serialized_policy = serialize_policy_for_subscription(
+        offline_policy, locked_license.subscription_id, now=datetime.now(timezone.utc)
+    )
     payload = build_assertion_payload(
         license_row=locked_license, installation_row=installation,
         device_fingerprint=device_key.fingerprint if device_key else None,
-        entitlements=entitlements, offline_policy=serialize_policy(offline_policy),
+        entitlements=entitlements, offline_policy=serialized_policy,
         contract_version=body["contract_version"], ttl_seconds=config["assertion_ttl_seconds"],
     )
     envelope = sign_assertion(payload, config["signing_key_directory"])

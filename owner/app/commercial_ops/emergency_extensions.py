@@ -140,3 +140,13 @@ def is_emergency_extension_active(subscription_id, *, now: datetime | None = Non
     I/O-free decision function (see its own module docstring)."""
     now = now or utcnow()
     return _active_extension_for(subscription_id, now) is not None
+
+
+def get_active_extension(subscription_id, *, now: datetime | None = None) -> EmergencyExtension | None:
+    """Phase 8V-P6: the row version of is_emergency_extension_active(), for
+    callers that need expires_at (checkin.py's per-check-in offline_policy
+    override -- see emergency-extension-wiring-design.md). Same query,
+    same ACTIVE-and-unexpired definition of "active" -- deliberately not a
+    second, divergent definition."""
+    now = now or utcnow()
+    return _active_extension_for(subscription_id, now)
