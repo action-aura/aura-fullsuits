@@ -1,0 +1,11 @@
+[Unit]
+Description=Aura Owner staging backup
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/aura-fullsuits/.env.staging
+WorkingDirectory=/opt/aura-fullsuits
+ExecStart=/usr/bin/docker compose -f docker-compose.staging.yml run --rm backup
+TimeoutStartSec=300

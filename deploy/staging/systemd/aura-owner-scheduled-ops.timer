@@ -1,0 +1,12 @@
+# Phase 9 -- runs the scan/reconcile/audit-verify job bundle daily.
+# `systemctl enable --now aura-owner-scheduled-ops.timer`
+[Unit]
+Description=Daily Aura Owner staging scheduled commercial operations
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
