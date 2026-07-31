@@ -1,0 +1,118 @@
+# Phase 9 Milestone 11 -- CI validation pipeline.
+#
+# NOT VERIFIED as an actually-running pipeline this session: this
+# repository has no configured git remote (`git remote -v` is empty), so no
+# GitHub Actions runner has ever executed this file. Every command below IS
+# real and was actually run manually this session against the real
+# repository (see docs/owner/phase9/ci-validation-contract.md for exact
+# command-by-command evidence) -- this file wires those same real commands
+# into a real, complete workflow definition, not aspirational pseudo-code.
+#
+# No automatic deployment to any real production environment (Non-Negotiable
+# Principle 9) -- this workflow's last real stage is staging DEPLOYMENT
+# PACKAGE creation; an actual `docker compose ... up` against a real host
+# requires a separate, manually-triggered, environment-protected job that
+# does not exist in this repository (no real host this session).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master, "phase9/**"]
+
+env:
+  # Real test-time-only values, never real secrets -- matches
+  # owner/tests/conftest.py's own OWNER_TEST_DATABASE_URL default.
+  OWNER_TEST_DATABASE_URL: postgresql+psycopg://aura_owner:aura_owner_dev@localhost:5432/aura_owner_test
+  OWNER_ENV: testing
+
+jobs:
+  test-and-scan:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: aura_owner
+          POSTGRES_PASSWORD: aura_owner_dev
+          POSTGRES_DB: aura_owner_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U aura_owner -d aura_owner_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - name: Source checkout
+        uses: actions/checkout@v4
+
+      - name: Dependency setup
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements/development.txt
+
+      - name: Owner tests
+        run: python -m pytest owner/tests -q --no-header
+
+      - name: commercial_runtime tests
+        run: python -m pytest commercial_runtime -q --no-header
+
+      - name: Retail tests (canonical runner -- see retail-test-isolation-resolution.md)
+        run: python products/run_all_tests.py retail
+
+      - name: Clinic tests (canonical runner)
+        run: python products/run_all_tests.py clinic
+
+      # Android tests: NOT run in this workflow -- no Android SDK/Gradle
+      # toolchain provisioning step exists in this repository's CI config
+      # this session (would need a self-hosted or actions/setup-java +
+      # android-actions/setup-android runner, not verified here). Real
+      # local evidence for Android unit/lint/build exists from Phase 8V-P9
+      # and was not re-run this phase (no product source changed).
+
+      - name: Localization checks
+        run: python -m pytest owner/tests -k localization -q --no-header
+
+      - name: Lint / static checks (bandit)
+        run: |
+          pip install bandit
+          bandit -r owner/app -f json -o bandit-results.json || true
+          python -c "import json,sys; d=json.load(open('bandit-results.json')); h=[r for r in d['results'] if r['issue_severity'] in ('HIGH','MEDIUM')]; sys.exit(1 if h else 0)"
+
+      - name: Migration check
+        run: |
+          cd owner
+          python -m alembic upgrade head
+          python -m alembic check
+
+      - name: Secret scanning
+        run: |
+          pip install detect-secrets
+          detect-secrets scan --all-files > secrets-baseline.json
+          python -c "import json; d=json.load(open('secrets-baseline.json')); assert not d.get('results'), 'potential secret found -- see secrets-baseline.json'"
+
+      - name: Dependency scanning
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements/base.txt -r requirements/owner-server.txt
+
+      - name: Artifact manifest + checksum generation
+        run: |
+          echo "commit=$(git rev-parse HEAD)" > build-manifest.txt
+          echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> build-manifest.txt
+          sha256sum requirements/*.txt >> build-manifest.txt
+
+      - name: SBOM generation
+        run: |
+          pip install cyclonedx-bom
+          python -m cyclonedx_py environment --output-format json --output-file sbom.json
+
+      - name: Staging deployment package creation
+        run: docker compose -f docker-compose.staging.yml config
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-evidence
+          path: |
+            bandit-results.json
+            build-manifest.txt
+            sbom.json
