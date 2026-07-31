@@ -1,5 +1,16 @@
 # Phase 8V-P6 — Final Decision
 
+## Later update (Phase 8V-P7, additive)
+
+Phase 8V-P7 found and fixed a real gap in this document's own conclusion: `build-impact-decision.md`
+(this session's own file, cross-referenced below) concluded "Windows rebuild not required" -- accurate
+for what that session tested, but Phase 8V-P7 discovered, by direct file-timestamp comparison, that
+both Windows executables actually predated this session's own fix commit by 4 real days, and rebuilt
+both. Phase 8V-P7 also completed Scenario 2's restriction half for Retail and reached full real PASSes
+on Scenarios 6 and 7's Owner-side mechanics -- all first-time results for this multi-session effort. See
+`docs/owner/phase8vp7/phase8-final-unconditional-decision.md` for current, authoritative status. This
+document's own verdict and evidence stand unchanged below.
+
 ## Overall verdict: **CONDITIONAL PASS continues — final unconditional tag WITHHELD**
 
 `aura-owner-commercial-ops-phase8-conditional-complete` remains the accurate marker. Not creating
