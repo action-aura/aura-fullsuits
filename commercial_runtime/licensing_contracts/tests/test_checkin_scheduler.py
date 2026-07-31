@@ -392,6 +392,59 @@ def test_elapsed_offline_time_accumulates_across_separate_scheduler_instances(
     assert observed_now >= NOW + timedelta(seconds=39)
 
 
+# -- Phase 8V-P9: real stale-assertion (monotonicity) guard -----------------
+
+def test_older_valid_assertion_rejected_as_stale_after_newer_one_accepted(owner_key, trust_store, state_repo, events):
+    # Phase 8V-P9 real finding: verify_assertion() alone (signature + validity
+    # window + identity match) never checked whether an assertion was newer
+    # than the one already stored -- a genuinely valid, still-unexpired OLDER
+    # assertion could silently overwrite a newer one and revert local state.
+    # This is the direct regression for that fix.
+    _seed_activated_record(state_repo, current_state="ACTIVE_ONLINE", assertion_envelope_json=None)
+    scheduler = _scheduler(FakeClient(), trust_store, state_repo, events)
+
+    assertion_a = _envelope(owner_key, "owner-1", _payload(
+        assertion_id="a-old", issued_at=NOW.isoformat(), allowed_device_count=2,
+    ))
+    result_a = scheduler.ingest_checkin_response({"result": "SUCCESS", "signed_assertion": assertion_a})
+    assert result_a == LicenseState.ACTIVE_ONLINE
+    assert state_repo.load().assertion_id == "a-old"
+
+    assertion_b = _envelope(owner_key, "owner-1", _payload(
+        assertion_id="b-new", issued_at=(NOW + timedelta(minutes=5)).isoformat(), allowed_device_count=1,
+    ))
+    result_b = scheduler.ingest_checkin_response({"result": "SUCCESS", "signed_assertion": assertion_b})
+    assert result_b == LicenseState.ACTIVE_ONLINE
+    assert state_repo.load().assertion_id == "b-new"
+
+    # Deliver the OLDER assertion A again, after B was already accepted --
+    # A is still a genuinely, independently valid signature within its own
+    # signed window (not tampered, not forged) -- must be rejected as stale.
+    result_replay = scheduler.ingest_checkin_response({"result": "SUCCESS", "signed_assertion": assertion_a})
+    loaded = state_repo.load()
+    assert loaded.assertion_id == "b-new"  # unchanged -- A never overwrote B
+    event_types = [e.event_type for e in events.recent()]
+    assert "ASSERTION_STALE_REJECTED" in event_types
+    # Exactly 2 real acceptances happened (A, then B) -- the stale replay of
+    # A afterward must not produce a THIRD CHECK_IN_SUCCEEDED/ASSERTION_ACCEPTED
+    # pair.
+    assert event_types.count("CHECK_IN_SUCCEEDED") == 2
+    assert event_types.count("ASSERTION_ACCEPTED") == 2
+
+
+def test_first_ever_assertion_is_never_rejected_as_stale(owner_key, trust_store, state_repo, events):
+    _seed_activated_record(state_repo, current_state="ACTIVE_ONLINE", assertion_envelope_json=None)
+    scheduler = _scheduler(FakeClient(), trust_store, state_repo, events)
+
+    envelope = _envelope(owner_key, "owner-1", _payload(assertion_id="first-ever"))
+    result = scheduler.ingest_checkin_response({"result": "SUCCESS", "signed_assertion": envelope})
+
+    assert result == LicenseState.ACTIVE_ONLINE
+    assert state_repo.load().assertion_id == "first-ever"
+    event_types = [e.event_type for e in events.recent()]
+    assert "ASSERTION_STALE_REJECTED" not in event_types
+
+
 def test_reevaluate_only_before_activation_is_noop(trust_store, state_repo, events):
     state_repo.save(
         LicenseStateRecord(

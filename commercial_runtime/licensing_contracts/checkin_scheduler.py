@@ -114,10 +114,29 @@ class LicenseCheckInScheduler:
                 # overwrite record with anything from this response.
                 self._events.record("ASSERTION_REJECTED")
             else:
-                checkin_ok = True
-                self._events.record("CHECK_IN_SUCCEEDED")
-                self._events.record("ASSERTION_ACCEPTED")
-                record = self._persist_fresh_assertion(record, envelope, verified)
+                # Phase 8V-P9: real finding -- verify_assertion() (signature +
+                # validity-window + identity checks) says nothing about
+                # whether THIS assertion is newer than the one already
+                # stored. Without this check, a genuinely valid, still-
+                # unexpired OLDER assertion (e.g. one issued before a real
+                # commercial transition, replayed or delivered out of order
+                # any time within its own signed TTL window) would silently
+                # overwrite a newer one and revert local state -- exactly
+                # the "monotonic assertions" guarantee Non-Negotiable Rule 9
+                # requires and this ingestion path never actually enforced.
+                # `assertion_issued_at` already exists on the stored record
+                # (persisted by _persist_fresh_assertion() below) purely as
+                # a timestamp; it was just never compared against on the
+                # way in. A missing stored value (first-ever assertion for
+                # this record) always allows -- there is nothing to be
+                # stale relative to.
+                if self._is_stale_assertion(record, verified.payload):
+                    self._events.record("ASSERTION_STALE_REJECTED")
+                else:
+                    checkin_ok = True
+                    self._events.record("CHECK_IN_SUCCEEDED")
+                    self._events.record("ASSERTION_ACCEPTED")
+                    record = self._persist_fresh_assertion(record, envelope, verified)
 
         new_state = self._reevaluate(record, checkin_ok)
         self._apply_state_transition(record, new_state)
@@ -170,6 +189,36 @@ class LicenseCheckInScheduler:
             self._trust_store.admit_manifest(manifest)
         except Exception:
             return  # malformed manifest -- never let this break the check-in cycle
+
+    @staticmethod
+    def _is_stale_assertion(record: LicenseStateRecord, payload: dict) -> bool:
+        """Phase 8V-P9 (Part K): the real monotonicity guard. A newly
+        verified assertion is stale when a real prior assertion is already
+        stored and this one's `issued_at` is strictly older. Compares real,
+        signed `issued_at` timestamps (never client wall-clock time, never a
+        value this function invents) -- `issued_at` is itself part of the
+        signed payload verify_assertion() already authenticated, so this
+        comparison is over trustworthy data, not a new trust source.
+
+        Equal `issued_at` is NOT treated as stale: two distinct, genuinely
+        issued assertions minted within the same second-resolution instant
+        (e.g. activation immediately followed by a check-in) are a real,
+        legitimate occurrence, not a replay -- a replay is always a byte-
+        identical re-delivery of something with a strictly older `issued_at`
+        than what is already stored. Rejecting ties would create a false
+        denial against genuine rapid-succession check-ins."""
+        stored_issued_at = record.assertion_issued_at
+        if not stored_issued_at:
+            return False  # nothing stored yet -- first assertion always allowed
+        new_issued_at = payload.get("issued_at")
+        if not new_issued_at:
+            return True  # a signed assertion missing issued_at is never newer than something real
+        try:
+            stored_dt = datetime.fromisoformat(stored_issued_at)
+            new_dt = datetime.fromisoformat(new_issued_at)
+        except ValueError:
+            return True  # unparseable -- deny-by-default, never guess
+        return new_dt < stored_dt
 
     def _persist_fresh_assertion(self, record: LicenseStateRecord, envelope: dict, verified) -> LicenseStateRecord:
         import json
