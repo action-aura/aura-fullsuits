@@ -145,15 +145,33 @@ class DeviceLimitScanResult:
     findings: list[OverLimitFinding] = field(default_factory=list)
 
 
-def scan_over_limit_licenses(*, as_of: date | None = None, dry_run: bool = True) -> DeviceLimitScanResult:
+def scan_over_limit_licenses(
+    *, as_of: date | None = None, now: datetime | None = None, dry_run: bool = True
+) -> DeviceLimitScanResult:
     """Report-only by default, same convention as `expiry_scan.py`. NEVER
     deactivates or replaces any installation itself -- Part P's explicit
     "over-limit remediation without silent deactivation": this job only
     ever surfaces an `InternalNotification` for a human to act on via
     `release_device_slot()`/`replace_device_slot()`/a plan-appropriate
-    renewal, never picks which installation to remove."""
+    renewal, never picks which installation to remove.
+
+    Phase 8V-P9: `as_of` (date-precision) is used only for the scan
+    result's own `as_of`/dedup bookkeeping -- it must NEVER be used to
+    evaluate DeviceSlotException windows. Those are stored with
+    timezone-aware DateTime precision (see DeviceSlotException's own
+    columns and create_device_slot_exception()'s `datetime` parameters),
+    and the real enforcement path (activation.py's own device-limit check,
+    via resolve_effective_device_limit()) already evaluates them against
+    real wall-clock time. A prior version of this scan truncated to
+    midnight-of-`as_of` before calling resolve_effective_device_limit(),
+    which meant a real, active, same-day short-duration exception was
+    correctly honored by activation.py but invisible to this scan's own
+    over-limit finding -- a detection/notification precision gap (P2:
+    enforcement itself was never affected, only this scan's own report),
+    not a security bypass. Fixed by evaluating the effective limit at
+    `now` (real current time) here, independent of `as_of`."""
     as_of = as_of or utcnow().date()
-    as_of_dt = datetime.combine(as_of, datetime.min.time())
+    now = now or utcnow()
     result = DeviceLimitScanResult(as_of=as_of, dry_run=dry_run)
 
     licenses = db_session.execute(
@@ -163,7 +181,7 @@ def scan_over_limit_licenses(*, as_of: date | None = None, dry_run: bool = True)
     for license_row in licenses:
         result.scanned_count += 1
         active_count = count_slot_consuming_installations(license_row.id)
-        effective_limit = resolve_effective_device_limit(license_row, as_of=as_of_dt)
+        effective_limit = resolve_effective_device_limit(license_row, as_of=now)
         if active_count <= effective_limit:
             continue
 

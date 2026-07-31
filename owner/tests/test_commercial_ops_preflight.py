@@ -138,6 +138,86 @@ def test_preflight_trust_anchor_matching_key_passes(app, seeded, signing_key, tm
         assert result.ok is True
 
 
+# -- Phase 8V-P9: license-pepper preflight -----------------------------------
+
+def test_preflight_pepper_ok_by_default(app, seeded, signing_key):
+    # Test config sets LICENSE_PEPPER = "test-license-pepper" (config.py) --
+    # non-empty, not the dev-insecure placeholder, so the real self-test
+    # round-trip should pass cleanly.
+    with app.app_context():
+        from app.commercial_ops.preflight import run_preflight
+
+        result = run_preflight(key_directory=app.config["SIGNING_KEY_DIRECTORY"])
+        names = {c.name: c.status for c in result.checks}
+        assert names["license_pepper_configured"] == "OK"
+        assert names["license_pepper_self_test_roundtrip"] == "OK"
+        assert names["license_pepper_no_stray_aliases"] == "OK"
+
+
+def test_preflight_pepper_empty_fails(app, seeded, signing_key):
+    with app.app_context():
+        from app.commercial_ops.preflight import run_preflight
+
+        original = app.config["LICENSE_PEPPER"]
+        app.config["LICENSE_PEPPER"] = ""
+        try:
+            result = run_preflight(key_directory=app.config["SIGNING_KEY_DIRECTORY"])
+        finally:
+            app.config["LICENSE_PEPPER"] = original
+        assert result.ok is False
+        names = {c.name: c.status for c in result.checks}
+        assert names["license_pepper_configured"] == "FAIL"
+
+
+def test_preflight_pepper_dev_placeholder_is_warning_not_failure(app, seeded, signing_key):
+    with app.app_context():
+        from app.commercial_ops.preflight import run_preflight
+
+        original = app.config["LICENSE_PEPPER"]
+        app.config["LICENSE_PEPPER"] = "dev-only-insecure-pepper-do-not-use-in-production"
+        try:
+            result = run_preflight(key_directory=app.config["SIGNING_KEY_DIRECTORY"])
+        finally:
+            app.config["LICENSE_PEPPER"] = original
+        names = {c.name: c.status for c in result.checks}
+        assert names["license_pepper_configured"] == "WARNING"
+        # The dev placeholder alone must not block preflight -- real production
+        # startup is separately, unconditionally blocked by
+        # validate_external_api_production() regardless of this check.
+        assert names["license_pepper_self_test_roundtrip"] == "OK"
+
+
+def test_preflight_pepper_roundtrip_never_logs_the_pepper_value(app, seeded, signing_key):
+    with app.app_context():
+        from app.commercial_ops.preflight import run_preflight
+
+        original = app.config["LICENSE_PEPPER"]
+        app.config["LICENSE_PEPPER"] = "a-very-distinctive-real-pepper-value-12345"
+        try:
+            result = run_preflight(key_directory=app.config["SIGNING_KEY_DIRECTORY"])
+        finally:
+            app.config["LICENSE_PEPPER"] = original
+        for check in result.checks:
+            assert "a-very-distinctive-real-pepper-value-12345" not in check.detail
+
+
+def test_preflight_pepper_stray_alias_env_var_is_warning(app, seeded, signing_key):
+    with app.app_context():
+        import os
+
+        from app.commercial_ops.preflight import run_preflight
+
+        os.environ["LICENSE_KEY_PEPPER"] = "some-mistaken-value-nobody-reads"
+        try:
+            result = run_preflight(key_directory=app.config["SIGNING_KEY_DIRECTORY"])
+        finally:
+            del os.environ["LICENSE_KEY_PEPPER"]
+        names = {c.name: c.status for c in result.checks}
+        assert names["license_pepper_no_stray_aliases"] == "WARNING"
+        # A stray alias alone (canonical pepper is still fine) must not block.
+        assert names["license_pepper_configured"] == "OK"
+
+
 def test_preflight_super_admin_without_mfa_is_warning_not_failure(app, seeded, signing_key):
     with app.app_context():
         from app.extensions import db_session

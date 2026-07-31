@@ -245,3 +245,85 @@ def test_scan_over_limit_licenses_never_touches_installations(app, seeded):
         for inst in installations:
             refreshed = db_session.get(Installation, inst.id)
             assert refreshed.status == "ACTIVE"
+
+
+def test_scan_over_limit_licenses_precision_matches_real_time_not_midnight(app, seeded):
+    # Phase 8V-P9: real physical-device finding (Phase 8V-P7) -- a same-day,
+    # short-duration DeviceSlotException was fully effective for the real
+    # enforcement path (activation.py's resolve_effective_device_limit(),
+    # which always evaluates at real wall-clock time) but was invisible to
+    # this scan's own over-limit finding, because the scan used to truncate
+    # to midnight-of-as_of before evaluating the exception window -- a
+    # timezone-aware DateTime column being compared against a naive
+    # midnight value. Regression: a 2-active-installation, device_limit=1
+    # license with a real, currently-active extra_slots=1 exception must
+    # NOT be flagged as over limit (2 <= 1+1), proving the scan now
+    # evaluates the exception at real time, not date-truncated time.
+    staff_id = make_staff(app, "dso9@example.com")
+    with app.app_context():
+        from datetime import timedelta
+
+        from app.commercial_ops.device_slot_ops import create_device_slot_exception, scan_over_limit_licenses
+        from app.extensions import db_session
+        from app.installations.services import register_installation
+        from app.licensing.services import transition_license
+        from app.models.base import utcnow
+        from app.models.licensing import License
+
+        lic_id, _ = make_license(app, staff_id, device_limit=1)
+        lic = db_session.get(License, lic_id)
+        transition_license(lic, "ACTIVE", staff_id)
+        platform_id = _windows_platform_id(app)
+        for label in ("precision-a", "precision-b"):
+            inst = register_installation(
+                {"customer_id": lic.customer_id, "license_id": lic.id, "product_id": lic.product_id,
+                 "platform_id": platform_id, "installation_label": label},
+                staff_id,
+            )
+            inst.status = "ACTIVE"
+        db_session.commit()
+
+        now = utcnow()
+        create_device_slot_exception(
+            license_row=lic, extra_slots=1, reason="Phase 8V-P9 precision regression test",
+            starts_at=now, expires_at=now + timedelta(minutes=5), actor_staff_user_id=staff_id,
+        )
+
+        result = scan_over_limit_licenses(as_of=None, now=now, dry_run=True)
+        assert not any(f.license_id == str(lic.id) for f in result.findings)
+
+
+def test_scan_over_limit_licenses_flags_after_exception_expiry(app, seeded):
+    staff_id = make_staff(app, "dso10@example.com")
+    with app.app_context():
+        from datetime import timedelta
+
+        from app.commercial_ops.device_slot_ops import create_device_slot_exception, scan_over_limit_licenses
+        from app.extensions import db_session
+        from app.installations.services import register_installation
+        from app.licensing.services import transition_license
+        from app.models.base import utcnow
+        from app.models.licensing import License
+
+        lic_id, _ = make_license(app, staff_id, device_limit=1)
+        lic = db_session.get(License, lic_id)
+        transition_license(lic, "ACTIVE", staff_id)
+        platform_id = _windows_platform_id(app)
+        for label in ("expiry-a", "expiry-b"):
+            inst = register_installation(
+                {"customer_id": lic.customer_id, "license_id": lic.id, "product_id": lic.product_id,
+                 "platform_id": platform_id, "installation_label": label},
+                staff_id,
+            )
+            inst.status = "ACTIVE"
+        db_session.commit()
+
+        now = utcnow()
+        create_device_slot_exception(
+            license_row=lic, extra_slots=1, reason="Phase 8V-P9 expiry regression test",
+            starts_at=now - timedelta(minutes=10), expires_at=now - timedelta(minutes=5),
+            actor_staff_user_id=staff_id,
+        )
+
+        result = scan_over_limit_licenses(as_of=None, now=now, dry_run=True)
+        assert any(f.license_id == str(lic.id) for f in result.findings)

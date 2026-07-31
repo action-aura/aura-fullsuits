@@ -180,6 +180,97 @@ def _check_role_permission_assignments(checks: list[PreflightCheck]) -> bool:
     return ok
 
 
+# Phase 8V-P9: real, plausible misspellings/aliases of the one canonical env
+# var (OWNER_LICENSE_PEPPER) an operator (or a hastily-written validation
+# script -- see docs/owner/phase8vp9/license-pepper-preflight-final.md for the
+# real incident this closes) could set by mistake, silently producing a
+# pepper Owner never actually uses. Checked as environment variables, not
+# config attributes, since the whole point is to catch a value that never
+# made it into app.config at all.
+_KNOWN_PEPPER_ALIASES = (
+    "LICENSE_PEPPER",
+    "LICENSE_KEY_PEPPER",
+    "OWNER_LICENSE_KEY_PEPPER",
+    "OWNER_PEPPER",
+    "PEPPER",
+)
+
+
+def _check_license_pepper(checks: list[PreflightCheck]) -> bool:
+    """Real self-test, not just a presence check: hashes and verifies a
+    synthetic constant using the exact pepper source
+    (current_app.config["LICENSE_PEPPER"]) that both issuance
+    (licensing/routes.py) and verification (licensing_service/activation.py,
+    via the config dict built from this same attribute) actually read --
+    confirmed by source to be the single real source for both, so a
+    round-trip against it is a genuine, direct proof issuance and
+    verification agree, not an assumption. Never logs or returns the pepper
+    value itself, and never logs a real/synthetic license key."""
+    from flask import current_app
+
+    from app.security.license_keys import hash_license_secret, verify_license_key
+
+    pepper = current_app.config.get("LICENSE_PEPPER", "")
+    ok = True
+
+    if not pepper:
+        ok = False
+        checks.append(PreflightCheck(
+            "license_pepper_configured", "FAIL",
+            "LICENSE_PEPPER (env: OWNER_LICENSE_PEPPER) is empty or unset. Every license-key issuance "
+            "and every activation's HMAC verification will fail. Fix: set OWNER_LICENSE_PEPPER to a "
+            "real secret value before starting Owner.",
+        ))
+    elif "insecure" in pepper or pepper == "dev-only-insecure-pepper-do-not-use-in-production":
+        checks.append(PreflightCheck(
+            "license_pepper_configured", "WARNING",
+            "LICENSE_PEPPER is set to the known development placeholder value. Fine for local/dev "
+            "validation; must never be true in a real production environment (validate_external_api_"
+            "production() already refuses production startup with this value -- this is a dev-mode "
+            "reminder, not a new production gate).",
+        ))
+    else:
+        checks.append(PreflightCheck("license_pepper_configured", "OK", "LICENSE_PEPPER is set (value not logged)."))
+
+    if ok and pepper:
+        try:
+            synthetic_key = "AURA-PREFLIGHT-SELFTEST-0000-0000-0000-0000-0000"
+            stored = hash_license_secret(synthetic_key, pepper)
+            if not verify_license_key(synthetic_key, pepper, stored):
+                ok = False
+                checks.append(PreflightCheck(
+                    "license_pepper_self_test_roundtrip", "FAIL",
+                    "A real hash/verify round-trip using the configured pepper did not match itself -- "
+                    "this should be structurally impossible and indicates a real bug in "
+                    "hash_license_secret()/verify_license_key(), not a configuration problem.",
+                ))
+            else:
+                checks.append(PreflightCheck(
+                    "license_pepper_self_test_roundtrip", "OK",
+                    "Real HMAC hash/verify round-trip against a synthetic key succeeded.",
+                ))
+        except ValueError as exc:
+            ok = False
+            checks.append(PreflightCheck("license_pepper_self_test_roundtrip", "FAIL", str(exc)))
+
+    aliases_set = [name for name in _KNOWN_PEPPER_ALIASES if os.environ.get(name)]
+    if aliases_set:
+        checks.append(PreflightCheck(
+            "license_pepper_no_stray_aliases", "WARNING",
+            f"Environment variable(s) {sorted(aliases_set)} are set but are NOT the canonical "
+            "OWNER_LICENSE_PEPPER -- Owner never reads them. If one of these was meant to configure "
+            "the pepper, it has silently had no effect. This is exactly the real mistake found during "
+            "Phase 8V-P7 physical validation (a validation script used the wrong config key name and "
+            "silently fell back to an unintended value). Not blocking on its own -- the value above "
+            "already confirmed LICENSE_PEPPER itself is set and self-consistent -- but always worth a "
+            "human's attention.",
+        ))
+    else:
+        checks.append(PreflightCheck("license_pepper_no_stray_aliases", "OK", "No known misspelled pepper env-var aliases are set."))
+
+    return ok
+
+
 def _check_super_admin_mfa(checks: list[PreflightCheck]) -> None:
     # Informational only -- a synthetic/dev Super Admin without MFA is
     # expected in some local test setups (see
@@ -207,6 +298,7 @@ def run_preflight(*, key_directory: str) -> PreflightResult:
         blocking_ok &= _check_trust_anchor(checks)
     blocking_ok &= _check_permission_seed(checks)
     blocking_ok &= _check_role_permission_assignments(checks)
+    blocking_ok &= _check_license_pepper(checks)
     _check_super_admin_mfa(checks)  # informational only, never blocking
 
     return PreflightResult(ok=bool(blocking_ok), checks=checks)
