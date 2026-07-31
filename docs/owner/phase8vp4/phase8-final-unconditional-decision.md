@@ -85,3 +85,15 @@ conditions than this session's own real state permitted.
    logging) for the raw Owner<->device bytes specifically.
 4. Exercise backup/restore/export on-device for real.
 5. Only once every named gap above closes, write the closing decision and create the final tag.
+
+## Phase 8V-P5 update (additive; this document's own historical verdict stands unchanged)
+
+Phase 8V-P5 made real progress on several of the above items: root-caused why local RESTRICTED had
+never been observed, achieved it physically for the first time (Clinic), added real wire-capture
+infrastructure, found and fixed a real P1 timezone bug, found and disclosed a real emergency-extension
+wiring gap, and ran the full regression including product backends (943/943). Scenarios 2 (Retail-side
+restricted-to-active/88.00/returns), 6, and 7 remain open, along with stale-assertion rejection and
+backup/restore/export. The final unconditional tag remains withheld. See
+`docs/owner/phase8vp5/phase8-final-decision.md` for the complete, current per-dimension verdict, which
+supersedes this document's "next session's exact scope" section above as the current source of truth
+for what remains.

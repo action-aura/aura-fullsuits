@@ -85,3 +85,15 @@ signing-key regeneration. No destructive git operations. Never move the conditio
 VPS/payment-gateway/WhatsApp/SMS/Aura-Core additions. Not publicly deployed, not production-operated,
 not internet-scale, not ready for unsupervised public release, not yet ready for a controlled paid
 pilot (Phase 8 itself remains conditional).
+
+## Phase 8V-P5 successor (additive pointer)
+
+Phase 8V-P5 (`docs/owner/phase8vp5/`) continued this exact closure effort on the same physical device.
+Headline real results: local `RESTRICTED` state achieved on-device for the first time across all
+sessions (root-caused via source reading why it never happened before); a real P1 timezone bug found
+and fixed in `emergency_extensions.py`; a real, disclosed structural gap found (emergency extensions'
+business layer and technical grace-extension layer are unwired); full automated regression re-run
+including product backends this time (943/943 passing). Scenarios 2 (Retail-side), 6, 7,
+stale-assertion rejection, and backup/restore/export remain open -- CONDITIONAL PASS continues, the
+final tag remains withheld. `docs/owner/phase8vp5/phase8-final-decision.md` is the current,
+authoritative status document; all standing rules above remain unchanged and were followed throughout.

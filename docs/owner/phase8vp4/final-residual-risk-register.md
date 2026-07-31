@@ -18,3 +18,12 @@ Item 5 is the most concrete new finding -- assessed low-medium, a real usability
 security or data-integrity defect (the authoritative Owner-side record is correct throughout; only
 the *device's own UI* lacks a direct path back to reactivation after an explicit local deactivation).
 Not fixed this session, consistent with this phase's own validation-only scope.
+
+## Phase 8V-P5 additions (additive, this register's prior entries unchanged)
+
+| # | Item | Severity | Status |
+|---|---|---|---|
+| 10 | `emergency_extensions.py` defaulted `now` to naive `datetime.utcnow()` instead of the shared tz-aware `utcnow()`, shifting stored extension windows by the DB session's UTC offset (3h on this dev Postgres) | **P1** | **Fixed this session** -- all 3 call sites corrected, regression test added, 12/12 + 16/16 collateral files pass |
+| 11 | `EmergencyExtension` (business/audit layer) and `OfflinePolicy.emergency_extension_allowed/until` (technical grace-extension layer) are never wired together -- creating a real, approved, audited extension has no functional effect on a device's local grace/restriction computation, only an informational `emergency_extension_id` in the assertion | **P1, disclosed, not fixed** | Found via careful inspection of real captured wire evidence (`offline_policy.emergency_extension_until: null` despite an active extension); confirmed via source (`policy_evaluator.py:108` reads only the `OfflinePolicy` fields). See `docs/owner/phase8vp5/scenario5-emergency-extension-and-expiry-final.md` |
+| 12 | Item 1 (Scenario 6/7) and item 2 (2/3/5 sub-checks) from this table remain open after Phase 8V-P5 -- Scenario 2's restricted-to-active/88.00/returns and Scenarios 6/7 were not reached this session either; real RESTRICTED itself *was* finally achieved (Clinic, via a dedicated OfflinePolicy), closing part of item 2 | Blocks final tag | See `docs/owner/phase8vp5/phase8-final-decision.md` for the full updated per-dimension verdict |
+| 13 | Item 5 (deactivation UX) formally classified this session: intent is confirmed "fresh activation via key required" (case A), and the missing key-entry form on `DEVICE_DEACTIVATED` is confirmed a real P2 gap (state machine supports `reactivation_requested -> ACTIVATION_REQUIRED`, screen never triggers it) | P2 (reclassified from unclassified) | Not fixed, per the spec's own instruction for case A. See `docs/owner/phase8vp5/local-deactivation-reactivation-decision.md` |

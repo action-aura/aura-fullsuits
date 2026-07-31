@@ -64,3 +64,12 @@ with the `-PownerLicensingBaseUrl` command in `artifact-verification.md` (using 
 the connection strictly local). Install, run the seven scenarios, capture traffic and Logcat per the
 two plan documents already written this session, write the closing decision, and only then create the
 final tag if every gate genuinely passes.
+
+## Later update (Phase 8V-P5, additive)
+
+This chain continued through Phase 8V-P4 and Phase 8V-P5. As of Phase 8V-P5: real physical RESTRICTED
+state was finally achieved (Phase 8V-P/P2/P3/P4 never reached it), a real P1 timezone bug in the
+emergency-extension service was found and fixed, and the full automated regression (943 tests including
+product backends) passed. Scenarios 2/6/7, stale-assertion rejection, and backup/restore/export remain
+open. Still CONDITIONAL PASS; still no final tag. See
+`docs/owner/phase8vp5/phase8-final-decision.md` for the current, authoritative status.
