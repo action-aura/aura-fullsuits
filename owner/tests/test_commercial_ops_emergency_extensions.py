@@ -48,6 +48,39 @@ def test_create_emergency_extension_success(app, seeded):
         assert ext.expires_at - ext.starts_at == timedelta(hours=24)
 
 
+def test_create_emergency_extension_default_now_is_real_utc_not_shifted(app, seeded):
+    # Phase 8V-P5: found by real physical validation against a real
+    # non-UTC-session Postgres (Asia/Amman, +3) -- create_emergency_extension()
+    # used to default `now` to the naive, deprecated datetime.utcnow(), which
+    # a DateTime(timezone=True) column silently re-localizes to the DB
+    # session's own timezone on write, shifting the real stored instant by
+    # the session's UTC offset. A 3-minute extension created this way could
+    # already be expired by the time a caller read it back. This regression
+    # exercises the actual default-`now` code path (never passing `now=`
+    # explicitly, since that's what a real caller does) and asserts the
+    # stored starts_at is genuinely close to real UTC now, not hours off.
+    from datetime import timezone
+
+    staff_id = make_staff(app, "ee-tz@example.com")
+    with app.app_context():
+        from app.commercial_ops.emergency_extensions import create_emergency_extension
+
+        sub = _make_subscription(app, staff_id)
+        real_utc_before = datetime.now(timezone.utc)
+        ext = create_emergency_extension(
+            subscription=sub, reason="Timezone regression check",
+            duration_hours=1, actor_staff_user_id=staff_id, incident_reference="INC-TZ-1",
+        )
+        real_utc_after = datetime.now(timezone.utc)
+
+        assert ext.starts_at.tzinfo is not None
+        # The stored instant must fall within the real wall-clock window this
+        # test actually ran in -- a multi-hour timezone-shift bug would place
+        # it far outside this window.
+        assert real_utc_before <= ext.starts_at <= real_utc_after
+        assert real_utc_before + timedelta(hours=1) <= ext.expires_at <= real_utc_after + timedelta(hours=1)
+
+
 def test_create_emergency_extension_requires_reason(app, seeded):
     staff_id = make_staff(app, "ee2@example.com")
     with app.app_context():
@@ -156,7 +189,14 @@ def test_is_emergency_extension_active_reflects_status_and_expiry(app, seeded):
         assert is_emergency_extension_active(sub.id) is False
         create_emergency_extension(subscription=sub, reason="first", duration_hours=1, actor_staff_user_id=staff_id)
         assert is_emergency_extension_active(sub.id) is True
-        future = datetime.utcnow() + timedelta(hours=2)
+        # Phase 8V-P5: must be timezone-aware -- a naive value compared
+        # against the (correctly timezone-aware, post-fix) expires_at column
+        # gets silently re-localized to the DB session's own timezone instead
+        # of being treated as UTC, which on a non-UTC session previously made
+        # this assertion pass for the wrong reason (or fail outright).
+        from datetime import timezone
+
+        future = datetime.now(timezone.utc) + timedelta(hours=2)
         assert is_emergency_extension_active(sub.id, now=future) is False
 
 
