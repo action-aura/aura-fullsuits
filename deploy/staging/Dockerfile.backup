@@ -1,0 +1,20 @@
+# Phase 9 Milestone 7 -- staging backup container.
+# Runs deploy/staging/backup.py on a schedule (Milestone 9's scheduler
+# mechanism drives `docker compose run backup` or an equivalent systemd
+# timer in a real deployment -- this image just needs to exist and work
+# when invoked, real scheduling lives outside the image itself).
+FROM python:3.11-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system aura && useradd --system --gid aura --home /app --shell /usr/sbin/nologin aura
+
+WORKDIR /app
+COPY deploy/staging/backup.py /app/backup.py
+RUN mkdir -p /backups && chown -R aura:aura /app /backups
+USER aura
+
+ENTRYPOINT ["python", "/app/backup.py"]
+CMD ["--db-host", "db", "--db-name", "aura_owner_staging", \
+     "--signing-key-dir", "/app/owner/var/signing-keys", "--backup-dir", "/backups"]

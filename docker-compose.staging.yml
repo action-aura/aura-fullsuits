@@ -96,7 +96,14 @@ services:
     build:
       context: .
       dockerfile: deploy/staging/Dockerfile.backup
-    restart: unless-stopped
+    # No `restart:` policy -- deploy/staging/backup.py is a one-shot script
+    # that exits after a single backup run. This service is invoked
+    # on-demand (`docker compose -f docker-compose.staging.yml run --rm
+    # backup`) by the Milestone 9 scheduler, not left running -- an
+    # `unless-stopped` restart policy on a script that always exits would
+    # make Docker hot-loop it (a "backup" every few seconds), which is
+    # wrong, not just wasteful.
+    profiles: ["manual"]
     env_file:
       - .env.staging
     environment:

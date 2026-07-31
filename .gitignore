@@ -1,5 +1,7 @@
 # Environments / secrets
 .env
+.env.*
+!.env.*.example
 *.local.env
 android/*/keystore.properties
 android/*/local.properties
