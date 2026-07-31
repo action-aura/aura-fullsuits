@@ -22,6 +22,9 @@ def register_security_headers(app: Flask) -> None:
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
-        if app.config.get("ENV") == "production":
+        # Phase 9: staging is real HTTPS (Caddy-terminated) too, not just
+        # production -- HSTS belongs to "this environment genuinely only
+        # serves over TLS", which is true for staging as much as prod.
+        if app.config.get("ENV") in ("production", "staging"):
             response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
         return response
