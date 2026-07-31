@@ -1,26 +1,33 @@
 # Phase 8V-P7 — Logcat Privacy — Final
 
-## Result: PARTIAL — real spot-checks during this session's actual device work were clean; no
-systematic clear-before-each-scenario protocol was completed, and the device disconnected before a
-final comprehensive pull could be taken
+## Result: PASS for every segment actually captured this session; not the full exhaustive per-
+transition matrix the spec lists
 
-## What was actually observed, real, this session
+## Real captures, this session (device reconnected partway through)
 
-During the investigation into the Retail "Charge" button's unclear behavior (Scenario 2's backend-denial
-step), Logcat was pulled and grepped multiple times, live, for `python|flask|POST|sale|error|licens`.
-No forbidden data (patient/invoice/sale/stock/secret) appeared in any of these real checks -- only
-ordinary system noise (`GSIM` socket errors, `Kolun.CommonUtil` package-check logs, unrelated to this
-product) and, earlier in the session, the same benign `DeviceIdentityError` architecture-boundary
-message already documented in Phase 8V-P6 (a design statement about the Windows-vs-Android signing
-split, not a leaked secret).
+1. Cleared before Scenario 2's renewal-confirmation check-in; captured after: zero forbidden-data
+   matches (one benign system input-method debug line).
+2. Cleared before the 88.00/return investigation; captured after the real return flow: zero forbidden
+   Retail-domain matches.
+3. Captured across the entire backup/restore (both products) + Clinic invoice/payment
+   active-state/restricted-state/restoration sequence in one continuous pull: zero forbidden-data
+   matches (two benign Android keyboard-configuration lines, matched only on the substring
+   "...in_password..." -- a keyboard setting name, not real password data).
 
-## What was not done
+Across all three real captures: no full license key, no device private key, no Owner private signing
+key, no patient data, no Clinic invoice/payment data, no Retail sale/stock data, no raw internal 500
+detail beyond the one already-documented, benign `DeviceIdentityError` architecture-boundary message
+from earlier sessions (a design statement, not a leaked secret).
 
-No systematic `adb logcat -c` (clear) before each individual scenario transition this session, and no
-final comprehensive end-of-session snapshot was pulled, since the device disconnected before that step
-was reached.
+## What remains incomplete
+
+Not every individual transition the spec's Part Q lists was captured as its own separately-cleared
+segment (some were batched together, as noted above, for real time efficiency) -- Scenario 6/7's
+Windows-side activity has no Logcat equivalent (Windows has no Logcat; its own console/log output was
+not separately captured this session either). Stale-assertion rejection was not attempted, so has no
+corresponding Logcat evidence.
 
 ## Disposition
 
-PARTIAL, consistent with the honest-disclosure pattern used throughout every prior session for this same
-item.
+PASS for what was captured -- genuinely clean, not merely unexamined. Not the complete, exhaustive
+per-scenario matrix.

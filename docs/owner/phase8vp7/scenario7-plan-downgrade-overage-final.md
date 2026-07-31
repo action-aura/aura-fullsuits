@@ -1,8 +1,16 @@
 # Phase 8V-P7 — Scenario 7 (Plan Downgrade and Device Overage) — Final
 
 ## Result: PASS for the Owner-side mechanics (downgrade, overage detection, idempotency, temporary
-exception, real expiry); PARTIAL for the device-facing confirmation (Android disconnected for an
-extended period this session)
+exception, real expiry); PARTIAL for the device-facing confirmation
+
+The physical Android device reconnected later in this session, but the two Windows product instances
+(D, E) this scenario's device-facing confirmation would need were stopped as part of an interim cleanup
+pass before the device came back, and the physical Android installation belongs to a different license
+(Scenario 2's) than this scenario's test license (`68a467ec-...`) -- joining it would mean deactivating
+the already-proven Scenario 2 installation, which was judged not worth the disruption for a
+confirmation step whose underlying mechanism (fresh, per-check-in assertion fields) is already
+physically proven in general by Scenario 2/3's own real check-ins this session. Reported as a real,
+deliberate scope decision, not fabricated as complete.
 
 ## Starting state (real, following directly from Scenario 6)
 

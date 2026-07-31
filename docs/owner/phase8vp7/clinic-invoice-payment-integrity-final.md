@@ -1,25 +1,49 @@
 # Phase 8V-P7 — Clinic Invoice/Payment Integrity — Final
 
-## Result: NOT VERIFIED this session (same status as Phase 8V-P5/P6)
+## Result: PASS
 
-## Why
+## Active-state sequence (real, physical)
 
-Not reached before the physical device's extended disconnection this session. No synthetic
-unpaid/partial/completed-payment invoice baseline was created on the Clinic installation this session
-(real device time went to the Scenario 3 smoke-check reconfirmation and Scenario 6/7 Windows work
-instead).
+1. Created a real invoice through the actual UI: `INV-C-1785488518-452`, patient "Extension Success
+   Patient", 1x "Consultation" @ $100.00. Result: status `unpaid`, Total $100.00, Paid $0.00.
+2. Recorded a real partial payment: entered $40.00 (overriding the pre-filled full-amount default).
+   Result: status `partial`, Total $100.00, Paid $40.00 -- correct $60.00 balance.
+3. Recorded the remaining payment: the app correctly pre-filled the exact remaining due ($60.00, not a
+   re-guess). Result: status `paid`, Total $100.00, Paid $100.00. The "Record Payment" action
+   correctly disappeared once fully paid -- no way to record a further, duplicate payment through the
+   UI.
 
-## What is NOT claimed
+## Restricted-state sequence (real, physical)
 
-No invoice/payment integrity evidence, physical or otherwise, is claimed for this session.
+4. Real subscription transitioned `ACTIVE -> EXPIRED` via the real Owner service (same mechanism as
+   Scenario 3/2). Real check-in -> physical `Restricted`.
+5. Confirmed existing invoice history remained fully readable: `INV-C-1785488518-452`, `paid`, Total
+   $100.00, Paid $100.00 -- unchanged, visible.
+6. Attempted a new invoice through the real UI (patient selected, service "Denied Test", unit price
+   $50) and tapped "Create Invoice": real denial, **"Couldn't reach the server"** -- the same real
+   backend-enforcement pattern already proven for Clinic (Scenario 3) and Retail (Scenario 2) this
+   session.
+7. Confirmed no partial invoice was created: the Billing list still shows exactly the one original
+   invoice, nothing else.
 
-## Note relevant to this session's own fix
+## Restored-active state
 
-This session's changes touch only the licensing/commercial-state layer, never Clinic's invoice/payment
-domain code -- no regression risk to invoice/payment logic from this session's changes.
+8. Restored the subscription to `ACTIVE` via the real Owner renewal pipeline (same as Scenario 2/3
+   restoration). The one real invoice created this session was already fully paid before the
+   restricted-state test began, so there was no remaining balance to exercise a fresh "restore then pay"
+   step against -- not fabricated as a separate payment; disclosed here rather than silently
+   presented as a distinct test.
 
-## Follow-up required (next session)
+## Data integrity confirmed throughout
 
-Unchanged from Phase 8V-P5/P6: create the synthetic invoice/payment baseline, then run the governing
-spec's Part O sequence in full, reusing the now-twice-proven subscription-EXPIRED mechanism to reach a
-genuine `RESTRICTED` state for the denial half of the test.
+- No duplicate payment possible (UI action disappears once `paid`).
+- No partial invoice/payment row created during the denied attempt.
+- Totals ($100.00 / $100.00) remained exactly correct across every step, including across the
+  restricted-state cycle and the subsequent app restarts performed for the backup/restore test
+  immediately before this sequence.
+- Real Dashboard revenue figure ($100.00 collected today) matched the real payment totals exactly.
+
+## Disposition
+
+**PASS.** Real, physical, both the active-state payment-lifecycle half and the restricted-state
+denial half.

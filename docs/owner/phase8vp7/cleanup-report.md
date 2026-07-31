@@ -26,3 +26,19 @@
 - Physical Android device remained disconnected at the time of this cleanup; no further device-side
   cleanup (display settings, app state) could be verified this session -- disclosed as an open item for
   the next session's own entry-gate check.
+
+## Update: device reconnected later in this same session -- real, final cleanup completed
+
+The device reconnected and was used for real further work (Scenario 2 completion, backup/restore/
+export both products, Clinic invoice/payment). A second, real Owner wire-capture process was started
+for that work and has now been stopped for real (3 real PIDs terminated, confirmed via
+`Get-CimInstance`/`Stop-Process`, not merely assumed). `adb reverse --remove-all` /
+`adb forward --remove-all` this time executed against a real connected device and returned empty
+(confirmed via `adb reverse --list`/`adb forward --list`). `adb shell wm size reset` this time executed
+against a real connected device and confirmed reset (`Physical size: 720x1612`, native, no override
+remaining -- the display-size override used during this session's UI navigation is fully cleared).
+Temp Logcat capture files (`logcat_s2_renewal.txt`, `logcat_return.txt`, `logcat_backup_invoice.txt`)
+and the real wire-capture file (`capture_raw.jsonl`, 4 real entries) deleted after their evidence was
+excerpted into `scenario2-retail-late-renewal-final.md`, `android-backup-restore-export-final.md`,
+`clinic-invoice-payment-integrity-final.md`, and `logcat-privacy-final.md`. Final `git status --short`
+confirmed clean except the intended `docs/owner/phase8vp7/` doc updates from this continuation.

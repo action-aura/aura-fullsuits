@@ -1,30 +1,37 @@
 # Phase 8V-P7 — On-Device Data Preservation — Final
 
-## Result: PARTIAL — real, positive evidence from this session's actual upgrade/scenario work; no full
-before/after baseline comparison (never established, same disclosed gap as prior sessions)
+## Result: PASS for everything actually exercised this session; not a full Part R baseline (never
+established across any session, same disclosed gap carried forward)
 
-## Real, positive evidence from this session
+## Real before/after evidence, this session
 
-- Both products' in-place upgrades (rc.3 -> rc.4) preserved `firstInstallTime` and `installation_id`
-  exactly (Clinic: `c7150980-...` unchanged; Retail: `e77bd448-...` unchanged) -- confirmed directly via
-  `dumpsys package` and real check-in responses, both before and after the upgrade.
-- Clinic's pre-existing single patient record ("Extension Success Patient", created during Phase
-  8V-P6's own Scenario 5 test) was confirmed still present (`TOTAL PATIENTS: 1`) on the Clinic Dashboard
-  immediately after this session's rc.4 upgrade -- real, direct confirmation that a real commercial-code
-  upgrade does not disturb domain data.
-- Retail's pre-existing sale (`SALE-000002`, $100.00, from Phase 8V-P5) was confirmed still reflected in
-  the Dashboard's `TODAY'S SALES`/`TRANSACTIONS` counters both before and after this session's own
-  Scenario 2 restriction test, and confirmed to remain exactly 1 transaction (not incremented) after the
-  denied "Charge" attempt during `RESTRICTED` -- real, direct evidence that the commercial-state
-  transition itself did not touch domain data, and that the denied mutation created no partial row.
+**Clinic**: 1 patient at session start ("Extension Success Patient") -> after adding "Post Backup
+Patient" (2) -> after restore, back to exactly 1, the *correct* one. 1 invoice created
+(`INV-C-1785488518-452`), fully paid ($100.00/$100.00), unchanged across a real `RESTRICTED` cycle, a
+denied second-invoice attempt, and the subscription restoration. No duplicate patient, no duplicate
+invoice, no duplicate payment at any point.
 
-## What was not done
+**Retail**: 1 product at session start (19 in stock) -> after adding "Post Backup Product" (2) ->
+after restore, back to exactly 1, the correct one, stock still 19. 1 pre-existing sale
+(`SALE-000002`, $100.00) -> real return processed (`RET-000001-5eba23a1`) -> stock correctly restored
+18 -> 19, net revenue correctly reduced $100.00 -> $0.00. No duplicate sale, no duplicate return.
 
-The full Part E-equivalent baseline (minimum patient/appointment/invoice counts for Clinic; minimum
-product/sale/stock counts for Retail) was never established in this or any prior session, so a complete
-field-by-field before/after comparison across every domain-data category could not be performed.
+**Commercial-state transitions never touched domain data**: every subscription transition performed
+this session (Retail EXPIRED->ACTIVE, Clinic EXPIRED->ACTIVE twice) produced zero side effects on
+patient/invoice/product/sale records -- confirmed directly by the exact-match counts above before and
+after each transition.
+
+## What remains not established
+
+The full Part R baseline (minimum 3 patients/2 appointments/1 visit/1 prescription/2 invoices for
+Clinic; 5 products/2 categories/1 supplier/3 sales for Retail) was never created in this or any prior
+session -- this session worked with the smaller, real datasets that existed from prior sessions' own
+validation work, which is sufficient to prove the *mechanism* (no unexpected loss, no duplication, no
+commercial-state leakage into domain data) but not a complete field-by-field sweep across every
+category the spec's Part R lists.
 
 ## Disposition
 
-PARTIAL, real positive evidence rather than mere absence-of-negative-evidence, consistent with this
-session's own pattern of honest, incremental disclosure.
+PASS for the real preservation mechanism, demonstrated repeatedly and consistently across every
+operation this session performed on both products. Not claimed as the full exhaustive baseline
+comparison the spec describes.

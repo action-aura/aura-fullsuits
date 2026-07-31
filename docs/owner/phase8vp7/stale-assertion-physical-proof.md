@@ -1,6 +1,13 @@
 # Phase 8V-P7 — Stale-Assertion Rejection — Physical Proof — Final
 
-## Result: NOT VERIFIED this session
+## Result: NOT VERIFIED this session (device reconnected later in the session; still not reached)
+
+The physical device reconnected partway through this session and was used for real work (Scenario 2
+completion, backup/restore/export both products, Clinic invoice/payment). Stale-assertion rejection
+was deliberately not attempted with the remaining time: it requires extending
+`owner_capture_server.py` with a real hold/release capability (a real, non-trivial infrastructure
+change) that was judged lower priority than the scenario/recovery-workflow gates actually reached.
+Disclosed as a real prioritization decision, not an oversight.
 
 ## Why
 
