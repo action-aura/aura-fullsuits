@@ -1,0 +1,125 @@
+# Phase 9 -- hardened staging stack. Harder evolution of owner/docker-compose.yml
+# (Phase 6 dev compose): TLS termination added, Postgres no longer publishes a
+# host port, staging-only secrets loaded from an out-of-repo .env.staging,
+# non-root app container, backup service added.
+#
+# Usage (local-only this session -- see staging-deployment-report.md):
+#   cp deploy/staging/.env.staging.example .env.staging   # fill in real values, never commit
+#   docker compose -f docker-compose.staging.yml up -d
+#
+# Real remote deployment: identical file, different DNS/.env.staging values.
+
+services:
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    env_file:
+      - .env.staging
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./deploy/staging/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      owner:
+        condition: service_healthy
+    networks:
+      - edge
+      - internal
+
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    env_file:
+      - .env.staging
+    environment:
+      POSTGRES_USER: ${STAGING_DB_USER}
+      POSTGRES_PASSWORD: ${STAGING_DB_PASSWORD}
+      POSTGRES_DB: ${STAGING_DB_NAME}
+    # No `ports:` mapping -- Postgres is reachable ONLY from the `internal`
+    # network (Owner + backup containers), never from the host or the
+    # public internet. This is the single most important hardening delta
+    # from the existing dev docker-compose.yml.
+    command: >
+      postgres -c max_connections=50
+               -c statement_timeout=30000
+               -c idle_in_transaction_session_timeout=60000
+    volumes:
+      - owner_pg_data_staging:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${STAGING_DB_USER} -d ${STAGING_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  owner:
+    build:
+      context: .
+      dockerfile: owner/Dockerfile.staging
+    restart: unless-stopped
+    env_file:
+      - .env.staging
+    environment:
+      OWNER_ENV: staging
+      OWNER_DATABASE_URL: postgresql+psycopg://${STAGING_DB_USER}:${STAGING_DB_PASSWORD}@db:5432/${STAGING_DB_NAME}
+      OWNER_SIGNING_KEY_DIRECTORY: /app/owner/var/signing-keys
+    volumes:
+      - owner_signing_keys_staging:/app/owner/var/signing-keys
+    # No `ports:` mapping to the host -- reachable only via the `proxy`
+    # service inside the `internal` network. A staging pilot client never
+    # talks to this container directly.
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "python -m alembic upgrade head &&
+             flask seed-rbac &&
+             flask seed-catalog &&
+             flask seed-offline-policy &&
+             gunicorn --bind 0.0.0.0:5000 --workers 2 --threads 4 --timeout 30
+                      --graceful-timeout 15 --max-requests 2000 --max-requests-jitter 200
+                      --access-logfile - --error-logfile - 'app:create_app()'"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5000/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - internal
+
+  backup:
+    build:
+      context: .
+      dockerfile: deploy/staging/Dockerfile.backup
+    restart: unless-stopped
+    env_file:
+      - .env.staging
+    environment:
+      STAGING_DB_HOST: db
+    volumes:
+      - owner_backups_staging:/backups
+      - owner_signing_keys_staging:/app/owner/var/signing-keys:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+
+networks:
+  edge:
+    driver: bridge
+  internal:
+    driver: bridge
+    internal: true  # no default route to the outside world for anything on this network
+
+volumes:
+  owner_pg_data_staging:
+  owner_signing_keys_staging:
+  owner_backups_staging:
+  caddy_data:
+  caddy_config:

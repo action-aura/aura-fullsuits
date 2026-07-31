@@ -1,0 +1,44 @@
+# Phase 9 -- staging reverse proxy config.
+# {$STAGING_DOMAIN} is set via docker-compose.staging.yml's env_file
+# (.env.staging, outside the repo -- see secrets-and-key-management.md).
+# Real deployment: Caddy obtains a Let's Encrypt certificate automatically
+# for a real public domain. This local-only session: STAGING_DOMAIN is a
+# hosts-file-mapped name and Caddy is configured with `tls internal` to use
+# its own local CA instead (see staging-deployment-report.md) -- clearly a
+# different trust root from a real deployment, never presented as
+# equivalent.
+
+{$STAGING_DOMAIN} {
+	# Security headers (Milestone 4). CSP is intentionally permissive on
+	# `unsafe-inline` style/script for the Owner UI's own first-party
+	# templates only (no external script sources) -- tightened only after a
+	# real CSP-violation-report drill against the real Owner UI, per the
+	# governing instruction's own warning against an untested CSP breaking
+	# required UI functionality.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'"
+		-Server
+	}
+
+	encode gzip
+
+	# Edge-level rate limiting is NOT enabled here: vanilla Caddy has no
+	# built-in rate-limit directive (it requires the third-party
+	# github.com/mholt/caddy-ratelimit plugin via a custom xcaddy build,
+	# which this session does not build/verify -- see host-hardening.md's
+	# honest disposition). Owner's own application-level login rate
+	# limiting (Phase 4/8, real, tested) is the actually-verified control;
+	# host-level fail2ban/ufw rate limiting is documented as a real
+	# deployment requirement in firewall-and-network-policy.md.
+
+	reverse_proxy owner:5000 {
+		header_up X-Forwarded-Proto {scheme}
+		health_uri /health/live
+		health_interval 30s
+		health_timeout 5s
+	}
+}

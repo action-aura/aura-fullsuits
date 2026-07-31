@@ -142,9 +142,28 @@ class ProductionConfig(BaseConfig):
     SESSION_COOKIE_SECURE = True
 
 
+class StagingConfig(BaseConfig):
+    """Phase 9: same hardening posture as production (secret validation,
+    SESSION_COOKIE_SECURE, external-API production checks all apply --
+    staging is not exempt from any of them), but a distinct ENV value so
+    logs/health responses/audit records are never mistakable for real
+    production (Non-Negotiable Principle 2: "staging must be clearly labeled
+    and operated as staging"). Requires its own OWNER_SECRET_KEY,
+    OWNER_DATABASE_URL, OWNER_LICENSE_PEPPER, and signing-key directory --
+    BaseConfig.validate() enforces this the same way it does for
+    'production', and Milestone 5/staging-key-separation requires those
+    values to never be copied from a real production environment (none
+    exists yet) or from development."""
+
+    ENV = "staging"
+    DEBUG = False
+    SESSION_COOKIE_SECURE = True
+
+
 CONFIG_MAP = {
     "development": DevelopmentConfig,
     "testing": TestingConfig,
+    "staging": StagingConfig,
     "production": ProductionConfig,
 }
 

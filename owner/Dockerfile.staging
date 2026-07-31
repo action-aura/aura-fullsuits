@@ -1,0 +1,47 @@
+# Phase 9 Milestone 3 -- hardened staging image.
+# Differences from the existing dev owner/Dockerfile (intentional, not
+# accidental drift):
+#   - requirements/owner-server.txt only (no requirements/development.txt --
+#     no pytest/coverage/linters/dev tooling shipped in the staging image).
+#   - runs as a dedicated non-root user.
+#   - OWNER_ENV=staging, not "production" (Non-Negotiable Principle 2:
+#     staging must be clearly labeled as staging, never claim to be
+#     production).
+#   - a real HEALTHCHECK against the new /health/ready endpoint.
+FROM python:3.11-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system aura && useradd --system --gid aura --home /app --shell /usr/sbin/nologin aura
+
+WORKDIR /app
+
+COPY requirements/base.txt requirements/owner-server.txt /app/requirements/
+RUN pip install --no-cache-dir -r requirements/owner-server.txt
+
+COPY owner/ /app/owner/
+RUN mkdir -p /app/owner/var/signing-keys /app/owner/var/backups \
+    && chown -R aura:aura /app
+
+WORKDIR /app/owner
+USER aura
+
+ENV FLASK_APP=app:create_app
+ENV OWNER_ENV=staging
+ENV PYTHONUNBUFFERED=1
+
+EXPOSE 5000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:5000/health/live || exit 1
+
+# 2 workers / 4 threads: appropriate for a small supervised pilot on a
+# single small host, not a claim of internet scale. --max-requests recycles
+# workers periodically as a defense against slow memory growth going
+# unnoticed on an unattended staging host. --timeout bounds a single
+# request's worst case so one stuck request can't wedge a whole worker.
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--threads", "4", \
+     "--timeout", "30", "--graceful-timeout", "15", "--max-requests", "2000", \
+     "--max-requests-jitter", "200", "--access-logfile", "-", "--error-logfile", "-", \
+     "app:create_app()"]
