@@ -17,6 +17,10 @@ def create_app(config_name: str | None = None) -> Flask:
 
     init_db(app.config["SQLALCHEMY_DATABASE_URI"])
 
+    from app.observability.logging_config import configure_structured_logging
+
+    configure_structured_logging(app)
+
     csrf.init_app(app)
     CORS(app, resources={r"/api/*": {"origins": []}})  # no external origins permitted by default
     register_security_headers(app)
