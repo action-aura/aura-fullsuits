@@ -24,6 +24,8 @@ LEAD_TRANSITIONS: dict[str, set[str]] = {
 
 REASON_REQUIRED_TARGETS = {"LOST"}
 
+NOTE_VISIBILITIES = {"AUTHOR_ONLY", "ASSIGNED_RECORD_USERS", "MANAGEMENT_ONLY"}
+
 
 class LeadError(StableCodeError):
     _MESSAGES = {
@@ -52,6 +54,11 @@ class LeadError(StableCodeError):
         "FOLLOWUP_ALREADY_CANCELLED": "This follow-up was already cancelled.",
         "FOLLOWUP_ALREADY_COMPLETED": "This follow-up was already completed.",
         "REASON_REQUIRED_FOR_FOLLOWUP_CANCEL": "A reason is required to cancel a follow-up.",
+        "CONTACT_NAME_REQUIRED": "Contact name is required.",
+        "CONTACT_NAME_TOO_LONG": "Contact name must be at most {max_len} characters.",
+        "NOTE_VISIBILITY_INVALID": "Unknown note visibility: {visibility}.",
+        "NOTE_BODY_TOO_LONG": "Note must be at most {max_len} characters.",
+        "NOTE_BODY_REQUIRED": "Note text is required.",
     }
 
 
@@ -61,6 +68,7 @@ class CustomerCrmError(StableCodeError):
         "CUSTOMER_ACCESS_DENIED": "You do not have access to this customer.",
         "DESTINATION_EMPLOYEE_NOT_ACTIVE": "Cannot assign a customer to an inactive employee.",
         "REASON_REQUIRED_FOR_REASSIGN": "A reason is required to reassign a customer.",
+        "NOTE_VISIBILITY_INVALID": "Unknown note visibility: {visibility}.",
     }
 
 

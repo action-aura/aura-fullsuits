@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from app.audit.services import record as audit_record
 from app.extensions import db_session
-from app.leads.errors import LeadError, validate_lead_transition
+from app.leads.errors import NOTE_VISIBILITIES, LeadError, validate_lead_transition
 from app.leads.ownership import apply_ownership_filter
 from app.models.base import utcnow
 from app.models.commercial_sales import CommercialOperationsIdempotencyKey
@@ -234,8 +234,17 @@ def assign_lead(
     return new_assignment
 
 
-def add_lead_note(lead: Lead, body: str, actor_employee_profile_id: uuid.UUID, actor_staff_user_id: uuid.UUID) -> LeadNote:
-    note = LeadNote(lead_id=lead.id, author_employee_profile_id=actor_employee_profile_id, body=body)
+def add_lead_note(
+    lead: Lead,
+    body: str,
+    actor_employee_profile_id: uuid.UUID,
+    actor_staff_user_id: uuid.UUID,
+    *,
+    visibility: str = "ASSIGNED_RECORD_USERS",
+) -> LeadNote:
+    if visibility not in NOTE_VISIBILITIES:
+        raise LeadError("NOTE_VISIBILITY_INVALID", visibility=visibility)
+    note = LeadNote(lead_id=lead.id, author_employee_profile_id=actor_employee_profile_id, body=body, visibility=visibility)
     db_session.add(note)
     db_session.commit()
     audit_record(
