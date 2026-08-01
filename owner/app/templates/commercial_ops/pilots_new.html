@@ -1,23 +1,23 @@
 {% extends "layout/base.html" %}
-{% block title %}New pilot{% endblock %}
+{% block title %}{{ _("New pilot") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Create pilot record</h2>
+  <h2>{{ _("Create pilot record") }}</h2>
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   {% if subscription %}
   <form method="post" action="{{ url_for('commercial_ops_ui.create_pilot') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="subscription_id" value="{{ subscription.id }}">
-    <p>Customer: <strong>{{ subscription.customer.legal_name }}</strong> (subscription already in PILOT status).</p>
-    <label>Pilot start</label><input name="pilot_start" type="date" required>
-    <label>Pilot end</label><input name="pilot_end" type="date" required>
-    <label>Allowed device count</label><input name="allowed_device_count" type="number" min="1" value="1">
-    <label>Support level</label><input name="support_level">
-    <label>Agreed limitations</label><textarea name="agreed_limitations"></textarea>
-    <label>Success criteria</label><textarea name="success_criteria"></textarea>
-    <label>Review date</label><input name="review_date" type="date">
-    <label>Exit / rollback plan</label><textarea name="exit_rollback_plan"></textarea>
-    <div style="margin-top:0.5rem;"><button type="submit">Create pilot</button></div>
+    <p>{{ _("Customer:") }} <strong>{{ subscription.customer.legal_name }}</strong> {{ _("(subscription already in PILOT status).") }}</p>
+    <label>{{ _("Pilot start") }}</label><input name="pilot_start" type="date" required>
+    <label>{{ _("Pilot end") }}</label><input name="pilot_end" type="date" required>
+    <label>{{ _("Allowed device count") }}</label><input name="allowed_device_count" type="number" min="1" value="1">
+    <label>{{ _("Support level") }}</label><input name="support_level">
+    <label>{{ _("Agreed limitations") }}</label><textarea name="agreed_limitations"></textarea>
+    <label>{{ _("Success criteria") }}</label><textarea name="success_criteria"></textarea>
+    <label>{{ _("Review date") }}</label><input name="review_date" type="date">
+    <label>{{ _("Exit / rollback plan") }}</label><textarea name="exit_rollback_plan"></textarea>
+    <div style="margin-top:0.5rem;"><button type="submit">{{ _("Create pilot") }}</button></div>
   </form>
   {% endif %}
 </div>

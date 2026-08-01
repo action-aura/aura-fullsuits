@@ -1,71 +1,79 @@
 {% extends "layout/base.html" %}
-{% block title %}Dashboard{% endblock %}
+{% block title %}{{ _("Dashboard") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Overview</h2>
+  <h2>{{ _("Overview") }}</h2>
   <div class="kv">
-    <dt>Total customers</dt><dd>{{ summary.total_customers }}</dd>
-    <dt>Pilot customers</dt><dd>{{ summary.pilot_customers }}</dd>
-    <dt>Active customers</dt><dd>{{ summary.active_customers }}</dd>
-    <dt>Active subscriptions</dt><dd>{{ summary.active_subscriptions }}</dd>
-    <dt>Subscriptions expiring in 7 days</dt><dd>{{ summary.expiring_7 }}</dd>
-    <dt>Subscriptions expiring in 30 days</dt><dd>{{ summary.expiring_30 }}</dd>
+    <dt>{{ _("Total customers") }}</dt><dd>{{ format_owner_number(summary.total_customers) }}</dd>
+    <dt>{{ _("Pilot customers") }}</dt><dd>{{ format_owner_number(summary.pilot_customers) }}</dd>
+    <dt>{{ _("Active customers") }}</dt><dd>{{ format_owner_number(summary.active_customers) }}</dd>
+    <dt>{{ _("Active subscriptions") }}</dt><dd>{{ format_owner_number(summary.active_subscriptions) }}</dd>
+    <dt>{{ _("Subscriptions expiring in 7 days") }}</dt><dd>{{ format_owner_number(summary.expiring_7) }}</dd>
+    <dt>{{ _("Subscriptions expiring in 30 days") }}</dt><dd>{{ format_owner_number(summary.expiring_30) }}</dd>
   </div>
 </div>
 
 <div class="card">
-  <h3>Commercial operations</h3>
+  <h3>{{ _("Commercial operations") }}</h3>
   <div class="kv">
-    <dt>Open notifications</dt><dd><a href="{{ url_for('commercial_ops_ui.list_notifications') }}">{{ summary.open_notifications }}</a></dd>
-    <dt>Renewals awaiting finance approval</dt><dd><a href="{{ url_for('commercial_ops_ui.list_renewals', status='PAYMENT_RECORDED') }}">{{ summary.renewals_awaiting_approval }}</a></dd>
-    <dt>Pilots needing action</dt><dd><a href="{{ url_for('commercial_ops_ui.list_pilots') }}">{{ summary.pilots_needing_action }}</a></dd>
-    <dt>Activations pending manual review</dt><dd><a href="{{ url_for('commercial_ops_ui.list_pending_activations') }}">{{ summary.pending_activations }}</a></dd>
-    <dt>Active emergency extensions</dt><dd><a href="{{ url_for('commercial_ops_ui.list_emergency_extensions') }}">{{ summary.active_emergency_extensions }}</a></dd>
-    <dt>Active device-slot exceptions</dt><dd>{{ summary.active_device_slot_exceptions }}</dd>
+    <dt>{{ _("Open notifications") }}</dt><dd><a href="{{ url_for('commercial_ops_ui.list_notifications') }}">{{ format_owner_number(summary.open_notifications) }}</a></dd>
+    <dt>{{ _("Renewals awaiting finance approval") }}</dt><dd><a href="{{ url_for('commercial_ops_ui.list_renewals', status='PAYMENT_RECORDED') }}">{{ format_owner_number(summary.renewals_awaiting_approval) }}</a></dd>
+    <dt>{{ _("Pilots needing action") }}</dt><dd><a href="{{ url_for('commercial_ops_ui.list_pilots') }}">{{ format_owner_number(summary.pilots_needing_action) }}</a></dd>
+    <dt>{{ _("Activations pending manual review") }}</dt><dd><a href="{{ url_for('commercial_ops_ui.list_pending_activations') }}">{{ format_owner_number(summary.pending_activations) }}</a></dd>
+    <dt>{{ _("Active emergency extensions") }}</dt><dd><a href="{{ url_for('commercial_ops_ui.list_emergency_extensions') }}">{{ format_owner_number(summary.active_emergency_extensions) }}</a></dd>
+    <dt>{{ _("Active device-slot exceptions") }}</dt><dd>{{ format_owner_number(summary.active_device_slot_exceptions) }}</dd>
   </div>
 </div>
 
 <div class="card">
-  <h3>Subscriptions by product</h3>
-  <table>
-    <tr><th>Product</th><th>Count</th></tr>
-    {% for name, count in summary.subs_by_product.items() %}<tr><td>{{ name }}</td><td>{{ count }}</td></tr>
-    {% else %}<tr><td colspan="2" class="empty">No subscriptions yet.</td></tr>{% endfor %}
+  <h3>{{ _("Subscriptions by product") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Product") }}</th><th>{{ _("Count") }}</th></tr></thead>
+    <tbody>
+    {% for name, count in summary.subs_by_product.items() %}<tr><td><bdi dir="ltr">{{ name }}</bdi></td><td>{{ format_owner_number(count) }}</td></tr>
+    {% else %}<tr><td colspan="2" class="empty">{{ _("No subscriptions yet.") }}</td></tr>{% endfor %}
+    </tbody>
   </table>
 </div>
 
 <div class="card">
-  <h3>Licenses by status</h3>
-  <table>
-    <tr><th>Status</th><th>Count</th></tr>
-    {% for status, count in summary.licenses_by_status.items() %}<tr><td>{{ status }}</td><td>{{ count }}</td></tr>
-    {% else %}<tr><td colspan="2" class="empty">No licenses yet.</td></tr>{% endfor %}
+  <h3>{{ _("Licenses by status") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Status") }}</th><th>{{ _("Count") }}</th></tr></thead>
+    <tbody>
+    {% for status, count in summary.licenses_by_status.items() %}<tr><td>{{ license_status_label(status) }}</td><td>{{ format_owner_number(count) }}</td></tr>
+    {% else %}<tr><td colspan="2" class="empty">{{ _("No licenses yet.") }}</td></tr>{% endfor %}
+    </tbody>
   </table>
 </div>
 
 <div class="card">
-  <h3>Active installations by product</h3>
-  <table>
-    <tr><th>Product</th><th>Count</th></tr>
-    {% for name, count in summary.active_installations_by_product.items() %}<tr><td>{{ name }}</td><td>{{ count }}</td></tr>
-    {% else %}<tr><td colspan="2" class="empty">No active installations yet.</td></tr>{% endfor %}
+  <h3>{{ _("Active installations by product") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Product") }}</th><th>{{ _("Count") }}</th></tr></thead>
+    <tbody>
+    {% for name, count in summary.active_installations_by_product.items() %}<tr><td><bdi dir="ltr">{{ name }}</bdi></td><td>{{ format_owner_number(count) }}</td></tr>
+    {% else %}<tr><td colspan="2" class="empty">{{ _("No active installations yet.") }}</td></tr>{% endfor %}
+    </tbody>
   </table>
 </div>
 
 <div class="card">
-  <h3>Latest Owner database backup</h3>
+  <h3>{{ _("Latest Owner database backup") }}</h3>
   {% if summary.latest_backup %}
-  <p><span class="badge {{ 'success' if summary.latest_backup.status == 'SUCCESS' else 'danger' }}">{{ summary.latest_backup.status }}</span> {{ summary.latest_backup.created_at }}</p>
-  {% else %}<p class="empty">No backup has been taken yet.</p>{% endif %}
+  <p><span class="badge {{ 'success' if summary.latest_backup.status == 'SUCCESS' else 'danger' }}">{{ backup_status_label(summary.latest_backup.status) }}</span> {{ format_owner_datetime(summary.latest_backup.created_at) }}</p>
+  {% else %}<p class="empty">{{ _("No backup has been taken yet.") }}</p>{% endif %}
 </div>
 
 <div class="card">
-  <h3>Recent staff actions</h3>
-  <table>
-    <tr><th>When</th><th>Action</th><th>Entity</th></tr>
+  <h3>{{ _("Recent staff actions") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("When") }}</th><th>{{ _("Action") }}</th><th>{{ _("Entity") }}</th></tr></thead>
+    <tbody>
     {% for a in summary.recent_staff_actions %}
-    <tr><td>{{ a.created_at }}</td><td>{{ a.action_code }}</td><td>{{ a.entity_type }}</td></tr>
-    {% else %}<tr><td colspan="3" class="empty">No activity yet.</td></tr>{% endfor %}
+    <tr><td>{{ format_owner_datetime(a.created_at) }}</td><td>{{ generic_audit_action_label(a.action_code) }}</td><td><bdi dir="ltr">{{ a.entity_type }}</bdi></td></tr>
+    {% else %}<tr><td colspan="3" class="empty">{{ _("No activity yet.") }}</td></tr>{% endfor %}
+    </tbody>
   </table>
 </div>
 {% endblock %}

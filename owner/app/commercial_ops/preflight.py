@@ -419,6 +419,36 @@ def _check_i18n_configuration(checks: list[PreflightCheck]) -> bool:
     else:
         checks.append(PreflightCheck("no_invalid_stored_staff_locale", "OK", "Every stored StaffUser.locale value is NULL or supported."))
 
+    # Phase 9.5B-R2: catalog completeness (empty/fuzzy entries) -- checked
+    # against the compiled .po source, not just .mo presence/size above,
+    # since a fuzzy entry compiles to a real (but silently wrong or
+    # missing, depending on babel version) translation rather than a
+    # zero-byte file -- the real bug this wave found and fixed
+    # (rtl-defect-and-fix-log.md item 5) would not have been caught by the
+    # existing .mo-presence check alone.
+    try:
+        from babel.messages.pofile import read_po
+
+        for code in languages:
+            po_path = os.path.join(translations_dir, code, "LC_MESSAGES", "messages.po")
+            if not os.path.isfile(po_path):
+                continue
+            with open(po_path, "r", encoding="utf-8") as f:
+                catalog = read_po(f)
+            empty = sum(1 for m in catalog if m.id and not m.string)
+            fuzzy = sum(1 for m in catalog if m.fuzzy)
+            if empty or fuzzy:
+                ok = False
+                checks.append(PreflightCheck(
+                    f"i18n_catalog_complete_{code}", "FAIL",
+                    f"Locale {code!r} catalog has {empty} empty and {fuzzy} fuzzy translation(s). "
+                    "Fix: review with 'python -m babel.messages.pofile', fill/correct, then recompile.",
+                ))
+            else:
+                checks.append(PreflightCheck(f"i18n_catalog_complete_{code}", "OK", f"Locale {code!r} catalog has zero empty/fuzzy entries."))
+    except Exception as exc:  # pragma: no cover - defensive, .po source may not ship in every deployment
+        checks.append(PreflightCheck("i18n_catalog_complete_source_check", "OK", f"Skipped (source .po not available in this deployment: {exc})."))
+
     return ok
 
 

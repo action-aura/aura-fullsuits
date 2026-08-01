@@ -1,47 +1,49 @@
 {% extends "layout/base.html" %}
-{% block title %}Device slot exceptions{% endblock %}
+{% block title %}{{ _("Device slot exceptions") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Device-slot exceptions for license {{ license.key_prefix or license.id }}</h2>
+  <h2>{{ _("Device-slot exceptions for license %(key)s", key=license.key_prefix or license.id) }}</h2>
   <dl class="kv">
-    <dt>Permanent device limit</dt><dd>{{ license.device_limit }}</dd>
-    <dt>Effective limit right now</dt><dd>{{ effective_limit }}</dd>
+    <dt>{{ _("Permanent device limit") }}</dt><dd>{{ format_owner_number(license.device_limit) }}</dd>
+    <dt>{{ _("Effective limit right now") }}</dt><dd>{{ format_owner_number(effective_limit) }}</dd>
   </dl>
 </div>
 
 <div class="card">
-  <h3>Create a temporary exception</h3>
+  <h3>{{ _("Create a temporary exception") }}</h3>
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   <form method="post" action="{{ url_for('commercial_ops_ui.create_slot_exception', license_id=license.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Extra slots</label><input name="extra_slots" type="number" min="1" required>
-    <label>Reason (required)</label><input name="reason" required>
-    <label>Expires at (max 90 days out, temporary means temporary)</label><input name="expires_at" type="datetime-local" required>
-    <div style="margin-top:0.5rem;"><button type="submit">Create exception</button></div>
+    <label>{{ _("Extra slots") }}</label><input name="extra_slots" type="number" min="1" required>
+    <label>{{ _("Reason (required)") }}</label><input name="reason" required>
+    <label>{{ _("Expires at (max 90 days out, temporary means temporary)") }}</label><input name="expires_at" type="datetime-local" required>
+    <div style="margin-top:0.5rem;"><button type="submit">{{ _("Create exception") }}</button></div>
   </form>
 </div>
 
 <div class="card">
-  <h3>Exception history</h3>
-  <table>
-    <tr><th>Extra slots</th><th>Status</th><th>Window</th><th>Reason</th></tr>
+  <h3>{{ _("Exception history") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Extra slots") }}</th><th>{{ _("Status") }}</th><th>{{ _("Window") }}</th><th>{{ _("Reason") }}</th><th></th></tr></thead>
+    <tbody>
     {% for e in exceptions %}
     <tr>
-      <td>{{ e.extra_slots }}</td>
-      <td><span class="badge {{ 'active' if e.status == 'ACTIVE' else 'danger' }}">{{ e.status }}</span></td>
-      <td>{{ e.starts_at }} &rarr; {{ e.expires_at }}</td>
+      <td>{{ format_owner_number(e.extra_slots) }}</td>
+      <td><span class="badge {{ 'active' if e.status == 'ACTIVE' else 'danger' }}">{{ emergency_extension_status_label(e.status) }}</span></td>
+      <td>{{ format_owner_datetime(e.starts_at) }} &rarr; {{ format_owner_datetime(e.expires_at) }}</td>
       <td>{{ e.reason }}</td>
       <td>
         {% if e.status == "ACTIVE" %}
         <form method="post" action="{{ url_for('commercial_ops_ui.revoke_slot_exception', exception_id=e.id) }}" class="inline">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input name="reason" placeholder="Reason (required)" required style="width:auto;display:inline-block;">
-          <button type="submit" class="danger">Revoke</button>
+          <input name="reason" placeholder="{{ _('Reason (required)') }}" required style="width:auto;display:inline-block;">
+          <button type="submit" class="danger">{{ _("Revoke") }}</button>
         </form>
         {% endif %}
       </td>
     </tr>
-    {% else %}<tr><td colspan="5" class="empty">No exceptions.</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="5" class="empty">{{ _("No exceptions.") }}</td></tr>{% endfor %}
+    </tbody>
   </table>
 </div>
 {% endblock %}

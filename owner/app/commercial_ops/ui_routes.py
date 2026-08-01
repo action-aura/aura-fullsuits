@@ -19,6 +19,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from flask import Blueprint, redirect, render_template, request, url_for
+from flask_babel import gettext as _
 from sqlalchemy import select
 from sqlalchemy.orm.exc import StaleDataError
 
@@ -112,7 +113,7 @@ def new_renewal_form():
     subscription_id = request.args.get("subscription_id")
     subscription = db_session.get(Subscription, subscription_id) if subscription_id else None
     if subscription is None:
-        return render_template("commercial_ops/renewals_new.html", subscription=None, plans=[], error="A valid subscription_id is required."), 400
+        return render_template("commercial_ops/renewals_new.html", subscription=None, plans=[], error=_("A valid subscription_id is required.")), 400
     plans = db_session.execute(select(Plan).where(Plan.product_id == subscription.product_id)).scalars().all()
     return render_template("commercial_ops/renewals_new.html", subscription=subscription, plans=plans, error=None)
 
@@ -123,20 +124,20 @@ def create_renewal():
     actor = _staff()
     subscription = db_session.get(Subscription, request.form.get("subscription_id"))
     if subscription is None:
-        return render_template("commercial_ops/renewals_new.html", subscription=None, plans=[], error="Subscription not found."), 404
+        return render_template("commercial_ops/renewals_new.html", subscription=None, plans=[], error=_("Subscription not found.")), 404
     plans = db_session.execute(select(Plan).where(Plan.product_id == subscription.product_id)).scalars().all()
     try:
         proposed_start = date.fromisoformat(request.form["proposed_term_start"])
         proposed_end = date.fromisoformat(request.form["proposed_term_end"])
     except (KeyError, ValueError):
-        return render_template("commercial_ops/renewals_new.html", subscription=subscription, plans=plans, error="Proposed term start/end must be valid dates."), 400
+        return render_template("commercial_ops/renewals_new.html", subscription=subscription, plans=plans, error=_("Proposed term start/end must be valid dates.")), 400
 
     commercial_amount = request.form.get("commercial_amount") or None
     if commercial_amount is not None:
         try:
             commercial_amount = Decimal(commercial_amount)
         except InvalidOperation:
-            return render_template("commercial_ops/renewals_new.html", subscription=subscription, plans=plans, error="Commercial amount must be a number."), 400
+            return render_template("commercial_ops/renewals_new.html", subscription=subscription, plans=plans, error=_("Commercial amount must be a number.")), 400
 
     renewal = create_renewal_request(
         subscription=subscription,
@@ -159,7 +160,7 @@ def create_renewal():
 def renewal_detail(renewal_id):
     renewal = db_session.get(RenewalRequest, renewal_id)
     if renewal is None:
-        return render_template("commercial_ops/not_found.html", entity="Renewal request"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Renewal request")), 404
     return render_template("commercial_ops/renewal_detail.html", renewal=renewal, error=None)
 
 
@@ -169,7 +170,7 @@ def transition_renewal(renewal_id):
     actor = _staff()
     renewal = db_session.get(RenewalRequest, renewal_id)
     if renewal is None:
-        return render_template("commercial_ops/not_found.html", entity="Renewal request"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Renewal request")), 404
     try:
         transition_renewal_request(renewal, request.form.get("to_status"), actor.id, reason=request.form.get("reason") or None)
     except InvalidRenewalTransitionError as exc:
@@ -184,7 +185,7 @@ def approve_renewal(renewal_id):
     actor = _staff()
     renewal = db_session.get(RenewalRequest, renewal_id)
     if renewal is None:
-        return render_template("commercial_ops/not_found.html", entity="Renewal request"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Renewal request")), 404
     try:
         approve_renewal_request(renewal, actor.id, reason=request.form.get("reason") or None)
     except (RenewalApplicationError, InvalidRenewalTransitionError) as exc:
@@ -199,7 +200,7 @@ def apply_renewal(renewal_id):
     actor = _staff()
     renewal = db_session.get(RenewalRequest, renewal_id)
     if renewal is None:
-        return render_template("commercial_ops/not_found.html", entity="Renewal request"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Renewal request")), 404
     try:
         apply_renewal_request(renewal.id, actor.id)
     except RenewalConcurrencyError as exc:
@@ -210,7 +211,7 @@ def apply_renewal(renewal_id):
         return render_template("commercial_ops/renewal_detail.html", renewal=db_session.get(RenewalRequest, renewal_id), error=str(exc)), 400
     except StaleDataError:
         db_session.rollback()
-        return render_template("commercial_ops/renewal_detail.html", renewal=db_session.get(RenewalRequest, renewal_id), error="Someone else already changed this renewal request. Reload and retry."), 409
+        return render_template("commercial_ops/renewal_detail.html", renewal=db_session.get(RenewalRequest, renewal_id), error=_("Someone else already changed this renewal request. Reload and retry.")), 409
     return redirect(url_for("commercial_ops_ui.renewal_detail", renewal_id=renewal_id))
 
 
@@ -233,7 +234,7 @@ def new_pilot_form():
     subscription_id = request.args.get("subscription_id")
     subscription = db_session.get(Subscription, subscription_id) if subscription_id else None
     if subscription is None or subscription.status != "PILOT":
-        return render_template("commercial_ops/pilots_new.html", subscription=None, error="A subscription already in PILOT status is required."), 400
+        return render_template("commercial_ops/pilots_new.html", subscription=None, error=_("A subscription already in PILOT status is required.")), 400
     return render_template("commercial_ops/pilots_new.html", subscription=subscription, error=None)
 
 
@@ -243,12 +244,12 @@ def create_pilot():
     actor = _staff()
     subscription = db_session.get(Subscription, request.form.get("subscription_id"))
     if subscription is None:
-        return render_template("commercial_ops/pilots_new.html", subscription=None, error="Subscription not found."), 404
+        return render_template("commercial_ops/pilots_new.html", subscription=None, error=_("Subscription not found.")), 404
     try:
         pilot_start = date.fromisoformat(request.form["pilot_start"])
         pilot_end = date.fromisoformat(request.form["pilot_end"])
     except (KeyError, ValueError):
-        return render_template("commercial_ops/pilots_new.html", subscription=subscription, error="Pilot start/end must be valid dates."), 400
+        return render_template("commercial_ops/pilots_new.html", subscription=subscription, error=_("Pilot start/end must be valid dates.")), 400
     try:
         pilot = create_pilot_record(
             subscription=subscription, pilot_start=pilot_start, pilot_end=pilot_end, actor_staff_user_id=actor.id,
@@ -269,7 +270,7 @@ def create_pilot():
 def pilot_detail(pilot_id):
     pilot = db_session.get(PilotRecord, pilot_id)
     if pilot is None:
-        return render_template("commercial_ops/not_found.html", entity="Pilot"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Pilot")), 404
     return render_template("commercial_ops/pilot_detail.html", pilot=pilot, error=None)
 
 
@@ -277,7 +278,7 @@ def _pilot_action(pilot_id, action, **kwargs):
     actor = _staff()
     pilot = db_session.get(PilotRecord, pilot_id)
     if pilot is None:
-        return render_template("commercial_ops/not_found.html", entity="Pilot"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Pilot")), 404
     try:
         action(pilot, actor, **kwargs)
     except (PilotLifecycleError, InvalidPilotTransitionError) as exc:
@@ -303,11 +304,11 @@ def extend_pilot_route(pilot_id):
     actor = _staff()
     pilot = db_session.get(PilotRecord, pilot_id)
     if pilot is None:
-        return render_template("commercial_ops/not_found.html", entity="Pilot"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Pilot")), 404
     try:
         new_end_date = date.fromisoformat(request.form["new_end_date"])
     except (KeyError, ValueError):
-        return render_template("commercial_ops/pilot_detail.html", pilot=pilot, error="new_end_date must be a valid date."), 400
+        return render_template("commercial_ops/pilot_detail.html", pilot=pilot, error=_("new_end_date must be a valid date.")), 400
     try:
         extend_pilot(pilot, new_end_date=new_end_date, reason=request.form.get("reason", ""), actor_staff_user_id=actor.id)
     except PilotLifecycleError as exc:
@@ -320,7 +321,7 @@ def extend_pilot_route(pilot_id):
 def convert_pilot_form(pilot_id):
     pilot = db_session.get(PilotRecord, pilot_id)
     if pilot is None:
-        return render_template("commercial_ops/not_found.html", entity="Pilot"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Pilot")), 404
     plans = db_session.execute(select(Plan).where(Plan.product_id == pilot.product_id)).scalars().all()
     return render_template("commercial_ops/pilot_convert.html", pilot=pilot, plans=plans, error=None)
 
@@ -340,13 +341,13 @@ def convert_pilot(pilot_id):
     actor = _staff()
     pilot = db_session.get(PilotRecord, pilot_id)
     if pilot is None:
-        return render_template("commercial_ops/not_found.html", entity="Pilot"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Pilot")), 404
     plans = db_session.execute(select(Plan).where(Plan.product_id == pilot.product_id)).scalars().all()
     try:
         proposed_start = date.fromisoformat(request.form["proposed_term_start"])
         proposed_end = date.fromisoformat(request.form["proposed_term_end"])
     except (KeyError, ValueError):
-        return render_template("commercial_ops/pilot_convert.html", pilot=pilot, plans=plans, error="Term start/end must be valid dates."), 400
+        return render_template("commercial_ops/pilot_convert.html", pilot=pilot, plans=plans, error=_("Term start/end must be valid dates.")), 400
     renewal = create_renewal_request(
         subscription=pilot.subscription, date_rule="PILOT_CONVERSION", proposed_term_start=proposed_start,
         proposed_term_end=proposed_end, currency=request.form.get("currency", "USD"), actor_staff_user_id=actor.id,
@@ -363,10 +364,10 @@ def mark_pilot_converted_route(pilot_id):
     actor = _staff()
     pilot = db_session.get(PilotRecord, pilot_id)
     if pilot is None:
-        return render_template("commercial_ops/not_found.html", entity="Pilot"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Pilot")), 404
     renewal = db_session.get(RenewalRequest, request.form.get("renewal_request_id"))
     if renewal is None:
-        return render_template("commercial_ops/pilot_detail.html", pilot=pilot, error="Renewal request not found."), 404
+        return render_template("commercial_ops/pilot_detail.html", pilot=pilot, error=_("Renewal request not found.")), 404
     try:
         mark_pilot_converted(pilot, renewal, actor.id)
     except (PilotLifecycleError, InvalidPilotTransitionError) as exc:
@@ -415,12 +416,12 @@ def create_emergency_extension_route():
     actor = _staff()
     subscription = db_session.get(Subscription, request.form.get("subscription_id"))
     if subscription is None:
-        return render_template("commercial_ops/emergency_extensions_new.html", subscription=None, error="Subscription not found."), 404
+        return render_template("commercial_ops/emergency_extensions_new.html", subscription=None, error=_("Subscription not found.")), 404
     license_row = db_session.get(License, request.form["license_id"]) if request.form.get("license_id") else None
     try:
         duration_hours = int(request.form["duration_hours"])
     except (KeyError, ValueError):
-        return render_template("commercial_ops/emergency_extensions_new.html", subscription=subscription, error="duration_hours must be an integer."), 400
+        return render_template("commercial_ops/emergency_extensions_new.html", subscription=subscription, error=_("duration_hours must be an integer.")), 400
     try:
         extension = create_emergency_extension(
             subscription=subscription, reason=request.form.get("reason", ""), duration_hours=duration_hours,
@@ -436,7 +437,7 @@ def create_emergency_extension_route():
 def emergency_extension_detail(extension_id):
     extension = db_session.get(EmergencyExtension, extension_id)
     if extension is None:
-        return render_template("commercial_ops/not_found.html", entity="Emergency extension"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Emergency extension")), 404
     return render_template("commercial_ops/emergency_extension_detail.html", extension=extension, error=None, now=datetime.now(timezone.utc))
 
 
@@ -447,7 +448,7 @@ def revoke_emergency_extension_route(extension_id):
     actor = _staff()
     extension = db_session.get(EmergencyExtension, extension_id)
     if extension is None:
-        return render_template("commercial_ops/not_found.html", entity="Emergency extension"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Emergency extension")), 404
     try:
         revoke_emergency_extension(extension, reason=request.form.get("reason", ""), actor_staff_user_id=actor.id)
     except EmergencyExtensionError as exc:
@@ -473,7 +474,7 @@ def list_pending_activations():
 def pending_activation_detail(pending_id):
     pending = db_session.get(PendingActivation, pending_id)
     if pending is None:
-        return render_template("commercial_ops/not_found.html", entity="Pending activation"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Pending activation")), 404
     return render_template("commercial_ops/pending_activation_detail.html", pending=pending, error=None)
 
 
@@ -484,7 +485,7 @@ def approve_pending_activation_route(pending_id):
     actor = _staff()
     pending = db_session.get(PendingActivation, pending_id)
     if pending is None:
-        return render_template("commercial_ops/not_found.html", entity="Pending activation"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Pending activation")), 404
     try:
         approve_pending_activation(pending, actor.id)
     except PendingActivationError as exc:
@@ -499,7 +500,7 @@ def reject_pending_activation_route(pending_id):
     actor = _staff()
     pending = db_session.get(PendingActivation, pending_id)
     if pending is None:
-        return render_template("commercial_ops/not_found.html", entity="Pending activation"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Pending activation")), 404
     try:
         reject_pending_activation(pending, actor.id, reason=request.form.get("reason", ""))
     except PendingActivationError as exc:
@@ -543,7 +544,7 @@ def release_installation(installation_id):
     actor = _staff()
     installation = db_session.get(Installation, installation_id)
     if installation is None:
-        return render_template("commercial_ops/not_found.html", entity="Installation"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Installation")), 404
     try:
         release_device_slot(installation, reason=request.form.get("reason", ""), actor_staff_user_id=actor.id)
     except DeviceSlotError as exc:
@@ -557,7 +558,7 @@ def replace_installation(installation_id):
     actor = _staff()
     installation = db_session.get(Installation, installation_id)
     if installation is None:
-        return render_template("commercial_ops/not_found.html", entity="Installation"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Installation")), 404
     try:
         replace_device_slot(installation, reason=request.form.get("reason", ""), actor_staff_user_id=actor.id)
     except DeviceSlotError as exc:
@@ -570,7 +571,7 @@ def replace_installation(installation_id):
 def license_slot_exceptions(license_id):
     license_row = db_session.get(License, license_id)
     if license_row is None:
-        return render_template("commercial_ops/not_found.html", entity="License"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("License")), 404
     exceptions = db_session.execute(
         select(DeviceSlotException).where(DeviceSlotException.license_id == license_id).order_by(DeviceSlotException.created_at.desc())
     ).scalars().all()
@@ -584,13 +585,13 @@ def create_slot_exception(license_id):
     actor = _staff()
     license_row = db_session.get(License, license_id)
     if license_row is None:
-        return render_template("commercial_ops/not_found.html", entity="License"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("License")), 404
     try:
         expires_at = datetime.fromisoformat(request.form["expires_at"]).replace(tzinfo=timezone.utc)
         extra_slots = int(request.form["extra_slots"])
     except (KeyError, ValueError):
         exceptions = db_session.execute(select(DeviceSlotException).where(DeviceSlotException.license_id == license_id)).scalars().all()
-        return render_template("commercial_ops/slot_exceptions.html", license=license_row, exceptions=exceptions, effective_limit=resolve_effective_device_limit(license_row), error="extra_slots must be an integer and expires_at a valid date/time."), 400
+        return render_template("commercial_ops/slot_exceptions.html", license=license_row, exceptions=exceptions, effective_limit=resolve_effective_device_limit(license_row), error=_("extra_slots must be an integer and expires_at a valid date/time.")), 400
     try:
         create_device_slot_exception(
             license_row=license_row, extra_slots=extra_slots, reason=request.form.get("reason", ""),
@@ -608,7 +609,7 @@ def revoke_slot_exception(exception_id):
     actor = _staff()
     exception = db_session.get(DeviceSlotException, exception_id)
     if exception is None:
-        return render_template("commercial_ops/not_found.html", entity="Device slot exception"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Device slot exception")), 404
     try:
         revoke_device_slot_exception(exception, reason=request.form.get("reason", ""), actor_staff_user_id=actor.id)
     except DeviceSlotError as exc:
@@ -647,7 +648,7 @@ def assign_notification_route(notification_id):
     actor = _staff()
     notification = db_session.get(InternalNotification, notification_id)
     if notification is None:
-        return render_template("commercial_ops/not_found.html", entity="Notification"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Notification")), 404
     assignee_id = request.form.get("assignee_staff_user_id") or actor.id
     assign_notification(notification, actor.id, assignee_id)
     return redirect(url_for("commercial_ops_ui.list_notifications"))
@@ -659,7 +660,7 @@ def acknowledge_notification_route(notification_id):
     actor = _staff()
     notification = db_session.get(InternalNotification, notification_id)
     if notification is None:
-        return render_template("commercial_ops/not_found.html", entity="Notification"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Notification")), 404
     try:
         acknowledge_notification(notification, actor.id)
     except NotificationError as exc:
@@ -674,7 +675,7 @@ def resolve_notification_route(notification_id):
     actor = _staff()
     notification = db_session.get(InternalNotification, notification_id)
     if notification is None:
-        return render_template("commercial_ops/not_found.html", entity="Notification"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Notification")), 404
     try:
         resolve_notification(notification, actor.id, request.form.get("resolution", ""))
     except NotificationError as exc:
@@ -723,6 +724,6 @@ def reconciliation_run():
 def subscription_timeline(subscription_id):
     subscription = db_session.get(Subscription, subscription_id)
     if subscription is None:
-        return render_template("commercial_ops/not_found.html", entity="Subscription"), 404
+        return render_template("commercial_ops/not_found.html", entity=_("Subscription")), 404
     events = build_subscription_timeline(subscription_id)
     return render_template("commercial_ops/timeline.html", subscription=subscription, events=events)

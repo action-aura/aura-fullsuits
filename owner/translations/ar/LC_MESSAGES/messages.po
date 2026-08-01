@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-08-01 11:17+0300\n"
+"POT-Creation-Date: 2026-08-01 15:27+0300\n"
 "PO-Revision-Date: 2026-08-01 11:16+0300\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: ar\n"
@@ -22,14 +22,12 @@ msgstr ""
 msgid "Setup Pending"
 msgstr "بانتظار إكمال الإعداد"
 
-#: app/i18n_labels.py:25 app/i18n_labels.py:55 app/i18n_labels.py:60
-#: app/templates/employees/detail.html:21
-#: app/templates/employees/detail.html:113
-#: app/templates/profile/sessions.html:15
+#: app/i18n_labels.py:25 app/i18n_labels.py:55 app/i18n_labels.py:60 app/i18n_labels.py:113 app/i18n_labels.py:127 app/i18n_labels.py:140 app/i18n_labels.py:155 app/i18n_labels.py:187
+#: app/i18n_labels.py:239 app/i18n_labels.py:248 app/i18n_labels.py:277 app/templates/employees/detail.html:21 app/templates/employees/detail.html:116 app/templates/profile/sessions.html:18
 msgid "Active"
 msgstr "نشط"
 
-#: app/i18n_labels.py:26 app/templates/employees/dashboard.html:15
+#: app/i18n_labels.py:26 app/i18n_labels.py:115 app/i18n_labels.py:128 app/i18n_labels.py:141 app/i18n_labels.py:156 app/templates/employees/dashboard.html:15
 msgid "Suspended"
 msgstr "موقوف مؤقتًا"
 
@@ -37,7 +35,7 @@ msgstr "موقوف مؤقتًا"
 msgid "Terminated"
 msgstr "منتهي العمل"
 
-#: app/i18n_labels.py:28 app/templates/employees/dashboard.html:17
+#: app/i18n_labels.py:28 app/i18n_labels.py:158 app/templates/employees/dashboard.html:17
 msgid "Archived"
 msgstr "مؤرشف"
 
@@ -77,13 +75,12 @@ msgstr "مُطّلع"
 msgid "Disabled"
 msgstr "معطّل"
 
-#: app/i18n_labels.py:60 app/templates/employees/detail.html:113
-#: app/templates/profile/sessions.html:14
+#: app/i18n_labels.py:60 app/i18n_labels.py:129 app/i18n_labels.py:241 app/i18n_labels.py:249 app/i18n_labels.py:278 app/templates/commercial_ops/emergency_extension_detail.html:16
+#: app/templates/employees/detail.html:116 app/templates/profile/sessions.html:17
 msgid "Revoked"
 msgstr "مُلغاة"
 
-#: app/i18n_labels.py:65 app/templates/employees/detail.html:24
-#: app/templates/profile/index.html:39
+#: app/i18n_labels.py:65 app/templates/employees/detail.html:24 app/templates/profile/index.html:39
 msgid "Enrolled"
 msgstr "مُفعّلة"
 
@@ -91,20 +88,19 @@ msgstr "مُفعّلة"
 msgid "Required"
 msgstr "مطلوبة"
 
-#: app/i18n_labels.py:66 app/templates/employees/detail.html:24
-#: app/templates/profile/index.html:39
+#: app/i18n_labels.py:66 app/templates/employees/detail.html:24 app/templates/profile/index.html:39
 msgid "Not enrolled"
 msgstr "غير مُفعّلة"
 
-#: app/i18n_labels.py:70
+#: app/i18n_labels.py:70 app/i18n_labels.py:116 app/i18n_labels.py:130
 msgid "Expired"
 msgstr "منتهية الصلاحية"
 
-#: app/i18n_labels.py:70
+#: app/i18n_labels.py:70 app/i18n_labels.py:209
 msgid "Open"
 msgstr "سارية"
 
-#: app/i18n_labels.py:75
+#: app/i18n_labels.py:75 app/i18n_labels.py:428
 msgid "Employee profile created"
 msgstr "تم إنشاء الملف الوظيفي للموظف"
 
@@ -112,7 +108,7 @@ msgstr "تم إنشاء الملف الوظيفي للموظف"
 msgid "Employee profile updated"
 msgstr "تم تحديث الملف الوظيفي للموظف"
 
-#: app/i18n_labels.py:77
+#: app/i18n_labels.py:77 app/i18n_labels.py:429
 msgid "Employee activated"
 msgstr "تم تفعيل الموظف"
 
@@ -144,43 +140,43 @@ msgstr "تم إلغاء جميع الجلسات"
 msgid "Session revoked"
 msgstr "تم إلغاء الجلسة"
 
-#: app/i18n_labels.py:85
+#: app/i18n_labels.py:85 app/i18n_labels.py:408 app/templates/staff/invitation_created.html:2
 msgid "Invitation created"
 msgstr "تم إنشاء الدعوة"
 
-#: app/i18n_labels.py:86
+#: app/i18n_labels.py:86 app/i18n_labels.py:410
 msgid "Invitation revoked"
 msgstr "تم إلغاء الدعوة"
 
-#: app/i18n_labels.py:87
+#: app/i18n_labels.py:87 app/i18n_labels.py:409
 msgid "Invitation accepted"
 msgstr "تم قبول الدعوة"
 
-#: app/i18n_labels.py:88
+#: app/i18n_labels.py:88 app/i18n_labels.py:407
 msgid "Roles changed"
 msgstr "تم تغيير الأدوار"
 
-#: app/i18n_labels.py:89
+#: app/i18n_labels.py:89 app/i18n_labels.py:405
 msgid "Account disabled"
 msgstr "تم تعطيل الحساب"
 
-#: app/i18n_labels.py:90
+#: app/i18n_labels.py:90 app/i18n_labels.py:406
 msgid "MFA reset"
 msgstr "تمت إعادة ضبط المصادقة متعددة العوامل"
 
-#: app/i18n_labels.py:91
+#: app/i18n_labels.py:91 app/i18n_labels.py:401
 msgid "Signed in"
 msgstr "تم تسجيل الدخول"
 
-#: app/i18n_labels.py:92
+#: app/i18n_labels.py:92 app/i18n_labels.py:402
 msgid "Signed in with MFA"
 msgstr "تم تسجيل الدخول بالمصادقة متعددة العوامل"
 
-#: app/i18n_labels.py:93
+#: app/i18n_labels.py:93 app/i18n_labels.py:403
 msgid "Signed out"
 msgstr "تم تسجيل الخروج"
 
-#: app/i18n_labels.py:94
+#: app/i18n_labels.py:94 app/i18n_labels.py:404
 msgid "Password changed"
 msgstr "تم تغيير كلمة المرور"
 
@@ -192,18 +188,471 @@ msgstr "تم تفعيل المصادقة متعددة العوامل"
 msgid "Recovery code used"
 msgstr "تم استخدام رمز الاسترداد"
 
-#: app/i18n_labels.py:103 app/templates/layout/base.html:95
+#: app/i18n_labels.py:103 app/templates/audit/security_events.html:7 app/templates/layout/base.html:95 app/templates/staff/list.html:2
 msgid "Staff"
 msgstr "الموظفون الإداريون"
 
-#: app/i18n_labels.py:104 app/templates/employees/list.html:2
-#: app/templates/employees/list.html:5 app/templates/layout/base.html:96
+#: app/i18n_labels.py:104 app/templates/employees/list.html:2 app/templates/employees/list.html:5 app/templates/layout/base.html:96
 msgid "Employees"
 msgstr "الموظفون"
+
+#: app/i18n_labels.py:111 app/i18n_labels.py:125 app/i18n_labels.py:167 app/i18n_labels.py:185 app/i18n_labels.py:238 app/i18n_labels.py:332 app/i18n_labels.py:343 app/i18n_labels.py:354
+msgid "Draft"
+msgstr "مسودة"
+
+#: app/commercial_ops/ui_routes.py:273 app/commercial_ops/ui_routes.py:281 app/commercial_ops/ui_routes.py:307 app/commercial_ops/ui_routes.py:324 app/commercial_ops/ui_routes.py:344
+#: app/commercial_ops/ui_routes.py:367 app/i18n_labels.py:112 app/i18n_labels.py:154 app/i18n_labels.py:260 app/i18n_labels.py:324 app/i18n_labels.py:334 app/i18n_labels.py:345 app/i18n_labels.py:356
+#: app/templates/commercial_ops/pilot_detail.html:2
+msgid "Pilot"
+msgstr "تجربة"
+
+#: app/i18n_labels.py:114
+msgid "Past Due"
+msgstr "متأخر السداد"
+
+#: app/i18n_labels.py:117 app/i18n_labels.py:190
+msgid "Completed"
+msgstr "مكتمل"
+
+#: app/i18n_labels.py:118 app/i18n_labels.py:175 app/i18n_labels.py:191
+msgid "Cancelled"
+msgstr "ملغى"
+
+#: app/i18n_labels.py:126
+msgid "Issued"
+msgstr "صادر"
+
+#: app/i18n_labels.py:131 app/i18n_labels.py:143
+msgid "Replaced"
+msgstr "مُستبدَل"
+
+#: app/i18n_labels.py:138
+msgid "Registered"
+msgstr "مُسجَّل"
+
+#: app/i18n_labels.py:139
+msgid "Pending Activation"
+msgstr "بانتظار التفعيل"
+
+#: app/i18n_labels.py:142
+msgid "Deactivated"
+msgstr "مُعطَّل"
+
+#: app/i18n_labels.py:152
+msgid "Lead"
+msgstr "عميل محتمل"
+
+#: app/i18n_labels.py:153
+msgid "Prospect"
+msgstr "عميل مرتقب"
+
+#: app/i18n_labels.py:157
+msgid "Closed"
+msgstr "مغلق"
+
+#: app/i18n_labels.py:168
+msgid "Quoted"
+msgstr "تم التسعير"
+
+#: app/i18n_labels.py:169
+msgid "Awaiting Confirmation"
+msgstr "بانتظار التأكيد"
+
+#: app/i18n_labels.py:170
+msgid "Awaiting Payment"
+msgstr "بانتظار الدفع"
+
+#: app/i18n_labels.py:171
+msgid "Payment Recorded"
+msgstr "تم تسجيل الدفع"
+
+#: app/i18n_labels.py:172 app/i18n_labels.py:186 app/i18n_labels.py:221
+msgid "Approved"
+msgstr "مُعتمَد"
+
+#: app/i18n_labels.py:173
+msgid "Applied"
+msgstr "مُطبَّق"
+
+#: app/i18n_labels.py:174 app/i18n_labels.py:222 app/i18n_labels.py:385
+msgid "Rejected"
+msgstr "مرفوض"
+
+#: app/i18n_labels.py:176 app/i18n_labels.py:369
+msgid "Voided"
+msgstr "ملغى (باطل)"
+
+#: app/i18n_labels.py:188
+msgid "Extended"
+msgstr "مُمدَّد"
+
+#: app/i18n_labels.py:189
+msgid "Converted"
+msgstr "مُحوَّل"
+
+#: app/i18n_labels.py:198
+msgid "Info"
+msgstr "معلومة"
+
+#: app/i18n_labels.py:199
+msgid "Warning"
+msgstr "تحذير"
+
+#: app/i18n_labels.py:200
+msgid "Critical"
+msgstr "حرج"
+
+#: app/i18n_labels.py:210 app/i18n_labels.py:231
+msgid "In Progress"
+msgstr "قيد التنفيذ"
+
+#: app/i18n_labels.py:211
+msgid "Acknowledged"
+msgstr "تم الإقرار"
+
+#: app/i18n_labels.py:212
+msgid "Resolved"
+msgstr "تم الحل"
+
+#: app/i18n_labels.py:213
+msgid "Dismissed"
+msgstr "مرفوض"
+
+#: app/i18n_labels.py:220 app/i18n_labels.py:386
+msgid "Pending Review"
+msgstr "بانتظار المراجعة"
+
+#: app/i18n_labels.py:229 app/i18n_labels.py:376 app/i18n_labels.py:387
+msgid "Success"
+msgstr "نجاح"
+
+#: app/i18n_labels.py:230 app/i18n_labels.py:367
+msgid "Failed"
+msgstr "فشل"
+
+#: app/i18n_labels.py:240 app/i18n_labels.py:336 app/i18n_labels.py:347 app/i18n_labels.py:358 app/templates/commercial_ops/activation_policy.html:39 app/templates/licensing_admin/signing_keys.html:22
+msgid "Retired"
+msgstr "متقاعد"
+
+#: app/commercial_ops/ui_routes.py:727 app/i18n_labels.py:256 app/templates/commercial_ops/emergency_extension_detail.html:8 app/templates/commercial_ops/emergency_extensions_list.html:17
+#: app/templates/commercial_ops/pilot_detail.html:8 app/templates/commercial_ops/pilots_list.html:18 app/templates/commercial_ops/renewal_detail.html:8 app/templates/commercial_ops/renewals_list.html:18
+#: app/templates/licensing/new.html:8 app/templates/subscriptions/detail.html:2
+msgid "Subscription"
+msgstr "الاشتراك"
+
+#: app/commercial_ops/ui_routes.py:574 app/commercial_ops/ui_routes.py:588 app/i18n_labels.py:257 app/templates/commercial_ops/emergency_extension_detail.html:9
+#: app/templates/commercial_ops/pending_activation_detail.html:9 app/templates/installations/new.html:8 app/templates/licensing/detail.html:2
+msgid "License"
+msgstr "الترخيص"
+
+#: app/commercial_ops/ui_routes.py:547 app/commercial_ops/ui_routes.py:561 app/i18n_labels.py:258 app/templates/commercial_ops/pending_activation_detail.html:8
+#: app/templates/commercial_ops/pending_activations_list.html:17 app/templates/installations/detail.html:2 app/templates/licensing_admin/device_keys.html:7 app/templates/licensing_admin/requests.html:18
+msgid "Installation"
+msgstr "التثبيت"
+
+#: app/i18n_labels.py:259 app/templates/commercial_ops/renewal_detail.html:2
+msgid "Renewal"
+msgstr "التجديد"
+
+#: app/commercial_ops/ui_routes.py:651 app/commercial_ops/ui_routes.py:663 app/commercial_ops/ui_routes.py:678 app/i18n_labels.py:261
+msgid "Notification"
+msgstr "الإشعار"
+
+#: app/i18n_labels.py:268
+msgid "Automatic"
+msgstr "تلقائي"
+
+#: app/i18n_labels.py:269
+msgid "Manual Approval"
+msgstr "موافقة يدوية"
+
+#: app/i18n_labels.py:270
+msgid "Risk Review"
+msgstr "مراجعة المخاطر"
+
+#: app/i18n_labels.py:285 app/i18n_labels.py:365
+msgid "Pending"
+msgstr "قيد الانتظار"
+
+#: app/i18n_labels.py:286
+msgid "Convert"
+msgstr "تحويل"
+
+#: app/i18n_labels.py:287
+msgid "Do Not Convert"
+msgstr "عدم التحويل"
+
+#: app/i18n_labels.py:294 app/templates/commercial_ops/renewals_new.html:16
+msgid "Early renewal (from current end date)"
+msgstr "تجديد مبكر (من تاريخ الانتهاء الحالي)"
+
+#: app/i18n_labels.py:295 app/templates/commercial_ops/renewals_new.html:17
+msgid "Late renewal (from approval date)"
+msgstr "تجديد متأخر (من تاريخ الموافقة)"
+
+#: app/i18n_labels.py:302
+msgid "Activation"
+msgstr "التفعيل"
+
+#: app/i18n_labels.py:303
+msgid "Check-in"
+msgstr "تسجيل حضور"
+
+#: app/i18n_labels.py:304
+msgid "Deactivation"
+msgstr "إلغاء التفعيل"
+
+#: app/i18n_labels.py:311 app/templates/audit/verify_chain.html:7
+msgid "OK"
+msgstr "سليم"
+
+#: app/i18n_labels.py:312
+msgid "Degraded"
+msgstr "متدهور"
+
+#: app/i18n_labels.py:313
+msgid "Down"
+msgstr "متوقف"
+
+#: app/i18n_labels.py:314
+msgid "Unknown"
+msgstr "غير معروف"
+
+#: app/i18n_labels.py:321
+msgid "One-time"
+msgstr "مرة واحدة"
+
+#: app/i18n_labels.py:322
+msgid "Monthly"
+msgstr "شهري"
+
+#: app/i18n_labels.py:323
+msgid "Annual"
+msgstr "سنوي"
+
+#: app/i18n_labels.py:325
+msgid "Custom"
+msgstr "مخصص"
+
+#: app/i18n_labels.py:333 app/i18n_labels.py:344 app/i18n_labels.py:355
+msgid "Planned"
+msgstr "مخطط له"
+
+#: app/i18n_labels.py:335 app/i18n_labels.py:346 app/i18n_labels.py:357
+msgid "Available"
+msgstr "متاح"
+
+#: app/i18n_labels.py:366
+msgid "Confirmed"
+msgstr "مؤكَّد"
+
+#: app/i18n_labels.py:368
+msgid "Refunded"
+msgstr "مُسترجَع"
+
+#: app/i18n_labels.py:377 app/i18n_labels.py:388
+msgid "Failure"
+msgstr "فشل"
+
+#: app/i18n_labels.py:384
+msgid "Accepted"
+msgstr "مقبول"
+
+#: app/i18n_labels.py:411
+msgid "Customer created"
+msgstr "تم إنشاء العميل"
+
+#: app/i18n_labels.py:412
+msgid "Customer updated"
+msgstr "تم تحديث العميل"
+
+#: app/i18n_labels.py:413
+msgid "Customer archived"
+msgstr "تم أرشفة العميل"
+
+#: app/i18n_labels.py:414
+msgid "Subscription created"
+msgstr "تم إنشاء الاشتراك"
+
+#: app/i18n_labels.py:415
+msgid "Subscription status changed"
+msgstr "تم تغيير حالة الاشتراك"
+
+#: app/i18n_labels.py:416
+msgid "Subscription renewed"
+msgstr "تم تجديد الاشتراك"
+
+#: app/i18n_labels.py:417
+msgid "Payment recorded"
+msgstr "تم تسجيل الدفعة"
+
+#: app/i18n_labels.py:418
+msgid "Payment corrected"
+msgstr "تم تصحيح الدفعة"
+
+#: app/i18n_labels.py:419
+msgid "License issued"
+msgstr "تم إصدار الترخيص"
+
+#: app/i18n_labels.py:420
+msgid "License status changed"
+msgstr "تم تغيير حالة الترخيص"
+
+#: app/i18n_labels.py:421
+msgid "License replaced"
+msgstr "تم استبدال الترخيص"
+
+#: app/i18n_labels.py:422
+msgid "License created"
+msgstr "تم إنشاء الترخيص"
+
+#: app/i18n_labels.py:423
+msgid "License key issued"
+msgstr "تم إصدار مفتاح الترخيص"
+
+#: app/i18n_labels.py:424
+msgid "Installation registered"
+msgstr "تم تسجيل التثبيت"
+
+#: app/i18n_labels.py:425
+msgid "Installation status changed"
+msgstr "تم تغيير حالة التثبيت"
+
+#: app/i18n_labels.py:426
+msgid "Backup created"
+msgstr "تم إنشاء نسخة احتياطية"
+
+#: app/i18n_labels.py:427
+msgid "Backup restored"
+msgstr "تمت استعادة النسخة الاحتياطية"
+
+#: app/i18n_labels.py:430
+msgid "Check-in accepted"
+msgstr "تم قبول تسجيل الحضور"
+
+#: app/i18n_labels.py:431
+msgid "Activation accepted"
+msgstr "تم قبول التفعيل"
+
+#: app/i18n_labels.py:432
+msgid "Device-slot exception created"
+msgstr "تم إنشاء استثناء فتحة الجهاز"
 
 #: app/auth/routes.py:378
 msgid "Invitation is invalid or has expired."
 msgstr "الدعوة غير صالحة أو منتهية الصلاحية."
+
+#: app/commercial_ops/pilot_lifecycle.py:149
+#, python-format
+msgid "Pilot has already been extended %(count)s time(s) (max_extensions_allowed=%(max)s). No indefinite rolling pilot."
+msgstr "تم بالفعل تمديد التجربة %(count)s مرة (الحد الأقصى المسموح به=%(max)s). لا يُسمح بتمديد التجربة إلى ما لا نهاية."
+
+#: app/commercial_ops/renewal_requests.py:173
+#, python-format
+msgid "Cannot transition renewal request from %(from_status)s to %(to_status)s."
+msgstr "لا يمكن نقل طلب التجديد من %(from_status)s إلى %(to_status)s."
+
+#: app/commercial_ops/renewal_requests.py:273
+#, python-format
+msgid "Cannot apply a renewal request in status %(status)s; must be APPROVED."
+msgstr "لا يمكن تطبيق طلب تجديد في حالة %(status)s؛ يجب أن يكون معتمدًا."
+
+#: app/commercial_ops/timeline.py:49 app/commercial_ops/timeline.py:55 app/commercial_ops/timeline.py:67 app/commercial_ops/timeline.py:73
+msgid "created"
+msgstr "تم الإنشاء"
+
+#: app/commercial_ops/timeline.py:50
+#, python-format
+msgid "Subscription %(from_status)s -> %(to_status)s"
+msgstr "الاشتراك: من %(from_status)s إلى %(to_status)s"
+
+#: app/commercial_ops/timeline.py:56
+#, python-format
+msgid "License %(from_status)s -> %(to_status)s"
+msgstr "الترخيص: من %(from_status)s إلى %(to_status)s"
+
+#: app/commercial_ops/timeline.py:61
+msgid "registered"
+msgstr "تم التسجيل"
+
+#: app/commercial_ops/timeline.py:62
+#, python-format
+msgid "Installation %(from_status)s -> %(to_status)s"
+msgstr "التثبيت: من %(from_status)s إلى %(to_status)s"
+
+#: app/commercial_ops/timeline.py:68
+#, python-format
+msgid "Renewal %(from_status)s -> %(to_status)s"
+msgstr "التجديد: من %(from_status)s إلى %(to_status)s"
+
+#: app/commercial_ops/timeline.py:74
+#, python-format
+msgid "Pilot %(from_status)s -> %(to_status)s"
+msgstr "التجربة: من %(from_status)s إلى %(to_status)s"
+
+#: app/commercial_ops/ui_routes.py:116
+msgid "A valid subscription_id is required."
+msgstr "معرّف اشتراك صالح مطلوب."
+
+#: app/commercial_ops/ui_routes.py:127 app/commercial_ops/ui_routes.py:247 app/commercial_ops/ui_routes.py:419
+msgid "Subscription not found."
+msgstr "الاشتراك غير موجود."
+
+#: app/commercial_ops/ui_routes.py:133
+msgid "Proposed term start/end must be valid dates."
+msgstr "يجب أن يكون تاريخا بداية ونهاية المدة المقترحة صالحين."
+
+#: app/commercial_ops/ui_routes.py:140
+msgid "Commercial amount must be a number."
+msgstr "يجب أن يكون المبلغ التجاري رقمًا."
+
+#: app/commercial_ops/ui_routes.py:163 app/commercial_ops/ui_routes.py:173 app/commercial_ops/ui_routes.py:188 app/commercial_ops/ui_routes.py:203
+msgid "Renewal request"
+msgstr "طلب التجديد"
+
+#: app/commercial_ops/ui_routes.py:214
+msgid "Someone else already changed this renewal request. Reload and retry."
+msgstr "قام شخص آخر بالفعل بتغيير طلب التجديد هذا. أعد التحميل وحاول مرة أخرى."
+
+#: app/commercial_ops/ui_routes.py:237
+msgid "A subscription already in PILOT status is required."
+msgstr "يلزم وجود اشتراك في حالة (تجريبي) بالفعل."
+
+#: app/commercial_ops/ui_routes.py:252
+msgid "Pilot start/end must be valid dates."
+msgstr "يجب أن يكون تاريخا بداية ونهاية التجربة صالحين."
+
+#: app/commercial_ops/ui_routes.py:311
+msgid "new_end_date must be a valid date."
+msgstr "يجب أن يكون تاريخ الانتهاء الجديد تاريخًا صالحًا."
+
+#: app/commercial_ops/ui_routes.py:350
+msgid "Term start/end must be valid dates."
+msgstr "يجب أن يكون تاريخا بداية ونهاية المدة صالحين."
+
+#: app/commercial_ops/ui_routes.py:370
+msgid "Renewal request not found."
+msgstr "طلب التجديد غير موجود."
+
+#: app/commercial_ops/ui_routes.py:424
+msgid "duration_hours must be an integer."
+msgstr "يجب أن تكون مدة الساعات عددًا صحيحًا."
+
+#: app/commercial_ops/ui_routes.py:440 app/commercial_ops/ui_routes.py:451 app/templates/commercial_ops/emergency_extension_detail.html:2 app/templates/commercial_ops/emergency_extension_detail.html:5
+msgid "Emergency extension"
+msgstr "تمديد الطوارئ"
+
+#: app/commercial_ops/ui_routes.py:477 app/commercial_ops/ui_routes.py:488 app/commercial_ops/ui_routes.py:503
+msgid "Pending activation"
+msgstr "التفعيل المعلَّق"
+
+#: app/commercial_ops/ui_routes.py:594
+msgid "extra_slots must be an integer and expires_at a valid date/time."
+msgstr "يجب أن يكون عدد الفتحات الإضافية عددًا صحيحًا وتاريخ الانتهاء تاريخًا/وقتًا صالحًا."
+
+#: app/commercial_ops/ui_routes.py:612
+msgid "Device slot exception"
+msgstr "استثناء فتحة جهاز"
 
 #: app/security/passwords.py:29
 #, python-format
@@ -214,6 +663,101 @@ msgstr "يجب أن تتكون كلمة المرور من %(min_length)s حرف�
 msgid "Password must mix at least 3 of: lowercase, uppercase, digit, symbol."
 msgstr "يجب أن تجمع كلمة المرور 3 عناصر على الأقل من: حروف صغيرة، حروف كبيرة، أرقام، رموز."
 
+#: app/templates/audit/list.html:2
+msgid "Audit log"
+msgstr "سجل التدقيق"
+
+#: app/templates/audit/list.html:6
+msgid "Audit log (most recent 500)"
+msgstr "سجل التدقيق (أحدث 500 سجل)"
+
+#: app/templates/audit/list.html:8
+msgid "Verify hash chain"
+msgstr "التحقق من سلسلة التجزئة"
+
+#: app/templates/audit/list.html:11
+msgid "Export CSV"
+msgstr "تصدير CSV"
+
+#: app/templates/audit/list.html:16 app/templates/audit/security_events.html:7 app/templates/commercial_ops/pilot_detail.html:88 app/templates/commercial_ops/renewal_detail.html:68
+#: app/templates/commercial_ops/timeline.html:8 app/templates/dashboard/index.html:71 app/templates/employees/detail.html:136 app/templates/installations/detail.html:54
+#: app/templates/licensing/detail.html:65 app/templates/licensing_admin/requests.html:18 app/templates/subscriptions/detail.html:44 app/templates/system/backups.html:14
+msgid "When"
+msgstr "التاريخ"
+
+#: app/templates/audit/list.html:16
+msgid "Actor"
+msgstr "الفاعل"
+
+#: app/templates/audit/list.html:16 app/templates/dashboard/index.html:71 app/templates/employees/detail.html:136
+msgid "Action"
+msgstr "الإجراء"
+
+#: app/templates/audit/list.html:16 app/templates/commercial_ops/reconciliation.html:26 app/templates/dashboard/index.html:71
+msgid "Entity"
+msgstr "الكيان"
+
+#: app/templates/audit/list.html:16 app/templates/installations/detail.html:54 app/templates/licensing_admin/requests.html:18
+msgid "Result"
+msgstr "النتيجة"
+
+#: app/templates/audit/list.html:21
+msgid "system"
+msgstr "النظام"
+
+#: app/templates/audit/list.html:26 app/templates/employees/detail.html:144
+msgid "No audit events yet."
+msgstr "لا توجد أحداث تدقيق بعد."
+
+#: app/templates/audit/security_events.html:2
+msgid "Security events"
+msgstr "أحداث الأمان"
+
+#: app/templates/audit/security_events.html:5
+msgid "Security events (most recent 500)"
+msgstr "أحداث الأمان (أحدث 500 حدث)"
+
+#: app/templates/audit/security_events.html:7 app/templates/catalog/index.html:61 app/templates/commercial_ops/notifications_list.html:30 app/templates/installations/detail.html:54
+#: app/templates/licensing_admin/requests.html:8 app/templates/licensing_admin/requests.html:18
+msgid "Type"
+msgstr "النوع"
+
+#: app/templates/audit/security_events.html:7
+msgid "IP"
+msgstr "عنوان IP"
+
+#: app/templates/audit/security_events.html:7 app/templates/commercial_ops/reconciliation.html:26
+msgid "Detail"
+msgstr "التفصيل"
+
+#: app/templates/audit/security_events.html:11
+msgid "No security events recorded yet."
+msgstr "لم يتم تسجيل أي أحداث أمان بعد."
+
+#: app/templates/audit/verify_chain.html:2
+msgid "Audit chain verification"
+msgstr "التحقق من سلسلة التدقيق"
+
+#: app/templates/audit/verify_chain.html:5
+msgid "Audit hash-chain verification"
+msgstr "التحقق من سلسلة تجزئة التدقيق"
+
+#: app/templates/audit/verify_chain.html:7
+msgid "The entire audit log chain is intact -- no tampered or out-of-order entries detected."
+msgstr "سلسلة سجل التدقيق بأكملها سليمة -- لم يتم اكتشاف أي إدخالات تم العبث بها أو خارج الترتيب."
+
+#: app/templates/audit/verify_chain.html:9
+msgid "BROKEN"
+msgstr "معطوبة"
+
+#: app/templates/audit/verify_chain.html:9
+msgid "Chain verification failed at entry:"
+msgstr "فشل التحقق من السلسلة عند الإدخال:"
+
+#: app/templates/audit/verify_chain.html:11
+msgid "Back to audit log"
+msgstr "العودة إلى سجل التدقيق"
+
 #: app/templates/auth/accept_invitation.html:2
 msgid "Accept invitation"
 msgstr "قبول الدعوة"
@@ -222,10 +766,9 @@ msgstr "قبول الدعوة"
 msgid "Set up your Aura Owner account"
 msgstr "إعداد حساب Aura Owner الخاص بك"
 
-#: app/templates/auth/accept_invitation.html:10 app/templates/auth/login.html:9
-#: app/templates/employees/detail.html:20
-#: app/templates/employees/invitations.html:8
-#: app/templates/employees/new.html:10 app/templates/profile/index.html:38
+#: app/templates/auth/accept_invitation.html:10 app/templates/auth/login.html:9 app/templates/customers/detail.html:23 app/templates/customers/detail.html:35 app/templates/employees/detail.html:20
+#: app/templates/employees/invitations.html:9 app/templates/employees/new.html:10 app/templates/profile/index.html:38 app/templates/staff/detail.html:7 app/templates/staff/list.html:8
+#: app/templates/staff/list.html:29 app/templates/staff/list.html:45
 msgid "Email"
 msgstr "البريد الإلكتروني"
 
@@ -245,10 +788,7 @@ msgstr "إنشاء الحساب"
 msgid "Return to login"
 msgstr "العودة إلى تسجيل الدخول"
 
-#: app/templates/auth/change_password.html:2
-#: app/templates/auth/change_password.html:5
-#: app/templates/auth/change_password.html:13
-#: app/templates/profile/index.html:41
+#: app/templates/auth/change_password.html:2 app/templates/auth/change_password.html:5 app/templates/auth/change_password.html:13 app/templates/profile/index.html:41
 msgid "Change password"
 msgstr "تغيير كلمة المرور"
 
@@ -264,8 +804,7 @@ msgstr "كلمة المرور الجديدة (12 حرفًا على الأقل، 
 msgid "Login"
 msgstr "تسجيل الدخول"
 
-#: app/templates/auth/login.html:5 app/templates/layout/base.html:5
-#: app/templates/layout/base.html:63
+#: app/templates/auth/login.html:5 app/templates/layout/base.html:5 app/templates/layout/base.html:63
 msgid "Aura Owner Control Center"
 msgstr "مركز تحكم Aura Owner"
 
@@ -361,8 +900,1263 @@ msgstr "رمز مكوّن من 6 أرقام"
 msgid "Confirm"
 msgstr "تأكيد"
 
-#: app/templates/employees/dashboard.html:2
-#: app/templates/employees/dashboard.html:5
+#: app/templates/catalog/channels.html:2 app/templates/catalog/channels.html:5
+msgid "Release channels"
+msgstr "قنوات الإصدار"
+
+#: app/templates/catalog/channels.html:7 app/templates/catalog/index.html:7 app/templates/catalog/index.html:22 app/templates/catalog/index.html:36 app/templates/catalog/index.html:61
+#: app/templates/commercial_ops/activation_policy.html:39 app/templates/licensing_admin/offline_policies.html:7
+msgid "Code"
+msgstr "الرمز"
+
+#: app/templates/catalog/channels.html:7 app/templates/catalog/index.html:7 app/templates/catalog/index.html:22 app/templates/catalog/index.html:36 app/templates/catalog/plan_new.html:14
+#: app/templates/customers/detail.html:23 app/templates/customers/detail.html:33 app/templates/employees/list.html:44 app/templates/employees/list.html:49 app/templates/staff/list.html:8
+msgid "Name"
+msgstr "الاسم"
+
+#: app/templates/catalog/index.html:2 app/templates/layout/base.html:84
+msgid "Catalog"
+msgstr "الكتالوج"
+
+#: app/templates/catalog/index.html:5
+msgid "Products"
+msgstr "المنتجات"
+
+#: app/templates/catalog/index.html:7
+msgid "Commercial status"
+msgstr "الحالة التجارية"
+
+#: app/templates/catalog/index.html:7
+msgid "Sellable"
+msgstr "قابل للبيع"
+
+#: app/templates/catalog/index.html:10 app/templates/catalog/versions.html:13 app/templates/customers/detail.html:26 app/templates/licensing_admin/status.html:7 app/templates/staff/detail.html:9
+#: app/templates/staff/list.html:15
+msgid "Yes"
+msgstr "نعم"
+
+#: app/templates/catalog/index.html:10 app/templates/catalog/versions.html:13 app/templates/staff/detail.html:9 app/templates/staff/list.html:15
+msgid "No"
+msgstr "لا"
+
+#: app/templates/catalog/index.html:18
+msgid "Plans"
+msgstr "الخطط"
+
+#: app/templates/catalog/index.html:19 app/templates/catalog/plan_new.html:2 app/templates/catalog/plan_new.html:5
+msgid "New plan"
+msgstr "خطة جديدة"
+
+#: app/templates/catalog/index.html:22 app/templates/catalog/plan_detail.html:7 app/templates/catalog/plan_new.html:16
+msgid "Billing model"
+msgstr "نموذج الفوترة"
+
+#: app/templates/catalog/index.html:22 app/templates/catalog/plan_detail.html:8 app/templates/commercial_ops/emergency_extensions_list.html:8
+#: app/templates/commercial_ops/emergency_extensions_list.html:17 app/templates/commercial_ops/notifications_list.html:9 app/templates/commercial_ops/notifications_list.html:30
+#: app/templates/commercial_ops/pending_activations_list.html:8 app/templates/commercial_ops/pending_activations_list.html:17 app/templates/commercial_ops/pilots_list.html:8
+#: app/templates/commercial_ops/pilots_list.html:18 app/templates/commercial_ops/renewals_list.html:8 app/templates/commercial_ops/renewals_list.html:18
+#: app/templates/commercial_ops/slot_exceptions.html:27 app/templates/customers/list.html:11 app/templates/customers/list.html:21 app/templates/dashboard/index.html:42
+#: app/templates/employees/detail.html:110 app/templates/employees/invitations.html:9 app/templates/employees/list.html:14 app/templates/employees/list.html:44 app/templates/employees/list.html:53
+#: app/templates/installations/list.html:11 app/templates/installations/list.html:21 app/templates/licensing/list.html:11 app/templates/licensing/list.html:21
+#: app/templates/licensing_admin/device_keys.html:7 app/templates/licensing_admin/signing_keys.html:22 app/templates/profile/sessions.html:9 app/templates/staff/detail.html:8
+#: app/templates/staff/list.html:8 app/templates/subscriptions/detail.html:65 app/templates/subscriptions/list.html:11 app/templates/subscriptions/list.html:21 app/templates/system/backups.html:14
+msgid "Status"
+msgstr "الحالة"
+
+#: app/templates/catalog/index.html:26 app/templates/commercial_ops/emergency_extensions_list.html:26 app/templates/commercial_ops/pilots_list.html:27 app/templates/commercial_ops/renewals_list.html:27
+#: app/templates/customers/list.html:27 app/templates/employees/list.html:61 app/templates/installations/list.html:27 app/templates/licensing/list.html:28 app/templates/staff/list.html:17
+#: app/templates/subscriptions/list.html:28
+msgid "View"
+msgstr "عرض"
+
+#: app/templates/catalog/index.html:27
+msgid "No plans yet."
+msgstr "لا توجد خطط بعد."
+
+#: app/templates/catalog/index.html:34
+msgid "Add-ons"
+msgstr "الإضافات"
+
+#: app/templates/catalog/index.html:36
+msgid "Availability"
+msgstr "التوفر"
+
+#: app/templates/catalog/index.html:59
+msgid "Entitlement definitions"
+msgstr "تعريفات الاستحقاقات"
+
+#: app/templates/catalog/index.html:61
+msgid "Description"
+msgstr "الوصف"
+
+#: app/templates/catalog/index.html:71
+msgid "Recently imported versions"
+msgstr "الإصدارات المستوردة مؤخرًا"
+
+#: app/templates/catalog/index.html:73 app/templates/catalog/plan_new.html:8 app/templates/catalog/versions.html:7 app/templates/commercial_ops/activation_policy.html:8
+#: app/templates/commercial_ops/activation_policy.html:39 app/templates/commercial_ops/pending_activation_detail.html:10 app/templates/commercial_ops/renewal_detail.html:9
+#: app/templates/dashboard/index.html:31 app/templates/dashboard/index.html:53 app/templates/installations/detail.html:9 app/templates/installations/list.html:21 app/templates/licensing/list.html:21
+msgid "Product"
+msgstr "المنتج"
+
+#: app/templates/catalog/index.html:73 app/templates/catalog/versions.html:7 app/templates/commercial_ops/pending_activation_detail.html:11 app/templates/employees/detail.html:110
+#: app/templates/installations/new.html:12 app/templates/profile/sessions.html:9
+msgid "Platform"
+msgstr "المنصة"
+
+#: app/templates/catalog/index.html:73 app/templates/catalog/versions.html:7
+msgid "Version"
+msgstr "الإصدار"
+
+#: app/templates/catalog/index.html:73 app/templates/catalog/versions.html:7 app/templates/system/backups.html:14
+msgid "Checksum"
+msgstr "المجموع التحققي"
+
+#: app/templates/catalog/index.html:73
+msgid "Imported"
+msgstr "تاريخ الاستيراد"
+
+#: app/templates/catalog/index.html:78
+msgid "No versions imported yet -- use"
+msgstr "لم يتم استيراد أي إصدارات بعد -- استخدم"
+
+#: app/templates/catalog/plan_detail.html:9 app/templates/catalog/plan_new.html:22
+msgid "Included devices"
+msgstr "الأجهزة المضمّنة"
+
+#: app/templates/catalog/plan_detail.html:13
+msgid "Price history"
+msgstr "سجل الأسعار"
+
+#: app/templates/catalog/plan_detail.html:15 app/templates/catalog/plan_detail.html:26
+msgid "Base price"
+msgstr "السعر الأساسي"
+
+#: app/templates/catalog/plan_detail.html:15 app/templates/catalog/plan_detail.html:27 app/templates/catalog/plan_new.html:20 app/templates/commercial_ops/pilot_convert.html:16
+#: app/templates/commercial_ops/renewals_new.html:21 app/templates/subscriptions/detail.html:61
+msgid "Currency"
+msgstr "العملة"
+
+#: app/templates/catalog/plan_detail.html:15 app/templates/catalog/plan_detail.html:28
+msgid "Effective from"
+msgstr "ساري من"
+
+#: app/templates/catalog/plan_detail.html:15
+msgid "Effective until"
+msgstr "ساري حتى"
+
+#: app/templates/catalog/plan_detail.html:18
+msgid "current"
+msgstr "حاليًا"
+
+#: app/templates/catalog/plan_detail.html:19
+msgid "No price set yet."
+msgstr "لم يتم تحديد سعر بعد."
+
+#: app/templates/catalog/plan_detail.html:23
+msgid "Add a new price (never overwrites history)"
+msgstr "إضافة سعر جديد (لا يستبدل السجل التاريخي أبدًا)"
+
+#: app/templates/catalog/plan_detail.html:29
+msgid "Add price"
+msgstr "إضافة سعر"
+
+#: app/templates/catalog/plan_new.html:12
+msgid "Plan code"
+msgstr "رمز الخطة"
+
+#: app/templates/catalog/plan_new.html:13
+msgid "e.g. CLINIC_PILOT_MONTHLY"
+msgstr "مثال: CLINIC_PILOT_MONTHLY"
+
+#: app/templates/catalog/plan_new.html:24
+msgid "Create plan (DRAFT)"
+msgstr "إنشاء خطة (مسودة)"
+
+#: app/templates/catalog/versions.html:2
+msgid "Versions"
+msgstr "الإصدارات"
+
+#: app/templates/catalog/versions.html:5
+msgid "Product versions"
+msgstr "إصدارات المنتج"
+
+#: app/templates/catalog/versions.html:7
+msgid "Channel"
+msgstr "القناة"
+
+#: app/templates/catalog/versions.html:7
+msgid "Stable"
+msgstr "مستقر"
+
+#: app/templates/catalog/versions.html:16
+msgid "No versions imported yet."
+msgstr "لم يتم استيراد أي إصدارات بعد."
+
+#: app/templates/commercial_ops/activation_policy.html:2
+msgid "Activation policy"
+msgstr "سياسة التفعيل"
+
+#: app/templates/commercial_ops/activation_policy.html:5
+msgid "Activation mode by product"
+msgstr "وضع التفعيل حسب المنتج"
+
+#: app/templates/commercial_ops/activation_policy.html:6
+msgid ""
+"AUTOMATIC (no policy row) preserves exactly the pre-Phase-8 behavior: a validated activation is approved and signed immediately, no review step. Changing this changes the security posture of every "
+"future activation for the product -- restricted to Super Admin."
+msgstr ""
+"يحافظ الوضع التلقائي (بدون سطر سياسة) تمامًا على السلوك السابق للمرحلة الثامنة: تتم الموافقة على التفعيل الصالح وتوقيعه فورًا دون خطوة مراجعة. تغيير هذا يغيّر الوضع الأمني لكل تفعيل مستقبلي لهذا "
+"المنتج -- مقتصر على المشرف العام."
+
+#: app/templates/commercial_ops/activation_policy.html:8
+msgid "Current effective mode"
+msgstr "الوضع الساري حاليًا"
+
+#: app/templates/commercial_ops/activation_policy.html:16
+msgid "Create a policy"
+msgstr "إنشاء سياسة"
+
+#: app/templates/commercial_ops/activation_policy.html:19
+msgid "Change activation policy? This affects every future activation for the selected product."
+msgstr "تغيير سياسة التفعيل؟ يؤثر هذا على كل تفعيل مستقبلي للمنتج المحدد."
+
+#: app/templates/commercial_ops/activation_policy.html:21
+msgid "Policy code"
+msgstr "رمز السياسة"
+
+#: app/templates/commercial_ops/activation_policy.html:22
+msgid "Product (leave blank for global default)"
+msgstr "المنتج (اتركه فارغًا للإعداد الافتراضي العام)"
+
+#: app/templates/commercial_ops/activation_policy.html:23
+msgid "-- global default --"
+msgstr "-- الإعداد الافتراضي العام --"
+
+#: app/templates/commercial_ops/activation_policy.html:24 app/templates/commercial_ops/activation_policy.html:39 app/templates/commercial_ops/pending_activations_list.html:17
+msgid "Mode"
+msgstr "الوضع"
+
+#: app/templates/commercial_ops/activation_policy.html:30
+msgid "Effective date"
+msgstr "تاريخ السريان"
+
+#: app/templates/commercial_ops/activation_policy.html:31 app/templates/commercial_ops/renewal_detail.html:22 app/templates/commercial_ops/renewals_new.html:30
+msgid "Notes"
+msgstr "ملاحظات"
+
+#: app/templates/commercial_ops/activation_policy.html:32
+msgid "Create policy"
+msgstr "إنشاء سياسة"
+
+#: app/templates/commercial_ops/activation_policy.html:37
+msgid "Policy history"
+msgstr "سجل السياسات"
+
+#: app/templates/commercial_ops/activation_policy.html:39
+msgid "Effective"
+msgstr "ساري"
+
+#: app/templates/commercial_ops/activation_policy.html:42
+msgid "(global)"
+msgstr "(عام)"
+
+#: app/templates/commercial_ops/activation_policy.html:43
+msgid "No policies configured -- every product is AUTOMATIC."
+msgstr "لم يتم تكوين أي سياسات -- كل منتج في الوضع التلقائي."
+
+#: app/templates/commercial_ops/emergency_extension_detail.html:9
+msgid "(all licenses on this subscription)"
+msgstr "(كل التراخيص في هذا الاشتراك)"
+
+#: app/templates/commercial_ops/emergency_extension_detail.html:10 app/templates/commercial_ops/emergency_extensions_list.html:17 app/templates/commercial_ops/pilot_detail.html:76
+#: app/templates/commercial_ops/pilot_detail.html:88 app/templates/commercial_ops/renewal_detail.html:21 app/templates/commercial_ops/renewal_detail.html:39
+#: app/templates/commercial_ops/renewal_detail.html:49 app/templates/commercial_ops/renewal_detail.html:68 app/templates/commercial_ops/renewals_new.html:29
+#: app/templates/commercial_ops/slot_exceptions.html:27 app/templates/commercial_ops/timeline.html:8 app/templates/employees/detail.html:136 app/templates/installations/detail.html:26
+#: app/templates/licensing/detail.html:44 app/templates/licensing/detail.html:65 app/templates/licensing_admin/requests.html:18 app/templates/subscriptions/detail.html:36
+#: app/templates/subscriptions/detail.html:44
+msgid "Reason"
+msgstr "السبب"
+
+#: app/templates/commercial_ops/emergency_extension_detail.html:11
+msgid "Incident reference"
+msgstr "مرجع الحادثة"
+
+#: app/templates/commercial_ops/emergency_extension_detail.html:12 app/templates/commercial_ops/emergency_extensions_list.html:17
+msgid "Starts"
+msgstr "يبدأ"
+
+#: app/templates/commercial_ops/emergency_extension_detail.html:13 app/templates/commercial_ops/emergency_extensions_list.html:17 app/templates/employees/invitations.html:9
+#: app/templates/staff/list.html:45
+msgid "Expires"
+msgstr "تنتهي الصلاحية"
+
+#: app/templates/commercial_ops/emergency_extension_detail.html:14
+msgid "Currently in window"
+msgstr "ضمن النافذة الزمنية حاليًا"
+
+#: app/templates/commercial_ops/emergency_extension_detail.html:14
+msgid "yes"
+msgstr "نعم"
+
+#: app/templates/commercial_ops/emergency_extension_detail.html:14
+msgid "no (expired)"
+msgstr "لا (منتهي)"
+
+#: app/templates/commercial_ops/emergency_extension_detail.html:15 app/templates/commercial_ops/renewal_detail.html:18
+msgid "Created by"
+msgstr "أنشأه"
+
+#: app/templates/commercial_ops/emergency_extension_detail.html:16
+#, python-format
+msgid "%(when)s by %(who)s -- %(reason)s"
+msgstr "%(when)s بواسطة %(who)s -- %(reason)s"
+
+#: app/templates/commercial_ops/emergency_extension_detail.html:18
+msgid "This extension never changes the subscription's paid term and never marks any payment confirmed."
+msgstr "لا يغيّر هذا التمديد أبدًا مدة الاشتراك المدفوعة ولا يُعلِّم أي دفعة كمؤكدة أبدًا."
+
+#: app/templates/commercial_ops/emergency_extension_detail.html:23 app/templates/commercial_ops/emergency_extension_detail.html:28 app/templates/commercial_ops/slot_exceptions.html:40
+#: app/templates/employees/detail.html:120 app/templates/employees/invitations.html:25 app/templates/licensing_admin/device_keys.html:21 app/templates/licensing_admin/signing_keys.html:43
+#: app/templates/profile/sessions.html:23 app/templates/staff/list.html:53
+msgid "Revoke"
+msgstr "إلغاء"
+
+#: app/templates/commercial_ops/emergency_extension_detail.html:25
+msgid "Revoke this emergency extension now?"
+msgstr "هل تريد إلغاء تمديد الطوارئ هذا الآن؟"
+
+#: app/templates/commercial_ops/emergency_extension_detail.html:27 app/templates/commercial_ops/emergency_extensions_new.html:14 app/templates/commercial_ops/pending_activation_detail.html:32
+#: app/templates/commercial_ops/pilot_detail.html:47 app/templates/commercial_ops/pilot_detail.html:66 app/templates/commercial_ops/slot_exceptions.html:18
+#: app/templates/commercial_ops/slot_exceptions.html:39
+msgid "Reason (required)"
+msgstr "السبب (مطلوب)"
+
+#: app/templates/commercial_ops/emergency_extensions_list.html:2 app/templates/commercial_ops/emergency_extensions_list.html:5
+msgid "Emergency extensions"
+msgstr "تمديدات الطوارئ"
+
+#: app/templates/commercial_ops/emergency_extensions_list.html:11 app/templates/commercial_ops/notifications_list.html:18 app/templates/commercial_ops/notifications_list.html:23
+#: app/templates/commercial_ops/pending_activations_list.html:11 app/templates/commercial_ops/pilots_list.html:10 app/templates/commercial_ops/renewals_list.html:10 app/templates/customers/list.html:13
+#: app/templates/employees/list.html:10 app/templates/employees/list.html:16 app/templates/employees/list.html:24 app/templates/employees/list.html:30 app/templates/installations/list.html:13
+#: app/templates/licensing/list.html:13 app/templates/licensing_admin/requests.html:10 app/templates/subscriptions/list.html:13
+msgid "All"
+msgstr "الكل"
+
+#: app/templates/commercial_ops/emergency_extensions_list.html:28
+msgid "No emergency extensions."
+msgstr "لا توجد تمديدات طوارئ."
+
+#: app/templates/commercial_ops/emergency_extensions_new.html:2
+msgid "New emergency extension"
+msgstr "تمديد طوارئ جديد"
+
+#: app/templates/commercial_ops/emergency_extensions_new.html:5 app/templates/subscriptions/detail.html:14
+msgid "Create emergency extension"
+msgstr "إنشاء تمديد طوارئ"
+
+#: app/templates/commercial_ops/emergency_extensions_new.html:6
+msgid ""
+"This is an explicit, short-lived, audited override for exceptional support cases only -- it is NOT a bypass. It never modifies the subscription's paid term or marks any payment confirmed, and it "
+"can never restore a REVOKED license."
+msgstr "هذا تجاوز صريح وقصير الأمد وخاضع للتدقيق لحالات الدعم الاستثنائية فقط -- وليس تحايلاً. لا يُعدِّل أبدًا مدة الاشتراك المدفوعة ولا يُعلِّم أي دفعة كمؤكدة، ولا يمكنه أبدًا استعادة ترخيص تم إلغاؤه."
+
+#: app/templates/commercial_ops/emergency_extensions_new.html:9
+msgid "Create this emergency extension? This action is audited."
+msgstr "إنشاء تمديد الطوارئ هذا؟ هذا الإجراء خاضع للتدقيق."
+
+#: app/templates/commercial_ops/emergency_extensions_new.html:11
+msgid "Subscription ID"
+msgstr "معرّف الاشتراك"
+
+#: app/templates/commercial_ops/emergency_extensions_new.html:13
+msgid "License ID (optional)"
+msgstr "معرّف الترخيص (اختياري)"
+
+#: app/templates/commercial_ops/emergency_extensions_new.html:15
+msgid "Incident / reference"
+msgstr "الحادثة / المرجع"
+
+#: app/templates/commercial_ops/emergency_extensions_new.html:16
+#, python-format
+msgid "Duration (hours, capped at %(max_hours)s)"
+msgstr "المدة (بالساعات، بحد أقصى %(max_hours)s)"
+
+#: app/templates/commercial_ops/emergency_extensions_new.html:17
+msgid "Create extension"
+msgstr "إنشاء تمديد"
+
+#: app/templates/commercial_ops/not_found.html:2 app/templates/employees/not_found.html:2
+msgid "Not found"
+msgstr "غير موجود"
+
+#: app/templates/commercial_ops/not_found.html:4
+#, python-format
+msgid "%(entity)s not found."
+msgstr "%(entity)s غير موجود."
+
+#: app/templates/commercial_ops/notifications_list.html:2 app/templates/layout/base.html:92
+msgid "Notifications"
+msgstr "الإشعارات"
+
+#: app/templates/commercial_ops/notifications_list.html:5
+msgid "Internal notification center"
+msgstr "مركز الإشعارات الداخلية"
+
+#: app/templates/commercial_ops/notifications_list.html:11
+msgid "Open/in-progress/acknowledged"
+msgstr "مفتوح/قيد التنفيذ/تم الإقرار"
+
+#: app/templates/commercial_ops/notifications_list.html:16 app/templates/commercial_ops/notifications_list.html:30
+msgid "Severity"
+msgstr "الخطورة"
+
+#: app/templates/commercial_ops/notifications_list.html:21 app/templates/commercial_ops/notifications_list.html:30
+msgid "Assigned role"
+msgstr "الدور المُسند"
+
+#: app/templates/commercial_ops/notifications_list.html:26
+msgid "Filter"
+msgstr "تصفية"
+
+#: app/templates/commercial_ops/notifications_list.html:30 app/templates/customers/detail.html:23 app/templates/customers/detail.html:34 app/templates/employees/list.html:44
+#: app/templates/employees/list.html:51
+msgid "Title"
+msgstr "المسمى"
+
+#: app/templates/commercial_ops/notifications_list.html:30 app/templates/commercial_ops/renewals_list.html:18 app/templates/employees/detail.html:110 app/templates/profile/sessions.html:9
+msgid "Created"
+msgstr "تاريخ الإنشاء"
+
+#: app/templates/commercial_ops/notifications_list.html:30 app/templates/commercial_ops/pilot_detail.html:24 app/templates/commercial_ops/renewal_detail.html:30
+msgid "Actions"
+msgstr "الإجراءات"
+
+#: app/templates/commercial_ops/notifications_list.html:44
+msgid "Assign to me"
+msgstr "إسناد إليّ"
+
+#: app/templates/commercial_ops/notifications_list.html:50
+msgid "Acknowledge"
+msgstr "إقرار"
+
+#: app/templates/commercial_ops/notifications_list.html:56
+msgid "Resolution note"
+msgstr "ملاحظة الحل"
+
+#: app/templates/commercial_ops/notifications_list.html:57
+msgid "Resolve"
+msgstr "حل"
+
+#: app/templates/commercial_ops/notifications_list.html:62
+msgid "No notifications match this filter."
+msgstr "لا توجد إشعارات مطابقة لهذا الفلتر."
+
+#: app/templates/commercial_ops/pending_activation_detail.html:2 app/templates/commercial_ops/pending_activation_detail.html:5
+msgid "Activation review"
+msgstr "مراجعة التفعيل"
+
+#: app/templates/commercial_ops/pending_activation_detail.html:12 app/templates/installations/detail.html:11
+msgid "App version"
+msgstr "إصدار التطبيق"
+
+#: app/templates/commercial_ops/pending_activation_detail.html:13
+msgid "Device public-key fingerprint"
+msgstr "بصمة المفتاح العام للجهاز"
+
+#: app/templates/commercial_ops/pending_activation_detail.html:14
+msgid "Gating mode"
+msgstr "وضع البوابة"
+
+#: app/templates/commercial_ops/pending_activation_detail.html:15 app/templates/commercial_ops/pending_activations_list.html:17
+msgid "Requested"
+msgstr "تاريخ الطلب"
+
+#: app/templates/commercial_ops/pending_activation_detail.html:16 app/templates/commercial_ops/pending_activation_detail.html:23
+msgid "Decision"
+msgstr "القرار"
+
+#: app/templates/commercial_ops/pending_activation_detail.html:16
+#, python-format
+msgid "%(status)s by %(who)s at %(when)s -- %(reason)s"
+msgstr "%(status)s بواسطة %(who)s في %(when)s -- %(reason)s"
+
+#: app/templates/commercial_ops/pending_activation_detail.html:16
+msgid "not yet decided"
+msgstr "لم يُبتّ فيه بعد"
+
+#: app/templates/commercial_ops/pending_activation_detail.html:18
+msgid "No license key, key material, or unrestricted raw request is ever shown here."
+msgstr "لا يُعرض هنا أبدًا مفتاح الترخيص أو مادة المفتاح أو الطلب الخام غير المقيّد."
+
+#: app/templates/commercial_ops/pending_activation_detail.html:25
+msgid "Approve this activation? This requires recent authentication."
+msgstr "الموافقة على هذا التفعيل؟ يتطلب هذا مصادقة حديثة."
+
+#: app/templates/commercial_ops/pending_activation_detail.html:27 app/templates/commercial_ops/renewal_detail.html:48
+msgid "Approve"
+msgstr "موافقة"
+
+#: app/templates/commercial_ops/pending_activation_detail.html:30
+msgid "Reject this activation?"
+msgstr "رفض هذا التفعيل؟"
+
+#: app/templates/commercial_ops/pending_activation_detail.html:33
+msgid "Reject"
+msgstr "رفض"
+
+#: app/templates/commercial_ops/pending_activations_list.html:2
+msgid "Activation reviews"
+msgstr "مراجعات التفعيل"
+
+#: app/templates/commercial_ops/pending_activations_list.html:5
+msgid "Pending activation reviews"
+msgstr "مراجعات التفعيل المعلَّقة"
+
+#: app/templates/commercial_ops/pending_activations_list.html:25
+msgid "Review"
+msgstr "مراجعة"
+
+#: app/templates/commercial_ops/pending_activations_list.html:27
+msgid "No activation reviews."
+msgstr "لا توجد مراجعات تفعيل."
+
+#: app/templates/commercial_ops/pilot_convert.html:2
+msgid "Convert pilot"
+msgstr "تحويل التجربة"
+
+#: app/templates/commercial_ops/pilot_convert.html:5
+msgid "Convert pilot to paid plan"
+msgstr "تحويل التجربة إلى خطة مدفوعة"
+
+#: app/templates/commercial_ops/pilot_convert.html:7
+msgid ""
+"This creates a real renewal request against the pilot's subscription. Conversion only becomes final once that renewal is separately approved (by someone other than its creator) and applied -- the "
+"same payment/recent-auth-gated pipeline as any other renewal. No silent conversion."
+msgstr ""
+"ينشئ هذا طلب تجديد حقيقيًا مقابل اشتراك التجربة. لا يصبح التحويل نهائيًا إلا بعد الموافقة على ذلك التجديد بشكل منفصل (من قِبل شخص آخر غير منشئه) وتطبيقه -- بنفس آلية الدفع/المصادقة الحديثة المطلوبة"
+" لأي تجديد آخر. لا يوجد تحويل صامت."
+
+#: app/templates/commercial_ops/pilot_convert.html:10
+msgid "Paid plan"
+msgstr "الخطة المدفوعة"
+
+#: app/templates/commercial_ops/pilot_convert.html:14
+msgid "Paid term start"
+msgstr "بداية المدة المدفوعة"
+
+#: app/templates/commercial_ops/pilot_convert.html:15
+msgid "Paid term end"
+msgstr "نهاية المدة المدفوعة"
+
+#: app/templates/commercial_ops/pilot_convert.html:17 app/templates/commercial_ops/renewal_detail.html:14 app/templates/subscriptions/detail.html:8 app/templates/subscriptions/new.html:18
+msgid "Device allowance"
+msgstr "حصة الأجهزة"
+
+#: app/templates/commercial_ops/pilot_convert.html:18
+msgid "Create conversion renewal request"
+msgstr "إنشاء طلب تجديد التحويل"
+
+#: app/templates/commercial_ops/pilot_convert.html:20
+msgid "After that renewal is applied, come back here and"
+msgstr "بعد تطبيق ذلك التجديد، عد إلى هنا و"
+
+#: app/templates/commercial_ops/pilot_convert.html:21
+msgid "mark this pilot converted"
+msgstr "ضع علامة على هذه التجربة كمحوَّلة"
+
+#: app/templates/commercial_ops/pilot_convert.html:22
+msgid "by submitting its renewal request ID from the pilot detail page."
+msgstr "عن طريق إرسال معرّف طلب التجديد الخاص بها من صفحة تفاصيل التجربة."
+
+#: app/templates/commercial_ops/pilot_convert.html:25
+msgid "Applied renewal request ID"
+msgstr "معرّف طلب التجديد المُطبَّق"
+
+#: app/templates/commercial_ops/pilot_convert.html:26
+msgid "Mark pilot converted"
+msgstr "وضع علامة على التجربة كمحوَّلة"
+
+#: app/templates/commercial_ops/pilot_detail.html:5
+#, python-format
+msgid "Pilot for %(customer)s"
+msgstr "تجربة %(customer)s"
+
+#: app/templates/commercial_ops/pilot_detail.html:9 app/templates/commercial_ops/slot_exceptions.html:27
+msgid "Window"
+msgstr "النافذة الزمنية"
+
+#: app/templates/commercial_ops/pilot_detail.html:10
+msgid "Allowed devices"
+msgstr "الأجهزة المسموح بها"
+
+#: app/templates/commercial_ops/pilot_detail.html:11 app/templates/commercial_ops/pilots_new.html:15
+msgid "Support level"
+msgstr "مستوى الدعم"
+
+#: app/templates/commercial_ops/pilot_detail.html:12 app/templates/commercial_ops/pilots_new.html:17
+msgid "Success criteria"
+msgstr "معايير النجاح"
+
+#: app/templates/commercial_ops/pilot_detail.html:13 app/templates/commercial_ops/pilots_new.html:16
+msgid "Agreed limitations"
+msgstr "القيود المتفق عليها"
+
+#: app/templates/commercial_ops/pilot_detail.html:14 app/templates/commercial_ops/pilots_new.html:18
+msgid "Review date"
+msgstr "تاريخ المراجعة"
+
+#: app/templates/commercial_ops/pilot_detail.html:15 app/templates/commercial_ops/pilots_new.html:19
+msgid "Exit / rollback plan"
+msgstr "خطة الخروج / التراجع"
+
+#: app/templates/commercial_ops/pilot_detail.html:16
+msgid "Extensions used"
+msgstr "التمديدات المستخدمة"
+
+#: app/templates/commercial_ops/pilot_detail.html:16
+#, python-format
+msgid "%(used)s / %(max)s (hard cap)"
+msgstr "%(used)s / %(max)s (الحد الأقصى الصارم)"
+
+#: app/templates/commercial_ops/pilot_detail.html:17
+msgid "Conversion decision"
+msgstr "قرار التحويل"
+
+#: app/templates/commercial_ops/pilot_detail.html:18
+msgid "Converted via renewal"
+msgstr "تم التحويل عبر التجديد"
+
+#: app/templates/commercial_ops/pilot_detail.html:28
+msgid "Approve pilot"
+msgstr "الموافقة على التجربة"
+
+#: app/templates/commercial_ops/pilot_detail.html:34
+msgid "Activate pilot"
+msgstr "تفعيل التجربة"
+
+#: app/templates/commercial_ops/pilot_detail.html:40
+msgid "Extend pilot"
+msgstr "تمديد التجربة"
+
+#: app/templates/commercial_ops/pilot_detail.html:42
+#, python-format
+msgid "Maximum extensions (%(max)s) already used -- no indefinite rolling pilot."
+msgstr "تم استخدام الحد الأقصى للتمديدات (%(max)s) بالفعل -- لا يُسمح بتمديد التجربة إلى ما لا نهاية."
+
+#: app/templates/commercial_ops/pilot_detail.html:46
+#, python-format
+msgid "New end date (current: %(current)s)"
+msgstr "تاريخ الانتهاء الجديد (الحالي: %(current)s)"
+
+#: app/templates/commercial_ops/pilot_detail.html:48
+msgid "Extend"
+msgstr "تمديد"
+
+#: app/templates/commercial_ops/pilot_detail.html:54
+msgid "Convert to paid plan"
+msgstr "التحويل إلى خطة مدفوعة"
+
+#: app/templates/commercial_ops/pilot_detail.html:59
+msgid "Reason (no conversion)"
+msgstr "السبب (بدون تحويل)"
+
+#: app/templates/commercial_ops/pilot_detail.html:60
+msgid "Complete without converting"
+msgstr "الإنهاء دون تحويل"
+
+#: app/templates/commercial_ops/pilot_detail.html:64
+msgid "Cancel this pilot?"
+msgstr "إلغاء هذه التجربة؟"
+
+#: app/templates/commercial_ops/pilot_detail.html:67
+msgid "Cancel pilot"
+msgstr "إلغاء التجربة"
+
+#: app/templates/commercial_ops/pilot_detail.html:74
+msgid "Extension history"
+msgstr "سجل التمديدات"
+
+#: app/templates/commercial_ops/pilot_detail.html:76
+msgid "Previous end"
+msgstr "النهاية السابقة"
+
+#: app/templates/commercial_ops/pilot_detail.html:76
+msgid "New end"
+msgstr "النهاية الجديدة"
+
+#: app/templates/commercial_ops/pilot_detail.html:76 app/templates/commercial_ops/renewal_detail.html:19
+msgid "Approved by"
+msgstr "اعتمدها"
+
+#: app/templates/commercial_ops/pilot_detail.html:80
+msgid "No extensions yet."
+msgstr "لا توجد تمديدات بعد."
+
+#: app/templates/commercial_ops/pilot_detail.html:86 app/templates/commercial_ops/renewal_detail.html:66 app/templates/licensing/detail.html:63 app/templates/subscriptions/detail.html:42
+msgid "Status history"
+msgstr "سجل الحالات"
+
+#: app/templates/commercial_ops/pilot_detail.html:88 app/templates/commercial_ops/renewal_detail.html:68 app/templates/licensing/detail.html:65 app/templates/subscriptions/detail.html:44
+msgid "From"
+msgstr "من"
+
+#: app/templates/commercial_ops/pilot_detail.html:88 app/templates/commercial_ops/renewal_detail.html:68 app/templates/licensing/detail.html:65 app/templates/subscriptions/detail.html:44
+msgid "To"
+msgstr "إلى"
+
+#: app/templates/commercial_ops/pilot_detail.html:92 app/templates/commercial_ops/renewal_detail.html:72 app/templates/licensing/detail.html:69 app/templates/subscriptions/detail.html:48
+msgid "No status changes yet."
+msgstr "لا توجد تغييرات حالة بعد."
+
+#: app/templates/commercial_ops/pilots_list.html:2 app/templates/commercial_ops/pilots_list.html:5 app/templates/layout/base.html:89
+msgid "Pilots"
+msgstr "التجارب التشغيلية"
+
+#: app/templates/commercial_ops/pilots_list.html:18 app/templates/commercial_ops/renewals_list.html:18 app/templates/installations/detail.html:8 app/templates/installations/list.html:21
+#: app/templates/licensing/list.html:21 app/templates/subscriptions/list.html:21 app/templates/subscriptions/new.html:8
+msgid "Customer"
+msgstr "العميل"
+
+#: app/templates/commercial_ops/pilots_list.html:18
+msgid "Pilot window"
+msgstr "النافذة الزمنية للتجربة"
+
+#: app/templates/commercial_ops/pilots_list.html:18
+msgid "Extensions"
+msgstr "التمديدات"
+
+#: app/templates/commercial_ops/pilots_list.html:29
+msgid "No pilots yet."
+msgstr "لا توجد تجارب بعد."
+
+#: app/templates/commercial_ops/pilots_new.html:2
+msgid "New pilot"
+msgstr "تجربة جديدة"
+
+#: app/templates/commercial_ops/pilots_new.html:5 app/templates/subscriptions/detail.html:13
+msgid "Create pilot record"
+msgstr "إنشاء سجل تجربة"
+
+#: app/templates/commercial_ops/pilots_new.html:11 app/templates/commercial_ops/renewals_new.html:11
+msgid "Customer:"
+msgstr "العميل:"
+
+#: app/templates/commercial_ops/pilots_new.html:11
+msgid "(subscription already in PILOT status)."
+msgstr "(الاشتراك في حالة تجريبي بالفعل)."
+
+#: app/templates/commercial_ops/pilots_new.html:12
+msgid "Pilot start"
+msgstr "بداية التجربة"
+
+#: app/templates/commercial_ops/pilots_new.html:13
+msgid "Pilot end"
+msgstr "نهاية التجربة"
+
+#: app/templates/commercial_ops/pilots_new.html:14
+msgid "Allowed device count"
+msgstr "عدد الأجهزة المسموح بها"
+
+#: app/templates/commercial_ops/pilots_new.html:20
+msgid "Create pilot"
+msgstr "إنشاء تجربة"
+
+#: app/templates/commercial_ops/queue.html:2
+msgid "My queue"
+msgstr "قائمة انتظاري"
+
+#: app/templates/commercial_ops/queue.html:5
+#, python-format
+msgid "Operational queue -- %(role)s"
+msgstr "قائمة انتظار العمليات -- %(role)s"
+
+#: app/templates/commercial_ops/queue.html:28
+msgid "Nothing here right now."
+msgstr "لا يوجد شيء هنا حاليًا."
+
+#: app/templates/commercial_ops/reconciliation.html:2 app/templates/commercial_ops/reconciliation.html:5 app/templates/layout/base.html:94
+msgid "Reconciliation"
+msgstr "التسوية"
+
+#: app/templates/commercial_ops/reconciliation.html:5
+msgid "(notifications written)"
+msgstr "(تمت كتابة الإشعارات)"
+
+#: app/templates/commercial_ops/reconciliation.html:5
+msgid "(dry run -- nothing written)"
+msgstr "(تشغيل تجريبي -- لم يُكتب شيء)"
+
+#: app/templates/commercial_ops/reconciliation.html:7
+msgid "As of"
+msgstr "اعتبارًا من"
+
+#: app/templates/commercial_ops/reconciliation.html:8
+msgid "Licenses checked"
+msgstr "التراخيص المفحوصة"
+
+#: app/templates/commercial_ops/reconciliation.html:9
+msgid "Renewals checked"
+msgstr "التجديدات المفحوصة"
+
+#: app/templates/commercial_ops/reconciliation.html:10
+msgid "Pending activations checked"
+msgstr "التفعيلات المعلَّقة المفحوصة"
+
+#: app/templates/commercial_ops/reconciliation.html:11
+msgid "Notifications created"
+msgstr "الإشعارات المُنشأة"
+
+#: app/templates/commercial_ops/reconciliation.html:12
+msgid "Notifications deduped"
+msgstr "الإشعارات المُزالة تكرارها"
+
+#: app/templates/commercial_ops/reconciliation.html:16
+msgid "Write notifications for every finding below? This never mutates any commercial record itself."
+msgstr "كتابة إشعارات لكل نتيجة أدناه؟ لا يُغيّر هذا أي سجل تجاري نفسه أبدًا."
+
+#: app/templates/commercial_ops/reconciliation.html:18
+msgid "Run and write notifications"
+msgstr "تشغيل وكتابة الإشعارات"
+
+#: app/templates/commercial_ops/reconciliation.html:24
+msgid "Findings"
+msgstr "النتائج"
+
+#: app/templates/commercial_ops/reconciliation.html:26
+msgid "Check"
+msgstr "الفحص"
+
+#: app/templates/commercial_ops/reconciliation.html:26
+msgid "Entity type"
+msgstr "نوع الكيان"
+
+#: app/templates/commercial_ops/reconciliation.html:30
+msgid "No findings -- everything reconciles."
+msgstr "لا توجد نتائج -- كل شيء متوافق."
+
+#: app/templates/commercial_ops/renewal_detail.html:5
+#, python-format
+msgid "Renewal for %(customer)s"
+msgstr "تجديد %(customer)s"
+
+#: app/templates/commercial_ops/renewal_detail.html:10
+msgid "Current plan"
+msgstr "الخطة الحالية"
+
+#: app/templates/commercial_ops/renewal_detail.html:11
+msgid "Proposed plan"
+msgstr "الخطة المقترحة"
+
+#: app/templates/commercial_ops/renewal_detail.html:11 app/templates/commercial_ops/renewal_detail.html:14
+msgid "(unchanged)"
+msgstr "(بدون تغيير)"
+
+#: app/templates/commercial_ops/renewal_detail.html:12
+msgid "Current term"
+msgstr "المدة الحالية"
+
+#: app/templates/commercial_ops/renewal_detail.html:13 app/templates/commercial_ops/renewals_list.html:18
+msgid "Proposed term"
+msgstr "المدة المقترحة"
+
+#: app/templates/commercial_ops/renewal_detail.html:15 app/templates/commercial_ops/renewals_new.html:27
+msgid "Commercial amount"
+msgstr "المبلغ التجاري"
+
+#: app/templates/commercial_ops/renewal_detail.html:16 app/templates/commercial_ops/renewals_new.html:14
+msgid "Date rule"
+msgstr "قاعدة التاريخ"
+
+#: app/templates/commercial_ops/renewal_detail.html:17
+msgid "Sales owner"
+msgstr "مسؤول المبيعات"
+
+#: app/templates/commercial_ops/renewal_detail.html:20
+msgid "Applied by"
+msgstr "طبَّقه"
+
+#: app/templates/commercial_ops/renewal_detail.html:23
+msgid "Optimistic version"
+msgstr "إصدار التزامن المتفائل"
+
+#: app/templates/commercial_ops/renewal_detail.html:25
+msgid "View full subscription timeline"
+msgstr "عرض المخطط الزمني الكامل للاشتراك"
+
+#: app/templates/commercial_ops/renewal_detail.html:35
+msgid "Change renewal status?"
+msgstr "تغيير حالة التجديد؟"
+
+#: app/templates/commercial_ops/renewal_detail.html:37
+msgid "Move to"
+msgstr "الانتقال إلى"
+
+#: app/templates/commercial_ops/renewal_detail.html:40
+msgid "Apply status change"
+msgstr "تطبيق تغيير الحالة"
+
+#: app/templates/commercial_ops/renewal_detail.html:46
+msgid "Approve this renewal? A confirmed payment must already be linked."
+msgstr "الموافقة على هذا التجديد؟ يجب أن تكون دفعة مؤكدة مرتبطة بالفعل."
+
+#: app/templates/commercial_ops/renewal_detail.html:48
+msgid "requires recent authentication and cannot be done by the staff member who created this request."
+msgstr "يتطلب مصادقة حديثة ولا يمكن أن يقوم به عضو الفريق الذي أنشأ هذا الطلب."
+
+#: app/templates/commercial_ops/renewal_detail.html:50
+msgid "Approve renewal"
+msgstr "الموافقة على التجديد"
+
+#: app/templates/commercial_ops/renewal_detail.html:56
+msgid "Apply this renewal now? The subscription term will change immediately."
+msgstr "تطبيق هذا التجديد الآن؟ ستتغير مدة الاشتراك فورًا."
+
+#: app/templates/commercial_ops/renewal_detail.html:58 app/templates/employees/list.html:36 app/templates/installations/detail.html:27 app/templates/licensing/detail.html:45
+#: app/templates/subscriptions/detail.html:26
+msgid "Apply"
+msgstr "تطبيق"
+
+#: app/templates/commercial_ops/renewal_detail.html:58
+#, python-format
+msgid "extends the subscription term from %(from_date)s to %(to_date)s and requires recent authentication. This cannot be undone by applying again (idempotent, row-locked)."
+msgstr "يُمدِّد مدة الاشتراك من %(from_date)s إلى %(to_date)s ويتطلب مصادقة حديثة. لا يمكن التراجع عن هذا بتطبيقه مرة أخرى (عملية متكافئة، صف مقفل)."
+
+#: app/templates/commercial_ops/renewal_detail.html:59
+msgid "Apply renewal"
+msgstr "تطبيق التجديد"
+
+#: app/templates/commercial_ops/renewals_list.html:2 app/templates/layout/base.html:88
+msgid "Renewals"
+msgstr "التجديدات"
+
+#: app/templates/commercial_ops/renewals_list.html:5
+msgid "Renewal requests"
+msgstr "طلبات التجديد"
+
+#: app/templates/commercial_ops/renewals_list.html:29
+msgid "No renewal requests yet."
+msgstr "لا توجد طلبات تجديد بعد."
+
+#: app/templates/commercial_ops/renewals_new.html:2
+msgid "New renewal"
+msgstr "تجديد جديد"
+
+#: app/templates/commercial_ops/renewals_new.html:5 app/templates/commercial_ops/renewals_new.html:31
+msgid "Create renewal request"
+msgstr "إنشاء طلب تجديد"
+
+#: app/templates/commercial_ops/renewals_new.html:11
+msgid "-- current plan"
+msgstr "-- الخطة الحالية"
+
+#: app/templates/commercial_ops/renewals_new.html:12
+msgid "current end date"
+msgstr "تاريخ الانتهاء الحالي"
+
+#: app/templates/commercial_ops/renewals_new.html:19
+msgid "Proposed term start"
+msgstr "بداية المدة المقترحة"
+
+#: app/templates/commercial_ops/renewals_new.html:20
+msgid "Proposed term end"
+msgstr "نهاية المدة المقترحة"
+
+#: app/templates/commercial_ops/renewals_new.html:22
+msgid "Requested plan (leave blank to keep current plan)"
+msgstr "الخطة المطلوبة (اتركها فارغة للاحتفاظ بالخطة الحالية)"
+
+#: app/templates/commercial_ops/renewals_new.html:24
+msgid "-- keep current plan --"
+msgstr "-- الاحتفاظ بالخطة الحالية --"
+
+#: app/templates/commercial_ops/renewals_new.html:28
+msgid "Device allowance after (leave blank to keep unchanged)"
+msgstr "حصة الأجهزة بعد التجديد (اتركها فارغة لعدم التغيير)"
+
+#: app/templates/commercial_ops/slot_exceptions.html:2
+msgid "Device slot exceptions"
+msgstr "استثناءات فتحات الأجهزة"
+
+#: app/templates/commercial_ops/slot_exceptions.html:5
+#, python-format
+msgid "Device-slot exceptions for license %(key)s"
+msgstr "استثناءات فتحات الأجهزة للترخيص %(key)s"
+
+#: app/templates/commercial_ops/slot_exceptions.html:7
+msgid "Permanent device limit"
+msgstr "الحد الدائم للأجهزة"
+
+#: app/templates/commercial_ops/slot_exceptions.html:8
+msgid "Effective limit right now"
+msgstr "الحد الساري حاليًا"
+
+#: app/templates/commercial_ops/slot_exceptions.html:13
+msgid "Create a temporary exception"
+msgstr "إنشاء استثناء مؤقت"
+
+#: app/templates/commercial_ops/slot_exceptions.html:17 app/templates/commercial_ops/slot_exceptions.html:27
+msgid "Extra slots"
+msgstr "فتحات إضافية"
+
+#: app/templates/commercial_ops/slot_exceptions.html:19
+msgid "Expires at (max 90 days out, temporary means temporary)"
+msgstr "ينتهي في (بحد أقصى 90 يومًا، المؤقت يعني مؤقتًا)"
+
+#: app/templates/commercial_ops/slot_exceptions.html:20
+msgid "Create exception"
+msgstr "إنشاء استثناء"
+
+#: app/templates/commercial_ops/slot_exceptions.html:25
+msgid "Exception history"
+msgstr "سجل الاستثناءات"
+
+#: app/templates/commercial_ops/slot_exceptions.html:45
+msgid "No exceptions."
+msgstr "لا توجد استثناءات."
+
+#: app/templates/commercial_ops/timeline.html:2
+msgid "Timeline"
+msgstr "المخطط الزمني"
+
+#: app/templates/commercial_ops/timeline.html:5
+#, python-format
+msgid "Commercial timeline -- %(customer)s"
+msgstr "المخطط الزمني التجاري -- %(customer)s"
+
+#: app/templates/commercial_ops/timeline.html:6
+msgid "Back to subscription"
+msgstr "العودة إلى الاشتراك"
+
+#: app/templates/commercial_ops/timeline.html:8
+msgid "Category"
+msgstr "الفئة"
+
+#: app/templates/commercial_ops/timeline.html:8
+msgid "Event"
+msgstr "الحدث"
+
+#: app/templates/commercial_ops/timeline.html:17
+msgid "No commercial events recorded yet."
+msgstr "لم يتم تسجيل أي أحداث تجارية بعد."
+
+#: app/templates/customers/detail.html:7 app/templates/customers/new.html:17
+msgid "Trade name"
+msgstr "الاسم التجاري"
+
+#: app/templates/customers/detail.html:8
+msgid "Country / City"
+msgstr "الدولة / المدينة"
+
+#: app/templates/customers/detail.html:9
+msgid "Registration ref"
+msgstr "مرجع التسجيل"
+
+#: app/templates/customers/detail.html:13
+msgid "Archive this customer? Records are kept, not deleted."
+msgstr "أرشفة هذا العميل؟ يتم الاحتفاظ بالسجلات دون حذفها."
+
+#: app/templates/customers/detail.html:15 app/templates/employees/detail.html:97
+msgid "Archive"
+msgstr "أرشفة"
+
+#: app/templates/customers/detail.html:21
+msgid "Contacts"
+msgstr "جهات الاتصال"
+
+#: app/templates/customers/detail.html:23 app/templates/customers/detail.html:36 app/templates/employees/detail.html:12 app/templates/employees/new.html:19 app/templates/profile/index.html:28
+msgid "Phone"
+msgstr "رقم الهاتف"
+
+#: app/templates/customers/detail.html:23
+msgid "Primary"
+msgstr "أساسي"
+
+#: app/templates/customers/detail.html:27
+msgid "No contacts yet."
+msgstr "لا توجد جهات اتصال بعد."
+
+#: app/templates/customers/detail.html:37
+msgid "Add contact"
+msgstr "إضافة جهة اتصال"
+
+#: app/templates/customers/detail.html:42
+msgid "Internal notes"
+msgstr "ملاحظات داخلية"
+
+#: app/templates/customers/detail.html:45
+msgid "No notes yet."
+msgstr "لا توجد ملاحظات بعد."
+
+#: app/templates/customers/detail.html:50
+msgid "Add note"
+msgstr "إضافة ملاحظة"
+
+#: app/templates/customers/list.html:2 app/templates/layout/base.html:83
+msgid "Customers"
+msgstr "العملاء"
+
+#: app/templates/customers/list.html:6
+msgid "Customer organizations"
+msgstr "مؤسسات العملاء"
+
+#: app/templates/customers/list.html:7 app/templates/customers/new.html:2
+msgid "New customer"
+msgstr "عميل جديد"
+
+#: app/templates/customers/list.html:21 app/templates/customers/new.html:15
+msgid "Legal name"
+msgstr "الاسم القانوني"
+
+#: app/templates/customers/list.html:21 app/templates/customers/new.html:21
+msgid "Country"
+msgstr "الدولة"
+
+#: app/templates/customers/list.html:29
+msgid "No customers yet."
+msgstr "لا يوجد عملاء بعد."
+
+#: app/templates/customers/new.html:5
+msgid "New customer organization"
+msgstr "مؤسسة عميل جديدة"
+
+#: app/templates/customers/new.html:8
+msgid "Possible duplicate(s) found:"
+msgstr "تم العثور على تكرار (تكرارات) محتملة:"
+
+#: app/templates/customers/new.html:9
+msgid "Submit again to confirm this is a genuinely different organization."
+msgstr "أرسل مرة أخرى لتأكيد أن هذه مؤسسة مختلفة حقًا."
+
+#: app/templates/customers/new.html:19
+msgid "Organization type"
+msgstr "نوع المؤسسة"
+
+#: app/templates/customers/new.html:23
+msgid "City"
+msgstr "المدينة"
+
+#: app/templates/customers/new.html:25
+msgid "Commercial registration reference"
+msgstr "مرجع السجل التجاري"
+
+#: app/templates/customers/new.html:27
+msgid "Primary contact email (used only for duplicate detection here)"
+msgstr "البريد الإلكتروني لجهة الاتصال الأساسية (يُستخدم هنا فقط للكشف عن التكرار)"
+
+#: app/templates/customers/new.html:29
+msgid "Acquisition source"
+msgstr "مصدر الاكتساب"
+
+#: app/templates/customers/new.html:31
+msgid "Create customer"
+msgstr "إنشاء عميل"
+
+#: app/templates/dashboard/index.html:2 app/templates/employees/list.html:76 app/templates/layout/base.html:82
+msgid "Dashboard"
+msgstr "لوحة التحكم"
+
+#: app/templates/dashboard/index.html:5
+msgid "Overview"
+msgstr "نظرة عامة"
+
+#: app/templates/dashboard/index.html:7
+msgid "Total customers"
+msgstr "إجمالي العملاء"
+
+#: app/templates/dashboard/index.html:8
+msgid "Pilot customers"
+msgstr "العملاء التجريبيون"
+
+#: app/templates/dashboard/index.html:9
+msgid "Active customers"
+msgstr "العملاء النشطون"
+
+#: app/templates/dashboard/index.html:10
+msgid "Active subscriptions"
+msgstr "الاشتراكات النشطة"
+
+#: app/templates/dashboard/index.html:11
+msgid "Subscriptions expiring in 7 days"
+msgstr "اشتراكات تنتهي خلال 7 أيام"
+
+#: app/templates/dashboard/index.html:12
+msgid "Subscriptions expiring in 30 days"
+msgstr "اشتراكات تنتهي خلال 30 يومًا"
+
+#: app/templates/dashboard/index.html:17
+msgid "Commercial operations"
+msgstr "العمليات التجارية"
+
+#: app/templates/dashboard/index.html:19
+msgid "Open notifications"
+msgstr "الإشعارات المفتوحة"
+
+#: app/templates/dashboard/index.html:20
+msgid "Renewals awaiting finance approval"
+msgstr "تجديدات بانتظار موافقة المالية"
+
+#: app/templates/dashboard/index.html:21
+msgid "Pilots needing action"
+msgstr "تجارب تحتاج إلى إجراء"
+
+#: app/templates/dashboard/index.html:22
+msgid "Activations pending manual review"
+msgstr "تفعيلات بانتظار المراجعة اليدوية"
+
+#: app/templates/dashboard/index.html:23
+msgid "Active emergency extensions"
+msgstr "تمديدات الطوارئ النشطة"
+
+#: app/templates/dashboard/index.html:24
+msgid "Active device-slot exceptions"
+msgstr "استثناءات فتحات الأجهزة النشطة"
+
+#: app/templates/dashboard/index.html:29
+msgid "Subscriptions by product"
+msgstr "الاشتراكات حسب المنتج"
+
+#: app/templates/dashboard/index.html:31 app/templates/dashboard/index.html:42 app/templates/dashboard/index.html:53
+msgid "Count"
+msgstr "العدد"
+
+#: app/templates/dashboard/index.html:34 app/templates/subscriptions/list.html:30
+msgid "No subscriptions yet."
+msgstr "لا توجد اشتراكات بعد."
+
+#: app/templates/dashboard/index.html:40
+msgid "Licenses by status"
+msgstr "التراخيص حسب الحالة"
+
+#: app/templates/dashboard/index.html:45 app/templates/licensing/list.html:30
+msgid "No licenses yet."
+msgstr "لا توجد تراخيص بعد."
+
+#: app/templates/dashboard/index.html:51
+msgid "Active installations by product"
+msgstr "التثبيتات النشطة حسب المنتج"
+
+#: app/templates/dashboard/index.html:56
+msgid "No active installations yet."
+msgstr "لا توجد تثبيتات نشطة بعد."
+
+#: app/templates/dashboard/index.html:62
+msgid "Latest Owner database backup"
+msgstr "أحدث نسخة احتياطية لقاعدة بيانات المالك"
+
+#: app/templates/dashboard/index.html:65
+msgid "No backup has been taken yet."
+msgstr "لم يتم أخذ أي نسخة احتياطية بعد."
+
+#: app/templates/dashboard/index.html:69
+msgid "Recent staff actions"
+msgstr "إجراءات الفريق الأخيرة"
+
+#: app/templates/dashboard/index.html:75
+msgid "No activity yet."
+msgstr "لا يوجد نشاط بعد."
+
+#: app/templates/employees/dashboard.html:2 app/templates/employees/dashboard.html:5
 msgid "Employee dashboard"
 msgstr "لوحة تحكم الموظفين"
 
@@ -399,8 +2193,7 @@ msgstr "متصل الآن"
 msgid "Recently active"
 msgstr "نشط مؤخرًا"
 
-#: app/templates/employees/dashboard.html:31
-#: app/templates/profile/index.html:36
+#: app/templates/employees/dashboard.html:31 app/templates/profile/index.html:36
 msgid "Security"
 msgstr "الأمان"
 
@@ -416,42 +2209,28 @@ msgstr "الحسابات المقفلة / المعطّلة"
 msgid "Currently active sessions"
 msgstr "الجلسات النشطة حاليًا"
 
-#: app/templates/employees/detail.html:7 app/templates/employees/new.html:13
-#: app/templates/profile/index.html:9
+#: app/templates/employees/detail.html:7 app/templates/employees/new.html:13 app/templates/profile/index.html:9
 msgid "Employee number"
 msgstr "الرقم الوظيفي"
 
-#: app/templates/employees/detail.html:8 app/templates/employees/detail.html:54
-#: app/templates/employees/new.html:22 app/templates/profile/index.html:10
+#: app/templates/employees/detail.html:8 app/templates/employees/detail.html:54 app/templates/employees/new.html:22 app/templates/profile/index.html:10
 msgid "Job title"
 msgstr "المسمى الوظيفي"
 
-#: app/templates/employees/detail.html:9 app/templates/employees/detail.html:56
-#: app/templates/employees/list.html:8 app/templates/employees/list.html:43
-#: app/templates/employees/list.html:49 app/templates/employees/new.html:25
-#: app/templates/profile/index.html:11
+#: app/templates/employees/detail.html:9 app/templates/employees/detail.html:56 app/templates/employees/list.html:8 app/templates/employees/list.html:44 app/templates/employees/list.html:52
+#: app/templates/employees/new.html:25 app/templates/profile/index.html:11
 msgid "Department"
 msgstr "القسم"
 
-#: app/templates/employees/detail.html:10
-#: app/templates/employees/detail.html:58 app/templates/employees/new.html:31
-#: app/templates/profile/index.html:12
+#: app/templates/employees/detail.html:10 app/templates/employees/detail.html:58 app/templates/employees/new.html:31 app/templates/profile/index.html:12
 msgid "Manager"
 msgstr "المدير المباشر"
 
-#: app/templates/employees/detail.html:11 app/templates/employees/new.html:28
-#: app/templates/profile/index.html:13
+#: app/templates/employees/detail.html:11 app/templates/employees/new.html:28 app/templates/profile/index.html:13
 msgid "Employment start date"
 msgstr "تاريخ بدء العمل"
 
-#: app/templates/employees/detail.html:12 app/templates/employees/new.html:19
-#: app/templates/profile/index.html:28
-msgid "Phone"
-msgstr "رقم الهاتف"
-
-#: app/templates/employees/detail.html:13 app/templates/employees/list.html:28
-#: app/templates/employees/list.html:43 app/templates/employees/list.html:53
-#: app/templates/profile/index.html:15
+#: app/templates/employees/detail.html:13 app/templates/employees/list.html:28 app/templates/employees/list.html:44 app/templates/employees/list.html:56 app/templates/profile/index.html:15
 msgid "Presence"
 msgstr "الحضور"
 
@@ -467,15 +2246,15 @@ msgstr "أمان الحساب"
 msgid "Account status"
 msgstr "حالة الحساب"
 
-#: app/templates/employees/detail.html:22 app/templates/profile/index.html:39
+#: app/templates/employees/detail.html:22 app/templates/profile/index.html:39 app/templates/staff/detail.html:10 app/templates/staff/list.html:8
 msgid "MFA"
 msgstr "المصادقة متعددة العوامل"
 
-#: app/templates/employees/detail.html:27
+#: app/templates/employees/detail.html:27 app/templates/staff/detail.html:12
 msgid "Last login"
 msgstr "آخر تسجيل دخول"
 
-#: app/templates/employees/detail.html:27
+#: app/templates/employees/detail.html:27 app/templates/installations/detail.html:13 app/templates/staff/detail.html:12
 msgid "Never"
 msgstr "لم يسجّل الدخول من قبل"
 
@@ -487,11 +2266,11 @@ msgstr "الجلسات النشطة"
 msgid "Roles and permissions"
 msgstr "الأدوار والصلاحيات"
 
-#: app/templates/employees/detail.html:34
+#: app/templates/employees/detail.html:34 app/templates/staff/detail.html:18
 msgid "Changing roles requires a fresh MFA confirmation and immediately revokes all of this account's active sessions."
 msgstr "يتطلب تغيير الأدوار تأكيدًا حديثًا للمصادقة متعددة العوامل، ويؤدي فورًا إلى إلغاء جميع الجلسات النشطة لهذا الحساب."
 
-#: app/templates/employees/detail.html:43
+#: app/templates/employees/detail.html:43 app/templates/staff/detail.html:27
 msgid "Save roles"
 msgstr "حفظ الأدوار"
 
@@ -499,13 +2278,11 @@ msgstr "حفظ الأدوار"
 msgid "Edit profile"
 msgstr "تعديل الملف الوظيفي"
 
-#: app/templates/employees/detail.html:52 app/templates/employees/new.html:16
-#: app/templates/profile/index.html:8
+#: app/templates/employees/detail.html:52 app/templates/employees/new.html:16 app/templates/profile/index.html:8
 msgid "Full name"
 msgstr "الاسم الكامل"
 
-#: app/templates/employees/detail.html:60 app/templates/employees/new.html:33
-#: app/templates/employees/new.html:39
+#: app/templates/employees/detail.html:60 app/templates/employees/new.html:33 app/templates/employees/new.html:39 app/templates/staff/detail.html:11
 msgid "None"
 msgstr "لا يوجد"
 
@@ -517,7 +2294,7 @@ msgstr "حفظ التغييرات"
 msgid "Lifecycle actions"
 msgstr "إجراءات دورة العمل"
 
-#: app/templates/employees/detail.html:71
+#: app/templates/employees/detail.html:71 app/templates/licensing_admin/signing_keys.html:35
 msgid "Activate"
 msgstr "تفعيل"
 
@@ -549,10 +2326,6 @@ msgstr "أُنهي عمله من قبل الإدارة"
 msgid "Terminate"
 msgstr "إنهاء العمل"
 
-#: app/templates/employees/detail.html:97
-msgid "Archive"
-msgstr "أرشفة"
-
 #: app/templates/employees/detail.html:101
 msgid "Revoke all sessions"
 msgstr "إلغاء جميع الجلسات"
@@ -561,58 +2334,17 @@ msgstr "إلغاء جميع الجلسات"
 msgid "Sessions"
 msgstr "الجلسات"
 
-#: app/templates/employees/detail.html:109
-#: app/templates/profile/sessions.html:8
-msgid "Created"
-msgstr "تاريخ الإنشاء"
-
-#: app/templates/employees/detail.html:109
-#: app/templates/profile/sessions.html:8
+#: app/templates/employees/detail.html:110 app/templates/profile/sessions.html:9
 msgid "Last seen"
 msgstr "آخر ظهور"
 
-#: app/templates/employees/detail.html:109
-#: app/templates/profile/sessions.html:8
-msgid "Platform"
-msgstr "المنصة"
-
-#: app/templates/employees/detail.html:109
-#: app/templates/employees/invitations.html:8
-#: app/templates/employees/list.html:14 app/templates/employees/list.html:43
-#: app/templates/employees/list.html:50 app/templates/profile/sessions.html:8
-msgid "Status"
-msgstr "الحالة"
-
-#: app/templates/employees/detail.html:117
-#: app/templates/employees/invitations.html:22
-#: app/templates/profile/sessions.html:20
-msgid "Revoke"
-msgstr "إلغاء"
-
-#: app/templates/employees/detail.html:124
-#: app/templates/profile/sessions.html:27
+#: app/templates/employees/detail.html:128 app/templates/profile/sessions.html:31
 msgid "No sessions."
 msgstr "لا توجد جلسات."
 
-#: app/templates/employees/detail.html:128
+#: app/templates/employees/detail.html:132
 msgid "Audit timeline"
 msgstr "السجل الزمني للتدقيق"
-
-#: app/templates/employees/detail.html:131
-msgid "When"
-msgstr "التاريخ"
-
-#: app/templates/employees/detail.html:131
-msgid "Action"
-msgstr "الإجراء"
-
-#: app/templates/employees/detail.html:131
-msgid "Reason"
-msgstr "السبب"
-
-#: app/templates/employees/detail.html:136
-msgid "No audit events yet."
-msgstr "لا توجد أحداث تدقيق بعد."
 
 #: app/templates/employees/invitation_created.html:2
 msgid "Employee invited"
@@ -627,30 +2359,23 @@ msgstr "تم إنشاء دعوة الموظف"
 msgid "Send this one-time setup link to %(email)s through a secure, trusted channel. It is shown here only once and expires in 3 days."
 msgstr "أرسل رابط الإعداد لمرة واحدة هذا إلى %(email)s عبر قناة آمنة وموثوقة. يُعرض هذا الرابط هنا مرة واحدة فقط وتنتهي صلاحيته خلال 3 أيام."
 
-#: app/templates/employees/invitation_created.html:8
-#: app/templates/employees/not_found.html:6
+#: app/templates/employees/invitation_created.html:8 app/templates/employees/not_found.html:6
 msgid "Back to employees"
 msgstr "العودة إلى الموظفين"
 
-#: app/templates/employees/invitations.html:2
-#: app/templates/employees/invitations.html:5
+#: app/templates/employees/invitations.html:2 app/templates/employees/invitations.html:5
 msgid "Pending employee invitations"
 msgstr "دعوات الموظفين المعلّقة"
 
-#: app/templates/employees/invitations.html:8
-#: app/templates/employees/new.html:43
+#: app/templates/employees/invitations.html:9 app/templates/employees/new.html:43 app/templates/staff/detail.html:11 app/templates/staff/list.html:31 app/templates/staff/list.html:45
 msgid "Roles"
 msgstr "الأدوار"
 
-#: app/templates/employees/invitations.html:8
-msgid "Expires"
-msgstr "تنتهي الصلاحية"
-
-#: app/templates/employees/invitations.html:18
+#: app/templates/employees/invitations.html:21
 msgid "Reissue"
 msgstr "إعادة الإصدار"
 
-#: app/templates/employees/invitations.html:28
+#: app/templates/employees/invitations.html:32 app/templates/staff/list.html:60
 msgid "No pending invitations."
 msgstr "لا توجد دعوات معلّقة."
 
@@ -662,66 +2387,40 @@ msgstr "بحث"
 msgid "Name or employee number"
 msgstr "الاسم أو الرقم الوظيفي"
 
-#: app/templates/employees/list.html:10 app/templates/employees/list.html:16
-#: app/templates/employees/list.html:24 app/templates/employees/list.html:30
-msgid "All"
-msgstr "الكل"
-
 #: app/templates/employees/list.html:22
 msgid "Role"
 msgstr "الدور"
 
-#: app/templates/employees/list.html:36
-msgid "Apply"
-msgstr "تطبيق"
-
-#: app/templates/employees/list.html:43 app/templates/employees/list.html:46
-msgid "Name"
-msgstr "الاسم"
-
-#: app/templates/employees/list.html:43 app/templates/employees/list.html:47
+#: app/templates/employees/list.html:44 app/templates/employees/list.html:50
 msgid "Employee #"
 msgstr "رقم الموظف"
 
-#: app/templates/employees/list.html:43 app/templates/employees/list.html:48
-msgid "Title"
-msgstr "المسمى"
-
-#: app/templates/employees/list.html:43 app/templates/employees/list.html:57
+#: app/templates/employees/list.html:44 app/templates/employees/list.html:60
 msgid "Start date"
 msgstr "تاريخ البدء"
 
-#: app/templates/employees/list.html:58
-msgid "View"
-msgstr "عرض"
-
-#: app/templates/employees/list.html:62
+#: app/templates/employees/list.html:66
 #, python-format
 msgid "Page %(page)s of %(total_pages)s -- %(total)s employee(s)."
 msgstr "صفحة %(page)s من %(total_pages)s -- %(total)s موظف."
 
-#: app/templates/employees/list.html:64
+#: app/templates/employees/list.html:68
 msgid "Previous"
 msgstr "السابق"
 
-#: app/templates/employees/list.html:65
+#: app/templates/employees/list.html:69
 msgid "Next"
 msgstr "التالي"
 
-#: app/templates/employees/list.html:67
+#: app/templates/employees/list.html:71
 msgid "No employees match these filters."
 msgstr "لا يوجد موظفون مطابقون لهذه المرشحات."
 
-#: app/templates/employees/list.html:71 app/templates/employees/new.html:2
-#: app/templates/employees/new.html:5
+#: app/templates/employees/list.html:75 app/templates/employees/new.html:2 app/templates/employees/new.html:5
 msgid "Add employee"
 msgstr "إضافة موظف"
 
-#: app/templates/employees/list.html:72 app/templates/layout/base.html:82
-msgid "Dashboard"
-msgstr "لوحة التحكم"
-
-#: app/templates/employees/list.html:73
+#: app/templates/employees/list.html:77 app/templates/staff/list.html:42
 msgid "Pending invitations"
 msgstr "الدعوات المعلّقة"
 
@@ -737,13 +2436,97 @@ msgstr "طلب المصادقة متعددة العوامل (يُوصى بها �
 msgid "Create employee & send setup link"
 msgstr "إنشاء الموظف وإرسال رابط الإعداد"
 
-#: app/templates/employees/not_found.html:2
-msgid "Not found"
-msgstr "غير موجود"
-
 #: app/templates/employees/not_found.html:5
 msgid "That employee record does not exist."
 msgstr "سجل الموظف هذا غير موجود."
+
+#: app/templates/installations/detail.html:10 app/templates/installations/new.html:18
+msgid "Device label"
+msgstr "تسمية الجهاز"
+
+#: app/templates/installations/detail.html:12
+msgid "First registered"
+msgstr "تاريخ أول تسجيل"
+
+#: app/templates/installations/detail.html:13
+msgid "Last check-in"
+msgstr "آخر تسجيل حضور"
+
+#: app/templates/installations/detail.html:19 app/templates/licensing/detail.html:37
+msgid "Change status"
+msgstr "تغيير الحالة"
+
+#: app/templates/installations/detail.html:21
+msgid "Change installation status?"
+msgstr "تغيير حالة التثبيت؟"
+
+#: app/templates/installations/detail.html:34
+msgid "Device-slot operations (Phase 8)"
+msgstr "عمليات فتحات الأجهزة (المرحلة 8)"
+
+#: app/templates/installations/detail.html:35
+msgid "These require a reason and are the recommended path (over the generic status change above) for releasing or replacing a device slot -- the audit record is more specific."
+msgstr "تتطلب هذه العمليات سببًا وهي المسار الموصى به (بدلاً من تغيير الحالة العام أعلاه) لتحرير فتحة جهاز أو استبدالها -- سجل التدقيق أكثر تحديدًا."
+
+#: app/templates/installations/detail.html:37
+msgid "Release this device slot? The installation will be deactivated."
+msgstr "تحرير فتحة الجهاز هذه؟ سيتم إلغاء تفعيل التثبيت."
+
+#: app/templates/installations/detail.html:39
+msgid "Release this slot -- reason (required)"
+msgstr "تحرير هذه الفتحة -- السبب (مطلوب)"
+
+#: app/templates/installations/detail.html:40
+msgid "Release slot"
+msgstr "تحرير الفتحة"
+
+#: app/templates/installations/detail.html:43
+msgid "Mark this installation replaced? A new activation will be needed on the replacement device."
+msgstr "وضع علامة على هذا التثبيت كمُستبدَل؟ سيلزم تفعيل جديد على الجهاز البديل."
+
+#: app/templates/installations/detail.html:45
+msgid "Mark replaced -- reason (required)"
+msgstr "وضع علامة كمُستبدَل -- السبب (مطلوب)"
+
+#: app/templates/installations/detail.html:46
+msgid "Mark replaced"
+msgstr "وضع علامة كمُستبدَل"
+
+#: app/templates/installations/detail.html:52
+msgid "Activation events"
+msgstr "أحداث التفعيل"
+
+#: app/templates/installations/detail.html:58
+msgid "No activation events yet."
+msgstr "لا توجد أحداث تفعيل بعد."
+
+#: app/templates/installations/list.html:2 app/templates/installations/list.html:6 app/templates/layout/base.html:87
+msgid "Installations"
+msgstr "التثبيتات"
+
+#: app/templates/installations/list.html:7 app/templates/installations/new.html:2 app/templates/installations/new.html:5
+msgid "Register installation"
+msgstr "تسجيل تثبيت"
+
+#: app/templates/installations/list.html:21
+msgid "Label"
+msgstr "التسمية"
+
+#: app/templates/installations/list.html:29
+msgid "No installations yet."
+msgstr "لا توجد تثبيتات بعد."
+
+#: app/templates/installations/new.html:16
+msgid "Installation label"
+msgstr "تسمية التثبيت"
+
+#: app/templates/installations/new.html:17
+msgid "e.g. Front desk PC"
+msgstr "مثال: حاسوب مكتب الاستقبال"
+
+#: app/templates/installations/new.html:20
+msgid "Register"
+msgstr "تسجيل"
 
 #: app/templates/layout/base.html:5
 msgid "Aura Owner"
@@ -757,33 +2540,13 @@ msgstr "اللغة"
 msgid "Log out"
 msgstr "تسجيل الخروج"
 
-#: app/templates/layout/base.html:83
-msgid "Customers"
-msgstr "العملاء"
-
-#: app/templates/layout/base.html:84
-msgid "Catalog"
-msgstr "الكتالوج"
-
-#: app/templates/layout/base.html:85
+#: app/templates/layout/base.html:85 app/templates/subscriptions/list.html:2 app/templates/subscriptions/list.html:6
 msgid "Subscriptions"
 msgstr "الاشتراكات"
 
-#: app/templates/layout/base.html:86
+#: app/templates/layout/base.html:86 app/templates/licensing/list.html:2 app/templates/licensing/list.html:6
 msgid "Licenses"
 msgstr "التراخيص"
-
-#: app/templates/layout/base.html:87
-msgid "Installations"
-msgstr "التثبيتات"
-
-#: app/templates/layout/base.html:88
-msgid "Renewals"
-msgstr "التجديدات"
-
-#: app/templates/layout/base.html:89
-msgid "Pilots"
-msgstr "التجارب التشغيلية"
 
 #: app/templates/layout/base.html:90
 msgid "Emergency Ext."
@@ -793,17 +2556,9 @@ msgstr "التمديد الطارئ"
 msgid "Activation Reviews"
 msgstr "مراجعات التفعيل"
 
-#: app/templates/layout/base.html:92
-msgid "Notifications"
-msgstr "الإشعارات"
-
 #: app/templates/layout/base.html:93
 msgid "My Queue"
 msgstr "قائمة مهامي"
-
-#: app/templates/layout/base.html:94
-msgid "Reconciliation"
-msgstr "التسوية"
 
 #: app/templates/layout/base.html:97
 msgid "Employee Dashboard"
@@ -832,6 +2587,294 @@ msgstr "ملفي الشخصي"
 #: app/templates/layout/base.html:103
 msgid "Account"
 msgstr "الحساب"
+
+#: app/templates/licensing/detail.html:6
+msgid "License key -- shown once"
+msgstr "مفتاح الترخيص -- يُعرض مرة واحدة"
+
+#: app/templates/licensing/detail.html:7
+msgid "Copy this now. It will never be displayed again."
+msgstr "انسخ هذا الآن. لن يُعرض مرة أخرى أبدًا."
+
+#: app/templates/licensing/detail.html:15
+msgid "Masked key"
+msgstr "المفتاح المُموَّه"
+
+#: app/templates/licensing/detail.html:15 app/templates/licensing/list.html:26
+msgid "not issued"
+msgstr "لم يُصدر بعد"
+
+#: app/templates/licensing/detail.html:16
+msgid "Allowed platforms"
+msgstr "المنصات المسموح بها"
+
+#: app/templates/licensing/detail.html:17 app/templates/licensing/new.html:14
+msgid "Device limit"
+msgstr "حد الأجهزة"
+
+#: app/templates/licensing/detail.html:18
+msgid "Valid from / until"
+msgstr "صالح من / حتى"
+
+#: app/templates/licensing/detail.html:20
+msgid "Device-slot exceptions"
+msgstr "استثناءات فتحات الأجهزة"
+
+#: app/templates/licensing/detail.html:25
+msgid "Issue key"
+msgstr "إصدار المفتاح"
+
+#: app/templates/licensing/detail.html:26
+msgid "Issuing requires a fresh MFA confirmation. The full key is shown exactly once."
+msgstr "يتطلب الإصدار تأكيد مصادقة ثنائية حديث. يُعرض المفتاح الكامل مرة واحدة بالضبط."
+
+#: app/templates/licensing/detail.html:30
+msgid "Issue license key"
+msgstr "إصدار مفتاح الترخيص"
+
+#: app/templates/licensing/detail.html:39
+msgid "Change license status? This may affect any activated installation."
+msgstr "تغيير حالة الترخيص؟ قد يؤثر هذا على أي تثبيت مُفعَّل."
+
+#: app/templates/licensing/detail.html:52
+msgid "Replace license"
+msgstr "استبدال الترخيص"
+
+#: app/templates/licensing/detail.html:53
+msgid "Creates a new DRAFT license and revokes/replaces this one."
+msgstr "ينشئ ترخيصًا جديدًا بحالة (مسودة) ويُلغي/يستبدل هذا الترخيص."
+
+#: app/templates/licensing/detail.html:55
+msgid "Replace this license with a new one?"
+msgstr "استبدال هذا الترخيص بترخيص جديد؟"
+
+#: app/templates/licensing/detail.html:57
+msgid "Replace"
+msgstr "استبدال"
+
+#: app/templates/licensing/list.html:7 app/templates/licensing/new.html:2 app/templates/licensing/new.html:5
+msgid "New license"
+msgstr "ترخيص جديد"
+
+#: app/templates/licensing/list.html:21
+msgid "Key"
+msgstr "المفتاح"
+
+#: app/templates/licensing/new.html:12
+msgid "Allowed platforms (comma-separated)"
+msgstr "المنصات المسموح بها (مفصولة بفواصل)"
+
+#: app/templates/licensing/new.html:16
+msgid "Create (DRAFT -- no key yet)"
+msgstr "إنشاء (مسودة -- بدون مفتاح بعد)"
+
+#: app/templates/licensing_admin/device_keys.html:2
+msgid "Device Keys"
+msgstr "مفاتيح الأجهزة"
+
+#: app/templates/licensing_admin/device_keys.html:5
+msgid "Device public keys"
+msgstr "المفاتيح العامة للأجهزة"
+
+#: app/templates/licensing_admin/device_keys.html:7
+msgid "Fingerprint"
+msgstr "البصمة"
+
+#: app/templates/licensing_admin/device_keys.html:7 app/templates/licensing_admin/signing_keys.html:22
+msgid "Algorithm"
+msgstr "الخوارزمية"
+
+#: app/templates/licensing_admin/device_keys.html:7
+msgid "Last proof"
+msgstr "آخر إثبات"
+
+#: app/templates/licensing_admin/device_keys.html:19
+msgid "Revoke this device key? The device will be unable to check in until it re-activates with a new key."
+msgstr "إلغاء مفتاح الجهاز هذا؟ لن يتمكن الجهاز من تسجيل الحضور حتى يُعيد التفعيل بمفتاح جديد."
+
+#: app/templates/licensing_admin/device_keys.html:26
+msgid "No device keys registered yet."
+msgstr "لم يتم تسجيل أي مفاتيح أجهزة بعد."
+
+#: app/templates/licensing_admin/entitlement_preview.html:2
+msgid "Entitlement Resolution Preview"
+msgstr "معاينة تحليل الاستحقاقات"
+
+#: app/templates/licensing_admin/entitlement_preview.html:5
+#, python-format
+msgid "Entitlement resolution -- %(customer)s"
+msgstr "تحليل الاستحقاقات -- %(customer)s"
+
+#: app/templates/licensing_admin/entitlement_preview.html:7
+msgid "Entitlement"
+msgstr "الاستحقاق"
+
+#: app/templates/licensing_admin/entitlement_preview.html:7
+msgid "Resolved value"
+msgstr "القيمة المحلَّلة"
+
+#: app/templates/licensing_admin/entitlement_preview.html:7
+msgid "Source"
+msgstr "المصدر"
+
+#: app/templates/licensing_admin/entitlement_preview.html:14
+msgid "Source is internal diagnostic detail only -- never sent to a client in a signed assertion."
+msgstr "المصدر تفصيل تشخيصي داخلي فقط -- لا يُرسل أبدًا إلى عميل ضمن تأكيد موقَّع."
+
+#: app/templates/licensing_admin/offline_policies.html:2
+msgid "Offline Policies"
+msgstr "سياسات العمل دون اتصال"
+
+#: app/templates/licensing_admin/offline_policies.html:5
+msgid "Offline-grace policies"
+msgstr "سياسات مهلة العمل دون اتصال"
+
+#: app/templates/licensing_admin/offline_policies.html:7
+msgid "Check-in interval"
+msgstr "فاصل تسجيل الحضور"
+
+#: app/templates/licensing_admin/offline_policies.html:7
+msgid "Offline grace"
+msgstr "مهلة العمل دون اتصال"
+
+#: app/templates/licensing_admin/offline_policies.html:7
+msgid "Warning starts"
+msgstr "بداية التحذير"
+
+#: app/templates/licensing_admin/offline_policies.html:7
+msgid "Hard expiry behavior"
+msgstr "سلوك الانتهاء الصارم"
+
+#: app/templates/licensing_admin/offline_policies.html:11
+#, python-format
+msgid "v%(version)s"
+msgstr "إصدار %(version)s"
+
+#: app/templates/licensing_admin/offline_policies.html:12 app/templates/licensing_admin/offline_policies.html:13
+#, python-format
+msgid "%(seconds)ss"
+msgstr "%(seconds)s ث"
+
+#: app/templates/licensing_admin/offline_policies.html:14
+#, python-format
+msgid "%(seconds)ss before grace ends"
+msgstr "%(seconds)s ث قبل انتهاء المهلة"
+
+#: app/templates/licensing_admin/offline_policies.html:17
+msgid "No offline policies seeded yet -- run"
+msgstr "لم يتم تهيئة أي سياسات عمل دون اتصال بعد -- شغّل"
+
+#: app/templates/licensing_admin/offline_policies.html:21
+msgid "Policy is DEFINED and RETURNED to clients only -- Phase 6 does not enforce it inside Retail or Clinic."
+msgstr "السياسة مُعرَّفة ومُعادة إلى العملاء فقط -- لا تفرضها المرحلة 6 داخل التجزئة أو العيادة."
+
+#: app/templates/licensing_admin/requests.html:2
+msgid "Activation Requests"
+msgstr "طلبات التفعيل"
+
+#: app/templates/licensing_admin/requests.html:5
+msgid "Recent activation/check-in/deactivation requests (most recent 200)"
+msgstr "طلبات التفعيل/تسجيل الحضور/إلغاء التفعيل الأخيرة (أحدث 200 طلب)"
+
+#: app/templates/licensing_admin/requests.html:18
+msgid "Source IP"
+msgstr "عنوان IP المصدر"
+
+#: app/templates/licensing_admin/requests.html:28
+msgid "No requests recorded yet."
+msgstr "لم يتم تسجيل أي طلبات بعد."
+
+#: app/templates/licensing_admin/signing_keys.html:2
+msgid "Signing Keys"
+msgstr "مفاتيح التوقيع"
+
+#: app/templates/licensing_admin/signing_keys.html:6
+msgid "Server signing keys"
+msgstr "مفاتيح توقيع الخادم"
+
+#: app/templates/licensing_admin/signing_keys.html:10
+msgid "Generate new (DRAFT)"
+msgstr "إنشاء مفتاح جديد (مسودة)"
+
+#: app/templates/licensing_admin/signing_keys.html:13
+msgid "Rotate to a brand-new active signing key? The previous key remains valid for already-issued assertions."
+msgstr "التبديل إلى مفتاح توقيع نشط جديد تمامًا؟ يظل المفتاح السابق صالحًا للتأكيدات الصادرة بالفعل."
+
+#: app/templates/licensing_admin/signing_keys.html:16
+msgid "Rotate now"
+msgstr "التبديل الآن"
+
+#: app/templates/licensing_admin/signing_keys.html:20
+msgid "Private key material is never shown here or stored in the database -- only public metadata."
+msgstr "لا تُعرض مادة المفتاح الخاص هنا أبدًا ولا تُخزَّن في قاعدة البيانات -- البيانات الوصفية العامة فقط."
+
+#: app/templates/licensing_admin/signing_keys.html:22
+msgid "Key ID"
+msgstr "معرّف المفتاح"
+
+#: app/templates/licensing_admin/signing_keys.html:22
+msgid "Activated"
+msgstr "تاريخ التفعيل"
+
+#: app/templates/licensing_admin/signing_keys.html:40
+msgid "Revoke this key? Assertions signed by it will no longer verify -- use only for compromise response."
+msgstr "إلغاء هذا المفتاح؟ لن يتم التحقق من التأكيدات الموقَّعة به بعد الآن -- يُستخدم فقط للاستجابة لاختراق أمني."
+
+#: app/templates/licensing_admin/signing_keys.html:48
+msgid "No signing keys yet -- generate one to enable the external API."
+msgstr "لا توجد مفاتيح توقيع بعد -- أنشئ واحدًا لتفعيل واجهة API الخارجية."
+
+#: app/templates/licensing_admin/status.html:2
+msgid "Activation Service Status"
+msgstr "حالة خدمة التفعيل"
+
+#: app/templates/licensing_admin/status.html:5
+msgid "Licensing & Activation Service"
+msgstr "خدمة الترخيص والتفعيل"
+
+#: app/templates/licensing_admin/status.html:7
+msgid "External API enabled"
+msgstr "واجهة API الخارجية مفعّلة"
+
+#: app/templates/licensing_admin/status.html:7
+msgid "No (default, safe)"
+msgstr "لا (افتراضي، آمن)"
+
+#: app/templates/licensing_admin/status.html:8
+msgid "Overall"
+msgstr "الحالة العامة"
+
+#: app/templates/licensing_admin/status.html:9
+msgid "Database"
+msgstr "قاعدة البيانات"
+
+#: app/templates/licensing_admin/status.html:10
+msgid "Replay/rate-limit store (PostgreSQL)"
+msgstr "مخزن منع التكرار/تحديد المعدل (PostgreSQL)"
+
+#: app/templates/licensing_admin/status.html:11
+msgid "Signing key"
+msgstr "مفتاح التوقيع"
+
+#: app/templates/licensing_admin/status.html:15
+msgid "Quick links"
+msgstr "روابط سريعة"
+
+#: app/templates/licensing_admin/status.html:16
+msgid "Signing keys"
+msgstr "مفاتيح التوقيع"
+
+#: app/templates/licensing_admin/status.html:17
+msgid "Recent activation/check-in requests"
+msgstr "طلبات التفعيل/تسجيل الحضور الأخيرة"
+
+#: app/templates/licensing_admin/status.html:18
+msgid "Device keys"
+msgstr "مفاتيح الأجهزة"
+
+#: app/templates/licensing_admin/status.html:19
+msgid "Offline policies"
+msgstr "سياسات العمل دون اتصال"
 
 #: app/templates/profile/index.html:2 app/templates/profile/index.html:5
 msgid "My profile"
@@ -865,14 +2908,192 @@ msgstr "حفظ"
 msgid "Enroll / re-enroll MFA"
 msgstr "تفعيل / إعادة تفعيل المصادقة متعددة العوامل"
 
-#: app/templates/profile/index.html:43 app/templates/profile/sessions.html:2
-#: app/templates/profile/sessions.html:5
+#: app/templates/profile/index.html:43 app/templates/profile/sessions.html:2 app/templates/profile/sessions.html:5
 msgid "My sessions"
 msgstr "جلساتي"
 
-#: app/templates/profile/sessions.html:13
+#: app/templates/profile/sessions.html:16
 msgid "This device"
 msgstr "هذا الجهاز"
+
+#: app/templates/staff/detail.html:8
+#, python-format
+msgid "Disabled (%(reason)s)"
+msgstr "معطَّل (%(reason)s)"
+
+#: app/templates/staff/detail.html:9 app/templates/staff/list.html:8
+msgid "Super Admin"
+msgstr "مشرف عام"
+
+#: app/templates/staff/detail.html:17
+msgid "Change roles"
+msgstr "تغيير الأدوار"
+
+#: app/templates/staff/detail.html:32
+msgid "Account actions"
+msgstr "إجراءات الحساب"
+
+#: app/templates/staff/detail.html:35
+msgid "Reset MFA"
+msgstr "إعادة تعيين المصادقة الثنائية"
+
+#: app/templates/staff/detail.html:39
+msgid "Disable this staff account? This revokes all of its active sessions immediately."
+msgstr "تعطيل حساب عضو الفريق هذا؟ يُلغي هذا كل جلساته النشطة فورًا."
+
+#: app/templates/staff/detail.html:42
+msgid "Disable account"
+msgstr "تعطيل الحساب"
+
+#: app/templates/staff/invitation_created.html:5
+#, python-format
+msgid "Invitation created for %(email)s"
+msgstr "تم إنشاء دعوة لـ %(email)s"
+
+#: app/templates/staff/invitation_created.html:6
+msgid "Copy this one-time link and send it to them manually (no email delivery is wired up in this phase):"
+msgstr "انسخ هذا الرابط لمرة واحدة وأرسله إليهم يدويًا (لا يوجد إرسال بريد إلكتروني مُفعَّل في هذه المرحلة):"
+
+#: app/templates/staff/invitation_created.html:8
+msgid "Expires:"
+msgstr "تنتهي في:"
+
+#: app/templates/staff/invitation_created.html:9
+msgid "Back to staff"
+msgstr "العودة إلى الفريق"
+
+#: app/templates/staff/list.html:5
+msgid "Staff accounts"
+msgstr "حسابات الفريق"
+
+#: app/templates/staff/list.html:22
+msgid "No staff accounts yet."
+msgstr "لا توجد حسابات فريق بعد."
+
+#: app/templates/staff/list.html:26
+msgid "Invite staff"
+msgstr "دعوة عضو فريق"
+
+#: app/templates/staff/list.html:37
+msgid "Send invitation"
+msgstr "إرسال الدعوة"
+
+#: app/templates/subscriptions/detail.html:7
+msgid "Start / End"
+msgstr "البداية / النهاية"
+
+#: app/templates/subscriptions/detail.html:11
+msgid "Commercial timeline"
+msgstr "المخطط الزمني التجاري"
+
+#: app/templates/subscriptions/detail.html:12
+msgid "Create renewal (Phase 8 workflow)"
+msgstr "إنشاء تجديد (سير عمل المرحلة 8)"
+
+#: app/templates/subscriptions/detail.html:18
+msgid "Change subscription status?"
+msgstr "تغيير حالة الاشتراك؟"
+
+#: app/templates/subscriptions/detail.html:20
+msgid "Change status to"
+msgstr "تغيير الحالة إلى"
+
+#: app/templates/subscriptions/detail.html:24
+msgid "Reason (required for cancellation)"
+msgstr "السبب (مطلوب للإلغاء)"
+
+#: app/templates/subscriptions/detail.html:28
+#, python-format
+msgid "No further status transitions available from %(status)s."
+msgstr "لا توجد انتقالات حالة أخرى متاحة من %(status)s."
+
+#: app/templates/subscriptions/detail.html:32
+msgid "Record a renewal"
+msgstr "تسجيل تجديد"
+
+#: app/templates/subscriptions/detail.html:35
+msgid "New end date"
+msgstr "تاريخ الانتهاء الجديد"
+
+#: app/templates/subscriptions/detail.html:37
+msgid "Record renewal"
+msgstr "تسجيل التجديد"
+
+#: app/templates/subscriptions/detail.html:55
+msgid "Record a payment"
+msgstr "تسجيل دفعة"
+
+#: app/templates/subscriptions/detail.html:60
+msgid "Amount"
+msgstr "المبلغ"
+
+#: app/templates/subscriptions/detail.html:62
+msgid "Method"
+msgstr "الطريقة"
+
+#: app/templates/subscriptions/detail.html:63
+msgid "Payment date"
+msgstr "تاريخ الدفع"
+
+#: app/templates/subscriptions/detail.html:64
+msgid "Reference"
+msgstr "المرجع"
+
+#: app/templates/subscriptions/detail.html:69
+msgid "Record payment"
+msgstr "تسجيل الدفعة"
+
+#: app/templates/subscriptions/list.html:7 app/templates/subscriptions/new.html:2 app/templates/subscriptions/new.html:5
+msgid "New subscription"
+msgstr "اشتراك جديد"
+
+#: app/templates/subscriptions/list.html:21 app/templates/subscriptions/new.html:12
+msgid "Plan"
+msgstr "الخطة"
+
+#: app/templates/subscriptions/list.html:21
+msgid "End date"
+msgstr "تاريخ الانتهاء"
+
+#: app/templates/subscriptions/new.html:16
+msgid "Billing cycle"
+msgstr "دورة الفوترة"
+
+#: app/templates/subscriptions/new.html:17
+msgid "e.g. annual"
+msgstr "مثال: سنوي"
+
+#: app/templates/subscriptions/new.html:20
+msgid "Create (starts as DRAFT)"
+msgstr "إنشاء (يبدأ كمسودة)"
+
+#: app/templates/system/backups.html:2 app/templates/system/backups.html:6
+msgid "Owner database backups"
+msgstr "نسخ احتياطية لقاعدة بيانات المالك"
+
+#: app/templates/system/backups.html:9
+msgid "Create backup now"
+msgstr "إنشاء نسخة احتياطية الآن"
+
+#: app/templates/system/backups.html:12
+msgid "Restricted to Super Admin with a fresh MFA confirmation. Restoring takes a pre-restore safety backup automatically before touching any data."
+msgstr "مقتصر على المشرف العام مع تأكيد مصادقة ثنائية حديث. تُنشئ الاستعادة نسخة احتياطية أمانية تلقائيًا قبل المساس بأي بيانات."
+
+#: app/templates/system/backups.html:14
+msgid "Size"
+msgstr "الحجم"
+
+#: app/templates/system/backups.html:25
+msgid "Restore the Owner database from this backup? A pre-restore safety backup is taken automatically, but this replaces current data."
+msgstr "استعادة قاعدة بيانات المالك من هذه النسخة الاحتياطية؟ تُؤخذ نسخة احتياطية أمانية تلقائيًا، لكن هذا سيستبدل البيانات الحالية."
+
+#: app/templates/system/backups.html:27
+msgid "Restore"
+msgstr "استعادة"
+
+#: app/templates/system/backups.html:32
+msgid "No backups taken yet."
+msgstr "لم يتم أخذ أي نسخة احتياطية بعد."
 
 #~ msgid "Each code can be used once if you lose access to your authenticator. They will"
 #~ msgstr ""

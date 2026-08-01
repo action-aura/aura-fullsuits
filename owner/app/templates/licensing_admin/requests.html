@@ -1,31 +1,33 @@
 {% extends "layout/base.html" %}
-{% block title %}Activation Requests{% endblock %}
+{% block title %}{{ _("Activation Requests") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Recent activation/check-in/deactivation requests (most recent 200)</h2>
+  <h2>{{ _("Recent activation/check-in/deactivation requests (most recent 200)") }}</h2>
   <form class="filters" method="get">
     <div>
-      <label>Type</label>
+      <label>{{ _("Type") }}</label>
       <select name="event_type" onchange="this.form.submit()">
-        <option value="">All</option>
+        <option value="">{{ _("All") }}</option>
         {% for t in ["ACTIVATION","CHECK_IN","DEACTIVATION"] %}
-        <option value="{{ t }}" {% if event_type_filter == t %}selected{% endif %}>{{ t }}</option>
+        <option value="{{ t }}" {% if event_type_filter == t %}selected{% endif %}>{{ activation_event_type_label(t) }}</option>
         {% endfor %}
       </select>
     </div>
   </form>
-  <table>
-    <tr><th>When</th><th>Type</th><th>Result</th><th>Reason</th><th>Installation</th><th>Source IP</th></tr>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("When") }}</th><th>{{ _("Type") }}</th><th>{{ _("Result") }}</th><th>{{ _("Reason") }}</th><th>{{ _("Installation") }}</th><th>{{ _("Source IP") }}</th></tr></thead>
+    <tbody>
     {% for r in rows %}
     <tr>
-      <td>{{ r.created_at }}</td><td>{{ r.event_type }}</td>
-      <td><span class="badge {{ 'success' if r.result == 'ACCEPTED' else 'danger' }}">{{ r.result }}</span></td>
-      <td>{{ r.reason_code }}</td>
-      <td>{{ (r.installation_id|string)[:8] if r.installation_id else "-" }}</td>
-      <td>{{ r.source_ip or "-" }}</td>
+      <td>{{ format_owner_datetime(r.created_at) }}</td><td>{{ activation_event_type_label(r.event_type) }}</td>
+      <td><span class="badge {{ 'success' if r.result == 'ACCEPTED' else 'danger' }}">{{ activation_event_result_label(r.result) }}</span></td>
+      <td><bdi dir="ltr">{{ r.reason_code }}</bdi></td>
+      <td><bdi dir="ltr">{{ (r.installation_id|string)[:8] if r.installation_id else "-" }}</bdi></td>
+      <td><bdi dir="ltr">{{ r.source_ip or "-" }}</bdi></td>
     </tr>
-    {% else %}<tr><td colspan="6" class="empty">No requests recorded yet.</td></tr>
+    {% else %}<tr><td colspan="6" class="empty">{{ _("No requests recorded yet.") }}</td></tr>
     {% endfor %}
+    </tbody>
   </table>
 </div>
 {% endblock %}

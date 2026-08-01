@@ -142,6 +142,12 @@ def extend_pilot(pilot: PilotRecord, *, new_end_date: date, reason: str, actor_s
     if not reason or not reason.strip():
         raise PilotLifecycleError("A reason is required to extend a pilot.")
     if pilot.extension_count >= pilot.max_extensions_allowed:
+        # Not translated: this exception is raised by service-layer code
+        # called both from HTTP routes (request context available) and
+        # directly from tests/other services (no request context) --
+        # gettext() requires an active request and would raise
+        # RuntimeError in the latter case. Real bug found and reverted
+        # during Phase 9.5B-R2 (see rtl-defect-and-fix-log.md item 2).
         raise PilotLifecycleError(
             f"Pilot has already been extended {pilot.extension_count} time(s) "
             f"(max_extensions_allowed={pilot.max_extensions_allowed}). No indefinite rolling pilot."

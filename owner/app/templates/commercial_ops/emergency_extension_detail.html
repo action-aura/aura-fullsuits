@@ -1,30 +1,31 @@
 {% extends "layout/base.html" %}
-{% block title %}Emergency extension{% endblock %}
+{% block title %}{{ _("Emergency extension") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Emergency extension <span class="badge {{ 'active' if extension.status == 'ACTIVE' else 'danger' }}">{{ extension.status }}</span></h2>
+  <h2>{{ _("Emergency extension") }} <span class="badge {{ 'active' if extension.status == 'ACTIVE' else 'danger' }}">{{ emergency_extension_status_label(extension.status) }}</span></h2>
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   <dl class="kv">
-    <dt>Subscription</dt><dd><a href="{{ url_for('subscriptions.detail', subscription_id=extension.subscription_id) }}">{{ extension.subscription_id }}</a></dd>
-    <dt>License</dt><dd>{{ extension.license_id or "(all licenses on this subscription)" }}</dd>
-    <dt>Reason</dt><dd>{{ extension.reason }}</dd>
-    <dt>Incident reference</dt><dd>{{ extension.incident_reference or "-" }}</dd>
-    <dt>Starts</dt><dd>{{ extension.starts_at }}</dd>
-    <dt>Expires</dt><dd>{{ extension.expires_at }}</dd>
-    <dt>Currently in window</dt><dd>{{ "yes" if extension.status == "ACTIVE" and extension.expires_at > now else "no (expired)" }}</dd>
-    <dt>Created by</dt><dd>{{ extension.created_by_staff_user_id }}</dd>
-    <dt>Revoked</dt><dd>{% if extension.revoked_at %}{{ extension.revoked_at }} by {{ extension.revoked_by_staff_user_id }} -- {{ extension.revocation_reason }}{% else %}-{% endif %}</dd>
+    <dt>{{ _("Subscription") }}</dt><dd><a href="{{ url_for('subscriptions.detail', subscription_id=extension.subscription_id) }}"><bdi dir="ltr">{{ extension.subscription_id }}</bdi></a></dd>
+    <dt>{{ _("License") }}</dt><dd>{% if extension.license_id %}<bdi dir="ltr">{{ extension.license_id }}</bdi>{% else %}{{ _("(all licenses on this subscription)") }}{% endif %}</dd>
+    <dt>{{ _("Reason") }}</dt><dd>{{ extension.reason }}</dd>
+    <dt>{{ _("Incident reference") }}</dt><dd>{{ extension.incident_reference or "-" }}</dd>
+    <dt>{{ _("Starts") }}</dt><dd>{{ format_owner_datetime(extension.starts_at) }}</dd>
+    <dt>{{ _("Expires") }}</dt><dd>{{ format_owner_datetime(extension.expires_at) }}</dd>
+    <dt>{{ _("Currently in window") }}</dt><dd>{{ _("yes") if extension.status == "ACTIVE" and extension.expires_at > now else _("no (expired)") }}</dd>
+    <dt>{{ _("Created by") }}</dt><dd><bdi dir="ltr">{{ extension.created_by_staff_user_id }}</bdi></dd>
+    <dt>{{ _("Revoked") }}</dt><dd>{% if extension.revoked_at %}{{ _("%(when)s by %(who)s -- %(reason)s", when=format_owner_datetime(extension.revoked_at), who=extension.revoked_by_staff_user_id, reason=extension.revocation_reason) }}{% else %}-{% endif %}</dd>
   </dl>
-  <p class="empty">This extension never changes the subscription's paid term and never marks any payment confirmed.</p>
+  <p class="empty">{{ _("This extension never changes the subscription's paid term and never marks any payment confirmed.") }}</p>
 </div>
 
 {% if extension.status == "ACTIVE" %}
 <div class="card">
-  <h3>Revoke</h3>
-  <form method="post" action="{{ url_for('commercial_ops_ui.revoke_emergency_extension_route', extension_id=extension.id) }}">
+  <h3>{{ _("Revoke") }}</h3>
+  <form method="post" action="{{ url_for('commercial_ops_ui.revoke_emergency_extension_route', extension_id=extension.id) }}"
+        data-confirm="{{ _('Revoke this emergency extension now?') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Reason (required)</label><input name="reason" required>
-    <button type="submit" class="danger" onclick="return confirm('Revoke this emergency extension now?');">Revoke</button>
+    <label>{{ _("Reason (required)") }}</label><input name="reason" required>
+    <button type="submit" class="danger">{{ _("Revoke") }}</button>
   </form>
 </div>
 {% endif %}

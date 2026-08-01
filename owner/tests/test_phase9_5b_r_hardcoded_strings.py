@@ -9,10 +9,15 @@ import re
 OWNER_ROOT = os.path.dirname(os.path.dirname(__file__))
 TEMPLATES_ROOT = os.path.join(OWNER_ROOT, "app", "templates")
 
-# Gated per phase9-5b-r-scope-and-boundaries.md's own documented reduction --
-# the 37 Phase 5-8 templates are a reviewed, directory-level allowlist entry,
-# not scanned string-by-string this phase.
-GATED_DIRS = ("layout", "auth", "employees", "profile")
+# Phase 9.5B-R2: expanded to every real current Owner template directory
+# (complete-owner-surface-inventory.md) -- the Phase 9.5B-R reduction to
+# layout/auth/employees/profile is now closed.
+GATED_DIRS = (
+    "layout", "auth", "employees", "profile",
+    "dashboard", "audit", "catalog", "customers", "installations",
+    "licensing", "licensing_admin", "staff", "subscriptions", "system",
+    "commercial_ops",
+)
 
 # Attribute names whose value is never translatable prose (ids, urls, form
 # field names, technical values) -- excluded from the text-node scan.
@@ -28,6 +33,10 @@ ALLOWLISTED_TEXT = {
     "Aura Owner",
     "-",
     "&nbsp;",
+    "&middot;",  # decorative separator, not prose
+    "&rarr;",  # decorative arrow between two already-translated date/status values
+    "flask import-release-manifest",  # literal CLI command name, not prose
+    "flask seed-offline-policy",  # literal CLI command name, not prose
 }
 
 
@@ -88,12 +97,16 @@ def test_scanner_allowlist_is_reviewed_and_bounded():
     assert len(ALLOWLISTED_TEXT) <= 10
 
 
-def test_non_gated_templates_are_not_scanned_this_phase_by_design():
-    """Confirms the real, documented scope reduction is what the scanner
-    actually implements -- not an accidental omission."""
-    all_dirs = {
-        d for d in os.listdir(TEMPLATES_ROOT)
-        if os.path.isdir(os.path.join(TEMPLATES_ROOT, d))
-    }
-    non_gated = all_dirs - set(GATED_DIRS)
-    assert len(non_gated) >= 10  # catalog/customers/subscriptions/licensing/etc. -- real, present, unscanned
+def test_all_real_template_directories_are_now_gated():
+    """Phase 9.5B-R2: the scope reduction from Phase 9.5B-R is closed --
+    every directory that actually contains a template must now be scanned.
+    `licensing_service/` and `settings/` are real, empty scaffold
+    directories (zero .html files -- confirmed no template, blueprint, or
+    route exists for either; see phase9-5b-r2-scope-and-boundaries.md) and
+    are correctly excluded, not silently omitted."""
+    dirs_with_templates = set()
+    for d in os.listdir(TEMPLATES_ROOT):
+        dir_path = os.path.join(TEMPLATES_ROOT, d)
+        if os.path.isdir(dir_path) and any(n.endswith(".html") for n in os.listdir(dir_path)):
+            dirs_with_templates.add(d)
+    assert dirs_with_templates == set(GATED_DIRS)

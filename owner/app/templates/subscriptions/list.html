@@ -1,33 +1,35 @@
 {% extends "layout/base.html" %}
-{% block title %}Subscriptions{% endblock %}
+{% block title %}{{ _("Subscriptions") }}{% endblock %}
 {% block content %}
 <div class="card">
   <div style="display:flex;justify-content:space-between;align-items:center;">
-    <h2>Subscriptions</h2>
-    <a class="btn" href="{{ url_for('subscriptions.new_form') }}">New subscription</a>
+    <h2>{{ _("Subscriptions") }}</h2>
+    <a class="btn" href="{{ url_for('subscriptions.new_form') }}">{{ _("New subscription") }}</a>
   </div>
   <form class="filters" method="get">
     <div>
-      <label>Status</label>
+      <label>{{ _("Status") }}</label>
       <select name="status" onchange="this.form.submit()">
-        <option value="">All</option>
+        <option value="">{{ _("All") }}</option>
         {% for s in ["DRAFT","PILOT","ACTIVE","PAST_DUE","SUSPENDED","EXPIRED","CANCELLED","COMPLETED"] %}
-        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s }}</option>
+        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ subscription_status_label(s) }}</option>
         {% endfor %}
       </select>
     </div>
   </form>
-  <table>
-    <tr><th>Customer</th><th>Plan</th><th>Status</th><th>End date</th><th></th></tr>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Customer") }}</th><th>{{ _("Plan") }}</th><th>{{ _("Status") }}</th><th>{{ _("End date") }}</th><th></th></tr></thead>
+    <tbody>
     {% for s in subscriptions %}
     <tr>
       <td>{{ s.customer.legal_name }}</td><td>{{ s.plan.name }}</td>
-      <td><span class="badge {{ 'active' if s.status == 'ACTIVE' else 'draft' }}">{{ s.status }}</span></td>
-      <td>{{ s.end_date or "-" }}</td>
-      <td><a href="{{ url_for('subscriptions.detail', subscription_id=s.id) }}">View</a></td>
+      <td><span class="badge {{ 'active' if s.status == 'ACTIVE' else 'draft' }}">{{ subscription_status_label(s.status) }}</span></td>
+      <td>{{ format_owner_date(s.end_date) if s.end_date else "-" }}</td>
+      <td><a href="{{ url_for('subscriptions.detail', subscription_id=s.id) }}">{{ _("View") }}</a></td>
     </tr>
-    {% else %}<tr><td colspan="5" class="empty">No subscriptions yet.</td></tr>
+    {% else %}<tr><td colspan="5" class="empty">{{ _("No subscriptions yet.") }}</td></tr>
     {% endfor %}
+    </tbody>
   </table>
 </div>
 {% endblock %}

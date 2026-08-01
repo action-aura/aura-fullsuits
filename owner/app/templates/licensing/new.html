@@ -1,19 +1,19 @@
 {% extends "layout/base.html" %}
-{% block title %}New license{% endblock %}
+{% block title %}{{ _("New license") }}{% endblock %}
 {% block content %}
 <div class="card" style="max-width:480px;">
-  <h2>New license</h2>
-  <form method="post">
+  <h2>{{ _("New license") }}</h2>
+  <form method="post" action="{{ url_for('licensing.create') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label for="subscription_id">Subscription</label>
+    <label for="subscription_id">{{ _("Subscription") }}</label>
     <select id="subscription_id" name="subscription_id" required>
       {% for s in subscriptions %}<option value="{{ s.id }}">{{ s.customer.legal_name }} -- {{ s.plan.name }}</option>{% endfor %}
     </select>
-    <label for="allowed_platforms">Allowed platforms (comma-separated)</label>
+    <label for="allowed_platforms">{{ _("Allowed platforms (comma-separated)") }}</label>
     <input id="allowed_platforms" name="allowed_platforms" value="WINDOWS,ANDROID" required>
-    <label for="device_limit">Device limit</label>
+    <label for="device_limit">{{ _("Device limit") }}</label>
     <input id="device_limit" name="device_limit" type="number" value="1" min="1" required>
-    <div style="margin-top:1rem;"><button type="submit">Create (DRAFT -- no key yet)</button></div>
+    <div style="margin-top:1rem;"><button type="submit">{{ _("Create (DRAFT -- no key yet)") }}</button></div>
   </form>
 </div>
 {% endblock %}

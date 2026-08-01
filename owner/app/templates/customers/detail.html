@@ -2,50 +2,52 @@
 {% block title %}{{ customer.legal_name }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>{{ customer.legal_name }} <span class="badge">{{ customer.lifecycle_status }}</span></h2>
+  <h2>{{ customer.legal_name }} <span class="badge">{{ customer_status_label(customer.lifecycle_status) }}</span></h2>
   <dl class="kv">
-    <dt>Trade name</dt><dd>{{ customer.trade_name or "-" }}</dd>
-    <dt>Country / City</dt><dd>{{ customer.country or "-" }} / {{ customer.city or "-" }}</dd>
-    <dt>Registration ref</dt><dd>{{ customer.commercial_registration_reference or "-" }}</dd>
+    <dt>{{ _("Trade name") }}</dt><dd>{{ customer.trade_name or "-" }}</dd>
+    <dt>{{ _("Country / City") }}</dt><dd>{{ customer.country or "-" }} / {{ customer.city or "-" }}</dd>
+    <dt>{{ _("Registration ref") }}</dt><dd><bdi dir="ltr">{{ customer.commercial_registration_reference or "-" }}</bdi></dd>
   </dl>
   {% if customer.lifecycle_status != "ARCHIVED" %}
   <form method="post" action="{{ url_for('customers.archive', customer_id=customer.id) }}"
-        onsubmit="return confirm('Archive this customer? Records are kept, not deleted.');">
+        data-confirm="{{ _('Archive this customer? Records are kept, not deleted.') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" class="danger">Archive</button>
+    <button type="submit" class="danger">{{ _("Archive") }}</button>
   </form>
   {% endif %}
 </div>
 
 <div class="card">
-  <h3>Contacts</h3>
-  <table>
-    <tr><th>Name</th><th>Title</th><th>Email</th><th>Phone</th><th>Primary</th></tr>
+  <h3>{{ _("Contacts") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Name") }}</th><th>{{ _("Title") }}</th><th>{{ _("Email") }}</th><th>{{ _("Phone") }}</th><th>{{ _("Primary") }}</th></tr></thead>
+    <tbody>
     {% for c in customer.contacts %}
-    <tr><td>{{ c.name }}</td><td>{{ c.title or "-" }}</td><td>{{ c.business_email or "-" }}</td><td>{{ c.business_phone or "-" }}</td><td>{{ "Yes" if c.is_primary else "" }}</td></tr>
-    {% else %}<tr><td colspan="5" class="empty">No contacts yet.</td></tr>
+    <tr><td>{{ c.name }}</td><td>{{ c.title or "-" }}</td><td><bdi dir="ltr">{{ c.business_email or "-" }}</bdi></td><td><bdi dir="ltr">{{ c.business_phone or "-" }}</bdi></td><td>{{ _("Yes") if c.is_primary else "" }}</td></tr>
+    {% else %}<tr><td colspan="5" class="empty">{{ _("No contacts yet.") }}</td></tr>
     {% endfor %}
+    </tbody>
   </table>
   <form method="post" action="{{ url_for('customers.add_contact_route', customer_id=customer.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Name</label><input name="name" required>
-    <label>Title</label><input name="title">
-    <label>Email</label><input name="business_email" type="email">
-    <label>Phone</label><input name="business_phone">
-    <div style="margin-top:0.5rem;"><button type="submit">Add contact</button></div>
+    <label>{{ _("Name") }}</label><input name="name" required>
+    <label>{{ _("Title") }}</label><input name="title">
+    <label>{{ _("Email") }}</label><input name="business_email" type="email">
+    <label>{{ _("Phone") }}</label><input name="business_phone">
+    <div style="margin-top:0.5rem;"><button type="submit">{{ _("Add contact") }}</button></div>
   </form>
 </div>
 
 <div class="card">
-  <h3>Internal notes</h3>
+  <h3>{{ _("Internal notes") }}</h3>
   {% for n in customer.notes|sort(attribute="created_at", reverse=True) %}
-  <p style="border-bottom:1px solid #eee;padding-bottom:0.4rem;">{{ n.body }}<br><small style="color:#6b7785;">{{ n.created_at }}</small></p>
-  {% else %}<p class="empty">No notes yet.</p>
+  <p style="border-bottom:1px solid #eee;padding-bottom:0.4rem;">{{ n.body }}<br><small style="color:#6b7785;">{{ format_owner_datetime(n.created_at) }}</small></p>
+  {% else %}<p class="empty">{{ _("No notes yet.") }}</p>
   {% endfor %}
   <form method="post" action="{{ url_for('customers.add_note_route', customer_id=customer.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <textarea name="body" rows="3" required></textarea>
-    <div style="margin-top:0.5rem;"><button type="submit">Add note</button></div>
+    <div style="margin-top:0.5rem;"><button type="submit">{{ _("Add note") }}</button></div>
   </form>
 </div>
 {% endblock %}

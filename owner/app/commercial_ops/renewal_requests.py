@@ -166,6 +166,11 @@ def transition_renewal_request(
     `approve_renewal_request()` / `apply_renewal_request()`."""
     allowed = VALID_TRANSITIONS.get(renewal.status, set())
     if to_status not in allowed:
+        # Not translated: raised by service-layer code called both from
+        # HTTP routes and directly (tests, other services) with no request
+        # context -- gettext() would raise RuntimeError in the latter case.
+        # Real bug found and reverted during Phase 9.5B-R2 (see
+        # rtl-defect-and-fix-log.md item 2).
         raise InvalidRenewalTransitionError(
             f"Cannot transition renewal request from {renewal.status} to {to_status}."
         )
@@ -262,6 +267,8 @@ def apply_renewal_request(renewal_request_id, actor_staff_user_id) -> RenewalReq
     if renewal is None:
         raise RenewalApplicationError("RENEWAL_REQUEST_NOT_FOUND")
     if renewal.status != "APPROVED":
+        # Not translated -- see the identical note above in
+        # transition_renewal_request().
         raise InvalidRenewalTransitionError(
             f"Cannot apply a renewal request in status {renewal.status}; must be APPROVED."
         )

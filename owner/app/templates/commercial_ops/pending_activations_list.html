@@ -1,29 +1,31 @@
 {% extends "layout/base.html" %}
-{% block title %}Activation reviews{% endblock %}
+{% block title %}{{ _("Activation reviews") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Pending activation reviews</h2>
+  <h2>{{ _("Pending activation reviews") }}</h2>
   <div class="filters">
     <form method="get">
-      <label>Status</label>
+      <label>{{ _("Status") }}</label>
       <select name="status" onchange="this.form.submit()">
         {% for s in ["PENDING_REVIEW","APPROVED","REJECTED",""] %}
-        <option value="{{ s }}" {{ "selected" if status_filter == s else "" }}>{{ s or "All" }}</option>
+        <option value="{{ s }}" {{ "selected" if status_filter == s else "" }}>{{ pending_activation_status_label(s) if s else _("All") }}</option>
         {% endfor %}
       </select>
     </form>
   </div>
-  <table>
-    <tr><th>Installation</th><th>Mode</th><th>Status</th><th>Requested</th></tr>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Installation") }}</th><th>{{ _("Mode") }}</th><th>{{ _("Status") }}</th><th>{{ _("Requested") }}</th><th></th></tr></thead>
+    <tbody>
     {% for p in rows %}
     <tr>
-      <td>{{ p.installation_id }}</td>
-      <td>{{ p.mode }}</td>
-      <td><span class="badge {{ 'pending' if p.status == 'PENDING_REVIEW' else ('active' if p.status == 'APPROVED' else 'danger') }}">{{ p.status }}</span></td>
-      <td>{{ p.created_at }}</td>
-      <td><a class="btn secondary" href="{{ url_for('commercial_ops_ui.pending_activation_detail', pending_id=p.id) }}">Review</a></td>
+      <td><bdi dir="ltr">{{ p.installation_id }}</bdi></td>
+      <td><bdi dir="ltr">{{ p.mode }}</bdi></td>
+      <td><span class="badge {{ 'pending' if p.status == 'PENDING_REVIEW' else ('active' if p.status == 'APPROVED' else 'danger') }}">{{ pending_activation_status_label(p.status) }}</span></td>
+      <td>{{ format_owner_datetime(p.created_at) }}</td>
+      <td><a class="btn secondary" href="{{ url_for('commercial_ops_ui.pending_activation_detail', pending_id=p.id) }}">{{ _("Review") }}</a></td>
     </tr>
-    {% else %}<tr><td colspan="5" class="empty">No activation reviews.</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="5" class="empty">{{ _("No activation reviews.") }}</td></tr>{% endfor %}
+    </tbody>
   </table>
 </div>
 {% endblock %}

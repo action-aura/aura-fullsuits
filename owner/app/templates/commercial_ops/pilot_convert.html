@@ -1,31 +1,29 @@
 {% extends "layout/base.html" %}
-{% block title %}Convert pilot{% endblock %}
+{% block title %}{{ _("Convert pilot") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Convert pilot to paid plan</h2>
+  <h2>{{ _("Convert pilot to paid plan") }}</h2>
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
-  <p>This creates a real renewal request against the pilot's subscription. Conversion only becomes
-  final once that renewal is separately approved (by someone other than its creator) and applied --
-  the same payment/recent-auth-gated pipeline as any other renewal. No silent conversion.</p>
+  <p>{{ _("This creates a real renewal request against the pilot's subscription. Conversion only becomes final once that renewal is separately approved (by someone other than its creator) and applied -- the same payment/recent-auth-gated pipeline as any other renewal. No silent conversion.") }}</p>
   <form method="post" action="{{ url_for('commercial_ops_ui.convert_pilot', pilot_id=pilot.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Paid plan</label>
+    <label>{{ _("Paid plan") }}</label>
     <select name="requested_plan_id" required>
       {% for p in plans %}<option value="{{ p.id }}">{{ p.name }} ({{ p.plan_code }})</option>{% endfor %}
     </select>
-    <label>Paid term start</label><input name="proposed_term_start" type="date" required>
-    <label>Paid term end</label><input name="proposed_term_end" type="date" required>
-    <label>Currency</label><input name="currency" value="USD" required>
-    <label>Device allowance</label><input name="device_allowance_after" type="number" min="1">
-    <div style="margin-top:0.5rem;"><button type="submit">Create conversion renewal request</button></div>
+    <label>{{ _("Paid term start") }}</label><input name="proposed_term_start" type="date" required>
+    <label>{{ _("Paid term end") }}</label><input name="proposed_term_end" type="date" required>
+    <label>{{ _("Currency") }}</label><input name="currency" value="USD" required>
+    <label>{{ _("Device allowance") }}</label><input name="device_allowance_after" type="number" min="1">
+    <div style="margin-top:0.5rem;"><button type="submit">{{ _("Create conversion renewal request") }}</button></div>
   </form>
-  <p style="margin-top:1rem;">After that renewal is applied, come back here and
-  <a href="{{ url_for('commercial_ops_ui.pilot_detail', pilot_id=pilot.id) }}">mark this pilot converted</a>
-  by submitting its renewal request ID from the pilot detail page.</p>
+  <p style="margin-top:1rem;">{{ _("After that renewal is applied, come back here and") }}
+  <a href="{{ url_for('commercial_ops_ui.pilot_detail', pilot_id=pilot.id) }}">{{ _("mark this pilot converted") }}</a>
+  {{ _("by submitting its renewal request ID from the pilot detail page.") }}</p>
   <form method="post" action="{{ url_for('commercial_ops_ui.mark_pilot_converted_route', pilot_id=pilot.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Applied renewal request ID</label><input name="renewal_request_id" required>
-    <button type="submit">Mark pilot converted</button>
+    <label>{{ _("Applied renewal request ID") }}</label><input name="renewal_request_id" required>
+    <button type="submit">{{ _("Mark pilot converted") }}</button>
   </form>
 </div>
 {% endblock %}

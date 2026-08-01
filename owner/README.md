@@ -104,24 +104,27 @@ any other way.
 
 ## Internationalization (English/Arabic, RTL)
 
-Phase 9.5B-R added one canonical i18n/RTL foundation (Flask-Babel) covering the shared layout/navigation,
-authentication/setup/MFA screens, and the complete employee-management portal. Real, compiled English +
-Arabic catalogs live at `translations/{en,ar}/LC_MESSAGES/messages.po`. To add or update a translatable
-string:
+Phase 9.5B-R added one canonical i18n/RTL foundation (Flask-Babel). Phase 9.5B-R2 completed Owner-wide
+coverage: every real current Owner template (67/67 -- layout/navigation, auth/setup/MFA, the employee
+portal, and every commercial-administration screen: catalog, customers, subscriptions, licensing,
+installations, commercial operations, staff, audit, system) is now translated. Real, compiled English +
+Arabic catalogs (742 messages, zero empty/fuzzy) live at `translations/{en,ar}/LC_MESSAGES/messages.po`.
+To add or update a translatable string:
 
 ```
 python -m babel.messages.frontend extract -F babel.cfg -o translations/messages.pot .
 python -m babel.messages.frontend update -i translations/messages.pot -d translations
-# edit translations/ar/LC_MESSAGES/messages.po by hand
-python -m babel.messages.frontend compile -d translations -f
+# fill/correct English (identity) and Arabic (real translation) entries --
+# check both emptiness AND the fuzzy flag; pybabel's approximate-match
+# heuristic can silently pair a new string with the wrong old translation
+# (see docs/owner/phase9_5b_r2/rtl-defect-and-fix-log.md item 5)
+python -m babel.messages.frontend compile -d translations
 ```
 
-`flask commercial preflight` validates the compiled catalogs exist and are non-empty. See
-`docs/owner/phase9_5b_r/translation-catalog-maintenance.md` and `translation-style-guide.md` for the full
-maintenance workflow and terminology glossary. The 37 pre-9.5B Phase 5-8 screens (catalog, customers,
-subscriptions, licensing, commercial operations, staff, audit, system) inherit the RTL/i18n foundation
-structurally but their own body text is not yet translated -- a documented, bounded scope reduction, not a
-defect (`docs/owner/phase9_5b_r/phase9-5b-r-scope-and-boundaries.md`).
+`flask commercial preflight` validates the compiled catalogs exist, are non-empty, AND contain zero
+empty/fuzzy entries (Phase 9.5B-R2 extension). See `docs/owner/phase9_5b_r2/` for the full closure
+evidence, and `docs/owner/phase9_5b_r/translation-catalog-maintenance.md` /
+`translation-style-guide.md` for the original maintenance workflow and terminology glossary.
 
 ## What this is NOT
 

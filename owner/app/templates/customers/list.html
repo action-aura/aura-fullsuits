@@ -1,32 +1,34 @@
 {% extends "layout/base.html" %}
-{% block title %}Customers{% endblock %}
+{% block title %}{{ _("Customers") }}{% endblock %}
 {% block content %}
 <div class="card">
   <div style="display:flex;justify-content:space-between;align-items:center;">
-    <h2>Customer organizations</h2>
-    <a class="btn" href="{{ url_for('customers.new_form') }}">New customer</a>
+    <h2>{{ _("Customer organizations") }}</h2>
+    <a class="btn" href="{{ url_for('customers.new_form') }}">{{ _("New customer") }}</a>
   </div>
   <form class="filters" method="get">
     <div>
-      <label>Status</label>
+      <label>{{ _("Status") }}</label>
       <select name="status" onchange="this.form.submit()">
-        <option value="">All</option>
+        <option value="">{{ _("All") }}</option>
         {% for s in ["LEAD","PROSPECT","PILOT","ACTIVE","SUSPENDED","CLOSED","ARCHIVED"] %}
-        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s }}</option>
+        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ customer_status_label(s) }}</option>
         {% endfor %}
       </select>
     </div>
   </form>
-  <table>
-    <tr><th>Legal name</th><th>Country</th><th>Status</th><th></th></tr>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Legal name") }}</th><th>{{ _("Country") }}</th><th>{{ _("Status") }}</th><th></th></tr></thead>
+    <tbody>
     {% for c in customers %}
     <tr>
       <td>{{ c.legal_name }}</td><td>{{ c.country or "-" }}</td>
-      <td><span class="badge {{ 'active' if c.lifecycle_status == 'ACTIVE' else 'draft' }}">{{ c.lifecycle_status }}</span></td>
-      <td><a href="{{ url_for('customers.detail', customer_id=c.id) }}">View</a></td>
+      <td><span class="badge {{ 'active' if c.lifecycle_status == 'ACTIVE' else 'draft' }}">{{ customer_status_label(c.lifecycle_status) }}</span></td>
+      <td><a href="{{ url_for('customers.detail', customer_id=c.id) }}">{{ _("View") }}</a></td>
     </tr>
-    {% else %}<tr><td colspan="4" class="empty">No customers yet.</td></tr>
+    {% else %}<tr><td colspan="4" class="empty">{{ _("No customers yet.") }}</td></tr>
     {% endfor %}
+    </tbody>
   </table>
 </div>
 {% endblock %}
