@@ -8,6 +8,7 @@ from app.auth.session import load_current_staff
 from app.extensions import db_session
 from app.models.staff import Role, StaffInvitation, StaffUser
 from app.security.rbac import require_permission, require_recent_auth
+from app.security.super_admin_guard import LastSuperAdminError
 from app.staff.services import SelfEscalationError, assign_roles, create_invitation, disable_staff, reset_mfa, revoke_invitation
 
 bp = Blueprint("staff", __name__, url_prefix="/staff")
@@ -85,7 +86,10 @@ def disable(staff_id):
         return jsonify({"error": "not_found"}), 404
     if staff.id == actor.id:
         return jsonify({"error": "cannot_disable_self"}), 400
-    disable_staff(staff, request.form.get("reason", ""), actor.id)
+    try:
+        disable_staff(staff, request.form.get("reason", ""), actor.id)
+    except LastSuperAdminError as exc:
+        return jsonify({"error": str(exc)}), 400
     return redirect(url_for("staff.detail", staff_id=staff_id))
 
 

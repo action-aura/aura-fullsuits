@@ -396,7 +396,7 @@ def accept_invitation_submit(token: str):
 
     from app.staff.services import create_staff_from_invitation  # local import avoids a package-load cycle
 
-    staff = create_staff_from_invitation(invitation, display_name, password_hash)
+    staff, profile = create_staff_from_invitation(invitation, display_name, password_hash)
     invitation.accepted_at = utcnow()
     invitation.created_staff_user_id = staff.id
     db_session.commit()

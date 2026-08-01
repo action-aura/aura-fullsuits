@@ -54,7 +54,27 @@ def create_session(staff_user: StaffUser) -> str:
     # every caller, not just this one call site.
     g.staff_session = record
     g.staff_user = staff_user
+    _activate_pending_employee_profile(staff_user)
     return raw_token
+
+
+def _activate_pending_employee_profile(staff_user: StaffUser) -> None:
+    """Phase 9.5B: create_session() is the one real choke point every login
+    path already calls at the moment a full session is established (plain
+    login, MFA verify, first-time forced MFA enrollment, post-password-change
+    re-login) -- so it's the correct single place to activate a still-PENDING
+    EmployeeProfile on first successful login, rather than duplicating this
+    check in every route that calls create_session(). Local import avoids a
+    package-load cycle (employees.services imports auth.session)."""
+    from app.models.employees import EmployeeProfile
+
+    profile = db_session.execute(
+        select(EmployeeProfile).where(EmployeeProfile.staff_user_id == staff_user.id)
+    ).scalars().first()
+    if profile is not None and profile.employment_status == "PENDING":
+        from app.employees.services import activate_employee
+
+        activate_employee(profile, actor_staff_user_id=staff_user.id)
 
 
 def _get_valid_session(raw_token: str) -> StaffSession | None:

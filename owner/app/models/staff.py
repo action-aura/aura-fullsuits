@@ -124,6 +124,16 @@ class StaffInvitation(Base, UUIDPKMixin, TimestampMixin):
     created_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
     )
+    # Phase 9.5B -- additive. JSON-encoded EmployeeProfile field draft
+    # (employee_number/full_name/phone/job_title/department/
+    # employment_start_date/manager_employee_profile_id/commission_plan_id),
+    # captured at invitation time and materialized into a real
+    # EmployeeProfile row transactionally on acceptance (see
+    # app.staff.services.create_staff_from_invitation). NULL for an
+    # invitation that only creates a bare StaffUser account (pre-9.5B
+    # behavior, unchanged). Never contains a secret -- same redaction
+    # discipline as every other audited field.
+    employee_profile_draft: Mapped[str | None] = mapped_column(Text)
 
 
 class MfaCredential(Base, UUIDPKMixin, TimestampMixin):
