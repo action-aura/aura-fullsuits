@@ -125,9 +125,26 @@ def test_due_today_and_overdue_queries_scoped_to_actor(app, seeded):
         profile_b = _make_profile(app, staff_b, "EMP-E6B")
         lead = create_lead({"organization_or_prospect_name": "Eng Co 6", "phone": "12345"}, profile_a.id, staff_a)
 
-        create_lead_followup(lead.id, {"due_at": utcnow() + timedelta(hours=2), "employee_profile_id": profile_a.id}, profile_a.id, staff_a)
+        # Phase 9.5C -- day-boundary-safe AND not-yet-overdue: "due today"
+        # is a UTC calendar-day window (day_start <= due_at < day_start + 1
+        # day); "overdue" additionally requires due_at < now. A wall-clock-
+        # relative offset like "+2 hours" is NOT safe -- it flakes whenever
+        # the test runs within 2 hours of UTC midnight (a real, observed
+        # failure, root-caused rather than hidden: it silently fell outside
+        # today's window). A fixed offset from today's midnight is *also*
+        # unsafe on its own -- if that offset already lies in the past
+        # relative to "now" (e.g. the test runs late in the UTC day), the
+        # row becomes overdue instead of merely due-today, corrupting the
+        # very distinction this test checks. The only value safe on both
+        # axes, regardless of what time the test runs, is the earlier of
+        # "shortly after now" and "shortly before today's end".
+        now = utcnow()
+        day_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        due_today_at = min(now + timedelta(hours=1), day_end - timedelta(minutes=1))
+
+        create_lead_followup(lead.id, {"due_at": due_today_at, "employee_profile_id": profile_a.id}, profile_a.id, staff_a)
         create_lead_followup(lead.id, {"due_at": utcnow() - timedelta(days=2), "employee_profile_id": profile_a.id}, profile_a.id, staff_a)
-        create_lead_followup(lead.id, {"due_at": utcnow() + timedelta(hours=1), "employee_profile_id": profile_b.id}, profile_b.id, staff_b)
+        create_lead_followup(lead.id, {"due_at": due_today_at, "employee_profile_id": profile_b.id}, profile_b.id, staff_b)
 
         due_today_a = list_own_lead_followups_due_today(profile_a.id)
         assert due_today_a["total"] == 1
