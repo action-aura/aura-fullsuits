@@ -236,3 +236,39 @@ def set_addon_availability(addon: Addon, status: str, actor_staff_user_id) -> No
         before_state={"availability_status": before},
         after_state={"availability_status": status},
     )
+
+
+def read_active_catalog(as_of: date | None = None) -> list[dict]:
+    """Phase 9.5A Milestone 22/9 -- CatalogReadService. Read-only: employees
+    without pricing.manage/catalog.manage select from this list, never edit
+    it (price-authority-rules.md). 'Active' = effective_date <= as_of <
+    retirement_date, the same effective/retired-date-window pattern already
+    used by ActivationPolicy/DevicePolicyProfile resolution, not the
+    workflow-shaped lifecycle_status field."""
+    as_of = as_of or utcnow().date()
+    plans = db_session.execute(
+        select(Plan)
+        .where(Plan.effective_date.is_not(None), Plan.effective_date <= as_of)
+        .where((Plan.retirement_date.is_(None)) | (Plan.retirement_date > as_of))
+    ).scalars().all()
+
+    result = []
+    for plan in plans:
+        current_price = db_session.execute(
+            select(PlanPrice).where(PlanPrice.plan_id == plan.id, PlanPrice.effective_until.is_(None))
+        ).scalars().first()
+        result.append(
+            {
+                "plan_id": str(plan.id),
+                "plan_code": plan.plan_code,
+                "name": plan.name,
+                "billing_model": plan.billing_model,
+                "included_device_count": plan.included_device_count,
+                "current_price": (
+                    {"base_price": str(current_price.base_price), "currency": current_price.currency}
+                    if current_price
+                    else None
+                ),
+            }
+        )
+    return result
