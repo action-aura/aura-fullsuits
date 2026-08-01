@@ -21,7 +21,16 @@ def register_security_headers(app: Flask) -> None:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
+        # Phase 9.5C -- geolocation is now a real, explicit-action feature
+        # (Milestone 12: Lead/Customer location capture, one-shot
+        # getCurrentPosition() from a button click, never on page load,
+        # never watchPosition). "self" allows this origin's own pages to
+        # request it while still blocking any third-party/embedded
+        # content -- found to be a real, structural blocker (the browser
+        # silently refused the permission request entirely) via Milestone
+        # 23 real-browser validation. Camera/microphone remain fully
+        # denied -- unused anywhere in this application.
+        response.headers["Permissions-Policy"] = "geolocation=(self), camera=(), microphone=()"
         # Phase 9: staging is real HTTPS (Caddy-terminated) too, not just
         # production -- HSTS belongs to "this environment genuinely only
         # serves over TLS", which is true for staging as much as prod.

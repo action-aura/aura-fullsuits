@@ -109,6 +109,28 @@ def test_lead_contacts_copied_to_customer_on_conversion(app, seeded):
         assert copied[0].is_primary is True
 
 
+def test_converted_customer_defaults_to_converting_actor_when_lead_unassigned(app, seeded):
+    """Real bug found via Milestone 25 end-to-end browser testing: a Lead
+    created without an explicit assignee converted to a Customer with
+    assigned_sales_staff_id=None -- invisible to the very employee who
+    just converted it, since the ownership-visibility check correctly
+    treats an unassigned Customer as visible only to a view_all holder."""
+    staff_id = make_staff(app, "conv11@example.com", role_codes=["SALES"])
+    with app.app_context():
+        from app.customers.services import customer_visible_to_actor
+        from app.leads.conversion import convert
+        from app.leads.services import create_lead
+
+        profile = _make_profile(app, staff_id, "EMP-CV11")
+        lead = create_lead({"organization_or_prospect_name": "Unassigned Convert Co", "phone": "111"}, profile.id, staff_id)
+        assert lead.assigned_employee_profile_id is None  # the real scenario: no explicit assignee
+
+        customer = convert(lead, actor_staff_user_id=staff_id, idempotency_key=str(uuid.uuid4()))
+
+        assert customer.assigned_sales_staff_id == staff_id
+        assert customer_visible_to_actor(customer, staff_id, {"customers.view_own"}) is True
+
+
 def test_conversion_creates_no_subscription_license_or_commercial_documents(app, seeded):
     """Explicit negative-space proof: conversion must not create any
     commercial fulfillment record."""

@@ -117,10 +117,16 @@ def _serialize_lead(lead: Lead) -> dict:
 
 
 def _lead_or_404(lead_id, actor_profile, *, all_held: bool):
+    """Fails CLOSED: an actor with no view_all/update_all AND no
+    EmployeeProfile is denied, never granted by default because the
+    ownership check had nothing to compare against. Mirrors the identical
+    fix in app/leads/routes.py:_lead_or_none (Milestone 23 finding)."""
     lead = db_session.get(Lead, lead_id)
     if lead is None:
         return None
-    if not all_held and actor_profile is not None:
+    if not all_held:
+        if actor_profile is None:
+            return None
         visible = lead.created_by_employee_profile_id == actor_profile.id or lead.assigned_employee_profile_id == actor_profile.id
         if not visible:
             return None
@@ -145,6 +151,8 @@ def list_leads_route():
 @require_permission("leads.create")
 def create_lead_route():
     staff, profile = _actor()
+    if profile is None:
+        return jsonify({"error": "EMPLOYEE_PROFILE_REQUIRED", "message": "This action requires a real employee profile."}), 400
     body = request.get_json(silent=True) or {}
     try:
         lead = create_lead(

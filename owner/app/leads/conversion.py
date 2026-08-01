@@ -91,10 +91,22 @@ def convert(
         if candidates:
             raise DuplicateCustomerError(candidates)
 
+        # Phase 9.5C -- real bug found via Milestone 25 end-to-end browser
+        # testing: a Lead created without an explicit assignee (the common
+        # case -- the create form has no assignment field; ownership comes
+        # from being the creator) converts to a Customer with
+        # assigned_sales_staff_id=None, which the ownership-visibility
+        # check (Milestone 3) correctly treats as invisible to everyone
+        # except a view_all holder -- so the employee who just converted
+        # their own Lead couldn't see the resulting Customer at all. Same
+        # "default to the acting employee" fix already applied to
+        # create_customer() in Milestone 3, applied here too.
         assigned_staff_user_id = None
         if lead.assigned_employee_profile_id:
             assigned_profile = db_session.get(EmployeeProfile, lead.assigned_employee_profile_id)
             assigned_staff_user_id = assigned_profile.staff_user_id if assigned_profile else None
+        if assigned_staff_user_id is None:
+            assigned_staff_user_id = actor_staff_user_id
 
         customer = Customer(
             legal_name=lead.organization_or_prospect_name,

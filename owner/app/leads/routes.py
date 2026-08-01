@@ -62,11 +62,37 @@ def _actor():
     return staff, profile
 
 
+_NO_PROFILE_MESSAGE = "This action requires a real employee profile; administrative accounts without one cannot perform it."
+
+
+def _missing_profile(profile) -> bool:
+    """Real bug found via Milestone 23 browser validation: every CRM
+    write path assumed `profile` (the actor's EmployeeProfile) is never
+    None, but a StaffUser is not guaranteed to have one -- a Super Admin
+    bootstrap account, in particular, legitimately has no EmployeeProfile
+    (it is not a working staff member). Calling profile.id on None
+    crashed with a 500 instead of a clear, actionable error. Every write
+    handler below now checks this first. Real employees created through
+    the normal onboarding flow always have an EmployeeProfile, so this
+    only ever triggers for an admin-only account attempting a CRM action
+    it was never meant to perform."""
+    return profile is None
+
+
 def _lead_or_none(lead_id, profile, *, all_held: bool):
+    """Fails CLOSED, not open: an actor who lacks view_all/update_all AND
+    has no EmployeeProfile to check ownership against gets denied, never
+    silently granted access because the ownership check had nothing to
+    compare against. (Real bug found via Milestone 23 browser validation
+    -- the original `and profile is not None` guard skipped the ownership
+    check entirely instead of treating "no profile" as "can't prove
+    ownership, so deny.")"""
     lead = db_session.get(Lead, lead_id)
     if lead is None:
         return None
-    if not all_held and profile is not None:
+    if not all_held:
+        if profile is None:
+            return None
         if lead.created_by_employee_profile_id != profile.id and lead.assigned_employee_profile_id != profile.id:
             return None
     return lead
@@ -80,7 +106,15 @@ def crm_dashboard():
     staff, profile = _actor()
     codes = get_staff_permission_codes(staff)
     is_management = "leads.view_all" in codes
-    summary = management_crm_dashboard() if is_management else employee_crm_dashboard(profile.id)
+    if not is_management and _missing_profile(profile):
+        # No EmployeeProfile and no view_all -- nothing this actor could
+        # own; an empty employee-shaped summary is the correct, honest
+        # answer (not a 500).
+        summary = {"own_active_leads": 0, "new_leads": 0, "potential_leads": 0, "qualified_leads": 0,
+                   "converted_leads": 0, "lost_leads": 0, "followups_due_today": 0, "followups_overdue": 0,
+                   "recent_interactions": 0}
+    else:
+        summary = management_crm_dashboard() if is_management else employee_crm_dashboard(profile.id)
     return render_template("leads/dashboard.html", summary=summary, is_management=is_management)
 
 
@@ -93,6 +127,8 @@ def list_leads():
     status_filter = request.args.get("status") or None
     if "leads.view_all" in codes:
         result = list_all_leads(page=page)
+    elif _missing_profile(profile):
+        result = {"rows": [], "page": 1, "page_size": 25, "total": 0, "total_pages": 1, "has_prev": False, "has_next": False}
     else:
         result = list_own_leads(profile.id, page=page)
     rows = [r for r in result["rows"] if not status_filter or r.status == status_filter]
@@ -109,6 +145,8 @@ def new_form():
 @require_permission("leads.create")
 def create():
     staff, profile = _actor()
+    if _missing_profile(profile):
+        return render_template("leads/new.html", error=_NO_PROFILE_MESSAGE), 400
     fields = {
         "organization_or_prospect_name": request.form.get("organization_or_prospect_name", "").strip(),
         "primary_contact_name": request.form.get("primary_contact_name") or None,
@@ -159,6 +197,8 @@ def update(lead_id):
     lead = _lead_or_none(lead_id, profile, all_held="leads.update_all" in codes)
     if lead is None:
         return jsonify({"error": "not_found"}), 404
+    if _missing_profile(profile):
+        return redirect(url_for("leads.detail", lead_id=lead_id, error="EMPLOYEE_PROFILE_REQUIRED"))
     fields = {k: v for k, v in request.form.items() if k in (
         "organization_or_prospect_name", "primary_contact_name", "phone", "email", "source", "priority",
     )}
@@ -177,6 +217,8 @@ def status(lead_id):
     lead = _lead_or_none(lead_id, profile, all_held="leads.update_all" in codes)
     if lead is None:
         return jsonify({"error": "not_found"}), 404
+    if _missing_profile(profile):
+        return redirect(url_for("leads.detail", lead_id=lead_id, error="EMPLOYEE_PROFILE_REQUIRED"))
     try:
         change_lead_status(
             lead, request.form.get("status"), profile.id, staff.id,
@@ -194,6 +236,8 @@ def assign(lead_id):
     lead = db_session.get(Lead, lead_id)
     if lead is None:
         return jsonify({"error": "not_found"}), 404
+    if _missing_profile(profile):
+        return redirect(url_for("leads.detail", lead_id=lead_id, error="EMPLOYEE_PROFILE_REQUIRED"))
     target = request.form.get("assigned_employee_profile_id")
     if target:
         try:
@@ -239,6 +283,8 @@ def archive(lead_id):
     lead = db_session.get(Lead, lead_id)
     if lead is None:
         return jsonify({"error": "not_found"}), 404
+    if _missing_profile(profile):
+        return redirect(url_for("leads.detail", lead_id=lead_id, error="EMPLOYEE_PROFILE_REQUIRED"))
     try:
         change_lead_status(lead, "ARCHIVED", profile.id, staff.id, reason=request.form.get("reason"))
     except LeadError:
@@ -276,6 +322,8 @@ def add_interaction_route(lead_id):
     lead = _lead_or_none(lead_id, profile, all_held="leads.update_all" in codes)
     if lead is None:
         return jsonify({"error": "not_found"}), 404
+    if _missing_profile(profile):
+        return redirect(url_for("leads.detail", lead_id=lead_id, error="EMPLOYEE_PROFILE_REQUIRED"))
     try:
         log_lead_interaction(lead_id, {"interaction_type": request.form.get("interaction_type"), "summary": request.form.get("summary")}, profile.id, staff.id)
     except LeadError:
@@ -291,6 +339,8 @@ def add_followup_route(lead_id):
     lead = _lead_or_none(lead_id, profile, all_held="leads.update_all" in codes)
     if lead is None:
         return jsonify({"error": "not_found"}), 404
+    if _missing_profile(profile):
+        return redirect(url_for("leads.detail", lead_id=lead_id, error="EMPLOYEE_PROFILE_REQUIRED"))
     due_raw = request.form.get("due_at")
     try:
         create_lead_followup(lead_id, {"due_at": datetime.fromisoformat(due_raw) if due_raw else None, "notes": request.form.get("notes")}, profile.id, staff.id)
@@ -307,6 +357,8 @@ def add_note_route(lead_id):
     lead = _lead_or_none(lead_id, profile, all_held="leads.update_all" in codes)
     if lead is None:
         return jsonify({"error": "not_found"}), 404
+    if _missing_profile(profile):
+        return redirect(url_for("leads.detail", lead_id=lead_id, error="EMPLOYEE_PROFILE_REQUIRED"))
     try:
         add_lead_note(lead, request.form.get("body", ""), profile.id, staff.id, visibility=request.form.get("visibility", "ASSIGNED_RECORD_USERS"))
     except LeadError:
@@ -322,6 +374,8 @@ def add_location_route(lead_id):
     lead = _lead_or_none(lead_id, profile, all_held="leads.update_all" in codes)
     if lead is None:
         return jsonify({"error": "not_found"}), 404
+    if _missing_profile(profile):
+        return redirect(url_for("leads.detail", lead_id=lead_id, error="EMPLOYEE_PROFILE_REQUIRED"))
     body = {
         "latitude": request.form.get("latitude"),
         "longitude": request.form.get("longitude"),
@@ -430,6 +484,10 @@ def verify_location_route(location_id):
             location = None
     if location is None:
         return jsonify({"error": "not_found"}), 404
+    if _missing_profile(profile):
+        if location.lead_id:
+            return redirect(url_for("leads.detail", lead_id=location.lead_id, error="EMPLOYEE_PROFILE_REQUIRED"))
+        return redirect(url_for("customers.detail", customer_id=location.customer_id, error="EMPLOYEE_PROFILE_REQUIRED"))
     try:
         verify_location(location, request.form.get("reason"), profile.id, staff.id)
     except LocationValidationError:

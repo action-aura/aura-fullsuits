@@ -149,7 +149,9 @@
   </p>
   {% else %}<p class="empty">{{ _("No location captured yet.") }}</p>
   {% endfor %}
-  <button type="button" id="capture-location-btn" data-lead-id="{{ lead.id }}">{{ _("Capture current location") }}</button>
+  <button type="button" id="capture-location-btn"
+          data-error-unsupported="{{ _('Geolocation is not supported by this browser.') }}"
+          data-error-denied="{{ _('Location permission was denied or unavailable.') }}">{{ _("Capture current location") }}</button>
   <form method="post" id="location-form" action="{{ url_for('leads.add_location_route', lead_id=lead.id) }}" style="display:none;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="latitude" id="loc-lat">
@@ -190,17 +192,5 @@
   </table>
 </div>
 
-<script>
-document.getElementById("capture-location-btn").addEventListener("click", function () {
-  if (!navigator.geolocation) { alert("{{ _('Geolocation is not supported by this browser.') }}"); return; }
-  navigator.geolocation.getCurrentPosition(function (pos) {
-    document.getElementById("loc-lat").value = pos.coords.latitude;
-    document.getElementById("loc-lng").value = pos.coords.longitude;
-    document.getElementById("loc-acc").value = pos.coords.accuracy;
-    document.getElementById("location-form").submit();
-  }, function () {
-    alert("{{ _('Location permission was denied or unavailable.') }}");
-  });
-});
-</script>
+<script src="{{ url_for('static', filename='js/geolocation-capture.js') }}"></script>
 {% endblock %}
