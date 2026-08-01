@@ -1,0 +1,32 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("New lead") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _("New lead") }}</h2>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form method="post" action="{{ url_for('leads.create') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>{{ _("Prospect or organization name") }}</label>
+    <input name="organization_or_prospect_name" required maxlength="200">
+    <label>{{ _("Primary contact name") }}</label>
+    <input name="primary_contact_name" maxlength="200">
+    <label>{{ _("Phone") }}</label>
+    <input name="phone" maxlength="32">
+    <label>{{ _("Email") }}</label>
+    <input name="email" type="email" maxlength="200">
+    <label>{{ _("Source") }}</label>
+    <select name="source">
+      {% for s in ["WEBSITE","REFERRAL","COLD_OUTREACH","EVENT","OTHER"] %}
+      <option value="{{ s }}">{{ lead_source_label(s) }}</option>
+      {% endfor %}
+    </select>
+    <label>{{ _("Priority") }}</label>
+    <select name="priority">
+      {% for p in ["LOW","MEDIUM","HIGH"] %}
+      <option value="{{ p }}" {% if p == "MEDIUM" %}selected{% endif %}>{{ lead_priority_label(p) }}</option>
+      {% endfor %}
+    </select>
+    <div style="margin-top:0.75rem;"><button type="submit">{{ _("Create lead") }}</button></div>
+  </form>
+</div>
+{% endblock %}

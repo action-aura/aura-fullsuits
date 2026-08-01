@@ -1,0 +1,42 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Leads") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <h2>{{ _("Leads") }}</h2>
+    <a class="btn" href="{{ url_for('leads.new_form') }}">{{ _("New lead") }}</a>
+  </div>
+  <form class="filters" method="get">
+    <div>
+      <label>{{ _("Status") }}</label>
+      <select name="status" onchange="this.form.submit()">
+        <option value="">{{ _("All") }}</option>
+        {% for s in ["NEW","POTENTIAL","FOLLOW_UP","UNDER_OBSERVATION","QUALIFIED","NOT_INTERESTED_NOW","CONFIRMED","LOST","ARCHIVED"] %}
+        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ lead_status_label(s) }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </form>
+  <div class="responsive-cards">
+    {% for lead in leads %}
+    <a class="crm-card" href="{{ url_for('leads.detail', lead_id=lead.id) }}">
+      <div style="display:flex;justify-content:space-between;">
+        <strong>{{ lead.organization_or_prospect_name }}</strong>
+        <span class="badge {{ 'active' if lead.status in ('QUALIFIED','CONFIRMED') else 'draft' }}">{{ lead_status_label(lead.status) }}</span>
+      </div>
+      <div><bdi dir="ltr">{{ lead.phone or lead.email or "-" }}</bdi></div>
+      <div>{{ lead_priority_label(lead.priority) }} &middot; {{ lead_source_label(lead.source) }}</div>
+      {% if lead.next_follow_up_at %}<div class="small">{{ _("Next follow-up") }}: {{ format_owner_datetime(lead.next_follow_up_at) }}</div>{% endif %}
+    </a>
+    {% else %}<p class="empty">{{ _("No leads yet.") }}</p>
+    {% endfor %}
+  </div>
+  <div class="pagination">
+    <span>
+      {{ _("Page") }} {{ result.page }} {{ "/" }} {{ result.total_pages }}
+      &middot;
+      {{ result.total }} {{ _("total") }}
+    </span>
+  </div>
+</div>
+{% endblock %}

@@ -1,49 +1,66 @@
 {% extends "layout/base.html" %}
-{% block title %}{{ customer.legal_name }}{% endblock %}
+{% block title %}{{ lead.organization_or_prospect_name }}{% endblock %}
 {% block content %}
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if duplicate_candidates %}
 <div class="card">
-  <h2>{{ customer.legal_name }} <span class="badge">{{ customer_status_label(customer.lifecycle_status) }}</span></h2>
+  <h3>{{ _("Possible duplicate customer") }}</h3>
+  {% for c in duplicate_candidates %}
+    {% if c.visible %}<p>{{ c.legal_name }} ({{ c.lifecycle_status }})</p>
+    {% else %}<p>{{ duplicate_review_marker_label(c.marker) }}</p>{% endif %}
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>{{ lead.organization_or_prospect_name }} <span class="badge">{{ lead_status_label(lead.status) }}</span></h2>
   <dl class="kv">
-    <dt>{{ _("Trade name") }}</dt><dd>{{ customer.trade_name or "-" }}</dd>
-    <dt>{{ _("Country / City") }}</dt><dd>{{ customer.country or "-" }} / {{ customer.city or "-" }}</dd>
-    <dt>{{ _("Registration ref") }}</dt><dd><bdi dir="ltr">{{ customer.commercial_registration_reference or "-" }}</bdi></dd>
-    {% if customer.converted_from_lead_id %}
-    <dt>{{ _("Converted from lead") }}</dt><dd><a href="{{ url_for('leads.detail', lead_id=customer.converted_from_lead_id) }}">{{ _("View source lead") }}</a></dd>
-    {% endif %}
+    <dt>{{ _("Contact") }}</dt><dd>{{ lead.primary_contact_name or "-" }}</dd>
+    <dt>{{ _("Phone") }}</dt><dd><bdi dir="ltr">{{ lead.phone or "-" }}</bdi></dd>
+    <dt>{{ _("Email") }}</dt><dd><bdi dir="ltr">{{ lead.email or "-" }}</bdi></dd>
+    <dt>{{ _("Source") }}</dt><dd>{{ lead_source_label(lead.source) }}</dd>
+    <dt>{{ _("Priority") }}</dt><dd>{{ lead_priority_label(lead.priority) }}</dd>
+    <dt>{{ _("Created") }}</dt><dd>{{ format_owner_datetime(lead.created_at) }}</dd>
   </dl>
-  {% if customer.lifecycle_status != "ARCHIVED" %}
-  <form method="post" action="{{ url_for('customers.archive', customer_id=customer.id) }}"
-        data-confirm="{{ _('Archive this customer? Records are kept, not deleted.') }}">
+
+  <form method="post" action="{{ url_for('leads.status', lead_id=lead.id) }}" style="margin-top:0.5rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" class="danger">{{ _("Archive") }}</button>
+    <input type="hidden" name="version" value="{{ lead.version }}">
+    <label>{{ _("Change status") }}</label>
+    <select name="status">
+      {% for s in ["POTENTIAL","FOLLOW_UP","UNDER_OBSERVATION","QUALIFIED","NOT_INTERESTED_NOW","LOST","ARCHIVED"] %}
+      <option value="{{ s }}">{{ lead_status_label(s) }}</option>
+      {% endfor %}
+    </select>
+    <input name="reason" placeholder="{{ _('Reason (required for Lost)') }}">
+    <button type="submit">{{ _("Update status") }}</button>
+  </form>
+
+  {% if lead.status == "QUALIFIED" %}
+  <form method="post" action="{{ url_for('leads.convert_route', lead_id=lead.id) }}"
+        data-confirm="{{ _('Convert this lead to a confirmed customer?') }}" style="margin-top:0.5rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="version" value="{{ lead.version }}">
+    <input type="hidden" name="idempotency_key" value="{{ lead.id }}-convert">
+    <button type="submit">{{ _("Convert to customer") }}</button>
   </form>
   {% endif %}
-  <form method="post" action="{{ url_for('customers.assign_route', customer_id=customer.id) }}" style="margin-top:0.5rem;">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="hidden" name="version" value="{{ customer.version }}">
-    <label>{{ _("Reassign to (staff UUID)") }}</label>
-    <input name="assigned_to_staff_user_id">
-    <input name="reason" placeholder="{{ _('Reason (required when reassigning)') }}">
-    <button type="submit">{{ _("Reassign") }}</button>
-  </form>
 </div>
 
 <div class="card">
   <h3>{{ _("Contacts") }}</h3>
   <table class="responsive-table">
-    <thead><tr><th>{{ _("Name") }}</th><th>{{ _("Title") }}</th><th>{{ _("Email") }}</th><th>{{ _("Phone") }}</th><th>{{ _("Primary") }}</th></tr></thead>
+    <thead><tr><th>{{ _("Name") }}</th><th>{{ _("Email") }}</th><th>{{ _("Phone") }}</th><th>{{ _("Primary") }}</th></tr></thead>
     <tbody>
-    {% for c in customer.contacts %}
-    <tr><td>{{ c.name }}</td><td>{{ c.title or "-" }}</td><td><bdi dir="ltr">{{ c.business_email or "-" }}</bdi></td><td><bdi dir="ltr">{{ c.business_phone or "-" }}</bdi></td><td>{{ _("Yes") if c.is_primary else "" }}</td></tr>
-    {% else %}<tr><td colspan="5" class="empty">{{ _("No contacts yet.") }}</td></tr>
+    {% for c in contacts %}
+    <tr><td>{{ c.name }}</td><td><bdi dir="ltr">{{ c.business_email or "-" }}</bdi></td><td><bdi dir="ltr">{{ c.business_phone or "-" }}</bdi></td><td>{{ _("Yes") if c.is_primary else "" }}</td></tr>
+    {% else %}<tr><td colspan="4" class="empty">{{ _("No contacts yet.") }}</td></tr>
     {% endfor %}
     </tbody>
   </table>
-  <form method="post" action="{{ url_for('customers.add_contact_route', customer_id=customer.id) }}">
+  <form method="post" action="{{ url_for('leads.add_contact_route', lead_id=lead.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label>{{ _("Name") }}</label><input name="name" required>
-    <label>{{ _("Title") }}</label><input name="title">
     <label>{{ _("Email") }}</label><input name="business_email" type="email">
     <label>{{ _("Phone") }}</label><input name="business_phone">
     <div style="margin-top:0.5rem;"><button type="submit">{{ _("Add contact") }}</button></div>
@@ -56,7 +73,7 @@
   <p>{{ interaction_type_label(i.interaction_type) }} &mdash; {{ i.summary or "" }}<br><small>{{ format_owner_datetime(i.occurred_at) }}</small></p>
   {% else %}<p class="empty">{{ _("No interactions logged yet.") }}</p>
   {% endfor %}
-  <form method="post" action="{{ url_for('customers.add_interaction_route', customer_id=customer.id) }}">
+  <form method="post" action="{{ url_for('leads.add_interaction_route', lead_id=lead.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <select name="interaction_type">
       {% for t in ["CALL","EMAIL","MEETING","WHATSAPP_MANUAL_NOTE","OTHER"] %}
@@ -85,7 +102,7 @@
   </p>
   {% else %}<p class="empty">{{ _("No follow-ups yet.") }}</p>
   {% endfor %}
-  <form method="post" action="{{ url_for('customers.add_followup_route', customer_id=customer.id) }}">
+  <form method="post" action="{{ url_for('leads.add_followup_route', lead_id=lead.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label>{{ _("Due") }}</label><input name="due_at" type="datetime-local" required>
     <textarea name="notes" rows="2" placeholder="{{ _('Notes') }}"></textarea>
@@ -94,12 +111,12 @@
 </div>
 
 <div class="card">
-  <h3>{{ _("Internal notes") }}</h3>
+  <h3>{{ _("Notes") }}</h3>
   {% for n in notes %}
-  <p style="border-bottom:1px solid #eee;padding-bottom:0.4rem;">{{ n.body }}<br><small style="color:#6b7785;">{{ note_visibility_label(n.visibility) }} &middot; {{ format_owner_datetime(n.created_at) }}</small></p>
+  <p>{{ n.body }}<br><small>{{ note_visibility_label(n.visibility) }} &middot; {{ format_owner_datetime(n.created_at) }}</small></p>
   {% else %}<p class="empty">{{ _("No notes yet.") }}</p>
   {% endfor %}
-  <form method="post" action="{{ url_for('customers.add_note_route', customer_id=customer.id) }}">
+  <form method="post" action="{{ url_for('leads.add_note_route', lead_id=lead.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <textarea name="body" rows="3" required></textarea>
     <select name="visibility">
@@ -132,15 +149,15 @@
   </p>
   {% else %}<p class="empty">{{ _("No location captured yet.") }}</p>
   {% endfor %}
-  <button type="button" id="capture-location-btn" data-customer-id="{{ customer.id }}">{{ _("Capture current location") }}</button>
-  <form method="post" id="location-form" action="{{ url_for('customers.add_location_route', customer_id=customer.id) }}" style="display:none;">
+  <button type="button" id="capture-location-btn" data-lead-id="{{ lead.id }}">{{ _("Capture current location") }}</button>
+  <form method="post" id="location-form" action="{{ url_for('leads.add_location_route', lead_id=lead.id) }}" style="display:none;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="latitude" id="loc-lat">
     <input type="hidden" name="longitude" id="loc-lng">
     <input type="hidden" name="accuracy_meters" id="loc-acc">
     <input type="hidden" name="source" value="GPS">
   </form>
-  <form method="post" action="{{ url_for('customers.add_location_route', customer_id=customer.id) }}">
+  <form method="post" action="{{ url_for('leads.add_location_route', lead_id=lead.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="source" value="MANUAL">
     <label>{{ _("Manual address") }}</label>
@@ -150,13 +167,24 @@
 </div>
 
 <div class="card">
+  <h3>{{ _("Status history") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("From") }}</th><th>{{ _("To") }}</th><th>{{ _("Reason") }}</th><th>{{ _("When") }}</th></tr></thead>
+    <tbody>
+    {% for h in status_history %}
+    <tr><td>{{ lead_status_label(h.from_status) if h.from_status else "-" }}</td><td>{{ lead_status_label(h.to_status) }}</td><td>{{ h.reason or "-" }}</td><td>{{ format_owner_datetime(h.changed_at) }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
   <h3>{{ _("Assignment history") }}</h3>
   <table class="responsive-table">
     <thead><tr><th>{{ _("Assigned to") }}</th><th>{{ _("Reason") }}</th><th>{{ _("When") }}</th></tr></thead>
     <tbody>
     {% for a in assignment_history %}
-    <tr><td><bdi dir="ltr">{{ a.assigned_to_staff_user_id }}</bdi></td><td>{{ a.reason or "-" }}</td><td>{{ format_owner_datetime(a.assigned_at) }}</td></tr>
-    {% else %}<tr><td colspan="3" class="empty">{{ _("No reassignments yet.") }}</td></tr>
+    <tr><td><bdi dir="ltr">{{ a.assigned_to_employee_profile_id }}</bdi></td><td>{{ a.reason or "-" }}</td><td>{{ format_owner_datetime(a.assigned_at) }}</td></tr>
     {% endfor %}
     </tbody>
   </table>

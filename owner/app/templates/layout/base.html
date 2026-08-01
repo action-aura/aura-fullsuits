@@ -56,6 +56,15 @@
       nav.tabs { overflow-x: auto; flex-wrap: nowrap; }
       main { padding-inline: 0.6rem; }
     }
+    /* Phase 9.5C -- Lead/Customer interactive cards (Milestone 6). Grid,
+       not a fixed-width flex row, so it reflows naturally at any viewport
+       without a separate mobile-only stylesheet; logical properties only,
+       so RTL mirrors automatically. */
+    .responsive-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.75rem; margin-block: 0.75rem; }
+    .crm-card { display: block; background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 1rem; text-decoration: none; color: inherit; font-size: 0.88rem; }
+    .crm-card:hover, .crm-card:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(36,82,184,0.15); }
+    .crm-card .small { color: var(--muted); font-size: 0.78rem; margin-block-start: 0.3rem; }
+    .pagination { display: flex; justify-content: flex-end; margin-block-start: 0.75rem; color: var(--muted); font-size: 0.82rem; }
   </style>
 </head>
 <body>
@@ -80,7 +89,9 @@
   {% if staff %}
   <nav class="tabs">
     <a href="{{ url_for('dashboard.index') }}">{{ _('Dashboard') }}</a>
+    <a href="{{ url_for('leads.list_leads') }}">{{ _('Leads') }}</a>
     <a href="{{ url_for('customers.list_customers') }}">{{ _('Customers') }}</a>
+    <a href="{{ url_for('leads.crm_dashboard') }}">{{ _('CRM Dashboard') }}</a>
     <a href="{{ url_for('catalog.index') }}">{{ _('Catalog') }}</a>
     <a href="{{ url_for('subscriptions.list_subscriptions') }}">{{ _('Subscriptions') }}</a>
     <a href="{{ url_for('licensing.list_licenses') }}">{{ _('Licenses') }}</a>

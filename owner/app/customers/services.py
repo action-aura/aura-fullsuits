@@ -199,6 +199,16 @@ def archive_customer(customer: Customer, actor_staff_user_id) -> None:
 
 
 def add_contact(customer: Customer, fields: dict, actor_staff_user_id) -> CustomerContact:
+    if fields.get("is_primary"):
+        # Phase 9.5C -- one clearly defined primary-contact policy, same
+        # rule as app.leads.contacts.add_lead_contact(): setting a new
+        # primary demotes any existing one for the same parent record in
+        # the same transaction, never two primaries at once.
+        db_session.execute(
+            CustomerContact.__table__.update()
+            .where(CustomerContact.customer_id == customer.id, CustomerContact.archived_at.is_(None))
+            .values(is_primary=False)
+        )
     contact = CustomerContact(customer_id=customer.id, **fields)
     db_session.add(contact)
     db_session.commit()
@@ -213,8 +223,12 @@ def add_contact(customer: Customer, fields: dict, actor_staff_user_id) -> Custom
     return contact
 
 
-def add_note(customer: Customer, body: str, actor_staff_user_id) -> CustomerNote:
-    note = CustomerNote(customer_id=customer.id, author_staff_user_id=actor_staff_user_id, body=body)
+def add_note(customer: Customer, body: str, actor_staff_user_id, *, visibility: str = "ASSIGNED_RECORD_USERS") -> CustomerNote:
+    from app.leads.errors import NOTE_VISIBILITIES, CustomerCrmError
+
+    if visibility not in NOTE_VISIBILITIES:
+        raise CustomerCrmError("NOTE_VISIBILITY_INVALID", visibility=visibility)
+    note = CustomerNote(customer_id=customer.id, author_staff_user_id=actor_staff_user_id, body=body, visibility=visibility)
     db_session.add(note)
     db_session.commit()
     audit_record(
