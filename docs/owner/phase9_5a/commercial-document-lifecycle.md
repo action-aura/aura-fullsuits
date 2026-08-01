@@ -25,7 +25,7 @@ commercial_invoices: id, sales_order_id (FK, nullable -- same simplified-flow al
   PARTIALLY_REFUNDED), invoice_number (unique), currency, subtotal/discount_total/tax_total/total
   (Numeric), issued_at (nullable), due_date (nullable), created_at, updated_at, version
 
-commercial_invoice_lines: same shape, invoice_id FK
+commercial_invoice_items: same shape, invoice_id FK
 
 commercial_refunds: id, commercial_invoice_id (FK), payment_record_id (FK, nullable -- which payment
   is being refunded), amount (Numeric), currency, reason, status (DRAFT|APPROVED|PAID|VOID),

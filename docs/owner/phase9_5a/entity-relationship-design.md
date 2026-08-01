@@ -28,12 +28,12 @@ erDiagram
     SalesOrder ||--o{ SalesOrderLine : "has"
     SalesOrder ||--o| CommercialInvoice : "becomes"
     SalesOrder |o--o| Subscription : "fulfills"
-    CommercialInvoice ||--o{ CommercialInvoiceLine : "has"
+    CommercialInvoice ||--o{ CommercialInvoiceItem : "has"
     CommercialInvoice ||--o{ PaymentRecord : "paid by"
     CommercialInvoice ||--o{ CommercialRefund : "refunded by"
 
     PlanPrice ||--o{ QuoteLine : "priced by"
-    PlanPrice ||--o{ CommercialInvoiceLine : "priced by"
+    PlanPrice ||--o{ CommercialInvoiceItem : "priced by"
 
     PaymentRecord ||--o| CommissionLedgerEntry : "triggers"
     CommissionRuleVersion ||--o{ CommissionLedgerEntry : "pins"

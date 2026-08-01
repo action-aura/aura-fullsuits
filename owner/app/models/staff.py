@@ -99,6 +99,14 @@ class StaffSession(Base, UUIDPKMixin, TimestampMixin):
     mfa_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_reason: Mapped[str | None] = mapped_column(Text)
+    # Phase 9.5A -- additive mobile-session extension (see
+    # docs/owner/phase9_5a/mobile-session-contract.md). NULL/default for
+    # every existing browser-cookie session; a mobile login populates these
+    # on the same StaffSession row rather than a parallel session table.
+    refresh_token_hash: Mapped[str | None] = mapped_column(String(128), unique=True)
+    refresh_token_family_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    access_token_last_issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    platform: Mapped[str] = mapped_column(String(16), default="WEB", nullable=False)
 
 
 class StaffInvitation(Base, UUIDPKMixin, TimestampMixin):

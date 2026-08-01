@@ -9,7 +9,7 @@ one-page index plus the cross-cutting conventions every new table follows.
 |---|---|---|
 | `employees.py` | `employee_profiles`, `employee_presence_sessions` | `employee-domain-model.md`, `employee-presence-contract.md` |
 | `leads.py` | `leads`, `lead_status_history`, `lead_assignments`, `lead_interactions`, `lead_followups`, `lead_notes`, `lead_product_interests`, `customer_locations`, `customer_interactions`, `customer_followups` | `lead-customer-domain-model.md`, `customer-location-contract.md` |
-| `commercial_sales.py` | `quotes`, `quote_lines`, `sales_orders`, `sales_order_lines`, `commercial_invoices`, `commercial_invoice_lines`, `commercial_refunds`, `commercial_operations_idempotency_keys` | `commercial-document-lifecycle.md`, `payment-and-fulfillment-contract.md` |
+| `commercial_sales.py` | `quotes`, `quote_lines`, `sales_orders`, `sales_order_lines`, `commercial_invoices`, `commercial_invoice_items`, `commercial_refunds`, `commercial_operations_idempotency_keys` | `commercial-document-lifecycle.md`, `payment-and-fulfillment-contract.md` |
 | `commissions.py` | `commission_plans`, `commission_rule_versions`, `employee_commission_plan_assignments`, `commission_ledger_entries`, `commission_payout_batches`, `commission_payout_lines` | `commission-domain-design.md` |
 | `expenses.py` | `expense_categories`, `expenses` | `mini-financial-ledger-design.md` |
 | `management_notes.py` | `shared_management_notes`, `management_note_visibility_grants`, `management_note_comments` | `management-notes-design.md` |

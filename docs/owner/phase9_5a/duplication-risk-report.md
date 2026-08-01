@@ -21,7 +21,7 @@ specifically; only `=="ARCHIVED"` is checked, in one template and one test, both
 **Risk**: `PaymentRecord` already exists; a naive "Payment" model for the new commercial-invoice flow
 would duplicate it.
 
-**Resolution**: New `CommercialInvoice`/`CommercialInvoiceLine` models represent the *document*
+**Resolution**: New `CommercialInvoice`/`CommercialInvoiceItem` models represent the *document*
 (line-item snapshot, states DRAFT/ISSUED/PARTIALLY_PAID/PAID/VOID/REFUNDED/PARTIALLY_REFUNDED).
 Confirmation of payment against that invoice reuses the existing `PaymentRecord` (already has
 `subscription_id`; extended with a nullable `commercial_invoice_id` FK, additive column, not a new

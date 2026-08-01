@@ -19,7 +19,7 @@ management `pricing.view` + explicit history endpoint).
 ## Price authority (real rule, see `price-authority-rules.md` for the full statement)
 
 Employees select an existing `Plan`/`PlanPrice`/`Addon` by ID — `QuoteLine`/`SalesOrderLine`/
-`CommercialInvoiceLine` (Milestone 11) always snapshot `plan_id`, `price_version_id` (the specific
+`CommercialInvoiceItem` (Milestone 11) always snapshot `plan_id`, `price_version_id` (the specific
 `PlanPrice.id` used, not just the amount), `unit_price`, and `description` at creation time. No line
 item ever accepts a client-supplied `unit_price` unless the caller holds a new `pricing.override`
 permission (not granted to SALES by default — Milestone 17) and the override amount + reason are

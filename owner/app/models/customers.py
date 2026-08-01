@@ -32,6 +32,12 @@ class Customer(Base, UUIDPKMixin, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
     )
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Phase 9.5A -- traceability back to the Lead this Customer was converted
+    # from, when applicable. NULL for a Customer created directly (still
+    # fully valid, unchanged Phase 5 behavior -- see
+    # docs/owner/phase9_5a/lead-conversion-contract.md). Written exactly once,
+    # at conversion time, by LeadConversionService -- never reassigned.
+    converted_from_lead_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_leads.id"))
 
     contacts: Mapped[list["CustomerContact"]] = relationship(back_populates="customer", cascade="all, delete-orphan")
     addresses: Mapped[list["CustomerAddress"]] = relationship(back_populates="customer", cascade="all, delete-orphan")

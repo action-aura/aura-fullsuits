@@ -1,6 +1,6 @@
 # Phase 9.5A — Price Authority Rules
 
-1. Every commercial line item (`QuoteLine`/`SalesOrderLine`/`CommercialInvoiceLine`) stores a snapshot:
+1. Every commercial line item (`QuoteLine`/`SalesOrderLine`/`CommercialInvoiceItem`) stores a snapshot:
    `plan_id` or `addon_id`, `price_version_id` (FK to the exact `PlanPrice`/`Addon` price row used),
    `description` (copied at creation, never a live join to the catalog for display), `quantity`,
    `unit_price` (Numeric, copied from the price version), `discount_amount` (nullable, Numeric),
