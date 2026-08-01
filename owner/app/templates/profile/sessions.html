@@ -5,7 +5,10 @@
   <h2>{{ _('My sessions') }}</h2>
   {% if sessions %}
   <table>
+    <thead>
     <tr><th>{{ _('Created') }}</th><th>{{ _('Last seen') }}</th><th>{{ _('Platform') }}</th><th>{{ _('Status') }}</th><th></th></tr>
+    </thead>
+    <tbody>
     {% for s in sessions %}
     <tr>
       <td>{{ format_owner_datetime(s.created_at) }}</td><td>{{ format_owner_datetime(s.last_seen_at) }}</td><td dir="ltr">{{ s.platform }}</td>
@@ -23,6 +26,7 @@
       </td>
     </tr>
     {% endfor %}
+    </tbody>
   </table>
   {% else %}<p class="empty">{{ _('No sessions.') }}</p>{% endif %}
 </div>

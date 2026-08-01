@@ -106,7 +106,10 @@
   <h3>{{ _('Sessions') }}</h3>
   {% if sessions %}
   <table>
+    <thead>
     <tr><th>{{ _('Created') }}</th><th>{{ _('Last seen') }}</th><th>{{ _('Platform') }}</th><th>{{ _('Status') }}</th><th></th></tr>
+    </thead>
+    <tbody>
     {% for s in sessions %}
     <tr>
       <td>{{ format_owner_datetime(s.created_at) }}</td><td>{{ format_owner_datetime(s.last_seen_at) }}</td><td dir="ltr">{{ s.platform }}</td>
@@ -120,6 +123,7 @@
       </td>
     </tr>
     {% endfor %}
+    </tbody>
   </table>
   {% else %}<p class="empty">{{ _('No sessions.') }}</p>{% endif %}
 </div>
@@ -128,10 +132,14 @@
   <h3>{{ _('Audit timeline') }}</h3>
   {% if audit_events %}
   <table>
+    <thead>
     <tr><th>{{ _('When') }}</th><th>{{ _('Action') }}</th><th>{{ _('Reason') }}</th></tr>
+    </thead>
+    <tbody>
     {% for ev in audit_events %}
     <tr><td>{{ format_owner_datetime(ev.created_at) }}</td><td>{{ audit_action_label(ev.action_code) }}</td><td>{{ ev.reason or "-" }}</td></tr>
     {% endfor %}
+    </tbody>
   </table>
   {% else %}<p class="empty">{{ _('No audit events yet.') }}</p>{% endif %}
 </div>

@@ -366,6 +366,62 @@ def _check_employee_domain_integrity(checks: list[PreflightCheck]) -> bool:
     return ok
 
 
+def _check_i18n_configuration(checks: list[PreflightCheck]) -> bool:
+    """Phase 9.5B-R, Milestone 21. Validates the real Flask-Babel/locale
+    configuration without printing any personal data, secret, or session
+    content -- only locale codes, file paths, and byte counts."""
+    from flask import current_app
+
+    ok = True
+
+    languages = current_app.config.get("LANGUAGES") or {}
+    default_locale = current_app.config.get("BABEL_DEFAULT_LOCALE")
+    if not languages:
+        ok = False
+        checks.append(PreflightCheck("i18n_supported_locales_configured", "FAIL", "app.config['LANGUAGES'] is empty or missing."))
+    else:
+        checks.append(PreflightCheck("i18n_supported_locales_configured", "OK", f"Supported locales: {sorted(languages.keys())}."))
+
+    if not default_locale or default_locale not in languages:
+        ok = False
+        checks.append(PreflightCheck(
+            "i18n_default_locale_valid", "FAIL",
+            f"BABEL_DEFAULT_LOCALE={default_locale!r} is not a member of the supported-locale allowlist.",
+        ))
+    else:
+        checks.append(PreflightCheck("i18n_default_locale_valid", "OK", f"Default locale: {default_locale!r}."))
+
+    translations_dir = current_app.config.get("BABEL_TRANSLATION_DIRECTORIES", "")
+    for code in languages:
+        mo_path = os.path.join(translations_dir, code, "LC_MESSAGES", "messages.mo")
+        if not os.path.isfile(mo_path):
+            ok = False
+            checks.append(PreflightCheck(
+                f"i18n_catalog_compiled_{code}", "FAIL",
+                f"Compiled catalog missing for locale {code!r}. Fix: 'python -m babel.messages.frontend compile -d translations'.",
+            ))
+        elif os.path.getsize(mo_path) == 0:
+            ok = False
+            checks.append(PreflightCheck(f"i18n_catalog_compiled_{code}", "FAIL", f"Compiled catalog for {code!r} is empty (0 bytes)."))
+        else:
+            checks.append(PreflightCheck(f"i18n_catalog_compiled_{code}", "OK", f"Compiled catalog present for {code!r}."))
+
+    invalid_locales = db_session.execute(
+        select(StaffUser.locale).where(StaffUser.locale.is_not(None), StaffUser.locale.not_in(list(languages.keys())))
+    ).scalars().all()
+    if invalid_locales:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_invalid_stored_staff_locale", "FAIL",
+            f"{len(invalid_locales)} StaffUser row(s) have a locale value outside the supported allowlist. "
+            "The DB CHECK constraint should make this structurally impossible -- report immediately if seen.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_invalid_stored_staff_locale", "OK", "Every stored StaffUser.locale value is NULL or supported."))
+
+    return ok
+
+
 def run_preflight(*, key_directory: str) -> PreflightResult:
     checks: list[PreflightCheck] = []
     blocking_ok = True
@@ -378,6 +434,7 @@ def run_preflight(*, key_directory: str) -> PreflightResult:
     blocking_ok &= _check_role_permission_assignments(checks)
     blocking_ok &= _check_license_pepper(checks)
     blocking_ok &= _check_employee_domain_integrity(checks)
+    blocking_ok &= _check_i18n_configuration(checks)
     _check_super_admin_mfa(checks)  # informational only, never blocking
 
     return PreflightResult(ok=bool(blocking_ok), checks=checks)

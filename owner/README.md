@@ -102,6 +102,27 @@ safe to collect many test files into one `pytest` invocation). See
 `docs/owner/phase9/retail-test-isolation-root-cause.md` before "fixing" this
 any other way.
 
+## Internationalization (English/Arabic, RTL)
+
+Phase 9.5B-R added one canonical i18n/RTL foundation (Flask-Babel) covering the shared layout/navigation,
+authentication/setup/MFA screens, and the complete employee-management portal. Real, compiled English +
+Arabic catalogs live at `translations/{en,ar}/LC_MESSAGES/messages.po`. To add or update a translatable
+string:
+
+```
+python -m babel.messages.frontend extract -F babel.cfg -o translations/messages.pot .
+python -m babel.messages.frontend update -i translations/messages.pot -d translations
+# edit translations/ar/LC_MESSAGES/messages.po by hand
+python -m babel.messages.frontend compile -d translations -f
+```
+
+`flask commercial preflight` validates the compiled catalogs exist and are non-empty. See
+`docs/owner/phase9_5b_r/translation-catalog-maintenance.md` and `translation-style-guide.md` for the full
+maintenance workflow and terminology glossary. The 37 pre-9.5B Phase 5-8 screens (catalog, customers,
+subscriptions, licensing, commercial operations, staff, audit, system) inherit the RTL/i18n foundation
+structurally but their own body text is not yet translated -- a documented, bounded scope reduction, not a
+defect (`docs/owner/phase9_5b_r/phase9-5b-r-scope-and-boundaries.md`).
+
 ## What this is NOT
 
 Not connected to Retail or Clinic. Not enforcing any license inside either

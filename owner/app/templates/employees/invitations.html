@@ -5,7 +5,10 @@
   <h2>{{ _('Pending employee invitations') }}</h2>
   {% if invitations %}
   <table>
+    <thead>
     <tr><th>{{ _('Email') }}</th><th>{{ _('Roles') }}</th><th>{{ _('Expires') }}</th><th>{{ _('Status') }}</th><th></th></tr>
+    </thead>
+    <tbody>
     {% for inv in invitations %}
     <tr>
       <td>{{ inv.email|bidi_isolate }}</td>
@@ -24,6 +27,7 @@
       </td>
     </tr>
     {% endfor %}
+    </tbody>
   </table>
   {% else %}<p class="empty">{{ _('No pending invitations.') }}</p>{% endif %}
 </div>

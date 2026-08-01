@@ -40,7 +40,10 @@
 <div class="card">
   {% if result.rows %}
   <table class="responsive-table">
+    <thead>
     <tr><th>{{ _('Name') }}</th><th>{{ _('Employee #') }}</th><th>{{ _('Title') }}</th><th>{{ _('Department') }}</th><th>{{ _('Status') }}</th><th>{{ _('Presence') }}</th><th>{{ _('Start date') }}</th><th></th></tr>
+    </thead>
+    <tbody>
     {% for e in result.rows %}
     <tr>
       <td data-label="{{ _('Name') }}">{{ e.full_name }}</td>
@@ -58,6 +61,7 @@
       <td data-label=""><a href="{{ url_for('employees.detail', employee_id=e.id) }}">{{ _('View') }}</a></td>
     </tr>
     {% endfor %}
+    </tbody>
   </table>
   <p class="empty">{{ _('Page %(page)s of %(total_pages)s -- %(total)s employee(s).', page=result.page, total_pages=result.total_pages, total=result.total) }}</p>
   <div>
