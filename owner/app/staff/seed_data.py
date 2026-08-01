@@ -81,6 +81,65 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("pending_activations.decide", "ACTIVATION_SERVICE", "Approve or reject a pending activation"),
     ("device_slot_exceptions.view", "INSTALLATIONS", "View temporary device-slot exceptions"),
     ("device_slot_exceptions.manage", "INSTALLATIONS", "Create/revoke a temporary device-slot exception"),
+    # Phase 9.5A -- commercial-operations foundation (employees, leads, sales
+    # documents, commissions, expenses, device policy, reports). Every
+    # permission here is additive; nothing above is renamed or removed.
+    ("employees.view_own", "EMPLOYEES", "View own employee profile"),
+    ("employees.view_all", "EMPLOYEES", "View all employee profiles"),
+    ("employees.create", "EMPLOYEES", "Create an employee profile"),
+    ("employees.update", "EMPLOYEES", "Update an employee profile"),
+    ("employees.suspend", "EMPLOYEES", "Suspend an employee"),
+    ("employees.terminate", "EMPLOYEES", "Terminate an employee"),
+    ("employees.assign_role", "EMPLOYEES", "Assign roles to an employee's staff account"),
+    ("employees.manage_commission_plan", "EMPLOYEES", "Assign/change an employee's commission plan"),
+    ("employees.view_presence", "EMPLOYEES", "View employee online/presence status"),
+    ("leads.create", "SALES_PIPELINE", "Create a lead"),
+    ("leads.view_own", "SALES_PIPELINE", "View own (created or assigned) leads"),
+    ("leads.view_all", "SALES_PIPELINE", "View all leads"),
+    ("leads.update_own", "SALES_PIPELINE", "Update own (created or assigned) leads"),
+    ("leads.update_all", "SALES_PIPELINE", "Update any lead"),
+    ("leads.assign", "SALES_PIPELINE", "Assign/reassign a lead"),
+    ("leads.convert", "SALES_PIPELINE", "Convert a lead to a customer"),
+    ("leads.archive", "SALES_PIPELINE", "Archive a lead"),
+    ("customers.view_own", "CUSTOMERS", "View own (assigned) customers"),
+    ("customers.view_all", "CUSTOMERS", "View all customers"),
+    ("customers.update_own", "CUSTOMERS", "Update own (assigned) customers"),
+    ("customers.update_all", "CUSTOMERS", "Update any customer"),
+    ("customers.assign", "CUSTOMERS", "Assign/reassign a customer"),
+    ("customers.capture_location", "CUSTOMERS", "Capture a lead/customer location"),
+    ("customers.verify_location", "CUSTOMERS", "Verify/correct another employee's captured location"),
+    ("quotes.create", "COMMERCIAL_SALES", "Create a quote"),
+    ("quotes.approve", "COMMERCIAL_SALES", "Approve/send a quote"),
+    ("orders.create", "COMMERCIAL_SALES", "Create a sales order"),
+    ("orders.approve", "COMMERCIAL_SALES", "Confirm a sales order"),
+    ("invoices.create", "COMMERCIAL_SALES", "Create a commercial invoice"),
+    ("invoices.issue", "COMMERCIAL_SALES", "Issue a commercial invoice"),
+    ("pricing.override", "COMMERCIAL_SALES", "Override a catalog price on a commercial-sales line item"),
+    ("payments.confirm", "FINANCE", "Confirm a payment (distinct from recording one)"),
+    ("refunds.create", "COMMERCIAL_SALES", "Create a refund record"),
+    ("refunds.approve", "COMMERCIAL_SALES", "Approve/pay a refund"),
+    ("commissions.view_own", "COMMISSIONS", "View own commission ledger"),
+    ("commissions.view_all", "COMMISSIONS", "View all employees' commissions"),
+    ("commissions.calculate", "COMMISSIONS", "Manually re-run commission eligibility evaluation"),
+    ("commissions.approve", "COMMISSIONS", "Approve a commission ledger entry"),
+    ("commissions.pay", "COMMISSIONS", "Approve a commission payout batch"),
+    ("commissions.reverse", "COMMISSIONS", "Reverse a commission ledger entry"),
+    ("expenses.create", "EXPENSES", "Create/submit an expense"),
+    ("expenses.view_own", "EXPENSES", "View own submitted expenses"),
+    ("expenses.view_all", "EXPENSES", "View all expenses"),
+    ("expenses.approve", "EXPENSES", "Approve an expense"),
+    ("expenses.pay", "EXPENSES", "Mark an expense paid"),
+    ("expenses.void", "EXPENSES", "Void an expense"),
+    ("device_policy.view", "LICENSING_OPERATIONS", "View device-policy profiles/overrides"),
+    ("device_policy.manage", "LICENSING_OPERATIONS", "Create/edit device-policy profiles/overrides"),
+    ("dashboard.view_own", "REPORTS", "View own-scoped dashboard"),
+    ("dashboard.view_all", "REPORTS", "View the management dashboard"),
+    ("reports.view_own", "REPORTS", "View own-scoped daily reports"),
+    ("reports.view_all", "REPORTS", "View global daily reports"),
+    ("reports.regenerate_daily", "REPORTS", "Manually regenerate a daily activity snapshot"),
+    ("management_notes.view", "MANAGEMENT_COLLABORATION", "View shared management notes visible to this account"),
+    ("management_notes.manage", "MANAGEMENT_COLLABORATION", "Create/edit/archive shared management notes"),
+    ("security_sessions.revoke", "STAFF", "Revoke a staff/employee session"),
 ]
 
 # code -> permission codes. SUPER_ADMIN gets every permission automatically
@@ -103,6 +162,23 @@ ROLES: dict[str, dict] = {
             "licenses.view", "licenses.create",
             "installations.view",
             "pilots.view", "pilots.manage",
+            # Phase 9.5A -- a SALES employee works their own leads/customers/
+            # sales documents and sees their own commission/dashboard/report
+            # data; deliberately NOT granted leads.view_all/update_all,
+            # customers.view_all/update_all, any commissions.* beyond
+            # view_own, any expenses.* beyond create, invoices.issue,
+            # pricing.override, device_policy.manage, or anything financial-
+            # approval-shaped (Non-Negotiable Principle 4/8: employees select
+            # from admin-managed prices, they don't authorize their own
+            # overrides or approve their own money).
+            "employees.view_own", "employees.view_presence",
+            "leads.create", "leads.view_own", "leads.update_own", "leads.convert",
+            "customers.view_own", "customers.update_own", "customers.capture_location",
+            "quotes.create", "orders.create", "invoices.create",
+            "commissions.view_own",
+            "expenses.create", "expenses.view_own",
+            "device_policy.view",
+            "dashboard.view_own", "reports.view_own",
         ],
     },
     "SUPPORT": {
@@ -120,6 +196,10 @@ ROLES: dict[str, dict] = {
             "pending_activations.view", "pending_activations.decide",
             "device_slot_exceptions.view", "device_slot_exceptions.manage",
             # No signing-key management, no plan/entitlement changes, no license-secret issuance (Part S).
+            # Phase 9.5A -- Support reads customer/lead context to help, but
+            # does not own the sales pipeline or approve money.
+            "customers.view_own", "leads.view_own",
+            "device_policy.view",
         ],
     },
     "FINANCE": {
@@ -130,6 +210,21 @@ ROLES: dict[str, dict] = {
             "customers.view",
             "subscriptions.view", "subscriptions.renew",
             "payments.view", "payments.create", "payments.correct",
+            # Phase 9.5A -- Finance is the money-authorization role: confirms
+            # payments, issues invoices, approves refunds, approves/pays
+            # commissions and expenses. Deliberately NOT leads.*/customers.*
+            # ownership permissions (Finance isn't a sales-pipeline role) and
+            # NOT device_policy.manage (a commercial-config, not financial,
+            # authority -- SUPER_ADMIN only).
+            "payments.confirm", "invoices.issue", "refunds.create", "refunds.approve",
+            # pricing.override is deliberately NOT granted here (or to any role
+            # below) -- like activation_policy.manage/signing_keys.manage, it's
+            # SUPER_ADMIN-only via the wildcard; a price exception is a
+            # commercial-authority decision, not a finance-confirmation one.
+            "commissions.view_all", "commissions.approve", "commissions.pay", "commissions.reverse",
+            "expenses.view_all", "expenses.approve", "expenses.pay", "expenses.void",
+            "customers.view_all",
+            "dashboard.view_all", "reports.view_all",
         ],
     },
     "VIEWER": {
@@ -141,6 +236,12 @@ ROLES: dict[str, dict] = {
             "signing_keys.view_public_metadata", "offline_policies.view",
             "pilots.view",
             "pending_activations.view", "device_slot_exceptions.view",
+            # Phase 9.5A -- read-only, non-sensitive only: no commissions.*
+            # (personal earnings data), no expenses.* (financial-sensitive),
+            # no employees.* beyond nothing (personal HR data).
+            "leads.view_all", "customers.view_all",
+            "device_policy.view",
+            "dashboard.view_all", "reports.view_all",
         ],
     },
 }
