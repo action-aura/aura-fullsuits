@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-08-01 18:05+0300\n"
+"POT-Creation-Date: 2026-08-01 23:12+0300\n"
 "PO-Revision-Date: 2026-08-01 11:16+0300\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: ar\n"
@@ -25,8 +25,8 @@ msgstr "بانتظار إكمال الإعداد"
 
 #: app/i18n_labels.py:25 app/i18n_labels.py:55 app/i18n_labels.py:60
 #: app/i18n_labels.py:113 app/i18n_labels.py:127 app/i18n_labels.py:140
-#: app/i18n_labels.py:155 app/i18n_labels.py:187 app/i18n_labels.py:239
-#: app/i18n_labels.py:248 app/i18n_labels.py:396
+#: app/i18n_labels.py:155 app/i18n_labels.py:283 app/i18n_labels.py:335
+#: app/i18n_labels.py:344 app/i18n_labels.py:492
 #: app/templates/employees/detail.html:21
 #: app/templates/employees/detail.html:116
 #: app/templates/profile/sessions.html:18
@@ -43,7 +43,7 @@ msgstr "موقوف مؤقتًا"
 msgid "Terminated"
 msgstr "منتهي العمل"
 
-#: app/i18n_labels.py:28 app/i18n_labels.py:158
+#: app/i18n_labels.py:28 app/i18n_labels.py:158 app/i18n_labels.py:174
 #: app/templates/employees/dashboard.html:17
 msgid "Archived"
 msgstr "مؤرشف"
@@ -84,8 +84,8 @@ msgstr "مُطّلع"
 msgid "Disabled"
 msgstr "معطّل"
 
-#: app/i18n_labels.py:60 app/i18n_labels.py:129 app/i18n_labels.py:241
-#: app/i18n_labels.py:249 app/i18n_labels.py:397
+#: app/i18n_labels.py:60 app/i18n_labels.py:129 app/i18n_labels.py:337
+#: app/i18n_labels.py:345 app/i18n_labels.py:493
 #: app/templates/commercial_ops/emergency_extension_detail.html:16
 #: app/templates/employees/detail.html:116
 #: app/templates/profile/sessions.html:17
@@ -110,11 +110,11 @@ msgstr "غير مُفعّلة"
 msgid "Expired"
 msgstr "منتهية الصلاحية"
 
-#: app/i18n_labels.py:70 app/i18n_labels.py:209
+#: app/i18n_labels.py:70 app/i18n_labels.py:216 app/i18n_labels.py:305
 msgid "Open"
 msgstr "سارية"
 
-#: app/i18n_labels.py:75 app/i18n_labels.py:547
+#: app/i18n_labels.py:75 app/i18n_labels.py:643
 msgid "Employee profile created"
 msgstr "تم إنشاء الملف الوظيفي للموظف"
 
@@ -122,7 +122,7 @@ msgstr "تم إنشاء الملف الوظيفي للموظف"
 msgid "Employee profile updated"
 msgstr "تم تحديث الملف الوظيفي للموظف"
 
-#: app/i18n_labels.py:77 app/i18n_labels.py:548
+#: app/i18n_labels.py:77 app/i18n_labels.py:644
 msgid "Employee activated"
 msgstr "تم تفعيل الموظف"
 
@@ -154,44 +154,44 @@ msgstr "تم إلغاء جميع الجلسات"
 msgid "Session revoked"
 msgstr "تم إلغاء الجلسة"
 
-#: app/i18n_labels.py:85 app/i18n_labels.py:527
+#: app/i18n_labels.py:85 app/i18n_labels.py:623
 #: app/templates/staff/invitation_created.html:2
 msgid "Invitation created"
 msgstr "تم إنشاء الدعوة"
 
-#: app/i18n_labels.py:86 app/i18n_labels.py:529
+#: app/i18n_labels.py:86 app/i18n_labels.py:625
 msgid "Invitation revoked"
 msgstr "تم إلغاء الدعوة"
 
-#: app/i18n_labels.py:87 app/i18n_labels.py:528
+#: app/i18n_labels.py:87 app/i18n_labels.py:624
 msgid "Invitation accepted"
 msgstr "تم قبول الدعوة"
 
-#: app/i18n_labels.py:88 app/i18n_labels.py:526
+#: app/i18n_labels.py:88 app/i18n_labels.py:622
 msgid "Roles changed"
 msgstr "تم تغيير الأدوار"
 
-#: app/i18n_labels.py:89 app/i18n_labels.py:524
+#: app/i18n_labels.py:89 app/i18n_labels.py:620
 msgid "Account disabled"
 msgstr "تم تعطيل الحساب"
 
-#: app/i18n_labels.py:90 app/i18n_labels.py:525
+#: app/i18n_labels.py:90 app/i18n_labels.py:621
 msgid "MFA reset"
 msgstr "تمت إعادة ضبط المصادقة متعددة العوامل"
 
-#: app/i18n_labels.py:91 app/i18n_labels.py:520
+#: app/i18n_labels.py:91 app/i18n_labels.py:616
 msgid "Signed in"
 msgstr "تم تسجيل الدخول"
 
-#: app/i18n_labels.py:92 app/i18n_labels.py:521
+#: app/i18n_labels.py:92 app/i18n_labels.py:617
 msgid "Signed in with MFA"
 msgstr "تم تسجيل الدخول بالمصادقة متعددة العوامل"
 
-#: app/i18n_labels.py:93 app/i18n_labels.py:522
+#: app/i18n_labels.py:93 app/i18n_labels.py:618
 msgid "Signed out"
 msgstr "تم تسجيل الخروج"
 
-#: app/i18n_labels.py:94 app/i18n_labels.py:523
+#: app/i18n_labels.py:94 app/i18n_labels.py:619
 msgid "Password changed"
 msgstr "تم تغيير كلمة المرور"
 
@@ -204,27 +204,27 @@ msgid "Recovery code used"
 msgstr "تم استخدام رمز الاسترداد"
 
 #: app/i18n_labels.py:103 app/templates/audit/security_events.html:7
-#: app/templates/layout/base.html:95 app/templates/staff/list.html:2
+#: app/templates/layout/base.html:106 app/templates/staff/list.html:2
 msgid "Staff"
 msgstr "الموظفون الإداريون"
 
 #: app/i18n_labels.py:104 app/templates/employees/list.html:2
-#: app/templates/employees/list.html:5 app/templates/layout/base.html:96
+#: app/templates/employees/list.html:5 app/templates/layout/base.html:107
 msgid "Employees"
 msgstr "الموظفون"
 
-#: app/i18n_labels.py:111 app/i18n_labels.py:125 app/i18n_labels.py:167
-#: app/i18n_labels.py:185 app/i18n_labels.py:238 app/i18n_labels.py:451
-#: app/i18n_labels.py:462 app/i18n_labels.py:473
+#: app/i18n_labels.py:111 app/i18n_labels.py:125 app/i18n_labels.py:263
+#: app/i18n_labels.py:281 app/i18n_labels.py:334 app/i18n_labels.py:547
+#: app/i18n_labels.py:558 app/i18n_labels.py:569
 msgid "Draft"
 msgstr "مسودة"
 
 #: app/commercial_ops/ui_routes.py:311 app/commercial_ops/ui_routes.py:319
 #: app/commercial_ops/ui_routes.py:345 app/commercial_ops/ui_routes.py:362
 #: app/commercial_ops/ui_routes.py:382 app/commercial_ops/ui_routes.py:405
-#: app/i18n_labels.py:112 app/i18n_labels.py:154 app/i18n_labels.py:379
-#: app/i18n_labels.py:443 app/i18n_labels.py:453 app/i18n_labels.py:464
-#: app/i18n_labels.py:475 app/templates/commercial_ops/pilot_detail.html:2
+#: app/i18n_labels.py:112 app/i18n_labels.py:154 app/i18n_labels.py:475
+#: app/i18n_labels.py:539 app/i18n_labels.py:549 app/i18n_labels.py:560
+#: app/i18n_labels.py:571 app/templates/commercial_ops/pilot_detail.html:2
 msgid "Pilot"
 msgstr "تجربة"
 
@@ -232,11 +232,12 @@ msgstr "تجربة"
 msgid "Past Due"
 msgstr "متأخر السداد"
 
-#: app/i18n_labels.py:117 app/i18n_labels.py:190
+#: app/i18n_labels.py:117 app/i18n_labels.py:217 app/i18n_labels.py:286
 msgid "Completed"
 msgstr "مكتمل"
 
-#: app/i18n_labels.py:118 app/i18n_labels.py:175 app/i18n_labels.py:191
+#: app/i18n_labels.py:118 app/i18n_labels.py:218 app/i18n_labels.py:271
+#: app/i18n_labels.py:287
 msgid "Cancelled"
 msgstr "ملغى"
 
@@ -272,280 +273,417 @@ msgstr "عميل مرتقب"
 msgid "Closed"
 msgstr "مغلق"
 
-#: app/i18n_labels.py:168
+#: app/i18n_labels.py:166 app/templates/leads/dashboard.html:26
+msgid "New"
+msgstr "جديد"
+
+#: app/i18n_labels.py:167
+msgid "Not interested now"
+msgstr "غير مهتم حاليًا"
+
+#: app/i18n_labels.py:168 app/templates/leads/dashboard.html:27
+msgid "Potential"
+msgstr "محتمل"
+
+#: app/i18n_labels.py:169
+msgid "Follow-up"
+msgstr "متابعة"
+
+#: app/i18n_labels.py:170
+msgid "Under observation"
+msgstr "قيد المراقبة"
+
+#: app/i18n_labels.py:171 app/templates/leads/dashboard.html:28
+msgid "Qualified"
+msgstr "مؤهّل"
+
+#: app/i18n_labels.py:172 app/i18n_labels.py:581
+msgid "Confirmed"
+msgstr "مؤكَّد"
+
+#: app/i18n_labels.py:173 app/templates/leads/dashboard.html:30
+msgid "Lost"
+msgstr "خاسر"
+
+#: app/i18n_labels.py:182
+msgid "Website"
+msgstr "الموقع الإلكتروني"
+
+#: app/i18n_labels.py:183
+msgid "Referral"
+msgstr "إحالة"
+
+#: app/i18n_labels.py:184
+msgid "Cold outreach"
+msgstr "تواصل مباشر"
+
+#: app/i18n_labels.py:185 app/templates/commercial_ops/timeline.html:8
+msgid "Event"
+msgstr "الحدث"
+
+#: app/i18n_labels.py:186 app/i18n_labels.py:208
+msgid "Other"
+msgstr "أخرى"
+
+#: app/i18n_labels.py:194
+msgid "Low"
+msgstr "منخفضة"
+
+#: app/i18n_labels.py:195
+msgid "Medium"
+msgstr "متوسطة"
+
+#: app/i18n_labels.py:196
+msgid "High"
+msgstr "عالية"
+
+#: app/i18n_labels.py:204
+msgid "Call"
+msgstr "مكالمة"
+
+#: app/i18n_labels.py:205 app/templates/auth/accept_invitation.html:10
+#: app/templates/auth/login.html:9 app/templates/customers/detail.html:35
+#: app/templates/customers/detail.html:47
+#: app/templates/employees/detail.html:20
+#: app/templates/employees/invitations.html:9
+#: app/templates/employees/new.html:10 app/templates/leads/detail.html:20
+#: app/templates/leads/detail.html:53 app/templates/leads/detail.html:64
+#: app/templates/leads/new.html:15 app/templates/profile/index.html:38
+#: app/templates/staff/detail.html:7 app/templates/staff/list.html:8
+#: app/templates/staff/list.html:29 app/templates/staff/list.html:45
+msgid "Email"
+msgstr "البريد الإلكتروني"
+
+#: app/i18n_labels.py:206
+msgid "Meeting"
+msgstr "اجتماع"
+
+#: app/i18n_labels.py:207
+msgid "WhatsApp (manual note)"
+msgstr "واتساب (ملاحظة يدوية)"
+
+#: app/i18n_labels.py:226
+msgid "Only me"
+msgstr "أنا فقط"
+
+#: app/i18n_labels.py:227
+msgid "Anyone with record access"
+msgstr "أي شخص لديه صلاحية الوصول للسجل"
+
+#: app/i18n_labels.py:228
+msgid "Management only"
+msgstr "الإدارة فقط"
+
+#: app/i18n_labels.py:236
+msgid "Device location (GPS)"
+msgstr "موقع الجهاز (GPS)"
+
+#: app/i18n_labels.py:237
+msgid "Approximate (network)"
+msgstr "تقريبي (عبر الشبكة)"
+
+#: app/i18n_labels.py:238
+msgid "Manually entered"
+msgstr "مُدخل يدويًا"
+
+#: app/i18n_labels.py:239 app/templates/catalog/index.html:73
+msgid "Imported"
+msgstr "تاريخ الاستيراد"
+
+#: app/i18n_labels.py:247
+msgid "Verified"
+msgstr "موثّق"
+
+#: app/i18n_labels.py:247
+msgid "Unverified"
+msgstr "غير موثّق"
+
+#: app/i18n_labels.py:254
+msgid "Possible existing record -- requires management review"
+msgstr "سجل موجود محتمل -- يتطلب مراجعة الإدارة"
+
+#: app/i18n_labels.py:264
 msgid "Quoted"
 msgstr "تم التسعير"
 
-#: app/i18n_labels.py:169
+#: app/i18n_labels.py:265
 msgid "Awaiting Confirmation"
 msgstr "بانتظار التأكيد"
 
-#: app/i18n_labels.py:170
+#: app/i18n_labels.py:266
 msgid "Awaiting Payment"
 msgstr "بانتظار الدفع"
 
-#: app/i18n_labels.py:171
+#: app/i18n_labels.py:267
 msgid "Payment Recorded"
 msgstr "تم تسجيل الدفع"
 
-#: app/i18n_labels.py:172 app/i18n_labels.py:186 app/i18n_labels.py:221
+#: app/i18n_labels.py:268 app/i18n_labels.py:282 app/i18n_labels.py:317
 msgid "Approved"
 msgstr "مُعتمَد"
 
-#: app/i18n_labels.py:173
+#: app/i18n_labels.py:269
 msgid "Applied"
 msgstr "مُطبَّق"
 
-#: app/i18n_labels.py:174 app/i18n_labels.py:222 app/i18n_labels.py:504
+#: app/i18n_labels.py:270 app/i18n_labels.py:318 app/i18n_labels.py:600
 msgid "Rejected"
 msgstr "مرفوض"
 
-#: app/i18n_labels.py:176 app/i18n_labels.py:488
+#: app/i18n_labels.py:272 app/i18n_labels.py:584
 msgid "Voided"
 msgstr "ملغى (باطل)"
 
-#: app/i18n_labels.py:188
+#: app/i18n_labels.py:284
 msgid "Extended"
 msgstr "مُمدَّد"
 
-#: app/i18n_labels.py:189
+#: app/i18n_labels.py:285 app/templates/leads/dashboard.html:29
 msgid "Converted"
 msgstr "مُحوَّل"
 
-#: app/i18n_labels.py:198
+#: app/i18n_labels.py:294
 msgid "Info"
 msgstr "معلومة"
 
-#: app/i18n_labels.py:199
+#: app/i18n_labels.py:295
 msgid "Warning"
 msgstr "تحذير"
 
-#: app/i18n_labels.py:200
+#: app/i18n_labels.py:296
 msgid "Critical"
 msgstr "حرج"
 
-#: app/i18n_labels.py:210 app/i18n_labels.py:231
+#: app/i18n_labels.py:306 app/i18n_labels.py:327
 msgid "In Progress"
 msgstr "قيد التنفيذ"
 
-#: app/i18n_labels.py:211
+#: app/i18n_labels.py:307
 msgid "Acknowledged"
 msgstr "تم الإقرار"
 
-#: app/i18n_labels.py:212
+#: app/i18n_labels.py:308
 msgid "Resolved"
 msgstr "تم الحل"
 
-#: app/i18n_labels.py:213
+#: app/i18n_labels.py:309
 msgid "Dismissed"
 msgstr "مرفوض"
 
-#: app/i18n_labels.py:220 app/i18n_labels.py:505
+#: app/i18n_labels.py:316 app/i18n_labels.py:601
 msgid "Pending Review"
 msgstr "بانتظار المراجعة"
 
-#: app/i18n_labels.py:229 app/i18n_labels.py:495 app/i18n_labels.py:506
+#: app/i18n_labels.py:325 app/i18n_labels.py:591 app/i18n_labels.py:602
 msgid "Success"
 msgstr "نجاح"
 
-#: app/i18n_labels.py:230 app/i18n_labels.py:486
+#: app/i18n_labels.py:326 app/i18n_labels.py:582
 msgid "Failed"
 msgstr "فشل"
 
-#: app/i18n_labels.py:240 app/i18n_labels.py:455 app/i18n_labels.py:466
-#: app/i18n_labels.py:477
+#: app/i18n_labels.py:336 app/i18n_labels.py:551 app/i18n_labels.py:562
+#: app/i18n_labels.py:573
 #: app/templates/commercial_ops/activation_policy.html:39
 #: app/templates/licensing_admin/signing_keys.html:22
 msgid "Retired"
 msgstr "متقاعد"
 
-#: app/i18n_labels.py:262
+#: app/i18n_labels.py:358
 #, python-format
 msgid ""
 "Subscription must already be in PILOT status to create a pilot record "
 "(was %(current_status)s)."
-msgstr "يجب أن يكون الاشتراك في حالة PILOT بالفعل لإنشاء سجل تجربة تشغيلية (كانت الحالة %(current_status)s)."
+msgstr ""
+"يجب أن يكون الاشتراك في حالة PILOT بالفعل لإنشاء سجل تجربة تشغيلية (كانت "
+"الحالة %(current_status)s)."
 
-#: app/i18n_labels.py:263
+#: app/i18n_labels.py:359
 msgid "Pilot end date must be after the pilot start date."
 msgstr "يجب أن يكون تاريخ انتهاء التجربة التشغيلية بعد تاريخ بدايتها."
 
-#: app/i18n_labels.py:264
+#: app/i18n_labels.py:360
 msgid "A reason is required to extend a pilot."
 msgstr "يلزم إدخال سبب لتمديد التجربة التشغيلية."
 
-#: app/i18n_labels.py:265
+#: app/i18n_labels.py:361
 #, python-format
 msgid ""
 "Pilot has already been extended %(count)s time(s) (maximum allowed: "
 "%(max)s). No indefinite rolling pilot."
-msgstr "تم تمديد التجربة التشغيلية %(count)s مرة/مرات بالفعل (الحد الأقصى المسموح به: %(max)s) -- لا يُسمح بتمديد التجربة إلى ما لا نهاية."
+msgstr ""
+"تم تمديد التجربة التشغيلية %(count)s مرة/مرات بالفعل (الحد الأقصى المسموح"
+" به: %(max)s) -- لا يُسمح بتمديد التجربة إلى ما لا نهاية."
 
-#: app/i18n_labels.py:266
+#: app/i18n_labels.py:362
 msgid "The new end date must be after the current pilot end date."
-msgstr "يجب أن يكون تاريخ الانتهاء الجديد بعد تاريخ انتهاء التجربة التشغيلية الحالي."
+msgstr ""
+"يجب أن يكون تاريخ الانتهاء الجديد بعد تاريخ انتهاء التجربة التشغيلية "
+"الحالي."
 
-#: app/i18n_labels.py:267
+#: app/i18n_labels.py:363
 msgid ""
 "The renewal request must be applied before this pilot can be marked "
 "converted."
 msgstr "يجب تطبيق طلب التجديد قبل أن يتسنى تعليم هذه التجربة التشغيلية كمُحوَّلة."
 
-#: app/i18n_labels.py:268
+#: app/i18n_labels.py:364
 msgid "This renewal request does not belong to this pilot's subscription."
 msgstr "طلب التجديد هذا لا يخص اشتراك هذه التجربة التشغيلية."
 
-#: app/i18n_labels.py:269
+#: app/i18n_labels.py:365
 msgid "A reason is required to cancel a pilot."
 msgstr "يلزم إدخال سبب لإلغاء التجربة التشغيلية."
 
-#: app/i18n_labels.py:279
+#: app/i18n_labels.py:375
 #, python-format
 msgid "Cannot change the pilot status from %(from_status)s to %(to_status)s."
 msgstr "لا يمكن تغيير حالة التجربة التشغيلية من %(from_status)s إلى %(to_status)s."
 
-#: app/i18n_labels.py:280
+#: app/i18n_labels.py:376
 #, python-format
 msgid "Cannot extend a pilot in status %(status)s."
 msgstr "لا يمكن تمديد تجربة تشغيلية في حالة %(status)s."
 
-#: app/i18n_labels.py:281
+#: app/i18n_labels.py:377
 #, python-format
 msgid "Cannot convert a pilot in status %(status)s."
 msgstr "لا يمكن تحويل تجربة تشغيلية في حالة %(status)s."
 
-#: app/i18n_labels.py:292
+#: app/i18n_labels.py:388
 #, python-format
 msgid ""
 "Cannot change the renewal request status from %(from_status)s to "
 "%(to_status)s."
 msgstr "لا يمكن تغيير حالة طلب التجديد من %(from_status)s إلى %(to_status)s."
 
-#: app/i18n_labels.py:293
+#: app/i18n_labels.py:389
 msgid "Use the approve action to move this renewal request to Approved."
 msgstr "استخدم إجراء الاعتماد لنقل طلب التجديد هذا إلى حالة معتمد."
 
-#: app/i18n_labels.py:294
+#: app/i18n_labels.py:390
 #, python-format
 msgid "Cannot approve a renewal request in status %(status)s."
 msgstr "لا يمكن اعتماد طلب تجديد في حالة %(status)s."
 
-#: app/i18n_labels.py:295
+#: app/i18n_labels.py:391
 #, python-format
 msgid ""
 "Cannot apply a renewal request in status %(status)s; it must be Approved "
 "first."
 msgstr "لا يمكن تطبيق طلب تجديد في حالة %(status)s؛ يجب أن يكون معتمدًا أولاً."
 
-#: app/i18n_labels.py:306
+#: app/i18n_labels.py:402
 msgid "A reason is required to release a device slot."
 msgstr "يلزم إدخال سبب لتحرير فتحة الجهاز."
 
-#: app/i18n_labels.py:307
+#: app/i18n_labels.py:403
 msgid "A reason is required to replace a device slot."
 msgstr "يلزم إدخال سبب لاستبدال فتحة الجهاز."
 
-#: app/i18n_labels.py:308
+#: app/i18n_labels.py:404
 msgid "Extra slots must be a positive number."
 msgstr "يجب أن يكون عدد الفتحات الإضافية رقمًا موجبًا."
 
-#: app/i18n_labels.py:309
+#: app/i18n_labels.py:405
 msgid "A reason is required to create a device slot exception."
 msgstr "يلزم إدخال سبب لإنشاء استثناء فتحة جهاز."
 
-#: app/i18n_labels.py:310
+#: app/i18n_labels.py:406
 msgid "The expiry date must be after the start date."
 msgstr "يجب أن يكون تاريخ الانتهاء بعد تاريخ البدء."
 
-#: app/i18n_labels.py:311
+#: app/i18n_labels.py:407
 #, python-format
 msgid ""
 "Device slot exceptions may not exceed %(max_days)s days -- temporary "
 "means temporary."
-msgstr "لا يجوز أن تتجاوز استثناءات فتحات الأجهزة %(max_days)s يومًا -- فالمؤقت يعني مؤقتًا."
+msgstr ""
+"لا يجوز أن تتجاوز استثناءات فتحات الأجهزة %(max_days)s يومًا -- فالمؤقت "
+"يعني مؤقتًا."
 
-#: app/i18n_labels.py:312
+#: app/i18n_labels.py:408
 #, python-format
 msgid "Cannot revoke a device slot exception in status %(status)s."
 msgstr "لا يمكن إلغاء استثناء فتحة جهاز في حالة %(status)s."
 
-#: app/i18n_labels.py:313
+#: app/i18n_labels.py:409
 msgid "A reason is required to revoke a device slot exception."
 msgstr "يلزم إدخال سبب لإلغاء استثناء فتحة الجهاز."
 
-#: app/i18n_labels.py:323
+#: app/i18n_labels.py:419
 msgid "A reason is required to create an emergency extension."
 msgstr "يلزم إدخال سبب لإنشاء تمديد طوارئ."
 
-#: app/i18n_labels.py:324
+#: app/i18n_labels.py:420
 #, python-format
 msgid ""
 "Duration must be between 1 and %(max_hours)s hours (explicit, short-lived"
 " only)."
 msgstr "يجب أن تكون المدة بين 1 و%(max_hours)s ساعة (صريحة وقصيرة الأجل فقط)."
 
-#: app/i18n_labels.py:325
+#: app/i18n_labels.py:421
 msgid "Cannot create an emergency extension for a revoked license."
 msgstr "لا يمكن إنشاء تمديد طوارئ لترخيص مُلغى."
 
-#: app/i18n_labels.py:326
+#: app/i18n_labels.py:422
 #, python-format
 msgid ""
 "This subscription already has an active emergency extension until "
 "%(expires_at)s."
 msgstr "لدى هذا الاشتراك بالفعل تمديد طوارئ نشط حتى %(expires_at)s."
 
-#: app/i18n_labels.py:327
+#: app/i18n_labels.py:423
 #, python-format
 msgid "Cannot revoke an emergency extension in status %(status)s."
 msgstr "لا يمكن إلغاء تمديد طوارئ في حالة %(status)s."
 
-#: app/i18n_labels.py:328
+#: app/i18n_labels.py:424
 msgid "A reason is required to revoke an emergency extension."
 msgstr "يلزم إدخال سبب لإلغاء تمديد الطوارئ."
 
-#: app/i18n_labels.py:339
+#: app/i18n_labels.py:435
 #, python-format
 msgid "Cannot approve a pending activation in status %(status)s."
 msgstr "لا يمكن الموافقة على تفعيل معلّق في حالة %(status)s."
 
-#: app/i18n_labels.py:340
+#: app/i18n_labels.py:436
 msgid "This installation is no longer awaiting activation."
 msgstr "هذا التثبيت لم يعد بانتظار التفعيل."
 
-#: app/i18n_labels.py:341
+#: app/i18n_labels.py:437
 msgid "The license for this pending activation could not be found."
 msgstr "تعذّر العثور على الترخيص الخاص بهذا التفعيل المعلّق."
 
-#: app/i18n_labels.py:342
+#: app/i18n_labels.py:438
 msgid "This license has already reached its device limit."
 msgstr "بلغ هذا الترخيص الحد الأقصى لعدد الأجهزة بالفعل."
 
-#: app/i18n_labels.py:343
+#: app/i18n_labels.py:439
 #, python-format
 msgid "Cannot reject a pending activation in status %(status)s."
 msgstr "لا يمكن رفض تفعيل معلّق في حالة %(status)s."
 
-#: app/i18n_labels.py:344
+#: app/i18n_labels.py:440
 msgid "A reason is required to reject a pending activation."
 msgstr "يلزم إدخال سبب لرفض طلب تفعيل معلّق."
 
-#: app/i18n_labels.py:354
+#: app/i18n_labels.py:450
 #, python-format
 msgid "Unknown activation mode: %(mode)s"
 msgstr "وضع تفعيل غير معروف: %(mode)s"
 
-#: app/i18n_labels.py:364
+#: app/i18n_labels.py:460
 #, python-format
 msgid "Cannot acknowledge a notification in status %(status)s."
 msgstr "لا يمكن الإقرار بإشعار في حالة %(status)s."
 
-#: app/i18n_labels.py:365
+#: app/i18n_labels.py:461
 #, python-format
 msgid "This notification is already %(status)s."
 msgstr "هذا الإشعار بالفعل في حالة %(status)s."
 
-#: app/commercial_ops/ui_routes.py:765 app/i18n_labels.py:375
+#: app/commercial_ops/ui_routes.py:765 app/i18n_labels.py:471
 #: app/templates/commercial_ops/emergency_extension_detail.html:8
 #: app/templates/commercial_ops/emergency_extensions_list.html:17
 #: app/templates/commercial_ops/pilot_detail.html:8
@@ -557,7 +695,7 @@ msgid "Subscription"
 msgstr "الاشتراك"
 
 #: app/commercial_ops/ui_routes.py:612 app/commercial_ops/ui_routes.py:626
-#: app/i18n_labels.py:376
+#: app/i18n_labels.py:472
 #: app/templates/commercial_ops/emergency_extension_detail.html:9
 #: app/templates/commercial_ops/pending_activation_detail.html:9
 #: app/templates/installations/new.html:8 app/templates/licensing/detail.html:2
@@ -565,7 +703,7 @@ msgid "License"
 msgstr "الترخيص"
 
 #: app/commercial_ops/ui_routes.py:585 app/commercial_ops/ui_routes.py:599
-#: app/i18n_labels.py:377
+#: app/i18n_labels.py:473
 #: app/templates/commercial_ops/pending_activation_detail.html:8
 #: app/templates/commercial_ops/pending_activations_list.html:17
 #: app/templates/installations/detail.html:2
@@ -574,194 +712,368 @@ msgstr "الترخيص"
 msgid "Installation"
 msgstr "التثبيت"
 
-#: app/i18n_labels.py:378 app/templates/commercial_ops/renewal_detail.html:2
+#: app/i18n_labels.py:474 app/templates/commercial_ops/renewal_detail.html:2
 msgid "Renewal"
 msgstr "التجديد"
 
 #: app/commercial_ops/ui_routes.py:689 app/commercial_ops/ui_routes.py:701
-#: app/commercial_ops/ui_routes.py:716 app/i18n_labels.py:380
+#: app/commercial_ops/ui_routes.py:716 app/i18n_labels.py:476
 msgid "Notification"
 msgstr "الإشعار"
 
-#: app/i18n_labels.py:387
+#: app/i18n_labels.py:483
 msgid "Automatic"
 msgstr "تلقائي"
 
-#: app/i18n_labels.py:388
+#: app/i18n_labels.py:484
 msgid "Manual Approval"
 msgstr "موافقة يدوية"
 
-#: app/i18n_labels.py:389
+#: app/i18n_labels.py:485
 msgid "Risk Review"
 msgstr "مراجعة المخاطر"
 
-#: app/i18n_labels.py:404 app/i18n_labels.py:484
+#: app/i18n_labels.py:500 app/i18n_labels.py:580
 msgid "Pending"
 msgstr "قيد الانتظار"
 
-#: app/i18n_labels.py:405
+#: app/i18n_labels.py:501
 msgid "Convert"
 msgstr "تحويل"
 
-#: app/i18n_labels.py:406
+#: app/i18n_labels.py:502
 msgid "Do Not Convert"
 msgstr "عدم التحويل"
 
-#: app/i18n_labels.py:413 app/templates/commercial_ops/renewals_new.html:16
+#: app/i18n_labels.py:509 app/templates/commercial_ops/renewals_new.html:16
 msgid "Early renewal (from current end date)"
 msgstr "تجديد مبكر (من تاريخ الانتهاء الحالي)"
 
-#: app/i18n_labels.py:414 app/templates/commercial_ops/renewals_new.html:17
+#: app/i18n_labels.py:510 app/templates/commercial_ops/renewals_new.html:17
 msgid "Late renewal (from approval date)"
 msgstr "تجديد متأخر (من تاريخ الموافقة)"
 
-#: app/i18n_labels.py:421
+#: app/i18n_labels.py:517
 msgid "Activation"
 msgstr "التفعيل"
 
-#: app/i18n_labels.py:422
+#: app/i18n_labels.py:518
 msgid "Check-in"
 msgstr "تسجيل حضور"
 
-#: app/i18n_labels.py:423
+#: app/i18n_labels.py:519
 msgid "Deactivation"
 msgstr "إلغاء التفعيل"
 
-#: app/i18n_labels.py:430 app/templates/audit/verify_chain.html:7
+#: app/i18n_labels.py:526 app/templates/audit/verify_chain.html:7
 msgid "OK"
 msgstr "سليم"
 
-#: app/i18n_labels.py:431
+#: app/i18n_labels.py:527
 msgid "Degraded"
 msgstr "متدهور"
 
-#: app/i18n_labels.py:432
+#: app/i18n_labels.py:528
 msgid "Down"
 msgstr "متوقف"
 
-#: app/i18n_labels.py:433
+#: app/i18n_labels.py:529
 msgid "Unknown"
 msgstr "غير معروف"
 
-#: app/i18n_labels.py:440
+#: app/i18n_labels.py:536
 msgid "One-time"
 msgstr "مرة واحدة"
 
-#: app/i18n_labels.py:441
+#: app/i18n_labels.py:537
 msgid "Monthly"
 msgstr "شهري"
 
-#: app/i18n_labels.py:442
+#: app/i18n_labels.py:538
 msgid "Annual"
 msgstr "سنوي"
 
-#: app/i18n_labels.py:444
+#: app/i18n_labels.py:540
 msgid "Custom"
 msgstr "مخصص"
 
-#: app/i18n_labels.py:452 app/i18n_labels.py:463 app/i18n_labels.py:474
+#: app/i18n_labels.py:548 app/i18n_labels.py:559 app/i18n_labels.py:570
 msgid "Planned"
 msgstr "مخطط له"
 
-#: app/i18n_labels.py:454 app/i18n_labels.py:465 app/i18n_labels.py:476
+#: app/i18n_labels.py:550 app/i18n_labels.py:561 app/i18n_labels.py:572
 msgid "Available"
 msgstr "متاح"
 
-#: app/i18n_labels.py:485
-msgid "Confirmed"
-msgstr "مؤكَّد"
-
-#: app/i18n_labels.py:487
+#: app/i18n_labels.py:583
 msgid "Refunded"
 msgstr "مُسترجَع"
 
-#: app/i18n_labels.py:496 app/i18n_labels.py:507
+#: app/i18n_labels.py:592 app/i18n_labels.py:603
 msgid "Failure"
 msgstr "فشل"
 
-#: app/i18n_labels.py:503
+#: app/i18n_labels.py:599
 msgid "Accepted"
 msgstr "مقبول"
 
-#: app/i18n_labels.py:530
+#: app/i18n_labels.py:626
 msgid "Customer created"
 msgstr "تم إنشاء العميل"
 
-#: app/i18n_labels.py:531
+#: app/i18n_labels.py:627
 msgid "Customer updated"
 msgstr "تم تحديث العميل"
 
-#: app/i18n_labels.py:532
+#: app/i18n_labels.py:628
 msgid "Customer archived"
 msgstr "تم أرشفة العميل"
 
-#: app/i18n_labels.py:533
+#: app/i18n_labels.py:629
 msgid "Subscription created"
 msgstr "تم إنشاء الاشتراك"
 
-#: app/i18n_labels.py:534
+#: app/i18n_labels.py:630
 msgid "Subscription status changed"
 msgstr "تم تغيير حالة الاشتراك"
 
-#: app/i18n_labels.py:535
+#: app/i18n_labels.py:631
 msgid "Subscription renewed"
 msgstr "تم تجديد الاشتراك"
 
-#: app/i18n_labels.py:536
+#: app/i18n_labels.py:632
 msgid "Payment recorded"
 msgstr "تم تسجيل الدفعة"
 
-#: app/i18n_labels.py:537
+#: app/i18n_labels.py:633
 msgid "Payment corrected"
 msgstr "تم تصحيح الدفعة"
 
-#: app/i18n_labels.py:538
+#: app/i18n_labels.py:634
 msgid "License issued"
 msgstr "تم إصدار الترخيص"
 
-#: app/i18n_labels.py:539
+#: app/i18n_labels.py:635
 msgid "License status changed"
 msgstr "تم تغيير حالة الترخيص"
 
-#: app/i18n_labels.py:540
+#: app/i18n_labels.py:636
 msgid "License replaced"
 msgstr "تم استبدال الترخيص"
 
-#: app/i18n_labels.py:541
+#: app/i18n_labels.py:637
 msgid "License created"
 msgstr "تم إنشاء الترخيص"
 
-#: app/i18n_labels.py:542
+#: app/i18n_labels.py:638
 msgid "License key issued"
 msgstr "تم إصدار مفتاح الترخيص"
 
-#: app/i18n_labels.py:543
+#: app/i18n_labels.py:639
 msgid "Installation registered"
 msgstr "تم تسجيل التثبيت"
 
-#: app/i18n_labels.py:544
+#: app/i18n_labels.py:640
 msgid "Installation status changed"
 msgstr "تم تغيير حالة التثبيت"
 
-#: app/i18n_labels.py:545
+#: app/i18n_labels.py:641
 msgid "Backup created"
 msgstr "تم إنشاء نسخة احتياطية"
 
-#: app/i18n_labels.py:546
+#: app/i18n_labels.py:642
 msgid "Backup restored"
 msgstr "تمت استعادة النسخة الاحتياطية"
 
-#: app/i18n_labels.py:549
+#: app/i18n_labels.py:645
 msgid "Check-in accepted"
 msgstr "تم قبول تسجيل الحضور"
 
-#: app/i18n_labels.py:550
+#: app/i18n_labels.py:646
 msgid "Activation accepted"
 msgstr "تم قبول التفعيل"
 
-#: app/i18n_labels.py:551
+#: app/i18n_labels.py:647
 msgid "Device-slot exception created"
 msgstr "تم إنشاء استثناء فتحة الجهاز"
+
+#: app/i18n_labels.py:657
+#, python-format
+msgid "Cannot change lead status from %(from_status)s to %(to_status)s."
+msgstr "لا يمكن تغيير حالة العميل المحتمل من %(from_status)s إلى %(to_status)s."
+
+#: app/i18n_labels.py:658
+msgid "A reason is required to mark a lead as lost."
+msgstr "يلزم إدخال سبب لتصنيف العميل المحتمل كخاسر."
+
+#: app/i18n_labels.py:659
+msgid "This lead was changed by someone else. Reload and try again."
+msgstr "تم تغيير هذا العميل المحتمل من قبل شخص آخر. أعد التحميل وحاول مرة أخرى."
+
+#: app/i18n_labels.py:660
+msgid "Lead not found."
+msgstr "العميل المحتمل غير موجود."
+
+#: app/i18n_labels.py:661
+msgid "You do not have access to this lead."
+msgstr "ليست لديك صلاحية الوصول إلى هذا العميل المحتمل."
+
+#: app/i18n_labels.py:662
+msgid "Cannot assign a lead to an inactive employee."
+msgstr "لا يمكن إسناد عميل محتمل إلى موظف غير نشط."
+
+#: app/i18n_labels.py:663
+msgid "A reason is required to reassign a lead."
+msgstr "يلزم إدخال سبب لإعادة إسناد العميل المحتمل."
+
+#: app/i18n_labels.py:664
+msgid "A prospect or organization name is required."
+msgstr "اسم العميل المحتمل أو المؤسسة مطلوب."
+
+#: app/i18n_labels.py:665
+#, python-format
+msgid "Name must be at most %(max_len)s characters."
+msgstr "يجب ألا يتجاوز الاسم %(max_len)s حرفًا."
+
+#: app/i18n_labels.py:666
+#, python-format
+msgid "Phone must be at most %(max_len)s characters."
+msgstr "يجب ألا يتجاوز رقم الهاتف %(max_len)s حرفًا."
+
+#: app/i18n_labels.py:667
+msgid "Enter a valid email address."
+msgstr "أدخل بريدًا إلكترونيًا صالحًا."
+
+#: app/i18n_labels.py:668
+msgid "At least one contact method (phone or email) is required."
+msgstr "يلزم وجود وسيلة تواصل واحدة على الأقل (هاتف أو بريد إلكتروني)."
+
+#: app/i18n_labels.py:669
+#, python-format
+msgid "Unknown lead source: %(source)s."
+msgstr "مصدر عميل محتمل غير معروف: %(source)s."
+
+#: app/i18n_labels.py:670
+#, python-format
+msgid "Unknown lead priority: %(priority)s."
+msgstr "أولوية عميل محتمل غير معروفة: %(priority)s."
+
+#: app/i18n_labels.py:671
+msgid "Estimated value must be a non-negative number."
+msgstr "يجب أن تكون القيمة التقديرية رقمًا غير سالب."
+
+#: app/i18n_labels.py:672
+msgid "A 3-letter currency code is required when an estimated value is set."
+msgstr "يلزم رمز عملة مكوّن من 3 أحرف عند تحديد قيمة تقديرية."
+
+#: app/i18n_labels.py:673
+#, python-format
+msgid "Location summary must be at most %(max_len)s characters."
+msgstr "يجب ألا يتجاوز ملخص الموقع %(max_len)s حرفًا."
+
+#: app/i18n_labels.py:674
+msgid ""
+"This request conflicts with an earlier request using the same idempotency"
+" key."
+msgstr "يتعارض هذا الطلب مع طلب سابق استخدم مفتاح التكرار (idempotency key) نفسه."
+
+#: app/i18n_labels.py:675
+#, python-format
+msgid "Unknown interaction type: %(interaction_type)s."
+msgstr "نوع تفاعل غير معروف: %(interaction_type)s."
+
+#: app/i18n_labels.py:676
+#, python-format
+msgid "Summary must be at most %(max_len)s characters."
+msgstr "يجب ألا يتجاوز الملخص %(max_len)s حرفًا."
+
+#: app/i18n_labels.py:677
+msgid "Interaction time cannot be in the future."
+msgstr "لا يمكن أن يكون وقت التفاعل في المستقبل."
+
+#: app/i18n_labels.py:678
+msgid "A due date/time is required for a follow-up."
+msgstr "يلزم تحديد تاريخ/وقت الاستحقاق للمتابعة."
+
+#: app/i18n_labels.py:679
+msgid "This follow-up was already cancelled."
+msgstr "تم إلغاء هذه المتابعة بالفعل."
+
+#: app/i18n_labels.py:680
+msgid "This follow-up was already completed."
+msgstr "تم إكمال هذه المتابعة بالفعل."
+
+#: app/i18n_labels.py:681
+msgid "A reason is required to cancel a follow-up."
+msgstr "يلزم إدخال سبب لإلغاء المتابعة."
+
+#: app/i18n_labels.py:682
+msgid "Contact name is required."
+msgstr "اسم جهة الاتصال مطلوب."
+
+#: app/i18n_labels.py:683
+#, python-format
+msgid "Contact name must be at most %(max_len)s characters."
+msgstr "يجب ألا يتجاوز اسم جهة الاتصال %(max_len)s حرفًا."
+
+#: app/i18n_labels.py:684 app/i18n_labels.py:702
+#, python-format
+msgid "Unknown note visibility: %(visibility)s."
+msgstr "مستوى ظهور ملاحظة غير معروف: %(visibility)s."
+
+#: app/i18n_labels.py:685
+#, python-format
+msgid "Note must be at most %(max_len)s characters."
+msgstr "يجب ألا تتجاوز الملاحظة %(max_len)s حرفًا."
+
+#: app/i18n_labels.py:686
+msgid "Note text is required."
+msgstr "نص الملاحظة مطلوب."
+
+#: app/i18n_labels.py:698
+msgid "This customer was changed by someone else. Reload and try again."
+msgstr "تم تغيير هذا العميل من قبل شخص آخر. أعد التحميل وحاول مرة أخرى."
+
+#: app/i18n_labels.py:699
+msgid "You do not have access to this customer."
+msgstr "ليست لديك صلاحية الوصول إلى هذا العميل."
+
+#: app/i18n_labels.py:700
+msgid "Cannot assign a customer to an inactive employee."
+msgstr "لا يمكن إسناد عميل إلى موظف غير نشط."
+
+#: app/i18n_labels.py:701
+msgid "A reason is required to reassign a customer."
+msgstr "يلزم إدخال سبب لإعادة إسناد العميل."
+
+#: app/i18n_labels.py:716
+msgid "Latitude must be a finite number between -90 and 90."
+msgstr "يجب أن يكون خط العرض رقمًا محدودًا بين -90 و90."
+
+#: app/i18n_labels.py:717
+msgid "Longitude must be a finite number between -180 and 180."
+msgstr "يجب أن يكون خط الطول رقمًا محدودًا بين -180 و180."
+
+#: app/i18n_labels.py:718
+msgid "Accuracy must be a finite number greater than or equal to zero."
+msgstr "يجب أن تكون الدقة رقمًا محدودًا أكبر من أو يساوي صفرًا."
+
+#: app/i18n_labels.py:719
+#, python-format
+msgid "Unknown location source: %(source)s."
+msgstr "مصدر موقع غير معروف: %(source)s."
+
+#: app/i18n_labels.py:720
+msgid "Client-reported capture time is too far from server time."
+msgstr "وقت الالتقاط المُرسل من الجهاز بعيد جدًا عن وقت الخادم."
+
+#: app/i18n_labels.py:721
+msgid "Manual address is too long."
+msgstr "العنوان اليدوي طويل جدًا."
+
+#: app/i18n_labels.py:722
+msgid "A reason is required to verify or revoke a location."
+msgstr "يلزم إدخال سبب لتوثيق الموقع أو إلغاء توثيقه."
 
 #: app/auth/routes.py:378
 msgid "Invitation is invalid or has expired."
@@ -903,9 +1215,11 @@ msgstr "تصدير CSV"
 #: app/templates/commercial_ops/pilot_detail.html:88
 #: app/templates/commercial_ops/renewal_detail.html:68
 #: app/templates/commercial_ops/timeline.html:8
+#: app/templates/customers/detail.html:150
 #: app/templates/dashboard/index.html:71
 #: app/templates/employees/detail.html:136
 #: app/templates/installations/detail.html:54
+#: app/templates/leads/detail.html:167 app/templates/leads/detail.html:179
 #: app/templates/licensing/detail.html:65
 #: app/templates/licensing_admin/requests.html:18
 #: app/templates/subscriptions/detail.html:44
@@ -1007,17 +1321,6 @@ msgstr "قبول الدعوة"
 msgid "Set up your Aura Owner account"
 msgstr "إعداد حساب Aura Owner الخاص بك"
 
-#: app/templates/auth/accept_invitation.html:10 app/templates/auth/login.html:9
-#: app/templates/customers/detail.html:23
-#: app/templates/customers/detail.html:35
-#: app/templates/employees/detail.html:20
-#: app/templates/employees/invitations.html:9
-#: app/templates/employees/new.html:10 app/templates/profile/index.html:38
-#: app/templates/staff/detail.html:7 app/templates/staff/list.html:8
-#: app/templates/staff/list.html:29 app/templates/staff/list.html:45
-msgid "Email"
-msgstr "البريد الإلكتروني"
-
 #: app/templates/auth/accept_invitation.html:12
 msgid "Your name"
 msgstr "اسمك"
@@ -1054,7 +1357,7 @@ msgid "Login"
 msgstr "تسجيل الدخول"
 
 #: app/templates/auth/login.html:5 app/templates/layout/base.html:5
-#: app/templates/layout/base.html:63
+#: app/templates/layout/base.html:72
 msgid "Aura Owner Control Center"
 msgstr "مركز تحكم Aura Owner"
 
@@ -1139,6 +1442,7 @@ msgid "6-digit code (or a recovery code)"
 msgstr "رمز مكوّن من 6 أرقام (أو رمز استرداد)"
 
 #: app/templates/auth/mfa_verify.html:11
+#: app/templates/customers/detail.html:124 app/templates/leads/detail.html:141
 msgid "Verify"
 msgstr "تأكيد"
 
@@ -1177,13 +1481,14 @@ msgstr "الرمز"
 #: app/templates/catalog/channels.html:7 app/templates/catalog/index.html:7
 #: app/templates/catalog/index.html:22 app/templates/catalog/index.html:36
 #: app/templates/catalog/plan_new.html:14
-#: app/templates/customers/detail.html:23
-#: app/templates/customers/detail.html:33 app/templates/employees/list.html:44
-#: app/templates/employees/list.html:49 app/templates/staff/list.html:8
+#: app/templates/customers/detail.html:35
+#: app/templates/customers/detail.html:45 app/templates/employees/list.html:44
+#: app/templates/employees/list.html:49 app/templates/leads/detail.html:53
+#: app/templates/leads/detail.html:63 app/templates/staff/list.html:8
 msgid "Name"
 msgstr "الاسم"
 
-#: app/templates/catalog/index.html:2 app/templates/layout/base.html:84
+#: app/templates/catalog/index.html:2 app/templates/layout/base.html:95
 msgid "Catalog"
 msgstr "الكتالوج"
 
@@ -1200,7 +1505,7 @@ msgid "Sellable"
 msgstr "قابل للبيع"
 
 #: app/templates/catalog/index.html:10 app/templates/catalog/versions.html:13
-#: app/templates/customers/detail.html:26
+#: app/templates/customers/detail.html:38 app/templates/leads/detail.html:56
 #: app/templates/licensing_admin/status.html:7
 #: app/templates/staff/detail.html:9 app/templates/staff/list.html:15
 msgid "Yes"
@@ -1245,6 +1550,7 @@ msgstr "نموذج الفوترة"
 #: app/templates/employees/list.html:53
 #: app/templates/installations/list.html:11
 #: app/templates/installations/list.html:21
+#: app/templates/leads/dashboard.html:16 app/templates/leads/list.html:11
 #: app/templates/licensing/list.html:11 app/templates/licensing/list.html:21
 #: app/templates/licensing_admin/device_keys.html:7
 #: app/templates/licensing_admin/signing_keys.html:22
@@ -1320,10 +1626,6 @@ msgstr "الإصدار"
 #: app/templates/system/backups.html:14
 msgid "Checksum"
 msgstr "المجموع التحققي"
-
-#: app/templates/catalog/index.html:73
-msgid "Imported"
-msgstr "تاريخ الاستيراد"
 
 #: app/templates/catalog/index.html:78
 msgid "No versions imported yet -- use"
@@ -1468,6 +1770,8 @@ msgstr "تاريخ السريان"
 #: app/templates/commercial_ops/activation_policy.html:31
 #: app/templates/commercial_ops/renewal_detail.html:22
 #: app/templates/commercial_ops/renewals_new.html:30
+#: app/templates/customers/detail.html:91 app/templates/leads/detail.html:108
+#: app/templates/leads/detail.html:114
 msgid "Notes"
 msgstr "ملاحظات"
 
@@ -1506,8 +1810,10 @@ msgstr "(كل التراخيص في هذا الاشتراك)"
 #: app/templates/commercial_ops/renewals_new.html:29
 #: app/templates/commercial_ops/slot_exceptions.html:27
 #: app/templates/commercial_ops/timeline.html:8
+#: app/templates/customers/detail.html:150
 #: app/templates/employees/detail.html:136
 #: app/templates/installations/detail.html:26
+#: app/templates/leads/detail.html:167 app/templates/leads/detail.html:179
 #: app/templates/licensing/detail.html:44
 #: app/templates/licensing/detail.html:65
 #: app/templates/licensing_admin/requests.html:18
@@ -1600,7 +1906,7 @@ msgstr "تمديدات الطوارئ"
 #: app/templates/customers/list.html:13 app/templates/employees/list.html:10
 #: app/templates/employees/list.html:16 app/templates/employees/list.html:24
 #: app/templates/employees/list.html:30
-#: app/templates/installations/list.html:13
+#: app/templates/installations/list.html:13 app/templates/leads/list.html:13
 #: app/templates/licensing/list.html:13
 #: app/templates/licensing_admin/requests.html:10
 #: app/templates/subscriptions/list.html:13
@@ -1667,7 +1973,7 @@ msgid "%(entity)s not found."
 msgstr "%(entity)s غير موجود."
 
 #: app/templates/commercial_ops/notifications_list.html:2
-#: app/templates/layout/base.html:92
+#: app/templates/layout/base.html:103
 msgid "Notifications"
 msgstr "الإشعارات"
 
@@ -1694,15 +2000,15 @@ msgid "Filter"
 msgstr "تصفية"
 
 #: app/templates/commercial_ops/notifications_list.html:30
-#: app/templates/customers/detail.html:23
-#: app/templates/customers/detail.html:34 app/templates/employees/list.html:44
+#: app/templates/customers/detail.html:35
+#: app/templates/customers/detail.html:46 app/templates/employees/list.html:44
 #: app/templates/employees/list.html:51
 msgid "Title"
 msgstr "المسمى"
 
 #: app/templates/commercial_ops/notifications_list.html:30
 #: app/templates/commercial_ops/renewals_list.html:18
-#: app/templates/employees/detail.html:110
+#: app/templates/employees/detail.html:110 app/templates/leads/detail.html:23
 #: app/templates/profile/sessions.html:9
 msgid "Created"
 msgstr "تاريخ الإنشاء"
@@ -2001,21 +2307,21 @@ msgstr "لا توجد تمديدات بعد."
 
 #: app/templates/commercial_ops/pilot_detail.html:86
 #: app/templates/commercial_ops/renewal_detail.html:66
-#: app/templates/licensing/detail.html:63
+#: app/templates/leads/detail.html:165 app/templates/licensing/detail.html:63
 #: app/templates/subscriptions/detail.html:42
 msgid "Status history"
 msgstr "سجل الحالات"
 
 #: app/templates/commercial_ops/pilot_detail.html:88
 #: app/templates/commercial_ops/renewal_detail.html:68
-#: app/templates/licensing/detail.html:65
+#: app/templates/leads/detail.html:167 app/templates/licensing/detail.html:65
 #: app/templates/subscriptions/detail.html:44
 msgid "From"
 msgstr "من"
 
 #: app/templates/commercial_ops/pilot_detail.html:88
 #: app/templates/commercial_ops/renewal_detail.html:68
-#: app/templates/licensing/detail.html:65
+#: app/templates/leads/detail.html:167 app/templates/licensing/detail.html:65
 #: app/templates/subscriptions/detail.html:44
 msgid "To"
 msgstr "إلى"
@@ -2029,7 +2335,7 @@ msgstr "لا توجد تغييرات حالة بعد."
 
 #: app/templates/commercial_ops/pilots_list.html:2
 #: app/templates/commercial_ops/pilots_list.html:5
-#: app/templates/layout/base.html:89
+#: app/templates/layout/base.html:100
 msgid "Pilots"
 msgstr "التجارب التشغيلية"
 
@@ -2104,7 +2410,7 @@ msgstr "لا يوجد شيء هنا حاليًا."
 
 #: app/templates/commercial_ops/reconciliation.html:2
 #: app/templates/commercial_ops/reconciliation.html:5
-#: app/templates/layout/base.html:94
+#: app/templates/layout/base.html:105
 msgid "Reconciliation"
 msgstr "التسوية"
 
@@ -2272,7 +2578,7 @@ msgid "Apply renewal"
 msgstr "تطبيق التجديد"
 
 #: app/templates/commercial_ops/renewals_list.html:2
-#: app/templates/layout/base.html:88
+#: app/templates/layout/base.html:99
 msgid "Renewals"
 msgstr "التجديدات"
 
@@ -2380,71 +2686,173 @@ msgstr "العودة إلى الاشتراك"
 msgid "Category"
 msgstr "الفئة"
 
-#: app/templates/commercial_ops/timeline.html:8
-msgid "Event"
-msgstr "الحدث"
-
 #: app/templates/commercial_ops/timeline.html:17
 msgid "No commercial events recorded yet."
 msgstr "لم يتم تسجيل أي أحداث تجارية بعد."
 
-#: app/templates/customers/detail.html:7 app/templates/customers/new.html:17
+#: app/templates/customers/detail.html:8 app/templates/customers/new.html:17
 msgid "Trade name"
 msgstr "الاسم التجاري"
 
-#: app/templates/customers/detail.html:8
+#: app/templates/customers/detail.html:9
 msgid "Country / City"
 msgstr "الدولة / المدينة"
 
-#: app/templates/customers/detail.html:9
+#: app/templates/customers/detail.html:10
 msgid "Registration ref"
 msgstr "مرجع التسجيل"
 
-#: app/templates/customers/detail.html:13
+#: app/templates/customers/detail.html:12
+msgid "Converted from lead"
+msgstr "مُحوَّل من عميل محتمل"
+
+#: app/templates/customers/detail.html:12
+msgid "View source lead"
+msgstr "عرض العميل المحتمل المصدر"
+
+#: app/templates/customers/detail.html:17
 msgid "Archive this customer? Records are kept, not deleted."
 msgstr "أرشفة هذا العميل؟ يتم الاحتفاظ بالسجلات دون حذفها."
 
-#: app/templates/customers/detail.html:15
+#: app/templates/customers/detail.html:19
 #: app/templates/employees/detail.html:97
 msgid "Archive"
 msgstr "أرشفة"
 
-#: app/templates/customers/detail.html:21
+#: app/templates/customers/detail.html:25
+msgid "Reassign to (staff UUID)"
+msgstr "إعادة الإسناد إلى (معرّف الموظف)"
+
+#: app/templates/customers/detail.html:27
+msgid "Reason (required when reassigning)"
+msgstr "السبب (مطلوب عند إعادة الإسناد)"
+
+#: app/templates/customers/detail.html:28
+msgid "Reassign"
+msgstr "إعادة الإسناد"
+
+#: app/templates/customers/detail.html:33 app/templates/leads/detail.html:51
 msgid "Contacts"
 msgstr "جهات الاتصال"
 
-#: app/templates/customers/detail.html:23
-#: app/templates/customers/detail.html:36
+#: app/templates/customers/detail.html:35
+#: app/templates/customers/detail.html:48
 #: app/templates/employees/detail.html:12 app/templates/employees/new.html:19
+#: app/templates/leads/detail.html:19 app/templates/leads/detail.html:53
+#: app/templates/leads/detail.html:65 app/templates/leads/new.html:13
 #: app/templates/profile/index.html:28
 msgid "Phone"
 msgstr "رقم الهاتف"
 
-#: app/templates/customers/detail.html:23
+#: app/templates/customers/detail.html:35 app/templates/leads/detail.html:53
 msgid "Primary"
 msgstr "أساسي"
 
-#: app/templates/customers/detail.html:27
+#: app/templates/customers/detail.html:39 app/templates/leads/detail.html:57
 msgid "No contacts yet."
 msgstr "لا توجد جهات اتصال بعد."
 
-#: app/templates/customers/detail.html:37
+#: app/templates/customers/detail.html:49 app/templates/leads/detail.html:66
 msgid "Add contact"
 msgstr "إضافة جهة اتصال"
 
-#: app/templates/customers/detail.html:42
+#: app/templates/customers/detail.html:54 app/templates/leads/detail.html:71
+msgid "Interactions"
+msgstr "التفاعلات"
+
+#: app/templates/customers/detail.html:57 app/templates/leads/detail.html:74
+msgid "No interactions logged yet."
+msgstr "لا توجد تفاعلات مسجَّلة بعد."
+
+#: app/templates/customers/detail.html:66 app/templates/leads/detail.html:83
+msgid "Summary"
+msgstr "الملخص"
+
+#: app/templates/customers/detail.html:67 app/templates/leads/detail.html:84
+msgid "Log interaction"
+msgstr "تسجيل تفاعل"
+
+#: app/templates/customers/detail.html:72 app/templates/leads/detail.html:89
+msgid "Follow-ups"
+msgstr "المتابعات"
+
+#: app/templates/customers/detail.html:77 app/templates/leads/detail.html:94
+msgid "Overdue"
+msgstr "متأخرة"
+
+#: app/templates/customers/detail.html:82 app/templates/leads/detail.html:99
+msgid "Complete"
+msgstr "إكمال"
+
+#: app/templates/customers/detail.html:86 app/templates/leads/detail.html:103
+msgid "No follow-ups yet."
+msgstr "لا توجد متابعات بعد."
+
+#: app/templates/customers/detail.html:90 app/templates/leads/detail.html:107
+msgid "Due"
+msgstr "الاستحقاق"
+
+#: app/templates/customers/detail.html:92 app/templates/leads/detail.html:109
+msgid "Add follow-up"
+msgstr "إضافة متابعة"
+
+#: app/templates/customers/detail.html:97
 msgid "Internal notes"
 msgstr "ملاحظات داخلية"
 
-#: app/templates/customers/detail.html:45
+#: app/templates/customers/detail.html:100 app/templates/leads/detail.html:117
 msgid "No notes yet."
 msgstr "لا توجد ملاحظات بعد."
 
-#: app/templates/customers/detail.html:50
+#: app/templates/customers/detail.html:110 app/templates/leads/detail.html:127
 msgid "Add note"
 msgstr "إضافة ملاحظة"
 
-#: app/templates/customers/list.html:2 app/templates/layout/base.html:83
+#: app/templates/customers/detail.html:115 app/templates/leads/detail.html:132
+msgid "Location"
+msgstr "الموقع"
+
+#: app/templates/customers/detail.html:123 app/templates/leads/detail.html:140
+msgid "Verification reason"
+msgstr "سبب التوثيق"
+
+#: app/templates/customers/detail.html:128 app/templates/leads/detail.html:145
+msgid "No location captured yet."
+msgstr "لم يتم التقاط أي موقع بعد."
+
+#: app/templates/customers/detail.html:130 app/templates/leads/detail.html:147
+msgid "Capture current location"
+msgstr "التقاط الموقع الحالي"
+
+#: app/templates/customers/detail.html:141 app/templates/leads/detail.html:158
+msgid "Manual address"
+msgstr "عنوان يدوي"
+
+#: app/templates/customers/detail.html:143 app/templates/leads/detail.html:160
+msgid "Save address"
+msgstr "حفظ العنوان"
+
+#: app/templates/customers/detail.html:148 app/templates/leads/detail.html:177
+msgid "Assignment history"
+msgstr "سجل الإسناد"
+
+#: app/templates/customers/detail.html:150 app/templates/leads/detail.html:179
+msgid "Assigned to"
+msgstr "مُسند إلى"
+
+#: app/templates/customers/detail.html:154
+msgid "No reassignments yet."
+msgstr "لا توجد عمليات إعادة إسناد بعد."
+
+#: app/templates/customers/detail.html:162 app/templates/leads/detail.html:190
+msgid "Geolocation is not supported by this browser."
+msgstr "تحديد الموقع الجغرافي غير مدعوم في هذا المتصفح."
+
+#: app/templates/customers/detail.html:169 app/templates/leads/detail.html:197
+msgid "Location permission was denied or unavailable."
+msgstr "تم رفض إذن الموقع أو أنه غير متاح."
+
+#: app/templates/customers/list.html:2 app/templates/layout/base.html:93
 msgid "Customers"
 msgstr "العملاء"
 
@@ -2505,7 +2913,7 @@ msgid "Create customer"
 msgstr "إنشاء عميل"
 
 #: app/templates/dashboard/index.html:2 app/templates/employees/list.html:76
-#: app/templates/layout/base.html:82
+#: app/templates/layout/base.html:91
 msgid "Dashboard"
 msgstr "لوحة التحكم"
 
@@ -2570,7 +2978,7 @@ msgid "Subscriptions by product"
 msgstr "الاشتراكات حسب المنتج"
 
 #: app/templates/dashboard/index.html:31 app/templates/dashboard/index.html:42
-#: app/templates/dashboard/index.html:53
+#: app/templates/dashboard/index.html:53 app/templates/leads/dashboard.html:16
 msgid "Count"
 msgstr "العدد"
 
@@ -2949,7 +3357,7 @@ msgid "Last check-in"
 msgstr "آخر تسجيل حضور"
 
 #: app/templates/installations/detail.html:19
-#: app/templates/licensing/detail.html:37
+#: app/templates/leads/detail.html:29 app/templates/licensing/detail.html:37
 msgid "Change status"
 msgstr "تغيير الحالة"
 
@@ -3005,7 +3413,7 @@ msgid "No activation events yet."
 msgstr "لا توجد أحداث تفعيل بعد."
 
 #: app/templates/installations/list.html:2
-#: app/templates/installations/list.html:6 app/templates/layout/base.html:87
+#: app/templates/installations/list.html:6 app/templates/layout/base.html:98
 msgid "Installations"
 msgstr "التثبيتات"
 
@@ -3039,63 +3447,171 @@ msgstr "تسجيل"
 msgid "Aura Owner"
 msgstr "Aura Owner"
 
-#: app/templates/layout/base.html:65
+#: app/templates/layout/base.html:74
 msgid "Language"
 msgstr "اللغة"
 
-#: app/templates/layout/base.html:75
+#: app/templates/layout/base.html:84
 msgid "Log out"
 msgstr "تسجيل الخروج"
 
-#: app/templates/layout/base.html:85 app/templates/subscriptions/list.html:2
+#: app/templates/layout/base.html:92 app/templates/leads/list.html:2
+#: app/templates/leads/list.html:6
+msgid "Leads"
+msgstr "العملاء المحتملون"
+
+#: app/templates/layout/base.html:94 app/templates/leads/dashboard.html:2
+#: app/templates/leads/dashboard.html:5
+msgid "CRM Dashboard"
+msgstr "لوحة تحكم إدارة العلاقات"
+
+#: app/templates/layout/base.html:96 app/templates/subscriptions/list.html:2
 #: app/templates/subscriptions/list.html:6
 msgid "Subscriptions"
 msgstr "الاشتراكات"
 
-#: app/templates/layout/base.html:86 app/templates/licensing/list.html:2
+#: app/templates/layout/base.html:97 app/templates/licensing/list.html:2
 #: app/templates/licensing/list.html:6
 msgid "Licenses"
 msgstr "التراخيص"
 
-#: app/templates/layout/base.html:90
+#: app/templates/layout/base.html:101
 msgid "Emergency Ext."
 msgstr "التمديد الطارئ"
 
-#: app/templates/layout/base.html:91
+#: app/templates/layout/base.html:102
 msgid "Activation Reviews"
 msgstr "مراجعات التفعيل"
 
-#: app/templates/layout/base.html:93
+#: app/templates/layout/base.html:104
 msgid "My Queue"
 msgstr "قائمة مهامي"
 
-#: app/templates/layout/base.html:97
+#: app/templates/layout/base.html:108
 msgid "Employee Dashboard"
 msgstr "لوحة تحكم الموظفين"
 
-#: app/templates/layout/base.html:98
+#: app/templates/layout/base.html:109
 msgid "Audit Log"
 msgstr "سجل التدقيق"
 
-#: app/templates/layout/base.html:99
+#: app/templates/layout/base.html:110
 msgid "Security Events"
 msgstr "أحداث الأمان"
 
-#: app/templates/layout/base.html:100
+#: app/templates/layout/base.html:111
 msgid "Backups"
 msgstr "النسخ الاحتياطية"
 
-#: app/templates/layout/base.html:101
+#: app/templates/layout/base.html:112
 msgid "Activation Service"
 msgstr "خدمة التفعيل"
 
-#: app/templates/layout/base.html:102
+#: app/templates/layout/base.html:113
 msgid "My Profile"
 msgstr "ملفي الشخصي"
 
-#: app/templates/layout/base.html:103
+#: app/templates/layout/base.html:114
 msgid "Account"
 msgstr "الحساب"
+
+#: app/templates/leads/dashboard.html:8
+msgid "Total active leads"
+msgstr "إجمالي العملاء المحتملين النشطين"
+
+#: app/templates/leads/dashboard.html:9
+msgid "Unassigned leads"
+msgstr "عملاء محتملون غير مُسندين"
+
+#: app/templates/leads/dashboard.html:10
+msgid "Records requiring reassignment"
+msgstr "سجلات تتطلب إعادة إسناد"
+
+#: app/templates/leads/dashboard.html:11 app/templates/leads/dashboard.html:31
+msgid "Follow-ups due today"
+msgstr "متابعات مستحقة اليوم"
+
+#: app/templates/leads/dashboard.html:12 app/templates/leads/dashboard.html:32
+msgid "Follow-ups overdue"
+msgstr "متابعات متأخرة"
+
+#: app/templates/leads/dashboard.html:14
+msgid "Leads by status"
+msgstr "العملاء المحتملون حسب الحالة"
+
+#: app/templates/leads/dashboard.html:25
+msgid "My active leads"
+msgstr "عملائي المحتملون النشطون"
+
+#: app/templates/leads/dashboard.html:33
+msgid "Interactions in the last 7 days"
+msgstr "التفاعلات خلال آخر 7 أيام"
+
+#: app/templates/leads/detail.html:7
+msgid "Possible duplicate customer"
+msgstr "عميل محتمل التكرار"
+
+#: app/templates/leads/detail.html:18
+msgid "Contact"
+msgstr "جهة الاتصال"
+
+#: app/templates/leads/detail.html:21 app/templates/leads/new.html:17
+#: app/templates/licensing_admin/entitlement_preview.html:7
+msgid "Source"
+msgstr "المصدر"
+
+#: app/templates/leads/detail.html:22 app/templates/leads/new.html:23
+msgid "Priority"
+msgstr "الأولوية"
+
+#: app/templates/leads/detail.html:35
+msgid "Reason (required for Lost)"
+msgstr "السبب (مطلوب عند الخسارة)"
+
+#: app/templates/leads/detail.html:36
+msgid "Update status"
+msgstr "تحديث الحالة"
+
+#: app/templates/leads/detail.html:41
+msgid "Convert this lead to a confirmed customer?"
+msgstr "هل تريد تحويل هذا العميل المحتمل إلى عميل مؤكد؟"
+
+#: app/templates/leads/detail.html:45
+msgid "Convert to customer"
+msgstr "تحويل إلى عميل"
+
+#: app/templates/leads/list.html:7 app/templates/leads/new.html:2
+#: app/templates/leads/new.html:5
+msgid "New lead"
+msgstr "عميل محتمل جديد"
+
+#: app/templates/leads/list.html:29
+msgid "Next follow-up"
+msgstr "المتابعة التالية"
+
+#: app/templates/leads/list.html:31
+msgid "No leads yet."
+msgstr "لا يوجد عملاء محتملون بعد."
+
+#: app/templates/leads/list.html:35
+msgid "Page"
+msgstr "الصفحة"
+
+#: app/templates/leads/list.html:35
+msgid "total"
+msgstr "الإجمالي"
+
+#: app/templates/leads/new.html:9
+msgid "Prospect or organization name"
+msgstr "اسم العميل المحتمل أو المؤسسة"
+
+#: app/templates/leads/new.html:11
+msgid "Primary contact name"
+msgstr "اسم جهة الاتصال الأساسية"
+
+#: app/templates/leads/new.html:29
+msgid "Create lead"
+msgstr "إنشاء عميل محتمل"
 
 #: app/templates/licensing/detail.html:6
 msgid "License key -- shown once"
@@ -3231,10 +3747,6 @@ msgstr "الاستحقاق"
 #: app/templates/licensing_admin/entitlement_preview.html:7
 msgid "Resolved value"
 msgstr "القيمة المحلَّلة"
-
-#: app/templates/licensing_admin/entitlement_preview.html:7
-msgid "Source"
-msgstr "المصدر"
 
 #: app/templates/licensing_admin/entitlement_preview.html:14
 msgid ""

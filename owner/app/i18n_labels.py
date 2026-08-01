@@ -160,6 +160,102 @@ def customer_status_label(code: str) -> str:
     return labels.get(code, code)
 
 
+def lead_status_label(code: str) -> str:
+    """Phase 9.5C -- real values from app.models.leads.LEAD_STATUSES."""
+    labels = {
+        "NEW": _("New"),
+        "NOT_INTERESTED_NOW": _("Not interested now"),
+        "POTENTIAL": _("Potential"),
+        "FOLLOW_UP": _("Follow-up"),
+        "UNDER_OBSERVATION": _("Under observation"),
+        "QUALIFIED": _("Qualified"),
+        "CONFIRMED": _("Confirmed"),
+        "LOST": _("Lost"),
+        "ARCHIVED": _("Archived"),
+    }
+    return labels.get(code, code)
+
+
+def lead_source_label(code: str) -> str:
+    """Phase 9.5C -- real values from app.models.leads.LEAD_SOURCES."""
+    labels = {
+        "WEBSITE": _("Website"),
+        "REFERRAL": _("Referral"),
+        "COLD_OUTREACH": _("Cold outreach"),
+        "EVENT": _("Event"),
+        "OTHER": _("Other"),
+    }
+    return labels.get(code, code)
+
+
+def lead_priority_label(code: str) -> str:
+    """Phase 9.5C -- real values from app.models.leads.LEAD_PRIORITIES."""
+    labels = {
+        "LOW": _("Low"),
+        "MEDIUM": _("Medium"),
+        "HIGH": _("High"),
+    }
+    return labels.get(code, code)
+
+
+def interaction_type_label(code: str) -> str:
+    """Phase 9.5C -- real values from app.models.leads.INTERACTION_TYPES."""
+    labels = {
+        "CALL": _("Call"),
+        "EMAIL": _("Email"),
+        "MEETING": _("Meeting"),
+        "WHATSAPP_MANUAL_NOTE": _("WhatsApp (manual note)"),
+        "OTHER": _("Other"),
+    }
+    return labels.get(code, code)
+
+
+def followup_status_label(code: str) -> str:
+    """Phase 9.5C -- derived status values (app.leads.engagement.followup_status)."""
+    labels = {
+        "OPEN": _("Open"),
+        "COMPLETED": _("Completed"),
+        "CANCELLED": _("Cancelled"),
+    }
+    return labels.get(code, code)
+
+
+def note_visibility_label(code: str) -> str:
+    """Phase 9.5C -- real values from app.leads.errors.NOTE_VISIBILITIES."""
+    labels = {
+        "AUTHOR_ONLY": _("Only me"),
+        "ASSIGNED_RECORD_USERS": _("Anyone with record access"),
+        "MANAGEMENT_ONLY": _("Management only"),
+    }
+    return labels.get(code, code)
+
+
+def location_source_label(code: str) -> str:
+    """Phase 9.5C -- real values from app.models.leads.LOCATION_SOURCES."""
+    labels = {
+        "GPS": _("Device location (GPS)"),
+        "NETWORK": _("Approximate (network)"),
+        "MANUAL": _("Manually entered"),
+        "IMPORTED": _("Imported"),
+    }
+    return labels.get(code, code)
+
+
+def location_verification_label(verified: bool) -> str:
+    """Phase 9.5C -- verified is a boolean column, not an enum, but its
+    display value is exactly as translatable as any other status label."""
+    return _("Verified") if verified else _("Unverified")
+
+
+def duplicate_review_marker_label(code: str) -> str:
+    """Phase 9.5C -- the one bounded duplicate-detection privacy marker
+    (app.customers.services.DUPLICATE_REVIEW_MARKER)."""
+    labels = {
+        "POSSIBLE_EXISTING_RECORD_REQUIRES_MANAGEMENT_REVIEW": _("Possible existing record -- requires management review"),
+    }
+    return labels.get(code, code)
+
+
 def renewal_status_label(code: str) -> str:
     """Real values confirmed against commercial_ops/renewals_list.html's
     status filter options (the authoritative, currently-implemented set)."""
@@ -551,3 +647,81 @@ def generic_audit_action_label(code: str) -> str:
         "DEVICE_SLOT_EXCEPTION_CREATED": _("Device-slot exception created"),
     }
     return labels.get(code, code)
+
+
+def localize_lead_error(code: str, **params) -> str:
+    """Phase 9.5C -- presentation-boundary localization for
+    app.leads.errors.LeadError, called only from route handlers (never
+    the service layer -- Non-Negotiable Rule 10)."""
+    messages = {
+        "INVALID_LEAD_TRANSITION": _("Cannot change lead status from %(from_status)s to %(to_status)s."),
+        "REASON_REQUIRED_FOR_LOST": _("A reason is required to mark a lead as lost."),
+        "STALE_LEAD_VERSION": _("This lead was changed by someone else. Reload and try again."),
+        "LEAD_NOT_FOUND": _("Lead not found."),
+        "LEAD_ACCESS_DENIED": _("You do not have access to this lead."),
+        "DESTINATION_EMPLOYEE_NOT_ACTIVE": _("Cannot assign a lead to an inactive employee."),
+        "REASON_REQUIRED_FOR_REASSIGN": _("A reason is required to reassign a lead."),
+        "LEAD_NAME_REQUIRED": _("A prospect or organization name is required."),
+        "LEAD_NAME_TOO_LONG": _("Name must be at most %(max_len)s characters."),
+        "LEAD_PHONE_TOO_LONG": _("Phone must be at most %(max_len)s characters."),
+        "LEAD_EMAIL_INVALID": _("Enter a valid email address."),
+        "LEAD_CONTACT_METHOD_REQUIRED": _("At least one contact method (phone or email) is required."),
+        "LEAD_SOURCE_INVALID": _("Unknown lead source: %(source)s."),
+        "LEAD_PRIORITY_INVALID": _("Unknown lead priority: %(priority)s."),
+        "LEAD_ESTIMATED_VALUE_INVALID": _("Estimated value must be a non-negative number."),
+        "LEAD_CURRENCY_REQUIRED_WITH_VALUE": _("A 3-letter currency code is required when an estimated value is set."),
+        "LEAD_LOCATION_SUMMARY_TOO_LONG": _("Location summary must be at most %(max_len)s characters."),
+        "IDEMPOTENCY_CONFLICT": _("This request conflicts with an earlier request using the same idempotency key."),
+        "INTERACTION_TYPE_INVALID": _("Unknown interaction type: %(interaction_type)s."),
+        "INTERACTION_SUMMARY_TOO_LONG": _("Summary must be at most %(max_len)s characters."),
+        "INTERACTION_OCCURRED_AT_TOO_FUTURE": _("Interaction time cannot be in the future."),
+        "FOLLOWUP_DUE_AT_REQUIRED": _("A due date/time is required for a follow-up."),
+        "FOLLOWUP_ALREADY_CANCELLED": _("This follow-up was already cancelled."),
+        "FOLLOWUP_ALREADY_COMPLETED": _("This follow-up was already completed."),
+        "REASON_REQUIRED_FOR_FOLLOWUP_CANCEL": _("A reason is required to cancel a follow-up."),
+        "CONTACT_NAME_REQUIRED": _("Contact name is required."),
+        "CONTACT_NAME_TOO_LONG": _("Contact name must be at most %(max_len)s characters."),
+        "NOTE_VISIBILITY_INVALID": _("Unknown note visibility: %(visibility)s."),
+        "NOTE_BODY_TOO_LONG": _("Note must be at most %(max_len)s characters."),
+        "NOTE_BODY_REQUIRED": _("Note text is required."),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    return template % params if params else template
+
+
+def localize_customer_crm_error(code: str, **params) -> str:
+    """Phase 9.5C -- presentation-boundary localization for
+    app.leads.errors.CustomerCrmError."""
+    messages = {
+        "STALE_CUSTOMER_VERSION": _("This customer was changed by someone else. Reload and try again."),
+        "CUSTOMER_ACCESS_DENIED": _("You do not have access to this customer."),
+        "DESTINATION_EMPLOYEE_NOT_ACTIVE": _("Cannot assign a customer to an inactive employee."),
+        "REASON_REQUIRED_FOR_REASSIGN": _("A reason is required to reassign a customer."),
+        "NOTE_VISIBILITY_INVALID": _("Unknown note visibility: %(visibility)s."),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    return template % params if params else template
+
+
+def localize_location_error(code: str, **params) -> str:
+    """Phase 9.5C -- presentation-boundary localization for
+    app.leads.errors.LocationValidationError. Templates never reference
+    the actual coordinate value -- only field names/bounds (Non-Negotiable
+    Domain Rule 14: exact coordinates never reach user-facing text)."""
+    messages = {
+        "INVALID_LATITUDE": _("Latitude must be a finite number between -90 and 90."),
+        "INVALID_LONGITUDE": _("Longitude must be a finite number between -180 and 180."),
+        "INVALID_ACCURACY": _("Accuracy must be a finite number greater than or equal to zero."),
+        "INVALID_SOURCE": _("Unknown location source: %(source)s."),
+        "TIMESTAMP_TOO_FAR": _("Client-reported capture time is too far from server time."),
+        "MANUAL_ADDRESS_TOO_LONG": _("Manual address is too long."),
+        "REASON_REQUIRED_FOR_VERIFY": _("A reason is required to verify or revoke a location."),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    return template % params if params else template
