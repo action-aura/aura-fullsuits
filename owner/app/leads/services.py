@@ -14,8 +14,10 @@ from sqlalchemy import select
 
 from app.audit.services import record as audit_record
 from app.extensions import db_session
+from app.leads.errors import LeadError, validate_lead_transition
 from app.leads.ownership import apply_ownership_filter
 from app.models.base import utcnow
+from app.models.employees import EmployeeProfile
 from app.models.leads import CustomerLocation, Lead, LeadAssignment, LeadNote, LeadStatusHistory
 from app.services.pagination import DEFAULT_PAGE_SIZE, paginate
 
@@ -68,9 +70,18 @@ def list_all_leads(*, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE) -> dict
 
 
 def change_lead_status(
-    lead: Lead, to_status: str, actor_employee_profile_id: uuid.UUID, actor_staff_user_id: uuid.UUID, reason: str | None = None
+    lead: Lead,
+    to_status: str,
+    actor_employee_profile_id: uuid.UUID,
+    actor_staff_user_id: uuid.UUID,
+    reason: str | None = None,
+    *,
+    expected_version: int | None = None,
 ) -> Lead:
+    if expected_version is not None and lead.version != expected_version:
+        raise LeadError("STALE_LEAD_VERSION")
     from_status = lead.status
+    validate_lead_transition(from_status, to_status, reason)
     lead.status = to_status
     lead.version += 1
     if to_status == "LOST":
@@ -104,14 +115,26 @@ def assign_lead(
     assigned_to_employee_profile_id: uuid.UUID,
     actor_employee_profile_id: uuid.UUID,
     actor_staff_user_id: uuid.UUID,
+    *,
+    reason: str | None = None,
+    expected_version: int | None = None,
 ) -> LeadAssignment:
     """Reassignment closes the currently-open assignment row and opens a new
     one -- never an in-place update (lead-customer-domain-model.md)."""
+    if expected_version is not None and lead.version != expected_version:
+        raise LeadError("STALE_LEAD_VERSION")
+
+    destination = db_session.get(EmployeeProfile, assigned_to_employee_profile_id)
+    if destination is None or destination.employment_status != "ACTIVE":
+        raise LeadError("DESTINATION_EMPLOYEE_NOT_ACTIVE")
+
     now = utcnow()
     current = db_session.execute(
         select(LeadAssignment).where(LeadAssignment.lead_id == lead.id, LeadAssignment.unassigned_at.is_(None))
     ).scalars().first()
     before_assignee = current.assigned_to_employee_profile_id if current else None
+    if current is not None and (reason or "").strip() == "":
+        raise LeadError("REASON_REQUIRED_FOR_REASSIGN")
     if current is not None:
         current.unassigned_at = now
 
@@ -120,6 +143,7 @@ def assign_lead(
         assigned_to_employee_profile_id=assigned_to_employee_profile_id,
         assigned_by_employee_profile_id=actor_employee_profile_id,
         assigned_at=now,
+        reason=reason,
     )
     db_session.add(new_assignment)
     lead.assigned_employee_profile_id = assigned_to_employee_profile_id
@@ -131,6 +155,7 @@ def assign_lead(
         action_code="LEAD_REASSIGNED" if before_assignee else "LEAD_ASSIGNED",
         entity_type="lead",
         entity_public_id=str(lead.id),
+        reason=reason,
         before_state={"assigned_to_employee_profile_id": str(before_assignee) if before_assignee else None},
         after_state={"assigned_to_employee_profile_id": str(assigned_to_employee_profile_id)},
     )
