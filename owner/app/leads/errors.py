@@ -45,6 +45,13 @@ class LeadError(StableCodeError):
         "LEAD_CURRENCY_REQUIRED_WITH_VALUE": "A 3-letter currency code is required when an estimated value is set.",
         "LEAD_LOCATION_SUMMARY_TOO_LONG": "Location summary must be at most {max_len} characters.",
         "IDEMPOTENCY_CONFLICT": "This request conflicts with an earlier request using the same idempotency key.",
+        "INTERACTION_TYPE_INVALID": "Unknown interaction type: {interaction_type}.",
+        "INTERACTION_SUMMARY_TOO_LONG": "Summary must be at most {max_len} characters.",
+        "INTERACTION_OCCURRED_AT_TOO_FUTURE": "Interaction time cannot be in the future.",
+        "FOLLOWUP_DUE_AT_REQUIRED": "A due date/time is required for a follow-up.",
+        "FOLLOWUP_ALREADY_CANCELLED": "This follow-up was already cancelled.",
+        "FOLLOWUP_ALREADY_COMPLETED": "This follow-up was already completed.",
+        "REASON_REQUIRED_FOR_FOLLOWUP_CANCEL": "A reason is required to cancel a follow-up.",
     }
 
 
