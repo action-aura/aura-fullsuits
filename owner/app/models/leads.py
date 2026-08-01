@@ -39,10 +39,10 @@ class Lead(Base, UUIDPKMixin, TimestampMixin):
     source: Mapped[str] = mapped_column(String(24), default="OTHER", nullable=False)
     status: Mapped[str] = mapped_column(String(24), default="NEW", nullable=False)
     assigned_employee_profile_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id")
+        UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), index=True
     )
     created_by_employee_profile_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False, index=True
     )
     estimated_value: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     currency: Mapped[str | None] = mapped_column(String(3))
@@ -66,7 +66,7 @@ class LeadProductInterest(Base, UUIDPKMixin, TimestampMixin):
 class LeadStatusHistory(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_lead_status_history"
 
-    lead_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_leads.id"), nullable=False)
+    lead_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_leads.id"), nullable=False, index=True)
     from_status: Mapped[str | None] = mapped_column(String(24))
     to_status: Mapped[str] = mapped_column(String(24), nullable=False)
     changed_by_employee_profile_id: Mapped[uuid.UUID] = mapped_column(
@@ -83,7 +83,7 @@ class LeadAssignment(Base, UUIDPKMixin, TimestampMixin):
 
     __tablename__ = "owner_lead_assignments"
 
-    lead_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_leads.id"), nullable=False)
+    lead_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_leads.id"), nullable=False, index=True)
     assigned_to_employee_profile_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False
     )
@@ -98,9 +98,9 @@ class LeadAssignment(Base, UUIDPKMixin, TimestampMixin):
 class LeadInteraction(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_lead_interactions"
 
-    lead_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_leads.id"), nullable=False)
+    lead_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_leads.id"), nullable=False, index=True)
     employee_profile_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False, index=True
     )
     interaction_type: Mapped[str] = mapped_column(String(24), nullable=False)
     summary: Mapped[str | None] = mapped_column(Text)
@@ -110,9 +110,9 @@ class LeadInteraction(Base, UUIDPKMixin, TimestampMixin):
 class LeadFollowup(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_lead_followups"
 
-    lead_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_leads.id"), nullable=False)
+    lead_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_leads.id"), nullable=False, index=True)
     employee_profile_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False, index=True
     )
     due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -129,7 +129,7 @@ class LeadNote(Base, UUIDPKMixin, TimestampMixin):
 
     __tablename__ = "owner_lead_notes"
 
-    lead_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_leads.id"), nullable=False)
+    lead_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_leads.id"), nullable=False, index=True)
     author_employee_profile_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False
     )
@@ -177,8 +177,8 @@ class CustomerLocation(Base, UUIDPKMixin, TimestampMixin):
         ),
     )
 
-    lead_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_leads.id"))
-    customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_customers.id"))
+    lead_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_leads.id"), index=True)
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_customers.id"), index=True)
     latitude: Mapped[Decimal | None] = mapped_column(Numeric(9, 6))
     longitude: Mapped[Decimal | None] = mapped_column(Numeric(9, 6))
     accuracy_meters: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
@@ -211,7 +211,7 @@ class CustomerInteraction(Base, UUIDPKMixin, TimestampMixin):
 
     __tablename__ = "owner_customer_interactions"
 
-    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False, index=True)
     employee_profile_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False
     )
@@ -223,7 +223,7 @@ class CustomerInteraction(Base, UUIDPKMixin, TimestampMixin):
 class CustomerFollowup(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_customer_followups"
 
-    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False, index=True)
     employee_profile_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False
     )

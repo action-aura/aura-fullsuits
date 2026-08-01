@@ -26,7 +26,7 @@ class Customer(Base, UUIDPKMixin, TimestampMixin):
     lifecycle_status: Mapped[str] = mapped_column(String(32), default="LEAD", nullable=False)
     acquisition_source: Mapped[str | None] = mapped_column(String(128))
     assigned_sales_staff_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id"), index=True
     )
     assigned_support_staff_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
@@ -52,7 +52,7 @@ class CustomerContact(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_customer_contacts"
 
     customer_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     title: Mapped[str | None] = mapped_column(String(128))
@@ -87,7 +87,7 @@ class CustomerNote(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_customer_notes"
 
     customer_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False, index=True
     )
     author_staff_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_staff_users.id"), nullable=False
