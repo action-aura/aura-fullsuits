@@ -126,6 +126,17 @@ empty/fuzzy entries (Phase 9.5B-R2 extension). See `docs/owner/phase9_5b_r2/` fo
 evidence, and `docs/owner/phase9_5b_r/translation-catalog-maintenance.md` /
 `translation-style-guide.md` for the original maintenance workflow and terminology glossary.
 
+Phase 9.5B-R3 closed the remaining verification gaps from R2: a nondeterministic Owner test failure
+(root-caused and fixed, see `docs/owner/phase9_5b_r3/flaky-test-root-cause-and-fix.md`), executed
+dependency/secret scans (`docs/owner/phase9_5b_r3/dependency-scan-final.md`,
+`secret-scan-final.md`), a request-context-free stable-code architecture for `commercial_ops` service
+exceptions (`docs/owner/phase9_5b_r3/service-error-architecture-result.md` -- raise
+`SomeError("CODE", **params)` in service code, never `_()`; localize only in
+`commercial_ops/ui_routes.py` via `localize_*_error()`), and complete browser/keyboard-focus
+validation across all 16 current route families (`docs/owner/phase9_5b_r3/
+complete-browser-family-validation.md`). Full closure record and final verdict:
+`docs/owner/phase9_5b_r3/PHASE9-5B-R3-FINAL-VERIFICATION-HANDOVER.md`.
+
 ## What this is NOT
 
 Not connected to Retail or Clinic. Not enforcing any license inside either
