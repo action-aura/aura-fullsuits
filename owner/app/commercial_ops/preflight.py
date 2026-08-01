@@ -288,6 +288,84 @@ def _check_super_admin_mfa(checks: list[PreflightCheck]) -> None:
         checks.append(PreflightCheck("super_admin_mfa_required", "OK", "Every Super Admin account requires MFA."))
 
 
+def _check_employee_domain_integrity(checks: list[PreflightCheck]) -> bool:
+    """Phase 9.5B, Milestone 21. Every condition here is already structurally
+    guaranteed by a real DB constraint (UNIQUE employee_number, FK
+    staff_user_id) -- these are defense-in-depth checks, the same
+    "catch it before a real activation call fails" spirit as the rest of
+    this module, not a substitute for the constraints themselves."""
+    from app.employees.presence import ONLINE_THRESHOLD_SECONDS, RECENTLY_ACTIVE_THRESHOLD_SECONDS
+    from app.models.employees import EmployeeProfile
+    from app.security.super_admin_guard import usable_super_admin_count
+
+    ok = True
+
+    numbers = db_session.execute(select(EmployeeProfile.employee_number)).scalars().all()
+    duplicates = {n for n in numbers if numbers.count(n) > 1}
+    if duplicates:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_duplicate_employee_numbers", "FAIL",
+            f"{len(duplicates)} employee_number value(s) appear more than once: {sorted(duplicates)}. "
+            "The UNIQUE constraint should make this structurally impossible -- report immediately if seen.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_duplicate_employee_numbers", "OK", f"{len(numbers)} employee_number value(s), all unique."))
+
+    orphans = db_session.execute(
+        select(EmployeeProfile.id).outerjoin(StaffUser, StaffUser.id == EmployeeProfile.staff_user_id).where(StaffUser.id.is_(None))
+    ).scalars().all()
+    if orphans:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_orphan_employee_profiles", "FAIL",
+            f"{len(orphans)} EmployeeProfile row(s) reference a staff_user_id with no matching StaffUser. "
+            "The FK (ON DELETE RESTRICT, no cascade) should make this structurally impossible.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_orphan_employee_profiles", "OK", "Every EmployeeProfile resolves to a real StaffUser."))
+
+    admin_count = usable_super_admin_count()
+    total_staff = db_session.execute(select(StaffUser)).scalars().all()
+    if not total_staff:
+        # Not yet bootstrapped -- expected on a fresh install/test database
+        # before 'flask create-superadmin' has ever run, same non-blocking
+        # spirit as _check_super_admin_mfa's own "synthetic/dev setup"
+        # allowance. Never a FAIL by itself.
+        checks.append(PreflightCheck(
+            "at_least_one_usable_super_admin", "WARNING",
+            "No StaffUser accounts exist yet -- expected before the first 'flask create-superadmin'. "
+            "Not a failure; will become one if staff exist but none are a usable Super Admin.",
+        ))
+    elif admin_count < 1:
+        ok = False
+        checks.append(PreflightCheck(
+            "at_least_one_usable_super_admin", "FAIL",
+            f"{len(total_staff)} StaffUser account(s) exist but zero are a usable Super Admin "
+            "(is_super_admin AND is_active AND not disabled). No one can perform a SUPER_ADMIN-only "
+            "action, including recovering from this state through the UI. Fix: re-enable an existing "
+            "Super Admin account directly (e.g. via a database console), since 'flask create-superadmin' "
+            "refuses to run when any Super Admin already exists, usable or not.",
+        ))
+    else:
+        checks.append(PreflightCheck("at_least_one_usable_super_admin", "OK", f"{admin_count} usable Super Admin account(s)."))
+
+    if not (0 < ONLINE_THRESHOLD_SECONDS < RECENTLY_ACTIVE_THRESHOLD_SECONDS):
+        ok = False
+        checks.append(PreflightCheck(
+            "presence_thresholds_valid", "FAIL",
+            f"ONLINE_THRESHOLD_SECONDS={ONLINE_THRESHOLD_SECONDS} must be a positive number strictly less than "
+            f"RECENTLY_ACTIVE_THRESHOLD_SECONDS={RECENTLY_ACTIVE_THRESHOLD_SECONDS}.",
+        ))
+    else:
+        checks.append(PreflightCheck(
+            "presence_thresholds_valid", "OK",
+            f"ONLINE < {ONLINE_THRESHOLD_SECONDS}s, RECENTLY_ACTIVE < {RECENTLY_ACTIVE_THRESHOLD_SECONDS}s.",
+        ))
+
+    return ok
+
+
 def run_preflight(*, key_directory: str) -> PreflightResult:
     checks: list[PreflightCheck] = []
     blocking_ok = True
@@ -299,6 +377,7 @@ def run_preflight(*, key_directory: str) -> PreflightResult:
     blocking_ok &= _check_permission_seed(checks)
     blocking_ok &= _check_role_permission_assignments(checks)
     blocking_ok &= _check_license_pepper(checks)
+    blocking_ok &= _check_employee_domain_integrity(checks)
     _check_super_admin_mfa(checks)  # informational only, never blocking
 
     return PreflightResult(ok=bool(blocking_ok), checks=checks)
