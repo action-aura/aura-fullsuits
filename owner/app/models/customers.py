@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -38,6 +38,10 @@ class Customer(Base, UUIDPKMixin, TimestampMixin):
     # docs/owner/phase9_5a/lead-conversion-contract.md). Written exactly once,
     # at conversion time, by LeadConversionService -- never reassigned.
     converted_from_lead_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_leads.id"))
+    # Phase 9.5C -- additive optimistic-lock column, same pattern already
+    # used by Lead.version and CustomerLocation.version. Defaults to 1 for
+    # every pre-existing row via the migration's server_default.
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     contacts: Mapped[list["CustomerContact"]] = relationship(back_populates="customer", cascade="all, delete-orphan")
     addresses: Mapped[list["CustomerAddress"]] = relationship(back_populates="customer", cascade="all, delete-orphan")
@@ -85,5 +89,9 @@ class CustomerNote(Base, UUIDPKMixin, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("owner_staff_users.id"), nullable=False
     )
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    # Phase 9.5C -- additive, same default-preserves-current-behavior
+    # rationale as LeadNote.visibility.
+    visibility: Mapped[str] = mapped_column(String(32), default="ASSIGNED_RECORD_USERS", nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     customer: Mapped[Customer] = relationship(back_populates="notes")

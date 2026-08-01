@@ -92,6 +92,7 @@ class LeadAssignment(Base, UUIDPKMixin, TimestampMixin):
     )
     assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     unassigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reason: Mapped[str | None] = mapped_column(Text)
 
 
 class LeadInteraction(Base, UUIDPKMixin, TimestampMixin):
@@ -129,6 +130,12 @@ class LeadNote(Base, UUIDPKMixin, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False
     )
     body: Mapped[str] = mapped_column(Text, nullable=False)
+    # Phase 9.5C -- additive. Default preserves pre-existing real-world
+    # behavior for every row written before this column existed: today,
+    # anyone with record access already sees every note, which is exactly
+    # what ASSIGNED_RECORD_USERS means. See crm-note-visibility-contract.md.
+    visibility: Mapped[str] = mapped_column(String(32), default="ASSIGNED_RECORD_USERS", nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class CustomerLocation(Base, UUIDPKMixin, TimestampMixin):
@@ -189,3 +196,24 @@ class CustomerFollowup(Base, UUIDPKMixin, TimestampMixin):
     due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)
+
+
+class CustomerAssignment(Base, UUIDPKMixin, TimestampMixin):
+    """Phase 9.5C -- mirrors LeadAssignment's exact append-only close/open
+    pattern. Customer.assigned_sales_staff_id remains the live pointer
+    (unchanged); this table is the new history record behind reassignment."""
+
+    __tablename__ = "owner_customer_assignments"
+
+    customer_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False, index=True
+    )
+    assigned_to_staff_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id"), nullable=False
+    )
+    assigned_by_staff_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id"), nullable=False
+    )
+    assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    unassigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reason: Mapped[str | None] = mapped_column(Text)
