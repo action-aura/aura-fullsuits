@@ -61,6 +61,30 @@ def require_permission(permission_code: str):
     return decorator
 
 
+def require_any_permission(*permission_codes: str):
+    """Phase 9.5C -- for the real _own/_all permission-pair shape (e.g.
+    leads.view_own vs leads.view_all): a role may hold only one of the
+    two (VIEWER has leads.view_all but not leads.view_own), so gating a
+    route on a single fixed code locks that role out entirely even
+    though the ownership-scoping logic underneath already handles both
+    cases correctly. Passes if the actor holds ANY of the listed codes."""
+    def decorator(view):
+        @wraps(view)
+        @require_login
+        def wrapped(*args, **kwargs):
+            staff = load_current_staff()
+            codes = get_staff_permission_codes(staff)
+            if not any(code in codes for code in permission_codes):
+                if _wants_json():
+                    return jsonify({"error": "forbidden"}), 403
+                abort(403)
+            return view(*args, **kwargs)
+
+        return wrapped
+
+    return decorator
+
+
 def require_recent_auth(view):
     """Require MFA confirmation within the recent-auth window for highly
     sensitive actions (Part F): role changes, disabling staff, license
