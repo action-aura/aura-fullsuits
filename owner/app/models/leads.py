@@ -116,6 +116,10 @@ class LeadFollowup(Base, UUIDPKMixin, TimestampMixin):
     )
     due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Phase 9.5C -- additive. Without this, "not completed_at" cannot
+    # distinguish a still-open follow-up from a cancelled one; OVERDUE
+    # itself stays derived (status == OPEN and due_at < now), never stored.
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)
 
 
@@ -195,6 +199,10 @@ class CustomerFollowup(Base, UUIDPKMixin, TimestampMixin):
     )
     due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Phase 9.5C -- additive. Without this, "not completed_at" cannot
+    # distinguish a still-open follow-up from a cancelled one; OVERDUE
+    # itself stays derived (status == OPEN and due_at < now), never stored.
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)
 
 
