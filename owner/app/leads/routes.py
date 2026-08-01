@@ -343,45 +343,66 @@ def add_location_route(lead_id):
 
 # --------------------------------------------------- shared child actions --
 
+def _resolve_followup_with_parent_check(followup_id, staff, profile, codes):
+    """Loads a follow-up by UUID and verifies the actor may access its
+    PARENT Lead/Customer before returning it -- mirrors
+    api_operations/crm.py's identical guard. A follow-up UUID alone must
+    never be sufficient to act on it (real IDOR closed here: this web
+    route previously had no ownership check at all)."""
+    from app.customers.services import customer_visible_to_actor
+    from app.models.customers import Customer
+    from app.models.leads import CustomerFollowup, LeadFollowup
+
+    row = db_session.get(LeadFollowup, followup_id)
+    if row is not None:
+        lead = _lead_or_none(row.lead_id, profile, all_held="leads.update_all" in codes)
+        return row if lead is not None else None
+    row = db_session.get(CustomerFollowup, followup_id)
+    if row is not None:
+        customer = db_session.get(Customer, row.customer_id)
+        if customer is not None and customer_visible_to_actor(customer, staff.id, codes):
+            return row
+    return None
+
+
 @shared_bp.route("/followups/<uuid:followup_id>/complete", methods=["POST"])
 @require_any_permission("leads.update_own", "leads.update_all")
 def complete_followup(followup_id):
-    from app.models.leads import CustomerFollowup, LeadFollowup
+    from app.models.leads import LeadFollowup
 
-    staff, _ = _actor()
-    row = db_session.get(LeadFollowup, followup_id)
-    if row is not None:
+    staff, profile = _actor()
+    codes = get_staff_permission_codes(staff)
+    row = _resolve_followup_with_parent_check(followup_id, staff, profile, codes)
+    if row is None:
+        return jsonify({"error": "not_found"}), 404
+    if isinstance(row, LeadFollowup):
         complete_lead_followup(row, staff.id)
         return redirect(url_for("leads.detail", lead_id=row.lead_id))
-    row = db_session.get(CustomerFollowup, followup_id)
-    if row is not None:
-        complete_customer_followup(row, staff.id)
-        return redirect(url_for("customers.detail", customer_id=row.customer_id))
-    return jsonify({"error": "not_found"}), 404
+    complete_customer_followup(row, staff.id)
+    return redirect(url_for("customers.detail", customer_id=row.customer_id))
 
 
 @shared_bp.route("/followups/<uuid:followup_id>/cancel", methods=["POST"])
 @require_any_permission("leads.update_own", "leads.update_all")
 def cancel_followup(followup_id):
-    from app.models.leads import CustomerFollowup, LeadFollowup
+    from app.models.leads import LeadFollowup
 
-    staff, _ = _actor()
+    staff, profile = _actor()
+    codes = get_staff_permission_codes(staff)
+    row = _resolve_followup_with_parent_check(followup_id, staff, profile, codes)
+    if row is None:
+        return jsonify({"error": "not_found"}), 404
     reason = request.form.get("reason")
-    row = db_session.get(LeadFollowup, followup_id)
-    if row is not None:
-        try:
+    try:
+        if isinstance(row, LeadFollowup):
             cancel_lead_followup(row, reason, staff.id)
-        except LeadError:
-            pass
-        return redirect(url_for("leads.detail", lead_id=row.lead_id))
-    row = db_session.get(CustomerFollowup, followup_id)
-    if row is not None:
-        try:
-            cancel_customer_followup(row, reason, staff.id)
-        except LeadError:
-            pass
+            return redirect(url_for("leads.detail", lead_id=row.lead_id))
+        cancel_customer_followup(row, reason, staff.id)
         return redirect(url_for("customers.detail", customer_id=row.customer_id))
-    return jsonify({"error": "not_found"}), 404
+    except LeadError:
+        if isinstance(row, LeadFollowup):
+            return redirect(url_for("leads.detail", lead_id=row.lead_id))
+        return redirect(url_for("customers.detail", customer_id=row.customer_id))
 
 
 @shared_bp.route("/locations/<uuid:location_id>/verify", methods=["POST"])
@@ -390,7 +411,23 @@ def verify_location_route(location_id):
     from app.models.leads import CustomerLocation
 
     staff, profile = _actor()
+    codes = get_staff_permission_codes(staff)
     location = db_session.get(CustomerLocation, location_id)
+    # IDOR fix: verify the actor may access the location's PARENT
+    # Lead/Customer before allowing verification (customers.verify_location
+    # alone previously let any holder verify ANY location by UUID,
+    # regardless of ownership of the record it belongs to).
+    if location is not None:
+        if location.lead_id:
+            parent_ok = _lead_or_none(location.lead_id, profile, all_held="leads.update_all" in codes) is not None
+        else:
+            from app.customers.services import customer_visible_to_actor
+            from app.models.customers import Customer
+
+            customer = db_session.get(Customer, location.customer_id)
+            parent_ok = customer is not None and customer_visible_to_actor(customer, staff.id, codes)
+        if not parent_ok:
+            location = None
     if location is None:
         return jsonify({"error": "not_found"}), 404
     try:

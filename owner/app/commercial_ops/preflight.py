@@ -23,7 +23,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.extensions import db_session
 from app.licensing_service import signing as signing_service
@@ -452,6 +452,77 @@ def _check_i18n_configuration(checks: list[PreflightCheck]) -> bool:
     return ok
 
 
+def _check_crm_domain_integrity(checks: list[PreflightCheck]) -> bool:
+    """Phase 9.5C, Milestone 26. Same defense-in-depth spirit as
+    _check_employee_domain_integrity(): every condition here should
+    already be structurally impossible (a real service-layer invariant),
+    these checks exist to catch a bypass -- a direct DB write, a bug in a
+    future migration -- before a real user hits it."""
+    from app.leads.errors import NOTE_VISIBILITIES
+    from app.models.customers import CustomerContact, CustomerNote
+    from app.models.leads import LEAD_SOURCES, LEAD_STATUSES, CustomerLocation, Lead, LeadContact, LeadNote
+
+    ok = True
+
+    invalid_statuses = db_session.execute(
+        select(Lead.status).where(Lead.status.notin_(LEAD_STATUSES)).distinct()
+    ).scalars().all()
+    if invalid_statuses:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_invalid_lead_status", "FAIL",
+            f"{len(invalid_statuses)} Lead row(s) have a status outside the canonical set {LEAD_STATUSES}: "
+            f"{invalid_statuses}. Should be structurally impossible via change_lead_status()'s transition guard.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_invalid_lead_status", "OK", "Every Lead.status is a canonical value."))
+
+    for label, model, parent_col in (("lead", LeadContact, LeadContact.lead_id), ("customer", CustomerContact, CustomerContact.customer_id)):
+        dupes = db_session.execute(
+            select(parent_col, func.count(model.id))
+            .where(model.is_primary.is_(True), model.archived_at.is_(None))
+            .group_by(parent_col)
+            .having(func.count(model.id) > 1)
+        ).all()
+        if dupes:
+            ok = False
+            checks.append(PreflightCheck(
+                f"no_duplicate_primary_{label}_contact", "FAIL",
+                f"{len(dupes)} {label} record(s) have more than one contact marked is_primary. "
+                "Should be structurally impossible via the primary-demotion transaction in add_contact()/add_lead_contact().",
+            ))
+        else:
+            checks.append(PreflightCheck(f"no_duplicate_primary_{label}_contact", "OK", f"No {label} has more than one primary contact."))
+
+    for label, model in (("lead", LeadNote), ("customer", CustomerNote)):
+        invalid_vis = db_session.execute(
+            select(func.count(model.id)).where(model.visibility.notin_(NOTE_VISIBILITIES))
+        ).scalar_one()
+        if invalid_vis:
+            ok = False
+            checks.append(PreflightCheck(
+                f"no_invalid_{label}_note_visibility", "FAIL",
+                f"{invalid_vis} {label} note(s) have a visibility value outside {NOTE_VISIBILITIES}.",
+            ))
+        else:
+            checks.append(PreflightCheck(f"no_invalid_{label}_note_visibility", "OK", f"Every {label} note has a canonical visibility value."))
+
+    orphan_locations = db_session.execute(
+        select(func.count(CustomerLocation.id)).where(CustomerLocation.lead_id.is_(None), CustomerLocation.customer_id.is_(None))
+    ).scalar_one()
+    if orphan_locations:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_orphan_locations", "FAIL",
+            f"{orphan_locations} CustomerLocation row(s) reference neither a Lead nor a Customer. "
+            "Should be structurally impossible via the ck_customer_locations_exactly_one_owner CHECK constraint.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_orphan_locations", "OK", "Every location row references exactly one parent."))
+
+    return ok
+
+
 def run_preflight(*, key_directory: str) -> PreflightResult:
     checks: list[PreflightCheck] = []
     blocking_ok = True
@@ -465,6 +536,7 @@ def run_preflight(*, key_directory: str) -> PreflightResult:
     blocking_ok &= _check_license_pepper(checks)
     blocking_ok &= _check_employee_domain_integrity(checks)
     blocking_ok &= _check_i18n_configuration(checks)
+    blocking_ok &= _check_crm_domain_integrity(checks)
     _check_super_admin_mfa(checks)  # informational only, never blocking
 
     return PreflightResult(ok=bool(blocking_ok), checks=checks)

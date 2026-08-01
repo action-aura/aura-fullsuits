@@ -819,7 +819,19 @@ def verify_location_route(location_id):
     from app.models.leads import CustomerLocation
 
     staff, profile = _actor()
+    codes = get_staff_permission_codes(staff)
     location = db_session.get(CustomerLocation, location_id)
+    # IDOR fix: customers.verify_location alone must not let the holder
+    # verify ANY location by UUID -- the location's parent Lead/Customer
+    # must also be one the actor can access.
+    if location is not None:
+        if location.lead_id:
+            parent_ok = _lead_or_404(location.lead_id, profile, all_held="leads.update_all" in codes) is not None
+        else:
+            customer = db_session.get(Customer, location.customer_id)
+            parent_ok = customer is not None and customer_visible_to_actor(customer, staff.id, codes)
+        if not parent_ok:
+            location = None
     if location is None:
         return jsonify({"error": "RECORD_NOT_FOUND"}), 404
     body = request.get_json(silent=True) or {}
