@@ -43,6 +43,21 @@ def _assert_valid_transition(current: str, target: str) -> None:
         raise InvalidEmploymentTransitionError(f"{current} -> {target} is not an allowed employment-status transition")
 
 
+def _revoke_all_presence_sessions(employee_profile_id: uuid.UUID) -> None:
+    """Real gap closed here: revoke_all_sessions_for_staff() revokes
+    StaffSession rows, but EmployeePresenceSession is a separate table --
+    without this, a just-suspended/terminated employee would still show
+    ONLINE/RECENTLY_ACTIVE on the dashboard until their last heartbeat aged
+    past the 15-minute threshold on its own."""
+    now = utcnow()
+    stmt = select(EmployeePresenceSession).where(
+        EmployeePresenceSession.employee_profile_id == employee_profile_id,
+        EmployeePresenceSession.revoked_at.is_(None),
+    )
+    for session_row in db_session.execute(stmt).scalars().all():
+        session_row.revoked_at = now
+
+
 def create_employee_profile(fields: dict, actor_staff_user_id: uuid.UUID) -> EmployeeProfile:
     profile = EmployeeProfile(
         **fields,
@@ -124,6 +139,7 @@ def suspend_employee(profile: EmployeeProfile, reason: str, actor_staff_user_id:
     if staff is not None:
         staff.is_active = False
     revoke_all_sessions_for_staff(profile.staff_user_id, reason="employee_suspended")
+    _revoke_all_presence_sessions(profile.id)
     db_session.commit()
     audit_record(
         actor_staff_user_id=actor_staff_user_id,
@@ -180,6 +196,7 @@ def terminate_employee(profile: EmployeeProfile, reason: str, actor_staff_user_i
     if staff is not None:
         staff.is_active = False
     revoke_all_sessions_for_staff(profile.staff_user_id, reason="employee_terminated")
+    _revoke_all_presence_sessions(profile.id)
     db_session.commit()
     audit_record(
         actor_staff_user_id=actor_staff_user_id,
@@ -259,3 +276,38 @@ def touch_presence(
 def revoke_presence(session_row: EmployeePresenceSession) -> None:
     session_row.revoked_at = utcnow()
     db_session.commit()
+
+
+# Phase 9.5B Milestone 7 -- explicitly self-editable fields only. Everything
+# else (employee_number, employment_status, employment_start_date, manager,
+# commission_plan, role/permissions) requires owner/app/employees/routes.py's
+# management-only update_employee() path (employees.update permission).
+SELF_EDITABLE_PROFILE_FIELDS = ("phone",)
+
+
+def update_own_profile(
+    profile: EmployeeProfile, staff: StaffUser, *, display_name: str | None, phone: str | None
+) -> EmployeeProfile:
+    before = {"display_name": staff.display_name, "phone": profile.phone}
+    changed = False
+    if display_name is not None and display_name.strip() and display_name.strip() != staff.display_name:
+        staff.display_name = display_name.strip()
+        changed = True
+    if phone is not None and phone.strip() != (profile.phone or ""):
+        profile.phone = phone.strip() or None
+        changed = True
+    if not changed:
+        return profile
+    profile.version += 1
+    profile.updated_by_staff_user_id = staff.id
+    db_session.commit()
+    audit_record(
+        actor_staff_user_id=staff.id,
+        actor_role_snapshot=None,
+        action_code="EMPLOYEE_SELF_PROFILE_UPDATED",
+        entity_type="employee_profile",
+        entity_public_id=str(profile.id),
+        before_state=before,
+        after_state={"display_name": staff.display_name, "phone": profile.phone},
+    )
+    return profile

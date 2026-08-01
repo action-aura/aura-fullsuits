@@ -35,6 +35,19 @@
     .kv { display: grid; grid-template-columns: 200px 1fr; gap: 0.3rem 1rem; font-size: 0.9rem; }
     .kv dt { color: var(--muted); }
     code.masked { background: #eef1f5; padding: 0.15rem 0.4rem; border-radius: 4px; }
+    /* Phase 9.5B -- minimal, scoped responsive treatment for any table
+       opted into it via .responsive-table, reused by the new employee
+       screens. Does not touch any existing table (no class added there),
+       so nothing else in Owner changes behavior. */
+    @media (max-width: 720px) {
+      table.responsive-table thead { display: none; }
+      table.responsive-table, table.responsive-table tbody, table.responsive-table tr, table.responsive-table td { display: block; width: 100%; }
+      table.responsive-table tr { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; }
+      table.responsive-table td { border-bottom: none; padding: 0.25rem 0; }
+      table.responsive-table td[data-label]:not([data-label=""])::before { content: attr(data-label) ": "; font-weight: 600; color: var(--muted); }
+      nav.tabs { overflow-x: auto; flex-wrap: nowrap; }
+      main { padding: 0 0.6rem; }
+    }
   </style>
 </head>
 <body>
@@ -66,10 +79,13 @@
     <a href="{{ url_for('commercial_ops_ui.queue_view') }}">My Queue</a>
     <a href="{{ url_for('commercial_ops_ui.reconciliation_view') }}">Reconciliation</a>
     <a href="{{ url_for('staff.list_staff') }}">Staff</a>
+    <a href="{{ url_for('employees.list_view') }}">Employees</a>
+    <a href="{{ url_for('employees.dashboard') }}">Employee Dashboard</a>
     <a href="{{ url_for('audit.list_audit') }}">Audit Log</a>
     <a href="{{ url_for('audit.security_events') }}">Security Events</a>
     <a href="{{ url_for('system.list_backups') }}">Backups</a>
     <a href="{{ url_for('licensing_admin.status') }}">Activation Service</a>
+    <a href="{{ url_for('profile.index') }}">My Profile</a>
     <a href="{{ url_for('auth.change_password_form') }}">Account</a>
   </nav>
   {% endif %}

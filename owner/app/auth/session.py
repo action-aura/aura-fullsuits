@@ -153,3 +153,29 @@ def revoke_all_sessions_for_staff(staff_user_id: uuid.UUID, reason: str = "admin
         record.revoked_at = utcnow()
         record.revoked_reason = reason
     db_session.commit()
+
+
+def list_sessions_for_staff(staff_user_id: uuid.UUID) -> list[StaffSession]:
+    """Phase 9.5B -- safe session metadata for management/self-service
+    session-list screens. Callers must render only safe fields (id, created_at,
+    last_seen_at, expires_at, ip_address, user_agent, platform, revoked_at) --
+    never token_hash/refresh_token_hash (see session-management-contract.md)."""
+    stmt = select(StaffSession).where(StaffSession.staff_user_id == staff_user_id).order_by(
+        StaffSession.last_seen_at.desc()
+    )
+    return list(db_session.execute(stmt).scalars().all())
+
+
+def revoke_session_by_id(session_id: uuid.UUID, reason: str) -> bool:
+    """Revoke one specific session by its public UUID (management revoking a
+    single employee session, or an employee revoking one of their own other
+    sessions) -- distinct from revoke_session() (current request's own
+    cookie token) and revoke_all_sessions_for_staff() (every session).
+    Returns False if the session doesn't exist or is already revoked."""
+    record = db_session.get(StaffSession, session_id)
+    if record is None or record.revoked_at is not None:
+        return False
+    record.revoked_at = utcnow()
+    record.revoked_reason = reason
+    db_session.commit()
+    return True

@@ -1,0 +1,30 @@
+{% extends "layout/base.html" %}
+{% block title %}Pending employee invitations{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>Pending employee invitations</h2>
+  {% if invitations %}
+  <table>
+    <tr><th>Email</th><th>Roles</th><th>Expires</th><th>Status</th><th></th></tr>
+    {% for inv in invitations %}
+    <tr>
+      <td>{{ inv.email }}</td>
+      <td>{{ inv.role_codes }}</td>
+      <td>{{ inv.expires_at }}</td>
+      <td>{% if inv.expires_at < now %}<span class="badge danger">Expired</span>{% else %}<span class="badge active">Open</span>{% endif %}</td>
+      <td>
+        <form class="inline" method="post" action="{{ url_for('employees.reissue_invitation', invitation_id=inv.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="secondary">Reissue</button>
+        </form>
+        <form class="inline" method="post" action="{{ url_for('staff.revoke_invite', invitation_id=inv.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="danger">Revoke</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="empty">No pending invitations.</p>{% endif %}
+</div>
+{% endblock %}

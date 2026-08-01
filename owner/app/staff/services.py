@@ -178,6 +178,26 @@ def create_invitation(email: str, role_codes: list[str], invited_by_staff_user_i
     return invitation, raw_token
 
 
+def reissue_employee_invitation(invitation: StaffInvitation, actor_staff_user_id: uuid.UUID) -> tuple[StaffInvitation, str]:
+    """Real fix for the governing spec's 'reissue setup credential' action:
+    a PENDING EmployeeProfile already has a working password (the profile is
+    only materialized transactionally on invitation *acceptance* -- by
+    definition it already has one). The real 'my setup link is lost/expired'
+    case has NO EmployeeProfile yet at all, because nothing was ever
+    accepted -- so reissue operates on the open StaffInvitation itself
+    (revoke the stale one, create a fresh one with the same email/roles/
+    employee-profile draft), never on an employee_id."""
+    if invitation.accepted_at is not None:
+        raise ValueError("This invitation was already accepted -- nothing to reissue.")
+    revoke_invitation(invitation, actor_staff_user_id)
+    role_codes = [c.strip() for c in invitation.role_codes.split(",") if c.strip()]
+    if invitation.employee_profile_draft:
+        draft = json.loads(invitation.employee_profile_draft)
+        mfa_required = draft.pop("mfa_required", True)
+        return create_employee_invitation(invitation.email, role_codes, draft, actor_staff_user_id, mfa_required=mfa_required)
+    return create_invitation(invitation.email, role_codes, actor_staff_user_id)
+
+
 def revoke_invitation(invitation: StaffInvitation, actor_staff_user_id: uuid.UUID) -> None:
     invitation.revoked_at = utcnow()
     db_session.commit()

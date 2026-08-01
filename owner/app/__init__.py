@@ -50,6 +50,9 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.commercial_ops.routes import bp as commercial_ops_bp
     from app.commercial_ops.ui_routes import bp as commercial_ops_ui_bp
     from app.health import bp as health_bp
+    from app.employees.routes import bp as employees_bp
+    from app.employees.self_routes import bp as profile_bp
+    from app.api_operations.routes import bp as api_operations_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(staff_bp)
@@ -66,6 +69,9 @@ def create_app(config_name: str | None = None) -> Flask:
     app.register_blueprint(commercial_ops_bp)
     app.register_blueprint(commercial_ops_ui_bp)
     app.register_blueprint(health_bp)
+    app.register_blueprint(employees_bp)
+    app.register_blueprint(profile_bp)
+    app.register_blueprint(api_operations_bp)
 
     if app.config.get("EXTERNAL_API_ENABLED"):
         from app.api.routes import bp as external_api_bp
