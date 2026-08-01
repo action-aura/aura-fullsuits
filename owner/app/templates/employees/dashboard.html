@@ -1,38 +1,38 @@
 {% extends "layout/base.html" %}
-{% block title %}Employee dashboard{% endblock %}
+{% block title %}{{ _('Employee dashboard') }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Employee dashboard</h2>
-  <p class="empty">Employee-domain metrics only, generated {{ metrics.generated_at }}.</p>
+  <h2>{{ _('Employee dashboard') }}</h2>
+  <p class="empty">{{ _('Employee-domain metrics only, generated %(ts)s.', ts=format_owner_datetime(metrics.generated_at)) }}</p>
 </div>
 
 <div class="card">
-  <h3>Headcount</h3>
+  <h3>{{ _('Headcount') }}</h3>
   <dl class="kv">
-    <dt>Total employee profiles</dt><dd>{{ metrics.total_employees }}</dd>
-    <dt>Active employees</dt><dd><a href="{{ url_for('employees.list_view', employment_status='ACTIVE') }}">{{ metrics.active_employees }}</a></dd>
-    <dt>Setup pending</dt><dd><a href="{{ url_for('employees.list_view', employment_status='PENDING') }}">{{ metrics.pending_employees }}</a></dd>
-    <dt>Suspended</dt><dd><a href="{{ url_for('employees.list_view', employment_status='SUSPENDED') }}">{{ metrics.suspended_employees }}</a></dd>
-    <dt>Terminated</dt><dd><a href="{{ url_for('employees.list_view', employment_status='TERMINATED') }}">{{ metrics.terminated_employees }}</a></dd>
-    <dt>Archived</dt><dd>{{ metrics.archived_employees }}</dd>
+    <dt>{{ _('Total employee profiles') }}</dt><dd>{{ format_owner_number(metrics.total_employees) }}</dd>
+    <dt>{{ _('Active employees') }}</dt><dd><a href="{{ url_for('employees.list_view', employment_status='ACTIVE') }}">{{ format_owner_number(metrics.active_employees) }}</a></dd>
+    <dt>{{ _('Setup pending') }}</dt><dd><a href="{{ url_for('employees.list_view', employment_status='PENDING') }}">{{ format_owner_number(metrics.pending_employees) }}</a></dd>
+    <dt>{{ _('Suspended') }}</dt><dd><a href="{{ url_for('employees.list_view', employment_status='SUSPENDED') }}">{{ format_owner_number(metrics.suspended_employees) }}</a></dd>
+    <dt>{{ _('Terminated') }}</dt><dd><a href="{{ url_for('employees.list_view', employment_status='TERMINATED') }}">{{ format_owner_number(metrics.terminated_employees) }}</a></dd>
+    <dt>{{ _('Archived') }}</dt><dd>{{ format_owner_number(metrics.archived_employees) }}</dd>
   </dl>
 </div>
 
 <div class="card">
-  <h3>Presence (application usage, not attendance)</h3>
+  <h3>{{ _('Presence (application usage, not attendance)') }}</h3>
   <dl class="kv">
-    <dt>Online now</dt><dd><a href="{{ url_for('employees.list_view', presence='ONLINE') }}">{{ metrics.online_now }}</a></dd>
-    <dt>Recently active</dt><dd><a href="{{ url_for('employees.list_view', presence='RECENTLY_ACTIVE') }}">{{ metrics.recently_active }}</a></dd>
-    <dt>Offline</dt><dd>{{ metrics.offline }}</dd>
+    <dt>{{ _('Online now') }}</dt><dd><a href="{{ url_for('employees.list_view', presence='ONLINE') }}">{{ format_owner_number(metrics.online_now) }}</a></dd>
+    <dt>{{ _('Recently active') }}</dt><dd><a href="{{ url_for('employees.list_view', presence='RECENTLY_ACTIVE') }}">{{ format_owner_number(metrics.recently_active) }}</a></dd>
+    <dt>{{ _('Offline') }}</dt><dd>{{ format_owner_number(metrics.offline) }}</dd>
   </dl>
 </div>
 
 <div class="card">
-  <h3>Security</h3>
+  <h3>{{ _('Security') }}</h3>
   <dl class="kv">
-    <dt>Employees without completed MFA (where required)</dt><dd>{{ metrics.mfa_incomplete }}</dd>
-    <dt>Locked / disabled accounts</dt><dd>{{ metrics.locked_accounts }}</dd>
-    <dt>Currently active sessions</dt><dd>{{ metrics.active_sessions }}</dd>
+    <dt>{{ _('Employees without completed MFA (where required)') }}</dt><dd>{{ format_owner_number(metrics.mfa_incomplete) }}</dd>
+    <dt>{{ _('Locked / disabled accounts') }}</dt><dd>{{ format_owner_number(metrics.locked_accounts) }}</dd>
+    <dt>{{ _('Currently active sessions') }}</dt><dd>{{ format_owner_number(metrics.active_sessions) }}</dd>
   </dl>
 </div>
 {% endblock %}

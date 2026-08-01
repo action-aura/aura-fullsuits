@@ -64,6 +64,14 @@ class BaseConfig:
     MAX_REQUEST_BYTES = int(os.environ.get("OWNER_MAX_REQUEST_BYTES", str(64 * 1024)))
     MAX_CONTENT_LENGTH = MAX_REQUEST_BYTES
 
+    # -- Phase 9.5B-R: Owner-wide internationalization --
+    # Strict allowlist -- app.i18n.select_locale() never trusts a client-
+    # supplied locale string that isn't a key in this dict (Non-Negotiable
+    # Principle 5). "ar" is real Modern Standard Arabic, RTL.
+    LANGUAGES = {"en": "English", "ar": "العربية"}
+    BABEL_DEFAULT_LOCALE = "en"
+    BABEL_TRANSLATION_DIRECTORIES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "translations")
+
     @classmethod
     def validate(cls) -> None:
         if cls.ENV == "development" or cls.TESTING:

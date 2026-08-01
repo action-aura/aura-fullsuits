@@ -8,6 +8,7 @@ already-imported reference would keep pointing at the old (unbound) one.
 """
 from __future__ import annotations
 
+from flask_babel import Babel
 from flask_wtf import CSRFProtect
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, scoped_session, sessionmaker
@@ -18,6 +19,7 @@ class Base(DeclarativeBase):
 
 
 csrf = CSRFProtect()
+babel = Babel()
 
 _session_factory = sessionmaker(autoflush=False, autocommit=False, future=True)
 db_session = scoped_session(_session_factory)

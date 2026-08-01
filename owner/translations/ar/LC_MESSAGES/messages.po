@@ -1,0 +1,885 @@
+# Arabic translations for PROJECT.
+# Copyright (C) 2026 ORGANIZATION
+# This file is distributed under the same license as the PROJECT project.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: PROJECT VERSION\n"
+"Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
+"POT-Creation-Date: 2026-08-01 11:17+0300\n"
+"PO-Revision-Date: 2026-08-01 11:16+0300\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language: ar\n"
+"Language-Team: ar <LL@li.org>\n"
+"Plural-Forms: nplurals=6; plural=(n==0 ? 0 : n==1 ? 1 : n==2 ? 2 : n%100>=3 && n%100<=10 ? 3 : n%100>=0 && n%100<=2 ? 4 : 5);\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: app/i18n_labels.py:24
+msgid "Setup Pending"
+msgstr "بانتظار إكمال الإعداد"
+
+#: app/i18n_labels.py:25 app/i18n_labels.py:55 app/i18n_labels.py:60
+#: app/templates/employees/detail.html:21
+#: app/templates/employees/detail.html:113
+#: app/templates/profile/sessions.html:15
+msgid "Active"
+msgstr "نشط"
+
+#: app/i18n_labels.py:26 app/templates/employees/dashboard.html:15
+msgid "Suspended"
+msgstr "موقوف مؤقتًا"
+
+#: app/i18n_labels.py:27 app/templates/employees/dashboard.html:16
+msgid "Terminated"
+msgstr "منتهي العمل"
+
+#: app/i18n_labels.py:28 app/templates/employees/dashboard.html:17
+msgid "Archived"
+msgstr "مؤرشف"
+
+#: app/i18n_labels.py:35
+msgid "Online Now"
+msgstr "متصل الآن"
+
+#: app/i18n_labels.py:36
+msgid "Recently Active"
+msgstr "نشط مؤخرًا"
+
+#: app/i18n_labels.py:37 app/templates/employees/dashboard.html:26
+msgid "Offline"
+msgstr "غير متصل"
+
+#: app/i18n_labels.py:44
+msgid "Super Administrator"
+msgstr "مدير النظام الأعلى"
+
+#: app/i18n_labels.py:45
+msgid "Sales"
+msgstr "المبيعات"
+
+#: app/i18n_labels.py:46
+msgid "Support"
+msgstr "الدعم الفني"
+
+#: app/i18n_labels.py:47
+msgid "Finance"
+msgstr "المالية"
+
+#: app/i18n_labels.py:48
+msgid "Viewer"
+msgstr "مُطّلع"
+
+#: app/i18n_labels.py:56 app/templates/employees/detail.html:21
+msgid "Disabled"
+msgstr "معطّل"
+
+#: app/i18n_labels.py:60 app/templates/employees/detail.html:113
+#: app/templates/profile/sessions.html:14
+msgid "Revoked"
+msgstr "مُلغاة"
+
+#: app/i18n_labels.py:65 app/templates/employees/detail.html:24
+#: app/templates/profile/index.html:39
+msgid "Enrolled"
+msgstr "مُفعّلة"
+
+#: app/i18n_labels.py:66 app/templates/employees/detail.html:25
+msgid "Required"
+msgstr "مطلوبة"
+
+#: app/i18n_labels.py:66 app/templates/employees/detail.html:24
+#: app/templates/profile/index.html:39
+msgid "Not enrolled"
+msgstr "غير مُفعّلة"
+
+#: app/i18n_labels.py:70
+msgid "Expired"
+msgstr "منتهية الصلاحية"
+
+#: app/i18n_labels.py:70
+msgid "Open"
+msgstr "سارية"
+
+#: app/i18n_labels.py:75
+msgid "Employee profile created"
+msgstr "تم إنشاء الملف الوظيفي للموظف"
+
+#: app/i18n_labels.py:76
+msgid "Employee profile updated"
+msgstr "تم تحديث الملف الوظيفي للموظف"
+
+#: app/i18n_labels.py:77
+msgid "Employee activated"
+msgstr "تم تفعيل الموظف"
+
+#: app/i18n_labels.py:78
+msgid "Employee suspended"
+msgstr "تم إيقاف الموظف مؤقتًا"
+
+#: app/i18n_labels.py:79
+msgid "Employee reactivated"
+msgstr "تمت إعادة تفعيل الموظف"
+
+#: app/i18n_labels.py:80
+msgid "Employee terminated"
+msgstr "تم إنهاء عمل الموظف"
+
+#: app/i18n_labels.py:81
+msgid "Employee archived"
+msgstr "تمت أرشفة الموظف"
+
+#: app/i18n_labels.py:82
+msgid "Employee updated their own profile"
+msgstr "قام الموظف بتحديث ملفه الشخصي"
+
+#: app/i18n_labels.py:83
+msgid "All sessions revoked"
+msgstr "تم إلغاء جميع الجلسات"
+
+#: app/i18n_labels.py:84
+msgid "Session revoked"
+msgstr "تم إلغاء الجلسة"
+
+#: app/i18n_labels.py:85
+msgid "Invitation created"
+msgstr "تم إنشاء الدعوة"
+
+#: app/i18n_labels.py:86
+msgid "Invitation revoked"
+msgstr "تم إلغاء الدعوة"
+
+#: app/i18n_labels.py:87
+msgid "Invitation accepted"
+msgstr "تم قبول الدعوة"
+
+#: app/i18n_labels.py:88
+msgid "Roles changed"
+msgstr "تم تغيير الأدوار"
+
+#: app/i18n_labels.py:89
+msgid "Account disabled"
+msgstr "تم تعطيل الحساب"
+
+#: app/i18n_labels.py:90
+msgid "MFA reset"
+msgstr "تمت إعادة ضبط المصادقة متعددة العوامل"
+
+#: app/i18n_labels.py:91
+msgid "Signed in"
+msgstr "تم تسجيل الدخول"
+
+#: app/i18n_labels.py:92
+msgid "Signed in with MFA"
+msgstr "تم تسجيل الدخول بالمصادقة متعددة العوامل"
+
+#: app/i18n_labels.py:93
+msgid "Signed out"
+msgstr "تم تسجيل الخروج"
+
+#: app/i18n_labels.py:94
+msgid "Password changed"
+msgstr "تم تغيير كلمة المرور"
+
+#: app/i18n_labels.py:95
+msgid "MFA enrolled"
+msgstr "تم تفعيل المصادقة متعددة العوامل"
+
+#: app/i18n_labels.py:96
+msgid "Recovery code used"
+msgstr "تم استخدام رمز الاسترداد"
+
+#: app/i18n_labels.py:103 app/templates/layout/base.html:95
+msgid "Staff"
+msgstr "الموظفون الإداريون"
+
+#: app/i18n_labels.py:104 app/templates/employees/list.html:2
+#: app/templates/employees/list.html:5 app/templates/layout/base.html:96
+msgid "Employees"
+msgstr "الموظفون"
+
+#: app/auth/routes.py:378
+msgid "Invitation is invalid or has expired."
+msgstr "الدعوة غير صالحة أو منتهية الصلاحية."
+
+#: app/security/passwords.py:29
+#, python-format
+msgid "Password must be at least %(min_length)s characters."
+msgstr "يجب أن تتكون كلمة المرور من %(min_length)s حرفًا على الأقل."
+
+#: app/security/passwords.py:39
+msgid "Password must mix at least 3 of: lowercase, uppercase, digit, symbol."
+msgstr "يجب أن تجمع كلمة المرور 3 عناصر على الأقل من: حروف صغيرة، حروف كبيرة، أرقام، رموز."
+
+#: app/templates/auth/accept_invitation.html:2
+msgid "Accept invitation"
+msgstr "قبول الدعوة"
+
+#: app/templates/auth/accept_invitation.html:5
+msgid "Set up your Aura Owner account"
+msgstr "إعداد حساب Aura Owner الخاص بك"
+
+#: app/templates/auth/accept_invitation.html:10 app/templates/auth/login.html:9
+#: app/templates/employees/detail.html:20
+#: app/templates/employees/invitations.html:8
+#: app/templates/employees/new.html:10 app/templates/profile/index.html:38
+msgid "Email"
+msgstr "البريد الإلكتروني"
+
+#: app/templates/auth/accept_invitation.html:12
+msgid "Your name"
+msgstr "اسمك"
+
+#: app/templates/auth/accept_invitation.html:14
+msgid "Choose a password (min 12 chars, mix of 3 character classes)"
+msgstr "اختر كلمة مرور (12 حرفًا على الأقل، وتجمع 3 أنواع من الأحرف)"
+
+#: app/templates/auth/accept_invitation.html:16
+msgid "Create account"
+msgstr "إنشاء الحساب"
+
+#: app/templates/auth/accept_invitation.html:19
+msgid "Return to login"
+msgstr "العودة إلى تسجيل الدخول"
+
+#: app/templates/auth/change_password.html:2
+#: app/templates/auth/change_password.html:5
+#: app/templates/auth/change_password.html:13
+#: app/templates/profile/index.html:41
+msgid "Change password"
+msgstr "تغيير كلمة المرور"
+
+#: app/templates/auth/change_password.html:9
+msgid "Current password"
+msgstr "كلمة المرور الحالية"
+
+#: app/templates/auth/change_password.html:11
+msgid "New password (min 12 chars, mix of 3 character classes)"
+msgstr "كلمة المرور الجديدة (12 حرفًا على الأقل، وتجمع 3 أنواع من الأحرف)"
+
+#: app/templates/auth/login.html:2
+msgid "Login"
+msgstr "تسجيل الدخول"
+
+#: app/templates/auth/login.html:5 app/templates/layout/base.html:5
+#: app/templates/layout/base.html:63
+msgid "Aura Owner Control Center"
+msgstr "مركز تحكم Aura Owner"
+
+#: app/templates/auth/login.html:11
+msgid "Password"
+msgstr "كلمة المرور"
+
+#: app/templates/auth/login.html:13
+msgid "Log in"
+msgstr "تسجيل الدخول"
+
+#: app/templates/auth/mfa_enroll.html:2
+msgid "Enable MFA"
+msgstr "تفعيل المصادقة متعددة العوامل"
+
+#: app/templates/auth/mfa_enroll.html:5
+msgid "Enable multi-factor authentication"
+msgstr "تفعيل المصادقة متعددة العوامل"
+
+#: app/templates/auth/mfa_enroll.html:6
+msgid "Scan this into any TOTP authenticator app (Google Authenticator, 1Password, etc.), or enter the secret manually."
+msgstr "امسح هذا الرمز عبر أي تطبيق مصادقة يدعم TOTP (مثل Google Authenticator أو 1Password)، أو أدخل الرمز السري يدويًا."
+
+#: app/templates/auth/mfa_enroll.html:9
+msgid "Manual secret"
+msgstr "الرمز السري اليدوي"
+
+#: app/templates/auth/mfa_enroll.html:10
+msgid "Provisioning URI"
+msgstr "رابط الإعداد"
+
+#: app/templates/auth/mfa_enroll.html:14
+msgid "Enter the current 6-digit code to confirm"
+msgstr "أدخل الرمز الحالي المكوّن من 6 أرقام للتأكيد"
+
+#: app/templates/auth/mfa_enroll.html:16
+msgid "Confirm and enable MFA"
+msgstr "تأكيد وتفعيل المصادقة متعددة العوامل"
+
+#: app/templates/auth/mfa_recovery_codes.html:2
+msgid "Recovery codes"
+msgstr "رموز الاسترداد"
+
+#: app/templates/auth/mfa_recovery_codes.html:5
+msgid "Save your recovery codes"
+msgstr "احفظ رموز الاسترداد الخاصة بك"
+
+#: app/templates/auth/mfa_recovery_codes.html:6
+msgid "Each code can be used once if you lose access to your authenticator. They will never be shown again after you leave this page."
+msgstr "يمكن استخدام كل رمز مرة واحدة فقط في حال فقدان الوصول إلى تطبيق المصادقة. لن تظهر هذه الرموز مرة أخرى بعد مغادرة هذه الصفحة."
+
+#: app/templates/auth/mfa_recovery_codes.html:12
+msgid "No codes to display -- this page can only be viewed once, immediately after generation."
+msgstr "لا توجد رموز لعرضها -- يمكن الاطلاع على هذه الصفحة مرة واحدة فقط، مباشرة بعد إنشائها."
+
+#: app/templates/auth/mfa_recovery_codes.html:14
+msgid "Continue to dashboard"
+msgstr "المتابعة إلى لوحة التحكم"
+
+#: app/templates/auth/mfa_verify.html:2
+msgid "Verify MFA"
+msgstr "تأكيد المصادقة متعددة العوامل"
+
+#: app/templates/auth/mfa_verify.html:5
+msgid "Enter your authenticator code"
+msgstr "أدخل رمز تطبيق المصادقة"
+
+#: app/templates/auth/mfa_verify.html:9
+msgid "6-digit code (or a recovery code)"
+msgstr "رمز مكوّن من 6 أرقام (أو رمز استرداد)"
+
+#: app/templates/auth/mfa_verify.html:11
+msgid "Verify"
+msgstr "تأكيد"
+
+#: app/templates/auth/reauth.html:2
+msgid "Confirm identity"
+msgstr "تأكيد الهوية"
+
+#: app/templates/auth/reauth.html:5
+msgid "Confirm your identity"
+msgstr "تأكيد هويتك"
+
+#: app/templates/auth/reauth.html:6
+msgid "This action requires a fresh MFA confirmation."
+msgstr "يتطلب هذا الإجراء تأكيدًا حديثًا للمصادقة متعددة العوامل."
+
+#: app/templates/auth/reauth.html:11
+msgid "6-digit code"
+msgstr "رمز مكوّن من 6 أرقام"
+
+#: app/templates/auth/reauth.html:13
+msgid "Confirm"
+msgstr "تأكيد"
+
+#: app/templates/employees/dashboard.html:2
+#: app/templates/employees/dashboard.html:5
+msgid "Employee dashboard"
+msgstr "لوحة تحكم الموظفين"
+
+#: app/templates/employees/dashboard.html:6
+#, python-format
+msgid "Employee-domain metrics only, generated %(ts)s."
+msgstr "مؤشرات نطاق الموظفين فقط، أُنشئت في %(ts)s."
+
+#: app/templates/employees/dashboard.html:10
+msgid "Headcount"
+msgstr "عدد الموظفين"
+
+#: app/templates/employees/dashboard.html:12
+msgid "Total employee profiles"
+msgstr "إجمالي الملفات الوظيفية"
+
+#: app/templates/employees/dashboard.html:13
+msgid "Active employees"
+msgstr "الموظفون النشطون"
+
+#: app/templates/employees/dashboard.html:14
+msgid "Setup pending"
+msgstr "بانتظار إكمال الإعداد"
+
+#: app/templates/employees/dashboard.html:22
+msgid "Presence (application usage, not attendance)"
+msgstr "الحضور (استخدام التطبيق، وليس الحضور الفعلي)"
+
+#: app/templates/employees/dashboard.html:24
+msgid "Online now"
+msgstr "متصل الآن"
+
+#: app/templates/employees/dashboard.html:25
+msgid "Recently active"
+msgstr "نشط مؤخرًا"
+
+#: app/templates/employees/dashboard.html:31
+#: app/templates/profile/index.html:36
+msgid "Security"
+msgstr "الأمان"
+
+#: app/templates/employees/dashboard.html:33
+msgid "Employees without completed MFA (where required)"
+msgstr "الموظفون الذين لم يكملوا إعداد المصادقة متعددة العوامل (عند الاشتراط)"
+
+#: app/templates/employees/dashboard.html:34
+msgid "Locked / disabled accounts"
+msgstr "الحسابات المقفلة / المعطّلة"
+
+#: app/templates/employees/dashboard.html:35
+msgid "Currently active sessions"
+msgstr "الجلسات النشطة حاليًا"
+
+#: app/templates/employees/detail.html:7 app/templates/employees/new.html:13
+#: app/templates/profile/index.html:9
+msgid "Employee number"
+msgstr "الرقم الوظيفي"
+
+#: app/templates/employees/detail.html:8 app/templates/employees/detail.html:54
+#: app/templates/employees/new.html:22 app/templates/profile/index.html:10
+msgid "Job title"
+msgstr "المسمى الوظيفي"
+
+#: app/templates/employees/detail.html:9 app/templates/employees/detail.html:56
+#: app/templates/employees/list.html:8 app/templates/employees/list.html:43
+#: app/templates/employees/list.html:49 app/templates/employees/new.html:25
+#: app/templates/profile/index.html:11
+msgid "Department"
+msgstr "القسم"
+
+#: app/templates/employees/detail.html:10
+#: app/templates/employees/detail.html:58 app/templates/employees/new.html:31
+#: app/templates/profile/index.html:12
+msgid "Manager"
+msgstr "المدير المباشر"
+
+#: app/templates/employees/detail.html:11 app/templates/employees/new.html:28
+#: app/templates/profile/index.html:13
+msgid "Employment start date"
+msgstr "تاريخ بدء العمل"
+
+#: app/templates/employees/detail.html:12 app/templates/employees/new.html:19
+#: app/templates/profile/index.html:28
+msgid "Phone"
+msgstr "رقم الهاتف"
+
+#: app/templates/employees/detail.html:13 app/templates/employees/list.html:28
+#: app/templates/employees/list.html:43 app/templates/employees/list.html:53
+#: app/templates/profile/index.html:15
+msgid "Presence"
+msgstr "الحضور"
+
+#: app/templates/employees/detail.html:13
+msgid "application usage only -- not attendance/working hours"
+msgstr "استخدام التطبيق فقط -- وليس الحضور أو ساعات العمل"
+
+#: app/templates/employees/detail.html:18
+msgid "Account security"
+msgstr "أمان الحساب"
+
+#: app/templates/employees/detail.html:21
+msgid "Account status"
+msgstr "حالة الحساب"
+
+#: app/templates/employees/detail.html:22 app/templates/profile/index.html:39
+msgid "MFA"
+msgstr "المصادقة متعددة العوامل"
+
+#: app/templates/employees/detail.html:27
+msgid "Last login"
+msgstr "آخر تسجيل دخول"
+
+#: app/templates/employees/detail.html:27
+msgid "Never"
+msgstr "لم يسجّل الدخول من قبل"
+
+#: app/templates/employees/detail.html:28
+msgid "Active sessions"
+msgstr "الجلسات النشطة"
+
+#: app/templates/employees/detail.html:33
+msgid "Roles and permissions"
+msgstr "الأدوار والصلاحيات"
+
+#: app/templates/employees/detail.html:34
+msgid "Changing roles requires a fresh MFA confirmation and immediately revokes all of this account's active sessions."
+msgstr "يتطلب تغيير الأدوار تأكيدًا حديثًا للمصادقة متعددة العوامل، ويؤدي فورًا إلى إلغاء جميع الجلسات النشطة لهذا الحساب."
+
+#: app/templates/employees/detail.html:43
+msgid "Save roles"
+msgstr "حفظ الأدوار"
+
+#: app/templates/employees/detail.html:48
+msgid "Edit profile"
+msgstr "تعديل الملف الوظيفي"
+
+#: app/templates/employees/detail.html:52 app/templates/employees/new.html:16
+#: app/templates/profile/index.html:8
+msgid "Full name"
+msgstr "الاسم الكامل"
+
+#: app/templates/employees/detail.html:60 app/templates/employees/new.html:33
+#: app/templates/employees/new.html:39
+msgid "None"
+msgstr "لا يوجد"
+
+#: app/templates/employees/detail.html:63
+msgid "Save changes"
+msgstr "حفظ التغييرات"
+
+#: app/templates/employees/detail.html:68
+msgid "Lifecycle actions"
+msgstr "إجراءات دورة العمل"
+
+#: app/templates/employees/detail.html:71
+msgid "Activate"
+msgstr "تفعيل"
+
+#: app/templates/employees/detail.html:76
+msgid "Suspend this employee? This blocks login and revokes all active sessions immediately."
+msgstr "هل تريد إيقاف هذا الموظف مؤقتًا؟ سيؤدي ذلك إلى منع تسجيل الدخول وإلغاء جميع الجلسات النشطة فورًا."
+
+#: app/templates/employees/detail.html:78
+msgid "Suspended by management"
+msgstr "أُوقف مؤقتًا من قبل الإدارة"
+
+#: app/templates/employees/detail.html:79
+msgid "Suspend"
+msgstr "إيقاف مؤقت"
+
+#: app/templates/employees/detail.html:84
+msgid "Reactivate"
+msgstr "إعادة تفعيل"
+
+#: app/templates/employees/detail.html:89
+msgid "Terminate this employee? This is not reversible without an explicit rehire process."
+msgstr "هل تريد إنهاء عمل هذا الموظف؟ لا يمكن التراجع عن هذا الإجراء إلا من خلال عملية إعادة توظيف صريحة."
+
+#: app/templates/employees/detail.html:91
+msgid "Terminated by management"
+msgstr "أُنهي عمله من قبل الإدارة"
+
+#: app/templates/employees/detail.html:92
+msgid "Terminate"
+msgstr "إنهاء العمل"
+
+#: app/templates/employees/detail.html:97
+msgid "Archive"
+msgstr "أرشفة"
+
+#: app/templates/employees/detail.html:101
+msgid "Revoke all sessions"
+msgstr "إلغاء جميع الجلسات"
+
+#: app/templates/employees/detail.html:106
+msgid "Sessions"
+msgstr "الجلسات"
+
+#: app/templates/employees/detail.html:109
+#: app/templates/profile/sessions.html:8
+msgid "Created"
+msgstr "تاريخ الإنشاء"
+
+#: app/templates/employees/detail.html:109
+#: app/templates/profile/sessions.html:8
+msgid "Last seen"
+msgstr "آخر ظهور"
+
+#: app/templates/employees/detail.html:109
+#: app/templates/profile/sessions.html:8
+msgid "Platform"
+msgstr "المنصة"
+
+#: app/templates/employees/detail.html:109
+#: app/templates/employees/invitations.html:8
+#: app/templates/employees/list.html:14 app/templates/employees/list.html:43
+#: app/templates/employees/list.html:50 app/templates/profile/sessions.html:8
+msgid "Status"
+msgstr "الحالة"
+
+#: app/templates/employees/detail.html:117
+#: app/templates/employees/invitations.html:22
+#: app/templates/profile/sessions.html:20
+msgid "Revoke"
+msgstr "إلغاء"
+
+#: app/templates/employees/detail.html:124
+#: app/templates/profile/sessions.html:27
+msgid "No sessions."
+msgstr "لا توجد جلسات."
+
+#: app/templates/employees/detail.html:128
+msgid "Audit timeline"
+msgstr "السجل الزمني للتدقيق"
+
+#: app/templates/employees/detail.html:131
+msgid "When"
+msgstr "التاريخ"
+
+#: app/templates/employees/detail.html:131
+msgid "Action"
+msgstr "الإجراء"
+
+#: app/templates/employees/detail.html:131
+msgid "Reason"
+msgstr "السبب"
+
+#: app/templates/employees/detail.html:136
+msgid "No audit events yet."
+msgstr "لا توجد أحداث تدقيق بعد."
+
+#: app/templates/employees/invitation_created.html:2
+msgid "Employee invited"
+msgstr "تمت دعوة الموظف"
+
+#: app/templates/employees/invitation_created.html:5
+msgid "Employee invitation created"
+msgstr "تم إنشاء دعوة الموظف"
+
+#: app/templates/employees/invitation_created.html:6
+#, python-format
+msgid "Send this one-time setup link to %(email)s through a secure, trusted channel. It is shown here only once and expires in 3 days."
+msgstr "أرسل رابط الإعداد لمرة واحدة هذا إلى %(email)s عبر قناة آمنة وموثوقة. يُعرض هذا الرابط هنا مرة واحدة فقط وتنتهي صلاحيته خلال 3 أيام."
+
+#: app/templates/employees/invitation_created.html:8
+#: app/templates/employees/not_found.html:6
+msgid "Back to employees"
+msgstr "العودة إلى الموظفين"
+
+#: app/templates/employees/invitations.html:2
+#: app/templates/employees/invitations.html:5
+msgid "Pending employee invitations"
+msgstr "دعوات الموظفين المعلّقة"
+
+#: app/templates/employees/invitations.html:8
+#: app/templates/employees/new.html:43
+msgid "Roles"
+msgstr "الأدوار"
+
+#: app/templates/employees/invitations.html:8
+msgid "Expires"
+msgstr "تنتهي الصلاحية"
+
+#: app/templates/employees/invitations.html:18
+msgid "Reissue"
+msgstr "إعادة الإصدار"
+
+#: app/templates/employees/invitations.html:28
+msgid "No pending invitations."
+msgstr "لا توجد دعوات معلّقة."
+
+#: app/templates/employees/list.html:7
+msgid "Search"
+msgstr "بحث"
+
+#: app/templates/employees/list.html:7
+msgid "Name or employee number"
+msgstr "الاسم أو الرقم الوظيفي"
+
+#: app/templates/employees/list.html:10 app/templates/employees/list.html:16
+#: app/templates/employees/list.html:24 app/templates/employees/list.html:30
+msgid "All"
+msgstr "الكل"
+
+#: app/templates/employees/list.html:22
+msgid "Role"
+msgstr "الدور"
+
+#: app/templates/employees/list.html:36
+msgid "Apply"
+msgstr "تطبيق"
+
+#: app/templates/employees/list.html:43 app/templates/employees/list.html:46
+msgid "Name"
+msgstr "الاسم"
+
+#: app/templates/employees/list.html:43 app/templates/employees/list.html:47
+msgid "Employee #"
+msgstr "رقم الموظف"
+
+#: app/templates/employees/list.html:43 app/templates/employees/list.html:48
+msgid "Title"
+msgstr "المسمى"
+
+#: app/templates/employees/list.html:43 app/templates/employees/list.html:57
+msgid "Start date"
+msgstr "تاريخ البدء"
+
+#: app/templates/employees/list.html:58
+msgid "View"
+msgstr "عرض"
+
+#: app/templates/employees/list.html:62
+#, python-format
+msgid "Page %(page)s of %(total_pages)s -- %(total)s employee(s)."
+msgstr "صفحة %(page)s من %(total_pages)s -- %(total)s موظف."
+
+#: app/templates/employees/list.html:64
+msgid "Previous"
+msgstr "السابق"
+
+#: app/templates/employees/list.html:65
+msgid "Next"
+msgstr "التالي"
+
+#: app/templates/employees/list.html:67
+msgid "No employees match these filters."
+msgstr "لا يوجد موظفون مطابقون لهذه المرشحات."
+
+#: app/templates/employees/list.html:71 app/templates/employees/new.html:2
+#: app/templates/employees/new.html:5
+msgid "Add employee"
+msgstr "إضافة موظف"
+
+#: app/templates/employees/list.html:72 app/templates/layout/base.html:82
+msgid "Dashboard"
+msgstr "لوحة التحكم"
+
+#: app/templates/employees/list.html:73
+msgid "Pending invitations"
+msgstr "الدعوات المعلّقة"
+
+#: app/templates/employees/new.html:37
+msgid "Commission plan"
+msgstr "خطة العمولة"
+
+#: app/templates/employees/new.html:51
+msgid "Require MFA (recommended for all new internal accounts)"
+msgstr "طلب المصادقة متعددة العوامل (يُوصى بها لجميع الحسابات الداخلية الجديدة)"
+
+#: app/templates/employees/new.html:54
+msgid "Create employee & send setup link"
+msgstr "إنشاء الموظف وإرسال رابط الإعداد"
+
+#: app/templates/employees/not_found.html:2
+msgid "Not found"
+msgstr "غير موجود"
+
+#: app/templates/employees/not_found.html:5
+msgid "That employee record does not exist."
+msgstr "سجل الموظف هذا غير موجود."
+
+#: app/templates/layout/base.html:5
+msgid "Aura Owner"
+msgstr "Aura Owner"
+
+#: app/templates/layout/base.html:65
+msgid "Language"
+msgstr "اللغة"
+
+#: app/templates/layout/base.html:75
+msgid "Log out"
+msgstr "تسجيل الخروج"
+
+#: app/templates/layout/base.html:83
+msgid "Customers"
+msgstr "العملاء"
+
+#: app/templates/layout/base.html:84
+msgid "Catalog"
+msgstr "الكتالوج"
+
+#: app/templates/layout/base.html:85
+msgid "Subscriptions"
+msgstr "الاشتراكات"
+
+#: app/templates/layout/base.html:86
+msgid "Licenses"
+msgstr "التراخيص"
+
+#: app/templates/layout/base.html:87
+msgid "Installations"
+msgstr "التثبيتات"
+
+#: app/templates/layout/base.html:88
+msgid "Renewals"
+msgstr "التجديدات"
+
+#: app/templates/layout/base.html:89
+msgid "Pilots"
+msgstr "التجارب التشغيلية"
+
+#: app/templates/layout/base.html:90
+msgid "Emergency Ext."
+msgstr "التمديد الطارئ"
+
+#: app/templates/layout/base.html:91
+msgid "Activation Reviews"
+msgstr "مراجعات التفعيل"
+
+#: app/templates/layout/base.html:92
+msgid "Notifications"
+msgstr "الإشعارات"
+
+#: app/templates/layout/base.html:93
+msgid "My Queue"
+msgstr "قائمة مهامي"
+
+#: app/templates/layout/base.html:94
+msgid "Reconciliation"
+msgstr "التسوية"
+
+#: app/templates/layout/base.html:97
+msgid "Employee Dashboard"
+msgstr "لوحة تحكم الموظفين"
+
+#: app/templates/layout/base.html:98
+msgid "Audit Log"
+msgstr "سجل التدقيق"
+
+#: app/templates/layout/base.html:99
+msgid "Security Events"
+msgstr "أحداث الأمان"
+
+#: app/templates/layout/base.html:100
+msgid "Backups"
+msgstr "النسخ الاحتياطية"
+
+#: app/templates/layout/base.html:101
+msgid "Activation Service"
+msgstr "خدمة التفعيل"
+
+#: app/templates/layout/base.html:102
+msgid "My Profile"
+msgstr "ملفي الشخصي"
+
+#: app/templates/layout/base.html:103
+msgid "Account"
+msgstr "الحساب"
+
+#: app/templates/profile/index.html:2 app/templates/profile/index.html:5
+msgid "My profile"
+msgstr "ملفي الشخصي"
+
+#: app/templates/profile/index.html:14
+msgid "Employment status"
+msgstr "حالة التوظيف"
+
+#: app/templates/profile/index.html:17
+msgid "No employee profile is linked to this account yet."
+msgstr "لا يوجد ملف وظيفي مرتبط بهذا الحساب بعد."
+
+#: app/templates/profile/index.html:22
+msgid "Update your details"
+msgstr "تحديث بياناتك"
+
+#: app/templates/profile/index.html:23
+msgid "Only display name and phone are self-editable. Employee number, role, employment status, start date, manager, and commission plan are management-controlled."
+msgstr "يمكنك تعديل اسم العرض ورقم الهاتف فقط. أما الرقم الوظيفي والدور وحالة التوظيف وتاريخ البدء والمدير المباشر وخطة العمولة فتخضع لتحكم الإدارة."
+
+#: app/templates/profile/index.html:26
+msgid "Display name"
+msgstr "اسم العرض"
+
+#: app/templates/profile/index.html:30
+msgid "Save"
+msgstr "حفظ"
+
+#: app/templates/profile/index.html:42
+msgid "Enroll / re-enroll MFA"
+msgstr "تفعيل / إعادة تفعيل المصادقة متعددة العوامل"
+
+#: app/templates/profile/index.html:43 app/templates/profile/sessions.html:2
+#: app/templates/profile/sessions.html:5
+msgid "My sessions"
+msgstr "جلساتي"
+
+#: app/templates/profile/sessions.html:13
+msgid "This device"
+msgstr "هذا الجهاز"
+
+#~ msgid "Each code can be used once if you lose access to your authenticator. They will"
+#~ msgstr ""
+
+#~ msgid "never be shown again"
+#~ msgstr ""
+
+#~ msgid "after you leave this page."
+#~ msgstr ""
+

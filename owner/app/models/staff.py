@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -45,6 +45,13 @@ class RolePermission(Base, UUIDPKMixin, TimestampMixin):
 
 class StaffUser(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_staff_users"
+    __table_args__ = (
+        # Phase 9.5B-R -- defense-in-depth: the real, authoritative allowlist
+        # is app.config["LANGUAGES"] (app/i18n.py), never trusted from client
+        # input in the first place; this constraint just makes a direct/
+        # migration-mistake write structurally impossible too.
+        CheckConstraint("locale IS NULL OR locale IN ('en', 'ar')", name="ck_staff_users_locale_supported"),
+    )
 
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -57,6 +64,10 @@ class StaffUser(Base, UUIDPKMixin, TimestampMixin):
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     disabled_reason: Mapped[str | None] = mapped_column(Text)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Phase 9.5B-R -- persisted display-language preference (presentation
+    # only, see app/i18n.py). NULL = no explicit preference yet, falls
+    # through to the cookie/Accept-Language/default precedence.
+    locale: Mapped[str | None] = mapped_column(String(8))
 
     role_assignments: Mapped[list["StaffRoleAssignment"]] = relationship(
         back_populates="staff_user",

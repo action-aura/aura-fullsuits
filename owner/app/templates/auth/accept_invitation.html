@@ -1,22 +1,22 @@
 {% extends "layout/base.html" %}
-{% block title %}Accept invitation{% endblock %}
+{% block title %}{{ _('Accept invitation') }}{% endblock %}
 {% block content %}
 <div class="card" style="max-width:420px;margin:2rem auto;">
-  <h2>Set up your Aura Owner account</h2>
+  <h2>{{ _('Set up your Aura Owner account') }}</h2>
   {% if error %}<div class="error">{{ error }}</div>{% endif %}
   {% if token %}
   <form method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Email</label>
-    <input value="{{ email }}" disabled>
-    <label for="display_name">Your name</label>
+    <label>{{ _('Email') }}</label>
+    <input value="{{ email }}" dir="ltr" disabled>
+    <label for="display_name">{{ _('Your name') }}</label>
     <input id="display_name" name="display_name" required autofocus>
-    <label for="password">Choose a password (min 12 chars, mix of 3 character classes)</label>
+    <label for="password">{{ _('Choose a password (min 12 chars, mix of 3 character classes)') }}</label>
     <input id="password" type="password" name="password" required>
-    <div style="margin-top:1rem;"><button type="submit">Create account</button></div>
+    <div style="margin-top:1rem;"><button type="submit">{{ _('Create account') }}</button></div>
   </form>
   {% else %}
-  <p><a href="{{ url_for('auth.login_form') }}">Return to login</a></p>
+  <p><a href="{{ url_for('auth.login_form') }}">{{ _('Return to login') }}</a></p>
   {% endif %}
 </div>
 {% endblock %}

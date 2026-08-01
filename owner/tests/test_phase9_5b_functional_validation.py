@@ -91,7 +91,7 @@ def test_full_employee_lifecycle_scenario(app, client, seeded):
     # Complete MFA enrollment (real TOTP flow, same client/session).
     enroll_page = client.get("/auth/mfa-enroll")
     assert enroll_page.status_code == 200
-    secret_match = re.search(r"<dt>Manual secret</dt><dd><code>([^<]+)</code></dd>", enroll_page.get_data(as_text=True))
+    secret_match = re.search(r"<dt>Manual secret</dt><dd><code[^>]*>([^<]+)</code></dd>", enroll_page.get_data(as_text=True))
     assert secret_match is not None
     import pyotp
 

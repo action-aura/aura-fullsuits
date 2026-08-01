@@ -1,23 +1,26 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{ current_locale }}" dir="{{ current_direction }}">
 <head>
   <meta charset="utf-8">
-  <title>{% block title %}Aura Owner{% endblock %} -- Aura Owner Control Center</title>
+  <title>{% block title %}{{ _('Aura Owner') }}{% endblock %} -- {{ _('Aura Owner Control Center') }}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     :root { --border:#d8dee4; --muted:#6b7785; --accent:#2452b8; --danger:#b3261e; --bg:#f6f8fa; }
     * { box-sizing: border-box; }
-    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: var(--bg); color: #1c2530; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans Arabic", sans-serif; margin: 0; background: var(--bg); color: #1c2530; }
     header.topbar { background: #101826; color: #fff; padding: 0.6rem 1rem; display: flex; align-items: center; justify-content: space-between; }
-    header.topbar a { color: #fff; text-decoration: none; margin-right: 1rem; font-size: 0.92rem; }
+    header.topbar a { color: #fff; text-decoration: none; margin-inline-end: 1rem; font-size: 0.92rem; }
     header.topbar a.brand { font-weight: 700; font-size: 1rem; }
+    .lang-switch { display: inline-flex; gap: 0.4rem; margin-inline-end: 1rem; }
+    .lang-switch a { margin-inline-end: 0; padding: 0.15rem 0.5rem; border-radius: 4px; }
+    .lang-switch a[aria-current="true"] { background: #223049; font-weight: 700; }
     nav.tabs { display: flex; flex-wrap: wrap; gap: 0; background: #16202f; padding: 0 1rem; }
     nav.tabs a { color: #c7d0dc; text-decoration: none; padding: 0.5rem 0.75rem; font-size: 0.85rem; }
     nav.tabs a:hover { color: #fff; background: #223049; }
     main { max-width: 1100px; margin: 1.25rem auto; padding: 0 1rem; }
     .card { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
     table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
-    th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); }
+    th, td { text-align: start; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); }
     th { color: var(--muted); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; }
     .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.72rem; font-weight: 600; background: #e7ecf3; color: #33455e; }
     .badge.active, .badge.confirmed, .badge.success, .badge.ok { background: #dcf3e2; color: #1c6b34; }
@@ -25,7 +28,7 @@
     .badge.danger, .badge.revoked, .badge.failed, .badge.disabled { background: #fbdcda; color: #8a2119; }
     form.inline { display: inline; }
     input, select, textarea { padding: 0.4rem 0.5rem; border: 1px solid var(--border); border-radius: 5px; font-size: 0.9rem; width: 100%; }
-    label { display: block; font-size: 0.82rem; color: var(--muted); margin: 0.5rem 0 0.2rem; }
+    label { display: block; font-size: 0.82rem; color: var(--muted); margin-block: 0.5rem 0.2rem; }
     button, .btn { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 0.45rem 0.9rem; font-size: 0.85rem; cursor: pointer; text-decoration: none; display: inline-block; }
     button.danger, .btn.danger { background: var(--danger); }
     button.secondary, .btn.secondary { background: #fff; color: var(--accent); border: 1px solid var(--accent); }
@@ -35,62 +38,74 @@
     .kv { display: grid; grid-template-columns: 200px 1fr; gap: 0.3rem 1rem; font-size: 0.9rem; }
     .kv dt { color: var(--muted); }
     code.masked { background: #eef1f5; padding: 0.15rem 0.4rem; border-radius: 4px; }
+    /* Bidirectional identifiers (email/UUID/employee number/correlation id)
+       are wrapped with the bidi_isolate filter -- <bdi dir="ltr"> -- which
+       needs no extra CSS; unicode-bidi:isolate is the element's own UA
+       default for <bdi>. */
     /* Phase 9.5B -- minimal, scoped responsive treatment for any table
        opted into it via .responsive-table, reused by the new employee
        screens. Does not touch any existing table (no class added there),
-       so nothing else in Owner changes behavior. */
+       so nothing else in Owner changes behavior. Uses logical properties so
+       it works unchanged in RTL. */
     @media (max-width: 720px) {
       table.responsive-table thead { display: none; }
       table.responsive-table, table.responsive-table tbody, table.responsive-table tr, table.responsive-table td { display: block; width: 100%; }
       table.responsive-table tr { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; }
-      table.responsive-table td { border-bottom: none; padding: 0.25rem 0; }
+      table.responsive-table td { border-bottom: none; padding-block: 0.25rem; }
       table.responsive-table td[data-label]:not([data-label=""])::before { content: attr(data-label) ": "; font-weight: 600; color: var(--muted); }
       nav.tabs { overflow-x: auto; flex-wrap: nowrap; }
-      main { padding: 0 0.6rem; }
+      main { padding-inline: 0.6rem; }
     }
   </style>
 </head>
 <body>
   <header class="topbar">
-    <div><a class="brand" href="{{ url_for('dashboard.index') }}">Aura Owner Control Center</a></div>
+    <div><a class="brand" href="{{ url_for('dashboard.index') }}">{{ _('Aura Owner Control Center') }}</a></div>
     <div>
+      <nav class="lang-switch" aria-label="{{ _('Language') }}">
+        {% for code, name in supported_locales.items() %}
+        <a href="{{ url_for('locale.switch', code=code, next=request.path) }}"
+           lang="{{ code }}" {% if code == current_locale %}aria-current="true"{% endif %}>{{ name }}</a>
+        {% endfor %}
+      </nav>
       {% if staff %}
         <span>{{ staff.display_name }}</span>
         <form class="inline" method="post" action="{{ url_for('auth.logout') }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" class="secondary">Log out</button>
+          <button type="submit" class="secondary">{{ _('Log out') }}</button>
         </form>
       {% endif %}
     </div>
   </header>
   {% if staff %}
   <nav class="tabs">
-    <a href="{{ url_for('dashboard.index') }}">Dashboard</a>
-    <a href="{{ url_for('customers.list_customers') }}">Customers</a>
-    <a href="{{ url_for('catalog.index') }}">Catalog</a>
-    <a href="{{ url_for('subscriptions.list_subscriptions') }}">Subscriptions</a>
-    <a href="{{ url_for('licensing.list_licenses') }}">Licenses</a>
-    <a href="{{ url_for('installations.list_installations') }}">Installations</a>
-    <a href="{{ url_for('commercial_ops_ui.list_renewals') }}">Renewals</a>
-    <a href="{{ url_for('commercial_ops_ui.list_pilots') }}">Pilots</a>
-    <a href="{{ url_for('commercial_ops_ui.list_emergency_extensions') }}">Emergency Ext.</a>
-    <a href="{{ url_for('commercial_ops_ui.list_pending_activations') }}">Activation Reviews</a>
-    <a href="{{ url_for('commercial_ops_ui.list_notifications') }}">Notifications</a>
-    <a href="{{ url_for('commercial_ops_ui.queue_view') }}">My Queue</a>
-    <a href="{{ url_for('commercial_ops_ui.reconciliation_view') }}">Reconciliation</a>
-    <a href="{{ url_for('staff.list_staff') }}">Staff</a>
-    <a href="{{ url_for('employees.list_view') }}">Employees</a>
-    <a href="{{ url_for('employees.dashboard') }}">Employee Dashboard</a>
-    <a href="{{ url_for('audit.list_audit') }}">Audit Log</a>
-    <a href="{{ url_for('audit.security_events') }}">Security Events</a>
-    <a href="{{ url_for('system.list_backups') }}">Backups</a>
-    <a href="{{ url_for('licensing_admin.status') }}">Activation Service</a>
-    <a href="{{ url_for('profile.index') }}">My Profile</a>
-    <a href="{{ url_for('auth.change_password_form') }}">Account</a>
+    <a href="{{ url_for('dashboard.index') }}">{{ _('Dashboard') }}</a>
+    <a href="{{ url_for('customers.list_customers') }}">{{ _('Customers') }}</a>
+    <a href="{{ url_for('catalog.index') }}">{{ _('Catalog') }}</a>
+    <a href="{{ url_for('subscriptions.list_subscriptions') }}">{{ _('Subscriptions') }}</a>
+    <a href="{{ url_for('licensing.list_licenses') }}">{{ _('Licenses') }}</a>
+    <a href="{{ url_for('installations.list_installations') }}">{{ _('Installations') }}</a>
+    <a href="{{ url_for('commercial_ops_ui.list_renewals') }}">{{ _('Renewals') }}</a>
+    <a href="{{ url_for('commercial_ops_ui.list_pilots') }}">{{ _('Pilots') }}</a>
+    <a href="{{ url_for('commercial_ops_ui.list_emergency_extensions') }}">{{ _('Emergency Ext.') }}</a>
+    <a href="{{ url_for('commercial_ops_ui.list_pending_activations') }}">{{ _('Activation Reviews') }}</a>
+    <a href="{{ url_for('commercial_ops_ui.list_notifications') }}">{{ _('Notifications') }}</a>
+    <a href="{{ url_for('commercial_ops_ui.queue_view') }}">{{ _('My Queue') }}</a>
+    <a href="{{ url_for('commercial_ops_ui.reconciliation_view') }}">{{ _('Reconciliation') }}</a>
+    <a href="{{ url_for('staff.list_staff') }}">{{ _('Staff') }}</a>
+    <a href="{{ url_for('employees.list_view') }}">{{ _('Employees') }}</a>
+    <a href="{{ url_for('employees.dashboard') }}">{{ _('Employee Dashboard') }}</a>
+    <a href="{{ url_for('audit.list_audit') }}">{{ _('Audit Log') }}</a>
+    <a href="{{ url_for('audit.security_events') }}">{{ _('Security Events') }}</a>
+    <a href="{{ url_for('system.list_backups') }}">{{ _('Backups') }}</a>
+    <a href="{{ url_for('licensing_admin.status') }}">{{ _('Activation Service') }}</a>
+    <a href="{{ url_for('profile.index') }}">{{ _('My Profile') }}</a>
+    <a href="{{ url_for('auth.change_password_form') }}">{{ _('Account') }}</a>
   </nav>
   {% endif %}
   <main>
     {% block content %}{% endblock %}
   </main>
+  <script src="{{ url_for('static', filename='js/confirm.js') }}"></script>
 </body>
 </html>

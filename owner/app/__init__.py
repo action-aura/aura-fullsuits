@@ -25,6 +25,10 @@ def create_app(config_name: str | None = None) -> Flask:
     CORS(app, resources={r"/api/*": {"origins": []}})  # no external origins permitted by default
     register_security_headers(app)
 
+    from app.i18n import init_app as init_i18n
+
+    init_i18n(app)
+
     @app.teardown_appcontext
     def _remove_session(exception=None):
         db_session.remove()
@@ -53,6 +57,7 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.employees.routes import bp as employees_bp
     from app.employees.self_routes import bp as profile_bp
     from app.api_operations.routes import bp as api_operations_bp
+    from app.locale_routes import bp as locale_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(staff_bp)
@@ -72,6 +77,7 @@ def create_app(config_name: str | None = None) -> Flask:
     app.register_blueprint(employees_bp)
     app.register_blueprint(profile_bp)
     app.register_blueprint(api_operations_bp)
+    app.register_blueprint(locale_bp)
 
     if app.config.get("EXTERNAL_API_ENABLED"):
         from app.api.routes import bp as external_api_bp

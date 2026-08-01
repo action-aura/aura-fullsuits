@@ -1,19 +1,19 @@
 {% extends "layout/base.html" %}
-{% block title %}Enable MFA{% endblock %}
+{% block title %}{{ _('Enable MFA') }}{% endblock %}
 {% block content %}
 <div class="card" style="max-width:460px;margin:2rem auto;">
-  <h2>Enable multi-factor authentication</h2>
-  <p>Scan this into any TOTP authenticator app (Google Authenticator, 1Password, etc.), or enter the secret manually.</p>
+  <h2>{{ _('Enable multi-factor authentication') }}</h2>
+  <p>{{ _('Scan this into any TOTP authenticator app (Google Authenticator, 1Password, etc.), or enter the secret manually.') }}</p>
   {% if error %}<div class="error">{{ error }}</div>{% endif %}
   <div class="kv">
-    <dt>Manual secret</dt><dd><code>{{ secret }}</code></dd>
-    <dt>Provisioning URI</dt><dd style="word-break:break-all;font-size:0.78rem;">{{ provisioning_uri }}</dd>
+    <dt>{{ _('Manual secret') }}</dt><dd><code dir="ltr">{{ secret }}</code></dd>
+    <dt>{{ _('Provisioning URI') }}</dt><dd dir="ltr" style="word-break:break-all;font-size:0.78rem;">{{ provisioning_uri }}</dd>
   </div>
   <form method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label for="code">Enter the current 6-digit code to confirm</label>
+    <label for="code">{{ _('Enter the current 6-digit code to confirm') }}</label>
     <input id="code" name="code" required autofocus autocomplete="one-time-code">
-    <div style="margin-top:1rem;"><button type="submit">Confirm and enable MFA</button></div>
+    <div style="margin-top:1rem;"><button type="submit">{{ _('Confirm and enable MFA') }}</button></div>
   </form>
 </div>
 {% endblock %}

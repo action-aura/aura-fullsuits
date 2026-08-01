@@ -2,137 +2,137 @@
 {% block title %}{{ profile.full_name }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>{{ profile.full_name }} <span class="badge {{ 'active' if profile.employment_status == 'ACTIVE' else ('warn' if profile.employment_status in ('PENDING','SUSPENDED') else 'danger') }}">{{ profile.employment_status }}</span></h2>
+  <h2>{{ profile.full_name }} <span class="badge {{ 'active' if profile.employment_status == 'ACTIVE' else ('warn' if profile.employment_status in ('PENDING','SUSPENDED') else 'danger') }}">{{ employment_status_label(profile.employment_status) }}</span></h2>
   <dl class="kv">
-    <dt>Employee number</dt><dd>{{ profile.employee_number }}</dd>
-    <dt>Job title</dt><dd>{{ profile.job_title or "-" }}</dd>
-    <dt>Department</dt><dd>{{ profile.department or "-" }}</dd>
-    <dt>Manager</dt><dd>{{ profile.manager.full_name if profile.manager else "-" }}</dd>
-    <dt>Employment start date</dt><dd>{{ profile.employment_start_date }}</dd>
-    <dt>Phone</dt><dd>{{ profile.phone or "-" }}</dd>
-    <dt>Presence</dt><dd><span class="badge {{ 'active' if presence == 'ONLINE' else ('warn' if presence == 'RECENTLY_ACTIVE' else '') }}">{{ presence.replace("_"," ").title() }}</span> <span class="empty">(application usage only -- not attendance/working hours)</span></dd>
+    <dt>{{ _('Employee number') }}</dt><dd>{{ profile.employee_number|bidi_isolate }}</dd>
+    <dt>{{ _('Job title') }}</dt><dd>{{ profile.job_title or "-" }}</dd>
+    <dt>{{ _('Department') }}</dt><dd>{{ profile.department or "-" }}</dd>
+    <dt>{{ _('Manager') }}</dt><dd>{{ profile.manager.full_name if profile.manager else "-" }}</dd>
+    <dt>{{ _('Employment start date') }}</dt><dd>{{ format_owner_date(profile.employment_start_date) }}</dd>
+    <dt>{{ _('Phone') }}</dt><dd>{{ profile.phone|bidi_isolate if profile.phone else "-" }}</dd>
+    <dt>{{ _('Presence') }}</dt><dd><span class="badge {{ 'active' if presence == 'ONLINE' else ('warn' if presence == 'RECENTLY_ACTIVE' else '') }}">{{ presence_label(presence) }}</span> <span class="empty">({{ _('application usage only -- not attendance/working hours') }})</span></dd>
   </dl>
 </div>
 
 <div class="card">
-  <h3>Account security</h3>
+  <h3>{{ _('Account security') }}</h3>
   <dl class="kv">
-    <dt>Email</dt><dd>{{ staff.email }}</dd>
-    <dt>Account status</dt><dd>{% if staff.is_active and not staff.disabled_at %}<span class="badge active">Active</span>{% else %}<span class="badge disabled">Disabled{% if staff.disabled_reason %} ({{ staff.disabled_reason }}){% endif %}</span>{% endif %}</dd>
-    <dt>MFA</dt>
+    <dt>{{ _('Email') }}</dt><dd>{{ staff.email|bidi_isolate }}</dd>
+    <dt>{{ _('Account status') }}</dt><dd>{% if staff.is_active and not staff.disabled_at %}<span class="badge active">{{ _('Active') }}</span>{% else %}<span class="badge disabled">{{ _('Disabled') }}{% if staff.disabled_reason %} ({{ staff.disabled_reason }}){% endif %}</span>{% endif %}</dd>
+    <dt>{{ _('MFA') }}</dt>
     <dd>
-      {% if staff.mfa_credential and staff.mfa_credential.confirmed %}<span class="badge active">Enrolled</span>{% else %}<span class="badge warn">Not enrolled</span>{% endif %}
-      {% if staff.mfa_required %}<span class="badge">Required</span>{% endif %}
+      {% if staff.mfa_credential and staff.mfa_credential.confirmed %}<span class="badge active">{{ _('Enrolled') }}</span>{% else %}<span class="badge warn">{{ _('Not enrolled') }}</span>{% endif %}
+      {% if staff.mfa_required %}<span class="badge">{{ _('Required') }}</span>{% endif %}
     </dd>
-    <dt>Last login</dt><dd>{{ staff.last_login_at or "Never" }}</dd>
-    <dt>Active sessions</dt><dd>{{ sessions|selectattr("revoked_at", "none")|list|length }}</dd>
+    <dt>{{ _('Last login') }}</dt><dd>{{ format_owner_datetime(staff.last_login_at) if staff.last_login_at else _('Never') }}</dd>
+    <dt>{{ _('Active sessions') }}</dt><dd>{{ sessions|selectattr("revoked_at", "none")|list|length }}</dd>
   </dl>
 </div>
 
 <div class="card">
-  <h3>Roles and permissions</h3>
-  <p>Changing roles requires a fresh MFA confirmation and immediately revokes all of this account's active sessions.</p>
+  <h3>{{ _('Roles and permissions') }}</h3>
+  <p>{{ _("Changing roles requires a fresh MFA confirmation and immediately revokes all of this account's active sessions.") }}</p>
   <form method="post" action="{{ url_for('staff.update_roles', staff_id=staff.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {% for role in roles %}
-      <label style="display:inline-block;margin-right:1rem;font-weight:normal;color:inherit;">
+      <label style="display:inline-block;margin-inline-end:1rem;font-weight:normal;color:inherit;">
         <input type="checkbox" name="role_codes" value="{{ role.code }}" style="width:auto;"
-          {% if staff.role_assignments|selectattr("role.code","equalto",role.code)|list %}checked{% endif %}> {{ role.code }}
+          {% if staff.role_assignments|selectattr("role.code","equalto",role.code)|list %}checked{% endif %}> {{ role_label(role.code) }}
       </label>
     {% endfor %}
-    <div style="margin-top:1rem;"><button type="submit">Save roles</button></div>
+    <div style="margin-top:1rem;"><button type="submit">{{ _('Save roles') }}</button></div>
   </form>
 </div>
 
 <div class="card">
-  <h3>Edit profile</h3>
+  <h3>{{ _('Edit profile') }}</h3>
   <form method="post" action="{{ url_for('employees.edit', employee_id=profile.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="version" value="{{ profile.version }}">
-    <label for="full_name">Full name</label>
+    <label for="full_name">{{ _('Full name') }}</label>
     <input id="full_name" name="full_name" value="{{ profile.full_name }}">
-    <label for="job_title">Job title</label>
+    <label for="job_title">{{ _('Job title') }}</label>
     <input id="job_title" name="job_title" value="{{ profile.job_title or '' }}">
-    <label for="department">Department</label>
+    <label for="department">{{ _('Department') }}</label>
     <input id="department" name="department" value="{{ profile.department or '' }}">
-    <label for="manager_employee_profile_id">Manager</label>
+    <label for="manager_employee_profile_id">{{ _('Manager') }}</label>
     <select id="manager_employee_profile_id" name="manager_employee_profile_id">
-      <option value="">None</option>
+      <option value="">{{ _('None') }}</option>
       {% for m in managers %}<option value="{{ m.id }}" {% if profile.manager_employee_profile_id == m.id %}selected{% endif %}>{{ m.full_name }} ({{ m.employee_number }})</option>{% endfor %}
     </select>
-    <div style="margin-top:1rem;"><button type="submit" class="secondary">Save changes</button></div>
+    <div style="margin-top:1rem;"><button type="submit" class="secondary">{{ _('Save changes') }}</button></div>
   </form>
 </div>
 
 <div class="card">
-  <h3>Lifecycle actions</h3>
+  <h3>{{ _('Lifecycle actions') }}</h3>
   {% if profile.employment_status == "PENDING" %}
   <form class="inline" method="post" action="{{ url_for('employees.activate', employee_id=profile.id) }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit">Activate</button>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit">{{ _('Activate') }}</button>
   </form>
   {% endif %}
   {% if profile.employment_status in ("PENDING","ACTIVE") %}
   <form class="inline" method="post" action="{{ url_for('employees.suspend', employee_id=profile.id) }}"
-        onsubmit="return confirm('Suspend this employee? This blocks login and revokes all active sessions immediately.');">
+        data-confirm="{{ _('Suspend this employee? This blocks login and revokes all active sessions immediately.') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="hidden" name="reason" value="Suspended by management">
-    <button type="submit" class="danger">Suspend</button>
+    <input type="hidden" name="reason" value="{{ _('Suspended by management') }}">
+    <button type="submit" class="danger">{{ _('Suspend') }}</button>
   </form>
   {% endif %}
   {% if profile.employment_status == "SUSPENDED" %}
   <form class="inline" method="post" action="{{ url_for('employees.reactivate', employee_id=profile.id) }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit">Reactivate</button>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit">{{ _('Reactivate') }}</button>
   </form>
   {% endif %}
   {% if profile.employment_status in ("PENDING","ACTIVE","SUSPENDED") %}
   <form class="inline" method="post" action="{{ url_for('employees.terminate', employee_id=profile.id) }}"
-        onsubmit="return confirm('Terminate this employee? This is not reversible without an explicit rehire process.');">
+        data-confirm="{{ _('Terminate this employee? This is not reversible without an explicit rehire process.') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="hidden" name="reason" value="Terminated by management">
-    <button type="submit" class="danger">Terminate</button>
+    <input type="hidden" name="reason" value="{{ _('Terminated by management') }}">
+    <button type="submit" class="danger">{{ _('Terminate') }}</button>
   </form>
   {% endif %}
   {% if profile.employment_status == "TERMINATED" %}
   <form class="inline" method="post" action="{{ url_for('employees.archive', employee_id=profile.id) }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="secondary">Archive</button>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="secondary">{{ _('Archive') }}</button>
   </form>
   {% endif %}
   <form class="inline" method="post" action="{{ url_for('employees.revoke_all_sessions', employee_id=profile.id) }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="secondary">Revoke all sessions</button>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="secondary">{{ _('Revoke all sessions') }}</button>
   </form>
 </div>
 
 <div class="card">
-  <h3>Sessions</h3>
+  <h3>{{ _('Sessions') }}</h3>
   {% if sessions %}
   <table>
-    <tr><th>Created</th><th>Last seen</th><th>Platform</th><th>Status</th><th></th></tr>
+    <tr><th>{{ _('Created') }}</th><th>{{ _('Last seen') }}</th><th>{{ _('Platform') }}</th><th>{{ _('Status') }}</th><th></th></tr>
     {% for s in sessions %}
     <tr>
-      <td>{{ s.created_at }}</td><td>{{ s.last_seen_at }}</td><td>{{ s.platform }}</td>
-      <td>{% if s.revoked_at %}<span class="badge revoked">Revoked</span>{% else %}<span class="badge active">Active</span>{% endif %}</td>
+      <td>{{ format_owner_datetime(s.created_at) }}</td><td>{{ format_owner_datetime(s.last_seen_at) }}</td><td dir="ltr">{{ s.platform }}</td>
+      <td>{% if s.revoked_at %}<span class="badge revoked">{{ _('Revoked') }}</span>{% else %}<span class="badge active">{{ _('Active') }}</span>{% endif %}</td>
       <td>
         {% if not s.revoked_at %}
         <form method="post" action="{{ url_for('employees.revoke_one_session', employee_id=profile.id, session_id=s.id) }}">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="danger">Revoke</button>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="danger">{{ _('Revoke') }}</button>
         </form>
         {% endif %}
       </td>
     </tr>
     {% endfor %}
   </table>
-  {% else %}<p class="empty">No sessions.</p>{% endif %}
+  {% else %}<p class="empty">{{ _('No sessions.') }}</p>{% endif %}
 </div>
 
 <div class="card">
-  <h3>Audit timeline</h3>
+  <h3>{{ _('Audit timeline') }}</h3>
   {% if audit_events %}
   <table>
-    <tr><th>When</th><th>Action</th><th>Reason</th></tr>
+    <tr><th>{{ _('When') }}</th><th>{{ _('Action') }}</th><th>{{ _('Reason') }}</th></tr>
     {% for ev in audit_events %}
-    <tr><td>{{ ev.created_at }}</td><td>{{ ev.action_code }}</td><td>{{ ev.reason or "-" }}</td></tr>
+    <tr><td>{{ format_owner_datetime(ev.created_at) }}</td><td>{{ audit_action_label(ev.action_code) }}</td><td>{{ ev.reason or "-" }}</td></tr>
     {% endfor %}
   </table>
-  {% else %}<p class="empty">No audit events yet.</p>{% endif %}
+  {% else %}<p class="empty">{{ _('No audit events yet.') }}</p>{% endif %}
 </div>
 {% endblock %}

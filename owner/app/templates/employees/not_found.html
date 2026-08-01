@@ -1,8 +1,8 @@
 {% extends "layout/base.html" %}
-{% block title %}Not found{% endblock %}
+{% block title %}{{ _('Not found') }}{% endblock %}
 {% block content %}
 <div class="card">
-  <p class="empty">That employee record does not exist.</p>
-  <a class="btn secondary" href="{{ url_for('employees.list_view') }}">Back to employees</a>
+  <p class="empty">{{ _('That employee record does not exist.') }}</p>
+  <a class="btn secondary" href="{{ url_for('employees.list_view') }}">{{ _('Back to employees') }}</a>
 </div>
 {% endblock %}

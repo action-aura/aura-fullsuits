@@ -1,29 +1,29 @@
 {% extends "layout/base.html" %}
-{% block title %}My sessions{% endblock %}
+{% block title %}{{ _('My sessions') }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>My sessions</h2>
+  <h2>{{ _('My sessions') }}</h2>
   {% if sessions %}
   <table>
-    <tr><th>Created</th><th>Last seen</th><th>Platform</th><th>Status</th><th></th></tr>
+    <tr><th>{{ _('Created') }}</th><th>{{ _('Last seen') }}</th><th>{{ _('Platform') }}</th><th>{{ _('Status') }}</th><th></th></tr>
     {% for s in sessions %}
     <tr>
-      <td>{{ s.created_at }}</td><td>{{ s.last_seen_at }}</td><td>{{ s.platform }}</td>
+      <td>{{ format_owner_datetime(s.created_at) }}</td><td>{{ format_owner_datetime(s.last_seen_at) }}</td><td dir="ltr">{{ s.platform }}</td>
       <td>
-        {% if s.id == current_session_id %}<span class="badge active">This device</span>
-        {% elif s.revoked_at %}<span class="badge revoked">Revoked</span>
-        {% else %}<span class="badge">Active</span>{% endif %}
+        {% if s.id == current_session_id %}<span class="badge active">{{ _('This device') }}</span>
+        {% elif s.revoked_at %}<span class="badge revoked">{{ _('Revoked') }}</span>
+        {% else %}<span class="badge">{{ _('Active') }}</span>{% endif %}
       </td>
       <td>
         {% if s.id != current_session_id and not s.revoked_at %}
         <form method="post" action="{{ url_for('profile.revoke_session_route', session_id=s.id) }}">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="danger">Revoke</button>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="danger">{{ _('Revoke') }}</button>
         </form>
         {% endif %}
       </td>
     </tr>
     {% endfor %}
   </table>
-  {% else %}<p class="empty">No sessions.</p>{% endif %}
+  {% else %}<p class="empty">{{ _('No sessions.') }}</p>{% endif %}
 </div>
 {% endblock %}

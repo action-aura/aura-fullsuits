@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from flask import Blueprint, current_app, redirect, render_template, request, session, url_for
+from flask_babel import gettext as _
 from sqlalchemy import select
 
 from app.audit.services import record as audit_record
@@ -374,7 +375,7 @@ def accept_invitation_form(token: str):
 def accept_invitation_submit(token: str):
     invitation = _find_valid_invitation(token)
     if invitation is None:
-        return render_template("auth/accept_invitation.html", error="Invitation is invalid or has expired.", token=None), 400
+        return render_template("auth/accept_invitation.html", error=_("Invitation is invalid or has expired."), token=None), 400
 
     display_name = request.form.get("display_name", "").strip()
     password = request.form.get("password", "")

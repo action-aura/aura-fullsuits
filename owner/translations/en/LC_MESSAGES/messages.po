@@ -1,0 +1,885 @@
+# English translations for PROJECT.
+# Copyright (C) 2026 ORGANIZATION
+# This file is distributed under the same license as the PROJECT project.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: PROJECT VERSION\n"
+"Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
+"POT-Creation-Date: 2026-08-01 11:17+0300\n"
+"PO-Revision-Date: 2026-08-01 11:16+0300\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language: en\n"
+"Language-Team: en <LL@li.org>\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.18.0\n"
+
+#: app/i18n_labels.py:24
+msgid "Setup Pending"
+msgstr "Setup Pending"
+
+#: app/i18n_labels.py:25 app/i18n_labels.py:55 app/i18n_labels.py:60
+#: app/templates/employees/detail.html:21
+#: app/templates/employees/detail.html:113
+#: app/templates/profile/sessions.html:15
+msgid "Active"
+msgstr "Active"
+
+#: app/i18n_labels.py:26 app/templates/employees/dashboard.html:15
+msgid "Suspended"
+msgstr "Suspended"
+
+#: app/i18n_labels.py:27 app/templates/employees/dashboard.html:16
+msgid "Terminated"
+msgstr "Terminated"
+
+#: app/i18n_labels.py:28 app/templates/employees/dashboard.html:17
+msgid "Archived"
+msgstr "Archived"
+
+#: app/i18n_labels.py:35
+msgid "Online Now"
+msgstr "Online Now"
+
+#: app/i18n_labels.py:36
+msgid "Recently Active"
+msgstr "Recently Active"
+
+#: app/i18n_labels.py:37 app/templates/employees/dashboard.html:26
+msgid "Offline"
+msgstr "Offline"
+
+#: app/i18n_labels.py:44
+msgid "Super Administrator"
+msgstr "Super Administrator"
+
+#: app/i18n_labels.py:45
+msgid "Sales"
+msgstr "Sales"
+
+#: app/i18n_labels.py:46
+msgid "Support"
+msgstr "Support"
+
+#: app/i18n_labels.py:47
+msgid "Finance"
+msgstr "Finance"
+
+#: app/i18n_labels.py:48
+msgid "Viewer"
+msgstr "Viewer"
+
+#: app/i18n_labels.py:56 app/templates/employees/detail.html:21
+msgid "Disabled"
+msgstr "Disabled"
+
+#: app/i18n_labels.py:60 app/templates/employees/detail.html:113
+#: app/templates/profile/sessions.html:14
+msgid "Revoked"
+msgstr "Revoked"
+
+#: app/i18n_labels.py:65 app/templates/employees/detail.html:24
+#: app/templates/profile/index.html:39
+msgid "Enrolled"
+msgstr "Enrolled"
+
+#: app/i18n_labels.py:66 app/templates/employees/detail.html:25
+msgid "Required"
+msgstr "Required"
+
+#: app/i18n_labels.py:66 app/templates/employees/detail.html:24
+#: app/templates/profile/index.html:39
+msgid "Not enrolled"
+msgstr "Not enrolled"
+
+#: app/i18n_labels.py:70
+msgid "Expired"
+msgstr "Expired"
+
+#: app/i18n_labels.py:70
+msgid "Open"
+msgstr "Open"
+
+#: app/i18n_labels.py:75
+msgid "Employee profile created"
+msgstr "Employee profile created"
+
+#: app/i18n_labels.py:76
+msgid "Employee profile updated"
+msgstr "Employee profile updated"
+
+#: app/i18n_labels.py:77
+msgid "Employee activated"
+msgstr "Employee activated"
+
+#: app/i18n_labels.py:78
+msgid "Employee suspended"
+msgstr "Employee suspended"
+
+#: app/i18n_labels.py:79
+msgid "Employee reactivated"
+msgstr "Employee reactivated"
+
+#: app/i18n_labels.py:80
+msgid "Employee terminated"
+msgstr "Employee terminated"
+
+#: app/i18n_labels.py:81
+msgid "Employee archived"
+msgstr "Employee archived"
+
+#: app/i18n_labels.py:82
+msgid "Employee updated their own profile"
+msgstr "Employee updated their own profile"
+
+#: app/i18n_labels.py:83
+msgid "All sessions revoked"
+msgstr "All sessions revoked"
+
+#: app/i18n_labels.py:84
+msgid "Session revoked"
+msgstr "Session revoked"
+
+#: app/i18n_labels.py:85
+msgid "Invitation created"
+msgstr "Invitation created"
+
+#: app/i18n_labels.py:86
+msgid "Invitation revoked"
+msgstr "Invitation revoked"
+
+#: app/i18n_labels.py:87
+msgid "Invitation accepted"
+msgstr "Invitation accepted"
+
+#: app/i18n_labels.py:88
+msgid "Roles changed"
+msgstr "Roles changed"
+
+#: app/i18n_labels.py:89
+msgid "Account disabled"
+msgstr "Account disabled"
+
+#: app/i18n_labels.py:90
+msgid "MFA reset"
+msgstr "MFA reset"
+
+#: app/i18n_labels.py:91
+msgid "Signed in"
+msgstr "Signed in"
+
+#: app/i18n_labels.py:92
+msgid "Signed in with MFA"
+msgstr "Signed in with MFA"
+
+#: app/i18n_labels.py:93
+msgid "Signed out"
+msgstr "Signed out"
+
+#: app/i18n_labels.py:94
+msgid "Password changed"
+msgstr "Password changed"
+
+#: app/i18n_labels.py:95
+msgid "MFA enrolled"
+msgstr "MFA enrolled"
+
+#: app/i18n_labels.py:96
+msgid "Recovery code used"
+msgstr "Recovery code used"
+
+#: app/i18n_labels.py:103 app/templates/layout/base.html:95
+msgid "Staff"
+msgstr "Staff"
+
+#: app/i18n_labels.py:104 app/templates/employees/list.html:2
+#: app/templates/employees/list.html:5 app/templates/layout/base.html:96
+msgid "Employees"
+msgstr "Employees"
+
+#: app/auth/routes.py:378
+msgid "Invitation is invalid or has expired."
+msgstr "Invitation is invalid or has expired."
+
+#: app/security/passwords.py:29
+#, python-format
+msgid "Password must be at least %(min_length)s characters."
+msgstr "Password must be at least %(min_length)s characters."
+
+#: app/security/passwords.py:39
+msgid "Password must mix at least 3 of: lowercase, uppercase, digit, symbol."
+msgstr "Password must mix at least 3 of: lowercase, uppercase, digit, symbol."
+
+#: app/templates/auth/accept_invitation.html:2
+msgid "Accept invitation"
+msgstr "Accept invitation"
+
+#: app/templates/auth/accept_invitation.html:5
+msgid "Set up your Aura Owner account"
+msgstr "Set up your Aura Owner account"
+
+#: app/templates/auth/accept_invitation.html:10 app/templates/auth/login.html:9
+#: app/templates/employees/detail.html:20
+#: app/templates/employees/invitations.html:8
+#: app/templates/employees/new.html:10 app/templates/profile/index.html:38
+msgid "Email"
+msgstr "Email"
+
+#: app/templates/auth/accept_invitation.html:12
+msgid "Your name"
+msgstr "Your name"
+
+#: app/templates/auth/accept_invitation.html:14
+msgid "Choose a password (min 12 chars, mix of 3 character classes)"
+msgstr "Choose a password (min 12 chars, mix of 3 character classes)"
+
+#: app/templates/auth/accept_invitation.html:16
+msgid "Create account"
+msgstr "Create account"
+
+#: app/templates/auth/accept_invitation.html:19
+msgid "Return to login"
+msgstr "Return to login"
+
+#: app/templates/auth/change_password.html:2
+#: app/templates/auth/change_password.html:5
+#: app/templates/auth/change_password.html:13
+#: app/templates/profile/index.html:41
+msgid "Change password"
+msgstr "Change password"
+
+#: app/templates/auth/change_password.html:9
+msgid "Current password"
+msgstr "Current password"
+
+#: app/templates/auth/change_password.html:11
+msgid "New password (min 12 chars, mix of 3 character classes)"
+msgstr "New password (min 12 chars, mix of 3 character classes)"
+
+#: app/templates/auth/login.html:2
+msgid "Login"
+msgstr "Login"
+
+#: app/templates/auth/login.html:5 app/templates/layout/base.html:5
+#: app/templates/layout/base.html:63
+msgid "Aura Owner Control Center"
+msgstr "Aura Owner Control Center"
+
+#: app/templates/auth/login.html:11
+msgid "Password"
+msgstr "Password"
+
+#: app/templates/auth/login.html:13
+msgid "Log in"
+msgstr "Log in"
+
+#: app/templates/auth/mfa_enroll.html:2
+msgid "Enable MFA"
+msgstr "Enable MFA"
+
+#: app/templates/auth/mfa_enroll.html:5
+msgid "Enable multi-factor authentication"
+msgstr "Enable multi-factor authentication"
+
+#: app/templates/auth/mfa_enroll.html:6
+msgid "Scan this into any TOTP authenticator app (Google Authenticator, 1Password, etc.), or enter the secret manually."
+msgstr "Scan this into any TOTP authenticator app (Google Authenticator, 1Password, etc.), or enter the secret manually."
+
+#: app/templates/auth/mfa_enroll.html:9
+msgid "Manual secret"
+msgstr "Manual secret"
+
+#: app/templates/auth/mfa_enroll.html:10
+msgid "Provisioning URI"
+msgstr "Provisioning URI"
+
+#: app/templates/auth/mfa_enroll.html:14
+msgid "Enter the current 6-digit code to confirm"
+msgstr "Enter the current 6-digit code to confirm"
+
+#: app/templates/auth/mfa_enroll.html:16
+msgid "Confirm and enable MFA"
+msgstr "Confirm and enable MFA"
+
+#: app/templates/auth/mfa_recovery_codes.html:2
+msgid "Recovery codes"
+msgstr "Recovery codes"
+
+#: app/templates/auth/mfa_recovery_codes.html:5
+msgid "Save your recovery codes"
+msgstr "Save your recovery codes"
+
+#: app/templates/auth/mfa_recovery_codes.html:6
+msgid "Each code can be used once if you lose access to your authenticator. They will never be shown again after you leave this page."
+msgstr "Each code can be used once if you lose access to your authenticator. They will never be shown again after you leave this page."
+
+#: app/templates/auth/mfa_recovery_codes.html:12
+msgid "No codes to display -- this page can only be viewed once, immediately after generation."
+msgstr "No codes to display -- this page can only be viewed once, immediately after generation."
+
+#: app/templates/auth/mfa_recovery_codes.html:14
+msgid "Continue to dashboard"
+msgstr "Continue to dashboard"
+
+#: app/templates/auth/mfa_verify.html:2
+msgid "Verify MFA"
+msgstr "Verify MFA"
+
+#: app/templates/auth/mfa_verify.html:5
+msgid "Enter your authenticator code"
+msgstr "Enter your authenticator code"
+
+#: app/templates/auth/mfa_verify.html:9
+msgid "6-digit code (or a recovery code)"
+msgstr "6-digit code (or a recovery code)"
+
+#: app/templates/auth/mfa_verify.html:11
+msgid "Verify"
+msgstr "Verify"
+
+#: app/templates/auth/reauth.html:2
+msgid "Confirm identity"
+msgstr "Confirm identity"
+
+#: app/templates/auth/reauth.html:5
+msgid "Confirm your identity"
+msgstr "Confirm your identity"
+
+#: app/templates/auth/reauth.html:6
+msgid "This action requires a fresh MFA confirmation."
+msgstr "This action requires a fresh MFA confirmation."
+
+#: app/templates/auth/reauth.html:11
+msgid "6-digit code"
+msgstr "6-digit code"
+
+#: app/templates/auth/reauth.html:13
+msgid "Confirm"
+msgstr "Confirm"
+
+#: app/templates/employees/dashboard.html:2
+#: app/templates/employees/dashboard.html:5
+msgid "Employee dashboard"
+msgstr "Employee dashboard"
+
+#: app/templates/employees/dashboard.html:6
+#, python-format
+msgid "Employee-domain metrics only, generated %(ts)s."
+msgstr "Employee-domain metrics only, generated %(ts)s."
+
+#: app/templates/employees/dashboard.html:10
+msgid "Headcount"
+msgstr "Headcount"
+
+#: app/templates/employees/dashboard.html:12
+msgid "Total employee profiles"
+msgstr "Total employee profiles"
+
+#: app/templates/employees/dashboard.html:13
+msgid "Active employees"
+msgstr "Active employees"
+
+#: app/templates/employees/dashboard.html:14
+msgid "Setup pending"
+msgstr "Setup pending"
+
+#: app/templates/employees/dashboard.html:22
+msgid "Presence (application usage, not attendance)"
+msgstr "Presence (application usage, not attendance)"
+
+#: app/templates/employees/dashboard.html:24
+msgid "Online now"
+msgstr "Online now"
+
+#: app/templates/employees/dashboard.html:25
+msgid "Recently active"
+msgstr "Recently active"
+
+#: app/templates/employees/dashboard.html:31
+#: app/templates/profile/index.html:36
+msgid "Security"
+msgstr "Security"
+
+#: app/templates/employees/dashboard.html:33
+msgid "Employees without completed MFA (where required)"
+msgstr "Employees without completed MFA (where required)"
+
+#: app/templates/employees/dashboard.html:34
+msgid "Locked / disabled accounts"
+msgstr "Locked / disabled accounts"
+
+#: app/templates/employees/dashboard.html:35
+msgid "Currently active sessions"
+msgstr "Currently active sessions"
+
+#: app/templates/employees/detail.html:7 app/templates/employees/new.html:13
+#: app/templates/profile/index.html:9
+msgid "Employee number"
+msgstr "Employee number"
+
+#: app/templates/employees/detail.html:8 app/templates/employees/detail.html:54
+#: app/templates/employees/new.html:22 app/templates/profile/index.html:10
+msgid "Job title"
+msgstr "Job title"
+
+#: app/templates/employees/detail.html:9 app/templates/employees/detail.html:56
+#: app/templates/employees/list.html:8 app/templates/employees/list.html:43
+#: app/templates/employees/list.html:49 app/templates/employees/new.html:25
+#: app/templates/profile/index.html:11
+msgid "Department"
+msgstr "Department"
+
+#: app/templates/employees/detail.html:10
+#: app/templates/employees/detail.html:58 app/templates/employees/new.html:31
+#: app/templates/profile/index.html:12
+msgid "Manager"
+msgstr "Manager"
+
+#: app/templates/employees/detail.html:11 app/templates/employees/new.html:28
+#: app/templates/profile/index.html:13
+msgid "Employment start date"
+msgstr "Employment start date"
+
+#: app/templates/employees/detail.html:12 app/templates/employees/new.html:19
+#: app/templates/profile/index.html:28
+msgid "Phone"
+msgstr "Phone"
+
+#: app/templates/employees/detail.html:13 app/templates/employees/list.html:28
+#: app/templates/employees/list.html:43 app/templates/employees/list.html:53
+#: app/templates/profile/index.html:15
+msgid "Presence"
+msgstr "Presence"
+
+#: app/templates/employees/detail.html:13
+msgid "application usage only -- not attendance/working hours"
+msgstr "application usage only -- not attendance/working hours"
+
+#: app/templates/employees/detail.html:18
+msgid "Account security"
+msgstr "Account security"
+
+#: app/templates/employees/detail.html:21
+msgid "Account status"
+msgstr "Account status"
+
+#: app/templates/employees/detail.html:22 app/templates/profile/index.html:39
+msgid "MFA"
+msgstr "MFA"
+
+#: app/templates/employees/detail.html:27
+msgid "Last login"
+msgstr "Last login"
+
+#: app/templates/employees/detail.html:27
+msgid "Never"
+msgstr "Never"
+
+#: app/templates/employees/detail.html:28
+msgid "Active sessions"
+msgstr "Active sessions"
+
+#: app/templates/employees/detail.html:33
+msgid "Roles and permissions"
+msgstr "Roles and permissions"
+
+#: app/templates/employees/detail.html:34
+msgid "Changing roles requires a fresh MFA confirmation and immediately revokes all of this account's active sessions."
+msgstr "Changing roles requires a fresh MFA confirmation and immediately revokes all of this account's active sessions."
+
+#: app/templates/employees/detail.html:43
+msgid "Save roles"
+msgstr "Save roles"
+
+#: app/templates/employees/detail.html:48
+msgid "Edit profile"
+msgstr "Edit profile"
+
+#: app/templates/employees/detail.html:52 app/templates/employees/new.html:16
+#: app/templates/profile/index.html:8
+msgid "Full name"
+msgstr "Full name"
+
+#: app/templates/employees/detail.html:60 app/templates/employees/new.html:33
+#: app/templates/employees/new.html:39
+msgid "None"
+msgstr "None"
+
+#: app/templates/employees/detail.html:63
+msgid "Save changes"
+msgstr "Save changes"
+
+#: app/templates/employees/detail.html:68
+msgid "Lifecycle actions"
+msgstr "Lifecycle actions"
+
+#: app/templates/employees/detail.html:71
+msgid "Activate"
+msgstr "Activate"
+
+#: app/templates/employees/detail.html:76
+msgid "Suspend this employee? This blocks login and revokes all active sessions immediately."
+msgstr "Suspend this employee? This blocks login and revokes all active sessions immediately."
+
+#: app/templates/employees/detail.html:78
+msgid "Suspended by management"
+msgstr "Suspended by management"
+
+#: app/templates/employees/detail.html:79
+msgid "Suspend"
+msgstr "Suspend"
+
+#: app/templates/employees/detail.html:84
+msgid "Reactivate"
+msgstr "Reactivate"
+
+#: app/templates/employees/detail.html:89
+msgid "Terminate this employee? This is not reversible without an explicit rehire process."
+msgstr "Terminate this employee? This is not reversible without an explicit rehire process."
+
+#: app/templates/employees/detail.html:91
+msgid "Terminated by management"
+msgstr "Terminated by management"
+
+#: app/templates/employees/detail.html:92
+msgid "Terminate"
+msgstr "Terminate"
+
+#: app/templates/employees/detail.html:97
+msgid "Archive"
+msgstr "Archive"
+
+#: app/templates/employees/detail.html:101
+msgid "Revoke all sessions"
+msgstr "Revoke all sessions"
+
+#: app/templates/employees/detail.html:106
+msgid "Sessions"
+msgstr "Sessions"
+
+#: app/templates/employees/detail.html:109
+#: app/templates/profile/sessions.html:8
+msgid "Created"
+msgstr "Created"
+
+#: app/templates/employees/detail.html:109
+#: app/templates/profile/sessions.html:8
+msgid "Last seen"
+msgstr "Last seen"
+
+#: app/templates/employees/detail.html:109
+#: app/templates/profile/sessions.html:8
+msgid "Platform"
+msgstr "Platform"
+
+#: app/templates/employees/detail.html:109
+#: app/templates/employees/invitations.html:8
+#: app/templates/employees/list.html:14 app/templates/employees/list.html:43
+#: app/templates/employees/list.html:50 app/templates/profile/sessions.html:8
+msgid "Status"
+msgstr "Status"
+
+#: app/templates/employees/detail.html:117
+#: app/templates/employees/invitations.html:22
+#: app/templates/profile/sessions.html:20
+msgid "Revoke"
+msgstr "Revoke"
+
+#: app/templates/employees/detail.html:124
+#: app/templates/profile/sessions.html:27
+msgid "No sessions."
+msgstr "No sessions."
+
+#: app/templates/employees/detail.html:128
+msgid "Audit timeline"
+msgstr "Audit timeline"
+
+#: app/templates/employees/detail.html:131
+msgid "When"
+msgstr "When"
+
+#: app/templates/employees/detail.html:131
+msgid "Action"
+msgstr "Action"
+
+#: app/templates/employees/detail.html:131
+msgid "Reason"
+msgstr "Reason"
+
+#: app/templates/employees/detail.html:136
+msgid "No audit events yet."
+msgstr "No audit events yet."
+
+#: app/templates/employees/invitation_created.html:2
+msgid "Employee invited"
+msgstr "Employee invited"
+
+#: app/templates/employees/invitation_created.html:5
+msgid "Employee invitation created"
+msgstr "Employee invitation created"
+
+#: app/templates/employees/invitation_created.html:6
+#, python-format
+msgid "Send this one-time setup link to %(email)s through a secure, trusted channel. It is shown here only once and expires in 3 days."
+msgstr "Send this one-time setup link to %(email)s through a secure, trusted channel. It is shown here only once and expires in 3 days."
+
+#: app/templates/employees/invitation_created.html:8
+#: app/templates/employees/not_found.html:6
+msgid "Back to employees"
+msgstr "Back to employees"
+
+#: app/templates/employees/invitations.html:2
+#: app/templates/employees/invitations.html:5
+msgid "Pending employee invitations"
+msgstr "Pending employee invitations"
+
+#: app/templates/employees/invitations.html:8
+#: app/templates/employees/new.html:43
+msgid "Roles"
+msgstr "Roles"
+
+#: app/templates/employees/invitations.html:8
+msgid "Expires"
+msgstr "Expires"
+
+#: app/templates/employees/invitations.html:18
+msgid "Reissue"
+msgstr "Reissue"
+
+#: app/templates/employees/invitations.html:28
+msgid "No pending invitations."
+msgstr "No pending invitations."
+
+#: app/templates/employees/list.html:7
+msgid "Search"
+msgstr "Search"
+
+#: app/templates/employees/list.html:7
+msgid "Name or employee number"
+msgstr "Name or employee number"
+
+#: app/templates/employees/list.html:10 app/templates/employees/list.html:16
+#: app/templates/employees/list.html:24 app/templates/employees/list.html:30
+msgid "All"
+msgstr "All"
+
+#: app/templates/employees/list.html:22
+msgid "Role"
+msgstr "Role"
+
+#: app/templates/employees/list.html:36
+msgid "Apply"
+msgstr "Apply"
+
+#: app/templates/employees/list.html:43 app/templates/employees/list.html:46
+msgid "Name"
+msgstr "Name"
+
+#: app/templates/employees/list.html:43 app/templates/employees/list.html:47
+msgid "Employee #"
+msgstr "Employee #"
+
+#: app/templates/employees/list.html:43 app/templates/employees/list.html:48
+msgid "Title"
+msgstr "Title"
+
+#: app/templates/employees/list.html:43 app/templates/employees/list.html:57
+msgid "Start date"
+msgstr "Start date"
+
+#: app/templates/employees/list.html:58
+msgid "View"
+msgstr "View"
+
+#: app/templates/employees/list.html:62
+#, python-format
+msgid "Page %(page)s of %(total_pages)s -- %(total)s employee(s)."
+msgstr "Page %(page)s of %(total_pages)s -- %(total)s employee(s)."
+
+#: app/templates/employees/list.html:64
+msgid "Previous"
+msgstr "Previous"
+
+#: app/templates/employees/list.html:65
+msgid "Next"
+msgstr "Next"
+
+#: app/templates/employees/list.html:67
+msgid "No employees match these filters."
+msgstr "No employees match these filters."
+
+#: app/templates/employees/list.html:71 app/templates/employees/new.html:2
+#: app/templates/employees/new.html:5
+msgid "Add employee"
+msgstr "Add employee"
+
+#: app/templates/employees/list.html:72 app/templates/layout/base.html:82
+msgid "Dashboard"
+msgstr "Dashboard"
+
+#: app/templates/employees/list.html:73
+msgid "Pending invitations"
+msgstr "Pending invitations"
+
+#: app/templates/employees/new.html:37
+msgid "Commission plan"
+msgstr "Commission plan"
+
+#: app/templates/employees/new.html:51
+msgid "Require MFA (recommended for all new internal accounts)"
+msgstr "Require MFA (recommended for all new internal accounts)"
+
+#: app/templates/employees/new.html:54
+msgid "Create employee & send setup link"
+msgstr "Create employee & send setup link"
+
+#: app/templates/employees/not_found.html:2
+msgid "Not found"
+msgstr "Not found"
+
+#: app/templates/employees/not_found.html:5
+msgid "That employee record does not exist."
+msgstr "That employee record does not exist."
+
+#: app/templates/layout/base.html:5
+msgid "Aura Owner"
+msgstr "Aura Owner"
+
+#: app/templates/layout/base.html:65
+msgid "Language"
+msgstr "Language"
+
+#: app/templates/layout/base.html:75
+msgid "Log out"
+msgstr "Log out"
+
+#: app/templates/layout/base.html:83
+msgid "Customers"
+msgstr "Customers"
+
+#: app/templates/layout/base.html:84
+msgid "Catalog"
+msgstr "Catalog"
+
+#: app/templates/layout/base.html:85
+msgid "Subscriptions"
+msgstr "Subscriptions"
+
+#: app/templates/layout/base.html:86
+msgid "Licenses"
+msgstr "Licenses"
+
+#: app/templates/layout/base.html:87
+msgid "Installations"
+msgstr "Installations"
+
+#: app/templates/layout/base.html:88
+msgid "Renewals"
+msgstr "Renewals"
+
+#: app/templates/layout/base.html:89
+msgid "Pilots"
+msgstr "Pilots"
+
+#: app/templates/layout/base.html:90
+msgid "Emergency Ext."
+msgstr "Emergency Ext."
+
+#: app/templates/layout/base.html:91
+msgid "Activation Reviews"
+msgstr "Activation Reviews"
+
+#: app/templates/layout/base.html:92
+msgid "Notifications"
+msgstr "Notifications"
+
+#: app/templates/layout/base.html:93
+msgid "My Queue"
+msgstr "My Queue"
+
+#: app/templates/layout/base.html:94
+msgid "Reconciliation"
+msgstr "Reconciliation"
+
+#: app/templates/layout/base.html:97
+msgid "Employee Dashboard"
+msgstr "Employee Dashboard"
+
+#: app/templates/layout/base.html:98
+msgid "Audit Log"
+msgstr "Audit Log"
+
+#: app/templates/layout/base.html:99
+msgid "Security Events"
+msgstr "Security Events"
+
+#: app/templates/layout/base.html:100
+msgid "Backups"
+msgstr "Backups"
+
+#: app/templates/layout/base.html:101
+msgid "Activation Service"
+msgstr "Activation Service"
+
+#: app/templates/layout/base.html:102
+msgid "My Profile"
+msgstr "My Profile"
+
+#: app/templates/layout/base.html:103
+msgid "Account"
+msgstr "Account"
+
+#: app/templates/profile/index.html:2 app/templates/profile/index.html:5
+msgid "My profile"
+msgstr "My profile"
+
+#: app/templates/profile/index.html:14
+msgid "Employment status"
+msgstr "Employment status"
+
+#: app/templates/profile/index.html:17
+msgid "No employee profile is linked to this account yet."
+msgstr "No employee profile is linked to this account yet."
+
+#: app/templates/profile/index.html:22
+msgid "Update your details"
+msgstr "Update your details"
+
+#: app/templates/profile/index.html:23
+msgid "Only display name and phone are self-editable. Employee number, role, employment status, start date, manager, and commission plan are management-controlled."
+msgstr "Only display name and phone are self-editable. Employee number, role, employment status, start date, manager, and commission plan are management-controlled."
+
+#: app/templates/profile/index.html:26
+msgid "Display name"
+msgstr "Display name"
+
+#: app/templates/profile/index.html:30
+msgid "Save"
+msgstr "Save"
+
+#: app/templates/profile/index.html:42
+msgid "Enroll / re-enroll MFA"
+msgstr "Enroll / re-enroll MFA"
+
+#: app/templates/profile/index.html:43 app/templates/profile/sessions.html:2
+#: app/templates/profile/sessions.html:5
+msgid "My sessions"
+msgstr "My sessions"
+
+#: app/templates/profile/sessions.html:13
+msgid "This device"
+msgstr "This device"
+
+#~ msgid "Each code can be used once if you lose access to your authenticator. They will"
+#~ msgstr ""
+
+#~ msgid "never be shown again"
+#~ msgstr ""
+
+#~ msgid "after you leave this page."
+#~ msgstr ""
+

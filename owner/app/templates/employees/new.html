@@ -1,57 +1,57 @@
 {% extends "layout/base.html" %}
-{% block title %}Add employee{% endblock %}
+{% block title %}{{ _('Add employee') }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Add employee</h2>
+  <h2>{{ _('Add employee') }}</h2>
   {% if error %}<div class="error">{{ error }}</div>{% endif %}
   <form method="post" action="{{ url_for('employees.create') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
-    <label for="email">Email</label>
-    <input id="email" type="email" name="email" required>
+    <label for="email">{{ _('Email') }}</label>
+    <input id="email" type="email" name="email" required dir="ltr">
 
-    <label for="employee_number">Employee number</label>
-    <input id="employee_number" name="employee_number" required>
+    <label for="employee_number">{{ _('Employee number') }}</label>
+    <input id="employee_number" name="employee_number" required dir="ltr">
 
-    <label for="full_name">Full name</label>
+    <label for="full_name">{{ _('Full name') }}</label>
     <input id="full_name" name="full_name" required>
 
-    <label for="phone">Phone</label>
-    <input id="phone" name="phone">
+    <label for="phone">{{ _('Phone') }}</label>
+    <input id="phone" name="phone" dir="ltr">
 
-    <label for="job_title">Job title</label>
+    <label for="job_title">{{ _('Job title') }}</label>
     <input id="job_title" name="job_title">
 
-    <label for="department">Department</label>
+    <label for="department">{{ _('Department') }}</label>
     <input id="department" name="department">
 
-    <label for="employment_start_date">Employment start date</label>
+    <label for="employment_start_date">{{ _('Employment start date') }}</label>
     <input id="employment_start_date" type="date" name="employment_start_date" required>
 
-    <label for="manager_employee_profile_id">Manager</label>
+    <label for="manager_employee_profile_id">{{ _('Manager') }}</label>
     <select id="manager_employee_profile_id" name="manager_employee_profile_id">
-      <option value="">None</option>
+      <option value="">{{ _('None') }}</option>
       {% for m in managers %}<option value="{{ m.id }}">{{ m.full_name }} ({{ m.employee_number }})</option>{% endfor %}
     </select>
 
-    <label for="commission_plan_id">Commission plan</label>
+    <label for="commission_plan_id">{{ _('Commission plan') }}</label>
     <select id="commission_plan_id" name="commission_plan_id">
-      <option value="">None</option>
+      <option value="">{{ _('None') }}</option>
       {% for p in plans %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
     </select>
 
-    <label>Roles</label>
+    <label>{{ _('Roles') }}</label>
     {% for role in roles %}
-      <label style="display:inline-block;margin-right:1rem;font-weight:normal;color:inherit;">
-        <input type="checkbox" name="role_codes" value="{{ role.code }}" style="width:auto;"> {{ role.code }}
+      <label style="display:inline-block;margin-inline-end:1rem;font-weight:normal;color:inherit;">
+        <input type="checkbox" name="role_codes" value="{{ role.code }}" style="width:auto;"> {{ role_label(role.code) }}
       </label>
     {% endfor %}
 
     <label style="display:inline-block;margin-top:0.75rem;font-weight:normal;color:inherit;">
-      <input type="checkbox" name="mfa_required" value="1" checked style="width:auto;"> Require MFA (recommended for all new internal accounts)
+      <input type="checkbox" name="mfa_required" value="1" checked style="width:auto;"> {{ _('Require MFA (recommended for all new internal accounts)') }}
     </label>
 
-    <div style="margin-top:1rem;"><button type="submit">Create employee &amp; send setup link</button></div>
+    <div style="margin-top:1rem;"><button type="submit">{{ _('Create employee & send setup link') }}</button></div>
   </form>
 </div>
 {% endblock %}

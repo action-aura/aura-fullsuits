@@ -1,75 +1,75 @@
 {% extends "layout/base.html" %}
-{% block title %}Employees{% endblock %}
+{% block title %}{{ _('Employees') }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Employees</h2>
+  <h2>{{ _('Employees') }}</h2>
   <form method="get" class="filters" style="flex-wrap:wrap;">
-    <div><label for="q">Search</label><input id="q" name="q" value="{{ filters.search or '' }}" placeholder="Name or employee number"></div>
-    <div><label for="department">Department</label>
+    <div><label for="q">{{ _('Search') }}</label><input id="q" name="q" value="{{ filters.search or '' }}" placeholder="{{ _('Name or employee number') }}"></div>
+    <div><label for="department">{{ _('Department') }}</label>
       <select id="department" name="department">
-        <option value="">All</option>
+        <option value="">{{ _('All') }}</option>
         {% for d in departments %}<option value="{{ d }}" {% if filters.department == d %}selected{% endif %}>{{ d }}</option>{% endfor %}
       </select>
     </div>
-    <div><label for="employment_status">Status</label>
+    <div><label for="employment_status">{{ _('Status') }}</label>
       <select id="employment_status" name="employment_status">
-        <option value="">All</option>
+        <option value="">{{ _('All') }}</option>
         {% for s in ["PENDING","ACTIVE","SUSPENDED","TERMINATED","ARCHIVED"] %}
-        <option value="{{ s }}" {% if filters.employment_status == s %}selected{% endif %}>{{ s }}</option>
+        <option value="{{ s }}" {% if filters.employment_status == s %}selected{% endif %}>{{ employment_status_label(s) }}</option>
         {% endfor %}
       </select>
     </div>
-    <div><label for="role_code">Role</label>
+    <div><label for="role_code">{{ _('Role') }}</label>
       <select id="role_code" name="role_code">
-        <option value="">All</option>
-        {% for r in roles %}<option value="{{ r.code }}" {% if filters.role_code == r.code %}selected{% endif %}>{{ r.code }}</option>{% endfor %}
+        <option value="">{{ _('All') }}</option>
+        {% for r in roles %}<option value="{{ r.code }}" {% if filters.role_code == r.code %}selected{% endif %}>{{ role_label(r.code) }}</option>{% endfor %}
       </select>
     </div>
-    <div><label for="presence">Presence</label>
+    <div><label for="presence">{{ _('Presence') }}</label>
       <select id="presence" name="presence">
-        <option value="">All</option>
+        <option value="">{{ _('All') }}</option>
         {% for p in ["ONLINE","RECENTLY_ACTIVE","OFFLINE"] %}
-        <option value="{{ p }}" {% if filters.presence == p %}selected{% endif %}>{{ p.replace("_"," ").title() }}</option>
+        <option value="{{ p }}" {% if filters.presence == p %}selected{% endif %}>{{ presence_label(p) }}</option>
         {% endfor %}
       </select>
     </div>
-    <div><label>&nbsp;</label><button type="submit" class="secondary">Apply</button></div>
+    <div><label>&nbsp;</label><button type="submit" class="secondary">{{ _('Apply') }}</button></div>
   </form>
 </div>
 
 <div class="card">
   {% if result.rows %}
   <table class="responsive-table">
-    <tr><th>Name</th><th>Employee #</th><th>Title</th><th>Department</th><th>Status</th><th>Presence</th><th>Start date</th><th></th></tr>
+    <tr><th>{{ _('Name') }}</th><th>{{ _('Employee #') }}</th><th>{{ _('Title') }}</th><th>{{ _('Department') }}</th><th>{{ _('Status') }}</th><th>{{ _('Presence') }}</th><th>{{ _('Start date') }}</th><th></th></tr>
     {% for e in result.rows %}
     <tr>
-      <td data-label="Name">{{ e.full_name }}</td>
-      <td data-label="Employee #">{{ e.employee_number }}</td>
-      <td data-label="Title">{{ e.job_title or "-" }}</td>
-      <td data-label="Department">{{ e.department or "-" }}</td>
-      <td data-label="Status">
-        <span class="badge {{ 'active' if e.employment_status == 'ACTIVE' else ('warn' if e.employment_status in ('PENDING','SUSPENDED') else 'danger') }}">{{ e.employment_status }}</span>
+      <td data-label="{{ _('Name') }}">{{ e.full_name }}</td>
+      <td data-label="{{ _('Employee #') }}">{{ e.employee_number|bidi_isolate }}</td>
+      <td data-label="{{ _('Title') }}">{{ e.job_title or "-" }}</td>
+      <td data-label="{{ _('Department') }}">{{ e.department or "-" }}</td>
+      <td data-label="{{ _('Status') }}">
+        <span class="badge {{ 'active' if e.employment_status == 'ACTIVE' else ('warn' if e.employment_status in ('PENDING','SUSPENDED') else 'danger') }}">{{ employment_status_label(e.employment_status) }}</span>
       </td>
-      <td data-label="Presence">
+      <td data-label="{{ _('Presence') }}">
         {% set p = presence_map.get(e.id, "OFFLINE") %}
-        <span class="badge {{ 'active' if p == 'ONLINE' else ('warn' if p == 'RECENTLY_ACTIVE' else '') }}">{{ p.replace("_"," ").title() }}</span>
+        <span class="badge {{ 'active' if p == 'ONLINE' else ('warn' if p == 'RECENTLY_ACTIVE' else '') }}">{{ presence_label(p) }}</span>
       </td>
-      <td data-label="Start date">{{ e.employment_start_date }}</td>
-      <td data-label=""><a href="{{ url_for('employees.detail', employee_id=e.id) }}">View</a></td>
+      <td data-label="{{ _('Start date') }}">{{ format_owner_date(e.employment_start_date) }}</td>
+      <td data-label=""><a href="{{ url_for('employees.detail', employee_id=e.id) }}">{{ _('View') }}</a></td>
     </tr>
     {% endfor %}
   </table>
-  <p class="empty">Page {{ result.page }} of {{ result.total_pages }} -- {{ result.total }} employee(s).</p>
+  <p class="empty">{{ _('Page %(page)s of %(total_pages)s -- %(total)s employee(s).', page=result.page, total_pages=result.total_pages, total=result.total) }}</p>
   <div>
-    {% if result.has_prev %}<a class="btn secondary" href="?page={{ result.page - 1 }}">Previous</a>{% endif %}
-    {% if result.has_next %}<a class="btn secondary" href="?page={{ result.page + 1 }}">Next</a>{% endif %}
+    {% if result.has_prev %}<a class="btn secondary" href="?page={{ result.page - 1 }}">{{ _('Previous') }}</a>{% endif %}
+    {% if result.has_next %}<a class="btn secondary" href="?page={{ result.page + 1 }}">{{ _('Next') }}</a>{% endif %}
   </div>
-  {% else %}<p class="empty">No employees match these filters.</p>{% endif %}
+  {% else %}<p class="empty">{{ _('No employees match these filters.') }}</p>{% endif %}
 </div>
 
 <div class="card">
-  <a class="btn" href="{{ url_for('employees.new_form') }}">Add employee</a>
-  <a class="btn secondary" href="{{ url_for('employees.dashboard') }}">Dashboard</a>
-  <a class="btn secondary" href="{{ url_for('employees.open_invitations') }}">Pending invitations</a>
+  <a class="btn" href="{{ url_for('employees.new_form') }}">{{ _('Add employee') }}</a>
+  <a class="btn secondary" href="{{ url_for('employees.dashboard') }}">{{ _('Dashboard') }}</a>
+  <a class="btn secondary" href="{{ url_for('employees.open_invitations') }}">{{ _('Pending invitations') }}</a>
 </div>
 {% endblock %}

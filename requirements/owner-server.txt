@@ -12,3 +12,9 @@ pyotp==2.9.0
 cryptography==48.0.1
 gunicorn==22.0.0
 jsonschema==4.23.0
+
+# Phase 9.5B-R -- Owner-wide internationalization (English/Arabic, RTL).
+# flask-babel wraps the canonical Babel gettext toolchain (extract/update/
+# compile) with Jinja/Flask integration -- not an ad-hoc translation engine.
+flask-babel==4.0.0
+babel==2.18.0

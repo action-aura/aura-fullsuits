@@ -1,45 +1,45 @@
 {% extends "layout/base.html" %}
-{% block title %}My profile{% endblock %}
+{% block title %}{{ _('My profile') }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>My profile</h2>
+  <h2>{{ _('My profile') }}</h2>
   {% if profile %}
   <dl class="kv">
-    <dt>Full name</dt><dd>{{ profile.full_name }}</dd>
-    <dt>Employee number</dt><dd>{{ profile.employee_number }}</dd>
-    <dt>Job title</dt><dd>{{ profile.job_title or "-" }}</dd>
-    <dt>Department</dt><dd>{{ profile.department or "-" }}</dd>
-    <dt>Manager</dt><dd>{{ profile.manager.full_name if profile.manager else "-" }}</dd>
-    <dt>Employment start date</dt><dd>{{ profile.employment_start_date }}</dd>
-    <dt>Employment status</dt><dd><span class="badge {{ 'active' if profile.employment_status == 'ACTIVE' else '' }}">{{ profile.employment_status }}</span></dd>
-    <dt>Presence</dt><dd>{{ presence.replace("_"," ").title() if presence else "-" }}</dd>
+    <dt>{{ _('Full name') }}</dt><dd>{{ profile.full_name }}</dd>
+    <dt>{{ _('Employee number') }}</dt><dd>{{ profile.employee_number|bidi_isolate }}</dd>
+    <dt>{{ _('Job title') }}</dt><dd>{{ profile.job_title or "-" }}</dd>
+    <dt>{{ _('Department') }}</dt><dd>{{ profile.department or "-" }}</dd>
+    <dt>{{ _('Manager') }}</dt><dd>{{ profile.manager.full_name if profile.manager else "-" }}</dd>
+    <dt>{{ _('Employment start date') }}</dt><dd>{{ format_owner_date(profile.employment_start_date) }}</dd>
+    <dt>{{ _('Employment status') }}</dt><dd><span class="badge {{ 'active' if profile.employment_status == 'ACTIVE' else '' }}">{{ employment_status_label(profile.employment_status) }}</span></dd>
+    <dt>{{ _('Presence') }}</dt><dd>{{ presence_label(presence) if presence else "-" }}</dd>
   </dl>
-  {% else %}<p class="empty">No employee profile is linked to this account yet.</p>{% endif %}
+  {% else %}<p class="empty">{{ _('No employee profile is linked to this account yet.') }}</p>{% endif %}
 </div>
 
 {% if profile %}
 <div class="card">
-  <h3>Update your details</h3>
-  <p class="empty">Only display name and phone are self-editable. Employee number, role, employment status, start date, manager, and commission plan are management-controlled.</p>
+  <h3>{{ _('Update your details') }}</h3>
+  <p class="empty">{{ _('Only display name and phone are self-editable. Employee number, role, employment status, start date, manager, and commission plan are management-controlled.') }}</p>
   <form method="post" action="{{ url_for('profile.update') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label for="display_name">Display name</label>
+    <label for="display_name">{{ _('Display name') }}</label>
     <input id="display_name" name="display_name" value="{{ staff.display_name }}">
-    <label for="phone">Phone</label>
-    <input id="phone" name="phone" value="{{ profile.phone or '' }}">
-    <div style="margin-top:1rem;"><button type="submit">Save</button></div>
+    <label for="phone">{{ _('Phone') }}</label>
+    <input id="phone" name="phone" value="{{ profile.phone or '' }}" dir="ltr">
+    <div style="margin-top:1rem;"><button type="submit">{{ _('Save') }}</button></div>
   </form>
 </div>
 {% endif %}
 
 <div class="card">
-  <h3>Security</h3>
+  <h3>{{ _('Security') }}</h3>
   <dl class="kv">
-    <dt>Email</dt><dd>{{ staff.email }}</dd>
-    <dt>MFA</dt><dd>{% if staff.mfa_credential and staff.mfa_credential.confirmed %}<span class="badge active">Enrolled</span>{% else %}<span class="badge warn">Not enrolled</span>{% endif %}</dd>
+    <dt>{{ _('Email') }}</dt><dd>{{ staff.email|bidi_isolate }}</dd>
+    <dt>{{ _('MFA') }}</dt><dd>{% if staff.mfa_credential and staff.mfa_credential.confirmed %}<span class="badge active">{{ _('Enrolled') }}</span>{% else %}<span class="badge warn">{{ _('Not enrolled') }}</span>{% endif %}</dd>
   </dl>
-  <a class="btn secondary" href="{{ url_for('auth.change_password_form') }}">Change password</a>
-  <a class="btn secondary" href="{{ url_for('auth.mfa_enroll_form') }}">Enroll / re-enroll MFA</a>
-  <a class="btn secondary" href="{{ url_for('profile.sessions') }}">My sessions</a>
+  <a class="btn secondary" href="{{ url_for('auth.change_password_form') }}">{{ _('Change password') }}</a>
+  <a class="btn secondary" href="{{ url_for('auth.mfa_enroll_form') }}">{{ _('Enroll / re-enroll MFA') }}</a>
+  <a class="btn secondary" href="{{ url_for('profile.sessions') }}">{{ _('My sessions') }}</a>
 </div>
 {% endblock %}
