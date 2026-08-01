@@ -16,7 +16,7 @@ GATED_DIRS = (
     "layout", "auth", "employees", "profile",
     "dashboard", "audit", "catalog", "customers", "installations",
     "licensing", "licensing_admin", "staff", "subscriptions", "system",
-    "commercial_ops",
+    "commercial_ops", "leads",
 )
 
 # Attribute names whose value is never translatable prose (ids, urls, form
@@ -34,6 +34,7 @@ ALLOWLISTED_TEXT = {
     "-",
     "&nbsp;",
     "&middot;",  # decorative separator, not prose
+    "&mdash;",  # decorative separator, not prose (Phase 9.5C: interaction/followup rows)
     "&rarr;",  # decorative arrow between two already-translated date/status values
     "flask import-release-manifest",  # literal CLI command name, not prose
     "flask seed-offline-policy",  # literal CLI command name, not prose

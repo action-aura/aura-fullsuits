@@ -17,7 +17,7 @@ REAL_TEMPLATE_DIRS = (
     "layout", "auth", "employees", "profile",
     "dashboard", "audit", "catalog", "customers", "installations",
     "licensing", "licensing_admin", "staff", "subscriptions", "system",
-    "commercial_ops",
+    "commercial_ops", "leads",
 )
 
 # No-fixture-required GET routes: real, reachable, list/index/status pages.
@@ -28,6 +28,8 @@ REAL_TEMPLATE_DIRS = (
 # commercial_ops_ui="/commercial-ops/ui", system="/system").
 NO_FIXTURE_ROUTES = [
     "/",
+    "/leads",
+    "/leads/dashboard",
     "/customers",
     "/installations",
     "/licenses",
