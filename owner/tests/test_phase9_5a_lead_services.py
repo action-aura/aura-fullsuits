@@ -80,11 +80,16 @@ def test_change_lead_status_appends_history_row(app, seeded):
 
         profile = _make_profile(app, staff_id, "EMP-L4")
         lead = create_lead({"organization_or_prospect_name": "Status Co"}, actor_employee_profile_id=profile.id, actor_staff_user_id=staff_id)
-        change_lead_status(lead, "QUALIFIED", actor_employee_profile_id=profile.id, actor_staff_user_id=staff_id, reason="good fit")
+        # Phase 9.5C Milestone 2 -- change_lead_status() now enforces the real
+        # transition matrix (docs/owner/phase9_5c/lead-transition-matrix.md);
+        # NEW can only advance one step to POTENTIAL, never straight to
+        # QUALIFIED. This test verifies history-row appending, not the full
+        # chain, so a single valid transition is the correct, non-weakened fix.
+        change_lead_status(lead, "POTENTIAL", actor_employee_profile_id=profile.id, actor_staff_user_id=staff_id, reason="good fit")
 
-        assert lead.status == "QUALIFIED"
+        assert lead.status == "POTENTIAL"
         history = db_session.query(LeadStatusHistory).filter_by(lead_id=lead.id).order_by(LeadStatusHistory.changed_at).all()
-        assert [h.to_status for h in history] == ["NEW", "QUALIFIED"]
+        assert [h.to_status for h in history] == ["NEW", "POTENTIAL"]
 
 
 def test_reassign_lead_closes_old_assignment_opens_new(app, seeded):
@@ -95,14 +100,21 @@ def test_reassign_lead_closes_old_assignment_opens_new(app, seeded):
         from app.extensions import db_session
         from app.models.leads import LeadAssignment
 
+        from app.employees.services import activate_employee
+
         profile_a = _make_profile(app, staff_a, "EMP-L5A")
         profile_b = _make_profile(app, staff_b, "EMP-L5B")
+        # Phase 9.5C Milestone 3 -- assign_lead() now rejects an inactive
+        # destination employee (a fresh profile defaults to PENDING); real
+        # reassignment targets must be ACTIVE.
+        activate_employee(profile_b, actor_staff_user_id=staff_a)
         lead = create_lead(
             {"organization_or_prospect_name": "Reassign Co", "assigned_employee_profile_id": profile_a.id},
             actor_employee_profile_id=profile_a.id, actor_staff_user_id=staff_a,
         )
 
-        assign_lead(lead, profile_b.id, actor_employee_profile_id=profile_a.id, actor_staff_user_id=staff_a)
+        # reason is now required when closing an existing open assignment.
+        assign_lead(lead, profile_b.id, actor_employee_profile_id=profile_a.id, actor_staff_user_id=staff_a, reason="workload rebalance")
 
         assert lead.assigned_employee_profile_id == profile_b.id
         rows = db_session.query(LeadAssignment).filter_by(lead_id=lead.id).order_by(LeadAssignment.assigned_at).all()

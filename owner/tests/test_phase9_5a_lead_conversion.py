@@ -73,7 +73,8 @@ def test_convert_rejects_lost_lead(app, seeded):
         lead = create_lead(
             {"organization_or_prospect_name": "Lost LLC"}, actor_employee_profile_id=profile.id, actor_staff_user_id=staff_id,
         )
-        change_lead_status(lead, "LOST", actor_employee_profile_id=profile.id, actor_staff_user_id=staff_id)
+        # Phase 9.5C Milestone 2 -- a reason is now required for any -> LOST transition.
+        change_lead_status(lead, "LOST", actor_employee_profile_id=profile.id, actor_staff_user_id=staff_id, reason="budget cut")
 
         with pytest.raises(InvalidLeadStateError):
             convert(lead, actor_staff_user_id=staff_id, idempotency_key=str(uuid.uuid4()))

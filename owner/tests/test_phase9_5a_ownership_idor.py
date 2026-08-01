@@ -103,8 +103,13 @@ def test_creator_retains_read_but_loses_write_context_after_reassignment(app, se
         from app.leads.services import assign_lead, create_lead
         from app.models.leads import Lead
 
+        from app.employees.services import activate_employee
+
         profile_a = _make_profile(app, staff_a, "EMP-IDOR3A")
         profile_b = _make_profile(app, staff_b, "EMP-IDOR3B")
+        # Phase 9.5C Milestone 3 -- assign_lead() now requires an ACTIVE
+        # destination employee; a fresh profile defaults to PENDING.
+        activate_employee(profile_b, actor_staff_user_id=staff_a)
         lead = create_lead(
             {"organization_or_prospect_name": "Created By A"}, actor_employee_profile_id=profile_a.id,
             actor_staff_user_id=staff_a,
