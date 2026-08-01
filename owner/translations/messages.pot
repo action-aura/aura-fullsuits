@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-08-01 15:27+0300\n"
+"POT-Creation-Date: 2026-08-01 18:05+0300\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -24,7 +24,7 @@ msgstr ""
 #: app/i18n_labels.py:25 app/i18n_labels.py:55 app/i18n_labels.py:60
 #: app/i18n_labels.py:113 app/i18n_labels.py:127 app/i18n_labels.py:140
 #: app/i18n_labels.py:155 app/i18n_labels.py:187 app/i18n_labels.py:239
-#: app/i18n_labels.py:248 app/i18n_labels.py:277
+#: app/i18n_labels.py:248 app/i18n_labels.py:396
 #: app/templates/employees/detail.html:21
 #: app/templates/employees/detail.html:116
 #: app/templates/profile/sessions.html:18
@@ -83,7 +83,7 @@ msgid "Disabled"
 msgstr ""
 
 #: app/i18n_labels.py:60 app/i18n_labels.py:129 app/i18n_labels.py:241
-#: app/i18n_labels.py:249 app/i18n_labels.py:278
+#: app/i18n_labels.py:249 app/i18n_labels.py:397
 #: app/templates/commercial_ops/emergency_extension_detail.html:16
 #: app/templates/employees/detail.html:116
 #: app/templates/profile/sessions.html:17
@@ -112,7 +112,7 @@ msgstr ""
 msgid "Open"
 msgstr ""
 
-#: app/i18n_labels.py:75 app/i18n_labels.py:428
+#: app/i18n_labels.py:75 app/i18n_labels.py:547
 msgid "Employee profile created"
 msgstr ""
 
@@ -120,7 +120,7 @@ msgstr ""
 msgid "Employee profile updated"
 msgstr ""
 
-#: app/i18n_labels.py:77 app/i18n_labels.py:429
+#: app/i18n_labels.py:77 app/i18n_labels.py:548
 msgid "Employee activated"
 msgstr ""
 
@@ -152,44 +152,44 @@ msgstr ""
 msgid "Session revoked"
 msgstr ""
 
-#: app/i18n_labels.py:85 app/i18n_labels.py:408
+#: app/i18n_labels.py:85 app/i18n_labels.py:527
 #: app/templates/staff/invitation_created.html:2
 msgid "Invitation created"
 msgstr ""
 
-#: app/i18n_labels.py:86 app/i18n_labels.py:410
+#: app/i18n_labels.py:86 app/i18n_labels.py:529
 msgid "Invitation revoked"
 msgstr ""
 
-#: app/i18n_labels.py:87 app/i18n_labels.py:409
+#: app/i18n_labels.py:87 app/i18n_labels.py:528
 msgid "Invitation accepted"
 msgstr ""
 
-#: app/i18n_labels.py:88 app/i18n_labels.py:407
+#: app/i18n_labels.py:88 app/i18n_labels.py:526
 msgid "Roles changed"
 msgstr ""
 
-#: app/i18n_labels.py:89 app/i18n_labels.py:405
+#: app/i18n_labels.py:89 app/i18n_labels.py:524
 msgid "Account disabled"
 msgstr ""
 
-#: app/i18n_labels.py:90 app/i18n_labels.py:406
+#: app/i18n_labels.py:90 app/i18n_labels.py:525
 msgid "MFA reset"
 msgstr ""
 
-#: app/i18n_labels.py:91 app/i18n_labels.py:401
+#: app/i18n_labels.py:91 app/i18n_labels.py:520
 msgid "Signed in"
 msgstr ""
 
-#: app/i18n_labels.py:92 app/i18n_labels.py:402
+#: app/i18n_labels.py:92 app/i18n_labels.py:521
 msgid "Signed in with MFA"
 msgstr ""
 
-#: app/i18n_labels.py:93 app/i18n_labels.py:403
+#: app/i18n_labels.py:93 app/i18n_labels.py:522
 msgid "Signed out"
 msgstr ""
 
-#: app/i18n_labels.py:94 app/i18n_labels.py:404
+#: app/i18n_labels.py:94 app/i18n_labels.py:523
 msgid "Password changed"
 msgstr ""
 
@@ -212,17 +212,17 @@ msgid "Employees"
 msgstr ""
 
 #: app/i18n_labels.py:111 app/i18n_labels.py:125 app/i18n_labels.py:167
-#: app/i18n_labels.py:185 app/i18n_labels.py:238 app/i18n_labels.py:332
-#: app/i18n_labels.py:343 app/i18n_labels.py:354
+#: app/i18n_labels.py:185 app/i18n_labels.py:238 app/i18n_labels.py:451
+#: app/i18n_labels.py:462 app/i18n_labels.py:473
 msgid "Draft"
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:273 app/commercial_ops/ui_routes.py:281
-#: app/commercial_ops/ui_routes.py:307 app/commercial_ops/ui_routes.py:324
-#: app/commercial_ops/ui_routes.py:344 app/commercial_ops/ui_routes.py:367
-#: app/i18n_labels.py:112 app/i18n_labels.py:154 app/i18n_labels.py:260
-#: app/i18n_labels.py:324 app/i18n_labels.py:334 app/i18n_labels.py:345
-#: app/i18n_labels.py:356 app/templates/commercial_ops/pilot_detail.html:2
+#: app/commercial_ops/ui_routes.py:311 app/commercial_ops/ui_routes.py:319
+#: app/commercial_ops/ui_routes.py:345 app/commercial_ops/ui_routes.py:362
+#: app/commercial_ops/ui_routes.py:382 app/commercial_ops/ui_routes.py:405
+#: app/i18n_labels.py:112 app/i18n_labels.py:154 app/i18n_labels.py:379
+#: app/i18n_labels.py:443 app/i18n_labels.py:453 app/i18n_labels.py:464
+#: app/i18n_labels.py:475 app/templates/commercial_ops/pilot_detail.html:2
 msgid "Pilot"
 msgstr ""
 
@@ -294,11 +294,11 @@ msgstr ""
 msgid "Applied"
 msgstr ""
 
-#: app/i18n_labels.py:174 app/i18n_labels.py:222 app/i18n_labels.py:385
+#: app/i18n_labels.py:174 app/i18n_labels.py:222 app/i18n_labels.py:504
 msgid "Rejected"
 msgstr ""
 
-#: app/i18n_labels.py:176 app/i18n_labels.py:369
+#: app/i18n_labels.py:176 app/i18n_labels.py:488
 msgid "Voided"
 msgstr ""
 
@@ -338,26 +338,212 @@ msgstr ""
 msgid "Dismissed"
 msgstr ""
 
-#: app/i18n_labels.py:220 app/i18n_labels.py:386
+#: app/i18n_labels.py:220 app/i18n_labels.py:505
 msgid "Pending Review"
 msgstr ""
 
-#: app/i18n_labels.py:229 app/i18n_labels.py:376 app/i18n_labels.py:387
+#: app/i18n_labels.py:229 app/i18n_labels.py:495 app/i18n_labels.py:506
 msgid "Success"
 msgstr ""
 
-#: app/i18n_labels.py:230 app/i18n_labels.py:367
+#: app/i18n_labels.py:230 app/i18n_labels.py:486
 msgid "Failed"
 msgstr ""
 
-#: app/i18n_labels.py:240 app/i18n_labels.py:336 app/i18n_labels.py:347
-#: app/i18n_labels.py:358
+#: app/i18n_labels.py:240 app/i18n_labels.py:455 app/i18n_labels.py:466
+#: app/i18n_labels.py:477
 #: app/templates/commercial_ops/activation_policy.html:39
 #: app/templates/licensing_admin/signing_keys.html:22
 msgid "Retired"
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:727 app/i18n_labels.py:256
+#: app/i18n_labels.py:262
+#, python-format
+msgid ""
+"Subscription must already be in PILOT status to create a pilot record "
+"(was %(current_status)s)."
+msgstr ""
+
+#: app/i18n_labels.py:263
+msgid "Pilot end date must be after the pilot start date."
+msgstr ""
+
+#: app/i18n_labels.py:264
+msgid "A reason is required to extend a pilot."
+msgstr ""
+
+#: app/i18n_labels.py:265
+#, python-format
+msgid ""
+"Pilot has already been extended %(count)s time(s) (maximum allowed: "
+"%(max)s). No indefinite rolling pilot."
+msgstr ""
+
+#: app/i18n_labels.py:266
+msgid "The new end date must be after the current pilot end date."
+msgstr ""
+
+#: app/i18n_labels.py:267
+msgid ""
+"The renewal request must be applied before this pilot can be marked "
+"converted."
+msgstr ""
+
+#: app/i18n_labels.py:268
+msgid "This renewal request does not belong to this pilot's subscription."
+msgstr ""
+
+#: app/i18n_labels.py:269
+msgid "A reason is required to cancel a pilot."
+msgstr ""
+
+#: app/i18n_labels.py:279
+#, python-format
+msgid "Cannot change the pilot status from %(from_status)s to %(to_status)s."
+msgstr ""
+
+#: app/i18n_labels.py:280
+#, python-format
+msgid "Cannot extend a pilot in status %(status)s."
+msgstr ""
+
+#: app/i18n_labels.py:281
+#, python-format
+msgid "Cannot convert a pilot in status %(status)s."
+msgstr ""
+
+#: app/i18n_labels.py:292
+#, python-format
+msgid ""
+"Cannot change the renewal request status from %(from_status)s to "
+"%(to_status)s."
+msgstr ""
+
+#: app/i18n_labels.py:293
+msgid "Use the approve action to move this renewal request to Approved."
+msgstr ""
+
+#: app/i18n_labels.py:294
+#, python-format
+msgid "Cannot approve a renewal request in status %(status)s."
+msgstr ""
+
+#: app/i18n_labels.py:295
+#, python-format
+msgid ""
+"Cannot apply a renewal request in status %(status)s; it must be Approved "
+"first."
+msgstr ""
+
+#: app/i18n_labels.py:306
+msgid "A reason is required to release a device slot."
+msgstr ""
+
+#: app/i18n_labels.py:307
+msgid "A reason is required to replace a device slot."
+msgstr ""
+
+#: app/i18n_labels.py:308
+msgid "Extra slots must be a positive number."
+msgstr ""
+
+#: app/i18n_labels.py:309
+msgid "A reason is required to create a device slot exception."
+msgstr ""
+
+#: app/i18n_labels.py:310
+msgid "The expiry date must be after the start date."
+msgstr ""
+
+#: app/i18n_labels.py:311
+#, python-format
+msgid ""
+"Device slot exceptions may not exceed %(max_days)s days -- temporary "
+"means temporary."
+msgstr ""
+
+#: app/i18n_labels.py:312
+#, python-format
+msgid "Cannot revoke a device slot exception in status %(status)s."
+msgstr ""
+
+#: app/i18n_labels.py:313
+msgid "A reason is required to revoke a device slot exception."
+msgstr ""
+
+#: app/i18n_labels.py:323
+msgid "A reason is required to create an emergency extension."
+msgstr ""
+
+#: app/i18n_labels.py:324
+#, python-format
+msgid ""
+"Duration must be between 1 and %(max_hours)s hours (explicit, short-lived"
+" only)."
+msgstr ""
+
+#: app/i18n_labels.py:325
+msgid "Cannot create an emergency extension for a revoked license."
+msgstr ""
+
+#: app/i18n_labels.py:326
+#, python-format
+msgid ""
+"This subscription already has an active emergency extension until "
+"%(expires_at)s."
+msgstr ""
+
+#: app/i18n_labels.py:327
+#, python-format
+msgid "Cannot revoke an emergency extension in status %(status)s."
+msgstr ""
+
+#: app/i18n_labels.py:328
+msgid "A reason is required to revoke an emergency extension."
+msgstr ""
+
+#: app/i18n_labels.py:339
+#, python-format
+msgid "Cannot approve a pending activation in status %(status)s."
+msgstr ""
+
+#: app/i18n_labels.py:340
+msgid "This installation is no longer awaiting activation."
+msgstr ""
+
+#: app/i18n_labels.py:341
+msgid "The license for this pending activation could not be found."
+msgstr ""
+
+#: app/i18n_labels.py:342
+msgid "This license has already reached its device limit."
+msgstr ""
+
+#: app/i18n_labels.py:343
+#, python-format
+msgid "Cannot reject a pending activation in status %(status)s."
+msgstr ""
+
+#: app/i18n_labels.py:344
+msgid "A reason is required to reject a pending activation."
+msgstr ""
+
+#: app/i18n_labels.py:354
+#, python-format
+msgid "Unknown activation mode: %(mode)s"
+msgstr ""
+
+#: app/i18n_labels.py:364
+#, python-format
+msgid "Cannot acknowledge a notification in status %(status)s."
+msgstr ""
+
+#: app/i18n_labels.py:365
+#, python-format
+msgid "This notification is already %(status)s."
+msgstr ""
+
+#: app/commercial_ops/ui_routes.py:765 app/i18n_labels.py:375
 #: app/templates/commercial_ops/emergency_extension_detail.html:8
 #: app/templates/commercial_ops/emergency_extensions_list.html:17
 #: app/templates/commercial_ops/pilot_detail.html:8
@@ -368,16 +554,16 @@ msgstr ""
 msgid "Subscription"
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:574 app/commercial_ops/ui_routes.py:588
-#: app/i18n_labels.py:257
+#: app/commercial_ops/ui_routes.py:612 app/commercial_ops/ui_routes.py:626
+#: app/i18n_labels.py:376
 #: app/templates/commercial_ops/emergency_extension_detail.html:9
 #: app/templates/commercial_ops/pending_activation_detail.html:9
 #: app/templates/installations/new.html:8 app/templates/licensing/detail.html:2
 msgid "License"
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:547 app/commercial_ops/ui_routes.py:561
-#: app/i18n_labels.py:258
+#: app/commercial_ops/ui_routes.py:585 app/commercial_ops/ui_routes.py:599
+#: app/i18n_labels.py:377
 #: app/templates/commercial_ops/pending_activation_detail.html:8
 #: app/templates/commercial_ops/pending_activations_list.html:17
 #: app/templates/installations/detail.html:2
@@ -386,214 +572,197 @@ msgstr ""
 msgid "Installation"
 msgstr ""
 
-#: app/i18n_labels.py:259 app/templates/commercial_ops/renewal_detail.html:2
+#: app/i18n_labels.py:378 app/templates/commercial_ops/renewal_detail.html:2
 msgid "Renewal"
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:651 app/commercial_ops/ui_routes.py:663
-#: app/commercial_ops/ui_routes.py:678 app/i18n_labels.py:261
+#: app/commercial_ops/ui_routes.py:689 app/commercial_ops/ui_routes.py:701
+#: app/commercial_ops/ui_routes.py:716 app/i18n_labels.py:380
 msgid "Notification"
 msgstr ""
 
-#: app/i18n_labels.py:268
+#: app/i18n_labels.py:387
 msgid "Automatic"
 msgstr ""
 
-#: app/i18n_labels.py:269
+#: app/i18n_labels.py:388
 msgid "Manual Approval"
 msgstr ""
 
-#: app/i18n_labels.py:270
+#: app/i18n_labels.py:389
 msgid "Risk Review"
 msgstr ""
 
-#: app/i18n_labels.py:285 app/i18n_labels.py:365
+#: app/i18n_labels.py:404 app/i18n_labels.py:484
 msgid "Pending"
 msgstr ""
 
-#: app/i18n_labels.py:286
+#: app/i18n_labels.py:405
 msgid "Convert"
 msgstr ""
 
-#: app/i18n_labels.py:287
+#: app/i18n_labels.py:406
 msgid "Do Not Convert"
 msgstr ""
 
-#: app/i18n_labels.py:294 app/templates/commercial_ops/renewals_new.html:16
+#: app/i18n_labels.py:413 app/templates/commercial_ops/renewals_new.html:16
 msgid "Early renewal (from current end date)"
 msgstr ""
 
-#: app/i18n_labels.py:295 app/templates/commercial_ops/renewals_new.html:17
+#: app/i18n_labels.py:414 app/templates/commercial_ops/renewals_new.html:17
 msgid "Late renewal (from approval date)"
 msgstr ""
 
-#: app/i18n_labels.py:302
+#: app/i18n_labels.py:421
 msgid "Activation"
 msgstr ""
 
-#: app/i18n_labels.py:303
+#: app/i18n_labels.py:422
 msgid "Check-in"
 msgstr ""
 
-#: app/i18n_labels.py:304
+#: app/i18n_labels.py:423
 msgid "Deactivation"
 msgstr ""
 
-#: app/i18n_labels.py:311 app/templates/audit/verify_chain.html:7
+#: app/i18n_labels.py:430 app/templates/audit/verify_chain.html:7
 msgid "OK"
 msgstr ""
 
-#: app/i18n_labels.py:312
+#: app/i18n_labels.py:431
 msgid "Degraded"
 msgstr ""
 
-#: app/i18n_labels.py:313
+#: app/i18n_labels.py:432
 msgid "Down"
 msgstr ""
 
-#: app/i18n_labels.py:314
+#: app/i18n_labels.py:433
 msgid "Unknown"
 msgstr ""
 
-#: app/i18n_labels.py:321
+#: app/i18n_labels.py:440
 msgid "One-time"
 msgstr ""
 
-#: app/i18n_labels.py:322
+#: app/i18n_labels.py:441
 msgid "Monthly"
 msgstr ""
 
-#: app/i18n_labels.py:323
+#: app/i18n_labels.py:442
 msgid "Annual"
 msgstr ""
 
-#: app/i18n_labels.py:325
+#: app/i18n_labels.py:444
 msgid "Custom"
 msgstr ""
 
-#: app/i18n_labels.py:333 app/i18n_labels.py:344 app/i18n_labels.py:355
+#: app/i18n_labels.py:452 app/i18n_labels.py:463 app/i18n_labels.py:474
 msgid "Planned"
 msgstr ""
 
-#: app/i18n_labels.py:335 app/i18n_labels.py:346 app/i18n_labels.py:357
+#: app/i18n_labels.py:454 app/i18n_labels.py:465 app/i18n_labels.py:476
 msgid "Available"
 msgstr ""
 
-#: app/i18n_labels.py:366
+#: app/i18n_labels.py:485
 msgid "Confirmed"
 msgstr ""
 
-#: app/i18n_labels.py:368
+#: app/i18n_labels.py:487
 msgid "Refunded"
 msgstr ""
 
-#: app/i18n_labels.py:377 app/i18n_labels.py:388
+#: app/i18n_labels.py:496 app/i18n_labels.py:507
 msgid "Failure"
 msgstr ""
 
-#: app/i18n_labels.py:384
+#: app/i18n_labels.py:503
 msgid "Accepted"
 msgstr ""
 
-#: app/i18n_labels.py:411
+#: app/i18n_labels.py:530
 msgid "Customer created"
 msgstr ""
 
-#: app/i18n_labels.py:412
+#: app/i18n_labels.py:531
 msgid "Customer updated"
 msgstr ""
 
-#: app/i18n_labels.py:413
+#: app/i18n_labels.py:532
 msgid "Customer archived"
 msgstr ""
 
-#: app/i18n_labels.py:414
+#: app/i18n_labels.py:533
 msgid "Subscription created"
 msgstr ""
 
-#: app/i18n_labels.py:415
+#: app/i18n_labels.py:534
 msgid "Subscription status changed"
 msgstr ""
 
-#: app/i18n_labels.py:416
+#: app/i18n_labels.py:535
 msgid "Subscription renewed"
 msgstr ""
 
-#: app/i18n_labels.py:417
+#: app/i18n_labels.py:536
 msgid "Payment recorded"
 msgstr ""
 
-#: app/i18n_labels.py:418
+#: app/i18n_labels.py:537
 msgid "Payment corrected"
 msgstr ""
 
-#: app/i18n_labels.py:419
+#: app/i18n_labels.py:538
 msgid "License issued"
 msgstr ""
 
-#: app/i18n_labels.py:420
+#: app/i18n_labels.py:539
 msgid "License status changed"
 msgstr ""
 
-#: app/i18n_labels.py:421
+#: app/i18n_labels.py:540
 msgid "License replaced"
 msgstr ""
 
-#: app/i18n_labels.py:422
+#: app/i18n_labels.py:541
 msgid "License created"
 msgstr ""
 
-#: app/i18n_labels.py:423
+#: app/i18n_labels.py:542
 msgid "License key issued"
 msgstr ""
 
-#: app/i18n_labels.py:424
+#: app/i18n_labels.py:543
 msgid "Installation registered"
 msgstr ""
 
-#: app/i18n_labels.py:425
+#: app/i18n_labels.py:544
 msgid "Installation status changed"
 msgstr ""
 
-#: app/i18n_labels.py:426
+#: app/i18n_labels.py:545
 msgid "Backup created"
 msgstr ""
 
-#: app/i18n_labels.py:427
+#: app/i18n_labels.py:546
 msgid "Backup restored"
 msgstr ""
 
-#: app/i18n_labels.py:430
+#: app/i18n_labels.py:549
 msgid "Check-in accepted"
 msgstr ""
 
-#: app/i18n_labels.py:431
+#: app/i18n_labels.py:550
 msgid "Activation accepted"
 msgstr ""
 
-#: app/i18n_labels.py:432
+#: app/i18n_labels.py:551
 msgid "Device-slot exception created"
 msgstr ""
 
 #: app/auth/routes.py:378
 msgid "Invitation is invalid or has expired."
-msgstr ""
-
-#: app/commercial_ops/pilot_lifecycle.py:149
-#, python-format
-msgid ""
-"Pilot has already been extended %(count)s time(s) "
-"(max_extensions_allowed=%(max)s). No indefinite rolling pilot."
-msgstr ""
-
-#: app/commercial_ops/renewal_requests.py:173
-#, python-format
-msgid "Cannot transition renewal request from %(from_status)s to %(to_status)s."
-msgstr ""
-
-#: app/commercial_ops/renewal_requests.py:273
-#, python-format
-msgid "Cannot apply a renewal request in status %(status)s; must be APPROVED."
 msgstr ""
 
 #: app/commercial_ops/timeline.py:49 app/commercial_ops/timeline.py:55
@@ -630,72 +799,72 @@ msgstr ""
 msgid "Pilot %(from_status)s -> %(to_status)s"
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:116
+#: app/commercial_ops/ui_routes.py:154
 msgid "A valid subscription_id is required."
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:127 app/commercial_ops/ui_routes.py:247
-#: app/commercial_ops/ui_routes.py:419
+#: app/commercial_ops/ui_routes.py:165 app/commercial_ops/ui_routes.py:285
+#: app/commercial_ops/ui_routes.py:457
 msgid "Subscription not found."
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:133
+#: app/commercial_ops/ui_routes.py:171
 msgid "Proposed term start/end must be valid dates."
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:140
+#: app/commercial_ops/ui_routes.py:178
 msgid "Commercial amount must be a number."
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:163 app/commercial_ops/ui_routes.py:173
-#: app/commercial_ops/ui_routes.py:188 app/commercial_ops/ui_routes.py:203
+#: app/commercial_ops/ui_routes.py:201 app/commercial_ops/ui_routes.py:211
+#: app/commercial_ops/ui_routes.py:226 app/commercial_ops/ui_routes.py:241
 msgid "Renewal request"
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:214
+#: app/commercial_ops/ui_routes.py:252
 msgid "Someone else already changed this renewal request. Reload and retry."
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:237
+#: app/commercial_ops/ui_routes.py:275
 msgid "A subscription already in PILOT status is required."
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:252
+#: app/commercial_ops/ui_routes.py:290
 msgid "Pilot start/end must be valid dates."
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:311
+#: app/commercial_ops/ui_routes.py:349
 msgid "new_end_date must be a valid date."
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:350
+#: app/commercial_ops/ui_routes.py:388
 msgid "Term start/end must be valid dates."
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:370
+#: app/commercial_ops/ui_routes.py:408
 msgid "Renewal request not found."
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:424
+#: app/commercial_ops/ui_routes.py:462
 msgid "duration_hours must be an integer."
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:440 app/commercial_ops/ui_routes.py:451
+#: app/commercial_ops/ui_routes.py:478 app/commercial_ops/ui_routes.py:489
 #: app/templates/commercial_ops/emergency_extension_detail.html:2
 #: app/templates/commercial_ops/emergency_extension_detail.html:5
 msgid "Emergency extension"
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:477 app/commercial_ops/ui_routes.py:488
-#: app/commercial_ops/ui_routes.py:503
+#: app/commercial_ops/ui_routes.py:515 app/commercial_ops/ui_routes.py:526
+#: app/commercial_ops/ui_routes.py:541
 msgid "Pending activation"
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:594
+#: app/commercial_ops/ui_routes.py:632
 msgid "extra_slots must be an integer and expires_at a valid date/time."
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:612
+#: app/commercial_ops/ui_routes.py:650
 msgid "Device slot exception"
 msgstr ""
 
