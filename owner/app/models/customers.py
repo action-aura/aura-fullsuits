@@ -60,6 +60,10 @@ class CustomerContact(Base, UUIDPKMixin, TimestampMixin):
     business_phone: Mapped[str | None] = mapped_column(String(64))
     preferred_channel: Mapped[str | None] = mapped_column(String(32))
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Phase 9.5C -- additive.
+    notes: Mapped[str | None] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     customer: Mapped[Customer] = relationship(back_populates="contacts")
 

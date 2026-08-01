@@ -142,6 +142,28 @@ class LeadNote(Base, UUIDPKMixin, TimestampMixin):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class LeadContact(Base, UUIDPKMixin, TimestampMixin):
+    """Phase 9.5C Milestone 8 -- Leads have no existing contact concept
+    (unlike Customer, which already has CustomerContact), so this is a
+    genuinely new table -- not a second authority for the same concept.
+    Field shape/primary-flag rule intentionally copied from CustomerContact
+    exactly, so conversion (Milestone 13) can carry a Lead's contacts across
+    to CustomerContact rows with a simple 1:1 field mapping."""
+
+    __tablename__ = "owner_lead_contacts"
+
+    lead_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_leads.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    title: Mapped[str | None] = mapped_column(String(128))
+    business_email: Mapped[str | None] = mapped_column(String(255))
+    business_phone: Mapped[str | None] = mapped_column(String(64))
+    preferred_channel: Mapped[str | None] = mapped_column(String(32))
+    is_primary: Mapped[bool] = mapped_column(default=False, nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class CustomerLocation(Base, UUIDPKMixin, TimestampMixin):
     """Shared table for Lead and Customer -- exactly one of lead_id/customer_id
     is set (CHECK constraint), never both, never neither. See
@@ -169,6 +191,14 @@ class CustomerLocation(Base, UUIDPKMixin, TimestampMixin):
     reverse_geocoded_address: Mapped[str | None] = mapped_column(Text)
     verified: Mapped[bool] = mapped_column(default=False, nullable=False)
     verification_method: Mapped[str | None] = mapped_column(String(64))
+    # Phase 9.5C -- additive. verified/verification_method already existed
+    # (Phase 9.5A) but nothing recorded WHO verified it, WHEN, or WHY --
+    # required by this milestone's "verification requires reason and audit."
+    verified_by_employee_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id")
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    verification_reason: Mapped[str | None] = mapped_column(Text)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
