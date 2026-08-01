@@ -29,7 +29,12 @@ def test_convert_creates_active_customer_and_confirms_lead(app, seeded):
         from app.leads.services import create_lead
         from app.models.customers import Customer
 
+        from app.employees.services import activate_employee
+
         profile = _make_profile(app, staff_id, "EMP-C1")
+        # Phase 9.5C Milestone 4 -- create_lead() now validates that an
+        # inline assigned_employee_profile_id is ACTIVE.
+        activate_employee(profile, actor_staff_user_id=staff_id)
         lead = create_lead(
             {"organization_or_prospect_name": "Convertible LLC", "assigned_employee_profile_id": profile.id},
             actor_employee_profile_id=profile.id, actor_staff_user_id=staff_id,

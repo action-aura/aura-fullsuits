@@ -104,6 +104,9 @@ def test_reassign_lead_closes_old_assignment_opens_new(app, seeded):
 
         profile_a = _make_profile(app, staff_a, "EMP-L5A")
         profile_b = _make_profile(app, staff_b, "EMP-L5B")
+        # Phase 9.5C Milestone 4 -- create_lead() now validates an inline
+        # assigned_employee_profile_id is ACTIVE.
+        activate_employee(profile_a, actor_staff_user_id=staff_a)
         # Phase 9.5C Milestone 3 -- assign_lead() now rejects an inactive
         # destination employee (a fresh profile defaults to PENDING); real
         # reassignment targets must be ACTIVE.

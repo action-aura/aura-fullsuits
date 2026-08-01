@@ -34,6 +34,17 @@ class LeadError(StableCodeError):
         "LEAD_ACCESS_DENIED": "You do not have access to this lead.",
         "DESTINATION_EMPLOYEE_NOT_ACTIVE": "Cannot assign a lead to an inactive employee.",
         "REASON_REQUIRED_FOR_REASSIGN": "A reason is required to reassign a lead.",
+        "LEAD_NAME_REQUIRED": "A prospect or organization name is required.",
+        "LEAD_NAME_TOO_LONG": "Name must be at most {max_len} characters.",
+        "LEAD_PHONE_TOO_LONG": "Phone must be at most {max_len} characters.",
+        "LEAD_EMAIL_INVALID": "Enter a valid email address.",
+        "LEAD_CONTACT_METHOD_REQUIRED": "At least one contact method (phone or email) is required.",
+        "LEAD_SOURCE_INVALID": "Unknown lead source: {source}.",
+        "LEAD_PRIORITY_INVALID": "Unknown lead priority: {priority}.",
+        "LEAD_ESTIMATED_VALUE_INVALID": "Estimated value must be a non-negative number.",
+        "LEAD_CURRENCY_REQUIRED_WITH_VALUE": "A 3-letter currency code is required when an estimated value is set.",
+        "LEAD_LOCATION_SUMMARY_TOO_LONG": "Location summary must be at most {max_len} characters.",
+        "IDEMPOTENCY_CONFLICT": "This request conflicts with an earlier request using the same idempotency key.",
     }
 
 
