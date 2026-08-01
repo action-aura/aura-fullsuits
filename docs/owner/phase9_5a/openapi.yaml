@@ -1,0 +1,997 @@
+openapi: 3.0.3
+info:
+  title: Aura Owner Operations API
+  version: 1.0.0
+  description: 'Phase 9.5A foundation contract for the commercial-operations / employee-portal / admin-portal
+    surface. Distinct from /api/licensing/v1 (external product licensing, unchanged). Every path in this
+    document is x-status: planned -- none are routed in owner/app/__init__.py this phase (foundation/contract
+    only, per the governing instruction''s explicit "mobile-ready, not mobile-built" boundary).
+
+    '
+servers:
+- url: /api/operations/v1
+security:
+- bearerAuth: []
+- cookieAuth: []
+paths:
+  /auth/mobile/login:
+    post:
+      x-status: planned
+      summary: Employee mobile login (see mobile-session-contract.md)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - email
+              - password
+              - platform
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                platform:
+                  type: string
+                  enum:
+                  - ANDROID
+                  - IOS
+      responses:
+        '200':
+          description: Login succeeded (no MFA required) or MFA challenge issued
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/MobileTokenPair'
+                - $ref: '#/components/schemas/MfaChallenge'
+        '401':
+          $ref: '#/components/responses/Error'
+          description: Error response
+  /auth/mobile/refresh:
+    post:
+      x-status: planned
+      summary: Rotate a refresh token (reuse detection revokes the whole family)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - refresh_token
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        '200':
+          description: New access/refresh token pair
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MobileTokenPair'
+        '401':
+          $ref: '#/components/responses/Error'
+          description: Error response
+  /employees:
+    get:
+      x-status: planned
+      summary: List employee profiles (employees.view_all) or own (employees.view_own)
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      - name: employment_status
+        in: query
+        schema:
+          type: string
+          enum:
+          - PENDING
+          - ACTIVE
+          - SUSPENDED
+          - TERMINATED
+          - ARCHIVED
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EmployeeProfile'
+                  page:
+                    type: integer
+                  page_size:
+                    type: integer
+                  total:
+                    type: integer
+          description: Successful response
+    post:
+      x-status: planned
+      summary: Create an employee profile (employees.create)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmployeeProfileCreate'
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmployeeProfile'
+          description: Successful response
+        '409':
+          $ref: '#/components/responses/Error'
+          description: Error response
+  /leads:
+    get:
+      x-status: planned
+      summary: List leads (ownership-filtered unless leads.view_all)
+      parameters:
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      - name: status
+        in: query
+        schema:
+          $ref: '#/components/schemas/LeadStatus'
+      - name: search
+        in: query
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LeadCard'
+                  page:
+                    type: integer
+                  page_size:
+                    type: integer
+                  total:
+                    type: integer
+          description: Successful response
+    post:
+      x-status: planned
+      summary: Create a lead (leads.create)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LeadCreate'
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeadDetail'
+          description: Successful response
+        '409':
+          $ref: '#/components/responses/Error'
+          description: Error response
+  /leads/{lead_id}:
+    parameters:
+    - name: lead_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    get:
+      x-status: planned
+      summary: Lead detail (record-level ownership enforced -- see data-isolation-threat-model.md)
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeadDetail'
+          description: Successful response
+        '404':
+          $ref: '#/components/responses/Error'
+          description: Error response
+  /leads/{lead_id}/convert:
+    parameters:
+    - name: lead_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    post:
+      x-status: planned
+      summary: Convert a lead to a customer (leads.convert) -- see lead-conversion-contract.md
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                existing_customer_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+          description: Successful response
+        '409':
+          description: DUPLICATE_CUSTOMER or INVALID_STATE_TRANSITION
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /customers/{customer_id}:
+    parameters:
+    - name: customer_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    get:
+      x-status: planned
+      summary: Customer detail -- see customer-detail-api-view-model.md
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerDetail'
+          description: Successful response
+        '404':
+          $ref: '#/components/responses/Error'
+          description: Error response
+  /customers/{customer_id}/locations:
+    parameters:
+    - name: customer_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    post:
+      x-status: planned
+      summary: Capture a customer location (customers.capture_location) -- explicit action only
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LocationCapture'
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerLocation'
+          description: Successful response
+  /quotes:
+    post:
+      x-status: planned
+      summary: Create a quote (quotes.create)
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuoteCreate'
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+          description: Successful response
+  /commercial-invoices/{invoice_id}/issue:
+    parameters:
+    - name: invoice_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    post:
+      x-status: planned
+      summary: Issue a draft commercial invoice (invoices.issue)
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommercialInvoice'
+          description: Successful response
+        '409':
+          $ref: '#/components/responses/Error'
+          description: Error response
+  /payments/{payment_id}/confirm:
+    parameters:
+    - name: payment_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    post:
+      x-status: planned
+      summary: Confirm a payment (payments.confirm) -- triggers commission eligibility evaluation
+      parameters:
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentRecord'
+          description: Successful response
+  /commissions/own:
+    get:
+      x-status: planned
+      summary: Caller's own commission ledger (commissions.view_own)
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CommissionLedgerEntry'
+          description: Successful response
+  /commissions/{entry_id}/approve:
+    parameters:
+    - name: entry_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    post:
+      x-status: planned
+      summary: Approve a commission ledger entry (commissions.approve) -- self-approval blocked server-side
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommissionLedgerEntry'
+          description: Successful response
+        '403':
+          $ref: '#/components/responses/Error'
+          description: Error response
+  /expenses:
+    post:
+      x-status: planned
+      summary: Submit an expense (expenses.create)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpenseCreate'
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Expense'
+          description: Successful response
+  /subscriptions/{subscription_id}/device-policy/effective:
+    parameters:
+    - name: subscription_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    get:
+      x-status: planned
+      summary: Resolved device policy -- see device-policy-api-contract.md
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EffectiveDevicePolicy'
+          description: Successful response
+  /dashboard/admin:
+    get:
+      x-status: planned
+      summary: Management dashboard (dashboard.view_all) -- see admin-dashboard-metric-contract.md
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminDashboard'
+          description: Successful response
+  /reports/daily/{business_date}:
+    parameters:
+    - name: business_date
+      in: path
+      required: true
+      schema:
+        type: string
+        format: date
+    get:
+      x-status: planned
+      summary: Daily activity snapshot -- see daily-reporting-contract.md
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DailySnapshot'
+          description: Successful response
+  /management-notes:
+    get:
+      x-status: planned
+      summary: Shared management notes visible to the caller (management_notes.view)
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ManagementNote'
+          description: Successful response
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque access token (mobile) -- see mobile-session-contract.md
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: session
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 50
+        default: 20
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+  responses:
+    Error:
+      description: Standard error envelope -- see api-error-catalog.md
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    ErrorResponse:
+      type: object
+      required:
+      - error_code
+      - message
+      - correlation_id
+      properties:
+        error_code:
+          type: string
+          enum:
+          - AUTHENTICATION_REQUIRED
+          - MFA_REQUIRED
+          - RECENT_AUTH_REQUIRED
+          - PERMISSION_DENIED
+          - RECORD_NOT_ASSIGNED
+          - RECORD_NOT_FOUND
+          - VERSION_CONFLICT
+          - IDEMPOTENCY_CONFLICT
+          - VALIDATION_ERROR
+          - INVALID_STATE_TRANSITION
+          - PRICE_VERSION_INACTIVE
+          - DEVICE_POLICY_VIOLATION
+          - DUPLICATE_LEAD
+          - DUPLICATE_CUSTOMER
+          - COMMISSION_NOT_ELIGIBLE
+          - REFRESH_TOKEN_INVALID
+          - REFRESH_TOKEN_REUSE_DETECTED
+          - INTERNAL_ERROR
+        message:
+          type: string
+        correlation_id:
+          type: string
+        details:
+          type: object
+          nullable: true
+    MobileTokenPair:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        expires_in:
+          type: integer
+          example: 900
+    MfaChallenge:
+      type: object
+      properties:
+        mfa_challenge_token:
+          type: string
+        error_code:
+          type: string
+          enum:
+          - MFA_REQUIRED
+    EmployeeProfile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        employee_number:
+          type: string
+        full_name:
+          type: string
+        job_title:
+          type: string
+          nullable: true
+        department:
+          type: string
+          nullable: true
+        employment_status:
+          type: string
+          enum:
+          - PENDING
+          - ACTIVE
+          - SUSPENDED
+          - TERMINATED
+          - ARCHIVED
+        manager_employee_profile_id:
+          type: string
+          format: uuid
+          nullable: true
+        version:
+          type: integer
+    EmployeeProfileCreate:
+      type: object
+      required:
+      - staff_user_id
+      - employee_number
+      - full_name
+      - employment_start_date
+      properties:
+        staff_user_id:
+          type: string
+          format: uuid
+        employee_number:
+          type: string
+        full_name:
+          type: string
+        employment_start_date:
+          type: string
+          format: date
+    LeadStatus:
+      type: string
+      enum:
+      - NEW
+      - NOT_INTERESTED_NOW
+      - POTENTIAL
+      - FOLLOW_UP
+      - UNDER_OBSERVATION
+      - QUALIFIED
+      - CONFIRMED
+      - LOST
+      - ARCHIVED
+    LeadCard:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        record_type:
+          type: string
+          enum:
+          - LEAD
+        name:
+          type: string
+        status:
+          $ref: '#/components/schemas/LeadStatus'
+        phone:
+          type: string
+          nullable: true
+        assigned_employee:
+          type: object
+          nullable: true
+          properties:
+            id:
+              type: string
+              format: uuid
+            display_name:
+              type: string
+        next_follow_up_at:
+          type: string
+          format: date-time
+          nullable: true
+        overdue_follow_up:
+          type: boolean
+    LeadCreate:
+      type: object
+      required:
+      - organization_or_prospect_name
+      properties:
+        organization_or_prospect_name:
+          type: string
+        primary_contact_name:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+        source:
+          type: string
+          enum:
+          - WEBSITE
+          - REFERRAL
+          - COLD_OUTREACH
+          - EVENT
+          - OTHER
+    LeadDetail:
+      allOf:
+      - $ref: '#/components/schemas/LeadCard'
+      - type: object
+        properties:
+          interactions:
+            type: array
+            items:
+              type: object
+          followups:
+            type: array
+            items:
+              type: object
+          notes:
+            type: array
+            items:
+              type: object
+          locations:
+            type: array
+            items:
+              $ref: '#/components/schemas/CustomerLocation'
+          version:
+            type: integer
+    Customer:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        legal_name:
+          type: string
+        lifecycle_status:
+          type: string
+        converted_from_lead_id:
+          type: string
+          format: uuid
+          nullable: true
+    CustomerDetail:
+      allOf:
+      - $ref: '#/components/schemas/Customer'
+      - type: object
+        properties:
+          commercial:
+            type: object
+            nullable: true
+          licensing:
+            type: object
+            nullable: true
+          version:
+            type: integer
+    LocationCapture:
+      type: object
+      required:
+      - source
+      properties:
+        latitude:
+          type: number
+          nullable: true
+        longitude:
+          type: number
+          nullable: true
+        accuracy_meters:
+          type: number
+          nullable: true
+        source:
+          type: string
+          enum:
+          - GPS
+          - NETWORK
+          - MANUAL
+          - IMPORTED
+        manual_address:
+          type: string
+          nullable: true
+    CustomerLocation:
+      allOf:
+      - $ref: '#/components/schemas/LocationCapture'
+      - type: object
+        properties:
+          id:
+            type: string
+            format: uuid
+          captured_at:
+            type: string
+            format: date-time
+          verified:
+            type: boolean
+    QuoteCreate:
+      type: object
+      required:
+      - customer_id
+      - lines
+      properties:
+        customer_id:
+          type: string
+          format: uuid
+        currency:
+          type: string
+        lines:
+          type: array
+          items:
+            type: object
+            required:
+            - plan_id
+            - quantity
+            properties:
+              plan_id:
+                type: string
+                format: uuid
+              quantity:
+                type: integer
+    Quote:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - DRAFT
+          - SENT
+          - ACCEPTED
+          - REJECTED
+          - EXPIRED
+          - CANCELLED
+        total:
+          type: string
+          description: Decimal serialized as a string, e.g. "1200.00"
+        currency:
+          type: string
+        version:
+          type: integer
+    CommercialInvoice:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - DRAFT
+          - ISSUED
+          - PARTIALLY_PAID
+          - PAID
+          - VOID
+          - REFUNDED
+          - PARTIALLY_REFUNDED
+        total:
+          type: string
+        currency:
+          type: string
+        version:
+          type: integer
+    PaymentRecord:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        amount:
+          type: string
+        currency:
+          type: string
+        status:
+          type: string
+        commercial_invoice_id:
+          type: string
+          format: uuid
+          nullable: true
+    CommissionLedgerEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        employee_profile_id:
+          type: string
+          format: uuid
+        commission_amount:
+          type: string
+        currency:
+          type: string
+        status:
+          type: string
+          enum:
+          - PENDING
+          - EARNED
+          - APPROVED
+          - PAID
+          - REVERSED
+          - CANCELLED
+          - DISPUTED
+        reversal_of_ledger_entry_id:
+          type: string
+          format: uuid
+          nullable: true
+    ExpenseCreate:
+      type: object
+      required:
+      - category_id
+      - amount
+      - currency
+      - expense_date
+      - description
+      properties:
+        category_id:
+          type: string
+          format: uuid
+        amount:
+          type: string
+        currency:
+          type: string
+        expense_date:
+          type: string
+          format: date
+        description:
+          type: string
+    Expense:
+      allOf:
+      - $ref: '#/components/schemas/ExpenseCreate'
+      - type: object
+        properties:
+          id:
+            type: string
+            format: uuid
+          status:
+            type: string
+            enum:
+            - DRAFT
+            - SUBMITTED
+            - APPROVED
+            - REJECTED
+            - PAID
+            - VOID
+    EffectiveDevicePolicy:
+      type: object
+      properties:
+        max_total_devices:
+          type: integer
+          nullable: true
+        platform_rules:
+          type: array
+          items:
+            type: object
+            properties:
+              platform_category:
+                type: string
+                enum:
+                - WINDOWS
+                - ANDROID
+                - IOS
+                - MOBILE
+              max_devices:
+                type: integer
+        approval_required_after_device_number:
+          type: integer
+          nullable: true
+        source:
+          type: string
+          enum:
+          - PLAN_PROFILE
+          - GLOBAL_DEFAULT
+          - UNRESTRICTED
+    AdminDashboard:
+      type: object
+      properties:
+        total_employees:
+          type: integer
+        active_employees:
+          type: integer
+        employees_online_now:
+          type: integer
+        recently_active_employees:
+          type: integer
+        total_leads:
+          type: integer
+        confirmed_customers:
+          type: integer
+        active_licenses:
+          type: integer
+        device_overage_findings:
+          type: integer
+        collected_revenue:
+          type: string
+        net_cash_view:
+          type: string
+    DailySnapshot:
+      type: object
+      properties:
+        business_date:
+          type: string
+          format: date
+        generation_status:
+          type: string
+          enum:
+          - PENDING
+          - GENERATING
+          - COMPLETE
+          - FAILED
+        metric_payload:
+          type: object
+    ManagementNote:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        status:
+          type: string
+          enum:
+          - OPEN
+          - IN_PROGRESS
+          - DONE
+          - ARCHIVED
+        visibility:
+          type: string
+          enum:
+          - MANAGEMENT_ONLY
+          - SPECIFIC_EMPLOYEES
+          - ALL_STAFF
+        pinned:
+          type: boolean
+        version:
+          type: integer
