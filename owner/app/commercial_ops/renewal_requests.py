@@ -73,7 +73,26 @@ _GRADUATING_SUBSCRIPTION_STATUSES = frozenset({"PILOT"})
 
 
 class InvalidRenewalTransitionError(ValueError):
-    pass
+    """Non-Negotiable: service/domain code must never depend on request
+    context (Phase 9.5B-R2/R3 -- gettext() here broke every non-HTTP
+    caller). `code`/`params` are stable and English-only, deliberately
+    never translated; a user-facing Jinja route localizes at the
+    presentation boundary via `app.i18n_labels.localize_renewal_transition_error`
+    instead of ever reading `str(exc)` directly -- see
+    `commercial_ops/ui_routes.py`."""
+
+    _MESSAGES = {
+        "INVALID_RENEWAL_TRANSITION": "Cannot transition renewal request from {from_status} to {to_status}.",
+        "USE_APPROVE_FUNCTION": "Use approve_renewal_request() to reach APPROVED.",
+        "INVALID_RENEWAL_APPROVE_STATUS": "Cannot approve a renewal request in status {status}.",
+        "INVALID_RENEWAL_APPLY_STATUS": "Cannot apply a renewal request in status {status}; must be APPROVED.",
+    }
+
+    def __init__(self, code: str, **params):
+        self.code = code
+        self.params = params
+        template = self._MESSAGES.get(code, code)
+        super().__init__(template.format(**params) if params else template)
 
 
 class RenewalApplicationError(ValueError):
@@ -166,16 +185,9 @@ def transition_renewal_request(
     `approve_renewal_request()` / `apply_renewal_request()`."""
     allowed = VALID_TRANSITIONS.get(renewal.status, set())
     if to_status not in allowed:
-        # Not translated: raised by service-layer code called both from
-        # HTTP routes and directly (tests, other services) with no request
-        # context -- gettext() would raise RuntimeError in the latter case.
-        # Real bug found and reverted during Phase 9.5B-R2 (see
-        # rtl-defect-and-fix-log.md item 2).
-        raise InvalidRenewalTransitionError(
-            f"Cannot transition renewal request from {renewal.status} to {to_status}."
-        )
+        raise InvalidRenewalTransitionError("INVALID_RENEWAL_TRANSITION", from_status=renewal.status, to_status=to_status)
     if to_status == "APPROVED":
-        raise InvalidRenewalTransitionError("Use approve_renewal_request() to reach APPROVED.")
+        raise InvalidRenewalTransitionError("USE_APPROVE_FUNCTION")
     from_status = renewal.status
     renewal.status = to_status
     if to_status == "CANCELLED":
@@ -212,7 +224,7 @@ def approve_renewal_request(renewal: RenewalRequest, actor_staff_user_id, *, rea
         raise RenewalApplicationError("SELF_APPROVAL_NOT_ALLOWED")
     allowed = VALID_TRANSITIONS.get(renewal.status, set())
     if "APPROVED" not in allowed:
-        raise InvalidRenewalTransitionError(f"Cannot approve a renewal request in status {renewal.status}.")
+        raise InvalidRenewalTransitionError("INVALID_RENEWAL_APPROVE_STATUS", status=renewal.status)
 
     from_status = renewal.status
     renewal.status = "APPROVED"
@@ -267,11 +279,7 @@ def apply_renewal_request(renewal_request_id, actor_staff_user_id) -> RenewalReq
     if renewal is None:
         raise RenewalApplicationError("RENEWAL_REQUEST_NOT_FOUND")
     if renewal.status != "APPROVED":
-        # Not translated -- see the identical note above in
-        # transition_renewal_request().
-        raise InvalidRenewalTransitionError(
-            f"Cannot apply a renewal request in status {renewal.status}; must be APPROVED."
-        )
+        raise InvalidRenewalTransitionError("INVALID_RENEWAL_APPLY_STATUS", status=renewal.status)
 
     subscription = db_session.execute(
         select(Subscription).where(Subscription.id == renewal.subscription_id).with_for_update()

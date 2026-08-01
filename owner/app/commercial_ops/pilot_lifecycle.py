@@ -32,12 +32,46 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
 }
 
 
-class InvalidPilotTransitionError(ValueError):
-    pass
+class _StableCodeError(ValueError):
+    """Non-Negotiable: service/domain code must never depend on request
+    context (Phase 9.5B-R2/R3 -- gettext() here broke every non-HTTP
+    caller). Every raise site provides a stable, English-only, always-
+    constructible `code` + structured `params` -- this is a real diagnostic
+    string for logs/CLI/JSON-API `detail` fields, deliberately never
+    translated. A user-facing Jinja route localizes via `code`/`params`
+    at the presentation boundary instead of ever reading `str(exc)`
+    directly -- see `app.i18n_labels.localize_pilot_lifecycle_error`/
+    `localize_pilot_transition_error` and their call sites in
+    `commercial_ops/ui_routes.py`."""
+
+    _MESSAGES: dict[str, str] = {}
+
+    def __init__(self, code: str, **params):
+        self.code = code
+        self.params = params
+        template = self._MESSAGES.get(code, code)
+        super().__init__(template.format(**params) if params else template)
 
 
-class PilotLifecycleError(ValueError):
-    pass
+class InvalidPilotTransitionError(_StableCodeError):
+    _MESSAGES = {
+        "INVALID_PILOT_TRANSITION": "Cannot transition pilot from {from_status} to {to_status}.",
+        "INVALID_PILOT_EXTEND_STATUS": "Cannot extend a pilot in status {status}.",
+        "INVALID_PILOT_CONVERT_STATUS": "Cannot convert a pilot in status {status}.",
+    }
+
+
+class PilotLifecycleError(_StableCodeError):
+    _MESSAGES = {
+        "SUBSCRIPTION_NOT_PILOT_STATUS": "Subscription must already be in PILOT status to create a pilot record (was {current_status}).",
+        "PILOT_END_BEFORE_START": "pilot_end must be after pilot_start.",
+        "REASON_REQUIRED_TO_EXTEND": "A reason is required to extend a pilot.",
+        "MAX_EXTENSIONS_REACHED": "Pilot has already been extended {count} time(s) (max_extensions_allowed={max}). No indefinite rolling pilot.",
+        "NEW_END_DATE_NOT_AFTER_CURRENT": "new_end_date must be after the current pilot_end.",
+        "RENEWAL_NOT_APPLIED": "Renewal request must be APPLIED before a pilot can be marked converted.",
+        "RENEWAL_SUBSCRIPTION_MISMATCH": "Renewal request does not belong to this pilot's subscription.",
+        "REASON_REQUIRED_TO_CANCEL": "A reason is required to cancel a pilot.",
+    }
 
 
 def create_pilot_record(
@@ -59,11 +93,9 @@ def create_pilot_record(
     platform_id=None,
 ) -> PilotRecord:
     if subscription.status != "PILOT":
-        raise PilotLifecycleError(
-            f"Subscription must already be in PILOT status to create a pilot record (was {subscription.status})."
-        )
+        raise PilotLifecycleError("SUBSCRIPTION_NOT_PILOT_STATUS", current_status=subscription.status)
     if pilot_end <= pilot_start:
-        raise PilotLifecycleError("pilot_end must be after pilot_start.")
+        raise PilotLifecycleError("PILOT_END_BEFORE_START")
 
     pilot = PilotRecord(
         subscription_id=subscription.id,
@@ -101,7 +133,7 @@ def create_pilot_record(
 def transition_pilot(pilot: PilotRecord, to_status: str, actor_staff_user_id, reason: str | None = None) -> None:
     allowed = VALID_TRANSITIONS.get(pilot.status, set())
     if to_status not in allowed:
-        raise InvalidPilotTransitionError(f"Cannot transition pilot from {pilot.status} to {to_status}.")
+        raise InvalidPilotTransitionError("INVALID_PILOT_TRANSITION", from_status=pilot.status, to_status=to_status)
     from_status = pilot.status
     pilot.status = to_status
     db_session.add(
@@ -138,22 +170,13 @@ def extend_pilot(pilot: PilotRecord, *, new_end_date: date, reason: str, actor_s
     count tracked... no indefinite rolling pilot." All four enforced here,
     not left as convention."""
     if pilot.status not in ("ACTIVE", "EXTENDED"):
-        raise InvalidPilotTransitionError(f"Cannot extend a pilot in status {pilot.status}.")
+        raise InvalidPilotTransitionError("INVALID_PILOT_EXTEND_STATUS", status=pilot.status)
     if not reason or not reason.strip():
-        raise PilotLifecycleError("A reason is required to extend a pilot.")
+        raise PilotLifecycleError("REASON_REQUIRED_TO_EXTEND")
     if pilot.extension_count >= pilot.max_extensions_allowed:
-        # Not translated: this exception is raised by service-layer code
-        # called both from HTTP routes (request context available) and
-        # directly from tests/other services (no request context) --
-        # gettext() requires an active request and would raise
-        # RuntimeError in the latter case. Real bug found and reverted
-        # during Phase 9.5B-R2 (see rtl-defect-and-fix-log.md item 2).
-        raise PilotLifecycleError(
-            f"Pilot has already been extended {pilot.extension_count} time(s) "
-            f"(max_extensions_allowed={pilot.max_extensions_allowed}). No indefinite rolling pilot."
-        )
+        raise PilotLifecycleError("MAX_EXTENSIONS_REACHED", count=pilot.extension_count, max=pilot.max_extensions_allowed)
     if new_end_date <= pilot.pilot_end:
-        raise PilotLifecycleError("new_end_date must be after the current pilot_end.")
+        raise PilotLifecycleError("NEW_END_DATE_NOT_AFTER_CURRENT")
 
     previous_end = pilot.pilot_end
     from_status = pilot.status
@@ -197,11 +220,11 @@ def mark_pilot_converted(pilot: PilotRecord, applied_renewal_request: RenewalReq
     through the full separation-of-duties/payment/recent-auth-gated
     pipeline (Part M: "no silent conversion")."""
     if applied_renewal_request.status != "APPLIED":
-        raise PilotLifecycleError("Renewal request must be APPLIED before a pilot can be marked converted.")
+        raise PilotLifecycleError("RENEWAL_NOT_APPLIED")
     if applied_renewal_request.subscription_id != pilot.subscription_id:
-        raise PilotLifecycleError("Renewal request does not belong to this pilot's subscription.")
+        raise PilotLifecycleError("RENEWAL_SUBSCRIPTION_MISMATCH")
     if pilot.status not in ("ACTIVE", "EXTENDED"):
-        raise InvalidPilotTransitionError(f"Cannot convert a pilot in status {pilot.status}.")
+        raise InvalidPilotTransitionError("INVALID_PILOT_CONVERT_STATUS", status=pilot.status)
 
     from_status = pilot.status
     pilot.status = "CONVERTED"
@@ -241,7 +264,7 @@ def complete_pilot(pilot: PilotRecord, *, actor_staff_user_id, reason: str | Non
 
 def cancel_pilot(pilot: PilotRecord, *, reason: str, actor_staff_user_id) -> None:
     if not reason or not reason.strip():
-        raise PilotLifecycleError("A reason is required to cancel a pilot.")
+        raise PilotLifecycleError("REASON_REQUIRED_TO_CANCEL")
     transition_pilot(pilot, "CANCELLED", actor_staff_user_id, reason=reason)
     subscription = pilot.subscription
     if subscription.status == "PILOT":

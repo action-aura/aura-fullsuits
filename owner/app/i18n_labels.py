@@ -251,6 +251,125 @@ def device_key_status_label(code: str) -> str:
     return labels.get(code, code)
 
 
+def localize_pilot_lifecycle_error(code: str, **params) -> str:
+    """Presentation-boundary translation for app.commercial_ops.pilot_lifecycle
+    .PilotLifecycleError -- called ONLY from a real Flask request handler
+    (commercial_ops/ui_routes.py), never from the service layer itself
+    (Phase 9.5B-R2/R3: gettext() inside the service layer broke every
+    non-HTTP caller). Safe fallback: an unrecognized code renders as
+    itself, never raises."""
+    messages = {
+        "SUBSCRIPTION_NOT_PILOT_STATUS": _("Subscription must already be in PILOT status to create a pilot record (was %(current_status)s)."),
+        "PILOT_END_BEFORE_START": _("Pilot end date must be after the pilot start date."),
+        "REASON_REQUIRED_TO_EXTEND": _("A reason is required to extend a pilot."),
+        "MAX_EXTENSIONS_REACHED": _("Pilot has already been extended %(count)s time(s) (maximum allowed: %(max)s). No indefinite rolling pilot."),
+        "NEW_END_DATE_NOT_AFTER_CURRENT": _("The new end date must be after the current pilot end date."),
+        "RENEWAL_NOT_APPLIED": _("The renewal request must be applied before this pilot can be marked converted."),
+        "RENEWAL_SUBSCRIPTION_MISMATCH": _("This renewal request does not belong to this pilot's subscription."),
+        "REASON_REQUIRED_TO_CANCEL": _("A reason is required to cancel a pilot."),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    return template % params if params else template
+
+
+def localize_pilot_transition_error(code: str, **params) -> str:
+    messages = {
+        "INVALID_PILOT_TRANSITION": _("Cannot change the pilot status from %(from_status)s to %(to_status)s."),
+        "INVALID_PILOT_EXTEND_STATUS": _("Cannot extend a pilot in status %(status)s."),
+        "INVALID_PILOT_CONVERT_STATUS": _("Cannot convert a pilot in status %(status)s."),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    labeled_params = {k: (pilot_status_label(v) if k in ("status", "from_status", "to_status") else v) for k, v in params.items()}
+    return template % labeled_params if labeled_params else template
+
+
+def localize_renewal_transition_error(code: str, **params) -> str:
+    messages = {
+        "INVALID_RENEWAL_TRANSITION": _("Cannot change the renewal request status from %(from_status)s to %(to_status)s."),
+        "USE_APPROVE_FUNCTION": _("Use the approve action to move this renewal request to Approved."),
+        "INVALID_RENEWAL_APPROVE_STATUS": _("Cannot approve a renewal request in status %(status)s."),
+        "INVALID_RENEWAL_APPLY_STATUS": _("Cannot apply a renewal request in status %(status)s; it must be Approved first."),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    labeled_params = {k: (renewal_status_label(v) if k in ("status", "from_status", "to_status") else v) for k, v in params.items()}
+    return template % labeled_params if labeled_params else template
+
+
+def localize_device_slot_error(code: str, **params) -> str:
+    messages = {
+        "REASON_REQUIRED_TO_RELEASE": _("A reason is required to release a device slot."),
+        "REASON_REQUIRED_TO_REPLACE": _("A reason is required to replace a device slot."),
+        "EXTRA_SLOTS_MUST_BE_POSITIVE": _("Extra slots must be a positive number."),
+        "REASON_REQUIRED_TO_CREATE_EXCEPTION": _("A reason is required to create a device slot exception."),
+        "EXPIRES_AT_BEFORE_STARTS_AT": _("The expiry date must be after the start date."),
+        "EXCEPTION_EXCEEDS_MAX_DAYS": _("Device slot exceptions may not exceed %(max_days)s days -- temporary means temporary."),
+        "INVALID_REVOKE_STATUS": _("Cannot revoke a device slot exception in status %(status)s."),
+        "REASON_REQUIRED_TO_REVOKE": _("A reason is required to revoke a device slot exception."),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    return template % params if params else template
+
+
+def localize_emergency_extension_error(code: str, **params) -> str:
+    messages = {
+        "REASON_REQUIRED_TO_CREATE": _("A reason is required to create an emergency extension."),
+        "INVALID_DURATION_HOURS": _("Duration must be between 1 and %(max_hours)s hours (explicit, short-lived only)."),
+        "LICENSE_REVOKED": _("Cannot create an emergency extension for a revoked license."),
+        "ALREADY_HAS_ACTIVE_EXTENSION": _("This subscription already has an active emergency extension until %(expires_at)s."),
+        "INVALID_REVOKE_STATUS": _("Cannot revoke an emergency extension in status %(status)s."),
+        "REASON_REQUIRED_TO_REVOKE": _("A reason is required to revoke an emergency extension."),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    safe_params = {k: v for k, v in params.items() if k != "extension_id"}
+    return template % safe_params if safe_params else template
+
+
+def localize_pending_activation_error(code: str, **params) -> str:
+    messages = {
+        "INVALID_APPROVE_STATUS": _("Cannot approve a pending activation in status %(status)s."),
+        "INSTALLATION_NOT_AWAITING_ACTIVATION": _("This installation is no longer awaiting activation."),
+        "LICENSE_NOT_FOUND": _("The license for this pending activation could not be found."),
+        "DEVICE_LIMIT_REACHED": _("This license has already reached its device limit."),
+        "INVALID_REJECT_STATUS": _("Cannot reject a pending activation in status %(status)s."),
+        "REASON_REQUIRED_TO_REJECT": _("A reason is required to reject a pending activation."),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    return template % params if params else template
+
+
+def localize_activation_policy_error(code: str, **params) -> str:
+    messages = {
+        "UNKNOWN_ACTIVATION_MODE": _("Unknown activation mode: %(mode)s"),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    return template % params if params else template
+
+
+def localize_notification_error(code: str, **params) -> str:
+    messages = {
+        "INVALID_ACKNOWLEDGE_STATUS": _("Cannot acknowledge a notification in status %(status)s."),
+        "ALREADY_RESOLVED_OR_DISMISSED": _("This notification is already %(status)s."),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    return template % params if params else template
+
+
 def timeline_category_label(code: str) -> str:
     labels = {
         "SUBSCRIPTION": _("Subscription"),

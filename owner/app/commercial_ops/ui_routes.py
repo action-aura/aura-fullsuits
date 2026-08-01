@@ -23,6 +23,17 @@ from flask_babel import gettext as _
 from sqlalchemy import select
 from sqlalchemy.orm.exc import StaleDataError
 
+from app.i18n_labels import (
+    localize_activation_policy_error,
+    localize_device_slot_error,
+    localize_emergency_extension_error,
+    localize_notification_error,
+    localize_pending_activation_error,
+    localize_pilot_lifecycle_error,
+    localize_pilot_transition_error,
+    localize_renewal_transition_error,
+)
+
 from app.auth.session import load_current_staff
 from app.commercial_ops.activation_policy import (
     ActivationPolicyError,
@@ -83,6 +94,33 @@ bp = Blueprint("commercial_ops_ui", __name__, url_prefix="/commercial-ops/ui")
 
 
 # -- shared helpers -----------------------------------------------------------
+
+def _localized_error_text(exc: Exception) -> str:
+    """Presentation-boundary translation for the three stable-code
+    exceptions raised by the pilot/renewal service layer (Phase 9.5B-R3).
+    Any other exception type (e.g. RenewalApplicationError, whose message
+    text is deliberately left as a stable code -- see
+    commercial_ops/routes.py's own "SELF_APPROVAL" string match --
+    StaleDataError) falls through to its existing str(exc)/pre-built
+    message, unchanged."""
+    if isinstance(exc, InvalidRenewalTransitionError):
+        return localize_renewal_transition_error(exc.code, **exc.params)
+    if isinstance(exc, InvalidPilotTransitionError):
+        return localize_pilot_transition_error(exc.code, **exc.params)
+    if isinstance(exc, PilotLifecycleError):
+        return localize_pilot_lifecycle_error(exc.code, **exc.params)
+    if isinstance(exc, DeviceSlotError):
+        return localize_device_slot_error(exc.code, **exc.params)
+    if isinstance(exc, EmergencyExtensionError):
+        return localize_emergency_extension_error(exc.code, **exc.params)
+    if isinstance(exc, PendingActivationError):
+        return localize_pending_activation_error(exc.code, **exc.params)
+    if isinstance(exc, ActivationPolicyError):
+        return localize_activation_policy_error(exc.code, **exc.params)
+    if isinstance(exc, NotificationError):
+        return localize_notification_error(exc.code, **exc.params)
+    return str(exc)
+
 
 def _staff():
     return load_current_staff()
@@ -174,7 +212,7 @@ def transition_renewal(renewal_id):
     try:
         transition_renewal_request(renewal, request.form.get("to_status"), actor.id, reason=request.form.get("reason") or None)
     except InvalidRenewalTransitionError as exc:
-        return render_template("commercial_ops/renewal_detail.html", renewal=renewal, error=str(exc)), 400
+        return render_template("commercial_ops/renewal_detail.html", renewal=renewal, error=_localized_error_text(exc)), 400
     return redirect(url_for("commercial_ops_ui.renewal_detail", renewal_id=renewal_id))
 
 
@@ -189,7 +227,7 @@ def approve_renewal(renewal_id):
     try:
         approve_renewal_request(renewal, actor.id, reason=request.form.get("reason") or None)
     except (RenewalApplicationError, InvalidRenewalTransitionError) as exc:
-        return render_template("commercial_ops/renewal_detail.html", renewal=renewal, error=str(exc)), 400
+        return render_template("commercial_ops/renewal_detail.html", renewal=renewal, error=_localized_error_text(exc)), 400
     return redirect(url_for("commercial_ops_ui.renewal_detail", renewal_id=renewal_id))
 
 
@@ -205,10 +243,10 @@ def apply_renewal(renewal_id):
         apply_renewal_request(renewal.id, actor.id)
     except RenewalConcurrencyError as exc:
         db_session.rollback()
-        return render_template("commercial_ops/renewal_detail.html", renewal=db_session.get(RenewalRequest, renewal_id), error=str(exc)), 409
+        return render_template("commercial_ops/renewal_detail.html", renewal=db_session.get(RenewalRequest, renewal_id), error=_localized_error_text(exc)), 409
     except (RenewalApplicationError, InvalidRenewalTransitionError) as exc:
         db_session.rollback()
-        return render_template("commercial_ops/renewal_detail.html", renewal=db_session.get(RenewalRequest, renewal_id), error=str(exc)), 400
+        return render_template("commercial_ops/renewal_detail.html", renewal=db_session.get(RenewalRequest, renewal_id), error=_localized_error_text(exc)), 400
     except StaleDataError:
         db_session.rollback()
         return render_template("commercial_ops/renewal_detail.html", renewal=db_session.get(RenewalRequest, renewal_id), error=_("Someone else already changed this renewal request. Reload and retry.")), 409
@@ -261,7 +299,7 @@ def create_pilot():
             exit_rollback_plan=request.form.get("exit_rollback_plan") or None,
         )
     except PilotLifecycleError as exc:
-        return render_template("commercial_ops/pilots_new.html", subscription=subscription, error=str(exc)), 400
+        return render_template("commercial_ops/pilots_new.html", subscription=subscription, error=_localized_error_text(exc)), 400
     return redirect(url_for("commercial_ops_ui.pilot_detail", pilot_id=pilot.id))
 
 
@@ -282,7 +320,7 @@ def _pilot_action(pilot_id, action, **kwargs):
     try:
         action(pilot, actor, **kwargs)
     except (PilotLifecycleError, InvalidPilotTransitionError) as exc:
-        return render_template("commercial_ops/pilot_detail.html", pilot=pilot, error=str(exc)), 400
+        return render_template("commercial_ops/pilot_detail.html", pilot=pilot, error=_localized_error_text(exc)), 400
     return redirect(url_for("commercial_ops_ui.pilot_detail", pilot_id=pilot_id))
 
 
@@ -312,7 +350,7 @@ def extend_pilot_route(pilot_id):
     try:
         extend_pilot(pilot, new_end_date=new_end_date, reason=request.form.get("reason", ""), actor_staff_user_id=actor.id)
     except PilotLifecycleError as exc:
-        return render_template("commercial_ops/pilot_detail.html", pilot=pilot, error=str(exc)), 400
+        return render_template("commercial_ops/pilot_detail.html", pilot=pilot, error=_localized_error_text(exc)), 400
     return redirect(url_for("commercial_ops_ui.pilot_detail", pilot_id=pilot_id))
 
 
@@ -371,7 +409,7 @@ def mark_pilot_converted_route(pilot_id):
     try:
         mark_pilot_converted(pilot, renewal, actor.id)
     except (PilotLifecycleError, InvalidPilotTransitionError) as exc:
-        return render_template("commercial_ops/pilot_detail.html", pilot=pilot, error=str(exc)), 400
+        return render_template("commercial_ops/pilot_detail.html", pilot=pilot, error=_localized_error_text(exc)), 400
     return redirect(url_for("commercial_ops_ui.pilot_detail", pilot_id=pilot_id))
 
 
@@ -428,7 +466,7 @@ def create_emergency_extension_route():
             actor_staff_user_id=actor.id, license=license_row, incident_reference=request.form.get("incident_reference") or None,
         )
     except EmergencyExtensionError as exc:
-        return render_template("commercial_ops/emergency_extensions_new.html", subscription=subscription, error=str(exc)), 400
+        return render_template("commercial_ops/emergency_extensions_new.html", subscription=subscription, error=_localized_error_text(exc)), 400
     return redirect(url_for("commercial_ops_ui.emergency_extension_detail", extension_id=extension.id))
 
 
@@ -452,7 +490,7 @@ def revoke_emergency_extension_route(extension_id):
     try:
         revoke_emergency_extension(extension, reason=request.form.get("reason", ""), actor_staff_user_id=actor.id)
     except EmergencyExtensionError as exc:
-        return render_template("commercial_ops/emergency_extension_detail.html", extension=extension, error=str(exc), now=datetime.now(timezone.utc)), 400
+        return render_template("commercial_ops/emergency_extension_detail.html", extension=extension, error=_localized_error_text(exc), now=datetime.now(timezone.utc)), 400
     return redirect(url_for("commercial_ops_ui.emergency_extension_detail", extension_id=extension_id))
 
 
@@ -489,7 +527,7 @@ def approve_pending_activation_route(pending_id):
     try:
         approve_pending_activation(pending, actor.id)
     except PendingActivationError as exc:
-        return render_template("commercial_ops/pending_activation_detail.html", pending=pending, error=str(exc)), 400
+        return render_template("commercial_ops/pending_activation_detail.html", pending=pending, error=_localized_error_text(exc)), 400
     return redirect(url_for("commercial_ops_ui.pending_activation_detail", pending_id=pending_id))
 
 
@@ -504,7 +542,7 @@ def reject_pending_activation_route(pending_id):
     try:
         reject_pending_activation(pending, actor.id, reason=request.form.get("reason", ""))
     except PendingActivationError as exc:
-        return render_template("commercial_ops/pending_activation_detail.html", pending=pending, error=str(exc)), 400
+        return render_template("commercial_ops/pending_activation_detail.html", pending=pending, error=_localized_error_text(exc)), 400
     return redirect(url_for("commercial_ops_ui.pending_activation_detail", pending_id=pending_id))
 
 
@@ -532,7 +570,7 @@ def activation_policy_create():
         products = db_session.execute(select(Product)).scalars().all()
         policies = db_session.execute(select(ActivationPolicy).order_by(ActivationPolicy.created_at.desc())).scalars().all()
         modes = {p.id: resolve_activation_mode(p.id) for p in products}
-        return render_template("commercial_ops/activation_policy.html", products=products, policies=policies, modes=modes, error=str(exc)), 400
+        return render_template("commercial_ops/activation_policy.html", products=products, policies=policies, modes=modes, error=_localized_error_text(exc)), 400
     return redirect(url_for("commercial_ops_ui.activation_policy_list"))
 
 
@@ -548,7 +586,7 @@ def release_installation(installation_id):
     try:
         release_device_slot(installation, reason=request.form.get("reason", ""), actor_staff_user_id=actor.id)
     except DeviceSlotError as exc:
-        return render_template("installations/detail.html", installation=installation, allowed_transitions=[], error=str(exc)), 400
+        return render_template("installations/detail.html", installation=installation, allowed_transitions=[], error=_localized_error_text(exc)), 400
     return redirect(url_for("installations.detail", installation_id=installation_id))
 
 
@@ -562,7 +600,7 @@ def replace_installation(installation_id):
     try:
         replace_device_slot(installation, reason=request.form.get("reason", ""), actor_staff_user_id=actor.id)
     except DeviceSlotError as exc:
-        return render_template("installations/detail.html", installation=installation, allowed_transitions=[], error=str(exc)), 400
+        return render_template("installations/detail.html", installation=installation, allowed_transitions=[], error=_localized_error_text(exc)), 400
     return redirect(url_for("installations.detail", installation_id=installation_id))
 
 
@@ -599,7 +637,7 @@ def create_slot_exception(license_id):
         )
     except DeviceSlotError as exc:
         exceptions = db_session.execute(select(DeviceSlotException).where(DeviceSlotException.license_id == license_id)).scalars().all()
-        return render_template("commercial_ops/slot_exceptions.html", license=license_row, exceptions=exceptions, effective_limit=resolve_effective_device_limit(license_row), error=str(exc)), 400
+        return render_template("commercial_ops/slot_exceptions.html", license=license_row, exceptions=exceptions, effective_limit=resolve_effective_device_limit(license_row), error=_localized_error_text(exc)), 400
     return redirect(url_for("commercial_ops_ui.license_slot_exceptions", license_id=license_id))
 
 
@@ -614,7 +652,7 @@ def revoke_slot_exception(exception_id):
         revoke_device_slot_exception(exception, reason=request.form.get("reason", ""), actor_staff_user_id=actor.id)
     except DeviceSlotError as exc:
         exceptions = db_session.execute(select(DeviceSlotException).where(DeviceSlotException.license_id == exception.license_id)).scalars().all()
-        return render_template("commercial_ops/slot_exceptions.html", license=exception.license, exceptions=exceptions, effective_limit=resolve_effective_device_limit(exception.license), error=str(exc)), 400
+        return render_template("commercial_ops/slot_exceptions.html", license=exception.license, exceptions=exceptions, effective_limit=resolve_effective_device_limit(exception.license), error=_localized_error_text(exc)), 400
     return redirect(url_for("commercial_ops_ui.license_slot_exceptions", license_id=exception.license_id))
 
 
@@ -665,7 +703,7 @@ def acknowledge_notification_route(notification_id):
         acknowledge_notification(notification, actor.id)
     except NotificationError as exc:
         notifications = db_session.execute(select(InternalNotification)).scalars().all()
-        return render_template("commercial_ops/notifications_list.html", notifications=notifications, status_filter=None, severity_filter=None, role_filter=None, error=str(exc)), 400
+        return render_template("commercial_ops/notifications_list.html", notifications=notifications, status_filter=None, severity_filter=None, role_filter=None, error=_localized_error_text(exc)), 400
     return redirect(url_for("commercial_ops_ui.list_notifications"))
 
 
@@ -680,7 +718,7 @@ def resolve_notification_route(notification_id):
         resolve_notification(notification, actor.id, request.form.get("resolution", ""))
     except NotificationError as exc:
         notifications = db_session.execute(select(InternalNotification)).scalars().all()
-        return render_template("commercial_ops/notifications_list.html", notifications=notifications, status_filter=None, severity_filter=None, role_filter=None, error=str(exc)), 400
+        return render_template("commercial_ops/notifications_list.html", notifications=notifications, status_filter=None, severity_filter=None, role_filter=None, error=_localized_error_text(exc)), 400
     return redirect(url_for("commercial_ops_ui.list_notifications"))
 
 
