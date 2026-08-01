@@ -5,7 +5,15 @@ from flask import Blueprint, jsonify, redirect, render_template, request, url_fo
 from sqlalchemy import select
 
 from app.auth.session import load_current_staff
-from app.customers.services import add_contact, add_note, archive_customer, create_customer, find_duplicate_candidates, update_customer
+from app.customers.services import (
+    add_contact,
+    add_note,
+    archive_customer,
+    create_customer,
+    customer_visible_to_actor,
+    find_duplicate_candidates,
+    update_customer,
+)
 from app.employees.queries import find_own_profile
 from app.extensions import db_session
 from app.leads.ownership import apply_ownership_filter
@@ -16,16 +24,7 @@ bp = Blueprint("customers", __name__, url_prefix="/customers")
 
 
 def _customer_visible_to(customer: Customer, actor) -> bool:
-    """Record-level ownership check reused by every single-Customer route
-    below -- avoids the exact per-route-reimplementation IDOR risk
-    apply_ownership_filter's own docstring warns about. A customer with no
-    assignee (should not normally occur post-Milestone-3's create_customer
-    default, but real for pre-existing/legacy rows) is visible only to a
-    customers.view_all holder, never by accident to everyone."""
-    codes = get_staff_permission_codes(actor)
-    if "customers.view_all" in codes:
-        return True
-    return customer.assigned_sales_staff_id is not None and customer.assigned_sales_staff_id == actor.id
+    return customer_visible_to_actor(customer, actor.id, get_staff_permission_codes(actor))
 
 
 @bp.route("", methods=["GET"])

@@ -53,6 +53,45 @@ def find_duplicate_candidates(legal_name: str, commercial_registration_reference
     return candidates
 
 
+def customer_visible_to_actor(customer: Customer, actor_staff_user_id: uuid.UUID, actor_permission_codes: set[str]) -> bool:
+    """Record-level ownership check -- the single shared implementation
+    reused by every single-Customer route AND by duplicate-detection
+    disclosure filtering below, avoiding the exact per-call-site
+    reimplementation IDOR risk apply_ownership_filter's own docstring
+    warns against. A customer with no assignee (should not normally occur
+    post-Milestone-3's create_customer default, but real for pre-existing/
+    legacy rows) is visible only to a customers.view_all holder, never by
+    accident to everyone. Takes plain values (no Flask/request object) to
+    stay request-context-free (Non-Negotiable Rule 10)."""
+    if "customers.view_all" in actor_permission_codes:
+        return True
+    return customer.assigned_sales_staff_id is not None and customer.assigned_sales_staff_id == actor_staff_user_id
+
+
+DUPLICATE_REVIEW_MARKER = "POSSIBLE_EXISTING_RECORD_REQUIRES_MANAGEMENT_REVIEW"
+
+
+def describe_duplicate_candidates_for_actor(
+    candidates: list[Customer], actor_staff_user_id: uuid.UUID, actor_permission_codes: set[str]
+) -> list[dict]:
+    """Privacy-safe presentation of duplicate-detection results (Milestone 5).
+    A candidate the actor cannot otherwise see is collapsed into a bounded
+    marker -- no name/phone/email/location/UUID of an inaccessible record
+    ever reaches an unauthorized employee's browser through this path."""
+    described = []
+    for candidate in candidates:
+        if customer_visible_to_actor(candidate, actor_staff_user_id, actor_permission_codes):
+            described.append({
+                "visible": True,
+                "customer_id": str(candidate.id),
+                "legal_name": candidate.legal_name,
+                "lifecycle_status": candidate.lifecycle_status,
+            })
+        else:
+            described.append({"visible": False, "marker": DUPLICATE_REVIEW_MARKER})
+    return described
+
+
 def assign_customer(
     customer: Customer,
     assigned_to_staff_user_id: uuid.UUID,
