@@ -37,11 +37,15 @@ def _make_profile(app, staff_id, employee_number):
 
 
 def _make_invoice_and_payment(staff_id, profile, invoice_number):
-    """Real CommercialInvoice + PaymentRecord rows -- CommissionLedgerEntry's
-    FKs are enforced, so a duplicate-guard test needs real referenced rows,
-    not arbitrary UUIDs."""
+    """Real CommercialInvoice + PaymentRecord + PaymentAllocation rows --
+    CommissionLedgerEntry's FKs are enforced, so a duplicate-guard test
+    needs real referenced rows, not arbitrary UUIDs. PaymentAllocation is
+    included (Phase 9.5D Milestone 15 -- source_payment_allocation_id is
+    the real dedup key now, not source_payment_record_id alone; see
+    commission-ledger-contract.md for why)."""
     from app.extensions import db_session
-    from app.models.commercial_sales import CommercialInvoice
+    from app.models.base import utcnow
+    from app.models.commercial_sales import CommercialInvoice, PaymentAllocation
     from app.models.customers import Customer
     from app.models.subscriptions import PaymentRecord
 
@@ -60,15 +64,26 @@ def _make_invoice_and_payment(staff_id, profile, invoice_number):
     )
     db_session.add(payment)
     db_session.flush()
-    return invoice, payment
+    allocation = PaymentAllocation(
+        payment_record_id=payment.id, commercial_invoice_id=invoice.id, allocated_amount=Decimal("100.00"),
+        currency="USD", allocated_by_staff_user_id=staff_id, allocated_at=utcnow(), version=1,
+    )
+    db_session.add(allocation)
+    db_session.flush()
+    return invoice, payment, allocation
 
 
 def test_duplicate_payment_event_cannot_create_two_earned_entries(app, seeded):
     """The real, migrated partial unique index
-    uq_commission_ledger_one_entry_per_payment (postgresql_where
+    uq_commission_ledger_one_entry_per_allocation (postgresql_where
     reversal_of_ledger_entry_id IS NULL) is the DB-level guard against a
-    duplicate payment-confirmation webhook/event creating a second EARNED
-    commission for the same real payment."""
+    duplicate payment-confirmation/allocation event creating a second
+    EARNED commission for the same real payment allocation. Phase 9.5D
+    Milestone 15 moved this guard from source_payment_record_id to
+    source_payment_allocation_id (one Payment can be legitimately
+    split-allocated across multiple Invoices, each earning its own
+    commission -- see commission-ledger-contract.md); the guard's
+    semantics are otherwise unchanged."""
     staff_id = make_staff(app, "fin1@example.com")
     with app.app_context():
         from app.extensions import db_session
@@ -85,10 +100,11 @@ def test_duplicate_payment_event_cannot_create_two_earned_entries(app, seeded):
         db_session.add(rule)
         db_session.flush()
 
-        invoice, payment = _make_invoice_and_payment(staff_id, profile, "FIN1-INV-001")
+        invoice, payment, allocation = _make_invoice_and_payment(staff_id, profile, "FIN1-INV-001")
         entry1 = CommissionLedgerEntry(
             employee_profile_id=profile.id, commission_rule_version_id=rule.id,
             source_commercial_invoice_id=invoice.id, source_payment_record_id=payment.id,
+            source_payment_allocation_id=allocation.id,
             base_amount=Decimal("100.00"), rate_or_fixed_applied=Decimal("10.00"), commission_amount=Decimal("10.00"),
             currency="USD",
         )
@@ -98,6 +114,7 @@ def test_duplicate_payment_event_cannot_create_two_earned_entries(app, seeded):
         entry2 = CommissionLedgerEntry(
             employee_profile_id=profile.id, commission_rule_version_id=rule.id,
             source_commercial_invoice_id=invoice.id, source_payment_record_id=payment.id,
+            source_payment_allocation_id=allocation.id,
             base_amount=Decimal("100.00"), rate_or_fixed_applied=Decimal("10.00"), commission_amount=Decimal("10.00"),
             currency="USD",
         )
@@ -108,10 +125,10 @@ def test_duplicate_payment_event_cannot_create_two_earned_entries(app, seeded):
 
 
 def test_reversal_entry_is_exempt_from_the_duplicate_guard(app, seeded):
-    """A reversal legitimately shares its original's source_payment_record_id
-    -- the partial index excludes rows with reversal_of_ledger_entry_id set,
-    so a real reversal never collides with the guard meant for duplicate
-    EARNED entries."""
+    """A reversal legitimately shares its original's
+    source_payment_allocation_id -- the partial index excludes rows with
+    reversal_of_ledger_entry_id set, so a real reversal never collides
+    with the guard meant for duplicate EARNED entries."""
     staff_id = make_staff(app, "fin2@example.com")
     with app.app_context():
         from app.extensions import db_session
@@ -128,10 +145,11 @@ def test_reversal_entry_is_exempt_from_the_duplicate_guard(app, seeded):
         db_session.add(rule)
         db_session.flush()
 
-        invoice, payment = _make_invoice_and_payment(staff_id, profile, "FIN2-INV-001")
+        invoice, payment, allocation = _make_invoice_and_payment(staff_id, profile, "FIN2-INV-001")
         original = CommissionLedgerEntry(
             employee_profile_id=profile.id, commission_rule_version_id=rule.id,
             source_commercial_invoice_id=invoice.id, source_payment_record_id=payment.id,
+            source_payment_allocation_id=allocation.id,
             base_amount=Decimal("100.00"), rate_or_fixed_applied=Decimal("10.00"), commission_amount=Decimal("10.00"),
             currency="USD",
         )
@@ -141,6 +159,7 @@ def test_reversal_entry_is_exempt_from_the_duplicate_guard(app, seeded):
         reversal = CommissionLedgerEntry(
             employee_profile_id=profile.id, commission_rule_version_id=rule.id,
             source_commercial_invoice_id=invoice.id, source_payment_record_id=payment.id,
+            source_payment_allocation_id=allocation.id,
             base_amount=Decimal("100.00"), rate_or_fixed_applied=Decimal("10.00"), commission_amount=Decimal("-10.00"),
             currency="USD", reversal_of_ledger_entry_id=original.id,
         )
