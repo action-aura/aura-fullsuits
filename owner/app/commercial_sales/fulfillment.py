@@ -27,6 +27,7 @@ from app.commercial_sales.catalog_for_sales import describe_plan_for_sale
 from app.commercial_sales.errors import CommercialSalesError
 from app.extensions import db_session
 from app.licensing.services import create_license, issue_license_key
+from app.models.base import utcnow
 from app.models.catalog import Plan
 from app.models.commercial_sales import (
     CommercialInvoice,
@@ -35,10 +36,19 @@ from app.models.commercial_sales import (
     SalesOrder,
     SalesOrderLine,
 )
+from app.models.licensing import License
+from app.models.subscriptions import Subscription
 from app.subscriptions.services import create_subscription, transition_subscription
 
 OPERATION_CODE = "ORDER_FULFILL"
 FULFILLMENT_INTENT_NEW_SUBSCRIPTION = "NEW_SUBSCRIPTION"
+
+# Subscription states a fulfillment retry may safely resume from and
+# reuse. Any other real state (CANCELLED/EXPIRED/PAST_DUE/SUSPENDED/
+# COMPLETED) means something else already happened to this Subscription
+# outside this fulfillment attempt -- reusing it blindly would be unsafe
+# (item #4: "existing incompatible Subscription or License state").
+_RESUMABLE_SUBSCRIPTION_STATUSES = ("DRAFT", "ACTIVE")
 
 
 def _check_eligibility(order: SalesOrder) -> tuple[CommercialInvoice, SalesOrderLine]:
@@ -90,12 +100,24 @@ def fulfill_order(
         )
     ).scalars().first()
     if existing_key is not None:
-        from app.models.subscriptions import Subscription
-
         replayed = db_session.get(Subscription, existing_key.result_reference_id)
         if replayed is None or replayed.sales_order_id != order.id:
+            # Duplicate idempotency key, conflicting payload (item #6):
+            # the same key was already used for a DIFFERENT order --
+            # rejected outright, never silently resolved to either order.
             raise CommercialSalesError("IDEMPOTENCY_CONFLICT")
+        # Duplicate idempotency key, identical payload (item #5): same
+        # key, same order -- returns the original result, no re-execution.
         return {"subscription_id": replayed.id, "order_id": order.id, "replayed": True}
+
+    # Real concurrency guard (item #3): SELECT ... FOR UPDATE on the order
+    # row serializes two concurrent fulfillment attempts for the SAME
+    # order -- the second call blocks until the first commits (and then
+    # sees order.status == "FULFILLED" and is rejected) or rolls back
+    # (and then proceeds cleanly). Without this lock, two concurrent
+    # calls could both read order.status == "CONFIRMED" before either
+    # writes, and both create a Subscription.
+    db_session.refresh(order, with_for_update=True)
 
     if order.status == "FULFILLED":
         raise CommercialSalesError("FULFILLMENT_ALREADY_COMPLETE")
@@ -119,19 +141,18 @@ def fulfill_order(
     )
 
     try:
-        # Recovery guard: create_subscription()/create_license() each
-        # commit their own transaction internally (their own established
-        # behavior, unchanged) -- fulfill_order() cannot wrap the whole
-        # sequence in one atomic outer transaction without changing code
-        # outside app/commercial_sales/. A retry after a partial failure
-        # (e.g. Subscription created, then a crash before License/the
-        # final idempotency-key commit) must not create a SECOND
-        # Subscription/License for the same order -- so an already-
-        # existing row for this sales_order_id is reused, never
-        # duplicated, before falling back to creating a new one.
-        from app.models.licensing import License
-        from app.models.subscriptions import Subscription
-
+        # Recovery guard (items #1/#2): create_subscription()/
+        # create_license() each commit their own transaction internally
+        # (their own established behavior, unchanged) -- fulfill_order()
+        # cannot wrap the whole sequence in one atomic outer transaction
+        # without changing code outside app/commercial_sales/. A retry
+        # after a partial failure at ANY point in the sequence (License
+        # creation crashes after Subscription exists; the final
+        # order/idempotency-key write crashes after both exist) must not
+        # create a SECOND Subscription/License for the same order -- an
+        # already-existing row for this sales_order_id/subscription_id is
+        # reused, never duplicated, before falling back to creating a new
+        # one.
         subscription = db_session.execute(select(Subscription).where(Subscription.sales_order_id == order.id)).scalars().first()
         if subscription is None:
             # Canonical service call -- never a direct model-row insert.
@@ -146,10 +167,24 @@ def fulfill_order(
                 },
                 actor_staff_user_id,
             )
+        elif subscription.status not in _RESUMABLE_SUBSCRIPTION_STATUSES:
+            # Item #4: an incompatible existing state (e.g. CANCELLED,
+            # EXPIRED, SUSPENDED) means something else already happened
+            # to this Subscription outside this fulfillment attempt --
+            # blindly reusing/transitioning it would silently override
+            # that. Rejected, not silently proceeded.
+            raise CommercialSalesError(
+                "FULFILLMENT_NOT_ELIGIBLE", reason=f"existing subscription is in incompatible status {subscription.status}"
+            )
+
         if subscription.status == "DRAFT":
             transition_subscription(subscription, "ACTIVE", actor_staff_user_id, reason="Fulfilled from confirmed, paid Sales Order")
 
         license_row = db_session.execute(select(License).where(License.subscription_id == subscription.id)).scalars().first()
+        if license_row is not None and license_row.status not in ("DRAFT", "ISSUED"):
+            raise CommercialSalesError(
+                "FULFILLMENT_NOT_ELIGIBLE", reason=f"existing license is in incompatible status {license_row.status}"
+            )
         if license_row is None:
             # Canonical service call -- never a direct model-row insert.
             license_row = create_license(
@@ -167,11 +202,10 @@ def fulfill_order(
         # or writes key fields directly (app/licensing/services.py). Its
         # own idempotency ledger (LicenseKeyIssuanceEvent) already makes
         # this call itself safely retryable.
-        issue_license_key(license_row, license_pepper, f"{idempotency_key}-license", actor_staff_user_id)
+        if license_row.status == "DRAFT":
+            issue_license_key(license_row, license_pepper, f"{idempotency_key}-license", actor_staff_user_id)
 
         order.status = "FULFILLED"
-        from app.models.base import utcnow
-
         order.fulfilled_at = utcnow()
         order.version += 1
 

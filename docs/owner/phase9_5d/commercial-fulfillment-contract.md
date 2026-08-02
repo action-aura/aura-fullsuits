@@ -29,6 +29,19 @@ The first draft set `License.allowed_platforms = "ALL"` as a placeholder. `app/l
 
 `test_no_installation_created_by_fulfillment` — fulfilling an order creates zero `Installation` rows. Device activation remains a separate, later event (unchanged Phase 6/8 behavior), never triggered by this phase's fulfillment path.
 
+## M13 closure — 8 explicit items required before treating this milestone as permanently closed
+
+Requested as a final verification pass after the milestone's initial implementation. All 8 are real, distinct tests, not variations of the same scenario:
+
+1. **Subscription created, License creation crashes, retry reuses Subscription** — `test_item1_subscription_created_license_crashes_retry_reuses_subscription`. Simulates the exact partial-failure state directly, confirms the retry reuses the existing Subscription and completes the License step that "crashed."
+2. **Subscription and License exist, result write crashes, retry reconciles without duplication** — `test_item2_subscription_and_license_exist_result_write_crashes_retry_reconciles`. Simulates both rows already existing with the order still `CONFIRMED`; retry reconciles to `FULFILLED` without creating a second Subscription or License.
+3. **Two concurrent fulfillment requests for the same source line** — `test_item3_concurrent_fulfillment_requests_only_one_creates_subscription`. Five real threads racing `fulfill_order()` against the same order; asserts exactly one Subscription ever exists. Required a real fix: `db_session.refresh(order, with_for_update=True)` takes a row lock on the Order at the start of the write path — without it, two concurrent calls could both read `status == "CONFIRMED"` before either committed.
+4. **Existing incompatible Subscription or License state** — `test_item4_existing_incompatible_subscription_state_rejected`. A Subscription already `CANCELLED` for this order (something happened to it outside this fulfillment attempt) is rejected, not silently reused or revived. Required a real fix: a `_RESUMABLE_SUBSCRIPTION_STATUSES = ("DRAFT", "ACTIVE")` allowlist gates the recovery-reuse path; anything else raises `FULFILLMENT_NOT_ELIGIBLE` instead of proceeding.
+5. **Duplicate idempotency key, identical payload** — `test_item5_duplicate_idempotency_key_identical_payload_replays`.
+6. **Duplicate idempotency key, conflicting payload** — `test_item6_duplicate_idempotency_key_conflicting_payload_rejected`. The same key reused against a genuinely different order is rejected (`IDEMPOTENCY_CONFLICT`), never silently resolved to either order.
+7. **Refund after fulfillment invokes the configured entitlement consequence** — `test_item7_refund_after_fulfillment_invokes_entitlement_consequence`. Closes Milestone 12's own forward reference now that this milestone's fulfillment link exists — see `refund-entitlement-consequence-policy.md`.
+8. **No direct write to Subscription/License/Entitlement/Installation/licensing-audit tables from commercial-sales services** — `test_item8_no_direct_write_to_licensing_or_installation_tables`. Structural scan across every file in `app/commercial_sales/`, not just `fulfillment.py`.
+
 ## Test coverage
 
-`tests/test_phase9_5d_fulfillment.py` — 9 tests: full happy path (Subscription `ACTIVE`, License `ISSUED` with real platform codes, Order `FULFILLED`), rejection when order isn't confirmed, rejection when invoice isn't fully paid, rejection when a blocking refund exists, idempotent replay, a simulated-partial-failure recovery-guard proof (see `fulfillment-idempotency-and-recovery.md`), already-fulfilled rejection, no-Installation proof, and the direct-construction structural proof.
+`tests/test_phase9_5d_fulfillment.py` — 15 tests total: the 8 closure items above, plus the original happy path (Subscription `ACTIVE`, License `ISSUED` with real platform codes, Order `FULFILLED`), rejection when order isn't confirmed, rejection when invoice isn't fully paid, rejection when a blocking refund exists, already-fulfilled rejection, no-Installation proof, and the direct-construction structural proof (fulfillment.py only, superseded in scope by item 8's package-wide version).

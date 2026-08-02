@@ -141,7 +141,8 @@ def confirm_refund(
     collected = confirmed_allocated_amount(invoice)
     refunded = total_confirmed_refunds(invoice)
     before_status = invoice.status
-    if refunded >= collected and collected > 0:
+    is_full_refund = refunded >= collected and collected > 0
+    if is_full_refund:
         invoice.status = "REFUNDED"
     elif refunded > 0:
         invoice.status = "PARTIALLY_REFUNDED"
@@ -156,13 +157,44 @@ def confirm_refund(
         entity_public_id=str(refund.id),
         after_state={"status": "PAID", "invoice_status": {"before": before_status, "after": invoice.status}},
     )
-    # Milestone 13 (fulfillment) will call
-    # entitlement_consequence.determine_entitlement_consequence() here
-    # once a real Subscription/License link exists to act on -- not
-    # called yet, since no fulfillment path exists in the codebase for
-    # this refund to have a consequence against. See
-    # refund-entitlement-consequence-policy.md.
+
+    _apply_entitlement_consequence(invoice, is_full_refund=is_full_refund, actor_staff_user_id=actor_staff_user_id)
     return refund
+
+
+def _apply_entitlement_consequence(invoice: CommercialInvoice, *, is_full_refund: bool, actor_staff_user_id: uuid.UUID) -> None:
+    """Item #7: refund after fulfillment must invoke the configured
+    entitlement consequence -- closes Milestone 12's own forward
+    reference now that Milestone 13's fulfillment link (Subscription.
+    sales_order_id) exists to act on. Non-Negotiable Rule 7 -- never a
+    silent choice."""
+    from app.commercial_sales.entitlement_consequence import SUSPEND_ENTITLEMENTS, determine_entitlement_consequence
+    from app.models.commercial_sales import SalesOrder
+    from app.models.subscriptions import Subscription
+    from app.subscriptions.services import transition_subscription
+
+    if invoice.sales_order_id is None:
+        return
+    order = db_session.get(SalesOrder, invoice.sales_order_id)
+    order_was_fulfilled = order is not None and order.status == "FULFILLED"
+
+    consequence = determine_entitlement_consequence(order_was_fulfilled=order_was_fulfilled, is_full_refund=is_full_refund)
+    if consequence != SUSPEND_ENTITLEMENTS:
+        return
+
+    subscription = db_session.execute(
+        select(Subscription).where(Subscription.sales_order_id == order.id)
+    ).scalars().first()
+    if subscription is not None and subscription.status == "ACTIVE":
+        transition_subscription(subscription, "SUSPENDED", actor_staff_user_id, reason="Full refund confirmed against the fulfilling invoice")
+        audit_record(
+            actor_staff_user_id=actor_staff_user_id,
+            actor_role_snapshot=None,
+            action_code="ENTITLEMENT_CONSEQUENCE_APPLIED",
+            entity_type="subscription",
+            entity_public_id=str(subscription.id),
+            after_state={"consequence": consequence, "status": "SUSPENDED"},
+        )
 
 
 def void_refund(refund: CommercialRefund, *, actor_staff_user_id: uuid.UUID, expected_version: int | None = None) -> CommercialRefund:
