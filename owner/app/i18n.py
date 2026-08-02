@@ -125,6 +125,15 @@ def init_app(app) -> None:
         signing_key_status_label,
         subscription_status_label,
         timeline_category_label,
+        quote_status_label,
+        sales_order_status_label,
+        commercial_invoice_status_label,
+        commercial_refund_status_label,
+        commercial_approval_status_label,
+        commission_entry_status_label,
+        commission_payout_batch_status_label,
+        localize_commercial_sales_error,
+        localize_commission_error,
     )
 
     # Domain-label and formatting helpers are Jinja globals (not filters) --
@@ -179,6 +188,15 @@ def init_app(app) -> None:
         emergency_extension_status_label=emergency_extension_status_label,
         generic_audit_action_label=generic_audit_action_label,
         health_status_label=health_status_label,
+        quote_status_label=quote_status_label,
+        sales_order_status_label=sales_order_status_label,
+        commercial_invoice_status_label=commercial_invoice_status_label,
+        commercial_refund_status_label=commercial_refund_status_label,
+        commercial_approval_status_label=commercial_approval_status_label,
+        commission_entry_status_label=commission_entry_status_label,
+        commission_payout_batch_status_label=commission_payout_batch_status_label,
+        localize_commercial_sales_error=localize_commercial_sales_error,
+        localize_commission_error=localize_commission_error,
     )
 
     @app.context_processor

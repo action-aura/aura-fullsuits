@@ -725,3 +725,163 @@ def localize_location_error(code: str, **params) -> str:
     if template is None:
         return code
     return template % params if params else template
+
+
+def quote_status_label(code: str) -> str:
+    """Phase 9.5D -- real values from app.models.commercial_sales.QUOTE_STATUSES."""
+    labels = {
+        "DRAFT": _("Draft"),
+        "SENT": _("Sent"),
+        "ACCEPTED": _("Accepted"),
+        "REJECTED": _("Rejected"),
+        "EXPIRED": _("Expired"),
+        "CANCELLED": _("Cancelled"),
+    }
+    return labels.get(code, code)
+
+
+def sales_order_status_label(code: str) -> str:
+    """Phase 9.5D -- real values from app.models.commercial_sales.SALES_ORDER_STATUSES."""
+    labels = {
+        "DRAFT": _("Draft"),
+        "CONFIRMED": _("Confirmed"),
+        "CANCELLED": _("Cancelled"),
+        "FULFILLED": _("Fulfilled"),
+    }
+    return labels.get(code, code)
+
+
+def commercial_invoice_status_label(code: str) -> str:
+    """Phase 9.5D -- real values from app.models.commercial_sales.INVOICE_STATUSES."""
+    labels = {
+        "DRAFT": _("Draft"),
+        "ISSUED": _("Issued"),
+        "PARTIALLY_PAID": _("Partially paid"),
+        "PAID": _("Paid"),
+        "VOID": _("Void"),
+        "REFUNDED": _("Refunded"),
+        "PARTIALLY_REFUNDED": _("Partially refunded"),
+    }
+    return labels.get(code, code)
+
+
+def commercial_refund_status_label(code: str) -> str:
+    """Phase 9.5D -- real values from app.models.commercial_sales.REFUND_STATUSES."""
+    labels = {
+        "DRAFT": _("Draft"),
+        "APPROVED": _("Approved"),
+        "PAID": _("Paid"),
+        "VOID": _("Void"),
+    }
+    return labels.get(code, code)
+
+
+def commercial_approval_status_label(code: str) -> str:
+    """Phase 9.5D -- real values from app.models.commercial_sales.APPROVAL_STATUSES."""
+    labels = {
+        "PENDING": _("Pending"),
+        "APPROVED": _("Approved"),
+        "REJECTED": _("Rejected"),
+        "CANCELLED": _("Cancelled"),
+        "EXPIRED": _("Expired"),
+    }
+    return labels.get(code, code)
+
+
+def commission_entry_status_label(code: str) -> str:
+    """Phase 9.5D -- real values from app.models.commissions.COMMISSION_ENTRY_STATUSES."""
+    labels = {
+        "PENDING": _("Pending"),
+        "EARNED": _("Earned"),
+        "APPROVED": _("Approved"),
+        "PAID": _("Paid"),
+        "REVERSED": _("Reversed"),
+        "CANCELLED": _("Cancelled"),
+        "DISPUTED": _("Disputed"),
+    }
+    return labels.get(code, code)
+
+
+def commission_payout_batch_status_label(code: str) -> str:
+    """Phase 9.5D -- real values from app.models.commissions.PAYOUT_BATCH_STATUSES."""
+    labels = {
+        "DRAFT": _("Draft"),
+        "APPROVED": _("Approved"),
+        "PAID": _("Paid"),
+    }
+    return labels.get(code, code)
+
+
+def localize_commercial_sales_error(code: str, **params) -> str:
+    """Phase 9.5D -- presentation-boundary localization for
+    app.commercial_sales.errors.CommercialSalesError, matching
+    localize_lead_error()'s established pattern: the service layer's own
+    str(exc) is deliberately English-only and request-context-free
+    (commercial_ops/errors.py StableCodeError's own docstring); a
+    user-facing Jinja route localizes via exc.code/exc.params here
+    instead."""
+    messages = {
+        "INVALID_QUANTITY": _("Quantity must be a positive whole number."),
+        "NON_FINITE_AMOUNT": _("Amount must be a finite number."),
+        "NEGATIVE_DOCUMENT_TOTAL": _("Document total cannot be negative."),
+        "DISCOUNT_EXCEEDS_GROSS": _("Discount cannot exceed the applicable gross amount."),
+        "REFUND_EXCEEDS_REFUNDABLE": _("Refund amount (%(amount)s) exceeds the refundable balance (%(refundable)s)."),
+        "ALLOCATION_EXCEEDS_PAYMENT": _("Allocation amount (%(amount)s) exceeds the unallocated payment balance (%(available)s)."),
+        "ALLOCATION_EXCEEDS_OUTSTANDING": _("Allocation amount (%(amount)s) exceeds the invoice outstanding balance (%(outstanding)s)."),
+        "CURRENCY_MISMATCH": _("Currency %(given)s does not match the required currency %(expected)s."),
+        "INVALID_CURRENCY_CODE": _("Currency must be a 3-letter ISO 4217 code."),
+        "EMPTY_DOCUMENT": _("A document must have at least one line."),
+        "INVALID_QUOTE_TRANSITION": _("Cannot change quote status from %(from_status)s to %(to_status)s."),
+        "INVALID_ORDER_TRANSITION": _("Cannot change order status from %(from_status)s to %(to_status)s."),
+        "INVALID_INVOICE_TRANSITION": _("Cannot change invoice status from %(from_status)s to %(to_status)s."),
+        "INVALID_REFUND_TRANSITION": _("Cannot change refund status from %(from_status)s to %(to_status)s."),
+        "INVALID_APPROVAL_TRANSITION": _("Cannot change approval status from %(from_status)s to %(to_status)s."),
+        "STALE_VERSION": _("This record was changed by someone else. Reload and try again."),
+        "RECORD_NOT_FOUND": _("Record not found."),
+        "RECORD_ACCESS_DENIED": _("You do not have access to this record."),
+        "IDEMPOTENCY_CONFLICT": _("This request conflicts with an earlier request using the same idempotency key."),
+        "REASON_REQUIRED": _("A reason is required for this action."),
+        "INVALID_PAYMENT_METHOD": _("Payment method must be one of the allowed values."),
+        "SELF_APPROVAL_FORBIDDEN": _("You cannot approve your own request."),
+        "APPROVAL_REQUIRED": _("This action requires approval before it can proceed."),
+        "APPROVAL_STALE": _("The approval no longer matches the current version of this record."),
+        "DISCOUNT_LIMIT_EXCEEDED": _("Discount exceeds your permitted limit and requires approval."),
+        "PRICE_OVERRIDE_REQUIRES_APPROVAL": _("A custom price requires approval."),
+        "ZERO_PRICE_REQUIRES_APPROVAL": _("A zero-price line requires approval."),
+        "QUOTE_NOT_ACCEPTED": _("The quote must be accepted before an order can be created."),
+        "CUSTOMER_REQUIRED": _("A confirmed customer is required before an order can be created."),
+        "CATALOG_ITEM_INACTIVE": _("This product or plan is not currently sellable."),
+        "PRICE_VERSION_EXPIRED": _("This price is no longer effective."),
+        "PAYMENT_NOT_CONFIRMED": _("The payment must be confirmed before it can be allocated."),
+        "PAYMENT_ALREADY_CONFIRMED": _("This payment has already been confirmed."),
+        "SELF_CONFIRMATION_FORBIDDEN": _("You cannot confirm a payment you submitted yourself."),
+        "FULFILLMENT_NOT_ELIGIBLE": _("This order is not eligible for fulfillment yet: %(reason)s."),
+        "FULFILLMENT_ALREADY_COMPLETE": _("This order line has already been fulfilled."),
+        "EMPLOYEE_PROFILE_REQUIRED": _("This action requires a real employee profile."),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    return template % params if params else template
+
+
+def localize_commission_error(code: str, **params) -> str:
+    """Phase 9.5D -- presentation-boundary localization for
+    app.commissions.errors.CommissionError, matching
+    localize_commercial_sales_error()'s pattern."""
+    messages = {
+        "COMMISSION_RULE_TYPE_NOT_IMPLEMENTED": _("Commission rule type %(rule_type)s is not implemented in this phase."),
+        "INVALID_COMMISSION_RATE": _("Commission rate must be a percentage greater than 0 and at most 100."),
+        "INVALID_COMMISSION_FIXED_AMOUNT": _("Commission fixed amount must be a positive value with a valid currency."),
+        "NO_ACTIVE_COMMISSION_RULE": _("The employee has no active commission plan/rule assignment for this date."),
+        "COMMISSION_ALREADY_EARNED_FOR_ALLOCATION": _("A commission entry already exists for this payment allocation."),
+        "COMMISSION_INVALID_TRANSITION": _("Cannot change commission entry status from %(from_status)s to %(to_status)s."),
+        "COMMISSION_SELF_APPROVAL_FORBIDDEN": _("You cannot approve or adjust your own commission entry."),
+        "COMMISSION_PAYOUT_REFERENCE_REQUIRED": _("An external payout reference is required to record a commission payout."),
+        "COMMISSION_REASON_REQUIRED": _("A reason is required for this commission action."),
+        "COMMISSION_ALREADY_IN_PAYOUT_BATCH": _("This commission entry is already included in a payout batch."),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    return template % params if params else template
