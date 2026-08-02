@@ -46,7 +46,7 @@ def test_preflight_detects_invalid_quote_status_bypassing_the_service_layer(app,
         # default and every transition guard -- simulates a bug in a future
         # migration or an unreviewed direct DB write.
         quote = Quote(
-            customer_id=customer.id, created_by_employee_profile_id=profile.id, status="NOT_A_REAL_STATUS",
+            customer_id=customer.id, created_by_employee_profile_id=profile.id, status="BOGUS_STATUS",
             quote_number="PREFLIGHT-BYPASS-001", currency="USD", subtotal=Decimal("0"), discount_total=Decimal("0"),
             total=Decimal("0"), valid_until=date.today() + timedelta(days=30), version=1,
         )
@@ -61,7 +61,7 @@ def test_preflight_detects_invalid_quote_status_bypassing_the_service_layer(app,
         failed = [c for c in checks if c.name == "no_invalid_quote_status"]
         assert len(failed) == 1
         assert failed[0].status == "FAIL"
-        assert "NOT_A_REAL_STATUS" in failed[0].detail
+        assert "BOGUS_STATUS" in failed[0].detail
 
         # Clean up so this test doesn't poison later tests sharing the DB.
         db_session.delete(quote)
