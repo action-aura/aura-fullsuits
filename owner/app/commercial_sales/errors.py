@@ -81,6 +81,7 @@ class CommercialSalesError(StableCodeError):
         "RECORD_ACCESS_DENIED": "You do not have access to this record.",
         "IDEMPOTENCY_CONFLICT": "This request conflicts with an earlier request using the same idempotency key.",
         "REASON_REQUIRED": "A reason is required for this action.",
+        "INVALID_PAYMENT_METHOD": "Payment method must be one of the allowed values.",
         # Approvals / segregation of duties
         "SELF_APPROVAL_FORBIDDEN": "You cannot approve your own request.",
         "APPROVAL_REQUIRED": "This action requires approval before it can proceed.",
