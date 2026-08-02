@@ -26,7 +26,8 @@ from app.commercial_sales.calculator import (
     calculate_line,
     validate_currency,
 )
-from app.commercial_sales.catalog_for_sales import describe_addon_for_sale, describe_plan_for_sale
+from app.commercial_sales.approvals import create_approval_request, unresolved_approvals_for_targets
+from app.commercial_sales.catalog_for_sales import describe_addon_for_sale, describe_plan_for_sale, requires_line_approval
 from app.commercial_sales.errors import QUOTE_TRANSITIONS, CommercialSalesError
 from app.commercial_sales.numbering import allocate_document_number
 from app.extensions import db_session
@@ -159,6 +160,13 @@ def add_quote_line(
 
     _recompute_quote_totals(quote)
     quote.version += 1
+
+    needs_approval = requires_line_approval(
+        unit_price=catalog_item["unit_price"],
+        override_unit_price=override_unit_price,
+        discount_amount=discount_amount,
+        line_gross=own_result.line_gross,
+    )
     db_session.commit()
 
     audit_record(
@@ -169,6 +177,26 @@ def add_quote_line(
         entity_public_id=str(quote.id),
         after_state={"line_id": str(line.id), "quantity": quantity},
     )
+
+    if needs_approval:
+        if override_unit_price is not None:
+            reason_code = "PRICE_OVERRIDE" if override_unit_price != 0 else "ZERO_PRICE_LINE"
+        else:
+            reason_code = "DISCOUNT_ABOVE_LIMIT"
+        create_approval_request(
+            target_type="QUOTE_LINE",
+            target_id=line.id,
+            target_version_at_request=line.version,
+            reason_code=reason_code,
+            requested_values={
+                "unit_price": str(catalog_item["unit_price"]),
+                "override_unit_price": str(override_unit_price) if override_unit_price is not None else None,
+                "discount_amount": str(discount_amount),
+            },
+            original_values={"unit_price": str(catalog_item["unit_price"])},
+            requested_by_staff_user_id=actor_staff_user_id,
+        )
+
     return line
 
 
@@ -260,6 +288,13 @@ def record_customer_decision(
 
     if quote.valid_until and quote.valid_until < utcnow().date():
         raise CommercialSalesError("PRICE_VERSION_EXPIRED")
+
+    if accepted:
+        line_ids = [
+            l.id for l in db_session.execute(select(QuoteLine).where(QuoteLine.quote_id == quote.id)).scalars().all()
+        ]
+        if unresolved_approvals_for_targets("QUOTE_LINE", line_ids):
+            raise CommercialSalesError("APPROVAL_REQUIRED")
 
     quote.status = target
     quote.version += 1

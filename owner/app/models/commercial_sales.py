@@ -71,6 +71,12 @@ class QuoteLine(Base, UUIDPKMixin, TimestampMixin):
     discount_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     line_total: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Phase 9.5D Milestone 6 -- additive. Pins CommercialApproval.
+    # target_version_at_request to THIS line's own version, not the
+    # parent Quote's -- the Quote's version increments on unrelated
+    # actions (submit, sibling line adds) that must never invalidate a
+    # still-accurate pending approval for this line.
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
 
 class SalesOrder(Base, UUIDPKMixin, TimestampMixin):
