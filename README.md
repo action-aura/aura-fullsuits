@@ -32,6 +32,13 @@ docs/                   Architecture, deployment, operations, migration, privacy
 
 Customer business data (products, sales, patients, invoices, etc.) stays local to the customer's installation. The Owner Control Center never stores or retrieves it — see `PRIVACY.md`.
 
+## Keeping two local clones in sync
+
+Working from two machines/devs against this repo? `scripts/sync/aura-sync.ps1`
+(Windows) / `scripts/sync/aura-sync.sh` (macOS/Linux) auto-pulls, auto-commits,
+and auto-pushes on an interval, and stops cleanly instead of guessing when it
+hits a conflict. See `docs/ops/auto-sync.md`.
+
 ## Status
 
 Under active extraction from Action Aura Enterprise. See `docs/migration/extraction-plan.md` for phase sequencing and `docs/migration/source-inventory.md` for what has moved so far.

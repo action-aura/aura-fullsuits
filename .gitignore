@@ -75,3 +75,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# aura-sync runtime state (per-dev machine only -- lock, pause flag, state.json,
+# audit log, conflict reports -- never shared, never committed)
+/.autosync/
