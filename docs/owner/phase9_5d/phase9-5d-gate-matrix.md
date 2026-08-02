@@ -5,9 +5,9 @@ This file is updated as each milestone completes with real, executed evidence �
 | Gate | Status | Evidence |
 |---|---|---|
 | Entry Gate | PASS | `phase9-5d-baseline.md` — branch created from exact tag, all 7 historical tags verified, legacy repo confirmed read-only and unchanged |
-| M1 — existing commercial authority audit | IN PROGRESS | research agent dispatched; docs pending |
-| M2 — canonical commercial funnel | PENDING | |
-| M3 — financial calculation authority | PENDING | |
+| M1 — existing commercial authority audit | PASS | `existing-commercial-authority-audit.md` + `commercial-authority-reuse-matrix.md` + `commercial-duplication-risk-report.md`, commit `ff71341`; spot-verified against real seed_data.py |
+| M2 — canonical commercial funnel | PASS | `commercial-funnel-contract.md` + `commercial-state-transition-matrix.md`, commit `00aa6e2`; built on verified existing Phase 9.5A design docs, not re-derived |
+| M3 — financial calculation authority | PASS | `app/commercial_sales/calculator.py` + `errors.py`, 40/40 tests passing, commit `c64114a` |
 | M4 — catalog/pricing for sales | PENDING | |
 | M5 — Quotes | PENDING | |
 | M6 — pricing/discount approvals | PENDING | |
