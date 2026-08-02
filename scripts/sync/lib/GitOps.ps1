@@ -2,6 +2,40 @@
 # interactive credential prompting (an expired token must fail fast, not pop a GUI and hang
 # a scheduled task forever) and enforces a real process-level timeout.
 
+function ConvertTo-Win32ArgumentString {
+    # ProcessStartInfo.ArgumentList requires .NET Framework 4.7.1+; some Windows PowerShell 5.1
+    # hosts still resolve System.Diagnostics.Process against an older assembly where that
+    # property is absent (silently $null, not a missing-member error). Build the escaped
+    # command-line string by hand instead, using the same quoting rules CommandLineToArgvW
+    # (and ArgumentList itself) expect.
+    param([string[]]$ArgumentValues)
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($arg in $ArgumentValues) {
+        if ($sb.Length -gt 0) { [void]$sb.Append(' ') }
+        if ($arg.Length -eq 0) { [void]$sb.Append('""'); continue }
+        $needsQuotes = $arg -match '[\s"]'
+        if ($needsQuotes) { [void]$sb.Append('"') }
+        $i = 0
+        while ($i -lt $arg.Length) {
+            $backslashes = 0
+            while ($i -lt $arg.Length -and $arg[$i] -eq '\') { $backslashes++; $i++ }
+            if ($i -eq $arg.Length) {
+                [void]$sb.Append('\' * ($backslashes * 2))
+            } elseif ($arg[$i] -eq '"') {
+                [void]$sb.Append('\' * ($backslashes * 2 + 1))
+                [void]$sb.Append('"')
+                $i++
+            } else {
+                [void]$sb.Append('\' * $backslashes)
+                [void]$sb.Append($arg[$i])
+                $i++
+            }
+        }
+        if ($needsQuotes) { [void]$sb.Append('"') }
+    }
+    return $sb.ToString()
+}
+
 function Invoke-Git {
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -18,7 +52,7 @@ function Invoke-Git {
     $psi.CreateNoWindow = $true
 
     $hardening = @('-c', 'credential.interactive=false', '-c', 'core.askPass=', '-c', 'advice.detachedHead=false')
-    foreach ($a in ($hardening + $GitArgs)) { $psi.ArgumentList.Add($a) }
+    $psi.Arguments = ConvertTo-Win32ArgumentString -ArgumentValues ($hardening + $GitArgs)
 
     $psi.EnvironmentVariables['GIT_TERMINAL_PROMPT'] = '0'
     $psi.EnvironmentVariables['GCM_INTERACTIVE'] = 'never'
