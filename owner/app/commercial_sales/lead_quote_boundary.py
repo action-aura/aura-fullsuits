@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import uuid
 
+from app.audit.services import record as audit_record
 from app.commercial_sales.errors import CommercialSalesError
 from app.extensions import db_session
 from app.leads.conversion import DuplicateCustomerError, InvalidLeadStateError, convert
@@ -63,4 +64,17 @@ def resolve_customer_for_accepted_quote(
     quote.customer_id = customer.id
     quote.version += 1
     db_session.commit()
+
+    # A real, separate mutation from convert()'s own internal audit trail --
+    # convert() records the Lead-to-Customer conversion itself; this
+    # records the Quote-specific consequence of that conversion (linking
+    # customer_id), which convert() has no way to know about.
+    audit_record(
+        actor_staff_user_id=actor_staff_user_id,
+        actor_role_snapshot=None,
+        action_code="QUOTE_LINKED_TO_CONVERTED_CUSTOMER",
+        entity_type="quote",
+        entity_public_id=str(quote.id),
+        after_state={"customer_id": str(customer.id), "lead_id": str(lead.id)},
+    )
     return customer

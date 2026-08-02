@@ -89,6 +89,17 @@ def test_lead_based_quote_converts_on_acceptance(app, seeded):
         lead = db_session.get(Lead, lead_id)
         assert lead.status == "CONFIRMED"
 
+        # Milestone 21 audit-coverage finding: linking Quote.customer_id is
+        # a real, separate mutation from convert()'s own internal audit
+        # trail (which only knows about the Lead-to-Customer conversion,
+        # not this Quote-specific consequence) -- must have its own entry.
+        from app.models.audit import AuditLog
+
+        link_events = db_session.query(AuditLog).filter_by(
+            action_code="QUOTE_LINKED_TO_CONVERTED_CUSTOMER", entity_public_id=str(quote.id)
+        ).all()
+        assert len(link_events) == 1
+
 
 def test_not_accepted_quote_rejected(app, seeded):
     staff_id, profile_id = _seed_sales_employee(app, "boundaryb@example.com")
