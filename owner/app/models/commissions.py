@@ -53,6 +53,13 @@ class CommissionRuleVersion(Base, UUIDPKMixin, TimestampMixin):
 
 class EmployeeCommissionPlanAssignment(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_employee_commission_plan_assignments"
+    __table_args__ = (
+        # Phase 9.5D Milestone 22 -- plain index=True's auto-generated name
+        # (ix_owner_employee_commission_plan_assignments_employee_profile_id,
+        # 67 chars) exceeds Postgres's 63-character identifier limit;
+        # explicit shorter name kept in sync with the migration.
+        Index("ix_owner_commission_plan_assignment_employee_profile_id", "employee_profile_id"),
+    )
 
     employee_profile_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False
@@ -92,13 +99,13 @@ class CommissionLedgerEntry(Base, UUIDPKMixin, TimestampMixin):
     )
 
     employee_profile_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False, index=True
     )
     commission_rule_version_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_commission_rule_versions.id"), nullable=False
     )
     source_commercial_invoice_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("owner_commercial_invoices.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("owner_commercial_invoices.id"), nullable=False, index=True
     )
     source_payment_record_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_payment_records.id"), nullable=False

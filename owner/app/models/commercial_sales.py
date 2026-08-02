@@ -53,7 +53,7 @@ class Quote(Base, UUIDPKMixin, TimestampMixin):
     customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_customers.id"))
     lead_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_leads.id"))
     created_by_employee_profile_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False, index=True
     )
     status: Mapped[str] = mapped_column(String(16), default="DRAFT", nullable=False)
     quote_number: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
@@ -76,7 +76,7 @@ class QuoteLine(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_quote_lines"
     __table_args__ = (_line_owner_check("owner_quote_lines"),)
 
-    quote_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_quotes.id"), nullable=False)
+    quote_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_quotes.id"), nullable=False, index=True)
     plan_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_plans.id"))
     addon_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_addons.id"))
     price_version_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
@@ -99,10 +99,10 @@ class QuoteLine(Base, UUIDPKMixin, TimestampMixin):
 class SalesOrder(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_sales_orders"
 
-    quote_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_quotes.id"))
+    quote_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_quotes.id"), index=True)
     customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False)
     created_by_employee_profile_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False, index=True
     )
     status: Mapped[str] = mapped_column(String(16), default="DRAFT", nullable=False)
     order_number: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
@@ -120,7 +120,7 @@ class SalesOrderLine(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_sales_order_lines"
     __table_args__ = (_line_owner_check("owner_sales_order_lines"),)
 
-    sales_order_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_sales_orders.id"), nullable=False)
+    sales_order_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_sales_orders.id"), nullable=False, index=True)
     plan_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_plans.id"))
     addon_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_addons.id"))
     price_version_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
@@ -137,10 +137,10 @@ class SalesOrderLine(Base, UUIDPKMixin, TimestampMixin):
 class CommercialInvoice(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_commercial_invoices"
 
-    sales_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_sales_orders.id"))
+    sales_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_sales_orders.id"), index=True)
     customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False)
     created_by_employee_profile_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False, index=True
     )
     status: Mapped[str] = mapped_column(String(24), default="DRAFT", nullable=False)
     invoice_number: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
@@ -161,7 +161,7 @@ class CommercialInvoiceItem(Base, UUIDPKMixin, TimestampMixin):
     __table_args__ = (_line_owner_check("owner_commercial_invoice_items"),)
 
     commercial_invoice_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("owner_commercial_invoices.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("owner_commercial_invoices.id"), nullable=False, index=True
     )
     plan_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_plans.id"))
     addon_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_addons.id"))
@@ -278,7 +278,7 @@ class CommercialApproval(Base, UUIDPKMixin, TimestampMixin):
     commercial_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     reason_code: Mapped[str] = mapped_column(String(32), nullable=False)
     requested_by_staff_user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("owner_staff_users.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id"), nullable=False, index=True
     )
     requested_values: Mapped[dict] = mapped_column(JSONB, nullable=False)
     original_values: Mapped[dict] = mapped_column(JSONB, nullable=False)
