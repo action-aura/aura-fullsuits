@@ -12,6 +12,11 @@ RBAC enforcement in this codebase is a **route-layer** concern (`require_permiss
 |---|---|---|
 | Creation / pipeline-ownership | `quotes.create`, `orders.create`, `invoices.create` | `SALES` only |
 | Money-authorization / approval | `quotes.approve`, `orders.approve`, `invoices.issue`, `refunds.create`, `refunds.approve`, `pricing.override`, `commissions.approve`, `commissions.pay`, `commissions.reverse` | `FINANCE` (all except `pricing.override`, which stays `SUPER_ADMIN`-only via the wildcard — a catalog-price bypass is a stronger authority than a discount approval) |
+| Evidence submission | `payments.create` | **Both** `SALES` and `FINANCE` (Milestone 18 addendum — see below) |
+
+## Milestone 18 addendum: `payments.create` is dual-granted, deliberately
+
+Unlike every other creation-tier verb, `payments.create` is granted to both `SALES` and `FINANCE` — not SALES-exclusive. This is not a maker-checker violation: `payments.create` only records "money was received," it never itself confirms anything (`payments.confirm` is the real authorization gate, `FINANCE`-only, never granted to `SALES`). A salesperson submitting evidence of a payment they personally collected in the field is the documented real-world workflow (`submit_payment()`'s own docstring: "Sales-employee-facing 'I received this payment, please confirm it' action"); FINANCE may also record a payment it received directly (e.g., a bank transfer with no salesperson involved). Either way, the same individual who submitted a payment can never also confirm it (`confirm_payment()`'s unconditional `SELF_CONFIRMATION_FORBIDDEN` check, `payment-maker-checker-policy.md`) — the real separation guarantee is, once again, enforced at the actor level, not merely by which role can create vs. approve.
 
 `SALES` never holds any permission from the approval tier. `FINANCE` never holds any permission from the creation tier (it is not a sales-pipeline role — it does not own Quotes/Orders/Invoices, it authorizes them). `SUPPORT` and `VIEWER` hold neither tier.
 
