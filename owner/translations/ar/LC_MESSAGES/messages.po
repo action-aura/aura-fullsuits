@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-08-01 23:12+0300\n"
+"POT-Creation-Date: 2026-08-02 15:02+0300\n"
 "PO-Revision-Date: 2026-08-01 11:16+0300\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: ar\n"
@@ -107,6 +107,7 @@ msgid "Not enrolled"
 msgstr "غير مُفعّلة"
 
 #: app/i18n_labels.py:70 app/i18n_labels.py:116 app/i18n_labels.py:130
+#: app/i18n_labels.py:737 app/i18n_labels.py:786
 msgid "Expired"
 msgstr "منتهية الصلاحية"
 
@@ -204,18 +205,20 @@ msgid "Recovery code used"
 msgstr "تم استخدام رمز الاسترداد"
 
 #: app/i18n_labels.py:103 app/templates/audit/security_events.html:7
-#: app/templates/layout/base.html:106 app/templates/staff/list.html:2
+#: app/templates/layout/base.html:115 app/templates/staff/list.html:2
 msgid "Staff"
 msgstr "الموظفون الإداريون"
 
 #: app/i18n_labels.py:104 app/templates/employees/list.html:2
-#: app/templates/employees/list.html:5 app/templates/layout/base.html:107
+#: app/templates/employees/list.html:5 app/templates/layout/base.html:116
 msgid "Employees"
 msgstr "الموظفون"
 
 #: app/i18n_labels.py:111 app/i18n_labels.py:125 app/i18n_labels.py:263
 #: app/i18n_labels.py:281 app/i18n_labels.py:334 app/i18n_labels.py:547
-#: app/i18n_labels.py:558 app/i18n_labels.py:569
+#: app/i18n_labels.py:558 app/i18n_labels.py:569 app/i18n_labels.py:733
+#: app/i18n_labels.py:746 app/i18n_labels.py:757 app/i18n_labels.py:771
+#: app/i18n_labels.py:808
 msgid "Draft"
 msgstr "مسودة"
 
@@ -237,11 +240,12 @@ msgid "Completed"
 msgstr "مكتمل"
 
 #: app/i18n_labels.py:118 app/i18n_labels.py:218 app/i18n_labels.py:271
-#: app/i18n_labels.py:287
+#: app/i18n_labels.py:287 app/i18n_labels.py:738 app/i18n_labels.py:748
+#: app/i18n_labels.py:785 app/i18n_labels.py:799
 msgid "Cancelled"
 msgstr "ملغى"
 
-#: app/i18n_labels.py:126
+#: app/i18n_labels.py:126 app/i18n_labels.py:758
 msgid "Issued"
 msgstr "صادر"
 
@@ -297,7 +301,8 @@ msgstr "قيد المراقبة"
 msgid "Qualified"
 msgstr "مؤهّل"
 
-#: app/i18n_labels.py:172 app/i18n_labels.py:581
+#: app/i18n_labels.py:172 app/i18n_labels.py:581 app/i18n_labels.py:747
+#: app/templates/commercial_sales/order_detail.html:10
 msgid "Confirmed"
 msgstr "مؤكَّد"
 
@@ -322,6 +327,7 @@ msgid "Event"
 msgstr "الحدث"
 
 #: app/i18n_labels.py:186 app/i18n_labels.py:208
+#: app/templates/commercial_sales/payment_new.html:23
 msgid "Other"
 msgstr "أخرى"
 
@@ -419,6 +425,8 @@ msgid "Payment Recorded"
 msgstr "تم تسجيل الدفع"
 
 #: app/i18n_labels.py:268 app/i18n_labels.py:282 app/i18n_labels.py:317
+#: app/i18n_labels.py:772 app/i18n_labels.py:783 app/i18n_labels.py:796
+#: app/i18n_labels.py:809 app/templates/commercial_sales/refund_detail.html:10
 msgid "Approved"
 msgstr "مُعتمَد"
 
@@ -427,6 +435,7 @@ msgid "Applied"
 msgstr "مُطبَّق"
 
 #: app/i18n_labels.py:270 app/i18n_labels.py:318 app/i18n_labels.py:600
+#: app/i18n_labels.py:736 app/i18n_labels.py:784
 msgid "Rejected"
 msgstr "مرفوض"
 
@@ -518,8 +527,8 @@ msgstr ""
 #: app/i18n_labels.py:362
 msgid "The new end date must be after the current pilot end date."
 msgstr ""
-"يجب أن يكون تاريخ الانتهاء الجديد بعد تاريخ انتهاء التجربة التشغيلية "
-"الحالي."
+"يجب أن يكون تاريخ الانتهاء الجديد بعد تاريخ انتهاء التجربة الحالي.يجب أن "
+"يكون تاريخ الانتهاء الجديد بعد تاريخ انتهاء التجربة التشغيلية الحالي."
 
 #: app/i18n_labels.py:363
 msgid ""
@@ -733,7 +742,8 @@ msgstr "موافقة يدوية"
 msgid "Risk Review"
 msgstr "مراجعة المخاطر"
 
-#: app/i18n_labels.py:500 app/i18n_labels.py:580
+#: app/i18n_labels.py:500 app/i18n_labels.py:580 app/i18n_labels.py:782
+#: app/i18n_labels.py:794
 msgid "Pending"
 msgstr "قيد الانتظار"
 
@@ -805,7 +815,7 @@ msgstr "مخطط له"
 msgid "Available"
 msgstr "متاح"
 
-#: app/i18n_labels.py:583
+#: app/i18n_labels.py:583 app/i18n_labels.py:762
 msgid "Refunded"
 msgstr "مُسترجَع"
 
@@ -813,7 +823,7 @@ msgstr "مُسترجَع"
 msgid "Failure"
 msgstr "فشل"
 
-#: app/i18n_labels.py:599
+#: app/i18n_labels.py:599 app/i18n_labels.py:735
 msgid "Accepted"
 msgstr "مقبول"
 
@@ -971,7 +981,7 @@ msgstr "يلزم رمز عملة مكوّن من 3 أحرف عند تحديد ق
 msgid "Location summary must be at most %(max_len)s characters."
 msgstr "يجب ألا يتجاوز ملخص الموقع %(max_len)s حرفًا."
 
-#: app/i18n_labels.py:674
+#: app/i18n_labels.py:674 app/i18n_labels.py:842
 msgid ""
 "This request conflicts with an earlier request using the same idempotency"
 " key."
@@ -1075,6 +1085,256 @@ msgstr "العنوان اليدوي طويل جدًا."
 msgid "A reason is required to verify or revoke a location."
 msgstr "يلزم إدخال سبب لتوثيق الموقع أو إلغاء توثيقه."
 
+#: app/i18n_labels.py:734
+msgid "Sent"
+msgstr "مُرسَل"
+
+#: app/i18n_labels.py:749
+msgid "Fulfilled"
+msgstr "مُنفَّذ"
+
+#: app/i18n_labels.py:759
+msgid "Partially paid"
+msgstr "مدفوع جزئياً"
+
+#: app/i18n_labels.py:760 app/i18n_labels.py:773 app/i18n_labels.py:797
+#: app/i18n_labels.py:810 app/templates/commercial_sales/refund_detail.html:11
+msgid "Paid"
+msgstr "مدفوع"
+
+#: app/i18n_labels.py:761 app/i18n_labels.py:774
+#: app/templates/commercial_sales/refund_detail.html:23
+msgid "Void"
+msgstr "لاغٍ"
+
+#: app/i18n_labels.py:763
+msgid "Partially refunded"
+msgstr "مسترد جزئياً"
+
+#: app/i18n_labels.py:795
+#: app/templates/commercial_sales/commissions_list.html:19
+#: app/templates/commercial_sales/commissions_list.html:25
+msgid "Earned"
+msgstr "مكتسَب"
+
+#: app/i18n_labels.py:798
+#: app/templates/commercial_sales/employee_dashboard.html:26
+#: app/templates/commercial_sales/invoice_detail.html:69
+msgid "Reversed"
+msgstr "معكوس"
+
+#: app/i18n_labels.py:800
+msgid "Disputed"
+msgstr "متنازَع عليه"
+
+#: app/i18n_labels.py:824
+msgid "Quantity must be a positive whole number."
+msgstr "يجب أن تكون الكمية عدداً صحيحاً موجباً."
+
+#: app/i18n_labels.py:825
+msgid "Amount must be a finite number."
+msgstr "يجب أن يكون المبلغ رقماً محدوداً."
+
+#: app/i18n_labels.py:826
+msgid "Document total cannot be negative."
+msgstr "لا يمكن أن يكون إجمالي المستند سالباً."
+
+#: app/i18n_labels.py:827
+msgid "Discount cannot exceed the applicable gross amount."
+msgstr "لا يمكن أن يتجاوز الخصم المبلغ الإجمالي المطبق."
+
+#: app/i18n_labels.py:828
+#, python-format
+msgid ""
+"Refund amount (%(amount)s) exceeds the refundable balance "
+"(%(refundable)s)."
+msgstr ""
+"مبلغ الاسترداد (%(amount)s) يتجاوز الرصيد القابل للاسترداد "
+"(%(refundable)s)."
+
+#: app/i18n_labels.py:829
+#, python-format
+msgid ""
+"Allocation amount (%(amount)s) exceeds the unallocated payment balance "
+"(%(available)s)."
+msgstr "مبلغ التخصيص (%(amount)s) يتجاوز رصيد الدفعة غير المخصص (%(available)s)."
+
+#: app/i18n_labels.py:830
+#, python-format
+msgid ""
+"Allocation amount (%(amount)s) exceeds the invoice outstanding balance "
+"(%(outstanding)s)."
+msgstr ""
+"مبلغ التخصيص (%(amount)s) يتجاوز الرصيد المستحق للفاتورة "
+"(%(outstanding)s)."
+
+#: app/i18n_labels.py:831
+#, python-format
+msgid "Currency %(given)s does not match the required currency %(expected)s."
+msgstr "العملة %(given)s لا تطابق العملة المطلوبة %(expected)s."
+
+#: app/i18n_labels.py:832
+msgid "Currency must be a 3-letter ISO 4217 code."
+msgstr "يجب أن تكون العملة رمزاً مكوناً من 3 أحرف وفق معيار ISO 4217."
+
+#: app/i18n_labels.py:833
+msgid "A document must have at least one line."
+msgstr "يجب أن يحتوي المستند على بند واحد على الأقل."
+
+#: app/i18n_labels.py:834
+#, python-format
+msgid "Cannot change quote status from %(from_status)s to %(to_status)s."
+msgstr "لا يمكن تغيير حالة عرض السعر من %(from_status)s إلى %(to_status)s."
+
+#: app/i18n_labels.py:835
+#, python-format
+msgid "Cannot change order status from %(from_status)s to %(to_status)s."
+msgstr "لا يمكن تغيير حالة الطلب من %(from_status)s إلى %(to_status)s."
+
+#: app/i18n_labels.py:836
+#, python-format
+msgid "Cannot change invoice status from %(from_status)s to %(to_status)s."
+msgstr "لا يمكن تغيير حالة الفاتورة من %(from_status)s إلى %(to_status)s."
+
+#: app/i18n_labels.py:837
+#, python-format
+msgid "Cannot change refund status from %(from_status)s to %(to_status)s."
+msgstr "لا يمكن تغيير حالة المبلغ المسترد من %(from_status)s إلى %(to_status)s."
+
+#: app/i18n_labels.py:838
+#, python-format
+msgid "Cannot change approval status from %(from_status)s to %(to_status)s."
+msgstr "لا يمكن تغيير حالة الاعتماد من %(from_status)s إلى %(to_status)s."
+
+#: app/i18n_labels.py:839
+msgid "This record was changed by someone else. Reload and try again."
+msgstr "تم تغيير هذا السجل من قبل شخص آخر. أعد التحميل وحاول مرة أخرى."
+
+#: app/i18n_labels.py:840 app/templates/commercial_sales/not_found.html:4
+msgid "Record not found."
+msgstr "السجل غير موجود."
+
+#: app/i18n_labels.py:841
+msgid "You do not have access to this record."
+msgstr "ليس لديك صلاحية الوصول إلى هذا السجل."
+
+#: app/i18n_labels.py:843
+msgid "A reason is required for this action."
+msgstr "السبب مطلوب لهذا الإجراء."
+
+#: app/i18n_labels.py:844
+msgid "Payment method must be one of the allowed values."
+msgstr "يجب أن تكون طريقة الدفع إحدى القيم المسموح بها."
+
+#: app/i18n_labels.py:845
+msgid "You cannot approve your own request."
+msgstr "لا يمكنك اعتماد طلبك الخاص."
+
+#: app/i18n_labels.py:846
+msgid "This action requires approval before it can proceed."
+msgstr "يتطلب هذا الإجراء اعتماداً قبل المتابعة."
+
+#: app/i18n_labels.py:847
+msgid "The approval no longer matches the current version of this record."
+msgstr "لم يعد الاعتماد مطابقاً للنسخة الحالية من هذا السجل."
+
+#: app/i18n_labels.py:848
+msgid "Discount exceeds your permitted limit and requires approval."
+msgstr "الخصم يتجاوز الحد المسموح لك ويتطلب اعتماداً."
+
+#: app/i18n_labels.py:849
+msgid "A custom price requires approval."
+msgstr "السعر المخصص يتطلب اعتماداً."
+
+#: app/i18n_labels.py:850
+msgid "A zero-price line requires approval."
+msgstr "بند بسعر صفري يتطلب اعتماداً."
+
+#: app/i18n_labels.py:851
+msgid "The quote must be accepted before an order can be created."
+msgstr "يجب قبول عرض السعر قبل إنشاء الطلب."
+
+#: app/i18n_labels.py:852
+msgid "A confirmed customer is required before an order can be created."
+msgstr "يلزم وجود عميل مؤكَّد قبل إنشاء طلب."
+
+#: app/i18n_labels.py:853
+msgid "This product or plan is not currently sellable."
+msgstr "هذا المنتج أو الخطة غير قابل للبيع حالياً."
+
+#: app/i18n_labels.py:854
+msgid "This price is no longer effective."
+msgstr "هذا السعر لم يعد سارياً."
+
+#: app/i18n_labels.py:855
+msgid "The payment must be confirmed before it can be allocated."
+msgstr "يجب تأكيد الدفعة قبل تخصيصها."
+
+#: app/i18n_labels.py:856
+msgid "This payment has already been confirmed."
+msgstr "تم تأكيد هذه الدفعة بالفعل."
+
+#: app/i18n_labels.py:857
+msgid "You cannot confirm a payment you submitted yourself."
+msgstr "لا يمكنك تأكيد دفعة قمت بتسجيلها بنفسك."
+
+#: app/i18n_labels.py:858
+#, python-format
+msgid "This order is not eligible for fulfillment yet: %(reason)s."
+msgstr "هذا الطلب غير مؤهل للتنفيذ بعد: %(reason)s."
+
+#: app/i18n_labels.py:859
+msgid "This order line has already been fulfilled."
+msgstr "تم تنفيذ بند الطلب هذا بالفعل."
+
+#: app/i18n_labels.py:860
+msgid "This action requires a real employee profile."
+msgstr "يتطلب هذا الإجراء ملف موظف حقيقي."
+
+#: app/i18n_labels.py:873
+#, python-format
+msgid "Commission rule type %(rule_type)s is not implemented in this phase."
+msgstr "نوع قاعدة العمولة %(rule_type)s غير مطبق في هذه المرحلة."
+
+#: app/i18n_labels.py:874
+msgid "Commission rate must be a percentage greater than 0 and at most 100."
+msgstr "يجب أن تكون نسبة العمولة أكبر من 0 ولا تتجاوز 100."
+
+#: app/i18n_labels.py:875
+msgid "Commission fixed amount must be a positive value with a valid currency."
+msgstr "يجب أن يكون مبلغ العمولة الثابت قيمة موجبة مع عملة صالحة."
+
+#: app/i18n_labels.py:876
+msgid "The employee has no active commission plan/rule assignment for this date."
+msgstr "لا يوجد لدى الموظف خطة/قاعدة عمولة نشطة مسندة لهذا التاريخ."
+
+#: app/i18n_labels.py:877
+msgid "A commission entry already exists for this payment allocation."
+msgstr "يوجد بالفعل قيد عمولة لتخصيص الدفعة هذا."
+
+#: app/i18n_labels.py:878
+#, python-format
+msgid ""
+"Cannot change commission entry status from %(from_status)s to "
+"%(to_status)s."
+msgstr "لا يمكن تغيير حالة العميل المحتمل من %(from_status)s إلى %(to_status)s."
+
+#: app/i18n_labels.py:879
+msgid "You cannot approve or adjust your own commission entry."
+msgstr "لا يمكنك اعتماد أو تعديل قيد عمولتك الخاص."
+
+#: app/i18n_labels.py:880
+msgid "An external payout reference is required to record a commission payout."
+msgstr "يلزم مرجع صرف خارجي لتسجيل دفع العمولة."
+
+#: app/i18n_labels.py:881
+msgid "A reason is required for this commission action."
+msgstr "السبب مطلوب لإجراء العمولة هذا."
+
+#: app/i18n_labels.py:882
+msgid "This commission entry is already included in a payout batch."
+msgstr "قيد العمولة هذا مدرج بالفعل ضمن دفعة صرف."
+
 #: app/auth/routes.py:378
 msgid "Invitation is invalid or has expired."
 msgstr "الدعوة غير صالحة أو منتهية الصلاحية."
@@ -1177,7 +1437,8 @@ msgstr "التفعيل المعلَّق"
 #: app/commercial_ops/ui_routes.py:632
 msgid "extra_slots must be an integer and expires_at a valid date/time."
 msgstr ""
-"يجب أن يكون عدد الفتحات الإضافية عددًا صحيحًا وتاريخ الانتهاء "
+"يجب أن تكون extra_slots عدداً صحيحاً وأن يكون expires_at تاريخاً/وقتاً "
+"صالحاً.يجب أن يكون عدد الفتحات الإضافية عددًا صحيحًا وتاريخ الانتهاء "
 "تاريخًا/وقتًا صالحًا."
 
 #: app/commercial_ops/ui_routes.py:650
@@ -1192,8 +1453,9 @@ msgstr "يجب أن تتكون كلمة المرور من %(min_length)s حرف�
 #: app/security/passwords.py:39
 msgid "Password must mix at least 3 of: lowercase, uppercase, digit, symbol."
 msgstr ""
-"يجب أن تجمع كلمة المرور 3 عناصر على الأقل من: حروف صغيرة، حروف كبيرة، "
-"أرقام، رموز."
+"يجب أن تجمع كلمة المرور 3 على الأقل من: أحرف صغيرة، أحرف كبيرة، أرقام، "
+"رموز.يجب أن تجمع كلمة المرور 3 عناصر على الأقل من: حروف صغيرة، حروف "
+"كبيرة، أرقام، رموز."
 
 #: app/templates/audit/list.html:2
 msgid "Audit log"
@@ -1215,11 +1477,11 @@ msgstr "تصدير CSV"
 #: app/templates/commercial_ops/pilot_detail.html:88
 #: app/templates/commercial_ops/renewal_detail.html:68
 #: app/templates/commercial_ops/timeline.html:8
-#: app/templates/customers/detail.html:150
+#: app/templates/customers/detail.html:157
 #: app/templates/dashboard/index.html:71
 #: app/templates/employees/detail.html:136
 #: app/templates/installations/detail.html:54
-#: app/templates/leads/detail.html:167 app/templates/leads/detail.html:179
+#: app/templates/leads/detail.html:174 app/templates/leads/detail.html:186
 #: app/templates/licensing/detail.html:65
 #: app/templates/licensing_admin/requests.html:18
 #: app/templates/subscriptions/detail.html:44
@@ -1442,7 +1704,7 @@ msgid "6-digit code (or a recovery code)"
 msgstr "رمز مكوّن من 6 أرقام (أو رمز استرداد)"
 
 #: app/templates/auth/mfa_verify.html:11
-#: app/templates/customers/detail.html:124 app/templates/leads/detail.html:141
+#: app/templates/customers/detail.html:129 app/templates/leads/detail.html:146
 msgid "Verify"
 msgstr "تأكيد"
 
@@ -1488,7 +1750,7 @@ msgstr "الرمز"
 msgid "Name"
 msgstr "الاسم"
 
-#: app/templates/catalog/index.html:2 app/templates/layout/base.html:95
+#: app/templates/catalog/index.html:2 app/templates/layout/base.html:104
 msgid "Catalog"
 msgstr "الكتالوج"
 
@@ -1542,6 +1804,30 @@ msgstr "نموذج الفوترة"
 #: app/templates/commercial_ops/renewals_list.html:8
 #: app/templates/commercial_ops/renewals_list.html:18
 #: app/templates/commercial_ops/slot_exceptions.html:27
+#: app/templates/commercial_sales/commissions_list.html:9
+#: app/templates/commercial_sales/commissions_list.html:19
+#: app/templates/commercial_sales/commissions_list.html:24
+#: app/templates/commercial_sales/invoice_detail.html:92
+#: app/templates/commercial_sales/invoice_detail.html:97
+#: app/templates/commercial_sales/invoices_list.html:8
+#: app/templates/commercial_sales/invoices_list.html:18
+#: app/templates/commercial_sales/invoices_list.html:23
+#: app/templates/commercial_sales/orders_list.html:8
+#: app/templates/commercial_sales/orders_list.html:18
+#: app/templates/commercial_sales/orders_list.html:23
+#: app/templates/commercial_sales/payments_list.html:11
+#: app/templates/commercial_sales/payments_list.html:21
+#: app/templates/commercial_sales/payments_list.html:27
+#: app/templates/commercial_sales/payout_batches_list.html:21
+#: app/templates/commercial_sales/payout_batches_list.html:27
+#: app/templates/commercial_sales/quote_detail.html:104
+#: app/templates/commercial_sales/quote_detail.html:109
+#: app/templates/commercial_sales/quotes_list.html:11
+#: app/templates/commercial_sales/quotes_list.html:21
+#: app/templates/commercial_sales/quotes_list.html:26
+#: app/templates/commercial_sales/refunds_list.html:8
+#: app/templates/commercial_sales/refunds_list.html:18
+#: app/templates/commercial_sales/refunds_list.html:23
 #: app/templates/customers/list.html:11 app/templates/customers/list.html:21
 #: app/templates/dashboard/index.html:42
 #: app/templates/employees/detail.html:110
@@ -1650,6 +1936,11 @@ msgstr "السعر الأساسي"
 #: app/templates/catalog/plan_new.html:20
 #: app/templates/commercial_ops/pilot_convert.html:16
 #: app/templates/commercial_ops/renewals_new.html:21
+#: app/templates/commercial_sales/invoice_detail.html:8
+#: app/templates/commercial_sales/order_detail.html:8
+#: app/templates/commercial_sales/payment_new.html:15
+#: app/templates/commercial_sales/quote_detail.html:8
+#: app/templates/commercial_sales/quote_new.html:13
 #: app/templates/subscriptions/detail.html:61
 msgid "Currency"
 msgstr "العملة"
@@ -1770,6 +2061,7 @@ msgstr "تاريخ السريان"
 #: app/templates/commercial_ops/activation_policy.html:31
 #: app/templates/commercial_ops/renewal_detail.html:22
 #: app/templates/commercial_ops/renewals_new.html:30
+#: app/templates/commercial_sales/quote_new.html:15
 #: app/templates/customers/detail.html:91 app/templates/leads/detail.html:108
 #: app/templates/leads/detail.html:114
 msgid "Notes"
@@ -1810,10 +2102,25 @@ msgstr "(كل التراخيص في هذا الاشتراك)"
 #: app/templates/commercial_ops/renewals_new.html:29
 #: app/templates/commercial_ops/slot_exceptions.html:27
 #: app/templates/commercial_ops/timeline.html:8
-#: app/templates/customers/detail.html:150
+#: app/templates/commercial_sales/invoice_detail.html:28
+#: app/templates/commercial_sales/invoice_detail.html:66
+#: app/templates/commercial_sales/invoice_detail.html:92
+#: app/templates/commercial_sales/invoice_detail.html:98
+#: app/templates/commercial_sales/invoice_detail.html:111
+#: app/templates/commercial_sales/order_detail.html:25
+#: app/templates/commercial_sales/payment_detail.html:21
+#: app/templates/commercial_sales/quote_detail.html:25
+#: app/templates/commercial_sales/quote_detail.html:41
+#: app/templates/commercial_sales/quote_detail.html:104
+#: app/templates/commercial_sales/quote_detail.html:108
+#: app/templates/commercial_sales/quote_detail.html:121
+#: app/templates/commercial_sales/refund_detail.html:8
+#: app/templates/commercial_sales/refunds_list.html:18
+#: app/templates/commercial_sales/refunds_list.html:24
+#: app/templates/customers/detail.html:157
 #: app/templates/employees/detail.html:136
 #: app/templates/installations/detail.html:26
-#: app/templates/leads/detail.html:167 app/templates/leads/detail.html:179
+#: app/templates/leads/detail.html:174 app/templates/leads/detail.html:186
 #: app/templates/licensing/detail.html:44
 #: app/templates/licensing/detail.html:65
 #: app/templates/licensing_admin/requests.html:18
@@ -1903,6 +2210,12 @@ msgstr "تمديدات الطوارئ"
 #: app/templates/commercial_ops/pending_activations_list.html:11
 #: app/templates/commercial_ops/pilots_list.html:10
 #: app/templates/commercial_ops/renewals_list.html:10
+#: app/templates/commercial_sales/commissions_list.html:11
+#: app/templates/commercial_sales/invoices_list.html:10
+#: app/templates/commercial_sales/orders_list.html:10
+#: app/templates/commercial_sales/payments_list.html:13
+#: app/templates/commercial_sales/quotes_list.html:13
+#: app/templates/commercial_sales/refunds_list.html:10
 #: app/templates/customers/list.html:13 app/templates/employees/list.html:10
 #: app/templates/employees/list.html:16 app/templates/employees/list.html:24
 #: app/templates/employees/list.html:30
@@ -1963,6 +2276,7 @@ msgid "Create extension"
 msgstr "إنشاء تمديد"
 
 #: app/templates/commercial_ops/not_found.html:2
+#: app/templates/commercial_sales/not_found.html:2
 #: app/templates/employees/not_found.html:2
 msgid "Not found"
 msgstr "غير موجود"
@@ -1973,7 +2287,7 @@ msgid "%(entity)s not found."
 msgstr "%(entity)s غير موجود."
 
 #: app/templates/commercial_ops/notifications_list.html:2
-#: app/templates/layout/base.html:103
+#: app/templates/layout/base.html:112
 msgid "Notifications"
 msgstr "الإشعارات"
 
@@ -2008,6 +2322,15 @@ msgstr "المسمى"
 
 #: app/templates/commercial_ops/notifications_list.html:30
 #: app/templates/commercial_ops/renewals_list.html:18
+#: app/templates/commercial_sales/order_detail.html:11
+#: app/templates/commercial_sales/orders_list.html:18
+#: app/templates/commercial_sales/orders_list.html:25
+#: app/templates/commercial_sales/quote_detail.html:13
+#: app/templates/commercial_sales/quotes_list.html:21
+#: app/templates/commercial_sales/quotes_list.html:28
+#: app/templates/commercial_sales/refund_detail.html:9
+#: app/templates/commercial_sales/refunds_list.html:18
+#: app/templates/commercial_sales/refunds_list.html:25
 #: app/templates/employees/detail.html:110 app/templates/leads/detail.html:23
 #: app/templates/profile/sessions.html:9
 msgid "Created"
@@ -2059,6 +2382,8 @@ msgstr "وضع البوابة"
 
 #: app/templates/commercial_ops/pending_activation_detail.html:15
 #: app/templates/commercial_ops/pending_activations_list.html:17
+#: app/templates/commercial_sales/quote_detail.html:104
+#: app/templates/commercial_sales/quote_detail.html:110
 msgid "Requested"
 msgstr "تاريخ الطلب"
 
@@ -2090,6 +2415,9 @@ msgstr "الموافقة على هذا التفعيل؟ يتطلب هذا مصا
 
 #: app/templates/commercial_ops/pending_activation_detail.html:27
 #: app/templates/commercial_ops/renewal_detail.html:48
+#: app/templates/commercial_sales/commissions_list.html:30
+#: app/templates/commercial_sales/quote_detail.html:116
+#: app/templates/commercial_sales/refund_detail.html:18
 msgid "Approve"
 msgstr "موافقة"
 
@@ -2098,6 +2426,7 @@ msgid "Reject this activation?"
 msgstr "رفض هذا التفعيل؟"
 
 #: app/templates/commercial_ops/pending_activation_detail.html:33
+#: app/templates/commercial_sales/quote_detail.html:122
 msgid "Reject"
 msgstr "رفض"
 
@@ -2252,8 +2581,9 @@ msgstr "تمديد التجربة"
 #, python-format
 msgid "Maximum extensions (%(max)s) already used -- no indefinite rolling pilot."
 msgstr ""
-"تم استخدام الحد الأقصى للتمديدات (%(max)s) بالفعل -- لا يُسمح بتمديد "
-"التجربة إلى ما لا نهاية."
+"تم استخدام الحد الأقصى للتمديدات (%(max)s) بالفعل -- لا يمكن استمرار "
+"التجربة إلى أجل غير مسمى.تم استخدام الحد الأقصى للتمديدات (%(max)s) "
+"بالفعل -- لا يُسمح بتمديد التجربة إلى ما لا نهاية."
 
 #: app/templates/commercial_ops/pilot_detail.html:46
 #, python-format
@@ -2307,21 +2637,21 @@ msgstr "لا توجد تمديدات بعد."
 
 #: app/templates/commercial_ops/pilot_detail.html:86
 #: app/templates/commercial_ops/renewal_detail.html:66
-#: app/templates/leads/detail.html:165 app/templates/licensing/detail.html:63
+#: app/templates/leads/detail.html:172 app/templates/licensing/detail.html:63
 #: app/templates/subscriptions/detail.html:42
 msgid "Status history"
 msgstr "سجل الحالات"
 
 #: app/templates/commercial_ops/pilot_detail.html:88
 #: app/templates/commercial_ops/renewal_detail.html:68
-#: app/templates/leads/detail.html:167 app/templates/licensing/detail.html:65
+#: app/templates/leads/detail.html:174 app/templates/licensing/detail.html:65
 #: app/templates/subscriptions/detail.html:44
 msgid "From"
 msgstr "من"
 
 #: app/templates/commercial_ops/pilot_detail.html:88
 #: app/templates/commercial_ops/renewal_detail.html:68
-#: app/templates/leads/detail.html:167 app/templates/licensing/detail.html:65
+#: app/templates/leads/detail.html:174 app/templates/licensing/detail.html:65
 #: app/templates/subscriptions/detail.html:44
 msgid "To"
 msgstr "إلى"
@@ -2335,12 +2665,14 @@ msgstr "لا توجد تغييرات حالة بعد."
 
 #: app/templates/commercial_ops/pilots_list.html:2
 #: app/templates/commercial_ops/pilots_list.html:5
-#: app/templates/layout/base.html:100
+#: app/templates/layout/base.html:109
 msgid "Pilots"
 msgstr "التجارب التشغيلية"
 
 #: app/templates/commercial_ops/pilots_list.html:18
 #: app/templates/commercial_ops/renewals_list.html:18
+#: app/templates/commercial_sales/payment_new.html:9
+#: app/templates/commercial_sales/quote_new.html:9
 #: app/templates/installations/detail.html:8
 #: app/templates/installations/list.html:21
 #: app/templates/licensing/list.html:21
@@ -2410,7 +2742,7 @@ msgstr "لا يوجد شيء هنا حاليًا."
 
 #: app/templates/commercial_ops/reconciliation.html:2
 #: app/templates/commercial_ops/reconciliation.html:5
-#: app/templates/layout/base.html:105
+#: app/templates/layout/base.html:114
 msgid "Reconciliation"
 msgstr "التسوية"
 
@@ -2578,7 +2910,7 @@ msgid "Apply renewal"
 msgstr "تطبيق التجديد"
 
 #: app/templates/commercial_ops/renewals_list.html:2
-#: app/templates/layout/base.html:99
+#: app/templates/layout/base.html:108
 msgid "Renewals"
 msgstr "التجديدات"
 
@@ -2690,6 +3022,573 @@ msgstr "الفئة"
 msgid "No commercial events recorded yet."
 msgstr "لم يتم تسجيل أي أحداث تجارية بعد."
 
+#: app/templates/commercial_sales/commissions_list.html:2
+#: app/templates/commercial_sales/commissions_list.html:5
+#: app/templates/layout/base.html:100
+msgid "Commissions"
+msgstr "العمولات"
+
+#: app/templates/commercial_sales/commissions_list.html:19
+#: app/templates/commercial_sales/commissions_list.html:23
+#: app/templates/commercial_sales/invoice_detail.html:55
+#: app/templates/commercial_sales/invoice_detail.html:60
+#: app/templates/commercial_sales/invoice_detail.html:82
+#: app/templates/commercial_sales/invoice_detail.html:92
+#: app/templates/commercial_sales/invoice_detail.html:96
+#: app/templates/commercial_sales/invoice_detail.html:109
+#: app/templates/commercial_sales/payment_new.html:13
+#: app/templates/commercial_sales/payments_list.html:21
+#: app/templates/commercial_sales/payments_list.html:25
+#: app/templates/commercial_sales/payout_batches_list.html:46
+#: app/templates/commercial_sales/payout_batches_list.html:50
+#: app/templates/commercial_sales/refunds_list.html:18
+#: app/templates/commercial_sales/refunds_list.html:22
+#: app/templates/subscriptions/detail.html:60
+msgid "Amount"
+msgstr "المبلغ"
+
+#: app/templates/commercial_sales/commissions_list.html:35
+msgid "No commission entries yet."
+msgstr "لا توجد قيود عمولة بعد."
+
+#: app/templates/commercial_sales/employee_dashboard.html:2
+msgid "Commercial dashboard"
+msgstr "لوحة المعلومات التجارية"
+
+#: app/templates/commercial_sales/employee_dashboard.html:5
+msgid "My commercial pipeline"
+msgstr "مسار المبيعات الخاص بي"
+
+#: app/templates/commercial_sales/employee_dashboard.html:7
+msgid "This view requires a real employee profile."
+msgstr "تتطلب هذه الصفحة ملف موظف حقيقي."
+
+#: app/templates/commercial_sales/employee_dashboard.html:9
+#: app/templates/commercial_sales/finance_dashboard.html:6
+#: app/templates/commercial_sales/quotes_list.html:2
+#: app/templates/commercial_sales/quotes_list.html:6
+#: app/templates/layout/base.html:95
+msgid "Quotes"
+msgstr "عروض الأسعار"
+
+#: app/templates/commercial_sales/employee_dashboard.html:13
+#: app/templates/commercial_sales/finance_dashboard.html:10
+msgid "Orders"
+msgstr "طلبات المبيعات"
+
+#: app/templates/commercial_sales/employee_dashboard.html:17
+#: app/templates/commercial_sales/finance_dashboard.html:14
+#: app/templates/commercial_sales/invoices_list.html:2
+#: app/templates/commercial_sales/invoices_list.html:5
+#: app/templates/layout/base.html:97
+msgid "Invoices"
+msgstr "الفواتير"
+
+#: app/templates/commercial_sales/employee_dashboard.html:21
+msgid "My commission earnings"
+msgstr "أرباح العمولات الخاصة بي"
+
+#: app/templates/commercial_sales/employee_dashboard.html:23
+msgid "Earned, awaiting approval"
+msgstr "مكتسبة، بانتظار الاعتماد"
+
+#: app/templates/commercial_sales/employee_dashboard.html:24
+msgid "Approved, awaiting payout"
+msgstr "معتمدة، بانتظار الصرف"
+
+#: app/templates/commercial_sales/employee_dashboard.html:25
+msgid "Paid to date"
+msgstr "المدفوع حتى الآن"
+
+#: app/templates/commercial_sales/employee_dashboard.html:27
+msgid "Pending approval requests"
+msgstr "طلبات الاعتماد المعلقة"
+
+#: app/templates/commercial_sales/finance_dashboard.html:2
+msgid "Finance dashboard"
+msgstr "لوحة معلومات المالية"
+
+#: app/templates/commercial_sales/finance_dashboard.html:5
+msgid "Commercial finance overview"
+msgstr "نظرة عامة على المالية التجارية"
+
+#: app/templates/commercial_sales/finance_dashboard.html:21
+msgid "Action queues"
+msgstr "قوائم الإجراءات المطلوبة"
+
+#: app/templates/commercial_sales/finance_dashboard.html:23
+msgid "Quote/pricing approvals pending"
+msgstr "اعتمادات عروض الأسعار/التسعير المعلقة"
+
+#: app/templates/commercial_sales/finance_dashboard.html:24
+msgid "Refunds pending approval"
+msgstr "المبالغ المستردة بانتظار الاعتماد"
+
+#: app/templates/commercial_sales/finance_dashboard.html:25
+msgid "Commissions pending approval"
+msgstr "عمولات بانتظار الاعتماد"
+
+#: app/templates/commercial_sales/finance_dashboard.html:26
+msgid "Commissions approved, awaiting payout"
+msgstr "عمولات معتمدة بانتظار الصرف"
+
+#: app/templates/commercial_sales/finance_dashboard.html:27
+msgid "Payout batches pending approval"
+msgstr "دفعات الصرف بانتظار الاعتماد"
+
+#: app/templates/commercial_sales/finance_dashboard.html:28
+msgid "Outstanding invoice total"
+msgstr "إجمالي الفواتير المستحقة"
+
+#: app/templates/commercial_sales/invoice_detail.html:9
+#: app/templates/commercial_sales/quote_detail.html:9
+msgid "Subtotal"
+msgstr "المجموع الفرعي"
+
+#: app/templates/commercial_sales/invoice_detail.html:10
+msgid "Tax"
+msgstr "الضريبة"
+
+#: app/templates/commercial_sales/invoice_detail.html:11
+#: app/templates/commercial_sales/invoices_list.html:18
+#: app/templates/commercial_sales/invoices_list.html:24
+#: app/templates/commercial_sales/order_detail.html:9
+#: app/templates/commercial_sales/orders_list.html:18
+#: app/templates/commercial_sales/orders_list.html:24
+#: app/templates/commercial_sales/quote_detail.html:11
+#: app/templates/commercial_sales/quotes_list.html:21
+#: app/templates/commercial_sales/quotes_list.html:27
+msgid "Total"
+msgstr "الإجمالي"
+
+#: app/templates/commercial_sales/invoice_detail.html:12
+msgid "Collected"
+msgstr "المحصَّل"
+
+#: app/templates/commercial_sales/invoice_detail.html:13
+msgid "Refundable"
+msgstr "القابل للاسترداد"
+
+#: app/templates/commercial_sales/invoice_detail.html:14
+#: app/templates/commercial_sales/invoices_list.html:18
+#: app/templates/commercial_sales/invoices_list.html:25
+#: app/templates/customers/detail.html:90 app/templates/leads/detail.html:107
+msgid "Due"
+msgstr "الاستحقاق"
+
+#: app/templates/commercial_sales/invoice_detail.html:21
+msgid "Issue invoice"
+msgstr "إصدار الفاتورة"
+
+#: app/templates/commercial_sales/invoice_detail.html:29
+msgid "Void invoice"
+msgstr "إلغاء الفاتورة"
+
+#: app/templates/commercial_sales/invoice_detail.html:35
+#: app/templates/commercial_sales/order_detail.html:47
+#: app/templates/commercial_sales/quote_detail.html:55
+msgid "Lines"
+msgstr "البنود"
+
+#: app/templates/commercial_sales/invoice_detail.html:37
+#: app/templates/commercial_sales/invoice_detail.html:41
+#: app/templates/commercial_sales/order_detail.html:49
+#: app/templates/commercial_sales/order_detail.html:53
+#: app/templates/commercial_sales/quote_detail.html:57
+#: app/templates/commercial_sales/quote_detail.html:61
+msgid "Item"
+msgstr "الصنف"
+
+#: app/templates/commercial_sales/invoice_detail.html:37
+#: app/templates/commercial_sales/invoice_detail.html:42
+#: app/templates/commercial_sales/order_detail.html:49
+#: app/templates/commercial_sales/order_detail.html:54
+#: app/templates/commercial_sales/quote_detail.html:57
+#: app/templates/commercial_sales/quote_detail.html:62
+#: app/templates/commercial_sales/quote_detail.html:87
+msgid "Quantity"
+msgstr "الكمية"
+
+#: app/templates/commercial_sales/invoice_detail.html:37
+#: app/templates/commercial_sales/invoice_detail.html:43
+#: app/templates/commercial_sales/order_detail.html:49
+#: app/templates/commercial_sales/order_detail.html:55
+#: app/templates/commercial_sales/quote_detail.html:57
+#: app/templates/commercial_sales/quote_detail.html:63
+msgid "Unit price"
+msgstr "سعر الوحدة"
+
+#: app/templates/commercial_sales/invoice_detail.html:37
+#: app/templates/commercial_sales/invoice_detail.html:44
+#: app/templates/commercial_sales/order_detail.html:49
+#: app/templates/commercial_sales/order_detail.html:56
+#: app/templates/commercial_sales/quote_detail.html:57
+#: app/templates/commercial_sales/quote_detail.html:65
+msgid "Line total"
+msgstr "إجمالي البند"
+
+#: app/templates/commercial_sales/invoice_detail.html:46
+#: app/templates/commercial_sales/order_detail.html:58
+msgid "No lines."
+msgstr "لا توجد بنود."
+
+#: app/templates/commercial_sales/invoice_detail.html:53
+msgid "Payment allocations"
+msgstr "تخصيصات الدفع"
+
+#: app/templates/commercial_sales/invoice_detail.html:55
+#: app/templates/commercial_sales/invoice_detail.html:59
+#: app/templates/commercial_sales/payment_detail.html:2
+msgid "Payment"
+msgstr "الدفعة"
+
+#: app/templates/commercial_sales/invoice_detail.html:55
+#: app/templates/commercial_sales/invoice_detail.html:61
+msgid "Allocated"
+msgstr "تاريخ التخصيص"
+
+#: app/templates/commercial_sales/invoice_detail.html:67
+msgid "Reverse"
+msgstr "عكس"
+
+#: app/templates/commercial_sales/invoice_detail.html:72
+msgid "No allocations yet."
+msgstr "لا توجد تخصيصات بعد."
+
+#: app/templates/commercial_sales/invoice_detail.html:80
+msgid "Payment ID"
+msgstr "معرّف الدفعة"
+
+#: app/templates/commercial_sales/invoice_detail.html:81
+msgid "Confirmed payment UUID"
+msgstr "معرّف دفعة مؤكَّدة"
+
+#: app/templates/commercial_sales/invoice_detail.html:84
+msgid "Allocate payment"
+msgstr "تخصيص الدفعة"
+
+#: app/templates/commercial_sales/invoice_detail.html:90
+#: app/templates/commercial_sales/refunds_list.html:2
+#: app/templates/commercial_sales/refunds_list.html:5
+#: app/templates/layout/base.html:99
+msgid "Refunds"
+msgstr "المبالغ المستردة"
+
+#: app/templates/commercial_sales/invoice_detail.html:101
+msgid "No refunds."
+msgstr "لا توجد مبالغ مستردة."
+
+#: app/templates/commercial_sales/invoice_detail.html:113
+msgid "Source payment (optional)"
+msgstr "الدفعة المصدر (اختياري)"
+
+#: app/templates/commercial_sales/invoice_detail.html:114
+msgid "Payment UUID"
+msgstr "معرّف الدفعة"
+
+#: app/templates/commercial_sales/invoice_detail.html:115
+msgid "Request refund"
+msgstr "طلب استرداد"
+
+#: app/templates/commercial_sales/invoices_list.html:18
+#: app/templates/commercial_sales/invoices_list.html:22
+#: app/templates/commercial_sales/orders_list.html:18
+#: app/templates/commercial_sales/orders_list.html:22
+#: app/templates/commercial_sales/quotes_list.html:21
+#: app/templates/commercial_sales/quotes_list.html:25
+msgid "Number"
+msgstr "الرقم"
+
+#: app/templates/commercial_sales/invoices_list.html:27
+msgid "No invoices yet."
+msgstr "لا توجد فواتير بعد."
+
+#: app/templates/commercial_sales/order_detail.html:15
+msgid "Confirm this order?"
+msgstr "تأكيد هذا الطلب؟"
+
+#: app/templates/commercial_sales/order_detail.html:18
+msgid "Confirm order"
+msgstr "تأكيد الطلب"
+
+#: app/templates/commercial_sales/order_detail.html:26
+msgid "Cancel order"
+msgstr "إلغاء الطلب"
+
+#: app/templates/commercial_sales/order_detail.html:30
+msgid "Fulfill this order? This provisions the subscription and license."
+msgstr "تنفيذ هذا الطلب؟ سيؤدي ذلك إلى تفعيل الاشتراك والترخيص."
+
+#: app/templates/commercial_sales/order_detail.html:32
+msgid "Fulfill order"
+msgstr "تنفيذ الطلب"
+
+#: app/templates/commercial_sales/order_detail.html:37
+msgid "View invoice"
+msgstr "عرض الفاتورة"
+
+#: app/templates/commercial_sales/order_detail.html:41
+msgid "Create invoice"
+msgstr "إنشاء فاتورة"
+
+#: app/templates/commercial_sales/orders_list.html:2
+#: app/templates/commercial_sales/orders_list.html:5
+msgid "Sales orders"
+msgstr "طلبات المبيعات"
+
+#: app/templates/commercial_sales/orders_list.html:27
+msgid "No orders yet."
+msgstr "لا توجد طلبات بعد."
+
+#: app/templates/commercial_sales/payment_detail.html:8
+#: app/templates/commercial_sales/payment_new.html:17
+#: app/templates/commercial_sales/payments_list.html:21
+#: app/templates/commercial_sales/payments_list.html:26
+#: app/templates/subscriptions/detail.html:62
+msgid "Method"
+msgstr "الطريقة"
+
+#: app/templates/commercial_sales/payment_detail.html:9
+#: app/templates/commercial_sales/payments_list.html:21
+#: app/templates/commercial_sales/payments_list.html:28
+msgid "Date"
+msgstr "التاريخ"
+
+#: app/templates/commercial_sales/payment_detail.html:10
+#: app/templates/commercial_sales/payment_new.html:29
+#: app/templates/commercial_sales/payout_batches_list.html:21
+#: app/templates/commercial_sales/payout_batches_list.html:25
+#: app/templates/subscriptions/detail.html:64
+msgid "Reference"
+msgstr "المرجع"
+
+#: app/templates/commercial_sales/payment_detail.html:11
+msgid "Unallocated balance"
+msgstr "الرصيد غير المخصص"
+
+#: app/templates/commercial_sales/payment_detail.html:15
+msgid "Confirm this payment?"
+msgstr "تأكيد هذه الدفعة؟"
+
+#: app/templates/commercial_sales/payment_detail.html:17
+msgid "Confirm payment"
+msgstr "تأكيد الدفعة"
+
+#: app/templates/commercial_sales/payment_detail.html:22
+msgid "Reject payment"
+msgstr "رفض الدفعة"
+
+#: app/templates/commercial_sales/payment_new.html:2
+#: app/templates/commercial_sales/payment_new.html:5
+#: app/templates/commercial_sales/payment_new.html:31
+#: app/templates/commercial_sales/payments_list.html:7
+#: app/templates/subscriptions/detail.html:69
+msgid "Record payment"
+msgstr "تسجيل الدفعة"
+
+#: app/templates/commercial_sales/payment_new.html:19
+msgid "Cash"
+msgstr "نقداً"
+
+#: app/templates/commercial_sales/payment_new.html:20
+msgid "Bank transfer"
+msgstr "تحويل بنكي"
+
+#: app/templates/commercial_sales/payment_new.html:21
+msgid "Card (offline)"
+msgstr "بطاقة (غير متصل)"
+
+#: app/templates/commercial_sales/payment_new.html:22
+msgid "Cheque"
+msgstr "شيك"
+
+#: app/templates/commercial_sales/payment_new.html:25
+#: app/templates/subscriptions/detail.html:63
+msgid "Payment date"
+msgstr "تاريخ الدفع"
+
+#: app/templates/commercial_sales/payment_new.html:27
+msgid "Invoice (optional)"
+msgstr "الفاتورة (اختياري)"
+
+#: app/templates/commercial_sales/payment_new.html:28
+msgid "Invoice UUID"
+msgstr "معرّف الفاتورة"
+
+#: app/templates/commercial_sales/payments_list.html:2
+#: app/templates/commercial_sales/payments_list.html:6
+#: app/templates/layout/base.html:98
+msgid "Payments"
+msgstr "المدفوعات"
+
+#: app/templates/commercial_sales/payments_list.html:30
+msgid "No payments yet."
+msgstr "لا توجد مدفوعات بعد."
+
+#: app/templates/commercial_sales/payout_batches_list.html:2
+msgid "Commission payouts"
+msgstr "صرف العمولات"
+
+#: app/templates/commercial_sales/payout_batches_list.html:5
+msgid "Commission payout batches"
+msgstr "دفعات صرف العمولات"
+
+#: app/templates/commercial_sales/payout_batches_list.html:9
+msgid "Batch reference"
+msgstr "مرجع الدفعة"
+
+#: app/templates/commercial_sales/payout_batches_list.html:11
+msgid "Period start"
+msgstr "بداية الفترة"
+
+#: app/templates/commercial_sales/payout_batches_list.html:13
+msgid "Period end"
+msgstr "نهاية الفترة"
+
+#: app/templates/commercial_sales/payout_batches_list.html:15
+msgid "Create batch"
+msgstr "إنشاء دفعة"
+
+#: app/templates/commercial_sales/payout_batches_list.html:21
+#: app/templates/commercial_sales/payout_batches_list.html:26
+msgid "Period"
+msgstr "الفترة"
+
+#: app/templates/commercial_sales/payout_batches_list.html:32
+msgid "Approve batch"
+msgstr "اعتماد الدفعة"
+
+#: app/templates/commercial_sales/payout_batches_list.html:37
+msgid "No payout batches yet."
+msgstr "لا توجد دفعات صرف بعد."
+
+#: app/templates/commercial_sales/payout_batches_list.html:44
+msgid "Approved commission entries awaiting payout"
+msgstr "قيود العمولة المعتمدة بانتظار الصرف"
+
+#: app/templates/commercial_sales/payout_batches_list.html:46
+#: app/templates/commercial_sales/payout_batches_list.html:51
+msgid "Employee"
+msgstr "الموظف"
+
+#: app/templates/commercial_sales/payout_batches_list.html:56
+msgid "Pay via"
+msgstr "الدفع عبر"
+
+#: app/templates/commercial_sales/payout_batches_list.html:61
+msgid "No approved entries awaiting payout."
+msgstr "لا توجد قيود معتمدة بانتظار الصرف."
+
+#: app/templates/commercial_sales/quote_detail.html:10
+#: app/templates/commercial_sales/quote_detail.html:57
+#: app/templates/commercial_sales/quote_detail.html:64
+msgid "Discount"
+msgstr "الخصم"
+
+#: app/templates/commercial_sales/quote_detail.html:12
+msgid "Valid until"
+msgstr "صالح حتى"
+
+#: app/templates/commercial_sales/quote_detail.html:17
+msgid "Submit this quote to the customer?"
+msgstr "إرسال عرض السعر هذا إلى العميل؟"
+
+#: app/templates/commercial_sales/quote_detail.html:20
+msgid "Submit quote"
+msgstr "إرسال عرض السعر"
+
+#: app/templates/commercial_sales/quote_detail.html:26
+msgid "Cancel quote"
+msgstr "إلغاء عرض السعر"
+
+#: app/templates/commercial_sales/quote_detail.html:35
+msgid "Customer accepted"
+msgstr "قبل العميل"
+
+#: app/templates/commercial_sales/quote_detail.html:42
+msgid "Customer rejected"
+msgstr "رفض العميل"
+
+#: app/templates/commercial_sales/quote_detail.html:49
+msgid "Create sales order"
+msgstr "إنشاء طلب مبيعات"
+
+#: app/templates/commercial_sales/quote_detail.html:68
+msgid "Remove this line?"
+msgstr "إزالة هذا البند؟"
+
+#: app/templates/commercial_sales/quote_detail.html:70
+msgid "Remove"
+msgstr "إزالة"
+
+#: app/templates/commercial_sales/quote_detail.html:75
+msgid "No lines yet."
+msgstr "لا توجد بنود بعد."
+
+#: app/templates/commercial_sales/quote_detail.html:83
+#: app/templates/subscriptions/list.html:21
+#: app/templates/subscriptions/new.html:12
+msgid "Plan"
+msgstr "الخطة"
+
+#: app/templates/commercial_sales/quote_detail.html:89
+msgid "Override unit price (optional)"
+msgstr "تجاوز سعر الوحدة (اختياري)"
+
+#: app/templates/commercial_sales/quote_detail.html:90
+msgid "Leave blank to use catalog price"
+msgstr "اتركه فارغاً لاستخدام سعر الكتالوج"
+
+#: app/templates/commercial_sales/quote_detail.html:91
+msgid "Override reason (required if overriding price)"
+msgstr "سبب التجاوز (مطلوب عند تجاوز السعر)"
+
+#: app/templates/commercial_sales/quote_detail.html:93
+msgid "Discount amount"
+msgstr "قيمة الخصم"
+
+#: app/templates/commercial_sales/quote_detail.html:95
+msgid "Add line"
+msgstr "إضافة بند"
+
+#: app/templates/commercial_sales/quote_detail.html:102
+msgid "Pricing approvals"
+msgstr "اعتمادات التسعير"
+
+#: app/templates/commercial_sales/quote_new.html:2
+#: app/templates/commercial_sales/quote_new.html:5
+#: app/templates/commercial_sales/quotes_list.html:7
+msgid "New quote"
+msgstr "عرض سعر جديد"
+
+#: app/templates/commercial_sales/quote_new.html:17
+msgid "Create quote"
+msgstr "إنشاء عرض سعر"
+
+#: app/templates/commercial_sales/quotes_list.html:30
+msgid "No quotes yet."
+msgstr "لا توجد عروض أسعار بعد."
+
+#: app/templates/commercial_sales/refund_detail.html:2
+msgid "Refund"
+msgstr "المبلغ المسترد"
+
+#: app/templates/commercial_sales/refund_detail.html:15
+msgid "Approve this refund?"
+msgstr "اعتماد هذا المبلغ المسترد؟"
+
+#: app/templates/commercial_sales/refund_detail.html:27
+msgid "Confirm this refund as paid?"
+msgstr "تأكيد أن هذا المبلغ المسترد مدفوع؟"
+
+#: app/templates/commercial_sales/refund_detail.html:30
+msgid "Confirm paid"
+msgstr "تأكيد الدفع"
+
+#: app/templates/commercial_sales/refunds_list.html:27
+msgid "No refunds yet."
+msgstr "لا توجد مبالغ مستردة بعد."
+
 #: app/templates/customers/detail.html:8 app/templates/customers/new.html:17
 msgid "Trade name"
 msgstr "الاسم التجاري"
@@ -2788,10 +3687,6 @@ msgstr "إكمال"
 msgid "No follow-ups yet."
 msgstr "لا توجد متابعات بعد."
 
-#: app/templates/customers/detail.html:90 app/templates/leads/detail.html:107
-msgid "Due"
-msgstr "الاستحقاق"
-
 #: app/templates/customers/detail.html:92 app/templates/leads/detail.html:109
 msgid "Add follow-up"
 msgstr "إضافة متابعة"
@@ -2812,45 +3707,45 @@ msgstr "إضافة ملاحظة"
 msgid "Location"
 msgstr "الموقع"
 
-#: app/templates/customers/detail.html:123 app/templates/leads/detail.html:140
+#: app/templates/customers/detail.html:128 app/templates/leads/detail.html:145
 msgid "Verification reason"
 msgstr "سبب التوثيق"
 
-#: app/templates/customers/detail.html:128 app/templates/leads/detail.html:145
+#: app/templates/customers/detail.html:133 app/templates/leads/detail.html:150
 msgid "No location captured yet."
 msgstr "لم يتم التقاط أي موقع بعد."
 
-#: app/templates/customers/detail.html:130 app/templates/leads/detail.html:147
-msgid "Capture current location"
-msgstr "التقاط الموقع الحالي"
-
-#: app/templates/customers/detail.html:141 app/templates/leads/detail.html:158
-msgid "Manual address"
-msgstr "عنوان يدوي"
-
-#: app/templates/customers/detail.html:143 app/templates/leads/detail.html:160
-msgid "Save address"
-msgstr "حفظ العنوان"
-
-#: app/templates/customers/detail.html:148 app/templates/leads/detail.html:177
-msgid "Assignment history"
-msgstr "سجل الإسناد"
-
-#: app/templates/customers/detail.html:150 app/templates/leads/detail.html:179
-msgid "Assigned to"
-msgstr "مُسند إلى"
-
-#: app/templates/customers/detail.html:154
-msgid "No reassignments yet."
-msgstr "لا توجد عمليات إعادة إسناد بعد."
-
-#: app/templates/customers/detail.html:162 app/templates/leads/detail.html:190
+#: app/templates/customers/detail.html:136 app/templates/leads/detail.html:153
 msgid "Geolocation is not supported by this browser."
 msgstr "تحديد الموقع الجغرافي غير مدعوم في هذا المتصفح."
 
-#: app/templates/customers/detail.html:169 app/templates/leads/detail.html:197
+#: app/templates/customers/detail.html:137 app/templates/leads/detail.html:154
 msgid "Location permission was denied or unavailable."
 msgstr "تم رفض إذن الموقع أو أنه غير متاح."
+
+#: app/templates/customers/detail.html:137 app/templates/leads/detail.html:154
+msgid "Capture current location"
+msgstr "التقاط الموقع الحالي"
+
+#: app/templates/customers/detail.html:148 app/templates/leads/detail.html:165
+msgid "Manual address"
+msgstr "عنوان يدوي"
+
+#: app/templates/customers/detail.html:150 app/templates/leads/detail.html:167
+msgid "Save address"
+msgstr "حفظ العنوان"
+
+#: app/templates/customers/detail.html:155 app/templates/leads/detail.html:184
+msgid "Assignment history"
+msgstr "سجل الإسناد"
+
+#: app/templates/customers/detail.html:157 app/templates/leads/detail.html:186
+msgid "Assigned to"
+msgstr "مُسند إلى"
+
+#: app/templates/customers/detail.html:161
+msgid "No reassignments yet."
+msgstr "لا توجد عمليات إعادة إسناد بعد."
 
 #: app/templates/customers/list.html:2 app/templates/layout/base.html:93
 msgid "Customers"
@@ -3413,7 +4308,7 @@ msgid "No activation events yet."
 msgstr "لا توجد أحداث تفعيل بعد."
 
 #: app/templates/installations/list.html:2
-#: app/templates/installations/list.html:6 app/templates/layout/base.html:98
+#: app/templates/installations/list.html:6 app/templates/layout/base.html:107
 msgid "Installations"
 msgstr "التثبيتات"
 
@@ -3465,53 +4360,69 @@ msgstr "العملاء المحتملون"
 msgid "CRM Dashboard"
 msgstr "لوحة تحكم إدارة العلاقات"
 
-#: app/templates/layout/base.html:96 app/templates/subscriptions/list.html:2
+#: app/templates/layout/base.html:96
+msgid "Sales Orders"
+msgstr "طلبات المبيعات"
+
+#: app/templates/layout/base.html:101
+msgid "Commission Payouts"
+msgstr "صرف العمولات"
+
+#: app/templates/layout/base.html:102
+msgid "Commercial Dashboard"
+msgstr "اللوحة التجارية"
+
+#: app/templates/layout/base.html:103
+msgid "Finance Dashboard"
+msgstr "لوحة المالية"
+
+#: app/templates/layout/base.html:105 app/templates/subscriptions/list.html:2
 #: app/templates/subscriptions/list.html:6
 msgid "Subscriptions"
 msgstr "الاشتراكات"
 
-#: app/templates/layout/base.html:97 app/templates/licensing/list.html:2
+#: app/templates/layout/base.html:106 app/templates/licensing/list.html:2
 #: app/templates/licensing/list.html:6
 msgid "Licenses"
 msgstr "التراخيص"
 
-#: app/templates/layout/base.html:101
+#: app/templates/layout/base.html:110
 msgid "Emergency Ext."
 msgstr "التمديد الطارئ"
 
-#: app/templates/layout/base.html:102
+#: app/templates/layout/base.html:111
 msgid "Activation Reviews"
 msgstr "مراجعات التفعيل"
 
-#: app/templates/layout/base.html:104
+#: app/templates/layout/base.html:113
 msgid "My Queue"
 msgstr "قائمة مهامي"
 
-#: app/templates/layout/base.html:108
+#: app/templates/layout/base.html:117
 msgid "Employee Dashboard"
 msgstr "لوحة تحكم الموظفين"
 
-#: app/templates/layout/base.html:109
+#: app/templates/layout/base.html:118
 msgid "Audit Log"
 msgstr "سجل التدقيق"
 
-#: app/templates/layout/base.html:110
+#: app/templates/layout/base.html:119
 msgid "Security Events"
 msgstr "أحداث الأمان"
 
-#: app/templates/layout/base.html:111
+#: app/templates/layout/base.html:120
 msgid "Backups"
 msgstr "النسخ الاحتياطية"
 
-#: app/templates/layout/base.html:112
+#: app/templates/layout/base.html:121
 msgid "Activation Service"
 msgstr "خدمة التفعيل"
 
-#: app/templates/layout/base.html:113
+#: app/templates/layout/base.html:122
 msgid "My Profile"
 msgstr "ملفي الشخصي"
 
-#: app/templates/layout/base.html:114
+#: app/templates/layout/base.html:123
 msgid "Account"
 msgstr "الحساب"
 
@@ -3593,11 +4504,11 @@ msgstr "المتابعة التالية"
 msgid "No leads yet."
 msgstr "لا يوجد عملاء محتملون بعد."
 
-#: app/templates/leads/list.html:35
+#: app/templates/leads/list.html:36
 msgid "Page"
 msgstr "الصفحة"
 
-#: app/templates/leads/list.html:35
+#: app/templates/leads/list.html:38
 msgid "total"
 msgstr "الإجمالي"
 
@@ -4085,36 +4996,11 @@ msgstr "تسجيل التجديد"
 msgid "Record a payment"
 msgstr "تسجيل دفعة"
 
-#: app/templates/subscriptions/detail.html:60
-msgid "Amount"
-msgstr "المبلغ"
-
-#: app/templates/subscriptions/detail.html:62
-msgid "Method"
-msgstr "الطريقة"
-
-#: app/templates/subscriptions/detail.html:63
-msgid "Payment date"
-msgstr "تاريخ الدفع"
-
-#: app/templates/subscriptions/detail.html:64
-msgid "Reference"
-msgstr "المرجع"
-
-#: app/templates/subscriptions/detail.html:69
-msgid "Record payment"
-msgstr "تسجيل الدفعة"
-
 #: app/templates/subscriptions/list.html:7
 #: app/templates/subscriptions/new.html:2
 #: app/templates/subscriptions/new.html:5
 msgid "New subscription"
 msgstr "اشتراك جديد"
-
-#: app/templates/subscriptions/list.html:21
-#: app/templates/subscriptions/new.html:12
-msgid "Plan"
-msgstr "الخطة"
 
 #: app/templates/subscriptions/list.html:21
 msgid "End date"

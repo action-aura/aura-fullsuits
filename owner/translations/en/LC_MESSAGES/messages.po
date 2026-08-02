@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-08-01 23:12+0300\n"
+"POT-Creation-Date: 2026-08-02 15:02+0300\n"
 "PO-Revision-Date: 2026-08-01 11:16+0300\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -106,6 +106,7 @@ msgid "Not enrolled"
 msgstr "Not enrolled"
 
 #: app/i18n_labels.py:70 app/i18n_labels.py:116 app/i18n_labels.py:130
+#: app/i18n_labels.py:737 app/i18n_labels.py:786
 msgid "Expired"
 msgstr "Expired"
 
@@ -203,18 +204,20 @@ msgid "Recovery code used"
 msgstr "Recovery code used"
 
 #: app/i18n_labels.py:103 app/templates/audit/security_events.html:7
-#: app/templates/layout/base.html:106 app/templates/staff/list.html:2
+#: app/templates/layout/base.html:115 app/templates/staff/list.html:2
 msgid "Staff"
 msgstr "Staff"
 
 #: app/i18n_labels.py:104 app/templates/employees/list.html:2
-#: app/templates/employees/list.html:5 app/templates/layout/base.html:107
+#: app/templates/employees/list.html:5 app/templates/layout/base.html:116
 msgid "Employees"
 msgstr "Employees"
 
 #: app/i18n_labels.py:111 app/i18n_labels.py:125 app/i18n_labels.py:263
 #: app/i18n_labels.py:281 app/i18n_labels.py:334 app/i18n_labels.py:547
-#: app/i18n_labels.py:558 app/i18n_labels.py:569
+#: app/i18n_labels.py:558 app/i18n_labels.py:569 app/i18n_labels.py:733
+#: app/i18n_labels.py:746 app/i18n_labels.py:757 app/i18n_labels.py:771
+#: app/i18n_labels.py:808
 msgid "Draft"
 msgstr "Draft"
 
@@ -236,11 +239,12 @@ msgid "Completed"
 msgstr "Completed"
 
 #: app/i18n_labels.py:118 app/i18n_labels.py:218 app/i18n_labels.py:271
-#: app/i18n_labels.py:287
+#: app/i18n_labels.py:287 app/i18n_labels.py:738 app/i18n_labels.py:748
+#: app/i18n_labels.py:785 app/i18n_labels.py:799
 msgid "Cancelled"
 msgstr "Cancelled"
 
-#: app/i18n_labels.py:126
+#: app/i18n_labels.py:126 app/i18n_labels.py:758
 msgid "Issued"
 msgstr "Issued"
 
@@ -296,7 +300,8 @@ msgstr "Under observation"
 msgid "Qualified"
 msgstr "Qualified"
 
-#: app/i18n_labels.py:172 app/i18n_labels.py:581
+#: app/i18n_labels.py:172 app/i18n_labels.py:581 app/i18n_labels.py:747
+#: app/templates/commercial_sales/order_detail.html:10
 msgid "Confirmed"
 msgstr "Confirmed"
 
@@ -321,6 +326,7 @@ msgid "Event"
 msgstr "Event"
 
 #: app/i18n_labels.py:186 app/i18n_labels.py:208
+#: app/templates/commercial_sales/payment_new.html:23
 msgid "Other"
 msgstr "Other"
 
@@ -418,6 +424,8 @@ msgid "Payment Recorded"
 msgstr "Payment Recorded"
 
 #: app/i18n_labels.py:268 app/i18n_labels.py:282 app/i18n_labels.py:317
+#: app/i18n_labels.py:772 app/i18n_labels.py:783 app/i18n_labels.py:796
+#: app/i18n_labels.py:809 app/templates/commercial_sales/refund_detail.html:10
 msgid "Approved"
 msgstr "Approved"
 
@@ -426,6 +434,7 @@ msgid "Applied"
 msgstr "Applied"
 
 #: app/i18n_labels.py:270 app/i18n_labels.py:318 app/i18n_labels.py:600
+#: app/i18n_labels.py:736 app/i18n_labels.py:784
 msgid "Rejected"
 msgstr "Rejected"
 
@@ -740,7 +749,8 @@ msgstr "Manual Approval"
 msgid "Risk Review"
 msgstr "Risk Review"
 
-#: app/i18n_labels.py:500 app/i18n_labels.py:580
+#: app/i18n_labels.py:500 app/i18n_labels.py:580 app/i18n_labels.py:782
+#: app/i18n_labels.py:794
 msgid "Pending"
 msgstr "Pending"
 
@@ -812,7 +822,7 @@ msgstr "Planned"
 msgid "Available"
 msgstr "Available"
 
-#: app/i18n_labels.py:583
+#: app/i18n_labels.py:583 app/i18n_labels.py:762
 msgid "Refunded"
 msgstr "Refunded"
 
@@ -820,7 +830,7 @@ msgstr "Refunded"
 msgid "Failure"
 msgstr "Failure"
 
-#: app/i18n_labels.py:599
+#: app/i18n_labels.py:599 app/i18n_labels.py:735
 msgid "Accepted"
 msgstr "Accepted"
 
@@ -978,11 +988,13 @@ msgstr "A 3-letter currency code is required when an estimated value is set."
 msgid "Location summary must be at most %(max_len)s characters."
 msgstr "Location summary must be at most %(max_len)s characters."
 
-#: app/i18n_labels.py:674
+#: app/i18n_labels.py:674 app/i18n_labels.py:842
 msgid ""
 "This request conflicts with an earlier request using the same idempotency"
 " key."
-msgstr "This request conflicts with an earlier request using the same idempotency key."
+msgstr ""
+"This request conflicts with an earlier request using the same idempotency"
+" key."
 
 #: app/i18n_labels.py:675
 #, python-format
@@ -1081,6 +1093,262 @@ msgstr "Manual address is too long."
 #: app/i18n_labels.py:722
 msgid "A reason is required to verify or revoke a location."
 msgstr "A reason is required to verify or revoke a location."
+
+#: app/i18n_labels.py:734
+msgid "Sent"
+msgstr "Sent"
+
+#: app/i18n_labels.py:749
+msgid "Fulfilled"
+msgstr "Fulfilled"
+
+#: app/i18n_labels.py:759
+msgid "Partially paid"
+msgstr "Partially paid"
+
+#: app/i18n_labels.py:760 app/i18n_labels.py:773 app/i18n_labels.py:797
+#: app/i18n_labels.py:810 app/templates/commercial_sales/refund_detail.html:11
+msgid "Paid"
+msgstr "Paid"
+
+#: app/i18n_labels.py:761 app/i18n_labels.py:774
+#: app/templates/commercial_sales/refund_detail.html:23
+msgid "Void"
+msgstr "Void"
+
+#: app/i18n_labels.py:763
+msgid "Partially refunded"
+msgstr "Partially refunded"
+
+#: app/i18n_labels.py:795
+#: app/templates/commercial_sales/commissions_list.html:19
+#: app/templates/commercial_sales/commissions_list.html:25
+msgid "Earned"
+msgstr "Earned"
+
+#: app/i18n_labels.py:798
+#: app/templates/commercial_sales/employee_dashboard.html:26
+#: app/templates/commercial_sales/invoice_detail.html:69
+msgid "Reversed"
+msgstr "Reversed"
+
+#: app/i18n_labels.py:800
+msgid "Disputed"
+msgstr "Disputed"
+
+#: app/i18n_labels.py:824
+msgid "Quantity must be a positive whole number."
+msgstr "Quantity must be a positive whole number."
+
+#: app/i18n_labels.py:825
+msgid "Amount must be a finite number."
+msgstr "Amount must be a finite number."
+
+#: app/i18n_labels.py:826
+msgid "Document total cannot be negative."
+msgstr "Document total cannot be negative."
+
+#: app/i18n_labels.py:827
+msgid "Discount cannot exceed the applicable gross amount."
+msgstr "Discount cannot exceed the applicable gross amount."
+
+#: app/i18n_labels.py:828
+#, python-format
+msgid ""
+"Refund amount (%(amount)s) exceeds the refundable balance "
+"(%(refundable)s)."
+msgstr ""
+"Refund amount (%(amount)s) exceeds the refundable balance "
+"(%(refundable)s)."
+
+#: app/i18n_labels.py:829
+#, python-format
+msgid ""
+"Allocation amount (%(amount)s) exceeds the unallocated payment balance "
+"(%(available)s)."
+msgstr ""
+"Allocation amount (%(amount)s) exceeds the unallocated payment balance "
+"(%(available)s)."
+
+#: app/i18n_labels.py:830
+#, python-format
+msgid ""
+"Allocation amount (%(amount)s) exceeds the invoice outstanding balance "
+"(%(outstanding)s)."
+msgstr ""
+"Allocation amount (%(amount)s) exceeds the invoice outstanding balance "
+"(%(outstanding)s)."
+
+#: app/i18n_labels.py:831
+#, python-format
+msgid "Currency %(given)s does not match the required currency %(expected)s."
+msgstr "Currency %(given)s does not match the required currency %(expected)s."
+
+#: app/i18n_labels.py:832
+msgid "Currency must be a 3-letter ISO 4217 code."
+msgstr "Currency must be a 3-letter ISO 4217 code."
+
+#: app/i18n_labels.py:833
+msgid "A document must have at least one line."
+msgstr "A document must have at least one line."
+
+#: app/i18n_labels.py:834
+#, python-format
+msgid "Cannot change quote status from %(from_status)s to %(to_status)s."
+msgstr "Cannot change quote status from %(from_status)s to %(to_status)s."
+
+#: app/i18n_labels.py:835
+#, python-format
+msgid "Cannot change order status from %(from_status)s to %(to_status)s."
+msgstr "Cannot change order status from %(from_status)s to %(to_status)s."
+
+#: app/i18n_labels.py:836
+#, python-format
+msgid "Cannot change invoice status from %(from_status)s to %(to_status)s."
+msgstr "Cannot change invoice status from %(from_status)s to %(to_status)s."
+
+#: app/i18n_labels.py:837
+#, python-format
+msgid "Cannot change refund status from %(from_status)s to %(to_status)s."
+msgstr "Cannot change refund status from %(from_status)s to %(to_status)s."
+
+#: app/i18n_labels.py:838
+#, python-format
+msgid "Cannot change approval status from %(from_status)s to %(to_status)s."
+msgstr "Cannot change approval status from %(from_status)s to %(to_status)s."
+
+#: app/i18n_labels.py:839
+msgid "This record was changed by someone else. Reload and try again."
+msgstr "This record was changed by someone else. Reload and try again."
+
+#: app/i18n_labels.py:840 app/templates/commercial_sales/not_found.html:4
+msgid "Record not found."
+msgstr "Record not found."
+
+#: app/i18n_labels.py:841
+msgid "You do not have access to this record."
+msgstr "You do not have access to this record."
+
+#: app/i18n_labels.py:843
+msgid "A reason is required for this action."
+msgstr "A reason is required for this action."
+
+#: app/i18n_labels.py:844
+msgid "Payment method must be one of the allowed values."
+msgstr "Payment method must be one of the allowed values."
+
+#: app/i18n_labels.py:845
+msgid "You cannot approve your own request."
+msgstr "You cannot approve your own request."
+
+#: app/i18n_labels.py:846
+msgid "This action requires approval before it can proceed."
+msgstr "This action requires approval before it can proceed."
+
+#: app/i18n_labels.py:847
+msgid "The approval no longer matches the current version of this record."
+msgstr "The approval no longer matches the current version of this record."
+
+#: app/i18n_labels.py:848
+msgid "Discount exceeds your permitted limit and requires approval."
+msgstr "Discount exceeds your permitted limit and requires approval."
+
+#: app/i18n_labels.py:849
+msgid "A custom price requires approval."
+msgstr "A custom price requires approval."
+
+#: app/i18n_labels.py:850
+msgid "A zero-price line requires approval."
+msgstr "A zero-price line requires approval."
+
+#: app/i18n_labels.py:851
+msgid "The quote must be accepted before an order can be created."
+msgstr ""
+"The quote must be accepted before an order can be created.The renewal "
+"request must be applied before this pilot can be marked converted."
+
+#: app/i18n_labels.py:852
+msgid "A confirmed customer is required before an order can be created."
+msgstr "A confirmed customer is required before an order can be created."
+
+#: app/i18n_labels.py:853
+msgid "This product or plan is not currently sellable."
+msgstr "This product or plan is not currently sellable."
+
+#: app/i18n_labels.py:854
+msgid "This price is no longer effective."
+msgstr "This price is no longer effective."
+
+#: app/i18n_labels.py:855
+msgid "The payment must be confirmed before it can be allocated."
+msgstr ""
+"The payment must be confirmed before it can be allocated.The renewal "
+"request must be applied before this pilot can be marked converted."
+
+#: app/i18n_labels.py:856
+msgid "This payment has already been confirmed."
+msgstr "This payment has already been confirmed."
+
+#: app/i18n_labels.py:857
+msgid "You cannot confirm a payment you submitted yourself."
+msgstr "You cannot confirm a payment you submitted yourself."
+
+#: app/i18n_labels.py:858
+#, python-format
+msgid "This order is not eligible for fulfillment yet: %(reason)s."
+msgstr "This order is not eligible for fulfillment yet: %(reason)s."
+
+#: app/i18n_labels.py:859
+msgid "This order line has already been fulfilled."
+msgstr "This order line has already been fulfilled."
+
+#: app/i18n_labels.py:860
+msgid "This action requires a real employee profile."
+msgstr "This action requires a real employee profile."
+
+#: app/i18n_labels.py:873
+#, python-format
+msgid "Commission rule type %(rule_type)s is not implemented in this phase."
+msgstr "Commission rule type %(rule_type)s is not implemented in this phase."
+
+#: app/i18n_labels.py:874
+msgid "Commission rate must be a percentage greater than 0 and at most 100."
+msgstr "Commission rate must be a percentage greater than 0 and at most 100."
+
+#: app/i18n_labels.py:875
+msgid "Commission fixed amount must be a positive value with a valid currency."
+msgstr "Commission fixed amount must be a positive value with a valid currency."
+
+#: app/i18n_labels.py:876
+msgid "The employee has no active commission plan/rule assignment for this date."
+msgstr "The employee has no active commission plan/rule assignment for this date."
+
+#: app/i18n_labels.py:877
+msgid "A commission entry already exists for this payment allocation."
+msgstr "A commission entry already exists for this payment allocation."
+
+#: app/i18n_labels.py:878
+#, python-format
+msgid ""
+"Cannot change commission entry status from %(from_status)s to "
+"%(to_status)s."
+msgstr "Cannot change lead status from %(from_status)s to %(to_status)s."
+
+#: app/i18n_labels.py:879
+msgid "You cannot approve or adjust your own commission entry."
+msgstr "You cannot approve or adjust your own commission entry."
+
+#: app/i18n_labels.py:880
+msgid "An external payout reference is required to record a commission payout."
+msgstr "An external payout reference is required to record a commission payout."
+
+#: app/i18n_labels.py:881
+msgid "A reason is required for this commission action."
+msgstr "A reason is required for this commission action."
+
+#: app/i18n_labels.py:882
+msgid "This commission entry is already included in a payout batch."
+msgstr "This commission entry is already included in a payout batch."
 
 #: app/auth/routes.py:378
 msgid "Invitation is invalid or has expired."
@@ -1218,11 +1486,11 @@ msgstr "Export CSV"
 #: app/templates/commercial_ops/pilot_detail.html:88
 #: app/templates/commercial_ops/renewal_detail.html:68
 #: app/templates/commercial_ops/timeline.html:8
-#: app/templates/customers/detail.html:150
+#: app/templates/customers/detail.html:157
 #: app/templates/dashboard/index.html:71
 #: app/templates/employees/detail.html:136
 #: app/templates/installations/detail.html:54
-#: app/templates/leads/detail.html:167 app/templates/leads/detail.html:179
+#: app/templates/leads/detail.html:174 app/templates/leads/detail.html:186
 #: app/templates/licensing/detail.html:65
 #: app/templates/licensing_admin/requests.html:18
 #: app/templates/subscriptions/detail.html:44
@@ -1445,7 +1713,7 @@ msgid "6-digit code (or a recovery code)"
 msgstr "6-digit code (or a recovery code)"
 
 #: app/templates/auth/mfa_verify.html:11
-#: app/templates/customers/detail.html:124 app/templates/leads/detail.html:141
+#: app/templates/customers/detail.html:129 app/templates/leads/detail.html:146
 msgid "Verify"
 msgstr "Verify"
 
@@ -1491,7 +1759,7 @@ msgstr "Code"
 msgid "Name"
 msgstr "Name"
 
-#: app/templates/catalog/index.html:2 app/templates/layout/base.html:95
+#: app/templates/catalog/index.html:2 app/templates/layout/base.html:104
 msgid "Catalog"
 msgstr "Catalog"
 
@@ -1545,6 +1813,30 @@ msgstr "Billing model"
 #: app/templates/commercial_ops/renewals_list.html:8
 #: app/templates/commercial_ops/renewals_list.html:18
 #: app/templates/commercial_ops/slot_exceptions.html:27
+#: app/templates/commercial_sales/commissions_list.html:9
+#: app/templates/commercial_sales/commissions_list.html:19
+#: app/templates/commercial_sales/commissions_list.html:24
+#: app/templates/commercial_sales/invoice_detail.html:92
+#: app/templates/commercial_sales/invoice_detail.html:97
+#: app/templates/commercial_sales/invoices_list.html:8
+#: app/templates/commercial_sales/invoices_list.html:18
+#: app/templates/commercial_sales/invoices_list.html:23
+#: app/templates/commercial_sales/orders_list.html:8
+#: app/templates/commercial_sales/orders_list.html:18
+#: app/templates/commercial_sales/orders_list.html:23
+#: app/templates/commercial_sales/payments_list.html:11
+#: app/templates/commercial_sales/payments_list.html:21
+#: app/templates/commercial_sales/payments_list.html:27
+#: app/templates/commercial_sales/payout_batches_list.html:21
+#: app/templates/commercial_sales/payout_batches_list.html:27
+#: app/templates/commercial_sales/quote_detail.html:104
+#: app/templates/commercial_sales/quote_detail.html:109
+#: app/templates/commercial_sales/quotes_list.html:11
+#: app/templates/commercial_sales/quotes_list.html:21
+#: app/templates/commercial_sales/quotes_list.html:26
+#: app/templates/commercial_sales/refunds_list.html:8
+#: app/templates/commercial_sales/refunds_list.html:18
+#: app/templates/commercial_sales/refunds_list.html:23
 #: app/templates/customers/list.html:11 app/templates/customers/list.html:21
 #: app/templates/dashboard/index.html:42
 #: app/templates/employees/detail.html:110
@@ -1653,6 +1945,11 @@ msgstr "Base price"
 #: app/templates/catalog/plan_new.html:20
 #: app/templates/commercial_ops/pilot_convert.html:16
 #: app/templates/commercial_ops/renewals_new.html:21
+#: app/templates/commercial_sales/invoice_detail.html:8
+#: app/templates/commercial_sales/order_detail.html:8
+#: app/templates/commercial_sales/payment_new.html:15
+#: app/templates/commercial_sales/quote_detail.html:8
+#: app/templates/commercial_sales/quote_new.html:13
 #: app/templates/subscriptions/detail.html:61
 msgid "Currency"
 msgstr "Currency"
@@ -1775,6 +2072,7 @@ msgstr "Effective date"
 #: app/templates/commercial_ops/activation_policy.html:31
 #: app/templates/commercial_ops/renewal_detail.html:22
 #: app/templates/commercial_ops/renewals_new.html:30
+#: app/templates/commercial_sales/quote_new.html:15
 #: app/templates/customers/detail.html:91 app/templates/leads/detail.html:108
 #: app/templates/leads/detail.html:114
 msgid "Notes"
@@ -1815,10 +2113,25 @@ msgstr "(all licenses on this subscription)"
 #: app/templates/commercial_ops/renewals_new.html:29
 #: app/templates/commercial_ops/slot_exceptions.html:27
 #: app/templates/commercial_ops/timeline.html:8
-#: app/templates/customers/detail.html:150
+#: app/templates/commercial_sales/invoice_detail.html:28
+#: app/templates/commercial_sales/invoice_detail.html:66
+#: app/templates/commercial_sales/invoice_detail.html:92
+#: app/templates/commercial_sales/invoice_detail.html:98
+#: app/templates/commercial_sales/invoice_detail.html:111
+#: app/templates/commercial_sales/order_detail.html:25
+#: app/templates/commercial_sales/payment_detail.html:21
+#: app/templates/commercial_sales/quote_detail.html:25
+#: app/templates/commercial_sales/quote_detail.html:41
+#: app/templates/commercial_sales/quote_detail.html:104
+#: app/templates/commercial_sales/quote_detail.html:108
+#: app/templates/commercial_sales/quote_detail.html:121
+#: app/templates/commercial_sales/refund_detail.html:8
+#: app/templates/commercial_sales/refunds_list.html:18
+#: app/templates/commercial_sales/refunds_list.html:24
+#: app/templates/customers/detail.html:157
 #: app/templates/employees/detail.html:136
 #: app/templates/installations/detail.html:26
-#: app/templates/leads/detail.html:167 app/templates/leads/detail.html:179
+#: app/templates/leads/detail.html:174 app/templates/leads/detail.html:186
 #: app/templates/licensing/detail.html:44
 #: app/templates/licensing/detail.html:65
 #: app/templates/licensing_admin/requests.html:18
@@ -1908,6 +2221,12 @@ msgstr "Emergency extensions"
 #: app/templates/commercial_ops/pending_activations_list.html:11
 #: app/templates/commercial_ops/pilots_list.html:10
 #: app/templates/commercial_ops/renewals_list.html:10
+#: app/templates/commercial_sales/commissions_list.html:11
+#: app/templates/commercial_sales/invoices_list.html:10
+#: app/templates/commercial_sales/orders_list.html:10
+#: app/templates/commercial_sales/payments_list.html:13
+#: app/templates/commercial_sales/quotes_list.html:13
+#: app/templates/commercial_sales/refunds_list.html:10
 #: app/templates/customers/list.html:13 app/templates/employees/list.html:10
 #: app/templates/employees/list.html:16 app/templates/employees/list.html:24
 #: app/templates/employees/list.html:30
@@ -1969,6 +2288,7 @@ msgid "Create extension"
 msgstr "Create extension"
 
 #: app/templates/commercial_ops/not_found.html:2
+#: app/templates/commercial_sales/not_found.html:2
 #: app/templates/employees/not_found.html:2
 msgid "Not found"
 msgstr "Not found"
@@ -1979,7 +2299,7 @@ msgid "%(entity)s not found."
 msgstr "%(entity)s not found."
 
 #: app/templates/commercial_ops/notifications_list.html:2
-#: app/templates/layout/base.html:103
+#: app/templates/layout/base.html:112
 msgid "Notifications"
 msgstr "Notifications"
 
@@ -2014,6 +2334,15 @@ msgstr "Title"
 
 #: app/templates/commercial_ops/notifications_list.html:30
 #: app/templates/commercial_ops/renewals_list.html:18
+#: app/templates/commercial_sales/order_detail.html:11
+#: app/templates/commercial_sales/orders_list.html:18
+#: app/templates/commercial_sales/orders_list.html:25
+#: app/templates/commercial_sales/quote_detail.html:13
+#: app/templates/commercial_sales/quotes_list.html:21
+#: app/templates/commercial_sales/quotes_list.html:28
+#: app/templates/commercial_sales/refund_detail.html:9
+#: app/templates/commercial_sales/refunds_list.html:18
+#: app/templates/commercial_sales/refunds_list.html:25
 #: app/templates/employees/detail.html:110 app/templates/leads/detail.html:23
 #: app/templates/profile/sessions.html:9
 msgid "Created"
@@ -2065,6 +2394,8 @@ msgstr "Gating mode"
 
 #: app/templates/commercial_ops/pending_activation_detail.html:15
 #: app/templates/commercial_ops/pending_activations_list.html:17
+#: app/templates/commercial_sales/quote_detail.html:104
+#: app/templates/commercial_sales/quote_detail.html:110
 msgid "Requested"
 msgstr "Requested"
 
@@ -2096,6 +2427,9 @@ msgstr "Approve this activation? This requires recent authentication."
 
 #: app/templates/commercial_ops/pending_activation_detail.html:27
 #: app/templates/commercial_ops/renewal_detail.html:48
+#: app/templates/commercial_sales/commissions_list.html:30
+#: app/templates/commercial_sales/quote_detail.html:116
+#: app/templates/commercial_sales/refund_detail.html:18
 msgid "Approve"
 msgstr "Approve"
 
@@ -2104,6 +2438,7 @@ msgid "Reject this activation?"
 msgstr "Reject this activation?"
 
 #: app/templates/commercial_ops/pending_activation_detail.html:33
+#: app/templates/commercial_sales/quote_detail.html:122
 msgid "Reject"
 msgstr "Reject"
 
@@ -2311,21 +2646,21 @@ msgstr "No extensions yet."
 
 #: app/templates/commercial_ops/pilot_detail.html:86
 #: app/templates/commercial_ops/renewal_detail.html:66
-#: app/templates/leads/detail.html:165 app/templates/licensing/detail.html:63
+#: app/templates/leads/detail.html:172 app/templates/licensing/detail.html:63
 #: app/templates/subscriptions/detail.html:42
 msgid "Status history"
 msgstr "Status history"
 
 #: app/templates/commercial_ops/pilot_detail.html:88
 #: app/templates/commercial_ops/renewal_detail.html:68
-#: app/templates/leads/detail.html:167 app/templates/licensing/detail.html:65
+#: app/templates/leads/detail.html:174 app/templates/licensing/detail.html:65
 #: app/templates/subscriptions/detail.html:44
 msgid "From"
 msgstr "From"
 
 #: app/templates/commercial_ops/pilot_detail.html:88
 #: app/templates/commercial_ops/renewal_detail.html:68
-#: app/templates/leads/detail.html:167 app/templates/licensing/detail.html:65
+#: app/templates/leads/detail.html:174 app/templates/licensing/detail.html:65
 #: app/templates/subscriptions/detail.html:44
 msgid "To"
 msgstr "To"
@@ -2339,12 +2674,14 @@ msgstr "No status changes yet."
 
 #: app/templates/commercial_ops/pilots_list.html:2
 #: app/templates/commercial_ops/pilots_list.html:5
-#: app/templates/layout/base.html:100
+#: app/templates/layout/base.html:109
 msgid "Pilots"
 msgstr "Pilots"
 
 #: app/templates/commercial_ops/pilots_list.html:18
 #: app/templates/commercial_ops/renewals_list.html:18
+#: app/templates/commercial_sales/payment_new.html:9
+#: app/templates/commercial_sales/quote_new.html:9
 #: app/templates/installations/detail.html:8
 #: app/templates/installations/list.html:21
 #: app/templates/licensing/list.html:21
@@ -2414,7 +2751,7 @@ msgstr "Nothing here right now."
 
 #: app/templates/commercial_ops/reconciliation.html:2
 #: app/templates/commercial_ops/reconciliation.html:5
-#: app/templates/layout/base.html:105
+#: app/templates/layout/base.html:114
 msgid "Reconciliation"
 msgstr "Reconciliation"
 
@@ -2587,7 +2924,7 @@ msgid "Apply renewal"
 msgstr "Apply renewal"
 
 #: app/templates/commercial_ops/renewals_list.html:2
-#: app/templates/layout/base.html:99
+#: app/templates/layout/base.html:108
 msgid "Renewals"
 msgstr "Renewals"
 
@@ -2699,6 +3036,573 @@ msgstr "Category"
 msgid "No commercial events recorded yet."
 msgstr "No commercial events recorded yet."
 
+#: app/templates/commercial_sales/commissions_list.html:2
+#: app/templates/commercial_sales/commissions_list.html:5
+#: app/templates/layout/base.html:100
+msgid "Commissions"
+msgstr "Commissions"
+
+#: app/templates/commercial_sales/commissions_list.html:19
+#: app/templates/commercial_sales/commissions_list.html:23
+#: app/templates/commercial_sales/invoice_detail.html:55
+#: app/templates/commercial_sales/invoice_detail.html:60
+#: app/templates/commercial_sales/invoice_detail.html:82
+#: app/templates/commercial_sales/invoice_detail.html:92
+#: app/templates/commercial_sales/invoice_detail.html:96
+#: app/templates/commercial_sales/invoice_detail.html:109
+#: app/templates/commercial_sales/payment_new.html:13
+#: app/templates/commercial_sales/payments_list.html:21
+#: app/templates/commercial_sales/payments_list.html:25
+#: app/templates/commercial_sales/payout_batches_list.html:46
+#: app/templates/commercial_sales/payout_batches_list.html:50
+#: app/templates/commercial_sales/refunds_list.html:18
+#: app/templates/commercial_sales/refunds_list.html:22
+#: app/templates/subscriptions/detail.html:60
+msgid "Amount"
+msgstr "Amount"
+
+#: app/templates/commercial_sales/commissions_list.html:35
+msgid "No commission entries yet."
+msgstr "No commission entries yet."
+
+#: app/templates/commercial_sales/employee_dashboard.html:2
+msgid "Commercial dashboard"
+msgstr "Commercial dashboard"
+
+#: app/templates/commercial_sales/employee_dashboard.html:5
+msgid "My commercial pipeline"
+msgstr "My commercial pipeline"
+
+#: app/templates/commercial_sales/employee_dashboard.html:7
+msgid "This view requires a real employee profile."
+msgstr "This view requires a real employee profile."
+
+#: app/templates/commercial_sales/employee_dashboard.html:9
+#: app/templates/commercial_sales/finance_dashboard.html:6
+#: app/templates/commercial_sales/quotes_list.html:2
+#: app/templates/commercial_sales/quotes_list.html:6
+#: app/templates/layout/base.html:95
+msgid "Quotes"
+msgstr "Quotes"
+
+#: app/templates/commercial_sales/employee_dashboard.html:13
+#: app/templates/commercial_sales/finance_dashboard.html:10
+msgid "Orders"
+msgstr "Orders"
+
+#: app/templates/commercial_sales/employee_dashboard.html:17
+#: app/templates/commercial_sales/finance_dashboard.html:14
+#: app/templates/commercial_sales/invoices_list.html:2
+#: app/templates/commercial_sales/invoices_list.html:5
+#: app/templates/layout/base.html:97
+msgid "Invoices"
+msgstr "Invoices"
+
+#: app/templates/commercial_sales/employee_dashboard.html:21
+msgid "My commission earnings"
+msgstr "My commission earnings"
+
+#: app/templates/commercial_sales/employee_dashboard.html:23
+msgid "Earned, awaiting approval"
+msgstr "Earned, awaiting approval"
+
+#: app/templates/commercial_sales/employee_dashboard.html:24
+msgid "Approved, awaiting payout"
+msgstr "Approved, awaiting payout"
+
+#: app/templates/commercial_sales/employee_dashboard.html:25
+msgid "Paid to date"
+msgstr "Paid to date"
+
+#: app/templates/commercial_sales/employee_dashboard.html:27
+msgid "Pending approval requests"
+msgstr "Pending approval requests"
+
+#: app/templates/commercial_sales/finance_dashboard.html:2
+msgid "Finance dashboard"
+msgstr "Finance dashboard"
+
+#: app/templates/commercial_sales/finance_dashboard.html:5
+msgid "Commercial finance overview"
+msgstr "Commercial finance overview"
+
+#: app/templates/commercial_sales/finance_dashboard.html:21
+msgid "Action queues"
+msgstr "Action queues"
+
+#: app/templates/commercial_sales/finance_dashboard.html:23
+msgid "Quote/pricing approvals pending"
+msgstr "Quote/pricing approvals pending"
+
+#: app/templates/commercial_sales/finance_dashboard.html:24
+msgid "Refunds pending approval"
+msgstr "Refunds pending approval"
+
+#: app/templates/commercial_sales/finance_dashboard.html:25
+msgid "Commissions pending approval"
+msgstr "Commissions pending approval"
+
+#: app/templates/commercial_sales/finance_dashboard.html:26
+msgid "Commissions approved, awaiting payout"
+msgstr "Commissions approved, awaiting payout"
+
+#: app/templates/commercial_sales/finance_dashboard.html:27
+msgid "Payout batches pending approval"
+msgstr "Payout batches pending approval"
+
+#: app/templates/commercial_sales/finance_dashboard.html:28
+msgid "Outstanding invoice total"
+msgstr "Outstanding invoice total"
+
+#: app/templates/commercial_sales/invoice_detail.html:9
+#: app/templates/commercial_sales/quote_detail.html:9
+msgid "Subtotal"
+msgstr "Subtotal"
+
+#: app/templates/commercial_sales/invoice_detail.html:10
+msgid "Tax"
+msgstr "Tax"
+
+#: app/templates/commercial_sales/invoice_detail.html:11
+#: app/templates/commercial_sales/invoices_list.html:18
+#: app/templates/commercial_sales/invoices_list.html:24
+#: app/templates/commercial_sales/order_detail.html:9
+#: app/templates/commercial_sales/orders_list.html:18
+#: app/templates/commercial_sales/orders_list.html:24
+#: app/templates/commercial_sales/quote_detail.html:11
+#: app/templates/commercial_sales/quotes_list.html:21
+#: app/templates/commercial_sales/quotes_list.html:27
+msgid "Total"
+msgstr "Total"
+
+#: app/templates/commercial_sales/invoice_detail.html:12
+msgid "Collected"
+msgstr "Collected"
+
+#: app/templates/commercial_sales/invoice_detail.html:13
+msgid "Refundable"
+msgstr "Refundable"
+
+#: app/templates/commercial_sales/invoice_detail.html:14
+#: app/templates/commercial_sales/invoices_list.html:18
+#: app/templates/commercial_sales/invoices_list.html:25
+#: app/templates/customers/detail.html:90 app/templates/leads/detail.html:107
+msgid "Due"
+msgstr "Due"
+
+#: app/templates/commercial_sales/invoice_detail.html:21
+msgid "Issue invoice"
+msgstr "Issue invoice"
+
+#: app/templates/commercial_sales/invoice_detail.html:29
+msgid "Void invoice"
+msgstr "Void invoice"
+
+#: app/templates/commercial_sales/invoice_detail.html:35
+#: app/templates/commercial_sales/order_detail.html:47
+#: app/templates/commercial_sales/quote_detail.html:55
+msgid "Lines"
+msgstr "Lines"
+
+#: app/templates/commercial_sales/invoice_detail.html:37
+#: app/templates/commercial_sales/invoice_detail.html:41
+#: app/templates/commercial_sales/order_detail.html:49
+#: app/templates/commercial_sales/order_detail.html:53
+#: app/templates/commercial_sales/quote_detail.html:57
+#: app/templates/commercial_sales/quote_detail.html:61
+msgid "Item"
+msgstr "Item"
+
+#: app/templates/commercial_sales/invoice_detail.html:37
+#: app/templates/commercial_sales/invoice_detail.html:42
+#: app/templates/commercial_sales/order_detail.html:49
+#: app/templates/commercial_sales/order_detail.html:54
+#: app/templates/commercial_sales/quote_detail.html:57
+#: app/templates/commercial_sales/quote_detail.html:62
+#: app/templates/commercial_sales/quote_detail.html:87
+msgid "Quantity"
+msgstr "Quantity"
+
+#: app/templates/commercial_sales/invoice_detail.html:37
+#: app/templates/commercial_sales/invoice_detail.html:43
+#: app/templates/commercial_sales/order_detail.html:49
+#: app/templates/commercial_sales/order_detail.html:55
+#: app/templates/commercial_sales/quote_detail.html:57
+#: app/templates/commercial_sales/quote_detail.html:63
+msgid "Unit price"
+msgstr "Unit price"
+
+#: app/templates/commercial_sales/invoice_detail.html:37
+#: app/templates/commercial_sales/invoice_detail.html:44
+#: app/templates/commercial_sales/order_detail.html:49
+#: app/templates/commercial_sales/order_detail.html:56
+#: app/templates/commercial_sales/quote_detail.html:57
+#: app/templates/commercial_sales/quote_detail.html:65
+msgid "Line total"
+msgstr "Line total"
+
+#: app/templates/commercial_sales/invoice_detail.html:46
+#: app/templates/commercial_sales/order_detail.html:58
+msgid "No lines."
+msgstr "No lines."
+
+#: app/templates/commercial_sales/invoice_detail.html:53
+msgid "Payment allocations"
+msgstr "Payment allocations"
+
+#: app/templates/commercial_sales/invoice_detail.html:55
+#: app/templates/commercial_sales/invoice_detail.html:59
+#: app/templates/commercial_sales/payment_detail.html:2
+msgid "Payment"
+msgstr "Payment"
+
+#: app/templates/commercial_sales/invoice_detail.html:55
+#: app/templates/commercial_sales/invoice_detail.html:61
+msgid "Allocated"
+msgstr "Allocated"
+
+#: app/templates/commercial_sales/invoice_detail.html:67
+msgid "Reverse"
+msgstr "Reverse"
+
+#: app/templates/commercial_sales/invoice_detail.html:72
+msgid "No allocations yet."
+msgstr "No allocations yet."
+
+#: app/templates/commercial_sales/invoice_detail.html:80
+msgid "Payment ID"
+msgstr "Payment ID"
+
+#: app/templates/commercial_sales/invoice_detail.html:81
+msgid "Confirmed payment UUID"
+msgstr "Confirmed payment UUID"
+
+#: app/templates/commercial_sales/invoice_detail.html:84
+msgid "Allocate payment"
+msgstr "Allocate payment"
+
+#: app/templates/commercial_sales/invoice_detail.html:90
+#: app/templates/commercial_sales/refunds_list.html:2
+#: app/templates/commercial_sales/refunds_list.html:5
+#: app/templates/layout/base.html:99
+msgid "Refunds"
+msgstr "Refunds"
+
+#: app/templates/commercial_sales/invoice_detail.html:101
+msgid "No refunds."
+msgstr "No refunds."
+
+#: app/templates/commercial_sales/invoice_detail.html:113
+msgid "Source payment (optional)"
+msgstr "Source payment (optional)"
+
+#: app/templates/commercial_sales/invoice_detail.html:114
+msgid "Payment UUID"
+msgstr "Payment UUID"
+
+#: app/templates/commercial_sales/invoice_detail.html:115
+msgid "Request refund"
+msgstr "Request refund"
+
+#: app/templates/commercial_sales/invoices_list.html:18
+#: app/templates/commercial_sales/invoices_list.html:22
+#: app/templates/commercial_sales/orders_list.html:18
+#: app/templates/commercial_sales/orders_list.html:22
+#: app/templates/commercial_sales/quotes_list.html:21
+#: app/templates/commercial_sales/quotes_list.html:25
+msgid "Number"
+msgstr "Number"
+
+#: app/templates/commercial_sales/invoices_list.html:27
+msgid "No invoices yet."
+msgstr "No invoices yet."
+
+#: app/templates/commercial_sales/order_detail.html:15
+msgid "Confirm this order?"
+msgstr "Confirm this order?"
+
+#: app/templates/commercial_sales/order_detail.html:18
+msgid "Confirm order"
+msgstr "Confirm order"
+
+#: app/templates/commercial_sales/order_detail.html:26
+msgid "Cancel order"
+msgstr "Cancel order"
+
+#: app/templates/commercial_sales/order_detail.html:30
+msgid "Fulfill this order? This provisions the subscription and license."
+msgstr "Fulfill this order? This provisions the subscription and license."
+
+#: app/templates/commercial_sales/order_detail.html:32
+msgid "Fulfill order"
+msgstr "Fulfill order"
+
+#: app/templates/commercial_sales/order_detail.html:37
+msgid "View invoice"
+msgstr "View invoice"
+
+#: app/templates/commercial_sales/order_detail.html:41
+msgid "Create invoice"
+msgstr "Create invoice"
+
+#: app/templates/commercial_sales/orders_list.html:2
+#: app/templates/commercial_sales/orders_list.html:5
+msgid "Sales orders"
+msgstr "Sales orders"
+
+#: app/templates/commercial_sales/orders_list.html:27
+msgid "No orders yet."
+msgstr "No orders yet."
+
+#: app/templates/commercial_sales/payment_detail.html:8
+#: app/templates/commercial_sales/payment_new.html:17
+#: app/templates/commercial_sales/payments_list.html:21
+#: app/templates/commercial_sales/payments_list.html:26
+#: app/templates/subscriptions/detail.html:62
+msgid "Method"
+msgstr "Method"
+
+#: app/templates/commercial_sales/payment_detail.html:9
+#: app/templates/commercial_sales/payments_list.html:21
+#: app/templates/commercial_sales/payments_list.html:28
+msgid "Date"
+msgstr "Date"
+
+#: app/templates/commercial_sales/payment_detail.html:10
+#: app/templates/commercial_sales/payment_new.html:29
+#: app/templates/commercial_sales/payout_batches_list.html:21
+#: app/templates/commercial_sales/payout_batches_list.html:25
+#: app/templates/subscriptions/detail.html:64
+msgid "Reference"
+msgstr "Reference"
+
+#: app/templates/commercial_sales/payment_detail.html:11
+msgid "Unallocated balance"
+msgstr "Unallocated balance"
+
+#: app/templates/commercial_sales/payment_detail.html:15
+msgid "Confirm this payment?"
+msgstr "Confirm this payment?"
+
+#: app/templates/commercial_sales/payment_detail.html:17
+msgid "Confirm payment"
+msgstr "Confirm payment"
+
+#: app/templates/commercial_sales/payment_detail.html:22
+msgid "Reject payment"
+msgstr "Reject payment"
+
+#: app/templates/commercial_sales/payment_new.html:2
+#: app/templates/commercial_sales/payment_new.html:5
+#: app/templates/commercial_sales/payment_new.html:31
+#: app/templates/commercial_sales/payments_list.html:7
+#: app/templates/subscriptions/detail.html:69
+msgid "Record payment"
+msgstr "Record payment"
+
+#: app/templates/commercial_sales/payment_new.html:19
+msgid "Cash"
+msgstr "Cash"
+
+#: app/templates/commercial_sales/payment_new.html:20
+msgid "Bank transfer"
+msgstr "Bank transfer"
+
+#: app/templates/commercial_sales/payment_new.html:21
+msgid "Card (offline)"
+msgstr "Card (offline)"
+
+#: app/templates/commercial_sales/payment_new.html:22
+msgid "Cheque"
+msgstr "Cheque"
+
+#: app/templates/commercial_sales/payment_new.html:25
+#: app/templates/subscriptions/detail.html:63
+msgid "Payment date"
+msgstr "Payment date"
+
+#: app/templates/commercial_sales/payment_new.html:27
+msgid "Invoice (optional)"
+msgstr "Invoice (optional)"
+
+#: app/templates/commercial_sales/payment_new.html:28
+msgid "Invoice UUID"
+msgstr "Invoice UUID"
+
+#: app/templates/commercial_sales/payments_list.html:2
+#: app/templates/commercial_sales/payments_list.html:6
+#: app/templates/layout/base.html:98
+msgid "Payments"
+msgstr "Payments"
+
+#: app/templates/commercial_sales/payments_list.html:30
+msgid "No payments yet."
+msgstr "No payments yet."
+
+#: app/templates/commercial_sales/payout_batches_list.html:2
+msgid "Commission payouts"
+msgstr "Commission payouts"
+
+#: app/templates/commercial_sales/payout_batches_list.html:5
+msgid "Commission payout batches"
+msgstr "Commission payout batches"
+
+#: app/templates/commercial_sales/payout_batches_list.html:9
+msgid "Batch reference"
+msgstr "Batch reference"
+
+#: app/templates/commercial_sales/payout_batches_list.html:11
+msgid "Period start"
+msgstr "Period start"
+
+#: app/templates/commercial_sales/payout_batches_list.html:13
+msgid "Period end"
+msgstr "Period end"
+
+#: app/templates/commercial_sales/payout_batches_list.html:15
+msgid "Create batch"
+msgstr "Create batch"
+
+#: app/templates/commercial_sales/payout_batches_list.html:21
+#: app/templates/commercial_sales/payout_batches_list.html:26
+msgid "Period"
+msgstr "Period"
+
+#: app/templates/commercial_sales/payout_batches_list.html:32
+msgid "Approve batch"
+msgstr "Approve batch"
+
+#: app/templates/commercial_sales/payout_batches_list.html:37
+msgid "No payout batches yet."
+msgstr "No payout batches yet."
+
+#: app/templates/commercial_sales/payout_batches_list.html:44
+msgid "Approved commission entries awaiting payout"
+msgstr "Approved commission entries awaiting payout"
+
+#: app/templates/commercial_sales/payout_batches_list.html:46
+#: app/templates/commercial_sales/payout_batches_list.html:51
+msgid "Employee"
+msgstr "Employee"
+
+#: app/templates/commercial_sales/payout_batches_list.html:56
+msgid "Pay via"
+msgstr "Pay via"
+
+#: app/templates/commercial_sales/payout_batches_list.html:61
+msgid "No approved entries awaiting payout."
+msgstr "No approved entries awaiting payout."
+
+#: app/templates/commercial_sales/quote_detail.html:10
+#: app/templates/commercial_sales/quote_detail.html:57
+#: app/templates/commercial_sales/quote_detail.html:64
+msgid "Discount"
+msgstr "Discount"
+
+#: app/templates/commercial_sales/quote_detail.html:12
+msgid "Valid until"
+msgstr "Valid until"
+
+#: app/templates/commercial_sales/quote_detail.html:17
+msgid "Submit this quote to the customer?"
+msgstr "Submit this quote to the customer?"
+
+#: app/templates/commercial_sales/quote_detail.html:20
+msgid "Submit quote"
+msgstr "Submit quote"
+
+#: app/templates/commercial_sales/quote_detail.html:26
+msgid "Cancel quote"
+msgstr "Cancel quote"
+
+#: app/templates/commercial_sales/quote_detail.html:35
+msgid "Customer accepted"
+msgstr "Customer accepted"
+
+#: app/templates/commercial_sales/quote_detail.html:42
+msgid "Customer rejected"
+msgstr "Customer rejected"
+
+#: app/templates/commercial_sales/quote_detail.html:49
+msgid "Create sales order"
+msgstr "Create sales order"
+
+#: app/templates/commercial_sales/quote_detail.html:68
+msgid "Remove this line?"
+msgstr "Remove this line?"
+
+#: app/templates/commercial_sales/quote_detail.html:70
+msgid "Remove"
+msgstr "Remove"
+
+#: app/templates/commercial_sales/quote_detail.html:75
+msgid "No lines yet."
+msgstr "No lines yet."
+
+#: app/templates/commercial_sales/quote_detail.html:83
+#: app/templates/subscriptions/list.html:21
+#: app/templates/subscriptions/new.html:12
+msgid "Plan"
+msgstr "Plan"
+
+#: app/templates/commercial_sales/quote_detail.html:89
+msgid "Override unit price (optional)"
+msgstr "Override unit price (optional)"
+
+#: app/templates/commercial_sales/quote_detail.html:90
+msgid "Leave blank to use catalog price"
+msgstr "Leave blank to use catalog price"
+
+#: app/templates/commercial_sales/quote_detail.html:91
+msgid "Override reason (required if overriding price)"
+msgstr "Override reason (required if overriding price)"
+
+#: app/templates/commercial_sales/quote_detail.html:93
+msgid "Discount amount"
+msgstr "Discount amount"
+
+#: app/templates/commercial_sales/quote_detail.html:95
+msgid "Add line"
+msgstr "Add line"
+
+#: app/templates/commercial_sales/quote_detail.html:102
+msgid "Pricing approvals"
+msgstr "Pricing approvals"
+
+#: app/templates/commercial_sales/quote_new.html:2
+#: app/templates/commercial_sales/quote_new.html:5
+#: app/templates/commercial_sales/quotes_list.html:7
+msgid "New quote"
+msgstr "New quote"
+
+#: app/templates/commercial_sales/quote_new.html:17
+msgid "Create quote"
+msgstr "Create quote"
+
+#: app/templates/commercial_sales/quotes_list.html:30
+msgid "No quotes yet."
+msgstr "No quotes yet."
+
+#: app/templates/commercial_sales/refund_detail.html:2
+msgid "Refund"
+msgstr "Refund"
+
+#: app/templates/commercial_sales/refund_detail.html:15
+msgid "Approve this refund?"
+msgstr "Approve this refund?"
+
+#: app/templates/commercial_sales/refund_detail.html:27
+msgid "Confirm this refund as paid?"
+msgstr "Confirm this refund as paid?"
+
+#: app/templates/commercial_sales/refund_detail.html:30
+msgid "Confirm paid"
+msgstr "Confirm paid"
+
+#: app/templates/commercial_sales/refunds_list.html:27
+msgid "No refunds yet."
+msgstr "No refunds yet."
+
 #: app/templates/customers/detail.html:8 app/templates/customers/new.html:17
 msgid "Trade name"
 msgstr "Trade name"
@@ -2797,10 +3701,6 @@ msgstr "Complete"
 msgid "No follow-ups yet."
 msgstr "No follow-ups yet."
 
-#: app/templates/customers/detail.html:90 app/templates/leads/detail.html:107
-msgid "Due"
-msgstr "Due"
-
 #: app/templates/customers/detail.html:92 app/templates/leads/detail.html:109
 msgid "Add follow-up"
 msgstr "Add follow-up"
@@ -2821,45 +3721,45 @@ msgstr "Add note"
 msgid "Location"
 msgstr "Location"
 
-#: app/templates/customers/detail.html:123 app/templates/leads/detail.html:140
+#: app/templates/customers/detail.html:128 app/templates/leads/detail.html:145
 msgid "Verification reason"
 msgstr "Verification reason"
 
-#: app/templates/customers/detail.html:128 app/templates/leads/detail.html:145
+#: app/templates/customers/detail.html:133 app/templates/leads/detail.html:150
 msgid "No location captured yet."
 msgstr "No location captured yet."
 
-#: app/templates/customers/detail.html:130 app/templates/leads/detail.html:147
-msgid "Capture current location"
-msgstr "Capture current location"
-
-#: app/templates/customers/detail.html:141 app/templates/leads/detail.html:158
-msgid "Manual address"
-msgstr "Manual address"
-
-#: app/templates/customers/detail.html:143 app/templates/leads/detail.html:160
-msgid "Save address"
-msgstr "Save address"
-
-#: app/templates/customers/detail.html:148 app/templates/leads/detail.html:177
-msgid "Assignment history"
-msgstr "Assignment history"
-
-#: app/templates/customers/detail.html:150 app/templates/leads/detail.html:179
-msgid "Assigned to"
-msgstr "Assigned to"
-
-#: app/templates/customers/detail.html:154
-msgid "No reassignments yet."
-msgstr "No reassignments yet."
-
-#: app/templates/customers/detail.html:162 app/templates/leads/detail.html:190
+#: app/templates/customers/detail.html:136 app/templates/leads/detail.html:153
 msgid "Geolocation is not supported by this browser."
 msgstr "Geolocation is not supported by this browser."
 
-#: app/templates/customers/detail.html:169 app/templates/leads/detail.html:197
+#: app/templates/customers/detail.html:137 app/templates/leads/detail.html:154
 msgid "Location permission was denied or unavailable."
 msgstr "Location permission was denied or unavailable."
+
+#: app/templates/customers/detail.html:137 app/templates/leads/detail.html:154
+msgid "Capture current location"
+msgstr "Capture current location"
+
+#: app/templates/customers/detail.html:148 app/templates/leads/detail.html:165
+msgid "Manual address"
+msgstr "Manual address"
+
+#: app/templates/customers/detail.html:150 app/templates/leads/detail.html:167
+msgid "Save address"
+msgstr "Save address"
+
+#: app/templates/customers/detail.html:155 app/templates/leads/detail.html:184
+msgid "Assignment history"
+msgstr "Assignment history"
+
+#: app/templates/customers/detail.html:157 app/templates/leads/detail.html:186
+msgid "Assigned to"
+msgstr "Assigned to"
+
+#: app/templates/customers/detail.html:161
+msgid "No reassignments yet."
+msgstr "No reassignments yet."
 
 #: app/templates/customers/list.html:2 app/templates/layout/base.html:93
 msgid "Customers"
@@ -3425,7 +4325,7 @@ msgid "No activation events yet."
 msgstr "No activation events yet."
 
 #: app/templates/installations/list.html:2
-#: app/templates/installations/list.html:6 app/templates/layout/base.html:98
+#: app/templates/installations/list.html:6 app/templates/layout/base.html:107
 msgid "Installations"
 msgstr "Installations"
 
@@ -3477,53 +4377,69 @@ msgstr "Leads"
 msgid "CRM Dashboard"
 msgstr "CRM Dashboard"
 
-#: app/templates/layout/base.html:96 app/templates/subscriptions/list.html:2
+#: app/templates/layout/base.html:96
+msgid "Sales Orders"
+msgstr "Sales Orders"
+
+#: app/templates/layout/base.html:101
+msgid "Commission Payouts"
+msgstr "Commission Payouts"
+
+#: app/templates/layout/base.html:102
+msgid "Commercial Dashboard"
+msgstr "Commercial Dashboard"
+
+#: app/templates/layout/base.html:103
+msgid "Finance Dashboard"
+msgstr "Finance Dashboard"
+
+#: app/templates/layout/base.html:105 app/templates/subscriptions/list.html:2
 #: app/templates/subscriptions/list.html:6
 msgid "Subscriptions"
 msgstr "Subscriptions"
 
-#: app/templates/layout/base.html:97 app/templates/licensing/list.html:2
+#: app/templates/layout/base.html:106 app/templates/licensing/list.html:2
 #: app/templates/licensing/list.html:6
 msgid "Licenses"
 msgstr "Licenses"
 
-#: app/templates/layout/base.html:101
+#: app/templates/layout/base.html:110
 msgid "Emergency Ext."
 msgstr "Emergency Ext."
 
-#: app/templates/layout/base.html:102
+#: app/templates/layout/base.html:111
 msgid "Activation Reviews"
 msgstr "Activation Reviews"
 
-#: app/templates/layout/base.html:104
+#: app/templates/layout/base.html:113
 msgid "My Queue"
 msgstr "My Queue"
 
-#: app/templates/layout/base.html:108
+#: app/templates/layout/base.html:117
 msgid "Employee Dashboard"
 msgstr "Employee Dashboard"
 
-#: app/templates/layout/base.html:109
+#: app/templates/layout/base.html:118
 msgid "Audit Log"
 msgstr "Audit Log"
 
-#: app/templates/layout/base.html:110
+#: app/templates/layout/base.html:119
 msgid "Security Events"
 msgstr "Security Events"
 
-#: app/templates/layout/base.html:111
+#: app/templates/layout/base.html:120
 msgid "Backups"
 msgstr "Backups"
 
-#: app/templates/layout/base.html:112
+#: app/templates/layout/base.html:121
 msgid "Activation Service"
 msgstr "Activation Service"
 
-#: app/templates/layout/base.html:113
+#: app/templates/layout/base.html:122
 msgid "My Profile"
 msgstr "My Profile"
 
-#: app/templates/layout/base.html:114
+#: app/templates/layout/base.html:123
 msgid "Account"
 msgstr "Account"
 
@@ -3605,11 +4521,11 @@ msgstr "Next follow-up"
 msgid "No leads yet."
 msgstr "No leads yet."
 
-#: app/templates/leads/list.html:35
+#: app/templates/leads/list.html:36
 msgid "Page"
 msgstr "Page"
 
-#: app/templates/leads/list.html:35
+#: app/templates/leads/list.html:38
 msgid "total"
 msgstr "total"
 
@@ -4102,36 +5018,11 @@ msgstr "Record renewal"
 msgid "Record a payment"
 msgstr "Record a payment"
 
-#: app/templates/subscriptions/detail.html:60
-msgid "Amount"
-msgstr "Amount"
-
-#: app/templates/subscriptions/detail.html:62
-msgid "Method"
-msgstr "Method"
-
-#: app/templates/subscriptions/detail.html:63
-msgid "Payment date"
-msgstr "Payment date"
-
-#: app/templates/subscriptions/detail.html:64
-msgid "Reference"
-msgstr "Reference"
-
-#: app/templates/subscriptions/detail.html:69
-msgid "Record payment"
-msgstr "Record payment"
-
 #: app/templates/subscriptions/list.html:7
 #: app/templates/subscriptions/new.html:2
 #: app/templates/subscriptions/new.html:5
 msgid "New subscription"
 msgstr "New subscription"
-
-#: app/templates/subscriptions/list.html:21
-#: app/templates/subscriptions/new.html:12
-msgid "Plan"
-msgstr "Plan"
 
 #: app/templates/subscriptions/list.html:21
 msgid "End date"
