@@ -1263,9 +1263,7 @@ msgstr "A zero-price line requires approval."
 
 #: app/i18n_labels.py:851
 msgid "The quote must be accepted before an order can be created."
-msgstr ""
-"The quote must be accepted before an order can be created.The renewal "
-"request must be applied before this pilot can be marked converted."
+msgstr "The quote must be accepted before an order can be created."
 
 #: app/i18n_labels.py:852
 msgid "A confirmed customer is required before an order can be created."
@@ -1281,9 +1279,7 @@ msgstr "This price is no longer effective."
 
 #: app/i18n_labels.py:855
 msgid "The payment must be confirmed before it can be allocated."
-msgstr ""
-"The payment must be confirmed before it can be allocated.The renewal "
-"request must be applied before this pilot can be marked converted."
+msgstr "The payment must be confirmed before it can be allocated."
 
 #: app/i18n_labels.py:856
 msgid "This payment has already been confirmed."
@@ -1332,7 +1328,9 @@ msgstr "A commission entry already exists for this payment allocation."
 msgid ""
 "Cannot change commission entry status from %(from_status)s to "
 "%(to_status)s."
-msgstr "Cannot change lead status from %(from_status)s to %(to_status)s."
+msgstr ""
+"Cannot change commission entry status from %(from_status)s to "
+"%(to_status)s."
 
 #: app/i18n_labels.py:879
 msgid "You cannot approve or adjust your own commission entry."
