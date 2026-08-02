@@ -17,7 +17,7 @@ This basis choice is real and load-bearing, not incidental: `PaymentAllocation.a
 
 `calculate_commission()` (Phase 9.5A, unchanged) already uses `ROUND_HALF_UP` at 2 decimal places — the same codebase-wide convention `app/commercial_sales/calculator.py` (Milestone 3) independently confirmed and reused. No new rounding policy is introduced by Milestone 14/15.
 
-## Proportional earning on partial allocations (forward reference to Milestone 15)
+## Proportional earning on partial allocations
 
 Since the basis is `PaymentAllocation.allocated_amount` (not the full `PaymentRecord.amount` or the full `CommercialInvoice.total`), a partial allocation naturally produces a proportionally smaller commission — no special-case "partial commission" logic is needed; `calculate_commission(rule, allocation.allocated_amount)` is simply called with a smaller `base_amount`. Two partial allocations against the same invoice (from the same or different Payments) each independently trigger their own commission-earning evaluation, on their own allocated amount — matching the Non-Negotiable rule "partial allocations create proportional earnings" without any additional arithmetic beyond what `calculate_commission()` already does.
 
