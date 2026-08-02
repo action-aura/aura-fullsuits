@@ -175,6 +175,16 @@ ROLES: dict[str, dict] = {
             "leads.create", "leads.view_own", "leads.update_own", "leads.convert",
             "customers.view_own", "customers.update_own", "customers.capture_location",
             "quotes.create", "orders.create", "invoices.create",
+            # Phase 9.5D Milestone 18 -- real gap found and closed:
+            # payments.create was FINANCE-only, but submit_payment()'s own
+            # docstring and payment-maker-checker-policy.md both describe
+            # this as the sales-employee-facing "I received this payment,
+            # please confirm it" action -- the M10 doc explicitly deferred
+            # this exact decision to "Milestone 16/19 ... at the route/
+            # permission-grant level". payments.confirm remains FINANCE-only
+            # (never granted here) -- the maker-checker separation this
+            # phase requires everywhere else.
+            "payments.create",
             "commissions.view_own",
             "expenses.create", "expenses.view_own",
             "device_policy.view",

@@ -2,7 +2,7 @@
 
 ## The rule
 
-A sales employee may **submit** payment information (`submit_payment()`, requires `payments.create`, pre-seeded and granted to FINANCE per Milestone 1's audit — not to SALES by default, matching the existing RBAC posture, though the spec's narrative describes sales staff "submitting evidence" as a real workflow role Milestone 16/19 should account for at the route/permission-grant level, not this service). Only an authorized Finance/management user may **confirm** it (`payments.confirm`, seeded, FINANCE-assigned, no role except SUPER_ADMIN's wildcard holds it otherwise). The two actions are structurally distinct function calls (`submit_payment()` vs. `confirm_payment()`), never a single "record-and-auto-confirm" path.
+A sales employee may **submit** payment information (`submit_payment()`, requires `payments.create`). **Resolved at Milestone 18** (this was explicitly deferred here, to "Milestone 16/19 ... at the route/permission-grant level"): `payments.create` is now granted to both `SALES` and `FINANCE` — a salesperson can record "I received this payment," matching the function's own docstring ("Sales-employee-facing"). Only an authorized Finance/management user may **confirm** it (`payments.confirm`, seeded, FINANCE-assigned only, no role except `SUPER_ADMIN`'s wildcard holds it otherwise — never granted to `SALES`). The two actions are structurally distinct function calls (`submit_payment()` vs. `confirm_payment()`), never a single "record-and-auto-confirm" path.
 
 ## Enforced in the service layer, not just by permission grant
 

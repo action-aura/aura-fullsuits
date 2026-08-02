@@ -109,6 +109,12 @@ def test_full_quote_to_commission_earning_chain_via_http(app, client, seeded):
     assert resp.status_code == 200, resp.get_data(as_text=True)
     assert resp.get_json()["status"] == "ISSUED"
 
+    # Maker-checker: SALES submits the payment it collected, FINANCE
+    # confirms it -- the same actor submitting AND confirming is a real,
+    # unconditional service-layer block (SELF_CONFIRMATION_FORBIDDEN),
+    # not merely a permission gate.
+    force_login(client, app, staff_sales)
+    csrf = _csrf(client)
     resp = client.post(
         "/api/operations/v1/payments",
         json={"customer_id": str(customer_id), "amount": "1000.00", "currency": "USD", "method": "CASH", "payment_date": date.today().isoformat()},
@@ -118,6 +124,8 @@ def test_full_quote_to_commission_earning_chain_via_http(app, client, seeded):
     payment_id = resp.get_json()["id"]
     assert resp.get_json()["status"] == "PENDING"
 
+    force_login(client, app, staff_finance)
+    csrf = _csrf(client)
     resp = client.post(f"/api/operations/v1/payments/{payment_id}/confirm", json={}, headers={"X-CSRFToken": csrf})
     assert resp.status_code == 200, resp.get_data(as_text=True)
     assert resp.get_json()["status"] == "CONFIRMED"
@@ -145,14 +153,14 @@ def test_employee_cannot_read_peer_quote_via_api(app, client, seeded):
     staff_a = make_staff(app, "apis3@example.com", role_codes=["SALES"])
     staff_b = make_staff(app, "apis4@example.com", role_codes=["SALES"])
     with app.app_context():
-        profile_a = _make_profile(app, staff_a, "EMP-APIS3")
+        profile_a_id = _make_profile(app, staff_a, "EMP-APIS3").id
         _make_profile(app, staff_b, "EMP-APIS4")
     customer_id, plan_id = _seed_customer_and_plan(app, staff_a, "APIS3_PLAN")
 
     with app.app_context():
         from app.commercial_sales.quotes import create_quote
 
-        quote = create_quote({"customer_id": customer_id, "currency": "USD"}, actor_employee_profile_id=profile_a.id, actor_staff_user_id=staff_a)
+        quote = create_quote({"customer_id": customer_id, "currency": "USD"}, actor_employee_profile_id=profile_a_id, actor_staff_user_id=staff_a)
         quote_id = quote.id
 
     force_login(client, app, staff_b)
