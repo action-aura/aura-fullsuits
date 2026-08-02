@@ -1,0 +1,34 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Record payment") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _("Record payment") }}</h2>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form method="post" action="{{ url_for('commercial_sales_web.submit_payment_route') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>{{ _("Customer") }}</label>
+    <select name="customer_id" required>
+      {% for c in customers %}<option value="{{ c.id }}">{{ c.legal_name }}</option>{% endfor %}
+    </select>
+    <label>{{ _("Amount") }}</label>
+    <input name="amount" required>
+    <label>{{ _("Currency") }}</label>
+    <input name="currency" value="USD" maxlength="3" required>
+    <label>{{ _("Method") }}</label>
+    <select name="method">
+      <option value="CASH">{{ _("Cash") }}</option>
+      <option value="BANK_TRANSFER">{{ _("Bank transfer") }}</option>
+      <option value="CARD_OFFLINE">{{ _("Card (offline)") }}</option>
+      <option value="CHEQUE">{{ _("Cheque") }}</option>
+      <option value="OTHER">{{ _("Other") }}</option>
+    </select>
+    <label>{{ _("Payment date") }}</label>
+    <input type="date" name="payment_date" required>
+    <label>{{ _("Invoice (optional)") }}</label>
+    <input name="commercial_invoice_id" placeholder="{{ _('Invoice UUID') }}">
+    <label>{{ _("Reference") }}</label>
+    <input name="reference">
+    <button type="submit" style="margin-top:0.75rem;">{{ _("Record payment") }}</button>
+  </form>
+</div>
+{% endblock %}

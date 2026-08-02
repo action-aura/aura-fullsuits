@@ -1,0 +1,32 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Invoices") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _("Invoices") }}</h2>
+  <form class="filters" method="get">
+    <div>
+      <label>{{ _("Status") }}</label>
+      <select name="status" onchange="this.form.submit()">
+        <option value="">{{ _("All") }}</option>
+        {% for s in ["DRAFT","ISSUED","PARTIALLY_PAID","PAID","VOID","REFUNDED","PARTIALLY_REFUNDED"] %}
+        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ commercial_invoice_status_label(s) }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </form>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Number") }}</th><th>{{ _("Status") }}</th><th>{{ _("Total") }}</th><th>{{ _("Due") }}</th></tr></thead>
+    <tbody>
+    {% for i in invoices %}
+    <tr>
+      <td data-label="{{ _('Number') }}"><a href="{{ url_for('commercial_sales_web.invoice_detail', invoice_id=i.id) }}"><bdi dir="ltr">{{ i.invoice_number }}</bdi></a></td>
+      <td data-label="{{ _('Status') }}"><span class="badge {{ 'success' if i.status == 'PAID' else ('danger' if i.status in ('VOID',) else 'pending') }}">{{ commercial_invoice_status_label(i.status) }}</span></td>
+      <td data-label="{{ _('Total') }}">{{ format_owner_number(i.total) }} {{ i.currency }}</td>
+      <td data-label="{{ _('Due') }}">{{ format_owner_date(i.due_date) if i.due_date else "-" }}</td>
+    </tr>
+    {% else %}<tr><td colspan="4" class="empty">{{ _("No invoices yet.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

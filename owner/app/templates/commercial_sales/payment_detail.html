@@ -1,0 +1,26 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Payment") }}{% endblock %}
+{% block content %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<div class="card">
+  <h2>{{ format_owner_number(payment.amount) }} {{ payment.currency }} <span class="badge {{ 'success' if payment.status == 'CONFIRMED' else 'pending' }}">{{ payment_status_label(payment.status) }}</span></h2>
+  <dl class="kv">
+    <dt>{{ _("Method") }}</dt><dd>{{ payment.method }}</dd>
+    <dt>{{ _("Date") }}</dt><dd>{{ format_owner_date(payment.payment_date) }}</dd>
+    <dt>{{ _("Reference") }}</dt><dd>{{ payment.reference or "-" }}</dd>
+    {% if unallocated is not none %}<dt>{{ _("Unallocated balance") }}</dt><dd>{{ format_owner_number(unallocated) }}</dd>{% endif %}
+  </dl>
+
+  {% if payment.status == "PENDING" %}
+  <form method="post" action="{{ url_for('commercial_sales_web.confirm_payment_route', payment_id=payment.id) }}" class="inline" data-confirm="{{ _('Confirm this payment?') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit">{{ _("Confirm payment") }}</button>
+  </form>
+  <form method="post" action="{{ url_for('commercial_sales_web.reject_payment_route', payment_id=payment.id) }}" class="inline" style="margin-inline-start:0.5rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input name="reason" placeholder="{{ _('Reason') }}" required>
+    <button type="submit" class="danger">{{ _("Reject payment") }}</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

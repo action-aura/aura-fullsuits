@@ -1,0 +1,63 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ order.order_number }}{% endblock %}
+{% block content %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<div class="card">
+  <h2><bdi dir="ltr">{{ order.order_number }}</bdi> <span class="badge">{{ sales_order_status_label(order.status) }}</span></h2>
+  <dl class="kv">
+    <dt>{{ _("Currency") }}</dt><dd>{{ order.currency }}</dd>
+    <dt>{{ _("Total") }}</dt><dd>{{ format_owner_number(order.total) }}</dd>
+    <dt>{{ _("Confirmed") }}</dt><dd>{{ format_owner_datetime(order.confirmed_at) if order.confirmed_at else "-" }}</dd>
+    <dt>{{ _("Created") }}</dt><dd>{{ format_owner_datetime(order.created_at) }}</dd>
+  </dl>
+
+  {% if order.status == "DRAFT" and can_approve %}
+  <form method="post" action="{{ url_for('commercial_sales_web.confirm_order_route', order_id=order.id) }}" class="inline" data-confirm="{{ _('Confirm this order?') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="version" value="{{ order.version }}">
+    <button type="submit">{{ _("Confirm order") }}</button>
+  </form>
+  {% endif %}
+  {% if order.status in ("DRAFT", "CONFIRMED") and can_approve %}
+  <form method="post" action="{{ url_for('commercial_sales_web.cancel_order_route', order_id=order.id) }}" class="inline" style="margin-inline-start:0.5rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="version" value="{{ order.version }}">
+    <input name="reason" placeholder="{{ _('Reason') }}" required>
+    <button type="submit" class="danger">{{ _("Cancel order") }}</button>
+  </form>
+  {% endif %}
+  {% if order.status == "CONFIRMED" and can_approve %}
+  <form method="post" action="{{ url_for('commercial_sales_web.fulfill_order_route', order_id=order.id) }}" class="inline" style="margin-inline-start:0.5rem;" data-confirm="{{ _('Fulfill this order? This provisions the subscription and license.') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit">{{ _("Fulfill order") }}</button>
+  </form>
+  {% endif %}
+
+  {% if invoice %}
+  <p style="margin-top:0.75rem;"><a href="{{ url_for('commercial_sales_web.invoice_detail', invoice_id=invoice.id) }}">{{ _("View invoice") }} <bdi dir="ltr">{{ invoice.invoice_number }}</bdi></a></p>
+  {% elif order.status == "CONFIRMED" %}
+  <form method="post" action="{{ url_for('commercial_sales_web.create_invoice_route', order_id=order.id) }}" style="margin-top:0.75rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit">{{ _("Create invoice") }}</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3>{{ _("Lines") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Item") }}</th><th>{{ _("Quantity") }}</th><th>{{ _("Unit price") }}</th><th>{{ _("Line total") }}</th></tr></thead>
+    <tbody>
+    {% for l in lines %}
+    <tr>
+      <td data-label="{{ _('Item') }}">{{ l.description }}</td>
+      <td data-label="{{ _('Quantity') }}">{{ l.quantity }}</td>
+      <td data-label="{{ _('Unit price') }}">{{ format_owner_number(l.overridden_unit_price or l.unit_price) }}</td>
+      <td data-label="{{ _('Line total') }}">{{ format_owner_number(l.line_total) }}</td>
+    </tr>
+    {% else %}<tr><td colspan="4" class="empty">{{ _("No lines.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

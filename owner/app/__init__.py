@@ -59,6 +59,7 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.api_operations.routes import bp as api_operations_bp
     from app.api_operations.crm import bp as api_operations_crm_bp
     from app.api_operations.commercial_sales import bp as api_operations_commercial_sales_bp
+    from app.commercial_sales.routes import bp as commercial_sales_web_bp
     from app.leads.routes import bp as leads_bp, shared_bp as crm_shared_bp
     from app.locale_routes import bp as locale_bp
 
@@ -82,6 +83,7 @@ def create_app(config_name: str | None = None) -> Flask:
     app.register_blueprint(api_operations_bp)
     app.register_blueprint(api_operations_crm_bp)
     app.register_blueprint(api_operations_commercial_sales_bp)
+    app.register_blueprint(commercial_sales_web_bp)
     app.register_blueprint(leads_bp)
     app.register_blueprint(crm_shared_bp)
     app.register_blueprint(locale_bp)

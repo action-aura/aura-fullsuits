@@ -1,0 +1,31 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Commercial dashboard") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _("My commercial pipeline") }}</h2>
+  {% if data is none %}
+  <p class="empty">{{ _("This view requires a real employee profile.") }}</p>
+  {% else %}
+  <h3>{{ _("Quotes") }}</h3>
+  <dl class="kv">
+    {% for status, count in data.quotes_by_status.items() %}<dt>{{ quote_status_label(status) }}</dt><dd>{{ count }}</dd>{% endfor %}
+  </dl>
+  <h3>{{ _("Orders") }}</h3>
+  <dl class="kv">
+    {% for status, count in data.orders_by_status.items() %}<dt>{{ sales_order_status_label(status) }}</dt><dd>{{ count }}</dd>{% endfor %}
+  </dl>
+  <h3>{{ _("Invoices") }}</h3>
+  <dl class="kv">
+    {% for status, count in data.invoices_by_status.items() %}<dt>{{ commercial_invoice_status_label(status) }}</dt><dd>{{ count }}</dd>{% endfor %}
+  </dl>
+  <h3>{{ _("My commission earnings") }}</h3>
+  <dl class="kv">
+    <dt>{{ _("Earned, awaiting approval") }}</dt><dd>{{ format_owner_number(data.commission_earned_unapproved) }}</dd>
+    <dt>{{ _("Approved, awaiting payout") }}</dt><dd>{{ format_owner_number(data.commission_approved_unpaid) }}</dd>
+    <dt>{{ _("Paid to date") }}</dt><dd>{{ format_owner_number(data.commission_paid_total) }}</dd>
+    <dt>{{ _("Reversed") }}</dt><dd>{{ format_owner_number(data.commission_reversed_total) }}</dd>
+    <dt>{{ _("Pending approval requests") }}</dt><dd>{{ data.own_pending_approval_requests }}</dd>
+  </dl>
+  {% endif %}
+</div>
+{% endblock %}

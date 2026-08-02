@@ -1,0 +1,32 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Refunds") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _("Refunds") }}</h2>
+  <form class="filters" method="get">
+    <div>
+      <label>{{ _("Status") }}</label>
+      <select name="status" onchange="this.form.submit()">
+        <option value="">{{ _("All") }}</option>
+        {% for s in ["DRAFT","APPROVED","PAID","VOID"] %}
+        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ commercial_refund_status_label(s) }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </form>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Amount") }}</th><th>{{ _("Status") }}</th><th>{{ _("Reason") }}</th><th>{{ _("Created") }}</th></tr></thead>
+    <tbody>
+    {% for r in refunds %}
+    <tr>
+      <td data-label="{{ _('Amount') }}"><a href="{{ url_for('commercial_sales_web.refund_detail', refund_id=r.id) }}">{{ format_owner_number(r.amount) }} {{ r.currency }}</a></td>
+      <td data-label="{{ _('Status') }}"><span class="badge {{ 'success' if r.status == 'PAID' else ('danger' if r.status == 'VOID' else 'pending') }}">{{ commercial_refund_status_label(r.status) }}</span></td>
+      <td data-label="{{ _('Reason') }}">{{ r.reason }}</td>
+      <td data-label="{{ _('Created') }}">{{ format_owner_datetime(r.created_at) }}</td>
+    </tr>
+    {% else %}<tr><td colspan="4" class="empty">{{ _("No refunds yet.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,34 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Refund") }}{% endblock %}
+{% block content %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<div class="card">
+  <h2>{{ format_owner_number(refund.amount) }} {{ refund.currency }} <span class="badge {{ 'success' if refund.status == 'PAID' else ('danger' if refund.status == 'VOID' else 'pending') }}">{{ commercial_refund_status_label(refund.status) }}</span></h2>
+  <dl class="kv">
+    <dt>{{ _("Reason") }}</dt><dd>{{ refund.reason }}</dd>
+    <dt>{{ _("Created") }}</dt><dd>{{ format_owner_datetime(refund.created_at) }}</dd>
+    <dt>{{ _("Approved") }}</dt><dd>{{ format_owner_datetime(refund.approved_at) if refund.approved_at else "-" }}</dd>
+    <dt>{{ _("Paid") }}</dt><dd>{{ format_owner_datetime(refund.paid_at) if refund.paid_at else "-" }}</dd>
+  </dl>
+
+  {% if refund.status == "DRAFT" and can_approve %}
+  <form method="post" action="{{ url_for('commercial_sales_web.approve_refund_route', refund_id=refund.id) }}" class="inline" data-confirm="{{ _('Approve this refund?') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="version" value="{{ refund.version }}">
+    <button type="submit">{{ _("Approve") }}</button>
+  </form>
+  <form method="post" action="{{ url_for('commercial_sales_web.void_refund_route', refund_id=refund.id) }}" class="inline" style="margin-inline-start:0.5rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="version" value="{{ refund.version }}">
+    <button type="submit" class="danger">{{ _("Void") }}</button>
+  </form>
+  {% endif %}
+  {% if refund.status == "APPROVED" and can_approve %}
+  <form method="post" action="{{ url_for('commercial_sales_web.confirm_refund_route', refund_id=refund.id) }}" class="inline" data-confirm="{{ _('Confirm this refund as paid?') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="version" value="{{ refund.version }}">
+    <button type="submit">{{ _("Confirm paid") }}</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}
