@@ -29,8 +29,8 @@ def upgrade() -> None:
         sa.Column('document_type', sa.String(32), nullable=False),
         sa.Column('period_key', sa.String(8), nullable=False),
         sa.Column('next_value', sa.Integer(), nullable=False, server_default='1'),
-        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
-        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
         sa.UniqueConstraint('document_type', 'period_key', name='uq_document_number_counter'),
     )
 
@@ -50,8 +50,8 @@ def upgrade() -> None:
         sa.Column('requested_at', sa.DateTime(timezone=True), nullable=False),
         sa.Column('decided_at', sa.DateTime(timezone=True), nullable=True),
         sa.Column('version', sa.Integer(), nullable=False, server_default='1'),
-        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
-        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
     )
     op.create_index('ix_owner_commercial_approvals_target', 'owner_commercial_approvals', ['target_type', 'target_id'])
 
@@ -68,8 +68,8 @@ def upgrade() -> None:
         sa.Column('reversed_by_staff_user_id', postgresql.UUID(as_uuid=True), sa.ForeignKey('owner_staff_users.id'), nullable=True),
         sa.Column('reversal_reason', sa.Text(), nullable=True),
         sa.Column('version', sa.Integer(), nullable=False, server_default='1'),
-        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
-        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
+        sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False, server_default=sa.text('now()')),
     )
     op.create_index('ix_owner_payment_allocations_payment_record_id', 'owner_payment_allocations', ['payment_record_id'])
     op.create_index('ix_owner_payment_allocations_commercial_invoice_id', 'owner_payment_allocations', ['commercial_invoice_id'])
