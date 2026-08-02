@@ -229,6 +229,7 @@ def create_payout_batch(fields: dict, actor_staff_user_id: uuid.UUID) -> Commiss
         period_start=fields["period_start"],
         period_end=fields["period_end"],
         status="DRAFT",
+        payment_method=fields.get("payment_method"),
         created_by_staff_user_id=actor_staff_user_id,
     )
     db_session.add(batch)

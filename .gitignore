@@ -55,6 +55,11 @@ owner/var/backups/
 owner/var/signing-keys/
 owner/var/signing-keys-test/
 *.pem
+
+# Aura Owner -- private Expense attachment storage (Phase 9.5E) -- never
+# committed, matches signing-keys' private-storage treatment above.
+owner/var/expense-attachments/
+owner/var/expense-attachments-test/
 owner/tools/activation_simulator/.device/
 owner/tools/activation_simulator/**/*.key
 

@@ -140,6 +140,20 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("management_notes.view", "MANAGEMENT_COLLABORATION", "View shared management notes visible to this account"),
     ("management_notes.manage", "MANAGEMENT_COLLABORATION", "Create/edit/archive shared management notes"),
     ("security_sessions.revoke", "STAFF", "Revoke a staff/employee session"),
+    # Phase 9.5E -- Expense payees.
+    ("expenses.manage_payees", "EXPENSES", "Create/deactivate expense payees"),
+    # Phase 9.5E -- Daily Cash Closing.
+    ("cash_closing.prepare", "CASH_CLOSING", "Create/submit a daily cash closing"),
+    ("cash_closing.view_own", "CASH_CLOSING", "View cash closings this account prepared"),
+    ("cash_closing.view_all", "CASH_CLOSING", "View all cash closings"),
+    ("cash_closing.approve", "CASH_CLOSING", "Approve/reject a submitted cash closing"),
+    ("cash_closing.reopen", "CASH_CLOSING", "Reopen an approved/closed cash closing"),
+    ("cash_closing.adjust", "CASH_CLOSING", "Create a cash closing adjustment"),
+    ("cash_closing.approve_adjustment", "CASH_CLOSING", "Approve a cash closing adjustment"),
+    # Phase 9.5E -- scheduled report snapshots (reports.view_own/view_all and
+    # reports.regenerate_daily are Phase 9.5A permissions, reused as-is).
+    ("report_snapshots.view", "REPORTS", "View scheduled report snapshots"),
+    ("report_snapshots.regenerate", "REPORTS", "Manually regenerate a report snapshot"),
 ]
 
 # code -> permission codes. SUPER_ADMIN gets every permission automatically
@@ -189,6 +203,13 @@ ROLES: dict[str, dict] = {
             "expenses.create", "expenses.view_own",
             "device_policy.view",
             "dashboard.view_own", "reports.view_own",
+            # Phase 9.5E -- a SALES employee reads shared notes addressed to
+            # them (ALL_STAFF/SPECIFIC_EMPLOYEES visibility resolves this at
+            # the query layer, not via a separate role); never management.manage
+            # (creating/assigning notes is a management action) and never
+            # cash_closing.*/report_snapshots.* (financial-authority-shaped,
+            # same reasoning as expenses.approve staying FINANCE-only).
+            "management_notes.view",
         ],
     },
     "SUPPORT": {
@@ -246,6 +267,20 @@ ROLES: dict[str, dict] = {
             "expenses.view_all", "expenses.approve", "expenses.pay", "expenses.void",
             "customers.view_all",
             "dashboard.view_all", "reports.view_all",
+            # Phase 9.5E -- real gaps closed, same class as Milestone 16/18's
+            # own findings: management_notes.* and reports.regenerate_daily
+            # were pre-seeded (Phase 9.5A) but granted to no role at all.
+            # Finance is the money-authorization + operational-reporting role
+            # (already holds reports.view_all/dashboard.view_all), so it also
+            # owns Cash Closing preparation/approval, payee management, and
+            # scheduled-report regeneration -- the same category of authority
+            # it already exercises for invoices/refunds/commissions/expenses.
+            "management_notes.view", "management_notes.manage",
+            "reports.regenerate_daily",
+            "expenses.manage_payees",
+            "cash_closing.prepare", "cash_closing.view_own", "cash_closing.view_all",
+            "cash_closing.approve", "cash_closing.reopen", "cash_closing.adjust", "cash_closing.approve_adjustment",
+            "report_snapshots.view", "report_snapshots.regenerate",
         ],
     },
     "VIEWER": {
@@ -263,6 +298,13 @@ ROLES: dict[str, dict] = {
             "leads.view_all", "customers.view_all",
             "device_policy.view",
             "dashboard.view_all", "reports.view_all",
+            # Phase 9.5E -- report_snapshots.view only: published operational
+            # figures, same sensitivity class as reports.view_all it already
+            # holds. No cash_closing.*/expenses.manage_payees (financial-
+            # authority-shaped) and no management_notes.* (may carry
+            # sensitive management discussion, matching this role's own
+            # "no personal HR data" boundary above).
+            "report_snapshots.view",
         ],
     },
 }

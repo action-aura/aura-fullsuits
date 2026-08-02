@@ -45,6 +45,15 @@ class BaseConfig:
 
     BACKUP_DIRECTORY = os.environ.get("OWNER_BACKUP_DIR", os.path.join(os.getcwd(), "var", "backups"))
 
+    # -- Phase 9.5E: Expense attachments -- private, non-web-served storage.
+    # Never under static/ or any Flask-served directory; access is always
+    # mediated by an authorization-checked download route. See
+    # docs/owner/phase9_5e/attachment-security-contract.md.
+    EXPENSE_ATTACHMENT_DIRECTORY = os.environ.get(
+        "OWNER_EXPENSE_ATTACHMENT_DIR", os.path.join(os.getcwd(), "var", "expense-attachments")
+    )
+    EXPENSE_ATTACHMENT_MAX_BYTES = int(os.environ.get("OWNER_EXPENSE_ATTACHMENT_MAX_BYTES", str(10 * 1024 * 1024)))  # 10MB
+
     WTF_CSRF_TIME_LIMIT = None
 
     # -- Phase 6: Licensing & Activation Service --
@@ -135,6 +144,9 @@ class TestingConfig(BaseConfig):
     WTF_CSRF_ENABLED = True
     SIGNING_KEY_DIRECTORY = os.environ.get(
         "OWNER_TEST_SIGNING_KEY_DIRECTORY", os.path.join(os.getcwd(), "var", "signing-keys-test")
+    )
+    EXPENSE_ATTACHMENT_DIRECTORY = os.environ.get(
+        "OWNER_TEST_EXPENSE_ATTACHMENT_DIR", os.path.join(os.getcwd(), "var", "expense-attachments-test")
     )
     REPLAY_PROTECTION_REQUIRED = True
     DISTRIBUTED_RATE_LIMIT_REQUIRED = True

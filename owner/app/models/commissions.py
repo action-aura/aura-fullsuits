@@ -137,6 +137,10 @@ class CommissionPayoutBatch(Base, UUIDPKMixin, TimestampMixin):
     period_start: Mapped[date] = mapped_column(Date, nullable=False)
     period_end: Mapped[date] = mapped_column(Date, nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="DRAFT", nullable=False)
+    # Phase 9.5E -- additive. NULL (pre-9.5E batches) is treated as "not
+    # cash" by Cash Closing's aggregation -- see
+    # docs/owner/phase9_5e/cash-closing-contract.md.
+    payment_method: Mapped[str | None] = mapped_column(String(32))
     created_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
     )

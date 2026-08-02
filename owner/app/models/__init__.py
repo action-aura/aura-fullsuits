@@ -23,6 +23,8 @@ from app.models import commissions  # noqa: F401
 from app.models import expenses  # noqa: F401
 from app.models import management_notes  # noqa: F401
 from app.models import daily_reports  # noqa: F401
+from app.models import cash_closing  # noqa: F401
+from app.models import report_snapshots  # noqa: F401
 
 from app.models.staff import (  # noqa: F401
     Role,
@@ -135,10 +137,23 @@ from app.models.commissions import (  # noqa: F401
     CommissionPayoutBatch,
     CommissionPayoutLine,
 )
-from app.models.expenses import ExpenseCategory, Expense  # noqa: F401
+from app.models.expenses import (  # noqa: F401
+    ExpenseCategory,
+    Expense,
+    Payee,
+    ExpenseApproval,
+    ExpensePayment,
+    ExpenseAttachment,
+)
 from app.models.management_notes import (  # noqa: F401
     SharedManagementNote,
     ManagementNoteVisibilityGrant,
     ManagementNoteComment,
 )
 from app.models.daily_reports import DailyActivitySnapshot  # noqa: F401
+from app.models.cash_closing import (  # noqa: F401
+    CashClosing,
+    CashClosingAdjustment,
+    CashClosingReopenEvent,
+)
+from app.models.report_snapshots import ReportSnapshot  # noqa: F401
