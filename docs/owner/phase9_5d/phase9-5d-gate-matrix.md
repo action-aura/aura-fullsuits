@@ -20,7 +20,7 @@ This file is updated as each milestone completes with real, executed evidence �
 | M13 — subscription/license fulfillment | PASS | `app/commercial_sales/fulfillment.py`, real row lock + incompatible-state guard + entitlement-consequence wiring, 15/15 tests (8 explicit closure items), commits `d85aad2`/`d79414a` |
 | M14 — commission policy | PASS | `app/commissions/management.py` + `errors.py`, append-only rule/assignment versioning, 9/9 tests, commit `b07e5c7` |
 | M15 — commission ledger | PASS | `app/commissions/ledger.py`, migration `a3c8e5d29f47` (allocation-basis uniqueness fix), wired into `allocation.py`/`refunds.py`, 13/13 tests (one per Commission Non-Negotiable Rule incl. real 8-thread concurrency race), commit `34b62b0` |
-| M16 — RBAC/segregation of duties | PENDING | |
+| M16 — RBAC/segregation of duties | PASS | `commercial-sales-sod-matrix.md`, FINANCE granted `quotes.approve`/`orders.approve` (real gap, previously SUPER_ADMIN-only), 6/6 SoD tests + 6/6 existing Phase 9.5A RBAC tests, `flask seed-rbac` applied to dev DB, commits `1aa3c9b`/`113c96f`. Full-suite regression (846 pass / 2 fail on M15's schema change, both fixed and reverified 5/5 green) |
 | M17 — commercial dashboards | PENDING | |
 | M18 — operations API | PENDING | |
 | M19 — web routes/UI | PENDING | |
