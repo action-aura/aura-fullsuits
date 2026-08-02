@@ -523,6 +523,103 @@ def _check_crm_domain_integrity(checks: list[PreflightCheck]) -> bool:
     return ok
 
 
+def _check_commercial_sales_domain_integrity(checks: list[PreflightCheck]) -> bool:
+    """Phase 9.5D, Milestone 28. Same defense-in-depth spirit as
+    _check_crm_domain_integrity(): every condition here should already be
+    structurally impossible via the real service-layer invariants built
+    across Milestones 3-24, these checks exist to catch a bypass -- a
+    direct DB write, a bug in a future migration -- before a real user
+    hits it."""
+    from app.commercial_sales.invoices import confirmed_allocated_amount
+    from app.commercial_sales.refunds import total_confirmed_refunds
+    from app.models.commercial_sales import (
+        APPROVAL_STATUSES,
+        INVOICE_STATUSES,
+        QUOTE_STATUSES,
+        REFUND_STATUSES,
+        SALES_ORDER_STATUSES,
+        CommercialApproval,
+        CommercialInvoice,
+        CommercialRefund,
+        PaymentAllocation,
+        Quote,
+        SalesOrder,
+    )
+    from app.models.commissions import COMMISSION_ENTRY_STATUSES, CommissionLedgerEntry
+
+    ok = True
+
+    for label, model, allowed in (
+        ("quote", Quote, QUOTE_STATUSES),
+        ("sales_order", SalesOrder, SALES_ORDER_STATUSES),
+        ("commercial_invoice", CommercialInvoice, INVOICE_STATUSES),
+        ("commercial_refund", CommercialRefund, REFUND_STATUSES),
+        ("commercial_approval", CommercialApproval, APPROVAL_STATUSES),
+        ("commission_ledger_entry", CommissionLedgerEntry, COMMISSION_ENTRY_STATUSES),
+    ):
+        invalid = db_session.execute(select(model.status).where(model.status.notin_(allowed)).distinct()).scalars().all()
+        if invalid:
+            ok = False
+            checks.append(PreflightCheck(
+                f"no_invalid_{label}_status", "FAIL",
+                f"{len(invalid)} {label} row(s) have a status outside the canonical set {allowed}: {invalid}.",
+            ))
+        else:
+            checks.append(PreflightCheck(f"no_invalid_{label}_status", "OK", f"Every {label}.status is a canonical value."))
+
+    orphan_quotes = db_session.execute(
+        select(func.count(Quote.id)).where(Quote.customer_id.is_(None), Quote.lead_id.is_(None))
+    ).scalar_one()
+    if orphan_quotes:
+        ok = False
+        checks.append(PreflightCheck(
+            "quote_has_customer_or_lead", "FAIL",
+            f"{orphan_quotes} Quote row(s) reference neither a Customer nor a Lead. "
+            "Should be structurally impossible via the ck_owner_quotes_at_least_one_of_customer_lead CHECK constraint.",
+        ))
+    else:
+        checks.append(PreflightCheck("quote_has_customer_or_lead", "OK", "Every Quote references a Customer and/or a Lead."))
+
+    # Financial invariants: confirmed allocations/refunds must never exceed
+    # the invoice's own total/collected amount -- the exact class of bug
+    # Milestone 24 found and fixed in confirm_refund() (no lock + re-check
+    # at confirm time). These checks are the production backstop for the
+    # same invariant, not a re-test of the fix.
+    over_allocated = 0
+    for invoice_id, total in db_session.execute(select(CommercialInvoice.id, CommercialInvoice.total)).all():
+        allocated = db_session.execute(
+            select(func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0)).where(
+                PaymentAllocation.commercial_invoice_id == invoice_id, PaymentAllocation.reversed_at.is_(None)
+            )
+        ).scalar_one()
+        if allocated > total:
+            over_allocated += 1
+    if over_allocated:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_over_allocated_invoice", "FAIL",
+            f"{over_allocated} CommercialInvoice row(s) have confirmed PaymentAllocation total exceeding the invoice total.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_over_allocated_invoice", "OK", "No invoice has allocated payments exceeding its total."))
+
+    over_refunded = 0
+    for invoice_id in db_session.execute(select(CommercialInvoice.id)).scalars().all():
+        invoice = db_session.get(CommercialInvoice, invoice_id)
+        if total_confirmed_refunds(invoice) > confirmed_allocated_amount(invoice):
+            over_refunded += 1
+    if over_refunded:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_over_refunded_invoice", "FAIL",
+            f"{over_refunded} CommercialInvoice row(s) have confirmed refunds exceeding the amount actually collected.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_over_refunded_invoice", "OK", "No invoice has confirmed refunds exceeding what was collected."))
+
+    return ok
+
+
 def run_preflight(*, key_directory: str) -> PreflightResult:
     checks: list[PreflightCheck] = []
     blocking_ok = True
@@ -537,6 +634,7 @@ def run_preflight(*, key_directory: str) -> PreflightResult:
     blocking_ok &= _check_employee_domain_integrity(checks)
     blocking_ok &= _check_i18n_configuration(checks)
     blocking_ok &= _check_crm_domain_integrity(checks)
+    blocking_ok &= _check_commercial_sales_domain_integrity(checks)
     _check_super_admin_mfa(checks)  # informational only, never blocking
 
     return PreflightResult(ok=bool(blocking_ok), checks=checks)
