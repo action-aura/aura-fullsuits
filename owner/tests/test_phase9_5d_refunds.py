@@ -250,3 +250,115 @@ def test_no_hard_delete_original_payment(app, seeded):
 
         assert payment.amount == original_amount
         assert payment.status == original_status  # never edited to reflect the refund
+
+
+def test_confirm_rejects_when_sibling_refunds_would_exceed_collected(app, seeded):
+    """Phase 9.5D Milestone 24 (financial-property pass) real finding:
+    confirm_refund() never re-validated the refund total at confirm
+    time. Two DRAFT refunds can each independently pass create_refund()'s
+    own validate_refund_amount() check (each within the refundable
+    balance individually, since neither counts toward
+    total_confirmed_refunds() until PAID) while their SUM exceeds what
+    was actually collected."""
+    staff_a, profile_a = _seed_sales_employee(app, "refundq@example.com")
+    staff_b, _ = _seed_sales_employee(app, "refundr@example.com", role_codes=["FINANCE"])
+    customer_id = _seed_customer(app, staff_a)
+    plan_id = _seed_plan(app, "RQ_PLAN", price=Decimal("200.00"))
+    with app.app_context():
+        from app.commercial_sales.errors import CommercialSalesError
+        from app.commercial_sales.refunds import approve_refund, confirm_refund, create_refund
+
+        invoice, payment = _make_paid_invoice(app, staff_a, profile_a, customer_id, plan_id, staff_b)
+
+        refund_1 = create_refund(
+            invoice, amount=Decimal("150.00"), reason="first", payment_record_id=payment.id,
+            actor_employee_profile_id=profile_a, actor_staff_user_id=staff_a,
+        )
+        refund_2 = create_refund(
+            invoice, amount=Decimal("150.00"), reason="second", payment_record_id=payment.id,
+            actor_employee_profile_id=profile_a, actor_staff_user_id=staff_a,
+        )
+        # Both created successfully -- 150 <= 200 refundable individually,
+        # neither counts against the other yet since neither is PAID.
+
+        approve_refund(refund_1, actor_staff_user_id=staff_b)
+        confirm_refund(refund_1, actor_staff_user_id=staff_b)
+        assert refund_1.status == "PAID"
+
+        approve_refund(refund_2, actor_staff_user_id=staff_b)
+        with pytest.raises(CommercialSalesError) as exc:
+            confirm_refund(refund_2, actor_staff_user_id=staff_b)
+        assert exc.value.code == "REFUND_EXCEEDS_REFUNDABLE"
+        assert refund_2.status == "APPROVED"  # unchanged -- rejected before the PAID transition
+
+
+def test_concurrent_refund_confirmations_cannot_jointly_over_refund(app, seeded):
+    """Real thread race: two concurrent confirm_refund() calls against
+    sibling refunds on the same invoice must serialize via the row lock
+    so the combined PAID total can never exceed what was collected."""
+    import threading
+
+    staff_a, profile_a = _seed_sales_employee(app, "refunds@example.com")
+    staff_b, _ = _seed_sales_employee(app, "refundt@example.com", role_codes=["FINANCE"])
+    customer_id = _seed_customer(app, staff_a)
+    plan_id = _seed_plan(app, "RS_PLAN", price=Decimal("200.00"))
+
+    refund_ids = []
+    with app.app_context():
+        from app.commercial_sales.refunds import approve_refund, create_refund
+
+        invoice, payment = _make_paid_invoice(app, staff_a, profile_a, customer_id, plan_id, staff_b)
+        for i in range(4):
+            r = create_refund(
+                invoice, amount=Decimal("100.00"), reason=f"race {i}", payment_record_id=payment.id,
+                actor_employee_profile_id=profile_a, actor_staff_user_id=staff_a,
+            )
+            approve_refund(r, actor_staff_user_id=staff_b)
+            refund_ids.append(r.id)
+
+    # 4 refunds of 100 each approved (400 total) against a 200 collected
+    # invoice -- at most 2 can legitimately be confirmed.
+    results = []
+    errors = []
+    lock = threading.Lock()
+
+    def worker(refund_id):
+        try:
+            with app.app_context():
+                from app.commercial_sales.refunds import confirm_refund
+                from app.extensions import db_session
+                from app.models.commercial_sales import CommercialRefund
+
+                local_refund = db_session.get(CommercialRefund, refund_id)
+                confirm_refund(local_refund, actor_staff_user_id=staff_b)
+                with lock:
+                    results.append(refund_id)
+        except Exception as exc:  # noqa: BLE001
+            with lock:
+                errors.append(exc)
+        finally:
+            from app.extensions import db_session as scoped_db_session
+
+            scoped_db_session.remove()
+
+    threads = [threading.Thread(target=worker, args=(rid,)) for rid in refund_ids]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert len(results) + len(errors) == 4
+
+    with app.app_context():
+        from sqlalchemy import select
+
+        from app.extensions import db_session
+        from app.models.commercial_sales import CommercialRefund
+
+        paid_total = sum(
+            (r.amount for r in db_session.execute(
+                select(CommercialRefund).where(CommercialRefund.id.in_(refund_ids), CommercialRefund.status == "PAID")
+            ).scalars().all()),
+            Decimal("0.00"),
+        )
+        assert paid_total <= Decimal("200.00"), f"over-refunded: {paid_total} > 200.00 collected"

@@ -132,14 +132,28 @@ def confirm_refund(
     _check_version(refund, expected_version)
     _check_transition(refund.status, "PAID")
 
+    invoice = db_session.get(CommercialInvoice, refund.commercial_invoice_id)
+    # Milestone 24 (financial-property pass) -- real gap found: nothing
+    # previously re-validated the refund total at confirm time, nor
+    # locked the invoice. Two DRAFT refunds can each independently pass
+    # create_refund()'s own validate_refund_amount() check (each within
+    # the refundable balance individually) while their SUM exceeds it --
+    # without a lock + re-check here, both could be confirmed
+    # concurrently and over-refund the customer past what was actually
+    # collected. Row-locked, matching allocate_payment()'s own pattern.
+    db_session.execute(select(CommercialInvoice).where(CommercialInvoice.id == invoice.id).with_for_update())
+
+    collected = confirmed_allocated_amount(invoice)
+    already_refunded = total_confirmed_refunds(invoice)  # excludes this refund -- still pre-PAID
+    if already_refunded + refund.amount > collected:
+        raise CommercialSalesError("REFUND_EXCEEDS_REFUNDABLE", amount=refund.amount, refundable=collected - already_refunded)
+
     refund.status = "PAID"
     refund.paid_at = utcnow()
     refund.version += 1
     db_session.flush()
 
-    invoice = db_session.get(CommercialInvoice, refund.commercial_invoice_id)
-    collected = confirmed_allocated_amount(invoice)
-    refunded = total_confirmed_refunds(invoice)
+    refunded = already_refunded + refund.amount
     before_status = invoice.status
     is_full_refund = refunded >= collected and collected > 0
     if is_full_refund:
