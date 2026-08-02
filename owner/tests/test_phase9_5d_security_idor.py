@@ -185,6 +185,7 @@ def test_cross_customer_payment_allocation_rejected(app, seeded):
             payment_date=date.today(), actor_staff_user_id=staff_a,
         )
         confirm_payment(payment_b, actor_staff_user_id=staff_fin)
+        payment_b_id = payment_b.id
 
     with app.app_context():
         import pytest
@@ -196,7 +197,7 @@ def test_cross_customer_payment_allocation_rejected(app, seeded):
         from app.models.subscriptions import PaymentRecord
 
         invoice_a = db_session.get(CommercialInvoice, invoice_id)
-        payment_b_reloaded = db_session.get(PaymentRecord, payment_b.id)
+        payment_b_reloaded = db_session.get(PaymentRecord, payment_b_id)
 
         with pytest.raises(CommercialSalesError) as exc:
             allocate_payment(payment=payment_b_reloaded, invoice=invoice_a, amount=Decimal("500.00"), actor_staff_user_id=staff_fin)
