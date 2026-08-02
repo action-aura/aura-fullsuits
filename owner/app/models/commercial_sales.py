@@ -12,8 +12,8 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPKMixin
@@ -186,3 +186,89 @@ class CommercialOperationsIdempotencyKey(Base, UUIDPKMixin, TimestampMixin):
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     operation_code: Mapped[str] = mapped_column(String(64), nullable=False)
     result_reference_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+
+
+class DocumentNumberCounter(Base, UUIDPKMixin, TimestampMixin):
+    """Phase 9.5D Milestone 5 -- concurrency-safe sequential document
+    numbering (quote_number/order_number/invoice_number), one counter row
+    per (document_type, period_key e.g. "2026"). Milestone 1's audit found
+    no existing numbering-sequence generator to reuse -- this is genuinely
+    new authority. See docs/owner/phase9_5d/quote-numbering-contract.md."""
+
+    __tablename__ = "owner_document_number_counters"
+    __table_args__ = (
+        UniqueConstraint("document_type", "period_key", name="uq_document_number_counter"),
+    )
+
+    document_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    period_key: Mapped[str] = mapped_column(String(8), nullable=False)
+    next_value: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+APPROVAL_STATUSES = ("PENDING", "APPROVED", "REJECTED", "CANCELLED", "EXPIRED")
+APPROVAL_TARGET_TYPES = ("QUOTE", "QUOTE_LINE")
+APPROVAL_REASON_CODES = (
+    "DISCOUNT_ABOVE_LIMIT", "PRICE_OVERRIDE", "ZERO_PRICE_LINE", "OTHER_EXCEPTION",
+)
+
+
+class CommercialApproval(Base, UUIDPKMixin, TimestampMixin):
+    """Phase 9.5D Milestone 6 -- a separate, per-document approval record,
+    matching the existing RenewalRequest/PendingActivation/PilotRecord
+    convention (status enum + dedicated approve/reject function +
+    permanent record) -- deliberately NOT folded into Quote.status
+    (Milestone 1's audit: a generic Approval model would itself be the
+    duplication-risk anti-pattern this phase's audit exists to prevent;
+    a per-document-type approval record matches the established
+    convention instead)."""
+
+    __tablename__ = "owner_commercial_approvals"
+    __table_args__ = (
+        Index("ix_owner_commercial_approvals_target", "target_type", "target_id"),
+    )
+
+    target_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    target_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    target_version_at_request: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    requested_by_staff_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id"), nullable=False
+    )
+    requested_values: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    original_values: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="PENDING", nullable=False)
+    decided_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
+    )
+    decision_reason: Mapped[str | None] = mapped_column(Text)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class PaymentAllocation(Base, UUIDPKMixin, TimestampMixin):
+    """Phase 9.5D Milestone 11 -- many-to-many Payment<->Invoice allocation,
+    a genuine additive extension beyond Phase 9.5A's original implicit
+    1-payment-to-1-invoice design (PaymentRecord.commercial_invoice_id).
+    See docs/owner/phase9_5d/payment-allocation-contract.md."""
+
+    __tablename__ = "owner_payment_allocations"
+
+    payment_record_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_payment_records.id"), nullable=False, index=True
+    )
+    commercial_invoice_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_commercial_invoices.id"), nullable=False, index=True
+    )
+    allocated_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    allocated_by_staff_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id"), nullable=False
+    )
+    allocated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reversed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reversed_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
+    )
+    reversal_reason: Mapped[str | None] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
