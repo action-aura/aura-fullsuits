@@ -45,11 +45,14 @@ def test_full_commercial_lifecycle_end_to_end(app, seeded):
         from app.catalog.services import add_plan_price, create_plan, seed_canonical_catalog
         from app.commissions.management import assign_employee_commission_plan, create_commission_plan, create_commission_rule_version
         from app.extensions import db_session
-        from app.models.catalog import Product
+        from app.models.catalog import Platform, Product, ProductPlatform
 
         seed_canonical_catalog()
         product = Product(product_code="PROD_E2E", name="E2E Product", is_active=True, is_sellable=True)
         db_session.add(product)
+        db_session.flush()
+        platform = db_session.query(Platform).first()
+        db_session.add(ProductPlatform(product_id=product.id, platform_id=platform.id, supported=True))
         db_session.flush()
         plan = create_plan(
             {"plan_code": "E2E_PLAN", "product_id": product.id, "name": "E2E Plan", "billing_model": "MONTHLY", "effective_date": date.today() - timedelta(days=1)},
