@@ -16,6 +16,7 @@ from app.audit.services import record as audit_record
 from app.commercial_sales.calculator import resolve_invoice_status, validate_allocation_amount
 from app.commercial_sales.errors import CommercialSalesError
 from app.commercial_sales.invoices import confirmed_allocated_amount
+from app.commissions.ledger import post_earning_for_allocation
 from app.extensions import db_session
 from app.models.base import utcnow
 from app.models.commercial_sales import CommercialInvoice, PaymentAllocation
@@ -84,6 +85,12 @@ def allocate_payment(
             "amount": str(amount), "invoice_status": {"before": before_status, "after": new_status},
         },
     )
+
+    # Non-Negotiable: commission basis is confirmed Payment Allocation --
+    # this is the real earning trigger, not Quote/Order/Invoice creation
+    # or bare payment confirmation.
+    post_earning_for_allocation(allocation, actor_staff_user_id=actor_staff_user_id)
+
     return allocation
 
 

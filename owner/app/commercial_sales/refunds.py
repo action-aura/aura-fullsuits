@@ -159,6 +159,16 @@ def confirm_refund(
     )
 
     _apply_entitlement_consequence(invoice, is_full_refund=is_full_refund, actor_staff_user_id=actor_staff_user_id)
+
+    from app.commissions.ledger import reverse_commissions_for_refund
+
+    reverse_commissions_for_refund(
+        invoice,
+        refund_amount=refund.amount,
+        collected_amount=collected,
+        reason=f"Refund {refund.id} confirmed against invoice {invoice.id}",
+        actor_staff_user_id=actor_staff_user_id,
+    )
     return refund
 
 

@@ -70,14 +70,22 @@ class EmployeeCommissionPlanAssignment(Base, UUIDPKMixin, TimestampMixin):
 class CommissionLedgerEntry(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_commission_ledger_entries"
     __table_args__ = (
-        # Partial unique index: a non-reversal entry can only exist once per
-        # source payment -- prevents a duplicate-payment-confirmation event
-        # from ever creating a second EARNED entry for the same real payment.
-        # Reversal rows (reversal_of_ledger_entry_id IS NOT NULL) are exempt
-        # since a reversal legitimately shares its origin's payment.
+        # Phase 9.5D Milestone 15 -- real gap found and closed: this
+        # constraint originally deduped on source_payment_record_id
+        # (Phase 9.5A, before PaymentAllocation existed). Non-Negotiable
+        # Rule: commission basis is confirmed Payment Allocation, and
+        # partial allocations create proportional earnings -- Milestone
+        # 11 already proved a single Payment can be split-allocated
+        # across multiple Invoices, each needing its own commission. A
+        # per-payment uniqueness constraint would silently block the
+        # second allocation's legitimate earning. Moved to
+        # source_payment_allocation_id (added this milestone, additive,
+        # table was empty -- MODEL PRESENT SERVICE MISSING per Milestone
+        # 1's audit, nothing to migrate). Reversal rows
+        # (reversal_of_ledger_entry_id IS NOT NULL) remain exempt.
         Index(
-            "uq_commission_ledger_one_entry_per_payment",
-            "source_payment_record_id",
+            "uq_commission_ledger_one_entry_per_allocation",
+            "source_payment_allocation_id",
             unique=True,
             postgresql_where=text("reversal_of_ledger_entry_id IS NULL"),
         ),
@@ -94,6 +102,9 @@ class CommissionLedgerEntry(Base, UUIDPKMixin, TimestampMixin):
     )
     source_payment_record_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_payment_records.id"), nullable=False
+    )
+    source_payment_allocation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_payment_allocations.id"), nullable=False, index=True
     )
     base_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     rate_or_fixed_applied: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
