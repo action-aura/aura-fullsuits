@@ -23,7 +23,7 @@ This file is updated as each milestone completes with real, executed evidence �
 | M16 — RBAC/segregation of duties | PASS | `commercial-sales-sod-matrix.md`, FINANCE granted `quotes.approve`/`orders.approve` (real gap, previously SUPER_ADMIN-only), 6/6 SoD tests + 6/6 existing Phase 9.5A RBAC tests, `flask seed-rbac` applied to dev DB, commits `1aa3c9b`/`113c96f`. Full-suite regression (846 pass / 2 fail on M15's schema change, both fixed and reverified 5/5 green) |
 | M17 — commercial dashboards | PASS | `app/commercial_sales/dashboards.py` (employee + finance scope, no generic management scope per Milestone 16 SoD), `commercial-dashboards-contract.md`, 3/3 tests incl. cross-employee isolation proof, commits `10eaaaa`/pending fix commit |
 | M18 — operations API | PASS | `app/api_operations/commercial_sales.py` (Quotes/Approvals/Orders/Fulfillment/Invoices/Payments/Allocations/Refunds/Commissions/Payouts/Dashboards), `commercial-sales-api-contract.md`, real gap closed (`payments.create` granted to SALES, per M10's own deferred decision), 5/5 real HTTP-layer tests incl. full document-chain E2E + IDOR + permission-denial + stale-version, commits `4d0eb3a`/`e06caba`/`870b901` |
-| M19 — web routes/UI | PENDING | |
+| M19 — web routes/UI | PASS | `app/commercial_sales/routes.py` (43 routes) + 16 templates, `commercial-sales-web-ui-contract.md`, nav links added, 3/3 real HTTP-layer form-POST tests incl. full document-chain E2E + IDOR + permission-denial, commits `82abf2c`/`2ebbbf0` |
 | M20 — i18n/RTL | PENDING | |
 | M21 — audit events | PENDING | |
 | M22 — DB/migrations/indexes/numbering | PENDING | |
