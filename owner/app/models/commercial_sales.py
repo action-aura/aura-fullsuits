@@ -180,9 +180,11 @@ class CommercialRefund(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_commercial_refunds"
 
     commercial_invoice_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("owner_commercial_invoices.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("owner_commercial_invoices.id"), nullable=False, index=True
     )
-    payment_record_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_payment_records.id"))
+    payment_record_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_payment_records.id"), index=True
+    )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
@@ -190,6 +192,17 @@ class CommercialRefund(Base, UUIDPKMixin, TimestampMixin):
     created_by_employee_profile_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False
     )
+    # Phase 9.5D Milestone 12 -- additive. Every sibling document
+    # (Quote/SalesOrder/CommercialInvoice) has both an optimistic-lock
+    # version and a timestamp per real transition; CommercialRefund had
+    # neither in the original Phase 9.5A migration -- a real, proven gap
+    # (not speculative), matching the exact convention every other
+    # document in this schema already follows. See
+    # docs/owner/phase9_5d/refund-domain-contract.md.
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     approved_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
     )
