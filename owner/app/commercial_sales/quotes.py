@@ -74,11 +74,21 @@ def _recompute_quote_totals(quote: Quote) -> DocumentResult:
 
 
 def create_quote(fields: dict, *, actor_employee_profile_id: uuid.UUID, actor_staff_user_id: uuid.UUID) -> Quote:
+    """A Quote may originate from a confirmed Customer (fields["customer_id"])
+    or a qualified Lead (fields["lead_id"]) -- exactly one, per
+    Non-Negotiable Rule 13 and the Quote model's own CHECK constraint. See
+    docs/owner/phase9_5d/lead-quote-customer-boundary.md."""
+    customer_id = fields.get("customer_id")
+    lead_id = fields.get("lead_id")
+    if (customer_id is None) == (lead_id is None):
+        raise CommercialSalesError("CUSTOMER_REQUIRED")
+
     currency = validate_currency(fields.get("currency"))
     valid_until = fields.get("valid_until") or (utcnow().date() + timedelta(days=DEFAULT_QUOTE_VALIDITY_DAYS))
 
     quote = Quote(
-        customer_id=fields["customer_id"],
+        customer_id=customer_id,
+        lead_id=lead_id,
         created_by_employee_profile_id=actor_employee_profile_id,
         status="DRAFT",
         quote_number=allocate_document_number("QUOTE"),
@@ -100,7 +110,12 @@ def create_quote(fields: dict, *, actor_employee_profile_id: uuid.UUID, actor_st
         action_code="QUOTE_CREATED",
         entity_type="quote",
         entity_public_id=str(quote.id),
-        after_state={"quote_number": quote.quote_number, "customer_id": str(quote.customer_id), "currency": currency},
+        after_state={
+            "quote_number": quote.quote_number,
+            "customer_id": str(customer_id) if customer_id else None,
+            "lead_id": str(lead_id) if lead_id else None,
+            "currency": currency,
+        },
     )
     return quote
 

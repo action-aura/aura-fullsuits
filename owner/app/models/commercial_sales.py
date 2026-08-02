@@ -33,8 +33,25 @@ def _line_owner_check(fk_column: str) -> CheckConstraint:
 
 class Quote(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_quotes"
+    __table_args__ = (
+        CheckConstraint(
+            "(customer_id IS NOT NULL)::int + (lead_id IS NOT NULL)::int >= 1",
+            name="ck_owner_quotes_at_least_one_of_customer_lead",
+        ),
+    )
 
-    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False)
+    # Phase 9.5D Milestone 7 -- additive. Non-Negotiable Rule 13 requires
+    # "a Quote may originate from a qualified Lead" but the original
+    # Phase 9.5A migration only ever gave Quote a required customer_id --
+    # no way to represent a Lead-based Quote at all. customer_id is
+    # relaxed to nullable and lead_id added; at least one is required
+    # (never neither), but NOT exactly-one -- once a Lead-based Quote's
+    # boundary conversion runs (Milestone 7), customer_id is populated
+    # while lead_id is deliberately retained as the permanent historical
+    # origin marker (same pattern as Customer.converted_from_lead_id).
+    # See docs/owner/phase9_5d/lead-quote-customer-boundary.md.
+    customer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_customers.id"))
+    lead_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_leads.id"))
     created_by_employee_profile_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_employee_profiles.id"), nullable=False
     )
