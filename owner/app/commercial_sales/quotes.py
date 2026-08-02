@@ -26,7 +26,11 @@ from app.commercial_sales.calculator import (
     calculate_line,
     validate_currency,
 )
-from app.commercial_sales.approvals import create_approval_request, unresolved_approvals_for_targets
+from app.commercial_sales.approvals import (
+    compute_line_commercial_fingerprint,
+    create_approval_request,
+    unresolved_approvals_for_targets,
+)
 from app.commercial_sales.catalog_for_sales import describe_addon_for_sale, describe_plan_for_sale, requires_line_approval
 from app.commercial_sales.errors import QUOTE_TRANSITIONS, CommercialSalesError
 from app.commercial_sales.numbering import allocate_document_number
@@ -198,10 +202,20 @@ def add_quote_line(
             reason_code = "PRICE_OVERRIDE" if override_unit_price != 0 else "ZERO_PRICE_LINE"
         else:
             reason_code = "DISCOUNT_ABOVE_LIMIT"
+        fingerprint = compute_line_commercial_fingerprint(
+            plan_id=plan_id,
+            addon_id=addon_id,
+            quantity=quantity,
+            unit_price=catalog_item["unit_price"],
+            overridden_unit_price=override_unit_price,
+            discount_amount=discount_amount,
+            currency=quote.currency,
+        )
         create_approval_request(
             target_type="QUOTE_LINE",
             target_id=line.id,
             target_version_at_request=line.version,
+            commercial_fingerprint=fingerprint,
             reason_code=reason_code,
             requested_values={
                 "unit_price": str(catalog_item["unit_price"]),

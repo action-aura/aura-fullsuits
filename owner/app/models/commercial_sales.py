@@ -253,6 +253,16 @@ class CommercialApproval(Base, UUIDPKMixin, TimestampMixin):
     target_type: Mapped[str] = mapped_column(String(16), nullable=False)
     target_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     target_version_at_request: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Phase 9.5D -- a version counter alone is only a valid staleness
+    # signal if EVERY approval-relevant mutation reliably bumps it; a
+    # deterministic content fingerprint of the actual commercial values
+    # (product/plan, quantity, list/proposed price, discount, currency)
+    # is authoritative instead -- it can never miss a material change
+    # regardless of which code path made it, and is provably unaffected
+    # by unrelated actions (viewing, audit writes, other lines' changes).
+    # target_version_at_request is retained for audit/debugging value
+    # only. See docs/owner/phase9_5d/commercial-approval-contract.md.
+    commercial_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     reason_code: Mapped[str] = mapped_column(String(32), nullable=False)
     requested_by_staff_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_staff_users.id"), nullable=False
