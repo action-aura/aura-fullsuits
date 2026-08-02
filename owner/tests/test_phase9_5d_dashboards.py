@@ -120,7 +120,7 @@ def test_employee_dashboard_is_scoped_to_own_pipeline_and_commission(app, seeded
 
         dash_a = employee_commercial_dashboard(profile_a, staff_a)
 
-        assert dash_a["invoices_by_status"].get("ISSUED", 0) == 1  # only A's own invoice
+        assert dash_a["invoices_by_status"].get("PAID", 0) == 1  # only A's own invoice, fully allocated -> PAID
         assert dash_a["commission_earned_unapproved"] == Decimal("100.00")  # only A's own 10% of 1000, never X's 50
 
 
