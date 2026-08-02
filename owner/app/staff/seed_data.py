@@ -217,9 +217,20 @@ ROLES: dict[str, dict] = {
             # NOT device_policy.manage (a commercial-config, not financial,
             # authority -- SUPER_ADMIN only).
             "payments.confirm", "invoices.issue", "refunds.create", "refunds.approve",
+            # Phase 9.5D Milestone 16 -- real gap found and closed: quotes.approve/
+            # orders.approve were pre-seeded (Phase 9.5A) but never granted to any
+            # role, so no one but SUPER_ADMIN could ever confirm a Sales Order or
+            # approve a pricing exception once routes exist. Order confirmation
+            # ("this sale is real and committed") and quote/exception approval are
+            # the same category of money-authorization decision FINANCE already
+            # holds for invoices/refunds/commissions -- granted here, not to SALES
+            # (which only ever gets *.create, never *.approve, on any commercial
+            # document -- see commercial-sales-sod-matrix.md).
+            "quotes.approve", "orders.approve",
             # pricing.override is deliberately NOT granted here (or to any role
             # below) -- like activation_policy.manage/signing_keys.manage, it's
-            # SUPER_ADMIN-only via the wildcard; a price exception is a
+            # SUPER_ADMIN-only via the wildcard; a price exception that needs an
+            # outright catalog-price bypass (not just a discount approval) is a
             # commercial-authority decision, not a finance-confirmation one.
             "commissions.view_all", "commissions.approve", "commissions.pay", "commissions.reverse",
             "expenses.view_all", "expenses.approve", "expenses.pay", "expenses.void",
