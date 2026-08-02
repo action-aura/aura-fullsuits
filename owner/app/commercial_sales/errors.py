@@ -102,5 +102,4 @@ class CommercialSalesError(StableCodeError):
         "FULFILLMENT_NOT_ELIGIBLE": "This order is not eligible for fulfillment yet: {reason}.",
         "FULFILLMENT_ALREADY_COMPLETE": "This order line has already been fulfilled.",
         # Commission
-        "COMMISSION_RULE_TYPE_NOT_IMPLEMENTED": "Commission rule type {rule_type} is not implemented in this phase.",
     }
