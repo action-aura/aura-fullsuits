@@ -1,22 +1,16 @@
-# Windows Task Scheduler install/uninstall/status. Per-user task, no admin required.
+# Windows Task Scheduler install/uninstall/status via schtasks.exe -- the classic
+# COM-based Task Scheduler API, not the modern ScheduledTasks PowerShell module.
 #
-# ScheduledTasks' underlying CIM/MI native layer is unreliable when driven from
-# PowerShell 7 (pwsh) -- both calling the cmdlets directly and importing the module
-# via -UseWindowsPowerShell can throw "The type initializer for
-# ...ApplicationMethods threw an exception" while constructing New-ScheduledTask*
-# objects. The one thing that reliably works is genuine Windows PowerShell 5.1 in
-# its own process. So every ScheduledTasks operation here runs in a child
-# `powershell.exe` process, regardless of what shell aura-sync.ps1 itself runs
-# under, and the result is verified rather than assumed.
+# The module (CIM/WMI-based) was tried first but proved unreliable: its native MI
+# layer can throw under PowerShell 7 on some machines, and even from genuine Windows
+# PowerShell 5.1, Register-ScheduledTask can hit "Access is denied" for a plain
+# per-user task when WMI write access to the TaskScheduler namespace is restricted
+# (AV/EDR hooking WMI writes, hardened WMI ACLs, etc.) -- while schtasks.exe, doing
+# the identical operation through the older RPC/COM path, works fine. It also avoids
+# the module's RepetitionDuration XML-overflow bug: `/sc minute /mo N` just repeats
+# forever on its own, no duration value needed.
 
-function Invoke-WindowsPowerShellScript {
-    param([Parameter(Mandatory)][string]$ScriptBlock)
-
-    $psPath = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($ScriptBlock))
-    $output = & $psPath -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded 2>&1
-    return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = @($output | ForEach-Object { $_.ToString() }) }
-}
+$script:TaskName = 'AuraFullSuits-AutoSync'
 
 function Install-SyncTask {
     param(
@@ -30,79 +24,52 @@ function Install-SyncTask {
     $exe = if ($pwshCmd -and $pwshCmd.Source -notmatch 'WindowsApps') { $pwshCmd.Source } else { (Get-Command powershell).Source }
 
     $scriptPath = Join-Path $RepoRoot 'scripts\sync\aura-sync.ps1'
-    $taskName = 'AuraFullSuits-AutoSync'
-    $userId = "$env:USERDOMAIN\$env:USERNAME"
+    $commandLine = "`"$exe`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$scriptPath`" -Once"
 
-    $inner = @"
-`$action = New-ScheduledTaskAction -Execute '$exe' -Argument '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$scriptPath" -Once' -WorkingDirectory '$RepoRoot'
-`$repeatTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes) -RepetitionDuration (New-TimeSpan -Days 7300)
-`$logonTrigger = New-ScheduledTaskTrigger -AtLogOn
-`$principal = New-ScheduledTaskPrincipal -UserId '$userId' -LogonType Interactive -RunLevel Limited
-`$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 0
-Register-ScheduledTask -TaskName '$taskName' -Action `$action -Trigger @(`$repeatTrigger, `$logonTrigger) -Principal `$principal -Settings `$settings -Force -ErrorAction Stop | Out-Null
-Write-Output 'AURA_SYNC_REGISTER_OK'
-"@
+    # /it = run using the interactive token of the logged-on user (no stored password
+    # needed). /rl limited = standard rights, no elevation. /sc minute /mo N = repeats
+    # every N minutes indefinitely, starting now, surviving reboots and logins.
+    $output = & schtasks.exe /create /tn $script:TaskName /tr $commandLine /sc minute /mo $IntervalMinutes /it /rl limited /f 2>&1
+    $exitCode = $LASTEXITCODE
 
-    $result = Invoke-WindowsPowerShellScript -ScriptBlock $inner
-
-    if ($result.ExitCode -eq 0 -and ($result.Output -contains 'AURA_SYNC_REGISTER_OK')) {
-        Write-Host "Installed scheduled task '$taskName' -- runs every $IntervalMinutes min, plus at logon." -ForegroundColor Green
+    if ($exitCode -eq 0) {
+        Write-Host "Installed scheduled task '$($script:TaskName)' -- runs every $IntervalMinutes min." -ForegroundColor Green
         Write-Host "Engine: $exe"
         Write-Host "Check status any time with: .\aura-sync.ps1 -Status"
     } else {
-        Write-Host "FAILED to install scheduled task." -ForegroundColor Red
-        $result.Output | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
-        Write-Host "Nothing was registered. Fall back to a foreground loop with: .\aura-sync.ps1 -Watch" -ForegroundColor Yellow
-        throw "Install-SyncTask failed (exit $($result.ExitCode))"
+        Write-Host 'FAILED to install scheduled task.' -ForegroundColor Red
+        $output | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+        Write-Host 'Nothing was registered. Fall back to a foreground loop with: .\aura-sync.ps1 -Watch' -ForegroundColor Yellow
+        throw "Install-SyncTask failed (exit $exitCode)"
     }
 }
 
 function Uninstall-SyncTask {
-    $taskName = 'AuraFullSuits-AutoSync'
-    $inner = @"
-`$existing = Get-ScheduledTask -TaskName '$taskName' -ErrorAction SilentlyContinue
-if (`$existing) {
-    Unregister-ScheduledTask -TaskName '$taskName' -Confirm:`$false -ErrorAction Stop
-    Write-Output 'AURA_SYNC_REMOVED'
-} else {
-    Write-Output 'AURA_SYNC_NOT_FOUND'
-}
-"@
-    $result = Invoke-WindowsPowerShellScript -ScriptBlock $inner
+    & schtasks.exe /query /tn $script:TaskName 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "No scheduled task named '$($script:TaskName)' found." -ForegroundColor Yellow
+        return
+    }
 
-    if ($result.Output -contains 'AURA_SYNC_REMOVED') {
-        Write-Host "Removed scheduled task '$taskName'." -ForegroundColor Green
-    } elseif ($result.Output -contains 'AURA_SYNC_NOT_FOUND') {
-        Write-Host "No scheduled task named '$taskName' found." -ForegroundColor Yellow
+    & schtasks.exe /delete /tn $script:TaskName /f 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Removed scheduled task '$($script:TaskName)'." -ForegroundColor Green
     } else {
-        Write-Host "Could not check/remove scheduled task." -ForegroundColor Red
-        $result.Output | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+        Write-Host "Could not remove scheduled task '$($script:TaskName)'." -ForegroundColor Red
     }
 }
 
 function Show-SyncStatus {
     param([Parameter(Mandatory)][string]$RepoRoot)
 
-    $taskName = 'AuraFullSuits-AutoSync'
-    $inner = @"
-`$task = Get-ScheduledTask -TaskName '$taskName' -ErrorAction SilentlyContinue
-if (`$task) {
-    `$info = `$task | Get-ScheduledTaskInfo
-    Write-Output "AURA_SYNC_STATE state=`$(`$task.State) lastResult=`$(`$info.LastTaskResult) nextRun=`$(`$info.NextRunTime)"
-} else {
-    Write-Output 'AURA_SYNC_NOT_INSTALLED'
-}
-"@
-    $result = Invoke-WindowsPowerShellScript -ScriptBlock $inner
-    $stateLine = $result.Output | Where-Object { $_ -like 'AURA_SYNC_STATE *' } | Select-Object -First 1
-
-    if ($stateLine) {
-        Write-Host "Scheduled task: $($stateLine -replace '^AURA_SYNC_STATE ', '')"
-    } elseif ($result.Output -contains 'AURA_SYNC_NOT_INSTALLED') {
-        Write-Host "No scheduled task installed. Use -Install to set one up, or -Watch for a foreground loop." -ForegroundColor Yellow
+    $output = & schtasks.exe /query /tn $script:TaskName /fo list /v 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $status = ($output | Select-String '^Status:\s*(.+)$' | Select-Object -First 1).Matches.Groups[1].Value
+        $nextRun = ($output | Select-String '^Next Run Time:\s*(.+)$' | Select-Object -First 1).Matches.Groups[1].Value
+        $lastResult = ($output | Select-String '^Last Result:\s*(.+)$' | Select-Object -First 1).Matches.Groups[1].Value
+        Write-Host "Scheduled task: status=$status lastResult=$lastResult nextRun=$nextRun"
     } else {
-        Write-Host "Could not query scheduled task." -ForegroundColor Red
-        $result.Output | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+        Write-Host 'No scheduled task installed. Use -Install to set one up, or -Watch for a foreground loop.' -ForegroundColor Yellow
     }
 
     $runtimeDir = Join-Path $RepoRoot '.autosync'
