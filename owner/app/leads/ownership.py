@@ -16,7 +16,7 @@ import uuid
 
 from sqlalchemy import Select, or_, select
 
-from app.models.commercial_sales import Quote
+from app.models.commercial_sales import Quote, SalesOrder
 from app.models.customers import Customer
 from app.models.employees import EmployeeProfile
 from app.models.leads import Lead
@@ -55,4 +55,8 @@ def apply_ownership_filter(
         # Lead), only a creator (created_by_employee_profile_id); ownership
         # is creator-only. See docs/owner/phase9_5d/quote-domain-contract.md.
         return stmt.where(Quote.created_by_employee_profile_id == actor_employee_profile_id)
+    if model is SalesOrder:
+        # Phase 9.5D Milestone 8 -- same creator-only rule as Quote (no
+        # separate assignee concept on SalesOrder either).
+        return stmt.where(SalesOrder.created_by_employee_profile_id == actor_employee_profile_id)
     raise NotImplementedError(f"apply_ownership_filter has no rule for {model!r}")
