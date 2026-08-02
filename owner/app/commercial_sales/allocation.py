@@ -43,6 +43,15 @@ def allocate_payment(
         raise CommercialSalesError("PAYMENT_NOT_CONFIRMED")
     if payment.currency != invoice.currency:
         raise CommercialSalesError("CURRENCY_MISMATCH", given=payment.currency, expected=invoice.currency)
+    # Milestone 23 (IDOR/tampering pass) -- real gap found: nothing
+    # previously verified the payment and invoice belong to the same
+    # customer. Without this check, a Finance actor (or a tampered
+    # request supplying an arbitrary payment_record_id) could allocate
+    # Customer A's confirmed payment against Customer B's invoice,
+    # crediting the wrong account -- a real financial-integrity and
+    # cross-tenant-data bug, not merely a permissions gap.
+    if payment.customer_id != invoice.customer_id:
+        raise CommercialSalesError("PAYMENT_CUSTOMER_MISMATCH")
 
     # Row-level lock on the invoice for the duration of this allocation --
     # two concurrent allocation attempts against the same invoice must

@@ -829,6 +829,7 @@ def localize_commercial_sales_error(code: str, **params) -> str:
         "ALLOCATION_EXCEEDS_PAYMENT": _("Allocation amount (%(amount)s) exceeds the unallocated payment balance (%(available)s)."),
         "ALLOCATION_EXCEEDS_OUTSTANDING": _("Allocation amount (%(amount)s) exceeds the invoice outstanding balance (%(outstanding)s)."),
         "CURRENCY_MISMATCH": _("Currency %(given)s does not match the required currency %(expected)s."),
+        "PAYMENT_CUSTOMER_MISMATCH": _("This payment belongs to a different customer than the invoice."),
         "INVALID_CURRENCY_CODE": _("Currency must be a 3-letter ISO 4217 code."),
         "EMPTY_DOCUMENT": _("A document must have at least one line."),
         "INVALID_QUOTE_TRANSITION": _("Cannot change quote status from %(from_status)s to %(to_status)s."),

@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-08-02 15:02+0300\n"
+"POT-Creation-Date: 2026-08-02 16:33+0300\n"
 "PO-Revision-Date: 2026-08-01 11:16+0300\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -988,7 +988,7 @@ msgstr "A 3-letter currency code is required when an estimated value is set."
 msgid "Location summary must be at most %(max_len)s characters."
 msgstr "Location summary must be at most %(max_len)s characters."
 
-#: app/i18n_labels.py:674 app/i18n_labels.py:842
+#: app/i18n_labels.py:674 app/i18n_labels.py:843
 msgid ""
 "This request conflicts with an earlier request using the same idempotency"
 " key."
@@ -1185,145 +1185,149 @@ msgid "Currency %(given)s does not match the required currency %(expected)s."
 msgstr "Currency %(given)s does not match the required currency %(expected)s."
 
 #: app/i18n_labels.py:832
+msgid "This payment belongs to a different customer than the invoice."
+msgstr "This payment belongs to a different customer than the invoice."
+
+#: app/i18n_labels.py:833
 msgid "Currency must be a 3-letter ISO 4217 code."
 msgstr "Currency must be a 3-letter ISO 4217 code."
 
-#: app/i18n_labels.py:833
+#: app/i18n_labels.py:834
 msgid "A document must have at least one line."
 msgstr "A document must have at least one line."
 
-#: app/i18n_labels.py:834
+#: app/i18n_labels.py:835
 #, python-format
 msgid "Cannot change quote status from %(from_status)s to %(to_status)s."
 msgstr "Cannot change quote status from %(from_status)s to %(to_status)s."
 
-#: app/i18n_labels.py:835
+#: app/i18n_labels.py:836
 #, python-format
 msgid "Cannot change order status from %(from_status)s to %(to_status)s."
 msgstr "Cannot change order status from %(from_status)s to %(to_status)s."
 
-#: app/i18n_labels.py:836
+#: app/i18n_labels.py:837
 #, python-format
 msgid "Cannot change invoice status from %(from_status)s to %(to_status)s."
 msgstr "Cannot change invoice status from %(from_status)s to %(to_status)s."
 
-#: app/i18n_labels.py:837
+#: app/i18n_labels.py:838
 #, python-format
 msgid "Cannot change refund status from %(from_status)s to %(to_status)s."
 msgstr "Cannot change refund status from %(from_status)s to %(to_status)s."
 
-#: app/i18n_labels.py:838
+#: app/i18n_labels.py:839
 #, python-format
 msgid "Cannot change approval status from %(from_status)s to %(to_status)s."
 msgstr "Cannot change approval status from %(from_status)s to %(to_status)s."
 
-#: app/i18n_labels.py:839
+#: app/i18n_labels.py:840
 msgid "This record was changed by someone else. Reload and try again."
 msgstr "This record was changed by someone else. Reload and try again."
 
-#: app/i18n_labels.py:840 app/templates/commercial_sales/not_found.html:4
+#: app/i18n_labels.py:841 app/templates/commercial_sales/not_found.html:4
 msgid "Record not found."
 msgstr "Record not found."
 
-#: app/i18n_labels.py:841
+#: app/i18n_labels.py:842
 msgid "You do not have access to this record."
 msgstr "You do not have access to this record."
 
-#: app/i18n_labels.py:843
+#: app/i18n_labels.py:844
 msgid "A reason is required for this action."
 msgstr "A reason is required for this action."
 
-#: app/i18n_labels.py:844
+#: app/i18n_labels.py:845
 msgid "Payment method must be one of the allowed values."
 msgstr "Payment method must be one of the allowed values."
 
-#: app/i18n_labels.py:845
+#: app/i18n_labels.py:846
 msgid "You cannot approve your own request."
 msgstr "You cannot approve your own request."
 
-#: app/i18n_labels.py:846
+#: app/i18n_labels.py:847
 msgid "This action requires approval before it can proceed."
 msgstr "This action requires approval before it can proceed."
 
-#: app/i18n_labels.py:847
+#: app/i18n_labels.py:848
 msgid "The approval no longer matches the current version of this record."
 msgstr "The approval no longer matches the current version of this record."
 
-#: app/i18n_labels.py:848
+#: app/i18n_labels.py:849
 msgid "Discount exceeds your permitted limit and requires approval."
 msgstr "Discount exceeds your permitted limit and requires approval."
 
-#: app/i18n_labels.py:849
+#: app/i18n_labels.py:850
 msgid "A custom price requires approval."
 msgstr "A custom price requires approval."
 
-#: app/i18n_labels.py:850
+#: app/i18n_labels.py:851
 msgid "A zero-price line requires approval."
 msgstr "A zero-price line requires approval."
 
-#: app/i18n_labels.py:851
+#: app/i18n_labels.py:852
 msgid "The quote must be accepted before an order can be created."
 msgstr "The quote must be accepted before an order can be created."
 
-#: app/i18n_labels.py:852
+#: app/i18n_labels.py:853
 msgid "A confirmed customer is required before an order can be created."
 msgstr "A confirmed customer is required before an order can be created."
 
-#: app/i18n_labels.py:853
+#: app/i18n_labels.py:854
 msgid "This product or plan is not currently sellable."
 msgstr "This product or plan is not currently sellable."
 
-#: app/i18n_labels.py:854
+#: app/i18n_labels.py:855
 msgid "This price is no longer effective."
 msgstr "This price is no longer effective."
 
-#: app/i18n_labels.py:855
+#: app/i18n_labels.py:856
 msgid "The payment must be confirmed before it can be allocated."
 msgstr "The payment must be confirmed before it can be allocated."
 
-#: app/i18n_labels.py:856
+#: app/i18n_labels.py:857
 msgid "This payment has already been confirmed."
 msgstr "This payment has already been confirmed."
 
-#: app/i18n_labels.py:857
+#: app/i18n_labels.py:858
 msgid "You cannot confirm a payment you submitted yourself."
 msgstr "You cannot confirm a payment you submitted yourself."
 
-#: app/i18n_labels.py:858
+#: app/i18n_labels.py:859
 #, python-format
 msgid "This order is not eligible for fulfillment yet: %(reason)s."
 msgstr "This order is not eligible for fulfillment yet: %(reason)s."
 
-#: app/i18n_labels.py:859
+#: app/i18n_labels.py:860
 msgid "This order line has already been fulfilled."
 msgstr "This order line has already been fulfilled."
 
-#: app/i18n_labels.py:860
+#: app/i18n_labels.py:861
 msgid "This action requires a real employee profile."
 msgstr "This action requires a real employee profile."
 
-#: app/i18n_labels.py:873
+#: app/i18n_labels.py:874
 #, python-format
 msgid "Commission rule type %(rule_type)s is not implemented in this phase."
 msgstr "Commission rule type %(rule_type)s is not implemented in this phase."
 
-#: app/i18n_labels.py:874
+#: app/i18n_labels.py:875
 msgid "Commission rate must be a percentage greater than 0 and at most 100."
 msgstr "Commission rate must be a percentage greater than 0 and at most 100."
 
-#: app/i18n_labels.py:875
+#: app/i18n_labels.py:876
 msgid "Commission fixed amount must be a positive value with a valid currency."
 msgstr "Commission fixed amount must be a positive value with a valid currency."
 
-#: app/i18n_labels.py:876
+#: app/i18n_labels.py:877
 msgid "The employee has no active commission plan/rule assignment for this date."
 msgstr "The employee has no active commission plan/rule assignment for this date."
 
-#: app/i18n_labels.py:877
+#: app/i18n_labels.py:878
 msgid "A commission entry already exists for this payment allocation."
 msgstr "A commission entry already exists for this payment allocation."
 
-#: app/i18n_labels.py:878
+#: app/i18n_labels.py:879
 #, python-format
 msgid ""
 "Cannot change commission entry status from %(from_status)s to "
@@ -1332,19 +1336,19 @@ msgstr ""
 "Cannot change commission entry status from %(from_status)s to "
 "%(to_status)s."
 
-#: app/i18n_labels.py:879
+#: app/i18n_labels.py:880
 msgid "You cannot approve or adjust your own commission entry."
 msgstr "You cannot approve or adjust your own commission entry."
 
-#: app/i18n_labels.py:880
+#: app/i18n_labels.py:881
 msgid "An external payout reference is required to record a commission payout."
 msgstr "An external payout reference is required to record a commission payout."
 
-#: app/i18n_labels.py:881
+#: app/i18n_labels.py:882
 msgid "A reason is required for this commission action."
 msgstr "A reason is required for this commission action."
 
-#: app/i18n_labels.py:882
+#: app/i18n_labels.py:883
 msgid "This commission entry is already included in a payout batch."
 msgstr "This commission entry is already included in a payout batch."
 
