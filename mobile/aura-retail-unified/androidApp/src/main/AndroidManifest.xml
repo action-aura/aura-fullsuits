@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- CAMERA: barcode scanning (Milestone 14). No INTERNET permission:
+         the embedded-loopback-server pattern this module replaces is gone;
+         real network permissions are added only when a real remote call
+         (Owner licensing activation, Milestone 7-11) is implemented. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <application
+        android:label="Aura Retail"
+        android:icon="@android:drawable/sym_def_app_icon"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

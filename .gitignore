@@ -43,6 +43,20 @@ android/*/.cxx/
 # APK/AAB build outputs are not committed by policy -- see docs/android/*
 android/*/app/build/outputs/
 
+# Aura Retail Unified Mobile (KMP/Compose Multiplatform) -- docs/retail/unified_mobile/
+mobile/aura-retail-unified/.gradle/
+mobile/aura-retail-unified/build/
+mobile/aura-retail-unified/*/build/
+mobile/aura-retail-unified/local.properties
+mobile/aura-retail-unified/keystore.properties
+mobile/aura-retail-unified/.idea/
+mobile/aura-retail-unified/.kotlin/
+mobile/aura-retail-unified/iosApp/build/
+mobile/aura-retail-unified/iosApp/Pods/
+mobile/aura-retail-unified/iosApp/*.xcworkspace/xcuserdata/
+mobile/aura-retail-unified/iosApp/*.xcodeproj/xcuserdata/
+mobile/aura-retail-unified/iosApp/*.xcodeproj/project.xcworkspace/xcuserdata/
+
 # Audit-only temp artifacts (Phase 3.5) -- never committed, ephemeral only
 .audit-temp/
 
