@@ -1,5 +1,17 @@
 # Aura Retail Unified Mobile — Android Feature Parity Matrix (Milestone 1)
 
+> **Product Owner Scope Override (post-Milestone-1):** the "6 items pending
+> product-owner decision" classification below (categories, branches,
+> reports/sales-trend, reports/top-products, import API, plus the dead
+> Clinic surface) has been superseded by an authoritative product-scope
+> decision: Aura Retail Unified Mobile is a complete Retail mobile product,
+> not a strict translation of the current 17-route Android navigation
+> graph. Every one of those 6 items now has a real classification and
+> implementation path in `complete-retail-capability-matrix.md` — read that
+> document as authoritative for those items. This document is preserved
+> unmodified below as the honest historical record of what Milestone 1's
+> first pass actually found and concluded at the time.
+
 Built by reading the real repository: `android/aura-retail/app/src/main/java/com/actionaura/retail/` (34 Kotlin files, navigation graph in `ui/AppRoot.kt`), `net/AuraApi.kt` (the actual Retrofit interface calling the embedded backend), and `products/retail/backend/api/retail_api.py` (48 routes / 17 tables). Every row below is grounded in a real file:line, not summarized from memory.
 
 **Statuses used:** AUDITED, SHARED_IMPLEMENTATION_REQUIRED, ANDROID_ADAPTER_REQUIRED, IOS_ADAPTER_REQUIRED, NOT_APPLICABLE (with reason), OUT_OF_SCOPE (with reason).
