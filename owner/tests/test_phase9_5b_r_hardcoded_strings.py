@@ -16,7 +16,7 @@ GATED_DIRS = (
     "layout", "auth", "employees", "profile",
     "dashboard", "audit", "catalog", "customers", "installations",
     "licensing", "licensing_admin", "staff", "subscriptions", "system",
-    "commercial_ops", "leads", "commercial_sales",
+    "commercial_ops", "leads", "commercial_sales", "operations_ui",
 )
 
 # Attribute names whose value is never translatable prose (ids, urls, form

@@ -886,3 +886,187 @@ def localize_commission_error(code: str, **params) -> str:
     if template is None:
         return code
     return template % params if params else template
+
+
+def expense_status_label(code: str) -> str:
+    """Phase 9.5E -- real values from app.models.expenses.EXPENSE_STATUSES."""
+    labels = {
+        "DRAFT": _("Draft"),
+        "SUBMITTED": _("Submitted"),
+        "RETURNED": _("Returned for correction"),
+        "APPROVED": _("Approved"),
+        "PARTIALLY_PAID": _("Partially paid"),
+        "PAID": _("Paid"),
+        "REJECTED": _("Rejected"),
+        "VOID": _("Void"),
+    }
+    return labels.get(code, code)
+
+
+def expense_approval_status_label(code: str) -> str:
+    labels = {
+        "PENDING": _("Pending"),
+        "APPROVED": _("Approved"),
+        "REJECTED": _("Rejected"),
+        "RETURNED": _("Returned"),
+        "CANCELLED": _("Cancelled"),
+    }
+    return labels.get(code, code)
+
+
+def expense_payment_method_label(code: str) -> str:
+    labels = {
+        "CASH": _("Cash"),
+        "BANK_TRANSFER": _("Bank transfer"),
+        "CARD_OFFLINE": _("Card (offline)"),
+        "CHEQUE": _("Cheque"),
+        "OTHER": _("Other"),
+    }
+    return labels.get(code, code)
+
+
+def payee_type_label(code: str) -> str:
+    labels = {
+        "EXTERNAL": _("External vendor"),
+        "EMPLOYEE": _("Employee beneficiary"),
+    }
+    return labels.get(code, code)
+
+
+def cash_closing_status_label(code: str) -> str:
+    """Phase 9.5E -- real values from app.models.cash_closing.CASH_CLOSING_STATUSES."""
+    labels = {
+        "DRAFT": _("Draft"),
+        "SUBMITTED": _("Submitted"),
+        "REVIEW_REQUIRED": _("Review required"),
+        "APPROVED": _("Approved"),
+        "REJECTED": _("Rejected"),
+        "REOPENED": _("Reopened"),
+        "CLOSED": _("Closed"),
+    }
+    return labels.get(code, code)
+
+
+def report_type_label(code: str) -> str:
+    labels = {
+        "DAILY_OPERATIONAL_SUMMARY": _("Daily operational summary"),
+        "DAILY_CASH_CLOSING_EXCEPTIONS": _("Daily cash closing exceptions"),
+        "WEEKLY_OPERATIONAL_SUMMARY": _("Weekly operational summary"),
+        "MONTHLY_OPERATIONAL_SUMMARY": _("Monthly operational summary"),
+    }
+    return labels.get(code, code)
+
+
+def management_note_status_label(code: str) -> str:
+    """Phase 9.5E -- real values from app.models.management_notes.MANAGEMENT_NOTE_STATUSES."""
+    labels = {
+        "OPEN": _("Open"),
+        "IN_PROGRESS": _("In progress"),
+        "DONE": _("Done"),
+        "ARCHIVED": _("Archived"),
+    }
+    return labels.get(code, code)
+
+
+def management_note_visibility_label(code: str) -> str:
+    """Phase 9.5E -- real values from app.models.management_notes.MANAGEMENT_NOTE_VISIBILITIES."""
+    labels = {
+        "MANAGEMENT_ONLY": _("Management only"),
+        "SPECIFIC_EMPLOYEES": _("Specific employees"),
+        "ALL_STAFF": _("All staff"),
+    }
+    return labels.get(code, code)
+
+
+def management_note_priority_label(code: str) -> str:
+    labels = {
+        "LOW": _("Low"),
+        "MEDIUM": _("Medium"),
+        "HIGH": _("High"),
+    }
+    return labels.get(code, code)
+
+
+def localize_expense_error(code: str, **params) -> str:
+    """Phase 9.5E -- presentation-boundary localization for
+    app.expenses.errors.ExpenseError and app.cash_closing's use of the same
+    class, matching localize_commercial_sales_error()'s exact pattern."""
+    messages = {
+        "INVALID_EXPENSE_TRANSITION": _("Cannot change expense status from %(from_status)s to %(to_status)s."),
+        "REASON_REQUIRED": _("A reason is required for this action."),
+        "RECORD_NOT_FOUND": _("Record not found."),
+        "RECORD_ACCESS_DENIED": _("You do not have access to this record."),
+        "NON_FINITE_AMOUNT": _("Amount must be a finite, positive number."),
+        "CURRENCY_MISMATCH": _("Currency %(given)s does not match the expense currency %(expected)s."),
+        "INVALID_CURRENCY_CODE": _("Currency must be a 3-letter ISO 4217 code."),
+        "PAYEE_REQUIRED": _("A payee is required."),
+        "PAYEE_INACTIVE": _("This payee is not active."),
+        "CATEGORY_INACTIVE": _("This expense category is not active."),
+        "PAYEE_TYPE_INVALID": _("Payee type must be EXTERNAL or EMPLOYEE."),
+        "EMPLOYEE_BENEFICIARY_REQUIRED": _("An employee is required for an employee-beneficiary payee."),
+        "EXTERNAL_CONTACT_NOT_ALLOWED_FOR_EMPLOYEE": _("An employee-beneficiary payee cannot have an external contact reference."),
+        "INVALID_EXPENSE_APPROVAL_TRANSITION": _("Cannot change approval status from %(from_status)s to %(to_status)s."),
+        "SELF_APPROVAL_FORBIDDEN": _("You cannot approve your own expense request."),
+        "BENEFICIARY_APPROVAL_FORBIDDEN": _("You cannot approve an expense where you are the recorded beneficiary."),
+        "APPROVAL_STALE": _("This expense was changed after the approval was requested. Reload and try again."),
+        "APPROVED_AMOUNT_EXCEEDS_REQUESTED": _("Approved amount (%(approved)s) cannot exceed the requested amount (%(requested)s)."),
+        "APPROVER_INELIGIBLE": _("This account is not eligible to approve this expense: %(reason)s."),
+        "APPROVER_MISSING_PERMISSION": _("This account does not have permission to approve expenses."),
+        "APPROVER_SUSPENDED_OR_TERMINATED": _("This approver employee profile is suspended or terminated."),
+        "APPROVER_MISSING_EMPLOYEE_PROFILE": _("This approver has no active employee profile."),
+        "EXPENSE_NOT_PENDING_APPROVAL": _("This expense has no pending approval request."),
+        "EXPENSE_NOT_APPROVED": _("The expense must be approved before a payment can be recorded."),
+        "EXPENSE_TERMINAL_STATE": _("This expense is in a terminal state (%(status)s) and cannot be paid."),
+        "PAYMENT_EXCEEDS_OUTSTANDING": _("Payment amount (%(amount)s) exceeds the outstanding approved balance (%(outstanding)s)."),
+        "IDEMPOTENCY_CONFLICT": _("This request conflicts with an earlier request using the same idempotency key."),
+        "PAYMENT_ALREADY_REVERSED": _("This payment has already been reversed."),
+        "SELF_PAYMENT_RECORDING_FORBIDDEN": _("You cannot record payment for your own expense request."),
+        "ATTACHMENT_TOO_LARGE": _("Attachment exceeds the maximum allowed size."),
+        "ATTACHMENT_TYPE_NOT_ALLOWED": _("This file type is not allowed for attachments."),
+        "ATTACHMENT_CONTENT_MISMATCH": _("The file actual content does not match its declared type."),
+        "ATTACHMENT_EMPTY": _("Attachment file is empty."),
+        "ATTACHMENT_NOT_FOUND": _("Attachment not found."),
+        "ATTACHMENT_ACCESS_DENIED": _("You do not have access to this attachment."),
+        "ATTACHMENT_ARCHIVED": _("This attachment has been archived."),
+        "INVALID_STORAGE_KEY": _("Invalid storage key."),
+        "INVALID_CASH_CLOSING_TRANSITION": _("Cannot change cash closing status from %(from_status)s to %(to_status)s."),
+        "CASH_CLOSING_ALREADY_EXISTS": _("A cash closing already exists for %(business_date)s %(currency)s."),
+        "OPENING_CASH_OVERRIDE_REQUIRES_REASON": _("A manual opening-cash override requires a reason."),
+        "OPENING_CASH_OVERRIDE_REQUIRES_PERMISSION": _("You do not have permission to override opening cash."),
+        "VARIANCE_EXPLANATION_REQUIRED": _("A nonzero variance requires an explanation."),
+        "SELF_APPROVAL_FORBIDDEN_CLOSING": _("You cannot approve a cash closing you prepared."),
+        "CLOSING_IMMUTABLE": _("This cash closing is approved or closed and cannot be edited directly -- reopen it first."),
+        "REOPEN_REQUIRES_REASON": _("Reopening a cash closing requires a reason."),
+        "REOPEN_REQUIRES_PERMISSION": _("You do not have permission to reopen a cash closing."),
+        "REOPEN_REQUIRES_RECENT_AUTHENTICATION": _("Reopening a cash closing requires recent re-authentication."),
+        "LATE_TRANSACTION_REQUIRES_REOPEN": _("A closed business date requires reopening the closing before recording a late transaction."),
+        "DUPLICATE_OVERRIDE_REQUIRES_REASON": _("Overriding a duplicate-expense warning requires a reason."),
+        "SNAPSHOT_ALREADY_PUBLISHED": _("A snapshot already exists for this canonical key."),
+        "SNAPSHOT_REGENERATION_REQUIRES_PERMISSION": _("You do not have permission to regenerate a report snapshot."),
+        "SNAPSHOT_REGENERATION_REQUIRES_REASON": _("Regenerating a report snapshot requires a reason."),
+        "EMPLOYEE_PROFILE_REQUIRED": _("This action requires a real employee profile."),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    return template % params if params else template
+
+
+def localize_management_note_error(code: str, **params) -> str:
+    """Phase 9.5E -- presentation-boundary localization for
+    app.management_notes.errors.ManagementNoteError."""
+    messages = {
+        "INVALID_MANAGEMENT_NOTE_TRANSITION": _("Cannot change note status from %(from_status)s to %(to_status)s."),
+        "RECORD_NOT_FOUND": _("Record not found."),
+        "RECORD_ACCESS_DENIED": _("You do not have access to this record."),
+        "VISIBILITY_INVALID": _("Visibility must be Management only, Specific employees, or All staff."),
+        "SPECIFIC_EMPLOYEES_REQUIRES_GRANTS": _("Specific-employees visibility requires at least one employee grant."),
+        "TITLE_REQUIRED": _("A title is required."),
+        "BODY_REQUIRED": _("A body is required."),
+        "STALE_VERSION": _("This note was changed by someone else. Reload and try again."),
+        "AUTHOR_SPOOF_FORBIDDEN": _("The author cannot be supplied by the client."),
+    }
+    template = messages.get(code)
+    if template is None:
+        return code
+    return template % params if params else template

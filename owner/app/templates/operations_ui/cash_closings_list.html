@@ -1,0 +1,24 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Cash Closing") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <h2>{{ _("Daily Cash Closing") }} (<bdi dir="ltr">{{ currency }}</bdi>)</h2>
+    <a class="btn" href="{{ url_for('operations_ui.new_closing_form') }}">{{ _("New closing") }}</a>
+  </div>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Business date") }}</th><th>{{ _("Status") }}</th><th>{{ _("Expected") }}</th><th>{{ _("Variance") }}</th></tr></thead>
+    <tbody>
+    {% for c in closings %}
+    <tr>
+      <td data-label="{{ _('Business date') }}"><a href="{{ url_for('operations_ui.closing_detail', closing_id=c.id) }}">{{ format_owner_date(c.business_date) }}</a></td>
+      <td data-label="{{ _('Status') }}"><span class="badge {{ 'success' if c.status == 'CLOSED' else ('danger' if c.status == 'REJECTED' else 'pending') }}">{{ cash_closing_status_label(c.status) }}</span></td>
+      <td data-label="{{ _('Expected') }}">{{ format_owner_number(c.expected_closing_cash) }} {{ c.currency }}</td>
+      <td data-label="{{ _('Variance') }}">{% if c.variance is not none %}{{ format_owner_number(c.variance) }} {{ c.currency }}{% endif %}</td>
+    </tr>
+    {% else %}<tr><td colspan="4" class="empty">{{ _("No cash closings yet.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

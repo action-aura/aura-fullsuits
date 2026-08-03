@@ -7,13 +7,12 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-08-02 16:33+0300\n"
+"POT-Creation-Date: 2026-08-03 07:24+0300\n"
 "PO-Revision-Date: 2026-08-01 11:16+0300\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: ar\n"
 "Language-Team: ar <LL@li.org>\n"
-"Plural-Forms: nplurals=6; plural=(n==0 ? 0 : n==1 ? 1 : n==2 ? 2 : "
-"n%100>=3 && n%100<=10 ? 3 : n%100>=0 && n%100<=2 ? 4 : 5);\n"
+"Plural-Forms: nplurals=6; plural=(n==0 ? 0 : n==1 ? 1 : n==2 ? 2 : n%100>=3 && n%100<=10 ? 3 : n%100>=0 && n%100<=2 ? 4 : 5);\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -44,7 +43,7 @@ msgid "Terminated"
 msgstr "منتهي العمل"
 
 #: app/i18n_labels.py:28 app/i18n_labels.py:158 app/i18n_labels.py:174
-#: app/templates/employees/dashboard.html:17
+#: app/i18n_labels.py:966 app/templates/employees/dashboard.html:17
 msgid "Archived"
 msgstr "مؤرشف"
 
@@ -112,6 +111,7 @@ msgid "Expired"
 msgstr "منتهية الصلاحية"
 
 #: app/i18n_labels.py:70 app/i18n_labels.py:216 app/i18n_labels.py:305
+#: app/i18n_labels.py:963
 msgid "Open"
 msgstr "سارية"
 
@@ -205,12 +205,12 @@ msgid "Recovery code used"
 msgstr "تم استخدام رمز الاسترداد"
 
 #: app/i18n_labels.py:103 app/templates/audit/security_events.html:7
-#: app/templates/layout/base.html:115 app/templates/staff/list.html:2
+#: app/templates/layout/base.html:122 app/templates/staff/list.html:2
 msgid "Staff"
 msgstr "الموظفون الإداريون"
 
 #: app/i18n_labels.py:104 app/templates/employees/list.html:2
-#: app/templates/employees/list.html:5 app/templates/layout/base.html:116
+#: app/templates/employees/list.html:5 app/templates/layout/base.html:123
 msgid "Employees"
 msgstr "الموظفون"
 
@@ -218,7 +218,7 @@ msgstr "الموظفون"
 #: app/i18n_labels.py:281 app/i18n_labels.py:334 app/i18n_labels.py:547
 #: app/i18n_labels.py:558 app/i18n_labels.py:569 app/i18n_labels.py:733
 #: app/i18n_labels.py:746 app/i18n_labels.py:757 app/i18n_labels.py:771
-#: app/i18n_labels.py:808
+#: app/i18n_labels.py:808 app/i18n_labels.py:894 app/i18n_labels.py:939
 msgid "Draft"
 msgstr "مسودة"
 
@@ -241,7 +241,7 @@ msgstr "مكتمل"
 
 #: app/i18n_labels.py:118 app/i18n_labels.py:218 app/i18n_labels.py:271
 #: app/i18n_labels.py:287 app/i18n_labels.py:738 app/i18n_labels.py:748
-#: app/i18n_labels.py:785 app/i18n_labels.py:799
+#: app/i18n_labels.py:785 app/i18n_labels.py:799 app/i18n_labels.py:912
 msgid "Cancelled"
 msgstr "ملغى"
 
@@ -273,7 +273,7 @@ msgstr "عميل محتمل"
 msgid "Prospect"
 msgstr "عميل مرتقب"
 
-#: app/i18n_labels.py:157
+#: app/i18n_labels.py:157 app/i18n_labels.py:945
 msgid "Closed"
 msgstr "مغلق"
 
@@ -326,20 +326,20 @@ msgstr "تواصل مباشر"
 msgid "Event"
 msgstr "الحدث"
 
-#: app/i18n_labels.py:186 app/i18n_labels.py:208
+#: app/i18n_labels.py:186 app/i18n_labels.py:208 app/i18n_labels.py:923
 #: app/templates/commercial_sales/payment_new.html:23
 msgid "Other"
 msgstr "أخرى"
 
-#: app/i18n_labels.py:194
+#: app/i18n_labels.py:194 app/i18n_labels.py:983
 msgid "Low"
 msgstr "منخفضة"
 
-#: app/i18n_labels.py:195
+#: app/i18n_labels.py:195 app/i18n_labels.py:984
 msgid "Medium"
 msgstr "متوسطة"
 
-#: app/i18n_labels.py:196
+#: app/i18n_labels.py:196 app/i18n_labels.py:985
 msgid "High"
 msgstr "عالية"
 
@@ -376,7 +376,7 @@ msgstr "أنا فقط"
 msgid "Anyone with record access"
 msgstr "أي شخص لديه صلاحية الوصول للسجل"
 
-#: app/i18n_labels.py:228
+#: app/i18n_labels.py:228 app/i18n_labels.py:974
 msgid "Management only"
 msgstr "الإدارة فقط"
 
@@ -426,7 +426,8 @@ msgstr "تم تسجيل الدفع"
 
 #: app/i18n_labels.py:268 app/i18n_labels.py:282 app/i18n_labels.py:317
 #: app/i18n_labels.py:772 app/i18n_labels.py:783 app/i18n_labels.py:796
-#: app/i18n_labels.py:809 app/templates/commercial_sales/refund_detail.html:10
+#: app/i18n_labels.py:809 app/i18n_labels.py:897 app/i18n_labels.py:909
+#: app/i18n_labels.py:942 app/templates/commercial_sales/refund_detail.html:10
 msgid "Approved"
 msgstr "مُعتمَد"
 
@@ -435,7 +436,8 @@ msgid "Applied"
 msgstr "مُطبَّق"
 
 #: app/i18n_labels.py:270 app/i18n_labels.py:318 app/i18n_labels.py:600
-#: app/i18n_labels.py:736 app/i18n_labels.py:784
+#: app/i18n_labels.py:736 app/i18n_labels.py:784 app/i18n_labels.py:900
+#: app/i18n_labels.py:910 app/i18n_labels.py:943
 msgid "Rejected"
 msgstr "مرفوض"
 
@@ -500,12 +502,8 @@ msgstr "متقاعد"
 
 #: app/i18n_labels.py:358
 #, python-format
-msgid ""
-"Subscription must already be in PILOT status to create a pilot record "
-"(was %(current_status)s)."
-msgstr ""
-"يجب أن يكون الاشتراك في حالة PILOT بالفعل لإنشاء سجل تجربة تشغيلية (كانت "
-"الحالة %(current_status)s)."
+msgid "Subscription must already be in PILOT status to create a pilot record (was %(current_status)s)."
+msgstr "يجب أن يكون الاشتراك في حالة PILOT بالفعل لإنشاء سجل تجربة تشغيلية (كانت الحالة %(current_status)s)."
 
 #: app/i18n_labels.py:359
 msgid "Pilot end date must be after the pilot start date."
@@ -517,23 +515,15 @@ msgstr "يلزم إدخال سبب لتمديد التجربة التشغيلي�
 
 #: app/i18n_labels.py:361
 #, python-format
-msgid ""
-"Pilot has already been extended %(count)s time(s) (maximum allowed: "
-"%(max)s). No indefinite rolling pilot."
-msgstr ""
-"تم تمديد التجربة التشغيلية %(count)s مرة/مرات بالفعل (الحد الأقصى المسموح"
-" به: %(max)s) -- لا يُسمح بتمديد التجربة إلى ما لا نهاية."
+msgid "Pilot has already been extended %(count)s time(s) (maximum allowed: %(max)s). No indefinite rolling pilot."
+msgstr "تم تمديد التجربة التشغيلية %(count)s مرة/مرات بالفعل (الحد الأقصى المسموح به: %(max)s) -- لا يُسمح بتمديد التجربة إلى ما لا نهاية."
 
 #: app/i18n_labels.py:362
 msgid "The new end date must be after the current pilot end date."
-msgstr ""
-"يجب أن يكون تاريخ الانتهاء الجديد بعد تاريخ انتهاء التجربة الحالي.يجب أن "
-"يكون تاريخ الانتهاء الجديد بعد تاريخ انتهاء التجربة التشغيلية الحالي."
+msgstr "يجب أن يكون تاريخ الانتهاء الجديد بعد تاريخ انتهاء التجربة الحالي.يجب أن يكون تاريخ الانتهاء الجديد بعد تاريخ انتهاء التجربة التشغيلية الحالي."
 
 #: app/i18n_labels.py:363
-msgid ""
-"The renewal request must be applied before this pilot can be marked "
-"converted."
+msgid "The renewal request must be applied before this pilot can be marked converted."
 msgstr "يجب تطبيق طلب التجديد قبل أن يتسنى تعليم هذه التجربة التشغيلية كمُحوَّلة."
 
 #: app/i18n_labels.py:364
@@ -561,9 +551,7 @@ msgstr "لا يمكن تحويل تجربة تشغيلية في حالة %(statu
 
 #: app/i18n_labels.py:388
 #, python-format
-msgid ""
-"Cannot change the renewal request status from %(from_status)s to "
-"%(to_status)s."
+msgid "Cannot change the renewal request status from %(from_status)s to %(to_status)s."
 msgstr "لا يمكن تغيير حالة طلب التجديد من %(from_status)s إلى %(to_status)s."
 
 #: app/i18n_labels.py:389
@@ -577,9 +565,7 @@ msgstr "لا يمكن اعتماد طلب تجديد في حالة %(status)s."
 
 #: app/i18n_labels.py:391
 #, python-format
-msgid ""
-"Cannot apply a renewal request in status %(status)s; it must be Approved "
-"first."
+msgid "Cannot apply a renewal request in status %(status)s; it must be Approved first."
 msgstr "لا يمكن تطبيق طلب تجديد في حالة %(status)s؛ يجب أن يكون معتمدًا أولاً."
 
 #: app/i18n_labels.py:402
@@ -604,12 +590,8 @@ msgstr "يجب أن يكون تاريخ الانتهاء بعد تاريخ ال�
 
 #: app/i18n_labels.py:407
 #, python-format
-msgid ""
-"Device slot exceptions may not exceed %(max_days)s days -- temporary "
-"means temporary."
-msgstr ""
-"لا يجوز أن تتجاوز استثناءات فتحات الأجهزة %(max_days)s يومًا -- فالمؤقت "
-"يعني مؤقتًا."
+msgid "Device slot exceptions may not exceed %(max_days)s days -- temporary means temporary."
+msgstr "لا يجوز أن تتجاوز استثناءات فتحات الأجهزة %(max_days)s يومًا -- فالمؤقت يعني مؤقتًا."
 
 #: app/i18n_labels.py:408
 #, python-format
@@ -626,9 +608,7 @@ msgstr "يلزم إدخال سبب لإنشاء تمديد طوارئ."
 
 #: app/i18n_labels.py:420
 #, python-format
-msgid ""
-"Duration must be between 1 and %(max_hours)s hours (explicit, short-lived"
-" only)."
+msgid "Duration must be between 1 and %(max_hours)s hours (explicit, short-lived only)."
 msgstr "يجب أن تكون المدة بين 1 و%(max_hours)s ساعة (صريحة وقصيرة الأجل فقط)."
 
 #: app/i18n_labels.py:421
@@ -637,9 +617,7 @@ msgstr "لا يمكن إنشاء تمديد طوارئ لترخيص مُلغى."
 
 #: app/i18n_labels.py:422
 #, python-format
-msgid ""
-"This subscription already has an active emergency extension until "
-"%(expires_at)s."
+msgid "This subscription already has an active emergency extension until %(expires_at)s."
 msgstr "لدى هذا الاشتراك بالفعل تمديد طوارئ نشط حتى %(expires_at)s."
 
 #: app/i18n_labels.py:423
@@ -743,7 +721,7 @@ msgid "Risk Review"
 msgstr "مراجعة المخاطر"
 
 #: app/i18n_labels.py:500 app/i18n_labels.py:580 app/i18n_labels.py:782
-#: app/i18n_labels.py:794
+#: app/i18n_labels.py:794 app/i18n_labels.py:908
 msgid "Pending"
 msgstr "قيد الانتظار"
 
@@ -981,10 +959,8 @@ msgstr "يلزم رمز عملة مكوّن من 3 أحرف عند تحديد ق
 msgid "Location summary must be at most %(max_len)s characters."
 msgstr "يجب ألا يتجاوز ملخص الموقع %(max_len)s حرفًا."
 
-#: app/i18n_labels.py:674 app/i18n_labels.py:843
-msgid ""
-"This request conflicts with an earlier request using the same idempotency"
-" key."
+#: app/i18n_labels.py:674 app/i18n_labels.py:843 app/i18n_labels.py:1021
+msgid "This request conflicts with an earlier request using the same idempotency key."
 msgstr "يتعارض هذا الطلب مع طلب سابق استخدم مفتاح التكرار (idempotency key) نفسه."
 
 #: app/i18n_labels.py:675
@@ -1093,17 +1069,19 @@ msgstr "مُرسَل"
 msgid "Fulfilled"
 msgstr "مُنفَّذ"
 
-#: app/i18n_labels.py:759
+#: app/i18n_labels.py:759 app/i18n_labels.py:898
 msgid "Partially paid"
 msgstr "مدفوع جزئياً"
 
 #: app/i18n_labels.py:760 app/i18n_labels.py:773 app/i18n_labels.py:797
-#: app/i18n_labels.py:810 app/templates/commercial_sales/refund_detail.html:11
+#: app/i18n_labels.py:810 app/i18n_labels.py:899
+#: app/templates/commercial_sales/refund_detail.html:11
 msgid "Paid"
 msgstr "مدفوع"
 
-#: app/i18n_labels.py:761 app/i18n_labels.py:774
+#: app/i18n_labels.py:761 app/i18n_labels.py:774 app/i18n_labels.py:901
 #: app/templates/commercial_sales/refund_detail.html:23
+#: app/templates/operations_ui/expense_detail.html:107
 msgid "Void"
 msgstr "لاغٍ"
 
@@ -1145,28 +1123,18 @@ msgstr "لا يمكن أن يتجاوز الخصم المبلغ الإجمالي
 
 #: app/i18n_labels.py:828
 #, python-format
-msgid ""
-"Refund amount (%(amount)s) exceeds the refundable balance "
-"(%(refundable)s)."
-msgstr ""
-"مبلغ الاسترداد (%(amount)s) يتجاوز الرصيد القابل للاسترداد "
-"(%(refundable)s)."
+msgid "Refund amount (%(amount)s) exceeds the refundable balance (%(refundable)s)."
+msgstr "مبلغ الاسترداد (%(amount)s) يتجاوز الرصيد القابل للاسترداد (%(refundable)s)."
 
 #: app/i18n_labels.py:829
 #, python-format
-msgid ""
-"Allocation amount (%(amount)s) exceeds the unallocated payment balance "
-"(%(available)s)."
+msgid "Allocation amount (%(amount)s) exceeds the unallocated payment balance (%(available)s)."
 msgstr "مبلغ التخصيص (%(amount)s) يتجاوز رصيد الدفعة غير المخصص (%(available)s)."
 
 #: app/i18n_labels.py:830
 #, python-format
-msgid ""
-"Allocation amount (%(amount)s) exceeds the invoice outstanding balance "
-"(%(outstanding)s)."
-msgstr ""
-"مبلغ التخصيص (%(amount)s) يتجاوز الرصيد المستحق للفاتورة "
-"(%(outstanding)s)."
+msgid "Allocation amount (%(amount)s) exceeds the invoice outstanding balance (%(outstanding)s)."
+msgstr "مبلغ التخصيص (%(amount)s) يتجاوز الرصيد المستحق للفاتورة (%(outstanding)s)."
 
 #: app/i18n_labels.py:831
 #, python-format
@@ -1177,7 +1145,7 @@ msgstr "العملة %(given)s لا تطابق العملة المطلوبة %(e
 msgid "This payment belongs to a different customer than the invoice."
 msgstr "تخص هذه الدفعة عميلاً مختلفاً عن عميل الفاتورة."
 
-#: app/i18n_labels.py:833
+#: app/i18n_labels.py:833 app/i18n_labels.py:1001
 msgid "Currency must be a 3-letter ISO 4217 code."
 msgstr "يجب أن تكون العملة رمزاً مكوناً من 3 أحرف وفق معيار ISO 4217."
 
@@ -1205,7 +1173,7 @@ msgstr "لا يمكن تغيير حالة الفاتورة من %(from_status)s 
 msgid "Cannot change refund status from %(from_status)s to %(to_status)s."
 msgstr "لا يمكن تغيير حالة المبلغ المسترد من %(from_status)s إلى %(to_status)s."
 
-#: app/i18n_labels.py:839
+#: app/i18n_labels.py:839 app/i18n_labels.py:1008
 #, python-format
 msgid "Cannot change approval status from %(from_status)s to %(to_status)s."
 msgstr "لا يمكن تغيير حالة الاعتماد من %(from_status)s إلى %(to_status)s."
@@ -1214,15 +1182,16 @@ msgstr "لا يمكن تغيير حالة الاعتماد من %(from_status)s 
 msgid "This record was changed by someone else. Reload and try again."
 msgstr "تم تغيير هذا السجل من قبل شخص آخر. أعد التحميل وحاول مرة أخرى."
 
-#: app/i18n_labels.py:841 app/templates/commercial_sales/not_found.html:4
+#: app/i18n_labels.py:841 app/i18n_labels.py:997 app/i18n_labels.py:1060
+#: app/templates/commercial_sales/not_found.html:4
 msgid "Record not found."
 msgstr "السجل غير موجود."
 
-#: app/i18n_labels.py:842
+#: app/i18n_labels.py:842 app/i18n_labels.py:998 app/i18n_labels.py:1061
 msgid "You do not have access to this record."
 msgstr "ليس لديك صلاحية الوصول إلى هذا السجل."
 
-#: app/i18n_labels.py:844
+#: app/i18n_labels.py:844 app/i18n_labels.py:996
 msgid "A reason is required for this action."
 msgstr "السبب مطلوب لهذا الإجراء."
 
@@ -1291,7 +1260,7 @@ msgstr "هذا الطلب غير مؤهل للتنفيذ بعد: %(reason)s."
 msgid "This order line has already been fulfilled."
 msgstr "تم تنفيذ بند الطلب هذا بالفعل."
 
-#: app/i18n_labels.py:861
+#: app/i18n_labels.py:861 app/i18n_labels.py:1047
 msgid "This action requires a real employee profile."
 msgstr "يتطلب هذا الإجراء ملف موظف حقيقي."
 
@@ -1318,9 +1287,7 @@ msgstr "يوجد بالفعل قيد عمولة لتخصيص الدفعة هذا
 
 #: app/i18n_labels.py:879
 #, python-format
-msgid ""
-"Cannot change commission entry status from %(from_status)s to "
-"%(to_status)s."
+msgid "Cannot change commission entry status from %(from_status)s to %(to_status)s."
 msgstr "لا يمكن تغيير حالة العميل المحتمل من %(from_status)s إلى %(to_status)s."
 
 #: app/i18n_labels.py:880
@@ -1338,6 +1305,303 @@ msgstr "السبب مطلوب لإجراء العمولة هذا."
 #: app/i18n_labels.py:883
 msgid "This commission entry is already included in a payout batch."
 msgstr "قيد العمولة هذا مدرج بالفعل ضمن دفعة صرف."
+
+#: app/i18n_labels.py:895 app/i18n_labels.py:940
+msgid "Submitted"
+msgstr "تم الإرسال"
+
+#: app/i18n_labels.py:896
+msgid "Returned for correction"
+msgstr "أعيد للتصحيح"
+
+#: app/i18n_labels.py:911
+msgid "Returned"
+msgstr "معاد"
+
+#: app/i18n_labels.py:919 app/templates/commercial_sales/payment_new.html:19
+msgid "Cash"
+msgstr "نقداً"
+
+#: app/i18n_labels.py:920 app/templates/commercial_sales/payment_new.html:20
+msgid "Bank transfer"
+msgstr "تحويل بنكي"
+
+#: app/i18n_labels.py:921 app/templates/commercial_sales/payment_new.html:21
+msgid "Card (offline)"
+msgstr "بطاقة (غير متصل)"
+
+#: app/i18n_labels.py:922 app/templates/commercial_sales/payment_new.html:22
+msgid "Cheque"
+msgstr "شيك"
+
+#: app/i18n_labels.py:930
+msgid "External vendor"
+msgstr "مورد خارجي"
+
+#: app/i18n_labels.py:931
+msgid "Employee beneficiary"
+msgstr "موظف مستفيد"
+
+#: app/i18n_labels.py:941
+msgid "Review required"
+msgstr "يتطلب مراجعة"
+
+#: app/i18n_labels.py:944
+msgid "Reopened"
+msgstr "أعيد فتحه"
+
+#: app/i18n_labels.py:952
+msgid "Daily operational summary"
+msgstr "الملخص التشغيلي اليومي"
+
+#: app/i18n_labels.py:953
+msgid "Daily cash closing exceptions"
+msgstr "استثناءات الإقفال النقدي اليومي"
+
+#: app/i18n_labels.py:954
+msgid "Weekly operational summary"
+msgstr "الملخص التشغيلي الأسبوعي"
+
+#: app/i18n_labels.py:955
+msgid "Monthly operational summary"
+msgstr "الملخص التشغيلي الشهري"
+
+#: app/i18n_labels.py:964
+msgid "In progress"
+msgstr "قيد التنفيذ"
+
+#: app/i18n_labels.py:965
+msgid "Done"
+msgstr "تم"
+
+#: app/i18n_labels.py:975
+msgid "Specific employees"
+msgstr "موظفون محددون"
+
+#: app/i18n_labels.py:976
+msgid "All staff"
+msgstr "جميع الموظفين"
+
+#: app/i18n_labels.py:995
+#, python-format
+msgid "Cannot change expense status from %(from_status)s to %(to_status)s."
+msgstr "لا يمكن تغيير حالة المصروف من %(from_status)s إلى %(to_status)s."
+
+#: app/i18n_labels.py:999
+msgid "Amount must be a finite, positive number."
+msgstr "يجب أن يكون المبلغ رقمًا محدودًا وموجبًا."
+
+#: app/i18n_labels.py:1000
+#, python-format
+msgid "Currency %(given)s does not match the expense currency %(expected)s."
+msgstr "العملة %(given)s لا تطابق عملة المصروف %(expected)s."
+
+#: app/i18n_labels.py:1002
+msgid "A payee is required."
+msgstr "المستفيد مطلوب."
+
+#: app/i18n_labels.py:1003
+msgid "This payee is not active."
+msgstr "هذا المستفيد غير نشط."
+
+#: app/i18n_labels.py:1004
+msgid "This expense category is not active."
+msgstr "فئة المصروف هذه غير نشطة."
+
+#: app/i18n_labels.py:1005
+msgid "Payee type must be EXTERNAL or EMPLOYEE."
+msgstr "يجب أن يكون نوع المستفيد خارجيًا أو موظفًا."
+
+#: app/i18n_labels.py:1006
+msgid "An employee is required for an employee-beneficiary payee."
+msgstr "يلزم تحديد موظف لمستفيد من نوع الموظف."
+
+#: app/i18n_labels.py:1007
+msgid "An employee-beneficiary payee cannot have an external contact reference."
+msgstr "لا يمكن أن يكون للمستفيد الموظف مرجع اتصال خارجي."
+
+#: app/i18n_labels.py:1009
+msgid "You cannot approve your own expense request."
+msgstr "لا يمكنك اعتماد طلب المصروف الخاص بك."
+
+#: app/i18n_labels.py:1010
+msgid "You cannot approve an expense where you are the recorded beneficiary."
+msgstr "لا يمكنك اعتماد مصروف أنت المستفيد المسجل منه."
+
+#: app/i18n_labels.py:1011
+msgid "This expense was changed after the approval was requested. Reload and try again."
+msgstr "تم تغيير هذا المصروف بعد طلب الاعتماد. أعد التحميل وحاول مرة أخرى."
+
+#: app/i18n_labels.py:1012
+#, python-format
+msgid "Approved amount (%(approved)s) cannot exceed the requested amount (%(requested)s)."
+msgstr "المبلغ المعتمد (%(approved)s) لا يمكن أن يتجاوز المبلغ المطلوب (%(requested)s)."
+
+#: app/i18n_labels.py:1013
+#, python-format
+msgid "This account is not eligible to approve this expense: %(reason)s."
+msgstr "هذا الحساب غير مؤهل لاعتماد هذا المصروف: %(reason)s."
+
+#: app/i18n_labels.py:1014
+msgid "This account does not have permission to approve expenses."
+msgstr "لا يملك هذا الحساب صلاحية اعتماد المصروفات."
+
+#: app/i18n_labels.py:1015
+msgid "This approver employee profile is suspended or terminated."
+msgstr "الملف الوظيفي لهذا المعتمِد موقوف أو منتهٍ."
+
+#: app/i18n_labels.py:1016
+msgid "This approver has no active employee profile."
+msgstr "لا يوجد ملف وظيفي نشط لهذا المعتمِد."
+
+#: app/i18n_labels.py:1017
+msgid "This expense has no pending approval request."
+msgstr "لا يوجد طلب اعتماد معلق لهذا المصروف."
+
+#: app/i18n_labels.py:1018
+msgid "The expense must be approved before a payment can be recorded."
+msgstr "يجب اعتماد المصروف قبل تسجيل أي دفعة."
+
+#: app/i18n_labels.py:1019
+#, python-format
+msgid "This expense is in a terminal state (%(status)s) and cannot be paid."
+msgstr "هذا المصروف في حالة نهائية (%(status)s) ولا يمكن دفعه."
+
+#: app/i18n_labels.py:1020
+#, python-format
+msgid "Payment amount (%(amount)s) exceeds the outstanding approved balance (%(outstanding)s)."
+msgstr "مبلغ الدفعة (%(amount)s) يتجاوز الرصيد المعتمد المتبقي (%(outstanding)s)."
+
+#: app/i18n_labels.py:1022
+msgid "This payment has already been reversed."
+msgstr "تم عكس هذه الدفعة بالفعل."
+
+#: app/i18n_labels.py:1023
+msgid "You cannot record payment for your own expense request."
+msgstr "لا يمكنك تسجيل دفعة لطلب المصروف الخاص بك."
+
+#: app/i18n_labels.py:1024
+msgid "Attachment exceeds the maximum allowed size."
+msgstr "المرفق يتجاوز الحجم الأقصى المسموح به."
+
+#: app/i18n_labels.py:1025
+msgid "This file type is not allowed for attachments."
+msgstr "نوع هذا الملف غير مسموح به كمرفق."
+
+#: app/i18n_labels.py:1026
+msgid "The file actual content does not match its declared type."
+msgstr "محتوى الملف الفعلي لا يطابق النوع المعلن عنه."
+
+#: app/i18n_labels.py:1027
+msgid "Attachment file is empty."
+msgstr "ملف المرفق فارغ."
+
+#: app/i18n_labels.py:1028
+msgid "Attachment not found."
+msgstr "المرفق غير موجود."
+
+#: app/i18n_labels.py:1029
+msgid "You do not have access to this attachment."
+msgstr "ليس لديك صلاحية الوصول إلى هذا المرفق."
+
+#: app/i18n_labels.py:1030
+msgid "This attachment has been archived."
+msgstr "تمت أرشفة هذا المرفق."
+
+#: app/i18n_labels.py:1031
+msgid "Invalid storage key."
+msgstr "مفتاح تخزين غير صالح."
+
+#: app/i18n_labels.py:1032
+#, python-format
+msgid "Cannot change cash closing status from %(from_status)s to %(to_status)s."
+msgstr "لا يمكن تغيير حالة الإقفال النقدي من %(from_status)s إلى %(to_status)s."
+
+#: app/i18n_labels.py:1033
+#, python-format
+msgid "A cash closing already exists for %(business_date)s %(currency)s."
+msgstr "يوجد إقفال نقدي بالفعل لتاريخ %(business_date)s بعملة %(currency)s."
+
+#: app/i18n_labels.py:1034
+msgid "A manual opening-cash override requires a reason."
+msgstr "تجاوز الرصيد الافتتاحي يدويًا يتطلب سببًا."
+
+#: app/i18n_labels.py:1035
+msgid "You do not have permission to override opening cash."
+msgstr "ليس لديك صلاحية تجاوز الرصيد الافتتاحي."
+
+#: app/i18n_labels.py:1036
+msgid "A nonzero variance requires an explanation."
+msgstr "الفرق غير الصفري يتطلب توضيحًا."
+
+#: app/i18n_labels.py:1037
+msgid "You cannot approve a cash closing you prepared."
+msgstr "لا يمكنك اعتماد إقفال نقدي قمت بإعداده."
+
+#: app/i18n_labels.py:1038
+msgid "This cash closing is approved or closed and cannot be edited directly -- reopen it first."
+msgstr "هذا الإقفال النقدي معتمد أو مغلق ولا يمكن تعديله مباشرة -- أعد فتحه أولاً."
+
+#: app/i18n_labels.py:1039
+msgid "Reopening a cash closing requires a reason."
+msgstr "إعادة فتح الإقفال النقدي يتطلب سببًا."
+
+#: app/i18n_labels.py:1040
+msgid "You do not have permission to reopen a cash closing."
+msgstr "ليس لديك صلاحية إعادة فتح إقفال نقدي."
+
+#: app/i18n_labels.py:1041
+msgid "Reopening a cash closing requires recent re-authentication."
+msgstr "إعادة فتح الإقفال النقدي يتطلب تحققًا حديثًا من الهوية."
+
+#: app/i18n_labels.py:1042
+msgid "A closed business date requires reopening the closing before recording a late transaction."
+msgstr "التاريخ التشغيلي المغلق يتطلب إعادة فتح الإقفال قبل تسجيل معاملة متأخرة."
+
+#: app/i18n_labels.py:1043
+msgid "Overriding a duplicate-expense warning requires a reason."
+msgstr "تجاوز تحذير المصروف المكرر يتطلب سببًا."
+
+#: app/i18n_labels.py:1044
+msgid "A snapshot already exists for this canonical key."
+msgstr "توجد لقطة بالفعل لهذا المفتاح المرجعي."
+
+#: app/i18n_labels.py:1045
+msgid "You do not have permission to regenerate a report snapshot."
+msgstr "ليس لديك صلاحية إعادة توليد لقطة التقرير."
+
+#: app/i18n_labels.py:1046
+msgid "Regenerating a report snapshot requires a reason."
+msgstr "إعادة توليد لقطة التقرير يتطلب سببًا."
+
+#: app/i18n_labels.py:1059
+#, python-format
+msgid "Cannot change note status from %(from_status)s to %(to_status)s."
+msgstr "لا يمكن تغيير حالة الملاحظة من %(from_status)s إلى %(to_status)s."
+
+#: app/i18n_labels.py:1062
+msgid "Visibility must be Management only, Specific employees, or All staff."
+msgstr "يجب أن تكون الرؤية للإدارة فقط، أو لموظفين محددين، أو لجميع الموظفين."
+
+#: app/i18n_labels.py:1063
+msgid "Specific-employees visibility requires at least one employee grant."
+msgstr "رؤية الموظفين المحددين تتطلب منح موظف واحد على الأقل."
+
+#: app/i18n_labels.py:1064
+msgid "A title is required."
+msgstr "العنوان مطلوب."
+
+#: app/i18n_labels.py:1065
+msgid "A body is required."
+msgstr "النص مطلوب."
+
+#: app/i18n_labels.py:1066
+msgid "This note was changed by someone else. Reload and try again."
+msgstr "تم تغيير هذه الملاحظة من قبل شخص آخر. أعد التحميل وحاول مرة أخرى."
+
+#: app/i18n_labels.py:1067
+msgid "The author cannot be supplied by the client."
+msgstr "لا يمكن أن يحدد العميل هوية الكاتب."
 
 #: app/auth/routes.py:378
 msgid "Invitation is invalid or has expired."
@@ -1440,14 +1704,15 @@ msgstr "التفعيل المعلَّق"
 
 #: app/commercial_ops/ui_routes.py:632
 msgid "extra_slots must be an integer and expires_at a valid date/time."
-msgstr ""
-"يجب أن تكون extra_slots عدداً صحيحاً وأن يكون expires_at تاريخاً/وقتاً "
-"صالحاً.يجب أن يكون عدد الفتحات الإضافية عددًا صحيحًا وتاريخ الانتهاء "
-"تاريخًا/وقتًا صالحًا."
+msgstr "يجب أن تكون extra_slots عدداً صحيحاً وأن يكون expires_at تاريخاً/وقتاً صالحاً.يجب أن يكون عدد الفتحات الإضافية عددًا صحيحًا وتاريخ الانتهاء تاريخًا/وقتًا صالحًا."
 
 #: app/commercial_ops/ui_routes.py:650
 msgid "Device slot exception"
 msgstr "استثناء فتحة جهاز"
+
+#: app/operations_ui/routes.py:113
+msgid "Invalid input."
+msgstr "إدخال غير صالح."
 
 #: app/security/passwords.py:29
 #, python-format
@@ -1456,10 +1721,7 @@ msgstr "يجب أن تتكون كلمة المرور من %(min_length)s حرف�
 
 #: app/security/passwords.py:39
 msgid "Password must mix at least 3 of: lowercase, uppercase, digit, symbol."
-msgstr ""
-"يجب أن تجمع كلمة المرور 3 على الأقل من: أحرف صغيرة، أحرف كبيرة، أرقام، "
-"رموز.يجب أن تجمع كلمة المرور 3 عناصر على الأقل من: حروف صغيرة، حروف "
-"كبيرة، أرقام، رموز."
+msgstr "يجب أن تجمع كلمة المرور 3 على الأقل من: أحرف صغيرة، أحرف كبيرة، أرقام، رموز.يجب أن تجمع كلمة المرور 3 عناصر على الأقل من: حروف صغيرة، حروف كبيرة، أرقام، رموز."
 
 #: app/templates/audit/list.html:2
 msgid "Audit log"
@@ -1535,6 +1797,9 @@ msgstr "أحداث الأمان (أحدث 500 حدث)"
 #: app/templates/installations/detail.html:54
 #: app/templates/licensing_admin/requests.html:8
 #: app/templates/licensing_admin/requests.html:18
+#: app/templates/operations_ui/payees_list.html:8
+#: app/templates/operations_ui/payees_list.html:11
+#: app/templates/operations_ui/payees_list.html:21
 msgid "Type"
 msgstr "النوع"
 
@@ -1560,12 +1825,8 @@ msgid "Audit hash-chain verification"
 msgstr "التحقق من سلسلة تجزئة التدقيق"
 
 #: app/templates/audit/verify_chain.html:7
-msgid ""
-"The entire audit log chain is intact -- no tampered or out-of-order "
-"entries detected."
-msgstr ""
-"سلسلة سجل التدقيق بأكملها سليمة -- لم يتم اكتشاف أي إدخالات تم العبث بها "
-"أو خارج الترتيب."
+msgid "The entire audit log chain is intact -- no tampered or out-of-order entries detected."
+msgstr "سلسلة سجل التدقيق بأكملها سليمة -- لم يتم اكتشاف أي إدخالات تم العبث بها أو خارج الترتيب."
 
 #: app/templates/audit/verify_chain.html:9
 msgid "BROKEN"
@@ -1623,7 +1884,7 @@ msgid "Login"
 msgstr "تسجيل الدخول"
 
 #: app/templates/auth/login.html:5 app/templates/layout/base.html:5
-#: app/templates/layout/base.html:72
+#: app/templates/layout/base.html:74
 msgid "Aura Owner Control Center"
 msgstr "مركز تحكم Aura Owner"
 
@@ -1644,12 +1905,8 @@ msgid "Enable multi-factor authentication"
 msgstr "تفعيل المصادقة متعددة العوامل"
 
 #: app/templates/auth/mfa_enroll.html:6
-msgid ""
-"Scan this into any TOTP authenticator app (Google Authenticator, "
-"1Password, etc.), or enter the secret manually."
-msgstr ""
-"امسح هذا الرمز عبر أي تطبيق مصادقة يدعم TOTP (مثل Google Authenticator أو"
-" 1Password)، أو أدخل الرمز السري يدويًا."
+msgid "Scan this into any TOTP authenticator app (Google Authenticator, 1Password, etc.), or enter the secret manually."
+msgstr "امسح هذا الرمز عبر أي تطبيق مصادقة يدعم TOTP (مثل Google Authenticator أو 1Password)، أو أدخل الرمز السري يدويًا."
 
 #: app/templates/auth/mfa_enroll.html:9
 msgid "Manual secret"
@@ -1676,20 +1933,12 @@ msgid "Save your recovery codes"
 msgstr "احفظ رموز الاسترداد الخاصة بك"
 
 #: app/templates/auth/mfa_recovery_codes.html:6
-msgid ""
-"Each code can be used once if you lose access to your authenticator. They"
-" will never be shown again after you leave this page."
-msgstr ""
-"يمكن استخدام كل رمز مرة واحدة فقط في حال فقدان الوصول إلى تطبيق المصادقة."
-" لن تظهر هذه الرموز مرة أخرى بعد مغادرة هذه الصفحة."
+msgid "Each code can be used once if you lose access to your authenticator. They will never be shown again after you leave this page."
+msgstr "يمكن استخدام كل رمز مرة واحدة فقط في حال فقدان الوصول إلى تطبيق المصادقة. لن تظهر هذه الرموز مرة أخرى بعد مغادرة هذه الصفحة."
 
 #: app/templates/auth/mfa_recovery_codes.html:12
-msgid ""
-"No codes to display -- this page can only be viewed once, immediately "
-"after generation."
-msgstr ""
-"لا توجد رموز لعرضها -- يمكن الاطلاع على هذه الصفحة مرة واحدة فقط، مباشرة "
-"بعد إنشائها."
+msgid "No codes to display -- this page can only be viewed once, immediately after generation."
+msgstr "لا توجد رموز لعرضها -- يمكن الاطلاع على هذه الصفحة مرة واحدة فقط، مباشرة بعد إنشائها."
 
 #: app/templates/auth/mfa_recovery_codes.html:14
 msgid "Continue to dashboard"
@@ -1750,11 +1999,14 @@ msgstr "الرمز"
 #: app/templates/customers/detail.html:35
 #: app/templates/customers/detail.html:45 app/templates/employees/list.html:44
 #: app/templates/employees/list.html:49 app/templates/leads/detail.html:53
-#: app/templates/leads/detail.html:63 app/templates/staff/list.html:8
+#: app/templates/leads/detail.html:63
+#: app/templates/operations_ui/payees_list.html:8
+#: app/templates/operations_ui/payees_list.html:11
+#: app/templates/staff/list.html:8
 msgid "Name"
 msgstr "الاسم"
 
-#: app/templates/catalog/index.html:2 app/templates/layout/base.html:104
+#: app/templates/catalog/index.html:2 app/templates/layout/base.html:111
 msgid "Catalog"
 msgstr "الكتالوج"
 
@@ -1844,6 +2096,13 @@ msgstr "نموذج الفوترة"
 #: app/templates/licensing/list.html:11 app/templates/licensing/list.html:21
 #: app/templates/licensing_admin/device_keys.html:7
 #: app/templates/licensing_admin/signing_keys.html:22
+#: app/templates/operations_ui/cash_closings_list.html:10
+#: app/templates/operations_ui/cash_closings_list.html:15
+#: app/templates/operations_ui/expenses_list.html:11
+#: app/templates/operations_ui/expenses_list.html:21
+#: app/templates/operations_ui/expenses_list.html:26
+#: app/templates/operations_ui/management_notes_list.html:10
+#: app/templates/operations_ui/management_notes_list.html:15
 #: app/templates/profile/sessions.html:9 app/templates/staff/detail.html:8
 #: app/templates/staff/list.html:8 app/templates/subscriptions/detail.html:65
 #: app/templates/subscriptions/list.html:11
@@ -1909,6 +2168,8 @@ msgid "Platform"
 msgstr "المنصة"
 
 #: app/templates/catalog/index.html:73 app/templates/catalog/versions.html:7
+#: app/templates/operations_ui/report_snapshots_list.html:7
+#: app/templates/operations_ui/report_snapshots_list.html:14
 msgid "Version"
 msgstr "الإصدار"
 
@@ -1945,6 +2206,11 @@ msgstr "السعر الأساسي"
 #: app/templates/commercial_sales/payment_new.html:15
 #: app/templates/commercial_sales/quote_detail.html:8
 #: app/templates/commercial_sales/quote_new.html:13
+#: app/templates/operations_ui/cash_closing_new.html:11
+#: app/templates/operations_ui/expense_new.html:19
+#: app/templates/operations_ui/report_snapshots_list.html:7
+#: app/templates/operations_ui/report_snapshots_list.html:13
+#: app/templates/operations_ui/report_snapshots_list.html:33
 #: app/templates/subscriptions/detail.html:61
 msgid "Currency"
 msgstr "العملة"
@@ -2015,16 +2281,8 @@ msgid "Activation mode by product"
 msgstr "وضع التفعيل حسب المنتج"
 
 #: app/templates/commercial_ops/activation_policy.html:6
-msgid ""
-"AUTOMATIC (no policy row) preserves exactly the pre-Phase-8 behavior: a "
-"validated activation is approved and signed immediately, no review step. "
-"Changing this changes the security posture of every future activation for"
-" the product -- restricted to Super Admin."
-msgstr ""
-"يحافظ الوضع التلقائي (بدون سطر سياسة) تمامًا على السلوك السابق للمرحلة "
-"الثامنة: تتم الموافقة على التفعيل الصالح وتوقيعه فورًا دون خطوة مراجعة. "
-"تغيير هذا يغيّر الوضع الأمني لكل تفعيل مستقبلي لهذا المنتج -- مقتصر على "
-"المشرف العام."
+msgid "AUTOMATIC (no policy row) preserves exactly the pre-Phase-8 behavior: a validated activation is approved and signed immediately, no review step. Changing this changes the security posture of every future activation for the product -- restricted to Super Admin."
+msgstr "يحافظ الوضع التلقائي (بدون سطر سياسة) تمامًا على السلوك السابق للمرحلة الثامنة: تتم الموافقة على التفعيل الصالح وتوقيعه فورًا دون خطوة مراجعة. تغيير هذا يغيّر الوضع الأمني لكل تفعيل مستقبلي لهذا المنتج -- مقتصر على المشرف العام."
 
 #: app/templates/commercial_ops/activation_policy.html:8
 msgid "Current effective mode"
@@ -2035,9 +2293,7 @@ msgid "Create a policy"
 msgstr "إنشاء سياسة"
 
 #: app/templates/commercial_ops/activation_policy.html:19
-msgid ""
-"Change activation policy? This affects every future activation for the "
-"selected product."
+msgid "Change activation policy? This affects every future activation for the selected product."
 msgstr "تغيير سياسة التفعيل؟ يؤثر هذا على كل تفعيل مستقبلي للمنتج المحدد."
 
 #: app/templates/commercial_ops/activation_policy.html:21
@@ -2128,6 +2384,9 @@ msgstr "(كل التراخيص في هذا الاشتراك)"
 #: app/templates/licensing/detail.html:44
 #: app/templates/licensing/detail.html:65
 #: app/templates/licensing_admin/requests.html:18
+#: app/templates/operations_ui/cash_closing_detail.html:36
+#: app/templates/operations_ui/cash_closing_detail.html:62
+#: app/templates/operations_ui/expense_detail.html:106
 #: app/templates/subscriptions/detail.html:36
 #: app/templates/subscriptions/detail.html:44
 msgid "Reason"
@@ -2171,12 +2430,8 @@ msgid "%(when)s by %(who)s -- %(reason)s"
 msgstr "%(when)s بواسطة %(who)s -- %(reason)s"
 
 #: app/templates/commercial_ops/emergency_extension_detail.html:18
-msgid ""
-"This extension never changes the subscription's paid term and never marks"
-" any payment confirmed."
-msgstr ""
-"لا يغيّر هذا التمديد أبدًا مدة الاشتراك المدفوعة ولا يُعلِّم أي دفعة "
-"كمؤكدة أبدًا."
+msgid "This extension never changes the subscription's paid term and never marks any payment confirmed."
+msgstr "لا يغيّر هذا التمديد أبدًا مدة الاشتراك المدفوعة ولا يُعلِّم أي دفعة كمؤكدة أبدًا."
 
 #: app/templates/commercial_ops/emergency_extension_detail.html:23
 #: app/templates/commercial_ops/emergency_extension_detail.html:28
@@ -2226,6 +2481,7 @@ msgstr "تمديدات الطوارئ"
 #: app/templates/installations/list.html:13 app/templates/leads/list.html:13
 #: app/templates/licensing/list.html:13
 #: app/templates/licensing_admin/requests.html:10
+#: app/templates/operations_ui/expenses_list.html:13
 #: app/templates/subscriptions/list.html:13
 msgid "All"
 msgstr "الكل"
@@ -2244,15 +2500,8 @@ msgid "Create emergency extension"
 msgstr "إنشاء تمديد طوارئ"
 
 #: app/templates/commercial_ops/emergency_extensions_new.html:6
-msgid ""
-"This is an explicit, short-lived, audited override for exceptional "
-"support cases only -- it is NOT a bypass. It never modifies the "
-"subscription's paid term or marks any payment confirmed, and it can never"
-" restore a REVOKED license."
-msgstr ""
-"هذا تجاوز صريح وقصير الأمد وخاضع للتدقيق لحالات الدعم الاستثنائية فقط -- "
-"وليس تحايلاً. لا يُعدِّل أبدًا مدة الاشتراك المدفوعة ولا يُعلِّم أي دفعة "
-"كمؤكدة، ولا يمكنه أبدًا استعادة ترخيص تم إلغاؤه."
+msgid "This is an explicit, short-lived, audited override for exceptional support cases only -- it is NOT a bypass. It never modifies the subscription's paid term or marks any payment confirmed, and it can never restore a REVOKED license."
+msgstr "هذا تجاوز صريح وقصير الأمد وخاضع للتدقيق لحالات الدعم الاستثنائية فقط -- وليس تحايلاً. لا يُعدِّل أبدًا مدة الاشتراك المدفوعة ولا يُعلِّم أي دفعة كمؤكدة، ولا يمكنه أبدًا استعادة ترخيص تم إلغاؤه."
 
 #: app/templates/commercial_ops/emergency_extensions_new.html:9
 msgid "Create this emergency extension? This action is audited."
@@ -2291,7 +2540,7 @@ msgid "%(entity)s not found."
 msgstr "%(entity)s غير موجود."
 
 #: app/templates/commercial_ops/notifications_list.html:2
-#: app/templates/layout/base.html:112
+#: app/templates/layout/base.html:119
 msgid "Notifications"
 msgstr "الإشعارات"
 
@@ -2321,6 +2570,9 @@ msgstr "تصفية"
 #: app/templates/customers/detail.html:35
 #: app/templates/customers/detail.html:46 app/templates/employees/list.html:44
 #: app/templates/employees/list.html:51
+#: app/templates/operations_ui/management_note_new.html:9
+#: app/templates/operations_ui/management_notes_list.html:10
+#: app/templates/operations_ui/management_notes_list.html:14
 msgid "Title"
 msgstr "المسمى"
 
@@ -2406,12 +2658,8 @@ msgid "not yet decided"
 msgstr "لم يُبتّ فيه بعد"
 
 #: app/templates/commercial_ops/pending_activation_detail.html:18
-msgid ""
-"No license key, key material, or unrestricted raw request is ever shown "
-"here."
-msgstr ""
-"لا يُعرض هنا أبدًا مفتاح الترخيص أو مادة المفتاح أو الطلب الخام غير "
-"المقيّد."
+msgid "No license key, key material, or unrestricted raw request is ever shown here."
+msgstr "لا يُعرض هنا أبدًا مفتاح الترخيص أو مادة المفتاح أو الطلب الخام غير المقيّد."
 
 #: app/templates/commercial_ops/pending_activation_detail.html:25
 msgid "Approve this activation? This requires recent authentication."
@@ -2422,6 +2670,8 @@ msgstr "الموافقة على هذا التفعيل؟ يتطلب هذا مصا
 #: app/templates/commercial_sales/commissions_list.html:30
 #: app/templates/commercial_sales/quote_detail.html:116
 #: app/templates/commercial_sales/refund_detail.html:18
+#: app/templates/operations_ui/cash_closing_detail.html:37
+#: app/templates/operations_ui/expense_detail.html:56
 msgid "Approve"
 msgstr "موافقة"
 
@@ -2431,6 +2681,8 @@ msgstr "رفض هذا التفعيل؟"
 
 #: app/templates/commercial_ops/pending_activation_detail.html:33
 #: app/templates/commercial_sales/quote_detail.html:122
+#: app/templates/operations_ui/cash_closing_detail.html:38
+#: app/templates/operations_ui/expense_detail.html:58
 msgid "Reject"
 msgstr "رفض"
 
@@ -2459,16 +2711,8 @@ msgid "Convert pilot to paid plan"
 msgstr "تحويل التجربة إلى خطة مدفوعة"
 
 #: app/templates/commercial_ops/pilot_convert.html:7
-msgid ""
-"This creates a real renewal request against the pilot's subscription. "
-"Conversion only becomes final once that renewal is separately approved "
-"(by someone other than its creator) and applied -- the same payment"
-"/recent-auth-gated pipeline as any other renewal. No silent conversion."
-msgstr ""
-"ينشئ هذا طلب تجديد حقيقيًا مقابل اشتراك التجربة. لا يصبح التحويل نهائيًا "
-"إلا بعد الموافقة على ذلك التجديد بشكل منفصل (من قِبل شخص آخر غير منشئه) "
-"وتطبيقه -- بنفس آلية الدفع/المصادقة الحديثة المطلوبة لأي تجديد آخر. لا "
-"يوجد تحويل صامت."
+msgid "This creates a real renewal request against the pilot's subscription. Conversion only becomes final once that renewal is separately approved (by someone other than its creator) and applied -- the same payment/recent-auth-gated pipeline as any other renewal. No silent conversion."
+msgstr "ينشئ هذا طلب تجديد حقيقيًا مقابل اشتراك التجربة. لا يصبح التحويل نهائيًا إلا بعد الموافقة على ذلك التجديد بشكل منفصل (من قِبل شخص آخر غير منشئه) وتطبيقه -- بنفس آلية الدفع/المصادقة الحديثة المطلوبة لأي تجديد آخر. لا يوجد تحويل صامت."
 
 #: app/templates/commercial_ops/pilot_convert.html:10
 msgid "Paid plan"
@@ -2584,10 +2828,7 @@ msgstr "تمديد التجربة"
 #: app/templates/commercial_ops/pilot_detail.html:42
 #, python-format
 msgid "Maximum extensions (%(max)s) already used -- no indefinite rolling pilot."
-msgstr ""
-"تم استخدام الحد الأقصى للتمديدات (%(max)s) بالفعل -- لا يمكن استمرار "
-"التجربة إلى أجل غير مسمى.تم استخدام الحد الأقصى للتمديدات (%(max)s) "
-"بالفعل -- لا يُسمح بتمديد التجربة إلى ما لا نهاية."
+msgstr "تم استخدام الحد الأقصى للتمديدات (%(max)s) بالفعل -- لا يمكن استمرار التجربة إلى أجل غير مسمى.تم استخدام الحد الأقصى للتمديدات (%(max)s) بالفعل -- لا يُسمح بتمديد التجربة إلى ما لا نهاية."
 
 #: app/templates/commercial_ops/pilot_detail.html:46
 #, python-format
@@ -2669,7 +2910,7 @@ msgstr "لا توجد تغييرات حالة بعد."
 
 #: app/templates/commercial_ops/pilots_list.html:2
 #: app/templates/commercial_ops/pilots_list.html:5
-#: app/templates/layout/base.html:109
+#: app/templates/layout/base.html:116
 msgid "Pilots"
 msgstr "التجارب التشغيلية"
 
@@ -2746,7 +2987,7 @@ msgstr "لا يوجد شيء هنا حاليًا."
 
 #: app/templates/commercial_ops/reconciliation.html:2
 #: app/templates/commercial_ops/reconciliation.html:5
-#: app/templates/layout/base.html:114
+#: app/templates/layout/base.html:121
 msgid "Reconciliation"
 msgstr "التسوية"
 
@@ -2783,9 +3024,7 @@ msgid "Notifications deduped"
 msgstr "الإشعارات المُزالة تكرارها"
 
 #: app/templates/commercial_ops/reconciliation.html:16
-msgid ""
-"Write notifications for every finding below? This never mutates any "
-"commercial record itself."
+msgid "Write notifications for every finding below? This never mutates any commercial record itself."
 msgstr "كتابة إشعارات لكل نتيجة أدناه؟ لا يُغيّر هذا أي سجل تجاري نفسه أبدًا."
 
 #: app/templates/commercial_ops/reconciliation.html:18
@@ -2878,9 +3117,7 @@ msgid "Approve this renewal? A confirmed payment must already be linked."
 msgstr "الموافقة على هذا التجديد؟ يجب أن تكون دفعة مؤكدة مرتبطة بالفعل."
 
 #: app/templates/commercial_ops/renewal_detail.html:48
-msgid ""
-"requires recent authentication and cannot be done by the staff member who"
-" created this request."
+msgid "requires recent authentication and cannot be done by the staff member who created this request."
 msgstr "يتطلب مصادقة حديثة ولا يمكن أن يقوم به عضو الفريق الذي أنشأ هذا الطلب."
 
 #: app/templates/commercial_ops/renewal_detail.html:50
@@ -2901,20 +3138,15 @@ msgstr "تطبيق"
 
 #: app/templates/commercial_ops/renewal_detail.html:58
 #, python-format
-msgid ""
-"extends the subscription term from %(from_date)s to %(to_date)s and "
-"requires recent authentication. This cannot be undone by applying again "
-"(idempotent, row-locked)."
-msgstr ""
-"يُمدِّد مدة الاشتراك من %(from_date)s إلى %(to_date)s ويتطلب مصادقة "
-"حديثة. لا يمكن التراجع عن هذا بتطبيقه مرة أخرى (عملية متكافئة، صف مقفل)."
+msgid "extends the subscription term from %(from_date)s to %(to_date)s and requires recent authentication. This cannot be undone by applying again (idempotent, row-locked)."
+msgstr "يُمدِّد مدة الاشتراك من %(from_date)s إلى %(to_date)s ويتطلب مصادقة حديثة. لا يمكن التراجع عن هذا بتطبيقه مرة أخرى (عملية متكافئة، صف مقفل)."
 
 #: app/templates/commercial_ops/renewal_detail.html:59
 msgid "Apply renewal"
 msgstr "تطبيق التجديد"
 
 #: app/templates/commercial_ops/renewals_list.html:2
-#: app/templates/layout/base.html:108
+#: app/templates/layout/base.html:115
 msgid "Renewals"
 msgstr "التجديدات"
 
@@ -3019,6 +3251,7 @@ msgid "Back to subscription"
 msgstr "العودة إلى الاشتراك"
 
 #: app/templates/commercial_ops/timeline.html:8
+#: app/templates/operations_ui/expense_new.html:9
 msgid "Category"
 msgstr "الفئة"
 
@@ -3028,7 +3261,7 @@ msgstr "لم يتم تسجيل أي أحداث تجارية بعد."
 
 #: app/templates/commercial_sales/commissions_list.html:2
 #: app/templates/commercial_sales/commissions_list.html:5
-#: app/templates/layout/base.html:100
+#: app/templates/layout/base.html:102
 msgid "Commissions"
 msgstr "العمولات"
 
@@ -3047,6 +3280,10 @@ msgstr "العمولات"
 #: app/templates/commercial_sales/payout_batches_list.html:50
 #: app/templates/commercial_sales/refunds_list.html:18
 #: app/templates/commercial_sales/refunds_list.html:22
+#: app/templates/operations_ui/expense_detail.html:68
+#: app/templates/operations_ui/expense_new.html:17
+#: app/templates/operations_ui/expenses_list.html:21
+#: app/templates/operations_ui/expenses_list.html:27
 #: app/templates/subscriptions/detail.html:60
 msgid "Amount"
 msgstr "المبلغ"
@@ -3071,7 +3308,7 @@ msgstr "تتطلب هذه الصفحة ملف موظف حقيقي."
 #: app/templates/commercial_sales/finance_dashboard.html:6
 #: app/templates/commercial_sales/quotes_list.html:2
 #: app/templates/commercial_sales/quotes_list.html:6
-#: app/templates/layout/base.html:95
+#: app/templates/layout/base.html:97
 msgid "Quotes"
 msgstr "عروض الأسعار"
 
@@ -3084,7 +3321,7 @@ msgstr "طلبات المبيعات"
 #: app/templates/commercial_sales/finance_dashboard.html:14
 #: app/templates/commercial_sales/invoices_list.html:2
 #: app/templates/commercial_sales/invoices_list.html:5
-#: app/templates/layout/base.html:97
+#: app/templates/layout/base.html:99
 msgid "Invoices"
 msgstr "الفواتير"
 
@@ -3274,7 +3511,7 @@ msgstr "تخصيص الدفعة"
 #: app/templates/commercial_sales/invoice_detail.html:90
 #: app/templates/commercial_sales/refunds_list.html:2
 #: app/templates/commercial_sales/refunds_list.html:5
-#: app/templates/layout/base.html:99
+#: app/templates/layout/base.html:101
 msgid "Refunds"
 msgstr "المبالغ المستردة"
 
@@ -3300,6 +3537,8 @@ msgstr "طلب استرداد"
 #: app/templates/commercial_sales/orders_list.html:22
 #: app/templates/commercial_sales/quotes_list.html:21
 #: app/templates/commercial_sales/quotes_list.html:25
+#: app/templates/operations_ui/expenses_list.html:21
+#: app/templates/operations_ui/expenses_list.html:25
 msgid "Number"
 msgstr "الرقم"
 
@@ -3355,6 +3594,8 @@ msgstr "الطريقة"
 #: app/templates/commercial_sales/payment_detail.html:9
 #: app/templates/commercial_sales/payments_list.html:21
 #: app/templates/commercial_sales/payments_list.html:28
+#: app/templates/operations_ui/expenses_list.html:21
+#: app/templates/operations_ui/expenses_list.html:28
 msgid "Date"
 msgstr "التاريخ"
 
@@ -3386,25 +3627,11 @@ msgstr "رفض الدفعة"
 #: app/templates/commercial_sales/payment_new.html:5
 #: app/templates/commercial_sales/payment_new.html:31
 #: app/templates/commercial_sales/payments_list.html:7
+#: app/templates/operations_ui/expense_detail.html:65
+#: app/templates/operations_ui/expense_detail.html:75
 #: app/templates/subscriptions/detail.html:69
 msgid "Record payment"
 msgstr "تسجيل الدفعة"
-
-#: app/templates/commercial_sales/payment_new.html:19
-msgid "Cash"
-msgstr "نقداً"
-
-#: app/templates/commercial_sales/payment_new.html:20
-msgid "Bank transfer"
-msgstr "تحويل بنكي"
-
-#: app/templates/commercial_sales/payment_new.html:21
-msgid "Card (offline)"
-msgstr "بطاقة (غير متصل)"
-
-#: app/templates/commercial_sales/payment_new.html:22
-msgid "Cheque"
-msgstr "شيك"
 
 #: app/templates/commercial_sales/payment_new.html:25
 #: app/templates/subscriptions/detail.html:63
@@ -3421,7 +3648,7 @@ msgstr "معرّف الفاتورة"
 
 #: app/templates/commercial_sales/payments_list.html:2
 #: app/templates/commercial_sales/payments_list.html:6
-#: app/templates/layout/base.html:98
+#: app/templates/layout/base.html:100
 msgid "Payments"
 msgstr "المدفوعات"
 
@@ -3442,10 +3669,12 @@ msgid "Batch reference"
 msgstr "مرجع الدفعة"
 
 #: app/templates/commercial_sales/payout_batches_list.html:11
+#: app/templates/operations_ui/report_snapshots_list.html:29
 msgid "Period start"
 msgstr "بداية الفترة"
 
 #: app/templates/commercial_sales/payout_batches_list.html:13
+#: app/templates/operations_ui/report_snapshots_list.html:31
 msgid "Period end"
 msgstr "نهاية الفترة"
 
@@ -3455,6 +3684,8 @@ msgstr "إنشاء دفعة"
 
 #: app/templates/commercial_sales/payout_batches_list.html:21
 #: app/templates/commercial_sales/payout_batches_list.html:26
+#: app/templates/operations_ui/report_snapshots_list.html:7
+#: app/templates/operations_ui/report_snapshots_list.html:12
 msgid "Period"
 msgstr "الفترة"
 
@@ -3751,7 +3982,7 @@ msgstr "مُسند إلى"
 msgid "No reassignments yet."
 msgstr "لا توجد عمليات إعادة إسناد بعد."
 
-#: app/templates/customers/list.html:2 app/templates/layout/base.html:93
+#: app/templates/customers/list.html:2 app/templates/layout/base.html:95
 msgid "Customers"
 msgstr "العملاء"
 
@@ -3812,7 +4043,7 @@ msgid "Create customer"
 msgstr "إنشاء عميل"
 
 #: app/templates/dashboard/index.html:2 app/templates/employees/list.html:76
-#: app/templates/layout/base.html:91
+#: app/templates/layout/base.html:93
 msgid "Dashboard"
 msgstr "لوحة التحكم"
 
@@ -4043,12 +4274,8 @@ msgid "Roles and permissions"
 msgstr "الأدوار والصلاحيات"
 
 #: app/templates/employees/detail.html:34 app/templates/staff/detail.html:18
-msgid ""
-"Changing roles requires a fresh MFA confirmation and immediately revokes "
-"all of this account's active sessions."
-msgstr ""
-"يتطلب تغيير الأدوار تأكيدًا حديثًا للمصادقة متعددة العوامل، ويؤدي فورًا "
-"إلى إلغاء جميع الجلسات النشطة لهذا الحساب."
+msgid "Changing roles requires a fresh MFA confirmation and immediately revokes all of this account's active sessions."
+msgstr "يتطلب تغيير الأدوار تأكيدًا حديثًا للمصادقة متعددة العوامل، ويؤدي فورًا إلى إلغاء جميع الجلسات النشطة لهذا الحساب."
 
 #: app/templates/employees/detail.html:43 app/templates/staff/detail.html:27
 msgid "Save roles"
@@ -4082,12 +4309,8 @@ msgid "Activate"
 msgstr "تفعيل"
 
 #: app/templates/employees/detail.html:76
-msgid ""
-"Suspend this employee? This blocks login and revokes all active sessions "
-"immediately."
-msgstr ""
-"هل تريد إيقاف هذا الموظف مؤقتًا؟ سيؤدي ذلك إلى منع تسجيل الدخول وإلغاء "
-"جميع الجلسات النشطة فورًا."
+msgid "Suspend this employee? This blocks login and revokes all active sessions immediately."
+msgstr "هل تريد إيقاف هذا الموظف مؤقتًا؟ سيؤدي ذلك إلى منع تسجيل الدخول وإلغاء جميع الجلسات النشطة فورًا."
 
 #: app/templates/employees/detail.html:78
 msgid "Suspended by management"
@@ -4102,12 +4325,8 @@ msgid "Reactivate"
 msgstr "إعادة تفعيل"
 
 #: app/templates/employees/detail.html:89
-msgid ""
-"Terminate this employee? This is not reversible without an explicit "
-"rehire process."
-msgstr ""
-"هل تريد إنهاء عمل هذا الموظف؟ لا يمكن التراجع عن هذا الإجراء إلا من خلال "
-"عملية إعادة توظيف صريحة."
+msgid "Terminate this employee? This is not reversible without an explicit rehire process."
+msgstr "هل تريد إنهاء عمل هذا الموظف؟ لا يمكن التراجع عن هذا الإجراء إلا من خلال عملية إعادة توظيف صريحة."
 
 #: app/templates/employees/detail.html:91
 msgid "Terminated by management"
@@ -4149,12 +4368,8 @@ msgstr "تم إنشاء دعوة الموظف"
 
 #: app/templates/employees/invitation_created.html:6
 #, python-format
-msgid ""
-"Send this one-time setup link to %(email)s through a secure, trusted "
-"channel. It is shown here only once and expires in 3 days."
-msgstr ""
-"أرسل رابط الإعداد لمرة واحدة هذا إلى %(email)s عبر قناة آمنة وموثوقة. "
-"يُعرض هذا الرابط هنا مرة واحدة فقط وتنتهي صلاحيته خلال 3 أيام."
+msgid "Send this one-time setup link to %(email)s through a secure, trusted channel. It is shown here only once and expires in 3 days."
+msgstr "أرسل رابط الإعداد لمرة واحدة هذا إلى %(email)s عبر قناة آمنة وموثوقة. يُعرض هذا الرابط هنا مرة واحدة فقط وتنتهي صلاحيته خلال 3 أيام."
 
 #: app/templates/employees/invitation_created.html:8
 #: app/templates/employees/not_found.html:6
@@ -4269,13 +4484,8 @@ msgid "Device-slot operations (Phase 8)"
 msgstr "عمليات فتحات الأجهزة (المرحلة 8)"
 
 #: app/templates/installations/detail.html:35
-msgid ""
-"These require a reason and are the recommended path (over the generic "
-"status change above) for releasing or replacing a device slot -- the "
-"audit record is more specific."
-msgstr ""
-"تتطلب هذه العمليات سببًا وهي المسار الموصى به (بدلاً من تغيير الحالة "
-"العام أعلاه) لتحرير فتحة جهاز أو استبدالها -- سجل التدقيق أكثر تحديدًا."
+msgid "These require a reason and are the recommended path (over the generic status change above) for releasing or replacing a device slot -- the audit record is more specific."
+msgstr "تتطلب هذه العمليات سببًا وهي المسار الموصى به (بدلاً من تغيير الحالة العام أعلاه) لتحرير فتحة جهاز أو استبدالها -- سجل التدقيق أكثر تحديدًا."
 
 #: app/templates/installations/detail.html:37
 msgid "Release this device slot? The installation will be deactivated."
@@ -4290,9 +4500,7 @@ msgid "Release slot"
 msgstr "تحرير الفتحة"
 
 #: app/templates/installations/detail.html:43
-msgid ""
-"Mark this installation replaced? A new activation will be needed on the "
-"replacement device."
+msgid "Mark this installation replaced? A new activation will be needed on the replacement device."
 msgstr "وضع علامة على هذا التثبيت كمُستبدَل؟ سيلزم تفعيل جديد على الجهاز البديل."
 
 #: app/templates/installations/detail.html:45
@@ -4312,7 +4520,7 @@ msgid "No activation events yet."
 msgstr "لا توجد أحداث تفعيل بعد."
 
 #: app/templates/installations/list.html:2
-#: app/templates/installations/list.html:6 app/templates/layout/base.html:107
+#: app/templates/installations/list.html:6 app/templates/layout/base.html:114
 msgid "Installations"
 msgstr "التثبيتات"
 
@@ -4346,87 +4554,117 @@ msgstr "تسجيل"
 msgid "Aura Owner"
 msgstr "Aura Owner"
 
-#: app/templates/layout/base.html:74
+#: app/templates/layout/base.html:76
 msgid "Language"
 msgstr "اللغة"
 
-#: app/templates/layout/base.html:84
+#: app/templates/layout/base.html:86
 msgid "Log out"
 msgstr "تسجيل الخروج"
 
-#: app/templates/layout/base.html:92 app/templates/leads/list.html:2
+#: app/templates/layout/base.html:94 app/templates/leads/list.html:2
 #: app/templates/leads/list.html:6
 msgid "Leads"
 msgstr "العملاء المحتملون"
 
-#: app/templates/layout/base.html:94 app/templates/leads/dashboard.html:2
+#: app/templates/layout/base.html:96 app/templates/leads/dashboard.html:2
 #: app/templates/leads/dashboard.html:5
 msgid "CRM Dashboard"
 msgstr "لوحة تحكم إدارة العلاقات"
 
-#: app/templates/layout/base.html:96
+#: app/templates/layout/base.html:98
 msgid "Sales Orders"
 msgstr "طلبات المبيعات"
 
-#: app/templates/layout/base.html:101
+#: app/templates/layout/base.html:103
 msgid "Commission Payouts"
 msgstr "صرف العمولات"
 
-#: app/templates/layout/base.html:102
+#: app/templates/layout/base.html:104
 msgid "Commercial Dashboard"
 msgstr "اللوحة التجارية"
 
-#: app/templates/layout/base.html:103
+#: app/templates/layout/base.html:105
 msgid "Finance Dashboard"
 msgstr "لوحة المالية"
 
-#: app/templates/layout/base.html:105 app/templates/subscriptions/list.html:2
+#: app/templates/layout/base.html:106
+#: app/templates/operations_ui/expenses_list.html:2
+#: app/templates/operations_ui/expenses_list.html:6
+msgid "Expenses"
+msgstr "المصروفات"
+
+#: app/templates/layout/base.html:107
+#: app/templates/operations_ui/payees_list.html:2
+#: app/templates/operations_ui/payees_list.html:5
+msgid "Expense Payees"
+msgstr "مستفيدو المصروفات"
+
+#: app/templates/layout/base.html:108
+#: app/templates/operations_ui/cash_closing_detail.html:2
+#: app/templates/operations_ui/cash_closings_list.html:2
+msgid "Cash Closing"
+msgstr "الإقفال النقدي"
+
+#: app/templates/layout/base.html:109
+#: app/templates/operations_ui/report_snapshots_list.html:2
+#: app/templates/operations_ui/report_snapshots_list.html:5
+msgid "Operational Reports"
+msgstr "التقارير التشغيلية"
+
+#: app/templates/layout/base.html:110
+#: app/templates/operations_ui/management_notes_list.html:2
+#: app/templates/operations_ui/management_notes_list.html:6
+msgid "Management Notes"
+msgstr "ملاحظات الإدارة"
+
+#: app/templates/layout/base.html:112 app/templates/subscriptions/list.html:2
 #: app/templates/subscriptions/list.html:6
 msgid "Subscriptions"
 msgstr "الاشتراكات"
 
-#: app/templates/layout/base.html:106 app/templates/licensing/list.html:2
+#: app/templates/layout/base.html:113 app/templates/licensing/list.html:2
 #: app/templates/licensing/list.html:6
 msgid "Licenses"
 msgstr "التراخيص"
 
-#: app/templates/layout/base.html:110
+#: app/templates/layout/base.html:117
 msgid "Emergency Ext."
 msgstr "التمديد الطارئ"
 
-#: app/templates/layout/base.html:111
+#: app/templates/layout/base.html:118
 msgid "Activation Reviews"
 msgstr "مراجعات التفعيل"
 
-#: app/templates/layout/base.html:113
+#: app/templates/layout/base.html:120
 msgid "My Queue"
 msgstr "قائمة مهامي"
 
-#: app/templates/layout/base.html:117
+#: app/templates/layout/base.html:124
 msgid "Employee Dashboard"
 msgstr "لوحة تحكم الموظفين"
 
-#: app/templates/layout/base.html:118
+#: app/templates/layout/base.html:125
 msgid "Audit Log"
 msgstr "سجل التدقيق"
 
-#: app/templates/layout/base.html:119
+#: app/templates/layout/base.html:126
 msgid "Security Events"
 msgstr "أحداث الأمان"
 
-#: app/templates/layout/base.html:120
+#: app/templates/layout/base.html:127
 msgid "Backups"
 msgstr "النسخ الاحتياطية"
 
-#: app/templates/layout/base.html:121
+#: app/templates/layout/base.html:128
 msgid "Activation Service"
 msgstr "خدمة التفعيل"
 
-#: app/templates/layout/base.html:122
+#: app/templates/layout/base.html:129
 msgid "My Profile"
 msgstr "ملفي الشخصي"
 
-#: app/templates/layout/base.html:123
+#: app/templates/layout/base.html:130
 msgid "Account"
 msgstr "الحساب"
 
@@ -4476,6 +4714,9 @@ msgid "Source"
 msgstr "المصدر"
 
 #: app/templates/leads/detail.html:22 app/templates/leads/new.html:23
+#: app/templates/operations_ui/management_note_new.html:13
+#: app/templates/operations_ui/management_notes_list.html:10
+#: app/templates/operations_ui/management_notes_list.html:17
 msgid "Priority"
 msgstr "الأولوية"
 
@@ -4484,6 +4725,7 @@ msgid "Reason (required for Lost)"
 msgstr "السبب (مطلوب عند الخسارة)"
 
 #: app/templates/leads/detail.html:36
+#: app/templates/operations_ui/management_note_detail.html:18
 msgid "Update status"
 msgstr "تحديث الحالة"
 
@@ -4565,12 +4807,8 @@ msgid "Issue key"
 msgstr "إصدار المفتاح"
 
 #: app/templates/licensing/detail.html:26
-msgid ""
-"Issuing requires a fresh MFA confirmation. The full key is shown exactly "
-"once."
-msgstr ""
-"يتطلب الإصدار تأكيد مصادقة ثنائية حديث. يُعرض المفتاح الكامل مرة واحدة "
-"بالضبط."
+msgid "Issuing requires a fresh MFA confirmation. The full key is shown exactly once."
+msgstr "يتطلب الإصدار تأكيد مصادقة ثنائية حديث. يُعرض المفتاح الكامل مرة واحدة بالضبط."
 
 #: app/templates/licensing/detail.html:30
 msgid "Issue license key"
@@ -4635,12 +4873,8 @@ msgid "Last proof"
 msgstr "آخر إثبات"
 
 #: app/templates/licensing_admin/device_keys.html:19
-msgid ""
-"Revoke this device key? The device will be unable to check in until it "
-"re-activates with a new key."
-msgstr ""
-"إلغاء مفتاح الجهاز هذا؟ لن يتمكن الجهاز من تسجيل الحضور حتى يُعيد التفعيل"
-" بمفتاح جديد."
+msgid "Revoke this device key? The device will be unable to check in until it re-activates with a new key."
+msgstr "إلغاء مفتاح الجهاز هذا؟ لن يتمكن الجهاز من تسجيل الحضور حتى يُعيد التفعيل بمفتاح جديد."
 
 #: app/templates/licensing_admin/device_keys.html:26
 msgid "No device keys registered yet."
@@ -4664,9 +4898,7 @@ msgid "Resolved value"
 msgstr "القيمة المحلَّلة"
 
 #: app/templates/licensing_admin/entitlement_preview.html:14
-msgid ""
-"Source is internal diagnostic detail only -- never sent to a client in a "
-"signed assertion."
+msgid "Source is internal diagnostic detail only -- never sent to a client in a signed assertion."
 msgstr "المصدر تفصيل تشخيصي داخلي فقط -- لا يُرسل أبدًا إلى عميل ضمن تأكيد موقَّع."
 
 #: app/templates/licensing_admin/offline_policies.html:2
@@ -4714,12 +4946,8 @@ msgid "No offline policies seeded yet -- run"
 msgstr "لم يتم تهيئة أي سياسات عمل دون اتصال بعد -- شغّل"
 
 #: app/templates/licensing_admin/offline_policies.html:21
-msgid ""
-"Policy is DEFINED and RETURNED to clients only -- Phase 6 does not "
-"enforce it inside Retail or Clinic."
-msgstr ""
-"السياسة مُعرَّفة ومُعادة إلى العملاء فقط -- لا تفرضها المرحلة 6 داخل "
-"التجزئة أو العيادة."
+msgid "Policy is DEFINED and RETURNED to clients only -- Phase 6 does not enforce it inside Retail or Clinic."
+msgstr "السياسة مُعرَّفة ومُعادة إلى العملاء فقط -- لا تفرضها المرحلة 6 داخل التجزئة أو العيادة."
 
 #: app/templates/licensing_admin/requests.html:2
 msgid "Activation Requests"
@@ -4750,24 +4978,16 @@ msgid "Generate new (DRAFT)"
 msgstr "إنشاء مفتاح جديد (مسودة)"
 
 #: app/templates/licensing_admin/signing_keys.html:13
-msgid ""
-"Rotate to a brand-new active signing key? The previous key remains valid "
-"for already-issued assertions."
-msgstr ""
-"التبديل إلى مفتاح توقيع نشط جديد تمامًا؟ يظل المفتاح السابق صالحًا "
-"للتأكيدات الصادرة بالفعل."
+msgid "Rotate to a brand-new active signing key? The previous key remains valid for already-issued assertions."
+msgstr "التبديل إلى مفتاح توقيع نشط جديد تمامًا؟ يظل المفتاح السابق صالحًا للتأكيدات الصادرة بالفعل."
 
 #: app/templates/licensing_admin/signing_keys.html:16
 msgid "Rotate now"
 msgstr "التبديل الآن"
 
 #: app/templates/licensing_admin/signing_keys.html:20
-msgid ""
-"Private key material is never shown here or stored in the database -- "
-"only public metadata."
-msgstr ""
-"لا تُعرض مادة المفتاح الخاص هنا أبدًا ولا تُخزَّن في قاعدة البيانات -- "
-"البيانات الوصفية العامة فقط."
+msgid "Private key material is never shown here or stored in the database -- only public metadata."
+msgstr "لا تُعرض مادة المفتاح الخاص هنا أبدًا ولا تُخزَّن في قاعدة البيانات -- البيانات الوصفية العامة فقط."
 
 #: app/templates/licensing_admin/signing_keys.html:22
 msgid "Key ID"
@@ -4778,12 +4998,8 @@ msgid "Activated"
 msgstr "تاريخ التفعيل"
 
 #: app/templates/licensing_admin/signing_keys.html:40
-msgid ""
-"Revoke this key? Assertions signed by it will no longer verify -- use "
-"only for compromise response."
-msgstr ""
-"إلغاء هذا المفتاح؟ لن يتم التحقق من التأكيدات الموقَّعة به بعد الآن -- "
-"يُستخدم فقط للاستجابة لاختراق أمني."
+msgid "Revoke this key? Assertions signed by it will no longer verify -- use only for compromise response."
+msgstr "إلغاء هذا المفتاح؟ لن يتم التحقق من التأكيدات الموقَّعة به بعد الآن -- يُستخدم فقط للاستجابة لاختراق أمني."
 
 #: app/templates/licensing_admin/signing_keys.html:48
 msgid "No signing keys yet -- generate one to enable the external API."
@@ -4841,6 +5057,344 @@ msgstr "مفاتيح الأجهزة"
 msgid "Offline policies"
 msgstr "سياسات العمل دون اتصال"
 
+#: app/templates/operations_ui/cash_closing_detail.html:8
+msgid "Opening cash"
+msgstr "الرصيد الافتتاحي"
+
+#: app/templates/operations_ui/cash_closing_detail.html:9
+msgid "Confirmed cash collections"
+msgstr "التحصيلات النقدية المؤكدة"
+
+#: app/templates/operations_ui/cash_closing_detail.html:10
+msgid "Confirmed cash refunds"
+msgstr "المبالغ المستردة النقدية المؤكدة"
+
+#: app/templates/operations_ui/cash_closing_detail.html:11
+msgid "Cash expense payments"
+msgstr "مدفوعات المصروفات النقدية"
+
+#: app/templates/operations_ui/cash_closing_detail.html:12
+msgid "Cash commission payouts"
+msgstr "دفعات العمولات النقدية"
+
+#: app/templates/operations_ui/cash_closing_detail.html:13
+msgid "Approved adjustments"
+msgstr "التسويات المعتمدة"
+
+#: app/templates/operations_ui/cash_closing_detail.html:14
+msgid "Expected closing cash"
+msgstr "الرصيد النقدي المتوقع عند الإقفال"
+
+#: app/templates/operations_ui/cash_closing_detail.html:16
+#: app/templates/operations_ui/cash_closing_detail.html:25
+msgid "Actual counted cash"
+msgstr "الرصيد النقدي الفعلي المعدود"
+
+#: app/templates/operations_ui/cash_closing_detail.html:17
+#: app/templates/operations_ui/cash_closings_list.html:10
+#: app/templates/operations_ui/cash_closings_list.html:17
+msgid "Variance"
+msgstr "الفرق"
+
+#: app/templates/operations_ui/cash_closing_detail.html:27
+msgid "Variance explanation (required if nonzero)"
+msgstr "توضيح الفرق (مطلوب إذا لم يكن صفرًا)"
+
+#: app/templates/operations_ui/cash_closing_detail.html:29
+msgid "Submit closing"
+msgstr "إرسال الإقفال"
+
+#: app/templates/operations_ui/cash_closing_detail.html:45
+msgid "Close"
+msgstr "إغلاق"
+
+#: app/templates/operations_ui/cash_closing_detail.html:52
+msgid "Reason for reopening"
+msgstr "سبب إعادة الفتح"
+
+#: app/templates/operations_ui/cash_closing_detail.html:53
+msgid "Reopen (requires recent authentication)"
+msgstr "إعادة الفتح (يتطلب تحققًا حديثًا من الهوية)"
+
+#: app/templates/operations_ui/cash_closing_detail.html:60
+msgid "Adjustment amount"
+msgstr "مبلغ التسوية"
+
+#: app/templates/operations_ui/cash_closing_detail.html:63
+msgid "Add adjustment"
+msgstr "إضافة تسوية"
+
+#: app/templates/operations_ui/cash_closing_new.html:2
+#: app/templates/operations_ui/cash_closing_new.html:5
+msgid "New cash closing"
+msgstr "إقفال نقدي جديد"
+
+#: app/templates/operations_ui/cash_closing_new.html:9
+#: app/templates/operations_ui/cash_closings_list.html:10
+#: app/templates/operations_ui/cash_closings_list.html:14
+msgid "Business date"
+msgstr "التاريخ التشغيلي"
+
+#: app/templates/operations_ui/cash_closing_new.html:13
+msgid "Opening cash override (first closing only)"
+msgstr "تجاوز الرصيد الافتتاحي (للإقفال الأول فقط)"
+
+#: app/templates/operations_ui/cash_closing_new.html:15
+msgid "Override reason"
+msgstr "سبب التجاوز"
+
+#: app/templates/operations_ui/cash_closing_new.html:17
+msgid "Create closing"
+msgstr "إنشاء إقفال"
+
+#: app/templates/operations_ui/cash_closings_list.html:6
+msgid "Daily Cash Closing"
+msgstr "الإقفال النقدي اليومي"
+
+#: app/templates/operations_ui/cash_closings_list.html:7
+msgid "New closing"
+msgstr "إقفال جديد"
+
+#: app/templates/operations_ui/cash_closings_list.html:10
+#: app/templates/operations_ui/cash_closings_list.html:16
+msgid "Expected"
+msgstr "المتوقع"
+
+#: app/templates/operations_ui/cash_closings_list.html:19
+msgid "No cash closings yet."
+msgstr "لا توجد إقفالات نقدية بعد."
+
+#: app/templates/operations_ui/expense_detail.html:2
+msgid "Expense"
+msgstr "المصروف"
+
+#: app/templates/operations_ui/expense_detail.html:6
+msgid "Amount:"
+msgstr "المبلغ:"
+
+#: app/templates/operations_ui/expense_detail.html:7
+msgid "Approved:"
+msgstr "المعتمد:"
+
+#: app/templates/operations_ui/expense_detail.html:8
+msgid "Outstanding:"
+msgstr "المتبقي:"
+
+#: app/templates/operations_ui/expense_detail.html:10
+msgid "Date:"
+msgstr "التاريخ:"
+
+#: app/templates/operations_ui/expense_detail.html:10
+msgid "Payment method:"
+msgstr "طريقة الدفع:"
+
+#: app/templates/operations_ui/expense_detail.html:12
+msgid "External reference:"
+msgstr "المرجع الخارجي:"
+
+#: app/templates/operations_ui/expense_detail.html:16
+msgid "Possible duplicate detected"
+msgstr "تم اكتشاف تكرار محتمل"
+
+#: app/templates/operations_ui/expense_detail.html:22
+msgid "Reason for override"
+msgstr "سبب التجاوز"
+
+#: app/templates/operations_ui/expense_detail.html:23
+msgid "Not a duplicate -- proceed"
+msgstr "ليس تكرارًا -- متابعة"
+
+#: app/templates/operations_ui/expense_detail.html:31
+msgid "Submit for approval"
+msgstr "إرسال للاعتماد"
+
+#: app/templates/operations_ui/expense_detail.html:38
+msgid "Revised amount"
+msgstr "المبلغ المعدل"
+
+#: app/templates/operations_ui/expense_detail.html:40
+msgid "Revised description"
+msgstr "الوصف المعدل"
+
+#: app/templates/operations_ui/expense_detail.html:42
+msgid "Revise and resubmit"
+msgstr "تعديل وإعادة الإرسال"
+
+#: app/templates/operations_ui/expense_detail.html:48
+msgid "Approval decision"
+msgstr "قرار الاعتماد"
+
+#: app/templates/operations_ui/expense_detail.html:49
+msgid "Requested amount"
+msgstr "المبلغ المطلوب"
+
+#: app/templates/operations_ui/expense_detail.html:52
+msgid "Approved amount (must not exceed requested)"
+msgstr "المبلغ المعتمد (يجب ألا يتجاوز المطلوب)"
+
+#: app/templates/operations_ui/expense_detail.html:54
+msgid "Reason (required for reject/return)"
+msgstr "السبب (مطلوب للرفض أو الإعادة)"
+
+#: app/templates/operations_ui/expense_detail.html:57
+msgid "Return for correction"
+msgstr "إعادة للتصحيح"
+
+#: app/templates/operations_ui/expense_detail.html:70
+#: app/templates/operations_ui/expense_new.html:23
+msgid "Payment method"
+msgstr "طريقة الدفع"
+
+#: app/templates/operations_ui/expense_detail.html:81
+msgid "Attachments"
+msgstr "المرفقات"
+
+#: app/templates/operations_ui/expense_detail.html:83
+#: app/templates/operations_ui/expense_detail.html:87
+msgid "File"
+msgstr "الملف"
+
+#: app/templates/operations_ui/expense_detail.html:83
+#: app/templates/operations_ui/expense_detail.html:88
+#: app/templates/system/backups.html:14
+msgid "Size"
+msgstr "الحجم"
+
+#: app/templates/operations_ui/expense_detail.html:88
+msgid "bytes"
+msgstr "بايت"
+
+#: app/templates/operations_ui/expense_detail.html:90
+msgid "No attachments."
+msgstr "لا توجد مرفقات."
+
+#: app/templates/operations_ui/expense_detail.html:98
+msgid "Upload receipt"
+msgstr "رفع الإيصال"
+
+#: app/templates/operations_ui/expense_detail.html:104
+msgid "Void this expense?"
+msgstr "إبطال هذا المصروف؟"
+
+#: app/templates/operations_ui/expense_new.html:2
+#: app/templates/operations_ui/expense_new.html:5
+#: app/templates/operations_ui/expenses_list.html:7
+msgid "New expense"
+msgstr "مصروف جديد"
+
+#: app/templates/operations_ui/expense_new.html:13
+msgid "Payee"
+msgstr "المستفيد"
+
+#: app/templates/operations_ui/expense_new.html:21
+msgid "Expense date"
+msgstr "تاريخ المصروف"
+
+#: app/templates/operations_ui/expense_new.html:31
+msgid "Business purpose"
+msgstr "الغرض من المصروف"
+
+#: app/templates/operations_ui/expense_new.html:33
+msgid "External reference (optional)"
+msgstr "المرجع الخارجي (اختياري)"
+
+#: app/templates/operations_ui/expense_new.html:35
+msgid "Save draft"
+msgstr "حفظ كمسودة"
+
+#: app/templates/operations_ui/expenses_list.html:30
+msgid "No expenses yet."
+msgstr "لا توجد مصروفات بعد."
+
+#: app/templates/operations_ui/management_note_detail.html:6
+msgid "Visibility:"
+msgstr "الرؤية:"
+
+#: app/templates/operations_ui/management_note_detail.html:6
+msgid "Priority:"
+msgstr "الأولوية:"
+
+#: app/templates/operations_ui/management_note_detail.html:23
+msgid "Comments"
+msgstr "التعليقات"
+
+#: app/templates/operations_ui/management_note_detail.html:26
+msgid "No comments yet."
+msgstr "لا توجد تعليقات بعد."
+
+#: app/templates/operations_ui/management_note_detail.html:31
+msgid "Add comment"
+msgstr "إضافة تعليق"
+
+#: app/templates/operations_ui/management_note_new.html:2
+#: app/templates/operations_ui/management_note_new.html:5
+msgid "New management note"
+msgstr "ملاحظة إدارية جديدة"
+
+#: app/templates/operations_ui/management_note_new.html:11
+msgid "Body"
+msgstr "النص"
+
+#: app/templates/operations_ui/management_note_new.html:19
+#: app/templates/operations_ui/management_notes_list.html:10
+#: app/templates/operations_ui/management_notes_list.html:16
+msgid "Visibility"
+msgstr "الرؤية"
+
+#: app/templates/operations_ui/management_note_new.html:24
+msgid "Create note"
+msgstr "إنشاء ملاحظة"
+
+#: app/templates/operations_ui/management_notes_list.html:7
+msgid "New note"
+msgstr "ملاحظة جديدة"
+
+#: app/templates/operations_ui/management_notes_list.html:19
+msgid "No notes visible to you."
+msgstr "لا توجد ملاحظات مرئية لك."
+
+#: app/templates/operations_ui/payees_list.html:12
+msgid "No payees yet."
+msgstr "لا يوجد مستفيدون بعد."
+
+#: app/templates/operations_ui/payees_list.html:18
+msgid "New payee"
+msgstr "مستفيد جديد"
+
+#: app/templates/operations_ui/payees_list.html:26
+#: app/templates/profile/index.html:26
+msgid "Display name"
+msgstr "اسم العرض"
+
+#: app/templates/operations_ui/payees_list.html:28
+msgid "External contact reference (optional)"
+msgstr "مرجع الاتصال الخارجي (اختياري)"
+
+#: app/templates/operations_ui/payees_list.html:30
+msgid "Create payee"
+msgstr "إنشاء مستفيد"
+
+#: app/templates/operations_ui/report_snapshots_list.html:7
+#: app/templates/operations_ui/report_snapshots_list.html:11
+msgid "Report"
+msgstr "التقرير"
+
+#: app/templates/operations_ui/report_snapshots_list.html:16
+msgid "No report snapshots yet."
+msgstr "لا توجد لقطات تقارير بعد."
+
+#: app/templates/operations_ui/report_snapshots_list.html:22
+msgid "Generate a snapshot"
+msgstr "توليد لقطة"
+
+#: app/templates/operations_ui/report_snapshots_list.html:25
+msgid "Report type"
+msgstr "نوع التقرير"
+
+#: app/templates/operations_ui/report_snapshots_list.html:35
+msgid "Generate"
+msgstr "توليد"
+
 #: app/templates/profile/index.html:2 app/templates/profile/index.html:5
 msgid "My profile"
 msgstr "ملفي الشخصي"
@@ -4858,17 +5412,8 @@ msgid "Update your details"
 msgstr "تحديث بياناتك"
 
 #: app/templates/profile/index.html:23
-msgid ""
-"Only display name and phone are self-editable. Employee number, role, "
-"employment status, start date, manager, and commission plan are "
-"management-controlled."
-msgstr ""
-"يمكنك تعديل اسم العرض ورقم الهاتف فقط. أما الرقم الوظيفي والدور وحالة "
-"التوظيف وتاريخ البدء والمدير المباشر وخطة العمولة فتخضع لتحكم الإدارة."
-
-#: app/templates/profile/index.html:26
-msgid "Display name"
-msgstr "اسم العرض"
+msgid "Only display name and phone are self-editable. Employee number, role, employment status, start date, manager, and commission plan are management-controlled."
+msgstr "يمكنك تعديل اسم العرض ورقم الهاتف فقط. أما الرقم الوظيفي والدور وحالة التوظيف وتاريخ البدء والمدير المباشر وخطة العمولة فتخضع لتحكم الإدارة."
 
 #: app/templates/profile/index.html:30
 msgid "Save"
@@ -4909,9 +5454,7 @@ msgid "Reset MFA"
 msgstr "إعادة تعيين المصادقة الثنائية"
 
 #: app/templates/staff/detail.html:39
-msgid ""
-"Disable this staff account? This revokes all of its active sessions "
-"immediately."
+msgid "Disable this staff account? This revokes all of its active sessions immediately."
 msgstr "تعطيل حساب عضو الفريق هذا؟ يُلغي هذا كل جلساته النشطة فورًا."
 
 #: app/templates/staff/detail.html:42
@@ -4924,12 +5467,8 @@ msgid "Invitation created for %(email)s"
 msgstr "تم إنشاء دعوة لـ %(email)s"
 
 #: app/templates/staff/invitation_created.html:6
-msgid ""
-"Copy this one-time link and send it to them manually (no email delivery "
-"is wired up in this phase):"
-msgstr ""
-"انسخ هذا الرابط لمرة واحدة وأرسله إليهم يدويًا (لا يوجد إرسال بريد "
-"إلكتروني مُفعَّل في هذه المرحلة):"
+msgid "Copy this one-time link and send it to them manually (no email delivery is wired up in this phase):"
+msgstr "انسخ هذا الرابط لمرة واحدة وأرسله إليهم يدويًا (لا يوجد إرسال بريد إلكتروني مُفعَّل في هذه المرحلة):"
 
 #: app/templates/staff/invitation_created.html:8
 msgid "Expires:"
@@ -5031,24 +5570,12 @@ msgid "Create backup now"
 msgstr "إنشاء نسخة احتياطية الآن"
 
 #: app/templates/system/backups.html:12
-msgid ""
-"Restricted to Super Admin with a fresh MFA confirmation. Restoring takes "
-"a pre-restore safety backup automatically before touching any data."
-msgstr ""
-"مقتصر على المشرف العام مع تأكيد مصادقة ثنائية حديث. تُنشئ الاستعادة نسخة "
-"احتياطية أمانية تلقائيًا قبل المساس بأي بيانات."
-
-#: app/templates/system/backups.html:14
-msgid "Size"
-msgstr "الحجم"
+msgid "Restricted to Super Admin with a fresh MFA confirmation. Restoring takes a pre-restore safety backup automatically before touching any data."
+msgstr "مقتصر على المشرف العام مع تأكيد مصادقة ثنائية حديث. تُنشئ الاستعادة نسخة احتياطية أمانية تلقائيًا قبل المساس بأي بيانات."
 
 #: app/templates/system/backups.html:25
-msgid ""
-"Restore the Owner database from this backup? A pre-restore safety backup "
-"is taken automatically, but this replaces current data."
-msgstr ""
-"استعادة قاعدة بيانات المالك من هذه النسخة الاحتياطية؟ تُؤخذ نسخة احتياطية"
-" أمانية تلقائيًا، لكن هذا سيستبدل البيانات الحالية."
+msgid "Restore the Owner database from this backup? A pre-restore safety backup is taken automatically, but this replaces current data."
+msgstr "استعادة قاعدة بيانات المالك من هذه النسخة الاحتياطية؟ تُؤخذ نسخة احتياطية أمانية تلقائيًا، لكن هذا سيستبدل البيانات الحالية."
 
 #: app/templates/system/backups.html:27
 msgid "Restore"
@@ -5058,10 +5585,7 @@ msgstr "استعادة"
 msgid "No backups taken yet."
 msgstr "لم يتم أخذ أي نسخة احتياطية بعد."
 
-#~ msgid ""
-#~ "Each code can be used once if "
-#~ "you lose access to your authenticator."
-#~ " They will"
+#~ msgid "Each code can be used once if you lose access to your authenticator. They will"
 #~ msgstr ""
 
 #~ msgid "never be shown again"

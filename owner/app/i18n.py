@@ -134,6 +134,17 @@ def init_app(app) -> None:
         commission_payout_batch_status_label,
         localize_commercial_sales_error,
         localize_commission_error,
+        expense_status_label,
+        expense_approval_status_label,
+        expense_payment_method_label,
+        payee_type_label,
+        cash_closing_status_label,
+        report_type_label,
+        management_note_status_label,
+        management_note_visibility_label,
+        management_note_priority_label,
+        localize_expense_error,
+        localize_management_note_error,
     )
 
     # Domain-label and formatting helpers are Jinja globals (not filters) --
@@ -197,6 +208,17 @@ def init_app(app) -> None:
         commission_payout_batch_status_label=commission_payout_batch_status_label,
         localize_commercial_sales_error=localize_commercial_sales_error,
         localize_commission_error=localize_commission_error,
+        expense_status_label=expense_status_label,
+        expense_approval_status_label=expense_approval_status_label,
+        expense_payment_method_label=expense_payment_method_label,
+        payee_type_label=payee_type_label,
+        cash_closing_status_label=cash_closing_status_label,
+        report_type_label=report_type_label,
+        management_note_status_label=management_note_status_label,
+        management_note_visibility_label=management_note_visibility_label,
+        management_note_priority_label=management_note_priority_label,
+        localize_expense_error=localize_expense_error,
+        localize_management_note_error=localize_management_note_error,
     )
 
     @app.context_processor

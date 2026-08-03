@@ -1,0 +1,38 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Operational Reports") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _("Operational Reports") }}</h2>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Report") }}</th><th>{{ _("Period") }}</th><th>{{ _("Currency") }}</th><th>{{ _("Version") }}</th></tr></thead>
+    <tbody>
+    {% for s in snapshots %}
+    <tr>
+      <td data-label="{{ _('Report') }}">{{ report_type_label(s.report_type) }}</td>
+      <td data-label="{{ _('Period') }}">{{ format_owner_date(s.period_start) }} &ndash; {{ format_owner_date(s.period_end) }}</td>
+      <td data-label="{{ _('Currency') }}">{% if s.currency %}<bdi dir="ltr">{{ s.currency }}</bdi>{% else %}&mdash;{% endif %}</td>
+      <td data-label="{{ _('Version') }}">v{{ s.snapshot_version }}</td>
+    </tr>
+    {% else %}<tr><td colspan="4" class="empty">{{ _("No report snapshots yet.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="card">
+  <h3>{{ _("Generate a snapshot") }}</h3>
+  <form method="post" action="{{ url_for('operations_ui.generate_snapshot_route') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>{{ _("Report type") }}</label>
+    <select name="report_type" required>
+      {% for rt in report_types %}<option value="{{ rt }}">{{ report_type_label(rt) }}</option>{% endfor %}
+    </select>
+    <label>{{ _("Period start") }}</label>
+    <input name="period_start" type="date" required>
+    <label>{{ _("Period end") }}</label>
+    <input name="period_end" type="date" required>
+    <label>{{ _("Currency") }}</label>
+    <input name="currency" value="USD" maxlength="3">
+    <button type="submit">{{ _("Generate") }}</button>
+  </form>
+</div>
+{% endblock %}

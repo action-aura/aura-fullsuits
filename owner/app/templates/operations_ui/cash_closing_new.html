@@ -1,0 +1,20 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("New cash closing") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _("New cash closing") }}</h2>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form method="post" action="{{ url_for('operations_ui.create_closing_route') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>{{ _("Business date") }}</label>
+    <input name="business_date" type="date" required>
+    <label>{{ _("Currency") }}</label>
+    <input name="currency" value="USD" maxlength="3" required>
+    <label>{{ _("Opening cash override (first closing only)") }}</label>
+    <input name="opening_cash_override" type="text" inputmode="decimal">
+    <label>{{ _("Override reason") }}</label>
+    <input name="opening_cash_override_reason">
+    <button type="submit">{{ _("Create closing") }}</button>
+  </form>
+</div>
+{% endblock %}

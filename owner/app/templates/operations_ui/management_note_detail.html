@@ -1,0 +1,35 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ note.title }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ note.title }} <span class="badge">{{ management_note_status_label(note.status) }}</span></h2>
+  <p>{{ _("Visibility:") }} {{ management_note_visibility_label(note.visibility) }} &middot; {{ _("Priority:") }} {{ management_note_priority_label(note.priority) }}</p>
+  <p>{{ note.body }}</p>
+
+  {% if 'management_notes.manage' in codes %}
+  <form method="post" action="{{ url_for('operations_ui.set_note_status_route', note_id=note.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <select name="status">
+      <option value="OPEN">{{ management_note_status_label("OPEN") }}</option>
+      <option value="IN_PROGRESS">{{ management_note_status_label("IN_PROGRESS") }}</option>
+      <option value="DONE">{{ management_note_status_label("DONE") }}</option>
+      <option value="ARCHIVED">{{ management_note_status_label("ARCHIVED") }}</option>
+    </select>
+    <button type="submit">{{ _("Update status") }}</button>
+  </form>
+  {% endif %}
+
+  <div class="card">
+    <h3>{{ _("Comments") }}</h3>
+    {% for c in comments %}
+    <p>{{ format_owner_datetime(c.created_at) }}: {{ c.body }}</p>
+    {% else %}<p class="empty">{{ _("No comments yet.") }}</p>
+    {% endfor %}
+    <form method="post" action="{{ url_for('operations_ui.add_comment_route', note_id=note.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <textarea name="body" required></textarea>
+      <button type="submit">{{ _("Add comment") }}</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

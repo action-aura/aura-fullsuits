@@ -1,0 +1,67 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Cash Closing") }} {{ closing.business_date }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ format_owner_date(closing.business_date) }} (<bdi dir="ltr">{{ closing.currency }}</bdi>) <span class="badge {{ 'success' if closing.status == 'CLOSED' else ('danger' if closing.status == 'REJECTED' else 'pending') }}">{{ cash_closing_status_label(closing.status) }}</span></h2>
+  <table class="responsive-table">
+    <tbody>
+      <tr><td>{{ _("Opening cash") }}</td><td>{{ format_owner_number(closing.opening_cash) }} {{ closing.currency }}</td></tr>
+      <tr><td>{{ _("Confirmed cash collections") }}</td><td>{{ format_owner_number(closing.confirmed_cash_collections) }} {{ closing.currency }}</td></tr>
+      <tr><td>{{ _("Confirmed cash refunds") }}</td><td>-{{ format_owner_number(closing.confirmed_cash_refunds) }} {{ closing.currency }}</td></tr>
+      <tr><td>{{ _("Cash expense payments") }}</td><td>-{{ format_owner_number(closing.cash_expense_payments) }} {{ closing.currency }}</td></tr>
+      <tr><td>{{ _("Cash commission payouts") }}</td><td>-{{ format_owner_number(closing.cash_commission_payouts) }} {{ closing.currency }}</td></tr>
+      <tr><td>{{ _("Approved adjustments") }}</td><td>{{ format_owner_number(closing.approved_cash_adjustments) }} {{ closing.currency }}</td></tr>
+      <tr><td><strong>{{ _("Expected closing cash") }}</strong></td><td><strong>{{ format_owner_number(closing.expected_closing_cash) }} {{ closing.currency }}</strong></td></tr>
+      {% if closing.actual_counted_cash is not none %}
+      <tr><td>{{ _("Actual counted cash") }}</td><td>{{ format_owner_number(closing.actual_counted_cash) }} {{ closing.currency }}</td></tr>
+      <tr><td>{{ _("Variance") }}</td><td>{{ format_owner_number(closing.variance) }} {{ closing.currency }}</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+
+  {% if closing.status == 'DRAFT' and 'cash_closing.prepare' in codes %}
+  <form method="post" action="{{ url_for('operations_ui.submit_closing_route', closing_id=closing.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>{{ _("Actual counted cash") }}</label>
+    <input name="actual_counted_cash" type="text" inputmode="decimal" required>
+    <label>{{ _("Variance explanation (required if nonzero)") }}</label>
+    <input name="variance_explanation">
+    <button type="submit">{{ _("Submit closing") }}</button>
+  </form>
+  {% endif %}
+
+  {% if closing.status in ('SUBMITTED', 'REVIEW_REQUIRED') and 'cash_closing.approve' in codes and closing.prepared_by_staff_user_id != staff.id %}
+  <form method="post" action="{{ url_for('operations_ui.decide_closing_route', closing_id=closing.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input name="reason" placeholder="{{ _('Reason') }}">
+    <button type="submit" name="decision" value="APPROVED">{{ _("Approve") }}</button>
+    <button type="submit" name="decision" value="REJECTED">{{ _("Reject") }}</button>
+  </form>
+  {% endif %}
+
+  {% if closing.status == 'APPROVED' and 'cash_closing.approve' in codes %}
+  <form method="post" action="{{ url_for('operations_ui.close_closing_route', closing_id=closing.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit">{{ _("Close") }}</button>
+  </form>
+  {% endif %}
+
+  {% if closing.status in ('APPROVED', 'CLOSED') and 'cash_closing.reopen' in codes %}
+  <form method="post" action="{{ url_for('operations_ui.reopen_closing_route', closing_id=closing.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input name="reason" placeholder="{{ _('Reason for reopening') }}" required>
+    <button type="submit">{{ _("Reopen (requires recent authentication)") }}</button>
+  </form>
+  {% endif %}
+
+  {% if closing.status not in ('APPROVED', 'CLOSED') and 'cash_closing.adjust' in codes %}
+  <form method="post" action="{{ url_for('operations_ui.add_adjustment_route', closing_id=closing.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>{{ _("Adjustment amount") }}</label>
+    <input name="amount" type="text" inputmode="decimal" required>
+    <input name="reason" placeholder="{{ _('Reason') }}" required>
+    <button type="submit">{{ _("Add adjustment") }}</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}
