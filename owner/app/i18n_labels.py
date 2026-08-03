@@ -645,6 +645,41 @@ def generic_audit_action_label(code: str) -> str:
         "CHECK_IN_ACCEPTED": _("Check-in accepted"),
         "ACTIVATION_ACCEPTED": _("Activation accepted"),
         "DEVICE_SLOT_EXCEPTION_CREATED": _("Device-slot exception created"),
+        # Phase 9.5E -- Expenses
+        "EXPENSE_CREATED": _("Expense created"),
+        "EXPENSE_SUBMITTED": _("Expense submitted for approval"),
+        "EXPENSE_REVISED": _("Expense revised"),
+        "EXPENSE_VOIDED": _("Expense voided"),
+        "EXPENSE_APPROVAL_APPROVED": _("Expense approved"),
+        "EXPENSE_APPROVAL_REJECTED": _("Expense rejected"),
+        "EXPENSE_APPROVAL_RETURNED": _("Expense returned for correction"),
+        "EXPENSE_APPROVAL_CANCELLED": _("Expense approval request cancelled"),
+        "EXPENSE_PAYMENT_RECORDED": _("Expense payment recorded"),
+        "EXPENSE_PAYMENT_REVERSED": _("Expense payment reversed"),
+        "EXPENSE_ATTACHMENT_UPLOADED": _("Expense attachment uploaded"),
+        "EXPENSE_ATTACHMENT_DOWNLOADED": _("Expense attachment downloaded"),
+        "EXPENSE_ATTACHMENT_ARCHIVED": _("Expense attachment archived"),
+        "EXPENSE_PAYEE_CREATED": _("Expense payee created"),
+        "EXPENSE_PAYEE_DEACTIVATED": _("Expense payee deactivated"),
+        "EXPENSE_DUPLICATE_WARNING_OVERRIDDEN": _("Duplicate-expense warning overridden"),
+        # Phase 9.5E -- Daily Cash Closing
+        "CASH_CLOSING_CREATED": _("Cash closing created"),
+        "CASH_CLOSING_SUBMITTED": _("Cash closing submitted"),
+        "CASH_CLOSING_APPROVED": _("Cash closing approved"),
+        "CASH_CLOSING_REJECTED": _("Cash closing rejected"),
+        "CASH_CLOSING_CLOSED": _("Cash closing closed"),
+        "CASH_CLOSING_REOPENED": _("Cash closing reopened"),
+        "CASH_CLOSING_ADJUSTMENT_CREATED": _("Cash closing adjustment created"),
+        "CASH_CLOSING_ADJUSTMENT_APPROVED": _("Cash closing adjustment approved"),
+        # Phase 9.5E -- Operational Reports
+        "REPORT_SNAPSHOT_GENERATED": _("Report snapshot generated"),
+        "REPORT_SNAPSHOT_REGENERATED": _("Report snapshot regenerated"),
+        # Phase 9.5E -- Management Notes
+        "MANAGEMENT_NOTE_CREATED": _("Management note created"),
+        "MANAGEMENT_NOTE_UPDATED": _("Management note updated"),
+        "MANAGEMENT_NOTE_ASSIGNED": _("Management note assigned"),
+        "MANAGEMENT_NOTE_STATUS_CHANGED": _("Management note status changed"),
+        "MANAGEMENT_NOTE_COMMENT_ADDED": _("Comment added to management note"),
     }
     return labels.get(code, code)
 
