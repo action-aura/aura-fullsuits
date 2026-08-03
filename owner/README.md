@@ -137,6 +137,23 @@ validation across all 16 current route families (`docs/owner/phase9_5b_r3/
 complete-browser-family-validation.md`). Full closure record and final verdict:
 `docs/owner/phase9_5b_r3/PHASE9-5B-R3-FINAL-VERIFICATION-HANDOVER.md`.
 
+## Expense Management, Cash Control, Reporting & Management Collaboration (Phase 9.5E)
+
+Phase 9.5D added the commercial sales path (Lead→Quote→Order→Invoice→Payment→
+Refund→Commission); Phase 9.5E adds the operational-finance side: Expense
+lifecycle/approval/payments/attachments/duplicate-review (`app/expenses/`),
+Daily Cash Closing with an authoritative formula and MFA-gated reopen
+(`app/cash_closing/`), read-only operational aggregation + 3 role-scoped
+dashboards + idempotent scheduled report snapshots (`app/operational_reports/`),
+and the first real service layer over the Phase 9.5A `SharedManagementNote`
+schema (`app/management_notes/`). A 35-route `/api/operations/v1` API and a
+32-route web UI (11 templates) sit on top, fully EN/AR localized. Full
+closure record: `docs/owner/phase9_5e/PHASE9-5E-EXPENSES-REPORTING-HANDOVER.md`.
+
+`flask commercial preflight` remains the single blocking gate -- Phase 9.5E
+extends it (14 operational-finance sub-checks), it does not add a second
+command.
+
 ## What this is NOT
 
 Not connected to Retail or Clinic. Not enforcing any license inside either
