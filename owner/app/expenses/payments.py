@@ -54,7 +54,7 @@ def record_expense_payment(
     idempotency_key: str | None = None,
 ) -> ExpensePayment:
     if expense.status not in ("APPROVED", "PARTIALLY_PAID"):
-        if expense.status in ("REJECTED", "VOID", "CANCELLED"):
+        if expense.status in ("PAID", "REJECTED", "VOID", "CANCELLED"):
             raise ExpenseError("EXPENSE_TERMINAL_STATE", status=expense.status)
         raise ExpenseError("EXPENSE_NOT_APPROVED")
 
