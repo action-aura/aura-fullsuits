@@ -143,3 +143,74 @@ def test_operational_finance_preflight_catches_invalid_expense_status(app, seede
         status_check = next(c for c in result.checks if c.name == "no_invalid_expense_status")
         assert status_check.status == "FAIL"
         assert result.ok is False
+
+
+def test_operational_finance_preflight_catches_corrupted_attachment_storage_key(app, seeded):
+    """Milestone 25: a real bypass-the-service-layer corruption of
+    ExpenseAttachment.storage_key (the exact field
+    app.expenses.attachments.read_attachment_bytes() trusts to be
+    traversal-safe) must be caught, not silently accepted."""
+    from app.commercial_ops.preflight import run_preflight
+    from app.expenses.lifecycle import create_expense
+    from app.expenses.payees import create_payee
+    from app.extensions import db_session
+    from app.models.expenses import ExpenseAttachment, ExpenseCategory
+    from app.models.base import utcnow
+
+    req_staff, req_profile = _seed_active_employee(app, "pf-attach-corrupt@example.com", ["SALES"])
+    with app.app_context():
+        category = ExpenseCategory(category_code="PFATTACH", name="Preflight Attachment Corrupt", is_active=True)
+        db_session.add(category)
+        db_session.commit()
+        payee = create_payee(payee_type="EXTERNAL", display_name="V", employee_profile_id=None, external_contact_reference=None, created_by_staff_user_id=req_staff)
+        expense = create_expense(
+            category_id=category.id, payee_id=payee.id, amount=Decimal("10.00"), currency="USD",
+            expense_date=date(2026, 8, 1), description="attachment corrupt test", external_reference=None,
+            payment_method="CASH", payment_reference=None, entered_by_employee_profile_id=req_profile,
+        )
+        # A direct INSERT bypassing upload_attachment() entirely -- the
+        # exact scenario a bad migration or manual DB fix would produce.
+        malicious = ExpenseAttachment(
+            expense_id=expense.id, storage_key="../../../../etc/passwd", original_filename="x",
+            content_type="application/pdf", content_hash="deadbeef", size_bytes=4, status="ACTIVE",
+            uploaded_by_employee_profile_id=req_profile, uploaded_at=utcnow(),
+        )
+        db_session.add(malicious)
+        db_session.commit()
+
+        result = run_preflight(key_directory=app.config["SIGNING_KEY_DIRECTORY"])
+        traversal_check = next(c for c in result.checks if c.name == "no_traversal_storage_key")
+        assert traversal_check.status == "FAIL"
+        assert result.ok is False
+
+
+def test_operational_finance_preflight_catches_duplicate_published_snapshot(app, seeded):
+    """Milestone 25: a real bypass of generate_snapshot()'s advisory lock +
+    unique constraint (two PUBLISHED rows for the same report key) must be
+    caught -- even though the real service layer already makes this
+    structurally very hard to reach, this is the production backstop."""
+    from app.commercial_ops.preflight import run_preflight
+    from app.expenses.errors import ExpenseError
+    from app.extensions import db_session
+    from app.models.report_snapshots import ReportSnapshot
+    from datetime import datetime, timezone
+    import uuid
+
+    with app.app_context():
+        # Two DIFFERENT snapshot_versions (so the real canonical-key unique
+        # constraint doesn't block the INSERT itself) both left PUBLISHED --
+        # the real corruption regenerate_snapshot()'s status-flip step is
+        # supposed to prevent (old row should always become SUPERSEDED).
+        for version in (1, 2):
+            db_session.add(ReportSnapshot(
+                id=uuid.uuid4(), report_type="DAILY_OPERATIONAL_SUMMARY", scope="GLOBAL",
+                period_start=date(2026, 8, 1), period_end=date(2026, 8, 1), currency="USD",
+                definition_version=1, snapshot_version=version, status="PUBLISHED", payload={},
+                generated_by="MANUAL", generated_by_staff_user_id=None, cutoff_at=datetime.now(timezone.utc),
+            ))
+        db_session.commit()
+
+        result = run_preflight(key_directory=app.config["SIGNING_KEY_DIRECTORY"])
+        dup_check = next(c for c in result.checks if c.name == "no_multiple_published_report_snapshots")
+        assert dup_check.status == "FAIL"
+        assert result.ok is False

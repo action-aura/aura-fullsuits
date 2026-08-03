@@ -643,6 +643,7 @@ def _check_operational_finance_domain_integrity(checks: list[PreflightCheck]) ->
         ExpensePayment,
     )
     from app.models.management_notes import MANAGEMENT_NOTE_STATUSES, MANAGEMENT_NOTE_VISIBILITIES, SharedManagementNote
+    from app.models.report_snapshots import ReportSnapshot
 
     ok = True
 
@@ -731,6 +732,92 @@ def _check_operational_finance_domain_integrity(checks: list[PreflightCheck]) ->
         ))
     else:
         checks.append(PreflightCheck("no_beneficiary_approved_expense", "OK", "No expense was approved by its own beneficiary."))
+
+    # --- Milestone 25: attachment integrity ---
+    from app.expenses.attachments import ALLOWED_CONTENT_TYPES
+
+    orphan_attachments = db_session.execute(
+        select(func.count(ExpenseAttachment.id))
+        .select_from(ExpenseAttachment)
+        .outerjoin(Expense, Expense.id == ExpenseAttachment.expense_id)
+        .where(Expense.id.is_(None))
+    ).scalar_one()
+    if orphan_attachments:
+        ok = False
+        checks.append(PreflightCheck("no_orphan_expense_attachment", "FAIL", f"{orphan_attachments} ExpenseAttachment row(s) reference a non-existent Expense."))
+    else:
+        checks.append(PreflightCheck("no_orphan_expense_attachment", "OK", "Every ExpenseAttachment references a real Expense."))
+
+    bad_mime = db_session.execute(
+        select(func.count(ExpenseAttachment.id)).where(ExpenseAttachment.content_type.notin_(list(ALLOWED_CONTENT_TYPES.keys())))
+    ).scalar_one()
+    if bad_mime:
+        ok = False
+        checks.append(PreflightCheck("no_unsupported_attachment_mime", "FAIL", f"{bad_mime} ExpenseAttachment row(s) have a content_type outside the allowlist."))
+    else:
+        checks.append(PreflightCheck("no_unsupported_attachment_mime", "OK", "Every ExpenseAttachment.content_type is within the allowlist."))
+
+    traversal_keys = 0
+    for storage_key in db_session.execute(select(ExpenseAttachment.storage_key)).scalars().all():
+        if ".." in storage_key or storage_key.startswith("/") or "\\" in storage_key:
+            traversal_keys += 1
+    if traversal_keys:
+        ok = False
+        checks.append(PreflightCheck("no_traversal_storage_key", "FAIL", f"{traversal_keys} ExpenseAttachment row(s) have a storage_key containing a traversal/absolute-path pattern."))
+    else:
+        checks.append(PreflightCheck("no_traversal_storage_key", "OK", "No ExpenseAttachment.storage_key contains a traversal or absolute-path pattern."))
+
+    # --- Milestone 25: scheduler/report-snapshot integrity ---
+    # The canonical-key/version uniqueness is already enforced by the real
+    # DB constraint (uq_report_snapshot_canonical_key) -- this check
+    # verifies that structural guarantee actually holds, the same
+    # defense-in-depth reasoning as every other check in this function.
+    dup_snapshots = db_session.execute(
+        select(
+            ReportSnapshot.report_type, ReportSnapshot.scope, ReportSnapshot.period_start, ReportSnapshot.period_end,
+            ReportSnapshot.currency, ReportSnapshot.definition_version, ReportSnapshot.snapshot_version, func.count(ReportSnapshot.id),
+        )
+        .group_by(
+            ReportSnapshot.report_type, ReportSnapshot.scope, ReportSnapshot.period_start, ReportSnapshot.period_end,
+            ReportSnapshot.currency, ReportSnapshot.definition_version, ReportSnapshot.snapshot_version,
+        )
+        .having(func.count(ReportSnapshot.id) > 1)
+    ).all()
+    if dup_snapshots:
+        ok = False
+        checks.append(PreflightCheck("no_duplicate_report_snapshot_canonical_key", "FAIL", f"{len(dup_snapshots)} canonical report-snapshot key(s) have more than one row."))
+    else:
+        checks.append(PreflightCheck("no_duplicate_report_snapshot_canonical_key", "OK", "Every report-snapshot canonical key has at most one row."))
+
+    multiple_published = db_session.execute(
+        select(
+            ReportSnapshot.report_type, ReportSnapshot.scope, ReportSnapshot.period_start, ReportSnapshot.period_end,
+            ReportSnapshot.currency, ReportSnapshot.definition_version, func.count(ReportSnapshot.id),
+        )
+        .where(ReportSnapshot.status == "PUBLISHED")
+        .group_by(
+            ReportSnapshot.report_type, ReportSnapshot.scope, ReportSnapshot.period_start, ReportSnapshot.period_end,
+            ReportSnapshot.currency, ReportSnapshot.definition_version,
+        )
+        .having(func.count(ReportSnapshot.id) > 1)
+    ).all()
+    if multiple_published:
+        ok = False
+        checks.append(PreflightCheck("no_multiple_published_report_snapshots", "FAIL", f"{len(multiple_published)} report key(s) have more than one PUBLISHED snapshot simultaneously."))
+    else:
+        checks.append(PreflightCheck("no_multiple_published_report_snapshots", "OK", "Every report key has at most one PUBLISHED snapshot."))
+
+    # --- Milestone 25: cash-closing uniqueness (structural backstop) ---
+    dup_closings = db_session.execute(
+        select(CashClosing.business_date, CashClosing.currency, func.count(CashClosing.id))
+        .group_by(CashClosing.business_date, CashClosing.currency)
+        .having(func.count(CashClosing.id) > 1)
+    ).all()
+    if dup_closings:
+        ok = False
+        checks.append(PreflightCheck("no_duplicate_active_cash_closing", "FAIL", f"{len(dup_closings)} (business_date, currency) scope(s) have more than one CashClosing row."))
+    else:
+        checks.append(PreflightCheck("no_duplicate_active_cash_closing", "OK", "Every (business_date, currency) scope has at most one CashClosing row."))
 
     return ok
 
