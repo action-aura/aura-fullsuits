@@ -140,7 +140,11 @@ def test_report_snapshots_page_renders(app, client, seeded):
 
 
 def test_management_notes_web_flow(app, client, seeded):
-    staff = make_staff(app, "web5@example.com", role_codes=["FINANCE"])
+    # management_notes.manage is SUPER_ADMIN-only (Phase 9.5A's explicit,
+    # documented commitment -- see app/staff/seed_data.py's FINANCE comment
+    # and management-notes-manage-rbac-correction.md); FINANCE holds only
+    # management_notes.view.
+    staff = make_staff(app, "web5@example.com", super_admin=True)
     _make_profile(app, staff)
     force_login(client, app, staff)
 

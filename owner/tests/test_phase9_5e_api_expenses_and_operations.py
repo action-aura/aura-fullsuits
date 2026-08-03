@@ -341,7 +341,9 @@ def test_report_snapshot_regenerate_requires_permission_via_api(app, client, see
 
 
 def test_management_note_hidden_from_unauthorized_employee_via_api(app, client, seeded):
-    staff_manager = make_staff(app, "eapi11a@example.com", role_codes=["FINANCE"])
+    # management_notes.manage is SUPER_ADMIN-only (Phase 9.5A's explicit,
+    # documented commitment); FINANCE holds only management_notes.view.
+    staff_manager = make_staff(app, "eapi11a@example.com", super_admin=True)
     staff_other = make_staff(app, "eapi11b@example.com", role_codes=["SALES"])
     _make_profile(app, staff_manager)
     _make_profile(app, staff_other)

@@ -38,6 +38,10 @@ def test_full_local_e2e_expense_to_closing_to_report_to_note(app, client, seeded
     staff_mgmt, profile_mgmt = _seed_active_employee(app, "e2eMgmt@example.com", ["FINANCE"])
     staff_appr2, profile_appr2 = _seed_active_employee(app, "e2eAppr2@example.com", ["FINANCE"])
     staff_other, profile_other = _seed_active_employee(app, "e2eOther@example.com", ["SALES"])
+    # management_notes.manage is SUPER_ADMIN-only (Phase 9.5A's explicit,
+    # documented commitment); FINANCE (staff_mgmt/staff_appr2 above) holds
+    # only management_notes.view.
+    staff_super = make_staff(app, "e2eSuper@example.com", super_admin=True)
 
     # -- Payee + category setup (via management) --
     force_login(client, app, staff_mgmt)
@@ -192,7 +196,9 @@ def test_full_local_e2e_expense_to_closing_to_report_to_note(app, client, seeded
     assert resp.get_json()["snapshot_version"] == 2
 
     # 52-57: Management note create/assign/resolve, isolation from an
-    # unrelated employee.
+    # unrelated employee. management_notes.manage is SUPER_ADMIN-only.
+    force_login(client, app, staff_super)
+    csrf = _csrf(client)
     resp = client.post(
         "/api/operations/v1/management-notes",
         json={"title": "E2E follow-up", "body": "verify vendor invoice", "priority": "HIGH", "visibility": "MANAGEMENT_ONLY"},

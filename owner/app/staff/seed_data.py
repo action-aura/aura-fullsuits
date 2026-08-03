@@ -275,7 +275,17 @@ ROLES: dict[str, dict] = {
             # owns Cash Closing preparation/approval, payee management, and
             # scheduled-report regeneration -- the same category of authority
             # it already exercises for invoices/refunds/commissions/expenses.
-            "management_notes.view", "management_notes.manage",
+            # management_notes.manage is deliberately NOT granted here -- a
+            # real Milestone 26 regression caught this module's own earlier
+            # grant of it violating Phase 9.5A's explicit, documented
+            # SUPER_ADMIN-only commitment for that exact permission
+            # (sensitive-action-control-matrix.md: "management notes being
+            # inherently a management-only concept"; enforced by
+            # test_phase9_5a_rbac_restrictions.py::test_sensitive_permissions_not_granted_below_super_admin).
+            # Finance keeps management_notes.view (reading notes addressed
+            # to it is not the same authority as creating/editing/archiving
+            # them); see management-notes-manage-rbac-correction.md.
+            "management_notes.view",
             "reports.regenerate_daily",
             "expenses.manage_payees",
             "cash_closing.prepare", "cash_closing.view_own", "cash_closing.view_all",
