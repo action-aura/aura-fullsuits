@@ -1,0 +1,31 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Finance Dashboard") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _("Finance Dashboard") }} (<bdi dir="ltr">{{ currency }}</bdi>)</h2>
+  <form method="get">
+    <label>{{ _("Currency") }}</label>
+    <input name="currency" value="{{ currency }}" maxlength="3" onchange="this.form.submit()">
+  </form>
+  <table class="responsive-table">
+    <tbody>
+      <tr><td>{{ _("Expense approvals pending") }}</td><td>{{ data.expense_approvals_pending }}</td></tr>
+      <tr><td>{{ _("Approved unpaid Expenses") }}</td><td>{{ data.approved_unpaid_expenses }}</td></tr>
+      <tr><td>{{ _("Expense-payment queue") }}</td><td>{{ data.expense_payment_queue }}</td></tr>
+      <tr><td>{{ _("Partial settlements") }}</td><td>{{ data.partial_settlements }}</td></tr>
+      <tr><td>{{ _("Closing-variance queue") }}</td><td>{{ data.closing_variance_queue_count }}</td></tr>
+      <tr><td>{{ _("Payment confirmations pending") }}</td><td>{{ data.payment_confirmations_pending }}</td></tr>
+      <tr><td>{{ _("Unallocated Payments") }}</td><td>{{ format_owner_number(data.unallocated_payments_total) }} {{ currency }}</td></tr>
+      <tr><td>{{ _("Refund queue") }}</td><td>{{ data.refund_queue_count }}</td></tr>
+      <tr><td>{{ _("Commission-payout queue") }}</td><td>{{ data.commission_payout_queue_count }}</td></tr>
+      <tr><td><strong>{{ _("Net operational cash movement") }}</strong></td><td><strong>{{ format_owner_number(data.net_operational_cash_movement) }} {{ currency }}</strong></td></tr>
+    </tbody>
+  </table>
+  {% if data.daily_cash_closing %}
+  <h3>{{ _("Today's Cash Closing") }}</h3>
+  <p><a href="{{ url_for('operations_ui.closing_detail', closing_id=data.daily_cash_closing.id) }}">{{ cash_closing_status_label(data.daily_cash_closing.status) }}</a></p>
+  {% else %}
+  <p class="empty">{{ _("No cash closing created for today yet.") }}</p>
+  {% endif %}
+</div>
+{% endblock %}

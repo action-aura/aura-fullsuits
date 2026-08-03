@@ -763,3 +763,36 @@ def add_management_note_comment_route(note_id):
     except ManagementNoteError as exc:
         return _note_error(exc)
     return jsonify({"id": str(comment.id), "body": comment.body, "created_at": _iso(comment.created_at)}), 201
+
+
+# ------------------------------------------------------------- Dashboards --
+# Phase 9.5E Milestone 12. Every metric delegates to
+# app.operational_reports.dashboards / .aggregation -- no calculation here.
+
+@bp.route("/dashboards/employee-expenses", methods=["GET"])
+@require_permission("dashboard.view_own")
+def employee_expense_dashboard_route():
+    from app.operational_reports.dashboards import employee_expense_dashboard
+
+    staff, profile = _actor()
+    if profile is None:
+        return jsonify({"error": "EMPLOYEE_PROFILE_REQUIRED"}), 400
+    return jsonify(employee_expense_dashboard(profile.id))
+
+
+@bp.route("/dashboards/management-operations", methods=["GET"])
+@require_permission("dashboard.view_all")
+def management_operational_dashboard_route():
+    from app.operational_reports.dashboards import management_operational_dashboard
+
+    currency = request.args.get("currency", "USD")
+    return jsonify(management_operational_dashboard(currency))
+
+
+@bp.route("/dashboards/finance-operations", methods=["GET"])
+@require_permission("dashboard.view_all")
+def finance_operational_dashboard_route():
+    from app.operational_reports.dashboards import finance_operational_dashboard
+
+    currency = request.args.get("currency", "USD")
+    return jsonify(finance_operational_dashboard(currency))

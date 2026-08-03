@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-08-03 07:32+0300\n"
+"POT-Creation-Date: 2026-08-03 08:31+0300\n"
 "PO-Revision-Date: 2026-08-01 11:16+0300\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -205,12 +205,12 @@ msgid "Recovery code used"
 msgstr "Recovery code used"
 
 #: app/i18n_labels.py:103 app/templates/audit/security_events.html:7
-#: app/templates/layout/base.html:122 app/templates/staff/list.html:2
+#: app/templates/layout/base.html:125 app/templates/staff/list.html:2
 msgid "Staff"
 msgstr "Staff"
 
 #: app/i18n_labels.py:104 app/templates/employees/list.html:2
-#: app/templates/employees/list.html:5 app/templates/layout/base.html:123
+#: app/templates/employees/list.html:5 app/templates/layout/base.html:126
 msgid "Employees"
 msgstr "Employees"
 
@@ -2130,7 +2130,7 @@ msgstr "Code"
 msgid "Name"
 msgstr "Name"
 
-#: app/templates/catalog/index.html:2 app/templates/layout/base.html:111
+#: app/templates/catalog/index.html:2 app/templates/layout/base.html:114
 msgid "Catalog"
 msgstr "Catalog"
 
@@ -2331,6 +2331,8 @@ msgstr "Base price"
 #: app/templates/commercial_sales/quote_detail.html:8
 #: app/templates/commercial_sales/quote_new.html:13
 #: app/templates/operations_ui/cash_closing_new.html:11
+#: app/templates/operations_ui/dashboard_finance.html:7
+#: app/templates/operations_ui/dashboard_management.html:7
 #: app/templates/operations_ui/expense_new.html:19
 #: app/templates/operations_ui/report_snapshots_list.html:7
 #: app/templates/operations_ui/report_snapshots_list.html:13
@@ -2664,7 +2666,7 @@ msgid "%(entity)s not found."
 msgstr "%(entity)s not found."
 
 #: app/templates/commercial_ops/notifications_list.html:2
-#: app/templates/layout/base.html:119
+#: app/templates/layout/base.html:122
 msgid "Notifications"
 msgstr "Notifications"
 
@@ -3034,7 +3036,7 @@ msgstr "No status changes yet."
 
 #: app/templates/commercial_ops/pilots_list.html:2
 #: app/templates/commercial_ops/pilots_list.html:5
-#: app/templates/layout/base.html:116
+#: app/templates/layout/base.html:119
 msgid "Pilots"
 msgstr "Pilots"
 
@@ -3111,7 +3113,7 @@ msgstr "Nothing here right now."
 
 #: app/templates/commercial_ops/reconciliation.html:2
 #: app/templates/commercial_ops/reconciliation.html:5
-#: app/templates/layout/base.html:121
+#: app/templates/layout/base.html:124
 msgid "Reconciliation"
 msgstr "Reconciliation"
 
@@ -3270,7 +3272,7 @@ msgid "Apply renewal"
 msgstr "Apply renewal"
 
 #: app/templates/commercial_ops/renewals_list.html:2
-#: app/templates/layout/base.html:115
+#: app/templates/layout/base.html:118
 msgid "Renewals"
 msgstr "Renewals"
 
@@ -4644,7 +4646,7 @@ msgid "No activation events yet."
 msgstr "No activation events yet."
 
 #: app/templates/installations/list.html:2
-#: app/templates/installations/list.html:6 app/templates/layout/base.html:114
+#: app/templates/installations/list.html:6 app/templates/layout/base.html:117
 msgid "Installations"
 msgstr "Installations"
 
@@ -4709,6 +4711,8 @@ msgid "Commercial Dashboard"
 msgstr "Commercial Dashboard"
 
 #: app/templates/layout/base.html:105
+#: app/templates/operations_ui/dashboard_finance.html:2
+#: app/templates/operations_ui/dashboard_finance.html:5
 msgid "Finance Dashboard"
 msgstr "Finance Dashboard"
 
@@ -4742,53 +4746,67 @@ msgstr "Operational Reports"
 msgid "Management Notes"
 msgstr "Management Notes"
 
-#: app/templates/layout/base.html:112 app/templates/subscriptions/list.html:2
+#: app/templates/layout/base.html:111
+#: app/templates/operations_ui/dashboard_employee.html:2
+#: app/templates/operations_ui/dashboard_employee.html:5
+msgid "My Expense Dashboard"
+msgstr "My Expense Dashboard"
+
+#: app/templates/layout/base.html:112
+msgid "Operational Management Dashboard"
+msgstr "Operational Management Dashboard"
+
+#: app/templates/layout/base.html:113
+msgid "Operational Finance Dashboard"
+msgstr "Operational Finance Dashboard"
+
+#: app/templates/layout/base.html:115 app/templates/subscriptions/list.html:2
 #: app/templates/subscriptions/list.html:6
 msgid "Subscriptions"
 msgstr "Subscriptions"
 
-#: app/templates/layout/base.html:113 app/templates/licensing/list.html:2
+#: app/templates/layout/base.html:116 app/templates/licensing/list.html:2
 #: app/templates/licensing/list.html:6
 msgid "Licenses"
 msgstr "Licenses"
 
-#: app/templates/layout/base.html:117
+#: app/templates/layout/base.html:120
 msgid "Emergency Ext."
 msgstr "Emergency Ext."
 
-#: app/templates/layout/base.html:118
+#: app/templates/layout/base.html:121
 msgid "Activation Reviews"
 msgstr "Activation Reviews"
 
-#: app/templates/layout/base.html:120
+#: app/templates/layout/base.html:123
 msgid "My Queue"
 msgstr "My Queue"
 
-#: app/templates/layout/base.html:124
+#: app/templates/layout/base.html:127
 msgid "Employee Dashboard"
 msgstr "Employee Dashboard"
 
-#: app/templates/layout/base.html:125
+#: app/templates/layout/base.html:128
 msgid "Audit Log"
 msgstr "Audit Log"
 
-#: app/templates/layout/base.html:126
+#: app/templates/layout/base.html:129
 msgid "Security Events"
 msgstr "Security Events"
 
-#: app/templates/layout/base.html:127
+#: app/templates/layout/base.html:130
 msgid "Backups"
 msgstr "Backups"
 
-#: app/templates/layout/base.html:128
+#: app/templates/layout/base.html:131
 msgid "Activation Service"
 msgstr "Activation Service"
 
-#: app/templates/layout/base.html:129
+#: app/templates/layout/base.html:132
 msgid "My Profile"
 msgstr "My Profile"
 
-#: app/templates/layout/base.html:130
+#: app/templates/layout/base.html:133
 msgid "Account"
 msgstr "Account"
 
@@ -5287,6 +5305,134 @@ msgstr "Expected"
 #: app/templates/operations_ui/cash_closings_list.html:19
 msgid "No cash closings yet."
 msgstr "No cash closings yet."
+
+#: app/templates/operations_ui/dashboard_employee.html:11
+msgid "Approved unpaid"
+msgstr "Approved unpaid"
+
+#: app/templates/operations_ui/dashboard_employee.html:15
+msgid "Required actions"
+msgstr "Required actions"
+
+#: app/templates/operations_ui/dashboard_employee.html:18
+msgid "View my expenses"
+msgstr "View my expenses"
+
+#: app/templates/operations_ui/dashboard_finance.html:12
+msgid "Expense approvals pending"
+msgstr "Expense approvals pending"
+
+#: app/templates/operations_ui/dashboard_finance.html:13
+#: app/templates/operations_ui/dashboard_management.html:26
+msgid "Approved unpaid Expenses"
+msgstr "Approved unpaid Expenses"
+
+#: app/templates/operations_ui/dashboard_finance.html:14
+msgid "Expense-payment queue"
+msgstr "Expense-payment queue"
+
+#: app/templates/operations_ui/dashboard_finance.html:15
+msgid "Partial settlements"
+msgstr "Partial settlements"
+
+#: app/templates/operations_ui/dashboard_finance.html:16
+#: app/templates/operations_ui/dashboard_management.html:28
+msgid "Closing-variance queue"
+msgstr "Closing-variance queue"
+
+#: app/templates/operations_ui/dashboard_finance.html:17
+msgid "Payment confirmations pending"
+msgstr "Payment confirmations pending"
+
+#: app/templates/operations_ui/dashboard_finance.html:18
+msgid "Unallocated Payments"
+msgstr "Unallocated Payments"
+
+#: app/templates/operations_ui/dashboard_finance.html:19
+msgid "Refund queue"
+msgstr "Refund queue"
+
+#: app/templates/operations_ui/dashboard_finance.html:20
+msgid "Commission-payout queue"
+msgstr "Commission-payout queue"
+
+#: app/templates/operations_ui/dashboard_finance.html:21
+#: app/templates/operations_ui/dashboard_management.html:42
+msgid "Net operational cash movement"
+msgstr "Net operational cash movement"
+
+#: app/templates/operations_ui/dashboard_finance.html:25
+msgid "Today's Cash Closing"
+msgstr "Today's Cash Closing"
+
+#: app/templates/operations_ui/dashboard_finance.html:28
+msgid "No cash closing created for today yet."
+msgstr "No cash closing created for today yet."
+
+#: app/templates/operations_ui/dashboard_management.html:2
+#: app/templates/operations_ui/dashboard_management.html:5
+msgid "Management Dashboard"
+msgstr "Management Dashboard"
+
+#: app/templates/operations_ui/dashboard_management.html:11
+msgid "Expense totals by Category"
+msgstr "Expense totals by Category"
+
+#: app/templates/operations_ui/dashboard_management.html:16
+msgid "No data."
+msgstr "No data."
+
+#: app/templates/operations_ui/dashboard_management.html:21
+msgid "Queues"
+msgstr "Queues"
+
+#: app/templates/operations_ui/dashboard_management.html:24
+msgid "Approval queue"
+msgstr "Approval queue"
+
+#: app/templates/operations_ui/dashboard_management.html:25
+msgid "Duplicate-review queue"
+msgstr "Duplicate-review queue"
+
+#: app/templates/operations_ui/dashboard_management.html:27
+msgid "Partially paid Expenses"
+msgstr "Partially paid Expenses"
+
+#: app/templates/operations_ui/dashboard_management.html:29
+msgid "Overdue Invoices"
+msgstr "Overdue Invoices"
+
+#: app/templates/operations_ui/dashboard_management.html:30
+msgid "Fulfillment exceptions"
+msgstr "Fulfillment exceptions"
+
+#: app/templates/operations_ui/dashboard_management.html:31
+msgid "Management Notes requiring action"
+msgstr "Management Notes requiring action"
+
+#: app/templates/operations_ui/dashboard_management.html:35
+msgid "Operational cash movement (month to date)"
+msgstr "Operational cash movement (month to date)"
+
+#: app/templates/operations_ui/dashboard_management.html:38
+msgid "Confirmed collections"
+msgstr "Confirmed collections"
+
+#: app/templates/operations_ui/dashboard_management.html:39
+msgid "Confirmed Refunds"
+msgstr "Confirmed Refunds"
+
+#: app/templates/operations_ui/dashboard_management.html:40
+msgid "Paid Expenses"
+msgstr "Paid Expenses"
+
+#: app/templates/operations_ui/dashboard_management.html:41
+msgid "Recorded Commission payouts"
+msgstr "Recorded Commission payouts"
+
+#: app/templates/operations_ui/dashboard_management.html:43
+msgid "Outstanding Receivables"
+msgstr "Outstanding Receivables"
 
 #: app/templates/operations_ui/expense_detail.html:2
 msgid "Expense"

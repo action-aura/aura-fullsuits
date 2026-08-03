@@ -550,3 +550,37 @@ def add_comment_route(note_id):
     except ManagementNoteError as exc:
         flash(localize_management_note_error(exc.code, **exc.params), "error")
     return redirect(url_for("operations_ui.note_detail", note_id=note_id))
+
+
+# ------------------------------------------------------------- Dashboards --
+
+@bp.route("/dashboard/employee-expenses", methods=["GET"])
+@require_permission("dashboard.view_own")
+def employee_expense_dashboard_view():
+    from app.operational_reports.dashboards import employee_expense_dashboard
+
+    staff, profile = _actor()
+    if profile is None:
+        return render_template("commercial_sales/not_found.html"), 404
+    data = employee_expense_dashboard(profile.id)
+    return render_template("operations_ui/dashboard_employee.html", data=data)
+
+
+@bp.route("/dashboard/management-operations", methods=["GET"])
+@require_permission("dashboard.view_all")
+def management_operational_dashboard_view():
+    from app.operational_reports.dashboards import management_operational_dashboard
+
+    currency = request.args.get("currency", "USD")
+    data = management_operational_dashboard(currency)
+    return render_template("operations_ui/dashboard_management.html", data=data, currency=currency)
+
+
+@bp.route("/dashboard/finance-operations", methods=["GET"])
+@require_permission("dashboard.view_all")
+def finance_operational_dashboard_view():
+    from app.operational_reports.dashboards import finance_operational_dashboard
+
+    currency = request.args.get("currency", "USD")
+    data = finance_operational_dashboard(currency)
+    return render_template("operations_ui/dashboard_finance.html", data=data, currency=currency)

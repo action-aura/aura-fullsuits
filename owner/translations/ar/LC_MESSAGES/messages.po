@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-08-03 07:32+0300\n"
+"POT-Creation-Date: 2026-08-03 08:31+0300\n"
 "PO-Revision-Date: 2026-08-01 11:16+0300\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: ar\n"
@@ -205,12 +205,12 @@ msgid "Recovery code used"
 msgstr "تم استخدام رمز الاسترداد"
 
 #: app/i18n_labels.py:103 app/templates/audit/security_events.html:7
-#: app/templates/layout/base.html:122 app/templates/staff/list.html:2
+#: app/templates/layout/base.html:125 app/templates/staff/list.html:2
 msgid "Staff"
 msgstr "الموظفون الإداريون"
 
 #: app/i18n_labels.py:104 app/templates/employees/list.html:2
-#: app/templates/employees/list.html:5 app/templates/layout/base.html:123
+#: app/templates/employees/list.html:5 app/templates/layout/base.html:126
 msgid "Employees"
 msgstr "الموظفون"
 
@@ -2130,7 +2130,7 @@ msgstr "الرمز"
 msgid "Name"
 msgstr "الاسم"
 
-#: app/templates/catalog/index.html:2 app/templates/layout/base.html:111
+#: app/templates/catalog/index.html:2 app/templates/layout/base.html:114
 msgid "Catalog"
 msgstr "الكتالوج"
 
@@ -2331,6 +2331,8 @@ msgstr "السعر الأساسي"
 #: app/templates/commercial_sales/quote_detail.html:8
 #: app/templates/commercial_sales/quote_new.html:13
 #: app/templates/operations_ui/cash_closing_new.html:11
+#: app/templates/operations_ui/dashboard_finance.html:7
+#: app/templates/operations_ui/dashboard_management.html:7
 #: app/templates/operations_ui/expense_new.html:19
 #: app/templates/operations_ui/report_snapshots_list.html:7
 #: app/templates/operations_ui/report_snapshots_list.html:13
@@ -2664,7 +2666,7 @@ msgid "%(entity)s not found."
 msgstr "%(entity)s غير موجود."
 
 #: app/templates/commercial_ops/notifications_list.html:2
-#: app/templates/layout/base.html:119
+#: app/templates/layout/base.html:122
 msgid "Notifications"
 msgstr "الإشعارات"
 
@@ -3034,7 +3036,7 @@ msgstr "لا توجد تغييرات حالة بعد."
 
 #: app/templates/commercial_ops/pilots_list.html:2
 #: app/templates/commercial_ops/pilots_list.html:5
-#: app/templates/layout/base.html:116
+#: app/templates/layout/base.html:119
 msgid "Pilots"
 msgstr "التجارب التشغيلية"
 
@@ -3111,7 +3113,7 @@ msgstr "لا يوجد شيء هنا حاليًا."
 
 #: app/templates/commercial_ops/reconciliation.html:2
 #: app/templates/commercial_ops/reconciliation.html:5
-#: app/templates/layout/base.html:121
+#: app/templates/layout/base.html:124
 msgid "Reconciliation"
 msgstr "التسوية"
 
@@ -3270,7 +3272,7 @@ msgid "Apply renewal"
 msgstr "تطبيق التجديد"
 
 #: app/templates/commercial_ops/renewals_list.html:2
-#: app/templates/layout/base.html:115
+#: app/templates/layout/base.html:118
 msgid "Renewals"
 msgstr "التجديدات"
 
@@ -4644,7 +4646,7 @@ msgid "No activation events yet."
 msgstr "لا توجد أحداث تفعيل بعد."
 
 #: app/templates/installations/list.html:2
-#: app/templates/installations/list.html:6 app/templates/layout/base.html:114
+#: app/templates/installations/list.html:6 app/templates/layout/base.html:117
 msgid "Installations"
 msgstr "التثبيتات"
 
@@ -4709,6 +4711,8 @@ msgid "Commercial Dashboard"
 msgstr "اللوحة التجارية"
 
 #: app/templates/layout/base.html:105
+#: app/templates/operations_ui/dashboard_finance.html:2
+#: app/templates/operations_ui/dashboard_finance.html:5
 msgid "Finance Dashboard"
 msgstr "لوحة المالية"
 
@@ -4742,53 +4746,67 @@ msgstr "التقارير التشغيلية"
 msgid "Management Notes"
 msgstr "ملاحظات الإدارة"
 
-#: app/templates/layout/base.html:112 app/templates/subscriptions/list.html:2
+#: app/templates/layout/base.html:111
+#: app/templates/operations_ui/dashboard_employee.html:2
+#: app/templates/operations_ui/dashboard_employee.html:5
+msgid "My Expense Dashboard"
+msgstr "لوحة مصروفاتي"
+
+#: app/templates/layout/base.html:112
+msgid "Operational Management Dashboard"
+msgstr "لوحة الإدارة التشغيلية"
+
+#: app/templates/layout/base.html:113
+msgid "Operational Finance Dashboard"
+msgstr "لوحة المالية التشغيلية"
+
+#: app/templates/layout/base.html:115 app/templates/subscriptions/list.html:2
 #: app/templates/subscriptions/list.html:6
 msgid "Subscriptions"
 msgstr "الاشتراكات"
 
-#: app/templates/layout/base.html:113 app/templates/licensing/list.html:2
+#: app/templates/layout/base.html:116 app/templates/licensing/list.html:2
 #: app/templates/licensing/list.html:6
 msgid "Licenses"
 msgstr "التراخيص"
 
-#: app/templates/layout/base.html:117
+#: app/templates/layout/base.html:120
 msgid "Emergency Ext."
 msgstr "التمديد الطارئ"
 
-#: app/templates/layout/base.html:118
+#: app/templates/layout/base.html:121
 msgid "Activation Reviews"
 msgstr "مراجعات التفعيل"
 
-#: app/templates/layout/base.html:120
+#: app/templates/layout/base.html:123
 msgid "My Queue"
 msgstr "قائمة مهامي"
 
-#: app/templates/layout/base.html:124
+#: app/templates/layout/base.html:127
 msgid "Employee Dashboard"
 msgstr "لوحة تحكم الموظفين"
 
-#: app/templates/layout/base.html:125
+#: app/templates/layout/base.html:128
 msgid "Audit Log"
 msgstr "سجل التدقيق"
 
-#: app/templates/layout/base.html:126
+#: app/templates/layout/base.html:129
 msgid "Security Events"
 msgstr "أحداث الأمان"
 
-#: app/templates/layout/base.html:127
+#: app/templates/layout/base.html:130
 msgid "Backups"
 msgstr "النسخ الاحتياطية"
 
-#: app/templates/layout/base.html:128
+#: app/templates/layout/base.html:131
 msgid "Activation Service"
 msgstr "خدمة التفعيل"
 
-#: app/templates/layout/base.html:129
+#: app/templates/layout/base.html:132
 msgid "My Profile"
 msgstr "ملفي الشخصي"
 
-#: app/templates/layout/base.html:130
+#: app/templates/layout/base.html:133
 msgid "Account"
 msgstr "الحساب"
 
@@ -5287,6 +5305,134 @@ msgstr "المتوقع"
 #: app/templates/operations_ui/cash_closings_list.html:19
 msgid "No cash closings yet."
 msgstr "لا توجد إقفالات نقدية بعد."
+
+#: app/templates/operations_ui/dashboard_employee.html:11
+msgid "Approved unpaid"
+msgstr "معتمد غير مدفوع"
+
+#: app/templates/operations_ui/dashboard_employee.html:15
+msgid "Required actions"
+msgstr "إجراءات مطلوبة"
+
+#: app/templates/operations_ui/dashboard_employee.html:18
+msgid "View my expenses"
+msgstr "عرض مصروفاتي"
+
+#: app/templates/operations_ui/dashboard_finance.html:12
+msgid "Expense approvals pending"
+msgstr "اعتمادات مصروفات معلقة"
+
+#: app/templates/operations_ui/dashboard_finance.html:13
+#: app/templates/operations_ui/dashboard_management.html:26
+msgid "Approved unpaid Expenses"
+msgstr "مصروفات معتمدة غير مدفوعة"
+
+#: app/templates/operations_ui/dashboard_finance.html:14
+msgid "Expense-payment queue"
+msgstr "قائمة دفع المصروفات"
+
+#: app/templates/operations_ui/dashboard_finance.html:15
+msgid "Partial settlements"
+msgstr "تسويات جزئية"
+
+#: app/templates/operations_ui/dashboard_finance.html:16
+#: app/templates/operations_ui/dashboard_management.html:28
+msgid "Closing-variance queue"
+msgstr "قائمة فروقات الإقفال"
+
+#: app/templates/operations_ui/dashboard_finance.html:17
+msgid "Payment confirmations pending"
+msgstr "تأكيدات دفعات معلقة"
+
+#: app/templates/operations_ui/dashboard_finance.html:18
+msgid "Unallocated Payments"
+msgstr "دفعات غير موزعة"
+
+#: app/templates/operations_ui/dashboard_finance.html:19
+msgid "Refund queue"
+msgstr "قائمة المبالغ المستردة"
+
+#: app/templates/operations_ui/dashboard_finance.html:20
+msgid "Commission-payout queue"
+msgstr "قائمة دفعات العمولات"
+
+#: app/templates/operations_ui/dashboard_finance.html:21
+#: app/templates/operations_ui/dashboard_management.html:42
+msgid "Net operational cash movement"
+msgstr "صافي الحركة النقدية التشغيلية"
+
+#: app/templates/operations_ui/dashboard_finance.html:25
+msgid "Today's Cash Closing"
+msgstr "الإقفال النقدي لليوم"
+
+#: app/templates/operations_ui/dashboard_finance.html:28
+msgid "No cash closing created for today yet."
+msgstr "لم يتم إنشاء إقفال نقدي لليوم بعد."
+
+#: app/templates/operations_ui/dashboard_management.html:2
+#: app/templates/operations_ui/dashboard_management.html:5
+msgid "Management Dashboard"
+msgstr "لوحة الإدارة"
+
+#: app/templates/operations_ui/dashboard_management.html:11
+msgid "Expense totals by Category"
+msgstr "إجماليات المصروفات حسب الفئة"
+
+#: app/templates/operations_ui/dashboard_management.html:16
+msgid "No data."
+msgstr "لا توجد بيانات."
+
+#: app/templates/operations_ui/dashboard_management.html:21
+msgid "Queues"
+msgstr "القوائم"
+
+#: app/templates/operations_ui/dashboard_management.html:24
+msgid "Approval queue"
+msgstr "قائمة الاعتماد"
+
+#: app/templates/operations_ui/dashboard_management.html:25
+msgid "Duplicate-review queue"
+msgstr "قائمة مراجعة التكرار"
+
+#: app/templates/operations_ui/dashboard_management.html:27
+msgid "Partially paid Expenses"
+msgstr "مصروفات مدفوعة جزئيًا"
+
+#: app/templates/operations_ui/dashboard_management.html:29
+msgid "Overdue Invoices"
+msgstr "فواتير متأخرة السداد"
+
+#: app/templates/operations_ui/dashboard_management.html:30
+msgid "Fulfillment exceptions"
+msgstr "استثناءات التنفيذ"
+
+#: app/templates/operations_ui/dashboard_management.html:31
+msgid "Management Notes requiring action"
+msgstr "ملاحظات إدارية تتطلب إجراءً"
+
+#: app/templates/operations_ui/dashboard_management.html:35
+msgid "Operational cash movement (month to date)"
+msgstr "الحركة النقدية التشغيلية (من بداية الشهر حتى اليوم)"
+
+#: app/templates/operations_ui/dashboard_management.html:38
+msgid "Confirmed collections"
+msgstr "التحصيلات المؤكدة"
+
+#: app/templates/operations_ui/dashboard_management.html:39
+msgid "Confirmed Refunds"
+msgstr "المبالغ المستردة المؤكدة"
+
+#: app/templates/operations_ui/dashboard_management.html:40
+msgid "Paid Expenses"
+msgstr "المصروفات المدفوعة"
+
+#: app/templates/operations_ui/dashboard_management.html:41
+msgid "Recorded Commission payouts"
+msgstr "دفعات العمولات المسجلة"
+
+#: app/templates/operations_ui/dashboard_management.html:43
+msgid "Outstanding Receivables"
+msgstr "الذمم المدينة المستحقة"
 
 #: app/templates/operations_ui/expense_detail.html:2
 msgid "Expense"

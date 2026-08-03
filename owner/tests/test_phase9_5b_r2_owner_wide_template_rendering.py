@@ -69,6 +69,13 @@ NO_FIXTURE_ROUTES = [
     "/operations/report-snapshots",
     "/operations/management-notes",
     "/operations/management-notes/new",
+    "/operations/dashboard/management-operations",
+    "/operations/dashboard/finance-operations",
+    # /operations/dashboard/employee-expenses deliberately excluded: it
+    # requires a real EmployeeProfile (dashboard.view_own is a personal-
+    # scope dashboard, not a global one), and the SUPER_ADMIN account this
+    # test uses has none -- covered instead by
+    # test_phase9_5e_dashboards.py's dedicated employee-profile fixture.
 ]
 
 
