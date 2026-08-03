@@ -3,9 +3,11 @@ info:
   title: Aura Owner Operations API
   version: 1.0.0
   description: 'Phase 9.5A foundation contract for the commercial-operations / employee-portal / admin-portal
-    surface. Distinct from /api/licensing/v1 (external product licensing, unchanged). Every path in this
-    document is x-status: planned -- none are routed in owner/app/__init__.py this phase (foundation/contract
-    only, per the governing instruction''s explicit "mobile-ready, not mobile-built" boundary).
+    surface, extended by Phase 9.5D (Commercial Sales) and Phase 9.5E (Expenses/Payees/Cash-Closing/
+    Report-Snapshots/Management-Notes). Distinct from /api/licensing/v1 (external product licensing,
+    unchanged). x-status distinguishes planned (foundation-only, not routed) from implemented (real route
+    in owner/app/__init__.py, documented from actual behavior -- see each path''s own docstring reference).
+    Mobile auth (/auth/mobile/*) remains planned; mobile-ready schema, mobile app not built.
 
     '
 servers:
@@ -381,9 +383,24 @@ paths:
           $ref: '#/components/responses/Error'
           description: Error response
   /expenses:
+    get:
+      x-status: implemented
+      summary: List own (expenses.view_own) or all (expenses.view_all) expenses, optional ?status= filter
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rows:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Expense'
+          description: Successful response
     post:
-      x-status: planned
-      summary: Submit an expense (expenses.create)
+      x-status: implemented
+      summary: Create a DRAFT expense (expenses.create)
       requestBody:
         required: true
         content:
@@ -397,6 +414,342 @@ paths:
               schema:
                 $ref: '#/components/schemas/Expense'
           description: Successful response
+        '400':
+          $ref: '#/components/responses/StableCodeError'
+  /expenses/{expense_id}:
+    parameters:
+    - name: expense_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    get:
+      x-status: implemented
+      summary: Get one expense (fail-closed 404 if not owned and expenses.view_all not held)
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Expense'
+          description: Successful response
+        '404':
+          $ref: '#/components/responses/StableCodeError'
+  /expenses/{expense_id}/submit:
+    parameters:
+    - name: expense_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      x-status: implemented
+      summary: DRAFT/RETURNED -> SUBMITTED. Opens a new PENDING approval cycle with a freshly captured fingerprint.
+      responses:
+        '200': {content: {application/json: {schema: {$ref: '#/components/schemas/Expense'}}}, description: Successful response}
+  /expenses/{expense_id}/revise:
+    parameters:
+    - name: expense_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      x-status: implemented
+      summary: Only valid from RETURNED. Any material field changed here invalidates the prior approval fingerprint.
+      responses:
+        '200': {content: {application/json: {schema: {$ref: '#/components/schemas/Expense'}}}, description: Successful response}
+  /expenses/{expense_id}/void:
+    parameters:
+    - name: expense_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      x-status: implemented
+      summary: Void a non-terminal expense (expenses.create for own, expenses.void for any). Requires a reason.
+      responses:
+        '200': {content: {application/json: {schema: {$ref: '#/components/schemas/Expense'}}}, description: Successful response}
+  /expenses/{expense_id}/duplicates:
+    parameters:
+    - name: expense_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    get:
+      x-status: implemented
+      summary: Advisory duplicate signals (exact external-reference/attachment-hash match, amount+date+payee match). Inaccessible matches are redacted to {expense_id, accessible:false}.
+      responses:
+        '200': {content: {application/json: {schema: {type: object, properties: {signals: {type: array, items: {type: object}}}}}}, description: Successful response}
+  /expenses/{expense_id}/duplicates/override:
+    parameters:
+    - name: expense_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      x-status: implemented
+      summary: Records a reasoned override of a duplicate warning. Never approves the expense (Rule 8).
+      responses:
+        '200': {content: {application/json: {schema: {$ref: '#/components/schemas/Expense'}}}, description: Successful response}
+  /expenses/{expense_id}/approval:
+    parameters:
+    - name: expense_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    get:
+      x-status: implemented
+      summary: The current PENDING approval request, if any (fingerprint, requested_amount).
+      responses:
+        '200': {content: {application/json: {schema: {$ref: '#/components/schemas/ExpenseApproval'}}}, description: Successful response}
+  /expenses/{expense_id}/approval/decision:
+    parameters:
+    - name: expense_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      x-status: implemented
+      summary: 'APPROVED/REJECTED/RETURNED (expenses.approve). Self-approval and beneficiary-conflict are always rejected (400 SELF_APPROVAL_FORBIDDEN / BENEFICIARY_APPROVAL_FORBIDDEN) regardless of the actor''s other roles. A stale fingerprint returns 409 APPROVAL_STALE.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: {type: string, enum: [APPROVED, REJECTED, RETURNED]}
+                approved_amount: {type: string, description: "Must be <= requested_amount"}
+                reason: {type: string}
+      responses:
+        '200': {content: {application/json: {schema: {$ref: '#/components/schemas/Expense'}}}, description: Successful response}
+        '409':
+          $ref: '#/components/responses/StableCodeError'
+  /expenses/{expense_id}/payments:
+    parameters:
+    - name: expense_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      x-status: implemented
+      summary: Record a partial/full payment against an APPROVED/PARTIALLY_PAID expense (expenses.pay). Server-authoritative overpayment prevention via a row lock. Supports an Idempotency-Key header.
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, payment_method]
+              properties:
+                amount: {type: string}
+                currency: {type: string}
+                payment_method: {type: string, enum: [CASH, BANK_TRANSFER, CARD_OFFLINE, CHEQUE, OTHER]}
+                payment_reference: {type: string}
+      responses:
+        '201': {content: {application/json: {schema: {$ref: '#/components/schemas/ExpensePayment'}}}, description: Successful response}
+        '400':
+          $ref: '#/components/responses/StableCodeError'
+        '409':
+          $ref: '#/components/responses/StableCodeError'
+  /expenses/{expense_id}/payments/{payment_id}/reverse:
+    parameters:
+    - name: expense_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    - name: payment_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      x-status: implemented
+      summary: Append-only reversal (expenses.pay). Requires a reason.
+      responses:
+        '200': {content: {application/json: {schema: {$ref: '#/components/schemas/ExpensePayment'}}}, description: Successful response}
+  /expenses/{expense_id}/attachments:
+    parameters:
+    - name: expense_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      x-status: implemented
+      summary: 'Authenticated multipart upload (expenses.create). MIME + magic-byte allowlist: application/pdf, image/jpeg, image/png only. Response never includes the storage key or filesystem path.'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: {type: string, format: binary}
+      responses:
+        '201': {content: {application/json: {schema: {$ref: '#/components/schemas/ExpenseAttachment'}}}, description: Successful response}
+        '400':
+          $ref: '#/components/responses/StableCodeError'
+  /expenses/{expense_id}/attachments/{attachment_id}/download:
+    parameters:
+    - name: expense_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    - name: attachment_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    get:
+      x-status: implemented
+      summary: Authorization re-checked on every call (not cached from upload time). Safe Content-Type/Content-Disposition; never a public/guessable URL.
+      responses:
+        '200': {content: {application/octet-stream: {schema: {type: string, format: binary}}}, description: Successful response}
+        '404':
+          $ref: '#/components/responses/StableCodeError'
+  /expenses/{expense_id}/attachments/{attachment_id}/archive:
+    parameters:
+    - name: expense_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    - name: attachment_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      x-status: implemented
+      summary: Archive an attachment (expenses.create). An archived attachment can no longer be downloaded even by an authorized viewer.
+      responses:
+        '200': {content: {application/json: {schema: {type: object}}}, description: Successful response}
+  /expense-payees:
+    get:
+      x-status: implemented
+      summary: List active payees (expenses.create or expenses.manage_payees)
+      responses:
+        '200': {content: {application/json: {schema: {type: object, properties: {rows: {type: array, items: {$ref: '#/components/schemas/Payee'}}}}}}, description: Successful response}
+    post:
+      x-status: implemented
+      summary: Create a Payee (expenses.manage_payees, FINANCE-only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Payee'
+      responses:
+        '201': {content: {application/json: {schema: {$ref: '#/components/schemas/Payee'}}}, description: Successful response}
+  /expense-payees/{payee_id}/deactivate:
+    parameters:
+    - name: payee_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      x-status: implemented
+      summary: Deactivate a Payee (expenses.manage_payees)
+      responses:
+        '200': {content: {application/json: {schema: {type: object}}}, description: Successful response}
+  /expense-categories:
+    get:
+      x-status: implemented
+      summary: List active expense categories
+      responses:
+        '200': {content: {application/json: {schema: {type: object, properties: {rows: {type: array, items: {type: object}}}}}}, description: Successful response}
+  /cash-closings:
+    get:
+      x-status: implemented
+      summary: List cash closings for a currency, optional ?business_date= filter (cash_closing.view_own/view_all/prepare)
+      responses:
+        '200': {content: {application/json: {schema: {type: object, properties: {rows: {type: array, items: {$ref: '#/components/schemas/CashClosing'}}}}}}, description: Successful response}
+    post:
+      x-status: implemented
+      summary: Get-or-create the DRAFT closing for (business_date, currency) -- one active closing per scope, enforced at the DB level (cash_closing.prepare)
+      responses:
+        '201': {content: {application/json: {schema: {$ref: '#/components/schemas/CashClosing'}}}, description: Successful response}
+  /cash-closings/{closing_id}/submit:
+    parameters:
+    - name: closing_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      x-status: implemented
+      summary: Server-recalculates expected_closing_cash fresh; caller supplies actual_counted_cash only. A material variance routes to REVIEW_REQUIRED automatically.
+      responses:
+        '200': {content: {application/json: {schema: {$ref: '#/components/schemas/CashClosing'}}}, description: Successful response}
+  /cash-closings/{closing_id}/decision:
+    parameters:
+    - name: closing_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      x-status: implemented
+      summary: APPROVED/REJECTED (cash_closing.approve). The preparer can never approve their own closing, including SUPER_ADMIN.
+      responses:
+        '200': {content: {application/json: {schema: {$ref: '#/components/schemas/CashClosing'}}}, description: Successful response}
+        '400':
+          $ref: '#/components/responses/StableCodeError'
+  /cash-closings/{closing_id}/close:
+    parameters:
+    - name: closing_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      x-status: implemented
+      summary: APPROVED -> CLOSED (cash_closing.approve)
+      responses:
+        '200': {content: {application/json: {schema: {$ref: '#/components/schemas/CashClosing'}}}, description: Successful response}
+  /cash-closings/{closing_id}/reopen:
+    parameters:
+    - name: closing_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      x-status: implemented
+      summary: Requires cash_closing.reopen, a non-empty reason, and recent re-authentication (enforced by the route decorator, not the client). Writes an immutable CashClosingReopenEvent snapshotting prior state.
+      responses:
+        '200': {content: {application/json: {schema: {$ref: '#/components/schemas/CashClosing'}}}, description: Successful response}
+        '401':
+          description: recent_auth_required
+  /cash-closings/{closing_id}/adjustments:
+    parameters:
+    - name: closing_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      x-status: implemented
+      summary: Add an adjustment line (cash_closing.adjust). Reflected in expected_closing_cash only once approved.
+      responses:
+        '201': {content: {application/json: {schema: {type: object}}}, description: Successful response}
+  /report-snapshots:
+    get:
+      x-status: implemented
+      summary: List PUBLISHED snapshots, optional ?report_type= filter (report_snapshots.view)
+      responses:
+        '200': {content: {application/json: {schema: {type: object, properties: {rows: {type: array, items: {$ref: '#/components/schemas/ReportSnapshot'}}}}}}, description: Successful response}
+  /report-snapshots/generate:
+    post:
+      x-status: implemented
+      summary: Idempotent -- returns the existing PUBLISHED snapshot for an already-generated canonical key (report_snapshots.view)
+      responses:
+        '201': {content: {application/json: {schema: {$ref: '#/components/schemas/ReportSnapshot'}}}, description: Successful response}
+  /report-snapshots/regenerate:
+    post:
+      x-status: implemented
+      summary: Creates a new snapshot_version; the previous PUBLISHED row is flipped to SUPERSEDED, never overwritten (report_snapshots.regenerate, requires a reason)
+      responses:
+        '201': {content: {application/json: {schema: {$ref: '#/components/schemas/ReportSnapshot'}}}, description: Successful response}
+        '403':
+          description: Forbidden -- missing report_snapshots.regenerate
   /subscriptions/{subscription_id}/device-policy/effective:
     parameters:
     - name: subscription_id
@@ -446,17 +799,77 @@ paths:
           description: Successful response
   /management-notes:
     get:
-      x-status: planned
-      summary: Shared management notes visible to the caller (management_notes.view)
+      x-status: implemented
+      summary: Notes visible to the caller (management_notes.view) -- query-level visibility filtering, never fetch-then-filter (would still leak via pagination).
       responses:
         '200':
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/ManagementNote'
+                type: object
+                properties:
+                  rows:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ManagementNote'
           description: Successful response
+    post:
+      x-status: implemented
+      summary: Create a note (management_notes.manage). author_staff_user_id is always the authenticated actor -- a client-supplied value is rejected (400 AUTHOR_SPOOF_FORBIDDEN).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ManagementNote'
+      responses:
+        '201': {content: {application/json: {schema: {$ref: '#/components/schemas/ManagementNote'}}}, description: Successful response}
+  /management-notes/{note_id}:
+    parameters:
+    - name: note_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    get:
+      x-status: implemented
+      summary: Fail-closed 404 (not 403) if the caller cannot see this note per its visibility -- existence itself is not revealed.
+      responses:
+        '200': {content: {application/json: {schema: {$ref: '#/components/schemas/ManagementNote'}}}, description: Successful response}
+        '404':
+          $ref: '#/components/responses/StableCodeError'
+  /management-notes/{note_id}/assign:
+    parameters:
+    - name: note_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      x-status: implemented
+      summary: Assign to another employee (management_notes.manage)
+      responses:
+        '200': {content: {application/json: {schema: {$ref: '#/components/schemas/ManagementNote'}}}, description: Successful response}
+  /management-notes/{note_id}/status:
+    parameters:
+    - name: note_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      x-status: implemented
+      summary: OPEN/IN_PROGRESS/DONE/ARCHIVED transition (management_notes.manage)
+      responses:
+        '200': {content: {application/json: {schema: {$ref: '#/components/schemas/ManagementNote'}}}, description: Successful response}
+  /management-notes/{note_id}/comments:
+    parameters:
+    - name: note_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    post:
+      x-status: implemented
+      summary: Add a comment (management_notes.view -- same visibility check as reading the note). author_staff_user_id is always the authenticated actor.
+      responses:
+        '201': {content: {application/json: {schema: {type: object}}}, description: Successful response}
 components:
   securitySchemes:
     bearerAuth:
@@ -496,7 +909,33 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+    StableCodeError:
+      description: >-
+        Phase 9.5D/9.5E's ACTUAL implemented error envelope for the
+        commercial-sales and expenses/operations route families -- {"error":
+        STABLE_CODE, "message": human text}. Documented separately from the
+        Error/ErrorResponse component above because it is genuinely a
+        different, narrower shape (no error_code/correlation_id fields) --
+        this is what app.commercial_ops.errors.StableCodeError-derived
+        exceptions actually produce at the route boundary, not what the
+        original Phase 9.5A ErrorResponse schema planned. Per the M15
+        instruction to document implemented behavior, not intended
+        behavior.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/StableCodeErrorResponse'
   schemas:
+    StableCodeErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          description: A stable, machine-readable code (e.g. SELF_APPROVAL_FORBIDDEN, APPROVAL_STALE, PAYMENT_EXCEEDS_OUTSTANDING).
+        message:
+          type: string
+          description: Localized-at-the-route-boundary human text. Never a raw exception or stack trace.
     ErrorResponse:
       type: object
       required:
@@ -869,6 +1308,7 @@ components:
       type: object
       required:
       - category_id
+      - payee_id
       - amount
       - currency
       - expense_date
@@ -877,8 +1317,12 @@ components:
         category_id:
           type: string
           format: uuid
+        payee_id:
+          type: string
+          format: uuid
         amount:
           type: string
+          description: The requester's REQUESTED amount, immutable once SUBMITTED.
         currency:
           type: string
         expense_date:
@@ -886,6 +1330,13 @@ components:
           format: date
         description:
           type: string
+          description: Also serves as the approval fingerprint's "business purpose" field.
+        external_reference:
+          type: string
+          nullable: true
+        payment_method:
+          type: string
+          enum: [CASH, BANK_TRANSFER, CARD_OFFLINE, CHEQUE, OTHER]
     Expense:
       allOf:
       - $ref: '#/components/schemas/ExpenseCreate'
@@ -894,15 +1345,101 @@ components:
           id:
             type: string
             format: uuid
+          expense_number:
+            type: string
+            nullable: true
+            description: Allocated at submit time (EXP-{year}-{seq}). Null while DRAFT.
+          beneficiary_employee_profile_id:
+            type: string
+            format: uuid
+            nullable: true
+          approved_amount:
+            type: string
+            nullable: true
+            description: Set only by a real APPROVED decision. Always <= amount.
+          version:
+            type: integer
           status:
             type: string
             enum:
             - DRAFT
             - SUBMITTED
+            - RETURNED
             - APPROVED
-            - REJECTED
+            - PARTIALLY_PAID
             - PAID
+            - REJECTED
             - VOID
+    ExpenseApproval:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        status: {type: string, enum: [PENDING, APPROVED, REJECTED, RETURNED, CANCELLED]}
+        fingerprint: {type: string, description: "SHA-256 hex, recomputed live at decision time and compared -- never a caller-supplied version."}
+        requested_amount: {type: string}
+        approved_amount: {type: string, nullable: true}
+        requested_at: {type: string, format: date-time}
+    ExpensePayment:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        expense_id: {type: string, format: uuid}
+        amount: {type: string}
+        currency: {type: string}
+        payment_method: {type: string}
+        status: {type: string, enum: [RECORDED, REVERSED]}
+        recorded_by_staff_user_id: {type: string, format: uuid}
+        paid_at: {type: string, format: date-time}
+    ExpenseAttachment:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        expense_id: {type: string, format: uuid}
+        original_filename: {type: string, description: "Sanitized for Content-Disposition only -- never a filesystem path."}
+        content_type: {type: string, enum: [application/pdf, image/jpeg, image/png]}
+        size_bytes: {type: integer}
+        status: {type: string, enum: [ACTIVE, ARCHIVED]}
+    Payee:
+      type: object
+      required: [payee_type, display_name]
+      properties:
+        id: {type: string, format: uuid}
+        payee_type: {type: string, enum: [EXTERNAL, EMPLOYEE]}
+        display_name: {type: string}
+        employee_profile_id: {type: string, format: uuid, nullable: true, description: "Set only when payee_type=EMPLOYEE."}
+        external_contact_reference: {type: string, nullable: true}
+    CashClosing:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        business_date: {type: string, format: date}
+        currency: {type: string}
+        status: {type: string, enum: [DRAFT, SUBMITTED, REVIEW_REQUIRED, APPROVED, REJECTED, REOPENED, CLOSED]}
+        opening_cash: {type: string}
+        confirmed_cash_collections: {type: string, description: Server-derived, never client-supplied.}
+        confirmed_cash_refunds: {type: string}
+        cash_expense_payments: {type: string}
+        cash_commission_payouts: {type: string}
+        approved_cash_adjustments: {type: string}
+        expected_closing_cash: {type: string, description: Server-authoritative -- never accepted from the client.}
+        actual_counted_cash: {type: string, nullable: true, description: The one field the client supplies.}
+        variance: {type: string, nullable: true, description: Server-calculated as actual_counted_cash - expected_closing_cash.}
+        variance_explanation: {type: string, nullable: true}
+        version: {type: integer}
+        reopen_count: {type: integer}
+    ReportSnapshot:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        report_type: {type: string, enum: [DAILY_OPERATIONAL_SUMMARY, DAILY_CASH_CLOSING_EXCEPTIONS, WEEKLY_OPERATIONAL_SUMMARY, MONTHLY_OPERATIONAL_SUMMARY]}
+        period_start: {type: string, format: date}
+        period_end: {type: string, format: date}
+        currency: {type: string, nullable: true}
+        snapshot_version: {type: integer}
+        status: {type: string, enum: [PUBLISHED, SUPERSEDED]}
+        payload: {type: object, description: "Report-type-specific figures, all currency-separated, never a blended total."}
+        generated_by: {type: string, enum: [SCHEDULER, MANUAL]}
+        cutoff_at: {type: string, format: date-time}
     EffectiveDevicePolicy:
       type: object
       properties:
