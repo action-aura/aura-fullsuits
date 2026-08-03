@@ -10,6 +10,7 @@ from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.audit.services import record as audit_record
 from app.expenses.errors import CASH_CLOSING_TRANSITIONS, ExpenseError
@@ -127,8 +128,24 @@ def get_or_create_draft_closing(
         expected_closing_cash=opening_cash,
         prepared_by_staff_user_id=prepared_by_staff_user_id,
     )
-    db_session.add(closing)
-    db_session.flush()
+    try:
+        with db_session.begin_nested():
+            db_session.add(closing)
+            db_session.flush()
+    except IntegrityError:
+        # Lost the race to a concurrent creator for the same
+        # (business_date, currency) scope -- the real uq_cash_closing_scope
+        # constraint is what actually prevents the duplicate; fall back to
+        # returning the winner's row instead of propagating a raw
+        # IntegrityError, matching the exact SAVEPOINT/re-select pattern
+        # app.expenses.numbering.allocate_expense_number() already proved.
+        winner = db_session.execute(
+            select(CashClosing).where(CashClosing.business_date == business_date, CashClosing.currency == currency)
+        ).scalars().first()
+        if winner is None:
+            raise
+        return winner
+
     recalculate_expected(closing)
     db_session.commit()
 
