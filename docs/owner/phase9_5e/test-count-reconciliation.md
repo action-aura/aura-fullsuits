@@ -34,3 +34,27 @@ No tests were silently consolidated, parameterized-and-undercounted, or double-c
 - A background regression launched mid-build, before most of the new test files existed, so it validated schema-level non-regression correctly but never actually executed 37 of the 42 new tests.
 
 **Corrective action:** the 42 new tests were subsequently re-run to completion against an isolated scratch database (`aura_owner_test_9_5e_scratch`, migrated to head) after all four files existed — `42 passed` (see the M2-14 commit message). The full current-tree collection (`921`) is the number that must be used as the baseline for every remaining Phase 9.5E milestone's regression reporting from here on, not `876`.
+
+## Update — second reconciliation (65 vs. the reported "73")
+
+After Milestones 15–19, the checkpoint report to the user stated "73 Phase 9.5E tests green" without re-running `pytest --collect-only` to verify it — a real counting error, the same class of mistake as the original 876 figure (a number carried forward and repeated without re-derivation from evidence).
+
+**Real evidence, collected per file:**
+
+```
+tests/test_phase9_5e_api_expenses_and_operations.py                     : 10
+tests/test_phase9_5e_audit_catalog.py                                   :  3
+tests/test_phase9_5e_cash_closing.py                                    : 10
+tests/test_phase9_5e_dev_server_port_isolation.py                       :  5
+tests/test_phase9_5e_expense_lifecycle_and_approval.py                  : 15
+tests/test_phase9_5e_expense_payments_attachments_duplicates.py         : 12
+tests/test_phase9_5e_migration_and_preflight.py                         :  4
+tests/test_phase9_5e_web_operations_ui.py                               :  6
+                                                                    total: 65
+```
+
+`879 + 65 = 944`. `pytest tests/ --collect-only -q` at this exact HEAD reports **944 tests collected** — an exact match, zero unexplained residual. Independently re-confirmed the pre-9.5E baseline is still exactly `879` via `pytest tests/ --collect-only -q --ignore-glob="tests/test_phase9_5e_*.py"`, so no regression in the base suite either.
+
+**Root cause of the "73" error:** the number was accumulated by mentally adding partial `passed` counts reported across several intermediate `pytest` runs during the session (52 → 58 → 61, then a further mental addition that was never re-verified against a fresh `--collect-only`) rather than being recomputed from the actual file set at the time of the final report. No tests were lost or hidden — the underlying work (M15–M19) is exactly what was built and committed; only the summary arithmetic was wrong.
+
+**Corrective standard going forward:** every test-count claim in this phase's remaining milestones must be backed by a `pytest --collect-only -q` (or an explicit per-file sum shown, as above) run immediately before it is reported — never a remembered running total.
