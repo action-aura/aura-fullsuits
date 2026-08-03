@@ -620,6 +620,121 @@ def _check_commercial_sales_domain_integrity(checks: list[PreflightCheck]) -> bo
     return ok
 
 
+def _check_operational_finance_domain_integrity(checks: list[PreflightCheck]) -> bool:
+    """Phase 9.5E, Milestones 19/25. Same defense-in-depth spirit as
+    _check_commercial_sales_domain_integrity(): every condition here should
+    already be structurally impossible via the real service-layer
+    invariants (approval SoD, row-locked payments, DB unique constraints),
+    these checks exist to catch a bypass -- a direct DB write, a bug in a
+    future migration -- before a real user hits it. Never outputs
+    attachment contents, storage paths, or note bodies (redaction
+    discipline matches every other preflight check in this module)."""
+    from app.expenses.payments import outstanding_amount
+    from app.models.cash_closing import CASH_CLOSING_STATUSES, CashClosing
+    from app.models.employees import EmployeeProfile
+    from app.models.expenses import (
+        EXPENSE_APPROVAL_STATUSES,
+        EXPENSE_ATTACHMENT_STATUSES,
+        EXPENSE_PAYMENT_STATUSES,
+        EXPENSE_STATUSES,
+        Expense,
+        ExpenseApproval,
+        ExpenseAttachment,
+        ExpensePayment,
+    )
+    from app.models.management_notes import MANAGEMENT_NOTE_STATUSES, MANAGEMENT_NOTE_VISIBILITIES, SharedManagementNote
+
+    ok = True
+
+    for label, model, allowed in (
+        ("expense", Expense, EXPENSE_STATUSES),
+        ("expense_approval", ExpenseApproval, EXPENSE_APPROVAL_STATUSES),
+        ("expense_payment", ExpensePayment, EXPENSE_PAYMENT_STATUSES),
+        ("expense_attachment", ExpenseAttachment, EXPENSE_ATTACHMENT_STATUSES),
+        ("cash_closing", CashClosing, CASH_CLOSING_STATUSES),
+        ("management_note", SharedManagementNote, MANAGEMENT_NOTE_STATUSES),
+    ):
+        invalid = db_session.execute(select(model.status).where(model.status.notin_(allowed)).distinct()).scalars().all()
+        if invalid:
+            ok = False
+            checks.append(PreflightCheck(
+                f"no_invalid_{label}_status", "FAIL",
+                f"{len(invalid)} {label} row(s) have a status outside the canonical set {allowed}: {invalid}.",
+            ))
+        else:
+            checks.append(PreflightCheck(f"no_invalid_{label}_status", "OK", f"Every {label}.status is a canonical value."))
+
+    invalid_visibility = db_session.execute(
+        select(SharedManagementNote.visibility).where(SharedManagementNote.visibility.notin_(MANAGEMENT_NOTE_VISIBILITIES)).distinct()
+    ).scalars().all()
+    if invalid_visibility:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_invalid_management_note_visibility", "FAIL",
+            f"{len(invalid_visibility)} SharedManagementNote row(s) have a visibility outside the canonical set.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_invalid_management_note_visibility", "OK", "Every SharedManagementNote.visibility is a canonical value."))
+
+    # Overpayment: exactly the invariant record_expense_payment()'s row lock
+    # is meant to make structurally impossible -- this is the production
+    # backstop, not a re-test of that fix.
+    over_paid = 0
+    for expense in db_session.execute(select(Expense).where(Expense.approved_amount.is_not(None))).scalars().all():
+        if outstanding_amount(expense) < 0:
+            over_paid += 1
+    if over_paid:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_overpaid_expense", "FAIL",
+            f"{over_paid} Expense row(s) have paid amount exceeding their approved amount.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_overpaid_expense", "OK", "No expense has payments exceeding its approved amount."))
+
+    # Self-approval: exactly the invariant check_approver_eligibility() is
+    # meant to make structurally impossible.
+    self_approved = db_session.execute(
+        select(func.count(ExpenseApproval.id))
+        .select_from(ExpenseApproval)
+        .join(Expense, Expense.id == ExpenseApproval.expense_id)
+        .join(StaffUser, StaffUser.id == ExpenseApproval.decided_by_staff_user_id)
+        .join(EmployeeProfile, EmployeeProfile.staff_user_id == StaffUser.id)
+        .where(ExpenseApproval.status == "APPROVED", EmployeeProfile.id == Expense.entered_by_employee_profile_id)
+    ).scalar_one()
+    if self_approved:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_self_approved_expense", "FAIL",
+            f"{self_approved} ExpenseApproval row(s) were approved by the same employee who requested the expense.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_self_approved_expense", "OK", "No expense was approved by its own requester."))
+
+    # Beneficiary-conflict: same reasoning, the other half of Rule 3.
+    beneficiary_approved = db_session.execute(
+        select(func.count(ExpenseApproval.id))
+        .select_from(ExpenseApproval)
+        .join(Expense, Expense.id == ExpenseApproval.expense_id)
+        .join(StaffUser, StaffUser.id == ExpenseApproval.decided_by_staff_user_id)
+        .join(EmployeeProfile, EmployeeProfile.staff_user_id == StaffUser.id)
+        .where(
+            ExpenseApproval.status == "APPROVED", Expense.beneficiary_employee_profile_id.is_not(None),
+            EmployeeProfile.id == Expense.beneficiary_employee_profile_id,
+        )
+    ).scalar_one()
+    if beneficiary_approved:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_beneficiary_approved_expense", "FAIL",
+            f"{beneficiary_approved} ExpenseApproval row(s) were approved by the expense's own recorded beneficiary.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_beneficiary_approved_expense", "OK", "No expense was approved by its own beneficiary."))
+
+    return ok
+
+
 def run_preflight(*, key_directory: str) -> PreflightResult:
     checks: list[PreflightCheck] = []
     blocking_ok = True
@@ -635,6 +750,7 @@ def run_preflight(*, key_directory: str) -> PreflightResult:
     blocking_ok &= _check_i18n_configuration(checks)
     blocking_ok &= _check_crm_domain_integrity(checks)
     blocking_ok &= _check_commercial_sales_domain_integrity(checks)
+    blocking_ok &= _check_operational_finance_domain_integrity(checks)
     _check_super_admin_mfa(checks)  # informational only, never blocking
 
     return PreflightResult(ok=bool(blocking_ok), checks=checks)
