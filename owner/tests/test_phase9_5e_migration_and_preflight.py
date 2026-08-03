@@ -30,6 +30,14 @@ EXPECTED_INDEXES = {
     "owner_cash_closing_adjustments": {"ix_owner_cash_closing_adjustments_cash_closing_id"},
     "owner_cash_closing_reopen_events": {"ix_owner_cash_closing_reopen_events_cash_closing_id"},
     "owner_report_snapshots": {"ix_report_snapshots_type_status", "uq_report_snapshot_canonical_key"},
+    "owner_shared_management_notes": {
+        "ix_owner_shared_management_notes_status", "ix_owner_shared_management_notes_visibility",
+        "ix_owner_shared_management_notes_assigned_employee_profile_id", "ix_owner_shared_management_notes_created_by_staff_user_id",
+    },
+    "owner_management_note_visibility_grants": {
+        "ix_owner_management_note_visibility_grants_management_note_id", "ix_owner_management_note_visibility_grants_employee_profile_id",
+    },
+    "owner_management_note_comments": {"ix_owner_management_note_comments_management_note_id"},
 }
 
 
