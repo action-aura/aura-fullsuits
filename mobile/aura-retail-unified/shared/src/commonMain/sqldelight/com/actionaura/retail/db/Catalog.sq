@@ -217,6 +217,38 @@ ORDER BY p.normalized_name LIMIT ?;
 -- (retail_api.py:131-136, product-inventory-authority-audit.md #6) except
 -- returning the actual rows, not just a count -- the legacy system never
 -- had a route that listed them (low-stock-definition.md).
+-- M5.5.5.14 follow-up -- real, durable audit trail for CatalogImporter's
+-- deterministic barcode/SKU dedup pass (M5.5.15). Persisted, not just
+-- returned in the transient CatalogImportResult, so "auditable migration
+-- mapping" survives past the single import call that produced it --
+-- product-migration-audit-report.md.
+CREATE TABLE import_conflicts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL,
+    legacy_product_id INTEGER NOT NULL,
+    field TEXT NOT NULL,
+    original_value TEXT NOT NULL,
+    resolution TEXT NOT NULL,
+    canonical_product_id INTEGER,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX import_conflicts_company_id ON import_conflicts(company_id);
+
+insertImportConflict:
+INSERT INTO import_conflicts(company_id, legacy_product_id, field, original_value, resolution, canonical_product_id, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+selectImportConflicts:
+SELECT * FROM import_conflicts WHERE company_id = ? ORDER BY id;
+
+-- CatalogImporter-only: bulk, any-status read used to seed idempotency
+-- (which legacy ids are already imported) and dedup state (which sku/
+-- barcode values are already claimed) BEFORE processing new legacy rows --
+-- without this, a partial-import-then-resume run could re-allow a
+-- barcode/SKU already claimed by a row imported in an earlier partial run.
+selectAllProductsForImportIdempotency:
+SELECT id, sku, barcode FROM products WHERE company_id = ?;
+
 selectLowStockProducts:
 SELECT p.*, c.name AS category_name, COALESCE(b.qty, '0') AS total_on_hand
 FROM products p

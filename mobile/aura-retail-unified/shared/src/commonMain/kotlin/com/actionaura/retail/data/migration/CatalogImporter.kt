@@ -45,6 +45,15 @@ class CatalogImportResult(
      * not impossible.
      */
     val duplicateSkuProductsSkipped: Int,
+    /**
+     * M5.5 follow-up -- real idempotency: rows whose legacy `id` already
+     * exists in the target company (a previous full or partial run already
+     * imported them) are left untouched, not reprocessed or duplicated.
+     * `productsImported` counts only genuinely NEW rows this call added.
+     */
+    val branchesAlreadyPresent: Int,
+    val categoriesAlreadyPresent: Int,
+    val productsAlreadyPresent: Int,
 )
 
 class CatalogImportRowCountMismatch(message: String) : Exception(message)
@@ -61,39 +70,91 @@ object CatalogImporter {
      *   column, so every imported product's searchable name is derived
      *   here, the same way `CreateProductUseCase` derives it for a
      *   normally-created product).
+     *
+     * Real, executed idempotency (M5.5 follow-up, product-migration-audit-
+     * report.md): calling this twice against the same target database (a
+     * full re-run, or a resumed partial run after a crash) produces the
+     * identical end state -- rows whose legacy id already exists are
+     * skipped, never re-inserted or reprocessed. Dedup state (which sku/
+     * barcode values are already claimed) is seeded from the TARGET
+     * database's existing rows before evaluating any new legacy row, so a
+     * resumed partial run cannot re-allow a barcode/SKU an earlier partial
+     * run already resolved.
      */
     fun import(legacyDriver: SqlDriver, newDb: RetailDatabase, normalizer: UnicodeTextNormalizer): CatalogImportResult {
         val branches = readLegacyBranches(legacyDriver)
         val categories = readLegacyCategories(legacyDriver)
         val products = readLegacyProducts(legacyDriver)
+        val companyId = branches.firstOrNull()?.companyId ?: categories.firstOrNull()?.companyId ?: products.firstOrNull()?.companyId ?: 1L
 
+        var branchesAlreadyPresent = 0
+        var categoriesAlreadyPresent = 0
+        var productsAlreadyPresent = 0
         var duplicateBarcodesDropped = 0
         var duplicateSkuProductsSkipped = 0
+        var productsImported = 0
 
         // Single transaction -- all-or-nothing, matching data-preservation-plan.md's
         // "any mismatch aborts the whole transaction" requirement.
         newDb.transaction {
             for (b in branches) {
+                if (newDb.catalogQueries.selectBranchById(b.id, b.companyId).executeAsOneOrNull() != null) {
+                    branchesAlreadyPresent++
+                    continue
+                }
                 newDb.catalogQueries.importBranch(b.id, b.companyId, b.name, b.address, b.phone, b.status, b.createdAtEpochMillis)
             }
             for (c in categories) {
+                if (newDb.catalogQueries.selectCategoryById(c.id, c.companyId).executeAsOneOrNull() != null) {
+                    categoriesAlreadyPresent++
+                    continue
+                }
                 newDb.catalogQueries.importCategory(c.id, c.companyId, c.name, c.description, c.createdAtEpochMillis)
             }
 
+            // Idempotency + dedup state, seeded from the TARGET database's
+            // existing rows (not just from this loop) -- see this
+            // function's own KDoc for why that matters on a resumed
+            // partial run.
+            val existing = newDb.catalogQueries.selectAllProductsForImportIdempotency(companyId).executeAsList()
+            val alreadyImportedIds = existing.mapTo(mutableSetOf()) { it.id }
+            val seenSkus = existing.mapTo(mutableSetOf()) { it.sku.lowercase() }
+            val seenBarcodes = existing.mapNotNullTo(mutableSetOf()) { it.barcode?.lowercase()?.ifEmpty { null } }
+            val canonicalProductIdBySku = existing.associateTo(mutableMapOf()) { it.sku.lowercase() to it.id }
+            val canonicalProductIdByBarcode = existing.mapNotNull { row -> row.barcode?.lowercase()?.ifEmpty { null }?.let { it to row.id } }.toMap(mutableMapOf())
+
             // Deterministic, id-order (lowest legacy id wins) dedup pass --
             // see CatalogImportResult's own KDoc for why this exists.
-            val seenSkus = mutableSetOf<String>()
-            val seenBarcodes = mutableSetOf<String>()
             for (p in products.sortedBy { it.id }) {
+                if (p.id in alreadyImportedIds) {
+                    productsAlreadyPresent++
+                    continue
+                }
                 val skuKey = p.sku.lowercase()
                 if (!seenSkus.add(skuKey)) {
                     duplicateSkuProductsSkipped++
+                    newDb.catalogQueries.insertImportConflict(
+                        p.companyId, p.id, "sku", p.sku, "ROW_SKIPPED",
+                        canonicalProductIdBySku[skuKey], p.createdAtEpochMillis,
+                    )
                     continue
                 }
                 var barcodeToImport = p.barcode
                 if (!barcodeToImport.isNullOrEmpty()) {
                     val barcodeKey = barcodeToImport.lowercase()
                     if (!seenBarcodes.add(barcodeKey)) {
+                        // The canonical claimant is tracked live (seeded from
+                        // pre-existing rows, updated as this loop imports
+                        // each product) -- NOT just the pre-loop snapshot,
+                        // which would miss a claimant imported earlier in
+                        // this SAME call (found by this test's own first
+                        // real run: a within-this-run conflict recorded
+                        // canonical_product_id = null).
+                        val canonicalId = canonicalProductIdByBarcode[barcodeKey]
+                        newDb.catalogQueries.insertImportConflict(
+                            p.companyId, p.id, "barcode", barcodeToImport, "DROPPED",
+                            canonicalId, p.createdAtEpochMillis,
+                        )
                         barcodeToImport = null
                         duplicateBarcodesDropped++
                     }
@@ -103,16 +164,23 @@ object CatalogImporter {
                     p.costPrice, p.sellPrice, p.taxRate, p.unit, p.reorderLevel, p.status,
                     p.createdAtEpochMillis, p.createdAtEpochMillis, // no legacy updated_at concept -- same value as created_at
                 )
+                canonicalProductIdBySku[skuKey] = p.id
+                if (!barcodeToImport.isNullOrEmpty()) canonicalProductIdByBarcode[barcodeToImport.lowercase()] = p.id
+                productsImported++
             }
         }
 
         // Post-import validation -- real row-count check, not assumed.
-        val newBranchCount = newDb.catalogQueries.selectActiveBranches(branches.firstOrNull()?.companyId ?: 1L).executeAsList().size
-        if (newBranchCount < branches.size) {
-            throw CatalogImportRowCountMismatch("branches: expected at least ${branches.size}, found $newBranchCount after import")
+        val newBranchCount = newDb.catalogQueries.selectActiveBranches(companyId).executeAsList().size
+        if (newBranchCount < branches.size - branchesAlreadyPresent) {
+            throw CatalogImportRowCountMismatch("branches: expected at least ${branches.size - branchesAlreadyPresent} new, found $newBranchCount active after import")
         }
 
-        return CatalogImportResult(branches.size, categories.size, products.size - duplicateSkuProductsSkipped, duplicateBarcodesDropped, duplicateSkuProductsSkipped)
+        return CatalogImportResult(
+            branches.size - branchesAlreadyPresent, categories.size - categoriesAlreadyPresent, productsImported,
+            duplicateBarcodesDropped, duplicateSkuProductsSkipped,
+            branchesAlreadyPresent, categoriesAlreadyPresent, productsAlreadyPresent,
+        )
     }
 
     private class LegacyBranch(val id: Long, val companyId: Long, val name: String, val address: String?, val phone: String?, val status: String, val createdAtEpochMillis: Long)
