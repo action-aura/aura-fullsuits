@@ -75,6 +75,22 @@ class AndroidLoggingSink : LoggingSink {
     }
 }
 
+/**
+ * Real NFKC-based normalization (Milestone 5.3's Category dedup, and any
+ * future name-comparison use case): trims, collapses internal whitespace
+ * runs, applies Unicode NFKC (folds Arabic presentation forms and
+ * full-width/half-width variants to their canonical composed form), then
+ * lowercases. `java.text.Normalizer` is real JDK/Android stdlib -- no
+ * external ICU dependency needed on this platform.
+ */
+class AndroidUnicodeTextNormalizer : UnicodeTextNormalizer {
+    override fun normalizeForComparison(value: String): String {
+        val collapsed = value.trim().replace(Regex("\\s+"), " ")
+        val nfkc = java.text.Normalizer.normalize(collapsed, java.text.Normalizer.Form.NFKC)
+        return nfkc.lowercase()
+    }
+}
+
 class AndroidNetworkStatus(private val context: Context) : NetworkStatus {
     override fun isOnline(): Boolean {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager

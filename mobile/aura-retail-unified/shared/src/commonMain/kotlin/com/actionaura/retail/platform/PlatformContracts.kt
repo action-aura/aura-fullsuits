@@ -154,3 +154,20 @@ interface LoggingSink {
 }
 
 enum class LogLevel { DEBUG, INFO, WARN, ERROR }
+
+/**
+ * Unicode-aware text normalization for duplicate-detection comparisons
+ * (e.g. Category name dedup, Milestone 5.3) -- NOT a display formatter,
+ * only ever used to decide "are these two strings the same real-world
+ * name." True Unicode canonical-equivalence normalization (NFKC -- folding
+ * Arabic presentation forms, composed vs. decomposed combining marks,
+ * full-width/half-width variants) requires a real ICU-backed platform API
+ * (`java.text.Normalizer` on Android, `NSString`'s
+ * `precomposedStringWithCompatibilityMapping` on iOS/Foundation) -- Kotlin
+ * common stdlib has no NFKC implementation, so this is a platform
+ * contract, not commonMain logic, matching ADR-2's interface-based-
+ * contracts decision (not `expect`/`actual`).
+ */
+interface UnicodeTextNormalizer {
+    fun normalizeForComparison(value: String): String
+}

@@ -31,7 +31,17 @@ CREATE TABLE categories (
 CREATE INDEX categories_company_id ON categories(company_id);
 -- CANONICAL_UNIFIED: real duplicate-name protection the Python authority
 -- never had (complete-retail-capability-matrix.md's Categories finding).
-CREATE UNIQUE INDEX categories_company_name ON categories(company_id, name);
+-- Partial (status = 'active' only) -- real bug found by M5.3's own test
+-- (reactivateRejectedIfADuplicateWasCreatedWhileArchived): a plain,
+-- unconditional UNIQUE index blocks reusing a name after its original
+-- category is archived, which is the exact, intended M5.3 UX (archive
+-- "Beverages", create a new "Beverages" later). This is a defense-in-depth
+-- backstop for the exact-string case only -- the real dedup logic
+-- (Arabic/Unicode NFKC-normalized, active-rows-only) lives in
+-- CreateCategoryUseCase/ReactivateCategoryUseCase (category-domain-
+-- contract.md), not here. Same partial-unique-index pattern already used
+-- by returns_idempotency (Returns.sq).
+CREATE UNIQUE INDEX categories_company_name ON categories(company_id, name) WHERE status = 'active';
 
 CREATE TABLE products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

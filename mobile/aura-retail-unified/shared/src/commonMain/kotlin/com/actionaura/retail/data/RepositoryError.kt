@@ -12,4 +12,6 @@ sealed class RepositoryError(val code: String) {
     data class NotFound(val entity: String, val id: String) : RepositoryError("NOT_FOUND")
     data class InsufficientStock(val productId: String, val have: String, val requested: String) : RepositoryError("INSUFFICIENT_STOCK")
     data class LastActiveProtected(val entity: String, val id: String) : RepositoryError("LAST_ACTIVE_PROTECTED")
+    data class DuplicateName(val entity: String, val name: String, val conflictingId: String) : RepositoryError("DUPLICATE_NAME")
+    data class ValidationFailed(val entity: String, val reason: String) : RepositoryError("VALIDATION_FAILED")
 }
