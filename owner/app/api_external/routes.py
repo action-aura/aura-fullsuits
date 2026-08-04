@@ -17,6 +17,7 @@ from app.licensing_service.deactivation import DeactivationRejected, process_dea
 from app.licensing_service.health import is_service_ready, public_service_info
 from app.licensing_service.reason_codes import to_public_reason_code
 from app.licensing_service.signing import export_signed_keyset_manifest
+from app.releases.distribution import DownloadAuthorizationRejected, authorize_download, fetch_download
 
 bp = Blueprint("api_external_licensing", __name__, url_prefix="/api/licensing/v1")
 
@@ -28,6 +29,7 @@ def _service_config() -> dict:
         "assertion_ttl_seconds": current_app.config["ASSERTION_TTL_SECONDS"],
         "license_pepper": current_app.config["LICENSE_PEPPER"],
         "signing_key_directory": current_app.config["SIGNING_KEY_DIRECTORY"],
+        "download_token_ttl_seconds": current_app.config["RELEASE_DOWNLOAD_TOKEN_TTL_SECONDS"],
     }
 
 
@@ -205,3 +207,76 @@ def service_info():
         resp.headers["Retry-After"] = str(exc.retry_after_seconds)
         return resp, status
     return jsonify(public_service_info(current_app.config["SIGNING_KEY_DIRECTORY"])), 200
+
+
+@bp.route("/releases/authorize-download", methods=["POST"])
+def authorize_release_download():
+    """Phase 9R M11. Device-signature-authenticated (same primitives as
+    check-in) -- not a new auth mechanism. Returns a short-lived, single-use
+    download token; never the artifact itself and never a storage
+    credential."""
+    try:
+        ratelimit.check_and_increment("release_download_authorize", _client_bucket())
+    except ratelimit.RateLimitExceeded as exc:
+        resp, status = _error_response("RATE_LIMITED", 429)
+        resp.headers["Retry-After"] = str(exc.retry_after_seconds)
+        return resp, status
+
+    body = _get_json_body()
+    if body is None:
+        return _error_response("INVALID_REQUEST", 400)
+    correlation_id = body.get("correlation_id") if isinstance(body, dict) else None
+
+    try:
+        authorization, raw_token = authorize_download(body, source_ip=request.remote_addr, config=_service_config())
+        return jsonify({
+            "download_token": raw_token,
+            "expires_at": authorization.expires_at.isoformat(),
+            "product_version": authorization.product_version.version,
+            "artifact_checksum_sha256": authorization.product_version.artifact_checksum_sha256,
+            "artifact_size_bytes": authorization.product_version.artifact_size_bytes,
+        }), 201
+    except DownloadAuthorizationRejected as exc:
+        db_session.rollback()
+        if exc.internal_reason_code == "INVALID_SIGNATURE":
+            try:
+                ratelimit.check_and_increment("activation_invalid_signature", _client_bucket())
+            except ratelimit.RateLimitExceeded:
+                pass
+        return _error_response(exc.internal_reason_code, exc.http_status, correlation_id)
+    except Exception:
+        db_session.rollback()
+        return _error_response("INTERNAL_DECISION_FAILURE", 500, correlation_id)
+
+
+@bp.route("/releases/download/<token>", methods=["GET"])
+def fetch_release_download(token: str):
+    """The token itself (single-use, short-lived, high-entropy) is the only
+    credential this endpoint checks -- deliberately no device-signature
+    requirement here, since the authorize-download step already proved
+    device identity and the token is unguessable and one-shot. Streams the
+    artifact directly; never a redirect to a raw storage path/credential."""
+    try:
+        ratelimit.check_and_increment("release_download_fetch", _client_bucket())
+    except ratelimit.RateLimitExceeded as exc:
+        resp, status = _error_response("RATE_LIMITED", 429)
+        resp.headers["Retry-After"] = str(exc.retry_after_seconds)
+        return resp, status
+
+    try:
+        content, release = fetch_download(token)
+    except DownloadAuthorizationRejected as exc:
+        db_session.rollback()
+        return _error_response(exc.internal_reason_code, exc.http_status)
+    except Exception:
+        db_session.rollback()
+        return _error_response("INTERNAL_DECISION_FAILURE", 500)
+
+    from flask import Response
+
+    safe_filename = f"release-{release.version}.bin"
+    response = Response(content, mimetype="application/octet-stream")
+    response.headers["Content-Disposition"] = f'attachment; filename="{safe_filename}"'
+    response.headers["Content-Length"] = str(len(content))
+    response.headers["Cache-Control"] = "no-store"
+    return response, 200

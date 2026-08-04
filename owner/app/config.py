@@ -57,6 +57,9 @@ KNOWN_CONFIG_ENV_VARS = frozenset(
         "OWNER_DEFAULT_OFFLINE_GRACE_SECONDS",
         "OWNER_MAX_REQUEST_BYTES",
         "OWNER_MAX_CONTENT_LENGTH_BYTES",
+        "OWNER_RELEASE_ARTIFACT_DIR",
+        "OWNER_TEST_RELEASE_ARTIFACT_DIR",
+        "OWNER_RELEASE_DOWNLOAD_TOKEN_TTL_SECONDS",
         # Phase 9R M2 additions
         "OWNER_TRUSTED_PROXY_COUNT",
         "OWNER_ALLOWED_HOSTS",
@@ -144,6 +147,17 @@ class BaseConfig:
         "OWNER_EXPENSE_ATTACHMENT_DIR", os.path.join(os.getcwd(), "var", "expense-attachments")
     )
     EXPENSE_ATTACHMENT_MAX_BYTES = int(os.environ.get("OWNER_EXPENSE_ATTACHMENT_MAX_BYTES", str(10 * 1024 * 1024)))  # 10MB
+
+    # -- Phase 9R M11: private release artifact storage (local/test adapter
+    # only -- see app/releases/storage.py's module docstring; a real
+    # deployment uses external object storage instead, per
+    # infrastructure-availability-audit.md #6). Never under static/ or any
+    # Flask-served directory; access is always mediated by a validated
+    # ReleaseDownloadAuthorization.
+    RELEASE_ARTIFACT_DIRECTORY = os.environ.get(
+        "OWNER_RELEASE_ARTIFACT_DIR", os.path.join(os.getcwd(), "var", "release-artifacts")
+    )
+    RELEASE_DOWNLOAD_TOKEN_TTL_SECONDS = int(os.environ.get("OWNER_RELEASE_DOWNLOAD_TOKEN_TTL_SECONDS", "300"))  # 5m
 
     WTF_CSRF_TIME_LIMIT = None
 
@@ -376,6 +390,9 @@ class TestingConfig(BaseConfig):
     )
     EXPENSE_ATTACHMENT_DIRECTORY = os.environ.get(
         "OWNER_TEST_EXPENSE_ATTACHMENT_DIR", os.path.join(os.getcwd(), "var", "expense-attachments-test")
+    )
+    RELEASE_ARTIFACT_DIRECTORY = os.environ.get(
+        "OWNER_TEST_RELEASE_ARTIFACT_DIR", os.path.join(os.getcwd(), "var", "release-artifacts-test")
     )
     REPLAY_PROTECTION_REQUIRED = True
     DISTRIBUTED_RATE_LIMIT_REQUIRED = True
