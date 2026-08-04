@@ -17,18 +17,21 @@ one component saturating the host while others sit idle.
 
 ## ADR-2: Direct host deployment vs. Docker vs. Kubernetes
 
-**Decision: direct host (systemd-managed processes); Docker optional, not
-required; Kubernetes rejected.**
+**Decision (reversed 2026-08-04, see `phase9-reconciliation.md`): Docker
+Compose, per Phase 9's already-real prior decision; Kubernetes rejected.**
 
-Direct-on-host with `systemd` units (Gunicorn, the scheduler, Caddy) is the
-smallest thing that can plausibly be called "production": restart-on-crash,
-boot-on-start, journald logging, no additional runtime to operate. Docker
-adds reproducible builds and easy rollback-by-image-tag, at the cost of one
-more moving part (image registry, image builds in CI) — worth it once CI/CD
-(M16) is mature, not a blocker to getting *something* real running.
-Kubernetes rejected per `deployment-architecture.md` — no real scale
-evidence, and the operational cost for a single-app single-database pilot
-would dwarf the rest of this phase.
+Originally recorded here as "direct host preferred, Docker optional" —
+written without having yet discovered `docs/owner/phase9/` and
+`deploy/staging/`. Phase 9 ("secure staging and pilot readiness") already
+made this exact decision for real: a working, internally consistent
+`docker-compose.staging.yml`, a real `Caddyfile`, and four systemd units
+(`aura-owner-scheduled-ops`, `aura-owner-backup`, each with a `.timer`)
+built around `docker compose run`/`up`. Per the owner's explicit
+confirmation, Phase 9R extends that real prior artifact rather than
+overriding it with a fresh preference — see `phase9-reconciliation.md` for
+the full discovery and reasoning. Kubernetes remains rejected for the same
+reason as before: no real scale evidence, and the operational cost for a
+single-app single-database pilot would dwarf the rest of this phase.
 
 ## ADR-3: Managed PostgreSQL vs. self-managed on the same host
 

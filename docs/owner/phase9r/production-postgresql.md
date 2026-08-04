@@ -1,5 +1,18 @@
 # Phase 9R — Production PostgreSQL (M4, Executed Against Real Local PostgreSQL 17.10)
 
+**Note (added after M5, see `phase9-reconciliation.md`):** Phase 9 already
+did real PostgreSQL hardening work (`docs/owner/phase9/postgresql-hardening.md`)
+— a real separate `aura_owner_staging` database, database-level
+`statement_timeout`/`idle_in_transaction_session_timeout`/`timezone=UTC`
+defaults via `ALTER DATABASE`, and the same `aura_owner` least-privilege
+gap identified below. This milestone's work is additive on top of that,
+not a re-run: connection-level timeouts (complementing, not replacing,
+Phase 9's database-level defaults), a bounded connection pool (not present
+in Phase 9's work), the `owner_installations` index gap (a new finding),
+and a fresh migration/drift check against the schema as it stands after
+Phase 9.5A-E's substantial growth since Phase 9's own check. Full
+reconciliation detail in `phase9-reconciliation.md`.
+
 Every finding below is real evidence from the actual local PostgreSQL 17.10
 instance this project's dev/test environment already uses — not simulated,
 not assumed. No real staging/production Postgres exists yet

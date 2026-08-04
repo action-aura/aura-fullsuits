@@ -3,22 +3,24 @@
 Date: 2026-08-04. Versions below checked live against official sources on
 this date (see Sources), not assumed from training data.
 
-## Decision: monolithic host, no containers, no Kubernetes
+## Decision: monolithic host, Docker Compose, no Kubernetes
 
-Owner is one Flask application plus one PostgreSQL database plus a scheduler
-process. There is no evidence of a workload that needs container
-orchestration: no stated multi-team deployment cadence, no stated need for
-independent scaling of sub-components, no existing containerization in the
-repo. `requirements/owner-server.txt` already pins `gunicorn==22.0.0` — the
-codebase was already heading toward a plain WSGI-server-on-a-host model, not
-a container model.
+**Amended 2026-08-04** (see `phase9-reconciliation.md`): this section
+originally read "no containers" — written before discovering that Phase 9
+("secure staging and pilot readiness") already built and internally
+validated a real `docker-compose.staging.yml` plus four systemd units
+around it (`deploy/staging/`). Per the owner's explicit decision, Phase 9R
+extends that real prior artifact rather than overriding it with a fresh
+preference. The "monolithic" half of this decision is unchanged and still
+correct: one Flask app, one PostgreSQL database, one scheduler concern —
+no evidence of a workload needing container *orchestration* (Kubernetes),
+only container *packaging* (Docker Compose), which Phase 9 already chose.
 
-Docker is still worth using for one narrow purpose — packaging the app +
-its exact dependency set reproducibly for deployment — but Docker Compose
-running on a single host is sufic if used; it is not required to reach a
-professional deployment, and this ADR does not mandate it. See
-`architecture-decision-record.md` for the containers-vs-direct-host
-trade-off actually weighed.
+Docker Compose packages the app + its exact dependency set reproducibly,
+runs on a single host, and is what the existing `docker-compose.staging.yml`,
+`deploy/staging/Caddyfile`, and systemd timer units
+(`aura-owner-scheduled-ops`, `aura-owner-backup`) already assume. See
+`architecture-decision-record.md` ADR-2 for the full reasoning.
 
 Kubernetes is explicitly rejected: no real scale evidence exists (no
 production traffic yet — there is no production), and the operational
