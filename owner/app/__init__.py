@@ -15,7 +15,14 @@ def create_app(config_name: str | None = None) -> Flask:
     app.config.from_object(config_cls)
     config_cls.validate()
 
-    init_db(app.config["SQLALCHEMY_DATABASE_URI"])
+    init_db(
+        app.config["SQLALCHEMY_DATABASE_URI"],
+        statement_timeout_ms=app.config["DB_STATEMENT_TIMEOUT_MS"],
+        lock_timeout_ms=app.config["DB_LOCK_TIMEOUT_MS"],
+        idle_in_transaction_timeout_ms=app.config["DB_IDLE_IN_TRANSACTION_TIMEOUT_MS"],
+        pool_size=app.config["DB_POOL_SIZE"],
+        max_overflow=app.config["DB_MAX_OVERFLOW"],
+    )
 
     from app.observability.logging_config import configure_structured_logging
 

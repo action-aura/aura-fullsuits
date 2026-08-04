@@ -30,6 +30,11 @@ KNOWN_CONFIG_ENV_VARS = frozenset(
         "OWNER_DATABASE_URL",
         "OWNER_TEST_DATABASE_URL",
         "OWNER_LICENSE_PEPPER",
+        "OWNER_DB_STATEMENT_TIMEOUT_MS",
+        "OWNER_DB_LOCK_TIMEOUT_MS",
+        "OWNER_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS",
+        "OWNER_DB_POOL_SIZE",
+        "OWNER_DB_MAX_OVERFLOW",
         "OWNER_SESSION_ABSOLUTE_SECONDS",
         "OWNER_SESSION_IDLE_SECONDS",
         "OWNER_RECENT_AUTH_SECONDS",
@@ -91,6 +96,28 @@ class BaseConfig:
     SQLALCHEMY_DATABASE_URI = os.environ.get("OWNER_DATABASE_URL", "")
     SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True}
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+    # -- Phase 9R M4: PostgreSQL connection hardening --
+    # Applied via libpq connection options (see app/extensions.py:init_db),
+    # not an ALTER ROLE against the database -- portable across whatever
+    # role/host the connection string points at, and doesn't require the
+    # deploying operator to have privileges to alter roles. Defaults are
+    # generous enough not to affect normal request/test latency but real
+    # enough to catch a genuinely runaway query, a stuck lock wait, or a
+    # leaked idle-in-transaction connection before it exhausts the pool.
+    DB_STATEMENT_TIMEOUT_MS = int(os.environ.get("OWNER_DB_STATEMENT_TIMEOUT_MS", "30000"))  # 30s
+    DB_LOCK_TIMEOUT_MS = int(os.environ.get("OWNER_DB_LOCK_TIMEOUT_MS", "10000"))  # 10s
+    DB_IDLE_IN_TRANSACTION_TIMEOUT_MS = int(
+        os.environ.get("OWNER_DB_IDLE_IN_TRANSACTION_TIMEOUT_MS", "120000")
+    )  # 120s
+    # Bounded application connections (M4/M5): pool_size + max_overflow is
+    # the hard ceiling this one process will ever hold open. Sized small by
+    # default because it multiplies by Gunicorn worker count (M5) -- five
+    # workers * (5+10) here is already 75 possible connections, which must
+    # stay under PostgreSQL's own max_connections with headroom for other
+    # processes (the scheduler, psql, backups).
+    DB_POOL_SIZE = int(os.environ.get("OWNER_DB_POOL_SIZE", "5"))
+    DB_MAX_OVERFLOW = int(os.environ.get("OWNER_DB_MAX_OVERFLOW", "10"))
 
     LICENSE_PEPPER = os.environ.get("OWNER_LICENSE_PEPPER", "")
 

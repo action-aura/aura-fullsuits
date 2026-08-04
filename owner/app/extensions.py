@@ -28,9 +28,37 @@ Base.query = db_session.query_property()
 _engine = None
 
 
-def init_db(database_uri: str):
+def init_db(
+    database_uri: str,
+    *,
+    statement_timeout_ms: int = 30000,
+    lock_timeout_ms: int = 10000,
+    idle_in_transaction_timeout_ms: int = 120000,
+    pool_size: int = 5,
+    max_overflow: int = 10,
+):
     global _engine
-    _engine = create_engine(database_uri, pool_pre_ping=True, future=True)
+    # Phase 9R M4: server-side timeouts set via libpq connection options
+    # (-c GUC=value at connection startup) rather than an ALTER ROLE against
+    # the database -- applies regardless of which role/host the connection
+    # string points at, and needs no special database privilege to set.
+    # SQLite (used by some standalone tooling, never by this Flask app) has
+    # no such option string, so this only applies to postgresql:// URLs.
+    connect_args = {}
+    if database_uri.startswith("postgresql"):
+        connect_args["options"] = (
+            f"-c statement_timeout={statement_timeout_ms} "
+            f"-c lock_timeout={lock_timeout_ms} "
+            f"-c idle_in_transaction_session_timeout={idle_in_transaction_timeout_ms}"
+        )
+    _engine = create_engine(
+        database_uri,
+        pool_pre_ping=True,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
+        connect_args=connect_args,
+        future=True,
+    )
     _session_factory.configure(bind=_engine)
     return _engine
 
