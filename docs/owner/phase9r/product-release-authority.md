@@ -63,3 +63,14 @@ import-never-auto-publishes. Broader regression sample (catalog + Phase
 `publication_state == "PUBLISHED"` is the gate M11's `authorize_download()`
 checks before issuing any download authorization — this milestone is the
 prerequisite M11 builds directly on.
+
+## Amendment (found at closure, see `deployment-pipeline-and-migrations.md`)
+
+Migration `96429a63cb29`'s `downgrade()` was broken
+(`drop_constraint(None, ...)`) — never actually exercised until the
+repository-controlled closure's final regression. Fixed there with real
+Postgres-generated constraint names, proven by actually running the
+downgrade and upgrading back, not just re-reading the diff. The 9 tests
+above test the *service* logic (`publish_release`/`withdraw_release`), not
+the migration's downgrade path — a real gap in this milestone's own
+original test coverage, closed at final regression rather than here.
