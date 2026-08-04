@@ -16,7 +16,19 @@ data class CartLine(
     val calculation: LineCalculation,
 )
 
+/**
+ * M5.5.11 -- `branchId` is captured once, at cart creation, and never
+ * changed by any of the pure transformations below (`addLine`,
+ * `updateLineQuantity`, etc. all `copy()` without touching it) --
+ * "cart retains its originating Branch." Real gap closed here: M3's
+ * original `Cart` had no Branch concept at all. Enforcing "Branch switch
+ * blocked during an active cart" is a use-case-layer concern
+ * (`GetCurrentBranchUseCase`/`SetCurrentBranchUseCase`, M5.4) that reads
+ * this field, not something `Cart` itself decides -- `Cart` only needs to
+ * make the value available and immutable once set.
+ */
 data class Cart(
+    val branchId: Long,
     val lines: List<CartLine>,
     val mode: TaxMode,
 ) {

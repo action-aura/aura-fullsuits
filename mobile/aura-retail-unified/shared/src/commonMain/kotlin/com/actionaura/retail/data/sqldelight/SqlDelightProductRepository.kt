@@ -21,29 +21,38 @@ import com.actionaura.retail.db.SelectProductBySku
 import com.actionaura.retail.financial.Money
 import com.actionaura.retail.financial.PercentageRate
 import com.actionaura.retail.financial.Quantity
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
-/** M5.1/M5.5 -- real, SQLDelight-backed `ProductRepository`. */
+/** M5.1/M5.5 -- real, SQLDelight-backed `ProductRepository`. `writeMutex`: see SqlDelightCategoryRepository's KDoc (stock-concurrency-report.md's real finding). */
 class SqlDelightProductRepository(private val db: RetailDatabase) : ProductRepository {
+    private val writeMutex = Mutex()
 
-    override suspend fun listActive(companyId: Long): List<Product> =
+    override suspend fun listActive(companyId: Long): List<Product> = writeMutex.withLock {
         db.catalogQueries.selectActiveProducts(companyId).executeAsList().map { it.toDomain() }
+    }
 
-    override suspend fun getById(companyId: Long, id: Long): Product? =
+    override suspend fun getById(companyId: Long, id: Long): Product? = writeMutex.withLock {
         db.catalogQueries.selectProductById(id, companyId).executeAsOneOrNull()?.toDomain()
+    }
 
-    override suspend fun getByBarcode(companyId: Long, barcode: String): Product? =
+    override suspend fun getByBarcode(companyId: Long, barcode: String): Product? = writeMutex.withLock {
         db.catalogQueries.selectProductByBarcode(barcode, companyId).executeAsOneOrNull()?.toDomain()
+    }
 
-    override suspend fun getBySku(companyId: Long, sku: String): Product? =
+    override suspend fun getBySku(companyId: Long, sku: String): Product? = writeMutex.withLock {
         db.catalogQueries.selectProductBySku(sku, companyId).executeAsOneOrNull()?.toDomain()
+    }
 
-    override suspend fun searchActiveByNormalizedNamePrefix(companyId: Long, normalizedPrefix: String, limit: Long): List<Product> =
+    override suspend fun searchActiveByNormalizedNamePrefix(companyId: Long, normalizedPrefix: String, limit: Long): List<Product> = writeMutex.withLock {
         db.catalogQueries.searchActiveProductsByNormalizedNamePrefix(companyId, normalizedPrefix, limit).executeAsList().map { it.toDomain() }
+    }
 
-    override suspend fun listLowStock(companyId: Long): List<LowStockProduct> =
+    override suspend fun listLowStock(companyId: Long): List<LowStockProduct> = writeMutex.withLock {
         db.catalogQueries.selectLowStockProducts(companyId, companyId).executeAsList().map {
             LowStockProduct(it.toDomain(), parseStoredQuantity(it.total_on_hand))
         }
+    }
 
     override suspend fun insert(
         companyId: Long,
@@ -58,21 +67,23 @@ class SqlDelightProductRepository(private val db: RetailDatabase) : ProductRepos
         unit: String,
         reorderLevel: Long,
         nowEpochMillis: Long,
-    ): DomainResult<Product> = db.transactionWithResult {
-        if (db.catalogQueries.selectProductBySku(sku, companyId).executeAsOneOrNull() != null) {
-            return@transactionWithResult DomainResult.Failure(RepositoryError.DuplicateValue("product", "sku", sku))
+    ): DomainResult<Product> = writeMutex.withLock {
+        db.transactionWithResult {
+            if (db.catalogQueries.selectProductBySku(sku, companyId).executeAsOneOrNull() != null) {
+                return@transactionWithResult DomainResult.Failure(RepositoryError.DuplicateValue("product", "sku", sku))
+            }
+            if (!barcode.isNullOrEmpty() && db.catalogQueries.selectProductByBarcodeAnyStatus(barcode, companyId).executeAsOneOrNull() != null) {
+                return@transactionWithResult DomainResult.Failure(RepositoryError.DuplicateValue("product", "barcode", barcode))
+            }
+            db.catalogQueries.insertProduct(
+                companyId, sku, barcode, name, normalizedName, categoryId,
+                costPrice.toString(), sellPrice.toString(), taxRate.toString(), unit, reorderLevel,
+                nowEpochMillis, nowEpochMillis,
+            )
+            val id = db.catalogQueries.lastInsertRowId().executeAsOne()
+            val created = db.catalogQueries.selectProductById(id, companyId).executeAsOne()
+            DomainResult.Success(created.toDomain())
         }
-        if (!barcode.isNullOrEmpty() && db.catalogQueries.selectProductByBarcodeAnyStatus(barcode, companyId).executeAsOneOrNull() != null) {
-            return@transactionWithResult DomainResult.Failure(RepositoryError.DuplicateValue("product", "barcode", barcode))
-        }
-        db.catalogQueries.insertProduct(
-            companyId, sku, barcode, name, normalizedName, categoryId,
-            costPrice.toString(), sellPrice.toString(), taxRate.toString(), unit, reorderLevel,
-            nowEpochMillis, nowEpochMillis,
-        )
-        val id = db.catalogQueries.lastInsertRowId().executeAsOne()
-        val created = db.catalogQueries.selectProductById(id, companyId).executeAsOne()
-        DomainResult.Success(created.toDomain())
     }
 
     override suspend fun update(
@@ -89,32 +100,34 @@ class SqlDelightProductRepository(private val db: RetailDatabase) : ProductRepos
         reorderLevel: Long,
         expectedUpdatedAtEpochMillis: Long,
         nowEpochMillis: Long,
-    ): DomainResult<Product> = db.transactionWithResult {
-        if (!barcode.isNullOrEmpty()) {
-            val conflict = db.catalogQueries.selectProductByBarcodeAnyStatus(barcode, companyId).executeAsOneOrNull()
-            if (conflict != null && conflict.id != id) {
-                return@transactionWithResult DomainResult.Failure(RepositoryError.DuplicateValue("product", "barcode", barcode))
+    ): DomainResult<Product> = writeMutex.withLock {
+        db.transactionWithResult {
+            if (!barcode.isNullOrEmpty()) {
+                val conflict = db.catalogQueries.selectProductByBarcodeAnyStatus(barcode, companyId).executeAsOneOrNull()
+                if (conflict != null && conflict.id != id) {
+                    return@transactionWithResult DomainResult.Failure(RepositoryError.DuplicateValue("product", "barcode", barcode))
+                }
             }
-        }
-        db.catalogQueries.updateProduct(
-            barcode, name, normalizedName, categoryId,
-            costPrice.toString(), sellPrice.toString(), taxRate.toString(), unit, reorderLevel, nowEpochMillis,
-            id, companyId, expectedUpdatedAtEpochMillis,
-        )
-        val changed = db.catalogQueries.changes().executeAsOne()
-        if (changed == 0L) {
-            val current = db.catalogQueries.selectProductById(id, companyId).executeAsOneOrNull()
-            return@transactionWithResult if (current == null) {
-                DomainResult.Failure(RepositoryError.NotFound("product", id.toString()))
-            } else {
-                DomainResult.Failure(RepositoryError.StaleUpdate("product", id.toString()))
+            db.catalogQueries.updateProduct(
+                barcode, name, normalizedName, categoryId,
+                costPrice.toString(), sellPrice.toString(), taxRate.toString(), unit, reorderLevel, nowEpochMillis,
+                id, companyId, expectedUpdatedAtEpochMillis,
+            )
+            val changed = db.catalogQueries.changes().executeAsOne()
+            if (changed == 0L) {
+                val current = db.catalogQueries.selectProductById(id, companyId).executeAsOneOrNull()
+                return@transactionWithResult if (current == null) {
+                    DomainResult.Failure(RepositoryError.NotFound("product", id.toString()))
+                } else {
+                    DomainResult.Failure(RepositoryError.StaleUpdate("product", id.toString()))
+                }
             }
+            val updated = db.catalogQueries.selectProductById(id, companyId).executeAsOne()
+            DomainResult.Success(updated.toDomain())
         }
-        val updated = db.catalogQueries.selectProductById(id, companyId).executeAsOne()
-        DomainResult.Success(updated.toDomain())
     }
 
-    override suspend fun setActive(companyId: Long, id: Long, active: Boolean, nowEpochMillis: Long) {
+    override suspend fun setActive(companyId: Long, id: Long, active: Boolean, nowEpochMillis: Long): Unit = writeMutex.withLock {
         db.catalogQueries.updateProductStatus(activeToStatus(active), nowEpochMillis, id, companyId)
     }
 
@@ -135,44 +148,46 @@ class SqlDelightProductRepository(private val db: RetailDatabase) : ProductRepos
         createdBy: String,
         idempotencyKey: String?,
         nowEpochMillis: Long,
-    ): DomainResult<Product> = db.transactionWithResult {
-        val existingBySku = db.catalogQueries.selectProductBySku(sku, companyId).executeAsOneOrNull()
-        if (existingBySku != null) {
-            if (idempotencyKey != null) {
-                val existingMovement = db.inventoryQueries.selectMovementByIdempotencyKey(companyId, idempotencyKey).executeAsOneOrNull()
-                if (existingMovement != null && existingMovement.product_id == existingBySku.id) {
-                    return@transactionWithResult DomainResult.Success(existingBySku.toDomain())
+    ): DomainResult<Product> = writeMutex.withLock {
+        db.transactionWithResult {
+            val existingBySku = db.catalogQueries.selectProductBySku(sku, companyId).executeAsOneOrNull()
+            if (existingBySku != null) {
+                if (idempotencyKey != null) {
+                    val existingMovement = db.inventoryQueries.selectMovementByIdempotencyKey(companyId, idempotencyKey).executeAsOneOrNull()
+                    if (existingMovement != null && existingMovement.product_id == existingBySku.id) {
+                        return@transactionWithResult DomainResult.Success(existingBySku.toDomain())
+                    }
                 }
+                return@transactionWithResult DomainResult.Failure(RepositoryError.DuplicateValue("product", "sku", sku))
             }
-            return@transactionWithResult DomainResult.Failure(RepositoryError.DuplicateValue("product", "sku", sku))
-        }
-        if (!barcode.isNullOrEmpty() && db.catalogQueries.selectProductByBarcodeAnyStatus(barcode, companyId).executeAsOneOrNull() != null) {
-            return@transactionWithResult DomainResult.Failure(RepositoryError.DuplicateValue("product", "barcode", barcode))
-        }
+            if (!barcode.isNullOrEmpty() && db.catalogQueries.selectProductByBarcodeAnyStatus(barcode, companyId).executeAsOneOrNull() != null) {
+                return@transactionWithResult DomainResult.Failure(RepositoryError.DuplicateValue("product", "barcode", barcode))
+            }
 
-        db.catalogQueries.insertProduct(
-            companyId, sku, barcode, name, normalizedName, categoryId,
-            costPrice.toString(), sellPrice.toString(), taxRate.toString(), unit, reorderLevel,
-            nowEpochMillis, nowEpochMillis,
-        )
-        val id = db.catalogQueries.lastInsertRowId().executeAsOne()
-
-        // LEGACY_PARITY (product-inventory-authority-audit.md #2): only
-        // record an opening-stock movement when there IS an opening
-        // quantity, matching create_product()'s own "only if
-        // initial_stock>0" behavior exactly.
-        db.inventoryQueries.upsertOpeningStock(companyId, id, branchId, "0")
-        if (initialStock.isPositive()) {
-            db.inventoryQueries.decrementStock(initialStock.toString(), companyId, id, branchId)
-            db.inventoryQueries.insertMovement(
-                companyId, id, branchId, StockMovementReason.INITIAL_STOCK.name,
-                initialStock.toString(), "0", initialStock.toString(),
-                null, null, null, idempotencyKey, null, createdBy, nowEpochMillis,
+            db.catalogQueries.insertProduct(
+                companyId, sku, barcode, name, normalizedName, categoryId,
+                costPrice.toString(), sellPrice.toString(), taxRate.toString(), unit, reorderLevel,
+                nowEpochMillis, nowEpochMillis,
             )
-        }
+            val id = db.catalogQueries.lastInsertRowId().executeAsOne()
 
-        val created = db.catalogQueries.selectProductById(id, companyId).executeAsOne()
-        DomainResult.Success(created.toDomain())
+            // LEGACY_PARITY (product-inventory-authority-audit.md #2): only
+            // record an opening-stock movement when there IS an opening
+            // quantity, matching create_product()'s own "only if
+            // initial_stock>0" behavior exactly.
+            db.inventoryQueries.upsertOpeningStock(companyId, id, branchId, "0")
+            if (initialStock.isPositive()) {
+                db.inventoryQueries.decrementStock(initialStock.toString(), companyId, id, branchId)
+                db.inventoryQueries.insertMovement(
+                    companyId, id, branchId, StockMovementReason.INITIAL_STOCK.name,
+                    initialStock.toString(), "0", initialStock.toString(),
+                    null, null, null, idempotencyKey, null, createdBy, nowEpochMillis,
+                )
+            }
+
+            val created = db.catalogQueries.selectProductById(id, companyId).executeAsOne()
+            DomainResult.Success(created.toDomain())
+        }
     }
 }
 

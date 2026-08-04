@@ -10,16 +10,19 @@ import com.actionaura.retail.data.parseStoredQuantity
 import com.actionaura.retail.db.Inventory_movements
 import com.actionaura.retail.db.RetailDatabase
 import com.actionaura.retail.financial.Quantity
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
-/** M5.1/M5.5 -- real, SQLDelight-backed `InventoryRepository`. */
+/** M5.1/M5.5 -- real, SQLDelight-backed `InventoryRepository`. `writeMutex`: see SqlDelightCategoryRepository's KDoc (stock-concurrency-report.md's real finding) -- this repository is the one M5.5.14's real races (final-unit sale, concurrent increases) were actually caught on. */
 class SqlDelightInventoryRepository(private val db: RetailDatabase) : InventoryRepository {
+    private val writeMutex = Mutex()
 
-    override suspend fun getStockOnHand(companyId: Long, productId: Long, branchId: Long): Quantity {
+    override suspend fun getStockOnHand(companyId: Long, productId: Long, branchId: Long): Quantity = writeMutex.withLock {
         val raw = db.inventoryQueries.selectStockOnHand(companyId, productId, branchId).executeAsOneOrNull()
-        return raw?.let { parseStoredQuantity(it) } ?: Quantity.ZERO
+        raw?.let { parseStoredQuantity(it) } ?: Quantity.ZERO
     }
 
-    override suspend fun ensureOpeningStock(companyId: Long, productId: Long, branchId: Long, opening: Quantity) {
+    override suspend fun ensureOpeningStock(companyId: Long, productId: Long, branchId: Long, opening: Quantity): Unit = writeMutex.withLock {
         db.inventoryQueries.upsertOpeningStock(companyId, productId, branchId, opening.toString())
     }
 
@@ -37,7 +40,7 @@ class SqlDelightInventoryRepository(private val db: RetailDatabase) : InventoryR
         notes: String?,
         createdBy: String,
         nowEpochMillis: Long,
-    ): DomainResult<Quantity> = db.transactionWithResult {
+    ): DomainResult<Quantity> = writeMutex.withLock { db.transactionWithResult {
         if (idempotencyKey != null) {
             val existing = db.inventoryQueries.selectMovementByIdempotencyKey(companyId, idempotencyKey).executeAsOneOrNull()
             if (existing != null) {
@@ -72,7 +75,7 @@ class SqlDelightInventoryRepository(private val db: RetailDatabase) : InventoryR
             reference, relatedSaleId, relatedReturnId, idempotencyKey, notes, createdBy, nowEpochMillis,
         )
         DomainResult.Success(after)
-    }
+    } }
 
     override suspend fun reconcileStock(
         companyId: Long,
@@ -83,7 +86,7 @@ class SqlDelightInventoryRepository(private val db: RetailDatabase) : InventoryR
         createdBy: String,
         idempotencyKey: String?,
         nowEpochMillis: Long,
-    ): DomainResult<Quantity> = db.transactionWithResult {
+    ): DomainResult<Quantity> = writeMutex.withLock { db.transactionWithResult {
         if (idempotencyKey != null) {
             val existing = db.inventoryQueries.selectMovementByIdempotencyKey(companyId, idempotencyKey).executeAsOneOrNull()
             if (existing != null) {
@@ -110,10 +113,11 @@ class SqlDelightInventoryRepository(private val db: RetailDatabase) : InventoryR
             null, null, null, idempotencyKey, notes, createdBy, nowEpochMillis,
         )
         DomainResult.Success(countedQuantity)
-    }
+    } }
 
-    override suspend fun listMovementHistory(companyId: Long, productId: Long, limit: Long): List<InventoryMovement> =
+    override suspend fun listMovementHistory(companyId: Long, productId: Long, limit: Long): List<InventoryMovement> = writeMutex.withLock {
         db.inventoryQueries.selectMovementsForProduct(companyId, productId, limit).executeAsList().map { it.toDomain() }
+    }
 }
 
 private fun Inventory_movements.toDomain() = InventoryMovement(
