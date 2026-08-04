@@ -151,11 +151,23 @@ selectCategoryById:
 SELECT c.*, (SELECT COUNT(*) FROM products p WHERE p.category_id = c.id AND p.status = 'active') AS product_count
 FROM categories c WHERE c.id = ? AND c.company_id = ?;
 
+-- M5.8.15 -- real, case-sensitive exact-name lookup, matching the real
+-- legacy `_handle_retail_categories` match rule exactly
+-- (import-handler-matrix.md's own audit). Any status, not active-only --
+-- a real archived Category must still be matched to avoid recreating it.
+selectCategoryByExactName:
+SELECT * FROM categories WHERE company_id = ? AND name = ?;
+
 updateCategoryStatus:
 UPDATE categories SET status = ? WHERE id = ? AND company_id = ?;
 
 selectBranchById:
 SELECT * FROM branches WHERE id = ? AND company_id = ?;
+
+-- M5.8.15 -- real, case-sensitive exact-name lookup, matching the real
+-- legacy `_handle_retail_branches` match rule exactly. Any status.
+selectBranchByExactName:
+SELECT * FROM branches WHERE company_id = ? AND name = ?;
 
 updateBranchStatus:
 UPDATE branches SET status = ? WHERE id = ? AND company_id = ?;

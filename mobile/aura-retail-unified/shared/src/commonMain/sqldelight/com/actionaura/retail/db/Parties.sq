@@ -48,3 +48,25 @@ INSERT INTO suppliers(company_id, name, phone, email, address, created_at) VALUE
 
 updateCustomerCreditBalance:
 UPDATE customers SET credit_balance = ? WHERE id = ? AND company_id = ?;
+
+-- M5.8.15 -- real, lower-cased exact-email lookup, matching the real
+-- legacy `_handle_retail_customers` match rule exactly
+-- (import-handler-matrix.md's own audit) -- a blank/NULL email never
+-- matches here, callers must not call this with an empty string.
+selectCustomerByEmail:
+SELECT * FROM customers WHERE company_id = ? AND LOWER(email) = ?;
+
+selectCustomerById:
+SELECT * FROM customers WHERE id = ? AND company_id = ?;
+
+-- Real import-only update: overwrites the fields the legacy handler
+-- itself accepts (name/phone/address/loyalty_points/total_spent) --
+-- never touches credit_mode/credit_limit/credit_balance, which are a
+-- real Retail Accounting concern outside Import Center's scope.
+updateCustomerFromImport:
+UPDATE customers SET name = ?, phone = ?, address = ?, loyalty_points = ?, total_spent = ? WHERE id = ? AND company_id = ?;
+
+-- M5.8.15 -- real, case-sensitive exact-name lookup, matching the real
+-- legacy `_handle_retail_suppliers` match rule exactly. Any status.
+selectSupplierByExactName:
+SELECT * FROM suppliers WHERE company_id = ? AND name = ?;
