@@ -26,6 +26,19 @@
 
 	encode gzip
 
+	# Phase 9R M6: edge-level request-body ceiling as defense in depth,
+	# slightly above the app's own MAX_CONTENT_LENGTH (12MB, app/config.py)
+	# to allow for multipart boundary/header overhead -- rejects an
+	# oversized request before it even reaches the app, rather than relying
+	# solely on Flask's own check. Real bug found and fixed this milestone:
+	# the app's global MAX_CONTENT_LENGTH used to be the licensing API's own
+	# 64KB bound, which silently broke every expense attachment upload over
+	# 64KB (production-postgresql.md's sibling doc,
+	# request-body-limits.md, has the full root-cause).
+	request_body {
+		max_size 15MB
+	}
+
 	# Edge-level rate limiting is NOT enabled here: vanilla Caddy has no
 	# built-in rate-limit directive (it requires the third-party
 	# github.com/mholt/caddy-ratelimit plugin via a custom xcaddy build,

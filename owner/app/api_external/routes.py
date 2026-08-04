@@ -52,6 +52,20 @@ def _strict_content_type():
         return _error_response("INVALID_REQUEST", 415)
 
 
+@bp.before_request
+def _bounded_payload():
+    # Phase 9R M6/M8: this blueprint's real bound is OWNER_MAX_REQUEST_BYTES
+    # (64KB by default) -- but app.config["MAX_CONTENT_LENGTH"] is a Flask-
+    # global setting, and Phase 9R raised it to accommodate expense
+    # attachment uploads (10MB) elsewhere in the app. Without this check,
+    # the licensing API would silently inherit that much larger global
+    # ceiling instead of its own tighter, deliberately small limit --
+    # enforced here explicitly, independent of whatever the global cap is.
+    limit = current_app.config["MAX_REQUEST_BYTES"]
+    if request.content_length is not None and request.content_length > limit:
+        return _error_response("PAYLOAD_TOO_LARGE", 413)
+
+
 @bp.errorhandler(413)
 def _payload_too_large(_exc):
     return _error_response("PAYLOAD_TOO_LARGE", 413)

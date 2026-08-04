@@ -56,6 +56,7 @@ KNOWN_CONFIG_ENV_VARS = frozenset(
         "OWNER_ASSERTION_TTL_SECONDS",
         "OWNER_DEFAULT_OFFLINE_GRACE_SECONDS",
         "OWNER_MAX_REQUEST_BYTES",
+        "OWNER_MAX_CONTENT_LENGTH_BYTES",
         # Phase 9R M2 additions
         "OWNER_TRUSTED_PROXY_COUNT",
         "OWNER_ALLOWED_HOSTS",
@@ -161,7 +162,18 @@ class BaseConfig:
     ASSERTION_TTL_SECONDS = int(os.environ.get("OWNER_ASSERTION_TTL_SECONDS", "86400"))
     DEFAULT_OFFLINE_GRACE_SECONDS = int(os.environ.get("OWNER_DEFAULT_OFFLINE_GRACE_SECONDS", str(14 * 86400)))
     MAX_REQUEST_BYTES = int(os.environ.get("OWNER_MAX_REQUEST_BYTES", str(64 * 1024)))
-    MAX_CONTENT_LENGTH = MAX_REQUEST_BYTES
+    # Phase 9R M6/M8: MAX_CONTENT_LENGTH is a Flask-GLOBAL ceiling (enforced
+    # by Werkzeug before any view function runs) -- it must be large enough
+    # for the biggest legitimate body any route accepts (expense attachment
+    # uploads, EXPENSE_ATTACHMENT_MAX_BYTES=10MB, plus multipart overhead
+    # headroom), never just the licensing API's own much smaller
+    # MAX_REQUEST_BYTES. The licensing API enforces its own tighter 64KB
+    # bound independently in app/api_external/routes.py's _bounded_payload()
+    # -- real bug found and fixed this milestone: before this, any
+    # multipart upload over 64KB (nearly every real expense attachment) was
+    # silently rejected with a raw 413 before ever reaching the
+    # attachment-specific size/type validation.
+    MAX_CONTENT_LENGTH = int(os.environ.get("OWNER_MAX_CONTENT_LENGTH_BYTES", str(12 * 1024 * 1024)))  # 12MB
 
     # -- Phase 9R M2: environment separation --
     # How many hops of X-Forwarded-* to trust from the reverse proxy. 0 in
