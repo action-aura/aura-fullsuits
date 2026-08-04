@@ -4,6 +4,7 @@ import com.actionaura.retail.data.DomainResult
 import com.actionaura.retail.data.LowStockProduct
 import com.actionaura.retail.data.ProductRepository
 import com.actionaura.retail.data.RepositoryError
+import com.actionaura.retail.data.StockMovementReason
 import com.actionaura.retail.data.model.Product
 import com.actionaura.retail.data.model.activeToStatus
 import com.actionaura.retail.data.model.statusToActive
@@ -19,6 +20,7 @@ import com.actionaura.retail.db.SelectProductById
 import com.actionaura.retail.db.SelectProductBySku
 import com.actionaura.retail.financial.Money
 import com.actionaura.retail.financial.PercentageRate
+import com.actionaura.retail.financial.Quantity
 
 /** M5.1/M5.5 -- real, SQLDelight-backed `ProductRepository`. */
 class SqlDelightProductRepository(private val db: RetailDatabase) : ProductRepository {
@@ -114,6 +116,63 @@ class SqlDelightProductRepository(private val db: RetailDatabase) : ProductRepos
 
     override suspend fun setActive(companyId: Long, id: Long, active: Boolean, nowEpochMillis: Long) {
         db.catalogQueries.updateProductStatus(activeToStatus(active), nowEpochMillis, id, companyId)
+    }
+
+    override suspend fun insertWithInitialStock(
+        companyId: Long,
+        sku: String,
+        barcode: String?,
+        name: String,
+        normalizedName: String,
+        categoryId: Long?,
+        costPrice: Money,
+        sellPrice: Money,
+        taxRate: PercentageRate,
+        unit: String,
+        reorderLevel: Long,
+        branchId: Long,
+        initialStock: Quantity,
+        createdBy: String,
+        idempotencyKey: String?,
+        nowEpochMillis: Long,
+    ): DomainResult<Product> = db.transactionWithResult {
+        val existingBySku = db.catalogQueries.selectProductBySku(sku, companyId).executeAsOneOrNull()
+        if (existingBySku != null) {
+            if (idempotencyKey != null) {
+                val existingMovement = db.inventoryQueries.selectMovementByIdempotencyKey(companyId, idempotencyKey).executeAsOneOrNull()
+                if (existingMovement != null && existingMovement.product_id == existingBySku.id) {
+                    return@transactionWithResult DomainResult.Success(existingBySku.toDomain())
+                }
+            }
+            return@transactionWithResult DomainResult.Failure(RepositoryError.DuplicateValue("product", "sku", sku))
+        }
+        if (!barcode.isNullOrEmpty() && db.catalogQueries.selectProductByBarcodeAnyStatus(barcode, companyId).executeAsOneOrNull() != null) {
+            return@transactionWithResult DomainResult.Failure(RepositoryError.DuplicateValue("product", "barcode", barcode))
+        }
+
+        db.catalogQueries.insertProduct(
+            companyId, sku, barcode, name, normalizedName, categoryId,
+            costPrice.toString(), sellPrice.toString(), taxRate.toString(), unit, reorderLevel,
+            nowEpochMillis, nowEpochMillis,
+        )
+        val id = db.catalogQueries.lastInsertRowId().executeAsOne()
+
+        // LEGACY_PARITY (product-inventory-authority-audit.md #2): only
+        // record an opening-stock movement when there IS an opening
+        // quantity, matching create_product()'s own "only if
+        // initial_stock>0" behavior exactly.
+        db.inventoryQueries.upsertOpeningStock(companyId, id, branchId, "0")
+        if (initialStock.isPositive()) {
+            db.inventoryQueries.decrementStock(initialStock.toString(), companyId, id, branchId)
+            db.inventoryQueries.insertMovement(
+                companyId, id, branchId, StockMovementReason.INITIAL_STOCK.name,
+                initialStock.toString(), "0", initialStock.toString(),
+                null, null, null, idempotencyKey, null, createdBy, nowEpochMillis,
+            )
+        }
+
+        val created = db.catalogQueries.selectProductById(id, companyId).executeAsOne()
+        DomainResult.Success(created.toDomain())
     }
 }
 

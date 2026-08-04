@@ -77,4 +77,37 @@ interface ProductRepository {
     ): DomainResult<Product>
 
     suspend fun setActive(companyId: Long, id: Long, active: Boolean, nowEpochMillis: Long)
+
+    /**
+     * M5.5.6 -- product creation plus opening stock as ONE transaction
+     * (spec's own explicit requirement). This lives on `ProductRepository`
+     * rather than being composed from `insert()` + a separate
+     * `InventoryRepository` call because the use-case layer has no access
+     * to a shared transaction across two different repository interfaces
+     * -- only a concrete repository implementation holding the real
+     * `RetailDatabase` can wrap both writes atomically. `initialStock`
+     * negative is structurally impossible (`Quantity` cannot hold a
+     * negative value, M3's own invariant) -- "negative initial stock is
+     * rejected" is therefore satisfied by the type system, not a runtime
+     * check. `idempotencyKey` (optional) makes a retry return the
+     * original product rather than double-creating.
+     */
+    suspend fun insertWithInitialStock(
+        companyId: Long,
+        sku: String,
+        barcode: String?,
+        name: String,
+        normalizedName: String,
+        categoryId: Long?,
+        costPrice: Money,
+        sellPrice: Money,
+        taxRate: PercentageRate,
+        unit: String,
+        reorderLevel: Long,
+        branchId: Long,
+        initialStock: Quantity,
+        createdBy: String,
+        idempotencyKey: String?,
+        nowEpochMillis: Long,
+    ): DomainResult<Product>
 }

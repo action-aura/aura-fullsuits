@@ -1,5 +1,6 @@
 package com.actionaura.retail.usecases.product
 
+import com.actionaura.retail.data.BranchRepository
 import com.actionaura.retail.data.CategoryRepository
 import com.actionaura.retail.data.DomainResult
 import com.actionaura.retail.data.ProductRepository
@@ -7,6 +8,7 @@ import com.actionaura.retail.data.RepositoryError
 import com.actionaura.retail.data.model.Product
 import com.actionaura.retail.financial.Money
 import com.actionaura.retail.financial.PercentageRate
+import com.actionaura.retail.financial.Quantity
 import com.actionaura.retail.platform.UnicodeTextNormalizer
 
 /**
@@ -236,4 +238,68 @@ class SearchProductsUseCase(
 /** Scan-time lookup -- active products only (matching `getByBarcode`'s own already-active-only query). */
 class FindProductByBarcodeUseCase(private val productRepository: ProductRepository) {
     suspend fun execute(companyId: Long, barcode: String): Product? = productRepository.getByBarcode(companyId, barcode.trim())
+}
+
+/** M5.5.12 -- low-stock-definition.md's chosen policy: real rows, not just a count (unlike the legacy dashboard's own count-only query). */
+class GetLowStockProductsUseCase(private val productRepository: ProductRepository) {
+    suspend fun execute(companyId: Long) = productRepository.listLowStock(companyId)
+}
+
+/**
+ * M5.5.6 -- product creation with opening stock, as one real transaction
+ * (`ProductRepository.insertWithInitialStock`). Reuses the exact same
+ * field validation `CreateProductUseCase` runs, plus one more: the target
+ * branch must exist and be active -- "target Branch must be active."
+ */
+class CreateProductWithInitialStockUseCase(
+    private val productRepository: ProductRepository,
+    private val categoryRepository: CategoryRepository,
+    private val branchRepository: BranchRepository,
+    private val normalizer: UnicodeTextNormalizer,
+) {
+    suspend fun execute(
+        companyId: Long,
+        sku: String,
+        barcode: String?,
+        name: String,
+        categoryId: Long?,
+        costPrice: Money,
+        sellPrice: Money,
+        taxRate: PercentageRate,
+        unit: String,
+        reorderLevel: Long,
+        branchId: Long,
+        initialStock: Quantity,
+        createdBy: String,
+        idempotencyKey: String?,
+        nowEpochMillis: Long,
+    ): DomainResult<Product> {
+        val validName = (validateName(name) as? DomainResult.Success)?.value
+            ?: return validateName(name) as DomainResult.Failure
+        val validSku = (validateSku(sku) as? DomainResult.Success)?.value
+            ?: return validateSku(sku) as DomainResult.Failure
+        val barcodeResult = validateBarcode(barcode)
+        if (barcodeResult is DomainResult.Failure) return barcodeResult
+        val validBarcode = (barcodeResult as DomainResult.Success).value
+
+        if (costPrice.isNegative()) return DomainResult.Failure(RepositoryError.ValidationFailed("product", "cost price must not be negative"))
+        if (sellPrice.isNegative()) return DomainResult.Failure(RepositoryError.ValidationFailed("product", "sell price must not be negative"))
+
+        val categoryCheck = validateCategoryAssignment(categoryRepository, companyId, categoryId)
+        if (categoryCheck is DomainResult.Failure) return categoryCheck
+
+        val branch = branchRepository.getById(companyId, branchId)
+            ?: return DomainResult.Failure(RepositoryError.NotFound("branch", branchId.toString()))
+        if (!branch.isActive) {
+            return DomainResult.Failure(RepositoryError.ValidationFailed("product", "cannot receive opening stock into an archived branch"))
+        }
+
+        val normalizedName = normalizer.normalizeForComparison(validName)
+        val trimmedUnit = unit.trim().ifEmpty { "pcs" }
+        return productRepository.insertWithInitialStock(
+            companyId, validSku, validBarcode, validName, normalizedName, categoryId,
+            costPrice, sellPrice, taxRate, trimmedUnit, reorderLevel,
+            branchId, initialStock, createdBy, idempotencyKey, nowEpochMillis,
+        )
+    }
 }
