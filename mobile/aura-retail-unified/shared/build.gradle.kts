@@ -39,6 +39,12 @@ kotlin {
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
                 implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
                 implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.6.1")
+                // Real, evidence-based decision -- see docs/retail/unified_mobile/
+                // money-decimal-decision.md. Version pinned (not a floating range)
+                // so an upstream release can never silently change financial
+                // behavior; wrapped entirely behind financial/Money.kt etc. so this
+                // is the only place BigDecimal is referenced directly.
+                implementation("com.ionspin.kotlin:bignum:0.3.10")
             }
         }
         val commonTest by getting {
