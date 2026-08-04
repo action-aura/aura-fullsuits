@@ -3,6 +3,7 @@ package com.actionaura.retail.data.migration
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.db.QueryResult
 import com.actionaura.retail.db.RetailDatabase
+import com.actionaura.retail.platform.UnicodeTextNormalizer
 
 /**
  * M4 -- real, working first slice of the Android data-preservation import
@@ -32,8 +33,13 @@ object CatalogImporter {
      *   `retail.db` file (read-only in practice -- this function never
      *   writes to it).
      * @param newDb the target, already-schema-created RetailDatabase.
+     * @param normalizer computes `products.normalized_name` (M5.5 addition,
+     *   NEW_COMPLETE_PRODUCT_REQUIREMENT -- the legacy source has no such
+     *   column, so every imported product's searchable name is derived
+     *   here, the same way `CreateProductUseCase` derives it for a
+     *   normally-created product).
      */
-    fun import(legacyDriver: SqlDriver, newDb: RetailDatabase): CatalogImportResult {
+    fun import(legacyDriver: SqlDriver, newDb: RetailDatabase, normalizer: UnicodeTextNormalizer): CatalogImportResult {
         val branches = readLegacyBranches(legacyDriver)
         val categories = readLegacyCategories(legacyDriver)
         val products = readLegacyProducts(legacyDriver)
@@ -49,8 +55,9 @@ object CatalogImporter {
             }
             for (p in products) {
                 newDb.catalogQueries.importProduct(
-                    p.id, p.companyId, p.sku, p.barcode, p.name, p.categoryId,
-                    p.costPrice, p.sellPrice, p.taxRate, p.unit, p.reorderLevel, p.status, p.createdAtEpochMillis,
+                    p.id, p.companyId, p.sku, p.barcode, p.name, normalizer.normalizeForComparison(p.name), p.categoryId,
+                    p.costPrice, p.sellPrice, p.taxRate, p.unit, p.reorderLevel, p.status,
+                    p.createdAtEpochMillis, p.createdAtEpochMillis, // no legacy updated_at concept -- same value as created_at
                 )
             }
         }

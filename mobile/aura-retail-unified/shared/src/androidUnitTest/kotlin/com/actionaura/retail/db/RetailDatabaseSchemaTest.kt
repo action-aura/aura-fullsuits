@@ -32,8 +32,8 @@ class RetailDatabaseSchemaTest {
         val categoryId = db.catalogQueries.lastInsertRowId().executeAsOne()
 
         db.catalogQueries.insertProduct(
-            1L, "SKU-001", "0000000001", "Cola 330ml", categoryId,
-            "0.50", "1.50", "10", "can", 24, 2000L,
+            1L, "SKU-001", "0000000001", "Cola 330ml", "cola 330ml", categoryId,
+            "0.50", "1.50", "10", "can", 24, 2000L, 2000L,
         )
         val productId = db.catalogQueries.lastInsertRowId().executeAsOne()
 

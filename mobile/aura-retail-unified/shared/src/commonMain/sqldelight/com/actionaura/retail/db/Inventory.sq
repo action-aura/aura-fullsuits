@@ -1,5 +1,23 @@
 -- M4 -- faithful port of schema.py's inventory_movements/inventory_balances.
-
+-- M5.5.8 extends inventory_movements into a real append-only audit ledger
+-- (inventory-movement-authority-decision.md): the legacy authority already
+-- had almost every write path pair a movement row with its balance change
+-- (product-inventory-authority-audit.md #3) -- this is UNIFIED_REQUIRED,
+-- not a new invention, plus the fields the legacy version never had
+-- (before/after balance, idempotency, sale/return linkage).
+--
+-- quantity_before/quantity_after are NEW_COMPLETE_PRODUCT_REQUIREMENT
+-- additions -- the legacy movement row never recorded the balance either
+-- side of the change, only the delta.
+--
+-- related_sale_id/related_return_id are plain INTEGER, deliberately with
+-- no REFERENCES clause -- unlike product_id, which must always resolve, a
+-- movement caused by a manual adjustment or import has neither, and this
+-- also sidesteps any doubt about cross-.sq-file FK creation ordering
+-- (Inventory.sq is compiled before Sales.sq/Returns.sq alphabetically;
+-- SQLite itself defers FK existence checking to DML time regardless, but
+-- there is no real need to introduce that cross-file coupling here when
+-- product_id/branch_id already establish the row's identity).
 CREATE TABLE inventory_movements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     company_id INTEGER NOT NULL DEFAULT 1,
@@ -7,8 +25,13 @@ CREATE TABLE inventory_movements (
     branch_id INTEGER,
     movement_type TEXT NOT NULL,
     quantity TEXT NOT NULL,
+    quantity_before TEXT NOT NULL,
+    quantity_after TEXT NOT NULL,
     unit_cost TEXT NOT NULL DEFAULT '0.00',
     reference TEXT,
+    related_sale_id INTEGER,
+    related_return_id INTEGER,
+    idempotency_key TEXT,
     notes TEXT,
     created_by TEXT NOT NULL DEFAULT 'System',
     created_at INTEGER NOT NULL
@@ -16,6 +39,10 @@ CREATE TABLE inventory_movements (
 CREATE INDEX inventory_movements_company_id ON inventory_movements(company_id);
 CREATE INDEX inventory_movements_product_id ON inventory_movements(product_id);
 CREATE INDEX inventory_movements_branch_id ON inventory_movements(branch_id);
+-- Append-only ledger idempotency: a retried mutation with the same key
+-- must not double-append. NULL-exempt, same pattern as
+-- returns.idempotency_key (Returns.sq).
+CREATE UNIQUE INDEX inventory_movements_idempotency ON inventory_movements(company_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
 
 CREATE TABLE inventory_balances (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,5 +67,19 @@ decrementStock:
 UPDATE inventory_balances SET quantity_on_hand = ? WHERE company_id = ? AND product_id = ? AND branch_id = ?;
 
 insertMovement:
-INSERT INTO inventory_movements(company_id, product_id, branch_id, movement_type, quantity, unit_cost, reference, notes, created_by, created_at)
-VALUES (?, ?, ?, ?, ?, '0.00', ?, ?, ?, ?);
+INSERT INTO inventory_movements(
+    company_id, product_id, branch_id, movement_type, quantity, quantity_before, quantity_after,
+    reference, related_sale_id, related_return_id, idempotency_key, notes, created_by, created_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- M5.5.13/M5.5.14 -- idempotency-key lookup, real (not just a UNIQUE
+-- index): AdjustInventoryUseCase re-reads this on a retry to return the
+-- SAME movement rather than surfacing the raw UNIQUE-constraint failure to
+-- the caller -- same pattern InMemorySaleRepository (M3) already
+-- established for sale idempotency.
+selectMovementByIdempotencyKey:
+SELECT * FROM inventory_movements WHERE company_id = ? AND idempotency_key = ?;
+
+selectMovementsForProduct:
+SELECT * FROM inventory_movements WHERE company_id = ? AND product_id = ? ORDER BY created_at DESC, id DESC LIMIT ?;

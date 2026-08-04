@@ -4,6 +4,7 @@ import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import com.actionaura.retail.data.DomainResult
 import com.actionaura.retail.data.RepositoryError
 import com.actionaura.retail.data.StockMovementDirection
+import com.actionaura.retail.data.StockMovementReason
 import com.actionaura.retail.db.RetailDatabase
 import com.actionaura.retail.financial.Money
 import com.actionaura.retail.financial.PercentageRate
@@ -24,11 +25,11 @@ class ProductInventoryRepositoryTest {
         return RetailDatabase(driver)
     }
 
-    private suspend fun insertCola(db: RetailDatabase) = SqlDelightProductRepository(db).insert(
-        companyId = 1L, sku = "SKU-001", barcode = "0000000001", name = "Cola 330ml", categoryId = null,
+    private suspend fun insertCola(db: RetailDatabase) = (SqlDelightProductRepository(db).insert(
+        companyId = 1L, sku = "SKU-001", barcode = "0000000001", name = "Cola 330ml", normalizedName = "cola 330ml", categoryId = null,
         costPrice = Money.of(0.5), sellPrice = Money.of(1.99), taxRate = PercentageRate.trusted(10.0),
         unit = "can", reorderLevel = 24, nowEpochMillis = 1000L,
-    )
+    ) as DomainResult.Success).value
 
     @Test
     fun productInsertPreservesTypedMoneyAndRateNotRawDouble() = runTest {
@@ -59,7 +60,7 @@ class ProductInventoryRepositoryTest {
         val db = newDb()
         val product = insertCola(db)
         val repo = SqlDelightProductRepository(db)
-        repo.setActive(1L, product.id, false)
+        repo.setActive(1L, product.id, false, 3000L)
 
         assertNull(repo.getByBarcode(1L, "0000000001"), "barcode lookup is scan-time and must only resolve active products")
         assertEquals(product.id, repo.getById(1L, product.id)?.id, "getById is not status-filtered")
@@ -78,14 +79,14 @@ class ProductInventoryRepositoryTest {
 
         val afterReceipt = inventory.adjustStock(
             1L, product.id, 1L, StockMovementDirection.INCREASE, Quantity.parse("50").getOrNull()!!,
-            "purchase_receipt", "PO-1", null, "tester", 2000L,
+            StockMovementReason.MANUAL_RECEIPT, "PO-1", null, null, null, null, "tester", 2000L,
         )
         assertIs<DomainResult.Success<Quantity>>(afterReceipt)
         assertEquals(Quantity.zeroOrMore("150")!!, afterReceipt.value)
 
         val afterSale = inventory.adjustStock(
             1L, product.id, 1L, StockMovementDirection.DECREASE, Quantity.parse("30").getOrNull()!!,
-            "manual_adjustment", null, null, "tester", 3000L,
+            StockMovementReason.MANUAL_CORRECTION_DECREASE, null, null, null, null, null, "tester", 3000L,
         )
         assertIs<DomainResult.Success<Quantity>>(afterSale)
         assertEquals(Quantity.zeroOrMore("120")!!, afterSale.value)
@@ -100,7 +101,7 @@ class ProductInventoryRepositoryTest {
 
         val result = inventory.adjustStock(
             1L, product.id, 1L, StockMovementDirection.DECREASE, Quantity.parse("11").getOrNull()!!,
-            "manual_adjustment", null, null, "tester", 2000L,
+            StockMovementReason.MANUAL_CORRECTION_DECREASE, null, null, null, null, null, "tester", 2000L,
         )
         assertIs<DomainResult.Failure>(result)
         assertIs<RepositoryError.InsufficientStock>(result.error)
@@ -118,7 +119,7 @@ class ProductInventoryRepositoryTest {
 
         val result = inventory.adjustStock(
             1L, product.id, 1L, StockMovementDirection.INCREASE, Quantity.parse("5").getOrNull()!!,
-            "purchase_receipt", null, null, "tester", 1000L,
+            StockMovementReason.MANUAL_RECEIPT, null, null, null, null, null, "tester", 1000L,
         )
         assertIs<DomainResult.Success<Quantity>>(result)
         assertEquals(Quantity.zeroOrMore("5")!!, result.value)

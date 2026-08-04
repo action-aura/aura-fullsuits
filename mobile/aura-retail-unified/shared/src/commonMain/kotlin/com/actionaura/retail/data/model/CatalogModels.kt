@@ -45,6 +45,14 @@ data class Product(
     val reorderLevel: Long,
     val isActive: Boolean,
     val createdAtEpochMillis: Long,
+    /**
+     * NEW_COMPLETE_PRODUCT_REQUIREMENT (product-inventory-authority-audit.md)
+     * -- doubles as the optimistic-concurrency version: `updateProduct`
+     * (Catalog.sq) requires the caller's last-read value to still match.
+     * The legacy schema has no `updated_at`/version column at all, so this
+     * is not a port of an existing field.
+     */
+    val updatedAtEpochMillis: Long,
 )
 
 internal const val STATUS_ACTIVE = "active"

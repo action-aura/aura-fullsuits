@@ -161,10 +161,10 @@ class CategoryUseCasesTest {
         val productRepo = SqlDelightProductRepository(db)
 
         val category = (CreateCategoryUseCase(categoryRepo, normalizer).execute(1L, "Beverages", null, 1000L) as DomainResult.Success).value
-        val product = productRepo.insert(
-            1L, "SKU-001", "0000000001", "Cola 330ml", category.id,
+        val product = (productRepo.insert(
+            1L, "SKU-001", "0000000001", "Cola 330ml", "cola 330ml", category.id,
             Money.of(0.5), Money.of(1.99), PercentageRate.trusted(10.0), "can", 24, 2000L,
-        )
+        ) as DomainResult.Success).value
 
         ArchiveCategoryUseCase(categoryRepo).execute(1L, category.id)
 

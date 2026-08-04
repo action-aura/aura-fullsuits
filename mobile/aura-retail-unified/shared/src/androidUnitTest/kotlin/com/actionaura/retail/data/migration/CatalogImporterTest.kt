@@ -3,6 +3,7 @@ package com.actionaura.retail.data.migration
 import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import com.actionaura.retail.db.RetailDatabase
+import com.actionaura.retail.platform.AndroidUnicodeTextNormalizer
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -60,7 +61,7 @@ class CatalogImporterTest {
         val legacyDriver = createSyntheticLegacyDatabase()
         val newDb = newTargetDatabase()
 
-        val result = CatalogImporter.import(legacyDriver, newDb)
+        val result = CatalogImporter.import(legacyDriver, newDb, AndroidUnicodeTextNormalizer())
 
         assertEquals(1, result.branchesImported)
         assertEquals(1, result.categoriesImported)

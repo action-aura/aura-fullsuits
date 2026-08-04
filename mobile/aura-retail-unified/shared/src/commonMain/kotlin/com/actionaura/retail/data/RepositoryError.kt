@@ -14,4 +14,7 @@ sealed class RepositoryError(val code: String) {
     data class LastActiveProtected(val entity: String, val id: String) : RepositoryError("LAST_ACTIVE_PROTECTED")
     data class DuplicateName(val entity: String, val name: String, val conflictingId: String) : RepositoryError("DUPLICATE_NAME")
     data class ValidationFailed(val entity: String, val reason: String) : RepositoryError("VALIDATION_FAILED")
+    data class StaleUpdate(val entity: String, val id: String) : RepositoryError("STALE_UPDATE")
+    data class IdempotencyConflict(val entity: String, val key: String) : RepositoryError("IDEMPOTENCY_CONFLICT")
+    data class DuplicateValue(val entity: String, val field: String, val value: String) : RepositoryError("DUPLICATE_VALUE")
 }

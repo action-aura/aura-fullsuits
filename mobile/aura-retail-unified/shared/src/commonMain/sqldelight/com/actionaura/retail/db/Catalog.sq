@@ -43,12 +43,24 @@ CREATE INDEX categories_company_id ON categories(company_id);
 -- by returns_idempotency (Returns.sq).
 CREATE UNIQUE INDEX categories_company_name ON categories(company_id, name) WHERE status = 'active';
 
+-- M5.5 -- sku/barcode are COLLATE NOCASE: a real audit finding
+-- (product-inventory-authority-audit.md #4) is that the legacy backend's
+-- SKU uniqueness check is case-sensitive while the legacy Android app's
+-- own client-side barcode/SKU scan matching is case-insensitive -- an
+-- existing internal inconsistency in the shipped legacy product, not a
+-- deliberate design. CANONICAL_UNIFIED: resolved by making storage-level
+-- comparison (uniqueness AND lookup) case-insensitive uniformly for both
+-- columns (barcode-and-sku-contract.md) -- the stored byte value itself is
+-- never case-folded, only comparison/uniqueness is. normalized_name and
+-- updated_at are NEW_COMPLETE_PRODUCT_REQUIREMENT additions (audit's own
+-- classification) -- neither exists in the legacy schema.
 CREATE TABLE products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     company_id INTEGER NOT NULL DEFAULT 1,
-    sku TEXT NOT NULL,
-    barcode TEXT,
+    sku TEXT NOT NULL COLLATE NOCASE,
+    barcode TEXT COLLATE NOCASE,
     name TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
     category_id INTEGER REFERENCES categories(id),
     cost_price TEXT NOT NULL DEFAULT '0.00',
     sell_price TEXT NOT NULL DEFAULT '0.00',
@@ -56,12 +68,26 @@ CREATE TABLE products (
     unit TEXT NOT NULL DEFAULT 'pcs',
     reorder_level INTEGER NOT NULL DEFAULT 5,
     status TEXT NOT NULL DEFAULT 'active',
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
 );
 CREATE INDEX products_company_id ON products(company_id);
 CREATE INDEX products_category_id ON products(category_id);
+-- Unconditional (all statuses), matching the real legacy authority exactly
+-- (retail_api.py:253-257 checks for an existing sku regardless of status) --
+-- unlike categories_company_name, this is LEGACY_PARITY, not
+-- CANONICAL_UNIFIED: the legacy system already permanently reserves a SKU
+-- company-wide once used, even after the product is soft-deleted. Proven
+-- by skuCannotBeReusedAfterArchiving (product-domain-contract.md).
 CREATE UNIQUE INDEX products_company_sku ON products(company_id, sku);
-CREATE INDEX products_barcode ON products(barcode);
+-- Partial + unconditional-across-statuses: NULL and '' are both exempt
+-- (never conflict with each other or anything else -- "do not make
+-- multiple null values conflict"), but an archived product's barcode is
+-- NOT exempt -- "do not allow an archived Product barcode to be silently
+-- reused" is an explicit M5.5.2 requirement, unlike Category's own
+-- active-only reuse policy.
+CREATE UNIQUE INDEX products_company_barcode ON products(company_id, barcode) WHERE barcode IS NOT NULL AND barcode != '';
+CREATE INDEX products_normalized_name ON products(company_id, normalized_name);
 
 selectActiveBranches:
 SELECT * FROM branches WHERE company_id = ? AND status = 'active' ORDER BY name;
@@ -82,8 +108,8 @@ insertCategory:
 INSERT INTO categories(company_id, name, description, status, created_at) VALUES (?, ?, ?, 'active', ?);
 
 insertProduct:
-INSERT INTO products(company_id, sku, barcode, name, category_id, cost_price, sell_price, tax_rate, unit, reorder_level, status, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?);
+INSERT INTO products(company_id, sku, barcode, name, normalized_name, category_id, cost_price, sell_price, tax_rate, unit, reorder_level, status, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?);
 
 lastInsertRowId:
 SELECT last_insert_rowid();
@@ -101,8 +127,8 @@ importCategory:
 INSERT INTO categories(id, company_id, name, description, status, created_at) VALUES (?, ?, ?, ?, 'active', ?);
 
 importProduct:
-INSERT INTO products(id, company_id, sku, barcode, name, category_id, cost_price, sell_price, tax_rate, unit, reorder_level, status, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO products(id, company_id, sku, barcode, name, normalized_name, category_id, cost_price, sell_price, tax_rate, unit, reorder_level, status, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- M5.1 -- repository-foundation lookups/mutations. getById intentionally
 -- ignores status (a caller may need to read an archived row, e.g. to
@@ -135,10 +161,57 @@ SELECT p.*, c.name AS category_name
 FROM products p LEFT JOIN categories c ON p.category_id = c.id
 WHERE p.barcode = ? AND p.company_id = ? AND p.status = 'active';
 
+-- M5.5.2 -- any-status barcode lookup for duplicate-detection at
+-- create/update time only (never for scan lookup, which stays
+-- active-only above) -- "do not allow an archived Product barcode to be
+-- silently reused" (barcode-and-sku-contract.md).
+selectProductByBarcodeAnyStatus:
+SELECT * FROM products WHERE barcode = ? AND company_id = ?;
+
 selectProductBySku:
 SELECT p.*, c.name AS category_name
 FROM products p LEFT JOIN categories c ON p.category_id = c.id
 WHERE p.sku = ? AND p.company_id = ?;
 
 updateProductStatus:
-UPDATE products SET status = ? WHERE id = ? AND company_id = ?;
+UPDATE products SET status = ?, updated_at = ? WHERE id = ? AND company_id = ?;
+
+-- M5.5.3 -- optimistic concurrency: the WHERE clause requires the caller's
+-- last-read updated_at to still match. changes() (SQLDelight's
+-- transactionWithResult + this same connection) tells the caller whether
+-- the row actually matched -- zero rows updated means either the product
+-- doesn't exist/belongs to another company, or (far more commonly) someone
+-- else updated it first -- UpdateProductUseCase disambiguates by re-reading
+-- (product-domain-contract.md).
+updateProduct:
+UPDATE products
+SET barcode = ?, name = ?, normalized_name = ?, category_id = ?, cost_price = ?, sell_price = ?, tax_rate = ?, unit = ?, reorder_level = ?, updated_at = ?
+WHERE id = ? AND company_id = ? AND updated_at = ?;
+
+changes:
+SELECT changes();
+
+-- M5.5.1 -- prefix search on the NFKC-normalized name, real-index-backed
+-- (products_normalized_name). Substring/fuzzy search is explicitly out of
+-- scope this milestone (would need SQLite FTS5, not proven necessary yet) --
+-- product-domain-contract.md.
+searchActiveProductsByNormalizedNamePrefix:
+SELECT p.*, c.name AS category_name
+FROM products p LEFT JOIN categories c ON p.category_id = c.id
+WHERE p.company_id = ? AND p.status = 'active' AND p.normalized_name LIKE ? || '%'
+ORDER BY p.normalized_name LIMIT ?;
+
+-- M5.5.12 -- mirrors the legacy dashboard_stats low_stock query exactly
+-- (retail_api.py:131-136, product-inventory-authority-audit.md #6) except
+-- returning the actual rows, not just a count -- the legacy system never
+-- had a route that listed them (low-stock-definition.md).
+selectLowStockProducts:
+SELECT p.*, c.name AS category_name, COALESCE(b.qty, '0') AS total_on_hand
+FROM products p
+LEFT JOIN categories c ON p.category_id = c.id
+LEFT JOIN (
+    SELECT product_id, CAST(SUM(CAST(quantity_on_hand AS REAL)) AS TEXT) AS qty
+    FROM inventory_balances WHERE company_id = ? GROUP BY product_id
+) b ON p.id = b.product_id
+WHERE p.company_id = ? AND p.status = 'active' AND CAST(COALESCE(b.qty, '0') AS REAL) <= p.reorder_level
+ORDER BY p.name;

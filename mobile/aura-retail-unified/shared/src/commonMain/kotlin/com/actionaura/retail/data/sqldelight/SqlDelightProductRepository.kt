@@ -1,20 +1,26 @@
 package com.actionaura.retail.data.sqldelight
 
+import com.actionaura.retail.data.DomainResult
+import com.actionaura.retail.data.LowStockProduct
 import com.actionaura.retail.data.ProductRepository
+import com.actionaura.retail.data.RepositoryError
 import com.actionaura.retail.data.model.Product
 import com.actionaura.retail.data.model.activeToStatus
 import com.actionaura.retail.data.model.statusToActive
 import com.actionaura.retail.data.parseStoredMoney
+import com.actionaura.retail.data.parseStoredQuantity
 import com.actionaura.retail.data.parseStoredRate
 import com.actionaura.retail.db.RetailDatabase
+import com.actionaura.retail.db.SearchActiveProductsByNormalizedNamePrefix
 import com.actionaura.retail.db.SelectActiveProducts
+import com.actionaura.retail.db.SelectLowStockProducts
 import com.actionaura.retail.db.SelectProductByBarcode
 import com.actionaura.retail.db.SelectProductById
 import com.actionaura.retail.db.SelectProductBySku
 import com.actionaura.retail.financial.Money
 import com.actionaura.retail.financial.PercentageRate
 
-/** M5.1 -- real, SQLDelight-backed `ProductRepository`. */
+/** M5.1/M5.5 -- real, SQLDelight-backed `ProductRepository`. */
 class SqlDelightProductRepository(private val db: RetailDatabase) : ProductRepository {
 
     override suspend fun listActive(companyId: Long): List<Product> =
@@ -29,11 +35,20 @@ class SqlDelightProductRepository(private val db: RetailDatabase) : ProductRepos
     override suspend fun getBySku(companyId: Long, sku: String): Product? =
         db.catalogQueries.selectProductBySku(sku, companyId).executeAsOneOrNull()?.toDomain()
 
+    override suspend fun searchActiveByNormalizedNamePrefix(companyId: Long, normalizedPrefix: String, limit: Long): List<Product> =
+        db.catalogQueries.searchActiveProductsByNormalizedNamePrefix(companyId, normalizedPrefix, limit).executeAsList().map { it.toDomain() }
+
+    override suspend fun listLowStock(companyId: Long): List<LowStockProduct> =
+        db.catalogQueries.selectLowStockProducts(companyId, companyId).executeAsList().map {
+            LowStockProduct(it.toDomain(), parseStoredQuantity(it.total_on_hand))
+        }
+
     override suspend fun insert(
         companyId: Long,
         sku: String,
         barcode: String?,
         name: String,
+        normalizedName: String,
         categoryId: Long?,
         costPrice: Money,
         sellPrice: Money,
@@ -41,19 +56,64 @@ class SqlDelightProductRepository(private val db: RetailDatabase) : ProductRepos
         unit: String,
         reorderLevel: Long,
         nowEpochMillis: Long,
-    ): Product {
-        val id = db.transactionWithResult {
-            db.catalogQueries.insertProduct(
-                companyId, sku, barcode, name, categoryId,
-                costPrice.toString(), sellPrice.toString(), taxRate.toString(), unit, reorderLevel, nowEpochMillis,
-            )
-            db.catalogQueries.lastInsertRowId().executeAsOne()
+    ): DomainResult<Product> = db.transactionWithResult {
+        if (db.catalogQueries.selectProductBySku(sku, companyId).executeAsOneOrNull() != null) {
+            return@transactionWithResult DomainResult.Failure(RepositoryError.DuplicateValue("product", "sku", sku))
         }
-        return getById(companyId, id) ?: error("product $id vanished immediately after insert")
+        if (!barcode.isNullOrEmpty() && db.catalogQueries.selectProductByBarcodeAnyStatus(barcode, companyId).executeAsOneOrNull() != null) {
+            return@transactionWithResult DomainResult.Failure(RepositoryError.DuplicateValue("product", "barcode", barcode))
+        }
+        db.catalogQueries.insertProduct(
+            companyId, sku, barcode, name, normalizedName, categoryId,
+            costPrice.toString(), sellPrice.toString(), taxRate.toString(), unit, reorderLevel,
+            nowEpochMillis, nowEpochMillis,
+        )
+        val id = db.catalogQueries.lastInsertRowId().executeAsOne()
+        val created = db.catalogQueries.selectProductById(id, companyId).executeAsOne()
+        DomainResult.Success(created.toDomain())
     }
 
-    override suspend fun setActive(companyId: Long, id: Long, active: Boolean) {
-        db.catalogQueries.updateProductStatus(activeToStatus(active), id, companyId)
+    override suspend fun update(
+        companyId: Long,
+        id: Long,
+        barcode: String?,
+        name: String,
+        normalizedName: String,
+        categoryId: Long?,
+        costPrice: Money,
+        sellPrice: Money,
+        taxRate: PercentageRate,
+        unit: String,
+        reorderLevel: Long,
+        expectedUpdatedAtEpochMillis: Long,
+        nowEpochMillis: Long,
+    ): DomainResult<Product> = db.transactionWithResult {
+        if (!barcode.isNullOrEmpty()) {
+            val conflict = db.catalogQueries.selectProductByBarcodeAnyStatus(barcode, companyId).executeAsOneOrNull()
+            if (conflict != null && conflict.id != id) {
+                return@transactionWithResult DomainResult.Failure(RepositoryError.DuplicateValue("product", "barcode", barcode))
+            }
+        }
+        db.catalogQueries.updateProduct(
+            barcode, name, normalizedName, categoryId,
+            costPrice.toString(), sellPrice.toString(), taxRate.toString(), unit, reorderLevel, nowEpochMillis,
+            id, companyId, expectedUpdatedAtEpochMillis,
+        )
+        val changed = db.catalogQueries.changes().executeAsOne()
+        if (changed == 0L) {
+            val current = db.catalogQueries.selectProductById(id, companyId).executeAsOneOrNull()
+            return@transactionWithResult if (current == null) {
+                DomainResult.Failure(RepositoryError.NotFound("product", id.toString()))
+            } else {
+                DomainResult.Failure(RepositoryError.StaleUpdate("product", id.toString()))
+            }
+        }
+        val updated = db.catalogQueries.selectProductById(id, companyId).executeAsOne()
+        DomainResult.Success(updated.toDomain())
+    }
+
+    override suspend fun setActive(companyId: Long, id: Long, active: Boolean, nowEpochMillis: Long) {
+        db.catalogQueries.updateProductStatus(activeToStatus(active), nowEpochMillis, id, companyId)
     }
 }
 
@@ -61,26 +121,46 @@ private fun SelectActiveProducts.toDomain() = Product(
     id = id, companyId = company_id, sku = sku, barcode = barcode, name = name,
     categoryId = category_id, categoryName = category_name,
     costPrice = parseStoredMoney(cost_price), sellPrice = parseStoredMoney(sell_price), taxRate = parseStoredRate(tax_rate),
-    unit = unit, reorderLevel = reorder_level, isActive = statusToActive(status), createdAtEpochMillis = created_at,
+    unit = unit, reorderLevel = reorder_level, isActive = statusToActive(status),
+    createdAtEpochMillis = created_at, updatedAtEpochMillis = updated_at,
 )
 
 private fun SelectProductById.toDomain() = Product(
     id = id, companyId = company_id, sku = sku, barcode = barcode, name = name,
     categoryId = category_id, categoryName = category_name,
     costPrice = parseStoredMoney(cost_price), sellPrice = parseStoredMoney(sell_price), taxRate = parseStoredRate(tax_rate),
-    unit = unit, reorderLevel = reorder_level, isActive = statusToActive(status), createdAtEpochMillis = created_at,
+    unit = unit, reorderLevel = reorder_level, isActive = statusToActive(status),
+    createdAtEpochMillis = created_at, updatedAtEpochMillis = updated_at,
 )
 
 private fun SelectProductByBarcode.toDomain() = Product(
     id = id, companyId = company_id, sku = sku, barcode = barcode, name = name,
     categoryId = category_id, categoryName = category_name,
     costPrice = parseStoredMoney(cost_price), sellPrice = parseStoredMoney(sell_price), taxRate = parseStoredRate(tax_rate),
-    unit = unit, reorderLevel = reorder_level, isActive = statusToActive(status), createdAtEpochMillis = created_at,
+    unit = unit, reorderLevel = reorder_level, isActive = statusToActive(status),
+    createdAtEpochMillis = created_at, updatedAtEpochMillis = updated_at,
 )
 
 private fun SelectProductBySku.toDomain() = Product(
     id = id, companyId = company_id, sku = sku, barcode = barcode, name = name,
     categoryId = category_id, categoryName = category_name,
     costPrice = parseStoredMoney(cost_price), sellPrice = parseStoredMoney(sell_price), taxRate = parseStoredRate(tax_rate),
-    unit = unit, reorderLevel = reorder_level, isActive = statusToActive(status), createdAtEpochMillis = created_at,
+    unit = unit, reorderLevel = reorder_level, isActive = statusToActive(status),
+    createdAtEpochMillis = created_at, updatedAtEpochMillis = updated_at,
+)
+
+private fun SearchActiveProductsByNormalizedNamePrefix.toDomain() = Product(
+    id = id, companyId = company_id, sku = sku, barcode = barcode, name = name,
+    categoryId = category_id, categoryName = category_name,
+    costPrice = parseStoredMoney(cost_price), sellPrice = parseStoredMoney(sell_price), taxRate = parseStoredRate(tax_rate),
+    unit = unit, reorderLevel = reorder_level, isActive = statusToActive(status),
+    createdAtEpochMillis = created_at, updatedAtEpochMillis = updated_at,
+)
+
+private fun SelectLowStockProducts.toDomain() = Product(
+    id = id, companyId = company_id, sku = sku, barcode = barcode, name = name,
+    categoryId = category_id, categoryName = category_name,
+    costPrice = parseStoredMoney(cost_price), sellPrice = parseStoredMoney(sell_price), taxRate = parseStoredRate(tax_rate),
+    unit = unit, reorderLevel = reorder_level, isActive = statusToActive(status),
+    createdAtEpochMillis = created_at, updatedAtEpochMillis = updated_at,
 )
