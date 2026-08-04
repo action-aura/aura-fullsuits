@@ -1,0 +1,108 @@
+-- M5.8.13/M5.8.14/M5.8.17/M5.8.18 -- real, durable Import Center
+-- persistence: immutable dry-runs, provenance (with a real idempotency
+-- key uniqueness constraint), and a bounded audit log. Additive to the
+-- shared schema (table-count-reconciliation.md's own established
+-- precedent for import_conflicts at M5.5) -- no existing table is
+-- touched.
+
+CREATE TABLE import_dry_runs (
+    id TEXT PRIMARY KEY,
+    company_id INTEGER NOT NULL,
+    branch_id INTEGER,
+    source_hash TEXT NOT NULL,
+    source_display_name TEXT NOT NULL,
+    format TEXT NOT NULL,
+    decoder_version INTEGER NOT NULL,
+    mapping_version INTEGER NOT NULL,
+    schema_version INTEGER NOT NULL,
+    entity_types TEXT NOT NULL,
+    total_rows INTEGER NOT NULL,
+    valid_rows INTEGER NOT NULL,
+    invalid_rows INTEGER NOT NULL,
+    warning_count INTEGER NOT NULL,
+    duplicate_count INTEGER NOT NULL,
+    conflict_count INTEGER NOT NULL,
+    planned_inserts INTEGER NOT NULL,
+    planned_updates INTEGER NOT NULL,
+    planned_skips INTEGER NOT NULL,
+    planned_generated_values INTEGER NOT NULL,
+    commit_eligible INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    consumed_at INTEGER
+);
+CREATE INDEX import_dry_runs_company_id ON import_dry_runs(company_id);
+
+CREATE TABLE import_provenance (
+    import_id TEXT PRIMARY KEY,
+    dry_run_id TEXT NOT NULL REFERENCES import_dry_runs(id),
+    source_hash TEXT NOT NULL,
+    safe_file_name TEXT NOT NULL,
+    format TEXT NOT NULL,
+    company_id INTEGER NOT NULL,
+    branch_id INTEGER,
+    entity_types TEXT NOT NULL,
+    mapping_version INTEGER NOT NULL,
+    schema_version INTEGER NOT NULL,
+    actor_id TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
+    completed_at INTEGER,
+    outcome TEXT NOT NULL,
+    inserted_counts TEXT NOT NULL,
+    updated_counts TEXT NOT NULL,
+    skipped_count INTEGER NOT NULL,
+    warning_count INTEGER NOT NULL,
+    idempotency_key TEXT NOT NULL
+);
+CREATE INDEX import_provenance_company_id ON import_provenance(company_id);
+-- Real idempotency authority: a repeated commit with the identical key
+-- returns the ORIGINAL provenance row (M5.8.17) -- the insert itself
+-- fails on a real UNIQUE violation for a second attempt, which the
+-- repository layer catches and resolves to the original row rather than
+-- inserting a duplicate.
+CREATE UNIQUE INDEX import_provenance_idempotency ON import_provenance(idempotency_key);
+
+CREATE TABLE import_audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    import_id TEXT NOT NULL,
+    timestamp INTEGER NOT NULL,
+    event_code TEXT NOT NULL,
+    detail TEXT NOT NULL
+);
+CREATE INDEX import_audit_log_import_id ON import_audit_log(import_id);
+
+changes:
+SELECT changes();
+
+insertDryRun:
+INSERT INTO import_dry_runs(
+    id, company_id, branch_id, source_hash, source_display_name, format, decoder_version,
+    mapping_version, schema_version, entity_types, total_rows, valid_rows, invalid_rows,
+    warning_count, duplicate_count, conflict_count, planned_inserts, planned_updates,
+    planned_skips, planned_generated_values, commit_eligible, created_at, expires_at, consumed_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL);
+
+selectDryRunById:
+SELECT * FROM import_dry_runs WHERE id = ? AND company_id = ?;
+
+markDryRunConsumed:
+UPDATE import_dry_runs SET consumed_at = ? WHERE id = ? AND company_id = ? AND consumed_at IS NULL;
+
+insertProvenance:
+INSERT INTO import_provenance(
+    import_id, dry_run_id, source_hash, safe_file_name, format, company_id, branch_id,
+    entity_types, mapping_version, schema_version, actor_id, started_at, completed_at,
+    outcome, inserted_counts, updated_counts, skipped_count, warning_count, idempotency_key
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+selectProvenanceByIdempotencyKey:
+SELECT * FROM import_provenance WHERE idempotency_key = ?;
+
+selectProvenanceById:
+SELECT * FROM import_provenance WHERE import_id = ? AND company_id = ?;
+
+insertAuditEntry:
+INSERT INTO import_audit_log(import_id, timestamp, event_code, detail) VALUES (?, ?, ?, ?);
+
+selectAuditEntriesForImport:
+SELECT * FROM import_audit_log WHERE import_id = ? ORDER BY timestamp;

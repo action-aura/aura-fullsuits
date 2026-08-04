@@ -38,6 +38,8 @@ data class ImportDryRun(
     val commitEligible: Boolean,
     val createdAtEpochMillis: Long,
     val expiresAtEpochMillis: Long,
+    /** M5.8.14 -- non-null once a real commit has consumed this dry-run; a second commit attempt against the same dry-run is a real, detected conflict, never silently allowed to proceed. */
+    val consumedAtEpochMillis: Long? = null,
 )
 
 /**
