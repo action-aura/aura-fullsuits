@@ -161,7 +161,17 @@ object CatalogImporter {
                 while (cursor.next().value) {
                     rows += LegacyProduct(
                         id = cursor.getLong(0)!!, companyId = cursor.getLong(1) ?: 1L, sku = cursor.getString(2)!!,
-                        barcode = cursor.getString(3), name = cursor.getString(4)!!, categoryId = cursor.getLong(5),
+                        // Blank-but-present legacy barcodes are normalized to
+                        // null here, at the import boundary -- same policy
+                        // ProductUseCases.validateBarcode already enforces
+                        // for the normal create/update path
+                        // (barcode-and-sku-contract.md) -- so '' never
+                        // actually reaches the products_company_barcode
+                        // partial index's WHERE clause via ANY write path,
+                        // making its `barcode != ''` condition a real,
+                        // future-proofing backstop rather than something any
+                        // code path actually needs to satisfy today.
+                        barcode = cursor.getString(3)?.ifEmpty { null }, name = cursor.getString(4)!!, categoryId = cursor.getLong(5),
                         // REAL -> TEXT: real, honest conversion from the source Double,
                         // never round-tripped through a string first -- see
                         // data-preservation-plan.md's representation-conversion notes.

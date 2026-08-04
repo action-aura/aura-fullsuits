@@ -87,6 +87,18 @@ CREATE UNIQUE INDEX products_company_sku ON products(company_id, sku);
 -- reused" is an explicit M5.5.2 requirement, unlike Category's own
 -- active-only reuse policy.
 CREATE UNIQUE INDEX products_company_barcode ON products(company_id, barcode) WHERE barcode IS NOT NULL AND barcode != '';
+-- M5.5.16 -- real finding, found by actually running EXPLAIN QUERY PLAN at
+-- 10K-product scale, not assumed: SQLite's query planner does not use a
+-- PARTIAL index (products_company_barcode above) unless it can prove the
+-- query's WHERE clause satisfies the index's own partial condition --
+-- confirmed by diagnostic testing that even the maximally-specific query
+-- `WHERE barcode = ? AND company_id = ?` fell back to a much less
+-- selective index (or a full scan) rather than ever choosing the partial
+-- index. A plain, unconditional companion index has no such proof
+-- requirement and was confirmed, by the same real testing, to be chosen
+-- correctly. This index exists PURELY for real lookup performance;
+-- products_company_barcode remains the actual uniqueness authority.
+CREATE INDEX products_barcode_lookup ON products(company_id, barcode);
 CREATE INDEX products_normalized_name ON products(company_id, normalized_name);
 
 selectActiveBranches:
