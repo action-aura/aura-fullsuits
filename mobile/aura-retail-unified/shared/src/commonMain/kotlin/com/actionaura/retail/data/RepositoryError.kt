@@ -1,0 +1,15 @@
+package com.actionaura.retail.data
+
+/**
+ * M5.1 -- stable, machine-readable errors for the general repository layer
+ * (catalog/inventory/settings). Deliberately separate from
+ * `financial.FinancialError`, which is scoped specifically to sale/return
+ * finalization (financial-error-code-map.md). Same discipline applies:
+ * `code` is the stable identifier, no English/Arabic prose here --
+ * localization happens strictly in a later UI-facing layer.
+ */
+sealed class RepositoryError(val code: String) {
+    data class NotFound(val entity: String, val id: String) : RepositoryError("NOT_FOUND")
+    data class InsufficientStock(val productId: String, val have: String, val requested: String) : RepositoryError("INSUFFICIENT_STOCK")
+    data class LastActiveProtected(val entity: String, val id: String) : RepositoryError("LAST_ACTIVE_PROTECTED")
+}

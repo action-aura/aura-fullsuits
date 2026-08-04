@@ -1,0 +1,126 @@
+package com.actionaura.retail.data.sqldelight
+
+import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
+import com.actionaura.retail.data.DomainResult
+import com.actionaura.retail.data.RepositoryError
+import com.actionaura.retail.data.StockMovementDirection
+import com.actionaura.retail.db.RetailDatabase
+import com.actionaura.retail.financial.Money
+import com.actionaura.retail.financial.PercentageRate
+import com.actionaura.retail.financial.Quantity
+import kotlinx.coroutines.test.runTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertNull
+
+/** M5.1 -- real, executed proof of the SQLDelight-backed Product/Inventory repositories. */
+class ProductInventoryRepositoryTest {
+
+    private fun newDb(): RetailDatabase {
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        driver.execute(null, "PRAGMA foreign_keys=ON", 0)
+        RetailDatabase.Schema.create(driver)
+        return RetailDatabase(driver)
+    }
+
+    private suspend fun insertCola(db: RetailDatabase) = SqlDelightProductRepository(db).insert(
+        companyId = 1L, sku = "SKU-001", barcode = "0000000001", name = "Cola 330ml", categoryId = null,
+        costPrice = Money.of(0.5), sellPrice = Money.of(1.99), taxRate = PercentageRate.trusted(10.0),
+        unit = "can", reorderLevel = 24, nowEpochMillis = 1000L,
+    )
+
+    @Test
+    fun productInsertPreservesTypedMoneyAndRateNotRawDouble() = runTest {
+        val db = newDb()
+        val product = insertCola(db)
+
+        // Real proof the round trip through the TEXT column and back
+        // produces exact typed values, not float artifacts -- same
+        // discipline as RetailDatabaseSchemaTest's own sell_price assertion.
+        assertEquals(Money.of(1.99), product.sellPrice)
+        assertEquals("1.99", product.sellPrice.toString())
+        assertEquals(PercentageRate.trusted(10.0).toString(), product.taxRate.toString())
+    }
+
+    @Test
+    fun productLookupByBarcodeAndSku() = runTest {
+        val db = newDb()
+        val product = insertCola(db)
+        val repo = SqlDelightProductRepository(db)
+
+        assertEquals(product.id, repo.getByBarcode(1L, "0000000001")?.id)
+        assertEquals(product.id, repo.getBySku(1L, "SKU-001")?.id)
+        assertNull(repo.getByBarcode(1L, "does-not-exist"))
+    }
+
+    @Test
+    fun archivedProductExcludedFromBarcodeLookupButNotFromGetById() = runTest {
+        val db = newDb()
+        val product = insertCola(db)
+        val repo = SqlDelightProductRepository(db)
+        repo.setActive(1L, product.id, false)
+
+        assertNull(repo.getByBarcode(1L, "0000000001"), "barcode lookup is scan-time and must only resolve active products")
+        assertEquals(product.id, repo.getById(1L, product.id)?.id, "getById is not status-filtered")
+    }
+
+    @Test
+    fun openingStockThenIncreaseThenDecrease() = runTest {
+        val db = newDb()
+        val product = insertCola(db)
+        val inventory = SqlDelightInventoryRepository(db)
+
+        assertEquals(Quantity.ZERO, inventory.getStockOnHand(1L, product.id, 1L))
+
+        inventory.ensureOpeningStock(1L, product.id, 1L, Quantity.zeroOrMore("100")!!)
+        assertEquals(Quantity.zeroOrMore("100")!!, inventory.getStockOnHand(1L, product.id, 1L))
+
+        val afterReceipt = inventory.adjustStock(
+            1L, product.id, 1L, StockMovementDirection.INCREASE, Quantity.parse("50").getOrNull()!!,
+            "purchase_receipt", "PO-1", null, "tester", 2000L,
+        )
+        assertIs<DomainResult.Success<Quantity>>(afterReceipt)
+        assertEquals(Quantity.zeroOrMore("150")!!, afterReceipt.value)
+
+        val afterSale = inventory.adjustStock(
+            1L, product.id, 1L, StockMovementDirection.DECREASE, Quantity.parse("30").getOrNull()!!,
+            "manual_adjustment", null, null, "tester", 3000L,
+        )
+        assertIs<DomainResult.Success<Quantity>>(afterSale)
+        assertEquals(Quantity.zeroOrMore("120")!!, afterSale.value)
+    }
+
+    @Test
+    fun decreaseBeyondOnHandFailsInsufficientStockAndLeavesBalanceUnchanged() = runTest {
+        val db = newDb()
+        val product = insertCola(db)
+        val inventory = SqlDelightInventoryRepository(db)
+        inventory.ensureOpeningStock(1L, product.id, 1L, Quantity.zeroOrMore("10")!!)
+
+        val result = inventory.adjustStock(
+            1L, product.id, 1L, StockMovementDirection.DECREASE, Quantity.parse("11").getOrNull()!!,
+            "manual_adjustment", null, null, "tester", 2000L,
+        )
+        assertIs<DomainResult.Failure>(result)
+        assertIs<RepositoryError.InsufficientStock>(result.error)
+        assertEquals(Quantity.zeroOrMore("10")!!, inventory.getStockOnHand(1L, product.id, 1L), "a rejected decrease must not mutate the balance")
+    }
+
+    @Test
+    fun adjustStockWorksWithNoPriorOpeningStockRow() = runTest {
+        // ensureOpeningStock is never called first -- adjustStock's own
+        // upsertOpeningStock("0") call inside its transaction must create
+        // the row on demand.
+        val db = newDb()
+        val product = insertCola(db)
+        val inventory = SqlDelightInventoryRepository(db)
+
+        val result = inventory.adjustStock(
+            1L, product.id, 1L, StockMovementDirection.INCREASE, Quantity.parse("5").getOrNull()!!,
+            "purchase_receipt", null, null, "tester", 1000L,
+        )
+        assertIs<DomainResult.Success<Quantity>>(result)
+        assertEquals(Quantity.zeroOrMore("5")!!, result.value)
+    }
+}

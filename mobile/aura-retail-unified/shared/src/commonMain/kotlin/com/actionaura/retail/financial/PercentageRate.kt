@@ -46,6 +46,9 @@ class PercentageRate private constructor(internal val raw: BigDecimal) {
         /** For a resolved, trusted rate (e.g. product.tax_rate read from the repository) -- no clamping, matches Python's tax_rate handling. */
         fun trusted(value: Double): PercentageRate = PercentageRate(BigDecimal.fromDouble(value))
 
+        /** Same as `trusted(Double)`, for the M4+ shared schema's TEXT-column representation (database-schema-contract.md rule 1 -- tax_rate is never SQLite REAL). */
+        fun trusted(value: String): PercentageRate = PercentageRate(BigDecimal.parseString(value.trim()))
+
         val ZERO_RATE: PercentageRate = PercentageRate(ZERO)
     }
 

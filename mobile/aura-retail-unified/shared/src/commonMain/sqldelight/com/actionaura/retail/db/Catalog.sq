@@ -93,3 +93,42 @@ INSERT INTO categories(id, company_id, name, description, status, created_at) VA
 importProduct:
 INSERT INTO products(id, company_id, sku, barcode, name, category_id, cost_price, sell_price, tax_rate, unit, reorder_level, status, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- M5.1 -- repository-foundation lookups/mutations. getById intentionally
+-- ignores status (a caller may need to read an archived row, e.g. to
+-- display it or reactivate it) -- only the list* queries above filter to
+-- active.
+
+selectCategoryById:
+SELECT c.*, (SELECT COUNT(*) FROM products p WHERE p.category_id = c.id AND p.status = 'active') AS product_count
+FROM categories c WHERE c.id = ? AND c.company_id = ?;
+
+updateCategoryStatus:
+UPDATE categories SET status = ? WHERE id = ? AND company_id = ?;
+
+selectBranchById:
+SELECT * FROM branches WHERE id = ? AND company_id = ?;
+
+updateBranchStatus:
+UPDATE branches SET status = ? WHERE id = ? AND company_id = ?;
+
+countActiveBranches:
+SELECT COUNT(*) FROM branches WHERE company_id = ? AND status = 'active';
+
+selectProductById:
+SELECT p.*, c.name AS category_name
+FROM products p LEFT JOIN categories c ON p.category_id = c.id
+WHERE p.id = ? AND p.company_id = ?;
+
+selectProductByBarcode:
+SELECT p.*, c.name AS category_name
+FROM products p LEFT JOIN categories c ON p.category_id = c.id
+WHERE p.barcode = ? AND p.company_id = ? AND p.status = 'active';
+
+selectProductBySku:
+SELECT p.*, c.name AS category_name
+FROM products p LEFT JOIN categories c ON p.category_id = c.id
+WHERE p.sku = ? AND p.company_id = ?;
+
+updateProductStatus:
+UPDATE products SET status = ? WHERE id = ? AND company_id = ?;
