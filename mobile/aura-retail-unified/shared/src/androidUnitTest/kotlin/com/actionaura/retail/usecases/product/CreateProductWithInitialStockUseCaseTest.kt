@@ -1,8 +1,9 @@
-package com.actionaura.retail.usecases.product
+﻿package com.actionaura.retail.usecases.product
 
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import com.actionaura.retail.data.DomainResult
 import com.actionaura.retail.data.RepositoryError
+import com.actionaura.retail.data.sqldelight.DatabaseWriteGate
 import com.actionaura.retail.data.sqldelight.SqlDelightBranchRepository
 import com.actionaura.retail.data.sqldelight.SqlDelightCategoryRepository
 import com.actionaura.retail.data.sqldelight.SqlDelightInventoryRepository
@@ -35,9 +36,10 @@ class CreateProductWithInitialStockUseCaseTest {
     @Test
     fun createWithInitialStockPersistsProductAndOpeningStockTogether() = runTest {
         val db = newDb()
-        val branchRepo = SqlDelightBranchRepository(db)
+        val gate = DatabaseWriteGate()
+        val branchRepo = SqlDelightBranchRepository(db, gate)
         val branch = branchRepo.insert(1L, "Main", null, null, 500L)
-        val useCase = CreateProductWithInitialStockUseCase(SqlDelightProductRepository(db), SqlDelightCategoryRepository(db), branchRepo, normalizer)
+        val useCase = CreateProductWithInitialStockUseCase(SqlDelightProductRepository(db, gate), SqlDelightCategoryRepository(db, gate), branchRepo, normalizer)
 
         val result = useCase.execute(
             1L, "SKU-100", null, "Cola", null, Money.of(0.5), Money.of(1.5), PercentageRate.trusted(0.0), "can", 5,
@@ -46,7 +48,7 @@ class CreateProductWithInitialStockUseCaseTest {
         assertIs<DomainResult.Success<*>>(result)
         val product = (result as DomainResult.Success).value
 
-        val inventory = SqlDelightInventoryRepository(db)
+        val inventory = SqlDelightInventoryRepository(db, gate)
         assertEquals(Quantity.zeroOrMore("100")!!, inventory.getStockOnHand(1L, product.id, branch.id))
         val history = inventory.listMovementHistory(1L, product.id, 10)
         assertEquals(1, history.size)
@@ -60,9 +62,10 @@ class CreateProductWithInitialStockUseCaseTest {
         // LEGACY_PARITY: matches create_product()'s own "only if
         // initial_stock>0" behavior (product-inventory-authority-audit.md #2).
         val db = newDb()
-        val branchRepo = SqlDelightBranchRepository(db)
+        val gate = DatabaseWriteGate()
+        val branchRepo = SqlDelightBranchRepository(db, gate)
         val branch = branchRepo.insert(1L, "Main", null, null, 500L)
-        val useCase = CreateProductWithInitialStockUseCase(SqlDelightProductRepository(db), SqlDelightCategoryRepository(db), branchRepo, normalizer)
+        val useCase = CreateProductWithInitialStockUseCase(SqlDelightProductRepository(db, gate), SqlDelightCategoryRepository(db, gate), branchRepo, normalizer)
 
         val result = useCase.execute(
             1L, "SKU-101", null, "Cola", null, Money.ZERO, Money.of(1.0), PercentageRate.trusted(0.0), "can", 5,
@@ -70,7 +73,7 @@ class CreateProductWithInitialStockUseCaseTest {
         )
         assertIs<DomainResult.Success<*>>(result)
         val product = (result as DomainResult.Success).value
-        assertTrue(SqlDelightInventoryRepository(db).listMovementHistory(1L, product.id, 10).isEmpty())
+        assertTrue(SqlDelightInventoryRepository(db, gate).listMovementHistory(1L, product.id, 10).isEmpty())
     }
 
     @Test
@@ -78,13 +81,14 @@ class CreateProductWithInitialStockUseCaseTest {
         // Proves real atomicity, not just "the stock write failed" -- the
         // PRODUCT row must not exist either after a rejected attempt.
         val db = newDb()
-        val branchRepo = SqlDelightBranchRepository(db)
+        val gate = DatabaseWriteGate()
+        val branchRepo = SqlDelightBranchRepository(db, gate)
         val branch = branchRepo.insert(1L, "Main", null, null, 500L)
         branchRepo.insert(1L, "Second", null, null, 600L) // so "Main" isn't the last active branch
         DeactivateBranchUseCase(branchRepo).execute(1L, branch.id)
 
-        val productRepo = SqlDelightProductRepository(db)
-        val useCase = CreateProductWithInitialStockUseCase(productRepo, SqlDelightCategoryRepository(db), branchRepo, normalizer)
+        val productRepo = SqlDelightProductRepository(db, gate)
+        val useCase = CreateProductWithInitialStockUseCase(productRepo, SqlDelightCategoryRepository(db, gate), branchRepo, normalizer)
         val result = useCase.execute(
             1L, "SKU-102", null, "Cola", null, Money.ZERO, Money.of(1.0), PercentageRate.trusted(0.0), "can", 5,
             branch.id, Quantity.parse("10").getOrNull()!!, "tester", null, 1000L,
@@ -97,9 +101,10 @@ class CreateProductWithInitialStockUseCaseTest {
     @Test
     fun retryWithSameIdempotencyKeyReturnsOriginalProductNotADuplicate() = runTest {
         val db = newDb()
-        val branchRepo = SqlDelightBranchRepository(db)
+        val gate = DatabaseWriteGate()
+        val branchRepo = SqlDelightBranchRepository(db, gate)
         val branch = branchRepo.insert(1L, "Main", null, null, 500L)
-        val useCase = CreateProductWithInitialStockUseCase(SqlDelightProductRepository(db), SqlDelightCategoryRepository(db), branchRepo, normalizer)
+        val useCase = CreateProductWithInitialStockUseCase(SqlDelightProductRepository(db, gate), SqlDelightCategoryRepository(db, gate), branchRepo, normalizer)
 
         val first = useCase.execute(
             1L, "SKU-103", null, "Cola", null, Money.ZERO, Money.of(1.0), PercentageRate.trusted(0.0), "can", 5,
@@ -116,6 +121,6 @@ class CreateProductWithInitialStockUseCaseTest {
         assertEquals(firstProduct.id, (retry as DomainResult.Success).value.id)
 
         // Exactly one movement -- the retry did not double-apply the opening stock.
-        assertEquals(1, SqlDelightInventoryRepository(db).listMovementHistory(1L, firstProduct.id, 10).size)
+        assertEquals(1, SqlDelightInventoryRepository(db, gate).listMovementHistory(1L, firstProduct.id, 10).size)
     }
 }

@@ -1,9 +1,11 @@
-package com.actionaura.retail.data.migration
+﻿package com.actionaura.retail.data.migration
 
 import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
+import com.actionaura.retail.data.sqldelight.DatabaseWriteGate
 import com.actionaura.retail.db.RetailDatabase
 import com.actionaura.retail.platform.AndroidUnicodeTextNormalizer
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -57,11 +59,12 @@ class CatalogImporterTest {
     }
 
     @Test
-    fun importsRealLegacyShapedDataWithPreservedIdsAndConvertedTypes() {
+    fun importsRealLegacyShapedDataWithPreservedIdsAndConvertedTypes() = runTest {
         val legacyDriver = createSyntheticLegacyDatabase()
         val newDb = newTargetDatabase()
+        val gate = DatabaseWriteGate()
 
-        val result = CatalogImporter.import(legacyDriver, newDb, AndroidUnicodeTextNormalizer())
+        val result = CatalogImporter.import(legacyDriver, newDb, gate, AndroidUnicodeTextNormalizer())
 
         assertEquals(1, result.branchesImported)
         assertEquals(1, result.categoriesImported)
@@ -79,7 +82,7 @@ class CatalogImporterTest {
     }
 
     @Test
-    fun legacySourceWithDuplicateBarcodesAcrossProductsImportsWithoutThrowing() {
+    fun legacySourceWithDuplicateBarcodesAcrossProductsImportsWithoutThrowing() = runTest {
         // M5.5.15 -- real check, not assumed: the legacy authority permits
         // duplicate barcodes across products (product-inventory-authority-
         // audit.md #4, no uniqueness enforced), but M5.5 added a REAL
@@ -97,8 +100,9 @@ class CatalogImporterTest {
             0,
         )
         val newDb = newTargetDatabase()
+        val gate = DatabaseWriteGate()
 
-        val result = CatalogImporter.import(legacyDriver, newDb, AndroidUnicodeTextNormalizer())
+        val result = CatalogImporter.import(legacyDriver, newDb, gate, AndroidUnicodeTextNormalizer())
         assertEquals(2, result.productsImported)
         assertEquals(1, result.duplicateBarcodesDropped)
 
@@ -108,7 +112,7 @@ class CatalogImporterTest {
     }
 
     @Test
-    fun legacySourceWithDuplicateSkusSkipsTheLaterRowRatherThanThrowing() {
+    fun legacySourceWithDuplicateSkusSkipsTheLaterRowRatherThanThrowing() = runTest {
         val legacyDriver = createSyntheticLegacyDatabase()
         legacyDriver.execute(
             null,
@@ -117,26 +121,28 @@ class CatalogImporterTest {
             0,
         )
         val newDb = newTargetDatabase()
+        val gate = DatabaseWriteGate()
 
-        val result = CatalogImporter.import(legacyDriver, newDb, AndroidUnicodeTextNormalizer())
+        val result = CatalogImporter.import(legacyDriver, newDb, gate, AndroidUnicodeTextNormalizer())
         assertEquals(1, result.productsImported)
         assertEquals(1, result.duplicateSkuProductsSkipped)
         assertEquals(1, newDb.catalogQueries.selectActiveProducts(1L).executeAsList().size)
     }
 
     @Test
-    fun reRunningImportIsIdempotentAndCreatesNoDuplicates() {
+    fun reRunningImportIsIdempotentAndCreatesNoDuplicates() = runTest {
         // M5.5 follow-up -- real proof: running import() TWICE against the
         // SAME target database (a full re-run, or a resumed partial run)
         // must produce the identical end state, not duplicate rows or throw.
         val legacyDriver = createSyntheticLegacyDatabase()
         val newDb = newTargetDatabase()
+        val gate = DatabaseWriteGate()
 
-        val first = CatalogImporter.import(legacyDriver, newDb, AndroidUnicodeTextNormalizer())
+        val first = CatalogImporter.import(legacyDriver, newDb, gate, AndroidUnicodeTextNormalizer())
         assertEquals(1, first.productsImported)
         assertEquals(0, first.productsAlreadyPresent)
 
-        val second = CatalogImporter.import(legacyDriver, newDb, AndroidUnicodeTextNormalizer())
+        val second = CatalogImporter.import(legacyDriver, newDb, gate, AndroidUnicodeTextNormalizer())
         assertEquals(0, second.productsImported, "nothing new to import on the second run")
         assertEquals(1, second.productsAlreadyPresent, "the previously-imported product must be recognized as already present, not reprocessed")
         assertEquals(1, second.branchesAlreadyPresent)
@@ -147,7 +153,7 @@ class CatalogImporterTest {
     }
 
     @Test
-    fun duplicateBarcodeConflictIsRecordedInTheAuditTrail() {
+    fun duplicateBarcodeConflictIsRecordedInTheAuditTrail() = runTest {
         // "creates an auditable migration mapping" / "records the original
         // conflicting value" / "records the resulting canonical value" --
         // real, durable rows in import_conflicts, not just an in-memory
@@ -160,7 +166,8 @@ class CatalogImporterTest {
             0,
         )
         val newDb = newTargetDatabase()
-        CatalogImporter.import(legacyDriver, newDb, AndroidUnicodeTextNormalizer())
+        val gate = DatabaseWriteGate()
+        CatalogImporter.import(legacyDriver, newDb, gate, AndroidUnicodeTextNormalizer())
 
         val conflicts = newDb.catalogQueries.selectImportConflicts(1L).executeAsList()
         assertEquals(1, conflicts.size)
@@ -173,7 +180,7 @@ class CatalogImporterTest {
     }
 
     @Test
-    fun duplicateSkuConflictIsRecordedInTheAuditTrail() {
+    fun duplicateSkuConflictIsRecordedInTheAuditTrail() = runTest {
         val legacyDriver = createSyntheticLegacyDatabase()
         legacyDriver.execute(
             null,
@@ -182,7 +189,8 @@ class CatalogImporterTest {
             0,
         )
         val newDb = newTargetDatabase()
-        CatalogImporter.import(legacyDriver, newDb, AndroidUnicodeTextNormalizer())
+        val gate = DatabaseWriteGate()
+        CatalogImporter.import(legacyDriver, newDb, gate, AndroidUnicodeTextNormalizer())
 
         val conflicts = newDb.catalogQueries.selectImportConflicts(1L).executeAsList()
         assertEquals(1, conflicts.size)
@@ -193,7 +201,7 @@ class CatalogImporterTest {
     }
 
     @Test
-    fun resumedPartialImportDoesNotReallowABarcodeAlreadyClaimedByAnEarlierRun() {
+    fun resumedPartialImportDoesNotReallowABarcodeAlreadyClaimedByAnEarlierRun() = runTest {
         // Real proof dedup state is seeded from the TARGET database, not
         // just from this loop's own in-memory set -- simulates: product 1
         // (barcode 000111) was already imported by an earlier, separate
@@ -209,12 +217,13 @@ class CatalogImporterTest {
             0,
         )
         val newDb = newTargetDatabase()
+        val gate = DatabaseWriteGate()
         // Simulate "product 1 already imported by an earlier run" directly,
         // bypassing CatalogImporter -- exactly what a real prior partial
         // run would have left behind.
         newDb.catalogQueries.importProduct(1L, 1L, "SKU-001", "000111", "Cola 330ml", "cola 330ml", null, "0.50", "1.99", "10", "can", 24, "active", 1000L, 1000L)
 
-        val result = CatalogImporter.import(legacyDriver, newDb, AndroidUnicodeTextNormalizer())
+        val result = CatalogImporter.import(legacyDriver, newDb, gate, AndroidUnicodeTextNormalizer())
         assertEquals(1, result.productsAlreadyPresent, "product 1 recognized as already present")
         assertEquals(1, result.productsImported, "only product 2 is genuinely new")
         assertEquals(1, result.duplicateBarcodesDropped, "product 2's barcode must still be dropped -- it collides with product 1's, even though product 1 wasn't reprocessed this call")

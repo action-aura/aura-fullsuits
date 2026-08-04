@@ -1,8 +1,9 @@
-package com.actionaura.retail.usecases.category
+﻿package com.actionaura.retail.usecases.category
 
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import com.actionaura.retail.data.DomainResult
 import com.actionaura.retail.data.RepositoryError
+import com.actionaura.retail.data.sqldelight.DatabaseWriteGate
 import com.actionaura.retail.data.sqldelight.SqlDelightCategoryRepository
 import com.actionaura.retail.data.sqldelight.SqlDelightProductRepository
 import com.actionaura.retail.db.RetailDatabase
@@ -37,7 +38,7 @@ class CategoryUseCasesTest {
 
     @Test
     fun createRejectsExactDuplicateNameCaseInsensitive() = runTest {
-        val repo = SqlDelightCategoryRepository(newDb())
+        val repo = SqlDelightCategoryRepository(newDb(), DatabaseWriteGate())
         val create = CreateCategoryUseCase(repo, normalizer)
 
         val first = create.execute(1L, "Beverages", null, 1000L)
@@ -53,7 +54,7 @@ class CategoryUseCasesTest {
         // Real NFKC compatibility folding: full-width Latin letters
         // (U+FF21-FF3A range) decompose to their standard-width
         // equivalents. "ＣＯＬＡ" is full-width "COLA".
-        val repo = SqlDelightCategoryRepository(newDb())
+        val repo = SqlDelightCategoryRepository(newDb(), DatabaseWriteGate())
         val create = CreateCategoryUseCase(repo, normalizer)
 
         val first = create.execute(1L, "Cola", null, 1000L)
@@ -71,7 +72,7 @@ class CategoryUseCasesTest {
         // codepoint). Two real, distinct Unicode codepoints an Arabic input
         // method could plausibly produce for what a user perceives as the
         // same letter.
-        val repo = SqlDelightCategoryRepository(newDb())
+        val repo = SqlDelightCategoryRepository(newDb(), DatabaseWriteGate())
         val create = CreateCategoryUseCase(repo, normalizer)
 
         val standard = create.execute(1L, "المشروبات", null, 1000L) // المشروبات (beverages)
@@ -84,7 +85,7 @@ class CategoryUseCasesTest {
 
     @Test
     fun createAllowsGenuinelyDifferentNames() = runTest {
-        val repo = SqlDelightCategoryRepository(newDb())
+        val repo = SqlDelightCategoryRepository(newDb(), DatabaseWriteGate())
         val create = CreateCategoryUseCase(repo, normalizer)
 
         assertIs<DomainResult.Success<*>>(create.execute(1L, "Beverages", null, 1000L))
@@ -93,7 +94,7 @@ class CategoryUseCasesTest {
 
     @Test
     fun createRejectsBlankName() = runTest {
-        val repo = SqlDelightCategoryRepository(newDb())
+        val repo = SqlDelightCategoryRepository(newDb(), DatabaseWriteGate())
         val create = CreateCategoryUseCase(repo, normalizer)
 
         val result = create.execute(1L, "   ", null, 1000L)
@@ -103,7 +104,7 @@ class CategoryUseCasesTest {
 
     @Test
     fun archiveThenReactivateRoundTrip() = runTest {
-        val repo = SqlDelightCategoryRepository(newDb())
+        val repo = SqlDelightCategoryRepository(newDb(), DatabaseWriteGate())
         val create = CreateCategoryUseCase(repo, normalizer)
         val archive = ArchiveCategoryUseCase(repo)
         val reactivate = ReactivateCategoryUseCase(repo, normalizer)
@@ -119,7 +120,7 @@ class CategoryUseCasesTest {
 
     @Test
     fun reactivateRejectedIfADuplicateWasCreatedWhileArchived() = runTest {
-        val repo = SqlDelightCategoryRepository(newDb())
+        val repo = SqlDelightCategoryRepository(newDb(), DatabaseWriteGate())
         val create = CreateCategoryUseCase(repo, normalizer)
         val archive = ArchiveCategoryUseCase(repo)
         val reactivate = ReactivateCategoryUseCase(repo, normalizer)
@@ -137,7 +138,7 @@ class CategoryUseCasesTest {
 
     @Test
     fun archiveIsIdempotent() = runTest {
-        val repo = SqlDelightCategoryRepository(newDb())
+        val repo = SqlDelightCategoryRepository(newDb(), DatabaseWriteGate())
         val create = CreateCategoryUseCase(repo, normalizer)
         val archive = ArchiveCategoryUseCase(repo)
 
@@ -148,7 +149,7 @@ class CategoryUseCasesTest {
 
     @Test
     fun archiveUnknownCategoryReturnsNotFound() = runTest {
-        val repo = SqlDelightCategoryRepository(newDb())
+        val repo = SqlDelightCategoryRepository(newDb(), DatabaseWriteGate())
         val result = ArchiveCategoryUseCase(repo).execute(1L, 999L)
         assertIs<DomainResult.Failure>(result)
         assertIs<RepositoryError.NotFound>(result.error)
@@ -157,8 +158,9 @@ class CategoryUseCasesTest {
     @Test
     fun archivingCategoryPreservesExistingProductAssociation() = runTest {
         val db = newDb()
-        val categoryRepo = SqlDelightCategoryRepository(db)
-        val productRepo = SqlDelightProductRepository(db)
+        val gate = DatabaseWriteGate()
+        val categoryRepo = SqlDelightCategoryRepository(db, gate)
+        val productRepo = SqlDelightProductRepository(db, gate)
 
         val category = (CreateCategoryUseCase(categoryRepo, normalizer).execute(1L, "Beverages", null, 1000L) as DomainResult.Success).value
         val product = (productRepo.insert(

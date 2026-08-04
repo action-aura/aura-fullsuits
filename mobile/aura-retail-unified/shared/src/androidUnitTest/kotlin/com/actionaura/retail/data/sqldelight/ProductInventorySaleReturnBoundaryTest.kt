@@ -30,10 +30,10 @@ class ProductInventorySaleReturnBoundaryTest {
         return RetailDatabase(driver)
     }
 
-    private suspend fun setup(db: RetailDatabase): Triple<SqlDelightProductRepository, SqlDelightBranchRepository, SqlDelightInventoryRepository> {
-        val productRepo = SqlDelightProductRepository(db)
-        val branchRepo = SqlDelightBranchRepository(db)
-        val inventoryRepo = SqlDelightInventoryRepository(db)
+    private suspend fun setup(db: RetailDatabase, gate: DatabaseWriteGate = DatabaseWriteGate()): Triple<SqlDelightProductRepository, SqlDelightBranchRepository, SqlDelightInventoryRepository> {
+        val productRepo = SqlDelightProductRepository(db, gate)
+        val branchRepo = SqlDelightBranchRepository(db, gate)
+        val inventoryRepo = SqlDelightInventoryRepository(db, gate)
         return Triple(productRepo, branchRepo, inventoryRepo)
     }
 

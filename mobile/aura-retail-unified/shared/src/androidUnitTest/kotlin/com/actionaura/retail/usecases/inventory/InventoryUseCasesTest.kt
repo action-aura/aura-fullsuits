@@ -1,10 +1,11 @@
-package com.actionaura.retail.usecases.inventory
+﻿package com.actionaura.retail.usecases.inventory
 
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import com.actionaura.retail.data.DomainResult
 import com.actionaura.retail.data.RepositoryError
 import com.actionaura.retail.data.StockMovementDirection
 import com.actionaura.retail.data.StockMovementReason
+import com.actionaura.retail.data.sqldelight.DatabaseWriteGate
 import com.actionaura.retail.data.sqldelight.SqlDelightBranchRepository
 import com.actionaura.retail.data.sqldelight.SqlDelightInventoryRepository
 import com.actionaura.retail.data.sqldelight.SqlDelightProductRepository
@@ -35,14 +36,15 @@ class InventoryUseCasesTest {
     @Test
     fun adjustInventoryRejectsArchivedBranch() = runTest {
         val db = newDb()
-        val branchRepo = SqlDelightBranchRepository(db)
-        val productRepo = SqlDelightProductRepository(db)
+        val gate = DatabaseWriteGate()
+        val branchRepo = SqlDelightBranchRepository(db, gate)
+        val productRepo = SqlDelightProductRepository(db, gate)
         val branch = branchRepo.insert(1L, "Main", null, null, 500L)
         branchRepo.insert(1L, "Second", null, null, 600L)
         val product = insertCola(productRepo)
         DeactivateBranchUseCase(branchRepo).execute(1L, branch.id)
 
-        val useCase = AdjustInventoryUseCase(SqlDelightInventoryRepository(db), productRepo, branchRepo)
+        val useCase = AdjustInventoryUseCase(SqlDelightInventoryRepository(db, gate), productRepo, branchRepo)
         val result = useCase.execute(
             1L, product.id, branch.id, StockMovementDirection.INCREASE, Quantity.parse("10").getOrNull()!!,
             StockMovementReason.MANUAL_RECEIPT, null, null, null, null, null, "tester", 2000L,
@@ -54,9 +56,10 @@ class InventoryUseCasesTest {
     @Test
     fun adjustInventoryRejectsUnknownProduct() = runTest {
         val db = newDb()
-        val branchRepo = SqlDelightBranchRepository(db)
+        val gate = DatabaseWriteGate()
+        val branchRepo = SqlDelightBranchRepository(db, gate)
         val branch = branchRepo.insert(1L, "Main", null, null, 500L)
-        val useCase = AdjustInventoryUseCase(SqlDelightInventoryRepository(db), SqlDelightProductRepository(db), branchRepo)
+        val useCase = AdjustInventoryUseCase(SqlDelightInventoryRepository(db, gate), SqlDelightProductRepository(db, gate), branchRepo)
 
         val result = useCase.execute(
             1L, 999L, branch.id, StockMovementDirection.INCREASE, Quantity.parse("10").getOrNull()!!,
@@ -69,9 +72,10 @@ class InventoryUseCasesTest {
     @Test
     fun reconcileToCountedQuantityRecordsCorrectDeltaBothDirections() = runTest {
         val db = newDb()
-        val branchRepo = SqlDelightBranchRepository(db)
-        val productRepo = SqlDelightProductRepository(db)
-        val inventoryRepo = SqlDelightInventoryRepository(db)
+        val gate = DatabaseWriteGate()
+        val branchRepo = SqlDelightBranchRepository(db, gate)
+        val productRepo = SqlDelightProductRepository(db, gate)
+        val inventoryRepo = SqlDelightInventoryRepository(db, gate)
         val branch = branchRepo.insert(1L, "Main", null, null, 500L)
         val product = insertCola(productRepo)
         inventoryRepo.ensureOpeningStock(1L, product.id, branch.id, Quantity.zeroOrMore("50")!!)
@@ -102,9 +106,10 @@ class InventoryUseCasesTest {
         // the recorded movement must equal what was actually there, not
         // an assumed value.
         val db = newDb()
-        val branchRepo = SqlDelightBranchRepository(db)
-        val productRepo = SqlDelightProductRepository(db)
-        val inventoryRepo = SqlDelightInventoryRepository(db)
+        val gate = DatabaseWriteGate()
+        val branchRepo = SqlDelightBranchRepository(db, gate)
+        val productRepo = SqlDelightProductRepository(db, gate)
+        val inventoryRepo = SqlDelightInventoryRepository(db, gate)
         val branch = branchRepo.insert(1L, "Main", null, null, 500L)
         val product = insertCola(productRepo)
         inventoryRepo.ensureOpeningStock(1L, product.id, branch.id, Quantity.zeroOrMore("73")!!)
@@ -120,9 +125,10 @@ class InventoryUseCasesTest {
     @Test
     fun getLowStockProductsReflectsSumAcrossBranches() = runTest {
         val db = newDb()
-        val branchRepo = SqlDelightBranchRepository(db)
-        val productRepo = SqlDelightProductRepository(db)
-        val inventoryRepo = SqlDelightInventoryRepository(db)
+        val gate = DatabaseWriteGate()
+        val branchRepo = SqlDelightBranchRepository(db, gate)
+        val productRepo = SqlDelightProductRepository(db, gate)
+        val inventoryRepo = SqlDelightInventoryRepository(db, gate)
         val branchA = branchRepo.insert(1L, "A", null, null, 500L)
         val branchB = branchRepo.insert(1L, "B", null, null, 600L)
         // reorder_level defaults to 5 in insertCola's own product (unit=can, reorderLevel=5).

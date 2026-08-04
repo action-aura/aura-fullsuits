@@ -2,8 +2,10 @@ package com.actionaura.retail.data.migration
 
 import app.cash.sqldelight.db.SqlDriver
 import app.cash.sqldelight.db.QueryResult
+import com.actionaura.retail.data.sqldelight.DatabaseWriteGate
 import com.actionaura.retail.db.RetailDatabase
 import com.actionaura.retail.platform.UnicodeTextNormalizer
+import kotlinx.coroutines.sync.withLock
 
 /**
  * M4 -- real, working first slice of the Android data-preservation import
@@ -65,6 +67,15 @@ object CatalogImporter {
      *   `retail.db` file (read-only in practice -- this function never
      *   writes to it).
      * @param newDb the target, already-schema-created RetailDatabase.
+     * @param gate the SAME `DatabaseWriteGate` every `SqlDelightXxxRepository`
+     *   wrapping `newDb` was constructed with (stock-concurrency-report.md).
+     *   Real, additional finding, M5.5 mandatory follow-up: this function
+     *   used to call `newDb.transaction { ... }` directly, completely
+     *   bypassing the gate -- a concurrent repository operation on the same
+     *   database during an import could hit the exact same real
+     *   `SQLITE_ERROR`/lost-update failures the gate exists to prevent,
+     *   because nothing serialized the import against it. Proven fixed by
+     *   `importAndProductCreationDoNotRace` (`ProductInventoryConcurrencyTest`).
      * @param normalizer computes `products.normalized_name` (M5.5 addition,
      *   NEW_COMPLETE_PRODUCT_REQUIREMENT -- the legacy source has no such
      *   column, so every imported product's searchable name is derived
@@ -81,7 +92,7 @@ object CatalogImporter {
      * resumed partial run cannot re-allow a barcode/SKU an earlier partial
      * run already resolved.
      */
-    fun import(legacyDriver: SqlDriver, newDb: RetailDatabase, normalizer: UnicodeTextNormalizer): CatalogImportResult {
+    suspend fun import(legacyDriver: SqlDriver, newDb: RetailDatabase, gate: DatabaseWriteGate, normalizer: UnicodeTextNormalizer): CatalogImportResult = gate.mutex.withLock {
         val branches = readLegacyBranches(legacyDriver)
         val categories = readLegacyCategories(legacyDriver)
         val products = readLegacyProducts(legacyDriver)

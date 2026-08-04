@@ -1,8 +1,9 @@
-package com.actionaura.retail.usecases.branch
+﻿package com.actionaura.retail.usecases.branch
 
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import com.actionaura.retail.data.DomainResult
 import com.actionaura.retail.data.RepositoryError
+import com.actionaura.retail.data.sqldelight.DatabaseWriteGate
 import com.actionaura.retail.data.sqldelight.SqlDelightBranchRepository
 import com.actionaura.retail.data.sqldelight.SqlDelightSettingsRepository
 import com.actionaura.retail.db.RetailDatabase
@@ -24,7 +25,7 @@ class BranchUseCasesTest {
 
     @Test
     fun ensureDefaultBranchCreatesExactlyOneMainBranchOnFirstCall() = runTest {
-        val repo = SqlDelightBranchRepository(newDb())
+        val repo = SqlDelightBranchRepository(newDb(), DatabaseWriteGate())
         val useCase = EnsureDefaultBranchUseCase(repo)
 
         val first = useCase.execute(1L, 1000L)
@@ -40,7 +41,7 @@ class BranchUseCasesTest {
 
     @Test
     fun ensureDefaultBranchReturnsLowestIdActiveBranchWhenSeveralExist() = runTest {
-        val repo = SqlDelightBranchRepository(newDb())
+        val repo = SqlDelightBranchRepository(newDb(), DatabaseWriteGate())
         val second = repo.insert(1L, "Second", null, null, 1000L)
         val first = repo.insert(1L, "First", null, null, 2000L) // inserted second, but note: id ordering, not creation-time ordering, is the deterministic rule
         // "Second" was inserted first, so it has the lower id -- the
@@ -53,8 +54,9 @@ class BranchUseCasesTest {
     @Test
     fun currentBranchDefaultsToDeterministicFallbackWhenNoneSelected() = runTest {
         val db = newDb()
-        val branchRepo = SqlDelightBranchRepository(db)
-        val settingsRepo = SqlDelightSettingsRepository(db)
+        val gate = DatabaseWriteGate()
+        val branchRepo = SqlDelightBranchRepository(db, gate)
+        val settingsRepo = SqlDelightSettingsRepository(db, gate)
         val branch = branchRepo.insert(1L, "Main", null, null, 1000L)
 
         val current = GetCurrentBranchUseCase(branchRepo, settingsRepo).execute(1L)
@@ -64,8 +66,9 @@ class BranchUseCasesTest {
     @Test
     fun setCurrentBranchThenGetReturnsIt() = runTest {
         val db = newDb()
-        val branchRepo = SqlDelightBranchRepository(db)
-        val settingsRepo = SqlDelightSettingsRepository(db)
+        val gate = DatabaseWriteGate()
+        val branchRepo = SqlDelightBranchRepository(db, gate)
+        val settingsRepo = SqlDelightSettingsRepository(db, gate)
         branchRepo.insert(1L, "First", null, null, 1000L)
         val second = branchRepo.insert(1L, "Second", null, null, 2000L)
 
@@ -79,8 +82,9 @@ class BranchUseCasesTest {
     @Test
     fun setCurrentBranchRejectsArchivedBranch() = runTest {
         val db = newDb()
-        val branchRepo = SqlDelightBranchRepository(db)
-        val settingsRepo = SqlDelightSettingsRepository(db)
+        val gate = DatabaseWriteGate()
+        val branchRepo = SqlDelightBranchRepository(db, gate)
+        val settingsRepo = SqlDelightSettingsRepository(db, gate)
         val first = branchRepo.insert(1L, "First", null, null, 1000L)
         branchRepo.insert(1L, "Second", null, null, 2000L)
         DeactivateBranchUseCase(branchRepo).execute(1L, first.id)
@@ -93,8 +97,9 @@ class BranchUseCasesTest {
     @Test
     fun currentBranchFallsBackWhenPreviouslySelectedBranchWasArchived() = runTest {
         val db = newDb()
-        val branchRepo = SqlDelightBranchRepository(db)
-        val settingsRepo = SqlDelightSettingsRepository(db)
+        val gate = DatabaseWriteGate()
+        val branchRepo = SqlDelightBranchRepository(db, gate)
+        val settingsRepo = SqlDelightSettingsRepository(db, gate)
         val first = branchRepo.insert(1L, "First", null, null, 1000L)
         val second = branchRepo.insert(1L, "Second", null, null, 2000L)
         SetCurrentBranchUseCase(branchRepo, settingsRepo).execute(1L, second.id)
@@ -106,7 +111,7 @@ class BranchUseCasesTest {
 
     @Test
     fun deactivateUseCasePropagatesLastActiveProtectedFromRepository() = runTest {
-        val repo = SqlDelightBranchRepository(newDb())
+        val repo = SqlDelightBranchRepository(newDb(), DatabaseWriteGate())
         val only = repo.insert(1L, "Only", null, null, 1000L)
 
         val result = DeactivateBranchUseCase(repo).execute(1L, only.id)
@@ -116,7 +121,7 @@ class BranchUseCasesTest {
 
     @Test
     fun activateUnknownBranchReturnsNotFound() = runTest {
-        val repo = SqlDelightBranchRepository(newDb())
+        val repo = SqlDelightBranchRepository(newDb(), DatabaseWriteGate())
         val result = ActivateBranchUseCase(repo).execute(1L, 999L)
         assertIs<DomainResult.Failure>(result)
         assertIs<RepositoryError.NotFound>(result.error)
@@ -124,7 +129,7 @@ class BranchUseCasesTest {
 
     @Test
     fun activateIsIdempotent() = runTest {
-        val repo = SqlDelightBranchRepository(newDb())
+        val repo = SqlDelightBranchRepository(newDb(), DatabaseWriteGate())
         repo.insert(1L, "First", null, null, 1000L)
         val second = repo.insert(1L, "Second", null, null, 2000L)
 
@@ -135,7 +140,8 @@ class BranchUseCasesTest {
     @Test
     fun currentBranchIsNullWhenNoBranchesExistAtAll() = runTest {
         val db = newDb()
-        val current = GetCurrentBranchUseCase(SqlDelightBranchRepository(db), SqlDelightSettingsRepository(db)).execute(1L)
+        val gate = DatabaseWriteGate()
+        val current = GetCurrentBranchUseCase(SqlDelightBranchRepository(db, gate), SqlDelightSettingsRepository(db, gate)).execute(1L)
         assertNull(current)
     }
 }

@@ -8,12 +8,11 @@ import com.actionaura.retail.data.model.activeToStatus
 import com.actionaura.retail.data.model.statusToActive
 import com.actionaura.retail.db.Branches
 import com.actionaura.retail.db.RetailDatabase
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/** M5.1/M5.5 -- real, SQLDelight-backed `BranchRepository`. `writeMutex`: see SqlDelightCategoryRepository's KDoc (stock-concurrency-report.md's real finding). */
-class SqlDelightBranchRepository(private val db: RetailDatabase) : BranchRepository {
-    private val writeMutex = Mutex()
+/** M5.1/M5.5 -- real, SQLDelight-backed `BranchRepository`. `gate`: see SqlDelightCategoryRepository's KDoc (DatabaseWriteGate.kt's real construction-rule fix). */
+class SqlDelightBranchRepository(private val db: RetailDatabase, private val gate: DatabaseWriteGate) : BranchRepository {
+    private val writeMutex get() = gate.mutex
 
     override suspend fun listActive(companyId: Long): List<Branch> = writeMutex.withLock {
         db.catalogQueries.selectActiveBranches(companyId).executeAsList().map { it.toDomain() }

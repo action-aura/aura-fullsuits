@@ -10,12 +10,11 @@ import com.actionaura.retail.data.parseStoredQuantity
 import com.actionaura.retail.db.Inventory_movements
 import com.actionaura.retail.db.RetailDatabase
 import com.actionaura.retail.financial.Quantity
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/** M5.1/M5.5 -- real, SQLDelight-backed `InventoryRepository`. `writeMutex`: see SqlDelightCategoryRepository's KDoc (stock-concurrency-report.md's real finding) -- this repository is the one M5.5.14's real races (final-unit sale, concurrent increases) were actually caught on. */
-class SqlDelightInventoryRepository(private val db: RetailDatabase) : InventoryRepository {
-    private val writeMutex = Mutex()
+/** M5.1/M5.5 -- real, SQLDelight-backed `InventoryRepository`. `gate`: see SqlDelightCategoryRepository's KDoc (DatabaseWriteGate.kt's real construction-rule fix) -- this repository is the one M5.5.14's real races (final-unit sale, concurrent increases) were actually caught on. */
+class SqlDelightInventoryRepository(private val db: RetailDatabase, private val gate: DatabaseWriteGate) : InventoryRepository {
+    private val writeMutex get() = gate.mutex
 
     override suspend fun getStockOnHand(companyId: Long, productId: Long, branchId: Long): Quantity = writeMutex.withLock {
         val raw = db.inventoryQueries.selectStockOnHand(companyId, productId, branchId).executeAsOneOrNull()

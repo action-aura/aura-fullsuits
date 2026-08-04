@@ -1,4 +1,4 @@
-package com.actionaura.retail.data.sqldelight
+﻿package com.actionaura.retail.data.sqldelight
 
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import com.actionaura.retail.data.DomainResult
@@ -25,7 +25,7 @@ class ProductInventoryRepositoryTest {
         return RetailDatabase(driver)
     }
 
-    private suspend fun insertCola(db: RetailDatabase) = (SqlDelightProductRepository(db).insert(
+    private suspend fun insertCola(db: RetailDatabase, gate: DatabaseWriteGate) = (SqlDelightProductRepository(db, gate).insert(
         companyId = 1L, sku = "SKU-001", barcode = "0000000001", name = "Cola 330ml", normalizedName = "cola 330ml", categoryId = null,
         costPrice = Money.of(0.5), sellPrice = Money.of(1.99), taxRate = PercentageRate.trusted(10.0),
         unit = "can", reorderLevel = 24, nowEpochMillis = 1000L,
@@ -34,7 +34,8 @@ class ProductInventoryRepositoryTest {
     @Test
     fun productInsertPreservesTypedMoneyAndRateNotRawDouble() = runTest {
         val db = newDb()
-        val product = insertCola(db)
+        val gate = DatabaseWriteGate()
+        val product = insertCola(db, gate)
 
         // Real proof the round trip through the TEXT column and back
         // produces exact typed values, not float artifacts -- same
@@ -47,8 +48,9 @@ class ProductInventoryRepositoryTest {
     @Test
     fun productLookupByBarcodeAndSku() = runTest {
         val db = newDb()
-        val product = insertCola(db)
-        val repo = SqlDelightProductRepository(db)
+        val gate = DatabaseWriteGate()
+        val product = insertCola(db, gate)
+        val repo = SqlDelightProductRepository(db, gate)
 
         assertEquals(product.id, repo.getByBarcode(1L, "0000000001")?.id)
         assertEquals(product.id, repo.getBySku(1L, "SKU-001")?.id)
@@ -58,8 +60,9 @@ class ProductInventoryRepositoryTest {
     @Test
     fun archivedProductExcludedFromBarcodeLookupButNotFromGetById() = runTest {
         val db = newDb()
-        val product = insertCola(db)
-        val repo = SqlDelightProductRepository(db)
+        val gate = DatabaseWriteGate()
+        val product = insertCola(db, gate)
+        val repo = SqlDelightProductRepository(db, gate)
         repo.setActive(1L, product.id, false, 3000L)
 
         assertNull(repo.getByBarcode(1L, "0000000001"), "barcode lookup is scan-time and must only resolve active products")
@@ -69,8 +72,9 @@ class ProductInventoryRepositoryTest {
     @Test
     fun openingStockThenIncreaseThenDecrease() = runTest {
         val db = newDb()
-        val product = insertCola(db)
-        val inventory = SqlDelightInventoryRepository(db)
+        val gate = DatabaseWriteGate()
+        val product = insertCola(db, gate)
+        val inventory = SqlDelightInventoryRepository(db, gate)
 
         assertEquals(Quantity.ZERO, inventory.getStockOnHand(1L, product.id, 1L))
 
@@ -95,8 +99,9 @@ class ProductInventoryRepositoryTest {
     @Test
     fun decreaseBeyondOnHandFailsInsufficientStockAndLeavesBalanceUnchanged() = runTest {
         val db = newDb()
-        val product = insertCola(db)
-        val inventory = SqlDelightInventoryRepository(db)
+        val gate = DatabaseWriteGate()
+        val product = insertCola(db, gate)
+        val inventory = SqlDelightInventoryRepository(db, gate)
         inventory.ensureOpeningStock(1L, product.id, 1L, Quantity.zeroOrMore("10")!!)
 
         val result = inventory.adjustStock(
@@ -114,8 +119,9 @@ class ProductInventoryRepositoryTest {
         // upsertOpeningStock("0") call inside its transaction must create
         // the row on demand.
         val db = newDb()
-        val product = insertCola(db)
-        val inventory = SqlDelightInventoryRepository(db)
+        val gate = DatabaseWriteGate()
+        val product = insertCola(db, gate)
+        val inventory = SqlDelightInventoryRepository(db, gate)
 
         val result = inventory.adjustStock(
             1L, product.id, 1L, StockMovementDirection.INCREASE, Quantity.parse("5").getOrNull()!!,

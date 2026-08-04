@@ -1,4 +1,4 @@
-package com.actionaura.retail.data.sqldelight
+﻿package com.actionaura.retail.data.sqldelight
 
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import com.actionaura.retail.data.DomainResult
@@ -24,7 +24,7 @@ class CategoryBranchRepositoryTest {
 
     @Test
     fun categoryInsertListGetAndArchiveRoundTrip() = runTest {
-        val repo = SqlDelightCategoryRepository(newDb())
+        val repo = SqlDelightCategoryRepository(newDb(), DatabaseWriteGate())
 
         val created = repo.insert(1L, "Beverages", "Cold drinks", 1000L)
         assertEquals("Beverages", created.name)
@@ -43,14 +43,14 @@ class CategoryBranchRepositoryTest {
 
     @Test
     fun categoryIsScopedByCompanyId() = runTest {
-        val repo = SqlDelightCategoryRepository(newDb())
+        val repo = SqlDelightCategoryRepository(newDb(), DatabaseWriteGate())
         val created = repo.insert(1L, "Beverages", null, 1000L)
         assertNull(repo.getById(2L, created.id), "a category created under company_id=1 must not be readable under company_id=2")
     }
 
     @Test
     fun branchInsertListAndCountActive() = runTest {
-        val repo = SqlDelightBranchRepository(newDb())
+        val repo = SqlDelightBranchRepository(newDb(), DatabaseWriteGate())
         repo.insert(1L, "Main", "123 St", "555-0100", 1000L)
         repo.insert(1L, "Second", null, null, 2000L)
 
@@ -60,7 +60,7 @@ class CategoryBranchRepositoryTest {
 
     @Test
     fun lastActiveBranchCannotBeDeactivated() = runTest {
-        val repo = SqlDelightBranchRepository(newDb())
+        val repo = SqlDelightBranchRepository(newDb(), DatabaseWriteGate())
         val only = repo.insert(1L, "Only Branch", null, null, 1000L)
 
         val result = repo.setActive(1L, only.id, false)
@@ -71,7 +71,7 @@ class CategoryBranchRepositoryTest {
 
     @Test
     fun secondToLastActiveBranchCanBeDeactivated() = runTest {
-        val repo = SqlDelightBranchRepository(newDb())
+        val repo = SqlDelightBranchRepository(newDb(), DatabaseWriteGate())
         val first = repo.insert(1L, "Main", null, null, 1000L)
         repo.insert(1L, "Second", null, null, 2000L)
 
@@ -82,7 +82,7 @@ class CategoryBranchRepositoryTest {
 
     @Test
     fun deactivatingAlreadyInactiveBranchIsIdempotentNoOp() = runTest {
-        val repo = SqlDelightBranchRepository(newDb())
+        val repo = SqlDelightBranchRepository(newDb(), DatabaseWriteGate())
         val first = repo.insert(1L, "Main", null, null, 1000L)
         repo.insert(1L, "Second", null, null, 2000L)
         repo.setActive(1L, first.id, false)

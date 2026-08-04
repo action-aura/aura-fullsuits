@@ -1,4 +1,4 @@
-package com.actionaura.retail.data.sqldelight
+﻿package com.actionaura.retail.data.sqldelight
 
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import com.actionaura.retail.db.RetailDatabase
@@ -19,7 +19,7 @@ class SettingsRepositoryTest {
 
     @Test
     fun getSetSettingRoundTrip() = runTest {
-        val repo = SqlDelightSettingsRepository(newDb())
+        val repo = SqlDelightSettingsRepository(newDb(), DatabaseWriteGate())
         assertNull(repo.getSetting(1L, "tax_calculation_mode"))
 
         repo.setSetting(1L, "tax_calculation_mode", "after_discount")
@@ -29,7 +29,7 @@ class SettingsRepositoryTest {
 
     @Test
     fun nextDocumentNumberStartsAtOneAndIncrementsPerCompanyAndDocType() = runTest {
-        val repo = SqlDelightSettingsRepository(newDb())
+        val repo = SqlDelightSettingsRepository(newDb(), DatabaseWriteGate())
 
         assertEquals(1L, repo.nextDocumentNumber(1L, "sale"))
         assertEquals(2L, repo.nextDocumentNumber(1L, "sale"))

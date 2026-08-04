@@ -21,12 +21,11 @@ import com.actionaura.retail.db.SelectProductBySku
 import com.actionaura.retail.financial.Money
 import com.actionaura.retail.financial.PercentageRate
 import com.actionaura.retail.financial.Quantity
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/** M5.1/M5.5 -- real, SQLDelight-backed `ProductRepository`. `writeMutex`: see SqlDelightCategoryRepository's KDoc (stock-concurrency-report.md's real finding). */
-class SqlDelightProductRepository(private val db: RetailDatabase) : ProductRepository {
-    private val writeMutex = Mutex()
+/** M5.1/M5.5 -- real, SQLDelight-backed `ProductRepository`. `gate`: see SqlDelightCategoryRepository's KDoc (DatabaseWriteGate.kt's real construction-rule fix). */
+class SqlDelightProductRepository(private val db: RetailDatabase, private val gate: DatabaseWriteGate) : ProductRepository {
+    private val writeMutex get() = gate.mutex
 
     override suspend fun listActive(companyId: Long): List<Product> = writeMutex.withLock {
         db.catalogQueries.selectActiveProducts(companyId).executeAsList().map { it.toDomain() }
