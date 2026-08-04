@@ -27,7 +27,7 @@ object ImportEntitySchemas {
         ImportFieldDefinition("tax_rate", "Tax Rate (%)", required = false, parser = ImportFieldParser.PERCENTAGE_RATE),
         ImportFieldDefinition("unit", "Unit (pcs/kg/box)", required = false, parser = ImportFieldParser.TEXT),
         ImportFieldDefinition("reorder_level", "Reorder Level", required = false, parser = ImportFieldParser.INTEGER),
-        ImportFieldDefinition("initial_stock", "Current Stock Qty", required = false, parser = ImportFieldParser.QUANTITY),
+        ImportFieldDefinition("initial_stock", "Current Stock Qty", required = false, parser = ImportFieldParser.QUANTITY_ZERO_OR_MORE),
     )
 
     val CUSTOMERS = listOf(
@@ -35,7 +35,7 @@ object ImportEntitySchemas {
         ImportFieldDefinition("phone", "Phone Number", required = false, parser = ImportFieldParser.TEXT),
         ImportFieldDefinition("email", "Email Address", required = false, parser = ImportFieldParser.EMAIL),
         ImportFieldDefinition("address", "Address", required = false, parser = ImportFieldParser.TEXT),
-        ImportFieldDefinition("loyalty_points", "Loyalty Points", required = false, parser = ImportFieldParser.QUANTITY),
+        ImportFieldDefinition("loyalty_points", "Loyalty Points", required = false, parser = ImportFieldParser.QUANTITY_ZERO_OR_MORE),
         ImportFieldDefinition("total_spent", "Total Spent", required = false, parser = ImportFieldParser.MONEY),
     )
 

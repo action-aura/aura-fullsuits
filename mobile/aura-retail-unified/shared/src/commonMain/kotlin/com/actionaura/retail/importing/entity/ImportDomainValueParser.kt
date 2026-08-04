@@ -57,6 +57,22 @@ object ImportDomainValueParser {
                     is com.actionaura.retail.financial.FinancialResult.Failure -> null to ImportValidationIssue.UnparseableValue(rowNumber, fieldKey, trimmed)
                 }
             }
+            // Real, deliberate distinction from QUANTITY above: `Quantity.parse`
+            // is strict-positive (built for sale/return LINE quantities,
+            // financial-invariant-catalog.md invariant #7/#7a); import's own
+            // `initial_stock`/`loyalty_points` fields are real, zero-or-more
+            // BALANCES (a product can genuinely have zero stock, a customer
+            // zero points) -- routed through `Quantity.zeroOrMore` instead,
+            // the exact same real distinction `Quantity.kt`'s own KDoc
+            // documents. Using strict `QUANTITY` here was a real bug, found
+            // by `ImportPerformanceAtScaleTest`'s 2,000-row real commit
+            // (20 real rows with a genuine "0" stock value were silently
+            // skipped) -- fixed at the source, not worked around in the test.
+            ImportFieldParser.QUANTITY_ZERO_OR_MORE -> {
+                val parsed = com.actionaura.retail.financial.Quantity.zeroOrMore(trimmed)
+                if (parsed != null) ImportParsedValue.QuantityValue(parsed) to null
+                else null to ImportValidationIssue.UnparseableValue(rowNumber, fieldKey, trimmed)
+            }
             ImportFieldParser.PERCENTAGE_RATE -> {
                 try {
                     ImportParsedValue.PercentageRateValue(PercentageRate.trusted(trimmed)) to null

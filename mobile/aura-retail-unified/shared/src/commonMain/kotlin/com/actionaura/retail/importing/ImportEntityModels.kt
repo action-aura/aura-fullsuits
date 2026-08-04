@@ -8,7 +8,7 @@ package com.actionaura.retail.importing
 enum class ImportEntityType { CATEGORIES, SUPPLIERS, BRANCHES, CUSTOMERS, PRODUCTS }
 
 /** How a mapped column's raw text is parsed into a domain value -- always a canonical M3/M5 parser, never import-only financial parsing (M5.8.10). */
-enum class ImportFieldParser { TEXT, MONEY, PERCENTAGE_RATE, QUANTITY, INTEGER, EMAIL, STATUS }
+enum class ImportFieldParser { TEXT, MONEY, PERCENTAGE_RATE, QUANTITY, QUANTITY_ZERO_OR_MORE, INTEGER, EMAIL, STATUS }
 
 data class ImportFieldDefinition(
     val key: String,

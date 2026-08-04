@@ -50,6 +50,34 @@ class ImportDomainValueParserTest {
     }
 
     @Test
+    fun zeroStockIsARealValidBalanceNeverRejectedUnlikeStrictQuantity() {
+        // Real bug found by ImportPerformanceAtScaleTest's own 2,000-row
+        // real commit: `QUANTITY` (Quantity.parse) is strict-positive,
+        // built for sale/return LINE quantities -- using it for
+        // `initial_stock`/`loyalty_points` (real, zero-or-more BALANCES)
+        // silently skipped every genuine "0" row. Fixed by routing those
+        // two fields through `QUANTITY_ZERO_OR_MORE` (Quantity.zeroOrMore)
+        // instead -- proven here directly.
+        val (value, issue) = ImportDomainValueParser.parse("0", ImportFieldParser.QUANTITY_ZERO_OR_MORE, 2, "initial_stock")
+        assertNull(issue)
+        assertIs<ImportParsedValue.QuantityValue>(value)
+    }
+
+    @Test
+    fun negativeZeroOrMoreQuantityIsStillARealValidationIssue() {
+        val (value, issue) = ImportDomainValueParser.parse("-5", ImportFieldParser.QUANTITY_ZERO_OR_MORE, 2, "initial_stock")
+        assertNull(value)
+        assertIs<ImportValidationIssue.UnparseableValue>(issue)
+    }
+
+    @Test
+    fun nonFiniteZeroOrMoreQuantityIsRejectedNeverSilentlyAccepted() {
+        val (value, issue) = ImportDomainValueParser.parse("NaN", ImportFieldParser.QUANTITY_ZERO_OR_MORE, 2, "initial_stock")
+        assertNull(value)
+        assertIs<ImportValidationIssue.UnparseableValue>(issue)
+    }
+
+    @Test
     fun leadingZeroBarcodeTextIsPreservedExactly() {
         val (value, issue) = ImportDomainValueParser.parse("00123456", ImportFieldParser.TEXT, 2, "barcode")
         assertNull(issue)

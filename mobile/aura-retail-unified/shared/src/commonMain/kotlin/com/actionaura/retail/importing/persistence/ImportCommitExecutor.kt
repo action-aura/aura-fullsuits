@@ -244,7 +244,7 @@ private fun processCustomers(db: RetailDatabase, companyId: Long, input: ImportC
 
         val phone = rawCell(input.table, row, input.fieldKeyToColumnIndex, "phone")?.trim()?.ifEmpty { null }
         val address = rawCell(input.table, row, input.fieldKeyToColumnIndex, "address")?.trim()?.ifEmpty { null }
-        val (loyaltyParsed, loyaltyIssue) = ImportDomainValueParser.parse(rawCell(input.table, row, input.fieldKeyToColumnIndex, "loyalty_points"), com.actionaura.retail.importing.ImportFieldParser.QUANTITY, row.rowNumber, "loyalty_points")
+        val (loyaltyParsed, loyaltyIssue) = ImportDomainValueParser.parse(rawCell(input.table, row, input.fieldKeyToColumnIndex, "loyalty_points"), com.actionaura.retail.importing.ImportFieldParser.QUANTITY_ZERO_OR_MORE, row.rowNumber, "loyalty_points")
         if (loyaltyIssue != null) { counts.skipped++; continue }
         val loyalty = (loyaltyParsed as? ImportParsedValue.QuantityValue)?.value ?: Quantity.ZERO
         val (spentParsed, spentIssue) = ImportDomainValueParser.parse(rawCell(input.table, row, input.fieldKeyToColumnIndex, "total_spent"), com.actionaura.retail.importing.ImportFieldParser.MONEY, row.rowNumber, "total_spent")
@@ -311,7 +311,7 @@ private fun processProducts(db: RetailDatabase, companyId: Long, importBranchId:
         val (reorderParsed, reorderIssue) = ImportDomainValueParser.parse(rawCell(input.table, row, input.fieldKeyToColumnIndex, "reorder_level"), com.actionaura.retail.importing.ImportFieldParser.INTEGER, row.rowNumber, "reorder_level")
         if (reorderIssue != null) { counts.skipped++; continue }
         val reorderLevel = (reorderParsed as? ImportParsedValue.IntegerValue)?.value ?: 0L
-        val (stockParsed, stockIssue) = ImportDomainValueParser.parse(rawCell(input.table, row, input.fieldKeyToColumnIndex, "initial_stock"), com.actionaura.retail.importing.ImportFieldParser.QUANTITY, row.rowNumber, "initial_stock")
+        val (stockParsed, stockIssue) = ImportDomainValueParser.parse(rawCell(input.table, row, input.fieldKeyToColumnIndex, "initial_stock"), com.actionaura.retail.importing.ImportFieldParser.QUANTITY_ZERO_OR_MORE, row.rowNumber, "initial_stock")
         if (stockIssue != null) { counts.skipped++; continue }
         val initialStock = stockParsed as? ImportParsedValue.QuantityValue
 
