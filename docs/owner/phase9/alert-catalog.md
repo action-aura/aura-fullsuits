@@ -30,6 +30,11 @@ directly to something this phase already made observable (a `/health/ready` chec
 | Unexpected process restart | container restart count | any restart outside a deliberate deploy | P2 |
 | TLS certificate expiring | Caddy-managed cert expiry | < 14 days remaining | P1 |
 | Audit-chain verification failure | `verify_chain()` returns `False` (real, existing Phase 8 function; scheduled via Milestone 9) | any occurrence | P0 |
+| Repeated release-download denial | `RELEASE_NOT_AVAILABLE`/`TOKEN_*` rejection codes (Phase 9R M11, `app/releases/distribution.py`) | >20 denials/5min from one installation | P1 (possible token abuse or a withdrawn/misconfigured release still being requested) |
+| Unexpected SUPER_ADMIN creation | `SUPER_ADMIN_CREATED`-shaped audit event outside a known onboarding window | any occurrence outside a change-managed bootstrap | P1 |
+| Privileged role/permission change | `ROLE_PERMISSION_*`/`STAFF_ROLE_ASSIGNED`-shaped audit events | any occurrence, dashboard-reviewed daily (not paging by default -- legitimate admin activity is common) | P2 |
+| Signing-key rotation occurred | `SIGNING_KEY_ACTIVATED`/`SIGNING_KEY_ROTATED` audit events (Phase 6) | any occurrence -- confirms an operator-initiated rotation matches expectation, catches an unexpected one | P2 |
+| Restore invoked | `OWNER_DB_RESTORE_SUCCEEDED`/`OWNER_DB_RESTORE_FAILED` (real, `app/system/backup.py`) | any occurrence -- a restore outside a planned drill/incident is itself worth immediate attention | P0 |
 
 ## Deduplication and recovery notification
 
