@@ -1,5 +1,17 @@
 # Phase 9R — Backup Policy (M12)
 
+**Amended (2026-08-04, see `phase9-reconciliation.md`):** Phase 9 already
+did substantially more with `app/system/backup.py` than this document
+originally assumed — a real, audit-linked `create_backup()`/
+`restore_backup()` (checksummed, `PGPASSWORD`-only credential handling,
+credential-leakage redaction, a `DatabaseBackupRecord` row per attempt) and
+a **real, executed restore drill** against real synthetic data with
+cryptographic verification (`docs/owner/phase9/restore-drill-report.md`,
+`disaster-recovery-runbook.md`). This document's policy content below
+remains accurate; M13 (`disaster-recovery-report.md`) re-runs that real
+drill against the current schema (post 9.5A-E) rather than re-describing
+Phase 9's already-real backup mechanism from scratch.
+
 ## Why the existing local backup proof isn't enough
 
 Phase 9.5E already proved backup/restore works
