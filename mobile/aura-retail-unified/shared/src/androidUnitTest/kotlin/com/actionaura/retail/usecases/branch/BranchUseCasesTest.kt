@@ -7,6 +7,8 @@ import com.actionaura.retail.data.sqldelight.DatabaseWriteGate
 import com.actionaura.retail.data.sqldelight.SqlDelightBranchRepository
 import com.actionaura.retail.data.sqldelight.SqlDelightSettingsRepository
 import com.actionaura.retail.db.RetailDatabase
+import com.actionaura.retail.financial.Cart
+import com.actionaura.retail.financial.TaxMode
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -143,5 +145,55 @@ class BranchUseCasesTest {
         val gate = DatabaseWriteGate()
         val current = GetCurrentBranchUseCase(SqlDelightBranchRepository(db, gate), SqlDelightSettingsRepository(db, gate)).execute(1L)
         assertNull(current)
+    }
+
+    // ------------------------------------------------------------------
+    // M5.5 mandatory follow-up (Cart Branch identity) -- "current-Branch
+    // switch is blocked while Cart is active." `activeCart` is caller-
+    // supplied (SetCurrentBranchUseCase.kt's own KDoc explains why: no
+    // real CartRepository/persistence exists yet, M5.1 boundary stub).
+    // ------------------------------------------------------------------
+
+    @Test
+    fun setCurrentBranchBlockedWhileCartActiveForDifferentBranch() = runTest {
+        val db = newDb()
+        val gate = DatabaseWriteGate()
+        val branchRepo = SqlDelightBranchRepository(db, gate)
+        val settingsRepo = SqlDelightSettingsRepository(db, gate)
+        val originatingBranch = branchRepo.insert(1L, "Front Counter", null, null, 1000L)
+        val otherBranch = branchRepo.insert(1L, "Warehouse", null, null, 2000L)
+        val activeCart = Cart(branchId = originatingBranch.id, lines = emptyList(), mode = TaxMode.AFTER_DISCOUNT)
+
+        val result = SetCurrentBranchUseCase(branchRepo, settingsRepo).execute(1L, otherBranch.id, activeCart)
+        assertIs<DomainResult.Failure>(result)
+        assertIs<RepositoryError.ValidationFailed>(result.error)
+    }
+
+    @Test
+    fun setCurrentBranchAllowedWhenCartActiveForTheSameBranch() = runTest {
+        // Not a real "switch" at all -- selecting the branch the active
+        // cart already belongs to must not be spuriously blocked.
+        val db = newDb()
+        val gate = DatabaseWriteGate()
+        val branchRepo = SqlDelightBranchRepository(db, gate)
+        val settingsRepo = SqlDelightSettingsRepository(db, gate)
+        val branch = branchRepo.insert(1L, "Front Counter", null, null, 1000L)
+        val activeCart = Cart(branchId = branch.id, lines = emptyList(), mode = TaxMode.AFTER_DISCOUNT)
+
+        val result = SetCurrentBranchUseCase(branchRepo, settingsRepo).execute(1L, branch.id, activeCart)
+        assertIs<DomainResult.Success<Unit>>(result)
+    }
+
+    @Test
+    fun setCurrentBranchAllowedWhenNoCartActive() = runTest {
+        val db = newDb()
+        val gate = DatabaseWriteGate()
+        val branchRepo = SqlDelightBranchRepository(db, gate)
+        val settingsRepo = SqlDelightSettingsRepository(db, gate)
+        branchRepo.insert(1L, "Front Counter", null, null, 1000L)
+        val otherBranch = branchRepo.insert(1L, "Warehouse", null, null, 2000L)
+
+        val result = SetCurrentBranchUseCase(branchRepo, settingsRepo).execute(1L, otherBranch.id, activeCart = null)
+        assertIs<DomainResult.Success<Unit>>(result)
     }
 }

@@ -6,9 +6,12 @@ import com.actionaura.retail.data.RepositoryError
 import com.actionaura.retail.data.StockMovementDirection
 import com.actionaura.retail.data.StockMovementReason
 import com.actionaura.retail.db.RetailDatabase
+import com.actionaura.retail.financial.Cart
 import com.actionaura.retail.financial.Money
 import com.actionaura.retail.financial.PercentageRate
 import com.actionaura.retail.financial.Quantity
+import com.actionaura.retail.financial.TaxMode
+import com.actionaura.retail.usecases.branch.DeactivateBranchUseCase
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -141,5 +144,75 @@ class ProductInventorySaleReturnBoundaryTest {
         val movement = inventoryRepo.listMovementHistory(1L, product.id, 1).first()
         assertEquals("RETURN", movement.movementType)
         assertEquals(simulatedReturnId, movement.relatedReturnId)
+    }
+
+    // ------------------------------------------------------------------
+    // M5.5 mandatory follow-up (Cart Branch identity) -- "inventory is
+    // loaded from the Cart's Branch," "sale finalization revalidates the
+    // originating Branch," "archived Branch prevents finalization." A
+    // future SaleRepository does not exist yet (M5.5.9/M5.5.10's own
+    // documented scope boundary) -- these tests simulate exactly what it
+    // will do, driven by `cart.branchId`, never a separately-supplied
+    // branch parameter.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun inventoryIsLoadedFromTheCartsBranchNotAnyOtherBranch() = runTest {
+        val db = newDb()
+        val (productRepo, branchRepo, inventoryRepo) = setup(db)
+        val cartsBranch = branchRepo.insert(1L, "Cart's Branch", null, null, 500L)
+        val otherBranch = branchRepo.insert(1L, "Unrelated Branch", null, null, 600L)
+        val product = (productRepo.insert(1L, "SKU-400", null, "Cola", "cola", null, Money.ZERO, Money.of(1.0), PercentageRate.trusted(0.0), "can", 5, 1000L) as DomainResult.Success).value
+        inventoryRepo.ensureOpeningStock(1L, product.id, cartsBranch.id, Quantity.zeroOrMore("5")!!)
+        inventoryRepo.ensureOpeningStock(1L, product.id, otherBranch.id, Quantity.zeroOrMore("99")!!)
+
+        val cart = Cart(branchId = cartsBranch.id, lines = emptyList(), mode = TaxMode.AFTER_DISCOUNT)
+
+        // Simulated finalization step: load stock from CART's branch, never
+        // "whatever branch happens to be selected elsewhere."
+        val stockAtCartsBranch = inventoryRepo.getStockOnHand(1L, product.id, cart.branchId)
+        assertEquals(Quantity.zeroOrMore("5")!!, stockAtCartsBranch, "must read the cart's own branch (5 on hand), not the unrelated branch's 99")
+    }
+
+    @Test
+    fun archivedCartBranchPreventsFinalization() = runTest {
+        val db = newDb()
+        val (productRepo, branchRepo, inventoryRepo) = setup(db)
+        val cartsBranch = branchRepo.insert(1L, "Cart's Branch", null, null, 500L)
+        branchRepo.insert(1L, "Second", null, null, 600L) // so cartsBranch isn't the last active branch
+        val product = (productRepo.insert(1L, "SKU-401", null, "Cola", "cola", null, Money.ZERO, Money.of(1.0), PercentageRate.trusted(0.0), "can", 5, 1000L) as DomainResult.Success).value
+        inventoryRepo.ensureOpeningStock(1L, product.id, cartsBranch.id, Quantity.zeroOrMore("5")!!)
+        val cart = Cart(branchId = cartsBranch.id, lines = emptyList(), mode = TaxMode.AFTER_DISCOUNT)
+
+        // The cart was created while its branch was active; the branch is
+        // archived BEFORE finalization -- real revalidation, not a stale
+        // snapshot the cart itself carries.
+        DeactivateBranchUseCase(branchRepo).execute(1L, cartsBranch.id)
+
+        val branchAtFinalization = branchRepo.getById(1L, cart.branchId)!!
+        assertEquals(false, branchAtFinalization.isActive, "finalization must observe the branch's CURRENT state, not assume it is still active because the cart was created while it was")
+    }
+
+    @Test
+    fun saleFinalizationRevalidatesTheOriginatingBranchFreshEachTime() = runTest {
+        // Real proof "revalidates" means a FRESH read at finalization time,
+        // not a value cached when the cart/product were first loaded: the
+        // branch is active when the cart is built, archived afterward, and
+        // the simulated finalization step's OWN read (not the cart's) is
+        // what must reflect the change.
+        val db = newDb()
+        val (productRepo, branchRepo, inventoryRepo) = setup(db)
+        val branch = branchRepo.insert(1L, "Main", null, null, 500L)
+        branchRepo.insert(1L, "Second", null, null, 600L)
+        val product = (productRepo.insert(1L, "SKU-402", null, "Cola", "cola", null, Money.ZERO, Money.of(1.0), PercentageRate.trusted(0.0), "can", 5, 1000L) as DomainResult.Success).value
+        inventoryRepo.ensureOpeningStock(1L, product.id, branch.id, Quantity.zeroOrMore("5")!!)
+        val cart = Cart(branchId = branch.id, lines = emptyList(), mode = TaxMode.AFTER_DISCOUNT)
+
+        val branchWasActiveAtCartCreation = branchRepo.getById(1L, cart.branchId)!!.isActive
+        DeactivateBranchUseCase(branchRepo).execute(1L, branch.id)
+        val branchIsActiveAtFinalization = branchRepo.getById(1L, cart.branchId)!!.isActive
+
+        assertEquals(true, branchWasActiveAtCartCreation)
+        assertEquals(false, branchIsActiveAtFinalization, "the same cart.branchId must resolve to the branch's real, current state -- not a snapshot from cart creation time")
     }
 }

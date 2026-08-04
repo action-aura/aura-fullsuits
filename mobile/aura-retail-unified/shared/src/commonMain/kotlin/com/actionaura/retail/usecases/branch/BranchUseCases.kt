@@ -5,6 +5,7 @@ import com.actionaura.retail.data.DomainResult
 import com.actionaura.retail.data.RepositoryError
 import com.actionaura.retail.data.SettingsRepository
 import com.actionaura.retail.data.model.Branch
+import com.actionaura.retail.financial.Cart
 
 /**
  * M5.4 -- the Branch domain's use-case layer, one layer above the M5.1
@@ -62,7 +63,19 @@ class SetCurrentBranchUseCase(
     private val branchRepository: BranchRepository,
     private val settingsRepository: SettingsRepository,
 ) {
-    suspend fun execute(companyId: Long, branchId: Long): DomainResult<Unit> {
+    /**
+     * M5.5 mandatory follow-up (Cart Branch identity) -- "current-Branch
+     * switch is blocked while Cart is active." `activeCart` is caller-
+     * supplied (never read from a `CartRepository`, since that remains an
+     * M5.1 boundary stub -- `RepositoryBoundaries.kt` -- not built out this
+     * milestone) so the real business rule lives here regardless of which
+     * later milestone wires up real cart persistence. `null` (no active
+     * cart, the default) never blocks a switch.
+     */
+    suspend fun execute(companyId: Long, branchId: Long, activeCart: Cart? = null): DomainResult<Unit> {
+        if (activeCart != null && activeCart.branchId != branchId) {
+            return DomainResult.Failure(RepositoryError.ValidationFailed("branch", "cannot switch branch while a cart is active for a different branch"))
+        }
         val branch = branchRepository.getById(companyId, branchId)
             ?: return DomainResult.Failure(RepositoryError.NotFound("branch", branchId.toString()))
         if (!branch.isActive) {
