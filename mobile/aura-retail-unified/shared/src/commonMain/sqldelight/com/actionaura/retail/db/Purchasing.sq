@@ -1,0 +1,48 @@
+-- M4 -- faithful port of schema.py's purchase_orders/purchase_order_items,
+-- including the real amount_paid/payment_status/due_date ALTER-added columns.
+
+CREATE TABLE purchase_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL DEFAULT 1,
+    po_number TEXT UNIQUE,
+    supplier_id INTEGER REFERENCES suppliers(id),
+    branch_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending',
+    subtotal TEXT NOT NULL DEFAULT '0.00',
+    tax_total TEXT NOT NULL DEFAULT '0.00',
+    total TEXT NOT NULL DEFAULT '0.00',
+    amount_paid TEXT NOT NULL DEFAULT '0.00',
+    payment_status TEXT NOT NULL DEFAULT 'unpaid',
+    due_date INTEGER,
+    notes TEXT,
+    ordered_at INTEGER,
+    received_at INTEGER,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX purchase_orders_company_id ON purchase_orders(company_id);
+CREATE INDEX purchase_orders_supplier_id ON purchase_orders(supplier_id);
+
+CREATE TABLE purchase_order_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    po_id INTEGER NOT NULL REFERENCES purchase_orders(id),
+    product_id INTEGER NOT NULL REFERENCES products(id),
+    quantity TEXT NOT NULL,
+    unit_cost TEXT NOT NULL,
+    total TEXT NOT NULL,
+    received_qty TEXT NOT NULL DEFAULT '0'
+);
+CREATE INDEX purchase_order_items_po_id ON purchase_order_items(po_id);
+CREATE INDEX purchase_order_items_product_id ON purchase_order_items(product_id);
+
+selectPurchaseOrders:
+SELECT * FROM purchase_orders WHERE company_id = ? ORDER BY created_at DESC;
+
+selectPurchaseOrderItems:
+SELECT * FROM purchase_order_items WHERE po_id = ?;
+
+insertPurchaseOrder:
+INSERT INTO purchase_orders(company_id, po_number, supplier_id, branch_id, status, subtotal, tax_total, total, ordered_at, created_at)
+VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?);
+
+insertPurchaseOrderItem:
+INSERT INTO purchase_order_items(po_id, product_id, quantity, unit_cost, total) VALUES (?, ?, ?, ?, ?);

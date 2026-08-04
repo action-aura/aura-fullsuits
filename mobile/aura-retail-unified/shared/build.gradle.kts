@@ -6,6 +6,7 @@ plugins {
     kotlin("plugin.compose")
     id("com.android.library")
     id("org.jetbrains.compose")
+    id("app.cash.sqldelight")
 }
 
 kotlin {
@@ -45,6 +46,11 @@ kotlin {
                 // behavior; wrapped entirely behind financial/Money.kt etc. so this
                 // is the only place BigDecimal is referenced directly.
                 implementation("com.ionspin.kotlin:bignum:0.3.10")
+                // M4 -- real, evidence-based choice, see docs/retail/unified_mobile/
+                // shared-database-schema-decision.md. Schema lives in
+                // shared/src/commonMain/sqldelight/.
+                implementation("app.cash.sqldelight:runtime:2.3.2")
+                implementation("app.cash.sqldelight:coroutines-extensions:2.3.2")
             }
         }
         val commonTest by getting {
@@ -57,11 +63,16 @@ kotlin {
             dependencies {
                 implementation("androidx.activity:activity-compose:1.9.2")
                 implementation("androidx.security:security-crypto:1.1.0-alpha06")
+                implementation("app.cash.sqldelight:android-driver:2.3.2")
             }
         }
         val androidUnitTest by getting {
             dependencies {
                 implementation(kotlin("test"))
+                // JVM/JDBC SQLite driver -- for real schema verification in
+                // plain unit tests, which cannot use AndroidSqliteDriver
+                // (that needs a real Android Context/instrumentation).
+                implementation("app.cash.sqldelight:sqlite-driver:2.3.2")
             }
         }
         // Kotlin's Default Hierarchy Template (on by default since Kotlin
@@ -79,12 +90,25 @@ kotlin {
         // maintained even though this host cannot compile them. See
         // docs/retail/unified_mobile/ios-build-readiness-plan.md for the
         // exact real Gradle error this produced and what it means.
+        //
+        // M4 addition: when this project is next synced on a Mac and iosMain
+        // really exists, add `implementation("app.cash.sqldelight:native-driver:2.3.2")`
+        // to it (the real iOS SQLite driver) -- not addable here for the same
+        // reason nothing else is.
+    }
+}
+
+sqldelight {
+    databases {
+        create("RetailDatabase") {
+            packageName.set("com.actionaura.retail.db")
+        }
     }
 }
 
 android {
     namespace = "com.actionaura.retail.shared"
-    compileSdk = 34
+    compileSdk = 35 // see androidApp/build.gradle.kts's comment -- sqldelight:android-driver:2.3.2 requires it
     defaultConfig {
         minSdk = 26
     }

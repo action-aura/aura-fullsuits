@@ -1,0 +1,68 @@
+-- M4 -- faithful port of schema.py's sales/sale_items, with one deliberate
+-- addition: sale_items.product_name_at_sale. Real Python gap (financial-
+-- invariant-catalog.md invariant #20 / intentional-financial-differences.md
+-- DIFF-03): the real sale_items table has no product-name column at all and
+-- always live-joins products.name, so a renamed/archived product silently
+-- changes how an old receipt displays. Milestone 3's
+-- FinalizedSaleLineSnapshot.productNameAtSale already committed to closing
+-- this gap in the domain model -- this is that same decision reaching the
+-- real persistence layer, not a new decision.
+
+CREATE TABLE sales (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL DEFAULT 1,
+    sale_number TEXT UNIQUE,
+    branch_id INTEGER,
+    customer_id INTEGER REFERENCES customers(id),
+    cashier TEXT NOT NULL DEFAULT 'POS',
+    subtotal TEXT NOT NULL DEFAULT '0.00',
+    discount_amount TEXT NOT NULL DEFAULT '0.00',
+    tax_amount TEXT NOT NULL DEFAULT '0.00',
+    total TEXT NOT NULL DEFAULT '0.00',
+    amount_paid TEXT NOT NULL DEFAULT '0.00',
+    change_amount TEXT NOT NULL DEFAULT '0.00',
+    payment_method TEXT NOT NULL DEFAULT 'cash',
+    status TEXT NOT NULL DEFAULT 'completed',
+    idempotency_key TEXT UNIQUE,
+    due_date INTEGER,
+    notes TEXT,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX sales_company_id ON sales(company_id);
+CREATE INDEX sales_customer_id ON sales(customer_id);
+CREATE INDEX sales_branch_id ON sales(branch_id);
+
+CREATE TABLE sale_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sale_id INTEGER NOT NULL REFERENCES sales(id),
+    product_id INTEGER NOT NULL REFERENCES products(id),
+    product_name_at_sale TEXT NOT NULL, -- CANONICAL_UNIFIED, DIFF-03
+    quantity TEXT NOT NULL,
+    unit_price TEXT NOT NULL,
+    discount_pct TEXT NOT NULL DEFAULT '0',
+    tax_rate TEXT NOT NULL DEFAULT '0',
+    line_total TEXT NOT NULL
+);
+CREATE INDEX sale_items_sale_id ON sale_items(sale_id);
+CREATE INDEX sale_items_product_id ON sale_items(product_id);
+
+selectSaleByIdempotencyKey:
+SELECT * FROM sales WHERE idempotency_key = ?;
+
+selectRecentSales:
+SELECT * FROM sales WHERE company_id = ? ORDER BY created_at DESC LIMIT ?;
+
+selectSaleById:
+SELECT * FROM sales WHERE id = ? AND company_id = ?;
+
+selectSaleItemsBySaleId:
+SELECT * FROM sale_items WHERE sale_id = ?;
+
+insertSale:
+INSERT INTO sales(company_id, sale_number, branch_id, customer_id, cashier, subtotal, discount_amount, tax_amount, total,
+                   amount_paid, change_amount, payment_method, status, idempotency_key, due_date, notes, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?);
+
+insertSaleItem:
+INSERT INTO sale_items(sale_id, product_id, product_name_at_sale, quantity, unit_price, discount_pct, tax_rate, line_total)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);

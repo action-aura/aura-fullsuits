@@ -1,0 +1,44 @@
+-- M4 -- faithful port of schema.py's inventory_movements/inventory_balances.
+
+CREATE TABLE inventory_movements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL DEFAULT 1,
+    product_id INTEGER NOT NULL REFERENCES products(id),
+    branch_id INTEGER,
+    movement_type TEXT NOT NULL,
+    quantity TEXT NOT NULL,
+    unit_cost TEXT NOT NULL DEFAULT '0.00',
+    reference TEXT,
+    notes TEXT,
+    created_by TEXT NOT NULL DEFAULT 'System',
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX inventory_movements_company_id ON inventory_movements(company_id);
+CREATE INDEX inventory_movements_product_id ON inventory_movements(product_id);
+CREATE INDEX inventory_movements_branch_id ON inventory_movements(branch_id);
+
+CREATE TABLE inventory_balances (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL DEFAULT 1,
+    product_id INTEGER NOT NULL REFERENCES products(id),
+    branch_id INTEGER NOT NULL,
+    quantity_on_hand TEXT NOT NULL DEFAULT '0',
+    quantity_reserved TEXT NOT NULL DEFAULT '0',
+    UNIQUE(company_id, product_id, branch_id)
+);
+CREATE INDEX inventory_balances_company_id ON inventory_balances(company_id);
+CREATE INDEX inventory_balances_product_id ON inventory_balances(product_id);
+
+selectStockOnHand:
+SELECT quantity_on_hand FROM inventory_balances WHERE company_id = ? AND product_id = ? AND branch_id = ?;
+
+upsertOpeningStock:
+INSERT OR IGNORE INTO inventory_balances(company_id, product_id, branch_id, quantity_on_hand, quantity_reserved)
+VALUES (?, ?, ?, ?, '0');
+
+decrementStock:
+UPDATE inventory_balances SET quantity_on_hand = ? WHERE company_id = ? AND product_id = ? AND branch_id = ?;
+
+insertMovement:
+INSERT INTO inventory_movements(company_id, product_id, branch_id, movement_type, quantity, unit_cost, reference, notes, created_by, created_at)
+VALUES (?, ?, ?, ?, ?, '0.00', ?, ?, ?, ?);

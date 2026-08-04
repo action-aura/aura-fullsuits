@@ -7,6 +7,7 @@ plugins {
     id("com.android.application") version "8.5.2" apply false
     id("com.android.library") version "8.5.2" apply false
     id("org.jetbrains.compose") version "1.7.0" apply false
+    id("app.cash.sqldelight") version "2.3.2" apply false
 }
 
 tasks.register("clean", Delete::class) {

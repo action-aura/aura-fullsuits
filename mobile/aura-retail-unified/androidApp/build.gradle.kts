@@ -7,7 +7,11 @@ plugins {
 
 android {
     namespace = "com.actionaura.retail.unified"
-    compileSdk = 34
+    // Real requirement found this milestone: app.cash.sqldelight:android-driver:2.3.2's
+    // own AAR metadata requires consumers to compile against API 35+. This module
+    // is independent of android/aura-retail's own compileSdk (separate Gradle
+    // root, separate APK, ADR-1) so bumping it here has no cross-project effect.
+    compileSdk = 35
 
     defaultConfig {
         // Distinct from com.actionaura.retail (the pre-unification app) for

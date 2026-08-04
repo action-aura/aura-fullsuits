@@ -1,0 +1,54 @@
+-- M4 -- faithful port of schema.py's payments (base + the real
+-- _ensure_credit_schema ALTER-added ledger-extension columns) and
+-- payment_methods.
+
+CREATE TABLE payment_methods (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL DEFAULT 1,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'other',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX payment_methods_company_id ON payment_methods(company_id);
+
+CREATE TABLE payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL DEFAULT 1,
+    sale_id INTEGER REFERENCES sales(id),
+    method TEXT NOT NULL,
+    amount TEXT NOT NULL,
+    reference TEXT,
+    status TEXT NOT NULL DEFAULT 'success',
+    idempotency_key TEXT UNIQUE,
+    party_type TEXT,
+    party_id INTEGER,
+    direction TEXT,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    fx_rate TEXT NOT NULL DEFAULT '1',
+    related_type TEXT,
+    related_id INTEGER,
+    notes TEXT,
+    reversal_of INTEGER REFERENCES payments(id),
+    voided_by TEXT,
+    voided_at INTEGER,
+    created_by TEXT,
+    device TEXT,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX payments_company_id ON payments(company_id);
+CREATE INDEX payments_sale_id ON payments(sale_id);
+CREATE INDEX payments_reference ON payments(reference);
+CREATE INDEX payments_party ON payments(party_type, party_id);
+
+selectPaymentMethods:
+SELECT * FROM payment_methods WHERE company_id = ? AND is_active = 1 ORDER BY sort_order;
+
+insertPayment:
+INSERT INTO payments(company_id, sale_id, method, amount, reference, status, idempotency_key,
+                      party_type, party_id, direction, currency, fx_rate, related_type, related_id,
+                      notes, created_by, device, created_at)
+VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, '1', ?, ?, ?, ?, ?, ?);
+
+voidPayment:
+UPDATE payments SET status = 'voided', voided_by = ?, voided_at = ? WHERE id = ? AND company_id = ?;

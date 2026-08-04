@@ -1,0 +1,53 @@
+-- M4 -- faithful port of schema.py's returns/return_items, plus the real
+-- ALTER-added idempotency_key + partial unique index (AUDIT-004) and the
+-- same product_name_at_sale snapshot addition as Sales.sq (DIFF-03).
+
+CREATE TABLE returns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL DEFAULT 1,
+    return_number TEXT UNIQUE,
+    sale_id INTEGER REFERENCES sales(id),
+    branch_id INTEGER,
+    cashier TEXT NOT NULL DEFAULT 'POS',
+    reason TEXT,
+    refund_method TEXT NOT NULL DEFAULT 'cash',
+    refund_amount TEXT NOT NULL DEFAULT '0.00',
+    status TEXT NOT NULL DEFAULT 'completed',
+    idempotency_key TEXT,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX returns_company_id ON returns(company_id);
+CREATE INDEX returns_sale_id ON returns(sale_id);
+-- Mirrors the real Python partial unique index exactly (idempotency_key IS
+-- NULL is exempt, matching SQLite's own UNIQUE-column NULL semantics --
+-- AUDIT-004's own reasoning, reproduced verbatim).
+CREATE UNIQUE INDEX returns_idempotency ON returns(idempotency_key) WHERE idempotency_key IS NOT NULL;
+
+CREATE TABLE return_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    return_id INTEGER NOT NULL REFERENCES returns(id),
+    product_id INTEGER NOT NULL REFERENCES products(id),
+    product_name_at_sale TEXT NOT NULL, -- CANONICAL_UNIFIED, same as sale_items
+    quantity TEXT NOT NULL,
+    unit_price TEXT NOT NULL,
+    line_total TEXT NOT NULL
+);
+CREATE INDEX return_items_return_id ON return_items(return_id);
+CREATE INDEX return_items_product_id ON return_items(product_id);
+
+selectReturnByIdempotencyKey:
+SELECT * FROM returns WHERE idempotency_key = ? AND company_id = ?;
+
+selectReturnsBySale:
+SELECT r.*, ri.product_id, ri.quantity FROM returns r JOIN return_items ri ON ri.return_id = r.id WHERE r.sale_id = ?;
+
+selectAlreadyReturnedQuantityRows:
+SELECT ri.product_id, ri.quantity FROM return_items ri JOIN returns r ON ri.return_id = r.id WHERE r.sale_id = ? AND ri.product_id = ?;
+
+insertReturn:
+INSERT INTO returns(company_id, return_number, sale_id, branch_id, cashier, reason, refund_method, refund_amount, status, idempotency_key, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?);
+
+insertReturnItem:
+INSERT INTO return_items(return_id, product_id, product_name_at_sale, quantity, unit_price, line_total)
+VALUES (?, ?, ?, ?, ?, ?);

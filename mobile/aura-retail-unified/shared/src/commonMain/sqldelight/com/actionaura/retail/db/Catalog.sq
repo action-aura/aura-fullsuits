@@ -1,0 +1,95 @@
+-- M4 -- real, faithful port of products/retail/backend/database/schema.py's
+-- branches/categories/products tables. Money/quantity columns are TEXT
+-- (canonical decimal strings, never SQLite REAL/binary float -- see
+-- docs/retail/unified_mobile/shared-database-schema-decision.md).
+-- created_at is epoch milliseconds (INTEGER), matching Milestone 3's
+-- FinalizedSaleSnapshot.createdAtEpochMillis contract exactly.
+
+CREATE TABLE branches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL DEFAULT 1,
+    name TEXT NOT NULL,
+    address TEXT,
+    phone TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX branches_company_id ON branches(company_id);
+
+CREATE TABLE categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL DEFAULT 1,
+    name TEXT NOT NULL,
+    description TEXT,
+    -- CANONICAL_UNIFIED (M1 override, complete-retail-capability-matrix.md):
+    -- the real Python schema has no status/archive column at all for
+    -- categories -- added here as new, real capability, not a port of an
+    -- existing column.
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX categories_company_id ON categories(company_id);
+-- CANONICAL_UNIFIED: real duplicate-name protection the Python authority
+-- never had (complete-retail-capability-matrix.md's Categories finding).
+CREATE UNIQUE INDEX categories_company_name ON categories(company_id, name);
+
+CREATE TABLE products (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL DEFAULT 1,
+    sku TEXT NOT NULL,
+    barcode TEXT,
+    name TEXT NOT NULL,
+    category_id INTEGER REFERENCES categories(id),
+    cost_price TEXT NOT NULL DEFAULT '0.00',
+    sell_price TEXT NOT NULL DEFAULT '0.00',
+    tax_rate TEXT NOT NULL DEFAULT '0',
+    unit TEXT NOT NULL DEFAULT 'pcs',
+    reorder_level INTEGER NOT NULL DEFAULT 5,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX products_company_id ON products(company_id);
+CREATE INDEX products_category_id ON products(category_id);
+CREATE UNIQUE INDEX products_company_sku ON products(company_id, sku);
+CREATE INDEX products_barcode ON products(barcode);
+
+selectActiveBranches:
+SELECT * FROM branches WHERE company_id = ? AND status = 'active' ORDER BY name;
+
+selectActiveCategories:
+SELECT c.*, (SELECT COUNT(*) FROM products p WHERE p.category_id = c.id AND p.status = 'active') AS product_count
+FROM categories c WHERE c.company_id = ? AND c.status = 'active' ORDER BY c.name;
+
+selectActiveProducts:
+SELECT p.*, c.name AS category_name
+FROM products p LEFT JOIN categories c ON p.category_id = c.id
+WHERE p.company_id = ? AND p.status = 'active' ORDER BY p.name;
+
+insertBranch:
+INSERT INTO branches(company_id, name, address, phone, status, created_at) VALUES (?, ?, ?, ?, 'active', ?);
+
+insertCategory:
+INSERT INTO categories(company_id, name, description, status, created_at) VALUES (?, ?, ?, 'active', ?);
+
+insertProduct:
+INSERT INTO products(company_id, sku, barcode, name, category_id, cost_price, sell_price, tax_rate, unit, reorder_level, status, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?);
+
+lastInsertRowId:
+SELECT last_insert_rowid();
+
+-- M4 data-preservation import (data-preservation-plan.md): explicit-id
+-- variants, used ONLY by the legacy-database importer to preserve the
+-- original row IDs every foreign-key relationship in the imported data
+-- depends on. Never used by normal application code (which always lets
+-- AUTOINCREMENT assign a fresh ID via insertBranch/insertCategory/
+-- insertProduct above).
+importBranch:
+INSERT INTO branches(id, company_id, name, address, phone, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?);
+
+importCategory:
+INSERT INTO categories(id, company_id, name, description, status, created_at) VALUES (?, ?, ?, ?, 'active', ?);
+
+importProduct:
+INSERT INTO products(id, company_id, sku, barcode, name, category_id, cost_price, sell_price, tax_rate, unit, reorder_level, status, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);

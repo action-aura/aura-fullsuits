@@ -1,0 +1,50 @@
+-- M4 -- faithful port of schema.py's customers/suppliers, including the
+-- real credit_mode/credit_limit/credit_balance/payment_terms columns
+-- _ensure_credit_schema() adds via ALTER TABLE in the Python authority --
+-- declared as first-class columns here, no lazy-migration quirk carried
+-- forward (android-database-audit.md).
+
+CREATE TABLE customers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL DEFAULT 1,
+    name TEXT NOT NULL,
+    phone TEXT,
+    email TEXT,
+    address TEXT,
+    loyalty_points TEXT NOT NULL DEFAULT '0',
+    total_spent TEXT NOT NULL DEFAULT '0.00',
+    credit_mode TEXT NOT NULL DEFAULT 'none',
+    credit_limit TEXT NOT NULL DEFAULT '0.00',
+    credit_balance TEXT NOT NULL DEFAULT '0.00',
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX customers_company_id ON customers(company_id);
+
+CREATE TABLE suppliers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL DEFAULT 1,
+    name TEXT NOT NULL,
+    phone TEXT,
+    email TEXT,
+    address TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    payment_terms TEXT NOT NULL DEFAULT 'none',
+    credit_balance TEXT NOT NULL DEFAULT '0.00',
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX suppliers_company_id ON suppliers(company_id);
+
+selectCustomers:
+SELECT * FROM customers WHERE company_id = ? ORDER BY total_spent DESC LIMIT 200;
+
+selectActiveSuppliers:
+SELECT * FROM suppliers WHERE company_id = ? AND status = 'active' ORDER BY name;
+
+insertCustomer:
+INSERT INTO customers(company_id, name, phone, email, address, created_at) VALUES (?, ?, ?, ?, ?, ?);
+
+insertSupplier:
+INSERT INTO suppliers(company_id, name, phone, email, address, created_at) VALUES (?, ?, ?, ?, ?, ?);
+
+updateCustomerCreditBalance:
+UPDATE customers SET credit_balance = ? WHERE id = ? AND company_id = ?;

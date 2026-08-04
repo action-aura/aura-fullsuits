@@ -30,9 +30,18 @@ interface InstallationIdentityProvider {
 
 class InstallationKeypairHandle(val publicKeyBase64: String)
 
-/** SQLDelight (or the chosen SQLite authority) driver factory -- Milestone 4. */
+/**
+ * SQLDelight driver factory -- Milestone 4, real (not a placeholder
+ * anymore): shared-database-schema-decision.md's evidence-based choice.
+ * Returns the real app.cash.sqldelight `SqlDriver` type -- every
+ * implementation (Android's `AndroidSqliteDriver`, iOS's future
+ * `NativeSqliteDriver`) must open the connection with the exact real
+ * pragmas android-database-audit.md documents from the Python authority:
+ * journal_mode=WAL, busy_timeout=30000, foreign_keys=ON (per-connection,
+ * every time -- SQLite does not persist this setting in the file itself).
+ */
 interface DatabaseDriverFactory {
-    fun createDriver(): Any // typed to the real SqlDriver once Milestone 4 selects the driver library
+    fun createDriver(): app.cash.sqldelight.db.SqlDriver
 }
 
 /** Continuous camera barcode scanning -- Milestone 14. */
