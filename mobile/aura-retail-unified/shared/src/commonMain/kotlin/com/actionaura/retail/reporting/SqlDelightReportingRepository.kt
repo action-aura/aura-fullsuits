@@ -49,6 +49,13 @@ class SqlDelightReportingRepository(
     }
 
     override suspend fun getSalesTrend(scope: ReportScope, buckets: List<Pair<ReportPeriod, String>>): SalesTrendResult {
+        // M5.7.10 -- rejected before the gate is even acquired: an
+        // unbounded bucket list would turn the already-real, already-
+        // measured-and-accepted "2 queries per bucket" N+1 shape
+        // (reporting-query-count-report.md) into an unbounded cost.
+        require(buckets.size <= ReportingLimits.MAX_TREND_BUCKET_COUNT) {
+            "getSalesTrend requested ${buckets.size} buckets, exceeding the bounded maximum of ${ReportingLimits.MAX_TREND_BUCKET_COUNT}"
+        }
         val currency = resolveCurrency(scope.companyId)
         return gate.mutex.withLock {
             val issues = mutableListOf<ReportingDataQualityIssue>()
@@ -61,12 +68,14 @@ class SqlDelightReportingRepository(
 
     override suspend fun getTopProductsByQuantity(scope: ReportScope, period: ReportPeriod, limit: Long): TopProductsResult {
         val currency = resolveCurrency(scope.companyId)
-        return gate.mutex.withLock { computeTopProductsLocked(scope, period, limit, currency, byRevenue = false) }
+        val boundedLimit = limit.coerceIn(0L, ReportingLimits.MAX_TOP_PRODUCTS_LIMIT)
+        return gate.mutex.withLock { computeTopProductsLocked(scope, period, boundedLimit, currency, byRevenue = false) }
     }
 
     override suspend fun getTopProductsByNetRevenue(scope: ReportScope, period: ReportPeriod, limit: Long): TopProductsResult {
         val currency = resolveCurrency(scope.companyId)
-        return gate.mutex.withLock { computeTopProductsLocked(scope, period, limit, currency, byRevenue = true) }
+        val boundedLimit = limit.coerceIn(0L, ReportingLimits.MAX_TOP_PRODUCTS_LIMIT)
+        return gate.mutex.withLock { computeTopProductsLocked(scope, period, boundedLimit, currency, byRevenue = true) }
     }
 
     private suspend fun resolveCurrency(companyId: Long): CurrencyCode =

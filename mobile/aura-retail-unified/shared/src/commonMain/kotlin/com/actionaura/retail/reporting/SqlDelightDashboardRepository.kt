@@ -50,7 +50,7 @@ class SqlDelightDashboardRepository(
             today = todaySummary.totalsByCurrency.getValue(currency),
             selectedPeriod = selectedSummary.totalsByCurrency.getValue(currency),
             lowStockCount = lowStock.size.toLong(),
-            lowStockPreview = lowStock.take(lowStockPreviewLimit.toInt()).map {
+            lowStockPreview = lowStock.take(lowStockPreviewLimit.coerceIn(0L, ReportingLimits.MAX_DASHBOARD_PREVIEW_LIMIT).toInt()).map {
                 LowStockPreviewItem(it.product.id, it.product.name, it.totalOnHandAcrossBranches, it.product.reorderLevel)
             },
             topProductsByQuantity = byQuantity.metrics,
