@@ -1,0 +1,541 @@
+{
+  "fixture_version": "1",
+  "pricing_calculation_version": "retail-pricing-v2-wave0",
+  "calculate_line_results": [
+    {
+      "id": "cl-01",
+      "input": {
+        "id": "cl-01",
+        "unit_price": 100,
+        "quantity": 1,
+        "discount_pct": 0,
+        "tax_rate": 15,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": 100.0,
+        "discount_amount": 0.0,
+        "taxable_amount": 100.0,
+        "tax": 15.0,
+        "total": 115.0
+      }
+    },
+    {
+      "id": "cl-02",
+      "input": {
+        "id": "cl-02",
+        "unit_price": 100,
+        "quantity": 1,
+        "discount_pct": 10,
+        "tax_rate": 15,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": 100.0,
+        "discount_amount": 10.0,
+        "taxable_amount": 90.0,
+        "tax": 13.5,
+        "total": 103.5
+      }
+    },
+    {
+      "id": "cl-03",
+      "input": {
+        "id": "cl-03",
+        "unit_price": 100,
+        "quantity": 1,
+        "discount_pct": 10,
+        "tax_rate": 15,
+        "mode": "before_discount"
+      },
+      "output": {
+        "gross": 100.0,
+        "discount_amount": 10.0,
+        "taxable_amount": 100.0,
+        "tax": 15.0,
+        "total": 105.0
+      }
+    },
+    {
+      "id": "cl-04",
+      "input": {
+        "id": "cl-04",
+        "unit_price": 100,
+        "quantity": 1,
+        "discount_pct": 0,
+        "tax_rate": 10,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": 100.0,
+        "discount_amount": 0.0,
+        "taxable_amount": 100.0,
+        "tax": 10.0,
+        "total": 110.0
+      }
+    },
+    {
+      "id": "cl-05",
+      "input": {
+        "id": "cl-05",
+        "unit_price": 100,
+        "quantity": 1,
+        "discount_pct": 0,
+        "tax_rate": 10,
+        "mode": "before_discount"
+      },
+      "output": {
+        "gross": 100.0,
+        "discount_amount": 0.0,
+        "taxable_amount": 100.0,
+        "tax": 10.0,
+        "total": 110.0
+      }
+    },
+    {
+      "id": "cl-06",
+      "input": {
+        "id": "cl-06",
+        "unit_price": 19.99,
+        "quantity": 3,
+        "discount_pct": 5,
+        "tax_rate": 8,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": 59.97,
+        "discount_amount": 3.0,
+        "taxable_amount": 56.97,
+        "tax": 4.56,
+        "total": 61.53
+      }
+    },
+    {
+      "id": "cl-07",
+      "input": {
+        "id": "cl-07",
+        "unit_price": 10.1,
+        "quantity": 3,
+        "discount_pct": 7.5,
+        "tax_rate": 8.25,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": 30.3,
+        "discount_amount": 2.27,
+        "taxable_amount": 28.03,
+        "tax": 2.31,
+        "total": 30.34
+      }
+    },
+    {
+      "id": "cl-08",
+      "input": {
+        "id": "cl-08",
+        "unit_price": 50,
+        "quantity": 2,
+        "discount_pct": 10,
+        "tax_rate": 0,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": 100.0,
+        "discount_amount": 10.0,
+        "taxable_amount": 90.0,
+        "tax": 0.0,
+        "total": 90.0
+      }
+    },
+    {
+      "id": "cl-09-zero-quantity",
+      "input": {
+        "id": "cl-09-zero-quantity",
+        "unit_price": 100,
+        "quantity": 0,
+        "discount_pct": 0,
+        "tax_rate": 10,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": 0.0,
+        "discount_amount": 0.0,
+        "taxable_amount": 0.0,
+        "tax": 0.0,
+        "total": 0.0
+      }
+    },
+    {
+      "id": "cl-10-negative-quantity",
+      "input": {
+        "id": "cl-10-negative-quantity",
+        "unit_price": 100,
+        "quantity": -5,
+        "discount_pct": 0,
+        "tax_rate": 10,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": -500.0,
+        "discount_amount": -0.0,
+        "taxable_amount": -500.0,
+        "tax": -50.0,
+        "total": -550.0
+      }
+    },
+    {
+      "id": "cl-11-integer-quantity",
+      "input": {
+        "id": "cl-11-integer-quantity",
+        "unit_price": 25.5,
+        "quantity": 4,
+        "discount_pct": 0,
+        "tax_rate": 5,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": 102.0,
+        "discount_amount": 0.0,
+        "taxable_amount": 102.0,
+        "tax": 5.1,
+        "total": 107.1
+      }
+    },
+    {
+      "id": "cl-12-decimal-quantity",
+      "input": {
+        "id": "cl-12-decimal-quantity",
+        "unit_price": 8,
+        "quantity": 1.5,
+        "discount_pct": 0,
+        "tax_rate": 0,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": 12.0,
+        "discount_amount": 0.0,
+        "taxable_amount": 12.0,
+        "tax": 0.0,
+        "total": 12.0
+      }
+    },
+    {
+      "id": "cl-13-very-large-quantity",
+      "input": {
+        "id": "cl-13-very-large-quantity",
+        "unit_price": 1,
+        "quantity": 1000000,
+        "discount_pct": 0,
+        "tax_rate": 0,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": 1000000.0,
+        "discount_amount": 0.0,
+        "taxable_amount": 1000000.0,
+        "tax": 0.0,
+        "total": 1000000.0
+      }
+    },
+    {
+      "id": "cl-14-zero-price",
+      "input": {
+        "id": "cl-14-zero-price",
+        "unit_price": 0,
+        "quantity": 5,
+        "discount_pct": 10,
+        "tax_rate": 15,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": 0.0,
+        "discount_amount": 0.0,
+        "taxable_amount": 0.0,
+        "tax": 0.0,
+        "total": 0.0
+      }
+    },
+    {
+      "id": "cl-15-negative-price",
+      "input": {
+        "id": "cl-15-negative-price",
+        "unit_price": -10,
+        "quantity": 1,
+        "discount_pct": 0,
+        "tax_rate": 0,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": -10.0,
+        "discount_amount": -0.0,
+        "taxable_amount": -10.0,
+        "tax": -0.0,
+        "total": -10.0
+      }
+    },
+    {
+      "id": "cl-16-high-precision-price",
+      "input": {
+        "id": "cl-16-high-precision-price",
+        "unit_price": 19.999,
+        "quantity": 1,
+        "discount_pct": 0,
+        "tax_rate": 0,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": 20.0,
+        "discount_amount": 0.0,
+        "taxable_amount": 20.0,
+        "tax": 0.0,
+        "total": 20.0
+      }
+    },
+    {
+      "id": "cl-17-discount-exactly-at-limit",
+      "input": {
+        "id": "cl-17-discount-exactly-at-limit",
+        "unit_price": 100,
+        "quantity": 1,
+        "discount_pct": 100,
+        "tax_rate": 0,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": 100.0,
+        "discount_amount": 100.0,
+        "taxable_amount": 0.0,
+        "tax": 0.0,
+        "total": 0.0
+      }
+    },
+    {
+      "id": "cl-18-discount-above-limit-clamped",
+      "input": {
+        "id": "cl-18-discount-above-limit-clamped",
+        "unit_price": 100,
+        "quantity": 1,
+        "discount_pct": 150,
+        "tax_rate": 0,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": 100.0,
+        "discount_amount": 100.0,
+        "taxable_amount": 0.0,
+        "tax": 0.0,
+        "total": 0.0
+      }
+    },
+    {
+      "id": "cl-19-discount-negative-clamped",
+      "input": {
+        "id": "cl-19-discount-negative-clamped",
+        "unit_price": 100,
+        "quantity": 1,
+        "discount_pct": -10,
+        "tax_rate": 0,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": 100.0,
+        "discount_amount": 0.0,
+        "taxable_amount": 100.0,
+        "tax": 0.0,
+        "total": 100.0
+      }
+    },
+    {
+      "id": "cl-20-zero-tax",
+      "input": {
+        "id": "cl-20-zero-tax",
+        "unit_price": 50,
+        "quantity": 2,
+        "discount_pct": 10,
+        "tax_rate": 0,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": 100.0,
+        "discount_amount": 10.0,
+        "taxable_amount": 90.0,
+        "tax": 0.0,
+        "total": 90.0
+      }
+    },
+    {
+      "id": "cl-21-tax-plus-discount",
+      "input": {
+        "id": "cl-21-tax-plus-discount",
+        "unit_price": 200,
+        "quantity": 1,
+        "discount_pct": 25,
+        "tax_rate": 12,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": 200.0,
+        "discount_amount": 50.0,
+        "taxable_amount": 150.0,
+        "tax": 18.0,
+        "total": 168.0
+      }
+    },
+    {
+      "id": "cl-22-unknown-mode-falls-back",
+      "input": {
+        "id": "cl-22-unknown-mode-falls-back",
+        "unit_price": 100,
+        "quantity": 1,
+        "discount_pct": 10,
+        "tax_rate": 15,
+        "mode": "nonsense"
+      },
+      "output": {
+        "gross": 100.0,
+        "discount_amount": 10.0,
+        "taxable_amount": 90.0,
+        "tax": 13.5,
+        "total": 103.5
+      }
+    },
+    {
+      "id": "cl-23-negative-zero-quantity",
+      "input": {
+        "id": "cl-23-negative-zero-quantity",
+        "unit_price": 100,
+        "quantity": -0.0,
+        "discount_pct": 0,
+        "tax_rate": 10,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": -0.0,
+        "discount_amount": -0.0,
+        "taxable_amount": 0.0,
+        "tax": 0.0,
+        "total": 0.0
+      }
+    },
+    {
+      "id": "cl-24-repeated-product-line",
+      "input": {
+        "id": "cl-24-repeated-product-line",
+        "unit_price": 5.5,
+        "quantity": 10,
+        "discount_pct": 0,
+        "tax_rate": 0,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": 55.0,
+        "discount_amount": 0.0,
+        "taxable_amount": 55.0,
+        "tax": 0.0,
+        "total": 55.0
+      }
+    },
+    {
+      "id": "cl-25-excessive-scale-price",
+      "input": {
+        "id": "cl-25-excessive-scale-price",
+        "unit_price": 19.123456789,
+        "quantity": 1,
+        "discount_pct": 0,
+        "tax_rate": 0,
+        "mode": "after_discount"
+      },
+      "output": {
+        "gross": 19.12,
+        "discount_amount": 0.0,
+        "taxable_amount": 19.12,
+        "tax": 0.0,
+        "total": 19.12
+      }
+    }
+  ],
+  "calculate_invoice_results": [
+    {
+      "id": "ci-01",
+      "input": {
+        "id": "ci-01",
+        "subtotal": 200,
+        "discount_amount": 30,
+        "tax_rate_pct": 12,
+        "mode": "before_discount"
+      },
+      "output": {
+        "discount_amount": 30.0,
+        "taxable_amount": 200.0,
+        "tax": 24.0,
+        "total": 194.0
+      }
+    },
+    {
+      "id": "ci-02-discount-clamped-to-subtotal",
+      "input": {
+        "id": "ci-02-discount-clamped-to-subtotal",
+        "subtotal": 100,
+        "discount_amount": 150,
+        "tax_rate_pct": 10,
+        "mode": "after_discount"
+      },
+      "output": {
+        "discount_amount": 100.0,
+        "taxable_amount": 0.0,
+        "tax": 0.0,
+        "total": 0.0
+      }
+    },
+    {
+      "id": "ci-03-negative-discount-clamped",
+      "input": {
+        "id": "ci-03-negative-discount-clamped",
+        "subtotal": 100,
+        "discount_amount": -20,
+        "tax_rate_pct": 10,
+        "mode": "after_discount"
+      },
+      "output": {
+        "discount_amount": 0.0,
+        "taxable_amount": 100.0,
+        "tax": 10.0,
+        "total": 110.0
+      }
+    }
+  ],
+  "change_results": [
+    {
+      "id": "ch-01-payment-exactly-equal",
+      "input": {
+        "id": "ch-01-payment-exactly-equal",
+        "amount_paid": 100.0,
+        "total": 100.0
+      },
+      "output": {
+        "change": 0.0
+      }
+    },
+    {
+      "id": "ch-02-payment-above-total",
+      "input": {
+        "id": "ch-02-payment-above-total",
+        "amount_paid": 105.0,
+        "total": 100.0
+      },
+      "output": {
+        "change": 5.0
+      }
+    },
+    {
+      "id": "ch-03-payment-below-total",
+      "input": {
+        "id": "ch-03-payment-below-total",
+        "amount_paid": 80.0,
+        "total": 100.0
+      },
+      "output": {
+        "change": 0.0
+      }
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "fixture_version": "1",
+  "description": "Canonical calculation-formula fixtures -- direct inputs to core/retail/pricing.py's calculate_line()/calculate_invoice() (already-parsed numeric values, not string parsing -- see parsing_fixtures.json for the string-boundary cases). Every case here must produce byte-identical output between the real Python function and the Kotlin calculateLine()/calculateInvoice() port.",
+  "calculate_line_cases": [
+    {"id": "cl-01", "unit_price": 100, "quantity": 1, "discount_pct": 0, "tax_rate": 15, "mode": "after_discount"},
+    {"id": "cl-02", "unit_price": 100, "quantity": 1, "discount_pct": 10, "tax_rate": 15, "mode": "after_discount"},
+    {"id": "cl-03", "unit_price": 100, "quantity": 1, "discount_pct": 10, "tax_rate": 15, "mode": "before_discount"},
+    {"id": "cl-04", "unit_price": 100, "quantity": 1, "discount_pct": 0, "tax_rate": 10, "mode": "after_discount"},
+    {"id": "cl-05", "unit_price": 100, "quantity": 1, "discount_pct": 0, "tax_rate": 10, "mode": "before_discount"},
+    {"id": "cl-06", "unit_price": 19.99, "quantity": 3, "discount_pct": 5, "tax_rate": 8, "mode": "after_discount"},
+    {"id": "cl-07", "unit_price": 10.1, "quantity": 3, "discount_pct": 7.5, "tax_rate": 8.25, "mode": "after_discount"},
+    {"id": "cl-08", "unit_price": 50, "quantity": 2, "discount_pct": 10, "tax_rate": 0, "mode": "after_discount"},
+    {"id": "cl-09-zero-quantity", "unit_price": 100, "quantity": 0, "discount_pct": 0, "tax_rate": 10, "mode": "after_discount"},
+    {"id": "cl-10-negative-quantity", "unit_price": 100, "quantity": -5, "discount_pct": 0, "tax_rate": 10, "mode": "after_discount"},
+    {"id": "cl-11-integer-quantity", "unit_price": 25.5, "quantity": 4, "discount_pct": 0, "tax_rate": 5, "mode": "after_discount"},
+    {"id": "cl-12-decimal-quantity", "unit_price": 8, "quantity": 1.5, "discount_pct": 0, "tax_rate": 0, "mode": "after_discount"},
+    {"id": "cl-13-very-large-quantity", "unit_price": 1, "quantity": 1000000, "discount_pct": 0, "tax_rate": 0, "mode": "after_discount"},
+    {"id": "cl-14-zero-price", "unit_price": 0, "quantity": 5, "discount_pct": 10, "tax_rate": 15, "mode": "after_discount"},
+    {"id": "cl-15-negative-price", "unit_price": -10, "quantity": 1, "discount_pct": 0, "tax_rate": 0, "mode": "after_discount"},
+    {"id": "cl-16-high-precision-price", "unit_price": 19.999, "quantity": 1, "discount_pct": 0, "tax_rate": 0, "mode": "after_discount"},
+    {"id": "cl-17-discount-exactly-at-limit", "unit_price": 100, "quantity": 1, "discount_pct": 100, "tax_rate": 0, "mode": "after_discount"},
+    {"id": "cl-18-discount-above-limit-clamped", "unit_price": 100, "quantity": 1, "discount_pct": 150, "tax_rate": 0, "mode": "after_discount"},
+    {"id": "cl-19-discount-negative-clamped", "unit_price": 100, "quantity": 1, "discount_pct": -10, "tax_rate": 0, "mode": "after_discount"},
+    {"id": "cl-20-zero-tax", "unit_price": 50, "quantity": 2, "discount_pct": 10, "tax_rate": 0, "mode": "after_discount"},
+    {"id": "cl-21-tax-plus-discount", "unit_price": 200, "quantity": 1, "discount_pct": 25, "tax_rate": 12, "mode": "after_discount"},
+    {"id": "cl-22-unknown-mode-falls-back", "unit_price": 100, "quantity": 1, "discount_pct": 10, "tax_rate": 15, "mode": "nonsense"},
+    {"id": "cl-23-negative-zero-quantity", "unit_price": 100, "quantity": -0.0, "discount_pct": 0, "tax_rate": 10, "mode": "after_discount"},
+    {"id": "cl-24-repeated-product-line", "unit_price": 5.5, "quantity": 10, "discount_pct": 0, "tax_rate": 0, "mode": "after_discount"},
+    {"id": "cl-25-excessive-scale-price", "unit_price": 19.123456789, "quantity": 1, "discount_pct": 0, "tax_rate": 0, "mode": "after_discount"}
+  ],
+  "calculate_invoice_cases": [
+    {"id": "ci-01", "subtotal": 200, "discount_amount": 30, "tax_rate_pct": 12, "mode": "before_discount"},
+    {"id": "ci-02-discount-clamped-to-subtotal", "subtotal": 100, "discount_amount": 150, "tax_rate_pct": 10, "mode": "after_discount"},
+    {"id": "ci-03-negative-discount-clamped", "subtotal": 100, "discount_amount": -20, "tax_rate_pct": 10, "mode": "after_discount"}
+  ],
+  "change_cases": [
+    {"id": "ch-01-payment-exactly-equal", "amount_paid": 100.0, "total": 100.0},
+    {"id": "ch-02-payment-above-total", "amount_paid": 105.0, "total": 100.0},
+    {"id": "ch-03-payment-below-total", "amount_paid": 80.0, "total": 100.0}
+  ]
+}
