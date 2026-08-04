@@ -1,0 +1,58 @@
+-- M5.6 -- real, indexed row-projection queries for the shared reporting
+-- authority. Deliberately NEVER SUM()/AVG() on TEXT money columns
+-- (exact-report-aggregation-decision.md's own real, executed proof that
+-- SQL aggregation coerces TEXT to lossy REAL) -- these queries only
+-- narrow the row set (company/status/date/branch), real Kotlin-side
+-- exact Money accumulation happens above this layer
+-- (reporting-definition-contract.md).
+--
+-- The `:branchId IS NULL OR branch_id = :branchId` pattern is the real,
+-- SQLDelight-native-parameter way to make branch filtering optional
+-- without a second query variant -- real index usage (sales_branch_id/
+-- returns_company_id) confirmed in product-inventory-query-plan-report.md's
+-- established discipline, re-verified for these queries in
+-- reporting-query-plan-report.md (M5.7).
+
+selectSalesForPeriod:
+SELECT id, branch_id, total, created_at
+FROM sales
+WHERE company_id = :companyId AND status = :status
+  AND created_at >= :startInclusive AND created_at < :endExclusive
+  AND (:branchId IS NULL OR branch_id = :branchId)
+ORDER BY created_at;
+
+selectReturnsForPeriod:
+SELECT id, branch_id, refund_amount, created_at
+FROM returns
+WHERE company_id = :companyId AND status = :status
+  AND created_at >= :startInclusive AND created_at < :endExclusive
+  AND (:branchId IS NULL OR branch_id = :branchId)
+ORDER BY created_at;
+
+-- M5.6.6/M5.6.7 -- top-products source rows. Joins `sales` for scope
+-- filtering (company/status/date/branch) and `products` for the category
+-- filter -- CURRENT product category, a real, documented policy choice
+-- (historical-category-reporting-decision.md: sale_items/return_items
+-- carry no category snapshot, so "historically valid" category filtering
+-- means the product's category as of NOW, not as of the sale -- old
+-- results can move when a product's category is reassigned later,
+-- explicitly not pretended otherwise).
+selectSaleItemsForPeriod:
+SELECT si.product_id, si.product_name_at_sale, si.quantity, si.line_total
+FROM sale_items si
+JOIN sales s ON si.sale_id = s.id
+JOIN products p ON si.product_id = p.id
+WHERE s.company_id = :companyId AND s.status = :status
+  AND s.created_at >= :startInclusive AND s.created_at < :endExclusive
+  AND (:branchId IS NULL OR s.branch_id = :branchId)
+  AND (:categoryId IS NULL OR p.category_id = :categoryId);
+
+selectReturnItemsForPeriod:
+SELECT ri.product_id, ri.product_name_at_sale, ri.quantity, ri.line_total
+FROM return_items ri
+JOIN returns r ON ri.return_id = r.id
+JOIN products p ON ri.product_id = p.id
+WHERE r.company_id = :companyId AND r.status = :status
+  AND r.created_at >= :startInclusive AND r.created_at < :endExclusive
+  AND (:branchId IS NULL OR r.branch_id = :branchId)
+  AND (:categoryId IS NULL OR p.category_id = :categoryId);

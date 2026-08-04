@@ -34,20 +34,20 @@ interface CartRepository {
 }
 
 /**
- * The six interfaces below are deliberately empty markers, not fake method
- * signatures -- their real shape is not yet designed (it depends on
- * decisions later milestones own: M5.6's exact net_sales/net_quantity/
- * net_revenue definitions, M5.8's ported-not-translated import pipeline
- * shape, M16's backup-format decisions, M9/M10's activation-policy
- * decisions). Inventing placeholder methods now would just be code deleted
- * and replaced later -- an empty marker is the honest boundary.
+ * The four interfaces below are deliberately empty markers, not fake
+ * method signatures -- their real shape is not yet designed (it depends
+ * on decisions later milestones own: M5.8's ported-not-translated import
+ * pipeline shape, M16's backup-format decisions, M9/M10's activation-
+ * policy decisions). Inventing placeholder methods now would just be code
+ * deleted and replaced later -- an empty marker is the honest boundary.
+ *
+ * `DashboardRepository`/`ReportingRepository` are no longer boundary
+ * stubs -- both now have real, implemented shapes in the `reporting`
+ * package (`reporting/ReportingRepository.kt`,
+ * `reporting/DashboardRepository.kt`), built once M5.6's exact
+ * net_sales/net_quantity/net_revenue definitions were settled
+ * (`reporting-definition-contract.md`).
  */
-
-/** M5.6 -- shared reporting authority (sales trend, top products, dashboard summary), built on ReportingRepository once the exact net_sales/net_quantity/net_revenue query definitions are settled. */
-interface DashboardRepository
-
-/** M5.6/M5.7 -- canonical reporting query authority (sales trend, top products), including the real EXPLAIN QUERY PLAN performance proof at 10K products / 100K sales scale. */
-interface ReportingRepository
 
 /** M5.8-M5.11 -- shared Import Center, ported architecturally (not line-by-line) from the real 1186-line Python import pipeline, with format security hardening and dry-run/commit transactional integrity. */
 interface ImportRepository
