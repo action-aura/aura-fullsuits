@@ -167,7 +167,13 @@ def import_release_manifest(manifest: dict, actor_staff_user_id: uuid.UUID | Non
             version=version_label,
             artifact_checksum_sha256=checksum,
             artifact_path=entry.get("path"),
+            artifact_size_bytes=entry.get("size_bytes"),
             imported_at=utcnow(),
+            created_by_staff_user_id=actor_staff_user_id,
+            # publication_state defaults to DRAFT (Phase 9R M10) -- import is
+            # never publication. A human (or the CI pipeline, M16) must call
+            # publish_release() explicitly before this version is visible to
+            # any client-facing authorization check.
         )
         db_session.add(row)
         created.append({"product_code": product_code, "platform": entry["platform_code"], "version": version_label})
