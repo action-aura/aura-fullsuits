@@ -17,4 +17,7 @@ sealed class RepositoryError(val code: String) {
     data class StaleUpdate(val entity: String, val id: String) : RepositoryError("STALE_UPDATE")
     data class IdempotencyConflict(val entity: String, val key: String) : RepositoryError("IDEMPOTENCY_CONFLICT")
     data class DuplicateValue(val entity: String, val field: String, val value: String) : RepositoryError("DUPLICATE_VALUE")
+
+    /** M5.6.18 -- a requested scope/capability the caller's `ReportingAccessContext` does not grant (reporting-authorization-integration-boundary.md). */
+    data class AccessDenied(val entity: String, val reason: String) : RepositoryError("ACCESS_DENIED")
 }
