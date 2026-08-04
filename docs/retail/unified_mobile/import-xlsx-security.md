@@ -63,8 +63,17 @@ intentional limitations, not defects:
 ## Real, disclosed platform-testability split
 
 `AndroidXlsxImportDecoder.kt` (real ZIP I/O, `java.util.zip.ZipInputStream`)
-cannot be exercised by a unit test on this host. Every decision it makes
-is delegated immediately to the tested `commonMain` functions above —
-this class's own logic is limited to: enumerate entries, extract two
-named entries' bytes, and hand them to the tested pure functions. This
-minimizes the real, untested surface to pure I/O plumbing.
+delegates every decision it makes immediately to the tested `commonMain`
+functions above — this class's own logic is limited to: enumerate
+entries, extract two named entries' bytes, and hand them to the tested
+pure functions. This minimizes the real, untested surface to pure I/O
+plumbing.
+
+**Correction (M5.8.20):** the claim above originally said this class
+"cannot be exercised by a unit test on this host." Real, re-checked
+evidence: its only imports are `java.util.zip.*`/`java.io.*` (plain JVM
+stdlib), never a real `android.*` framework class — unlike
+`AndroidSqliteImportDecoder` (real `SQLiteDatabase`), it needed no
+device/Robolectric at all. It IS now real, JVM-unit-tested —
+`AndroidXlsxImportDecoderTest.kt` (4/4), see
+`import-android-adapter-validation.md` for the full corrected account.
