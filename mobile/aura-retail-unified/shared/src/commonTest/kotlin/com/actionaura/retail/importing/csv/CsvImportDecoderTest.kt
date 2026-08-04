@@ -178,6 +178,51 @@ class CsvImportDecoderTest {
     }
 
     @Test
+    fun rowCountExactlyAtTheLimitSucceedsOnlyOneOverIsRejected() = runTest {
+        // Real boundary-value proof, not just "clearly over the limit" --
+        // exactly `maxRowCount` real data rows must succeed; one more
+        // must fail. Both real, separate assertions against the SAME limit.
+        val limits = ImportLimits(maxRowCount = 3)
+        val atLimit = StringBuilder("name,sku\n").apply { repeat(3) { append("Cola,SKU-$it\n") } }.toString()
+        val overLimit = StringBuilder("name,sku\n").apply { repeat(4) { append("Cola,SKU-$it\n") } }.toString()
+
+        val atLimitResult = decode(atLimit, limits)
+        assertIs<ImportResult.Success<com.actionaura.retail.importing.NormalizedTable>>(atLimitResult)
+        assertEquals(3, atLimitResult.value.rows.size)
+
+        val overLimitResult = decode(overLimit, limits)
+        assertIs<ImportResult.Failure>(overLimitResult)
+        assertIs<com.actionaura.retail.importing.ImportError.LimitExceeded>(overLimitResult.error)
+    }
+
+    @Test
+    fun cellLengthExactlyAtTheLimitSucceedsOnlyOneOverIsRejected() = runTest {
+        val limits = ImportLimits(maxCellLength = 10)
+        val atLimitResult = decode("name,sku\nCola,${"X".repeat(10)}\n", limits)
+        assertIs<ImportResult.Success<com.actionaura.retail.importing.NormalizedTable>>(atLimitResult)
+        assertEquals("X".repeat(10), atLimitResult.value.rows[0].cells[1])
+
+        val overLimitResult = decode("name,sku\nCola,${"X".repeat(11)}\n", limits)
+        assertIs<ImportResult.Failure>(overLimitResult)
+        assertIs<com.actionaura.retail.importing.ImportError.LimitExceeded>(overLimitResult.error)
+    }
+
+    @Test
+    fun columnCountExactlyAtTheLimitSucceedsOnlyOneOverIsRejected() = runTest {
+        val limits = ImportLimits(maxColumnCount = 3)
+        val atLimitHeader = (1..3).joinToString(",") { "col$it" }
+        val overLimitHeader = (1..4).joinToString(",") { "col$it" }
+
+        val atLimitResult = decode("$atLimitHeader\na,b,c\n", limits)
+        assertIs<ImportResult.Success<com.actionaura.retail.importing.NormalizedTable>>(atLimitResult)
+        assertEquals(3, atLimitResult.value.columns.size)
+
+        val overLimitResult = decode("$overLimitHeader\na,b,c,d\n", limits)
+        assertIs<ImportResult.Failure>(overLimitResult)
+        assertIs<com.actionaura.retail.importing.ImportError.LimitExceeded>(overLimitResult.error)
+    }
+
+    @Test
     fun oversizedFileIsRejectedBeforeParsing() = runTest {
         val limits = ImportLimits(maxCompressedFileSizeBytes = 5)
         val result = decode("name,sku\nCola,SKU-1\n", limits)
