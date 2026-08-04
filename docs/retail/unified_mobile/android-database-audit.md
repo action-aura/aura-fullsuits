@@ -1,5 +1,15 @@
 # Aura Retail Unified Mobile — Android Local Database Audit (M4)
 
+> **M5.0 correction**: the "Plus two lazily-created tables" sentence below
+> undercounted by one — `_ensure_credit_schema()` actually creates **three**
+> real lazy tables (`payment_methods`, `retail_settings`, `doc_sequences`),
+> not two. The real total legacy table count is **20** (17 from
+> `init_retail()` + 3 lazy), matching the unified schema's real 20 tables
+> exactly. See `table-count-reconciliation.md` for the full, corrected,
+> evidence-based accounting. Left below unmodified as the honest record of
+> what this audit found at the time, per this engagement's standing
+> discipline of correcting counts additively, not silently.
+
 Real audit of the actual current Android database, read from the real source, not assumed.
 
 ## Real, exact file location
