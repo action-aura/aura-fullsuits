@@ -1,0 +1,35 @@
+# Aura Retail Unified Mobile — Financial Invariant Catalog (M3.0)
+
+Every invariant the shared Kotlin core must enforce, sourced from the real Python authority audited in `python-financial-authority-map.md`. Each entry: the invariant, its Python source, whether it is `LEGACY_PARITY` (port as-is) or `CANONICAL_UNIFIED` (new/corrected, per the Product Owner Override's "do not preserve proven deficiencies merely for parity"), and its Kotlin target.
+
+| # | Invariant | Python source | Class | Kotlin target |
+|---|---|---|---|---|
+| 1 | Line total = `unit_price * quantity`, discount/tax applied per the active tax mode (`AFTER_DISCOUNT`/`BEFORE_DISCOUNT`) | `pricing.calculate_line` | LEGACY_PARITY | `financial/CalculateLine.kt` |
+| 2 | Every currency figure independently rounded to 2dp, `ROUND_HALF_UP`, computed in exact decimal (never binary float) | `pricing._money`, `_d` | LEGACY_PARITY | `financial/Money.kt` |
+| 3 | `discount_pct` clamped to `[0, 100]`, never rejected, malformed input becomes 0 | `pricing.clamp_discount_pct` | LEGACY_PARITY | `financial/CalculateLine.kt` |
+| 4 | Unrecognized/missing tax mode silently falls back to `AFTER_DISCOUNT` | `pricing.normalize_mode` | LEGACY_PARITY | `financial/TaxMode.kt` |
+| 5 | Order-level discount is a currency amount, clamped to `[0, subtotal]`, distinct from per-line percentage discount | `pricing.calculate_invoice` | LEGACY_PARITY | `usecases/ApplyOrderDiscount.kt` |
+| 6 | `unit_price`/`tax_rate` are always server/core-resolved from the product record — client-submitted values for these fields (and `subtotal`/`discount_amount`/`tax_amount`/`total`) are always ignored | `create_sale` docstring + code | LEGACY_PARITY | `usecases/FinalizeSale.kt` — core never accepts these as trusted input |
+| 7 | Quantity must parse as a finite positive number | `create_sale`/`create_return`, `float(item.get('quantity'))` + `qty <= 0` check | **CANONICAL_UNIFIED** (real defect closed, not ported) | `financial/Quantity.kt` parse function |
+| 7a | **Real Python defect, not reproduced**: `float("nan")` does not raise and `nan <= 0` is `False` in IEEE-754, so a NaN quantity string silently passes both the parse step and the positivity check in the current Python authority. The Kotlin `Quantity` parser must explicitly reject NaN/Infinity, closing this gap. | (defect, see above) | CANONICAL_UNIFIED | `financial/Quantity.kt` |
+| 8 | A sale is rejected outright (no partial persistence) if requested quantity exceeds on-hand stock for any line | `create_sale` stock check | LEGACY_PARITY | `usecases/FinalizeSale.kt` |
+| 9 | Stock decrement and sale-line persistence happen in one transaction; a rejected line rolls back the whole sale, not just that line | `create_sale`, `BEGIN IMMEDIATE`/rollback | LEGACY_PARITY | `data/SaleRepository.kt` (Milestone 4 for the real driver; M3.4 for the interface + in-memory test double) |
+| 10 | A concurrent sale cannot read a stale "stock is sufficient" snapshot (write-lock taken before line resolution) | `create_sale`, `BEGIN IMMEDIATE` comment | LEGACY_PARITY | `data/SaleRepository.kt` transaction contract |
+| 11 | Idempotency key: identical key returns the prior result without re-executing the mutation | `create_sale`/`create_return` idempotency lookup | LEGACY_PARITY | `usecases/FinalizeSale.kt`/`FinalizeReturn.kt` |
+| 12 | **Real Python gap, not reproduced**: no comparison of the retried payload against the original — a different payload under the same idempotency key silently returns the *first* call's result instead of a conflict | (gap, see `python-financial-authority-map.md`) | **CANONICAL_UNIFIED** | `usecases/FinalizeSale.kt` — must hash/compare the material payload and return `DUPLICATE_OPERATION_CONFLICT` on mismatch |
+| 13 | Underpayment (`amount_paid < total`) is not a hard error — it creates AR debt (`balance_due`), and is only permitted for a named customer with an eligible credit mode/limit; a walk-in underpayment is rejected | `create_sale` credit-sale block | LEGACY_PARITY (precise semantics, not a generic "PAYMENT_BELOW_TOTAL always rejects" rule) | `usecases/FinalizeSale.kt` + a separate `CreditPolicy` service boundary (AR-domain, not the pure calculation engine) |
+| 14 | Omitted `amount_paid` defaults to exactly `total` (treated as fully paid) | `create_sale`, `paid = _money(amount_paid or total)` | LEGACY_PARITY | `usecases/FinalizeSale.kt` |
+| 15 | `change = max(0, paid - total)` — never negative | `create_sale` | LEGACY_PARITY | `financial/CalculateChange.kt` |
+| 16 | A return's refund figures are always recomputed from the *original sale_items row* (unit_price/discount_pct/tax_rate as they were at sale time), never from live product data | `create_return`, sold-row lookup + `calculate_line` | LEGACY_PARITY | `usecases/FinalizeReturn.kt` |
+| 17 | Cumulative returns across multiple return transactions for the same sale+product cannot exceed the originally sold quantity (epsilon-tolerant comparison, `0.0001`) | `create_return`, `already_returned`/`remaining` | LEGACY_PARITY | `usecases/FinalizeReturn.kt` |
+| 18 | A return references a real sale belonging to the same company; a product not part of the original sale is rejected | `create_return` | LEGACY_PARITY | `usecases/FinalizeReturn.kt` |
+| 19 | Stock restoration on return happens exactly once per return-line, inside the same transaction as the return's persistence | `create_return` | LEGACY_PARITY | `data/ReturnRepository.kt` |
+| 20 | **Real Python gap, not reproduced**: the sale-item snapshot does not include the product's *display name* — receipts/history rely on a live join to `products.name`, so a renamed/archived product changes how old receipts render | `sale_items` schema (no `product_name` column) | **CANONICAL_UNIFIED** | `financial/FinalizedSaleLineSnapshot.kt` — the shared snapshot type includes a frozen product name, closing this gap for both platforms |
+| 21 | Customer loyalty points: 1 point per $10 of sale total (integer floor) | `create_sale`, `pts = int(total / 10)` | LEGACY_PARITY | `usecases/FinalizeSale.kt` (or a small `LoyaltyPolicy` helper) |
+| 22 | Dashboard revenue figures are not clamped to zero when returns exceed sales in a period (can go negative) | `retail_pricing_test.py::test_revenue_becoming_negative_is_not_clamped` | LEGACY_PARITY | `usecases/DashboardUseCase.kt` (Milestone 5 scope, noted here since it's a financial-figure invariant) |
+
+## Explicit non-invariants (real absence, not an oversight)
+
+- No tax-inclusive pricing concept exists (`pricing.py`'s own docstring: *"Neither mode supports tax-inclusive pricing... do not infer one"*). The shared core must not invent one.
+- No mixed taxable/non-taxable line concept beyond a per-line `tax_rate = 0` (handled as an ordinary zero-rate case, no special branch needed).
+- No sale "draft"/"pending" status exists — every persisted sale is immediately `'completed'`. The shared command model's `FinalizeSale` therefore has no intermediate persisted state to model; `CalculateCart` (pure, unpersisted) is the only "not yet committed" concept.
