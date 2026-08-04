@@ -22,6 +22,29 @@ class CatalogImportResult(
     val branchesImported: Int,
     val categoriesImported: Int,
     val productsImported: Int,
+    /**
+     * M5.5.15 -- real, found by actually running the importer against a
+     * legacy source with duplicate barcodes (a real, audited legacy
+     * possibility -- product-inventory-authority-audit.md #4, no
+     * uniqueness ever enforced there): M5.5's new
+     * `products_company_barcode` unique index would otherwise make the
+     * WHOLE import throw and roll back on the very first duplicate. Per
+     * the Product Owner Scope Override ("do not preserve proven
+     * deficiencies merely for parity"), the first product to claim a
+     * barcode (lowest legacy id) keeps it; every later duplicate is
+     * imported with its barcode dropped (null) rather than crashing the
+     * import. This count is how many products that happened to.
+     */
+    val duplicateBarcodesDropped: Int,
+    /**
+     * Same real finding, for `sku` (required/non-null, so it cannot be
+     * dropped like barcode -- the whole duplicate row is skipped instead).
+     * The legacy app-level SKU uniqueness check (retail_api.py:253-257) is
+     * itself race-prone (product-inventory-authority-audit.md #2), so a
+     * real legacy database with a duplicate SKU, while not expected, is
+     * not impossible.
+     */
+    val duplicateSkuProductsSkipped: Int,
 )
 
 class CatalogImportRowCountMismatch(message: String) : Exception(message)
@@ -44,6 +67,9 @@ object CatalogImporter {
         val categories = readLegacyCategories(legacyDriver)
         val products = readLegacyProducts(legacyDriver)
 
+        var duplicateBarcodesDropped = 0
+        var duplicateSkuProductsSkipped = 0
+
         // Single transaction -- all-or-nothing, matching data-preservation-plan.md's
         // "any mismatch aborts the whole transaction" requirement.
         newDb.transaction {
@@ -53,9 +79,27 @@ object CatalogImporter {
             for (c in categories) {
                 newDb.catalogQueries.importCategory(c.id, c.companyId, c.name, c.description, c.createdAtEpochMillis)
             }
-            for (p in products) {
+
+            // Deterministic, id-order (lowest legacy id wins) dedup pass --
+            // see CatalogImportResult's own KDoc for why this exists.
+            val seenSkus = mutableSetOf<String>()
+            val seenBarcodes = mutableSetOf<String>()
+            for (p in products.sortedBy { it.id }) {
+                val skuKey = p.sku.lowercase()
+                if (!seenSkus.add(skuKey)) {
+                    duplicateSkuProductsSkipped++
+                    continue
+                }
+                var barcodeToImport = p.barcode
+                if (!barcodeToImport.isNullOrEmpty()) {
+                    val barcodeKey = barcodeToImport.lowercase()
+                    if (!seenBarcodes.add(barcodeKey)) {
+                        barcodeToImport = null
+                        duplicateBarcodesDropped++
+                    }
+                }
                 newDb.catalogQueries.importProduct(
-                    p.id, p.companyId, p.sku, p.barcode, p.name, normalizer.normalizeForComparison(p.name), p.categoryId,
+                    p.id, p.companyId, p.sku, barcodeToImport, p.name, normalizer.normalizeForComparison(p.name), p.categoryId,
                     p.costPrice, p.sellPrice, p.taxRate, p.unit, p.reorderLevel, p.status,
                     p.createdAtEpochMillis, p.createdAtEpochMillis, // no legacy updated_at concept -- same value as created_at
                 )
@@ -68,7 +112,7 @@ object CatalogImporter {
             throw CatalogImportRowCountMismatch("branches: expected at least ${branches.size}, found $newBranchCount after import")
         }
 
-        return CatalogImportResult(branches.size, categories.size, products.size)
+        return CatalogImportResult(branches.size, categories.size, products.size - duplicateSkuProductsSkipped, duplicateBarcodesDropped, duplicateSkuProductsSkipped)
     }
 
     private class LegacyBranch(val id: Long, val companyId: Long, val name: String, val address: String?, val phone: String?, val status: String, val createdAtEpochMillis: Long)

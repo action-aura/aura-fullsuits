@@ -79,6 +79,52 @@ class CatalogImporterTest {
     }
 
     @Test
+    fun legacySourceWithDuplicateBarcodesAcrossProductsImportsWithoutThrowing() {
+        // M5.5.15 -- real check, not assumed: the legacy authority permits
+        // duplicate barcodes across products (product-inventory-authority-
+        // audit.md #4, no uniqueness enforced), but M5.5 added a REAL
+        // products_company_barcode unique index to the unified schema.
+        // importProduct is a plain INSERT with no duplicate handling of its
+        // own -- the FIRST real run of this test (before CatalogImporter's
+        // own dedup pass existed) actually threw a real SQLiteException and
+        // rolled back the whole import. Fixed in CatalogImporter itself
+        // (CatalogImportResult's own KDoc); this test proves the fix.
+        val legacyDriver = createSyntheticLegacyDatabase()
+        legacyDriver.execute(
+            null,
+            "INSERT INTO products(id, company_id, sku, barcode, name, category_id, cost_price, sell_price, tax_rate, unit, reorder_level, status, created_at) " +
+                "VALUES (2, 1, 'SKU-002', '000111', 'Cola 500ml', 1, 0.6, 2.49, 10.0, 'can', 12, 'active', '2026-01-15 10:33:00')",
+            0,
+        )
+        val newDb = newTargetDatabase()
+
+        val result = CatalogImporter.import(legacyDriver, newDb, AndroidUnicodeTextNormalizer())
+        assertEquals(2, result.productsImported)
+        assertEquals(1, result.duplicateBarcodesDropped)
+
+        val products = newDb.catalogQueries.selectActiveProducts(1L).executeAsList().sortedBy { it.id }
+        assertEquals("000111", products[0].barcode, "the first (lowest-id) claimant keeps the barcode")
+        assertEquals(null, products[1].barcode, "the later duplicate's barcode is dropped, not silently duplicated")
+    }
+
+    @Test
+    fun legacySourceWithDuplicateSkusSkipsTheLaterRowRatherThanThrowing() {
+        val legacyDriver = createSyntheticLegacyDatabase()
+        legacyDriver.execute(
+            null,
+            "INSERT INTO products(id, company_id, sku, barcode, name, category_id, cost_price, sell_price, tax_rate, unit, reorder_level, status, created_at) " +
+                "VALUES (2, 1, 'SKU-001', '000222', 'Cola Duplicate SKU', 1, 0.6, 2.49, 10.0, 'can', 12, 'active', '2026-01-15 10:33:00')",
+            0,
+        )
+        val newDb = newTargetDatabase()
+
+        val result = CatalogImporter.import(legacyDriver, newDb, AndroidUnicodeTextNormalizer())
+        assertEquals(1, result.productsImported)
+        assertEquals(1, result.duplicateSkuProductsSkipped)
+        assertEquals(1, newDb.catalogQueries.selectActiveProducts(1L).executeAsList().size)
+    }
+
+    @Test
     fun legacyTimestampParsedToPlausibleEpochMillis() {
         // 2026-01-15 10:30:00 local -- sanity bound, not an exact-timezone
         // assertion (data-preservation-plan.md's own documented caveat).
