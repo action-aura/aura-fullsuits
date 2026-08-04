@@ -75,8 +75,25 @@ class Money private constructor(internal val raw: BigDecimal) : Comparable<Money
     override fun equals(other: Any?): Boolean = other is Money && raw.compareTo(other.raw) == 0
     override fun hashCode(): Int = raw.toStringExpanded().hashCode()
 
-    /** Deterministic, never-scientific-notation, always-2dp string -- matches Python's float(Decimal.quantize(...)) formatting contract for JSON/receipt output. */
-    override fun toString(): String = raw.toStringExpanded()
+    /**
+     * Deterministic, never-scientific-notation, always-exactly-2dp string.
+     * Real bug found by this milestone's own test
+     * (fullReturnRestoresStockAndRefundsFromSnapshot expected "66.00", got
+     * "66"): bignum's `toStringExpanded()` after
+     * `roundToDigitPositionAfterDecimalPoint` strips trailing zeros rather
+     * than preserving the fixed 2dp scale -- so the padding below is done
+     * explicitly rather than trusted to the library's own formatting.
+     */
+    override fun toString(): String {
+        val expanded = raw.toStringExpanded()
+        val dotIndex = expanded.indexOf('.')
+        return when {
+            dotIndex == -1 -> "$expanded.00"
+            expanded.length - dotIndex - 1 == CURRENCY_SCALE -> expanded
+            expanded.length - dotIndex - 1 < CURRENCY_SCALE -> expanded + "0".repeat(CURRENCY_SCALE - (expanded.length - dotIndex - 1))
+            else -> expanded.substring(0, dotIndex + 1 + CURRENCY_SCALE) // defensive -- should be unreachable given construction always rounds to 2dp
+        }
+    }
 }
 
 fun max(a: Money, b: Money): Money = if (a >= b) a else b
