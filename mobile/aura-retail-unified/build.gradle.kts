@@ -4,6 +4,11 @@ plugins {
     // a compiler-version mismatch during the Milestone 18 migration window.
     kotlin("multiplatform") version "2.0.21" apply false
     kotlin("plugin.compose") version "2.0.21" apply false
+    // M6.7 -- real compiler plugin required for @Serializable type-safe
+    // navigation routes (AuraRoute.kt); the runtime library alone
+    // (kotlinx-serialization-json, already used since M5.8) does not
+    // generate serializers without this.
+    kotlin("plugin.serialization") version "2.0.21" apply false
     id("com.android.application") version "8.5.2" apply false
     id("com.android.library") version "8.5.2" apply false
     id("org.jetbrains.compose") version "1.7.0" apply false
