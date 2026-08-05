@@ -36,6 +36,13 @@ kotlin {
                 implementation(compose.runtime)
                 implementation(compose.foundation)
                 implementation(compose.material3)
+                // M6.8 -- the real, official Compose Multiplatform extended
+                // icon set. Real, evidence-based decision: `Icons.Filled.*`
+                // without this dependency only resolves a small, undocumented
+                // subset (confirmed by real compile failures on ArrowBack/
+                // Warning) -- this is the real fix, not further guessing at
+                // which names happen to work.
+                implementation(compose.materialIconsExtended)
                 implementation(compose.components.resources)
                 implementation(compose.ui)
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")

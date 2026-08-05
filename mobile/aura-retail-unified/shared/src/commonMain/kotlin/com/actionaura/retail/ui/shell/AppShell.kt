@@ -3,8 +3,8 @@ package com.actionaura.retail.ui.shell
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Star
@@ -35,7 +35,7 @@ private data class PrimaryDestinationSpec(val route: AuraRoute, val label: Strin
 private val PRIMARY_SPECS = listOf(
     PrimaryDestinationSpec(AuraRoute.Dashboard, "Dashboard", Icons.Filled.Home),
     PrimaryDestinationSpec(AuraRoute.Pos, "POS", Icons.Filled.ShoppingCart),
-    PrimaryDestinationSpec(AuraRoute.Products, "Products", Icons.Filled.List),
+    PrimaryDestinationSpec(AuraRoute.Products, "Products", Icons.AutoMirrored.Filled.List),
     PrimaryDestinationSpec(AuraRoute.Sales, "Sales", Icons.Filled.Star),
     PrimaryDestinationSpec(AuraRoute.More, "More", Icons.Filled.MoreVert),
 )
