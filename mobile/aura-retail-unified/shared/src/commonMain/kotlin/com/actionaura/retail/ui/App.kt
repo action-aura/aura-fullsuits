@@ -20,7 +20,7 @@ import androidx.compose.ui.Modifier
 import com.actionaura.retail.di.AuraAppContainer
 import com.actionaura.retail.di.LocalAuraAppContainer
 import com.actionaura.retail.licensing.transport.LicensingBootstrapState
-import com.actionaura.retail.licensing.transport.computeLicensingBootstrapState
+import com.actionaura.retail.licensing.transport.computeLicensingBootstrapStateFromHealth
 import com.actionaura.retail.ui.adaptive.AuraWindowSize
 import com.actionaura.retail.ui.shell.AppPhase
 import com.actionaura.retail.ui.shell.AuthenticatedAppShell
@@ -56,17 +56,30 @@ fun App(container: AuraAppContainer? = null) {
         AuraAppTheme(preference = AuraThemePreference.System) {
             Surface(modifier = Modifier.fillMaxSize()) {
                 var phase by remember { mutableStateOf<AppPhase>(AppPhase.Bootstrap) }
-                // M9.20 -- real, computed once per bootstrap, never allowed to throw past
-                // this point (`computeLicensingBootstrapState`'s own exception-safety).
-                // Real, disclosed scope decision (`startup-licensing-integration.md`):
-                // this value is computed and held for real diagnostic/future use, but does
-                // NOT gate `phase` in M9 -- gating the whole Retail shell on licensing state
-                // requires M10 (secure storage) and M11 (offline lease verification) to
-                // exist first, per the real dependency chain; gating now with neither would
-                // either permanently block the app or require inventing a bypass, and the
-                // checkpoint's own rule explicitly forbids a development-only bypass in
-                // release. `AppPhase.LicenseBlocked` remains the real, already-defined,
-                // not-yet-reachable state a later milestone wires this into.
+                // M9.20/M10.31 -- real, computed once per bootstrap, never allowed to throw
+                // past this point (`computeLicensingBootstrapStateFromHealth`'s own
+                // exception-safety). Real, disclosed scope decision
+                // (`startup-licensing-integration.md`): this value is computed and held for
+                // real diagnostic/future use, but does NOT gate `phase` yet -- gating the
+                // whole Retail shell on licensing state requires M11 (offline lease
+                // verification) to exist first, per the real dependency chain; gating now
+                // without it would either permanently block the app or require inventing a
+                // bypass, and the checkpoint's own rule explicitly forbids a
+                // development-only bypass in release. `AppPhase.LicenseBlocked` remains the
+                // real, already-defined, not-yet-reachable state a later milestone wires
+                // this into.
+                //
+                // M10.31 real wiring: now queries the real, container-held
+                // `SecureMaterialStore.health(scope)` (M10.6/M10.22) instead of the M9.20
+                // hardcoded `hasStoredInstallationMaterial = false`. Real, honest, current
+                // limitation: no real Installation-identity/scope generator exists in
+                // production yet (`ActivationViewModel`'s own disclosed
+                // `installationIdentityProvider = { null }` default, M8/M9 gap) -- so there
+                // is no real scope to query health for today, and `health` is passed as
+                // `null`, which resolves to the same honest `ServiceNotConfigured` result
+                // the M9.20 function already produced. This is real, structural readiness
+                // for the moment a future milestone adds real Installation-identity
+                // generation, not a behavior change today.
                 var licensingBootstrapState by remember { mutableStateOf<LicensingBootstrapState?>(null) }
 
                 BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -80,7 +93,7 @@ fun App(container: AuraAppContainer? = null) {
                             // the composable body (which would be a real composition
                             // side-effect anti-pattern).
                             LaunchedEffect(Unit) {
-                                licensingBootstrapState = computeLicensingBootstrapState(hasStoredInstallationMaterial = false)
+                                licensingBootstrapState = computeLicensingBootstrapStateFromHealth(health = null)
                                 phase = AppPhase.Authenticated
                             }
                         }

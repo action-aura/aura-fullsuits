@@ -19,7 +19,7 @@ import kotlin.test.fail
  *
  * 1. **Structural proof** (already real, already passing, cited not
  *    duplicated): `AuraAppContainerTest.kt` proves the real
- *    `AuraAppContainer(driverFactory, normalizer)` constructor
+ *    `AuraAppContainer(driverFactory, normalizer, secureBlobStore)` constructor
  *    actually opens a real database, constructs a real
  *    `DatabaseWriteGate`, and exposes real, non-null repositories --
  *    this is 100% real shared Kotlin logic, exercised identically

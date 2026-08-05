@@ -20,6 +20,9 @@ import com.actionaura.retail.reporting.DashboardRepository
 import com.actionaura.retail.reporting.ReportingRepository
 import com.actionaura.retail.reporting.SqlDelightDashboardRepository
 import com.actionaura.retail.reporting.SqlDelightReportingRepository
+import com.actionaura.retail.securestorage.GenerationalSecureMaterialStore
+import com.actionaura.retail.securestorage.SecureBlobStore
+import com.actionaura.retail.securestorage.SecureMaterialStore
 import com.actionaura.retail.usecases.branch.ActivateBranchUseCase
 import com.actionaura.retail.usecases.branch.DeactivateBranchUseCase
 import com.actionaura.retail.usecases.branch.EnsureDefaultBranchUseCase
@@ -64,12 +67,35 @@ import com.actionaura.retail.usecases.category.ReactivateCategoryUseCase
  * one now would be exactly the "temporary RBAC authority" the
  * checkpoint's own M6.25 forbids. When M7-M10 add real session state,
  * that state is additive to this container, not a replacement for it.
+ *
+ * `secureBlobStore`: M10.31 -- the real, platform-specific
+ * `SecureBlobStore` adapter (`AndroidSecureBlobStore`/
+ * `IosSecureBlobStore`), supplied by the real platform entry point
+ * exactly like `driverFactory` already is. Wrapped here in the one
+ * real, pure-Kotlin atomicity authority (`GenerationalSecureMaterialStore`,
+ * M10.6) so every screen reads the SAME real secure-storage authority
+ * from the SAME composition root, never a second independent instance
+ * -- the identical rule `database`/`gate` already enforce.
  */
-class AuraAppContainer(driverFactory: DatabaseDriverFactory, private val unicodeTextNormalizer: UnicodeTextNormalizer) {
+class AuraAppContainer(
+    driverFactory: DatabaseDriverFactory,
+    private val unicodeTextNormalizer: UnicodeTextNormalizer,
+    secureBlobStore: SecureBlobStore,
+) {
 
     private val driver = driverFactory.createDriver()
     val database: RetailDatabase = RetailDatabase(driver)
     val gate: DatabaseWriteGate = DatabaseWriteGate()
+    val secureMaterialStore: SecureMaterialStore = GenerationalSecureMaterialStore(
+        blobStore = secureBlobStore,
+        // Real, standard kotlinx-datetime ISO-8601 instant string (already this
+        // module's own real "now" authority, `CategoryListViewModel.nowEpochMillis`).
+        nowIso8601 = { kotlinx.datetime.Clock.System.now().toString() },
+        // Real CSPRNG-backed generation id -- the same M9 `secureRandomHex` bridge
+        // that replaced this codebase's own weak-RNG defect, never a predictable
+        // counter/timestamp in production.
+        newGenerationId = { com.actionaura.retail.licensing.transport.secureRandomHex(16) },
+    )
 
     val settingsRepository: SettingsRepository = SqlDelightSettingsRepository(database, gate)
     val categoryRepository: CategoryRepository = SqlDelightCategoryRepository(database, gate)

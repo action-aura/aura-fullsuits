@@ -33,7 +33,7 @@ class ImportCategoriesViewModelTest {
                 return driver
             }
         }
-        return AuraAppContainer(factory, AndroidUnicodeTextNormalizer())
+        return AuraAppContainer(factory, AndroidUnicodeTextNormalizer(), com.actionaura.retail.securestorage.InMemorySecureBlobStore())
     }
 
     @Test
