@@ -9,9 +9,37 @@ import kotlinx.serialization.Serializable
  * value found in Owner's own code/schema, cited in the linked doc.
  */
 
-/** Real seeded `owner_platforms` rows today (`app/catalog/services.py:32`). No IOS row exists yet. */
+/**
+ * M8.0 -- `WINDOWS`/`ANDROID` are real, seeded `owner_platforms` rows
+ * today (`app/catalog/services.py:32`). `IOS` is added here as a
+ * client-side forward-compatible contract case only
+ * (`platform-contract-reconciliation-m8.md`) -- it is NOT a real
+ * `owner_platforms` row and Owner does not accept it yet
+ * (`ios-platform-readiness-state.md`). Never treat this enum's mere
+ * inclusion of `IOS` as proof of server acceptance.
+ */
 @Serializable
-enum class LicensingPlatform { WINDOWS, ANDROID }
+enum class LicensingPlatform { WINDOWS, ANDROID, IOS }
+
+/**
+ * M8.0 -- real parse result for an arbitrary platform string (server
+ * response or local input). Never silently coerces an unrecognized
+ * value to an existing case, never defaults to `ANDROID`, never
+ * accepts `ALL`/`ANY`/`MOBILE` as a known platform -- none of those
+ * exist as a real `owner_platforms` row (`platform-contract-
+ * reconciliation-m8.md`).
+ */
+sealed interface PlatformDecodeResult {
+    data class Known(val platform: LicensingPlatform) : PlatformDecodeResult
+    data class UnsupportedPlatform(val raw: String) : PlatformDecodeResult
+
+    companion object {
+        fun parse(raw: String): PlatformDecodeResult {
+            val match = LicensingPlatform.entries.firstOrNull { it.name == raw }
+            return if (match != null) Known(match) else UnsupportedPlatform(raw)
+        }
+    }
+}
 
 /** Real `owner_products.product_code` values (`app/catalog/services.py:28-31`). */
 @Serializable

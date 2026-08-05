@@ -78,9 +78,27 @@ class LicensingContractTest {
     }
 
     @Test
-    fun platformHasExactlyTheTwoRealSeededValuesNoIos() {
-        val real = setOf("WINDOWS", "ANDROID")
-        assertEquals(real, LicensingPlatform.entries.map { it.name }.toSet(), "platform-authority-audit.md: no IOS row exists in owner_platforms today")
+    fun platformHasExactlyTheThreeClientContractValuesWindowsAndroidIos() {
+        val real = setOf("WINDOWS", "ANDROID", "IOS")
+        assertEquals(real, LicensingPlatform.entries.map { it.name }.toSet(), "platform-contract-reconciliation-m8.md: IOS is a real client-side forward-compatible contract case, added in M8 -- but see ios-platform-readiness-state.md, Owner does not accept it yet")
+    }
+
+    @Test
+    fun platformDecodeParsesEveryKnownValue() {
+        for (raw in listOf("WINDOWS", "ANDROID", "IOS")) {
+            val result = PlatformDecodeResult.parse(raw)
+            assertTrue(result is PlatformDecodeResult.Known, "expected $raw to parse as a known platform")
+            assertEquals(raw, result.platform.name)
+        }
+    }
+
+    @Test
+    fun platformDecodeRejectsAllAnyMobileAndUnknownValuesWithoutFallback() {
+        for (raw in listOf("ALL", "ANY", "MOBILE", "", "windows", "Android", "LINUX")) {
+            val result = PlatformDecodeResult.parse(raw)
+            assertTrue(result is PlatformDecodeResult.UnsupportedPlatform, "real regression: '$raw' must never silently decode into a known platform")
+            assertEquals(raw, result.raw)
+        }
     }
 
     // --- Error contract (M7.15): every real server code parses; unknown codes never silently coerced ---
