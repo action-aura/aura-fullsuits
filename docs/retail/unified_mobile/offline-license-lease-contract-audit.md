@@ -90,6 +90,19 @@ real `VERSION_UNSUPPORTED`/`VERSION_NOT_ALLOWED` public reason codes
 that do exist, applied at the contract-version level, not an app
 semantic-version level).
 
+## M8.11 follow-up: schema recovered
+
+`missing-commercial-runtime-fixture-investigation.md` (M8) recovered
+the real canonicalization vector schema from three independent,
+mutually cross-checked implementations (Owner, `commercial_runtime`'s
+own test suite, both legacy Android Kotlin ports) and mirrored it into
+this branch's own `CanonicalVectorFixture.kt`. The upstream file
+(`commercial_runtime/licensing_contracts/tests/fixtures/
+canonical_vectors.json`) still does not exist as a real file in that
+package — that remains a real, open `COMMERCIAL_RUNTIME`-owned gap —
+but the *schema-recoverability* question this document originally
+raised is now resolved.
+
 ## Real test coverage (existing, `commercial_runtime` package)
 
 `test_assertion_verifier.py`, `test_trust_store.py`,
