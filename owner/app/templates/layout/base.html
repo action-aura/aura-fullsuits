@@ -4,29 +4,14 @@
   <meta charset="utf-8">
   <title>{% block title %}{{ _('Aura Owner') }}{% endblock %} -- {{ _('Aura Owner Control Center') }}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <script>
-    /* Pre-paint shell-preference restore. Must run before tokens.css is
-       requested/parsed so there is never a flash of the wrong theme or a
-       layout jump from the sidebar changing width after first paint.
-       Reads two presentation-only, non-security localStorage keys:
-       "aura-owner-theme" ("light"|"dark"|"system", default "system" --
-       leaving data-theme unset here falls through to tokens.css's
-       prefers-color-scheme media query) and "aura-owner-sidebar"
-       ("collapsed"|"expanded", default "expanded"). See
-       static/js/theme.js and static/js/sidebar.js for the interactive
-       toggle controls that write these keys. */
-    (function () {
-      try {
-        var theme = window.localStorage.getItem("aura-owner-theme");
-        if (theme === "light" || theme === "dark") {
-          document.documentElement.setAttribute("data-theme", theme);
-        }
-        if (window.localStorage.getItem("aura-owner-sidebar") === "collapsed") {
-          document.documentElement.setAttribute("data-sidebar", "collapsed");
-        }
-      } catch (e) { /* localStorage unavailable (private mode, disabled storage) */ }
-    })();
-  </script>
+  {# Pre-paint shell-preference restore -- must execute before tokens.css
+     is parsed/applied (see static/js/theme-preload.js). A blocking
+     external <script src>, not inline: the app's CSP is script-src
+     'self' with no 'unsafe-inline' (app/security/headers.py), so an
+     inline <script> here would be silently blocked by the browser --
+     confirmed via real browser console output during this phase's own
+     shell-rebuild verification. #}
+  <script src="{{ url_for('static', filename='js/theme-preload.js') }}"></script>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/shell.css') }}">
