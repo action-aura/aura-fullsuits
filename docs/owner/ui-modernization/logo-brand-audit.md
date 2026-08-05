@@ -164,20 +164,85 @@ No `BRAND.md`, `brand-guidelines.md`, `style-guide.md`, design-token
 specification, or logo-usage document exists anywhere under `docs/` for
 Owner or for the Action Aura product suite as a whole.
 
-## Summary for the modernization phase
+## 7. Real logo provided by the Product Owner (2026-08-05)
 
-Aura Owner currently has **no logo, no favicon, no brand image asset of
-any kind, and no formal brand guideline**. Its only visual identity today
-is: a text wordmark ("Aura Owner Control Center") in the top bar, a
-five-token CSS color system (`--accent #2452b8`, `--danger #b3261e`,
-`--border #d8dee4`, `--muted #6b7785`, `--bg #f6f8fa`) plus two
-un-tokenized chrome colors (`#101826` top bar, `#16202f` nav strip), and
-a system-font stack with a Noto Sans Arabic fallback. None of this is
-sourced from, or traceable to, any documented Action Aura brand standard
-— the two sibling Android products (Clinic, Retail) each have their own
-separate, non-matching visual identity and neither shares a color with
-Owner. Per the task's ground rules, no new logo or brand color is
-proposed here — the modernization phase should treat "define the actual
-Action Aura brand" (or explicitly decide Owner keeps its own
-independent, non-branded identity) as an open decision to make with the
-product owner, not a gap this audit can fill by invention.
+Per the acceptance decision recorded against this gap (§8's "Summary"
+below no longer applies as originally written — see the update there),
+the Product Owner supplied the real Action Aura brand mark directly for
+this phase, with explicit direction to "use as a base and be creative."
+
+**Description of the real mark** (a circular emblem, provided as a raster
+image, not yet committed as a repo file — see "Asset file: outstanding"
+below):
+
+- A near-black circular badge (background approx. `#0A0A0C`), with the
+  wordmark split across two lines inside: **"ACTION"** in a warm
+  amber/gold gradient (approx. `#F2A93B` → `#E8871E`), and **"AURA"**
+  in solid white (`#FFFFFF`), bold condensed sans-serif, all-caps.
+- The badge is ringed by a full-spectrum conic gradient (blue → violet →
+  magenta → orange → amber → green → teal, sweeping the full circle),
+  with fine circuit-board-style traces radiating outward from the ring
+  into the dark background, in matching per-segment hues, fading to
+  transparent at the canvas edge.
+- Square canvas, circular mark centered, generous dark clear space on
+  all sides already built into the composition.
+
+**Real, usable brand colors extracted from this mark** (visually
+sampled — no image-editing/color-picker tool was available to sample
+exact pixels programmatically; values are close approximations of the
+mark's real colors, not invented):
+
+| Role | Hex (approx.) | Source in the mark |
+|---|---|---|
+| Brand blue (primary candidate) | `#2D5FE0` | The blue arc of the conic ring — and notably close to Owner's own existing `--accent: #2452b8` (§3), meaning the app's current de facto brand color already aligns with the real logo's dominant cool hue rather than conflicting with it. |
+| Brand amber (secondary candidate) | `#F0A030` | The actual "ACTION" wordmark color inside the mark itself — a real, intentional, named color in the logo, not sampled from the decorative ring. |
+| Brand violet (accent candidate) | `#8B5CF6` | The violet/magenta arc of the conic ring — a distinct third hue for sparing decorative accent use only. |
+| Mark background / deep surface | `#0A0A0C` | The badge's own near-black fill — a real reference point for the darkest dark-theme surface (not pure `#000000`, per the task's own §28 requirement that dark theme "must not be pure black everywhere"). |
+
+**Design tension, resolved deliberately, not accidentally:** the mark's
+full rainbow conic ring is correct and effective as a *badge/emblem* —
+favicon, login hero, first-login welcome screen — but is explicitly the
+kind of "heavy gradient," "neon," multi-hue treatment §7 of the main
+task spec prohibits from ordinary UI chrome ("Avoid: neon colors,
+glowing borders, heavy gradients on every card... 'Dribbble-only'
+designs that are impractical in real operations"). The creative
+direction taken: extract **one calm primary (blue)** and **one
+distinctive secondary (amber, from the real wordmark)** for everyday UI
+(buttons, links, focus rings, nav highlight), reserve the **full
+multi-hue ring** for a small number of high-impact brand moments only
+(favicon, login/security screens, first-login welcome hero — see
+`design-token-system.md` and `light-dark-theme-contract.md`), and never
+paint ordinary tables, cards, or buttons with the rainbow gradient.
+
+**Asset file: outstanding.** This document records the real colors and
+composition described above, but the actual image file itself has not
+yet been committed to the repository — no binary-file-write tool was
+available to persist the pasted image directly. Target path once
+provided: `owner/app/static/img/brand/action-aura-mark.png` (directory
+already created). Until that file exists, the favicon and any literal
+`<img>` logo usage will reference this path but render broken — token
+and color work in `design-token-system.md` does not depend on the file
+existing and proceeds now; the icon-usage acceptance gate is not closed
+until the real file is in place.
+
+## Summary for the modernization phase (updated 2026-08-05)
+
+As originally audited, Aura Owner shipped with **no logo, no favicon, no
+brand image asset of any kind, and no formal brand guideline** — only a
+text wordmark, a five-token CSS color system (`--accent #2452b8`,
+`--danger #b3261e`, `--border #d8dee4`, `--muted #6b7785`,
+`--bg #f6f8fa`) plus two un-tokenized chrome colors (`#101826` top bar,
+`#16202f` nav strip), none traceable to any documented Action Aura brand
+standard, and not shared with the sibling Android products.
+
+**This gap is now resolved for the purposes of this phase**: the
+Product Owner provided the real Action Aura brand mark directly (§7,
+2026-08-05), with explicit direction to use it as a base and apply
+creative judgment for how it maps onto a restrained enterprise UI. The
+real, extracted colors (§7's table) — brand blue `#2D5FE0` (aligned with
+Owner's pre-existing `#2452b8` accent), brand amber `#F0A030` (the real
+"ACTION" wordmark color), brand violet `#8B5CF6` (ring accent), and near-
+black `#0A0A0C` (mark background) — are the actual source values for
+`design-token-system.md`'s `brand-primary`/`brand-secondary`/
+`brand-accent` tokens. No further invention needed. Only the literal
+image file's placement in the repo remains outstanding (§7).
