@@ -242,9 +242,10 @@ class ActivationViewModel(
         (sessionId.value.hashCode() * 31 + claimReference.hashCode() * 31 + currentState.deviceLabelInput.hashCode())
 }
 
-/** Pure-Kotlin, KMP-safe random key -- no platform UUID API required (avoids introducing this codebase's first expect/actual pair for something this simple). */
-internal fun randomIdempotencyKey(): String {
-    val bytes = ByteArray(16)
-    for (i in bytes.indices) bytes[i] = kotlin.random.Random.nextInt(0, 256).toByte()
-    return bytes.joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
-}
+/**
+ * Real platform CSPRNG-backed key (`secureRandomBytes`, Android
+ * `java.security.SecureRandom` / iOS `SecRandomCopyBytes`) --
+ * previously `kotlin.random.Random`-based, changed after a security
+ * review correctly flagged that as a weak cryptographic primitive.
+ */
+internal fun randomIdempotencyKey(): String = com.actionaura.retail.licensing.transport.secureRandomHex(16)
