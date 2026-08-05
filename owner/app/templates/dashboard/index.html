@@ -2,30 +2,85 @@
 {% block title %}{{ _("Dashboard") }}{% endblock %}
 {% block content %}
 {% include "layout/_tour.html" %}
+{#
+  Role-aware dashboard (Stage C). Every card below is gated on the real
+  permission that governs its underlying data -- the same codes
+  layout/_sidebar.html uses for the equivalent nav destination -- not
+  on role name or "is this a management-looking metric" guesswork.
+  Before this, get_dashboard_summary()'s full result (customer/
+  subscription/license/installation/commercial-ops/backup counts) was
+  rendered unconditionally to every logged-in employee regardless of
+  permission -- a real over-exposure: a SALES-only account could see
+  company-wide backup status and commercial-ops activity it has no
+  route access to. dashboard/services.py's own query set is unchanged
+  (its return shape is covered by existing tests -- see
+  role-dashboard-contract.md for why filtering happens here, in the
+  template, rather than in the service); this stage's fix is that
+  unauthorized sections are no longer rendered to the browser at all.
+#}
+{% set can_view_customers = has_permission('customers.view') %}
+{% set can_view_subscriptions = has_permission('subscriptions.view') %}
+{% set can_view_licenses = has_permission('licenses.view') %}
+{% set can_view_installations = has_permission('installations.view') %}
+{% set can_view_backups = has_permission('system.view') %}
+{% set can_view_audit = has_permission('audit.view') %}
+{% set can_view_notifications = has_permission('subscriptions.view') %}
+{% set can_view_pilots = has_permission('pilots.view') %}
+{% set can_view_activations = has_permission('pending_activations.view') %}
+{% set can_view_emergency_ext = has_permission('emergency_extensions.view') %}
+{% set can_view_device_slots = has_permission('device_slot_exceptions.view') %}
+{% set can_view_commercial_ops = can_view_notifications or can_view_pilots or can_view_activations or can_view_emergency_ext or can_view_device_slots %}
+
+{% if not (can_view_customers or can_view_subscriptions or can_view_licenses or can_view_installations or can_view_backups or can_view_audit or can_view_commercial_ops) %}
+<div class="card">
+  <h2>{{ _("Overview") }}</h2>
+  <p class="empty">{{ _("Nothing to show here yet -- your role doesn't include a company-wide overview permission. Use the sidebar to reach the screens you're permitted to work in.") }}</p>
+</div>
+{% endif %}
+
+{% if can_view_customers or can_view_subscriptions %}
 <div class="card">
   <h2>{{ _("Overview") }}</h2>
   <div class="kv">
+    {% if can_view_customers %}
     <dt>{{ _("Total customers") }}</dt><dd>{{ format_owner_number(summary.total_customers) }}</dd>
     <dt>{{ _("Pilot customers") }}</dt><dd>{{ format_owner_number(summary.pilot_customers) }}</dd>
     <dt>{{ _("Active customers") }}</dt><dd>{{ format_owner_number(summary.active_customers) }}</dd>
+    {% endif %}
+    {% if can_view_subscriptions %}
     <dt>{{ _("Active subscriptions") }}</dt><dd>{{ format_owner_number(summary.active_subscriptions) }}</dd>
     <dt>{{ _("Subscriptions expiring in 7 days") }}</dt><dd>{{ format_owner_number(summary.expiring_7) }}</dd>
     <dt>{{ _("Subscriptions expiring in 30 days") }}</dt><dd>{{ format_owner_number(summary.expiring_30) }}</dd>
+    {% endif %}
   </div>
 </div>
+{% endif %}
 
+{% if can_view_commercial_ops %}
 <div class="card">
   <h3>{{ _("Commercial operations") }}</h3>
   <div class="kv">
+    {% if can_view_notifications %}
     <dt>{{ _("Open notifications") }}</dt><dd><a href="{{ url_for('commercial_ops_ui.list_notifications') }}">{{ format_owner_number(summary.open_notifications) }}</a></dd>
     <dt>{{ _("Renewals awaiting finance approval") }}</dt><dd><a href="{{ url_for('commercial_ops_ui.list_renewals', status='PAYMENT_RECORDED') }}">{{ format_owner_number(summary.renewals_awaiting_approval) }}</a></dd>
+    {% endif %}
+    {% if can_view_pilots %}
     <dt>{{ _("Pilots needing action") }}</dt><dd><a href="{{ url_for('commercial_ops_ui.list_pilots') }}">{{ format_owner_number(summary.pilots_needing_action) }}</a></dd>
+    {% endif %}
+    {% if can_view_activations %}
     <dt>{{ _("Activations pending manual review") }}</dt><dd><a href="{{ url_for('commercial_ops_ui.list_pending_activations') }}">{{ format_owner_number(summary.pending_activations) }}</a></dd>
+    {% endif %}
+    {% if can_view_emergency_ext %}
     <dt>{{ _("Active emergency extensions") }}</dt><dd><a href="{{ url_for('commercial_ops_ui.list_emergency_extensions') }}">{{ format_owner_number(summary.active_emergency_extensions) }}</a></dd>
+    {% endif %}
+    {% if can_view_device_slots %}
     <dt>{{ _("Active device-slot exceptions") }}</dt><dd>{{ format_owner_number(summary.active_device_slot_exceptions) }}</dd>
+    {% endif %}
   </div>
 </div>
+{% endif %}
 
+{% if can_view_subscriptions %}
 <div class="card">
   <h3>{{ _("Subscriptions by product") }}</h3>
   <table class="responsive-table">
@@ -36,7 +91,9 @@
     </tbody>
   </table>
 </div>
+{% endif %}
 
+{% if can_view_licenses %}
 <div class="card">
   <h3>{{ _("Licenses by status") }}</h3>
   <table class="responsive-table">
@@ -47,7 +104,9 @@
     </tbody>
   </table>
 </div>
+{% endif %}
 
+{% if can_view_installations %}
 <div class="card">
   <h3>{{ _("Active installations by product") }}</h3>
   <table class="responsive-table">
@@ -58,14 +117,18 @@
     </tbody>
   </table>
 </div>
+{% endif %}
 
+{% if can_view_backups %}
 <div class="card">
   <h3>{{ _("Latest Owner database backup") }}</h3>
   {% if summary.latest_backup %}
   <p><span class="badge {{ 'success' if summary.latest_backup.status == 'SUCCESS' else 'danger' }}">{{ backup_status_label(summary.latest_backup.status) }}</span> {{ format_owner_datetime(summary.latest_backup.created_at) }}</p>
   {% else %}<p class="empty">{{ _("No backup has been taken yet.") }}</p>{% endif %}
 </div>
+{% endif %}
 
+{% if can_view_audit %}
 <div class="card">
   <h3>{{ _("Recent staff actions") }}</h3>
   <table class="responsive-table">
@@ -77,4 +140,5 @@
     </tbody>
   </table>
 </div>
+{% endif %}
 {% endblock %}
