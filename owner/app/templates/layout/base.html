@@ -93,7 +93,9 @@
             <div class="aura-profile-menu__panel">
               <a href="{{ url_for('profile.index') }}">{{ _('My Profile') }}</a>
               <a href="{{ url_for('auth.change_password_form') }}">{{ _('Account') }}</a>
-              <form class="aura-profile-menu__logout" method="post" action="{{ url_for('auth.logout') }}">
+              <a href="{{ url_for('dashboard.index', tour='reopen') }}">{{ _('Show welcome tour') }}</a>
+              <form class="aura-profile-menu__logout" method="post" action="{{ url_for('auth.logout') }}"
+                    data-confirm="{{ _('Log out of Aura Owner?') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="aura-profile-menu__logout-btn">{{ _('Log out') }}</button>
               </form>
@@ -119,5 +121,7 @@
   <script src="{{ url_for('static', filename='js/confirm.js') }}"></script>
   <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
   <script src="{{ url_for('static', filename='js/sidebar.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/password-toggle.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/product-tour.js') }}"></script>
 </body>
 </html>

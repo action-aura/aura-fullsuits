@@ -32,6 +32,10 @@ def create_app(config_name: str | None = None) -> Flask:
     CORS(app, resources={r"/api/*": {"origins": []}})  # no external origins permitted by default
     register_security_headers(app)
 
+    from app.errors import register_error_handlers
+
+    register_error_handlers(app)
+
     from app.i18n import init_app as init_i18n
 
     init_i18n(app)

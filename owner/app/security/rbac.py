@@ -38,7 +38,11 @@ def require_login(view):
         if staff is None:
             if _wants_json():
                 return jsonify({"error": "authentication_required"}), 401
-            return redirect(url_for("auth.login_form", next=request.path))
+            # Presentation-only hint for login.html to show a calm "your
+            # session ended, sign in again" message instead of a bare
+            # login form -- never trusted for anything security-relevant,
+            # the actual authorization decision above is already made.
+            return redirect(url_for("auth.login_form", next=request.path, reason="session_expired"))
         return view(*args, **kwargs)
 
     return wrapped

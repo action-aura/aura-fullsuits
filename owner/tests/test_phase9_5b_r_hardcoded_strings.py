@@ -17,6 +17,10 @@ GATED_DIRS = (
     "dashboard", "audit", "catalog", "customers", "installations",
     "licensing", "licensing_admin", "staff", "subscriptions", "system",
     "commercial_ops", "leads", "commercial_sales", "operations_ui",
+    # UI modernization Stage C -- styled 401/403/CSRF pages
+    # (errors.py's register_error_handlers), replacing the bare
+    # Werkzeug default pages that existed before.
+    "errors",
 )
 
 # Attribute names whose value is never translatable prose (ids, urls, form
@@ -37,6 +41,7 @@ ALLOWLISTED_TEXT = {
     "&mdash;",  # decorative separator, not prose (Phase 9.5C: interaction/followup rows)
     "&rarr;",  # decorative arrow between two already-translated date/status values
     "&ndash;",  # decorative separator between two already-translated date values (Phase 9.5D: payout batch period)
+    "&times;",  # decorative close-icon glyph (UI modernization: tour/modal close buttons), aria-hidden and paired with a real translated aria-label on the button itself
     "flask import-release-manifest",  # literal CLI command name, not prose
     "flask seed-offline-policy",  # literal CLI command name, not prose
 }

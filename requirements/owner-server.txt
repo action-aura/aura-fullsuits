@@ -9,6 +9,10 @@ alembic==1.13.2
 argon2-cffi==23.1.0
 pyjwt==2.13.0
 pyotp==2.9.0
+# UI modernization -- renders the MFA enrollment QR code server-side as an
+# inline SVG data URI (no client-side JS, no external request, no CDN).
+# Pure-Python, zero transitive dependencies.
+segno==1.6.1
 cryptography==50.0.0
 gunicorn==22.0.0
 jsonschema==4.23.0
