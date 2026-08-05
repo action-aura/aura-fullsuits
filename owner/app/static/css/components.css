@@ -1,0 +1,190 @@
+/*
+ * Aura Owner -- shared component styles.
+ *
+ * Moved verbatim (same selectors/class names, so every one of the ~102
+ * child templates that already reference these classes keeps working
+ * unchanged) out of the old inline <style> block that used to live in
+ * layout/base.html, as part of the application-shell rebuild. Colors
+ * are now sourced from the canonical --aura-* tokens (tokens.css) instead
+ * of the old private --accent/--border/--muted/--danger/--bg constants,
+ * so every one of these components now also follows the light/dark theme
+ * automatically -- no visual class was renamed or removed.
+ */
+
+:root {
+  --border: var(--aura-color-border-default);
+  --muted: var(--aura-color-text-muted);
+  --accent: var(--aura-color-brand-primary);
+  --danger: var(--aura-color-danger);
+  --bg: var(--aura-color-surface-base);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: var(--aura-font-sans);
+  margin: 0;
+  background: var(--bg);
+  color: var(--aura-color-text-primary);
+}
+
+.card {
+  background: var(--aura-color-surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--aura-radius-md);
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+th, td {
+  text-align: start;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--aura-radius-full);
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--aura-color-surface-muted);
+  color: var(--aura-color-text-secondary);
+}
+.badge.active, .badge.confirmed, .badge.success, .badge.ok {
+  background: var(--aura-color-success-soft);
+  color: var(--aura-color-success);
+}
+.badge.warn, .badge.pending, .badge.draft {
+  background: var(--aura-color-warning-soft);
+  color: var(--aura-color-warning);
+}
+.badge.danger, .badge.revoked, .badge.failed, .badge.disabled {
+  background: var(--aura-color-danger-soft);
+  color: var(--aura-color-danger);
+}
+
+form.inline { display: inline; }
+
+input, select, textarea {
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--aura-radius-sm);
+  font-size: 0.9rem;
+  width: 100%;
+  background: var(--aura-color-surface-raised);
+  color: var(--aura-color-text-primary);
+  font-family: inherit;
+}
+
+label {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-block: 0.5rem 0.2rem;
+}
+
+button, .btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--aura-radius-sm);
+  padding: 0.45rem 0.9rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+  font-family: inherit;
+}
+button.danger, .btn.danger { background: var(--danger); }
+button.secondary, .btn.secondary {
+  background: var(--aura-color-surface-raised);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+.error {
+  background: var(--aura-color-danger-soft);
+  color: var(--aura-color-danger);
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--aura-radius-sm);
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.flash-messages { max-width: 900px; margin: 0 auto 0.75rem; }
+.flash.info {
+  background: var(--aura-color-info-soft);
+  color: var(--aura-color-info);
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--aura-radius-sm);
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.empty { color: var(--muted); font-style: italic; padding: 1rem 0; }
+
+.filters { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; align-items: end; }
+
+.kv { display: grid; grid-template-columns: 200px 1fr; gap: 0.3rem 1rem; font-size: 0.9rem; }
+.kv dt { color: var(--muted); }
+
+code.masked {
+  background: var(--aura-color-surface-muted);
+  color: var(--aura-color-text-primary);
+  padding: 0.15rem 0.4rem;
+  border-radius: var(--aura-radius-sm);
+}
+
+/* Bidirectional identifiers (email/UUID/employee number/correlation id)
+   are wrapped with the bidi_isolate filter -- <bdi dir="ltr"> -- which
+   needs no extra CSS; unicode-bidi:isolate is the element's own UA
+   default for <bdi>. */
+
+/* Phase 9.5B -- minimal, scoped responsive treatment for any table
+   opted into it via .responsive-table, reused by the new employee
+   screens. Does not touch any existing table (no class added there),
+   so nothing else in Owner changes behavior. Uses logical properties so
+   it works unchanged in RTL. */
+@media (max-width: 720px) {
+  table.responsive-table thead { display: none; }
+  table.responsive-table, table.responsive-table tbody, table.responsive-table tr, table.responsive-table td { display: block; width: 100%; }
+  table.responsive-table tr { border: 1px solid var(--border); border-radius: var(--aura-radius-md); margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; }
+  table.responsive-table td { border-bottom: none; padding-block: 0.25rem; }
+  table.responsive-table td[data-label]:not([data-label=""])::before { content: attr(data-label) ": "; font-weight: 600; color: var(--muted); }
+}
+
+/* Phase 9.5C -- Lead/Customer interactive cards (Milestone 6). Grid,
+   not a fixed-width flex row, so it reflows naturally at any viewport
+   without a separate mobile-only stylesheet; logical properties only,
+   so RTL mirrors automatically. */
+.responsive-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.75rem; margin-block: 0.75rem; }
+.crm-card {
+  display: block;
+  background: var(--aura-color-surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--aura-radius-md);
+  padding: 0.75rem 1rem;
+  text-decoration: none;
+  color: inherit;
+  font-size: 0.88rem;
+}
+.crm-card:hover, .crm-card:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(45, 95, 224, 0.15);
+}
+.crm-card .small { color: var(--muted); font-size: 0.78rem; margin-block-start: 0.3rem; }
+.pagination { display: flex; justify-content: flex-end; margin-block-start: 0.75rem; color: var(--muted); font-size: 0.82rem; }

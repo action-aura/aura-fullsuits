@@ -1,0 +1,433 @@
+/*
+ * Aura Owner -- application shell (sidebar + top bar).
+ * Layout rules only -- token *values* live in tokens.css and must never
+ * be redefined here, only referenced via var(--aura-*).
+ *
+ * Sidebar collapsed/expanded state and theme are both restored before
+ * first paint by a tiny inline script in layout/base.html's <head>,
+ * which sets data-theme / data-sidebar on <html>. Both are presentation-
+ * only client preferences stored in localStorage -- not a security
+ * control, see base.html's inline script comment.
+ *
+ * RTL: every directional property below is a logical property
+ * (inset-inline-*, margin-inline-*, border-inline-*, text-align: start)
+ * so the shell mirrors automatically under dir="rtl" with no separate
+ * RTL stylesheet, matching the pattern already established in
+ * components.css / the old base.html responsive block.
+ */
+
+.aura-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.aura-shell {
+  display: flex;
+  min-height: 100vh;
+  align-items: stretch;
+}
+
+/* ---------- Sidebar ---------- */
+
+.aura-sidebar {
+  flex: 0 0 var(--aura-sidebar-expanded);
+  width: var(--aura-sidebar-expanded);
+  background: var(--aura-color-surface-raised);
+  border-inline-end: 1px solid var(--aura-color-border-default);
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  inset-block-start: 0;
+  block-size: 100vh;
+  overflow-y: auto;
+  transition: width var(--aura-motion-base) var(--aura-ease-standard),
+    flex-basis var(--aura-motion-base) var(--aura-ease-standard);
+  z-index: var(--aura-z-sticky);
+}
+
+:root[data-sidebar="collapsed"] .aura-sidebar {
+  flex-basis: var(--aura-sidebar-collapsed);
+  width: var(--aura-sidebar-collapsed);
+}
+
+.aura-sidebar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--aura-space-2);
+  padding: var(--aura-space-4) var(--aura-space-3);
+  border-block-end: 1px solid var(--aura-color-border-default);
+  min-block-size: 56px;
+}
+
+.aura-sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--aura-space-2);
+  text-decoration: none;
+  color: var(--aura-color-text-primary);
+  font-weight: var(--aura-font-weight-semibold);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.aura-sidebar__mark {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 28px;
+  block-size: 28px;
+  border-radius: var(--aura-radius-md);
+  background: var(--aura-color-brand-primary);
+  color: #fff;
+  font-size: var(--aura-font-size-sm);
+  font-weight: var(--aura-font-weight-bold);
+}
+
+.aura-sidebar__name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+:root[data-sidebar="collapsed"] .aura-sidebar__name,
+:root[data-sidebar="collapsed"] .aura-nav-group__title,
+:root[data-sidebar="collapsed"] .aura-nav-link__text {
+  display: none;
+}
+
+.aura-sidebar__toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: var(--aura-target-compact);
+  block-size: var(--aura-target-compact);
+  background: transparent;
+  border: 1px solid var(--aura-color-border-default);
+  border-radius: var(--aura-radius-sm);
+  color: var(--aura-color-text-secondary);
+  cursor: pointer;
+  padding: 0;
+}
+.aura-sidebar__toggle:hover { background: var(--aura-color-surface-muted); }
+.aura-sidebar__toggle:focus-visible,
+a:focus-visible,
+button:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--aura-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.aura-sidebar__toggle-icon {
+  display: inline-block;
+  inline-size: 12px;
+  block-size: 12px;
+  border-inline-start: 2px solid currentColor;
+  border-block-end: 2px solid currentColor;
+  transform: rotate(45deg);
+  margin-inline-end: 3px;
+  transition: transform var(--aura-motion-fast) var(--aura-ease-standard);
+}
+:root[data-sidebar="collapsed"] .aura-sidebar__toggle-icon {
+  transform: rotate(225deg);
+  margin-inline-end: 0;
+  margin-inline-start: 3px;
+}
+:root[dir="rtl"] .aura-sidebar__toggle-icon { transform: rotate(225deg); }
+:root[dir="rtl"][data-sidebar="collapsed"] .aura-sidebar__toggle-icon { transform: rotate(45deg); }
+
+.aura-sidebar__nav {
+  padding: var(--aura-space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--aura-space-4);
+}
+
+.aura-nav-group__title {
+  font-size: var(--aura-font-size-xs);
+  font-weight: var(--aura-font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--aura-color-text-muted);
+  padding: 0 var(--aura-space-2);
+  margin-block-end: var(--aura-space-1);
+}
+
+.aura-nav-group__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.aura-nav-link {
+  display: flex;
+  align-items: center;
+  gap: var(--aura-space-2);
+  padding: var(--aura-space-2);
+  border-radius: var(--aura-radius-sm);
+  color: var(--aura-color-text-secondary);
+  text-decoration: none;
+  font-size: var(--aura-font-size-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.aura-nav-link:hover { background: var(--aura-color-surface-muted); color: var(--aura-color-text-primary); }
+.aura-nav-link.is-active {
+  background: var(--aura-color-brand-primary-soft);
+  color: var(--aura-color-brand-primary);
+  font-weight: var(--aura-font-weight-medium);
+}
+
+/* Mobile: sidebar becomes an off-canvas panel toggled by the top-bar
+   menu button (sidebar.js adds/removes .aura-sidebar--open). */
+@media (max-width: 1024px) {
+  .aura-sidebar {
+    position: fixed;
+    inset-block: 0;
+    inset-inline-start: 0;
+    transform: translateX(-100%);
+    box-shadow: var(--aura-shadow-lg);
+  }
+  :root[dir="rtl"] .aura-sidebar { transform: translateX(100%); }
+  .aura-sidebar.aura-sidebar--open { transform: translateX(0); }
+  .aura-sidebar__toggle { display: none; }
+}
+@media (min-width: 1025px) {
+  .aura-topbar__menu-btn { display: none; }
+}
+
+/* ---------- Top bar ---------- */
+
+.aura-shell__body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.aura-topbar {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: var(--aura-z-sticky);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--aura-space-4);
+  padding: var(--aura-space-3) var(--aura-space-5);
+  background: var(--aura-color-surface-raised);
+  border-block-end: 1px solid var(--aura-color-border-default);
+  min-block-size: 56px;
+}
+
+.aura-topbar__start {
+  display: flex;
+  align-items: center;
+  gap: var(--aura-space-3);
+  min-width: 0;
+}
+
+.aura-topbar__menu-btn {
+  flex: 0 0 auto;
+  inline-size: var(--aura-target-compact);
+  block-size: var(--aura-target-compact);
+  background: transparent;
+  border: 1px solid var(--aura-color-border-default);
+  border-radius: var(--aura-radius-sm);
+  color: var(--aura-color-text-secondary);
+  cursor: pointer;
+}
+
+.aura-topbar__heading { min-width: 0; }
+.aura-topbar__brand {
+  display: block;
+  font-size: var(--aura-font-size-xs);
+  color: var(--aura-color-text-muted);
+  text-decoration: none;
+}
+.aura-topbar__title {
+  margin: 0;
+  font-size: var(--aura-font-size-lg);
+  font-weight: var(--aura-font-weight-semibold);
+  color: var(--aura-color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aura-topbar__end {
+  display: flex;
+  align-items: center;
+  gap: var(--aura-space-2);
+  flex-wrap: nowrap;
+}
+
+/* Visually-present, inert placeholders for two future milestones
+   (global search / Ctrl+K command palette, quick-create). Real
+   <button disabled> so they are announced as disabled to assistive
+   tech, are not keyboard-focusable in the tab order, and need no JS
+   click handler that would otherwise have to do nothing convincingly. */
+.aura-topbar__stub {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--aura-space-1);
+  background: var(--aura-color-surface-muted);
+  border: 1px solid var(--aura-color-border-default);
+  border-radius: var(--aura-radius-sm);
+  color: var(--aura-color-text-muted);
+  font-size: var(--aura-font-size-sm);
+  padding: 0.4rem 0.6rem;
+  cursor: not-allowed;
+}
+.aura-topbar__stub--icon { padding-inline: 0.5rem; }
+.aura-topbar__stub kbd {
+  font-family: var(--aura-font-mono);
+  font-size: var(--aura-font-size-xs);
+  background: var(--aura-color-surface-raised);
+  border: 1px solid var(--aura-color-border-default);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.aura-theme-switch {
+  display: inline-flex;
+  border: 1px solid var(--aura-color-border-default);
+  border-radius: var(--aura-radius-sm);
+  overflow: hidden;
+}
+.aura-theme-switch__btn {
+  background: var(--aura-color-surface-raised);
+  color: var(--aura-color-text-secondary);
+  border: none;
+  border-inline-start: 1px solid var(--aura-color-border-default);
+  padding: 0.35rem 0.6rem;
+  font-size: var(--aura-font-size-xs);
+  cursor: pointer;
+}
+.aura-theme-switch__btn:first-child { border-inline-start: none; }
+.aura-theme-switch__btn[aria-pressed="true"] {
+  background: var(--aura-color-brand-primary-soft);
+  color: var(--aura-color-brand-primary);
+  font-weight: var(--aura-font-weight-medium);
+}
+
+.aura-lang-switch {
+  display: inline-flex;
+  gap: 2px;
+}
+.aura-lang-switch a {
+  color: var(--aura-color-text-secondary);
+  text-decoration: none;
+  padding: 0.3rem 0.55rem;
+  border-radius: var(--aura-radius-sm);
+  font-size: var(--aura-font-size-xs);
+}
+.aura-lang-switch a:hover { background: var(--aura-color-surface-muted); }
+.aura-lang-switch a[aria-current="true"] {
+  background: var(--aura-color-brand-primary-soft);
+  color: var(--aura-color-brand-primary);
+  font-weight: var(--aura-font-weight-medium);
+}
+
+.aura-role-badge {
+  display: inline-block;
+  padding: 0.05rem 0.45rem;
+  border-radius: var(--aura-radius-full);
+  background: var(--aura-color-surface-muted);
+  color: var(--aura-color-text-secondary);
+  font-size: var(--aura-font-size-xs);
+  font-weight: var(--aura-font-weight-medium);
+}
+
+.aura-profile-menu { position: relative; }
+.aura-profile-menu > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--aura-space-2);
+  cursor: pointer;
+  padding: 0.3rem 0.5rem;
+  border-radius: var(--aura-radius-sm);
+  border: 1px solid var(--aura-color-border-default);
+}
+.aura-profile-menu > summary::-webkit-details-marker { display: none; }
+.aura-profile-menu > summary:hover { background: var(--aura-color-surface-muted); }
+.aura-profile-menu__name {
+  font-size: var(--aura-font-size-sm);
+  color: var(--aura-color-text-primary);
+  max-inline-size: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.aura-profile-menu__panel {
+  position: absolute;
+  inset-inline-end: 0;
+  inset-block-start: calc(100% + var(--aura-space-2));
+  min-inline-size: 180px;
+  background: var(--aura-color-surface-overlay);
+  border: 1px solid var(--aura-color-border-default);
+  border-radius: var(--aura-radius-md);
+  box-shadow: var(--aura-shadow-md);
+  padding: var(--aura-space-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: var(--aura-z-dropdown);
+}
+.aura-profile-menu__panel a {
+  color: var(--aura-color-text-primary);
+  text-decoration: none;
+  font-size: var(--aura-font-size-sm);
+  padding: 0.4rem 0.5rem;
+  border-radius: var(--aura-radius-sm);
+}
+.aura-profile-menu__panel a:hover { background: var(--aura-color-surface-muted); }
+.aura-profile-menu__logout { margin: 0; }
+.aura-profile-menu__logout-btn {
+  width: 100%;
+  text-align: start;
+  background: none;
+  color: var(--aura-color-danger);
+  border: none;
+  padding: 0.4rem 0.5rem;
+  border-radius: var(--aura-radius-sm);
+  font-size: var(--aura-font-size-sm);
+  cursor: pointer;
+}
+.aura-profile-menu__logout-btn:hover { background: var(--aura-color-danger-soft); }
+
+/* ---------- Main content ---------- */
+
+.aura-main {
+  flex: 1 1 auto;
+  max-width: var(--aura-content-max-width);
+  width: 100%;
+  margin-inline: auto;
+  padding: var(--aura-space-5);
+}
+
+.aura-main--unauthenticated {
+  max-width: var(--aura-content-narrow);
+  margin-block-start: var(--aura-space-8);
+}
+
+@media (max-width: 720px) {
+  .aura-main { padding-inline: var(--aura-space-3); }
+  .aura-topbar { padding-inline: var(--aura-space-3); }
+  .aura-topbar__stub-label { display: none; }
+  .aura-topbar__stub kbd { display: none; }
+  .aura-profile-menu__name { max-inline-size: 90px; }
+}
