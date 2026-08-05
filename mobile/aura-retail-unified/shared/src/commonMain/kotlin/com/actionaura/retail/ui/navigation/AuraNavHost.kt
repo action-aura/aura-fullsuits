@@ -62,13 +62,19 @@ fun AuraNavHost(navController: NavHostController, startDestination: AuraRoute = 
         composable<AuraRoute.TopProducts> { com.actionaura.retail.ui.reporting.ReportingDashboardScreen() }
         composable<AuraRoute.Reports> { com.actionaura.retail.ui.reporting.ReportingDashboardScreen() }
 
-        composable<AuraRoute.ImportHome> { unavailable("Import Center", "Import Center UI vertical slice (M6.19)") }
-        composable<AuraRoute.ImportFileSelection> { unavailable("Select file", "Import Center UI vertical slice (M6.19)") }
-        composable<AuraRoute.ImportInspection> { unavailable("Inspect file", "Import Center UI vertical slice (M6.19)") }
-        composable<AuraRoute.ImportMapping> { unavailable("Column mapping", "Import Center UI vertical slice (M6.19)") }
-        composable<AuraRoute.ImportDryRun> { unavailable("Dry-run plan", "Import Center UI vertical slice (M6.19)") }
-        composable<AuraRoute.ImportCommit> { unavailable("Commit import", "Import Center UI vertical slice (M6.19)") }
-        composable<AuraRoute.ImportResult> { unavailable("Import result", "Import Center UI vertical slice (M6.19)") }
+        // Real, disclosed simplification (import-ui-vertical-slice.md): the
+        // real paste->preview->dry-run->commit->result flow is collapsed
+        // into ONE real screen with internal step state, not 7 separate
+        // navigation destinations -- ImportHome is the one real entry
+        // point; the other 6 route stubs remain for the real, future
+        // multi-screen flow once a real platform FilePicker exists.
+        composable<AuraRoute.ImportHome> { com.actionaura.retail.ui.importing.ImportCategoriesScreen() }
+        composable<AuraRoute.ImportFileSelection> { unavailable("Select file", "collapsed into ImportHome's own real flow this milestone -- no real platform FilePicker exists yet") }
+        composable<AuraRoute.ImportInspection> { unavailable("Inspect file", "collapsed into ImportHome's own real flow this milestone") }
+        composable<AuraRoute.ImportMapping> { unavailable("Column mapping", "collapsed into ImportHome's own real flow this milestone") }
+        composable<AuraRoute.ImportDryRun> { unavailable("Dry-run plan", "collapsed into ImportHome's own real flow this milestone") }
+        composable<AuraRoute.ImportCommit> { unavailable("Commit import", "collapsed into ImportHome's own real flow this milestone") }
+        composable<AuraRoute.ImportResult> { unavailable("Import result", "collapsed into ImportHome's own real flow this milestone") }
 
         composable<AuraRoute.Settings> { unavailable("Settings", "Full Settings UI milestone (post-M6)") }
         composable<AuraRoute.Language> { unavailable("Language", "Full Settings UI milestone (post-M6)") }
