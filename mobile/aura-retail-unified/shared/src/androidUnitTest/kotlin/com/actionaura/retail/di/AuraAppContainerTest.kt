@@ -32,7 +32,7 @@ class AuraAppContainerTest {
 
     @Test
     fun everyRepositoryInOneContainerSharesTheSameRealDatabaseInstance() = runTest {
-        val container = AuraAppContainer(FakeDatabaseDriverFactory())
+        val container = AuraAppContainer(FakeDatabaseDriverFactory(), com.actionaura.retail.platform.AndroidUnicodeTextNormalizer())
 
         // Real cross-repository consistency proof: a Branch inserted
         // through one repository is immediately visible via a raw query
@@ -48,7 +48,7 @@ class AuraAppContainerTest {
 
     @Test
     fun theSameGateInstanceIsSharedAcrossEveryRepository() = runTest {
-        val container = AuraAppContainer(FakeDatabaseDriverFactory())
+        val container = AuraAppContainer(FakeDatabaseDriverFactory(), com.actionaura.retail.platform.AndroidUnicodeTextNormalizer())
 
         // Real proof categories and branches (two independently-
         // constructed repository objects) never deadlock or corrupt
@@ -65,8 +65,8 @@ class AuraAppContainerTest {
 
     @Test
     fun twoIndependentContainersNeverShareRealDatabaseState() = runTest {
-        val containerA = AuraAppContainer(FakeDatabaseDriverFactory())
-        val containerB = AuraAppContainer(FakeDatabaseDriverFactory())
+        val containerA = AuraAppContainer(FakeDatabaseDriverFactory(), com.actionaura.retail.platform.AndroidUnicodeTextNormalizer())
+        val containerB = AuraAppContainer(FakeDatabaseDriverFactory(), com.actionaura.retail.platform.AndroidUnicodeTextNormalizer())
         assertNotSame(containerA.database, containerB.database)
         assertNotSame(containerA.gate, containerB.gate)
 
@@ -78,7 +78,7 @@ class AuraAppContainerTest {
 
     @Test
     fun theSameContainerInstanceReturnsTheSameRealDatabaseReferenceEveryAccess() {
-        val container = AuraAppContainer(FakeDatabaseDriverFactory())
+        val container = AuraAppContainer(FakeDatabaseDriverFactory(), com.actionaura.retail.platform.AndroidUnicodeTextNormalizer())
         assertSame(container.database, container.database)
         assertSame(container.gate, container.gate)
         assertNotNull(container.reportingRepository)

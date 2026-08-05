@@ -37,16 +37,16 @@ fun AuraNavHost(navController: NavHostController, startDestination: AuraRoute = 
         composable<AuraRoute.ProductDetails> { unavailable("Product details", "Full catalog UI milestone (post-M6)") }
         composable<AuraRoute.ProductCreate> { unavailable("Add product", "Full catalog UI milestone (post-M6)") }
         composable<AuraRoute.ProductEdit> { unavailable("Edit product", "Full catalog UI milestone (post-M6)") }
-        composable<AuraRoute.Categories> { unavailable("Categories", "Category UI vertical slice (M6.16)") }
-        composable<AuraRoute.CategoryCreate> { unavailable("Add category", "Category UI vertical slice (M6.16)") }
-        composable<AuraRoute.CategoryEdit> { unavailable("Edit category", "Category UI vertical slice (M6.16)") }
+        composable<AuraRoute.Categories> { com.actionaura.retail.ui.category.CategoryListScreen(navController) }
+        composable<AuraRoute.CategoryCreate> { com.actionaura.retail.ui.category.CategoryEditScreen(navController) }
+        composable<AuraRoute.CategoryEdit> { unavailable("Edit category", "CategoryRepository has no update method (M5.1 real, confirmed scope) -- real, disclosed gap") }
         composable<AuraRoute.Suppliers> { unavailable("Suppliers", "Suppliers milestone (post-M6)") }
         composable<AuraRoute.SupplierDetails> { unavailable("Supplier details", "Suppliers milestone (post-M6)") }
 
         composable<AuraRoute.Inventory> { unavailable("Inventory", "Full catalog UI milestone (post-M6)") }
         composable<AuraRoute.InventoryAdjustment> { unavailable("Adjust stock", "Full catalog UI milestone (post-M6)") }
-        composable<AuraRoute.Branches> { unavailable("Branches", "Branch UI vertical slice (M6.17)") }
-        composable<AuraRoute.BranchDetails> { unavailable("Branch details", "Branch UI vertical slice (M6.17)") }
+        composable<AuraRoute.Branches> { com.actionaura.retail.ui.branch.BranchListScreen(navController) }
+        composable<AuraRoute.BranchDetails> { unavailable("Branch details", "BranchRepository has no update method (M5.1 real, confirmed scope) -- real, disclosed gap") }
         composable<AuraRoute.Customers> { unavailable("Customers", "Customers milestone (post-M6)") }
         composable<AuraRoute.CustomerDetails> { unavailable("Customer details", "Customers milestone (post-M6)") }
         composable<AuraRoute.SaleDetails> { unavailable("Sale details", "Full POS/Sale-history milestone (post-M6)") }

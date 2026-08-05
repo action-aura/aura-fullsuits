@@ -15,10 +15,21 @@ import com.actionaura.retail.db.RetailDatabase
 import com.actionaura.retail.importing.persistence.ImportPersistenceRepository
 import com.actionaura.retail.importing.persistence.SqlDelightImportPersistenceRepository
 import com.actionaura.retail.platform.DatabaseDriverFactory
+import com.actionaura.retail.platform.UnicodeTextNormalizer
 import com.actionaura.retail.reporting.DashboardRepository
 import com.actionaura.retail.reporting.ReportingRepository
 import com.actionaura.retail.reporting.SqlDelightDashboardRepository
 import com.actionaura.retail.reporting.SqlDelightReportingRepository
+import com.actionaura.retail.usecases.branch.ActivateBranchUseCase
+import com.actionaura.retail.usecases.branch.DeactivateBranchUseCase
+import com.actionaura.retail.usecases.branch.EnsureDefaultBranchUseCase
+import com.actionaura.retail.usecases.branch.GetCurrentBranchUseCase
+import com.actionaura.retail.usecases.branch.ListActiveBranchesUseCase
+import com.actionaura.retail.usecases.branch.SetCurrentBranchUseCase
+import com.actionaura.retail.usecases.category.ArchiveCategoryUseCase
+import com.actionaura.retail.usecases.category.CreateCategoryUseCase
+import com.actionaura.retail.usecases.category.ListActiveCategoriesUseCase
+import com.actionaura.retail.usecases.category.ReactivateCategoryUseCase
 
 /**
  * M6.3 -- the one real, canonical composition root for the entire
@@ -54,7 +65,7 @@ import com.actionaura.retail.reporting.SqlDelightReportingRepository
  * checkpoint's own M6.25 forbids. When M7-M10 add real session state,
  * that state is additive to this container, not a replacement for it.
  */
-class AuraAppContainer(driverFactory: DatabaseDriverFactory) {
+class AuraAppContainer(driverFactory: DatabaseDriverFactory, private val unicodeTextNormalizer: UnicodeTextNormalizer) {
 
     private val driver = driverFactory.createDriver()
     val database: RetailDatabase = RetailDatabase(driver)
@@ -68,4 +79,18 @@ class AuraAppContainer(driverFactory: DatabaseDriverFactory) {
     val reportingRepository: ReportingRepository = SqlDelightReportingRepository(database, gate, settingsRepository)
     val dashboardRepository: DashboardRepository = SqlDelightDashboardRepository(reportingRepository, productRepository)
     val importPersistenceRepository: ImportPersistenceRepository = SqlDelightImportPersistenceRepository(database, gate)
+
+    // M6.16 -- real Category use cases (M5.2/M5.3's own existing authority, not reimplemented).
+    val createCategoryUseCase = CreateCategoryUseCase(categoryRepository, unicodeTextNormalizer)
+    val archiveCategoryUseCase = ArchiveCategoryUseCase(categoryRepository)
+    val reactivateCategoryUseCase = ReactivateCategoryUseCase(categoryRepository, unicodeTextNormalizer)
+    val listActiveCategoriesUseCase = ListActiveCategoriesUseCase(categoryRepository)
+
+    // M6.17 -- real Branch use cases (M5.4's own existing authority).
+    val activateBranchUseCase = ActivateBranchUseCase(branchRepository)
+    val deactivateBranchUseCase = DeactivateBranchUseCase(branchRepository)
+    val getCurrentBranchUseCase = GetCurrentBranchUseCase(branchRepository, settingsRepository)
+    val setCurrentBranchUseCase = SetCurrentBranchUseCase(branchRepository, settingsRepository)
+    val ensureDefaultBranchUseCase = EnsureDefaultBranchUseCase(branchRepository)
+    val listActiveBranchesUseCase = ListActiveBranchesUseCase(branchRepository)
 }
