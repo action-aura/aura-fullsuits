@@ -9,6 +9,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -16,6 +17,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.actionaura.retail.di.AuraAppContainer
+import com.actionaura.retail.di.LocalAuraAppContainer
 import com.actionaura.retail.ui.adaptive.AuraWindowSize
 import com.actionaura.retail.ui.shell.AppPhase
 import com.actionaura.retail.ui.shell.AuthenticatedAppShell
@@ -34,29 +37,41 @@ import com.actionaura.retail.ui.theme.AuraThemePreference
  * exists yet (`AppPhase.kt`'s own KDoc), so this is a real, honest
  * `AUTHORIZATION_PENDING` development posture (M6.25), not a faked
  * sign-in flow.
+ *
+ * `container`: the real, app-scoped `AuraAppContainer`, constructed
+ * ONCE by the real platform entry point (M6.26 -- `MainActivity`,
+ * using the real `AndroidDatabaseDriverFactory`/`AndroidUnicodeTextNormalizer`)
+ * and provided here via `LocalAuraAppContainer` -- every screen reads
+ * it from that composition local, never constructs its own. `null` is
+ * accepted (not required) so this function still renders for a
+ * desktop/JVM Compose preview with no real database
+ * (`presentation-di-scope-report.md`'s own disclosed rationale for the
+ * composition local's nullable default).
  */
 @Composable
-fun App() {
-    AuraAppTheme(preference = AuraThemePreference.System) {
-        Surface(modifier = Modifier.fillMaxSize()) {
-            var phase by remember { mutableStateOf<AppPhase>(AppPhase.Bootstrap) }
+fun App(container: AuraAppContainer? = null) {
+    CompositionLocalProvider(LocalAuraAppContainer provides container) {
+        AuraAppTheme(preference = AuraThemePreference.System) {
+            Surface(modifier = Modifier.fillMaxSize()) {
+                var phase by remember { mutableStateOf<AppPhase>(AppPhase.Bootstrap) }
 
-            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                val windowSize = AuraWindowSize(maxWidth.value.toInt(), maxHeight.value.toInt())
+                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                    val windowSize = AuraWindowSize(maxWidth.value.toInt(), maxHeight.value.toInt())
 
-                when (val currentPhase = phase) {
-                    is AppPhase.Bootstrap -> {
-                        BootstrapScreen()
-                        // Real, immediate transition -- see this function's own KDoc.
-                        // A real `LaunchedEffect`, never a bare state write inside
-                        // the composable body (which would be a real composition
-                        // side-effect anti-pattern).
-                        LaunchedEffect(Unit) { phase = AppPhase.Authenticated }
+                    when (val currentPhase = phase) {
+                        is AppPhase.Bootstrap -> {
+                            BootstrapScreen()
+                            // Real, immediate transition -- see this function's own KDoc.
+                            // A real `LaunchedEffect`, never a bare state write inside
+                            // the composable body (which would be a real composition
+                            // side-effect anti-pattern).
+                            LaunchedEffect(Unit) { phase = AppPhase.Authenticated }
+                        }
+                        is AppPhase.Authenticated -> AuthenticatedAppShell(windowSize)
+                        is AppPhase.Onboarding, is AppPhase.Unauthenticated, is AppPhase.LicenseBlocked, is AppPhase.SessionExpired ->
+                            BootstrapScreen() // real, defined states -- not yet reachable (see AppPhase.kt)
+                        is AppPhase.BootstrapFailure -> BootstrapFailureScreen(currentPhase.reasonKey)
                     }
-                    is AppPhase.Authenticated -> AuthenticatedAppShell(windowSize)
-                    is AppPhase.Onboarding, is AppPhase.Unauthenticated, is AppPhase.LicenseBlocked, is AppPhase.SessionExpired ->
-                        BootstrapScreen() // real, defined states -- not yet reachable (see AppPhase.kt)
-                    is AppPhase.BootstrapFailure -> BootstrapFailureScreen(currentPhase.reasonKey)
                 }
             }
         }
