@@ -51,6 +51,16 @@ kotlin {
                 // shared/src/commonMain/sqldelight/.
                 implementation("app.cash.sqldelight:runtime:2.3.2")
                 implementation("app.cash.sqldelight:coroutines-extensions:2.3.2")
+                // M6.2/M6.7 -- real, official Compose Multiplatform authorities
+                // for shared ViewModel lifecycle and type-safe navigation
+                // (JetBrains' own KMP forks of androidx.lifecycle/androidx.navigation),
+                // not a hand-rolled substitute -- see
+                // docs/retail/unified_mobile/shared-viewmodel-lifecycle.md and
+                // type-safe-navigation-contract.md for the real, evidence-based
+                // version-compatibility check against this module's pinned
+                // Kotlin 2.0.21 / Compose Multiplatform 1.7.0.
+                implementation("org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose:2.8.2")
+                implementation("org.jetbrains.androidx.navigation:navigation-compose:2.8.0-alpha10")
             }
         }
         val commonTest by getting {
