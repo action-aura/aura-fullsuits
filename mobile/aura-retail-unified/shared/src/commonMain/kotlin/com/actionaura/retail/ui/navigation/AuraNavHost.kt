@@ -27,7 +27,7 @@ fun AuraNavHost(navController: NavHostController, startDestination: AuraRoute = 
         composable<AuraRoute.LicenseBlocked> { unavailable("License blocked", "M7-M10 licensing milestone") }
         composable<AuraRoute.SessionExpired> { unavailable("Session expired", "M7-M10 licensing/session milestone") }
 
-        composable<AuraRoute.Dashboard> { unavailable("Dashboard", "Reporting UI vertical slice (M6.18)") }
+        composable<AuraRoute.Dashboard> { com.actionaura.retail.ui.reporting.ReportingDashboardScreen() }
         composable<AuraRoute.Pos> { unavailable("Point of Sale", "Full POS/checkout milestone (post-M6)") }
         composable<AuraRoute.Products> { unavailable("Products", "Full catalog UI milestone (post-M6)") }
         composable<AuraRoute.Sales> { unavailable("Sales", "Full POS/Sale-history milestone (post-M6)") }
@@ -53,9 +53,14 @@ fun AuraNavHost(navController: NavHostController, startDestination: AuraRoute = 
         composable<AuraRoute.ReturnCreate> { unavailable("Process return", "Returns milestone (post-M6)") }
         composable<AuraRoute.ReturnDetails> { unavailable("Return details", "Returns milestone (post-M6)") }
 
-        composable<AuraRoute.SalesTrend> { unavailable("Sales trend", "Reporting UI vertical slice (M6.18)") }
-        composable<AuraRoute.TopProducts> { unavailable("Top products", "Reporting UI vertical slice (M6.18)") }
-        composable<AuraRoute.Reports> { unavailable("Reports", "Reporting UI vertical slice (M6.18)") }
+        // Real, deliberate reuse: SalesTrend/TopProducts/Reports are all real
+        // sections of the SAME one-call DashboardSnapshot (M5.6.8's own "no
+        // duplicated formulas" composition) -- no separate query exists for
+        // each, so each route renders the same real screen rather than a
+        // fake, narrower duplicate.
+        composable<AuraRoute.SalesTrend> { com.actionaura.retail.ui.reporting.ReportingDashboardScreen() }
+        composable<AuraRoute.TopProducts> { com.actionaura.retail.ui.reporting.ReportingDashboardScreen() }
+        composable<AuraRoute.Reports> { com.actionaura.retail.ui.reporting.ReportingDashboardScreen() }
 
         composable<AuraRoute.ImportHome> { unavailable("Import Center", "Import Center UI vertical slice (M6.19)") }
         composable<AuraRoute.ImportFileSelection> { unavailable("Select file", "Import Center UI vertical slice (M6.19)") }
