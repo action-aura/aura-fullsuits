@@ -182,6 +182,30 @@ class SecureMaterialStoreTest {
         assertEquals(SecureStorageFailureCode.NOT_AVAILABLE, result.failure.code)
     }
 
+    @Test
+    fun deleteScopeOnAnEmptyScopeIsASafeNoOp() = runTest {
+        val store = SecureStorageFixtures.store()
+        val result = store.deleteScope(SecureStorageFixtures.scope())
+        assertTrue(result is SecureStorageResult.Success, "real regression: deleting a scope with no committed bundle must be a safe no-op, never a failure")
+    }
+
+    // ===== KEY ROTATION (M10.16) =====
+
+    @Test
+    fun rotateKeySucceedsAndPreviouslyCommittedBundleRemainsLoadable() = runTest {
+        val store = SecureStorageFixtures.store()
+        store.commitActivationBundle(SecureStorageFixtures.bundle())
+
+        val rotation = store.rotateKey()
+        assertTrue(rotation is SecureStorageResult.Success, "real regression: key rotation must succeed and never require a bundle to already be absent")
+
+        // Real, disclosed contract (android-secure-storage-decision.md): rotation does not
+        // proactively re-encrypt existing blobs -- but existing material must remain readable.
+        val loaded = store.loadActivationBundle(SecureStorageFixtures.scope())
+        assertTrue(loaded is SecureStorageResult.Success)
+        assertNotNull(loaded.value, "real regression: rotating the wrapping key must never orphan a previously-committed bundle")
+    }
+
     // ===== CONCURRENCY =====
 
     @Test
