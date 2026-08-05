@@ -123,8 +123,15 @@ section describes.
 
 Every item above remains true across M7 (audit/contract only, no code)
 and M8 (device-policy/iOS contract work, no Owner code, no customer
-auth implementation) to date — confirmed by direct review, not
-assumed: no commit on this branch touches `owner/app/`, and
+auth implementation) to date — confirmed by direct evidence, not
+assumed: `git log --name-only f2b7b3f..feat/retail-unified-mobile-android-ios`
+(the Unified Mobile effort's own real entry-gate commit through current
+HEAD) shows **zero** files under `owner/` touched by any commit in that
+range. (A naive `branch ^master` diff is *not* the right comparison
+here — `master` predates most of Owner's own Phase 5-9.5E development,
+so it would wrongly attribute that unrelated ancestral history to this
+branch; the commit-range diff above is the correct, precise check.)
 `customer-authentication-gap-analysis.md`/
 `OWNER-EXTERNAL-CUSTOMER-IDENTITY-AND-LICENSING-BOUNDARY-SPEC.md` are
-both explicit that nothing here is applied server-side.
+both explicit that nothing here is applied server-side, consistent with
+this evidence.
