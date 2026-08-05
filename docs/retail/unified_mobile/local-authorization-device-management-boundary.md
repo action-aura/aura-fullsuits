@@ -13,7 +13,7 @@ may require, per M7.19's own four-term `AND` composition:
 
 ```
 commercial_device_management_access(installation, action) =
-      valid_customer_account_or_equivalent_authority(action)   // OWNER-CUSTOMER-AUTH-PREREQUISITE-SPEC.md, item 14 — real, currently absent for account-gated actions; possession-based actions unaffected
+      valid_customer_account_or_equivalent_authority(action)   // OWNER-EXTERNAL-CUSTOMER-IDENTITY-AND-LICENSING-BOUNDARY-SPEC.md, item 14 — real, currently absent for account-gated actions; possession-based actions unaffected
   AND valid_license_ownership(installation, license)             // item 15 of the same spec
   AND installation_credential_present(installation)               // real Ed25519 device-key possession, already proven in M7
   AND recent_reauthentication_if_required(action)                  // mirrors require_recent_auth's real staff-side pattern

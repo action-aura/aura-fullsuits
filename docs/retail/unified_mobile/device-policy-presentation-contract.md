@@ -45,7 +45,7 @@ readiness (`IosPlatformReadinessState.current()`, embedded directly).
   problems list is surfaced (developer/support-diagnostic value), the
   policy itself is never rendered as if valid.
 - `CustomerAuthPrerequisiteMissing` — real, honest reflection of
-  `OWNER-CUSTOMER-AUTH-PREREQUISITE-SPEC.md`'s own blocking
+  `OWNER-EXTERNAL-CUSTOMER-IDENTITY-AND-LICENSING-BOUNDARY-SPEC.md`'s own blocking
   classification, for any future screen whose data genuinely requires
   a logged-in customer principal (item 14 of that spec) rather than
   pure possession-based activation.
