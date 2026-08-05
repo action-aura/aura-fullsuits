@@ -1,4 +1,23 @@
-# Owner Customer Authentication Prerequisite Specification
+# Owner External Customer Identity and Licensing Boundary Specification
+
+**Renamed from `OWNER-CUSTOMER-AUTH-PREREQUISITE-SPEC.md`** (see
+`owner-internal-vs-customer-boundary.md`) — the original name was
+ambiguous about *where* this authority lives. To be explicit, stated
+once, up front:
+
+**This specification does not modify, extend, or grant Customer access
+to Aura Owner's internal employee portal or `StaffUser`/`StaffSession`
+authentication in any way.** Aura Owner remains Action Aura's internal,
+employee-only system (management, SUPER_ADMIN, sales, finance,
+support). Everything below defines a **new, structurally separate**
+external authority — its own model, its own session/token scheme, its
+own routes, its own blueprint — that happens to be implemented as
+server-side code within the same `owner/app/` codebase (because that is
+where the canonical `Customer`/`Subscription`/`License`/`Installation`
+data already lives), not as a feature of the employee portal. Item 7
+below already states this explicitly ("must not extend or branch the
+existing `app/auth/routes.py` staff login logic"); this note exists so
+the *title* doesn't undercut that already-correct content.
 
 **Not applied in this branch.** M7 proved customer-facing
 authentication is absent from Owner (`customer-authentication-gap-
