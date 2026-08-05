@@ -19,6 +19,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.actionaura.retail.di.AuraAppContainer
 import com.actionaura.retail.di.LocalAuraAppContainer
+import com.actionaura.retail.licensing.transport.LicensingBootstrapState
+import com.actionaura.retail.licensing.transport.computeLicensingBootstrapState
 import com.actionaura.retail.ui.adaptive.AuraWindowSize
 import com.actionaura.retail.ui.shell.AppPhase
 import com.actionaura.retail.ui.shell.AuthenticatedAppShell
@@ -54,6 +56,18 @@ fun App(container: AuraAppContainer? = null) {
         AuraAppTheme(preference = AuraThemePreference.System) {
             Surface(modifier = Modifier.fillMaxSize()) {
                 var phase by remember { mutableStateOf<AppPhase>(AppPhase.Bootstrap) }
+                // M9.20 -- real, computed once per bootstrap, never allowed to throw past
+                // this point (`computeLicensingBootstrapState`'s own exception-safety).
+                // Real, disclosed scope decision (`startup-licensing-integration.md`):
+                // this value is computed and held for real diagnostic/future use, but does
+                // NOT gate `phase` in M9 -- gating the whole Retail shell on licensing state
+                // requires M10 (secure storage) and M11 (offline lease verification) to
+                // exist first, per the real dependency chain; gating now with neither would
+                // either permanently block the app or require inventing a bypass, and the
+                // checkpoint's own rule explicitly forbids a development-only bypass in
+                // release. `AppPhase.LicenseBlocked` remains the real, already-defined,
+                // not-yet-reachable state a later milestone wires this into.
+                var licensingBootstrapState by remember { mutableStateOf<LicensingBootstrapState?>(null) }
 
                 BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                     val windowSize = AuraWindowSize(maxWidth.value.toInt(), maxHeight.value.toInt())
@@ -65,7 +79,10 @@ fun App(container: AuraAppContainer? = null) {
                             // A real `LaunchedEffect`, never a bare state write inside
                             // the composable body (which would be a real composition
                             // side-effect anti-pattern).
-                            LaunchedEffect(Unit) { phase = AppPhase.Authenticated }
+                            LaunchedEffect(Unit) {
+                                licensingBootstrapState = computeLicensingBootstrapState(hasStoredInstallationMaterial = false)
+                                phase = AppPhase.Authenticated
+                            }
                         }
                         is AppPhase.Authenticated -> AuthenticatedAppShell(windowSize)
                         is AppPhase.Onboarding, is AppPhase.Unauthenticated, is AppPhase.LicenseBlocked, is AppPhase.SessionExpired ->
