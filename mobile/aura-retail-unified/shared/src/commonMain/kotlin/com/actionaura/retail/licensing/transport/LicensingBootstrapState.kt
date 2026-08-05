@@ -42,3 +42,28 @@ fun computeLicensingBootstrapState(hasStoredInstallationMaterial: Boolean): Lice
 } catch (e: Exception) {
     LicensingBootstrapState.BootstrapError(e.message ?: "unknown bootstrap failure")
 }
+
+/**
+ * M10.22 -- real, richer classification once a real
+ * `SecureMaterialStore` exists (`startup-secure-storage-bootstrap.md`).
+ * `health` is `null` when no real secure-storage adapter is wired yet
+ * -- the real, current production default until M10.31's own DI
+ * wiring lands -- which still resolves to the same honest
+ * [LicensingBootstrapState.ServiceNotConfigured] the simpler M9.20
+ * function already returns, never a fabricated "ready" state.
+ */
+fun computeLicensingBootstrapStateFromHealth(
+    health: com.actionaura.retail.securestorage.SecureStorageHealth?,
+): LicensingBootstrapState = try {
+    when {
+        health == null -> LicensingBootstrapState.ServiceNotConfigured
+        !health.adapterAvailable -> LicensingBootstrapState.SecureStorageUnavailable
+        health.recoveryRequired -> LicensingBootstrapState.StoredMaterialUnreadable(health.safeErrorCode?.name ?: "unknown")
+        health.keyInvalidated -> LicensingBootstrapState.StoredMaterialUnavailable
+        health.migrationRequired -> LicensingBootstrapState.StoredMaterialUnreadable("migration required")
+        !health.activationBundleExists -> LicensingBootstrapState.ActivationRequired
+        else -> LicensingBootstrapState.FutureLeaseVerificationRequired
+    }
+} catch (e: Exception) {
+    LicensingBootstrapState.BootstrapError(e.message ?: "unknown bootstrap failure")
+}
