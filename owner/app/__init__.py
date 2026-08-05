@@ -43,8 +43,20 @@ def create_app(config_name: str | None = None) -> Flask:
     @app.context_processor
     def _inject_current_staff():
         from app.auth.session import load_current_staff
+        from app.security.rbac import get_staff_permission_codes
 
-        return {"staff": load_current_staff()}
+        staff = load_current_staff()
+        permission_codes = get_staff_permission_codes(staff)
+        return {
+            "staff": staff,
+            # Presentation-only: the shell/nav use this to avoid showing
+            # destinations the employee can't reach. Every route remains
+            # independently, server-side protected by rbac.py's own
+            # decorators regardless of what this renders -- hiding a nav
+            # link is never itself an authorization control.
+            "has_permission": lambda code: code in permission_codes,
+            "has_any_permission": lambda *codes: any(c in permission_codes for c in codes),
+        }
 
     from app.auth import bp as auth_bp
     from app.staff import bp as staff_bp
