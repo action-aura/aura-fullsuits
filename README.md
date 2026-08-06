@@ -28,6 +28,10 @@ tests/                  Cross-cutting integration/security/privacy/tenancy/smoke
 docs/                   Architecture, deployment, operations, migration, privacy, commercial, handover docs
 ```
 
+## Jordan JoFotara e-invoicing
+
+Retail and Clinic can optionally report invoices to Jordan's ISTD JoFotara national e-invoicing system — off by default, no effect on any install that doesn't enable it. See `docs/einvoicing/phase1/`.
+
 ## Data ownership
 
 Customer business data (products, sales, patients, invoices, etc.) stays local to the customer's installation. The Owner Control Center never stores or retrieves it — see `PRIVACY.md`.

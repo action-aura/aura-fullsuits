@@ -18,3 +18,23 @@ No direct thermal-printer protocol implemented — no hardware was available to 
 
 ## Data safety (ties to Part P)
 Every printed/shared value comes from the server's authoritative sale response (`SaleResult` on Android, `saleData` from `POST /api/sub/retail/sales` on Windows) — see `receipt-printing-test-report.md` for the specific bug this caught and fixed.
+
+## QR codes on receipts (docs/einvoicing/phase1/)
+
+Jordan JoFotara e-invoicing (opt-in, default off) needs a QR code on the
+printed receipt/invoice once an invoice clears with the tax authority.
+Because both Windows and Clinic already print through the OS spooler as
+HTML (this doc's Windows section above; Clinic's `_printInvoice()` is the
+identical mechanism), a QR code required **zero printer-protocol work** —
+it's just an `<img src="data:image/png;base64,...">` tag inserted into the
+same HTML the browser already prints, gated behind the feature being
+enabled and the specific invoice having actually cleared. See
+`../einvoicing/phase1/receipt-qr-rendering-design.md` for the full design,
+including how a receipt printed before clearance shows an honest "pending"
+line instead.
+
+The Android share-fallback path above is untouched by this wave — no
+Android UI work was done for e-invoicing (see
+`../einvoicing/phase1/phase1-residual-risk-register.md` item 2). Adding an
+e-invoicing status line to the existing plain-text "Share Receipt" builder
+remains a Phase 2 item alongside the rest of the Android UI gap.

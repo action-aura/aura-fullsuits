@@ -892,7 +892,33 @@ const RetailSystem = {
   },
   savePrinterCfg(cfg) { try { localStorage.setItem('aura_printer_cfg', JSON.stringify(cfg)); } catch (e) {} },
 
-  _printReceipt(saleData) {
+  // docs/einvoicing/phase1/ -- e-invoice submission is async (the outbox
+  // worker, not the sale itself), so at the moment of printing it usually
+  // hasn't cleared yet. This does ONE best-effort status check (never
+  // blocks/fails printing on error) so a receipt printed after clearance
+  // shows the real QR, and one printed right after checkout shows an
+  // honest "pending" line instead of fabricating a QR that doesn't exist
+  // yet. Entirely gated on saleData.einvoice being present -- a
+  // flag-disabled install's receipt HTML is unaffected.
+  async _einvoiceReceiptBlock(saleData) {
+    if (!saleData.einvoice || !saleData.einvoice.invoice_ref) return '';
+    try {
+      const resp = await this._get('/api/einvoicing/outbox/' + encodeURIComponent(saleData.einvoice.invoice_ref));
+      const entryStatus = resp?.data?.entry?.status;
+      if (entryStatus === 'CLEARED') {
+        const qrUrl = '/api/einvoicing/qr/' + encodeURIComponent(saleData.einvoice.invoice_ref) + '.png';
+        return `
+      <div class="rcpt-hr"></div>
+      <div class="rcpt-center"><img src="${qrUrl}" style="width:32mm;height:auto" /></div>
+      <div class="rcpt-center" style="font-size:9px">Jordan e-invoice cleared</div>`;
+      }
+    } catch (e) { /* best-effort only -- printing must never fail on this */ }
+    return `
+      <div class="rcpt-hr"></div>
+      <div class="rcpt-center" style="font-size:9px">Jordan e-invoice: pending government clearance</div>`;
+  },
+
+  async _printReceipt(saleData) {
     const cfg = this._printerCfg();
     const widthMm = cfg.paperWidth === '58mm' ? 58 : 80;
     const lines = (saleData.lines || []).map(i => `
@@ -900,6 +926,7 @@ const RetailSystem = {
         <span>${(i.name || ('#'+i.product_id))} ×${i.quantity}</span>
         <span>${this._fmt(i.line_total)}</span>
       </div>`).join('');
+    const einvoiceBlock = await this._einvoiceReceiptBlock(saleData);
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>Receipt ${saleData.sale_number}</title>
       <style>
         @page { size: ${widthMm}mm auto; margin: 2mm; }
@@ -923,6 +950,7 @@ const RetailSystem = {
       ${saleData.change > 0 ? `<div class="rcpt-line"><span>Change</span><span>${this._fmt(saleData.change)}</span></div>` : ''}
       <div class="rcpt-hr"></div>
       <div class="rcpt-center">Thank you</div>
+      ${einvoiceBlock}
       </body></html>`;
 
     let frame = document.getElementById('ret-print-frame');

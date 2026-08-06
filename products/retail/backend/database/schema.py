@@ -28,7 +28,9 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 
 # Wave 1B (Part K): see products/clinic/backend/database/schema.py's
 # identical CLINIC_SCHEMA_VERSION for the full rationale.
-RETAIL_SCHEMA_VERSION = 1
+# v2 (docs/einvoicing/phase1/): adds the einvoice_* tables. See
+# _apply_retail_alters below -- never lower this or reuse a number.
+RETAIL_SCHEMA_VERSION = 2
 
 
 def _get_path(name):
@@ -283,15 +285,20 @@ def init_retail():
     conn.commit()
 
     # Wave 1B (Part K): infrastructure ready for the first real Retail schema
-    # change (none exist yet -- unlike Clinic, which already has real ALTERs).
-    # Mirrors products/clinic/backend/database/schema.py's identical pattern;
-    # see commercial_runtime/security/migration_safety.py. The no-op
-    # migrate_fn below is intentional, not a placeholder to "fill in later" --
-    # add real ALTER statements to it (and bump RETAIL_SCHEMA_VERSION) the
-    # day Retail's schema actually needs to change.
+    # change. Mirrors products/clinic/backend/database/schema.py's identical
+    # pattern; see commercial_runtime/security/migration_safety.py.
+    #
+    # v1 -> v2 (docs/einvoicing/phase1/): adds the einvoice_* tables used by
+    # opt-in Jordan JoFotara e-invoicing. CREATE TABLE IF NOT EXISTS only --
+    # no existing table is ALTERed, no existing row is read or written. A
+    # pilot install that never enables the feature gains only empty tables.
+    def _apply_retail_alters(migrating_conn):
+        from commercial_runtime.einvoicing.schema import apply_einvoicing_schema
+        apply_einvoicing_schema(migrating_conn)
+
     from commercial_runtime.security.migration_safety import ensure_schema_version
     ensure_schema_version(
-        conn, _get_path('retail'), RETAIL_SCHEMA_VERSION, lambda c: None,
+        conn, _get_path('retail'), RETAIL_SCHEMA_VERSION, _apply_retail_alters,
         backup_dir=os.path.join(BASE_DIR, 'migration_backups'),
     )
 

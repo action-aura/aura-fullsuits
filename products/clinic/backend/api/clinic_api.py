@@ -109,6 +109,50 @@ def _owned(conn, table, row_id, cid):
         return False
     return conn.execute(f"SELECT 1 FROM {table} WHERE id=? AND company_id=?", (row_id, cid)).fetchone() is not None
 
+_CLINIC_DOC_SCHEMA_READY = False
+def _ensure_clinic_doc_schema(conn):
+    """Idempotent, additive-only -- mirrors
+    products/retail/backend/api/retail_api.py::_ensure_credit_schema's
+    lazy-create-if-missing pattern (same convention, not the versioned
+    schema.py migration path, since this is exactly the precedent that
+    pattern already established for a per-company sequence table)."""
+    global _CLINIC_DOC_SCHEMA_READY
+    if _CLINIC_DOC_SCHEMA_READY:
+        return
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS clinic_doc_sequences (
+            company_id INTEGER, doc_type TEXT, last_no INTEGER DEFAULT 0, PRIMARY KEY (company_id, doc_type)
+        )
+    """)
+    conn.commit()
+    _CLINIC_DOC_SCHEMA_READY = True
+
+_CLINIC_REF_PREFIX = {'invoice': 'INV-C'}
+
+def _next_clinic_ref(conn, cid, doc_type):
+    """Atomic, zero-padded, sequential, gapless reference (e.g. INV-C-000053).
+
+    Replaces the previous `f'INV-C-{int(time.time())}-{random.randint(100, 999)}'`
+    scheme, which was unique (collision-proofed by the random suffix) but
+    NOT sequential or gapless -- a real gap found during
+    docs/einvoicing/phase1/invoice-numbering-audit.md, tracked there as a
+    pre-existing issue unrelated to e-invoicing correctness (which uses its
+    own, separate einvoice_sequence) and fixed here on its own merits: a
+    tax/audit-facing invoice number should be sequential.
+
+    A bare-UNIQUE `invoice_number` column plus a per-company-resetting
+    counter has the exact same cross-company collision risk
+    products/retail/backend/api/retail_api.py's `_next_ref()` has (see that
+    function and the returns.return_number fix) -- the company fragment
+    suffix below closes it the same way, from day one, rather than shipping
+    the same bug twice.
+    """
+    _ensure_clinic_doc_schema(conn)
+    conn.execute("INSERT OR IGNORE INTO clinic_doc_sequences (company_id,doc_type,last_no) VALUES (?,?,0)", (cid, doc_type))
+    conn.execute("UPDATE clinic_doc_sequences SET last_no=last_no+1 WHERE company_id=? AND doc_type=?", (cid, doc_type))
+    n = conn.execute("SELECT last_no FROM clinic_doc_sequences WHERE company_id=? AND doc_type=?", (cid, doc_type)).fetchone()[0]
+    return f"{_CLINIC_REF_PREFIX.get(doc_type, doc_type.upper())}-{int(n):06d}-{str(cid)[:8]}"
+
 # ─── Dashboard ────────────────────────────────────────────────────────────────
 
 @clinic_bp.route('/dashboard/stats', methods=['GET'])
@@ -765,9 +809,12 @@ def create_invoice():
         # mid-loop failure previously could leave an invoice header with no
         # line items and no rollback.
         conn.execute("BEGIN IMMEDIATE")
-        # Unique even when several invoices are created within the same second
-        # (invoice_number is UNIQUE — a bare int(time.time()) would collide).
-        inv_no = f'INV-C-{int(time.time())}-{random.randint(100, 999)}'
+        # Sequential, gapless, company-scoped -- see _next_clinic_ref()'s
+        # docstring for why this replaced the previous timestamp+random
+        # scheme. Allocated inside this same transaction so a rollback
+        # below releases the number, exactly like retail_api.py's
+        # equivalent _next_ref() call.
+        inv_no = _next_clinic_ref(conn, cid, 'invoice')
         items = data.get('items', [])
         subtotal = sum(i.get('qty', 1) * i.get('unit_price', 0) for i in items)
         # Discount applied before tax (tax-after-discount), mirroring the POS fix.
@@ -843,7 +890,27 @@ def create_invoice():
         import logging
         logging.getLogger('aura.clinic').warning(
             'invoice accounting sync skipped: %s', type(e).__name__)
-    return jsonify({'status': 'success', 'data': {'id': inv_id, 'invoice_number': inv_no, 'total': total}})
+
+    response_data = {'id': inv_id, 'invoice_number': inv_no, 'total': total}
+
+    # docs/einvoicing/phase1/ -- best-effort, never blocks or fails the
+    # invoice that already committed above. Mirrors retail_api.py::
+    # create_sale's identical block -- see that comment for the full
+    # rationale. Only adds an 'einvoice' key when actually enqueued -- a
+    # disabled install's response is byte-for-byte unchanged (see
+    # clinic_einvoicing_regression_test.py).
+    try:
+        from database.schema import get_clinic_conn as _get_clinic_conn_for_einvoicing
+        from core.clinic.einvoice_adapter import enqueue_invoice as _enqueue_einvoice_invoice
+        invoice_ref = f'AURA_CLINIC:clinic_invoice:{inv_id}'
+        if _enqueue_einvoice_invoice(_get_clinic_conn_for_einvoicing, company_id=cid,
+                                      invoice_id=inv_id, invoice_number=inv_no):
+            response_data['einvoice'] = {'invoice_ref': invoice_ref, 'status': 'queued'}
+    except Exception as e:
+        import logging
+        logging.getLogger('aura.clinic').warning('e-invoice enqueue skipped: %s', type(e).__name__)
+
+    return jsonify({'status': 'success', 'data': response_data})
 
 @clinic_bp.route('/invoices', methods=['GET'])
 @mt_login_required

@@ -1076,11 +1076,38 @@ const ClinicSystem = {
   },
 
   // Printable invoice (#4): builds a clean A4-style sheet in a new window and prints.
+  // docs/einvoicing/phase1/ -- best-effort, never blocks printing on
+  // error. Mirrors products/retail/frontend/subsystem-retail.js's
+  // _einvoiceReceiptBlock -- see that comment for the full rationale
+  // (submission is async, so a receipt printed immediately after
+  // checkout usually predates clearance; the invoice_ref format is
+  // deterministic, matching clinic_api.py::create_invoice's enqueue
+  // call, so it can be constructed client-side without an extra field
+  // on the GET /invoices/<id> response).
+  async _einvoiceInvoiceBlock(invId) {
+    const ref = 'AURA_CLINIC:clinic_invoice:' + invId;
+    try {
+      const resp = await this._get('/api/einvoicing/outbox/' + encodeURIComponent(ref));
+      const entryStatus = resp?.data?.entry?.status;
+      if (entryStatus === 'CLEARED') {
+        const qrUrl = '/api/einvoicing/qr/' + encodeURIComponent(ref) + '.png';
+        return `<div style="clear:both;padding-top:20px;text-align:center">
+          <img src="${qrUrl}" style="width:100px;height:auto" />
+          <div class="muted">Jordan e-invoice cleared</div></div>`;
+      }
+      if (entryStatus) {
+        return `<div style="clear:both;padding-top:20px" class="muted">Jordan e-invoice: pending government clearance</div>`;
+      }
+    } catch (e) { /* not enqueued (feature off, or a 404) -- show nothing */ }
+    return '';
+  },
+
   async _printInvoice(invId) {
     try {
       const d = (await this._get(`/api/sub/clinic/invoices/${invId}`)).data || {};
       const inv = d.invoice || {};
       const items = d.items || [];
+      const einvoiceBlock = await this._einvoiceInvoiceBlock(invId);
       const esc = s => String(s == null ? '' : s).replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));
       const rows = items.map(i => `<tr>
         <td>${esc(i.description)}</td>
@@ -1113,6 +1140,7 @@ const ClinicSystem = {
           <div><span>Paid</span><span>$${(+inv.amount_paid||0).toFixed(2)}</span></div>
         </div>
         ${inv.notes?`<div style="clear:both;padding-top:30px" class="muted">Notes: ${esc(inv.notes)}</div>`:''}
+        ${einvoiceBlock}
         </body></html>`;
       // On Android the WebView can't open a print popup; hand the HTML to the native
       // print bridge (MainActivity.AndroidBridge.printHtml). Inert on desktop.

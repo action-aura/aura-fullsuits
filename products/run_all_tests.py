@@ -51,6 +51,10 @@ SUITES = {
     # `python products/run_all_tests.py licensing_contracts` run just this
     # suite the same way `... retail` already does.
     'licensing_contracts': ROOT / 'commercial_runtime' / 'licensing_contracts' / 'tests',
+    # docs/einvoicing/phase1/ -- Jordan JoFotara e-invoicing shared domain.
+    # Same rationale as licensing_contracts above: its own key, own
+    # fast-growing test surface, mirrors the existing split.
+    'einvoicing': ROOT / 'commercial_runtime' / 'einvoicing' / 'tests',
 }
 
 
