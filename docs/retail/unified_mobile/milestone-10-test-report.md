@@ -3,6 +3,21 @@
 Platform Secure Storage, Atomic Activation Material Persistence,
 Credential Lifecycle, and Startup Recovery.
 
+**Update (M10 Regression Stabilization Closeout, additive — the
+original record below is preserved, not rewritten):** the
+`ReportingConcurrencyAtScaleTest` instability disclosed below as a
+"pre-existing timing-sensitive defect" was investigated, root-caused,
+and fixed by a corrective closeout. Real root cause: not a
+concurrency/leak/gate-contention defect, but `kotlinx-coroutines-test`'s
+own implicit 60-second `runTest` default deadlock-guard timeout being
+too tight for this fixture's real, legitimate, unmocked I/O cost at
+scale. Full detail: `m10-reporting-flake-investigation.md`,
+`m10-regression-stabilization-report.md`. Two consecutive full
+`:shared:testDebugUnitTest` runs are now clean: **656/656, 0 failures,
+0 errors**, each. The "654/656" figure below reflects the real,
+honest state at the original M10 close and is kept for the historical
+record.
+
 ## Real, executed shared-test result
 
 `:shared:testDebugUnitTest`, full run: **656 tests**, 654 deterministic
@@ -114,7 +129,7 @@ executed tests — none were found by inspection alone.
 | No production signing keys/App Store release | PASS | Confirmed by inspection |
 | No Aura Owner code modified | PASS | Zero commands issued against `owner/` other than read-only fingerprint capture |
 | No Clinic code introduced | PASS | Confirmed by inspection |
-| All shared tests pass except disclosed pre-existing flake | CONDITIONAL | See "Real, executed shared-test result" above |
+| All shared tests pass except disclosed pre-existing flake | CONDITIONAL at original M10 close; **PASS as of the Regression Stabilization Closeout** | See "Real, executed shared-test result" above and its own update note |
 | 631-test M9 baseline remains green | PASS | Subsumed; net +25 |
 | Android debug APK builds | PASS | `BUILD SUCCESSFUL` |
 | External workspaces: no M10-attributable change | PASS | `external-workspace-exit-fingerprints-m10.md` — 2 of 3 byte-identical, 1 changed for real unrelated reasons, zero M10 contribution |

@@ -97,3 +97,70 @@ real, unrelated reasons — investigated and attributed above, not
 silently claimed unchanged and not silently omitted. `NO_M10_
 ATTRIBUTABLE_EXTERNAL_WORKSPACE_CHANGE` holds: M10 itself contributed
 zero bytes to any of the three.
+
+## M10 Regression Stabilization Closeout — fresh fingerprints (additive, not a replacement of the M10 exit record above)
+
+Real, freshly-executed, same 8-command protocol, captured at the close
+of the corrective "M10 Regression Stabilization Closeout" (the
+`ReportingConcurrencyAtScaleTest`/reporting-perf flake investigation
+and fix). Per the governing checkpoint's own explicit instruction, this
+section is additive — the M10 exit record above is not overwritten.
+
+### `aura-fullsuits-phase9r`
+```
+HEAD: 8c35768393d9407f72ef34aa93705f9c454453f7   (unchanged)
+STATUS / all hashes: empty (byte-identical)
+```
+**Byte-identical.**
+
+### `AuraEnterprise` (legacy repo)
+```
+HEAD: 414e6ea5ca9fc698fe075a4ae4464cebf0b7bf34   (unchanged)
+STATUS: 22 modified, 15 untracked (unchanged)
+DIFF_BINARY_HASH:        cc37af7f7c95450e59be66bb4785a67bdfaeae18f7c86bbc2e3161ab76c66f7
+DIFF_CACHED_BINARY_HASH: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85
+UNTRACKED_LIST_HASH:     cafdb44a28f4865453bf28d1def21c1ca34496052ed638da5882a776bb4afe9
+```
+**Byte-identical to the M10 exit record.** Never touched this session —
+read-only `git status`/`git diff` only.
+
+### `aura-fullsuits-owner-ui` (Owner UI-modernization worktree)
+```
+HEAD: 2b2f909c9cbc27b71dbd881ed0bd3f4c4b7977ef   (moved from f59b0219... — a real, independent commit landed between the M10 exit capture and this closeout session, not by this session)
+Branch: feat/owner-ui-ux-modernization
+STATUS: 7 modified, 5 untracked (real, further drift since the M10 exit capture)
+DIFF_BINARY_HASH:        75171187facdd470adb8b979a931748d55dd21e09f820a35b8fbeb45fd6e59a
+DIFF_CACHED_BINARY_HASH: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85 (empty)
+UNTRACKED_LIST_HASH:     2172489514fdbb809c8f305b783f00521fd989bbf08f7945b17f44548de532d
+```
+
+**`OWNER_UI_WORKTREE_BYTE_IDENTICAL = FALSE`.**
+**`M10_CLOSEOUT_CONTRIBUTION_TO_OWNER_UI_WORKTREE = ZERO`.**
+**`CONCURRENT_CHANGE_ATTRIBUTED = TRUE`.**
+
+Real, observed content of the current uncommitted working-tree state:
+- Modified: `owner/app/__init__.py`, `owner/app/static/css/components.css`,
+  `owner/app/static/css/shell.css`, `owner/app/templates/layout/_sidebar.html`,
+  `owner/app/templates/layout/base.html`, `owner/tests/test_phase9_5b_r2_owner_wide_template_rendering.py`,
+  `owner/tests/test_phase9_5b_r_hardcoded_strings.py`.
+- Untracked (new): `docs/owner/ui-modernization/attention-center-contract.md`,
+  `owner/app/attention/`, `owner/app/templates/attention/`,
+  `owner/tests/test_attention_center.py`, plus the already-present `var/`.
+
+Real classification: the HEAD move plus this new file set (an "attention
+center" feature — contract doc, new `owner/app/attention/` package,
+templates, tests) is further, real, independent, in-progress work on
+that same Owner UI/UX modernization initiative — the M10-exit-time
+uncommitted files (first-login-welcome, product-tour, password-toggle)
+are gone from the untracked list, consistent with them having been
+committed by that workstream's own owner between the M10 exit capture
+and now (matching the HEAD advance). No command in this closeout
+session ever executed with this worktree as its working directory
+except the read-only fingerprint capture itself.
+
+### Required claim
+
+**`NO_M10_CLOSEOUT_ATTRIBUTABLE_EXTERNAL_CHANGE` holds.** Two of three
+workspaces are byte-identical; the third changed for real, independently-
+attributed, unrelated reasons, exactly as already established at M10
+exit — this closeout session contributed zero bytes to any of the three.

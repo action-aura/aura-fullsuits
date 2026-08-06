@@ -70,3 +70,21 @@ runtime behavior elsewhere in this milestone. A future session with
 real Android/iOS hardware should extend this document with actual
 measured latencies rather than this milestone fabricating estimated
 numbers here.
+
+## Addendum — real, unrelated real-I/O timing finding in a different subsystem (M10 Regression Stabilization Closeout)
+
+Not a secure-storage finding — recorded here only as a cross-reference
+since it is the closest real, host-timing-variance discussion this
+initiative has produced elsewhere. The M10 Regression Stabilization
+Closeout investigated and fixed a real, separate, pre-existing flake in
+the **Reporting** subsystem's own `reporting.perf` test package
+(`ReportingConcurrencyAtScaleTest` and others), unrelated to secure
+storage, unrelated to `GenerationalSecureMaterialStore`, and touching
+no file this document otherwise describes. Root cause: real, unmocked
+JDBC I/O against a 100,000-sale test fixture intermittently exceeding
+`kotlinx-coroutines-test`'s own implicit 60-second `runTest` default
+deadlock-guard timeout — a fragile library default, not a concurrency
+defect. Full detail: `m10-reporting-flake-investigation.md` and
+`m10-regression-stabilization-report.md`. Mentioned here purely for
+completeness; this document's own secure-storage concurrency/
+performance classification above is unaffected and unchanged.

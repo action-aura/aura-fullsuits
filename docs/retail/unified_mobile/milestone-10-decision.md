@@ -1,6 +1,26 @@
 # Aura Retail Unified Mobile — Milestone 10 Decision
 
-## Verdict: **CONDITIONAL PASS**
+## Update: M10 Regression Stabilization Closeout
+
+**Current verdict: `CONDITIONAL PASS — REGRESSION GATE CLOSED`**
+(additive update — the original M10 decision below is preserved
+verbatim, not rewritten). The `ReportingConcurrencyAtScaleTest`
+instability the original decision disclosed below as a "pre-existing,
+unrelated timing flake" was investigated, root-caused (a fragile
+library-default `runTest` deadlock-guard timeout misapplied to real,
+heavy, unmocked I/O — not a concurrency/leak/gate-contention defect),
+and fixed across every real call site sharing the cause, with every
+correctness assertion retained. Two consecutive full
+`:shared:testDebugUnitTest` runs are now clean: 656/656, 0 failures, 0
+errors. Full detail: `m10-reporting-flake-investigation.md`,
+`m10-regression-stabilization-report.md`. M10's real, standing
+CONDITIONAL limitations (no real Android/iOS runtime execution on this
+host) are unaffected and remain exactly as disclosed below — this
+closeout does not and cannot upgrade M10 to an unconditional PASS.
+
+## Original M10 verdict (unchanged, preserved for the historical record)
+
+### Verdict: **CONDITIONAL PASS**
 
 Exactly the verdict the checkpoint's own M10 verdict rules predicted
 for this Windows host: "the expected maximum honest verdict is
