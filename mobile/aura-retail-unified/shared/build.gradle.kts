@@ -82,6 +82,17 @@ kotlin {
                 implementation("androidx.activity:activity-compose:1.9.2")
                 implementation("androidx.security:security-crypto:1.1.0-alpha06")
                 implementation("app.cash.sqldelight:android-driver:2.3.2")
+                // M11.2/M11.8 -- real Ed25519 signature verification for
+                // signed License leases. Same version and same raw "subtle"
+                // primitives (Ed25519Sign/Ed25519Verify) the legacy Android
+                // app already uses and has physically cross-verified against
+                // the canonical Python `cryptography`-library signer
+                // (Ed25519CrossVerifyTest) -- reused deliberately, not
+                // re-chosen, per signed-lease-cryptography-decision.md.
+                // AndroidKeyStore's own native Ed25519 needs API 33+, above
+                // this module's minSdk 26 -- the same real constraint that
+                // drove the legacy app's own decision.
+                implementation("com.google.crypto.tink:tink-android:1.15.0")
             }
         }
         val androidUnitTest by getting {
@@ -91,6 +102,13 @@ kotlin {
                 // plain unit tests, which cannot use AndroidSqliteDriver
                 // (that needs a real Android Context/instrumentation).
                 implementation("app.cash.sqldelight:sqlite-driver:2.3.2")
+                // M11 -- Tink's raw `subtle.Ed25519Sign`/`Ed25519Verify`
+                // primitives are plain algorithmic Java classes with no
+                // Android-runtime dependency, so the real Android signature
+                // verifier (SignedLeaseSignatureVerifier.android.kt) is
+                // real, host-executable on this plain JVM unit-test target
+                // -- not a mock standing in for it.
+                implementation("com.google.crypto.tink:tink-android:1.15.0")
             }
         }
         // Kotlin's Default Hierarchy Template (on by default since Kotlin
