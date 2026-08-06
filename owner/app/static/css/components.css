@@ -417,3 +417,102 @@ code.masked {
    would otherwise keep a JS-hidden nav button visibly showing. Scoped
    to the tour nav only, not a global [hidden] override. */
 .aura-tour-nav [hidden] { display: none !important; }
+
+/* ---------- Attention Center ----------
+   Real, derived, real-time list -- no "unread" state, so there is
+   deliberately no unread/read visual distinction here (see
+   attention-center-contract.md). Priority is communicated with a
+   left accent bar + text badge, never color alone (kept as text too,
+   for users who can't perceive the accent color). */
+
+.aura-attention-summary {
+  color: var(--muted);
+  font-size: var(--aura-font-size-sm);
+  margin-block-end: var(--aura-space-4);
+}
+
+.aura-attention-group { margin-block-end: var(--aura-space-5); }
+
+.aura-attention-group h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--aura-space-2);
+  font-size: var(--aura-font-size-md);
+}
+
+.aura-attention-group__count {
+  color: var(--muted);
+  font-size: var(--aura-font-size-sm);
+  font-weight: var(--aura-font-weight-medium);
+}
+
+.aura-attention-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--aura-space-2);
+}
+
+.aura-attention-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--aura-space-3);
+  padding: var(--aura-space-3) var(--aura-space-4);
+  background: var(--aura-color-surface-raised);
+  border: 1px solid var(--border);
+  border-inline-start: 3px solid var(--aura-color-border-strong);
+  border-radius: var(--aura-radius-md);
+}
+
+.aura-attention-item--urgent { border-inline-start-color: var(--aura-color-danger); }
+.aura-attention-item--normal { border-inline-start-color: var(--aura-color-warning); }
+.aura-attention-item--low { border-inline-start-color: var(--aura-color-border-strong); }
+
+.aura-attention-item__body { min-inline-size: 0; }
+
+.aura-attention-item__title {
+  font-weight: var(--aura-font-weight-medium);
+  color: var(--aura-color-text-primary);
+}
+
+.aura-attention-item__context {
+  color: var(--muted);
+  font-size: var(--aura-font-size-sm);
+  margin-block-start: 0.2rem;
+}
+
+.aura-attention-item__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--aura-space-1);
+  color: var(--muted);
+  font-size: var(--aura-font-size-xs);
+  margin-block-start: 0.35rem;
+}
+
+.aura-attention-item__action {
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.aura-attention-empty {
+  text-align: center;
+  padding: var(--aura-space-8) var(--aura-space-4);
+}
+
+.aura-attention-empty__icon {
+  inline-size: 48px;
+  block-size: 48px;
+  margin-inline: auto;
+  margin-block-end: var(--aura-space-4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--aura-radius-full);
+  background: var(--aura-color-success-soft);
+  color: var(--aura-color-success);
+  font-size: var(--aura-font-size-xl);
+}

@@ -21,6 +21,8 @@ GATED_DIRS = (
     # (errors.py's register_error_handlers), replacing the bare
     # Werkzeug default pages that existed before.
     "errors",
+    # UI modernization Stage C -- the Attention Center (app/attention/).
+    "attention",
 )
 
 # Attribute names whose value is never translatable prose (ids, urls, form

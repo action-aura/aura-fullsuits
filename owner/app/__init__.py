@@ -48,9 +48,17 @@ def create_app(config_name: str | None = None) -> Flask:
     def _inject_current_staff():
         from app.auth.session import load_current_staff
         from app.security.rbac import get_staff_permission_codes
+        from app.attention.service import ATTENTION_CATEGORY_PERMISSIONS, count_attention_items
 
         staff = load_current_staff()
         permission_codes = get_staff_permission_codes(staff)
+        # Real per-request cost, same disclosed trade-off
+        # role-dashboard-contract.md already accepts for this codebase's
+        # scale: computed fresh (no persisted count to go stale), but only
+        # when the employee holds at least one Attention Center permission
+        # -- most requests (no relevant permission at all) pay nothing.
+        can_view_attention = bool(permission_codes & ATTENTION_CATEGORY_PERMISSIONS)
+        attention_count = count_attention_items(staff) if can_view_attention else 0
         return {
             "staff": staff,
             # Presentation-only: the shell/nav use this to avoid showing
@@ -60,6 +68,8 @@ def create_app(config_name: str | None = None) -> Flask:
             # link is never itself an authorization control.
             "has_permission": lambda code: code in permission_codes,
             "has_any_permission": lambda *codes: any(c in permission_codes for c in codes),
+            "can_view_attention_center": can_view_attention,
+            "attention_count": attention_count,
         }
 
     from app.auth import bp as auth_bp
@@ -87,6 +97,7 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.operations_ui.routes import bp as operations_ui_bp
     from app.leads.routes import bp as leads_bp, shared_bp as crm_shared_bp
     from app.locale_routes import bp as locale_bp
+    from app.attention.routes import bp as attention_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(staff_bp)
@@ -114,6 +125,7 @@ def create_app(config_name: str | None = None) -> Flask:
     app.register_blueprint(leads_bp)
     app.register_blueprint(crm_shared_bp)
     app.register_blueprint(locale_bp)
+    app.register_blueprint(attention_bp)
 
     if app.config.get("EXTERNAL_API_ENABLED"):
         from app.api.routes import bp as external_api_bp

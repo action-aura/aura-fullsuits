@@ -68,6 +68,19 @@
           <button type="button" class="aura-topbar__stub aura-topbar__stub--icon" disabled aria-label="{{ _('Quick create (coming soon)') }}">
             <span aria-hidden="true">+</span>
           </button>
+          {% if can_view_attention_center %}
+          {# Real, permission-aware indicator (not a stub) -- links to the
+             real /attention page. Count is derived/real-time, computed
+             fresh on this request (no persisted "unread" state to go
+             stale -- see attention-center-contract.md). Renders even at
+             zero so the destination stays reachable; the number itself
+             is what communicates "nothing needs you right now". #}
+          <a class="aura-topbar__attention{{ ' has-items' if attention_count else '' }}" href="{{ url_for('attention.index') }}"
+             aria-label="{{ _('Attention Center: %(count)d item(s) need your attention', count=attention_count) }}">
+            <span aria-hidden="true">&#9888;</span>
+            <span class="aura-topbar__attention-count" aria-hidden="true">{{ format_owner_number(attention_count) }}</span>
+          </a>
+          {% endif %}
           <div class="aura-theme-switch" role="group" aria-label="{{ _('Theme') }}">
             <button type="button" class="aura-theme-switch__btn" data-theme-option="light" aria-pressed="false">{{ _('Light') }}</button>
             <button type="button" class="aura-theme-switch__btn" data-theme-option="dark" aria-pressed="false">{{ _('Dark') }}</button>

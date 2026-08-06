@@ -301,6 +301,36 @@ summary:focus-visible {
   padding: 0 4px;
 }
 
+/* Real (not a stub) permission-aware Attention Center indicator -- a
+   derived, real-time count, never a persisted "unread" badge. Renders
+   at zero too (a real "nothing needs you" state), and gets the
+   .has-items accent only once there is real, current data behind it. */
+.aura-topbar__attention {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--aura-space-1);
+  background: var(--aura-color-surface-muted);
+  border: 1px solid var(--aura-color-border-default);
+  border-radius: var(--aura-radius-sm);
+  color: var(--aura-color-text-secondary);
+  font-size: var(--aura-font-size-sm);
+  padding: 0.4rem 0.6rem;
+  text-decoration: none;
+}
+.aura-topbar__attention:hover, .aura-topbar__attention:focus-visible {
+  border-color: var(--aura-color-brand-primary);
+  color: var(--aura-color-text-primary);
+}
+.aura-topbar__attention-count {
+  font-weight: var(--aura-font-weight-semibold);
+  font-size: var(--aura-font-size-xs);
+}
+.aura-topbar__attention.has-items {
+  background: var(--aura-color-warning-soft);
+  border-color: var(--aura-color-warning);
+  color: var(--aura-color-warning);
+}
+
 .aura-theme-switch {
   display: inline-flex;
   border: 1px solid var(--aura-color-border-default);

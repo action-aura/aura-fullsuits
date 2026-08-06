@@ -22,6 +22,8 @@ REAL_TEMPLATE_DIRS = (
     # (errors.py's register_error_handlers), replacing the bare
     # Werkzeug default pages that existed before.
     "errors",
+    # UI modernization Stage C -- the Attention Center (app/attention/).
+    "attention",
 )
 
 # No-fixture-required GET routes: real, reachable, list/index/status pages.

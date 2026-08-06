@@ -31,6 +31,9 @@
   <div class="aura-nav-group__title">{{ _('Overview') }}</div>
   <ul class="aura-nav-group__list">
     {{ nav_link('dashboard.index', _('Dashboard')) }}
+    {% if can_view_attention_center %}
+      {{ nav_link('attention.index', _('Attention Center')) }}
+    {% endif %}
   </ul>
 </div>
 
