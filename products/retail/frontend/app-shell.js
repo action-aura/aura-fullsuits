@@ -266,11 +266,6 @@ const SubsystemApp = {
         const sess = await fetch('/api/auth/session', { credentials: 'include', cache: 'no-store' })
           .then(r => r.json()).catch(() => ({}));
         if (!sess.authenticated) {
-          // Paint a minimal dark shell so the modal has a backdrop
-          const appEl = document.getElementById('app');
-          if (appEl && !document.getElementById('page-subs-menu')) {
-            appEl.innerHTML = `<div id="page-subs-menu" class="page active" style="height:100vh;background:#020617;"></div>`;
-          }
           const status = await fetch('/api/onboarding/status', { cache: 'no-store' })
             .then(r => r.json()).catch(() => ({ needs_setup: false }));
           if (status.needs_setup) {
