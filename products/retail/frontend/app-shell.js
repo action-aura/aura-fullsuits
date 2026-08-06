@@ -471,15 +471,21 @@ const SubsystemApp = {
       document.getElementById('aura-relogin-modal')?.remove();
       this._authModalOpen = false;
 
-      // Show a brief welcome message then init the full platform
-      const appEl = document.getElementById('app') || document.body;
-      appEl.innerHTML = `
-        <div style="height:100vh;background:#020617;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;font-family:Inter,sans-serif;">
-          <div style="font-size:56px;margin-bottom:16px;">✅</div>
-          <h2 style="font-size:28px;font-weight:800;margin:0 0 8px;">Account Created!</h2>
-          <p style="color:#64748b;margin:0;font-size:16px;">Welcome, <strong style="color:#14b8a6">${name}</strong>. Loading your platform…</p>
-        </div>`;
-      setTimeout(() => SubsystemApp.init(), 1400);
+      // Show a brief welcome message overlay (on body, not inside #app so we preserve the #page-subsystem/#subsystem-shell containers)
+      const overlay = document.createElement('div');
+      overlay.id = 'aura-setup-complete-overlay';
+      overlay.style.cssText = 'position:fixed;inset:0;background:#020617;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;font-family:Inter,sans-serif;z-index:99999;';
+      overlay.innerHTML = `
+        <div style="font-size:56px;margin-bottom:16px;">✅</div>
+        <h2 style="font-size:28px;font-weight:800;margin:0 0 8px;">Account Created!</h2>
+        <p style="color:#64748b;margin:0;font-size:16px;">Welcome, <strong style="color:#14b8a6">${name}</strong>. Loading your platform…</p>`;
+      document.body.appendChild(overlay);
+
+      // Init the platform and remove the overlay once rendering is complete
+      setTimeout(async () => {
+        await SubsystemApp.init();
+        document.getElementById('aura-setup-complete-overlay')?.remove();
+      }, 1400);
 
     } catch(e) {
       showErr('Network error. Make sure the server is running.');
