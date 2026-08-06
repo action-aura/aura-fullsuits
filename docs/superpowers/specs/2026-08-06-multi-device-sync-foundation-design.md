@@ -84,10 +84,17 @@ sub-projects — not this one.
   (server-stamped, authoritative). Composite index on `(license_id, seq)` —
   the pull query's hot path.
 - `POST /api/sync/push` — device submits a batch of its own new local
-  events. Authenticated via the device's existing license-activation
-  session (no new auth system) — `license_id` is **always derived from the
-  authenticated session, never accepted from the request body**; a device
-  cannot claim to belong to a license it isn't actually activated against.
+  events. Authenticated the same way `owner/app/licensing_service/checkin.py`
+  already authenticates a device today: **no session object exists in this
+  codebase** — instead, the request carries `installation_id` + an
+  Ed25519 signature over the canonicalized body, verified per-request via
+  `device_identity.verify_signature(...)` against that installation's
+  registered public key (rejected outright on a bad signature, same as
+  check-in). `license_id` is then resolved server-side via the
+  `Installation.license` relationship — **never accepted from the request
+  body** — so a device cannot claim to belong to a license it isn't
+  actually activated against. No new auth system; this reuses the exact
+  verify-then-resolve pattern check-in already uses in production.
   **Idempotent by the event's own client-generated `id`**: if the same
   event `id` arrives twice (client retried after a dropped response, never
   actually knowing whether the first attempt landed), the second insert is
@@ -95,9 +102,11 @@ sub-projects — not this one.
   `seq`. This is required correctness, not an optimization — without it, a
   single network blip on the open internet duplicates real events.
   Server assigns each **new** event the next `seq` value and stores it.
-- `GET /api/sync/pull?since=<seq>` — returns events with `seq > since` for
-  the *authenticated session's* `license_id` (never a client-supplied
-  value), **excluding events authored by the requesting device itself**
+- `GET /api/sync/pull?since=<seq>` — same signed-request verification as
+  push, resolving `license_id` via `Installation.license` server-side.
+  Returns events with `seq > since` for that `license_id` (never a
+  client-supplied value), **excluding events authored by the requesting
+  device itself**
   (avoids a pointless self-echo round trip). Response includes the highest
   `seq` returned, which becomes the client's new cursor.
 - Both routes reject with 401/403 if the device's license session is
@@ -109,11 +118,24 @@ sub-projects — not this one.
 - New local table `sync_outbox`: queued events not yet confirmed received
   by the relay. New local table (or single-row state) `sync_cursor`: last
   `seq` this device has pulled.
-- Category's existing create/update/delete code paths (both platforms) get
-  one new step: after the local write succeeds, append a corresponding
-  event to `sync_outbox`. The local write and the outbox write happen in
-  the same local transaction — an event is queued if and only if the local
-  write actually committed.
+- **Confirmed during planning: neither platform has full Category CRUD
+  today.** Desktop has only GET/POST (no update/delete route at all).
+  Mobile has create + soft-archive/reactivate (`setActive`), no hard
+  delete. This sub-project adds the missing desktop update/delete routes.
+  The wire-level `event_type = 'delete'` is a logical concept ("this
+  category is gone"), not a literal storage instruction — each platform
+  maps it to whatever its own schema already does: desktop performs a real
+  row delete (matches its existing schema, no status column to add);
+  mobile performs a soft-archive (`status = 'inactive'`, matching its
+  existing schema and UI, which only ever offers archive/reactivate).
+  Applying a `delete` event from the wire on either platform must produce
+  the same *user-visible* outcome (category no longer appears as active)
+  even though the underlying local operation differs.
+- Category's create/update/delete code paths (both platforms) get one new
+  step: after the local write succeeds, append a corresponding event to
+  `sync_outbox`. The local write and the outbox write happen in the same
+  local transaction — an event is queued if and only if the local write
+  actually committed.
 - **Push loop**: attempt to drain `sync_outbox` to the relay whenever
   triggered (immediately after any local write, and on a reconnect
   signal). Success removes the event from the outbox. Failure leaves it
@@ -130,6 +152,23 @@ sub-projects — not this one.
   UUID assigned on first upgrade, replacing the autoincrement integer PK.
   This must run once, safely, against real existing local data on both
   platforms — not just fresh installs.
+- **Mobile device signing (confirmed net-new during planning, not
+  reuse)**: desktop already has a working Ed25519 device signer (DPAPI-
+  backed, used today for licensing check-in). Mobile has signature
+  *verification* only (checking server-issued lease responses) — no
+  client-side signer, no private key, nothing that can produce the signed
+  request Owner's auth requires. This sub-project builds real mobile
+  signing: Ed25519 keypair generation, secure on-device private-key
+  storage, and a `sign(canonicalBytes) -> ByteArray` capability mirroring
+  desktop's `WindowsDpapiDeviceIdentityProvider`. This also requires
+  registering the mobile device's public key with Owner at activation time.
+  **Confirmed during planning: Owner's activation flow is already
+  platform-agnostic** (`owner/app/licensing_service/activation.py` accepts
+  `device_public_key`/`device_public_key_algorithm` generically, keyed off
+  a `platform` catalog lookup, not hardcoded to Windows) — no Owner-side
+  change needed for registration itself, only the mobile client actually
+  generating a keypair and completing the existing activation call with
+  its own public key, the same way every other platform already does.
 
 ### Conflict handling (Category specifically — a deliberately simple rule
 for a low-stakes table)
@@ -190,13 +229,15 @@ a real URL) — never a rewrite of sync logic:
   terminates HTTPS (this sub-project doesn't set up the real cert/host —
   that's the deferred deployment task — but the client and relay code must
   not assume or require plaintext HTTP to function).
-- **Auth reuses licensing's existing internet-grade session, not a
-  local-only shortcut.** `licensing_contracts` already authenticates real
-  devices over real networks (Ed25519-signed assertions, replay
-  protection) — sync's device authentication must be the same mechanism,
-  not a simplified stand-in that happens to work over a trusted cable.
-  If anything about the reused session assumes a trusted/local caller,
-  that's a finding to fix here, not to carry into the plan.
+- **Auth reuses the Owner platform's existing internet-grade device
+  verification, not a local-only shortcut.** Confirmed during planning:
+  Owner has no session/decorator abstraction at all —
+  `owner/app/licensing_service/checkin.py` authenticates every request
+  inline, per-request, via Ed25519 signature verification over the
+  canonicalized body against the calling installation's registered public
+  key, already running in production over real networks. Sync's device
+  authentication must replicate that exact pattern, not invent a lighter
+  substitute that happens to work over a trusted cable.
 - **License scoping is a server-side security boundary, not a
   convenience filter.** Every push and pull derives `license_id` from the
   authenticated session exclusively (already reflected above) — this is
