@@ -301,6 +301,22 @@ summary:focus-visible {
   padding: 0 4px;
 }
 
+/* Real (not a stub) command palette trigger, Stage C -- reuses
+   .aura-topbar__stub's box/kbd visual shape but overrides the disabled
+   cursor/color styling above since this control is now genuinely
+   interactive (real click handler + global Ctrl+K/Cmd+K in
+   command-palette.js), unlike the still-inert quick-create stub next
+   to it. */
+.aura-command-palette-trigger {
+  cursor: pointer;
+  color: var(--aura-color-text-secondary);
+}
+.aura-command-palette-trigger:hover,
+.aura-command-palette-trigger:focus-visible {
+  border-color: var(--aura-color-brand-primary);
+  color: var(--aura-color-text-primary);
+}
+
 /* Real (not a stub) permission-aware Attention Center indicator -- a
    derived, real-time count, never a persisted "unread" badge. Renders
    at zero too (a real "nothing needs you" state), and gets the

@@ -516,3 +516,153 @@ code.masked {
   color: var(--aura-color-success);
   font-size: var(--aura-font-size-xl);
 }
+
+/* ---------- Command Palette (Ctrl+K, Stage C) ----------
+   Same overlay/dialog shape as .aura-tour-overlay/.aura-tour-dialog
+   above, at the dedicated --aura-z-command-palette layer (already
+   reserved above --aura-z-modal in tokens.css) rather than sharing the
+   tour's z-index, since either could in principle be triggered while
+   the other is open. Real ARIA combobox/listbox semantics -- see
+   command-palette-contract.md and command-palette.js. */
+
+.aura-cp-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 10, 12, 0.5);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: var(--aura-space-4);
+  padding-block-start: 12vh;
+  z-index: var(--aura-z-command-palette);
+}
+
+.aura-cp-dialog {
+  background: var(--aura-color-surface-raised);
+  border-radius: var(--aura-radius-lg);
+  box-shadow: var(--aura-shadow-lg);
+  max-inline-size: 560px;
+  width: 100%;
+  max-block-size: 70vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.aura-cp-search-row {
+  display: flex;
+  align-items: center;
+  gap: var(--aura-space-2);
+  padding: var(--aura-space-3) var(--aura-space-4);
+  border-block-end: 1px solid var(--aura-color-border-default);
+  flex: 0 0 auto;
+}
+
+.aura-cp-search-icon {
+  color: var(--aura-color-text-muted);
+  font-size: var(--aura-font-size-md);
+  flex: 0 0 auto;
+}
+
+.aura-cp-input {
+  flex: 1 1 auto;
+  border: none;
+  background: transparent;
+  color: var(--aura-color-text-primary);
+  font-size: var(--aura-font-size-md);
+  min-width: 0;
+}
+.aura-cp-input:focus { outline: none; }
+
+.aura-cp-close {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--aura-color-text-muted);
+  font-size: var(--aura-font-size-lg);
+  line-height: 1;
+  cursor: pointer;
+  padding: var(--aura-space-1);
+}
+.aura-cp-close:hover, .aura-cp-close:focus-visible { color: var(--aura-color-text-primary); }
+
+.aura-cp-listbox {
+  list-style: none;
+  margin: 0;
+  padding: var(--aura-space-2);
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+
+.aura-cp-group-label {
+  font-size: var(--aura-font-size-xs);
+  font-weight: var(--aura-font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--aura-color-text-muted);
+  padding: var(--aura-space-2) var(--aura-space-2) var(--aura-space-1);
+}
+
+.aura-cp-option {
+  display: flex;
+  align-items: baseline;
+  gap: var(--aura-space-2);
+  padding: var(--aura-space-2);
+  border-radius: var(--aura-radius-sm);
+  cursor: pointer;
+  color: var(--aura-color-text-primary);
+}
+.aura-cp-option.is-active {
+  background: var(--aura-color-brand-primary-soft);
+  color: var(--aura-color-brand-primary);
+}
+
+.aura-cp-option-label {
+  font-size: var(--aura-font-size-sm);
+  font-weight: var(--aura-font-weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aura-cp-option-context {
+  font-size: var(--aura-font-size-xs);
+  color: var(--aura-color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-inline-size: 0;
+}
+.aura-cp-option.is-active .aura-cp-option-context { color: inherit; }
+
+.aura-cp-empty {
+  padding: var(--aura-space-6) var(--aura-space-4);
+  text-align: center;
+  color: var(--aura-color-text-muted);
+  font-size: var(--aura-font-size-sm);
+  margin: 0;
+}
+
+.aura-cp-footer {
+  display: flex;
+  gap: var(--aura-space-4);
+  padding: var(--aura-space-2) var(--aura-space-4);
+  border-block-start: 1px solid var(--aura-color-border-default);
+  color: var(--aura-color-text-muted);
+  font-size: var(--aura-font-size-xs);
+  flex: 0 0 auto;
+}
+.aura-cp-footer kbd {
+  font-family: var(--aura-font-mono);
+  font-size: var(--aura-font-size-xs);
+  background: var(--aura-color-surface-muted);
+  border: 1px solid var(--aura-color-border-default);
+  border-radius: 4px;
+  padding: 0 4px;
+  margin-inline-end: 2px;
+}
+
+@media (max-width: 640px) {
+  .aura-cp-overlay { padding-block-start: var(--aura-space-4); }
+  .aura-cp-dialog { max-block-size: 85vh; }
+}

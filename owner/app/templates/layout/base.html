@@ -53,14 +53,14 @@
         </div>
         <div class="aura-topbar__end">
           {% if staff %}
-          {# Visual-only placeholders for two future milestones (global
-             search / Ctrl+K command palette, quick-create). Real disabled
-             <button>s: announced as disabled to assistive tech, excluded
-             from the tab order, need no click handler that would
-             otherwise have to do nothing convincingly -- see shell.css
-             comment and the task report for why this was chosen over
-             omitting them or wiring up a fake interaction. #}
-          <button type="button" class="aura-topbar__stub" disabled aria-label="{{ _('Search (coming soon)') }}">
+          {# Real, working command palette trigger (Stage C) -- replaces
+             the former disabled search stub. Ctrl+K / Cmd+K opens it from
+             anywhere on the page too (command-palette.js). Quick-create
+             remains a separate, not-yet-built milestone (per-domain
+             "+" buttons on each list screen) -- unrelated to this one and
+             still an inert, disabled placeholder. #}
+          <button type="button" class="aura-topbar__stub aura-command-palette-trigger" id="aura-command-palette-trigger"
+                  aria-haspopup="dialog" aria-label="{{ _('Search (Ctrl+K)') }}">
             <span aria-hidden="true">&#9906;</span>
             <span class="aura-topbar__stub-label">{{ _('Search') }}</span>
             <kbd>{{ _('Ctrl K') }}</kbd>
@@ -131,10 +131,16 @@
       </main>
     </div>
   </div>
+  {% if staff %}
+  {% include "layout/_command_palette.html" %}
+  {% endif %}
   <script src="{{ url_for('static', filename='js/confirm.js') }}"></script>
   <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
   <script src="{{ url_for('static', filename='js/sidebar.js') }}"></script>
   <script src="{{ url_for('static', filename='js/password-toggle.js') }}"></script>
   <script src="{{ url_for('static', filename='js/product-tour.js') }}"></script>
+  {% if staff %}
+  <script src="{{ url_for('static', filename='js/command-palette.js') }}"></script>
+  {% endif %}
 </body>
 </html>

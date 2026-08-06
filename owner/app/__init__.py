@@ -49,6 +49,7 @@ def create_app(config_name: str | None = None) -> Flask:
         from app.auth.session import load_current_staff
         from app.security.rbac import get_staff_permission_codes
         from app.attention.service import ATTENTION_CATEGORY_PERMISSIONS, count_attention_items
+        from app.command_palette.service import get_static_commands
 
         staff = load_current_staff()
         permission_codes = get_staff_permission_codes(staff)
@@ -59,6 +60,13 @@ def create_app(config_name: str | None = None) -> Flask:
         # -- most requests (no relevant permission at all) pay nothing.
         can_view_attention = bool(permission_codes & ATTENTION_CATEGORY_PERMISSIONS)
         attention_count = count_attention_items(staff) if can_view_attention else 0
+        # Command palette static nav/quick-create list: small, fixed-size,
+        # computed once per request from the same permission_codes set
+        # already resolved above -- see command_palette/service.py's own
+        # docstring for why this mirrors (rather than derives from)
+        # layout/_sidebar.html. Only computed for logged-in staff (base.html
+        # only renders the palette trigger when `staff` is set).
+        command_palette_data = get_static_commands(permission_codes) if staff else {"navigate": [], "create": []}
         return {
             "staff": staff,
             # Presentation-only: the shell/nav use this to avoid showing
@@ -70,6 +78,7 @@ def create_app(config_name: str | None = None) -> Flask:
             "has_any_permission": lambda *codes: any(c in permission_codes for c in codes),
             "can_view_attention_center": can_view_attention,
             "attention_count": attention_count,
+            "command_palette_data": command_palette_data,
         }
 
     from app.auth import bp as auth_bp
@@ -98,6 +107,7 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.leads.routes import bp as leads_bp, shared_bp as crm_shared_bp
     from app.locale_routes import bp as locale_bp
     from app.attention.routes import bp as attention_bp
+    from app.command_palette.routes import bp as command_palette_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(staff_bp)
@@ -126,6 +136,7 @@ def create_app(config_name: str | None = None) -> Flask:
     app.register_blueprint(crm_shared_bp)
     app.register_blueprint(locale_bp)
     app.register_blueprint(attention_bp)
+    app.register_blueprint(command_palette_bp)
 
     if app.config.get("EXTERNAL_API_ENABLED"):
         from app.api.routes import bp as external_api_bp
