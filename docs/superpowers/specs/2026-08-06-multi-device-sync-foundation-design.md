@@ -73,20 +73,33 @@ sub-projects — not this one.
 
 ### Relay (`owner/app/sync/`, new)
 
-- New table `sync_events` (Alembic migration): `id` (UUID), `seq`
+- New table `sync_events` (Alembic migration): `id` (UUID, **client-generated,
+  unique constraint** — this is the dedup key, see below), `seq`
   (server-assigned autoincrementing bigint — the pull cursor), `license_id`
   (FK), `device_id`, `entity_type` (`'category'` for this sub-project),
   `entity_id` (UUID), `event_type` (`create` | `update` | `delete`),
-  `payload` (JSON, full row snapshot — never a partial diff), `created_at`.
+  `payload` (JSON, full row snapshot — never a partial diff), `created_at`
+  (client-supplied, display/audit only — **never** used for ordering or
+  conflict resolution; `seq` is the only ordering authority), `received_at`
+  (server-stamped, authoritative). Composite index on `(license_id, seq)` —
+  the pull query's hot path.
 - `POST /api/sync/push` — device submits a batch of its own new local
   events. Authenticated via the device's existing license-activation
-  session (no new auth system). Server assigns each event the next `seq`
-  value and stores it.
+  session (no new auth system) — `license_id` is **always derived from the
+  authenticated session, never accepted from the request body**; a device
+  cannot claim to belong to a license it isn't actually activated against.
+  **Idempotent by the event's own client-generated `id`**: if the same
+  event `id` arrives twice (client retried after a dropped response, never
+  actually knowing whether the first attempt landed), the second insert is
+  a no-op keyed on the unique constraint, not a duplicate row with a new
+  `seq`. This is required correctness, not an optimization — without it, a
+  single network blip on the open internet duplicates real events.
+  Server assigns each **new** event the next `seq` value and stores it.
 - `GET /api/sync/pull?since=<seq>` — returns events with `seq > since` for
-  the requesting device's `license_id`, **excluding events authored by the
-  requesting device itself** (avoids a pointless self-echo round trip).
-  Response includes the highest `seq` returned, which becomes the client's
-  new cursor.
+  the *authenticated session's* `license_id` (never a client-supplied
+  value), **excluding events authored by the requesting device itself**
+  (avoids a pointless self-echo round trip). Response includes the highest
+  `seq` returned, which becomes the client's new cursor.
 - Both routes reject with 401/403 if the device's license session is
   invalid/expired/deactivated — sync must fail closed, not silently no-op.
 
@@ -158,6 +171,50 @@ own conflict model in a later sub-project.
 - Malformed event payload: reject at the relay with a 400 and log it;
   never silently drop or silently accept a corrupt row into the event log
   (the log is the source of truth other devices replay from).
+
+## Cloud-deployment readiness requirements (binding, not optional)
+
+Local-cable testing runs over a trusted, single-operator channel (loopback,
+or USB you physically control). The real deployment target runs over the
+open internet, with untrusted clients and real customer data. These
+requirements exist so that transition is an ops step (point the client at
+a real URL) — never a rewrite of sync logic:
+
+- **No hardcoded loopback anywhere in application logic.** The relay base
+  URL is a client-side config value (env var / settings file) on both
+  desktop and mobile, defaulting to `http://127.0.0.1:<port>` only in the
+  local dev configuration. Production config uses `https://`. The sync
+  code itself must never branch on "am I local or cloud" — it only ever
+  talks to "the configured relay URL."
+- **TLS is mandatory in production.** The relay's production deployment
+  terminates HTTPS (this sub-project doesn't set up the real cert/host —
+  that's the deferred deployment task — but the client and relay code must
+  not assume or require plaintext HTTP to function).
+- **Auth reuses licensing's existing internet-grade session, not a
+  local-only shortcut.** `licensing_contracts` already authenticates real
+  devices over real networks (Ed25519-signed assertions, replay
+  protection) — sync's device authentication must be the same mechanism,
+  not a simplified stand-in that happens to work over a trusted cable.
+  If anything about the reused session assumes a trusted/local caller,
+  that's a finding to fix here, not to carry into the plan.
+- **License scoping is a server-side security boundary, not a
+  convenience filter.** Every push and pull derives `license_id` from the
+  authenticated session exclusively (already reflected above) — this is
+  the one thing standing between two different real customers' data once
+  this is internet-facing. No code path may accept `license_id` as
+  client-supplied input, not even for a "trusted" internal call.
+- **Push is idempotent** (already reflected above) — required because
+  at-least-once delivery over a real, unreliable internet connection is
+  the normal case, not an edge case.
+- **Ordering is server-assigned only** (`seq`, already reflected above) —
+  client clocks are never trusted for anything but display.
+- **Payload/batch size bounds.** The push endpoint must reject
+  unreasonably large batches/payloads outright (exact limits are an
+  implementation detail for the plan, not this spec) rather than being
+  designed in a way that assumes a cooperative, unbounded caller — basic
+  abuse resistance, not full production hardening (rate limiting itself
+  can be a deployment-time concern, but the endpoint contract must not
+  preclude adding it later).
 
 ## Local testing (cable-only, no cloud)
 
