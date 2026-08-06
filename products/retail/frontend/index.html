@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Aura Retail</title>
+  <link rel="icon" href="data:,">
   <script>
     // Apply the saved theme before first paint to avoid a flash (default: light).
     try { document.documentElement.setAttribute('data-theme', localStorage.getItem('aura_theme') || 'light'); } catch(e) {}
@@ -18,7 +19,11 @@
   </style>
 </head>
 <body>
-  <div id="app"></div>
+  <div id="app">
+    <div id="page-subsystem" class="page active" style="height:100vh;">
+      <div id="subsystem-shell" style="height:100%; display:flex;"></div>
+    </div>
+  </div>
 
   <script src="/static/icons.js"></script>
   <script src="/static/i18n.js"></script>
