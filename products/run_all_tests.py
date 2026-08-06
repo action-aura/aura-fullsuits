@@ -51,6 +51,10 @@ SUITES = {
     # `python products/run_all_tests.py licensing_contracts` run just this
     # suite the same way `... retail` already does.
     'licensing_contracts': ROOT / 'commercial_runtime' / 'licensing_contracts' / 'tests',
+    # Multi-device sync foundation (2026-08-06), Task 5: same reasoning as
+    # 'licensing_contracts' above -- its own key so
+    # `python products/run_all_tests.py sync` runs just this suite.
+    'sync': ROOT / 'commercial_runtime' / 'sync' / 'tests',
 }
 
 

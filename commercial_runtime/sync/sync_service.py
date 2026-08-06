@@ -119,12 +119,26 @@ class SyncService:
         uses. Never lets a relay/network failure escape -- an unreachable or
         rejecting relay is an expected, ordinary condition (offline device),
         not a reason to crash the host app. The next scheduled tick (or the
-        next route-triggered nudge) simply retries."""
+        next route-triggered nudge) simply retries.
+
+        push and pull are each wrapped in their OWN try/except -- found via
+        a real test (test_run_once_swallows_push_failure_and_still_attempts_
+        pull), not by inspection: a single shared try/except around both
+        calls (the shape this originally mirrored from the brief's own
+        draft) means a push failure -- which is not always "offline"; it can
+        be a real, persistent RelayRejected against one bad outbox row
+        (e.g. a malformed event a human has to go fix) -- would silently
+        skip pull() forever until that one row is resolved. This device
+        should keep receiving OTHER devices' updates regardless of whether
+        its own outbox is currently able to drain."""
         try:
             self.push_once()
+        except Exception:
+            logger.info("Sync push attempt failed (offline or rejected); will retry on the next tick.", exc_info=True)
+        try:
             self.pull_once()
         except Exception:
-            logger.info("Sync relay attempt failed (offline or rejected); will retry on the next tick.", exc_info=True)
+            logger.info("Sync pull attempt failed (offline or rejected); will retry on the next tick.", exc_info=True)
 
     def start(self, interval_seconds: float = 10.0) -> None:
         self._stopped.clear()
