@@ -41,6 +41,7 @@ from config import (
     SECRET_KEY, DATABASE_DIR, APP_VERSION,
     OWNER_LICENSING_BASE_URL, OWNER_LICENSING_VERIFY_TLS, OWNER_LICENSING_TIMEOUT_SECONDS,
     LICENSING_TRUST_ANCHOR_PATH, LICENSING_PLATFORM, LICENSING_INTERNAL_SHARED_SECRET,
+    SYNC_RELAY_BASE_URL, SYNC_RELAY_TIMEOUT_SECONDS, SYNC_RELAY_VERIFY_TLS,
 )
 
 app = Flask(__name__, static_folder=str(PRODUCT_DIR / 'frontend'), static_url_path='/static')
@@ -141,11 +142,56 @@ app.register_blueprint(make_licensing_blueprint(
     internal_shared_secret=LICENSING_INTERNAL_SHARED_SECRET,
 ))
 
+# Multi-device sync foundation (2026-08-06), Task 5: the background push/pull
+# loop. Windows-only for now (mobile's own Kotlin-held device key is Task 9's
+# concern -- see AndroidBridgeDeviceIdentityProvider.sign(), which always
+# raises, since this Python process never holds an Android device's private
+# key at all). Reuses the EXACT same licensing_dir/db_path/device-identity
+# factory make_licensing_blueprint's own _build_context() constructs above --
+# never a second device identity, never a second on-disk key -- so the
+# signature this client produces verifies against the SAME installation
+# Owner already knows from activation/check-in.
+_sync_service = None
+if SYNC_RELAY_BASE_URL and LICENSING_PLATFORM != 'ANDROID':
+    from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
+    from commercial_runtime.sync.relay_client import SyncRelayClient
+    from commercial_runtime.sync.sync_service import SyncService, register_active_service
+
+    _sync_licensing_dir = Path(DATABASE_DIR).parent / 'licensing'
+    _sync_state_repository = LicenseStateRepository(Path(DATABASE_DIR) / 'subsystems' / 'licensing.db')
+    _sync_signer = _licensing_device_identity_factory(_sync_licensing_dir)
+
+    def _build_sync_client():
+        # Rebuilt on every call (not cached at startup) for the same reason
+        # make_licensing_blueprint's _build_context() rebuilds its own
+        # per-request object graph: the installation_id this client signs
+        # with must reflect activation happening AFTER process start, not a
+        # None/stale value captured once at import time.
+        record = _sync_state_repository.load()
+        installation_id = record.owner_installation_id if record else None
+        return SyncRelayClient(
+            SYNC_RELAY_BASE_URL,
+            _sync_signer,
+            installation_id,
+            timeout_seconds=SYNC_RELAY_TIMEOUT_SECONDS,
+            verify_tls=SYNC_RELAY_VERIFY_TLS,
+        )
+
+    def _sync_get_conn():
+        from database.schema import get_retail_conn
+        return get_retail_conn()
+
+    _sync_service = SyncService(_build_sync_client, _sync_get_conn)
+    register_active_service(_sync_service)
+
 
 def init_app():
-    """Initialize the registry + retail schema. Call once before serving."""
+    """Initialize the registry + retail schema, and start the background
+    sync loop (if configured). Call once before serving."""
     init_registry_db()
     init_retail()
+    if _sync_service is not None:
+        _sync_service.start()
     return app
 
 

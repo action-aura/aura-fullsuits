@@ -71,3 +71,17 @@ LICENSING_TRUST_ANCHOR_PATH = os.path.join(os.path.dirname(_licensing_contracts_
 # 'ANDROID') before it imports this app; absent on Windows.
 LICENSING_PLATFORM = os.environ.get('AURA_PLATFORM', 'WINDOWS')
 LICENSING_INTERNAL_SHARED_SECRET = os.environ.get('AURA_INTERNAL_SHARED_SECRET') or None
+
+# Multi-device sync foundation (2026-08-06), Task 5 -- SyncRelayClient/
+# SyncService configuration, following the exact OWNER_LICENSING_* pattern
+# immediately above: empty base URL means the sync loop is never started at
+# all (app.py's init_app() only calls SyncService.start() when this is
+# non-empty), never a hidden default Owner instance.
+SYNC_RELAY_BASE_URL = os.environ.get('AURA_SYNC_RELAY_URL', '')
+SYNC_RELAY_TIMEOUT_SECONDS = float(os.environ.get('AURA_SYNC_RELAY_TIMEOUT_SECONDS', '10'))
+# Same frozen-build TLS-verification floor as OWNER_LICENSING_VERIFY_TLS: a
+# frozen customer build always verifies TLS regardless of this env var; only
+# an unfrozen (source/dev) run honors the insecure escape hatch.
+SYNC_RELAY_VERIFY_TLS = True if getattr(sys, 'frozen', False) else (
+    os.environ.get('AURA_SYNC_RELAY_INSECURE') != '1'
+)

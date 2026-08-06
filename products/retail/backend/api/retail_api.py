@@ -15,6 +15,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from flask import Blueprint, request, jsonify, session
 from commercial_runtime.identity.mt_auth import mt_login_required, mt_require_subsystem
 from commercial_runtime.licensing_contracts.flask_guard import make_capability_guard
+from commercial_runtime.sync.sync_service import nudge as _sync_nudge
 from database.schema import get_retail_conn, sub_create
 from datetime import datetime, timedelta, timezone
 from core.retail import pricing as tax_engine
@@ -234,6 +235,7 @@ def create_category():
         'id': new_id, 'company_id': cid, 'name': data['name'], 'description': data.get('description', ''),
     })
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return jsonify({'status': 'success', 'data': {'id': new_id}})
 
 @retail_bp.route('/categories/<string:category_id>', methods=['PUT'])
@@ -256,6 +258,7 @@ def update_category(category_id):
         'id': category_id, 'company_id': cid, 'name': data['name'], 'description': data.get('description', ''),
     })
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return jsonify({'status': 'success'})
 
 @retail_bp.route('/categories/<string:category_id>', methods=['DELETE'])
@@ -272,6 +275,7 @@ def delete_category(category_id):
         return jsonify({'status': 'error', 'message': 'Category not found'}), 404
     _queue_sync_event(cur, 'category', category_id, 'delete', {'id': category_id})
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return jsonify({'status': 'success'})
 
 # ── Products ──────────────────────────────────────────────────────────────────
