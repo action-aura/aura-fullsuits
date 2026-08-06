@@ -22,7 +22,7 @@ import kotlin.test.assertIs
 
 /**
  * Task 8 (multi-device-sync-foundation) -- real, executable end-to-end proof
- * that [HttpExternalLicensingTransport.activateInstallation] actually
+ * that [HttpExternalLicensingTransport.activateWithLicenseKey] actually
  * registers this device's real Ed25519 public key with a REAL, locally
  * running Owner instance's real, unmodified
  * `owner/app/licensing_service/activation.py`. This is deliberately NOT a
@@ -62,9 +62,8 @@ class HttpExternalLicensingTransportActivationLiveTest {
         val transport = HttpExternalLicensingTransport(httpClient, configuration, deviceSigner)
 
         val installationSeedValue = "task8-live-test-" + secureRandomHex(16)
-        val command = ActivationCommand(
-            customerSessionId = ExternalCustomerSessionId("not-used-by-the-real-wire-contract"),
-            licenseClaimReference = licenseKey!!,
+        val command = DirectLicenseKeyActivationCommand(
+            licenseKey = licenseKey!!,
             productCode = LicensingProductCode.AURA_RETAIL,
             platform = LicensingPlatform.ANDROID,
             installationIdentity = InstallationIdentity(
@@ -76,7 +75,7 @@ class HttpExternalLicensingTransportActivationLiveTest {
             idempotencyKey = "task8-live-test-idem-" + secureRandomHex(16),
         )
 
-        val outcome = transport.activateInstallation(command)
+        val outcome = transport.activateWithLicenseKey(command)
         println("Task 8 live activation outcome: $outcome")
 
         val result = assertIs<TransportOutcome.Success<ActivationResult>>(outcome, "expected a well-formed TransportOutcome.Success wrapping an ActivationResult, got: $outcome").value

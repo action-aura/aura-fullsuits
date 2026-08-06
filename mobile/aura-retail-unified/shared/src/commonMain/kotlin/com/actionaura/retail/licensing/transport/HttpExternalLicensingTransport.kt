@@ -40,32 +40,43 @@ import kotlin.io.encoding.ExperimentalEncodingApi
  * Task 8 (multi-device-sync-foundation) -- the real, net-new HTTP-backed
  * [ExternalLicensingTransport] this module previously had zero of
  * (`DisabledProductionTransport` deterministically never makes a network
- * call, `production-transport-availability-rule.md`). Only [activateInstallation]
- * is real here -- the one operation this task actually verified end to end
- * against Owner's real, unmodified `owner/app/licensing_service/activation.py`.
- * Every other operation still deterministically returns
- * [TransportOutcome.TransportNotConfigured], the same honest default
- * [DisabledProductionTransport] already uses, because their real Owner-side
- * authority does not exist yet (`ExternalCustomerSessionContracts.kt`'s own
- * KDoc: the customer-session/register/sign-in/claim-license surface is
- * "shared client-side contract shapes only, no real transport execution" as
- * of this task) -- this class never fabricates a fake success for those.
+ * call, `production-transport-availability-rule.md`). Only
+ * [activateWithLicenseKey] is real here -- the one operation this task
+ * actually verified end to end against Owner's real, unmodified
+ * `owner/app/licensing_service/activation.py`. Every
+ * [ExternalLicensingTransport] interface method, INCLUDING
+ * `activateInstallation(ActivationCommand)`, still deterministically
+ * returns [TransportOutcome.TransportNotConfigured], the same honest
+ * default [DisabledProductionTransport] already uses, because their real
+ * Owner-side authority does not exist yet
+ * (`ExternalCustomerSessionContracts.kt`'s own KDoc: the customer-session/
+ * register/sign-in/claim-license surface is "shared client-side contract
+ * shapes only, no real transport execution" as of this task) -- this class
+ * never fabricates a fake success for those.
  *
- * Deliberate scope note on [ActivationCommand]: the real
- * `owner/app/licensing_service/activation.py` wire contract (`REQUIRED_FIELDS`)
- * takes one flat `license_key` string and has no concept of a customer
- * session at all -- Owner's activation endpoint authenticates purely via the
- * license key + device signature, exactly like desktop's own
+ * Deliberate scope note: the real `owner/app/licensing_service/activation.py`
+ * wire contract (`REQUIRED_FIELDS`) takes one flat `license_key` string and
+ * has no concept of a customer session at all -- Owner's activation
+ * endpoint authenticates purely via the license key + device signature,
+ * exactly like desktop's own
  * `commercial_runtime/licensing_contracts/client.py::LicensingClient.activate()`.
- * [ActivationCommand.licenseClaimReference] is the one field on that command
- * shaped like the raw license key (redacted in `toString()` exactly like
- * `ActivationRequest.licenseKey` and `LicenseClaimRequest.licenseSerial`
- * already are) and is used as such here; [ActivationCommand.customerSessionId]
- * is not part of the real wire contract at all and is intentionally never
- * placed on the HTTP request -- inventing a customer-session header Owner's
- * real endpoint does not accept would be exactly the "fabricated auth
- * header" this module's own transport contract forbids
- * (`ExternalLicensingTransport.kt`'s class KDoc).
+ * `ActivationCommand` (the interface's own command type) is shaped for a
+ * DIFFERENT, still-unreal customer-session-gated flow --
+ * `ActivationCommand.licenseClaimReference` is a server-assigned public
+ * license ID from a real `claimLicense()` call, never the raw key (see the
+ * loud warning on that field itself, `ActivationCommandContracts.kt`).
+ * Reusing it here as the wire `license_key` would have been a real, silent
+ * landmine for whoever wires a real `claimLicense()` next -- every
+ * activation through the actual customer-facing UI flow
+ * (`ActivationViewModel.onActivate()`) would send a public ID where Owner
+ * expects the plaintext secret and get rejected with `LICENSE_NOT_FOUND`
+ * every time. So `activateInstallation(ActivationCommand)` stays an honest
+ * `TransportNotConfigured` stub -- correctly reflecting that its real
+ * dependency (`claimLicense`) isn't real yet either -- and
+ * [activateWithLicenseKey] is a separate, additional, correctly-typed real
+ * method for the one activation path Owner actually supports today
+ * ([DirectLicenseKeyActivationCommand], whose `licenseKey` field is
+ * unambiguously the raw secret).
  */
 class HttpExternalLicensingTransport(
     baseHttpClient: HttpClient,
@@ -90,7 +101,15 @@ class HttpExternalLicensingTransport(
 
     private val wireJson = Json { ignoreUnknownKeys = true; isLenient = false }
 
-    override suspend fun activateInstallation(command: ActivationCommand): TransportOutcome<ActivationResult> {
+    /**
+     * The one real, wire-verified activation path -- direct, anonymous
+     * (no customer session) activation using the raw plaintext license
+     * key, exactly matching `activation.py`'s real contract. See this
+     * class's own KDoc for why this is a separate method/command type
+     * from the interface's `activateInstallation(ActivationCommand)`
+     * rather than a reuse of it.
+     */
+    suspend fun activateWithLicenseKey(command: DirectLicenseKeyActivationCommand): TransportOutcome<ActivationResult> {
         val signablePayload = buildJsonObject {
             put("contract_version", command.clientContractVersion)
             put("request_id", secureRandomHex(16))
@@ -103,7 +122,7 @@ class HttpExternalLicensingTransport(
             put("installation_id", command.installationIdentity.seed.value)
             put("device_public_key", encodeBase64(deviceSigner.publicKeyBytes()))
             put("device_public_key_algorithm", "ed25519")
-            put("license_key", command.licenseClaimReference)
+            put("license_key", command.licenseKey)
             put("idempotency_key", command.idempotencyKey)
         }
 
@@ -121,7 +140,7 @@ class HttpExternalLicensingTransport(
                 contentType(ContentType.Application.Json)
                 setBody(fullPayload.toString())
             }
-            interpretActivationResponse(response, command)
+            interpretActivationResponse(response, command.clientContractVersion)
         } catch (e: CancellationException) {
             throw e
         } catch (e: HttpRequestTimeoutException) {
@@ -133,7 +152,7 @@ class HttpExternalLicensingTransport(
 
     private fun activationsUrl(): String = configuration.baseUrl.trimEnd('/') + "/activations"
 
-    private suspend fun interpretActivationResponse(response: HttpResponse, command: ActivationCommand): TransportOutcome<ActivationResult> {
+    private suspend fun interpretActivationResponse(response: HttpResponse, expectedContractVersion: String): TransportOutcome<ActivationResult> {
         if (response.status == HttpStatusCode.TooManyRequests) {
             val retryAfter = response.headers[HttpHeaders.RetryAfter]?.toLongOrNull()
             return TransportOutcome.RateLimited(retryAfter)
@@ -153,7 +172,7 @@ class HttpExternalLicensingTransport(
             return TransportOutcome.MalformedResponse("failed to decode activation response JSON: ${e::class.simpleName}")
         }
 
-        if (decoded.contractVersion != null && decoded.contractVersion != command.clientContractVersion) {
+        if (decoded.contractVersion != null && decoded.contractVersion != expectedContractVersion) {
             return TransportOutcome.UnsupportedContractVersion(decoded.contractVersion)
         }
 
@@ -200,6 +219,24 @@ class HttpExternalLicensingTransport(
     // (`ExternalCustomerSessionContracts.kt`'s own KDoc) -- never fabricates
     // a fake success, matching `DisabledProductionTransport`'s own honest
     // default for every operation outside this task's real, verified scope.
+
+    /**
+     * Deliberately still `TransportNotConfigured`, NOT wired to
+     * [activateWithLicenseKey] -- see this class's own KDoc. This
+     * interface method's [ActivationCommand] carries a customer-session-
+     * flow public license ID (`licenseClaimReference`), not the raw
+     * secret `activateWithLicenseKey` needs, and its real dependency
+     * ([claimLicense]) isn't real either. Forwarding
+     * `command.licenseClaimReference` to Owner as `license_key` here
+     * would silently send the wrong value the moment `claimLicense`
+     * starts returning real public IDs -- every real activation through
+     * `ActivationViewModel`'s actual UI flow would then fail with
+     * `LICENSE_NOT_FOUND`. Stays honest until a real `claimLicense` (or an
+     * explicit design decision to retire the customer-session flow in
+     * favor of direct-license-key activation everywhere) makes this
+     * method's own contract real.
+     */
+    override suspend fun activateInstallation(command: ActivationCommand) = TransportOutcome.TransportNotConfigured
 
     override suspend fun register(request: CustomerRegisterRequest) = TransportOutcome.TransportNotConfigured
     override suspend fun verifyAccount(request: CustomerVerifyAccountRequest) = TransportOutcome.TransportNotConfigured

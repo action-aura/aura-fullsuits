@@ -87,6 +87,14 @@ kotlin {
             dependencies {
                 implementation(kotlin("test"))
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+                // Task 8 fix (multi-device-sync-foundation) -- real,
+                // official Ktor test engine (pure Kotlin, no per-platform
+                // engine artifact needed) so HttpExternalLicensingTransport's
+                // response-branch/error-classification logic has real,
+                // non-live-gated regression coverage -- the live test
+                // against a real Owner instance is skipped by default in
+                // ordinary CI, so it alone was never enough.
+                implementation("io.ktor:ktor-client-mock:2.3.12")
             }
         }
         val androidMain by getting {
