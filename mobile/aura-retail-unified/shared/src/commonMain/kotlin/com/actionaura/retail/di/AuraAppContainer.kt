@@ -23,6 +23,8 @@ import com.actionaura.retail.reporting.SqlDelightReportingRepository
 import com.actionaura.retail.securestorage.GenerationalSecureMaterialStore
 import com.actionaura.retail.securestorage.SecureBlobStore
 import com.actionaura.retail.securestorage.SecureMaterialStore
+import com.actionaura.retail.sync.DeviceSigner
+import com.actionaura.retail.sync.PlatformDeviceSigner
 import com.actionaura.retail.usecases.branch.ActivateBranchUseCase
 import com.actionaura.retail.usecases.branch.DeactivateBranchUseCase
 import com.actionaura.retail.usecases.branch.EnsureDefaultBranchUseCase
@@ -96,6 +98,18 @@ class AuraAppContainer(
         // counter/timestamp in production.
         newGenerationId = { com.actionaura.retail.licensing.transport.secureRandomHex(16) },
     )
+
+    // Task 7 (multi-device-sync-foundation) -- the real, net-new device
+    // signing authority. Wraps the SAME `secureBlobStore` the composition
+    // root was constructed with (not `secureMaterialStore` above -- see
+    // `PlatformDeviceSigner`'s own KDoc for why a device signing key is
+    // deliberately kept out of the activation-bundle lifecycle), so every
+    // screen/use case reads the SAME real device keypair from the SAME
+    // composition root, never a second independent instance -- the
+    // identical rule `database`/`gate`/`secureMaterialStore` already
+    // enforce. Consumed by Task 8 (activation, publishing this device's
+    // public key to Owner) and Task 9 (sync client, signing push/pull).
+    val deviceSigner: DeviceSigner = PlatformDeviceSigner(secureBlobStore)
 
     val settingsRepository: SettingsRepository = SqlDelightSettingsRepository(database, gate)
     val categoryRepository: CategoryRepository = SqlDelightCategoryRepository(database, gate)
