@@ -95,9 +95,11 @@ def create_app(config_name: str | None = None) -> Flask:
     if app.config.get("EXTERNAL_API_ENABLED"):
         from app.api.routes import bp as external_api_bp
         from app.api_external.routes import bp as licensing_api_bp
+        from app.sync import bp as sync_api_bp
 
         app.register_blueprint(external_api_bp)
         app.register_blueprint(licensing_api_bp)
+        app.register_blueprint(sync_api_bp)
         # CSRF tokens are a session-cookie-based browser defense; this API is
         # authenticated by device Ed25519 signatures + nonces instead (Part
         # L), consumed by non-browser clients with no session to carry a
@@ -105,8 +107,16 @@ def create_app(config_name: str | None = None) -> Flask:
         # nonce+timestamp+signature checks are this API's actual CSRF-
         # equivalent protection.
         csrf.exempt(licensing_api_bp)
+        # Multi-device sync relay (docs/superpowers/plans/2026-08-06-
+        # multi-device-sync-foundation.md, Task 2): same non-browser,
+        # device-signature-authenticated shape as licensing_api_bp above --
+        # folded into the same EXTERNAL_API_ENABLED gate rather than a new
+        # flag, since it's the same category of external device API. Its
+        # signature check is its CSRF-equivalent protection for the same
+        # reason licensing_api_bp's is exempted.
+        csrf.exempt(sync_api_bp)
     # else: no external API blueprint is ever registered -- there is no route
-    # for an external activation/check-in/deactivation request to reach
+    # for an external activation/check-in/deactivation/sync request to reach
     # (Part B/R), not merely a disabled check inside one.
 
     from app.cli import register_cli
