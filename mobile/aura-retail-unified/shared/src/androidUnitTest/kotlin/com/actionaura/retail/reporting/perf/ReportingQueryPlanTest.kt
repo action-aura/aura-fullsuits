@@ -188,7 +188,7 @@ class ReportingQueryPlanTest {
         val plan = explainPlan(
             "SELECT si.product_id, si.product_name_at_sale, si.quantity, si.line_total FROM sale_items si " +
                 "JOIN sales s ON si.sale_id = s.id JOIN products p ON si.product_id = p.id " +
-                "WHERE s.company_id = 1 AND s.status = 'completed' AND s.created_at >= ${summary.startEpochMillis} AND s.created_at < ${summary.endEpochMillis} AND p.category_id = $categoryId",
+                "WHERE s.company_id = 1 AND s.status = 'completed' AND s.created_at >= ${summary.startEpochMillis} AND s.created_at < ${summary.endEpochMillis} AND p.category_id = '$categoryId'",
         )
         recordPlan("TOP PRODUCTS: quantity ranking, by Category", plan)
     }
@@ -200,7 +200,7 @@ class ReportingQueryPlanTest {
         val plan = explainPlan(
             "SELECT si.product_id, si.product_name_at_sale, si.quantity, si.line_total FROM sale_items si " +
                 "JOIN sales s ON si.sale_id = s.id JOIN products p ON si.product_id = p.id " +
-                "WHERE s.company_id = 1 AND s.status = 'completed' AND s.created_at >= ${summary.startEpochMillis} AND s.created_at < ${summary.endEpochMillis} AND s.branch_id = $branchId AND p.category_id = $categoryId",
+                "WHERE s.company_id = 1 AND s.status = 'completed' AND s.created_at >= ${summary.startEpochMillis} AND s.created_at < ${summary.endEpochMillis} AND s.branch_id = $branchId AND p.category_id = '$categoryId'",
         )
         recordPlan("TOP PRODUCTS: quantity ranking, by Branch AND Category", plan)
     }

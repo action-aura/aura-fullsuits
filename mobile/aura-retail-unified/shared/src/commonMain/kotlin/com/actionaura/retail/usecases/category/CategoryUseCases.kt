@@ -35,7 +35,7 @@ class CreateCategoryUseCase(
         val conflict = repository.listActive(companyId)
             .firstOrNull { normalizer.normalizeForComparison(it.name) == normalizedCandidate }
         if (conflict != null) {
-            return DomainResult.Failure(RepositoryError.DuplicateName("category", trimmedName, conflict.id.toString()))
+            return DomainResult.Failure(RepositoryError.DuplicateName("category", trimmedName, conflict.id))
         }
         val created = repository.insert(companyId, trimmedName, description?.trim()?.ifEmpty { null }, nowEpochMillis)
         return DomainResult.Success(created)
@@ -43,9 +43,9 @@ class CreateCategoryUseCase(
 }
 
 class ArchiveCategoryUseCase(private val repository: CategoryRepository) {
-    suspend fun execute(companyId: Long, categoryId: Long): DomainResult<Unit> {
+    suspend fun execute(companyId: Long, categoryId: String): DomainResult<Unit> {
         val existing = repository.getById(companyId, categoryId)
-            ?: return DomainResult.Failure(RepositoryError.NotFound("category", categoryId.toString()))
+            ?: return DomainResult.Failure(RepositoryError.NotFound("category", categoryId))
         if (!existing.isActive) return DomainResult.Success(Unit) // idempotent no-op, matches repository-layer retry conventions elsewhere in this codebase
         repository.setActive(companyId, categoryId, false)
         return DomainResult.Success(Unit)
@@ -56,9 +56,9 @@ class ReactivateCategoryUseCase(
     private val repository: CategoryRepository,
     private val normalizer: UnicodeTextNormalizer,
 ) {
-    suspend fun execute(companyId: Long, categoryId: Long): DomainResult<Category> {
+    suspend fun execute(companyId: Long, categoryId: String): DomainResult<Category> {
         val existing = repository.getById(companyId, categoryId)
-            ?: return DomainResult.Failure(RepositoryError.NotFound("category", categoryId.toString()))
+            ?: return DomainResult.Failure(RepositoryError.NotFound("category", categoryId))
         if (existing.isActive) return DomainResult.Success(existing) // idempotent no-op
 
         // A different active category may have been created with the same
@@ -69,7 +69,7 @@ class ReactivateCategoryUseCase(
         val conflict = repository.listActive(companyId)
             .firstOrNull { normalizer.normalizeForComparison(it.name) == normalizedCandidate }
         if (conflict != null) {
-            return DomainResult.Failure(RepositoryError.DuplicateName("category", existing.name, conflict.id.toString()))
+            return DomainResult.Failure(RepositoryError.DuplicateName("category", existing.name, conflict.id))
         }
         repository.setActive(companyId, categoryId, true)
         return DomainResult.Success(repository.getById(companyId, categoryId)!!)

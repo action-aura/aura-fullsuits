@@ -20,6 +20,8 @@ import com.actionaura.retail.importing.entity.ImportDuplicatePolicy
 import com.actionaura.retail.importing.entity.ImportEntitySchemas
 import com.actionaura.retail.importing.entity.ImportParsedValue
 import kotlinx.coroutines.sync.withLock
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 
 /** One real, previously-decoded+mapped source table for one entity, ready to commit. */
 data class ImportCommitInput(
@@ -169,6 +171,7 @@ private fun rawCell(table: NormalizedTable, row: com.actionaura.retail.importing
     return row.cells.getOrNull(colIndex)
 }
 
+@OptIn(ExperimentalUuidApi::class)
 private fun processCategories(db: RetailDatabase, companyId: Long, input: ImportCommitInput, nowEpochMillis: Long, counts: EntityCounts) {
     val seenKeys = mutableMapOf<String, Long>()
     for (row in input.table.rows) {
@@ -181,7 +184,7 @@ private fun processCategories(db: RetailDatabase, companyId: Long, input: Import
         val decision = ImportDuplicatePolicy.classifyAgainstDatabase(ImportEntityType.CATEGORIES, row.rowNumber, name, existing?.id)
         if (decision != null) { counts.skipped++; continue } // SUPPLIERS/BRANCHES/CATEGORIES policy: SKIP on match
         val descRaw = rawCell(input.table, row, input.fieldKeyToColumnIndex, "description")
-        db.catalogQueries.insertCategory(companyId, name, descRaw?.trim()?.ifEmpty { null }, nowEpochMillis)
+        db.catalogQueries.insertCategory(Uuid.random().toString(), companyId, name, descRaw?.trim()?.ifEmpty { null }, nowEpochMillis)
         counts.inserted++
     }
 }
@@ -264,17 +267,19 @@ private fun processCustomers(db: RetailDatabase, companyId: Long, input: ImportC
     }
 }
 
+@OptIn(ExperimentalUuidApi::class)
 private fun processProducts(db: RetailDatabase, companyId: Long, importBranchId: Long?, input: ImportCommitInput, nowEpochMillis: Long, counts: EntityCounts) {
     val seenKeys = mutableMapOf<String, Long>()
-    val categoryIdCache = mutableMapOf<String, Long>()
+    val categoryIdCache = mutableMapOf<String, String>()
 
-    fun resolveCategoryId(name: String?): Long? {
+    fun resolveCategoryId(name: String?): String? {
         if (name.isNullOrEmpty()) return null
         categoryIdCache[name]?.let { return it }
         val existing = db.catalogQueries.selectCategoryByExactName(companyId, name).executeAsOneOrNull()
         val id = existing?.id ?: run {
-            db.catalogQueries.insertCategory(companyId, name, null, nowEpochMillis)
-            db.catalogQueries.lastInsertRowId().executeAsOne()
+            val newId = Uuid.random().toString()
+            db.catalogQueries.insertCategory(newId, companyId, name, null, nowEpochMillis)
+            newId
         }
         categoryIdCache[name] = id
         return id

@@ -67,7 +67,13 @@ object ImportDuplicatePolicy {
      *    silently overwrites real existing Supplier/Branch/Category
      *    data from an uploaded file).
      */
-    fun classifyAgainstDatabase(entityType: ImportEntityType, rowNumber: Long, matchedKey: String, existingId: Long?): ImportDuplicate? {
+    // `existingId` is only ever null-checked here, never compared/stored --
+    // `Any?` (rather than `Long?`) lets every entity's own real id type
+    // pass through unchanged, including Category's TEXT/UUID id
+    // (M-sync's own categories.id migration) alongside every other
+    // entity's still-`Long` id, without this function needing to know or
+    // care which.
+    fun classifyAgainstDatabase(entityType: ImportEntityType, rowNumber: Long, matchedKey: String, existingId: Any?): ImportDuplicate? {
         if (existingId == null) return null
         val decision = when (entityType) {
             ImportEntityType.PRODUCTS, ImportEntityType.CUSTOMERS -> ImportDuplicateDecision.UPDATE_EXISTING

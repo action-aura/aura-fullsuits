@@ -1,0 +1,50 @@
+-- Task 6 (multi-device-sync-foundation) -- local sync-state tables,
+-- mirroring the desktop client's own SQLite shape (Task 3). Purely local
+-- bookkeeping -- these tables never carry business data of their own, and
+-- nothing in the shared module reads/writes them yet: this is schema-only
+-- groundwork. Later tasks in this plan wire the actual producers/
+-- consumers:
+--   - Task 10 (outbox instrumentation): every mutating write to a synced
+--     entity (starting with categories) additionally appends a row here,
+--     inside the SAME transaction as the business write.
+--   - Task 9 (sync client): drains syncOutbox in createdAt order, pushes
+--     to the Owner relay, deletes each row once acknowledged, and
+--     advances syncCursor as it applies incoming remote changes.
+--
+-- syncOutbox.id is the outbox event's own id (client-generated, e.g. a
+-- UUID) -- distinct from entityId, which is the id of the business row
+-- (e.g. a categories.id) the event describes.
+CREATE TABLE syncOutbox (
+    id TEXT NOT NULL PRIMARY KEY,
+    entityType TEXT NOT NULL,
+    entityId TEXT NOT NULL,
+    eventType TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    createdAt INTEGER NOT NULL
+);
+
+-- Single-row (id = 1) cursor singleton -- the last remote sequence number
+-- this device has fully applied. Seeded to 0 here so a fresh database
+-- always has exactly one row, never requiring callers to handle a
+-- missing-cursor case.
+CREATE TABLE syncCursor (
+    id INTEGER NOT NULL PRIMARY KEY,
+    lastSeq INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO syncCursor (id, lastSeq) VALUES (1, 0);
+
+selectOutbox:
+SELECT * FROM syncOutbox ORDER BY createdAt;
+
+insertOutboxEvent:
+INSERT INTO syncOutbox (id, entityType, entityId, eventType, payload, createdAt)
+VALUES (?, ?, ?, ?, ?, ?);
+
+deleteOutboxEvent:
+DELETE FROM syncOutbox WHERE id = ?;
+
+selectCursor:
+SELECT lastSeq FROM syncCursor WHERE id = 1;
+
+updateCursor:
+UPDATE syncCursor SET lastSeq = ? WHERE id = 1;

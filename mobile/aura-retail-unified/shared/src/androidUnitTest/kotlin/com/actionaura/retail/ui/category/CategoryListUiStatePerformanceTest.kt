@@ -18,7 +18,7 @@ class CategoryListUiStatePerformanceTest {
     @Test
     fun filteringTenThousandRealCategoriesCompletesWellWithinABoundedRealTime() {
         val categories = (1..10_000).map { i ->
-            Category(id = i.toLong(), companyId = 1L, name = "Category $i", description = null, isActive = true, productCount = 0, createdAtEpochMillis = 1000L)
+            Category(id = "cat-$i", companyId = 1L, name = "Category $i", description = null, isActive = true, productCount = 0, createdAtEpochMillis = 1000L)
         }
         val state = CategoryListUiState(categories = categories, searchState = com.actionaura.retail.presentation.SearchState(appliedQuery = "999"))
 

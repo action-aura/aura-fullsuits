@@ -98,7 +98,7 @@ class ReportingQueryPlanRegressionTest {
         val plan = explainPlan(
             "SELECT si.product_id, si.product_name_at_sale, si.quantity, si.line_total FROM sale_items si " +
                 "JOIN sales s ON si.sale_id = s.id JOIN products p ON si.product_id = p.id " +
-                "WHERE s.company_id = 1 AND s.status = 'completed' AND s.created_at >= ${summary.startEpochMillis} AND s.created_at < ${summary.endEpochMillis} AND p.category_id = $categoryId",
+                "WHERE s.company_id = 1 AND s.status = 'completed' AND s.created_at >= ${summary.startEpochMillis} AND s.created_at < ${summary.endEpochMillis} AND p.category_id = '$categoryId'",
         )
         assertTrue("USING COVERING INDEX products_category_id" in plan, "REGRESSION: Category filter no longer uses the covering index -- real plan:\n$plan")
         assertNoFullScanOfAnyReportingTable(plan)

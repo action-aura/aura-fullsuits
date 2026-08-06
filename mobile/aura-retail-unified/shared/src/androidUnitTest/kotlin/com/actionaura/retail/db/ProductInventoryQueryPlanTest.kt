@@ -33,10 +33,10 @@ class ProductInventoryQueryPlanTest {
                 db.catalogQueries.insertBranch(1L, "Branch $b", null, null, 1000L)
             }
             for (c in 1..20) {
-                db.catalogQueries.insertCategory(1L, "Category $c", null, 1000L)
+                db.catalogQueries.insertCategory("cat-$c", 1L, "Category $c", null, 1000L)
             }
             for (p in 1..10_000) {
-                val categoryId = ((p % 20) + 1).toLong()
+                val categoryId = "cat-${(p % 20) + 1}"
                 val status = if (p % 10 == 0) "archived" else "active" // 10% archived
                 db.catalogQueries.insertProduct(
                     1L, "SKU-%05d".format(p), "0000%06d".format(p), "Product $p", "product $p", categoryId,

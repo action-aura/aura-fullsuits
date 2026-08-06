@@ -150,7 +150,7 @@ class CategoryUseCasesTest {
     @Test
     fun archiveUnknownCategoryReturnsNotFound() = runTest {
         val repo = SqlDelightCategoryRepository(newDb(), DatabaseWriteGate())
-        val result = ArchiveCategoryUseCase(repo).execute(1L, 999L)
+        val result = ArchiveCategoryUseCase(repo).execute(1L, "does-not-exist")
         assertIs<DomainResult.Failure>(result)
         assertIs<RepositoryError.NotFound>(result.error)
     }

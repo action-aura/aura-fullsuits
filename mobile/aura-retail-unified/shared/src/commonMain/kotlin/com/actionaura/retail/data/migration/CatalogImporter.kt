@@ -116,11 +116,22 @@ object CatalogImporter {
                 newDb.catalogQueries.importBranch(b.id, b.companyId, b.name, b.address, b.phone, b.status, b.createdAtEpochMillis)
             }
             for (c in categories) {
-                if (newDb.catalogQueries.selectCategoryById(c.id, c.companyId).executeAsOneOrNull() != null) {
+                // M-sync -- categories.id is now TEXT (client-generated UUID
+                // in the normal insert path), but this importer's whole
+                // idempotency scheme depends on preserving the LEGACY row id
+                // exactly (data-preservation-plan.md, this function's own
+                // KDoc) so every FK relationship (products.category_id
+                // below) still resolves. The legacy numeric id's decimal
+                // string form is used as the new TEXT id -- a real,
+                // deterministic, collision-free (within one company's
+                // legacy source) preservation of the original identity, not
+                // a fresh UUID that would sever it.
+                val legacyIdAsText = c.id.toString()
+                if (newDb.catalogQueries.selectCategoryById(legacyIdAsText, c.companyId).executeAsOneOrNull() != null) {
                     categoriesAlreadyPresent++
                     continue
                 }
-                newDb.catalogQueries.importCategory(c.id, c.companyId, c.name, c.description, c.createdAtEpochMillis)
+                newDb.catalogQueries.importCategory(legacyIdAsText, c.companyId, c.name, c.description, c.createdAtEpochMillis)
             }
 
             // Idempotency + dedup state, seeded from the TARGET database's
@@ -171,7 +182,7 @@ object CatalogImporter {
                     }
                 }
                 newDb.catalogQueries.importProduct(
-                    p.id, p.companyId, p.sku, barcodeToImport, p.name, normalizer.normalizeForComparison(p.name), p.categoryId,
+                    p.id, p.companyId, p.sku, barcodeToImport, p.name, normalizer.normalizeForComparison(p.name), p.categoryId?.toString(),
                     p.costPrice, p.sellPrice, p.taxRate, p.unit, p.reorderLevel, p.status,
                     p.createdAtEpochMillis, p.createdAtEpochMillis, // no legacy updated_at concept -- same value as created_at
                 )

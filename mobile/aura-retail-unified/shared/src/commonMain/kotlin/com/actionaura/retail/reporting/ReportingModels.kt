@@ -12,7 +12,7 @@ import com.actionaura.retail.financial.Quantity
  */
 
 /** Explicit scope captured once at invocation (M5.6.5's own "no current-Branch mutation during report execution" requirement). */
-data class ReportScope(val companyId: Long, val branchId: Long? = null, val categoryId: Long? = null)
+data class ReportScope(val companyId: Long, val branchId: Long? = null, val categoryId: String? = null)
 
 /**
  * M5.6.3 -- one currency's totals for a period. `transactionCount` is

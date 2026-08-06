@@ -57,14 +57,14 @@ class CategoryListViewModel(
         setState { it.copy(searchState = it.searchState.copy(rawQuery = query, appliedQuery = query)) }
     }
 
-    fun onArchive(categoryId: Long) = launchOnDefault {
+    fun onArchive(categoryId: String) = launchOnDefault {
         when (val result = container.archiveCategoryUseCase.execute(companyId, categoryId)) {
             is DomainResult.Success -> load()
             is DomainResult.Failure -> sendEffect(CategoryListEffect.ShowMessage(result.error.toUiMessage()))
         }
     }
 
-    fun onReactivate(categoryId: Long) = launchOnDefault {
+    fun onReactivate(categoryId: String) = launchOnDefault {
         when (val result = container.reactivateCategoryUseCase.execute(companyId, categoryId)) {
             is DomainResult.Success -> load()
             is DomainResult.Failure -> sendEffect(CategoryListEffect.ShowMessage(result.error.toUiMessage()))

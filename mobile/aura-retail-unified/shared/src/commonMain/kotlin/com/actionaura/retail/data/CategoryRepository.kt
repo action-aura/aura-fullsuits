@@ -12,7 +12,7 @@ import com.actionaura.retail.data.model.Category
  */
 interface CategoryRepository {
     suspend fun listActive(companyId: Long): List<Category>
-    suspend fun getById(companyId: Long, id: Long): Category?
+    suspend fun getById(companyId: Long, id: String): Category?
     suspend fun insert(companyId: Long, name: String, description: String?, nowEpochMillis: Long): Category
-    suspend fun setActive(companyId: Long, id: Long, active: Boolean)
+    suspend fun setActive(companyId: Long, id: String, active: Boolean)
 }

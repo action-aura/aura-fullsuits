@@ -8,6 +8,8 @@ import com.actionaura.retail.db.RetailDatabase
 import com.actionaura.retail.db.SelectActiveCategories
 import com.actionaura.retail.db.SelectCategoryById
 import kotlinx.coroutines.sync.withLock
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 
 /**
  * M5.1/M5.5 -- real, SQLDelight-backed `CategoryRepository`.
@@ -29,20 +31,28 @@ class SqlDelightCategoryRepository(private val db: RetailDatabase, private val g
         db.catalogQueries.selectActiveCategories(companyId).executeAsList().map { it.toDomain() }
     }
 
-    override suspend fun getById(companyId: Long, id: Long): Category? = writeMutex.withLock {
+    override suspend fun getById(companyId: Long, id: String): Category? = writeMutex.withLock {
         db.catalogQueries.selectCategoryById(id, companyId).executeAsOneOrNull()?.toDomain()
     }
 
+    // M-sync -- id is now a client-generated UUID string (Catalog.sq's own
+    // KDoc), not SQLite's rowid: `kotlin.uuid.Uuid` is this module's own
+    // Kotlin 2.0.21 stdlib UUID generator (Experimental in this Kotlin
+    // version, stable from 2.1.20) -- no existing UUID-generation utility
+    // was found anywhere else in commonMain (only `java.util.UUID`, an
+    // Android-only JVM type, appears in androidMain), so the stdlib is the
+    // real, dependency-free choice here rather than adding a new library.
+    @OptIn(ExperimentalUuidApi::class)
     override suspend fun insert(companyId: Long, name: String, description: String?, nowEpochMillis: Long): Category = writeMutex.withLock {
-        val id = db.transactionWithResult {
-            db.catalogQueries.insertCategory(companyId, name, description, nowEpochMillis)
-            db.catalogQueries.lastInsertRowId().executeAsOne()
+        val newId = Uuid.random().toString()
+        db.transactionWithResult {
+            db.catalogQueries.insertCategory(newId, companyId, name, description, nowEpochMillis)
         }
-        db.catalogQueries.selectCategoryById(id, companyId).executeAsOneOrNull()?.toDomain()
-            ?: error("category $id vanished immediately after insert")
+        db.catalogQueries.selectCategoryById(newId, companyId).executeAsOneOrNull()?.toDomain()
+            ?: error("category $newId vanished immediately after insert")
     }
 
-    override suspend fun setActive(companyId: Long, id: Long, active: Boolean): Unit = writeMutex.withLock {
+    override suspend fun setActive(companyId: Long, id: String, active: Boolean): Unit = writeMutex.withLock {
         db.catalogQueries.updateCategoryStatus(activeToStatus(active), id, companyId)
     }
 }

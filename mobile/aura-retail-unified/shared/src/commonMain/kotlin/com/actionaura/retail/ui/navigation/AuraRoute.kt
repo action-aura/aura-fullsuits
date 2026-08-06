@@ -43,7 +43,7 @@ sealed interface AuraRoute {
     @Serializable data class ProductEdit(val productId: Long) : AuraRoute
     @Serializable data object Categories : AuraRoute
     @Serializable data object CategoryCreate : AuraRoute
-    @Serializable data class CategoryEdit(val categoryId: Long) : AuraRoute
+    @Serializable data class CategoryEdit(val categoryId: String) : AuraRoute
     @Serializable data object Suppliers : AuraRoute
     @Serializable data class SupplierDetails(val supplierId: Long) : AuraRoute
 

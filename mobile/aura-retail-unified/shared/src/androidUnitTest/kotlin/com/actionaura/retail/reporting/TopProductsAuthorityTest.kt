@@ -39,7 +39,7 @@ class TopProductsAuthorityTest {
         return RetailDatabase(driver)
     }
 
-    private suspend fun seedProduct(db: RetailDatabase, gate: DatabaseWriteGate, sku: String, name: String, categoryId: Long? = null): Long {
+    private suspend fun seedProduct(db: RetailDatabase, gate: DatabaseWriteGate, sku: String, name: String, categoryId: String? = null): Long {
         val repo = SqlDelightProductRepository(db, gate)
         val result = repo.insert(1L, sku, null, name, name.lowercase(), categoryId, Money.ZERO, Money.of(1.0), PercentageRate.trusted(0.0), "unit", 5, 1000L)
         return (result as DomainResult.Success).value.id

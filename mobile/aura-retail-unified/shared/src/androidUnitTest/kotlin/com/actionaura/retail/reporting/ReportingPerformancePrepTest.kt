@@ -38,7 +38,7 @@ class ReportingPerformancePrepTest {
         val settings = SqlDelightSettingsRepository(db, gate)
 
         val branchIds = mutableListOf<Long>()
-        val categoryIds = mutableListOf<Long>()
+        val categoryIds = mutableListOf<String>()
         val productIds = mutableListOf<Long>()
 
         val seedStart = System.currentTimeMillis()
@@ -48,8 +48,9 @@ class ReportingPerformancePrepTest {
                 branchIds += db.catalogQueries.lastInsertRowId().executeAsOne()
             }
             repeat(20) { i ->
-                db.catalogQueries.insertCategory(1L, "Category-$i", null, 500L)
-                categoryIds += db.catalogQueries.lastInsertRowId().executeAsOne()
+                val categoryId = "cat-$i"
+                db.catalogQueries.insertCategory(categoryId, 1L, "Category-$i", null, 500L)
+                categoryIds += categoryId
             }
             repeat(10_000) { i ->
                 db.catalogQueries.insertProduct(

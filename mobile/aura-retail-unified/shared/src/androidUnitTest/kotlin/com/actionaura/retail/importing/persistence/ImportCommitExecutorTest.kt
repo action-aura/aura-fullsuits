@@ -102,7 +102,7 @@ class ImportCommitExecutorTest {
         val db = newDb()
         val gate = DatabaseWriteGate()
         val repo = SqlDelightImportPersistenceRepository(db, gate)
-        db.catalogQueries.insertCategory(1L, "Beverages", "Old description", 500L)
+        db.catalogQueries.insertCategory("cat-beverages", 1L, "Beverages", "Old description", 500L)
         val dryRun = issueDryRun(repo)
 
         val result = ImportCommitExecutor.commit(db, gate, repo, token(dryRun), listOf(categoriesInput(listOf("Beverages", "New description"))), "tester", 2000L)

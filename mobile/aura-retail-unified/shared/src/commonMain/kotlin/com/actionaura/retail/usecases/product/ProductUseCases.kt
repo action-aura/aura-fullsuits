@@ -63,10 +63,10 @@ internal fun validateBarcode(barcode: String?): DomainResult<String?> {
     return DomainResult.Success(trimmed)
 }
 
-internal suspend fun validateCategoryAssignment(categoryRepository: CategoryRepository, companyId: Long, categoryId: Long?): DomainResult<Unit> {
+internal suspend fun validateCategoryAssignment(categoryRepository: CategoryRepository, companyId: Long, categoryId: String?): DomainResult<Unit> {
     if (categoryId == null) return DomainResult.Success(Unit)
     val category = categoryRepository.getById(companyId, categoryId)
-        ?: return DomainResult.Failure(RepositoryError.NotFound("category", categoryId.toString()))
+        ?: return DomainResult.Failure(RepositoryError.NotFound("category", categoryId))
     if (!category.isActive) {
         return DomainResult.Failure(RepositoryError.ValidationFailed("product", "cannot assign an archived category"))
     }
@@ -83,7 +83,7 @@ class CreateProductUseCase(
         sku: String,
         barcode: String?,
         name: String,
-        categoryId: Long?,
+        categoryId: String?,
         costPrice: Money,
         sellPrice: Money,
         taxRate: PercentageRate,
@@ -127,7 +127,7 @@ class UpdateProductUseCase(
         id: Long,
         barcode: String?,
         name: String,
-        categoryId: Long?,
+        categoryId: String?,
         costPrice: Money,
         sellPrice: Money,
         taxRate: PercentageRate,
@@ -170,7 +170,7 @@ class AssignProductCategoryUseCase(
     private val categoryRepository: CategoryRepository,
     private val normalizer: UnicodeTextNormalizer,
 ) {
-    suspend fun execute(companyId: Long, productId: Long, categoryId: Long?, expectedUpdatedAtEpochMillis: Long, nowEpochMillis: Long): DomainResult<Product> {
+    suspend fun execute(companyId: Long, productId: Long, categoryId: String?, expectedUpdatedAtEpochMillis: Long, nowEpochMillis: Long): DomainResult<Product> {
         val current = productRepository.getById(companyId, productId)
             ?: return DomainResult.Failure(RepositoryError.NotFound("product", productId.toString()))
         val categoryCheck = validateCategoryAssignment(categoryRepository, companyId, categoryId)
@@ -262,7 +262,7 @@ class CreateProductWithInitialStockUseCase(
         sku: String,
         barcode: String?,
         name: String,
-        categoryId: Long?,
+        categoryId: String?,
         costPrice: Money,
         sellPrice: Money,
         taxRate: PercentageRate,

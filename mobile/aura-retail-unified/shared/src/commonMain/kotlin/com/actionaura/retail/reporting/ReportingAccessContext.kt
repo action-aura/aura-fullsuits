@@ -45,7 +45,7 @@ enum class ReportingCapability {
 fun ReportingAccessContext.resolveScope(
     requiredCapability: ReportingCapability,
     requestedBranchId: Long?,
-    requestedCategoryId: Long?,
+    requestedCategoryId: String?,
 ): DomainResult<ReportScope> {
     if (requiredCapability !in grantedCapabilities) {
         return DomainResult.Failure(RepositoryError.AccessDenied("reporting", "capability $requiredCapability not granted"))

@@ -210,7 +210,7 @@ class ImportCommitExecutorMatrixTest {
         val db = newDb()
         val gate = DatabaseWriteGate()
         val repo = SqlDelightImportPersistenceRepository(db, gate)
-        db.catalogQueries.insertCategory(1L, "Discontinued", "old", 500L)
+        db.catalogQueries.insertCategory("cat-discontinued", 1L, "Discontinued", "old", 500L)
         db.catalogQueries.updateCategoryStatus("archived", db.catalogQueries.selectCategoryByExactName(1L, "Discontinued").executeAsOne().id, 1L)
         val dryRun = issueDryRun(repo)
 
@@ -233,7 +233,7 @@ class ImportCommitExecutorMatrixTest {
         val db = newDb()
         val gate = DatabaseWriteGate()
         val repo = SqlDelightImportPersistenceRepository(db, gate)
-        db.catalogQueries.insertCategory(2L, "Beverages", "company 2's own row", 500L)
+        db.catalogQueries.insertCategory("cat-beverages-co2", 2L, "Beverages", "company 2's own row", 500L)
         val dryRun = issueDryRun(repo, companyId = 1L)
 
         val input = ImportCommitInput(

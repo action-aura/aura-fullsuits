@@ -21,7 +21,7 @@ data class Branch(
 )
 
 data class Category(
-    val id: Long,
+    val id: String,
     val companyId: Long,
     val name: String,
     val description: String?,
@@ -36,7 +36,7 @@ data class Product(
     val sku: String,
     val barcode: String?,
     val name: String,
-    val categoryId: Long?,
+    val categoryId: String?,
     val categoryName: String?,
     val costPrice: Money,
     val sellPrice: Money,

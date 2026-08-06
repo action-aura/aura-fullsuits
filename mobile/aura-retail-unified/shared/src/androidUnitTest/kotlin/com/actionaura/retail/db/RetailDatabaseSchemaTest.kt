@@ -28,8 +28,8 @@ class RetailDatabaseSchemaTest {
     fun schemaCreatesAllTablesAndBasicCrudWorks() {
         val db = newDatabase()
 
-        db.catalogQueries.insertCategory(1L, "Beverages", null, 1000L)
-        val categoryId = db.catalogQueries.lastInsertRowId().executeAsOne()
+        val categoryId = "cat-beverages"
+        db.catalogQueries.insertCategory(categoryId, 1L, "Beverages", null, 1000L)
 
         db.catalogQueries.insertProduct(
             1L, "SKU-001", "0000000001", "Cola 330ml", "cola 330ml", categoryId,

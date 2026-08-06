@@ -73,7 +73,7 @@ class ReportingCategoryCurrentRegressionTest {
             "EXPLAIN QUERY PLAN SELECT si.product_id, si.product_name_at_sale, si.quantity, si.line_total FROM sale_items si " +
                 "JOIN sales s ON si.sale_id = s.id JOIN products p ON si.product_id = p.id " +
                 "WHERE s.company_id = 1 AND s.status = 'completed' AND s.created_at >= ${summary.startEpochMillis} AND s.created_at < ${summary.endEpochMillis} " +
-                "AND p.category_id = ${summary.reassignedToCategoryId}",
+                "AND p.category_id = '${summary.reassignedToCategoryId}'",
             { cursor ->
                 while (cursor.next().value) lines += cursor.getString(3) ?: ""
                 app.cash.sqldelight.db.QueryResult.Value(Unit)

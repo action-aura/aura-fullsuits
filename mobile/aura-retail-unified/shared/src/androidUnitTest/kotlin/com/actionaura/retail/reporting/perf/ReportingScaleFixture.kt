@@ -66,13 +66,13 @@ object ReportingScaleFixture {
         val companyId: Long,
         val branchIds: List<Long>,
         val archivedBranchId: Long,
-        val categoryIds: List<Long>,
-        val archivedCategoryIds: List<Long>,
+        val categoryIds: List<String>,
+        val archivedCategoryIds: List<String>,
         val productIds: List<Long>,
         val archivedProductIds: List<Long>,
         val reassignedProductId: Long,
-        val reassignedFromCategoryId: Long,
-        val reassignedToCategoryId: Long,
+        val reassignedFromCategoryId: String,
+        val reassignedToCategoryId: String,
         val reassignedProductSaleDay: Long,
         val tiedProductIds: List<Long>,
         val tiedProductsDay: Long,
@@ -94,7 +94,6 @@ object ReportingScaleFixture {
         val endEpoch = epochMillisUtc(2024 + YEARS, 1, 1)
         val totalDays = ((endEpoch - startEpoch) / 86_400_000L).toInt()
 
-        var nextCategoryId = 1L
         var nextBranchId = 1L
         var nextProductId = 1L
         var nextSaleId = 1L
@@ -102,8 +101,8 @@ object ReportingScaleFixture {
         var nextReturnId = 1L
         var nextReturnItemId = 1L
 
-        val categoryIds = mutableListOf<Long>()
-        val archivedCategoryIds = mutableListOf<Long>()
+        val categoryIds = mutableListOf<String>()
+        val archivedCategoryIds = mutableListOf<String>()
         val branchIds = mutableListOf<Long>()
         val productIds = mutableListOf<Long>()
         val archivedProductIds = mutableListOf<Long>()
@@ -112,19 +111,25 @@ object ReportingScaleFixture {
         var returnCount = 0L
         var returnItemCount = 0L
         var reassignedProductId = 0L
-        var reassignedFromCategoryId = 0L
-        var reassignedToCategoryId = 0L
+        var reassignedFromCategoryId = ""
+        var reassignedToCategoryId = ""
         var reassignedProductSaleDay = 0L
 
         db.transaction {
+            // M-sync -- categories.id is now a client-generated TEXT id, not
+            // an arithmetic AUTOINCREMENT sequence -- this fixture generates
+            // its own simple, deterministic id per category (still no
+            // round-trip read-back needed, preserving this fixture's own
+            // documented "no lastInsertRowId() per row" performance intent).
             repeat(CATEGORY_COUNT) { i ->
-                db.catalogQueries.insertCategory(companyId, "Category-$i", null, startEpoch)
-                categoryIds += nextCategoryId++
+                val categoryId = "cat-$i"
+                db.catalogQueries.insertCategory(categoryId, companyId, "Category-$i", null, startEpoch)
+                categoryIds += categoryId
             }
             // Archive the last ARCHIVED_CATEGORY_COUNT categories.
             val toArchive = categoryIds.takeLast(ARCHIVED_CATEGORY_COUNT)
             toArchive.forEach { id ->
-                driver.execute(null, "UPDATE categories SET status = 'archived' WHERE id = ?", 1) { bindLong(0, id) }
+                driver.execute(null, "UPDATE categories SET status = 'archived' WHERE id = ?", 1) { bindString(0, id) }
             }
             archivedCategoryIds += toArchive
 
@@ -207,7 +212,7 @@ object ReportingScaleFixture {
             val reassignSaleId = nextSaleId++
             db.salesQueries.insertSaleItem(reassignSaleId, reassignedProductId, "Product", "1", "15.00", "0", "0", "15.00")
             nextSaleItemId++
-            driver.execute(null, "UPDATE products SET category_id = ? WHERE id = ?", 2) { bindLong(0, reassignedToCategoryId); bindLong(1, reassignedProductId) }
+            driver.execute(null, "UPDATE products SET category_id = ? WHERE id = ?", 2) { bindString(0, reassignedToCategoryId); bindLong(1, reassignedProductId) }
         }
 
         val genElapsed = System.currentTimeMillis() - genStart

@@ -16,8 +16,14 @@ CREATE TABLE branches (
 );
 CREATE INDEX branches_company_id ON branches(company_id);
 
+-- M-sync -- id migrated INTEGER AUTOINCREMENT -> TEXT (client-generated
+-- UUID string), so a category created on one device gets a globally
+-- unique id no other device can collide with -- required for multi-device
+-- sync (multi-device-sync-foundation plan, Task 6). Generated client-side
+-- at insert time (SqlDelightCategoryRepository.insert); never relies on
+-- SQLite's rowid/lastInsertRowId() anymore.
 CREATE TABLE categories (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,
     company_id INTEGER NOT NULL DEFAULT 1,
     name TEXT NOT NULL,
     description TEXT,
@@ -61,7 +67,7 @@ CREATE TABLE products (
     barcode TEXT COLLATE NOCASE,
     name TEXT NOT NULL,
     normalized_name TEXT NOT NULL,
-    category_id INTEGER REFERENCES categories(id),
+    category_id TEXT REFERENCES categories(id),
     cost_price TEXT NOT NULL DEFAULT '0.00',
     sell_price TEXT NOT NULL DEFAULT '0.00',
     tax_rate TEXT NOT NULL DEFAULT '0',
@@ -116,8 +122,10 @@ WHERE p.company_id = ? AND p.status = 'active' ORDER BY p.name;
 insertBranch:
 INSERT INTO branches(company_id, name, address, phone, status, created_at) VALUES (?, ?, ?, ?, 'active', ?);
 
+-- M-sync -- id is now client-generated (TEXT UUID), passed in explicitly
+-- rather than left to AUTOINCREMENT/lastInsertRowId().
 insertCategory:
-INSERT INTO categories(company_id, name, description, status, created_at) VALUES (?, ?, ?, 'active', ?);
+INSERT INTO categories(id, company_id, name, description, status, created_at) VALUES (?, ?, ?, ?, 'active', ?);
 
 insertProduct:
 INSERT INTO products(company_id, sku, barcode, name, normalized_name, category_id, cost_price, sell_price, tax_rate, unit, reorder_level, status, created_at, updated_at)
