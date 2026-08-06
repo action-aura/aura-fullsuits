@@ -77,30 +77,63 @@ actual class PlatformDeviceSigner actual constructor(
     /**
      * Real load-or-generate-once semantics: an existing persisted keypair is
      * always preferred over generating a new one -- generation only ever
-     * happens the first time this device has never stored a keypair before.
-     * Mutex-guarded so two concurrent first-use callers can never race and
+     * happens the first time this device has genuinely never stored a
+     * keypair before (`SecureStorageResult.Success(null)` -- the blob name
+     * was never written). A `SecureStorageResult.Failure` read (Keystore key
+     * invalidated, corrupt/tampered ciphertext, generic IO error --
+     * `SecureStorageContracts.kt`'s own real, non-hypothetical failure
+     * codes, actually returned by `AndroidSecureBlobStore`) is explicitly
+     * NOT treated as "no key was ever stored": that would silently mint and
+     * persist a brand-new keypair over the one existing `BLOB_NAME` slot --
+     * a real, in-place overwrite (unlike `GenerationalSecureMaterialStore`'s
+     * write-fresh-generation-then-promote protocol, which this class
+     * deliberately doesn't use, see class KDoc) with no way back. That is
+     * exactly the "regenerated key silently and permanently breaks
+     * Owner-side verification" hazard this whole task exists to prevent --
+     * so a read `Failure` is surfaced as a real, loud exception instead,
+     * never silently swallowed into "must be a first run."
+     *
+     * Cheap unlocked fast path first (`cached` is `@Volatile`, so a
+     * happens-before edge from the mutex unlock that originally set it makes
+     * this read safe): avoids taking the mutex on every `sign()` call once
+     * the key is already resident in memory. Double-checked again inside the
+     * lock, since two concurrent first-use callers could otherwise race and
      * generate two different keypairs (only one would win the persisted
-     * write, but the loser must not hand a caller the *other*, non-persisted
-     * keypair).
+     * write, but the loser must not hand a caller the *other*,
+     * non-persisted keypair).
      */
-    private suspend fun loadOrCreateKeyPair(): RawKeyPair = mutex.withLock {
-        cached?.let { return@withLock it }
+    private suspend fun loadOrCreateKeyPair(): RawKeyPair {
+        cached?.let { return it }
+        return mutex.withLock {
+            cached?.let { return@withLock it }
 
-        val existing = secureBlobStore.get(BLOB_NAME, ASSOCIATED_DATA)
-        if (existing is SecureStorageResult.Success && existing.value != null) {
-            val loaded = decode(existing.value)
-            cached = loaded
-            return@withLock loaded
-        }
+            when (val existing = secureBlobStore.get(BLOB_NAME, ASSOCIATED_DATA)) {
+                is SecureStorageResult.Success -> {
+                    val storedBytes = existing.value
+                    if (storedBytes != null) {
+                        val loaded = decode(storedBytes)
+                        cached = loaded
+                        return@withLock loaded
+                    }
+                    // Success(null): genuine first run -- this device has never stored a keypair. Safe to generate below.
+                }
+                is SecureStorageResult.Failure -> error(
+                    "failed to read persisted device signing keypair (${existing.failure.code}: " +
+                        "${existing.failure.safeDiagnosticReason}) -- refusing to treat a read failure as " +
+                        "\"no key was ever stored\", which would silently generate and overwrite the one " +
+                        "persisted keypair Owner already registered. This must be surfaced/retried by the caller, never silently papered over.",
+                )
+            }
 
-        val generated = Ed25519Sign.KeyPair.newKeyPair()
-        val raw = RawKeyPair(privateKey = generated.privateKey, publicKey = generated.publicKey)
-        val writeResult = secureBlobStore.put(BLOB_NAME, ASSOCIATED_DATA, encode(raw))
-        check(writeResult is SecureStorageResult.Success) {
-            "failed to persist newly generated device signing keypair -- refusing to hand out an unpersisted key that Owner-side verification could never agree on again"
+            val generated = Ed25519Sign.KeyPair.newKeyPair()
+            val raw = RawKeyPair(privateKey = generated.privateKey, publicKey = generated.publicKey)
+            val writeResult = secureBlobStore.put(BLOB_NAME, ASSOCIATED_DATA, encode(raw))
+            check(writeResult is SecureStorageResult.Success) {
+                "failed to persist newly generated device signing keypair -- refusing to hand out an unpersisted key that Owner-side verification could never agree on again"
+            }
+            cached = raw
+            raw
         }
-        cached = raw
-        raw
     }
 
     private fun encode(keyPair: RawKeyPair): ByteArray = keyPair.privateKey + keyPair.publicKey

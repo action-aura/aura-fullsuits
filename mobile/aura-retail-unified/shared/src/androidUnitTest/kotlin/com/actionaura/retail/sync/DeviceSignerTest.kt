@@ -8,6 +8,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -144,5 +145,58 @@ class DeviceSignerTest {
         val signatureFromSecondLaunch = secondLaunch.sign(message)
 
         assertContentEquals(signatureFromFirstLaunch, signatureFromSecondLaunch)
+    }
+
+    /**
+     * Regression for the review-caught critical hazard: `loadOrCreateKeyPair()`
+     * used to treat ANY `secureBlobStore.get()` failure (Keystore key
+     * invalidation, corrupt/tampered ciphertext, generic IO error -- real,
+     * non-hypothetical `SecureStorageFailureCode` variants, actually
+     * returned by `AndroidSecureBlobStore` in production) the same as
+     * "no key was ever stored," silently generating and persisting a
+     * replacement keypair over the one existing `BLOB_NAME` slot. This is
+     * the exact "regenerated key silently and permanently breaks
+     * Owner-side verification" hazard this whole task exists to prevent --
+     * `InMemorySecureBlobStore.corruptOnNextGet` (this codebase's own
+     * established fault-injection primitive, already used by
+     * `SecureMaterialStoreTest.corruptedComponentFailsClosedNeverReturnsPartialBundle`)
+     * forces exactly that read-failure path, one-shot.
+     */
+    @Test
+    fun readFailureIsSurfacedLoudlyAndNeverTreatedAsFirstRunNeverOverwritesThePersistedKey() = runTest {
+        val store = InMemorySecureBlobStore()
+
+        // Genuine first run: establishes and persists the real keypair.
+        val originalPublicKey = PlatformDeviceSigner(store).publicKeyBytes()
+
+        // Force the NEXT get() on this blob to fail closed as corrupt --
+        // simulating a transient Keystore/ciphertext read failure. Must
+        // match PlatformDeviceSigner's own internal BLOB_NAME.
+        store.corruptOnNextGet.add("device_signing:ed25519_keypair_v1")
+
+        // A brand-new instance (no in-memory cache) actually exercises the
+        // read path and must hit the injected failure.
+        val instanceDuringFailure = PlatformDeviceSigner(store)
+        val thrown = assertFailsWith<IllegalStateException>(
+            "a read failure must be surfaced loudly, never silently swallowed into \"must be a first run\"",
+        ) {
+            instanceDuringFailure.publicKeyBytes()
+        }
+        assertTrue(
+            thrown.message.orEmpty().contains("refusing", ignoreCase = true),
+            "the thrown exception must explain that it is refusing to treat a read failure as first-run, got: ${thrown.message}",
+        )
+
+        // Critical assertion: the failed attempt must NOT have generated or
+        // persisted a replacement keypair. `corruptOnNextGet` is one-shot,
+        // so this next read succeeds against real storage again -- and it
+        // must still be the ORIGINAL key, proving no silent overwrite
+        // occurred during the failure above.
+        val instanceAfterFailure = PlatformDeviceSigner(store)
+        assertContentEquals(
+            originalPublicKey,
+            instanceAfterFailure.publicKeyBytes(),
+            "real regression: a transient read failure must never silently mint and persist a replacement device identity over the one Owner already registered",
+        )
     }
 }
