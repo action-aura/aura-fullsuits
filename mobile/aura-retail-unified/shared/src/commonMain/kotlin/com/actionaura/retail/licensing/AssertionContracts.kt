@@ -2,6 +2,7 @@ package com.actionaura.retail.licensing
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 /**
  * M7.17 -- real, versioned signed-assertion contract
@@ -41,7 +42,16 @@ data class AssertionPayload(
     @SerialName("subscription_status") val subscriptionStatus: SubscriptionStatus,
     @SerialName("allowed_device_count") val allowedDeviceCount: Int,
     @SerialName("device_key_fingerprint") val deviceKeyFingerprint: String,
-    val entitlements: Map<String, String> = emptyMap(),
+    // Task 8 (multi-device-sync-foundation) fix: real, live-verified against
+    // Owner's actual `resolve_entitlements()` response -- entitlement values
+    // are genuinely heterogeneous raw JSON ("true / 5 / \"text\" / [\"a\",\"b\"]",
+    // `entitlements.py`'s own documented convention, never string-coerced
+    // server-side), so `Map<String, String>` silently failed to decode every
+    // real activation response (`JsonDecodingException`) -- never previously
+    // caught because every earlier consumer of this type used
+    // `ContractFixtureTransport`/hand-built fixtures, never a real decode of
+    // a real Owner response.
+    val entitlements: Map<String, JsonElement> = emptyMap(),
     @SerialName("offline_policy") val offlinePolicy: OfflinePolicy,
     @SerialName("contract_version") val contractVersion: String,
     @SerialName("commercial_policy_version") val commercialPolicyVersion: String? = null,

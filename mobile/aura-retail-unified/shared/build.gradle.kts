@@ -69,6 +69,18 @@ kotlin {
                 // Kotlin 2.0.21 / Compose Multiplatform 1.7.0.
                 implementation("org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose:2.8.2")
                 implementation("org.jetbrains.androidx.navigation:navigation-compose:2.8.0-alpha10")
+                // Task 8 (multi-device-sync-foundation) -- the real, net-new HTTP
+                // transport dependency this module previously had zero of
+                // (`DisabledProductionTransport` never made a network call).
+                // `ktor-client-core` is engine-agnostic in commonMain; each
+                // platform supplies its own real engine artifact
+                // (`ktor-client-okhttp` in androidMain today; a future iOS
+                // milestone adds `ktor-client-darwin` to iosMain the same way
+                // `shared/build.gradle.kts`'s own iosMain comment already
+                // documents for the SQLDelight native driver). Version pinned
+                // (not a floating range), matching this module's own established
+                // pinning discipline for every other dependency here.
+                implementation("io.ktor:ktor-client-core:2.3.12")
             }
         }
         val commonTest by getting {
@@ -82,6 +94,10 @@ kotlin {
                 implementation("androidx.activity:activity-compose:1.9.2")
                 implementation("androidx.security:security-crypto:1.1.0-alpha06")
                 implementation("app.cash.sqldelight:android-driver:2.3.2")
+                // Task 8 -- real Android Ktor engine (OkHttp-backed), the same
+                // real HTTP stack Android apps already ship with, not a
+                // hand-rolled substitute.
+                implementation("io.ktor:ktor-client-okhttp:2.3.12")
                 // M11.2/M11.8 -- real Ed25519 signature verification for
                 // signed License leases. Same version and same raw "subtle"
                 // primitives (Ed25519Sign/Ed25519Verify) the legacy Android
@@ -109,6 +125,12 @@ kotlin {
                 // real, host-executable on this plain JVM unit-test target
                 // -- not a mock standing in for it.
                 implementation("com.google.crypto.tink:tink-android:1.15.0")
+                // Task 8 -- real Ktor OkHttp engine, explicitly redeclared here
+                // matching this source set's own established convention of
+                // re-declaring what androidMain already provides (see the
+                // tink-android redeclaration immediately above) rather than
+                // relying on implicit test-classpath inheritance.
+                implementation("io.ktor:ktor-client-okhttp:2.3.12")
             }
         }
         // Kotlin's Default Hierarchy Template (on by default since Kotlin

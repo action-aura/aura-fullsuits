@@ -1,5 +1,7 @@
 package com.actionaura.retail.licensing
 
+import kotlinx.serialization.json.JsonPrimitive
+
 /**
  * M7.18 -- versioned, sanitized fixture suite. NO real license key, NO real
  * customer/staff PII, NO real device public key from a genuine device, NO
@@ -83,7 +85,7 @@ object LicensingFixtures {
         subscriptionStatus = subscriptionStatus,
         allowedDeviceCount = 3,
         deviceKeyFingerprint = "fixture-device-key-fingerprint",
-        entitlements = mapOf("max_devices" to "3"),
+        entitlements = mapOf("max_devices" to JsonPrimitive(3)),
         offlinePolicy = offlinePolicy(),
         contractVersion = contractVersion,
         commercialGraceEnd = commercialGraceEnd,

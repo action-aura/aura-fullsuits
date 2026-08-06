@@ -289,8 +289,15 @@ class M9OrchestrationTest {
 
     @Test
     fun productionWiringCannotConstructAFakeSuccessTransport() {
-        // Structural: DisabledProductionTransport is the only ExternalLicensingTransport implementation
-        // in commonMain/androidMain; ContractFixtureTransport lives exclusively in commonTest.
+        // Structural: DisabledProductionTransport remains the transport actually
+        // wired into `AuraAppContainer`/production DI. Task 8 (multi-device-sync-
+        // foundation) added a second, real commonMain/androidMain implementation
+        // (`HttpExternalLicensingTransport`) for the one operation Owner's real
+        // activation.py already supports -- but it is deliberately not wired
+        // into production composition here, since most of its interface surface
+        // (customer session/register/sign-in/claim-license) still has no real
+        // Owner-side authority (`ExternalCustomerSessionContracts.kt`'s own
+        // KDoc). ContractFixtureTransport still lives exclusively in commonTest.
         val production: ExternalLicensingTransport = DisabledProductionTransport()
         assertTrue(production is DisabledProductionTransport)
     }
