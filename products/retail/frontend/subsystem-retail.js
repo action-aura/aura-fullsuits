@@ -1074,7 +1074,7 @@ const RetailSystem = {
     const payload = {
       name, sku,
       barcode:      document.getElementById('pm-barcode')?.value,
-      category_id:  document.getElementById('pm-cat')?.value ? +document.getElementById('pm-cat').value : null,
+      category_id:  document.getElementById('pm-cat')?.value || null,
       cost_price:   +document.getElementById('pm-cost')?.value || 0,
       sell_price:   +document.getElementById('pm-sell')?.value || 0,
       tax_rate:     +document.getElementById('pm-tax')?.value  || 0,

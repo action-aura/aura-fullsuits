@@ -37,6 +37,7 @@ import csv
 import io
 import re
 import json as _json
+import uuid as _uuid
 from datetime import datetime
 from flask import Blueprint, request, jsonify, session
 
@@ -1046,8 +1047,9 @@ def _handle_retail_products(records):
             if cat_name not in cat_cache:
                 row = conn.execute("SELECT id FROM categories WHERE company_id=? AND name=?", (cid, cat_name)).fetchone()
                 if not row:
-                    cur.execute("INSERT INTO categories (company_id,name) VALUES (?,?)", (cid, cat_name))
-                    cat_cache[cat_name] = cur.lastrowid
+                    new_cat_id = str(_uuid.uuid4())
+                    cur.execute("INSERT INTO categories (id,company_id,name) VALUES (?,?,?)", (new_cat_id, cid, cat_name))
+                    cat_cache[cat_name] = new_cat_id
                 else:
                     cat_cache[cat_name] = row['id']
             cat_id = cat_cache[cat_name]
@@ -1170,8 +1172,8 @@ def _handle_retail_categories(records):
         if not name: continue
         if conn.execute("SELECT id FROM categories WHERE company_id=? AND name=?", (cid, name)).fetchone():
             continue
-        cur.execute("INSERT INTO categories (company_id,name,description) VALUES (?,?,?)",
-                    (cid, name, rec.get('description','')))
+        cur.execute("INSERT INTO categories (id,company_id,name,description) VALUES (?,?,?,?)",
+                    (str(_uuid.uuid4()), cid, name, rec.get('description','')))
         imported += 1
     conn.commit(); conn.close()
     return {'imported': imported, 'message': f'{imported} categories imported.'}

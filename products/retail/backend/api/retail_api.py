@@ -9,13 +9,14 @@ api/subsystems/retail_api.py -- see docs/migration/retail-extraction-report.md.
 import os
 import time
 import json
+import uuid as _uuid
 import requests
 from decimal import Decimal, ROUND_HALF_UP
 from flask import Blueprint, request, jsonify, session
 from commercial_runtime.identity.mt_auth import mt_login_required, mt_require_subsystem
 from commercial_runtime.licensing_contracts.flask_guard import make_capability_guard
 from database.schema import get_retail_conn, sub_create
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from core.retail import pricing as tax_engine
 from config import DATABASE_DIR
 
@@ -52,6 +53,19 @@ def _cid():
 
 def _uid():
     return session.get('mt_user_id') or session.get('user_id', 'system')
+
+
+# Multi-device sync foundation (2026-08-06): queues a row into sync_outbox
+# (Task 3) so the push loop (Task 5) can relay it to the Owner. Must be
+# called with the SAME cur/conn as the row write it describes, before that
+# transaction's commit() -- the outbox row and the row it describes land or
+# roll back together.
+def _queue_sync_event(cur, entity_type, entity_id, event_type, payload):
+    cur.execute(
+        "INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, payload, created_at) VALUES (?,?,?,?,?,?)",
+        (str(_uuid.uuid4()), entity_type, str(entity_id), event_type,
+         json.dumps(payload), datetime.now(timezone.utc).isoformat()),
+    )
 
 def _default_branch(conn, cid):
     """Resolve this company's working branch the SAME way create_product files stock —
@@ -213,11 +227,52 @@ def create_category():
     cid = _cid()
     conn = get_retail_conn()
     cur = conn.cursor()
-    cur.execute("INSERT INTO categories (company_id,name,description) VALUES (?,?,?)",
-                (cid, data['name'], data.get('description', '')))
-    cid_new = cur.lastrowid
+    new_id = str(_uuid.uuid4())
+    cur.execute("INSERT INTO categories (id, company_id, name, description) VALUES (?,?,?,?)",
+                (new_id, cid, data['name'], data.get('description', '')))
+    _queue_sync_event(cur, 'category', new_id, 'create', {
+        'id': new_id, 'company_id': cid, 'name': data['name'], 'description': data.get('description', ''),
+    })
     conn.commit(); conn.close()
-    return jsonify({'status': 'success', 'data': {'id': cid_new}})
+    return jsonify({'status': 'success', 'data': {'id': new_id}})
+
+@retail_bp.route('/categories/<string:category_id>', methods=['PUT'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.product.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+def update_category(category_id):
+    data = request.json or {}
+    if not data.get('name'):
+        return jsonify({'status': 'error', 'message': 'Category name required'}), 400
+    cid = _cid()
+    conn = get_retail_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE categories SET name=?, description=? WHERE id=? AND company_id=?",
+                (data['name'], data.get('description', ''), category_id, cid))
+    if cur.rowcount == 0:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Category not found'}), 404
+    _queue_sync_event(cur, 'category', category_id, 'update', {
+        'id': category_id, 'company_id': cid, 'name': data['name'], 'description': data.get('description', ''),
+    })
+    conn.commit(); conn.close()
+    return jsonify({'status': 'success'})
+
+@retail_bp.route('/categories/<string:category_id>', methods=['DELETE'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.product.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+def delete_category(category_id):
+    cid = _cid()
+    conn = get_retail_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM categories WHERE id=? AND company_id=?", (category_id, cid))
+    if cur.rowcount == 0:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Category not found'}), 404
+    _queue_sync_event(cur, 'category', category_id, 'delete', {'id': category_id})
+    conn.commit(); conn.close()
+    return jsonify({'status': 'success'})
 
 # ── Products ──────────────────────────────────────────────────────────────────
 
