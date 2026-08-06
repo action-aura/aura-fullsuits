@@ -96,3 +96,4 @@ Thumbs.db
 
 # Logs
 *.log
+.worktrees/
