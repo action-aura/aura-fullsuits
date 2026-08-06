@@ -101,6 +101,15 @@ def _version():
     }), 200
 
 
+@app.route('/', methods=['GET'])
+def _index():
+    """Serves the standalone shell (frontend/index.html), which loads
+    app-shell.js + subsystem-retail.js and drives onboarding/login/nav.
+    Was previously unrouted entirely -- the packaged launcher opened this
+    exact URL and 404'd (see docs/superpowers/specs/2026-08-06-retail-standalone-ui-shell-design.md)."""
+    return app.send_static_file('index.html')
+
+
 from commercial_runtime.identity.auth_routes import auth_bp
 from commercial_runtime.identity.onboarding_routes import onboarding_bp
 from commercial_runtime.identity.registry_db import init_registry_db
