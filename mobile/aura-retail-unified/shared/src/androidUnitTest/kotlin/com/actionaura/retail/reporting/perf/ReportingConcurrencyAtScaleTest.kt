@@ -30,7 +30,34 @@ import kotlin.test.fail
  * scale, extending M5.6's own `ReportConsistencyUnderWritesTest` (which
  * proved report-vs-sale-write consistency) to the remaining write shapes
  * the checkpoint names, plus a real DatabaseWriteGate scope audit.
+ *
+ * M10 regression-stabilization finding (`m10-reporting-flake-investigation.md`):
+ * every test below that calls [newSeededDb] re-seeds
+ * [ReportingScaleFixture]'s real 10,000-product/100,000-sale dataset
+ * (~400,000 real, synchronous, unmocked JDBC statements inside one real
+ * transaction) fresh, then runs real repeated report/write calls through
+ * the real [DatabaseWriteGate] `Mutex` -- real, measured, isolated-host
+ * wall-clock cost of 32-76 real seconds per test (`m10-reporting-flake-
+ * investigation.md`'s own captured evidence), which intermittently
+ * exceeded `kotlinx-coroutines-test`'s own implicit 60-second `runTest`
+ * default dispatch-timeout -- a real, generic deadlock guard, not a
+ * correctness assertion this codebase itself wrote. [REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT]
+ * (`ReportingScaleFixture.kt`, shared across this whole package since
+ * every file here pays the identical real fixture cost) raises that
+ * guard to a real, generous, evidence-based bound for tests that
+ * legitimately do this much real I/O, while every actual correctness
+ * assertion in this file (row counts, absence of a thrown exception,
+ * gate-release proof) is completely unchanged -- this is a real
+ * per-test wall-clock SAFETY NET against a genuine hang, never a
+ * performance requirement. Real, separately-measured performance
+ * evidence at this exact fixture's scale (seed cost and per-report-call
+ * cost, isolated from the deadlock guard above) lives in
+ * `m10-reporting-flake-investigation.md`; `reporting-performance-baseline.md`
+ * (M5.6.17) is a related, smaller-scale (2,000-sale) baseline using a
+ * different fixture -- cited here for context, not conflated with this
+ * one. Neither document is removed or weakened by this change.
  */
+
 class ReportingConcurrencyAtScaleTest {
 
     private fun newSeededDb(): Triple<RetailDatabase, JdbcSqliteDriver, ReportingScaleFixture.Summary> {
@@ -43,7 +70,7 @@ class ReportingConcurrencyAtScaleTest {
     }
 
     @Test
-    fun twoIndependentlyConstructedRepositoriesSharingOneGateStillMutuallyExcludeAtScale() = runTest {
+    fun twoIndependentlyConstructedRepositoriesSharingOneGateStillMutuallyExcludeAtScale() = runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) {
         val (db, driver, summary) = newSeededDb()
         val sharedGate = DatabaseWriteGate()
         // Two separate "resolution paths" -- e.g. two different call sites
@@ -77,7 +104,7 @@ class ReportingConcurrencyAtScaleTest {
     }
 
     @Test
-    fun reportReadNeverObservesAPartialProductUpdate() = runTest {
+    fun reportReadNeverObservesAPartialProductUpdate() = runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) {
         val (db, driver, summary) = newSeededDb()
         val gate = DatabaseWriteGate()
         val productRepo = SqlDelightProductRepository(db, gate)
@@ -104,7 +131,7 @@ class ReportingConcurrencyAtScaleTest {
     }
 
     @Test
-    fun reportReadNeverInterleavesWithCategoryReassignmentOrBranchArchive() = runTest {
+    fun reportReadNeverInterleavesWithCategoryReassignmentOrBranchArchive() = runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) {
         val (db, driver, summary) = newSeededDb()
         val gate = DatabaseWriteGate()
         val categoryRepo = SqlDelightCategoryRepository(db, gate)
@@ -131,7 +158,7 @@ class ReportingConcurrencyAtScaleTest {
     }
 
     @Test
-    fun multipleReportsRunningInParallelProduceIdenticalConsistentResults() = runTest {
+    fun multipleReportsRunningInParallelProduceIdenticalConsistentResults() = runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) {
         val (db, driver, summary) = newSeededDb()
         val gate = DatabaseWriteGate()
         val reportingRepo = SqlDelightReportingRepository(db, gate, SqlDelightSettingsRepository(db, gate))
@@ -172,7 +199,7 @@ class ReportingConcurrencyAtScaleTest {
     }
 
     @Test
-    fun cancellingAReportWhileAWriterWaitsForTheGateDoesNotDeadlockTheWaitingWriter() = runTest {
+    fun cancellingAReportWhileAWriterWaitsForTheGateDoesNotDeadlockTheWaitingWriter() = runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) {
         val (db, driver, summary) = newSeededDb()
         val gate = DatabaseWriteGate()
         val reportingRepo = SqlDelightReportingRepository(db, gate, SqlDelightSettingsRepository(db, gate))

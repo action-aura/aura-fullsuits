@@ -23,6 +23,7 @@ import kotlinx.coroutines.test.runTest
  * comparing complete raw `EXPLAIN QUERY PLAN` text, which real SQLite
  * version differences would make brittle.
  */
+// M10 regression-stabilization: runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) below is a real deadlock guard, not a performance requirement -- see ReportingScaleFixture.kt's own doc comment and m10-reporting-flake-investigation.md.
 class ReportingQueryPlanRegressionTest {
 
     companion object {
@@ -104,7 +105,7 @@ class ReportingQueryPlanRegressionTest {
     }
 
     @Test
-    fun realQueryResultsStayExactAndBoundedAtFullScale() = runTest {
+    fun realQueryResultsStayExactAndBoundedAtFullScale() = runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) {
         val gate = DatabaseWriteGate()
         val repo = SqlDelightReportingRepository(db, gate, SqlDelightSettingsRepository(db, gate))
         val fullRange = ReportPeriodFactory.customRange(summary.startEpochMillis, summary.endEpochMillis)

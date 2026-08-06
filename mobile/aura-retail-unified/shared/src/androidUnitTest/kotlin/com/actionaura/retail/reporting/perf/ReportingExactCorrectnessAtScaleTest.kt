@@ -22,6 +22,7 @@ import kotlin.test.assertEquals
  * uses exactly four known price points, letting this total be computed
  * by hand rather than approximated.
  */
+// M10 regression-stabilization: runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) below is a real deadlock guard, not a performance requirement -- see ReportingScaleFixture.kt's own doc comment and m10-reporting-flake-investigation.md.
 class ReportingExactCorrectnessAtScaleTest {
 
     private fun newSeededDb(): Triple<RetailDatabase, JdbcSqliteDriver, ReportingScaleFixture.Summary> {
@@ -34,7 +35,7 @@ class ReportingExactCorrectnessAtScaleTest {
     }
 
     @Test
-    fun grossSalesOverTheFullRangeExactlyMatchesTheFixturesOwnHandComputedTotal() = runTest {
+    fun grossSalesOverTheFullRangeExactlyMatchesTheFixturesOwnHandComputedTotal() = runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) {
         val (db, driver, summary) = newSeededDb()
         val gate = DatabaseWriteGate()
         val repo = SqlDelightReportingRepository(db, gate, SqlDelightSettingsRepository(db, gate))

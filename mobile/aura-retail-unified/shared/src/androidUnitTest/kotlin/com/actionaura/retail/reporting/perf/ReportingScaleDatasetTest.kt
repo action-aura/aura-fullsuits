@@ -16,6 +16,7 @@ import kotlin.test.assertTrue
  * M5.7 whose job is to validate the fixture itself; every other M5.7
  * test file uses `ReportingScaleFixture.seed(db, driver)` as a given.
  */
+// M10 regression-stabilization: runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) below is a real deadlock guard, not a performance requirement -- see ReportingScaleFixture.kt's own doc comment and m10-reporting-flake-investigation.md.
 class ReportingScaleDatasetTest {
 
     private fun newDb(): Pair<RetailDatabase, SqlDriver> {
@@ -26,7 +27,7 @@ class ReportingScaleDatasetTest {
     }
 
     @Test
-    fun fixtureProducesExactlyTheClaimedRowCountsAndCharacteristics() = runTest {
+    fun fixtureProducesExactlyTheClaimedRowCountsAndCharacteristics() = runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) {
         val (db, driver) = newDb()
         val summary = ReportingScaleFixture.seed(db, driver)
 

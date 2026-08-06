@@ -22,6 +22,7 @@ import kotlin.test.assertTrue
  * whole trend). Uses `CountingSqlDriver` to count real `executeQuery`
  * calls, not an estimate from timing.
  */
+// M10 regression-stabilization: runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) below is a real deadlock guard, not a performance requirement -- see ReportingScaleFixture.kt's own doc comment and m10-reporting-flake-investigation.md.
 class ReportingQueryCountTest {
 
     private fun newSeededDb(): Triple<RetailDatabase, CountingSqlDriver, ReportingScaleFixture.Summary> {
@@ -36,7 +37,7 @@ class ReportingQueryCountTest {
     }
 
     @Test
-    fun oneSalesSummaryCallIssuesExactlyTwoRealQueries() = runTest {
+    fun oneSalesSummaryCallIssuesExactlyTwoRealQueries() = runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) {
         val (db, driver, summary) = newSeededDb()
         val repo = SqlDelightReportingRepository(db, DatabaseWriteGate(), SqlDelightSettingsRepository(db, DatabaseWriteGate()))
         val period = ReportPeriodFactory.customRange(summary.startEpochMillis, summary.startEpochMillis + 86_400_000L)
@@ -49,7 +50,7 @@ class ReportingQueryCountTest {
     }
 
     @Test
-    fun getSalesTrendIssuesExactlyTwoQueriesPerBucketARealNPlusOneShape() = runTest {
+    fun getSalesTrendIssuesExactlyTwoQueriesPerBucketARealNPlusOneShape() = runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) {
         val (db, driver, summary) = newSeededDb()
         val gate = DatabaseWriteGate()
         val repo = SqlDelightReportingRepository(db, gate, SqlDelightSettingsRepository(db, gate))
@@ -65,7 +66,7 @@ class ReportingQueryCountTest {
     }
 
     @Test
-    fun topProductsCallIssuesExactlyTwoRealQueriesRegardlessOfResultSize() = runTest {
+    fun topProductsCallIssuesExactlyTwoRealQueriesRegardlessOfResultSize() = runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) {
         val (db, driver, summary) = newSeededDb()
         val gate = DatabaseWriteGate()
         val repo = SqlDelightReportingRepository(db, gate, SqlDelightSettingsRepository(db, gate))
@@ -79,7 +80,7 @@ class ReportingQueryCountTest {
     }
 
     @Test
-    fun fullDashboardCompositionIssuesABoundedExplainableQueryCount() = runTest {
+    fun fullDashboardCompositionIssuesABoundedExplainableQueryCount() = runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) {
         val (db, driver, summary) = newSeededDb()
         val gate = DatabaseWriteGate()
         val repo = SqlDelightReportingRepository(db, gate, SqlDelightSettingsRepository(db, gate))

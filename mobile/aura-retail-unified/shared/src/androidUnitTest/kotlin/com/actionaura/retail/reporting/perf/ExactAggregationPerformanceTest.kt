@@ -23,6 +23,7 @@ import kotlin.test.assertTrue
  * query plans showed actually cost enough wall-clock time to justify a
  * new composite index?
  */
+// M10 regression-stabilization: runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) below is a real deadlock guard, not a performance requirement -- see ReportingScaleFixture.kt's own doc comment and m10-reporting-flake-investigation.md.
 class ExactAggregationPerformanceTest {
 
     private fun newSeededDb(): Triple<RetailDatabase, JdbcSqliteDriver, ReportingScaleFixture.Summary> {
@@ -41,7 +42,7 @@ class ExactAggregationPerformanceTest {
     }
 
     @Test
-    fun exactAggregationLatencyAcrossRepresentativeRangesAtFullScale() = runTest {
+    fun exactAggregationLatencyAcrossRepresentativeRangesAtFullScale() = runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) {
         val (db, gateDriver, summary) = newSeededDb()
         val gate = DatabaseWriteGate()
         val settings = SqlDelightSettingsRepository(db, gate)

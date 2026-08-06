@@ -19,6 +19,7 @@ import kotlin.test.assertTrue
  * `ReportingScaleFixture`'s real `reassignedProductId` case: a Product
  * sold under Category A, later reassigned to Category B.
  */
+// M10 regression-stabilization: runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) below is a real deadlock guard, not a performance requirement -- see ReportingScaleFixture.kt's own doc comment and m10-reporting-flake-investigation.md.
 class ReportingCategoryCurrentRegressionTest {
 
     private fun newSeededDb(): Triple<RetailDatabase, JdbcSqliteDriver, ReportingScaleFixture.Summary> {
@@ -31,7 +32,7 @@ class ReportingCategoryCurrentRegressionTest {
     }
 
     @Test
-    fun historicalReportFilteredByTheProductsCurrentCategoryIncludesTheSaleEvenThoughItWasSoldUnderADifferentCategory() = runTest {
+    fun historicalReportFilteredByTheProductsCurrentCategoryIncludesTheSaleEvenThoughItWasSoldUnderADifferentCategory() = runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) {
         val (db, driver, summary) = newSeededDb()
         val gate = DatabaseWriteGate()
         val repo = SqlDelightReportingRepository(db, gate, SqlDelightSettingsRepository(db, gate))
@@ -48,7 +49,7 @@ class ReportingCategoryCurrentRegressionTest {
     }
 
     @Test
-    fun historicalReportFilteredByTheOriginalSaleTimeCategoryNoLongerIncludesTheSaleAfterReassignment() = runTest {
+    fun historicalReportFilteredByTheOriginalSaleTimeCategoryNoLongerIncludesTheSaleAfterReassignment() = runTest(timeout = REPORTING_SCALE_DEADLOCK_GUARD_TIMEOUT) {
         val (db, driver, summary) = newSeededDb()
         val gate = DatabaseWriteGate()
         val repo = SqlDelightReportingRepository(db, gate, SqlDelightSettingsRepository(db, gate))
