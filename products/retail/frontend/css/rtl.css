@@ -1,0 +1,48 @@
+/* ============================================================================
+ * RTL layout — activated ONLY under body.rtl (Arabic). The default English
+ * (LTR) experience is never touched. Most of the app uses flex/grid, which
+ * mirrors automatically under direction:rtl; the rules below handle the
+ * specifics that don't auto-mirror, and explicitly KEEP data/charts logical.
+ * ========================================================================== */
+
+body.rtl { direction: rtl; text-align: right; }
+
+/* --- Typographic mirroring for common chrome ------------------------------ */
+body.rtl .sub-section-sub,
+body.rtl .sub-chart-title,
+body.rtl .sub-kpi-label,
+body.rtl .sub-section-title { text-align: right; }
+
+/* --- Inputs / selects read right-to-left ---------------------------------- */
+body.rtl input,
+body.rtl select,
+body.rtl textarea { text-align: right; }
+
+/* --- Tables: header/text right-aligned; NUMBERS stay right-aligned (correct
+       in RTL anyway). Keep the table itself RTL so the first column is on the
+       right, matching reading order. --------------------------------------- */
+body.rtl table { direction: rtl; }
+body.rtl th, body.rtl td { text-align: right; }
+
+/* --- CHARTS / CANVAS must NOT mirror: flipping would reverse axes, legends
+       and value order. Force them back to LTR. ------------------------------ */
+body.rtl canvas,
+body.rtl .echarts-container,
+body.rtl [id$="-chart"],
+body.rtl [id$="-container"] canvas,
+body.rtl #sub-ed-container .ed-chart { direction: ltr; }
+
+/* --- Fixed-position chrome anchored to the left edge moves to the right.
+       Uses !important to beat the element's inline `left:12px` style. -------- */
+body.rtl #aura-beta-badge { left: auto !important; right: 12px !important; }
+
+/* --- Modals: keep centered; flip inner text + the corner lang toggle ------- */
+body.rtl #aura-relogin-modal { direction: rtl; }
+body.rtl #aura-relogin-modal input { text-align: right; }
+
+/* --- Import wizard: mirror rows but keep the EN→AR mapping arrows logical --- */
+body.rtl .iw-map-row { direction: rtl; }
+body.rtl .iw-modal { text-align: right; }
+
+/* --- Numeric cells / money should remain LTR so figures read correctly ----- */
+body.rtl .num, body.rtl .money, body.rtl .iw-num { direction: ltr; display: inline-block; }
