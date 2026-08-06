@@ -1,0 +1,48 @@
+"""sync_events table
+
+Revision ID: c52eef9a82cc
+Revises: f5959fdb9738
+Create Date: 2026-08-06 20:25:31.004077
+
+Append-only cross-device sync event log (Task 1 of the multi-device
+data-sync foundation plan). `id` is client-generated (the push endpoint's
+idempotency key -- a retry with the same id must never create a second
+row), `seq` is the server-assigned, autoincrementing ordering authority
+every client cursors against. `client_created_at` is the device's own
+claimed timestamp (display only, untrusted for ordering); the mixin's
+`created_at`/`updated_at` serve as the server-authoritative receipt
+timestamps.
+"""
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
+
+
+revision = 'c52eef9a82cc'
+down_revision = 'f5959fdb9738'
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "owner_sync_events",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column("seq", sa.BigInteger(), autoincrement=True, nullable=False),
+        sa.Column("license_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("owner_licenses.id"), nullable=False),
+        sa.Column("device_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("entity_type", sa.String(64), nullable=False),
+        sa.Column("entity_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("event_type", sa.String(16), nullable=False),
+        sa.Column("payload", postgresql.JSONB(), nullable=False),
+        sa.Column("client_created_at", sa.DateTime(), nullable=False),
+        sa.UniqueConstraint("seq", name="uq_owner_sync_events_seq"),
+    )
+    op.create_index("ix_owner_sync_events_license_seq", "owner_sync_events", ["license_id", "seq"])
+
+
+def downgrade() -> None:
+    op.drop_index("ix_owner_sync_events_license_seq", table_name="owner_sync_events")
+    op.drop_table("owner_sync_events")
