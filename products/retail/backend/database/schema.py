@@ -28,7 +28,11 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 
 # Wave 1B (Part K): see products/clinic/backend/database/schema.py's
 # identical CLINIC_SCHEMA_VERSION for the full rationale.
-RETAIL_SCHEMA_VERSION = 1
+# Multi-device sync foundation (2026-08-06), v1 -> v2: categories.id moves
+# from INTEGER PRIMARY KEY AUTOINCREMENT to TEXT PRIMARY KEY (client-
+# generated UUID) so two offline devices can create categories without ever
+# colliding on id. See _migrate_categories_to_uuid below.
+RETAIL_SCHEMA_VERSION = 2
 
 
 def _get_path(name):
@@ -73,6 +77,130 @@ def sub_create(conn_fn, table, data):
         return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
     finally:
         conn.close()
+
+
+def _migrate_categories_to_uuid(conn):
+    """One-time migration (schema v1 -> v2): categories.id moves from
+    INTEGER PRIMARY KEY AUTOINCREMENT to TEXT PRIMARY KEY (client-generated
+    UUIDs), so two offline devices can create categories without ever
+    colliding on id. products.category_id is repointed to match, preserving
+    every existing row (name/description/company_id/created_at, and every
+    product's category link, including NULL).
+
+    Two SQLite behaviours (both confirmed empirically against this exact
+    connection factory/pragmas, not assumed) shaped how this is written:
+
+    1. `PRAGMA foreign_keys=ON` is set on every connection by `_conn()`
+       above, including the one this runs on. Left on, `DROP TABLE
+       categories_old` (once products rows reference it) and `ALTER TABLE
+       products DROP COLUMN category_id_old` (SQLite refuses to drop a
+       column that is part of a FOREIGN KEY definition) both fail partway
+       through a naive rename-based rebuild. So this runs with
+       foreign_keys temporarily OFF (it cannot be toggled inside a
+       transaction, so it's flipped before BEGIN and restored after COMMIT
+       via try/finally).
+
+    2. `ALTER TABLE x RENAME TO y` auto-rewrites any OTHER table's
+       FOREIGN KEY clause that points at `x`, to point at `y` instead
+       (SQLite's default legacy_alter_table=OFF behaviour). Renaming
+       `categories` to `categories_old` would silently rewrite products'
+       declared FK to `REFERENCES "categories_old"(id)`; renaming
+       `products` away would do the same to inventory_movements/
+       sale_items/purchase_order_items/return_items. Both tables are
+       instead rebuilt under a `_new` name and swapped in via
+       `DROP <original>` + `RENAME <new> TO <original>` -- the original
+       name is never renamed away, so no other table's FK text is ever
+       touched.
+
+    The whole rebuild runs as one explicit transaction; any failure rolls
+    back completely (verified: this Python/SQLite combination honors
+    explicit BEGIN across mixed DDL+DML), leaving the database exactly as
+    the pre-migration backup captured it for a clean retry on next launch.
+    """
+    import uuid as _uuid
+
+    # Defensive idempotency: ensure_schema_version's version gate is the
+    # normal guard against a second run, but check directly too rather than
+    # relying solely on that.
+    id_col = next((c for c in conn.execute("PRAGMA table_info(categories)").fetchall() if c["name"] == "id"), None)
+    if id_col is not None and id_col["type"].upper() == "TEXT":
+        return
+
+    fk_was_on = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        conn.execute("BEGIN")
+
+        cat_rows = conn.execute(
+            "SELECT id, company_id, name, description, created_at FROM categories"
+        ).fetchall()
+        id_map = {row["id"]: str(_uuid.uuid4()) for row in cat_rows}
+
+        conn.execute("""
+            CREATE TABLE categories_new (
+                id TEXT PRIMARY KEY,
+                company_id INTEGER DEFAULT 1,
+                name TEXT NOT NULL,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        for row in cat_rows:
+            conn.execute(
+                "INSERT INTO categories_new (id, company_id, name, description, created_at) VALUES (?,?,?,?,?)",
+                (id_map[row["id"]], row["company_id"], row["name"], row["description"], row["created_at"]),
+            )
+        conn.execute("DROP TABLE categories")
+        conn.execute("ALTER TABLE categories_new RENAME TO categories")
+
+        conn.execute("""
+            CREATE TABLE products_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INTEGER DEFAULT 1,
+                sku TEXT NOT NULL,
+                barcode TEXT,
+                name TEXT NOT NULL,
+                category_id TEXT,
+                cost_price REAL DEFAULT 0,
+                sell_price REAL DEFAULT 0,
+                tax_rate REAL DEFAULT 0,
+                unit TEXT DEFAULT 'pcs',
+                reorder_level INTEGER DEFAULT 5,
+                status TEXT DEFAULT 'active',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (category_id) REFERENCES categories(id)
+            )
+        """)
+        conn.execute("""
+            INSERT INTO products_new (id, company_id, sku, barcode, name, category_id,
+                                       cost_price, sell_price, tax_rate, unit, reorder_level,
+                                       status, created_at)
+            SELECT id, company_id, sku, barcode, name, NULL,
+                   cost_price, sell_price, tax_rate, unit, reorder_level,
+                   status, created_at
+            FROM products
+        """)
+        old_cat_ids = conn.execute(
+            "SELECT DISTINCT category_id FROM products WHERE category_id IS NOT NULL"
+        ).fetchall()
+        for row in old_cat_ids:
+            old_cid = row["category_id"]
+            new_cid = id_map.get(old_cid)
+            if new_cid is not None:
+                conn.execute(
+                    "UPDATE products_new SET category_id=? WHERE id IN "
+                    "(SELECT id FROM products WHERE category_id=?)",
+                    (new_cid, old_cid),
+                )
+        conn.execute("DROP TABLE products")
+        conn.execute("ALTER TABLE products_new RENAME TO products")
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute(f"PRAGMA foreign_keys={'ON' if fk_was_on else 'OFF'}")
 
 
 def init_retail():
@@ -279,19 +407,35 @@ def init_retail():
         details TEXT,
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+    -- Multi-device sync foundation (2026-08-06): sync_outbox holds locally
+    -- committed writes not yet relayed to the Owner; sync_cursor is a
+    -- single-row (id=1) high-water-mark of the last Owner-side seq this
+    -- device has pulled. Consumed by Task 4 (routes write to sync_outbox)
+    -- and Task 5 (sync client reads/writes both).
+    CREATE TABLE IF NOT EXISTS sync_outbox (
+        id TEXT PRIMARY KEY,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS sync_cursor (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        last_seq INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT OR IGNORE INTO sync_cursor (id, last_seq) VALUES (1, 0);
     """)
     conn.commit()
 
-    # Wave 1B (Part K): infrastructure ready for the first real Retail schema
-    # change (none exist yet -- unlike Clinic, which already has real ALTERs).
-    # Mirrors products/clinic/backend/database/schema.py's identical pattern;
-    # see commercial_runtime/security/migration_safety.py. The no-op
-    # migrate_fn below is intentional, not a placeholder to "fill in later" --
-    # add real ALTER statements to it (and bump RETAIL_SCHEMA_VERSION) the
-    # day Retail's schema actually needs to change.
+    # Wave 1B (Part K) / multi-device sync foundation (2026-08-06): first
+    # real Retail schema change -- see _migrate_categories_to_uuid above.
+    # Mirrors products/clinic/backend/database/schema.py's identical
+    # ensure_schema_version pattern; see
+    # commercial_runtime/security/migration_safety.py.
     from commercial_runtime.security.migration_safety import ensure_schema_version
     ensure_schema_version(
-        conn, _get_path('retail'), RETAIL_SCHEMA_VERSION, lambda c: None,
+        conn, _get_path('retail'), RETAIL_SCHEMA_VERSION, _migrate_categories_to_uuid,
         backup_dir=os.path.join(BASE_DIR, 'migration_backups'),
     )
 
@@ -314,9 +458,15 @@ def _seed_retail(conn, cur, company_id=1):
         (cid, 'West Mall', '200 Shopping Blvd, Westgate', '+1-555-1003'),
     ])
 
-    cur.executemany("INSERT INTO categories (company_id,name) VALUES (?,?)", [
-        (cid, 'Electronics'), (cid, 'Clothing'), (cid, 'Food & Beverages'),
-        (cid, 'Home & Living'), (cid, 'Health & Beauty'),
+    # categories.id is TEXT (client-generated UUID) since the multi-device
+    # sync foundation migration (see _migrate_categories_to_uuid) -- there is
+    # no autoincrement to fall back on, so seed data must generate its own
+    # ids explicitly, same as any real device would.
+    import uuid as _uuid
+    category_names = ['Electronics', 'Clothing', 'Food & Beverages', 'Home & Living', 'Health & Beauty']
+    category_ids = [str(_uuid.uuid4()) for _ in category_names]
+    cur.executemany("INSERT INTO categories (id,company_id,name) VALUES (?,?,?)", [
+        (category_ids[i], cid, category_names[i]) for i in range(len(category_names))
     ])
 
     cur.executemany("INSERT INTO suppliers (company_id,name,phone,email) VALUES (?,?,?,?)", [
@@ -329,6 +479,10 @@ def _seed_retail(conn, cur, company_id=1):
     cur.execute("INSERT INTO tax_rates (company_id,name,rate,is_default) VALUES (?,'Zero Rated',0,0)", (cid,))
     cur.execute("INSERT INTO tax_rates (company_id,name,rate,is_default) VALUES (?,'Reduced Rate',5,0)", (cid,))
 
+    # 4th element is a 1-based index into category_names/category_ids above
+    # (1=Electronics .. 5=Health & Beauty), preserved from the source data's
+    # positional convention -- resolved to the real generated UUID below,
+    # since category_id is no longer a small autoincrement int.
     products = [
         ('SKU-R001', '6001001', 'Laptop 15" Pro', 1, 750.0, 1199.99, 15, 'pcs', 3),
         ('SKU-R002', '6001002', 'Wireless Earbuds', 1, 25.0, 59.99, 15, 'pcs', 10),
@@ -344,7 +498,9 @@ def _seed_retail(conn, cur, company_id=1):
         ('SKU-R012', '6001012', 'Shampoo 400ml', 5, 2.5, 7.99, 5, 'pcs', 20),
     ]
     for p in products:
-        cur.execute("INSERT INTO products (company_id,sku,barcode,name,category_id,cost_price,sell_price,tax_rate,unit,reorder_level) VALUES (?,?,?,?,?,?,?,?,?,?)", (cid,) + p)
+        cat_id = category_ids[p[3] - 1]
+        row = (p[0], p[1], p[2], cat_id) + p[4:]
+        cur.execute("INSERT INTO products (company_id,sku,barcode,name,category_id,cost_price,sell_price,tax_rate,unit,reorder_level) VALUES (?,?,?,?,?,?,?,?,?,?)", (cid,) + row)
 
     cur.execute("SELECT id FROM products WHERE company_id=?", (cid,))
     prod_ids = [r[0] for r in cur.fetchall()]
