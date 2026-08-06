@@ -473,13 +473,18 @@ const SubsystemApp = {
       overlay.innerHTML = `
         <div style="font-size:56px;margin-bottom:16px;">✅</div>
         <h2 style="font-size:28px;font-weight:800;margin:0 0 8px;">Account Created!</h2>
-        <p style="color:#64748b;margin:0;font-size:16px;">Welcome, <strong style="color:#14b8a6">${name}</strong>. Loading your platform…</p>`;
+        <p style="color:#64748b;margin:0;font-size:16px;">Welcome, <strong id="aura-setup-complete-name" style="color:#14b8a6"></strong>. Loading your platform…</p>`;
+      const nameEl = overlay.querySelector('#aura-setup-complete-name');
+      if (nameEl) nameEl.textContent = name;
       document.body.appendChild(overlay);
 
       // Init the platform and remove the overlay once rendering is complete
       setTimeout(async () => {
-        await SubsystemApp.init();
-        document.getElementById('aura-setup-complete-overlay')?.remove();
+        try {
+          await SubsystemApp.init();
+        } finally {
+          document.getElementById('aura-setup-complete-overlay')?.remove();
+        }
       }, 1400);
 
     } catch(e) {
@@ -678,8 +683,10 @@ const SubsystemApp = {
         };
 
         if (this.active === 'dashboard') {
-          this.renderEmptyDashboard(sectionId);
-          return;
+          throw new Error(
+            `The Dashboard module is not available in this installation. ` +
+            `Please contact your administrator or re-download the system package.`
+          );
         }
 
         const rendererName = _RENDERERS[this.active];
@@ -693,7 +700,10 @@ const SubsystemApp = {
           }
           await renderer.render(sectionId);
         } else {
-          this.renderEmptyDashboard(sectionId);
+          throw new Error(
+            `The ${this.systems[this.active]?.name || this.active} module is not available in this installation. ` +
+            `Please contact your administrator or re-download the system package.`
+          );
         }
       };
 

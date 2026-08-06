@@ -2,12 +2,12 @@
  * Aura Retail -- Licensing UI (Phase 7 Part G).
  *
  * Self-contained: does not depend on the shared SubsystemApp shell that
- * subsystem-retail.js expects, because no such shell currently exists
- * anywhere in this product (verified during Part G implementation -- there
- * is no index.html, no SubsystemApp object, anywhere in the repo). Building
- * that shell is a pre-existing product gap unrelated to licensing and out
- * of Phase 7's scope; this page stands alone so the required activation
- * flow (Part G) has somewhere real to run without inventing that shell.
+ * subsystem-retail.js expects. At the time this file was written (Part G),
+ * no such shell existed anywhere in this product -- no index.html, no
+ * SubsystemApp object -- so this page stood alone to give the required
+ * activation flow (Part G) somewhere real to run. That shell (index.html
+ * + app-shell.js) was subsequently built by a later branch; this file was
+ * kept self-contained regardless since it never needed the shell.
  *
  * Talks only to /api/licensing/* (Part E/G/L routes, already tested in
  * commercial_runtime/licensing_contracts/tests/test_routes.py) -- never
