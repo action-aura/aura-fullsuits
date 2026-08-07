@@ -249,7 +249,7 @@ def test_pull_once_upserts_on_create(get_conn):
     cat_id = str(uuid.uuid4())
     event = _pull_event(cat_id, "create", {"id": cat_id, "company_id": 1, "name": "Electronics", "description": "d"})
     client = FakeRelayClient(pull_responses=[{"events": [event], "cursor": 3}])
-    service = SyncService(lambda: client, get_conn)
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
 
     service.pull_once()
 
@@ -265,7 +265,7 @@ def test_pull_once_upserts_on_update_overwriting_existing_row(get_conn):
     create_event = _pull_event(cat_id, "create", {"id": cat_id, "company_id": 1, "name": "Old Name", "description": ""})
     update_event = _pull_event(cat_id, "update", {"id": cat_id, "company_id": 1, "name": "New Name", "description": "updated"})
     client = FakeRelayClient(pull_responses=[{"events": [create_event], "cursor": 1}, {"events": [update_event], "cursor": 2}])
-    service = SyncService(lambda: client, get_conn)
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
 
     service.pull_once()
     service.pull_once()
@@ -282,7 +282,7 @@ def test_pull_once_hard_deletes_on_delete(get_conn):
     create_event = _pull_event(cat_id, "create", {"id": cat_id, "company_id": 1, "name": "Gone Soon", "description": ""})
     delete_event = _pull_event(cat_id, "delete", {"id": cat_id})
     client = FakeRelayClient(pull_responses=[{"events": [create_event], "cursor": 1}, {"events": [delete_event], "cursor": 2}])
-    service = SyncService(lambda: client, get_conn)
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
 
     service.pull_once()
     assert len(_categories(get_conn)) == 1
@@ -290,6 +290,97 @@ def test_pull_once_hard_deletes_on_delete(get_conn):
 
     assert _categories(get_conn) == []
     assert _cursor(get_conn) == 2
+
+
+# ── Cross-device company_id bug fix (2026-08-07) ─────────────────────────
+# Confirmed live during multi-device testing: a pulled event's own
+# `payload["company_id"]` is the SENDING device's company_id (derived
+# locally, once, at that device's own onboarding -- see
+# onboarding_routes.py::create_admin). Two devices on the SAME license,
+# activated with different admin emails, have two different company_id
+# values. _apply_event must stamp the RECEIVING device's own company_id
+# (from local_company_id_provider) on every pulled row -- never the
+# payload's -- or the row becomes permanently invisible to that device's
+# own `WHERE company_id=?` queries (retail_api.py::list_categories).
+
+def test_pull_once_stamps_the_receiving_devices_own_company_id_not_the_payloads(get_conn):
+    """The exact bug found in live device testing, reproduced directly:
+    device A pushed a category with ITS OWN company_id ("company-A") in the
+    payload; applying that pulled event on device B (whose own company_id
+    is "company-B", supplied via local_company_id_provider, entirely
+    independent of the payload) must write the row under "company-B" --
+    never "company-A" -- so device B's own list_categories-style
+    `WHERE company_id=?` filter (reproduced below against the real
+    categories table) finds it."""
+    cat_id = str(uuid.uuid4())
+    event = _pull_event(
+        cat_id, "create",
+        {"id": cat_id, "company_id": "company-A", "name": "Beverages", "description": "from device A"},
+    )
+    client = FakeRelayClient(pull_responses=[{"events": [event], "cursor": 1}])
+    service = SyncService(lambda: client, get_conn, lambda: "company-B")
+
+    service.pull_once()
+
+    rows = _categories(get_conn)
+    assert len(rows) == 1
+    assert rows[0]["id"] == cat_id
+    assert rows[0]["company_id"] == "company-B"  # device B's own id, never "company-A"
+
+    # Reproduces list_categories's own `WHERE c.company_id=?` filter against
+    # the receiving device's own company_id -- this is the row actually
+    # being invisible in the UI that live testing caught.
+    conn = get_conn()
+    visible = conn.execute("SELECT * FROM categories WHERE company_id=?", ("company-B",)).fetchall()
+    invisible_under_senders_id = conn.execute("SELECT * FROM categories WHERE company_id=?", ("company-A",)).fetchall()
+    conn.close()
+    assert len(visible) == 1
+    assert invisible_under_senders_id == []
+
+
+def test_pull_once_without_a_company_id_provider_raises_instead_of_silently_misfiling(get_conn):
+    """A SyncService wired with no local_company_id_provider at all (a
+    misconfiguration) must fail loudly the moment a category create/update
+    actually needs it -- never fall back to writing the payload's
+    (wrong-device) company_id, and never insert a NULL/garbage company_id
+    silently. run_once()'s own per-call try/except is what turns this into
+    an ordinary retried-next-tick condition for a real caller; pull_once()
+    itself must still raise so that swallowing is a deliberate choice made
+    one layer up, not baked into apply_pull_result."""
+    cat_id = str(uuid.uuid4())
+    event = _pull_event(cat_id, "create", {"id": cat_id, "company_id": "company-A", "name": "X", "description": ""})
+    client = FakeRelayClient(pull_responses=[{"events": [event], "cursor": 1}])
+    service = SyncService(lambda: client, get_conn)  # no local_company_id_provider
+
+    with pytest.raises(RuntimeError):
+        service.pull_once()
+
+    # Nothing partially applied, cursor untouched -- same all-or-nothing
+    # guarantee as any other mid-apply failure (see the partial-batch test
+    # below).
+    assert _categories(get_conn) == []
+    assert _cursor(get_conn) == 0
+
+
+def test_pull_once_delete_only_batch_never_needs_a_company_id_provider(get_conn):
+    """A delete is keyed by categories.id alone (a client-generated UUID,
+    globally unique -- see schema.py's v1->v2 migration note) and never
+    writes a company_id, so a batch containing only deletes must apply
+    cleanly even with no local_company_id_provider configured."""
+    cat_id = str(uuid.uuid4())
+    conn = get_conn()
+    conn.execute("INSERT INTO categories (id, company_id, name, description) VALUES (?,?,?,?)",
+                 (cat_id, "company-B", "Pre-existing", ""))
+    conn.commit()
+    conn.close()
+
+    delete_event = _pull_event(cat_id, "delete", {"id": cat_id})
+    client = FakeRelayClient(pull_responses=[{"events": [delete_event], "cursor": 1}])
+    service = SyncService(lambda: client, get_conn)  # no local_company_id_provider
+
+    service.pull_once()  # must not raise
+
+    assert _categories(get_conn) == []
 
 
 def test_pull_once_ignores_unknown_entity_types(get_conn):
@@ -329,16 +420,16 @@ def test_pull_once_partial_batch_apply_failure_never_advances_cursor_or_partiall
     event_1 = _pull_event(cat_id_1, "create", {"id": cat_id_1, "company_id": 1, "name": "First", "description": ""})
     event_2 = _pull_event(cat_id_2, "create", {"id": cat_id_2, "company_id": 1, "name": "Second", "description": ""})
     client = FakeRelayClient(pull_responses=[{"events": [event_1, event_2], "cursor": 9}])
-    service = SyncService(lambda: client, get_conn)
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
 
     real_apply = SyncService._apply_event
     calls = {"n": 0}
 
-    def _apply_event_second_one_explodes(self, conn, ev):
+    def _apply_event_second_one_explodes(self, conn, ev, local_company_id=None):
         calls["n"] += 1
         if calls["n"] == 2:
             raise RuntimeError("simulated failure applying the second event in the batch")
-        return real_apply(self, conn, ev)
+        return real_apply(self, conn, ev, local_company_id)
 
     monkeypatch.setattr(SyncService, "_apply_event", _apply_event_second_one_explodes)
 

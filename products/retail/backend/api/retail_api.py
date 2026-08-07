@@ -231,8 +231,12 @@ def create_category():
     new_id = str(_uuid.uuid4())
     cur.execute("INSERT INTO categories (id, company_id, name, description) VALUES (?,?,?,?)",
                 (new_id, cid, data['name'], data.get('description', '')))
+    # No `company_id` in the wire payload -- it is meaningless cross-device
+    # (each device derives its own `company_id` locally at onboarding; see
+    # commercial_runtime/sync/sync_service.py's module docstring). The
+    # receiving device stamps ITS OWN company_id on apply.
     _queue_sync_event(cur, 'category', new_id, 'create', {
-        'id': new_id, 'company_id': cid, 'name': data['name'], 'description': data.get('description', ''),
+        'id': new_id, 'name': data['name'], 'description': data.get('description', ''),
     })
     conn.commit(); conn.close()
     _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -254,8 +258,9 @@ def update_category(category_id):
     if cur.rowcount == 0:
         conn.close()
         return jsonify({'status': 'error', 'message': 'Category not found'}), 404
+    # No `company_id` in the wire payload -- see create_category's comment above.
     _queue_sync_event(cur, 'category', category_id, 'update', {
-        'id': category_id, 'company_id': cid, 'name': data['name'], 'description': data.get('description', ''),
+        'id': category_id, 'name': data['name'], 'description': data.get('description', ''),
     })
     conn.commit(); conn.close()
     _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py

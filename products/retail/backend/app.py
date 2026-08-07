@@ -152,7 +152,11 @@ _sync_service = None
 if SYNC_RELAY_BASE_URL and LICENSING_PLATFORM != 'ANDROID':
     from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
     from commercial_runtime.sync.relay_client import SyncRelayClient
-    from commercial_runtime.sync.sync_service import SyncService, register_active_service
+    from commercial_runtime.sync.sync_service import (
+        SyncService,
+        local_company_id_from_registry,
+        register_active_service,
+    )
 
     _sync_licensing_dir = Path(DATABASE_DIR).parent / 'licensing'
     _sync_state_repository = LicenseStateRepository(Path(DATABASE_DIR) / 'subsystems' / 'licensing.db')
@@ -178,7 +182,12 @@ if SYNC_RELAY_BASE_URL and LICENSING_PLATFORM != 'ANDROID':
         from database.schema import get_retail_conn
         return get_retail_conn()
 
-    _sync_service = SyncService(_build_sync_client, _sync_get_conn)
+    # local_company_id_from_registry (commercial_runtime/sync/sync_service.py)
+    # reads THIS device's own company_id from the registry DB on every pull
+    # batch that needs it -- never the pulled payload's own company_id (a
+    # different device's value). See that function's docstring and the
+    # module-level "Cross-device company_id bug fix" note.
+    _sync_service = SyncService(_build_sync_client, _sync_get_conn, local_company_id_from_registry)
     register_active_service(_sync_service)
 elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
     # Android's own wiring (multi-device-sync-foundation, Task 9): this
@@ -198,7 +207,7 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
     # SyncCoordinator has its own short-interval timer instead of relying on
     # the shared retail_api.py nudge() call sites.
     from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
-    from commercial_runtime.sync.sync_service import SyncService
+    from commercial_runtime.sync.sync_service import SyncService, local_company_id_from_registry
     from commercial_runtime.sync.internal_routes import make_sync_internal_blueprint
 
     _sync_state_repository = LicenseStateRepository(Path(DATABASE_DIR) / 'subsystems' / 'licensing.db')
@@ -207,7 +216,10 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
         from database.schema import get_retail_conn
         return get_retail_conn()
 
-    _android_sync_service = SyncService(None, _sync_get_conn)  # client_factory never used -- see comment above
+    # local_company_id_from_registry: see the Windows branch above -- the
+    # /_internal/sync/pull-apply route below calls apply_pull_result() on
+    # THIS service, which needs the same fix.
+    _android_sync_service = SyncService(None, _sync_get_conn, local_company_id_from_registry)  # client_factory never used -- see comment above
     app.register_blueprint(make_sync_internal_blueprint(
         sync_service=_android_sync_service,
         get_conn=_sync_get_conn,

@@ -82,7 +82,11 @@ def get_conn(db_path):
 @pytest.fixture
 def client(get_conn):
     app = Flask(__name__)
-    sync_service = SyncService(None, get_conn)  # client_factory never used by these routes
+    # client_factory never used by these routes. local_company_id_provider
+    # is this (fake) receiving device's own company_id -- see
+    # test_pull_apply_stamps_the_receiving_devices_own_company_id below for
+    # why this must never come from a pulled event's own payload.
+    sync_service = SyncService(None, get_conn, lambda: "receiving-company")
     app.register_blueprint(make_sync_internal_blueprint(
         sync_service=sync_service,
         get_conn=get_conn,
@@ -195,6 +199,30 @@ def test_pull_apply_upserts_category_and_advances_cursor(client, get_conn):
     assert cursor_resp.get_json()["since"] == 7
 
 
+def test_pull_apply_stamps_the_receiving_devices_own_company_id_not_the_payloads(client, get_conn):
+    """Same cross-device company_id bug covered in test_sync_service.py,
+    proven through the real route Android's Kotlin SyncCoordinator actually
+    calls: a pulled event's payload carries device A's own company_id
+    ("company-A"); this fixture's SyncService is wired with
+    local_company_id_provider returning "receiving-company" (this device's
+    own id) -- the applied row must be stamped "receiving-company", never
+    "company-A"."""
+    result = {
+        "events": [{
+            "entity_type": "category", "event_type": "create",
+            "payload": {"id": "cat-cross-device", "company_id": "company-A", "name": "From A", "description": ""},
+        }],
+        "cursor": 1,
+    }
+    resp = client.post("/api/sync/_internal/pull-apply", headers=_auth_headers(), json=result)
+    assert resp.status_code == 200
+
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM categories WHERE id='cat-cross-device'").fetchone()
+    conn.close()
+    assert row["company_id"] == "receiving-company"
+
+
 def test_pull_apply_rejects_body_without_cursor(client):
     resp = client.post("/api/sync/_internal/pull-apply", headers=_auth_headers(), json={"events": []})
     assert resp.status_code == 400
@@ -204,7 +232,7 @@ def test_pull_apply_rejects_body_without_cursor(client):
 def test_pull_apply_failure_leaves_cursor_untouched(client, get_conn, monkeypatch):
     import commercial_runtime.sync.sync_service as sync_service_module
 
-    def _boom(self, conn, ev):
+    def _boom(self, conn, ev, local_company_id=None):
         raise RuntimeError("malformed event")
 
     monkeypatch.setattr(sync_service_module.SyncService, "_apply_event", _boom)

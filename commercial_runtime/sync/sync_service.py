@@ -11,6 +11,25 @@ category routes through the outbox (Task 4). A future entity type arriving
 from Owner (e.g. once products/customers are wired) is silently skipped, not
 an error -- forward compatibility for a relay that may carry entity types
 this particular product build doesn't know how to apply yet.
+
+Cross-device `company_id` bug fix (2026-08-07, found in live device
+testing): a pulled event's `payload["company_id"]` is the SENDING device's
+own `company_id` -- NOT a shared/authoritative tenant id. `company_id` is
+derived once, locally, at onboarding, as `md5(admin_email)`
+(`commercial_runtime/identity/onboarding_routes.py::create_admin`), so two
+devices activated with different admin emails on the SAME license end up
+with two different `company_id` values. Blindly writing the payload's
+`company_id` into a pulled row makes it permanently invisible to the
+RECEIVING device's own `WHERE company_id=?` queries (e.g.
+`retail_api.py::list_categories`), which always filter on that device's OWN
+`company_id` (`_cid()` -> `session['company_id']`, set at login from that
+device's own `users` row). `_apply_event` therefore IGNORES
+`payload["company_id"]` entirely and stamps the RECEIVING device's own
+locally-authoritative `company_id` (read fresh from the registry DB's
+`company_settings` table -- see `local_company_id_from_registry` below) onto
+every pulled row instead. `_apply_event` runs on a background thread with no
+Flask request/session context, so it cannot call `_cid()`/read
+`session.get('company_id')` -- it must read the value directly from disk.
 """
 from __future__ import annotations
 
@@ -22,8 +41,43 @@ from typing import Callable, Optional
 logger = logging.getLogger(__name__)
 
 
+def local_company_id_from_registry() -> Optional[str]:
+    """Default `local_company_id_provider`: reads THIS device's own single,
+    locally-authoritative `company_id` directly from the registry database
+    -- never from a pulled event's payload (see module docstring above).
+
+    Every install has exactly one `company_id`: `create_admin` (the only
+    account-creation path with no existing-admin requirement) writes the
+    `users` row and the `company_settings` row with the SAME `company_id` in
+    one transaction, and is only reachable while no valid admin exists yet
+    -- so `company_settings` always holds exactly this device's one real
+    `company_id` once onboarding has completed. Falls back to the admin
+    `users` row (the same source `_cid()`/`create_session` populate the
+    session from) if `company_settings` is somehow missing, and returns
+    `None` (never a fabricated default) if neither exists yet -- e.g. a pull
+    landing before this device has completed its own onboarding, which
+    `_apply_event` treats as "cannot apply yet", not "guess company_id=1".
+    """
+    from commercial_runtime.identity.registry_db import get_conn as _registry_get_conn
+
+    conn = _registry_get_conn()
+    try:
+        row = conn.execute("SELECT company_id FROM company_settings LIMIT 1").fetchone()
+        if row and row["company_id"]:
+            return row["company_id"]
+        row = conn.execute("SELECT company_id FROM users WHERE role='admin' LIMIT 1").fetchone()
+        return row["company_id"] if row else None
+    finally:
+        conn.close()
+
+
 class SyncService:
-    def __init__(self, client_factory: Callable[[], "SyncRelayClient"], get_conn: Callable[[], "sqlite3.Connection"]):
+    def __init__(
+        self,
+        client_factory: Callable[[], "SyncRelayClient"],
+        get_conn: Callable[[], "sqlite3.Connection"],
+        local_company_id_provider: Optional[Callable[[], Optional[str]]] = None,
+    ):
         """`client_factory` is called fresh on every push_once()/pull_once()
         attempt, not once at construction time -- deliberately, mirroring
         `commercial_runtime/licensing_contracts/routes.py`'s own
@@ -33,9 +87,21 @@ class SyncService:
         was on disk at that moment (commonly None, before the operator has
         even activated the license yet); rebuilding on every attempt means
         activation completing later in the same process is picked up on the
-        very next tick with no restart required."""
+        very next tick with no restart required.
+
+        `local_company_id_provider`, when supplied, is called fresh on every
+        `apply_pull_result()` batch that actually needs it (never cached) --
+        see the module docstring's "Cross-device `company_id` bug fix" note.
+        `_apply_event` uses its return value, never the pulled payload's own
+        `company_id`, when writing a pulled row locally. Deliberately no
+        default here (unlike `local_company_id_from_registry` being a free
+        function callers may pass in): a `SyncService` constructed without
+        one raises loudly the first time a category event actually needs it,
+        rather than silently touching a real on-disk registry DB a test (or
+        some future caller) never intended to read."""
         self._client_factory = client_factory
         self._get_conn = get_conn
+        self._local_company_id_provider = local_company_id_provider
         self._timer: Optional[threading.Timer] = None
         self._stopped = threading.Event()
         # Serializes push_once/pull_once against each other -- the 10s timer
@@ -130,20 +196,58 @@ class SyncService:
         `/_internal/sync/pull-apply` route calls it with a result Kotlin
         already fetched directly from Owner (Android's Python never makes
         that signed HTTP call itself). Caller commits."""
-        for ev in result.get("events", []):
-            self._apply_event(conn, ev)
+        events = result.get("events", [])
+        # Fetched at most once per batch (not once per event) -- it is the
+        # SAME value (this device's own company_id) for every event in the
+        # batch. Only actually needed for a category create/update (the ONLY
+        # writes that stamp a company_id) -- a batch of pure deletes (keyed
+        # by categories.id alone) or unknown entity types never touches the
+        # provider at all, so a SyncService with no provider configured can
+        # still apply those without raising.
+        local_company_id = None
+        if any(ev.get("entity_type") == "category" and ev.get("event_type") in ("create", "update") for ev in events):
+            local_company_id = self._get_local_company_id()
+        for ev in events:
+            self._apply_event(conn, ev, local_company_id)
         conn.execute("UPDATE sync_cursor SET last_seq=? WHERE id=1", (result["cursor"],))
 
-    def _apply_event(self, conn, ev: dict) -> None:
+    def _get_local_company_id(self) -> str:
+        """Returns THIS device's own locally-authoritative company_id --
+        never the pulled payload's. Raises rather than silently applying a
+        pulled row under the wrong (or no) company_id: a misconfigured
+        SyncService (no provider wired) or a device that hasn't finished its
+        own onboarding yet (provider returns None/empty) must surface loudly
+        here, exactly like a network failure -- pull_once()'s caller already
+        swallows this per-tick (see run_once()'s docstring) and retries."""
+        if self._local_company_id_provider is None:
+            raise RuntimeError(
+                "SyncService has no local_company_id_provider configured; "
+                "cannot apply a pulled category event without knowing this "
+                "device's own company_id."
+            )
+        company_id = self._local_company_id_provider()
+        if not company_id:
+            raise RuntimeError(
+                "local_company_id_provider returned no company_id for this "
+                "device (onboarding not yet complete?); cannot apply pulled "
+                "category events until it does."
+            )
+        return company_id
+
+    def _apply_event(self, conn, ev: dict, local_company_id: Optional[str] = None) -> None:
         if ev.get("entity_type") != "category":
             return  # only category is in scope for this sub-project
         p = ev.get("payload") or {}
         event_type = ev.get("event_type")
         if event_type in ("create", "update"):
+            # `local_company_id` -- THIS device's own company_id -- not
+            # `p.get("company_id")`, which is the SENDING device's company_id
+            # and is never valid to write into a local row here. See the
+            # module docstring's "Cross-device company_id bug fix" note.
             conn.execute(
                 "INSERT INTO categories (id, company_id, name, description) VALUES (?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description",
-                (p.get("id"), p.get("company_id"), p.get("name"), p.get("description", "")),
+                (p.get("id"), local_company_id, p.get("name"), p.get("description", "")),
             )
         elif event_type == "delete":
             conn.execute("DELETE FROM categories WHERE id=?", (p.get("id"),))
