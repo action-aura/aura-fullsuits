@@ -5,12 +5,13 @@
 `LicenseCheckInScheduler` exactly: a self-rescheduling `threading.Timer`,
 daemon thread, `threading.Event` stop flag.
 
-Scope note: only `entity_type == "category"` is understood by
-`_apply_event` -- this sub-project (multi-device-sync-foundation) only wires
-category routes through the outbox (Task 4). A future entity type arriving
-from Owner (e.g. once products/customers are wired) is silently skipped, not
-an error -- forward compatibility for a relay that may carry entity types
-this particular product build doesn't know how to apply yet.
+Scope note: only `entity_type in ("category", "product", "customer")` is
+understood by `_apply_event` -- this sub-project (multi-device-sync-
+foundation, retail-catalog-party-sync-expansion) only wires category/
+product/customer routes through the outbox. A future entity type arriving
+from Owner is silently skipped, not an error -- forward compatibility for a
+relay that may carry entity types this particular product build doesn't
+know how to apply yet.
 
 Cross-device `company_id` bug fix (2026-08-07, found in live device
 testing): a pulled event's `payload["company_id"]` is the SENDING device's
@@ -206,7 +207,7 @@ class SyncService:
         # still apply those without raising.
         local_company_id = None
         if any(
-            ev.get("entity_type") in ("category", "product") and ev.get("event_type") in ("create", "update")
+            ev.get("entity_type") in ("category", "product", "customer") and ev.get("event_type") in ("create", "update")
             for ev in events
         ):
             local_company_id = self._get_local_company_id()
@@ -239,7 +240,7 @@ class SyncService:
 
     def _apply_event(self, conn, ev: dict, local_company_id: Optional[str] = None) -> None:
         entity_type = ev.get("entity_type")
-        if entity_type not in ("category", "product"):
+        if entity_type not in ("category", "product", "customer"):
             return
         p = ev.get("payload") or {}
         event_type = ev.get("event_type")
@@ -270,6 +271,18 @@ class SyncService:
                 )
             elif event_type == "delete":
                 conn.execute("UPDATE products SET status='inactive' WHERE id=?", (p.get("id"),))
+        elif entity_type == "customer":
+            if event_type in ("create", "update"):
+                conn.execute(
+                    "INSERT INTO customers (id, company_id, name, phone, email, address, status) "
+                    "VALUES (?,?,?,?,?,?,'active') "
+                    "ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone, "
+                    "email=excluded.email, address=excluded.address",
+                    (p.get("id"), local_company_id, p.get("name"), p.get("phone", ""),
+                     p.get("email", ""), p.get("address", "")),
+                )
+            elif event_type == "delete":
+                conn.execute("UPDATE customers SET status='inactive' WHERE id=?", (p.get("id"),))
 
     def run_once(self) -> None:
         """The one entry point the timer tick (and the manual/CLI caller)

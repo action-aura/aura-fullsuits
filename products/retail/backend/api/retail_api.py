@@ -485,14 +485,14 @@ def list_customers():
         rows = conn.execute("""
             SELECT c.*, COUNT(s.id) as order_count
             FROM customers c LEFT JOIN sales s ON s.customer_id=c.id AND s.company_id=c.company_id
-            WHERE c.company_id=? AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ?)
+            WHERE c.company_id=? AND c.status='active' AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ?)
             GROUP BY c.id ORDER BY c.name
         """, (cid, f'%{q}%', f'%{q}%', f'%{q}%')).fetchall()
     else:
         rows = conn.execute("""
             SELECT c.*, COUNT(s.id) as order_count
             FROM customers c LEFT JOIN sales s ON s.customer_id=c.id AND s.company_id=c.company_id
-            WHERE c.company_id=? GROUP BY c.id ORDER BY c.total_spent DESC LIMIT 200
+            WHERE c.company_id=? AND c.status='active' GROUP BY c.id ORDER BY c.total_spent DESC LIMIT 200
         """, (cid,)).fetchall()
     conn.close()
     return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
@@ -508,14 +508,19 @@ def create_customer():
     cid  = _cid()
     conn = get_retail_conn()
     cur  = conn.cursor()
-    cur.execute("INSERT INTO customers (company_id,name,phone,email,address) VALUES (?,?,?,?,?)",
-                (cid, data['name'], data.get('phone',''), data.get('email',''), data.get('address','')))
-    nid = cur.lastrowid
+    nid = str(_uuid.uuid4())
+    cur.execute("INSERT INTO customers (id,company_id,name,phone,email,address) VALUES (?,?,?,?,?,?)",
+                (nid, cid, data['name'], data.get('phone',''), data.get('email',''), data.get('address','')))
     _audit(conn, 'CUSTOMER_CREATED', 'customer', nid, data['name'])
+    _queue_sync_event(cur, 'customer', nid, 'create', {
+        'id': nid, 'name': data['name'], 'phone': data.get('phone', ''),
+        'email': data.get('email', ''), 'address': data.get('address', ''),
+    })
     conn.commit(); conn.close()
+    _sync_nudge()
     return jsonify({'status': 'success', 'data': {'id': nid}})
 
-@retail_bp.route('/customers/<int:cust_id>', methods=['PATCH'])
+@retail_bp.route('/customers/<string:cust_id>', methods=['PATCH'])
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.customer.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
@@ -526,14 +531,49 @@ def update_customer(cust_id):
     if not fields:
         return jsonify({'status': 'error', 'message': 'No valid fields'}), 400
     conn = get_retail_conn()
+    cur = conn.cursor()
     sets = ', '.join(f'{k}=?' for k in fields)
-    conn.execute(f'UPDATE customers SET {sets} WHERE id=? AND company_id=?',
-                 list(fields.values()) + [cust_id, cid])
+    cur.execute(f'UPDATE customers SET {sets} WHERE id=? AND company_id=?',
+                list(fields.values()) + [cust_id, cid])
+    if cur.rowcount == 0:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Customer not found'}), 404
     _audit(conn, 'CUSTOMER_UPDATED', 'customer', cust_id)
+    row = conn.execute("SELECT name,phone,email,address FROM customers WHERE id=?", (cust_id,)).fetchone()
+    _queue_sync_event(cur, 'customer', cust_id, 'update', dict(row) | {'id': cust_id})
     conn.commit(); conn.close()
+    _sync_nudge()
     return jsonify({'status': 'success'})
 
-@retail_bp.route('/customers/<int:cust_id>/sales', methods=['GET'])
+@retail_bp.route('/customers/<string:cust_id>', methods=['DELETE'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.customer.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+def delete_customer(cust_id):
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE customers SET status='inactive' WHERE id=? AND company_id=?", (cust_id, cid))
+        if cur.rowcount == 0:
+            return jsonify({'status': 'error', 'message': 'Customer not found'}), 404
+        _audit(conn, 'CUSTOMER_DELETED', 'customer', cust_id, 'Customer deactivated')
+        _queue_sync_event(cur, 'customer', cust_id, 'delete', {'id': cust_id})
+        conn.commit()
+    except sqlite3.IntegrityError as exc:
+        conn.rollback()
+        current_app.logger.warning("delete_customer(%s) failed on a database constraint: %s", cust_id, exc)
+        return jsonify({'status': 'error', 'message': 'This customer could not be deleted.'}), 409
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("delete_customer(%s) failed: %s", cust_id, exc)
+        return jsonify({'status': 'error', 'message': 'Could not delete this customer.'}), 400
+    finally:
+        conn.close()
+    _sync_nudge()
+    return jsonify({'status': 'success', 'message': 'Customer deactivated'})
+
+@retail_bp.route('/customers/<string:cust_id>/sales', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
 def customer_sales(cust_id):
@@ -1504,7 +1544,7 @@ def customers_receivables():
     conn.close()
     return jsonify({'status': 'success', 'total_receivable': _money(total), 'data': [dict(r) for r in rows]})
 
-@retail_bp.route('/customers/<int:cust_id>/statement', methods=['GET'])
+@retail_bp.route('/customers/<string:cust_id>/statement', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
 def customer_statement(cust_id):
@@ -1530,7 +1570,7 @@ def customer_statement(cust_id):
     conn.close()
     return jsonify({'status': 'success', 'data': {'customer': dict(cust), 'events': out, 'balance': _money(cust['credit_balance'])}})
 
-@retail_bp.route('/customers/<int:cust_id>/payments', methods=['POST'])
+@retail_bp.route('/customers/<string:cust_id>/payments', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.customer.payment.record", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)

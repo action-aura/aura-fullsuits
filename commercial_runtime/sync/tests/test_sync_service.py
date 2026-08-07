@@ -384,9 +384,13 @@ def test_pull_once_delete_only_batch_never_needs_a_company_id_provider(get_conn)
 
 
 def test_pull_once_ignores_unknown_entity_types(get_conn):
+    # "supplier": genuinely unknown to _apply_event -- "category"/"product"/
+    # "customer" are all wired in by this point (see retail-catalog-party-
+    # sync-expansion's Tasks 1-3), so any of those would no longer exercise
+    # the ignore path this test is actually about.
     event = {
-        "id": str(uuid.uuid4()), "entity_type": "product", "entity_id": "p-1",
-        "event_type": "create", "payload": {"id": "p-1"}, "created_at": "2026-08-06T00:00:00+00:00",
+        "id": str(uuid.uuid4()), "entity_type": "supplier", "entity_id": "s-1",
+        "event_type": "create", "payload": {"id": "s-1"}, "created_at": "2026-08-06T00:00:00+00:00",
     }
     client = FakeRelayClient(pull_responses=[{"events": [event], "cursor": 5}])
     service = SyncService(lambda: client, get_conn)

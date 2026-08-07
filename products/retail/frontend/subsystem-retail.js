@@ -1333,15 +1333,20 @@ const RetailSystem = {
         tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:30px">No customers found.</td></tr>';
         return;
       }
-      tbody.innerHTML = data.map(cu => `<tr onclick="RetailSystem._viewCustomer(${cu.id})">
-        <td style="font-weight:600">${cu.name}</td>
-        <td style="color:var(--text-muted)">${cu.phone||'—'}</td>
-        <td style="color:var(--text-muted)">${cu.email||'—'}</td>
-        <td><span style="color:#fbbf24;font-weight:700">${cu.loyalty_points||0} pts</span></td>
+      // Every interpolated value here is escaped (see this._esc): a customer
+      // name/phone/email/address can now arrive from ANOTHER DEVICE over the
+      // sync relay, which is a genuinely new trust boundary, mirroring
+      // Category's Fix 7.
+      tbody.innerHTML = data.map(cu => `<tr onclick="RetailSystem._viewCustomer('${this._esc(cu.id)}')">
+        <td style="font-weight:600">${this._esc(cu.name)}</td>
+        <td style="color:var(--text-muted)">${cu.phone?this._esc(cu.phone):'—'}</td>
+        <td style="color:var(--text-muted)">${cu.email?this._esc(cu.email):'—'}</td>
+        <td><span style="color:#fbbf24;font-weight:700">${this._esc(cu.loyalty_points||0)} pts</span></td>
         <td style="font-weight:600;color:#10b981">${this._fmt(cu.total_spent)}</td>
-        <td style="color:var(--text-muted)">${cu.order_count||0}</td>
+        <td style="color:var(--text-muted)">${this._esc(cu.order_count||0)}</td>
         <td onclick="event.stopPropagation()">
-          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditCustomer(${cu.id})">Edit</button>
+          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditCustomer('${this._esc(cu.id)}')">Edit</button>
+          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._deleteCustomer('${this._esc(cu.id)}')">${t('Delete')}</button>
         </td>
       </tr>`).join('');
     } catch(e) { console.error(e); }
@@ -1354,7 +1359,7 @@ const RetailSystem = {
 
   _openAddCustomer() { this._showCustomerModal({}); },
   _openEditCustomer(id) {
-    const cu = this._customers.find(x=>x.id===id);
+    const cu = this._customers.find(x=>String(x.id)===String(id));
     if (cu) this._showCustomerModal(cu);
   },
 
@@ -1374,7 +1379,7 @@ const RetailSystem = {
         <div class="ret-field"><label>Address</label><input id="cm-addr" value="${cu.address||''}" /></div>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-cust-modal').remove()">Cancel</button>
-          <button class="ret-btn ret-btn-primary" id="cm-btn" onclick="RetailSystem._saveCustomer(${cu.id||'null'})">${isEdit?'Save':'Add Customer'}</button>
+          <button class="ret-btn ret-btn-primary" id="cm-btn" onclick="RetailSystem._saveCustomer(${cu.id ? `'${this._esc(cu.id)}'` : 'null'})">${isEdit?'Save':'Add Customer'}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -1402,8 +1407,28 @@ const RetailSystem = {
     } catch(e) { if(btn){btn.disabled=false;btn.textContent='Save';} }
   },
 
+  // Mirrors _deleteCategory exactly (see its comment for why: a failed
+  // delete must be VISIBLE, not a silent no-op).
+  async _deleteCustomer(custId) {
+    const cu = (this._customers || []).find(x => String(x.id) === String(custId));
+    const name = (cu && cu.name) || '';
+    if (!confirm(`${t('Delete')} "${name}"?`)) return;
+    try {
+      const d = await this._del(`/api/sub/retail/customers/${custId}`);
+      if (d && d.status === 'success') {
+        SubsystemApp.showToast(d.message || t('Customer deleted'), 'success');
+      } else {
+        SubsystemApp.showToast((d && d.message) || t('Could not delete this customer.'), 'error');
+      }
+      this._loadCustomers();
+    } catch(e) {
+      console.error('Customer delete failed', e);
+      SubsystemApp.showToast(t('Could not delete this customer.'), 'error');
+    }
+  },
+
   async _viewCustomer(cid) {
-    const cu = this._customers.find(x=>x.id===cid);
+    const cu = this._customers.find(x=>String(x.id)===String(cid));
     if (!cu) return;
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';

@@ -44,6 +44,13 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # -- inventory_movements, inventory_balances, sale_items,
 # purchase_order_items, return_items -- is rebuilt in the same transaction
 # and has its product_id values remapped. See _migrate_products_to_uuid below.
+# Still v4: customers.id gets the identical INTEGER -> TEXT UUID treatment,
+# plus a new `status` column (customers never had one) and the credit_mode/
+# credit_limit/credit_balance columns folded in as first-class columns. No
+# table has a declared FK to customers(id) (sales.customer_id and
+# payments.party_id are both loose, undeclared columns), so this rides along
+# on the same v4 bump rather than needing one of its own. See
+# _migrate_customers_to_uuid below.
 RETAIL_SCHEMA_VERSION = 4
 
 
@@ -450,6 +457,103 @@ def _migrate_products_to_uuid(conn):
         conn.execute(f"PRAGMA foreign_keys={'ON' if fk_was_on else 'OFF'}")
 
 
+def _migrate_customers_to_uuid(conn):
+    """One-time migration (still schema v4): customers.id moves from
+    INTEGER PRIMARY KEY AUTOINCREMENT to TEXT PRIMARY KEY, adds a new
+    `status` column (customers never had one), and folds the
+    credit_mode/credit_limit/credit_balance columns _ensure_credit_schema
+    (api/retail_api.py) adds at runtime via ALTER TABLE into the rebuilt
+    table as first-class columns -- _ensure_credit_schema's own addcol()
+    calls stay in place as a no-op safety net (PRAGMA table_info already
+    finding the column is exactly what makes addcol() skip it).
+
+    No table has a declared FK to customers(id) -- sales.customer_id and
+    payments.party_id are both loose, undeclared columns (confirmed: grep
+    "REFERENCES customers" across schema.py returns nothing) -- so there is
+    no SQLite auto-rewrite-on-rename hazard here. This still rebuilds under
+    `customers_new` and swaps in, for consistency with every other
+    migration in this file, and because relying on "no FK today" staying
+    true forever is not a safe long-term assumption to bake into a
+    rename-based migration.
+    """
+    import uuid as _uuid
+
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='customers'"
+    ).fetchone()
+    if exists is None:
+        # `init_retail()` always creates `customers` (via CREATE TABLE IF NOT
+        # EXISTS) before this migration ever runs, so a real device is never
+        # missing it -- this guard only protects a hand-built/partial
+        # database (e.g. a test fixture that only sets up categories/
+        # products) from an unconditional rebuild attempt against a table
+        # that was never created. Mirrors the identical guard in
+        # _migrate_products_to_uuid's referencing-table loop above.
+        return
+
+    id_col = next((c for c in conn.execute("PRAGMA table_info(customers)").fetchall() if c["name"] == "id"), None)
+    if id_col is not None and id_col["type"].upper() == "TEXT":
+        return
+
+    fk_was_on = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        conn.execute("BEGIN")
+
+        existing_cols = {c["name"] for c in conn.execute("PRAGMA table_info(customers)").fetchall()}
+        has_credit = "credit_mode" in existing_cols  # _ensure_credit_schema may have already run on this db
+
+        cust_rows = conn.execute("SELECT * FROM customers").fetchall()
+        id_map = {row["id"]: str(_uuid.uuid4()) for row in cust_rows}
+
+        conn.execute("""
+            CREATE TABLE customers_new (
+                id TEXT PRIMARY KEY,
+                company_id INTEGER DEFAULT 1,
+                name TEXT NOT NULL,
+                phone TEXT,
+                email TEXT,
+                address TEXT,
+                loyalty_points REAL DEFAULT 0,
+                total_spent REAL DEFAULT 0,
+                status TEXT DEFAULT 'active',
+                credit_mode TEXT DEFAULT 'none',
+                credit_limit REAL DEFAULT 0,
+                credit_balance REAL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        for row in cust_rows:
+            conn.execute(
+                "INSERT INTO customers_new (id, company_id, name, phone, email, address, loyalty_points, "
+                "total_spent, status, credit_mode, credit_limit, credit_balance, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (id_map[row["id"]], row["company_id"], row["name"], row["phone"], row["email"], row["address"],
+                 row["loyalty_points"], row["total_spent"], "active",
+                 row["credit_mode"] if has_credit else "none",
+                 row["credit_limit"] if has_credit else 0,
+                 row["credit_balance"] if has_credit else 0,
+                 row["created_at"]),
+            )
+        conn.execute("DROP TABLE customers")
+        conn.execute("ALTER TABLE customers_new RENAME TO customers")
+
+        for row in cust_rows:
+            old_id, new_id = row["id"], id_map[row["id"]]
+            conn.execute("UPDATE sales SET customer_id=? WHERE customer_id=?", (new_id, old_id))
+            conn.execute(
+                "UPDATE payments SET party_id=? WHERE party_type='customer' AND party_id=?",
+                (new_id, old_id),
+            )
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute(f"PRAGMA foreign_keys={'ON' if fk_was_on else 'OFF'}")
+
+
 def _migrate_retail_schema(conn):
     """The single `migrate_fn` handed to `ensure_schema_version` -- runs every
     migration this file owns, in version order, on any database behind
@@ -463,6 +567,7 @@ def _migrate_retail_schema(conn):
     _migrate_categories_to_uuid(conn)
     _migrate_products_category_fk_on_delete_set_null(conn)
     _migrate_products_to_uuid(conn)
+    _migrate_customers_to_uuid(conn)
 
 
 def init_retail():
@@ -802,8 +907,16 @@ def _seed_retail(conn, cur, company_id=1):
         ('Fatima Al-Hassan', '+1-555-2004', 'fatima@email.com', 60, 340.0),
         ('Carlos Rivera', '+1-555-2005', 'carlos@email.com', 290, 2100.0),
     ]
-    for c in customers:
-        cur.execute("INSERT INTO customers (company_id,name,phone,email,loyalty_points,total_spent) VALUES (?,?,?,?,?,?)", (cid,) + c)
+    # customers.id is TEXT (client-generated UUID) since the multi-device
+    # sync foundation migration (see _migrate_customers_to_uuid) -- there is
+    # no autoincrement to fall back on, so seed data must generate its own
+    # ids explicitly, same as categories/products above.
+    customer_ids = [str(_uuid.uuid4()) for _ in customers]
+    for i, c in enumerate(customers):
+        cur.execute(
+            "INSERT INTO customers (id,company_id,name,phone,email,loyalty_points,total_spent) VALUES (?,?,?,?,?,?,?)",
+            (customer_ids[i], cid) + c,
+        )
 
     from core.retail import pricing as _tax_engine
     try:
@@ -818,7 +931,13 @@ def _seed_retail(conn, cur, company_id=1):
     for i in range(40):
         d = (now - timedelta(days=random.randint(0, 30))).strftime('%Y-%m-%d %H:%M:%S')
         branch_id = random.choice([1, 2])
-        cust_id = random.choice([1, 2, 3, 4, 5, None])
+        # customer_ids holds real generated UUIDs (customers.id is TEXT now,
+        # see _migrate_customers_to_uuid) -- picking from it, not a
+        # hardcoded 1-5 range, mirrors the cat_id fix above for the same
+        # reason: a stale small-int id would never match any real customer
+        # row via `s.customer_id=c.id`, silently showing every demo sale as
+        # "Walk-in".
+        cust_id = random.choice(customer_ids + [None])
         method = random.choice(methods)
         num_items = random.randint(1, 4)
         subtotal = 0

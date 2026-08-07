@@ -1121,8 +1121,9 @@ def _handle_retail_customers(records):
                         (name, rec.get('phone',''), rec.get('address',''), lp, ts, existing['id']))
             updated += 1
         else:
-            cur.execute("INSERT INTO customers (company_id,name,phone,email,address,loyalty_points,total_spent) VALUES (?,?,?,?,?,?,?)",
-                        (cid, name, rec.get('phone',''), email, rec.get('address',''), lp, ts))
+            nid = str(_uuid.uuid4())
+            cur.execute("INSERT INTO customers (id,company_id,name,phone,email,address,loyalty_points,total_spent) VALUES (?,?,?,?,?,?,?,?)",
+                        (nid, cid, name, rec.get('phone',''), email, rec.get('address',''), lp, ts))
             imported += 1
     conn.commit(); conn.close()
     return {'imported': imported, 'updated': updated, 'message': f'{imported} new customers, {updated} updated.'}
