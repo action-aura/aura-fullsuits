@@ -17,10 +17,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.actionaura.retail.di.AuraAppContainer
 import com.actionaura.retail.di.LocalAuraAppContainer
 import com.actionaura.retail.licensing.transport.LicensingBootstrapState
 import com.actionaura.retail.licensing.transport.computeLicensingBootstrapStateFromHealth
+import com.actionaura.retail.ui.activation.ActivationScreen
 import com.actionaura.retail.ui.adaptive.AuraWindowSize
 import com.actionaura.retail.ui.shell.AppPhase
 import com.actionaura.retail.ui.shell.AuthenticatedAppShell
@@ -98,7 +100,25 @@ fun App(container: AuraAppContainer? = null) {
                             }
                         }
                         is AppPhase.Authenticated -> AuthenticatedAppShell(windowSize)
-                        is AppPhase.Onboarding, is AppPhase.Unauthenticated, is AppPhase.LicenseBlocked, is AppPhase.SessionExpired ->
+                        // Task 11a (multi-device-sync-foundation) -- real wiring for
+                        // whenever a future milestone starts actually driving `phase`
+                        // into `Onboarding` (still never reached today -- see this
+                        // function's own KDoc: `phase` only ever becomes `Bootstrap` or
+                        // `Authenticated`). `container.newActivationViewModel()` (Task
+                        // 11a) gives a real screen instance real dependencies the moment
+                        // this branch does become reachable, rather than the honest
+                        // `BootstrapScreen()` placeholder every other not-yet-reachable
+                        // phase below still uses.
+                        is AppPhase.Onboarding -> {
+                            val currentContainer = container
+                            if (currentContainer != null) {
+                                val activationViewModel = viewModel { currentContainer.newActivationViewModel() }
+                                ActivationScreen(activationViewModel)
+                            } else {
+                                BootstrapScreen() // real, honest: no container yet (desktop/JVM preview, `container: AuraAppContainer? = null`).
+                            }
+                        }
+                        is AppPhase.Unauthenticated, is AppPhase.LicenseBlocked, is AppPhase.SessionExpired ->
                             BootstrapScreen() // real, defined states -- not yet reachable (see AppPhase.kt)
                         is AppPhase.BootstrapFailure -> BootstrapFailureScreen(currentPhase.reasonKey)
                     }

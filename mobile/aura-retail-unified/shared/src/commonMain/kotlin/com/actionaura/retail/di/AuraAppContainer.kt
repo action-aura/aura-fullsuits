@@ -14,7 +14,18 @@ import com.actionaura.retail.data.sqldelight.SqlDelightSettingsRepository
 import com.actionaura.retail.db.RetailDatabase
 import com.actionaura.retail.importing.persistence.ImportPersistenceRepository
 import com.actionaura.retail.importing.persistence.SqlDelightImportPersistenceRepository
+import com.actionaura.retail.licensing.InstallationIdentity
+import com.actionaura.retail.licensing.InstallationIdentityStatus
+import com.actionaura.retail.licensing.InstallationIdentityVersion
+import com.actionaura.retail.licensing.LicensingPlatform
 import com.actionaura.retail.licensing.LicensingProductCode
+import com.actionaura.retail.licensing.LocalInstallationSeed
+import com.actionaura.retail.licensing.transport.ActivationResponseProcessor
+import com.actionaura.retail.licensing.transport.DisabledProductionTransport
+import com.actionaura.retail.licensing.transport.ExternalApiConfiguration
+import com.actionaura.retail.licensing.transport.HttpExternalLicensingTransport
+import com.actionaura.retail.licensing.transport.TransportOutcome
+import com.actionaura.retail.licensing.transport.secureRandomHex
 import com.actionaura.retail.platform.DatabaseDriverFactory
 import com.actionaura.retail.platform.UnicodeTextNormalizer
 import com.actionaura.retail.reporting.DashboardRepository
@@ -24,12 +35,14 @@ import com.actionaura.retail.reporting.SqlDelightReportingRepository
 import com.actionaura.retail.securestorage.GenerationalSecureMaterialStore
 import com.actionaura.retail.securestorage.SecureBlobStore
 import com.actionaura.retail.securestorage.SecureMaterialStore
+import com.actionaura.retail.securestorage.SecureMaterialStoreActivationSink
 import com.actionaura.retail.sync.DeviceSigner
 import com.actionaura.retail.sync.PlatformDeviceSigner
 import com.actionaura.retail.sync.SyncOrchestrator
 import com.actionaura.retail.sync.SyncRelayConfiguration
 import com.actionaura.retail.sync.SyncRelayConfigurationValidationResult
 import com.actionaura.retail.sync.resolveActiveSyncTransport
+import com.actionaura.retail.ui.activation.ActivationViewModel
 import com.actionaura.retail.usecases.branch.ActivateBranchUseCase
 import com.actionaura.retail.usecases.branch.DeactivateBranchUseCase
 import com.actionaura.retail.usecases.branch.EnsureDefaultBranchUseCase
@@ -112,6 +125,26 @@ class AuraAppContainer(
     // task), so the real, honest default here is `null`, never a
     // fabricated placeholder URL.
     syncRelayConfiguration: SyncRelayConfiguration? = null,
+    // Task 11a (multi-device-sync-foundation) -- real, versioned licensing-API
+    // configuration for the real `HttpExternalLicensingTransport`. Mirrors
+    // `syncRelayConfiguration`'s own "null = not configured, inert" pattern
+    // exactly: no production licensing-API base URL source exists yet on
+    // mobile (same disclosed gap `syncRelayConfiguration`'s own KDoc already
+    // records for the sync relay), so the real, honest default here is
+    // `null`, never a fabricated placeholder URL. When `null`,
+    // `newActivationViewModel()` below still returns a real, usable
+    // `ActivationViewModel` -- every real capability it needs simply resolves
+    // to the same honest `TransportNotConfigured`/no-op defaults
+    // `ActivationViewModel`'s own constructor already uses.
+    private val licensingApiConfiguration: ExternalApiConfiguration? = null,
+    // Task 11a -- the real current platform this process is running on,
+    // supplied by the real platform entry point exactly like
+    // `driverFactory`/`secureBlobStore` already are. Defaulted to `ANDROID`
+    // (not required) because Android is the only platform this repo can
+    // actually build/run/verify on today (`ios-build-readiness-plan.md`) --
+    // a real iOS entry point would pass `LicensingPlatform.IOS` explicitly
+    // once one exists.
+    private val platform: LicensingPlatform = LicensingPlatform.ANDROID,
     // Task 10 -- a real `SupervisorJob`-rooted scope so a genuine failure
     // in one sync tick (e.g. Task 7's `DeviceSigner` `IllegalStateException`
     // on a corrupt/invalidated signing key -- deliberately never swallowed,
@@ -167,6 +200,92 @@ class AuraAppContainer(
         database = database,
         gate = gate,
         scope = coroutineScope,
+    )
+
+    // Task 11a (multi-device-sync-foundation) -- the real, wire-verified
+    // HttpExternalLicensingTransport (Task 8), constructed only when a real
+    // `licensingApiConfiguration` was supplied -- mirrors `syncOrchestrator`'s
+    // own "inert until configured" posture. Reuses the SAME `syncHttpClient`
+    // (CIO-backed) and `deviceSigner` this container already holds, never a
+    // second independent instance of either. CIO rather than OkHttp here is
+    // a consistency choice, not a correctness requirement for THIS call --
+    // activation is POST-only, so OkHttp's documented GET-body-drop defect
+    // (`SyncTransport`'s own KDoc) does not apply -- but reusing the one
+    // HttpClient this container already owns avoids adding a second engine
+    // dependency for no real benefit.
+    private val licensingTransport: HttpExternalLicensingTransport? = licensingApiConfiguration?.let {
+        HttpExternalLicensingTransport(syncHttpClient, it, deviceSigner)
+    }
+
+    /**
+     * Task 11a -- the real, net-new factory this task adds: constructs a
+     * fresh [ActivationViewModel] wired to every real capability this
+     * container holds -- the real transport (when configured),
+     * the real per-attempt [SecureMaterialStoreActivationSink] factory
+     * (each activation attempt commits into the SAME `secureMaterialStore`
+     * every other real screen reads from), and a real, freshly-generated
+     * [InstallationIdentity] (generated ONCE per `ActivationViewModel`
+     * instance -- captured in a local `val` below, not regenerated on every
+     * `installationIdentityProvider()` call -- so a retried activation
+     * attempt after a transient network failure still presents the SAME
+     * `installation_id` to Owner, never a different device identity per
+     * retry).
+     *
+     * A factory FUNCTION, not a cached `val` field -- `ActivationViewModel`
+     * carries real per-attempt mutable session state (`customerSessionId`,
+     * `licenseClaimReference`, `submittedLicenseKey`) meant to live for
+     * exactly one screen visit, the same "container holds shared instances,
+     * screen construction reads from container" pattern this class's own
+     * KDoc on `syncOrchestrator.transportProvider` already establishes,
+     * matching this app's own established `viewModel { XyzViewModel(container) }`
+     * Compose construction pattern (`CategoryListScreen.kt`).
+     *
+     * `licensingApiConfiguration == null` (the honest default -- no real
+     * licensing-API base URL source exists yet, see that parameter's own
+     * KDoc) still returns a real, non-throwing `ActivationViewModel`; every
+     * capability it needs simply resolves to `ActivationViewModel`'s own
+     * honest `TransportNotConfigured`/no-op defaults, matching
+     * `DisabledProductionTransport`'s own never-fabricate-success rule.
+     */
+    fun newActivationViewModel(): ActivationViewModel {
+        val installationIdentity = generateInstallationIdentity()
+        val transport = licensingTransport
+        return ActivationViewModel(
+            transport = DisabledProductionTransport(), // real, honest: signIn/claimLicense have no real Owner-side authority yet (Task 8's own KDoc).
+            productCode = LicensingProductCode.AURA_RETAIL,
+            platform = platform,
+            installationIdentityProvider = { installationIdentity },
+            activateWithLicenseKey = if (transport != null) {
+                transport::activateWithLicenseKey
+            } else {
+                { TransportOutcome.TransportNotConfigured }
+            },
+            activationResponseProcessorFactory = { ownerInstallationId, identity ->
+                val sink = SecureMaterialStoreActivationSink(
+                    store = secureMaterialStore,
+                    installationIdentity = identity,
+                    productCode = LicensingProductCode.AURA_RETAIL.name,
+                    platform = platform.name,
+                    ownerInstallationId = ownerInstallationId,
+                    nowIso8601 = { kotlinx.datetime.Clock.System.now().toString() },
+                )
+                ActivationResponseProcessor(sink, sink)
+            },
+        )
+    }
+
+    /**
+     * Task 11a -- a real, freshly-generated [InstallationIdentity]. No
+     * chicken-and-egg problem: this local seed is generated BEFORE
+     * activation and only becomes durably persisted (inside the committed
+     * activation bundle) as a RESULT of a successful activation, exactly
+     * matching how Tasks 8/9/10's own live tests already construct one
+     * (`"task8-live-test-" + secureRandomHex(16)`, `HttpExternalLicensingTransportActivationLiveTest.kt`).
+     */
+    private fun generateInstallationIdentity(): InstallationIdentity = InstallationIdentity(
+        seed = LocalInstallationSeed(secureRandomHex(32), InstallationIdentityVersion.V1),
+        status = InstallationIdentityStatus.GENERATED,
+        generatedAt = kotlinx.datetime.Clock.System.now().toString(),
     )
 
     val settingsRepository: SettingsRepository = SqlDelightSettingsRepository(database, gate)
