@@ -32,7 +32,12 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # from INTEGER PRIMARY KEY AUTOINCREMENT to TEXT PRIMARY KEY (client-
 # generated UUID) so two offline devices can create categories without ever
 # colliding on id. See _migrate_categories_to_uuid below.
-RETAIL_SCHEMA_VERSION = 2
+# Multi-device sync foundation (2026-08-07), v2 -> v3: products.category_id's
+# FOREIGN KEY gains ON DELETE SET NULL. See
+# _migrate_products_category_fk_on_delete_set_null below for why a bare
+# `REFERENCES categories(id)` permanently wedges sync on any device holding a
+# product in a category some OTHER device deleted.
+RETAIL_SCHEMA_VERSION = 3
 
 
 def _get_path(name):
@@ -168,7 +173,7 @@ def _migrate_categories_to_uuid(conn):
                 reorder_level INTEGER DEFAULT 5,
                 status TEXT DEFAULT 'active',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (category_id) REFERENCES categories(id)
+                FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL
             )
         """)
         conn.execute("""
@@ -201,6 +206,122 @@ def _migrate_categories_to_uuid(conn):
         raise
     finally:
         conn.execute(f"PRAGMA foreign_keys={'ON' if fk_was_on else 'OFF'}")
+
+
+def _products_category_fk_is_set_null(conn):
+    """True when products.category_id's FOREIGN KEY already declares
+    ON DELETE SET NULL. Read from SQLite's own `PRAGMA foreign_key_list`
+    (the parsed FK definition) rather than by string-matching the stored
+    CREATE TABLE text, so formatting/whitespace differences between the base
+    schema and a migrated rebuild can never make this misreport."""
+    try:
+        rows = conn.execute("PRAGMA foreign_key_list(products)").fetchall()
+    except sqlite3.DatabaseError:
+        return False
+    for r in rows:
+        if r["table"] == "categories" and r["from"] == "category_id":
+            return (r["on_delete"] or "").upper() == "SET NULL"
+    return False
+
+
+def _migrate_products_category_fk_on_delete_set_null(conn):
+    """One-time migration (schema v2 -> v3): products.category_id's FOREIGN
+    KEY gains ON DELETE SET NULL.
+
+    Why this is a correctness fix and not cosmetics: `_conn()` above sets
+    `PRAGMA foreign_keys=ON` on EVERY connection, so a bare
+    `REFERENCES categories(id)` is genuinely enforced. Categories are synced
+    across devices on one license; products are NOT (this phase). Two devices
+    therefore legitimately hold different product -> category assignments.
+    Device A (no products in "Electronics") deletes that category and the
+    delete is relayed; device B (which does have a product there) applies it
+    via `commercial_runtime/sync/sync_service.py::_apply_event`'s
+    `DELETE FROM categories WHERE id=?` and gets
+    `IntegrityError: FOREIGN KEY constraint failed`. That aborts
+    `apply_pull_result` before the cursor is advanced, and `run_once`
+    swallows the exception -- so device B silently stops receiving ANY event
+    from ANY device, permanently, with no self-healing. ON DELETE SET NULL
+    makes the delete unassign B's products instead, which is also exactly
+    the desktop UX intent for deleting a category locally.
+
+    Structure mirrors `_migrate_categories_to_uuid` above (read its docstring
+    for the full reasoning) and inherits its two safety properties verbatim:
+
+    1. Runs with `PRAGMA foreign_keys` temporarily OFF (it cannot be toggled
+       inside a transaction, so it is flipped before BEGIN and restored after
+       COMMIT via try/finally) -- otherwise `DROP TABLE products` fails while
+       inventory_movements/inventory_balances/purchase_order_items/
+       sale_items/return_items rows still reference it.
+
+    2. The original `products` name is never renamed away: the replacement is
+       built as `products_new` and swapped in via `DROP products` +
+       `RENAME products_new TO products`. Renaming `products` to
+       `products_old` would make SQLite silently rewrite all five referencing
+       tables' FK clauses to point at `products_old`.
+
+    Idempotent (returns immediately when the FK is already SET NULL, on top
+    of ensure_schema_version's user_version gate) and fully transactional:
+    any failure rolls the whole rebuild back, leaving the database exactly as
+    the pre-migration backup captured it for a clean retry on next launch.
+    Every products row and every column value is preserved as-is -- this
+    changes only the table's declared FK action, never any data.
+    """
+    if _products_category_fk_is_set_null(conn):
+        return
+
+    fk_was_on = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        conn.execute("BEGIN")
+        conn.execute("""
+            CREATE TABLE products_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INTEGER DEFAULT 1,
+                sku TEXT NOT NULL,
+                barcode TEXT,
+                name TEXT NOT NULL,
+                category_id TEXT,
+                cost_price REAL DEFAULT 0,
+                sell_price REAL DEFAULT 0,
+                tax_rate REAL DEFAULT 0,
+                unit TEXT DEFAULT 'pcs',
+                reorder_level INTEGER DEFAULT 5,
+                status TEXT DEFAULT 'active',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL
+            )
+        """)
+        conn.execute("""
+            INSERT INTO products_new (id, company_id, sku, barcode, name, category_id,
+                                       cost_price, sell_price, tax_rate, unit, reorder_level,
+                                       status, created_at)
+            SELECT id, company_id, sku, barcode, name, category_id,
+                   cost_price, sell_price, tax_rate, unit, reorder_level,
+                   status, created_at
+            FROM products
+        """)
+        conn.execute("DROP TABLE products")
+        conn.execute("ALTER TABLE products_new RENAME TO products")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute(f"PRAGMA foreign_keys={'ON' if fk_was_on else 'OFF'}")
+
+
+def _migrate_retail_schema(conn):
+    """The single `migrate_fn` handed to `ensure_schema_version` -- runs every
+    migration this file owns, in version order, on any database behind
+    RETAIL_SCHEMA_VERSION. `ensure_schema_version` only tells a migration
+    "you are behind", not "you are behind by exactly one version", so a v1
+    install upgrading straight to v3 must run BOTH steps in one pass. Each
+    step is independently idempotent (each inspects the live schema and
+    returns immediately when its own change is already present), so running
+    them all is correct regardless of which version the database actually
+    starts from."""
+    _migrate_categories_to_uuid(conn)
+    _migrate_products_category_fk_on_delete_set_null(conn)
 
 
 def init_retail():
@@ -237,7 +358,13 @@ def init_retail():
         reorder_level INTEGER DEFAULT 5,
         status TEXT DEFAULT 'active',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (category_id) REFERENCES categories(id)
+        -- ON DELETE SET NULL, not a bare REFERENCES: a category delete
+        -- relayed in from ANOTHER device must never be able to fail against
+        -- this device's own product links (products are not synced, so two
+        -- devices on one license legitimately hold different product ->
+        -- category assignments). See
+        -- _migrate_products_category_fk_on_delete_set_null above.
+        FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL
     );
     CREATE TABLE IF NOT EXISTS inventory_movements (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -429,13 +556,15 @@ def init_retail():
     conn.commit()
 
     # Wave 1B (Part K) / multi-device sync foundation (2026-08-06): first
-    # real Retail schema change -- see _migrate_categories_to_uuid above.
+    # real Retail schema changes -- see _migrate_retail_schema above, which
+    # chains _migrate_categories_to_uuid (v2) and
+    # _migrate_products_category_fk_on_delete_set_null (v3).
     # Mirrors products/clinic/backend/database/schema.py's identical
     # ensure_schema_version pattern; see
     # commercial_runtime/security/migration_safety.py.
     from commercial_runtime.security.migration_safety import ensure_schema_version
     ensure_schema_version(
-        conn, _get_path('retail'), RETAIL_SCHEMA_VERSION, _migrate_categories_to_uuid,
+        conn, _get_path('retail'), RETAIL_SCHEMA_VERSION, _migrate_retail_schema,
         backup_dir=os.path.join(BASE_DIR, 'migration_backups'),
     )
 
