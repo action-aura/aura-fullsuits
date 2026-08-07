@@ -104,8 +104,34 @@ kotlin {
                 implementation("app.cash.sqldelight:android-driver:2.3.2")
                 // Task 8 -- real Android Ktor engine (OkHttp-backed), the same
                 // real HTTP stack Android apps already ship with, not a
-                // hand-rolled substitute.
+                // hand-rolled substitute. Used by HttpExternalLicensingTransport
+                // (POST-only, unaffected by the constraint below).
                 implementation("io.ktor:ktor-client-okhttp:2.3.12")
+                // Task 9 (multi-device-sync-foundation) -- a SECOND real Ktor
+                // engine, specifically for SyncTransport.pull(). Real,
+                // evidence-based finding, not a style preference: Ktor's
+                // OkHttp engine (`OkHttpEngineKt.convertToOkHttpRequest`,
+                // disassembled and confirmed directly) unconditionally passes
+                // `null` as the OkHttp RequestBody whenever
+                // `okhttp3.internal.http.HttpMethod.permitsRequestBody(method)`
+                // is false -- and OkHttp's own `permitsRequestBody("GET")` is
+                // `false` (OkHttp forbids a body on GET at the
+                // `Request.Builder` level: "method GET must not have a
+                // request body", confirmed via a direct standalone OkHttp
+                // probe). `owner/app/sync/routes.py::pull()` is a real GET
+                // endpoint that requires a signed JSON body (`since` lives
+                // inside it, never a query param -- see that module's own
+                // docstring) -- an HttpClient(OkHttp)-backed SyncTransport
+                // therefore ALWAYS sends an empty body on pull() and Owner
+                // ALWAYS rejects it with INVALID_REQUEST. Live-verified: the
+                // very first live run of `SyncTransportLiveTest` against a
+                // real Owner instance failed exactly this way before this
+                // fix. Ktor's CIO engine writes raw HTTP text directly (never
+                // going through `okhttp3.Request.Builder`), so it carries no
+                // such restriction -- SyncTransport's own callers MUST
+                // construct its `HttpClient` with THIS engine, never OkHttp
+                // (see SyncTransport's own class KDoc).
+                implementation("io.ktor:ktor-client-cio:2.3.12")
                 // M11.2/M11.8 -- real Ed25519 signature verification for
                 // signed License leases. Same version and same raw "subtle"
                 // primitives (Ed25519Sign/Ed25519Verify) the legacy Android
@@ -139,6 +165,11 @@ kotlin {
                 // tink-android redeclaration immediately above) rather than
                 // relying on implicit test-classpath inheritance.
                 implementation("io.ktor:ktor-client-okhttp:2.3.12")
+                // Task 9 -- real Ktor CIO engine, redeclared here for the
+                // same reason (`SyncTransportLiveTest` needs it, matching
+                // androidMain's own real, required-for-correctness choice
+                // for SyncTransport -- see that dependency's own comment).
+                implementation("io.ktor:ktor-client-cio:2.3.12")
             }
         }
         // Kotlin's Default Hierarchy Template (on by default since Kotlin
