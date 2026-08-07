@@ -203,6 +203,15 @@ own conflict model in a later sub-project.
 - Push/pull network failure: retried with backoff; nothing is ever
   dropped, since the outbox only clears on confirmed relay receipt and the
   cursor only advances after successful local apply.
+  **Caveat (added 2026-08-07 after the final whole-branch review):** this
+  "nothing is ever dropped" claim covers retry, crash-mid-apply and
+  duplicate delivery, but NOT concurrent commits. `seq` is assigned at
+  INSERT time and becomes visible at COMMIT time, so a push that takes a
+  lower `seq` but commits after a higher one can be skipped permanently by
+  a device that pulled in between. See "Residual gaps" in
+  `docs/superpowers/plans/2026-08-06-multi-device-sync-foundation.md` for
+  the full mechanism and the two candidate fixes; it must be closed before
+  this guarantee holds under real concurrent multi-device write load.
 - Duplicate/replayed event: idempotent by `(entity_id, seq)` — a no-op.
 - Invalid/expired license session: sync endpoints reject explicitly
   (401/403); the client surfaces "sync paused — check license" rather than
