@@ -10,9 +10,10 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.io.BufferedReader
+import java.io.BufferedInputStream
+import java.io.ByteArrayOutputStream
 import java.io.IOException
-import java.io.InputStreamReader
+import java.io.InputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
@@ -121,12 +122,23 @@ class SyncRelayClient(
     private val identity: DeviceIdentity,
     private val installationId: String,
     httpClient: OkHttpClient? = null,
+    /** Injectable ONLY so SyncRelayClientTest can point the raw-socket
+     * `pull()` path at a MockWebServer whose TLS identity is a
+     * test-generated cert (which the real system trust store would
+     * otherwise reject outright, making it impossible to isolate a
+     * hostname-verification bug from a plain untrusted-cert failure).
+     * Production callers must never pass this -- the default is the real
+     * platform trust store, exactly like `httpClient` above defaults to a
+     * plain OkHttpClient using the same trust store for `push()`. */
+    sslSocketFactory: SSLSocketFactory? = null,
     private val sleepFn: (Long) -> Unit = { Thread.sleep(it) },
 ) {
     private val http: OkHttpClient = httpClient ?: OkHttpClient.Builder()
         .connectTimeout(config.timeoutSeconds, TimeUnit.SECONDS)
         .readTimeout(config.timeoutSeconds, TimeUnit.SECONDS)
         .build()
+    private val rawSslSocketFactory: SSLSocketFactory =
+        sslSocketFactory ?: (SSLSocketFactory.getDefault() as SSLSocketFactory)
 
     /** `events` are already-converted canonical values (see [jsonToCanonical])
      * -- callers must not pass a Gson-`Map<String, Any?>`-deserialized batch,
@@ -245,8 +257,24 @@ class SyncRelayClient(
      * This method instead speaks raw HTTP/1.1 over a plain `Socket` (wrapped
      * in an `SSLSocket` for https), giving full control over the request
      * line -- the only way to put a literal "GET" on the wire together with
-     * a body. `Connection: close` is always sent so the body can simply be
-     * read until EOF, without needing to parse chunked transfer-encoding. */
+     * a body. `Connection: close` is always sent, but the RESPONSE side is
+     * still parsed properly (`Content-Length` and chunked
+     * transfer-encoding, see [readChunkedBody]) rather than blindly reading
+     * to EOF: a real reverse proxy/load balancer in front of Owner may
+     * chunk its response regardless of what the request asked for --
+     * chunking is a response-framing choice the origin/proxy makes, not
+     * something `Connection: close` on the request suppresses.
+     *
+     * For https, `sslSocket.sslParameters.endpointIdentificationAlgorithm`
+     * is set to `"HTTPS"` before `startHandshake()`. Without this, a bare
+     * `SSLSocket` (unlike `HttpsURLConnection`/OkHttp, both of which do
+     * this internally) only validates the certificate chain against the
+     * trust store -- it does NOT check that the certificate's CN/SAN
+     * actually matches [host]. That gap would let anyone who can redirect
+     * traffic to a server holding ANY CA-trusted certificate (for a
+     * completely unrelated domain) complete the handshake undetected --
+     * a classic MITM vector. See SyncRelayClientTest's hostname-mismatch
+     * test, which fails without this line and passes with it. */
     private fun executeGetWithBody(url: String, bodyJson: String): HttpResult {
         val uri = URI(url)
         val isHttps = uri.scheme == "https"
@@ -267,8 +295,10 @@ class SyncRelayClient(
             plainSocket.connect(InetSocketAddress(host, port), timeoutMillis)
             plainSocket.soTimeout = timeoutMillis
             if (isHttps) {
-                val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
-                socket = (sslFactory.createSocket(plainSocket, host, port, true) as SSLSocket).also {
+                socket = (rawSslSocketFactory.createSocket(plainSocket, host, port, true) as SSLSocket).also {
+                    val params = it.sslParameters
+                    params.endpointIdentificationAlgorithm = "HTTPS"
+                    it.sslParameters = params
                     it.soTimeout = timeoutMillis
                     it.startHandshake()
                 }
@@ -287,32 +317,113 @@ class SyncRelayClient(
             out.write(bodyBytes)
             out.flush()
 
-            val input = BufferedReader(InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))
-            val statusLine = input.readLine() ?: throw IOException("Empty response from server")
+            // Raw byte-level reading throughout (never a BufferedReader/
+            // InputStreamReader over this stream) -- chunk boundaries are
+            // byte counts, and a char-decoding reader can buffer ahead or
+            // split a multi-byte UTF-8 sequence across reads, which would
+            // silently desynchronize chunk framing from the underlying
+            // bytes. Headers/status-line/chunk-size lines are themselves
+            // pure ASCII per RFC 7230, so reading them as bytes first and
+            // decoding after is always safe.
+            val input = BufferedInputStream(socket.getInputStream())
+            val statusLine = String(readLineBytes(input), StandardCharsets.US_ASCII)
             val status = statusLine.split(" ").getOrNull(1)?.toIntOrNull()
                 ?: throw IOException("Malformed HTTP status line: $statusLine")
 
             var retryAfter: String? = null
-            var headerLine = input.readLine()
-            while (!headerLine.isNullOrEmpty()) {
+            var contentLength: Int? = null
+            var chunked = false
+            while (true) {
+                val headerLineBytes = readLineBytes(input)
+                if (headerLineBytes.isEmpty()) break
+                val headerLine = String(headerLineBytes, StandardCharsets.ISO_8859_1)
                 val idx = headerLine.indexOf(':')
-                if (idx > 0 && headerLine.substring(0, idx).equals("Retry-After", ignoreCase = true)) {
-                    retryAfter = headerLine.substring(idx + 1).trim()
+                if (idx <= 0) continue
+                val name = headerLine.substring(0, idx).trim()
+                val value = headerLine.substring(idx + 1).trim()
+                when {
+                    name.equals("Retry-After", ignoreCase = true) -> retryAfter = value
+                    name.equals("Content-Length", ignoreCase = true) -> contentLength = value.toIntOrNull()
+                    name.equals("Transfer-Encoding", ignoreCase = true) && value.contains("chunked", ignoreCase = true) ->
+                        chunked = true
                 }
-                headerLine = input.readLine()
             }
 
-            val bodyBuilder = StringBuilder()
-            val buffer = CharArray(4096)
-            while (true) {
-                val n = input.read(buffer)
-                if (n == -1) break
-                bodyBuilder.append(buffer, 0, n)
+            val bodyBytesOut = when {
+                chunked -> readChunkedBody(input)
+                contentLength != null -> readExactly(input, contentLength)
+                else -> input.readBytes() // no framing given at all -- read to EOF (Connection: close)
             }
-            return HttpResult(status, retryAfter, bodyBuilder.toString())
+            return HttpResult(status, retryAfter, String(bodyBytesOut, StandardCharsets.UTF_8))
         } finally {
             socket.close()
         }
+    }
+
+    /** Reads one CRLF- (or bare-LF-) terminated line as raw bytes, WITHOUT
+     * the terminator, directly off [input] -- used for the status line,
+     * headers, and chunk-size lines, all of which RFC 7230 guarantees are
+     * pure ASCII, so decoding only happens after the exact bytes of the
+     * line are known. */
+    private fun readLineBytes(input: InputStream): ByteArray {
+        val buf = ByteArrayOutputStream()
+        var prev = -1
+        while (true) {
+            val b = input.read()
+            if (b == -1) {
+                if (buf.size() == 0) throw IOException("Unexpected end of stream while reading a line")
+                return buf.toByteArray()
+            }
+            if (b == '\n'.code) {
+                val bytes = buf.toByteArray()
+                return if (prev == '\r'.code) bytes.copyOfRange(0, bytes.size - 1) else bytes
+            }
+            buf.write(b)
+            prev = b
+        }
+    }
+
+    private fun readExactly(input: InputStream, length: Int): ByteArray {
+        val out = ByteArray(length)
+        var read = 0
+        while (read < length) {
+            val n = input.read(out, read, length - read)
+            if (n == -1) {
+                throw IOException("Unexpected end of stream while reading response body (expected $length bytes, got $read)")
+            }
+            read += n
+        }
+        return out
+    }
+
+    /** Minimal RFC 7230 §4.1 chunked-transfer-encoding decoder -- handles
+     * the common case (chunk-size line, chunk data, CRLF, repeat, final
+     * zero-size chunk optionally followed by trailer headers). A malformed
+     * chunk (unparsable size, truncated data, missing terminator) throws a
+     * clear IOException rather than silently misinterpreting chunk framing
+     * as literal body bytes -- this is exactly the failure mode the
+     * previous "read to EOF" implementation was exposed to behind any real
+     * reverse proxy/load balancer that chunks responses (never caught
+     * before because testing only used a bare `flask run` dev server). */
+    private fun readChunkedBody(input: InputStream): ByteArray {
+        val out = ByteArrayOutputStream()
+        while (true) {
+            val sizeLine = String(readLineBytes(input), StandardCharsets.US_ASCII).trim()
+            val sizeHex = sizeLine.substringBefore(';').trim()
+            val size = sizeHex.toIntOrNull(16)
+                ?: throw IOException("Malformed chunk size in chunked response: \"$sizeLine\"")
+            if (size == 0) {
+                // Optional trailer headers, terminated by an empty line.
+                while (readLineBytes(input).isNotEmpty()) { /* discard trailers */ }
+                break
+            }
+            out.write(readExactly(input, size))
+            val terminator = readLineBytes(input)
+            if (terminator.isNotEmpty()) {
+                throw IOException("Malformed chunk terminator in chunked response (expected CRLF after chunk data)")
+            }
+        }
+        return out.toByteArray()
     }
 
     private sealed class RequestOutcome {
