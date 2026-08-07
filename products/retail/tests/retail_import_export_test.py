@@ -246,7 +246,7 @@ def test_unknown_entity_rejected():
 def test_import_does_not_touch_unrelated_products():
     client, cid = _make_admin_client()
     rconn = get_retail_conn()
-    rconn.execute("INSERT INTO products (company_id,sku,name,cost_price,sell_price) VALUES (?,'PRE-EXISTING','Untouched Product',1,2)", (cid,))
+    rconn.execute("INSERT INTO products (id,company_id,sku,name,cost_price,sell_price) VALUES (?,?,'PRE-EXISTING','Untouched Product',1,2)", (str(uuid.uuid4()), cid))
     rconn.commit(); rconn.close()
 
     body = _csv_bytes([{'Product Name': 'New Import', 'SKU': 'NEW-SKU', 'Selling Price': '5'}],

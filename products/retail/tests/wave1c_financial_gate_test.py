@@ -87,8 +87,8 @@ def _make_admin_and_product(price=100.0, tax_rate=10.0, stock=50):
         "SELECT id FROM branches WHERE company_id=? ORDER BY id LIMIT 1", (company_id,)
     ).fetchone()[0]
     rconn.execute(
-        "INSERT INTO products (company_id,sku,name,cost_price,sell_price,tax_rate) VALUES (?, 'G1C-1','Gate Item',5,?,?)",
-        (company_id, price, tax_rate),
+        "INSERT INTO products (id,company_id,sku,name,cost_price,sell_price,tax_rate) VALUES (?,?,'G1C-1','Gate Item',5,?,?)",
+        (str(uuid.uuid4()), company_id, price, tax_rate),
     )
     product_id = rconn.execute(
         "SELECT id FROM products WHERE company_id=? AND sku='G1C-1'", (company_id,)

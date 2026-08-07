@@ -72,8 +72,8 @@ def _make_admin_and_product(price=100.0, tax_rate=15.0, stock=50):
         "SELECT id FROM branches WHERE company_id=? ORDER BY id LIMIT 1", (company_id,)
     ).fetchone()[0]
     rconn.execute(
-        "INSERT INTO products (company_id,sku,name,cost_price,sell_price,tax_rate) VALUES (?, 'RT-1','Return Item',5,?,?)",
-        (company_id, price, tax_rate),
+        "INSERT INTO products (id,company_id,sku,name,cost_price,sell_price,tax_rate) VALUES (?,?,'RT-1','Return Item',5,?,?)",
+        (str(uuid.uuid4()), company_id, price, tax_rate),
     )
     product_id = rconn.execute(
         "SELECT id FROM products WHERE company_id=? AND sku='RT-1'", (company_id,)
@@ -170,8 +170,8 @@ def test_return_of_product_not_in_sale_rejected():
     client, cid, pid, bid = _make_admin_and_product()
     rconn = get_retail_conn()
     rconn.execute(
-        "INSERT INTO products (company_id,sku,name,cost_price,sell_price,tax_rate) VALUES (?, 'RT-2','Other Item',5,50,0)",
-        (cid,),
+        "INSERT INTO products (id,company_id,sku,name,cost_price,sell_price,tax_rate) VALUES (?,?,'RT-2','Other Item',5,50,0)",
+        (str(uuid.uuid4()), cid),
     )
     other_pid = rconn.execute("SELECT id FROM products WHERE company_id=? AND sku='RT-2'", (cid,)).fetchone()[0]
     rconn.commit()
@@ -202,8 +202,8 @@ def test_multi_line_return_refunds_sum_of_lines():
     client, cid, pid, bid = _make_admin_and_product(price=100.0, tax_rate=15.0, stock=10)
     rconn = get_retail_conn()
     rconn.execute(
-        "INSERT INTO products (company_id,sku,name,cost_price,sell_price,tax_rate) VALUES (?, 'RT-3','Second Item',5,50,0)",
-        (cid,),
+        "INSERT INTO products (id,company_id,sku,name,cost_price,sell_price,tax_rate) VALUES (?,?,'RT-3','Second Item',5,50,0)",
+        (str(uuid.uuid4()), cid),
     )
     pid2 = rconn.execute("SELECT id FROM products WHERE company_id=? AND sku='RT-3'", (cid,)).fetchone()[0]
     rconn.execute(

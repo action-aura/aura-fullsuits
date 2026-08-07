@@ -345,14 +345,14 @@ def create_product():
             conn.close()
             return jsonify({'status': 'error', 'message': 'SKU already exists'}), 409
         cur = conn.cursor()
+        pid = str(_uuid.uuid4())
         cur.execute("""
-            INSERT INTO products (company_id,sku,barcode,name,category_id,cost_price,
+            INSERT INTO products (id,company_id,sku,barcode,name,category_id,cost_price,
                                   sell_price,tax_rate,unit,reorder_level,status)
-            VALUES (?,?,?,?,?,?,?,?,?,?,'active')
-        """, (cid, data['sku'], data.get('barcode',''), data['name'],
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,'active')
+        """, (pid, cid, data['sku'], data.get('barcode',''), data['name'],
               data.get('category_id'), data.get('cost_price',0), data.get('sell_price',0),
               data.get('tax_rate',0), data.get('unit','pcs'), data.get('reorder_level',5)))
-        pid = cur.lastrowid
         # File opening stock under the company's working branch — the SAME branch that
         # sales/returns/adjustments resolve to (via _default_branch), so a sale always
         # decrements the row this created. Self-heals a branch on fresh/standalone installs.
@@ -367,14 +367,21 @@ def create_product():
                 VALUES (?,?,?,'opening_stock',?,?,?)
             """, (cid, pid, bid, data.get('initial_stock', 0), 'OPENING', _uid()))
         _audit(conn, 'PRODUCT_CREATED', 'product', pid, data['name'])
+        _queue_sync_event(cur, 'product', pid, 'create', {
+            'id': pid, 'sku': data['sku'], 'barcode': data.get('barcode', ''), 'name': data['name'],
+            'category_id': data.get('category_id'), 'cost_price': data.get('cost_price', 0),
+            'sell_price': data.get('sell_price', 0), 'tax_rate': data.get('tax_rate', 0),
+            'unit': data.get('unit', 'pcs'), 'reorder_level': data.get('reorder_level', 5),
+        })
         conn.commit(); conn.close()
         _emit('ProductCreated', {'product_id': pid})
+        _sync_nudge()
         return jsonify({'status': 'success', 'data': {'id': pid}})
     except Exception as e:
         conn.close()
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-@retail_bp.route('/products/<int:pid>', methods=['PATCH'])
+@retail_bp.route('/products/<string:pid>', methods=['PATCH'])
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.product.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
@@ -386,35 +393,49 @@ def update_product(pid):
     if not fields:
         return jsonify({'status': 'error', 'message': 'No valid fields'}), 400
     conn = get_retail_conn()
+    cur = conn.cursor()
     sets = ', '.join(f'{k}=?' for k in fields)
-    conn.execute(f'UPDATE products SET {sets} WHERE id=? AND company_id=?',
-                 list(fields.values()) + [pid, cid])
+    cur.execute(f'UPDATE products SET {sets} WHERE id=? AND company_id=?',
+                list(fields.values()) + [pid, cid])
+    if cur.rowcount == 0:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Product not found'}), 404
     _audit(conn, 'PRODUCT_UPDATED', 'product', pid)
+    row = conn.execute("SELECT sku,barcode,name,category_id,cost_price,sell_price,tax_rate,unit,reorder_level FROM products WHERE id=?", (pid,)).fetchone()
+    _queue_sync_event(cur, 'product', pid, 'update', dict(row) | {'id': pid})
     conn.commit(); conn.close()
+    _sync_nudge()
     return jsonify({'status': 'success'})
 
-@retail_bp.route('/products/<int:pid>', methods=['DELETE'])
+@retail_bp.route('/products/<string:pid>', methods=['DELETE'])
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.product.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def delete_product(pid):
     cid = _cid()
     conn = get_retail_conn()
-    sales_check = conn.execute(
-        "SELECT COUNT(*) FROM sale_items WHERE product_id=?", (pid,)
-    ).fetchone()[0]
-    if sales_check > 0:
-        conn.execute("UPDATE products SET status='inactive' WHERE id=? AND company_id=?", (pid, cid))
-        msg = 'Product deactivated (has sales history)'
-    else:
-        conn.execute("DELETE FROM inventory_balances WHERE product_id=? AND company_id=?", (pid, cid))
-        conn.execute("DELETE FROM products WHERE id=? AND company_id=?", (pid, cid))
-        msg = 'Product deleted'
-    _audit(conn, 'PRODUCT_DELETED', 'product', pid, msg)
-    conn.commit(); conn.close()
-    return jsonify({'status': 'success', 'message': msg})
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE products SET status='inactive' WHERE id=? AND company_id=?", (pid, cid))
+        if cur.rowcount == 0:
+            return jsonify({'status': 'error', 'message': 'Product not found'}), 404
+        _audit(conn, 'PRODUCT_DELETED', 'product', pid, 'Product deactivated')
+        _queue_sync_event(cur, 'product', pid, 'delete', {'id': pid})
+        conn.commit()
+    except sqlite3.IntegrityError as exc:
+        conn.rollback()
+        current_app.logger.warning("delete_product(%s) failed on a database constraint: %s", pid, exc)
+        return jsonify({'status': 'error', 'message': 'This product could not be deleted.'}), 409
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("delete_product(%s) failed: %s", pid, exc)
+        return jsonify({'status': 'error', 'message': 'Could not delete this product.'}), 400
+    finally:
+        conn.close()
+    _sync_nudge()
+    return jsonify({'status': 'success', 'message': 'Product deactivated'})
 
-@retail_bp.route('/products/<int:pid>/stock-adjust', methods=['POST'])
+@retail_bp.route('/products/<string:pid>/stock-adjust', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.stock.adjust", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)

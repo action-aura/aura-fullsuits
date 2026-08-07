@@ -205,7 +205,10 @@ class SyncService:
         # provider at all, so a SyncService with no provider configured can
         # still apply those without raising.
         local_company_id = None
-        if any(ev.get("entity_type") == "category" and ev.get("event_type") in ("create", "update") for ev in events):
+        if any(
+            ev.get("entity_type") in ("category", "product") and ev.get("event_type") in ("create", "update")
+            for ev in events
+        ):
             local_company_id = self._get_local_company_id()
         for ev in events:
             self._apply_event(conn, ev, local_company_id)
@@ -235,22 +238,38 @@ class SyncService:
         return company_id
 
     def _apply_event(self, conn, ev: dict, local_company_id: Optional[str] = None) -> None:
-        if ev.get("entity_type") != "category":
-            return  # only category is in scope for this sub-project
+        entity_type = ev.get("entity_type")
+        if entity_type not in ("category", "product"):
+            return
         p = ev.get("payload") or {}
         event_type = ev.get("event_type")
-        if event_type in ("create", "update"):
-            # `local_company_id` -- THIS device's own company_id -- not
-            # `p.get("company_id")`, which is the SENDING device's company_id
-            # and is never valid to write into a local row here. See the
-            # module docstring's "Cross-device company_id bug fix" note.
-            conn.execute(
-                "INSERT INTO categories (id, company_id, name, description) VALUES (?,?,?,?) "
-                "ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description",
-                (p.get("id"), local_company_id, p.get("name"), p.get("description", "")),
-            )
-        elif event_type == "delete":
-            conn.execute("DELETE FROM categories WHERE id=?", (p.get("id"),))
+        if entity_type == "category":
+            if event_type in ("create", "update"):
+                # `local_company_id` -- THIS device's own company_id -- not
+                # `p.get("company_id")`, which is the SENDING device's company_id
+                # and is never valid to write into a local row here. See the
+                # module docstring's "Cross-device company_id bug fix" note.
+                conn.execute(
+                    "INSERT INTO categories (id, company_id, name, description) VALUES (?,?,?,?) "
+                    "ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description",
+                    (p.get("id"), local_company_id, p.get("name"), p.get("description", "")),
+                )
+            elif event_type == "delete":
+                conn.execute("DELETE FROM categories WHERE id=?", (p.get("id"),))
+        elif entity_type == "product":
+            if event_type in ("create", "update"):
+                conn.execute(
+                    "INSERT INTO products (id, company_id, sku, barcode, name, category_id, cost_price, "
+                    "sell_price, tax_rate, unit, reorder_level, status) VALUES (?,?,?,?,?,?,?,?,?,?,?,'active') "
+                    "ON CONFLICT(id) DO UPDATE SET sku=excluded.sku, barcode=excluded.barcode, name=excluded.name, "
+                    "category_id=excluded.category_id, cost_price=excluded.cost_price, sell_price=excluded.sell_price, "
+                    "tax_rate=excluded.tax_rate, unit=excluded.unit, reorder_level=excluded.reorder_level",
+                    (p.get("id"), local_company_id, p.get("sku"), p.get("barcode", ""), p.get("name"),
+                     p.get("category_id"), p.get("cost_price", 0), p.get("sell_price", 0), p.get("tax_rate", 0),
+                     p.get("unit", "pcs"), p.get("reorder_level", 5)),
+                )
+            elif event_type == "delete":
+                conn.execute("UPDATE products SET status='inactive' WHERE id=?", (p.get("id"),))
 
     def run_once(self) -> None:
         """The one entry point the timer tick (and the manual/CLI caller)

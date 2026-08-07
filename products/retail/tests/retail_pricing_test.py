@@ -166,8 +166,8 @@ def _make_admin_and_client():
         "SELECT id FROM branches WHERE company_id=? ORDER BY id LIMIT 1", (company_id,)
     ).fetchone()[0]
     rconn.execute(
-        "INSERT INTO products (company_id,sku,name,cost_price,sell_price,tax_rate) VALUES (?, 'PRC-1','Priced Item',5,100,15)",
-        (company_id,),
+        "INSERT INTO products (id,company_id,sku,name,cost_price,sell_price,tax_rate) VALUES (?,?,'PRC-1','Priced Item',5,100,15)",
+        (str(uuid.uuid4()), company_id),
     )
     product_id = rconn.execute(
         "SELECT id FROM products WHERE company_id=? AND sku='PRC-1'", (company_id,)
@@ -344,7 +344,7 @@ def test_full_return():
 def test_multi_line_return():
     client, cid, pid, bid = _make_admin_and_client()
     rconn = get_retail_conn()
-    rconn.execute("INSERT INTO products (company_id,sku,name,cost_price,sell_price,tax_rate) VALUES (?, 'PRC-2','Second Item',2,50,15)", (cid,))
+    rconn.execute("INSERT INTO products (id,company_id,sku,name,cost_price,sell_price,tax_rate) VALUES (?,?,'PRC-2','Second Item',2,50,15)", (str(uuid.uuid4()), cid))
     pid2 = rconn.execute("SELECT id FROM products WHERE company_id=? AND sku='PRC-2'", (cid,)).fetchone()[0]
     rconn.execute("INSERT INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand) VALUES (?,?,?,50)", (cid, pid2, bid))
     rconn.commit(); rconn.close()

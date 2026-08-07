@@ -461,7 +461,7 @@ const RetailSystem = {
       const icon = _ICONS[p.category_name] || _ICONS.Default;
       const stockClr = p.total_stock <= (p.reorder_level||0) ? '#ef4444' : 'var(--text-muted)';
       return `<div class="pos-card${outOfStock?' pos-card-outofstock':''}"
-          onclick="${outOfStock ? "SubsystemApp.showToast('Out of stock','error')" : `RetailSystem._addToCart(${p.id})`}">
+          onclick="${outOfStock ? "SubsystemApp.showToast('Out of stock','error')" : `RetailSystem._addToCart('${this._esc(p.id)}')`}">
         <div class="pos-card-icon">${icon}</div>
         <div class="pos-card-name" title="${p.name}">${p.name}</div>
         <div class="pos-card-price">${this._fmt(p.sell_price)}</div>
@@ -828,7 +828,7 @@ const RetailSystem = {
     const payload = {
       idempotency_key: `pos_${Date.now()}`,
       branch_id: 1,
-      customer_id: customerId ? +customerId : null,
+      customer_id: customerId || null,
       subtotal:         this._currentTotals.subtotal,
       discount_amount:  this._currentTotals.discount,
       tax_amount:       this._currentTotals.tax,
@@ -1011,18 +1011,18 @@ const RetailSystem = {
     tbody.innerHTML = prods.map(p => {
       const lowStock = p.total_stock <= (p.reorder_level||0);
       return `<tr>
-        <td style="font-family:monospace;color:var(--sub-accent)">${p.sku}</td>
-        <td style="font-weight:600">${p.name}${p.barcode?`<div style="font-size:10px;color:var(--text-muted);font-family:monospace">${p.barcode}</div>`:''}</td>
-        <td style="color:var(--text-muted)">${p.category_name||'—'}</td>
+        <td style="font-family:monospace;color:var(--sub-accent)">${this._esc(p.sku)}</td>
+        <td style="font-weight:600">${this._esc(p.name)}${p.barcode?`<div style="font-size:10px;color:var(--text-muted);font-family:monospace">${this._esc(p.barcode)}</div>`:''}</td>
+        <td style="color:var(--text-muted)">${p.category_name?this._esc(p.category_name):'—'}</td>
         <td>${this._fmt(p.cost_price)}</td>
         <td style="font-weight:600;color:#10b981">${this._fmt(p.sell_price)}</td>
         <td style="font-weight:700;color:${lowStock?'#ef4444':'#10b981'}">${lowStock?'⚠ ':''}${p.total_stock} ${p.unit||''}</td>
         <td style="color:var(--text-muted)">${p.reorder_level||0}</td>
         <td>${this._badge('Active','green')}</td>
         <td onclick="event.stopPropagation()" style="display:flex;gap:6px">
-          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditProduct(${p.id})">Edit</button>
-          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openStockAdjust(${p.id},'${p.name.replace(/'/g,"\\'")}',${p.total_stock})">Stock</button>
-          <button class="ret-btn ret-btn-danger ret-btn-sm" onclick="RetailSystem._deleteProduct(${p.id},'${p.name.replace(/'/g,"\\'")}')">Delete</button>
+          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditProduct('${this._esc(p.id)}')">Edit</button>
+          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openStockAdjust('${this._esc(p.id)}','${p.name.replace(/'/g,"\\'")}',${p.total_stock})">Stock</button>
+          <button class="ret-btn ret-btn-danger ret-btn-sm" onclick="RetailSystem._deleteProduct('${this._esc(p.id)}','${p.name.replace(/'/g,"\\'")}')">Delete</button>
         </td>
       </tr>`;
     }).join('');
@@ -1034,7 +1034,7 @@ const RetailSystem = {
   },
 
   _openEditProduct(pid) {
-    const p = this._products.find(x => x.id === pid);
+    const p = this._products.find(x => String(x.id) === String(pid));
     if (!p) return;
     const catOpts = this._categories.map(c =>
       `<option value="${this._esc(c.id)}" ${c.id===p.category_id?'selected':''}>${this._esc(c.name)}</option>`).join('');
@@ -1078,7 +1078,7 @@ const RetailSystem = {
         ${!isEdit ? `<div class="ret-field"><label>Initial Stock</label><input type="number" id="pm-stock" value="0" min="0" /></div>` : ''}
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-prod-modal').remove()">Cancel</button>
-          <button class="ret-btn ret-btn-primary" id="pm-save-btn" onclick="RetailSystem._saveProduct(${p.id||'null'})">${isEdit?'Save Changes':'Add Product'}</button>
+          <button class="ret-btn ret-btn-primary" id="pm-save-btn" onclick="RetailSystem._saveProduct(${isEdit ? `'${this._esc(p.id)}'` : 'null'})">${isEdit?'Save Changes':'Add Product'}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -1139,7 +1139,7 @@ const RetailSystem = {
         </div>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-stock-modal').remove()">Cancel</button>
-          <button class="ret-btn ret-btn-primary" id="sa-btn" onclick="RetailSystem._saveStockAdjust(${pid})">Apply</button>
+          <button class="ret-btn ret-btn-primary" id="sa-btn" onclick="RetailSystem._saveStockAdjust('${this._esc(pid)}')">Apply</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -1167,7 +1167,7 @@ const RetailSystem = {
   },
 
   async _deleteProduct(pid, name) {
-    if (!confirm(`Delete "${name}"? (Products with sales history will be deactivated instead)`)) return;
+    if (!confirm(`Delete "${name}"? (The product will be deactivated, not permanently removed)`)) return;
     try {
       const d = await this._del(`/api/sub/retail/products/${pid}`);
       SubsystemApp.showToast(d.message||'Done', d.status==='success'?'success':'error');
@@ -1870,7 +1870,7 @@ const RetailSystem = {
       const idx = cb.dataset.idx;
       const qty = +document.querySelectorAll('.ret-item-qty')[idx]?.value || 1;
       const price = +cb.dataset.price;
-      return { product_id:+cb.dataset.pid, quantity:qty, unit_price:price, line_total:qty*price };
+      return { product_id:cb.dataset.pid, quantity:qty, unit_price:price, line_total:qty*price };
     });
     const btn = document.getElementById('ret-save-btn');
     if (btn) { btn.disabled=true; btn.textContent='Processing…'; }

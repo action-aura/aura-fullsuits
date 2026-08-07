@@ -75,9 +75,9 @@ def _seed_category_with_product(cat_id, company_id=1):
         (cat_id, company_id, "Electronics", "Device B's own copy"),
     )
     conn.execute(
-        "INSERT INTO products (company_id, sku, barcode, name, category_id, cost_price, sell_price) "
-        "VALUES (?,?,?,?,?,?,?)",
-        (company_id, "SKU-FK-1", "9990001", "Laptop", cat_id, 750.0, 1199.99),
+        "INSERT INTO products (id, company_id, sku, barcode, name, category_id, cost_price, sell_price) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (str(uuid.uuid4()), company_id, "SKU-FK-1", "9990001", "Laptop", cat_id, 750.0, 1199.99),
     )
     conn.commit()
     conn.close()
@@ -108,7 +108,9 @@ def test_foreign_keys_are_actually_enforced_on_a_real_connection():
         assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
-                "INSERT INTO products (company_id, sku, name, category_id) VALUES (1,'SKU-BAD','Bad','no-such-category')"
+                "INSERT INTO products (id, company_id, sku, name, category_id) "
+                "VALUES (?,1,'SKU-BAD','Bad','no-such-category')",
+                (str(uuid.uuid4()),),
             )
             conn.commit()
     finally:
@@ -328,7 +330,12 @@ def test_v2_to_v3_migration_rebuilds_the_fk_without_losing_a_single_row(tmp_path
         rows = {r["sku"]: dict(r) for r in conn.execute("SELECT * FROM products ORDER BY id")}
         assert set(rows) == {"SKU-OLD", "SKU-NULL"}
         kept = rows["SKU-OLD"]
-        assert (kept["id"], kept["company_id"], kept["barcode"], kept["name"]) == (5, 7, "111", "Legacy Laptop")
+        # `_migrate_retail_schema` chains the FK rebuild AND the products.id ->
+        # UUID rebuild (`_migrate_products_to_uuid`) in one pass (multi-device
+        # sync foundation, schema v3 -> v4) -- the old autoincrement id (5)
+        # does not survive; every other non-id column does.
+        assert isinstance(kept["id"], str) and len(kept["id"]) == 36  # a real UUID, not the old autoincrement int
+        assert (kept["company_id"], kept["barcode"], kept["name"]) == (7, "111", "Legacy Laptop")
         assert (kept["category_id"], kept["cost_price"], kept["sell_price"]) == ("cat-1", 750.0, 1199.99)
         assert (kept["tax_rate"], kept["unit"], kept["reorder_level"], kept["status"]) == (15, "pcs", 3, "active")
         assert rows["SKU-NULL"]["category_id"] is None

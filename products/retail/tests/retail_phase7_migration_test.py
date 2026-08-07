@@ -74,8 +74,8 @@ def rc1_client_and_company():
     c, cid = _make_admin_client()
     conn = get_retail_conn()
     conn.execute(
-        "INSERT INTO products (company_id, sku, name, sell_price, status) VALUES (?,?,?,?,?)",
-        (cid, f"PRE-{uuid.uuid4().hex[:8]}", PRE_EXISTING_PRODUCT_NAME, 99.0, 'active'),
+        "INSERT INTO products (id, company_id, sku, name, sell_price, status) VALUES (?,?,?,?,?,?)",
+        (str(uuid.uuid4()), cid, f"PRE-{uuid.uuid4().hex[:8]}", PRE_EXISTING_PRODUCT_NAME, 99.0, 'active'),
     )
     conn.commit()
     conn.close()

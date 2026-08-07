@@ -422,12 +422,12 @@ def test_demo_wipe_scoped_to_own_company_only():
         rconn.execute("INSERT INTO branches (company_id,name) VALUES (?, 'A Branch')", (cid_a,))
         rconn.execute("INSERT INTO branches (company_id,name) VALUES (?, 'B Branch')", (cid_b,))
         rconn.execute(
-            "INSERT INTO products (company_id,sku,name,cost_price,sell_price) VALUES (?, 'A-SKU','A Product',1,2)",
-            (cid_a,),
+            "INSERT INTO products (id,company_id,sku,name,cost_price,sell_price) VALUES (?,?,'A-SKU','A Product',1,2)",
+            (str(uuid.uuid4()), cid_a),
         )
         rconn.execute(
-            "INSERT INTO products (company_id,sku,name,cost_price,sell_price) VALUES (?, 'B-SKU','B Product',1,2)",
-            (cid_b,),
+            "INSERT INTO products (id,company_id,sku,name,cost_price,sell_price) VALUES (?,?,'B-SKU','B Product',1,2)",
+            (str(uuid.uuid4()), cid_b),
         )
         rconn.commit()
         rconn.close()
@@ -458,8 +458,8 @@ def test_demo_wipe_rolls_back_on_failure(monkeypatch):
         rconn = get_retail_conn()
         rconn.execute("INSERT INTO branches (company_id,name) VALUES (?, 'RB Branch')", (cid,))
         rconn.execute(
-            "INSERT INTO products (company_id,sku,name,cost_price,sell_price) VALUES (?, 'RB-SKU','RB Product',1,2)",
-            (cid,),
+            "INSERT INTO products (id,company_id,sku,name,cost_price,sell_price) VALUES (?,?,'RB-SKU','RB Product',1,2)",
+            (str(uuid.uuid4()), cid),
         )
         rconn.commit()
         rconn.close()
@@ -506,10 +506,10 @@ def test_cross_company_data_isolation():
 
     rconn = get_retail_conn()
     rconn.execute(
-        "INSERT INTO products (company_id,sku,name,cost_price,sell_price) VALUES (?, 'ISO-A','A',1,2)", (cid_a,)
+        "INSERT INTO products (id,company_id,sku,name,cost_price,sell_price) VALUES (?,?,'ISO-A','A',1,2)", (str(uuid.uuid4()), cid_a)
     )
     rconn.execute(
-        "INSERT INTO products (company_id,sku,name,cost_price,sell_price) VALUES (?, 'ISO-B','B',1,2)", (cid_b,)
+        "INSERT INTO products (id,company_id,sku,name,cost_price,sell_price) VALUES (?,?,'ISO-B','B',1,2)", (str(uuid.uuid4()), cid_b)
     )
     rconn.commit()
     rconn.close()

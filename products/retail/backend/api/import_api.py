@@ -1072,15 +1072,15 @@ def _handle_retail_products(records):
             pid = existing['id']
             dupes += 1
         else:
+            pid = str(_uuid.uuid4())
             cur.execute("""
-                INSERT INTO products (company_id,sku,barcode,name,category_id,cost_price,
+                INSERT INTO products (id,company_id,sku,barcode,name,category_id,cost_price,
                                       sell_price,tax_rate,unit,reorder_level,status)
-                VALUES (?,?,?,?,?,?,?,?,?,?,'active')
-            """, (cid, sku, rec.get('barcode',''), rec.get('name',''), cat_id,
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,'active')
+            """, (pid, cid, sku, rec.get('barcode',''), rec.get('name',''), cat_id,
                   rec.get('cost_price') or 0, rec.get('sell_price') or 0,
                   rec.get('tax_rate') or 0, rec.get('unit','pcs') or 'pcs',
                   rec.get('reorder_level') or 5))
-            pid = cur.lastrowid
             imported += 1
 
         init_stock = rec.get('initial_stock')

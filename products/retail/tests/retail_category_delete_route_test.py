@@ -84,8 +84,8 @@ def _make_category_with_product(company_id):
     conn.execute("INSERT INTO categories (id, company_id, name) VALUES (?,?,?)", (cat_id, company_id, "Electronics"))
     sku = f"SKU-{uuid.uuid4().hex[:8]}"
     conn.execute(
-        "INSERT INTO products (company_id, sku, name, category_id, sell_price) VALUES (?,?,?,?,?)",
-        (company_id, sku, "Laptop", cat_id, 1199.99),
+        "INSERT INTO products (id, company_id, sku, name, category_id, sell_price) VALUES (?,?,?,?,?,?)",
+        (str(uuid.uuid4()), company_id, sku, "Laptop", cat_id, 1199.99),
     )
     conn.commit()
     conn.close()
