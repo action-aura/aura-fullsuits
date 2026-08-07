@@ -267,6 +267,42 @@ class M9OrchestrationTest {
         assertTrue(result is ActivationProcessingResult.Complete, "expected Complete against the real paired production sink, got: $result")
     }
 
+    /**
+     * Task 10 fix-pass regression test -- code review flagged that the
+     * `&&` -> `||` fix above (correct for today's ONE real, paired sink)
+     * silently weakens the "never complete until both accept" invariant
+     * for a hypothetical future pair of genuinely INDEPENDENT sinks: one
+     * commit call truly, permanently fails while the other truly
+     * succeeds. `||` cannot distinguish that from the real paired-sink
+     * "awaiting the other piece" case (both surface as the same
+     * `SecureMaterialCommitResult.Failed` type -- distinguishable only by
+     * a free-text reason string, which `process()` deliberately does not
+     * inspect). This test does NOT assert the ideal/safe behavior --  it
+     * documents and locks in TODAY's actual, accepted trade-off
+     * (`Complete`, even though only half the material persisted) so that
+     * introducing a second real, independent sink implementation in the
+     * future forces a reviewer to see this exact test and consciously
+     * reconsider it, rather than a real partial-persistence security bug
+     * reintroducing itself silently.
+     */
+    @Test
+    fun activationResponseProcessorReportsCompleteEvenWhenOnlyOneOfTwoTrulyIndependentSinksCommits() = runTest {
+        val credentialSink = object : InstallationCredentialSink {
+            override suspend fun commit(installationId: String, credential: InstallationCredentialMaterial) = SecureMaterialCommitResult.Committed
+        }
+        val leaseSink = object : SignedLeaseSink {
+            override suspend fun commit(installationId: String, lease: com.actionaura.retail.licensing.SignedAssertionEnvelope) =
+                SecureMaterialCommitResult.Failed("genuine independent persistence failure, not a paired-sink 'awaiting' state")
+        }
+        val processor = ActivationResponseProcessor(credentialSink, leaseSink)
+        val result = processor.process(M9SanitizedFixtures.activationApproved(), LicensingProductCode.AURA_RETAIL, LicensingPlatform.ANDROID)
+        assertTrue(
+            result is ActivationProcessingResult.Complete,
+            "this assertion documents a KNOWN, ACCEPTED trade-off (see ActivationResponseProcessor's own class KDoc) -- " +
+                "if this now fails, either the trade-off was intentionally fixed (update this test) or something else regressed",
+        )
+    }
+
     @Test
     fun activationResponseProcessorStopsAtSecurePersistenceRequiredWhenSinkFails() = runTest {
         val sink = NoSecureStorageAvailableSink()

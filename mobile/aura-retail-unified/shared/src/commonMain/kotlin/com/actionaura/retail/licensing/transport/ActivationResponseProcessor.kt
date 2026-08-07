@@ -9,9 +9,30 @@ import com.actionaura.retail.licensing.LicensingProductCode
  * (`activation-response-processing.md`). Structural decode already
  * happens via `kotlinx.serialization` into [ActivationResult] (M7.17)
  * before this layer runs; this processor performs the remaining six
- * real validation/handoff steps and never marks activation complete
- * until [InstallationCredentialSink]/[SignedLeaseSink] accept the
- * material.
+ * real validation/handoff steps and marks activation complete once
+ * [InstallationCredentialSink]/[SignedLeaseSink] report the material
+ * accepted.
+ *
+ * Task 10 (multi-device-sync-foundation) code-review correction: this
+ * class's own KDoc previously claimed "never complete until BOTH
+ * accept" -- no longer accurate (and, per [finishApprovedOrAlreadyActive]'s
+ * own inline KDoc, was never actually achievable against the one real
+ * production sink this app has). The real, current contract is "complete
+ * once persistence genuinely completes, as reported by AT LEAST ONE of
+ * the two sink calls" -- correct today because the only real sink
+ * ([com.actionaura.retail.securestorage.SecureMaterialStoreActivationSink])
+ * deliberately pairs the two calls so at most one can ever report success,
+ * and it only does so once both pieces are truly, atomically persisted.
+ * This is a real, known, DELIBERATELY ACCEPTED weakening for a
+ * hypothetical future pair of genuinely INDEPENDENT sinks (one succeeds,
+ * the other independently, permanently fails) -- see
+ * `ActivationResponseProcessorTest.activationResponseProcessorReportsCompleteEvenWhenOnlyOneOfTwoTrulyIndependentSinksCommits`
+ * for a test that documents and locks in this exact trade-off, so a real
+ * future security regression can't reintroduce itself silently the
+ * moment a second real sink implementation exists. See
+ * `M9OrchestrationTest.activationResponseProcessorReportsCompleteEvenWhenOnlyOneOfTwoTrulyIndependentSinksCommits`
+ * (`shared/src/commonTest/.../M9OrchestrationTest.kt`, the same file
+ * every other real regression test for this class already lives in).
  */
 sealed interface ActivationProcessingResult {
     data class Complete(val installationId: String) : ActivationProcessingResult
@@ -62,7 +83,7 @@ class ActivationResponseProcessor(
             else -> error("unreachable")
         }
 
-        // Step 8/9: credential + signed-lease handoff -- activation is never complete until both accept.
+        // Step 8/9: credential + signed-lease handoff -- activation is complete once persistence genuinely completes (see this class's own updated KDoc for the real, current "at least one" contract and its known trade-off).
         //
         // Task 10 (multi-device-sync-foundation) real bug found and fixed by
         // this task's own real, on-device verification -- NOT a Task 10

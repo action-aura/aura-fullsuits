@@ -88,11 +88,26 @@ suspend fun resolveOwnerInstallationId(
  * ("Task 10 ... is expected to do this wiring, supplying a real
  * installationId from wherever the activation flow ends up persisting
  * it"). Returns `null` (never throws, never fabricates a placeholder
- * installationId) whenever either half of what [SyncTransport] needs
- * beyond `deviceSigner` is missing:
+ * installationId) whenever any of what [SyncTransport] needs beyond
+ * `deviceSigner` is missing or invalid:
  * - [configuration] is `null` -- mirrors desktop's own established
  *   "empty relay URL = inert" pattern (`task-5-report.md`); no relay
  *   base URL has been configured for this build/environment.
+ * - [configuration] is non-null but fails its own [SyncRelayConfiguration.validate]
+ *   (cleartext HTTP in production, embedded credentials, a malformed
+ *   scheme, etc.) -- code-review finding (Task 10 fix pass): this check
+ *   was originally missing here, meaning [AuraAppContainer]'s own
+ *   `init {}` poll-loop gate (which DOES call `.validate()` before ever
+ *   calling `start()`) could be silently bypassed by [nudge] -- every
+ *   category write calls `pushOnce()` -> this function directly,
+ *   independent of whether the poll loop ever started. Unreachable in
+ *   today's production build (`MainActivity` always passes `null`), but
+ *   the moment any future task wires a real, fallible config source, an
+ *   ordinary category write must never attempt a network push using a
+ *   configuration this module's own security rules already reject --
+ *   checking `validate()` here closes that gap at the one real, shared
+ *   choke point every push/pull path (poll loop AND `nudge()`) goes
+ *   through, rather than duplicating the check at each call site.
  * - [resolveOwnerInstallationId] finds no persisted activation -- this
  *   device has never had a real activation bundle committed (see this
  *   file's own class-level KDoc for why that is real, disclosed,
@@ -118,6 +133,7 @@ suspend fun resolveActiveSyncTransport(
     productCode: String,
 ): SyncTransport? {
     if (configuration == null) return null
+    if (configuration.validate() !is SyncRelayConfigurationValidationResult.Valid) return null
     val installationId = resolveOwnerInstallationId(secureBlobStore, secureMaterialStore, productCode) ?: return null
     return SyncTransport(httpClient, configuration, deviceSigner, installationId)
 }

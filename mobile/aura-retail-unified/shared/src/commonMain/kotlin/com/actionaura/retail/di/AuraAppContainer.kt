@@ -206,6 +206,19 @@ class AuraAppContainer(
     // poll loop never starts, and `transportProvider` always resolves
     // `null` regardless -- genuinely inert, never a crash, never an
     // attempted connection.
+    //
+    // Code-review fix pass (Task 10): `resolveActiveSyncTransport` (called
+    // by `transportProvider` above) now ALSO checks `.validate()` itself --
+    // the real gap this comment's own claim used to overstate: this `init`
+    // block only ever gated the recurring poll loop, never `nudge()` (fired
+    // on every category write, independent of whether the loop started),
+    // so an invalid config could previously reach a real network attempt
+    // via `nudge()` alone. Both checks are kept intentionally (defense in
+    // depth, cheap): this one avoids ever starting a loop that would
+    // forever no-op against a known-invalid config; the one inside
+    // `resolveActiveSyncTransport` is the actual, unconditional security
+    // gate every push/pull path -- loop tick AND `nudge()` alike -- goes
+    // through.
     init {
         val configuration = syncRelayConfiguration
         if (configuration != null && configuration.validate() is SyncRelayConfigurationValidationResult.Valid) {
