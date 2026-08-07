@@ -54,12 +54,13 @@ import kotlin.random.Random
  * `Request.Builder` structurally forbids a body on GET/HEAD
  * (`HttpMethod.permitsRequestBody` hard-codes this; confirmed against
  * OkHttp 4.12.0's own source) -- there is no supported way to build that
- * request through OkHttp. `pull()` therefore uses plain
- * `java.net.HttpURLConnection` (which has no such restriction --
- * `setRequestMethod("GET")` + `doOutput = true` is the standard, documented
- * way to send a body on a non-standard GET, the same technique commonly
- * used for Elasticsearch's `_mget`/`_msearch` APIs) for this one call only;
- * push (a real POST) uses OkHttp like everything else in this app.
+ * request through OkHttp. Android's built-in `java.net.HttpURLConnection`
+ * was tried next and also rejected -- confirmed via physical-device
+ * testing, it silently rewrites the method to POST the instant the output
+ * stream is touched, regardless of `requestMethod` having been set to
+ * "GET" first. `pull()` therefore speaks raw HTTP/1.1 over a `Socket` for
+ * this one call (see [executeGetWithBody]'s own doc comment); push (a
+ * real POST) uses OkHttp like everything else in this app.
  */
 
 private const val NONCE_LENGTH_BYTES = 24
@@ -256,19 +257,23 @@ class SyncRelayClient(
         val timeoutMillis = (config.timeoutSeconds * 1000).toInt()
 
         val plainSocket = Socket()
-        plainSocket.connect(InetSocketAddress(host, port), timeoutMillis)
-        plainSocket.soTimeout = timeoutMillis
-        val socket: Socket = if (isHttps) {
-            val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
-            (sslFactory.createSocket(plainSocket, host, port, true) as SSLSocket).also {
-                it.soTimeout = timeoutMillis
-                it.startHandshake()
-            }
-        } else {
-            plainSocket
-        }
-
+        // `socket` starts pointing at plainSocket (not yet connected) so the
+        // finally block below always has a real, safe-to-close() reference
+        // -- including if connect() itself throws, which would otherwise
+        // leak the unconnected socket (Socket.close() is a safe no-op-ish
+        // call regardless of connection state).
+        var socket: Socket = plainSocket
         try {
+            plainSocket.connect(InetSocketAddress(host, port), timeoutMillis)
+            plainSocket.soTimeout = timeoutMillis
+            if (isHttps) {
+                val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
+                socket = (sslFactory.createSocket(plainSocket, host, port, true) as SSLSocket).also {
+                    it.soTimeout = timeoutMillis
+                    it.startHandshake()
+                }
+            }
+
             val requestHead = buildString {
                 append("GET ").append(pathAndQuery).append(" HTTP/1.1\r\n")
                 append("Host: ").append(host).append(if (uri.port != -1) ":${uri.port}" else "").append("\r\n")
