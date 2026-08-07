@@ -1140,8 +1140,9 @@ def _handle_retail_suppliers(records):
         if not name: continue
         existing = conn.execute("SELECT id FROM suppliers WHERE company_id=? AND name=?", (cid, name)).fetchone()
         if existing: continue
-        cur.execute("INSERT INTO suppliers (company_id,name,phone,email,address) VALUES (?,?,?,?,?)",
-                    (cid, name, rec.get('phone',''), rec.get('email',''), rec.get('address','')))
+        nid = str(_uuid.uuid4())
+        cur.execute("INSERT INTO suppliers (id,company_id,name,phone,email,address) VALUES (?,?,?,?,?,?)",
+                    (nid, cid, name, rec.get('phone',''), rec.get('email',''), rec.get('address','')))
         imported += 1
     conn.commit(); conn.close()
     return {'imported': imported, 'message': f'{imported} suppliers imported.'}

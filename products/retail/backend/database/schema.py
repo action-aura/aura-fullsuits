@@ -51,6 +51,12 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # payments.party_id are both loose, undeclared columns), so this rides along
 # on the same v4 bump rather than needing one of its own. See
 # _migrate_customers_to_uuid below.
+# Still v4: suppliers.id gets the identical INTEGER -> TEXT UUID treatment,
+# plus the payment_terms/credit_balance columns _ensure_credit_schema adds at
+# runtime folded in as first-class columns. Unlike customers, this table DOES
+# have a declared FK pointing at it (purchase_orders.supplier_id
+# REFERENCES suppliers(id)), so this migration carries the same rename-away
+# hazard as products/categories -- see _migrate_suppliers_to_uuid below.
 RETAIL_SCHEMA_VERSION = 4
 
 
@@ -554,6 +560,91 @@ def _migrate_customers_to_uuid(conn):
         conn.execute(f"PRAGMA foreign_keys={'ON' if fk_was_on else 'OFF'}")
 
 
+def _migrate_suppliers_to_uuid(conn):
+    """One-time migration (still schema v4): suppliers.id moves from
+    INTEGER PRIMARY KEY AUTOINCREMENT to TEXT PRIMARY KEY, folding
+    payment_terms/credit_balance (added at runtime by _ensure_credit_schema)
+    into the rebuilt table as first-class columns, same reasoning as
+    _migrate_customers_to_uuid.
+
+    Unlike customers, purchase_orders.supplier_id IS a declared FK
+    (`FOREIGN KEY (supplier_id) REFERENCES suppliers(id)`, schema.py:428) --
+    same rename-away hazard as products/categories: suppliers is rebuilt
+    under `suppliers_new` and swapped in, never renamed away directly.
+    """
+    import uuid as _uuid
+
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='suppliers'"
+    ).fetchone()
+    if exists is None:
+        # `init_retail()` always creates `suppliers` (via CREATE TABLE IF NOT
+        # EXISTS) before this migration ever runs, so a real device is never
+        # missing it -- this guard only protects a hand-built/partial
+        # database (e.g. a test fixture that only sets up categories/
+        # products) from an unconditional rebuild attempt against a table
+        # that was never created. Mirrors the identical guard in
+        # _migrate_customers_to_uuid above.
+        return
+
+    id_col = next((c for c in conn.execute("PRAGMA table_info(suppliers)").fetchall() if c["name"] == "id"), None)
+    if id_col is not None and id_col["type"].upper() == "TEXT":
+        return
+
+    fk_was_on = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        conn.execute("BEGIN")
+
+        existing_cols = {c["name"] for c in conn.execute("PRAGMA table_info(suppliers)").fetchall()}
+        has_credit = "payment_terms" in existing_cols
+
+        sup_rows = conn.execute("SELECT * FROM suppliers").fetchall()
+        id_map = {row["id"]: str(_uuid.uuid4()) for row in sup_rows}
+
+        conn.execute("""
+            CREATE TABLE suppliers_new (
+                id TEXT PRIMARY KEY,
+                company_id INTEGER DEFAULT 1,
+                name TEXT NOT NULL,
+                phone TEXT,
+                email TEXT,
+                address TEXT,
+                status TEXT DEFAULT 'active',
+                payment_terms TEXT DEFAULT 'none',
+                credit_balance REAL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        for row in sup_rows:
+            conn.execute(
+                "INSERT INTO suppliers_new (id, company_id, name, phone, email, address, status, "
+                "payment_terms, credit_balance, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (id_map[row["id"]], row["company_id"], row["name"], row["phone"], row["email"], row["address"],
+                 row["status"],
+                 row["payment_terms"] if has_credit else "none",
+                 row["credit_balance"] if has_credit else 0,
+                 row["created_at"]),
+            )
+        conn.execute("DROP TABLE suppliers")
+        conn.execute("ALTER TABLE suppliers_new RENAME TO suppliers")
+
+        for row in sup_rows:
+            old_id, new_id = row["id"], id_map[row["id"]]
+            conn.execute("UPDATE purchase_orders SET supplier_id=? WHERE supplier_id=?", (new_id, old_id))
+            conn.execute(
+                "UPDATE payments SET party_id=? WHERE party_type='supplier' AND party_id=?",
+                (new_id, old_id),
+            )
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute(f"PRAGMA foreign_keys={'ON' if fk_was_on else 'OFF'}")
+
+
 def _migrate_retail_schema(conn):
     """The single `migrate_fn` handed to `ensure_schema_version` -- runs every
     migration this file owns, in version order, on any database behind
@@ -568,6 +659,7 @@ def _migrate_retail_schema(conn):
     _migrate_products_category_fk_on_delete_set_null(conn)
     _migrate_products_to_uuid(conn)
     _migrate_customers_to_uuid(conn)
+    _migrate_suppliers_to_uuid(conn)
 
 
 def init_retail():
@@ -844,10 +936,15 @@ def _seed_retail(conn, cur, company_id=1):
         (category_ids[i], cid, category_names[i]) for i in range(len(category_names))
     ])
 
-    cur.executemany("INSERT INTO suppliers (company_id,name,phone,email) VALUES (?,?,?,?)", [
-        (cid, 'TechDistrib Ltd', '+1-555-9001', 'orders@techdistrib.com'),
-        (cid, 'FashionWholesale Co', '+1-555-9002', 'supply@fashionwholesale.com'),
-        (cid, 'GroceryDirect', '+1-555-9003', 'bulk@grocerydirect.com'),
+    # suppliers.id is TEXT (client-generated UUID) since the multi-device
+    # sync foundation migration (see _migrate_suppliers_to_uuid) -- there is
+    # no autoincrement to fall back on, so seed data must generate its own
+    # ids explicitly, same as categories/products/customers above.
+    supplier_ids = [str(_uuid.uuid4()) for _ in range(3)]
+    cur.executemany("INSERT INTO suppliers (id,company_id,name,phone,email) VALUES (?,?,?,?,?)", [
+        (supplier_ids[0], cid, 'TechDistrib Ltd', '+1-555-9001', 'orders@techdistrib.com'),
+        (supplier_ids[1], cid, 'FashionWholesale Co', '+1-555-9002', 'supply@fashionwholesale.com'),
+        (supplier_ids[2], cid, 'GroceryDirect', '+1-555-9003', 'bulk@grocerydirect.com'),
     ])
 
     cur.execute("INSERT INTO tax_rates (company_id,name,rate,is_default) VALUES (?,'Standard VAT',15,1)", (cid,))

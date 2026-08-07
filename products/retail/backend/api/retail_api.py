@@ -618,14 +618,19 @@ def create_supplier():
     cid = _cid()
     conn = get_retail_conn()
     cur = conn.cursor()
-    cur.execute("INSERT INTO suppliers (company_id,name,phone,email,address) VALUES (?,?,?,?,?)",
-                (cid, data['name'], data.get('phone',''), data.get('email',''), data.get('address','')))
-    nid = cur.lastrowid
+    nid = str(_uuid.uuid4())
+    cur.execute("INSERT INTO suppliers (id,company_id,name,phone,email,address) VALUES (?,?,?,?,?,?)",
+                (nid, cid, data['name'], data.get('phone',''), data.get('email',''), data.get('address','')))
     _audit(conn, 'SUPPLIER_CREATED', 'supplier', nid, data['name'])
+    _queue_sync_event(cur, 'supplier', nid, 'create', {
+        'id': nid, 'name': data['name'], 'phone': data.get('phone', ''),
+        'email': data.get('email', ''), 'address': data.get('address', ''),
+    })
     conn.commit(); conn.close()
+    _sync_nudge()
     return jsonify({'status': 'success', 'data': {'id': nid}})
 
-@retail_bp.route('/suppliers/<int:sid>', methods=['PATCH'])
+@retail_bp.route('/suppliers/<string:sid>', methods=['PATCH'])
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.supplier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
@@ -636,12 +641,47 @@ def update_supplier(sid):
     if not fields:
         return jsonify({'status': 'error', 'message': 'No valid fields'}), 400
     conn = get_retail_conn()
+    cur = conn.cursor()
     sets = ', '.join(f'{k}=?' for k in fields)
-    conn.execute(f'UPDATE suppliers SET {sets} WHERE id=? AND company_id=?',
-                 list(fields.values()) + [sid, cid])
+    cur.execute(f'UPDATE suppliers SET {sets} WHERE id=? AND company_id=?',
+                list(fields.values()) + [sid, cid])
+    if cur.rowcount == 0:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Supplier not found'}), 404
     _audit(conn, 'SUPPLIER_UPDATED', 'supplier', sid)
+    row = conn.execute("SELECT name,phone,email,address FROM suppliers WHERE id=?", (sid,)).fetchone()
+    _queue_sync_event(cur, 'supplier', sid, 'update', dict(row) | {'id': sid})
     conn.commit(); conn.close()
+    _sync_nudge()
     return jsonify({'status': 'success'})
+
+@retail_bp.route('/suppliers/<string:sid>', methods=['DELETE'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.supplier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+def delete_supplier(sid):
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE suppliers SET status='inactive' WHERE id=? AND company_id=?", (sid, cid))
+        if cur.rowcount == 0:
+            return jsonify({'status': 'error', 'message': 'Supplier not found'}), 404
+        _audit(conn, 'SUPPLIER_DELETED', 'supplier', sid, 'Supplier deactivated')
+        _queue_sync_event(cur, 'supplier', sid, 'delete', {'id': sid})
+        conn.commit()
+    except sqlite3.IntegrityError as exc:
+        conn.rollback()
+        current_app.logger.warning("delete_supplier(%s) failed on a database constraint: %s", sid, exc)
+        return jsonify({'status': 'error', 'message': 'This supplier could not be deleted.'}), 409
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("delete_supplier(%s) failed: %s", sid, exc)
+        return jsonify({'status': 'error', 'message': 'Could not delete this supplier.'}), 400
+    finally:
+        conn.close()
+    _sync_nudge()
+    return jsonify({'status': 'success', 'message': 'Supplier deactivated'})
 
 # ── Purchase Orders ───────────────────────────────────────────────────────────
 
@@ -1605,7 +1645,7 @@ def suppliers_payables():
     conn.close()
     return jsonify({'status': 'success', 'total_payable': _money(total), 'data': [dict(r) for r in rows]})
 
-@retail_bp.route('/suppliers/<int:sid>/statement', methods=['GET'])
+@retail_bp.route('/suppliers/<string:sid>/statement', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
 def supplier_statement(sid):
@@ -1631,7 +1671,7 @@ def supplier_statement(sid):
     conn.close()
     return jsonify({'status': 'success', 'data': {'supplier': dict(sup), 'events': out, 'balance': _money(sup['credit_balance'])}})
 
-@retail_bp.route('/suppliers/<int:sid>/payments', methods=['POST'])
+@retail_bp.route('/suppliers/<string:sid>/payments', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.supplier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)

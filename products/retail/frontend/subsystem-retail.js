@@ -1504,21 +1504,28 @@ const RetailSystem = {
   async _loadSuppliers() {
     try {
       const data = (await this._get('/api/sub/retail/suppliers')).data || [];
+      this._suppliers = data;
       const tbody = document.querySelector('#sup-table tbody');
       if (!tbody) return;
       if (!data.length) {
         tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">No suppliers yet.</td></tr>';
         return;
       }
+      // Every interpolated value here is escaped (see this._esc): a supplier
+      // name/phone/email/address can now arrive from ANOTHER DEVICE over the
+      // sync relay, mirroring Category/Customer's fix. supplier ids are real
+      // client-generated UUIDs (not autoincrement ints), so every id must be
+      // quoted, never spliced in as a bareword.
       tbody.innerHTML = data.map(s => `<tr>
-        <td style="font-weight:600">${s.name}</td>
-        <td>${s.phone||'—'}</td>
-        <td>${s.email||'—'}</td>
-        <td style="color:var(--text-muted)">${s.address||'—'}</td>
-        <td>${s.order_count||0}</td>
+        <td style="font-weight:600">${this._esc(s.name)}</td>
+        <td>${s.phone?this._esc(s.phone):'—'}</td>
+        <td>${s.email?this._esc(s.email):'—'}</td>
+        <td style="color:var(--text-muted)">${s.address?this._esc(s.address):'—'}</td>
+        <td>${this._esc(s.order_count||0)}</td>
         <td>
-          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditSupplier(${s.id},'${s.name.replace(/'/g,"\\'")}','${s.phone||''}','${s.email||''}','${s.address||''}')">Edit</button>
-          <button class="ret-btn ret-btn-primary ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._openCreatePO(${s.id},'${s.name.replace(/'/g,"\\'")}')">+ PO</button>
+          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditSupplier('${this._esc(s.id)}','${this._esc(s.name).replace(/'/g,"\\'")}','${this._esc(s.phone||'')}','${this._esc(s.email||'')}','${this._esc(s.address||'')}')">Edit</button>
+          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._deleteSupplier('${this._esc(s.id)}','${this._esc(s.name).replace(/'/g,"\\'")}')">${t('Delete')}</button>
+          <button class="ret-btn ret-btn-primary ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._openCreatePO('${this._esc(s.id)}','${this._esc(s.name).replace(/'/g,"\\'")}')">+ PO</button>
         </td>
       </tr>`).join('');
     } catch(e) { console.error(e); }
@@ -1543,7 +1550,7 @@ const RetailSystem = {
         <div class="ret-field"><label>Address</label><input id="sm-addr" value="${s.address||''}" /></div>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-sup-modal').remove()">Cancel</button>
-          <button class="ret-btn ret-btn-primary" id="sm-btn" onclick="RetailSystem._saveSupplier(${s.id||'null'})">${isEdit?'Save':'Add Supplier'}</button>
+          <button class="ret-btn ret-btn-primary" id="sm-btn" onclick="RetailSystem._saveSupplier(${s.id ? `'${this._esc(s.id)}'` : 'null'})">${isEdit?'Save':'Add Supplier'}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -1569,6 +1576,24 @@ const RetailSystem = {
         this._loadSuppliers();
       } else { SubsystemApp.showToast(d.message||'Error','error'); if(btn){btn.disabled=false;btn.textContent='Save';} }
     } catch(e) { if(btn){btn.disabled=false;btn.textContent='Save';} }
+  },
+
+  // Mirrors _deleteCategory/_deleteCustomer exactly (see _deleteCategory's
+  // comment for why: a failed delete must be VISIBLE, not a silent no-op).
+  async _deleteSupplier(supId, name) {
+    if (!confirm(`${t('Delete')} "${name}"?`)) return;
+    try {
+      const d = await this._del(`/api/sub/retail/suppliers/${supId}`);
+      if (d && d.status === 'success') {
+        SubsystemApp.showToast(d.message || t('Supplier deleted'), 'success');
+      } else {
+        SubsystemApp.showToast((d && d.message) || t('Could not delete this supplier.'), 'error');
+      }
+      this._loadSuppliers();
+    } catch(e) {
+      console.error('Supplier delete failed', e);
+      SubsystemApp.showToast(t('Could not delete this supplier.'), 'error');
+    }
   },
 
   // ── PURCHASE ORDERS ───────────────────────────────────────────────────────
