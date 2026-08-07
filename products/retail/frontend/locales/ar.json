@@ -56,6 +56,7 @@
   "Funnels": "مسارات التحويل",
   "Analytics": "التحليلات",
   "Point of Sale": "نقطة البيع",
+  "Categories": "الفئات",
   "Customers": "العملاء",
   "Suppliers": "الموردون",
   "Purchase Orders": "أوامر الشراء",
@@ -143,5 +144,14 @@
   "No data available": "لا توجد بيانات متاحة",
   "Smart Import": "الاستيراد الذكي",
   "Import All Selected": "استيراد كل المحدد",
-  "Upload one file — we route it to the right functions": "ارفع ملفًا واحدًا — نوجّهه إلى الوظائف الصحيحة"
+  "Upload one file — we route it to the right functions": "ارفع ملفًا واحدًا — نوجّهه إلى الوظائف الصحيحة",
+
+  "Add Category": "إضافة فئة",
+  "Edit Category": "تعديل الفئة",
+  "Category Name": "اسم الفئة",
+  "Description": "الوصف",
+  "No categories found.": "لم يتم العثور على فئات.",
+  "Category updated": "تم تحديث الفئة",
+  "Category added": "تمت إضافة الفئة",
+  "Name required": "الاسم مطلوب"
 }

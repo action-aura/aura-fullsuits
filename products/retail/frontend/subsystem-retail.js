@@ -35,6 +35,12 @@ const RetailSystem = {
   async _patch(url, body) {
     return (await this._fetch(url, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })).json();
   },
+  // Categories are the one resource whose update route is PUT, not PATCH
+  // (see products/retail/backend/api/retail_api.py's update_category) --
+  // this mirrors _patch exactly, just with the method the backend expects.
+  async _put(url, body) {
+    return (await this._fetch(url, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })).json();
+  },
   async _del(url) { return (await this._fetch(url, { method: 'DELETE' })).json(); },
 
   // ── Router ────────────────────────────────────────────────────────────────
@@ -47,6 +53,7 @@ const RetailSystem = {
       case 'dashboard': return this._renderDashboard(c);
       case 'pos':       return this._renderPOS(c);
       case 'products':  return this._renderProducts(c);
+      case 'categories':return this._renderCategories(c);
       case 'customers': return this._renderCustomers(c);
       case 'suppliers': return this._renderSuppliers(c);
       case 'purchases': return this._renderPurchases(c);
@@ -1151,6 +1158,108 @@ const RetailSystem = {
       const d = await this._del(`/api/sub/retail/products/${pid}`);
       SubsystemApp.showToast(d.message||'Done', d.status==='success'?'success':'error');
       this._loadProducts();
+    } catch(e) {}
+  },
+
+  // ── CATEGORIES ────────────────────────────────────────────────────────────
+  // Symmetric desktop counterpart to what the POS category filter bar and the
+  // Product modal's category dropdown already consume (this._categories) --
+  // this is the first place a desktop user can create/edit/delete a category
+  // rather than only doing it from the phone. Backend routes (GET/POST/PUT/
+  // DELETE /api/sub/retail/categories[/<id>]) already exist and already queue
+  // sync events; nothing here talks to the DB directly.
+  async _renderCategories(c) {
+    this._injectStyles();
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <h2 class="ret-title">${t('Categories')}</h2>
+        <div style="display:flex;gap:10px">
+          <button class="sub-btn-primary" onclick="RetailSystem._openAddCategory()">+ ${t('Add Category')}</button>
+        </div>
+      </div>
+      <div class="sub-chart-card">
+        <div style="overflow-x:auto">
+          <table class="ret-table" id="cat-table">
+            <thead><tr><th>${t('Category Name')}</th><th>${t('Description')}</th><th>${t('Products')}</th><th>${t('Actions')}</th></tr></thead>
+            <tbody><tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:30px">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>`;
+    await this._loadCategories();
+  },
+
+  async _loadCategories() {
+    try {
+      const data = (await this._get('/api/sub/retail/categories')).data || [];
+      this._categories = data;
+      const tbody = document.querySelector('#cat-table tbody');
+      if (!tbody) return;
+      if (!data.length) {
+        tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:30px">${t('No categories found.')}</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = data.map(cat => `<tr>
+        <td style="font-weight:600">${cat.name}</td>
+        <td style="color:var(--text-muted)">${cat.description||'—'}</td>
+        <td style="color:var(--text-muted)">${cat.product_count||0}</td>
+        <td>
+          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditCategory('${cat.id}')">${t('Edit')}</button>
+          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._deleteCategory('${cat.id}','${(cat.name||'').replace(/'/g,"\\'")}')">${t('Delete')}</button>
+        </td>
+      </tr>`).join('');
+    } catch(e) { console.error(e); }
+  },
+
+  _openAddCategory() { this._showCategoryModal({}); },
+  _openEditCategory(id) {
+    const cat = this._categories.find(x => String(x.id) === String(id));
+    if (cat) this._showCategoryModal(cat);
+  },
+
+  _showCategoryModal(cat) {
+    const isEdit = !!cat.id;
+    const overlay = document.createElement('div');
+    overlay.className = 'ret-modal-overlay';
+    overlay.id = 'ret-cat-modal';
+    overlay.innerHTML = `
+      <div class="ret-modal" style="width:440px">
+        <h3>${isEdit ? '✏️ '+t('Edit Category') : '🏷️ '+t('Add Category')}</h3>
+        <div class="ret-field"><label>${t('Category Name')} *</label><input id="catm-name" value="${cat.name||''}" /></div>
+        <div class="ret-field"><label>${t('Description')}</label><textarea id="catm-desc" rows="3">${cat.description||''}</textarea></div>
+        <div class="ret-modal-footer">
+          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-cat-modal').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-primary" id="catm-btn" onclick="RetailSystem._saveCategory(${isEdit ? `'${cat.id}'` : 'null'})">${isEdit ? t('Save') : t('Add Category')}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+    document.getElementById('catm-name')?.focus();
+  },
+
+  async _saveCategory(catId) {
+    const name = document.getElementById('catm-name')?.value.trim();
+    if (!name) { SubsystemApp.showToast(t('Name required'), 'error'); return; }
+    const btn = document.getElementById('catm-btn');
+    if (btn) { btn.disabled=true; btn.textContent='Saving…'; }
+    const payload = { name, description: document.getElementById('catm-desc')?.value || '' };
+    try {
+      const d = catId
+        ? await this._put(`/api/sub/retail/categories/${catId}`, payload)
+        : await this._post('/api/sub/retail/categories', payload);
+      if (d.status==='success') {
+        SubsystemApp.showToast(catId ? t('Category updated') : t('Category added'), 'success');
+        document.getElementById('ret-cat-modal')?.remove();
+        this._loadCategories();
+      } else { SubsystemApp.showToast(d.message||'Error','error'); if(btn){btn.disabled=false;btn.textContent=t('Save');} }
+    } catch(e) { if(btn){btn.disabled=false;btn.textContent=t('Save');} }
+  },
+
+  async _deleteCategory(catId, name) {
+    if (!confirm(`${t('Delete')} "${name}"?`)) return;
+    try {
+      const d = await this._del(`/api/sub/retail/categories/${catId}`);
+      SubsystemApp.showToast(d.message||'Done', d.status==='success'?'success':'error');
+      this._loadCategories();
     } catch(e) {}
   },
 

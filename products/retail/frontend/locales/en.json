@@ -56,6 +56,7 @@
   "Funnels": "Funnels",
   "Analytics": "Analytics",
   "Point of Sale": "Point of Sale",
+  "Categories": "Categories",
   "Customers": "Customers",
   "Suppliers": "Suppliers",
   "Purchase Orders": "Purchase Orders",
@@ -143,5 +144,14 @@
   "No data available": "No data available",
   "Smart Import": "Smart Import",
   "Import All Selected": "Import All Selected",
-  "Upload one file — we route it to the right functions": "Upload one file — we route it to the right functions"
+  "Upload one file — we route it to the right functions": "Upload one file — we route it to the right functions",
+
+  "Add Category": "Add Category",
+  "Edit Category": "Edit Category",
+  "Category Name": "Category Name",
+  "Description": "Description",
+  "No categories found.": "No categories found.",
+  "Category updated": "Category updated",
+  "Category added": "Category added",
+  "Name required": "Name required"
 }

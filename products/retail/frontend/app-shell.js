@@ -241,6 +241,7 @@ const SubsystemApp = {
         { id: 'dashboard',  label: 'Dashboard',        icon: '🏠' },
         { id: 'pos',        label: 'Point of Sale',     icon: '🛒' },
         { id: 'products',   label: 'Products',          icon: '📦' },
+        { id: 'categories', label: 'Categories',        icon: '🏷️' },
         { id: 'customers',  label: 'Customers',         icon: '👥' },
         { id: 'suppliers',  label: 'Suppliers',         icon: '🏭' },
         { id: 'purchases',  label: 'Purchase Orders',   icon: '📋' },
