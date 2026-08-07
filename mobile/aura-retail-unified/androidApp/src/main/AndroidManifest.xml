@@ -1,11 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- CAMERA: barcode scanning (Milestone 14). No INTERNET permission:
-         the embedded-loopback-server pattern this module replaces is gone;
-         real network permissions are added only when a real remote call
-         (Owner licensing activation, Milestone 7-11) is implemented. -->
+    <!-- CAMERA: barcode scanning (Milestone 14). -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- INTERNET: Task 10 (multi-device-sync-foundation), real finding,
+         not a routine addition: this permission was never actually added
+         when Tasks 8/9 implemented real network calls
+         (HttpExternalLicensingTransport/SyncTransport), even though this
+         file's own prior comment said it would be "added only when a real
+         remote call is implemented." Without it, every real on-device
+         HTTP attempt fails with a SecurityException the moment a socket
+         opens, invisible in Tasks 8/9's own JVM-unit-test verification
+         (no Android permission system involved there), only surfaced by
+         this task's real physical-device run. -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:label="Aura Retail"

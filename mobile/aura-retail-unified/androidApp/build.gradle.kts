@@ -50,4 +50,12 @@ dependencies {
     implementation(project(":shared"))
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.core:core-ktx:1.13.1")
+    // Task 10 (multi-device-sync-foundation) -- MainActivity constructs the
+    // real HttpClient(CIO) AuraAppContainer's SyncTransport needs (`shared`'s
+    // own ktor-client-cio dependency is `implementation`-scoped, not `api`,
+    // so it is not transitively visible here without this explicit
+    // redeclaration -- matches this module's own established convention of
+    // redeclaring rather than relying on implicit transitive exposure,
+    // shared/build.gradle.kts's androidUnitTest ktor-client-cio comment).
+    implementation("io.ktor:ktor-client-cio:2.3.12")
 }

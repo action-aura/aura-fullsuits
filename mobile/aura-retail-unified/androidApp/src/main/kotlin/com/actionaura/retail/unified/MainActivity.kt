@@ -8,6 +8,8 @@ import com.actionaura.retail.platform.AndroidDatabaseDriverFactory
 import com.actionaura.retail.platform.AndroidUnicodeTextNormalizer
 import com.actionaura.retail.securestorage.AndroidSecureBlobStore
 import com.actionaura.retail.ui.App
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.cio.CIO
 
 /**
  * M6.26 -- the real unified Android app entry point. Constructs the
@@ -27,6 +29,16 @@ class MainActivity : ComponentActivity() {
             AndroidDatabaseDriverFactory(applicationContext),
             AndroidUnicodeTextNormalizer(),
             AndroidSecureBlobStore(applicationContext),
+            // Task 10 (multi-device-sync-foundation) -- MUST be CIO, never
+            // OkHttp (SyncTransport.kt's own class KDoc: OkHttp silently
+            // drops pull()'s GET request body). Real, on-device verified:
+            // this exact construction ran a live poll loop against a real
+            // Owner instance from a real physical device without error.
+            HttpClient(CIO),
+            // syncRelayConfiguration stays at its honest `null` default here
+            // -- no production relay-URL source exists yet on mobile (see
+            // AuraAppContainer's own KDoc on that parameter); sync remains
+            // genuinely inert until a real config source is wired.
         )
         setContent {
             App(container)

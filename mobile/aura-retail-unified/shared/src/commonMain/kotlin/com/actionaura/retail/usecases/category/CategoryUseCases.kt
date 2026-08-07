@@ -25,6 +25,15 @@ import com.actionaura.retail.platform.UnicodeTextNormalizer
 class CreateCategoryUseCase(
     private val repository: CategoryRepository,
     private val normalizer: UnicodeTextNormalizer,
+    // Task 10 (multi-device-sync-foundation) -- fires right after a
+    // successful write, matching desktop's own "call nudge() right after
+    // conn.commit()" convention (task-5-report.md). A plain callback, not
+    // a `SyncOrchestrator` reference: this use-case layer must never
+    // depend on the `sync` package directly (it already has no dependency
+    // on `di`/`sync` types) -- `AuraAppContainer` wires the real
+    // `syncOrchestrator::nudge` in; every existing/test call site keeps
+    // compiling unchanged via this default no-op.
+    private val onSyncNudge: () -> Unit = {},
 ) {
     suspend fun execute(companyId: Long, name: String, description: String?, nowEpochMillis: Long): DomainResult<Category> {
         val trimmedName = name.trim()
@@ -38,16 +47,21 @@ class CreateCategoryUseCase(
             return DomainResult.Failure(RepositoryError.DuplicateName("category", trimmedName, conflict.id))
         }
         val created = repository.insert(companyId, trimmedName, description?.trim()?.ifEmpty { null }, nowEpochMillis)
+        onSyncNudge()
         return DomainResult.Success(created)
     }
 }
 
-class ArchiveCategoryUseCase(private val repository: CategoryRepository) {
+class ArchiveCategoryUseCase(
+    private val repository: CategoryRepository,
+    private val onSyncNudge: () -> Unit = {},
+) {
     suspend fun execute(companyId: Long, categoryId: String): DomainResult<Unit> {
         val existing = repository.getById(companyId, categoryId)
             ?: return DomainResult.Failure(RepositoryError.NotFound("category", categoryId))
-        if (!existing.isActive) return DomainResult.Success(Unit) // idempotent no-op, matches repository-layer retry conventions elsewhere in this codebase
+        if (!existing.isActive) return DomainResult.Success(Unit) // idempotent no-op, matches repository-layer retry conventions elsewhere in this codebase -- no real write happened, so no nudge either
         repository.setActive(companyId, categoryId, false)
+        onSyncNudge()
         return DomainResult.Success(Unit)
     }
 }
@@ -55,11 +69,12 @@ class ArchiveCategoryUseCase(private val repository: CategoryRepository) {
 class ReactivateCategoryUseCase(
     private val repository: CategoryRepository,
     private val normalizer: UnicodeTextNormalizer,
+    private val onSyncNudge: () -> Unit = {},
 ) {
     suspend fun execute(companyId: Long, categoryId: String): DomainResult<Category> {
         val existing = repository.getById(companyId, categoryId)
             ?: return DomainResult.Failure(RepositoryError.NotFound("category", categoryId))
-        if (existing.isActive) return DomainResult.Success(existing) // idempotent no-op
+        if (existing.isActive) return DomainResult.Success(existing) // idempotent no-op -- no real write, no nudge
 
         // A different active category may have been created with the same
         // normalized name while this one was archived -- reactivating
@@ -72,6 +87,7 @@ class ReactivateCategoryUseCase(
             return DomainResult.Failure(RepositoryError.DuplicateName("category", existing.name, conflict.id))
         }
         repository.setActive(companyId, categoryId, true)
+        onSyncNudge()
         return DomainResult.Success(repository.getById(companyId, categoryId)!!)
     }
 }

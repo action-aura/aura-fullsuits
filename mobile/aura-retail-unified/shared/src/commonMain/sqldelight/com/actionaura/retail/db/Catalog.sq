@@ -169,6 +169,33 @@ SELECT * FROM categories WHERE company_id = ? AND name = ?;
 updateCategoryStatus:
 UPDATE categories SET status = ? WHERE id = ? AND company_id = ?;
 
+-- Task 10 (multi-device-sync-foundation) -- applies an incoming remote
+-- category create/update sync event (SyncOrchestrator.applyEvent).
+-- Deliberately NOT a real SQLite UPSERT (`INSERT ... ON CONFLICT DO
+-- UPDATE`, SQLite 3.24+ only): this module's minSdk is 26
+-- (shared/build.gradle.kts), whose bundled on-device SQLite is ~3.18/3.19
+-- -- confirmed the SQLDelight generator itself already pins the
+-- `sqlite_3_18` dialect (no dialect override anywhere in this module) and
+-- rejected `ON CONFLICT ... DO UPDATE` at CODE-GENERATION time with a
+-- parse error, before this was ever a runtime concern. `applyEvent` reads
+-- `selectCategoryById` first and calls one of these two plain queries
+-- instead -- portable back to SQLite 3.18, no dialect/minSdk risk.
+-- `importCategory` (M4, existing, unmodified) already covers the "row
+-- does not exist locally yet" branch exactly (explicit id, status forced
+-- 'active') -- reused here rather than duplicated.
+--
+-- A remote "create"/"update" always implies the category is active on the
+-- originating device -- the separate, explicit "delete" event_type is how
+-- an archive is represented on the wire (Sync.sq's own header comment:
+-- mobile's soft-archive IS this platform's "delete") -- so status is
+-- unconditionally 'active' here too, matching insertCategory's own
+-- literal. created_at is intentionally untouched by this query -- an
+-- incoming update for an already-locally-known category must never
+-- clobber the row's original creation timestamp with the remote event's
+-- own created_at.
+updateCategoryFields:
+UPDATE categories SET name = ?, description = ?, status = 'active' WHERE id = ? AND company_id = ?;
+
 selectBranchById:
 SELECT * FROM branches WHERE id = ? AND company_id = ?;
 

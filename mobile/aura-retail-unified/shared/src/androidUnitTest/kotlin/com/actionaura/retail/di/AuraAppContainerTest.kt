@@ -5,6 +5,8 @@ import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import com.actionaura.retail.db.RetailDatabase
 import com.actionaura.retail.platform.DatabaseDriverFactory
 import com.actionaura.retail.securestorage.InMemorySecureBlobStore
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.cio.CIO
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -34,7 +36,7 @@ class AuraAppContainerTest {
 
     @Test
     fun everyRepositoryInOneContainerSharesTheSameRealDatabaseInstance() = runTest {
-        val container = AuraAppContainer(FakeDatabaseDriverFactory(), com.actionaura.retail.platform.AndroidUnicodeTextNormalizer(), InMemorySecureBlobStore())
+        val container = AuraAppContainer(FakeDatabaseDriverFactory(), com.actionaura.retail.platform.AndroidUnicodeTextNormalizer(), InMemorySecureBlobStore(), HttpClient(CIO))
 
         // Real cross-repository consistency proof: a Branch inserted
         // through one repository is immediately visible via a raw query
@@ -50,7 +52,7 @@ class AuraAppContainerTest {
 
     @Test
     fun theSameGateInstanceIsSharedAcrossEveryRepository() = runTest {
-        val container = AuraAppContainer(FakeDatabaseDriverFactory(), com.actionaura.retail.platform.AndroidUnicodeTextNormalizer(), InMemorySecureBlobStore())
+        val container = AuraAppContainer(FakeDatabaseDriverFactory(), com.actionaura.retail.platform.AndroidUnicodeTextNormalizer(), InMemorySecureBlobStore(), HttpClient(CIO))
 
         // Real proof categories and branches (two independently-
         // constructed repository objects) never deadlock or corrupt
@@ -67,8 +69,8 @@ class AuraAppContainerTest {
 
     @Test
     fun twoIndependentContainersNeverShareRealDatabaseState() = runTest {
-        val containerA = AuraAppContainer(FakeDatabaseDriverFactory(), com.actionaura.retail.platform.AndroidUnicodeTextNormalizer(), InMemorySecureBlobStore())
-        val containerB = AuraAppContainer(FakeDatabaseDriverFactory(), com.actionaura.retail.platform.AndroidUnicodeTextNormalizer(), InMemorySecureBlobStore())
+        val containerA = AuraAppContainer(FakeDatabaseDriverFactory(), com.actionaura.retail.platform.AndroidUnicodeTextNormalizer(), InMemorySecureBlobStore(), HttpClient(CIO))
+        val containerB = AuraAppContainer(FakeDatabaseDriverFactory(), com.actionaura.retail.platform.AndroidUnicodeTextNormalizer(), InMemorySecureBlobStore(), HttpClient(CIO))
         assertNotSame(containerA.database, containerB.database)
         assertNotSame(containerA.gate, containerB.gate)
 
@@ -80,7 +82,7 @@ class AuraAppContainerTest {
 
     @Test
     fun theSameContainerInstanceReturnsTheSameRealDatabaseReferenceEveryAccess() {
-        val container = AuraAppContainer(FakeDatabaseDriverFactory(), com.actionaura.retail.platform.AndroidUnicodeTextNormalizer(), InMemorySecureBlobStore())
+        val container = AuraAppContainer(FakeDatabaseDriverFactory(), com.actionaura.retail.platform.AndroidUnicodeTextNormalizer(), InMemorySecureBlobStore(), HttpClient(CIO))
         assertSame(container.database, container.database)
         assertSame(container.gate, container.gate)
         assertNotNull(container.reportingRepository)
@@ -101,8 +103,8 @@ class AuraAppContainerTest {
     fun secureMaterialStoreIsRealFunctionalAndIndependentPerContainer() = runTest {
         val blobStoreA = InMemorySecureBlobStore()
         val blobStoreB = InMemorySecureBlobStore()
-        val containerA = AuraAppContainer(FakeDatabaseDriverFactory(), com.actionaura.retail.platform.AndroidUnicodeTextNormalizer(), blobStoreA)
-        val containerB = AuraAppContainer(FakeDatabaseDriverFactory(), com.actionaura.retail.platform.AndroidUnicodeTextNormalizer(), blobStoreB)
+        val containerA = AuraAppContainer(FakeDatabaseDriverFactory(), com.actionaura.retail.platform.AndroidUnicodeTextNormalizer(), blobStoreA, HttpClient(CIO))
+        val containerB = AuraAppContainer(FakeDatabaseDriverFactory(), com.actionaura.retail.platform.AndroidUnicodeTextNormalizer(), blobStoreB, HttpClient(CIO))
 
         val bundle = com.actionaura.retail.securestorage.SecureStorageFixtures.bundle()
         val commit = containerA.secureMaterialStore.commitActivationBundle(bundle)

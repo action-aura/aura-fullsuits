@@ -14,6 +14,7 @@ import com.actionaura.retail.data.sqldelight.SqlDelightSettingsRepository
 import com.actionaura.retail.db.RetailDatabase
 import com.actionaura.retail.importing.persistence.ImportPersistenceRepository
 import com.actionaura.retail.importing.persistence.SqlDelightImportPersistenceRepository
+import com.actionaura.retail.licensing.LicensingProductCode
 import com.actionaura.retail.platform.DatabaseDriverFactory
 import com.actionaura.retail.platform.UnicodeTextNormalizer
 import com.actionaura.retail.reporting.DashboardRepository
@@ -25,6 +26,10 @@ import com.actionaura.retail.securestorage.SecureBlobStore
 import com.actionaura.retail.securestorage.SecureMaterialStore
 import com.actionaura.retail.sync.DeviceSigner
 import com.actionaura.retail.sync.PlatformDeviceSigner
+import com.actionaura.retail.sync.SyncOrchestrator
+import com.actionaura.retail.sync.SyncRelayConfiguration
+import com.actionaura.retail.sync.SyncRelayConfigurationValidationResult
+import com.actionaura.retail.sync.resolveActiveSyncTransport
 import com.actionaura.retail.usecases.branch.ActivateBranchUseCase
 import com.actionaura.retail.usecases.branch.DeactivateBranchUseCase
 import com.actionaura.retail.usecases.branch.EnsureDefaultBranchUseCase
@@ -35,6 +40,10 @@ import com.actionaura.retail.usecases.category.ArchiveCategoryUseCase
 import com.actionaura.retail.usecases.category.CreateCategoryUseCase
 import com.actionaura.retail.usecases.category.ListActiveCategoriesUseCase
 import com.actionaura.retail.usecases.category.ReactivateCategoryUseCase
+import io.ktor.client.HttpClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 
 /**
  * M6.3 -- the one real, canonical composition root for the entire
@@ -83,6 +92,32 @@ class AuraAppContainer(
     driverFactory: DatabaseDriverFactory,
     private val unicodeTextNormalizer: UnicodeTextNormalizer,
     secureBlobStore: SecureBlobStore,
+    // Task 10 (multi-device-sync-foundation) -- the real, engine-committed
+    // `HttpClient` [SyncTransport] is constructed with. MUST be CIO-backed
+    // (`io.ktor.client.engine.cio.CIO`), never OkHttp -- `SyncTransport`'s
+    // own class KDoc explains why (OkHttp silently drops `pull()`'s GET
+    // request body). Required, not defaulted: `ktor-client-cio` is an
+    // androidMain/androidUnitTest-only Gradle dependency (confirmed
+    // against `shared/build.gradle.kts`), so `commonMain` cannot construct
+    // one itself -- the real platform entry point (`MainActivity`)
+    // constructs it exactly once and passes it in, the same established
+    // pattern this constructor already uses for `driverFactory`/
+    // `secureBlobStore`.
+    syncHttpClient: HttpClient,
+    // Task 10 -- `null` = sync relay not configured for this build/
+    // environment, mirroring desktop's own established "empty relay URL =
+    // inert" pattern (`task-5-report.md`) -- no production source for a
+    // real relay URL exists yet on mobile (confirmed: no BuildConfig/
+    // gradle-property wiring for it anywhere in this module before this
+    // task), so the real, honest default here is `null`, never a
+    // fabricated placeholder URL.
+    syncRelayConfiguration: SyncRelayConfiguration? = null,
+    // Task 10 -- a real `SupervisorJob`-rooted scope so a genuine failure
+    // in one sync tick (e.g. Task 7's `DeviceSigner` `IllegalStateException`
+    // on a corrupt/invalidated signing key -- deliberately never swallowed,
+    // see `SyncOrchestrator`'s own KDoc) can never cascade into cancelling
+    // unrelated coroutines sharing this scope.
+    private val coroutineScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) {
 
     private val driver = driverFactory.createDriver()
@@ -111,6 +146,29 @@ class AuraAppContainer(
     // public key to Owner) and Task 9 (sync client, signing push/pull).
     val deviceSigner: DeviceSigner = PlatformDeviceSigner(secureBlobStore)
 
+    // Task 10 -- the real push/pull orchestration loop. `transportProvider`
+    // is re-evaluated on every single push/pull attempt (never cached) via
+    // `resolveActiveSyncTransport`, so a real activation committed after
+    // this container was constructed is picked up on the very next tick
+    // with no restart -- see `SyncOrchestrator`'s own KDoc for why this
+    // mirrors desktop's `client_factory` rationale rather than the task
+    // brief's own illustrative draft (a fixed `transport` field).
+    val syncOrchestrator: SyncOrchestrator = SyncOrchestrator(
+        transportProvider = {
+            resolveActiveSyncTransport(
+                secureBlobStore = secureBlobStore,
+                secureMaterialStore = secureMaterialStore,
+                deviceSigner = deviceSigner,
+                httpClient = syncHttpClient,
+                configuration = syncRelayConfiguration,
+                productCode = LicensingProductCode.AURA_RETAIL.name,
+            )
+        },
+        database = database,
+        gate = gate,
+        scope = coroutineScope,
+    )
+
     val settingsRepository: SettingsRepository = SqlDelightSettingsRepository(database, gate)
     val categoryRepository: CategoryRepository = SqlDelightCategoryRepository(database, gate)
     val branchRepository: BranchRepository = SqlDelightBranchRepository(database, gate)
@@ -121,9 +179,12 @@ class AuraAppContainer(
     val importPersistenceRepository: ImportPersistenceRepository = SqlDelightImportPersistenceRepository(database, gate)
 
     // M6.16 -- real Category use cases (M5.2/M5.3's own existing authority, not reimplemented).
-    val createCategoryUseCase = CreateCategoryUseCase(categoryRepository, unicodeTextNormalizer)
-    val archiveCategoryUseCase = ArchiveCategoryUseCase(categoryRepository)
-    val reactivateCategoryUseCase = ReactivateCategoryUseCase(categoryRepository, unicodeTextNormalizer)
+    // Task 10 -- each write use case is wired to `syncOrchestrator::nudge`,
+    // so a real create/archive/reactivate pushes immediately instead of
+    // waiting out the full poll interval (`CategoryUseCases.kt`'s own KDoc).
+    val createCategoryUseCase = CreateCategoryUseCase(categoryRepository, unicodeTextNormalizer, syncOrchestrator::nudge)
+    val archiveCategoryUseCase = ArchiveCategoryUseCase(categoryRepository, syncOrchestrator::nudge)
+    val reactivateCategoryUseCase = ReactivateCategoryUseCase(categoryRepository, unicodeTextNormalizer, syncOrchestrator::nudge)
     val listActiveCategoriesUseCase = ListActiveCategoriesUseCase(categoryRepository)
 
     // M6.17 -- real Branch use cases (M5.4's own existing authority).
@@ -133,4 +194,22 @@ class AuraAppContainer(
     val setCurrentBranchUseCase = SetCurrentBranchUseCase(branchRepository, settingsRepository)
     val ensureDefaultBranchUseCase = EnsureDefaultBranchUseCase(branchRepository)
     val listActiveBranchesUseCase = ListActiveBranchesUseCase(branchRepository)
+
+    // Task 10 -- starts the background poll loop, guarded on
+    // `syncRelayConfiguration` being both present AND passing its own
+    // `validate()` (never started against a config this module's own
+    // security rules already reject, e.g. cleartext HTTP in production) --
+    // mirrors desktop's own "empty relay URL = inert" gate exactly. When
+    // `syncRelayConfiguration` is `null` (the honest default -- no
+    // production URL source exists yet), `syncOrchestrator` is still
+    // constructed (so `nudge()` always has a safe target to call) but its
+    // poll loop never starts, and `transportProvider` always resolves
+    // `null` regardless -- genuinely inert, never a crash, never an
+    // attempted connection.
+    init {
+        val configuration = syncRelayConfiguration
+        if (configuration != null && configuration.validate() is SyncRelayConfigurationValidationResult.Valid) {
+            syncOrchestrator.start()
+        }
+    }
 }

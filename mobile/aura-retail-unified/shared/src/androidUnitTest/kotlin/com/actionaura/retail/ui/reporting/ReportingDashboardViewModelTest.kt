@@ -6,6 +6,8 @@ import com.actionaura.retail.di.AuraAppContainer
 import com.actionaura.retail.platform.AndroidUnicodeTextNormalizer
 import com.actionaura.retail.platform.DatabaseDriverFactory
 import com.actionaura.retail.presentation.LoadState
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.cio.CIO
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -32,7 +34,7 @@ class ReportingDashboardViewModelTest {
                 return driver
             }
         }
-        return AuraAppContainer(factory, AndroidUnicodeTextNormalizer(), com.actionaura.retail.securestorage.InMemorySecureBlobStore())
+        return AuraAppContainer(factory, AndroidUnicodeTextNormalizer(), com.actionaura.retail.securestorage.InMemorySecureBlobStore(), HttpClient(CIO))
     }
 
     @Test

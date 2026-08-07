@@ -222,6 +222,51 @@ class M9OrchestrationTest {
         assertTrue(result is ActivationProcessingResult.Complete)
     }
 
+    /**
+     * Task 10 (multi-device-sync-foundation) regression test -- a real
+     * bug this task's own on-device verification found: with the ONE real
+     * production sink (`SecureMaterialStoreActivationSink`), passed as the
+     * SAME instance for both `credentialSink`/`leaseSink` (exactly how
+     * production code is meant to wire it, per that class's own KDoc),
+     * `activationResponseProcessorCompletesOnlyWhenBothSinksCommit` above
+     * NEVER actually exercises this real pairing behavior --
+     * `InMemorySecureMaterialSink` commits each piece independently and
+     * always reports `Committed`, unlike the real sink, which only ever
+     * reports `Committed` on the SECOND of its two paired calls (the
+     * first always reports "awaiting the other piece"). This test uses
+     * the REAL sink stack (`GenerationalSecureMaterialStore` over a real,
+     * in-memory `SecureBlobStore`, not another synthetic double) to prove
+     * `process()` reports `Complete` against the shape production code
+     * actually uses -- this test genuinely failed (returned
+     * `SecurePersistenceRequired`) before this task's `&&` -> `||` fix in
+     * `ActivationResponseProcessor.process()`.
+     */
+    @Test
+    fun activationResponseProcessorCompletesWithTheRealPairedProductionSink() = runTest {
+        val blobStore = com.actionaura.retail.securestorage.InMemorySecureBlobStore()
+        val store = com.actionaura.retail.securestorage.GenerationalSecureMaterialStore(
+            blobStore = blobStore,
+            nowIso8601 = { "2026-08-07T00:00:00Z" },
+            newGenerationId = { "gen-${blobStore.rawKeyCount()}" },
+        )
+        val identity = com.actionaura.retail.licensing.InstallationIdentity(
+            seed = com.actionaura.retail.licensing.LocalInstallationSeed("fixture-seed", com.actionaura.retail.licensing.InstallationIdentityVersion.V1),
+            status = com.actionaura.retail.licensing.InstallationIdentityStatus.GENERATED,
+            generatedAt = "2026-08-07T00:00:00Z",
+        )
+        val sink = com.actionaura.retail.securestorage.SecureMaterialStoreActivationSink(
+            store = store,
+            installationIdentity = identity,
+            productCode = LicensingProductCode.AURA_RETAIL.name,
+            platform = LicensingPlatform.ANDROID.name,
+            ownerInstallationId = "fixture-installation-public-id",
+            nowIso8601 = { "2026-08-07T00:00:00Z" },
+        )
+        val processor = ActivationResponseProcessor(sink, sink)
+        val result = processor.process(M9SanitizedFixtures.activationApproved(), LicensingProductCode.AURA_RETAIL, LicensingPlatform.ANDROID)
+        assertTrue(result is ActivationProcessingResult.Complete, "expected Complete against the real paired production sink, got: $result")
+    }
+
     @Test
     fun activationResponseProcessorStopsAtSecurePersistenceRequiredWhenSinkFails() = runTest {
         val sink = NoSecureStorageAvailableSink()

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Task 10 (multi-device-sync-foundation), debug-build-only manifest
+    fragment, merged automatically by Gradle only into debug builds
+    (Android's own src/debug/ convention). Adds networkSecurityConfig,
+    pointing at res/xml/network_security_config.xml's own explicit,
+    narrowly-scoped local-dev-host cleartext allowance; see that file's
+    own comment for the real bug this fixes and why it is scoped this
+    way. Release builds never merge this fragment.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:networkSecurityConfig="@xml/network_security_config" />
+</manifest>
