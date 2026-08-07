@@ -85,11 +85,15 @@ def _seed_category_with_product(cat_id, company_id=1):
 
 # ── The schema change itself ────────────────────────────────────────────────
 
-def test_schema_version_is_v3_and_products_fk_declares_on_delete_set_null():
-    assert retail_schema.RETAIL_SCHEMA_VERSION == 3
+def test_schema_version_is_v4_and_products_fk_declares_on_delete_set_null():
+    # Was v3 when this file was written; the multi-device sync foundation's
+    # products.id -> UUID migration (see database/schema.py's
+    # _migrate_products_to_uuid) bumped this to v4. The FK-on-delete-set-null
+    # assertion this test exists for is unaffected by that later change.
+    assert retail_schema.RETAIL_SCHEMA_VERSION == 4
     conn = retail_schema.get_retail_conn()
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
         assert retail_schema._products_category_fk_is_set_null(conn) is True
     finally:
         conn.close()
@@ -216,7 +220,17 @@ def _build_v2_database(path):
     fix would have it: categories.id already TEXT, but products.category_id's
     FK still a bare `REFERENCES categories(id)` -- plus real rows in products
     AND in a table that references products (inventory_movements), since the
-    latter is what makes a naive rebuild fail."""
+    latter is what makes a naive rebuild fail.
+
+    inventory_movements is declared with its full real column set (matching
+    database/schema.py's `init_retail()` CREATE TABLE, not a trimmed-down
+    stand-in) -- this codebase's inventory_movements shape has never had
+    fewer columns than that, and since the multi-device sync foundation's
+    products.id -> UUID migration (_migrate_products_to_uuid) now also
+    unconditionally rebuilds this table in the same migration chain, a
+    trimmed fixture would fail for a reason that has nothing to do with what
+    this test file actually covers.
+    """
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.executescript("""
@@ -245,8 +259,16 @@ def _build_v2_database(path):
         );
         CREATE TABLE inventory_movements (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER DEFAULT 1,
             product_id INTEGER NOT NULL,
+            branch_id INTEGER,
+            movement_type TEXT NOT NULL,
             quantity REAL NOT NULL,
+            unit_cost REAL DEFAULT 0,
+            reference TEXT,
+            notes TEXT,
+            created_by TEXT DEFAULT 'System',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (product_id) REFERENCES products(id)
         );
         INSERT INTO categories (id, company_id, name, description) VALUES ('cat-1', 7, 'Electronics', 'kept');
@@ -254,7 +276,8 @@ def _build_v2_database(path):
                               tax_rate, unit, reorder_level, status)
             VALUES (5, 7, 'SKU-OLD', '111', 'Legacy Laptop', 'cat-1', 750.0, 1199.99, 15, 'pcs', 3, 'active');
         INSERT INTO products (id, company_id, sku, name, category_id) VALUES (6, 7, 'SKU-NULL', 'Unfiled', NULL);
-        INSERT INTO inventory_movements (product_id, quantity) VALUES (5, 12);
+        INSERT INTO inventory_movements (company_id, product_id, branch_id, movement_type, quantity)
+            VALUES (7, 5, 1, 'opening_stock', 12);
         PRAGMA user_version = 2;
     """)
     conn.commit()

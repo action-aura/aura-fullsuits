@@ -37,7 +37,14 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # _migrate_products_category_fk_on_delete_set_null below for why a bare
 # `REFERENCES categories(id)` permanently wedges sync on any device holding a
 # product in a category some OTHER device deleted.
-RETAIL_SCHEMA_VERSION = 3
+# Multi-device sync foundation (2026-08-07), v3 -> v4: products.id moves from
+# INTEGER PRIMARY KEY AUTOINCREMENT to TEXT PRIMARY KEY (client-generated
+# UUID), same reason categories got this in v1 -> v2: two offline devices
+# must never collide on an id. Every table with a declared FK to products(id)
+# -- inventory_movements, inventory_balances, sale_items,
+# purchase_order_items, return_items -- is rebuilt in the same transaction
+# and has its product_id values remapped. See _migrate_products_to_uuid below.
+RETAIL_SCHEMA_VERSION = 4
 
 
 def _get_path(name):
@@ -310,18 +317,152 @@ def _migrate_products_category_fk_on_delete_set_null(conn):
         conn.execute(f"PRAGMA foreign_keys={'ON' if fk_was_on else 'OFF'}")
 
 
+def _migrate_products_to_uuid(conn):
+    """One-time migration (schema v3 -> v4): products.id moves from
+    INTEGER PRIMARY KEY AUTOINCREMENT to TEXT PRIMARY KEY (client-generated
+    UUIDs), same reason categories got this in v1->v2: two offline devices
+    must never collide on an id. Every table with a declared FK to
+    products(id) -- inventory_movements, inventory_balances, sale_items,
+    purchase_order_items, return_items -- is rebuilt in this SAME
+    transaction and its product_id values remapped via an old-id -> new-uuid
+    map, mirroring exactly how _migrate_categories_to_uuid remaps
+    products.category_id (see that function's docstring for the full
+    PRAGMA foreign_keys / rename-hazard reasoning, inherited verbatim here).
+
+    Sales/Inventory/Returns/Payments are NOT synced this phase (see the
+    design spec's Scope section) -- only their product_id VALUES are
+    remapped here, as a one-time local consequence of products.id changing
+    type. This migration runs identically on every device independently;
+    it does not require or wait for any other device.
+    """
+    import uuid as _uuid
+
+    id_col = next((c for c in conn.execute("PRAGMA table_info(products)").fetchall() if c["name"] == "id"), None)
+    if id_col is not None and id_col["type"].upper() == "TEXT":
+        return
+
+    fk_was_on = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        conn.execute("BEGIN")
+
+        prod_rows = conn.execute(
+            "SELECT id, company_id, sku, barcode, name, category_id, cost_price, sell_price, "
+            "tax_rate, unit, reorder_level, status, created_at FROM products"
+        ).fetchall()
+        id_map = {row["id"]: str(_uuid.uuid4()) for row in prod_rows}
+
+        conn.execute("""
+            CREATE TABLE products_new (
+                id TEXT PRIMARY KEY,
+                company_id INTEGER DEFAULT 1,
+                sku TEXT NOT NULL,
+                barcode TEXT,
+                name TEXT NOT NULL,
+                category_id TEXT,
+                cost_price REAL DEFAULT 0,
+                sell_price REAL DEFAULT 0,
+                tax_rate REAL DEFAULT 0,
+                unit TEXT DEFAULT 'pcs',
+                reorder_level INTEGER DEFAULT 5,
+                status TEXT DEFAULT 'active',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL
+            )
+        """)
+        for row in prod_rows:
+            conn.execute(
+                "INSERT INTO products_new (id, company_id, sku, barcode, name, category_id, cost_price, "
+                "sell_price, tax_rate, unit, reorder_level, status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (id_map[row["id"]], row["company_id"], row["sku"], row["barcode"], row["name"],
+                 row["category_id"], row["cost_price"], row["sell_price"], row["tax_rate"],
+                 row["unit"], row["reorder_level"], row["status"], row["created_at"]),
+            )
+        conn.execute("DROP TABLE products")
+        conn.execute("ALTER TABLE products_new RENAME TO products")
+
+        referencing = [
+            ("inventory_movements", """
+                CREATE TABLE inventory_movements_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER DEFAULT 1, product_id TEXT NOT NULL,
+                    branch_id INTEGER, movement_type TEXT NOT NULL, quantity REAL NOT NULL, unit_cost REAL DEFAULT 0,
+                    reference TEXT, notes TEXT, created_by TEXT DEFAULT 'System', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (product_id) REFERENCES products(id)
+                )""", "id, company_id, product_id, branch_id, movement_type, quantity, unit_cost, reference, notes, created_by, created_at"),
+            ("inventory_balances", """
+                CREATE TABLE inventory_balances_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER DEFAULT 1, product_id TEXT NOT NULL,
+                    branch_id INTEGER NOT NULL, quantity_on_hand REAL DEFAULT 0, quantity_reserved REAL DEFAULT 0,
+                    UNIQUE(company_id, product_id, branch_id), FOREIGN KEY (product_id) REFERENCES products(id)
+                )""", "id, company_id, product_id, branch_id, quantity_on_hand, quantity_reserved"),
+            ("sale_items", """
+                CREATE TABLE sale_items_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, sale_id INTEGER NOT NULL, product_id TEXT NOT NULL,
+                    quantity REAL NOT NULL, unit_price REAL NOT NULL, discount_pct REAL DEFAULT 0, tax_rate REAL DEFAULT 0,
+                    line_total REAL NOT NULL, FOREIGN KEY (sale_id) REFERENCES sales(id), FOREIGN KEY (product_id) REFERENCES products(id)
+                )""", "id, sale_id, product_id, quantity, unit_price, discount_pct, tax_rate, line_total"),
+            ("purchase_order_items", """
+                CREATE TABLE purchase_order_items_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, po_id INTEGER NOT NULL, product_id TEXT NOT NULL,
+                    quantity REAL NOT NULL, unit_cost REAL NOT NULL, total REAL NOT NULL, received_qty REAL DEFAULT 0,
+                    FOREIGN KEY (po_id) REFERENCES purchase_orders(id), FOREIGN KEY (product_id) REFERENCES products(id)
+                )""", "id, po_id, product_id, quantity, unit_cost, total, received_qty"),
+            ("return_items", """
+                CREATE TABLE return_items_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, return_id INTEGER NOT NULL, product_id TEXT NOT NULL,
+                    quantity REAL NOT NULL, unit_price REAL NOT NULL, line_total REAL NOT NULL,
+                    FOREIGN KEY (return_id) REFERENCES returns(id), FOREIGN KEY (product_id) REFERENCES products(id)
+                )""", "id, return_id, product_id, quantity, unit_price, line_total"),
+        ]
+        for table, create_sql, cols in referencing:
+            exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone()
+            if exists is None:
+                # `init_retail()` always creates every one of these tables
+                # (via CREATE TABLE IF NOT EXISTS) before this migration ever
+                # runs, so a real device is never missing one -- this guard
+                # only protects a hand-built/partial database (e.g. a test
+                # fixture) from an unconditional rebuild attempt against a
+                # table that was never created.
+                continue
+            conn.execute(create_sql)
+            col_list = [c.strip() for c in cols.split(",")]
+            select_cols = ", ".join(c if c != "product_id" else "product_id" for c in col_list)
+            conn.execute(f"INSERT INTO {table}_new ({cols}) SELECT {select_cols} FROM {table}")
+            old_pids = conn.execute(f"SELECT DISTINCT product_id FROM {table} WHERE product_id IS NOT NULL").fetchall()
+            for row in old_pids:
+                old_pid = row["product_id"]
+                new_pid = id_map.get(old_pid)
+                if new_pid is not None:
+                    conn.execute(
+                        f"UPDATE {table}_new SET product_id=? WHERE id IN (SELECT id FROM {table} WHERE product_id=?)",
+                        (new_pid, old_pid),
+                    )
+            conn.execute(f"DROP TABLE {table}")
+            conn.execute(f"ALTER TABLE {table}_new RENAME TO {table}")
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute(f"PRAGMA foreign_keys={'ON' if fk_was_on else 'OFF'}")
+
+
 def _migrate_retail_schema(conn):
     """The single `migrate_fn` handed to `ensure_schema_version` -- runs every
     migration this file owns, in version order, on any database behind
     RETAIL_SCHEMA_VERSION. `ensure_schema_version` only tells a migration
     "you are behind", not "you are behind by exactly one version", so a v1
-    install upgrading straight to v3 must run BOTH steps in one pass. Each
+    install upgrading straight to v4 must run ALL steps in one pass. Each
     step is independently idempotent (each inspects the live schema and
     returns immediately when its own change is already present), so running
     them all is correct regardless of which version the database actually
     starts from."""
     _migrate_categories_to_uuid(conn)
     _migrate_products_category_fk_on_delete_set_null(conn)
+    _migrate_products_to_uuid(conn)
 
 
 def init_retail():
@@ -626,10 +767,20 @@ def _seed_retail(conn, cur, company_id=1):
         ('SKU-R011', '6001011', 'LED Desk Lamp', 4, 12.0, 34.99, 15, 'pcs', 8),
         ('SKU-R012', '6001012', 'Shampoo 400ml', 5, 2.5, 7.99, 5, 'pcs', 20),
     ]
-    for p in products:
+    # products.id is TEXT (client-generated UUID) since the multi-device sync
+    # foundation migration (see _migrate_products_to_uuid) -- there is no
+    # autoincrement to fall back on, so seed data must generate its own ids
+    # explicitly, same as any real device would (mirrors the categories fix
+    # above; `_uuid` is already imported there, reused here).
+    product_ids = [str(_uuid.uuid4()) for _ in products]
+    for i, p in enumerate(products):
         cat_id = category_ids[p[3] - 1]
         row = (p[0], p[1], p[2], cat_id) + p[4:]
-        cur.execute("INSERT INTO products (company_id,sku,barcode,name,category_id,cost_price,sell_price,tax_rate,unit,reorder_level) VALUES (?,?,?,?,?,?,?,?,?,?)", (cid,) + row)
+        cur.execute(
+            "INSERT INTO products (id,company_id,sku,barcode,name,category_id,cost_price,sell_price,tax_rate,unit,reorder_level) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (product_ids[i], cid) + row,
+        )
 
     cur.execute("SELECT id FROM products WHERE company_id=?", (cid,))
     prod_ids = [r[0] for r in cur.fetchall()]
