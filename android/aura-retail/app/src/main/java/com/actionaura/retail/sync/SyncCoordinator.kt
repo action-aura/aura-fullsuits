@@ -48,7 +48,6 @@ object SyncCoordinator {
     private const val TAG = "SyncCoordinator"
     private const val INTERVAL_SECONDS = 10L
 
-    @Volatile private var context: Context? = null
     @Volatile private var identity: DeviceIdentity? = null
     @Volatile private var running = false
     private var timer: Timer? = null
@@ -75,7 +74,6 @@ object SyncCoordinator {
         if (BuildConfig.OWNER_SYNC_BASE_URL.isBlank()) return
         synchronized(lock) {
             if (running) return
-            context = appContext.applicationContext
             // Same base dir LicensingCoordinator uses (File(filesDir, "data"))
             // -- this MUST resolve to the identical on-disk device key
             // LicensingCoordinator's DeviceIdentity already generated/uses
