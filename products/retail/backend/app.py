@@ -42,7 +42,23 @@ from config import (
     OWNER_LICENSING_BASE_URL, OWNER_LICENSING_VERIFY_TLS, OWNER_LICENSING_TIMEOUT_SECONDS,
     LICENSING_TRUST_ANCHOR_PATH, LICENSING_PLATFORM, LICENSING_INTERNAL_SHARED_SECRET,
     SYNC_RELAY_BASE_URL, SYNC_RELAY_TIMEOUT_SECONDS, SYNC_RELAY_VERIFY_TLS,
+    SYNC_RELAY_URL_PROBLEMS,
 )
+
+# Final-review Fix 2 (2026-08-07): a sync relay URL that fails config.py's
+# `validate_sync_relay_url` (cleartext http:// to a non-loopback host,
+# embedded credentials, unsupported scheme, ...) disables sync entirely
+# rather than silently shipping device-signed business data in the clear.
+# Mirrors mobile/aura-retail-unified's AuraAppContainer.kt, which likewise
+# never starts sync against a `SyncRelayConfiguration` that fails
+# `validate()`. Logged loudly (not silently swallowed) so a misconfigured
+# deployment is diagnosable, and NOT fatal to the app: Retail must still boot
+# and work fully with no working Owner/sync at all.
+_SYNC_RELAY_URL_IS_USABLE = bool(SYNC_RELAY_BASE_URL) and not SYNC_RELAY_URL_PROBLEMS
+if SYNC_RELAY_BASE_URL and SYNC_RELAY_URL_PROBLEMS:
+    import logging as _logging
+    for _problem in SYNC_RELAY_URL_PROBLEMS:
+        _logging.getLogger(__name__).error("Multi-device sync DISABLED -- %s", _problem)
 
 app = Flask(__name__, static_folder=str(PRODUCT_DIR / 'frontend'), static_url_path='/static')
 
@@ -158,7 +174,7 @@ app.register_blueprint(make_licensing_blueprint(
 # this client produces verifies against the SAME installation Owner already
 # knows from activation/check-in.
 _sync_service = None
-if SYNC_RELAY_BASE_URL and LICENSING_PLATFORM != 'ANDROID':
+if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':
     from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
     from commercial_runtime.sync.relay_client import SyncRelayClient
     from commercial_runtime.sync.sync_service import (

@@ -80,6 +80,51 @@ class SyncNetworkError(reasonCode: String, message: String) : SyncRelayClientErr
 class SyncMalformedResponseError(reasonCode: String, message: String) : SyncRelayClientError(reasonCode, message)
 class SyncRelayRejected(reasonCode: String, message: String) : SyncRelayClientError(reasonCode, message)
 
+/** Final-review Fix 2 (2026-08-07): the configured relay URL is not safe to
+ * speak to at all. Never retried -- a misconfigured build does not become
+ * correct by trying again. */
+class SyncInsecureRelayUrlError(message: String) :
+    SyncRelayClientError("INSECURE_RELAY_URL", message)
+
+/** Exactly the hosts `res/xml/network_security_config.xml` marks
+ * `cleartextTrafficPermitted="true"`, plus the IPv6 loopback literal. Kept in
+ * lockstep with that file deliberately: this class's `pull()` path speaks raw
+ * `java.net.Socket`, which the OS cleartext policy does NOT cover (that
+ * policy is enforced by HttpURLConnection/OkHttp, so it only ever protected
+ * `push()`). Without the check below, a build configured with
+ * `-PownerSyncBaseUrl=http://some-real-host` would have `push()` blocked by
+ * the platform while `pull()` silently sent the signed request body and read
+ * back the entire cross-device event stream in the clear. */
+private val CLEARTEXT_PERMITTED_HOSTS = setOf("127.0.0.1", "localhost", "::1", "[::1]")
+
+/** Mirrors `SyncRelayConfiguration.validate()` in
+ * mobile/aura-retail-unified (and `validate_sync_relay_url` in desktop's
+ * products/retail/backend/config.py): https:// for anything real, http://
+ * only for an explicit loopback development relay. */
+internal fun requireTransportIsSafe(url: String) {
+    val uri = try {
+        URI(url)
+    } catch (exc: Exception) {
+        throw SyncInsecureRelayUrlError("Sync relay URL is not parsable: $url")
+    }
+    val scheme = uri.scheme?.lowercase()
+        ?: throw SyncInsecureRelayUrlError("Sync relay URL has no scheme: $url")
+    if (uri.userInfo != null) {
+        throw SyncInsecureRelayUrlError("Sync relay URL must not embed credentials.")
+    }
+    val host = uri.host?.lowercase()
+        ?: throw SyncInsecureRelayUrlError("Sync relay URL has no host: $url")
+    when {
+        scheme == "https" -> return
+        scheme != "http" -> throw SyncInsecureRelayUrlError("Sync relay URL uses unsupported scheme '$scheme://'.")
+        host !in CLEARTEXT_PERMITTED_HOSTS -> throw SyncInsecureRelayUrlError(
+            "Refusing to sync over cleartext http:// to non-loopback host '$host'. " +
+                "Sync request bodies are device-signed business data and the full event " +
+                "stream comes back in the response; configure an https:// relay URL."
+        )
+    }
+}
+
 /** Converts a parsed [JsonElement] into exactly the value shapes
  * `com.actionaura.retail.licensing.canonicalize()` accepts (String, Boolean,
  * Int/Long, Double, Map<String, Any?>, List<Any?>, null) WITHOUT going
@@ -179,6 +224,13 @@ class SyncRelayClient(
     private fun requestJson(method: String, path: String, body: Map<String, Any?>): JsonObject {
         val bodyJson = canonicalStructureToJsonString(body)
         val url = config.baseUrl.trimEnd('/') + path
+        // Checked once, BEFORE the retry loop -- an unsafe URL is a permanent
+        // configuration fault, not a transient failure worth backing off on.
+        // Deliberately here rather than only inside executeGetWithBody, so
+        // push() (OkHttp) and pull() (raw Socket) are held to the identical
+        // rule instead of pull() relying on a platform policy that does not
+        // apply to it. See requireTransportIsSafe above.
+        requireTransportIsSafe(url)
         var lastError: SyncRelayClientError? = null
 
         for (attempt in 0..config.maxRetries) {

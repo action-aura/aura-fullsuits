@@ -85,3 +85,69 @@ SYNC_RELAY_TIMEOUT_SECONDS = float(os.environ.get('AURA_SYNC_RELAY_TIMEOUT_SECON
 SYNC_RELAY_VERIFY_TLS = True if getattr(sys, 'frozen', False) else (
     os.environ.get('AURA_SYNC_RELAY_INSECURE') != '1'
 )
+
+
+# Final-review Fix 2 (2026-08-07): scheme enforcement for the sync relay URL,
+# the desktop counterpart of
+# mobile/aura-retail-unified/.../sync/SyncRelayConfiguration.kt's `validate()`
+# -- previously only the KMP client checked this, so desktop would happily
+# push and pull a device-signed event stream over cleartext against any host
+# an operator typed into AURA_SYNC_RELAY_URL. Same rule as the KMP version:
+# `https://` for anything real, `http://` only for an explicit local
+# development host. Loopback is the one genuinely safe cleartext case (it
+# never leaves the machine) and is exactly how this is run in dev
+# (`AURA_SYNC_RELAY_URL=http://127.0.0.1:5551`).
+#
+# Deliberately NOT a raise at import time: a misconfigured relay URL must
+# disable SYNC, not prevent the whole Retail app from booting (the product
+# is required to function fully with no Owner configured at all). app.py
+# checks SYNC_RELAY_URL_PROBLEMS and refuses to start the sync loop while
+# logging every problem, mirroring AuraAppContainer.kt's own
+# "never started against a config that does not validate()" gate.
+_LOCAL_DEV_HOSTS = ('127.0.0.1', 'localhost', '::1')
+
+
+def validate_sync_relay_url(url, insecure_scheme_allowed_hosts=_LOCAL_DEV_HOSTS):
+    """Returns a list of human-readable problems with `url` (empty == valid).
+
+    An empty/unset url is "valid" here in the same sense an empty
+    OWNER_LICENSING_BASE_URL is: it means "sync is not configured", which
+    app.py already handles as "never start the loop", not as an error.
+    """
+    if not url:
+        return []
+    problems = []
+    from urllib.parse import urlsplit
+    try:
+        parts = urlsplit(url)
+    except ValueError as exc:
+        return [f"AURA_SYNC_RELAY_URL is not a parsable URL ({exc})."]
+
+    scheme = (parts.scheme or '').lower()
+    # `hostname` (not `netloc`) is already lowercased, port-stripped, and has
+    # any `user:pass@` prefix removed by urlsplit -- so a URL like
+    # `http://127.0.0.1@evil.example.com/` cannot masquerade as loopback.
+    host = parts.hostname or ''
+
+    if not scheme:
+        problems.append("AURA_SYNC_RELAY_URL has no scheme; it must start with https:// (or http:// for a loopback dev relay).")
+    elif scheme not in ('http', 'https'):
+        problems.append(f"AURA_SYNC_RELAY_URL uses unsupported scheme '{scheme}://'; only https:// (or http:// for a loopback dev relay) is allowed.")
+    elif scheme == 'http' and host not in insecure_scheme_allowed_hosts:
+        problems.append(
+            f"AURA_SYNC_RELAY_URL uses cleartext http:// against non-loopback host '{host}'. "
+            f"Every sync push/pull body is device-signed business data; it must travel over https://. "
+            f"http:// is only permitted for a local development relay ({'/'.join(insecure_scheme_allowed_hosts)})."
+        )
+    if not host:
+        problems.append("AURA_SYNC_RELAY_URL has no host.")
+    if '@' in parts.netloc:
+        problems.append("AURA_SYNC_RELAY_URL must not embed credentials.")
+    if parts.query:
+        problems.append("AURA_SYNC_RELAY_URL must not embed a query string.")
+    if parts.fragment:
+        problems.append("AURA_SYNC_RELAY_URL must not embed a URL fragment.")
+    return problems
+
+
+SYNC_RELAY_URL_PROBLEMS = validate_sync_relay_url(SYNC_RELAY_BASE_URL)

@@ -142,6 +142,88 @@ class SyncRelayClientTest {
         assertThat(server.requestCount).isEqualTo(1)
     }
 
+    // ── Transport safety (final-review Fix 2) ───────────────────────────────
+    //
+    // `res/xml/network_security_config.xml` blocks cleartext to non-loopback
+    // hosts, but that platform policy is enforced by HttpURLConnection/OkHttp
+    // -- NOT by the raw `java.net.Socket` `pull()` speaks. So before this
+    // check existed, a build configured with `http://some-real-host` had
+    // `push()` blocked by the OS while `pull()` happily sent the signed body
+    // and read back the whole cross-device event stream in the clear.
+
+    @Test
+    fun `pull refuses to run over cleartext http to a non-loopback host`() {
+        try {
+            client("http://sync.actionaura.example:5551").pull(0L)
+            throw AssertionError("expected SyncInsecureRelayUrlError")
+        } catch (exc: SyncInsecureRelayUrlError) {
+            assertThat(exc.reasonCode).isEqualTo("INSECURE_RELAY_URL")
+            assertThat(exc.message).contains("sync.actionaura.example")
+        }
+    }
+
+    @Test
+    fun `push refuses to run over cleartext http to a non-loopback host too`() {
+        try {
+            client("http://sync.actionaura.example:5551").push(emptyList())
+            throw AssertionError("expected SyncInsecureRelayUrlError")
+        } catch (exc: SyncInsecureRelayUrlError) {
+            assertThat(exc.reasonCode).isEqualTo("INSECURE_RELAY_URL")
+        }
+    }
+
+    @Test
+    fun `an unsafe relay url fails immediately and is never retried`() {
+        var slept = 0
+        val client = SyncRelayClient(
+            config = SyncRelayClientConfig(baseUrl = "http://sync.actionaura.example", maxRetries = 4),
+            identity = identity,
+            installationId = "inst-1",
+            sleepFn = { slept++ },
+        )
+        try {
+            client.pull(0L)
+            throw AssertionError("expected SyncInsecureRelayUrlError")
+        } catch (exc: SyncInsecureRelayUrlError) {
+            // expected
+        }
+        assertThat(slept).isEqualTo(0)
+    }
+
+    @Test
+    fun `cleartext http to loopback is still permitted (the real dev relay recipe)`() {
+        requireTransportIsSafe("http://127.0.0.1:5551/api/sync/v1/pull")
+        requireTransportIsSafe("http://localhost:5551/api/sync/v1/pull")
+    }
+
+    @Test
+    fun `https to any host is permitted`() {
+        requireTransportIsSafe("https://sync.actionaura.example/api/sync/v1/pull")
+        requireTransportIsSafe("https://sync.actionaura.example:8443/api/sync/v1/push")
+    }
+
+    @Test
+    fun `a loopback lookalike in the userinfo cannot smuggle cleartext through`() {
+        // URI("http://127.0.0.1@evil.example.com/") has host evil.example.com;
+        // a naive `url.contains("127.0.0.1")` check would have let it through.
+        try {
+            requireTransportIsSafe("http://127.0.0.1@evil.example.com/api/sync/v1/pull")
+            throw AssertionError("expected SyncInsecureRelayUrlError")
+        } catch (exc: SyncInsecureRelayUrlError) {
+            assertThat(exc.message).contains("credentials")
+        }
+    }
+
+    @Test
+    fun `an unsupported scheme is refused`() {
+        try {
+            requireTransportIsSafe("ftp://sync.actionaura.example/api/sync/v1/pull")
+            throw AssertionError("expected SyncInsecureRelayUrlError")
+        } catch (exc: SyncInsecureRelayUrlError) {
+            assertThat(exc.message).contains("unsupported scheme")
+        }
+    }
+
     // ── pull() -- real GET-with-body, FakeSyncServer ────────────────────────
 
     @Test
