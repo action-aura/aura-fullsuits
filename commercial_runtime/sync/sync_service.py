@@ -54,25 +54,11 @@ class SyncService:
         with self._lock:
             conn = self._get_conn()
             try:
-                rows = conn.execute("SELECT * FROM sync_outbox ORDER BY created_at").fetchall()
-                if not rows:
+                events = self.read_outbox(conn)
+                if not events:
                     return
-                events = [
-                    {
-                        "id": r["id"],
-                        "entity_type": r["entity_type"],
-                        "entity_id": r["entity_id"],
-                        "event_type": r["event_type"],
-                        "payload": json.loads(r["payload"]),
-                        "created_at": r["created_at"],
-                    }
-                    for r in rows
-                ]
                 self._client_factory().push(events)  # raises on failure -- nothing below runs
-                ids = [r["id"] for r in rows]
-                conn.execute(
-                    "DELETE FROM sync_outbox WHERE id IN ({})".format(",".join("?" * len(ids))), ids
-                )
+                self.ack_outbox(conn, [e["id"] for e in events])
                 conn.commit()
             finally:
                 # conn.close() with no prior commit() discards any
@@ -90,15 +76,63 @@ class SyncService:
         with self._lock:
             conn = self._get_conn()
             try:
-                cursor_row = conn.execute("SELECT last_seq FROM sync_cursor WHERE id=1").fetchone()
-                since = cursor_row["last_seq"] if cursor_row else 0
+                since = self.read_cursor(conn)
                 result = self._client_factory().pull(since)  # raises on failure
-                for ev in result.get("events", []):
-                    self._apply_event(conn, ev)
-                conn.execute("UPDATE sync_cursor SET last_seq=? WHERE id=1", (result["cursor"],))
+                self.apply_pull_result(conn, result)
                 conn.commit()
             finally:
                 conn.close()
+
+    def read_outbox(self, conn) -> list:
+        """Reads (never deletes) the current sync_outbox rows, in the same
+        shape push() expects. Split out of push_once() (multi-device-sync-
+        foundation, Task 9) so Android's local `/_internal` sync routes can
+        read the batch Kotlin is about to push WITHOUT this Python process
+        ever calling `self._client_factory().push()` itself -- Android's
+        Python never holds the signing key (see
+        commercial_runtime/licensing_contracts/android_bridge_identity.py),
+        so Kotlin makes the actual signed HTTP call and this method only
+        hands it the rows to sign and send."""
+        rows = conn.execute("SELECT * FROM sync_outbox ORDER BY created_at").fetchall()
+        return [
+            {
+                "id": r["id"],
+                "entity_type": r["entity_type"],
+                "entity_id": r["entity_id"],
+                "event_type": r["event_type"],
+                "payload": json.loads(r["payload"]),
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+
+    def ack_outbox(self, conn, ids: list) -> None:
+        """Deletes exactly the given outbox row ids -- the second half of
+        the read_outbox()/ack_outbox() split push_once() now composes
+        itself, and what Android's `/_internal/sync/outbox/ack` route calls
+        once Kotlin's push to Owner has genuinely succeeded. Caller commits."""
+        if not ids:
+            return
+        conn.execute(
+            "DELETE FROM sync_outbox WHERE id IN ({})".format(",".join("?" * len(ids))), ids
+        )
+
+    def read_cursor(self, conn) -> int:
+        cursor_row = conn.execute("SELECT last_seq FROM sync_cursor WHERE id=1").fetchone()
+        return cursor_row["last_seq"] if cursor_row else 0
+
+    def apply_pull_result(self, conn, result: dict) -> None:
+        """Applies a pull result (the exact shape SyncRelayClient.pull()
+        returns: `{"events": [...], "cursor": N}`) to local tables and
+        advances the cursor. Split out of pull_once() (Task 9) so it can be
+        called two ways with identical semantics: pull_once() calls it right
+        after fetching the result itself (Windows), and Android's local
+        `/_internal/sync/pull-apply` route calls it with a result Kotlin
+        already fetched directly from Owner (Android's Python never makes
+        that signed HTTP call itself). Caller commits."""
+        for ev in result.get("events", []):
+            self._apply_event(conn, ev)
+        conn.execute("UPDATE sync_cursor SET last_seq=? WHERE id=1", (result["cursor"],))
 
     def _apply_event(self, conn, ev: dict) -> None:
         if ev.get("entity_type") != "category":

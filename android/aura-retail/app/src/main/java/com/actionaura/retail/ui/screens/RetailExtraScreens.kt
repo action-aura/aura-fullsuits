@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AssignmentReturn
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.LocalShipping
@@ -65,6 +66,7 @@ fun MoreScreen(onNavigate: (String) -> Unit) {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         SectionHeader(tr("Records"))
+        MoreItem(tr("Categories"), tr("Group products for filtering"), Icons.Default.Category) { onNavigate("categories") }
         MoreItem(tr("Reports"), tr("Sales stats by time period"), Icons.Default.BarChart) { onNavigate("reports") }
         MoreItem(tr("Transactions"), tr("Past sales & invoices"), Icons.Default.ReceiptLong) { onNavigate("transactions") }
         MoreItem(tr("Returns"), tr("Refund items from a sale"), Icons.Default.AssignmentReturn) { onNavigate("returns") }

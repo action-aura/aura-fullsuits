@@ -28,6 +28,7 @@ import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.*
 import com.actionaura.retail.net.ApiClient
 import com.actionaura.retail.server.ServerBootstrap
+import com.actionaura.retail.sync.SyncCoordinator
 import com.actionaura.retail.ui.components.NebulaBackground
 import com.actionaura.retail.ui.components.auroraBrush
 import com.actionaura.retail.ui.components.pulseGlow
@@ -47,6 +48,13 @@ fun AppRoot() {
     LaunchedEffect(Unit) {
         phase = try {
             ServerBootstrap.start(ctx)
+            // Multi-device sync foundation (Task 9 wiring): starts the
+            // background push/pull loop once the embedded server (and
+            // therefore its /_internal/sync/* routes) is up. A no-op when
+            // OWNER_SYNC_BASE_URL is unconfigured (see SyncCoordinator.start()'s
+            // own doc comment) -- never blocks the phase transition below,
+            // since it only schedules a timer and returns immediately.
+            SyncCoordinator.start(ctx)
             val needsSetup = try { ApiClient.get().onboardingStatus().needs_setup } catch (e: Exception) { false }
             if (needsSetup) Phase.SETUP
             else {
@@ -269,6 +277,7 @@ private fun retailGraph(b: NavGraphBuilder, nav: androidx.navigation.NavControll
     b.composable("dashboard") { DashboardScreen(onNavigate = { r -> nav.navigate(r) }) }
     b.composable("pos") { PosScreen(snackbar) }
     b.composable("products") { ProductsScreen(snackbar) }
+    b.composable("categories") { CategoriesScreen(snackbar) }
     b.composable("more") { MoreScreen(onNavigate = { r -> nav.navigate(r) }) }
     b.composable("reports") { ReportsScreen(snackbar) }
     b.composable("transactions") { TransactionsScreen(snackbar) }

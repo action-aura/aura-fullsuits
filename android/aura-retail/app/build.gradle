@@ -51,6 +51,20 @@ android {
         // hardcoded here.
         buildConfigField "String", "OWNER_LICENSING_BASE_URL",
                 "\"${project.findProperty('ownerLicensingBaseUrl') ?: ''}\""
+
+        // Multi-device sync foundation (2026-08-06), Task 9 wiring -- Owner's
+        // sync relay root (Kotlin appends "/api/sync/v1/push|pull" itself,
+        // same as SyncRelayClient.kt does), following the EXACT same
+        // independently-configured, empty-by-default pattern as
+        // OWNER_LICENSING_BASE_URL immediately above (never derived from it --
+        // desktop's own AURA_OWNER_LICENSING_URL and AURA_SYNC_RELAY_URL are
+        // two separately-set env vars pointed at the same Owner host but
+        // different path depths; see products/retail/backend/config.py).
+        // Overridden per real build via -PownerSyncBaseUrl=..., never
+        // hardcoded here. Empty means SyncCoordinator stays inert (no timer
+        // started), never a hidden default Owner instance.
+        buildConfigField "String", "OWNER_SYNC_BASE_URL",
+                "\"${project.findProperty('ownerSyncBaseUrl') ?: ''}\""
     }
 
     // ── Python (Chaquopy) ───────────────────────────────────────────────────────

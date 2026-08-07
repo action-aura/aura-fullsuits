@@ -158,6 +158,20 @@ data class Product(
 )
 data class ProductsResponse(val status: String = "", val data: List<Product> = emptyList())
 
+// Categories -- multi-device sync foundation (2026-08-06), Task 9 wiring:
+// GET/POST /api/sub/retail/categories, PUT /categories/{id}. Category
+// create/update is the only entity type Task 4's sync_outbox wiring
+// understands (see commercial_runtime/sync/sync_service.py's own docstring)
+// -- this is a real, working management screen (CategoriesScreen.kt), not
+// a stub, added specifically so a category change can be made through this
+// app's real UI and verified end to end against Owner's relay.
+data class Category(
+    val id: String = "", val name: String = "", val description: String? = "",
+    val product_count: Int = 0,
+)
+data class CategoriesResponse(val status: String = "", val data: List<Category> = emptyList())
+data class CreateCategoryRequest(val name: String, val description: String = "")
+
 data class CreateProductRequest(
     val name: String, val sku: String,
     val sell_price: Double = 0.0, val cost_price: Double = 0.0,

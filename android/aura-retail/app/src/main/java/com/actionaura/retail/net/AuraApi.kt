@@ -4,6 +4,7 @@ import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.PATCH
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
 
@@ -78,6 +79,16 @@ interface AuraApi {
 
     @GET("api/sub/retail/products")
     suspend fun products(): ProductsResponse
+
+    // Categories (multi-device sync foundation, Task 9 wiring -- see Models.kt)
+    @GET("api/sub/retail/categories")
+    suspend fun categories(): CategoriesResponse
+
+    @POST("api/sub/retail/categories")
+    suspend fun createCategory(@Body body: CreateCategoryRequest): CreatedResponse
+
+    @PUT("api/sub/retail/categories/{id}")
+    suspend fun updateCategory(@Path("id") id: String, @Body body: CreateCategoryRequest): CreatedResponse
 
     @POST("api/sub/retail/products")
     suspend fun createProduct(@Body body: CreateProductRequest): CreatedResponse

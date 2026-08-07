@@ -143,14 +143,11 @@ app.register_blueprint(make_licensing_blueprint(
 ))
 
 # Multi-device sync foundation (2026-08-06), Task 5: the background push/pull
-# loop. Windows-only for now (mobile's own Kotlin-held device key is Task 9's
-# concern -- see AndroidBridgeDeviceIdentityProvider.sign(), which always
-# raises, since this Python process never holds an Android device's private
-# key at all). Reuses the EXACT same licensing_dir/db_path/device-identity
-# factory make_licensing_blueprint's own _build_context() constructs above --
-# never a second device identity, never a second on-disk key -- so the
-# signature this client produces verifies against the SAME installation
-# Owner already knows from activation/check-in.
+# loop. Reuses the EXACT same licensing_dir/db_path/device-identity factory
+# make_licensing_blueprint's own _build_context() constructs above -- never a
+# second device identity, never a second on-disk key -- so the signature
+# this client produces verifies against the SAME installation Owner already
+# knows from activation/check-in.
 _sync_service = None
 if SYNC_RELAY_BASE_URL and LICENSING_PLATFORM != 'ANDROID':
     from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
@@ -183,11 +180,53 @@ if SYNC_RELAY_BASE_URL and LICENSING_PLATFORM != 'ANDROID':
 
     _sync_service = SyncService(_build_sync_client, _sync_get_conn)
     register_active_service(_sync_service)
+elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
+    # Android's own wiring (multi-device-sync-foundation, Task 9): this
+    # process never holds the Android device's private key
+    # (AndroidBridgeDeviceIdentityProvider.sign() always raises -- see that
+    # class's docstring), so it can never call SyncRelayClient.push()/pull()
+    # itself the way the Windows branch above does. Kotlin's own
+    # SyncRelayClient.kt (AndroidKeystore-backed, mirrors OwnerClient.kt --
+    # "the ONLY place on Android that ever makes a signed HTTP call to
+    # Owner") makes the actual signed push/pull calls directly to Owner, and
+    # uses the /_internal/sync/* routes below (registered by
+    # make_sync_internal_blueprint) to read the outbox it's about to sign,
+    # acknowledge what it pushed, read the cursor, and apply what it pulled.
+    # register_active_service()/nudge() are deliberately NOT wired here:
+    # nudge() calls push_once(), which would call this SyncService's
+    # client_factory (None, never usable on Android) -- Kotlin's
+    # SyncCoordinator has its own short-interval timer instead of relying on
+    # the shared retail_api.py nudge() call sites.
+    from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
+    from commercial_runtime.sync.sync_service import SyncService
+    from commercial_runtime.sync.internal_routes import make_sync_internal_blueprint
+
+    _sync_state_repository = LicenseStateRepository(Path(DATABASE_DIR) / 'subsystems' / 'licensing.db')
+
+    def _sync_get_conn():
+        from database.schema import get_retail_conn
+        return get_retail_conn()
+
+    _android_sync_service = SyncService(None, _sync_get_conn)  # client_factory never used -- see comment above
+    app.register_blueprint(make_sync_internal_blueprint(
+        sync_service=_android_sync_service,
+        get_conn=_sync_get_conn,
+        state_repository=_sync_state_repository,
+        shared_secret=LICENSING_INTERNAL_SHARED_SECRET,
+    ))
 
 
 def init_app():
     """Initialize the registry + retail schema, and start the background
-    sync loop (if configured). Call once before serving."""
+    sync loop (if configured). Call once before serving.
+
+    Deliberately never starts anything for `_android_sync_service` -- it is
+    never assigned to `_sync_service` (see the ANDROID branch above), so
+    this function's own `_sync_service is not None` check correctly stays
+    False on Android. Calling `.start()` on it would run Python's own
+    push/pull timer, which would call its `client_factory` (`None`) and
+    crash on the first tick -- Kotlin's SyncCoordinator is what drives
+    Android's push/pull loop instead."""
     init_registry_db()
     init_retail()
     if _sync_service is not None:
