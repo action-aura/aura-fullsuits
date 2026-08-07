@@ -196,7 +196,7 @@ object SyncCoordinator {
             .header("X-Aura-Internal-Secret", ServerBootstrap.internalSecret())
             .get()
             .build()
-        return executeLocal(request)
+        return executeLocal(path, request)
     }
 
     private fun postLocal(path: String, jsonBody: String): JsonObject {
@@ -205,13 +205,43 @@ object SyncCoordinator {
             .header("X-Aura-Internal-Secret", ServerBootstrap.internalSecret())
             .post(jsonBody.toRequestBody("application/json".toMediaType()))
             .build()
-        return executeLocal(request)
+        return executeLocal(path, request)
     }
 
-    private fun executeLocal(request: Request): JsonObject {
+    /** Thrown when a call to the embedded Python backend's own
+     * `/api/sync/_internal/...` routes fails. Propagates up to
+     * [runOnce]/[nudge]'s per-half catch, so a failing local call aborts only
+     * that half of the tick and is retried on the next one -- but is now
+     * genuinely LOGGED rather than being mistaken for success.
+     *
+     * Final-review Fix 5 (2026-08-07): this used to parse the response body
+     * regardless of status code, so a 400 from `/pull-apply` (e.g. Python
+     * raising while applying a pulled event) or a 403 from `/outbox/ack`
+     * (wrong internal secret) was treated as a successful call. On the ack
+     * path that is actively destructive -- a rejected ack was followed by
+     * "push succeeded", leaving the outbox rows to be pushed again forever;
+     * on the pull-apply path it silently discarded the batch while the caller
+     * believed the cursor had advanced. It is also precisely why the Fix 1
+     * foreign-key wedge was invisible on this platform: no log, no error,
+     * just silent non-progress. */
+    class LocalSyncApiError(val statusCode: Int, message: String) : Exception(message)
+
+    private fun executeLocal(path: String, request: Request): JsonObject {
         http.newCall(request).execute().use { response ->
-            val bodyString = response.body?.string() ?: "{}"
-            return JsonParser.parseString(bodyString).asJsonObject
+            val bodyString = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                // Truncated: a Flask error page can be many KB of HTML, and
+                // this goes to logcat on every failing tick.
+                val detail = bodyString.take(500)
+                Log.e(TAG, "Local sync API call to $path failed with HTTP ${response.code}: $detail")
+                throw LocalSyncApiError(response.code, "Local sync API $path returned HTTP ${response.code}")
+            }
+            return try {
+                JsonParser.parseString(bodyString).asJsonObject
+            } catch (exc: Exception) {
+                Log.e(TAG, "Local sync API call to $path returned a non-JSON body: ${bodyString.take(500)}", exc)
+                throw LocalSyncApiError(response.code, "Local sync API $path returned a malformed body")
+            }
         }
     }
 }
