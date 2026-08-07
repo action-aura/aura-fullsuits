@@ -202,11 +202,8 @@ every apply stamps the receiving device's own.
 
 ## KMP mobile (`mobile/aura-retail-unified`)
 
-- **Customers/Suppliers** (`Parties.sq`): same UUID migration pattern as
-  Category got in the prior round (id `INTEGER` → `TEXT`, generated
-  client-side at insert). Add `status` to `customers` (doesn't exist).
-  Repository changes mirror `SqlDelightCategoryRepository.kt`'s pattern.
-  New delete use-cases (soft-delete), matching desktop's new routes.
+- **Customers/Suppliers: dropped from KMP this round** — see Residual/
+  deferred items below. Desktop and Aura POS still sync both fully.
 - **Products** (`Catalog.sq`): same id-type migration, but must also:
   - Update `import_conflicts.canonical_product_id` (currently `INTEGER`) to
     `TEXT`, and check `CatalogImporter`'s usage of it.
@@ -240,6 +237,14 @@ demo depends on, not just unit tests passing.
 ## Residual/deferred items (documented, not built this round)
 
 - Branches: no real feature exists, deferred entirely.
+- KMP Customers/Suppliers sync: dropped during planning (2026-08-07) — unlike
+  KMP's own Products (real `ProductUseCases.kt` + repository + UI) and unlike
+  desktop's Customers/Suppliers (full CRUD UI), KMP has no Customer/Supplier
+  feature at all; `Parties.sq`'s insert/select queries are only ever called
+  by `ImportCommitExecutor.kt` (legacy-data import), never by any app
+  screen. Wiring sync onto a feature with no UI would be invisible and
+  unverifiable through the app itself — same shape as the Branches decision
+  above. Desktop and Aura POS still get full Customers/Suppliers sync.
 - Sales/Inventory/Returns/Payments sync: explicitly deferred (this is the
   "high-risk entities" work already flagged in the wider roadmap as needing
   its own design pass for offline-concurrent-stock and no-double-refund
