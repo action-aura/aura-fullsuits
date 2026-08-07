@@ -43,6 +43,20 @@ const RetailSystem = {
   },
   async _del(url) { return (await this._fetch(url, { method: 'DELETE' })).json(); },
 
+  // Final-review Fix 7 (2026-08-07): HTML-escape a value before it is
+  // interpolated into innerHTML or into a quoted attribute. Every other
+  // section in this file interpolates its own locally-created records raw --
+  // Category is the first entity whose name/description can arrive from
+  // ANOTHER DEVICE over the sync relay, which is a genuinely new trust
+  // boundary, so the category rendering paths escape. Escapes `"` and `'`
+  // too (not just the three characters needed for text nodes) because these
+  // values also land inside double-quoted attribute values.
+  _esc(v) {
+    return String(v == null ? '' : v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  },
+
   // ── Router ────────────────────────────────────────────────────────────────
   render(sectionId) {
     const c = document.getElementById('sub-content');
@@ -780,7 +794,7 @@ const RetailSystem = {
 
   _addProductFromScan(code) {
     document.getElementById('ret-scan-nf')?.remove();
-    const catOpts = (this._categories || []).map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+    const catOpts = (this._categories || []).map(c => `<option value="${this._esc(c.id)}">${this._esc(c.name)}</option>`).join('');
     this._showProductModal({ barcode: code }, catOpts);
   },
 
@@ -1015,7 +1029,7 @@ const RetailSystem = {
   },
 
   _openAddProduct() {
-    const catOpts = this._categories.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+    const catOpts = this._categories.map(c => `<option value="${this._esc(c.id)}">${this._esc(c.name)}</option>`).join('');
     this._showProductModal({}, catOpts);
   },
 
@@ -1023,7 +1037,7 @@ const RetailSystem = {
     const p = this._products.find(x => x.id === pid);
     if (!p) return;
     const catOpts = this._categories.map(c =>
-      `<option value="${c.id}" ${c.id===p.category_id?'selected':''}>${c.name}</option>`).join('');
+      `<option value="${this._esc(c.id)}" ${c.id===p.category_id?'selected':''}>${this._esc(c.name)}</option>`).join('');
     this._showProductModal(p, catOpts);
   },
 
@@ -1198,13 +1212,19 @@ const RetailSystem = {
         tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:30px">${t('No categories found.')}</td></tr>`;
         return;
       }
+      // Every interpolated value here is escaped (see this._esc): a category
+      // name/description can have been authored on a DIFFERENT device and
+      // relayed in, so it is untrusted input at this point. The Delete button
+      // deliberately passes only the id -- _deleteCategory looks the name up
+      // from this._categories itself, so no remote-authored string is ever
+      // spliced into an inline event-handler attribute at all.
       tbody.innerHTML = data.map(cat => `<tr>
-        <td style="font-weight:600">${cat.name}</td>
-        <td style="color:var(--text-muted)">${cat.description||'—'}</td>
-        <td style="color:var(--text-muted)">${cat.product_count||0}</td>
+        <td style="font-weight:600">${this._esc(cat.name)}</td>
+        <td style="color:var(--text-muted)">${cat.description ? this._esc(cat.description) : '—'}</td>
+        <td style="color:var(--text-muted)">${this._esc(cat.product_count||0)}</td>
         <td>
-          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditCategory('${cat.id}')">${t('Edit')}</button>
-          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._deleteCategory('${cat.id}','${(cat.name||'').replace(/'/g,"\\'")}')">${t('Delete')}</button>
+          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditCategory('${this._esc(cat.id)}')">${t('Edit')}</button>
+          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._deleteCategory('${this._esc(cat.id)}')">${t('Delete')}</button>
         </td>
       </tr>`).join('');
     } catch(e) { console.error(e); }
@@ -1224,11 +1244,11 @@ const RetailSystem = {
     overlay.innerHTML = `
       <div class="ret-modal" style="width:440px">
         <h3>${isEdit ? '✏️ '+t('Edit Category') : '🏷️ '+t('Add Category')}</h3>
-        <div class="ret-field"><label>${t('Category Name')} *</label><input id="catm-name" value="${cat.name||''}" /></div>
-        <div class="ret-field"><label>${t('Description')}</label><textarea id="catm-desc" rows="3">${cat.description||''}</textarea></div>
+        <div class="ret-field"><label>${t('Category Name')} *</label><input id="catm-name" value="${this._esc(cat.name)}" /></div>
+        <div class="ret-field"><label>${t('Description')}</label><textarea id="catm-desc" rows="3">${this._esc(cat.description)}</textarea></div>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-cat-modal').remove()">${t('Cancel')}</button>
-          <button class="ret-btn ret-btn-primary" id="catm-btn" onclick="RetailSystem._saveCategory(${isEdit ? `'${cat.id}'` : 'null'})">${isEdit ? t('Save') : t('Add Category')}</button>
+          <button class="ret-btn ret-btn-primary" id="catm-btn" onclick="RetailSystem._saveCategory(${isEdit ? `'${this._esc(cat.id)}'` : 'null'})">${isEdit ? t('Save') : t('Add Category')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -1254,13 +1274,29 @@ const RetailSystem = {
     } catch(e) { if(btn){btn.disabled=false;btn.textContent=t('Save');} }
   },
 
-  async _deleteCategory(catId, name) {
+  // Final-review Fix 4 (2026-08-07): a failed delete must be VISIBLE. This
+  // previously ended in a bare `catch(e){}` -- and `_del()` calls `.json()`,
+  // which throws on the HTML body Flask's default 500 handler returns, so
+  // every server-side failure landed in that empty catch: the user clicked
+  // Delete, nothing happened, no error, no clue. The backend now answers with
+  // a clean JSON 4xx (see delete_category), and both that and any remaining
+  // transport/parse failure are surfaced as a toast here.
+  async _deleteCategory(catId) {
+    const cat = (this._categories || []).find(x => String(x.id) === String(catId));
+    const name = (cat && cat.name) || '';
     if (!confirm(`${t('Delete')} "${name}"?`)) return;
     try {
       const d = await this._del(`/api/sub/retail/categories/${catId}`);
-      SubsystemApp.showToast(d.message||'Done', d.status==='success'?'success':'error');
+      if (d && d.status === 'success') {
+        SubsystemApp.showToast(d.message || t('Category deleted'), 'success');
+      } else {
+        SubsystemApp.showToast((d && d.message) || t('Could not delete this category.'), 'error');
+      }
       this._loadCategories();
-    } catch(e) {}
+    } catch(e) {
+      console.error('Category delete failed', e);
+      SubsystemApp.showToast(t('Could not delete this category.'), 'error');
+    }
   },
 
   // ── CUSTOMERS ─────────────────────────────────────────────────────────────

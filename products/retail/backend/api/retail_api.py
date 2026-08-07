@@ -9,10 +9,11 @@ api/subsystems/retail_api.py -- see docs/migration/retail-extraction-report.md.
 import os
 import time
 import json
+import sqlite3
 import uuid as _uuid
 import requests
 from decimal import Decimal, ROUND_HALF_UP
-from flask import Blueprint, request, jsonify, session
+from flask import Blueprint, request, jsonify, session, current_app
 from commercial_runtime.identity.mt_auth import mt_login_required, mt_require_subsystem
 from commercial_runtime.licensing_contracts.flask_guard import make_capability_guard
 from commercial_runtime.sync.sync_service import nudge as _sync_nudge
@@ -273,13 +274,37 @@ def update_category(category_id):
 def delete_category(category_id):
     cid = _cid()
     conn = get_retail_conn()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM categories WHERE id=? AND company_id=?", (category_id, cid))
-    if cur.rowcount == 0:
+    # Final-review Fix 4 (2026-08-07): defense-in-depth error containment.
+    # Deleting a category is the one destructive write here that can fail on
+    # a database-integrity rule rather than on validation. That specific
+    # failure (a product still referencing the category) can no longer happen
+    # since schema v3 made products.category_id ON DELETE SET NULL -- but
+    # before, this raised an uncaught sqlite3.IntegrityError straight into
+    # Flask's default 500 handler, WITH the connection never closed on that
+    # path (leaked for the duration of the process, holding a WAL read/write
+    # lock). Any future FK/constraint added anywhere near this table would
+    # reintroduce exactly that, so the containment stays: a clean 409 with a
+    # real message the UI can show, and a connection that is always closed.
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM categories WHERE id=? AND company_id=?", (category_id, cid))
+        if cur.rowcount == 0:
+            return jsonify({'status': 'error', 'message': 'Category not found'}), 404
+        _queue_sync_event(cur, 'category', category_id, 'delete', {'id': category_id})
+        conn.commit()
+    except sqlite3.IntegrityError as exc:
+        conn.rollback()
+        current_app.logger.warning("delete_category(%s) failed on a database constraint: %s", category_id, exc)
+        return jsonify({
+            'status': 'error',
+            'message': 'This category could not be deleted because other records still depend on it.',
+        }), 409
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("delete_category(%s) failed: %s", category_id, exc)
+        return jsonify({'status': 'error', 'message': 'Could not delete this category.'}), 400
+    finally:
         conn.close()
-        return jsonify({'status': 'error', 'message': 'Category not found'}), 404
-    _queue_sync_event(cur, 'category', category_id, 'delete', {'id': category_id})
-    conn.commit(); conn.close()
     _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return jsonify({'status': 'success'})
 
