@@ -37,7 +37,12 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # _migrate_products_category_fk_on_delete_set_null below for why a bare
 # `REFERENCES categories(id)` permanently wedges sync on any device holding a
 # product in a category some OTHER device deleted.
-RETAIL_SCHEMA_VERSION = 3
+# v3 -> v4 (docs/einvoicing/phase1/, merged 2026-08-08): adds the einvoice_*
+# tables. Originally cut as its own "v2" on a branch from before the sync
+# migrations above existed -- renumbered to v4 here since both branches
+# independently claimed v2 for unrelated migrations. See
+# _apply_retail_alters below -- never lower this or reuse a number.
+RETAIL_SCHEMA_VERSION = 4
 
 
 def _get_path(name):
@@ -315,13 +320,23 @@ def _migrate_retail_schema(conn):
     migration this file owns, in version order, on any database behind
     RETAIL_SCHEMA_VERSION. `ensure_schema_version` only tells a migration
     "you are behind", not "you are behind by exactly one version", so a v1
-    install upgrading straight to v3 must run BOTH steps in one pass. Each
+    install upgrading straight to v4 must run every step in one pass. Each
     step is independently idempotent (each inspects the live schema and
     returns immediately when its own change is already present), so running
     them all is correct regardless of which version the database actually
     starts from."""
     _migrate_categories_to_uuid(conn)
     _migrate_products_category_fk_on_delete_set_null(conn)
+    _apply_retail_alters(conn)
+
+
+def _apply_retail_alters(conn):
+    """v3 -> v4 (docs/einvoicing/phase1/): adds the einvoice_* tables used by
+    opt-in Jordan JoFotara e-invoicing. CREATE TABLE IF NOT EXISTS only --
+    no existing table is ALTERed, no existing row is read or written. A
+    pilot install that never enables the feature gains only empty tables."""
+    from commercial_runtime.einvoicing.schema import apply_einvoicing_schema
+    apply_einvoicing_schema(conn)
 
 
 def init_retail():
@@ -557,8 +572,8 @@ def init_retail():
 
     # Wave 1B (Part K) / multi-device sync foundation (2026-08-06): first
     # real Retail schema changes -- see _migrate_retail_schema above, which
-    # chains _migrate_categories_to_uuid (v2) and
-    # _migrate_products_category_fk_on_delete_set_null (v3).
+    # chains _migrate_categories_to_uuid (v2), _migrate_products_category_fk_
+    # on_delete_set_null (v3), and _apply_retail_alters/einvoicing (v4).
     # Mirrors products/clinic/backend/database/schema.py's identical
     # ensure_schema_version pattern; see
     # commercial_runtime/security/migration_safety.py.

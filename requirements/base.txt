@@ -17,3 +17,10 @@ requests==2.33.0
 # separate (android/aura-*/app/build.gradle), see
 # docs/licensing/phase7/android-device-key-storage-design.md for why.
 cryptography==48.0.1
+
+# docs/einvoicing/phase1/ -- Jordan JoFotara e-invoicing QR code rendering.
+# Pure Python, zero transitive dependencies, universal wheel -- required so
+# it also installs cleanly under Chaquopy on Android (see
+# android/aura-retail/app/build.gradle and android/aura-clinic/app/build.gradle,
+# Step 17: a compiled/native-wheel-only QR library would break that build).
+segno==1.6.6

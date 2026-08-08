@@ -843,7 +843,16 @@ def create_sale():
                 warning = 'Credit limit exceeded.'
 
         due_date = data.get('due_date')
-        sale_number = _next_ref(conn, cid, 'sale')
+        # sales.sale_number carries a bare (not company-scoped) UNIQUE
+        # constraint, but _next_ref()'s counter resets per company -- two
+        # different companies' first sale would otherwise both generate
+        # "SALE-000001" and collide in this shared multi-tenant database.
+        # Same fix already applied to returns.return_number above (see that
+        # comment) -- appending a company fragment keeps the sequential
+        # part human-readable/searchable while guaranteeing global
+        # uniqueness without altering the shared _next_ref helper or its
+        # format for other doc types.
+        sale_number = f"{_next_ref(conn, cid, 'sale')}-{str(cid)[:8]}"
 
         cur.execute("""
             INSERT INTO sales (company_id,sale_number,branch_id,customer_id,cashier,
@@ -890,14 +899,35 @@ def create_sale():
         conn.commit()
         _emit('SaleCompleted', {'sale_id': sale_id, 'sale_number': sale_number, 'total': total,
                                  'payment_method': pm})
-        return jsonify({'status': 'success', 'data': {
+
+        response_data = {
             'id': sale_id, 'sale_number': sale_number,
             'idempotency_key': idem, 'currency': _settings(conn, cid)['base_currency'],
             'subtotal': subtotal, 'discount_amount': discount, 'tax_amount': tax,
             'change': round(change, 2), 'total': round(total, 2),
             'amount_paid': paid, 'balance_due': balance_due, 'warning': warning,
             'lines': resolved_lines, 'calculation_version': tax_engine.CALCULATION_VERSION,
-        }})
+        }
+
+        # docs/einvoicing/phase1/ -- best-effort, never blocks or fails the
+        # sale that already committed above. Opened on its OWN connection
+        # (see einvoice_adapter.enqueue_sale) so a failure here cannot roll
+        # back or otherwise touch the sale transaction. Only adds an
+        # 'einvoice' key to the response when the feature is actually
+        # enqueued -- a disabled install's response is byte-for-byte
+        # unchanged (see retail_einvoicing_regression_test.py).
+        try:
+            from database.schema import get_retail_conn as _get_retail_conn_for_einvoicing
+            from core.retail.einvoice_adapter import enqueue_sale as _enqueue_einvoice_sale
+            invoice_ref = f'AURA_RETAIL:sale:{sale_id}'
+            if _enqueue_einvoice_sale(_get_retail_conn_for_einvoicing, company_id=cid,
+                                       sale_id=sale_id, sale_number=sale_number):
+                response_data['einvoice'] = {'invoice_ref': invoice_ref, 'status': 'queued'}
+        except Exception as e:
+            import logging
+            logging.getLogger('aura.retail').warning('e-invoice enqueue skipped: %s', type(e).__name__)
+
+        return jsonify({'status': 'success', 'data': response_data})
     except Exception as e:
         conn.rollback()
         return jsonify({'status': 'error', 'message': str(e)}), 500
