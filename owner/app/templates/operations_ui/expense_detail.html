@@ -1,8 +1,12 @@
 {% extends "layout/base.html" %}
+{% import "components/commercial_record.html" as record with context %}
 {% block title %}{{ _("Expense") }} {{ expense.expense_number or "" }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2><bdi dir="ltr">{{ expense.expense_number or expense.id }}</bdi> <span class="badge {{ 'success' if expense.status in ('PAID','APPROVED') else ('danger' if expense.status in ('REJECTED','VOID') else 'pending') }}">{{ expense_status_label(expense.status) }}</span></h2>
+  <h2><bdi dir="ltr">{{ expense.expense_number or expense.id }}</bdi> <span class="badge {{ expense_badge_class(expense.status) }}">{{ expense_status_label(expense.status) }}</span></h2>
+
+  {{ record.steps(expense_timeline(expense, latest_approval)) }}
+
   <p>{{ _("Amount:") }} {{ format_owner_number(expense.amount) }} {{ expense.currency }}
     {% if expense.approved_amount is not none %}&middot; {{ _("Approved:") }} {{ format_owner_number(expense.approved_amount) }} {{ expense.currency }}{% endif %}
     {% if outstanding is not none %}&middot; {{ _("Outstanding:") }} {{ format_owner_number(outstanding) }} {{ expense.currency }}{% endif %}
@@ -10,6 +14,15 @@
   <p>{{ _("Date:") }} {{ format_owner_date(expense.expense_date) }} &middot; {{ _("Payment method:") }} {{ expense_payment_method_label(expense.payment_method) }}</p>
   <p>{{ expense.description }}</p>
   {% if expense.external_reference %}<p>{{ _("External reference:") }} <bdi dir="ltr">{{ expense.external_reference }}</bdi></p>{% endif %}
+
+  {{ record.related_records([
+      (_("Category"), None, category.name if category else "-"),
+      (_("Payee"), None, payee.display_name if payee else "-"),
+      (_("Beneficiary employee"), url_for('employees.detail', employee_id=expense.beneficiary_employee_profile_id) if expense.beneficiary_employee_profile_id else None,
+       beneficiary_name if beneficiary_name else _("No employee beneficiary")),
+  ]) }}
+
+  <p>{{ _("Entered by:") }} {{ entered_by_name or "-" }}{% if expense.approved_by_staff_user_id %} &middot; {{ _("Approved by:") }} {{ approved_by_name or "-" }}{% endif %}</p>
 
   {% if duplicate_signals %}
   <div class="error">

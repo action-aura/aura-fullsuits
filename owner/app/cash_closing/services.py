@@ -296,6 +296,35 @@ def add_adjustment(closing: CashClosing, *, amount: Decimal, reason: str, create
     return adjustment
 
 
+def prior_closing_for_display(closing: CashClosing) -> CashClosing | None:
+    """UI modernization Stage D -- read-only lookup for the status-timeline/
+    related-records UI (see app.cash_closing.status_presentation and
+    operations_ui/routes.py::closing_detail). Re-derives the same
+    (currency, business_date < this one, status == CLOSED) query
+    get_or_create_draft_closing() used at creation time to set opening_cash
+    -- not a stored FK, so it reflects the CURRENT state of closing
+    history, not necessarily the exact row that was read at creation time
+    (e.g. if a chain member was later reopened). Only meaningful when
+    opening cash was NOT a manual override -- an override has no real
+    "prior closing" relationship at all, by definition."""
+    if closing.opening_cash_is_override:
+        return None
+    return _prior_closing(closing.business_date, closing.currency)
+
+
+def latest_reopen_event(closing: CashClosing) -> CashClosingReopenEvent | None:
+    """UI modernization Stage D -- read-only lookup for the status-timeline
+    UI. The most recent CashClosingReopenEvent row for this closing (or
+    None if it has never been reopened) -- used only to read its real,
+    already-persisted prior_status/reopened_at columns, never to decide or
+    mutate anything."""
+    return db_session.execute(
+        select(CashClosingReopenEvent)
+        .where(CashClosingReopenEvent.cash_closing_id == closing.id)
+        .order_by(CashClosingReopenEvent.reopened_at.desc())
+    ).scalars().first()
+
+
 def approve_adjustment(adjustment: CashClosingAdjustment, *, actor_staff_user_id: uuid.UUID) -> CashClosingAdjustment:
     if adjustment.created_by_staff_user_id == actor_staff_user_id:
         raise ExpenseError("SELF_APPROVAL_FORBIDDEN_CLOSING")

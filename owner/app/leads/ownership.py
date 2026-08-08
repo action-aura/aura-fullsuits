@@ -19,6 +19,7 @@ from sqlalchemy import Select, or_, select
 from app.models.commercial_sales import CommercialInvoice, Quote, SalesOrder
 from app.models.customers import Customer
 from app.models.employees import EmployeeProfile
+from app.models.expenses import Expense
 from app.models.leads import Lead
 
 
@@ -62,4 +63,10 @@ def apply_ownership_filter(
     if model is CommercialInvoice:
         # Phase 9.5D Milestone 9 -- same creator-only rule.
         return stmt.where(CommercialInvoice.created_by_employee_profile_id == actor_employee_profile_id)
+    if model is Expense:
+        # UI modernization Stage D (finance-ui-contract.md) -- Expense has no
+        # separate assignee concept (unlike Lead), only a creator
+        # (entered_by_employee_profile_id) -- same creator-only rule as
+        # Quote/SalesOrder/CommercialInvoice.
+        return stmt.where(Expense.entered_by_employee_profile_id == actor_employee_profile_id)
     raise NotImplementedError(f"apply_ownership_filter has no rule for {model!r}")

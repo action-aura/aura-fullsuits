@@ -1,8 +1,23 @@
 {% extends "layout/base.html" %}
+{% import "components/commercial_record.html" as record with context %}
 {% block title %}{{ _("Cash Closing") }} {{ closing.business_date }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>{{ format_owner_date(closing.business_date) }} (<bdi dir="ltr">{{ closing.currency }}</bdi>) <span class="badge {{ 'success' if closing.status == 'CLOSED' else ('danger' if closing.status == 'REJECTED' else 'pending') }}">{{ cash_closing_status_label(closing.status) }}</span></h2>
+  <h2>{{ format_owner_date(closing.business_date) }} (<bdi dir="ltr">{{ closing.currency }}</bdi>) <span class="badge {{ cash_closing_badge_class(closing.status) }}">{{ cash_closing_status_label(closing.status) }}</span></h2>
+
+  {{ record.steps(cash_closing_timeline(closing, latest_reopen_event)) }}
+
+  {{ record.related_records([
+      (_("Prior closing"),
+       url_for('operations_ui.closing_detail', closing_id=prior_closing.id) if prior_closing else None,
+       format_owner_date(prior_closing.business_date) if prior_closing else (_("Opening cash was manually set") if closing.opening_cash_is_override else _("No prior closed record"))),
+  ]) }}
+
+  <p>{{ _("Prepared by:") }} {{ prepared_by_name or "-" }}
+    {% if closing.reviewed_by_staff_user_id %} &middot; {{ _("Reviewed by:") }} {{ reviewed_by_name or "-" }}{% endif %}
+    {% if closing.approved_by_staff_user_id %} &middot; {{ _("Approved by:") }} {{ approved_by_name or "-" }}{% endif %}
+  </p>
+
   <table class="responsive-table">
     <tbody>
       <tr><td>{{ _("Opening cash") }}</td><td>{{ format_owner_number(closing.opening_cash) }} {{ closing.currency }}</td></tr>

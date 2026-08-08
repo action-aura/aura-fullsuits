@@ -161,6 +161,8 @@ def init_app(app) -> None:
         refund_timeline,
         approval_badge_class,
     )
+    from app.expenses.status_presentation import expense_badge_class, expense_timeline
+    from app.cash_closing.status_presentation import cash_closing_badge_class, cash_closing_timeline
 
     # Domain-label and formatting helpers are Jinja globals (not filters) --
     # exposed once, here, reused by every template rather than each screen
@@ -249,6 +251,14 @@ def init_app(app) -> None:
         invoice_timeline=invoice_timeline,
         refund_timeline=refund_timeline,
         payment_timeline=payment_timeline,
+        # UI modernization Stage D (finance-ui-contract.md) -- Expenses/Cash
+        # Closing's own shared badge-color + status-step (timeline) helpers,
+        # see app/expenses/status_presentation.py and
+        # app/cash_closing/status_presentation.py.
+        expense_badge_class=expense_badge_class,
+        expense_timeline=expense_timeline,
+        cash_closing_badge_class=cash_closing_badge_class,
+        cash_closing_timeline=cash_closing_timeline,
     )
 
     @app.context_processor
