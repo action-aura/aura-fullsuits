@@ -111,6 +111,12 @@
    columns: list of dicts, each either {"label": ...} (plain header) or
      {"label": ..., "sort_key": ...} (real sortable header -- only include
      sort_key for a column with verified server-side ORDER BY support).
+     Optional {"align": "end"} marks a real financial/quantity column --
+     adds the shared `.num` utility class (tabular-nums + end-aligned,
+     `components.css`'s "Enterprise Table System" section) to the
+     rendered <th>; the caller's own {% call %} block is responsible for
+     adding the matching class="num" to that column's <td> cells (this
+     macro only ever owns the <thead>, never per-row cell markup).
    has_rows: whether the caller's block will render at least one <tr>.
    default_sort/default_dir: the route's default ordering when no ?sort/
      ?dir query param is present yet (must match the service function's
@@ -137,14 +143,14 @@
         {% set is_current = current_sort == col.sort_key %}
         {% set next_dir = "desc" if (is_current and current_dir == "asc") else "asc" %}
         {% set aria = "ascending" if (is_current and current_dir == "asc") else ("descending" if (is_current and current_dir == "desc") else "none") %}
-        <th scope="col" aria-sort="{{ aria }}">
+        <th scope="col" aria-sort="{{ aria }}"{% if col.align == "end" %} class="num"{% endif %}>
           <a class="aura-table__sort-link" href="{{ _sort_href(sort_field, dir_field, col.sort_key, next_dir) }}">
             <span>{{ col.label }}</span>
             <span class="aura-table__sort-icon" aria-hidden="true">{% if is_current and current_dir == "asc" %}&#9650;{% elif is_current and current_dir == "desc" %}&#9660;{% else %}&#8645;{% endif %}</span>
           </a>
         </th>
       {% else %}
-        <th scope="col">{{ col.label }}</th>
+        <th scope="col"{% if col.align == "end" %} class="num"{% endif %}>{{ col.label }}</th>
       {% endif %}
     {% endfor %}
     </tr>

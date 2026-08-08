@@ -146,6 +146,21 @@ def init_app(app) -> None:
         localize_expense_error,
         localize_management_note_error,
     )
+    from app.commercial_sales.status_presentation import (
+        commission_entry_badge_class,
+        invoice_badge_class,
+        invoice_timeline,
+        order_badge_class,
+        order_timeline,
+        payment_badge_class,
+        payment_timeline,
+        payout_batch_badge_class,
+        quote_badge_class,
+        quote_timeline,
+        refund_badge_class,
+        refund_timeline,
+        approval_badge_class,
+    )
 
     # Domain-label and formatting helpers are Jinja globals (not filters) --
     # exposed once, here, reused by every template rather than each screen
@@ -219,6 +234,21 @@ def init_app(app) -> None:
         management_note_priority_label=management_note_priority_label,
         localize_expense_error=localize_expense_error,
         localize_management_note_error=localize_management_note_error,
+        # UI modernization Stage D -- shared badge-color + status-step
+        # (timeline) helpers, see app/commercial_sales/status_presentation.py.
+        quote_badge_class=quote_badge_class,
+        order_badge_class=order_badge_class,
+        invoice_badge_class=invoice_badge_class,
+        payment_badge_class=payment_badge_class,
+        refund_badge_class=refund_badge_class,
+        commission_entry_badge_class=commission_entry_badge_class,
+        payout_batch_badge_class=payout_batch_badge_class,
+        approval_badge_class=approval_badge_class,
+        quote_timeline=quote_timeline,
+        order_timeline=order_timeline,
+        invoice_timeline=invoice_timeline,
+        refund_timeline=refund_timeline,
+        payment_timeline=payment_timeline,
     )
 
     @app.context_processor

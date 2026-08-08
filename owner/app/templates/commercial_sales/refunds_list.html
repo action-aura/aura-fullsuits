@@ -1,32 +1,31 @@
 {% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
 {% block title %}{{ _("Refunds") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>{{ _("Refunds") }}</h2>
-  <form class="filters" method="get">
-    <div>
-      <label>{{ _("Status") }}</label>
-      <select name="status" onchange="this.form.submit()">
-        <option value="">{{ _("All") }}</option>
-        {% for s in ["DRAFT","APPROVED","PAID","VOID"] %}
-        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ commercial_refund_status_label(s) }}</option>
-        {% endfor %}
-      </select>
-    </div>
-  </form>
-  <table class="responsive-table">
-    <thead><tr><th>{{ _("Amount") }}</th><th>{{ _("Status") }}</th><th>{{ _("Reason") }}</th><th>{{ _("Created") }}</th></tr></thead>
-    <tbody>
-    {% for r in refunds %}
+  {{ table.toolbar(_("Refunds")) }}
+  {{ table.filter_bar(
+      status_options=["DRAFT","APPROVED","PAID","VOID"], status_value=status_filter, status_label_fn=commercial_refund_status_label,
+      search_value=search, search_field="q", search_label=_("Search"), search_placeholder=_("Reason")
+  ) }}
+  {% call table.table(
+      columns=[
+        {"label": _("Amount"), "sort_key": "amount", "align": "end"},
+        {"label": _("Status"), "sort_key": "status"},
+        {"label": _("Reason")},
+        {"label": _("Created"), "sort_key": "created_at"},
+      ],
+      has_rows=result.rows|length > 0, empty_message=_("No refunds yet."), caption=_("Refunds")
+  ) %}
+    {% for r in result.rows %}
     <tr>
-      <td data-label="{{ _('Amount') }}"><a href="{{ url_for('commercial_sales_web.refund_detail', refund_id=r.id) }}">{{ format_owner_number(r.amount) }} {{ r.currency }}</a></td>
-      <td data-label="{{ _('Status') }}"><span class="badge {{ 'success' if r.status == 'PAID' else ('danger' if r.status == 'VOID' else 'pending') }}">{{ commercial_refund_status_label(r.status) }}</span></td>
-      <td data-label="{{ _('Reason') }}">{{ r.reason }}</td>
-      <td data-label="{{ _('Created') }}">{{ format_owner_datetime(r.created_at) }}</td>
+      <td class="num"><a href="{{ url_for('commercial_sales_web.refund_detail', refund_id=r.id) }}">{{ format_owner_number(r.amount) }} {{ r.currency }}</a></td>
+      <td><span class="badge {{ refund_badge_class(r.status) }}">{{ commercial_refund_status_label(r.status) }}</span></td>
+      <td>{{ r.reason }}</td>
+      <td>{{ format_owner_datetime(r.created_at) }}</td>
     </tr>
-    {% else %}<tr><td colspan="4" class="empty">{{ _("No refunds yet.") }}</td></tr>
     {% endfor %}
-    </tbody>
-  </table>
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
 </div>
 {% endblock %}

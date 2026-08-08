@@ -1,0 +1,63 @@
+{#
+  Aura Owner -- Commercial-record status timeline (Stage D).
+
+  Shared header pieces for the five commercial-sales detail screens
+  (quote_detail.html, order_detail.html, invoice_detail.html,
+  payment_detail.html, refund_detail.html): a real status/step
+  visualization and a real related-records list. Import WITH CONTEXT (the
+  step macro reads `_` from the calling template's context):
+
+    {% import "components/commercial_record.html" as record with context %}
+
+  The step data itself is never computed here -- `timeline` is the exact
+  dict returned by app.commercial_sales.status_presentation.*_timeline()
+  (a Jinja global, called directly in the detail template as e.g.
+  `quote_timeline(quote)`), built from the entity's real persisted status,
+  real transition graph, and real per-transition timestamp columns. This
+  macro only ever paints that already-computed result -- it never decides
+  whether a transition is valid (Non-Negotiable: "the UI must never
+  suggest an invalid state transition... the backend state machine
+  remains authoritative"). Full contract:
+  docs/owner/ui-modernization/commercial-flow-ui-contract.md.
+#}
+
+{# ---------- Real step/status timeline. `timeline` = {"steps": [...],
+   "offpath": {...}|None} as returned by a *_timeline() Jinja global.
+   Every rendered step is a real status value from the entity's own real
+   status vocabulary -- nothing here is a generic/idealized pipeline. #}
+{% macro steps(timeline) %}
+<ol class="aura-steps" aria-label="{{ _('Status') }}">
+  {% for step in timeline.steps %}
+  <li class="aura-steps__item aura-steps__item--{{ step.state }}">
+    <span class="aura-steps__dot" aria-hidden="true">{{ "✓" if step.state == "done" else loop.index }}</span>
+    <span>
+      <span class="aura-steps__label">{{ step.label }}</span>
+      {% if step.timestamp %}<span class="aura-steps__timestamp">{{ format_owner_datetime(step.timestamp) }}</span>{% endif %}
+    </span>
+  </li>
+  {% endfor %}
+  {% if timeline.offpath %}
+  <li class="aura-steps__offpath">
+    <span class="badge {{ timeline.offpath.badge_class }}">{{ timeline.offpath.label }}</span>
+    {% if timeline.offpath.timestamp %}<span class="aura-steps__timestamp">{{ format_owner_datetime(timeline.offpath.timestamp) }}</span>{% endif %}
+  </li>
+  {% endif %}
+</ol>
+{% endmacro %}
+
+{# ---------- Real related-records list: upstream/downstream document
+   links, only ever rendered when the caller has already verified the
+   relationship is real (a real FK, a record that actually exists, and
+   one the current actor is already permitted to see -- this macro does
+   no permission/existence checking of its own).
+   items: list of (label, url, display_text) tuples. A tuple with url=None
+   renders as plain text (e.g. "not yet created"). #}
+{% macro related_records(items) %}
+<ul class="aura-related-records">
+  {% for label, url, text in items %}
+  <li><span class="aura-related-records__label">{{ label }}:</span>
+    {% if url %}<a href="{{ url }}">{{ text }}</a>{% else %}<span class="empty">{{ text }}</span>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% endmacro %}

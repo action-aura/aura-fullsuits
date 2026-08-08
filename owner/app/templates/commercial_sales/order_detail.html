@@ -1,21 +1,32 @@
 {% extends "layout/base.html" %}
+{% import "components/commercial_record.html" as record with context %}
 {% block title %}{{ order.order_number }}{% endblock %}
 {% block content %}
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 <div class="card">
-  <h2><bdi dir="ltr">{{ order.order_number }}</bdi> <span class="badge">{{ sales_order_status_label(order.status) }}</span></h2>
+  <h2><bdi dir="ltr">{{ order.order_number }}</bdi> <span class="badge {{ order_badge_class(order.status) }}">{{ sales_order_status_label(order.status) }}</span></h2>
+
+  {{ record.steps(order_timeline(order)) }}
+
   <dl class="kv">
     <dt>{{ _("Currency") }}</dt><dd>{{ order.currency }}</dd>
     <dt>{{ _("Total") }}</dt><dd>{{ format_owner_number(order.total) }}</dd>
     <dt>{{ _("Confirmed") }}</dt><dd>{{ format_owner_datetime(order.confirmed_at) if order.confirmed_at else "-" }}</dd>
     <dt>{{ _("Created") }}</dt><dd>{{ format_owner_datetime(order.created_at) }}</dd>
+    <dt>{{ _("Created by") }}</dt><dd>{{ created_by_name or "-" }}</dd>
   </dl>
+
+  {{ record.related_records([
+      (_("Customer"), url_for('customers.detail', customer_id=customer.id) if customer else None, customer.legal_name if customer else "-"),
+      (_("Originating quote"), url_for('commercial_sales_web.quote_detail', quote_id=quote.id) if quote else None, quote.quote_number if quote else "-"),
+      (_("Invoice"), url_for('commercial_sales_web.invoice_detail', invoice_id=invoice.id) if invoice else None, invoice.invoice_number if invoice else _("Not yet created")),
+  ]) }}
 
   {% if order.status == "DRAFT" and can_approve %}
   <form method="post" action="{{ url_for('commercial_sales_web.confirm_order_route', order_id=order.id) }}" class="inline" data-confirm="{{ _('Confirm this order?') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="version" value="{{ order.version }}">
-    <button type="submit">{{ _("Confirm order") }}</button>
+    <button type="submit" class="btn">{{ _("Confirm order") }}</button>
   </form>
   {% endif %}
   {% if order.status in ("DRAFT", "CONFIRMED") and can_approve %}
@@ -23,22 +34,20 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="version" value="{{ order.version }}">
     <input name="reason" placeholder="{{ _('Reason') }}" required>
-    <button type="submit" class="danger">{{ _("Cancel order") }}</button>
+    <button type="submit" class="btn danger">{{ _("Cancel order") }}</button>
   </form>
   {% endif %}
   {% if order.status == "CONFIRMED" and can_approve %}
   <form method="post" action="{{ url_for('commercial_sales_web.fulfill_order_route', order_id=order.id) }}" class="inline" style="margin-inline-start:0.5rem;" data-confirm="{{ _('Fulfill this order? This provisions the subscription and license.') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit">{{ _("Fulfill order") }}</button>
+    <button type="submit" class="btn">{{ _("Fulfill order") }}</button>
   </form>
   {% endif %}
 
-  {% if invoice %}
-  <p style="margin-top:0.75rem;"><a href="{{ url_for('commercial_sales_web.invoice_detail', invoice_id=invoice.id) }}">{{ _("View invoice") }} <bdi dir="ltr">{{ invoice.invoice_number }}</bdi></a></p>
-  {% elif order.status == "CONFIRMED" %}
+  {% if not invoice and order.status == "CONFIRMED" %}
   <form method="post" action="{{ url_for('commercial_sales_web.create_invoice_route', order_id=order.id) }}" style="margin-top:0.75rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit">{{ _("Create invoice") }}</button>
+    <button type="submit" class="btn">{{ _("Create invoice") }}</button>
   </form>
   {% endif %}
 </div>

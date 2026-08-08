@@ -1,9 +1,13 @@
 {% extends "layout/base.html" %}
+{% import "components/commercial_record.html" as record with context %}
 {% block title %}{{ quote.quote_number }}{% endblock %}
 {% block content %}
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 <div class="card">
-  <h2><bdi dir="ltr">{{ quote.quote_number }}</bdi> <span class="badge">{{ quote_status_label(quote.status) }}</span></h2>
+  <h2><bdi dir="ltr">{{ quote.quote_number }}</bdi> <span class="badge {{ quote_badge_class(quote.status) }}">{{ quote_status_label(quote.status) }}</span></h2>
+
+  {{ record.steps(quote_timeline(quote)) }}
+
   <dl class="kv">
     <dt>{{ _("Currency") }}</dt><dd>{{ quote.currency }}</dd>
     <dt>{{ _("Subtotal") }}</dt><dd>{{ format_owner_number(quote.subtotal) }}</dd>
@@ -11,19 +15,25 @@
     <dt>{{ _("Total") }}</dt><dd>{{ format_owner_number(quote.total) }}</dd>
     <dt>{{ _("Valid until") }}</dt><dd>{{ format_owner_date(quote.valid_until) }}</dd>
     <dt>{{ _("Created") }}</dt><dd>{{ format_owner_datetime(quote.created_at) }}</dd>
+    <dt>{{ _("Created by") }}</dt><dd>{{ created_by_name or "-" }}</dd>
   </dl>
+
+  {{ record.related_records([
+      (_("Customer"), url_for('customers.detail', customer_id=customer.id) if customer else None, customer.legal_name if customer else _("Lead-based quote, not yet a customer")),
+      (_("Sales order"), url_for('commercial_sales_web.order_detail', order_id=order.id) if order else None, order.order_number if order else _("Not yet created")),
+  ]) }}
 
   {% if quote.status == "DRAFT" %}
   <form method="post" action="{{ url_for('commercial_sales_web.submit_quote_route', quote_id=quote.id) }}" class="inline" data-confirm="{{ _('Submit this quote to the customer?') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="version" value="{{ quote.version }}">
-    <button type="submit">{{ _("Submit quote") }}</button>
+    <button type="submit" class="btn">{{ _("Submit quote") }}</button>
   </form>
   <form method="post" action="{{ url_for('commercial_sales_web.cancel_quote_route', quote_id=quote.id) }}" class="inline" style="margin-inline-start:0.5rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="version" value="{{ quote.version }}">
     <input name="reason" placeholder="{{ _('Reason') }}" required>
-    <button type="submit" class="danger">{{ _("Cancel quote") }}</button>
+    <button type="submit" class="btn danger">{{ _("Cancel quote") }}</button>
   </form>
   {% endif %}
 
@@ -32,21 +42,21 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="version" value="{{ quote.version }}">
     <input type="hidden" name="accepted" value="1">
-    <button type="submit">{{ _("Customer accepted") }}</button>
+    <button type="submit" class="btn">{{ _("Customer accepted") }}</button>
   </form>
   <form method="post" action="{{ url_for('commercial_sales_web.quote_decision_route', quote_id=quote.id) }}" class="inline" style="margin-inline-start:0.5rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="version" value="{{ quote.version }}">
     <input type="hidden" name="accepted" value="0">
     <input name="reason" placeholder="{{ _('Reason') }}" required>
-    <button type="submit" class="danger">{{ _("Customer rejected") }}</button>
+    <button type="submit" class="btn danger">{{ _("Customer rejected") }}</button>
   </form>
   {% endif %}
 
-  {% if quote.status == "ACCEPTED" %}
+  {% if quote.status == "ACCEPTED" and not order %}
   <form method="post" action="{{ url_for('commercial_sales_web.create_order_route', quote_id=quote.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit">{{ _("Create sales order") }}</button>
+    <button type="submit" class="btn">{{ _("Create sales order") }}</button>
   </form>
   {% endif %}
 </div>
@@ -92,7 +102,7 @@
     <input name="override_reason">
     <label>{{ _("Discount amount") }}</label>
     <input name="discount_amount" value="0">
-    <button type="submit" style="margin-top:0.5rem;">{{ _("Add line") }}</button>
+    <button type="submit" class="btn" style="margin-top:0.5rem;">{{ _("Add line") }}</button>
   </form>
   {% endif %}
 </div>
@@ -106,20 +116,20 @@
     {% for a in approvals %}
     <tr>
       <td data-label="{{ _('Reason') }}">{{ a.reason_code }}</td>
-      <td data-label="{{ _('Status') }}"><span class="badge {{ 'success' if a.status == 'APPROVED' else ('danger' if a.status in ('REJECTED','CANCELLED','EXPIRED') else 'pending') }}">{{ commercial_approval_status_label(a.status) }}</span></td>
+      <td data-label="{{ _('Status') }}"><span class="badge {{ approval_badge_class(a.status) }}">{{ commercial_approval_status_label(a.status) }}</span></td>
       <td data-label="{{ _('Requested') }}">{{ format_owner_datetime(a.requested_at) }}</td>
       <td>
         {% if a.status == "PENDING" and can_approve %}
         <form method="post" action="{{ url_for('commercial_sales_web.decide_approval_route', approval_id=a.id) }}" class="inline">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="approved" value="1">
-          <button type="submit">{{ _("Approve") }}</button>
+          <button type="submit" class="btn">{{ _("Approve") }}</button>
         </form>
         <form method="post" action="{{ url_for('commercial_sales_web.decide_approval_route', approval_id=a.id) }}" class="inline" style="margin-inline-start:0.3rem;">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="approved" value="0">
           <input name="decision_reason" placeholder="{{ _('Reason') }}" required>
-          <button type="submit" class="danger">{{ _("Reject") }}</button>
+          <button type="submit" class="btn danger">{{ _("Reject") }}</button>
         </form>
         {% endif %}
       </td>

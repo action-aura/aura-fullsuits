@@ -819,6 +819,99 @@ th[aria-sort="ascending"] .aura-table__sort-icon, th[aria-sort="descending"] .au
    for the sidebar's collapse-toggle icon (shell.css). */
 :root[dir="rtl"] [data-aura-pagination-dir] { transform: scaleX(-1); }
 
+/* Financial/quantity column utility (Stage D commercial-sales pass) -- no
+   dedicated table-cell numeral utility existed before this pass (only the
+   unrelated .aura-summary-tile__value KPI-tile rule already used
+   tabular-nums, per typography-contract.md sec 3's general
+   font-variant-numeric requirement). `text-align: end` (logical, not
+   `right`) so column alignment mirrors correctly under RTL. Applied via
+   table()'s own optional {"align": "end"} column key on <th>; callers add
+   the matching class="num" to that column's own <td> cells. */
+table.aura-table th.num, table.aura-table td.num {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Commercial-record status timeline (Stage D) ----------
+   Real, pure-CSS/server-rendered step indicator for the five commercial-
+   sales detail screens (Quote/Order/Invoice/Payment/Refund) --
+   templates/components/commercial_record.html. Never JS-driven: the
+   caller (commercial_sales/status_presentation.py) computes each step's
+   done/current/upcoming state from the real persisted status + real
+   transition graph, this stylesheet only paints the result. See
+   docs/owner/ui-modernization/commercial-flow-ui-contract.md. */
+.aura-steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+  list-style: none;
+  margin: var(--aura-space-3) 0;
+  padding: 0;
+}
+.aura-steps__item {
+  display: flex;
+  align-items: center;
+  gap: var(--aura-space-2);
+  padding-inline-end: var(--aura-space-4);
+  position: relative;
+}
+.aura-steps__item:not(:last-child)::after {
+  content: "";
+  inline-size: var(--aura-space-6);
+  block-size: 1px;
+  background: var(--aura-color-border-default);
+  margin-inline: var(--aura-space-2);
+}
+.aura-steps__dot {
+  inline-size: 1.5rem;
+  block-size: 1.5rem;
+  border-radius: var(--aura-radius-full);
+  border: var(--aura-border-width-md) solid var(--aura-color-border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--aura-font-size-xs);
+  font-weight: var(--aura-font-weight-semibold);
+  color: var(--aura-color-text-muted);
+  background: var(--aura-color-surface-raised);
+  flex-shrink: 0;
+}
+.aura-steps__label { font-size: var(--aura-font-size-sm); color: var(--aura-color-text-secondary); }
+.aura-steps__timestamp { font-size: var(--aura-font-size-xs); color: var(--aura-color-text-muted); display: block; }
+
+.aura-steps__item--done .aura-steps__dot {
+  border-color: var(--aura-color-success);
+  background: var(--aura-color-success-soft);
+  color: var(--aura-color-success);
+}
+.aura-steps__item--done .aura-steps__label { color: var(--aura-color-text-primary); }
+.aura-steps__item--current .aura-steps__dot {
+  border-color: var(--aura-color-brand-primary);
+  background: var(--aura-color-brand-primary-soft);
+  color: var(--aura-color-brand-primary);
+}
+.aura-steps__item--current .aura-steps__label { color: var(--aura-color-text-primary); font-weight: var(--aura-font-weight-semibold); }
+
+.aura-steps__offpath {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--aura-space-2);
+  margin-inline-start: var(--aura-space-2);
+  padding-inline-start: var(--aura-space-4);
+  border-inline-start: 1px solid var(--aura-color-border-default);
+}
+
+.aura-related-records {
+  list-style: none;
+  margin: var(--aura-space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--aura-space-1);
+}
+.aura-related-records__label { color: var(--aura-color-text-muted); margin-inline-end: var(--aura-space-1); }
+
 /* ---------- Customer 360 tabs (Stage D) ----------
    Real ARIA tabs (role="tablist"/"tab"/"tabpanel"), progressively
    enhanced from a plain in-page anchor-link list -- see static/js/tabs.js

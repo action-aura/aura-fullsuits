@@ -1,33 +1,45 @@
 {% extends "layout/base.html" %}
+{% import "components/commercial_record.html" as record with context %}
 {% block title %}{{ _("Refund") }}{% endblock %}
 {% block content %}
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 <div class="card">
-  <h2>{{ format_owner_number(refund.amount) }} {{ refund.currency }} <span class="badge {{ 'success' if refund.status == 'PAID' else ('danger' if refund.status == 'VOID' else 'pending') }}">{{ commercial_refund_status_label(refund.status) }}</span></h2>
+  <h2>{{ format_owner_number(refund.amount) }} {{ refund.currency }} <span class="badge {{ refund_badge_class(refund.status) }}">{{ commercial_refund_status_label(refund.status) }}</span></h2>
+
+  {{ record.steps(refund_timeline(refund)) }}
+
   <dl class="kv">
     <dt>{{ _("Reason") }}</dt><dd>{{ refund.reason }}</dd>
     <dt>{{ _("Created") }}</dt><dd>{{ format_owner_datetime(refund.created_at) }}</dd>
+    <dt>{{ _("Created by") }}</dt><dd>{{ created_by_name or "-" }}</dd>
     <dt>{{ _("Approved") }}</dt><dd>{{ format_owner_datetime(refund.approved_at) if refund.approved_at else "-" }}</dd>
+    <dt>{{ _("Approved by") }}</dt><dd>{{ approved_by_name or "-" }}</dd>
     <dt>{{ _("Paid") }}</dt><dd>{{ format_owner_datetime(refund.paid_at) if refund.paid_at else "-" }}</dd>
   </dl>
+
+  {{ record.related_records([
+      (_("Customer"), url_for('customers.detail', customer_id=customer.id) if customer else None, customer.legal_name if customer else "-"),
+      (_("Invoice"), url_for('commercial_sales_web.invoice_detail', invoice_id=invoice.id) if invoice else None, invoice.invoice_number if invoice else "-"),
+      (_("Source payment"), url_for('commercial_sales_web.payment_detail', payment_id=payment.id) if payment else None, (format_owner_number(payment.amount) ~ " " ~ payment.currency) if payment else _("Not specified")),
+  ]) }}
 
   {% if refund.status == "DRAFT" and can_approve %}
   <form method="post" action="{{ url_for('commercial_sales_web.approve_refund_route', refund_id=refund.id) }}" class="inline" data-confirm="{{ _('Approve this refund?') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="version" value="{{ refund.version }}">
-    <button type="submit">{{ _("Approve") }}</button>
+    <button type="submit" class="btn">{{ _("Approve") }}</button>
   </form>
   <form method="post" action="{{ url_for('commercial_sales_web.void_refund_route', refund_id=refund.id) }}" class="inline" style="margin-inline-start:0.5rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="version" value="{{ refund.version }}">
-    <button type="submit" class="danger">{{ _("Void") }}</button>
+    <button type="submit" class="btn danger">{{ _("Void") }}</button>
   </form>
   {% endif %}
   {% if refund.status == "APPROVED" and can_approve %}
   <form method="post" action="{{ url_for('commercial_sales_web.confirm_refund_route', refund_id=refund.id) }}" class="inline" data-confirm="{{ _('Confirm this refund as paid?') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="version" value="{{ refund.version }}">
-    <button type="submit">{{ _("Confirm paid") }}</button>
+    <button type="submit" class="btn">{{ _("Confirm paid") }}</button>
   </form>
   {% endif %}
 </div>
