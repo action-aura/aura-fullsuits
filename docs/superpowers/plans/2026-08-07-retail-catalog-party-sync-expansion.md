@@ -1070,19 +1070,29 @@ git commit -m "feat(retail-sync): migrate + wire Suppliers into sync, add delete
 
 ---
 
-### Task 5: KMP mobile — Products
+### Task 5: KMP mobile — Products (DEFERRED, not built this plan)
 
-**Note on scope:** KMP Customers/Suppliers sync was investigated and
-deliberately dropped from this plan (decided 2026-08-07): unlike desktop
-(full CRUD UI both entities) and unlike KMP's own Products (real
-`ProductUseCases.kt` + repository + UI), KMP has **no** Customer/Supplier
-feature at all — `Parties.sq`'s `insertCustomer`/`insertSupplier`/etc. are
-called from exactly one place, `ImportCommitExecutor.kt` (the legacy-data
-importer), and nowhere else; no screen ever reads or writes those tables
-post-import. Wiring sync onto a feature with no UI would be invisible and
-unverifiable through the app itself. Revisit if/when KMP gets a real
-Customer/Supplier management screen — desktop and Aura POS still sync
-Customers/Suppliers fully (Tasks 3-4).
+**Dropped during implementation (decided 2026-08-08).** The implementer
+correctly stopped before writing code: `products.id` in KMP is a live FK
+target of 5 MORE schema files this plan never read during
+planning — `Inventory.sq`, `Sales.sq`, `Returns.sq`, `Purchasing.sq`,
+`Reporting.sq` — plus their repositories/use-cases (including
+`SqlDelightInventoryRepository.kt`, explicitly the file where M5.5.14's
+real concurrency races were caught) and a second, separate importer
+(`ImportCommitExecutor.kt`) with its own product-creation path. Doing this
+correctly is a materially larger migration than "KMP mobile — Products" —
+comparable in size to desktop's entire Products work (Tasks 1+2 combined),
+on higher-risk, concurrency-hardened code. Full findings:
+`.superpowers/sdd/2026-08-07-retail-catalog-party-sync-expansion/task-5-report.md`.
+
+Given Aura POS (the actual investor-facing app, shares desktop's Python)
+already has full Products/Customers/Suppliers sync from Tasks 1-4
+regardless, and KMP already had its Customers/Suppliers sync dropped for a
+similar reason (secondary app, no proportionate payoff this round), this
+was deferred rather than widened. KMP keeps Category-only sync. Revisit as
+its own future plan if KMP Products sync becomes a real priority — that
+plan should start by reading the full FK graph above (not just `Catalog.sq`),
+which this plan did not do.
 
 **Files:**
 - Modify: `mobile/aura-retail-unified/shared/src/commonMain/sqldelight/com/actionaura/retail/db/Catalog.sq`
@@ -1159,7 +1169,7 @@ CREATE TABLE import_conflicts (
 
 ---
 
-### Task 6: End-to-end LAN verification
+### Task 5 (renumbered): End-to-end LAN verification
 
 **Files:** none (verification only — fix anything found, in whichever file it's actually in, then re-verify).
 
@@ -1180,6 +1190,7 @@ CREATE TABLE import_conflicts (
 ## Residual/deferred items (do not build, document only if the final review asks)
 
 - Branches: no real feature exists, out of scope entirely.
-- KMP Customers/Suppliers sync: dropped (decided during Task 5 planning, 2026-08-07) — no Customer/Supplier feature/UI exists in KMP at all today, only import-time table population. Desktop and Aura POS still sync both fully.
+- KMP Customers/Suppliers sync: dropped (decided during planning, 2026-08-07) — no Customer/Supplier feature/UI exists in KMP at all today, only import-time table population. Desktop and Aura POS still sync both fully.
+- KMP Products sync: dropped (decided during Task 5 implementation, 2026-08-08) — `products.id` is a live FK target of 5 more KMP schema files this plan never scoped (Inventory/Sales/Returns/Purchasing/Reporting.sq) plus their repositories and a second importer; a correct migration is comparable in size to desktop's entire Products work. See Task 5's section above for full detail. Desktop and Aura POS still sync Products fully.
 - Sales/Inventory/Returns/Payments sync: deferred to a future plan (needs its own conflict-resolution design pass per the wider roadmap).
 - KMP's `company_id` sync-apply gap (hardcoded `companyId = 1L` at every KMP call site): unchanged by this plan, still inert since nothing varies it yet.

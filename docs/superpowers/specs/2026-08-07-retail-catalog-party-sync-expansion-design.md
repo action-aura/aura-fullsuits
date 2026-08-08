@@ -204,18 +204,12 @@ every apply stamps the receiving device's own.
 
 - **Customers/Suppliers: dropped from KMP this round** — see Residual/
   deferred items below. Desktop and Aura POS still sync both fully.
-- **Products** (`Catalog.sq`): same id-type migration, but must also:
-  - Update `import_conflicts.canonical_product_id` (currently `INTEGER`) to
-    `TEXT`, and check `CatalogImporter`'s usage of it.
-  - Preserve the existing optimistic-concurrency contract on `updateProduct`
-    (`WHERE id = ? AND company_id = ? AND updated_at = ?`) — the id
-    comparison just becomes a string compare, no behavior change needed
-    there, but confirm `SqlDelightProductRepository`'s callers aren't
-    assuming `Long`.
-  - `insertProduct`/`importProduct` need explicit id generation the same
-    way `insertCategory` already does (:127-128 in `Catalog.sq`).
-  - Outbox wiring into the product use-cases, mirroring how Category's
-    KMP task wired `SqlDelightCategoryRepositoryOutboxTest.kt`'s pattern.
+- **Products: also dropped from KMP this round** (discovered during
+  implementation, not during planning — see Residual/deferred items below).
+  `products.id` is a live FK target of 5 more KMP schema files
+  (`Inventory.sq`, `Sales.sq`, `Returns.sq`, `Purchasing.sq`, `Reporting.sq`)
+  this spec never scoped, unlike Category whose only referencing column was
+  already `TEXT`. Desktop and Aura POS still sync Products fully.
 
 ## Testing strategy
 
@@ -245,6 +239,20 @@ demo depends on, not just unit tests passing.
   screen. Wiring sync onto a feature with no UI would be invisible and
   unverifiable through the app itself — same shape as the Branches decision
   above. Desktop and Aura POS still get full Customers/Suppliers sync.
+- KMP Products sync: dropped during Task 5's implementation (2026-08-08) —
+  the implementer correctly stopped rather than guess. `products.id` is a
+  live FK target of 5 more KMP schema files this spec never read
+  (`Inventory.sq`, `Sales.sq`, `Returns.sq`, `Purchasing.sq`, `Reporting.sq`)
+  plus their repositories (including the concurrency-hardened
+  `SqlDelightInventoryRepository.kt`) and a second, separate importer
+  (`ImportCommitExecutor.kt`) with its own product-creation path — unlike
+  Category, whose only referencing column (`products.category_id`) was
+  already `TEXT` before Category's own migration. A correct migration is
+  comparable in size to desktop's entire Products work (Tasks 1+2 combined).
+  Full findings in the plan's Task 5 section and
+  `.superpowers/sdd/2026-08-07-retail-catalog-party-sync-expansion/task-5-report.md`.
+  Desktop and Aura POS still get full Products sync. Revisit as its own
+  future plan, starting from the full FK graph above.
 - Sales/Inventory/Returns/Payments sync: explicitly deferred (this is the
   "high-risk entities" work already flagged in the wider roadmap as needing
   its own design pass for offline-concurrent-stock and no-double-refund
