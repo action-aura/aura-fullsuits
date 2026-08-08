@@ -163,6 +163,9 @@ def init_app(app) -> None:
     )
     from app.expenses.status_presentation import expense_badge_class, expense_timeline
     from app.cash_closing.status_presentation import cash_closing_badge_class, cash_closing_timeline
+    from app.subscriptions.status_presentation import subscription_badge_class
+    from app.licensing.status_presentation import license_badge_class, license_timeline
+    from app.installations.status_presentation import installation_badge_class
 
     # Domain-label and formatting helpers are Jinja globals (not filters) --
     # exposed once, here, reused by every template rather than each screen
@@ -259,6 +262,15 @@ def init_app(app) -> None:
         expense_timeline=expense_timeline,
         cash_closing_badge_class=cash_closing_badge_class,
         cash_closing_timeline=cash_closing_timeline,
+        # UI modernization Stage D.5 (licensing-command-center-contract.md)
+        # -- Subscriptions/Licenses/Installations' own shared badge-color
+        # (+ License's real status-step timeline) helpers. Subscription and
+        # Installation deliberately have no *_timeline() global -- see each
+        # module's own docstring for the linear-vs-cyclic reasoning.
+        subscription_badge_class=subscription_badge_class,
+        license_badge_class=license_badge_class,
+        license_timeline=license_timeline,
+        installation_badge_class=installation_badge_class,
     )
 
     @app.context_processor

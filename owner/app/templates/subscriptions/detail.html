@@ -2,7 +2,7 @@
 {% block title %}{{ _("Subscription") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>{{ subscription.customer.legal_name }} -- {{ subscription.plan.name }} <span class="badge {{ 'active' if subscription.status == 'ACTIVE' else 'draft' }}">{{ subscription_status_label(subscription.status) }}</span></h2>
+  <h2>{{ subscription.customer.legal_name }} -- {{ subscription.plan.name }} <span class="badge {{ subscription_badge_class(subscription.status) }}">{{ subscription_status_label(subscription.status) }}</span></h2>
   <dl class="kv">
     <dt>{{ _("Start / End") }}</dt><dd>{{ format_owner_date(subscription.start_date) if subscription.start_date else "-" }} / {{ format_owner_date(subscription.end_date) if subscription.end_date else "-" }}</dd>
     <dt>{{ _("Device allowance") }}</dt><dd>{{ format_owner_number(subscription.device_allowance) if subscription.device_allowance else "-" }}</dd>

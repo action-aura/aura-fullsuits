@@ -1,4 +1,5 @@
 {% extends "layout/base.html" %}
+{% import "components/commercial_record.html" as record with context %}
 {% block title %}{{ _("License") }}{% endblock %}
 {% block content %}
 {% if revealed_key %}
@@ -10,13 +11,27 @@
 {% endif %}
 
 <div class="card">
-  <h2>{{ license.customer.legal_name }} -- {{ license.product.product_code }} <span class="badge {{ 'active' if license.status in ('ACTIVE','ISSUED') else ('danger' if license.status == 'REVOKED' else 'draft') }}">{{ license_status_label(license.status) }}</span></h2>
+  <h2>{{ license.customer.legal_name }} -- {{ license.product.product_code }} <span class="badge {{ license_badge_class(license.status) }}">{{ license_status_label(license.status) }}</span></h2>
+
+  {{ record.steps(license_timeline(license)) }}
+
   <dl class="kv">
     <dt>{{ _("Masked key") }}</dt><dd>{% if license.key_prefix %}<code class="masked" dir="ltr">{{ license.key_prefix }}-...{{ license.key_suffix_masked }}</code>{% else %}<span class="empty">{{ _("not issued") }}</span>{% endif %}</dd>
     <dt>{{ _("Allowed platforms") }}</dt><dd><bdi dir="ltr">{{ license.allowed_platforms }}</bdi></dd>
     <dt>{{ _("Device limit") }}</dt><dd>{{ format_owner_number(license.device_limit) }}</dd>
     <dt>{{ _("Valid from / until") }}</dt><dd>{{ format_owner_date(license.valid_from) if license.valid_from else "-" }} / {{ format_owner_date(license.valid_until) if license.valid_until else "-" }}</dd>
+    {% if license.status == "REVOKED" and license.revocation_reason %}
+    <dt>{{ _("Revocation reason") }}</dt><dd>{{ license.revocation_reason }}</dd>
+    {% endif %}
   </dl>
+
+  {{ record.related_records([
+      (_("Customer"), url_for('customers.detail', customer_id=license.customer_id), license.customer.legal_name),
+      (_("Subscription"), url_for('subscriptions.detail', subscription_id=license.subscription_id), license.subscription.plan.name),
+      (_("Replacement license"), url_for('licensing.detail', license_id=license.replaced_by_license_id) if license.replaced_by_license_id else None,
+       _("View replacement") if license.replaced_by_license_id else _("Not replaced")),
+  ]) }}
+
   <p><a href="{{ url_for('commercial_ops_ui.license_slot_exceptions', license_id=license.id) }}">{{ _("Device-slot exceptions") }}</a></p>
 </div>
 
@@ -27,7 +42,7 @@
   <form method="post" action="{{ url_for('licensing.issue', license_id=license.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="idempotency_key" value="{{ issue_idempotency_key }}">
-    <button type="submit">{{ _("Issue license key") }}</button>
+    <button type="submit">{{ _("Issue license key (requires recent authentication)") }}</button>
   </form>
 </div>
 {% endif %}
@@ -42,7 +57,7 @@
       {% for s in allowed_transitions %}<option value="{{ s }}">{{ license_status_label(s) }}</option>{% endfor %}
     </select>
     <label>{{ _("Reason") }}</label><input name="reason">
-    <div style="margin-top:0.5rem;"><button type="submit">{{ _("Apply") }}</button></div>
+    <div style="margin-top:0.5rem;"><button type="submit">{{ _("Apply (requires recent authentication)") }}</button></div>
   </form>
 </div>
 {% endif %}
@@ -50,7 +65,7 @@
 {% if license.status in ("ACTIVE","ISSUED","SUSPENDED","EXPIRED") %}
 <div class="card">
   <h3>{{ _("Replace license") }}</h3>
-  <p>{{ _("Creates a new DRAFT license and revokes/replaces this one.") }}</p>
+  <p>{{ _("Creates a new DRAFT license and revokes/replaces this one. Requires a fresh MFA confirmation.") }}</p>
   <form method="post" action="{{ url_for('licensing.replace', license_id=license.id) }}"
         data-confirm="{{ _('Replace this license with a new one?') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

@@ -2,7 +2,7 @@
 {% block title %}{{ _("Installation") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>{{ installation.installation_label or installation.id }} <span class="badge {{ 'active' if installation.status == 'ACTIVE' else 'draft' }}">{{ installation_status_label(installation.status) }}</span></h2>
+  <h2>{{ installation.installation_label or installation.id }} <span class="badge {{ installation_badge_class(installation.status) }}">{{ installation_status_label(installation.status) }}</span></h2>
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   <dl class="kv">
     <dt>{{ _("Customer") }}</dt><dd>{{ installation.customer.legal_name }}</dd>
@@ -47,6 +47,24 @@
   </form>
 </div>
 {% endif %}
+
+{# Real, previously-missing status-history table (InstallationStatusHistory)
+   -- Subscriptions and Licenses already show their own equivalent history
+   table; Installations only showed "Activation events" (a distinct,
+   protocol-level log) and never this one, a real, disclosed, additive gap
+   fixed this pass. See docs/owner/ui-modernization/licensing-command-center-contract.md. #}
+<div class="card">
+  <h3>{{ _("Status history") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("From") }}</th><th>{{ _("To") }}</th><th>{{ _("When") }}</th><th>{{ _("Reason") }}</th></tr></thead>
+    <tbody>
+    {% for h in installation.status_history|sort(attribute="created_at", reverse=True) %}
+    <tr><td>{{ installation_status_label(h.from_status) if h.from_status else "-" }}</td><td>{{ installation_status_label(h.to_status) }}</td><td>{{ format_owner_datetime(h.created_at) }}</td><td>{{ h.reason or "-" }}</td></tr>
+    {% else %}<tr><td colspan="4" class="empty">{{ _("No status changes yet.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
 
 <div class="card">
   <h3>{{ _("Activation events") }}</h3>

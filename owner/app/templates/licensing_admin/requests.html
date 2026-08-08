@@ -1,23 +1,25 @@
 {% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
 {% block title %}{{ _("Activation Requests") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>{{ _("Recent activation/check-in/deactivation requests (most recent 200)") }}</h2>
-  <form class="filters" method="get">
-    <div>
-      <label>{{ _("Type") }}</label>
-      <select name="event_type" onchange="this.form.submit()">
-        <option value="">{{ _("All") }}</option>
-        {% for t in ["ACTIVATION","CHECK_IN","DEACTIVATION"] %}
-        <option value="{{ t }}" {% if event_type_filter == t %}selected{% endif %}>{{ activation_event_type_label(t) }}</option>
-        {% endfor %}
-      </select>
-    </div>
-  </form>
-  <table class="responsive-table">
-    <thead><tr><th>{{ _("When") }}</th><th>{{ _("Type") }}</th><th>{{ _("Result") }}</th><th>{{ _("Reason") }}</th><th>{{ _("Installation") }}</th><th>{{ _("Source IP") }}</th></tr></thead>
-    <tbody>
-    {% for r in rows %}
+  {{ table.toolbar(_("Recent activation/check-in/deactivation requests")) }}
+  {{ table.filter_bar(
+      status_options=["ACTIVATION","CHECK_IN","DEACTIVATION"], status_value=event_type_filter, status_label_fn=activation_event_type_label,
+      status_field="event_type"
+  ) }}
+  {% call table.table(
+      columns=[
+        {"label": _("When"), "sort_key": "created_at"},
+        {"label": _("Type"), "sort_key": "event_type"},
+        {"label": _("Result"), "sort_key": "result"},
+        {"label": _("Reason")},
+        {"label": _("Installation")},
+        {"label": _("Source IP")},
+      ],
+      has_rows=result.rows, empty_message=_("No requests recorded yet."), caption=_("Activation requests")
+  ) %}
+    {% for r in result.rows %}
     <tr>
       <td>{{ format_owner_datetime(r.created_at) }}</td><td>{{ activation_event_type_label(r.event_type) }}</td>
       <td><span class="badge {{ 'success' if r.result == 'ACCEPTED' else 'danger' }}">{{ activation_event_result_label(r.result) }}</span></td>
@@ -25,9 +27,8 @@
       <td><bdi dir="ltr">{{ (r.installation_id|string)[:8] if r.installation_id else "-" }}</bdi></td>
       <td><bdi dir="ltr">{{ r.source_ip or "-" }}</bdi></td>
     </tr>
-    {% else %}<tr><td colspan="6" class="empty">{{ _("No requests recorded yet.") }}</td></tr>
     {% endfor %}
-    </tbody>
-  </table>
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
 </div>
 {% endblock %}

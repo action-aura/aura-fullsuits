@@ -4,6 +4,7 @@
 <div class="card">
   <div style="display:flex;justify-content:space-between;align-items:center;">
     <h2>{{ _("Server signing keys") }}</h2>
+    {% if has_permission("signing_keys.manage") %}
     <div>
       <form class="inline" method="post" action="{{ url_for('licensing_admin.generate_signing_key') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -16,6 +17,7 @@
         <button type="submit">{{ _("Rotate now") }}</button>
       </form>
     </div>
+    {% endif %}
   </div>
   <p style="color:#6b7785;font-size:0.85rem;">{{ _("Private key material is never shown here or stored in the database -- only public metadata.") }}</p>
   <table class="responsive-table">
@@ -29,6 +31,7 @@
       <td>{{ format_owner_datetime(k.activated_at) if k.activated_at else "-" }}</td>
       <td>{{ format_owner_datetime(k.retired_at) if k.retired_at else "-" }}</td>
       <td>
+        {% if has_permission("signing_keys.manage") %}
         {% if k.status == "DRAFT" %}
         <form class="inline" method="post" action="{{ url_for('licensing_admin.activate_signing_key', key_id=k.key_id) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -42,6 +45,7 @@
           <input type="hidden" name="reason" value="revoked_via_admin_ui">
           <button type="submit" class="danger">{{ _("Revoke") }}</button>
         </form>
+        {% endif %}
         {% endif %}
       </td>
     </tr>
