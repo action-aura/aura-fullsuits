@@ -5,7 +5,8 @@ Usage:
   .\aura-sync.ps1                       one sync pass (default)
   .\aura-sync.ps1 -Once                 same as above, explicit
   .\aura-sync.ps1 -Watch                foreground loop, Ctrl+C to stop
-  .\aura-sync.ps1 -Install [-IntervalMinutes 5]   register Windows Scheduled Task
+  .\aura-sync.ps1 -TrackCurrentBranch   sync whatever branch is checked out, not just master
+  .\aura-sync.ps1 -Install [-IntervalMinutes 5] [-TrackCurrentBranch]   register Windows Scheduled Task
   .\aura-sync.ps1 -Uninstall            remove the scheduled task
   .\aura-sync.ps1 -Status               show task + last pass + pause state
   .\aura-sync.ps1 -Pause [-Minutes 30] [-Reason "risky rebase"]
@@ -24,7 +25,8 @@ param(
     [switch]$Status,
     [switch]$Install,
     [int]$IntervalMinutes = 5,
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    [switch]$TrackCurrentBranch
 )
 
 $ErrorActionPreference = 'Stop'
@@ -132,9 +134,10 @@ function Invoke-SyncPass {
             return 2
         }
 
-        $allowedBranches = @($Config['SYNC_BRANCHES'] -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+        $trackCurrent = [bool]$Config['SYNC_TRACK_CURRENT']
+        $allowedBranches = @($Config['SYNC_BRANCHES'] -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' -and $_ -ine 'current' })
         $branchGuard = Invoke-Guard -RepoRoot $RepoRoot -PassId $passId -Name 'branch' -Check {
-            Test-BranchGuard -RepoRoot $RepoRoot -AllowedBranches $allowedBranches
+            Test-BranchGuard -RepoRoot $RepoRoot -AllowedBranches $allowedBranches -TrackCurrent $trackCurrent
         }
         if (-not $branchGuard.Pass) {
             Write-SyncSummary -RepoRoot $RepoRoot -PassId $passId -Config $Config -Result 'skipped' -Reason $branchGuard.Reason
@@ -142,22 +145,27 @@ function Invoke-SyncPass {
         }
         $branch = $branchGuard.Data.branch
 
-        $upstreamGuard = Invoke-Guard -RepoRoot $RepoRoot -PassId $passId -Name 'upstream' -Check { Test-UpstreamGuard -RepoRoot $RepoRoot }
+        $upstreamGuard = Invoke-Guard -RepoRoot $RepoRoot -PassId $passId -Name 'upstream' -Check {
+            if ($trackCurrent) { Resolve-SyncUpstream -RepoRoot $RepoRoot -Branch $branch -AllowNewRemoteBranch $true }
+            else { Test-UpstreamGuard -RepoRoot $RepoRoot }
+        }
         if (-not $upstreamGuard.Pass) {
-            Write-SyncSummary -RepoRoot $RepoRoot -PassId $passId -Config $Config -Result 'error' -Reason $upstreamGuard.Reason
+            Write-SyncSummary -RepoRoot $RepoRoot -PassId $passId -Config $Config -Result 'error' -Reason $upstreamGuard.Reason -Branch $branch
             return 4
         }
         $upstream = $upstreamGuard.Data.upstream
+        $remoteExists = if ($null -ne $upstreamGuard.Data.remoteExists) { $upstreamGuard.Data.remoteExists } else { $true }
+        $needsSetUpstream = [bool]$upstreamGuard.Data.needsSetUpstream
 
         $identityGuard = Invoke-Guard -RepoRoot $RepoRoot -PassId $passId -Name 'identity' -Check { Test-IdentityGuard -RepoRoot $RepoRoot }
         if (-not $identityGuard.Pass) {
-            Write-SyncSummary -RepoRoot $RepoRoot -PassId $passId -Config $Config -Result 'error' -Reason $identityGuard.Reason
+            Write-SyncSummary -RepoRoot $RepoRoot -PassId $passId -Config $Config -Result 'error' -Reason $identityGuard.Reason -Branch $branch
             return 4
         }
 
         $backoffGuard = Invoke-Guard -RepoRoot $RepoRoot -PassId $passId -Name 'backoff' -Check { Test-BackoffGuard -State $state }
         if (-not $backoffGuard.Pass) {
-            Write-SyncSummary -RepoRoot $RepoRoot -PassId $passId -Config $Config -Result 'skipped' -Reason $backoffGuard.Reason
+            Write-SyncSummary -RepoRoot $RepoRoot -PassId $passId -Config $Config -Result 'skipped' -Reason $backoffGuard.Reason -Branch $branch
             return 2
         }
 
@@ -174,31 +182,56 @@ function Invoke-SyncPass {
                 $state.authBackoffUntilUtc = (Get-Date).ToUniversalTime().AddMinutes($Config['AUTH_BACKOFF_MINUTES']).ToString('o')
                 Save-SyncState -RepoRoot $RepoRoot -State $state
                 Write-SyncLog -RepoRoot $RepoRoot -PassId $passId -Level 'ERROR' -Event 'auth-failed' -Data @{ phase = 'fetch' }
-                Write-SyncSummary -RepoRoot $RepoRoot -PassId $passId -Config $Config -Result 'error' -Reason 'auth failed on fetch -- check `gh auth status` / credential manager'
+                Write-SyncSummary -RepoRoot $RepoRoot -PassId $passId -Config $Config -Result 'error' -Reason 'auth failed on fetch -- check `gh auth status` / credential manager' -Branch $branch
                 return 3
             }
             Save-SyncState -RepoRoot $RepoRoot -State $state
             Write-SyncLog -RepoRoot $RepoRoot -PassId $passId -Level 'WARN' -Event 'fetch-failed' -Data @{ reason = 'network' }
-            Write-SyncSummary -RepoRoot $RepoRoot -PassId $passId -Config $Config -Result 'skipped' -Reason 'offline or fetch failed (network)'
+            Write-SyncSummary -RepoRoot $RepoRoot -PassId $passId -Config $Config -Result 'skipped' -Reason 'offline or fetch failed (network)' -Branch $branch
             return 0
         }
         Write-SyncLog -RepoRoot $RepoRoot -PassId $passId -Level 'DEBUG' -Event 'fetch-ok' -Data @{}
 
+        $branchUnchanged = Test-BranchUnchanged -RepoRoot $RepoRoot -Expected $branch
+        if (-not $branchUnchanged.Pass) {
+            Write-SyncSummary -RepoRoot $RepoRoot -PassId $passId -Config $Config -Result 'skipped' -Reason $branchUnchanged.Reason -Branch $branch
+            return 2
+        }
+
+        if ($trackCurrent -and -not $remoteExists) {
+            # Pre-fetch, this clone may not have known origin/<branch> existed yet
+            # (e.g. a teammate pushed it moments ago) -- re-resolve now that fetch ran.
+            $reResolve = Resolve-SyncUpstream -RepoRoot $RepoRoot -Branch $branch -AllowNewRemoteBranch $true
+            $upstream = $reResolve.Data.upstream
+            $remoteExists = $reResolve.Data.remoteExists
+            $needsSetUpstream = $reResolve.Data.needsSetUpstream
+        }
+
         $commitResult = [pscustomobject]@{ Committed = $false; Files = @(); SkippedPaths = @(); Sha = $null; SecretBlocked = $false; SecretHits = @() }
         if ($Config['AUTO_COMMIT']) {
-            $commitResult = Invoke-AutoCommit -RepoRoot $RepoRoot -PassId $passId -Config $Config -State $state
+            $commitResult = Invoke-AutoCommit -RepoRoot $RepoRoot -PassId $passId -Config $Config -State $state -Branch $branch
             if ($commitResult.SecretBlocked) {
                 Set-SyncPauseFlag -RepoRoot $RepoRoot -FlagReason 'secret'
                 $hitSummary = ($commitResult.SecretHits | ForEach-Object { "$($_.Path):$($_.Line)[$($_.Rule)]" }) -join '; '
                 Save-SyncState -RepoRoot $RepoRoot -State $state
-                Write-SyncSummary -RepoRoot $RepoRoot -PassId $passId -Config $Config -Result 'error' -Reason "possible secret staged, auto-sync PAUSED: $hitSummary"
+                Write-SyncSummary -RepoRoot $RepoRoot -PassId $passId -Config $Config -Result 'error' -Reason "possible secret staged, auto-sync PAUSED: $hitSummary" -Branch $branch
                 return 3
             }
         }
 
         $status = Get-SyncStatus -RepoRoot $RepoRoot
+        $behind = $status.Behind
+        if ($remoteExists -and $needsSetUpstream) {
+            # No @{u} configured, so `git status --branch` can't report ahead/behind --
+            # compute it directly against the resolved upstream instead.
+            $behindRaw = (Invoke-Git -RepoRoot $RepoRoot -GitArgs @('rev-list', '--count', "HEAD..$upstream")).StdOut.Trim()
+            $behindParsed = 0
+            [void][int]::TryParse($behindRaw, [ref]$behindParsed)
+            $behind = $behindParsed
+        }
+
         $integrateResult = [pscustomobject]@{ Success = $true; Conflict = $false; ConflictFiles = @(); PulledCommits = @() }
-        if ($status.Behind -gt 0) {
+        if ($remoteExists -and $behind -gt 0) {
             $integrateResult = Invoke-Integrate -RepoRoot $RepoRoot -PassId $passId -Config $Config -Branch $branch -Upstream $upstream
             if (-not $integrateResult.Success) {
                 Write-ConflictReport -RepoRoot $RepoRoot -Branch $branch -Upstream $upstream -ConflictFiles $integrateResult.ConflictFiles
@@ -207,19 +240,20 @@ function Invoke-SyncPass {
                 Save-SyncState -RepoRoot $RepoRoot -State $state
                 Write-SyncSummary -RepoRoot $RepoRoot -PassId $passId -Config $Config -Result 'conflict' `
                     -Reason "conflict predicted in: $($integrateResult.ConflictFiles -join ', ') -- see .autosync\CONFLICT.md" `
-                    -CommittedFiles $commitResult.Files -SkippedPaths $commitResult.SkippedPaths
+                    -CommittedFiles $commitResult.Files -SkippedPaths $commitResult.SkippedPaths -Branch $branch
                 return 3
             }
         }
 
         $pushResult = [pscustomobject]@{ Pushed = $false; Reason = 'auto-push-disabled'; ConflictFiles = @(); AuthFailed = $false }
         if ($Config['AUTO_PUSH']) {
-            $pushResult = Invoke-SyncPush -RepoRoot $RepoRoot -PassId $passId -Config $Config -Branch $branch
+            $pushResult = Invoke-SyncPush -RepoRoot $RepoRoot -PassId $passId -Config $Config -Branch $branch -RemoteExists $remoteExists -SetUpstream $needsSetUpstream
             if ($pushResult.AuthFailed) {
                 $state.authBackoffUntilUtc = (Get-Date).ToUniversalTime().AddMinutes($Config['AUTH_BACKOFF_MINUTES']).ToString('o')
             }
             if ($pushResult.Reason -eq 'conflict-on-retry') {
-                Write-ConflictReport -RepoRoot $RepoRoot -Branch $branch -Upstream $upstream -ConflictFiles $pushResult.ConflictFiles
+                $upstreamDisplay = if ($upstream) { $upstream } else { "origin/$branch" }
+                Write-ConflictReport -RepoRoot $RepoRoot -Branch $branch -Upstream $upstreamDisplay -ConflictFiles $pushResult.ConflictFiles
                 Set-SyncPauseFlag -RepoRoot $RepoRoot -FlagReason 'conflict'
             }
         }
@@ -244,7 +278,7 @@ function Invoke-SyncPass {
             else { $pushResult.Reason }
 
         Write-SyncSummary -RepoRoot $RepoRoot -PassId $passId -Config $Config -Result $overallResult -Reason 'pass complete' `
-            -PulledCommits $integrateResult.PulledCommits -CommittedFiles $commitResult.Files -PushResult $pushLabel -SkippedPaths $commitResult.SkippedPaths
+            -PulledCommits $integrateResult.PulledCommits -CommittedFiles $commitResult.Files -PushResult $pushLabel -SkippedPaths $commitResult.SkippedPaths -Branch $branch
 
         Write-SyncLog -RepoRoot $RepoRoot -PassId $passId -Level 'INFO' -Event 'finish' -Data @{ result = $overallResult }
         return $(if ($overallResult -eq 'ok') { 0 } else { 3 })
@@ -256,7 +290,7 @@ function Invoke-SyncPass {
 # --- CLI dispatch ---
 
 if ($Install) {
-    Install-SyncTask -RepoRoot $RepoRoot -IntervalMinutes $IntervalMinutes
+    Install-SyncTask -RepoRoot $RepoRoot -IntervalMinutes $IntervalMinutes -TrackCurrentBranch:$TrackCurrentBranch
     exit 0
 }
 
@@ -290,9 +324,14 @@ if ($Resume) {
 }
 
 $config = Import-SyncConfig -RepoRoot $RepoRoot
+if ($TrackCurrentBranch) {
+    $config['SYNC_BRANCHES'] = 'current'
+    $config['SYNC_TRACK_CURRENT'] = $true
+}
 
 if ($Watch) {
-    Write-Host "aura-sync watching -- interval $($config['INTERVAL_SECONDS'])s, branch(es): $($config['SYNC_BRANCHES']). Ctrl+C to stop." -ForegroundColor Cyan
+    $modeLabel = if ($config['SYNC_TRACK_CURRENT']) { 'mode=current (tracks whatever branch is checked out)' } else { "branch(es): $($config['SYNC_BRANCHES'])" }
+    Write-Host "aura-sync watching -- interval $($config['INTERVAL_SECONDS'])s, $modeLabel. Ctrl+C to stop." -ForegroundColor Cyan
     try {
         while ($true) {
             Invoke-SyncPass -RepoRoot $RepoRoot -Config $config | Out-Null

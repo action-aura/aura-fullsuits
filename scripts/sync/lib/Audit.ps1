@@ -73,7 +73,8 @@ function Write-SyncSummary {
         [string[]]$PulledCommits = @(),
         [string[]]$CommittedFiles = @(),
         [string]$PushResult = 'none',                # none | pushed | held | failed
-        [string[]]$SkippedPaths = @()
+        [string[]]$SkippedPaths = @(),
+        [string]$Branch = ''
     )
 
     $runtimeDir = Get-SyncRuntimeDir -RepoRoot $RepoRoot
@@ -81,6 +82,10 @@ function Write-SyncSummary {
 
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add("aura-sync  $($now.ToString('yyyy-MM-dd HH:mm:ss zzz'))  pass=$PassId  result=$Result")
+    if ($Branch) {
+        $mode = if ($Config['SYNC_TRACK_CURRENT']) { 'current' } else { 'fixed' }
+        $lines.Add("branch: $Branch (mode=$mode)")
+    }
     $lines.Add("reason: $Reason")
 
     if ($PulledCommits.Count -gt 0) {

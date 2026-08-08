@@ -28,9 +28,10 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 
 # Wave 1B (Part K): see products/clinic/backend/database/schema.py's
 # identical CLINIC_SCHEMA_VERSION for the full rationale.
-# v2 (docs/einvoicing/phase1/): adds the einvoice_* tables. See
-# _apply_retail_alters below -- never lower this or reuse a number.
-RETAIL_SCHEMA_VERSION = 2
+# v2 (docs/einvoicing/phase1/): adds the einvoice_* tables.
+# v3: adds products.supplier_id. See _apply_retail_alters below --
+# never lower this or reuse a number.
+RETAIL_SCHEMA_VERSION = 3
 
 
 def _get_path(name):
@@ -295,6 +296,21 @@ def init_retail():
     def _apply_retail_alters(migrating_conn):
         from commercial_runtime.einvoicing.schema import apply_einvoicing_schema
         apply_einvoicing_schema(migrating_conn)
+
+        # v2 -> v3: link products to their supplier. Nullable FK -- existing
+        # rows get NULL (unassigned), no backfill assumed. Added ahead of the
+        # multi-device catalog/party sync schema so a synced product record
+        # carries its supplier from day one.
+        try:
+            migrating_conn.execute(
+                'ALTER TABLE products ADD COLUMN supplier_id INTEGER REFERENCES suppliers(id)'
+            )
+        except sqlite3.OperationalError as e:
+            if 'duplicate column name' not in str(e):
+                raise
+        migrating_conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_products_supplier ON products(supplier_id)'
+        )
 
     from commercial_runtime.security.migration_safety import ensure_schema_version
     ensure_schema_version(

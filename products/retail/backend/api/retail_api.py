@@ -257,11 +257,11 @@ def create_product():
             return jsonify({'status': 'error', 'message': 'SKU already exists'}), 409
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO products (company_id,sku,barcode,name,category_id,cost_price,
+            INSERT INTO products (company_id,sku,barcode,name,category_id,supplier_id,cost_price,
                                   sell_price,tax_rate,unit,reorder_level,status)
-            VALUES (?,?,?,?,?,?,?,?,?,?,'active')
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,'active')
         """, (cid, data['sku'], data.get('barcode',''), data['name'],
-              data.get('category_id'), data.get('cost_price',0), data.get('sell_price',0),
+              data.get('category_id'), data.get('supplier_id'), data.get('cost_price',0), data.get('sell_price',0),
               data.get('tax_rate',0), data.get('unit','pcs'), data.get('reorder_level',5)))
         pid = cur.lastrowid
         # File opening stock under the company's working branch — the SAME branch that
@@ -292,7 +292,7 @@ def create_product():
 def update_product(pid):
     data = request.json or {}
     cid  = _cid()
-    allowed = ['name','barcode','category_id','cost_price','sell_price','tax_rate','unit','reorder_level','status']
+    allowed = ['name','barcode','category_id','supplier_id','cost_price','sell_price','tax_rate','unit','reorder_level','status']
     fields = {k: v for k, v in data.items() if k in allowed}
     if not fields:
         return jsonify({'status': 'error', 'message': 'No valid fields'}), 400

@@ -103,14 +103,15 @@ function Test-InProgressGuard {
 function Test-BranchGuard {
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
-        [Parameter(Mandatory)][string[]]$AllowedBranches
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$AllowedBranches,
+        [bool]$TrackCurrent = $false
     )
     $r = Invoke-Git -RepoRoot $RepoRoot -GitArgs @('symbolic-ref', '--quiet', '--short', 'HEAD')
     $branch = $r.StdOut.Trim()
     if ($r.ExitCode -ne 0 -or -not $branch) {
         return [pscustomobject]@{ Pass = $false; Reason = 'detached-head' }
     }
-    if ($AllowedBranches -notcontains $branch) {
+    if (-not $TrackCurrent -and $AllowedBranches -notcontains $branch) {
         return [pscustomobject]@{ Pass = $false; Reason = "branch-not-allowed:$branch" }
     }
     return [pscustomobject]@{ Pass = $true; Reason = $branch; Data = @{ branch = $branch } }
@@ -124,6 +125,52 @@ function Test-UpstreamGuard {
         return [pscustomobject]@{ Pass = $false; Reason = 'no-upstream' }
     }
     return [pscustomobject]@{ Pass = $true; Reason = $upstream; Data = @{ upstream = $upstream } }
+}
+
+function Resolve-SyncUpstream {
+    # Same as Test-UpstreamGuard but for "track current branch" mode: a branch
+    # that's never had `git push -u` run against it has no @{u} configured even
+    # though it may already exist on origin (common right after a fresh clone
+    # checks out someone else's branch) -- fall back to checking for a matching
+    # remote-tracking ref before concluding it's genuinely a brand-new branch.
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][string]$Branch,
+        [bool]$AllowNewRemoteBranch = $false
+    )
+    $r = Invoke-Git -RepoRoot $RepoRoot -GitArgs @('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}')
+    $upstream = $r.StdOut.Trim()
+    if ($r.ExitCode -eq 0 -and $upstream) {
+        return [pscustomobject]@{ Pass = $true; Reason = $upstream; Data = @{ upstream = $upstream; remoteExists = $true; needsSetUpstream = $false } }
+    }
+
+    $remoteRef = Invoke-Git -RepoRoot $RepoRoot -GitArgs @('rev-parse', '--verify', '--quiet', "refs/remotes/origin/$Branch")
+    if ($remoteRef.ExitCode -eq 0) {
+        return [pscustomobject]@{ Pass = $true; Reason = 'upstream-inferred'; Data = @{ upstream = "origin/$Branch"; remoteExists = $true; needsSetUpstream = $true } }
+    }
+
+    if ($AllowNewRemoteBranch) {
+        return [pscustomobject]@{ Pass = $true; Reason = 'new-remote-branch'; Data = @{ upstream = $null; remoteExists = $false; needsSetUpstream = $true } }
+    }
+
+    return [pscustomobject]@{ Pass = $false; Reason = 'no-upstream' }
+}
+
+function Test-BranchUnchanged {
+    # Guards the window between reading $branch and actually pushing/pulling
+    # against it -- the jitter sleep and a 60s fetch both give a dev time to
+    # `git checkout` something else mid-pass. If that happens, stop rather than
+    # push/pull against a branch that's no longer checked out.
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][string]$Expected
+    )
+    $r = Invoke-Git -RepoRoot $RepoRoot -GitArgs @('symbolic-ref', '--quiet', '--short', 'HEAD')
+    $actual = $r.StdOut.Trim()
+    if ($r.ExitCode -ne 0 -or $actual -ne $Expected) {
+        return [pscustomobject]@{ Pass = $false; Reason = "branch-changed-mid-pass:$Expected->$actual" }
+    }
+    return [pscustomobject]@{ Pass = $true; Reason = 'unchanged' }
 }
 
 function Test-IdentityGuard {

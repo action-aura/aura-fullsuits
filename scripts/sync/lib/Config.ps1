@@ -60,5 +60,13 @@ function Import-SyncConfig {
         throw "sync.config: PULL_STRATEGY must be rebase|merge|ff-only, got '$($typed['PULL_STRATEGY'])'"
     }
 
+    # SYNC_BRANCHES=current (anywhere in the comma list) means "track whatever
+    # branch is checked out", overriding the fixed-branch allowlist semantics.
+    $branchList = @($typed['SYNC_BRANCHES'] -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+    $typed['SYNC_TRACK_CURRENT'] = [bool]($branchList | Where-Object { $_ -ieq 'current' })
+    if ($typed['SYNC_TRACK_CURRENT'] -and $branchList.Count -gt 1) {
+        Write-Warning "sync.config: SYNC_BRANCHES='$($typed['SYNC_BRANCHES'])' mixes 'current' with fixed branch names -- 'current' takes precedence, fixed names ignored."
+    }
+
     return $typed
 }

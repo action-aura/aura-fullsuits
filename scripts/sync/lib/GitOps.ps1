@@ -202,7 +202,8 @@ function Invoke-AutoCommit {
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$PassId,
         [Parameter(Mandatory)][hashtable]$Config,
-        [Parameter(Mandatory)]$State
+        [Parameter(Mandatory)]$State,
+        [Parameter(Mandatory)][string]$Branch
     )
 
     $result = [pscustomobject]@{ Committed = $false; Files = @(); SkippedPaths = @(); Sha = $null; SecretBlocked = $false; SecretHits = @() }
@@ -287,8 +288,17 @@ function Invoke-AutoCommit {
     $canAmend = $false
     if ($Config['AMEND_AUTOSYNC_COMMITS']) {
         $headSubject = (Invoke-Git -RepoRoot $RepoRoot -GitArgs @('log', '-1', '--format=%s')).StdOut.Trim()
-        $unpushedCount = (Invoke-Git -RepoRoot $RepoRoot -GitArgs @('rev-list', '--count', 'origin/master..HEAD')).StdOut.Trim()
-        $isAncestor = (Invoke-Git -RepoRoot $RepoRoot -GitArgs @('merge-base', '--is-ancestor', 'HEAD', 'origin/master')).ExitCode -eq 0
+        $upstreamRef = "origin/$Branch"
+        $remoteBranchExists = (Invoke-Git -RepoRoot $RepoRoot -GitArgs @('rev-parse', '--verify', '--quiet', "refs/remotes/$upstreamRef")).ExitCode -eq 0
+        if ($remoteBranchExists) {
+            $unpushedCount = (Invoke-Git -RepoRoot $RepoRoot -GitArgs @('rev-list', '--count', "$upstreamRef..HEAD")).StdOut.Trim()
+            $isAncestor = (Invoke-Git -RepoRoot $RepoRoot -GitArgs @('merge-base', '--is-ancestor', 'HEAD', $upstreamRef)).ExitCode -eq 0
+        } else {
+            # Brand-new branch, nothing pushed yet -- every commit on it is
+            # unpushed and nothing can be "already an ancestor of origin".
+            $unpushedCount = (Invoke-Git -RepoRoot $RepoRoot -GitArgs @('rev-list', '--count', 'HEAD')).StdOut.Trim()
+            $isAncestor = $false
+        }
         $unpushedInt = 0
         [void][int]::TryParse($unpushedCount, [ref]$unpushedInt)
         if ($headSubject.StartsWith($Config['COMMIT_PREFIX']) -and $unpushedInt -ge 1 -and -not $isAncestor) {
@@ -435,12 +445,24 @@ function Invoke-SyncPush {
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$PassId,
         [Parameter(Mandatory)][hashtable]$Config,
-        [Parameter(Mandatory)][string]$Branch
+        [Parameter(Mandatory)][string]$Branch,
+        [bool]$RemoteExists = $true,
+        [bool]$SetUpstream = $false
     )
 
     $result = [pscustomobject]@{ Pushed = $false; Reason = 'not-attempted'; ConflictFiles = @(); AuthFailed = $false }
 
-    $aheadRaw = (Invoke-Git -RepoRoot $RepoRoot -GitArgs @('rev-list', '--count', "origin/$Branch..HEAD")).StdOut.Trim()
+    $unchangedCheck = Test-BranchUnchanged -RepoRoot $RepoRoot -Expected $Branch
+    if (-not $unchangedCheck.Pass) {
+        $result.Reason = 'branch-changed-mid-pass'
+        return $result
+    }
+
+    if ($RemoteExists) {
+        $aheadRaw = (Invoke-Git -RepoRoot $RepoRoot -GitArgs @('rev-list', '--count', "origin/$Branch..HEAD")).StdOut.Trim()
+    } else {
+        $aheadRaw = (Invoke-Git -RepoRoot $RepoRoot -GitArgs @('rev-list', '--count', 'HEAD')).StdOut.Trim()
+    }
     $ahead = 0
     [void][int]::TryParse($aheadRaw, [ref]$ahead)
     if ($ahead -eq 0) { $result.Reason = 'nothing-to-push'; return $result }
@@ -459,15 +481,24 @@ function Invoke-SyncPush {
         }
     }
 
-    $conflictGate = Invoke-Guard -RepoRoot $RepoRoot -PassId $PassId -Name 'conflict-marker-gate' -Check { Test-ConflictMarkerGuard -RepoRoot $RepoRoot -Upstream "origin/$Branch" }
-    if (-not $conflictGate.Pass) {
-        $result.Reason = 'held-conflict-markers'
-        return $result
+    if ($RemoteExists) {
+        $conflictGate = Invoke-Guard -RepoRoot $RepoRoot -PassId $PassId -Name 'conflict-marker-gate' -Check { Test-ConflictMarkerGuard -RepoRoot $RepoRoot -Upstream "origin/$Branch" }
+        if (-not $conflictGate.Pass) {
+            $result.Reason = 'held-conflict-markers'
+            return $result
+        }
+    } else {
+        Invoke-Guard -RepoRoot $RepoRoot -PassId $PassId -Name 'conflict-marker-gate' -Check {
+            [pscustomobject]@{ Pass = $true; Reason = 'no-remote-branch' }
+        } | Out-Null
     }
 
     $maxAttempts = 1 + $Config['PUSH_RETRIES']
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-        $r = Invoke-Git -RepoRoot $RepoRoot -GitArgs @('push', '--porcelain', 'origin', "HEAD:$Branch") -TimeoutSeconds 60
+        $pushArgs = @('push', '--porcelain')
+        if ($SetUpstream -and $attempt -eq 1) { $pushArgs += '--set-upstream' }
+        $pushArgs += @('origin', "HEAD:refs/heads/$Branch")
+        $r = Invoke-Git -RepoRoot $RepoRoot -GitArgs $pushArgs -TimeoutSeconds 60
         $combined = "$($r.StdOut)`n$($r.StdErr)"
 
         if ($r.ExitCode -eq 0) {

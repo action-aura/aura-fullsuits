@@ -15,7 +15,8 @@ $script:TaskName = 'AuraFullSuits-AutoSync'
 function Install-SyncTask {
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
-        [Parameter(Mandatory)][int]$IntervalMinutes
+        [Parameter(Mandatory)][int]$IntervalMinutes,
+        [switch]$TrackCurrentBranch
     )
 
     # Resolve the real pwsh binary -- the WindowsApps execution alias does not
@@ -25,6 +26,7 @@ function Install-SyncTask {
 
     $scriptPath = Join-Path $RepoRoot 'scripts\sync\aura-sync.ps1'
     $commandLine = "`"$exe`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$scriptPath`" -Once"
+    if ($TrackCurrentBranch) { $commandLine += ' -TrackCurrentBranch' }
 
     # /it = run using the interactive token of the logged-on user (no stored password
     # needed). /rl limited = standard rights, no elevation. /sc minute /mo N = repeats

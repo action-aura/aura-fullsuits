@@ -7,7 +7,8 @@
 #   ./aura-sync.sh                    one sync pass (default)
 #   ./aura-sync.sh --once             same as above, explicit
 #   ./aura-sync.sh --watch            foreground loop, Ctrl+C to stop
-#   ./aura-sync.sh --install [--interval-minutes 5]   cron entry (Linux/macOS)
+#   ./aura-sync.sh --track-current-branch   sync whatever branch is checked out, not just master
+#   ./aura-sync.sh --install [--interval-minutes 5] [--track-current-branch]   cron entry (Linux/macOS)
 #   ./aura-sync.sh --uninstall        remove the cron entry
 #   ./aura-sync.sh --status           show cron entry + last pass + pause state
 #   ./aura-sync.sh --pause [--minutes 30] [--reason "risky rebase"]
@@ -202,6 +203,11 @@ write_summary() {
 
     {
         echo "aura-sync  $(date -u '+%Y-%m-%d %H:%M:%S UTC')  pass=$PASS_ID  result=$result"
+        if [ -n "${PASS_BRANCH:-}" ]; then
+            local mode_label="fixed"
+            [ "${TRACK_CURRENT_MODE:-0}" -eq 1 ] && mode_label="current"
+            echo "branch: $PASS_BRANCH (mode=$mode_label)"
+        fi
         echo "reason: $reason"
         if [ "$pulled_count" -gt 0 ]; then
             echo "pulled ($pulled_count):"
@@ -309,6 +315,9 @@ guard_in_progress() {
 guard_branch() {
     local branch; branch="$(git_hardened symbolic-ref --quiet --short HEAD 2>/dev/null)"
     if [ -z "$branch" ]; then echo "detached-head"; return 1; fi
+    if [ "${TRACK_CURRENT_MODE:-0}" -eq 1 ]; then
+        echo "$branch"; return 0
+    fi
     local allowed b ok=1
     IFS=',' read -ra allowed <<< "$SYNC_BRANCHES"
     for b in "${allowed[@]}"; do
@@ -323,6 +332,44 @@ guard_upstream() {
     local upstream; upstream="$(git_hardened rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
     if [ -z "$upstream" ]; then echo "no-upstream"; return 1; fi
     echo "$upstream"; return 0
+}
+
+# "Track current branch" mode equivalent of guard_upstream: a branch that's
+# never had `git push -u` run against it has no @{u} configured even though it
+# may already exist on origin (common right after checking out a teammate's
+# branch) -- fall back to a matching remote-tracking ref before concluding
+# it's genuinely brand-new. Sets globals (not a $(...) capture -- this needs
+# to mutate the caller's shell, which a subshell can't do) UPSTREAM,
+# REMOTE_EXISTS, NEEDS_SET_UPSTREAM, UPSTREAM_REASON. Returns 0/1.
+resolve_upstream() {
+    local branch="$1" allow_new="$2" upstream
+    upstream="$(git_hardened rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"
+    if [ -n "$upstream" ]; then
+        UPSTREAM="$upstream"; REMOTE_EXISTS=1; NEEDS_SET_UPSTREAM=0; UPSTREAM_REASON="$upstream"
+        return 0
+    fi
+    if git_hardened rev-parse --verify --quiet "refs/remotes/origin/$branch" >/dev/null 2>&1; then
+        UPSTREAM="origin/$branch"; REMOTE_EXISTS=1; NEEDS_SET_UPSTREAM=1; UPSTREAM_REASON="upstream-inferred"
+        return 0
+    fi
+    if [ "$allow_new" -eq 1 ]; then
+        UPSTREAM=""; REMOTE_EXISTS=0; NEEDS_SET_UPSTREAM=1; UPSTREAM_REASON="new-remote-branch"
+        return 0
+    fi
+    UPSTREAM_REASON="no-upstream"
+    return 1
+}
+
+# Guards the window between reading $branch and actually pushing/pulling
+# against it -- the jitter sleep and the fetch both give a dev time to
+# `git checkout` something else mid-pass.
+guard_branch_unchanged() {
+    local expected="$1" actual
+    actual="$(git_hardened symbolic-ref --quiet --short HEAD 2>/dev/null)"
+    if [ -z "$actual" ] || [ "$actual" != "$expected" ]; then
+        echo "branch-changed-mid-pass:$expected->$actual"; return 1
+    fi
+    echo "unchanged"; return 0
 }
 
 guard_identity() {
@@ -460,6 +507,7 @@ check_merge_tree_conflict() {
 }
 
 auto_commit() {
+    local branch="$1"
     AC_COMMITTED=0; AC_FILES=""; AC_SKIPPED=""; AC_SHA=""; AC_SECRET_BLOCKED=0
 
     sync_status
@@ -539,16 +587,28 @@ auto_commit() {
     top_dirs="$(printf '%s\n' "$files" | awk -F/ '{print $1}' | sort -u | head -3 | paste -sd, -)"
     subject="$COMMIT_PREFIX: $count file(s) in $top_dirs [$(hostname)] $(date -u '+%Y-%m-%d %H:%M')"
 
-    local can_amend=0 head_subject unpushed committer_epoch
+    local can_amend=0 head_subject unpushed committer_epoch upstream_ref remote_branch_exists is_ancestor
     if [ "${AMEND_AUTOSYNC_COMMITS:-true}" = "true" ]; then
         head_subject="$(git_hardened log -1 --format=%s)"
-        unpushed="$(git_hardened rev-list --count origin/master..HEAD 2>/dev/null)"
-        git_hardened merge-base --is-ancestor HEAD origin/master >/dev/null 2>&1
+        upstream_ref="origin/$branch"
+        if git_hardened rev-parse --verify --quiet "refs/remotes/$upstream_ref" >/dev/null 2>&1; then
+            remote_branch_exists=1
+            unpushed="$(git_hardened rev-list --count "$upstream_ref..HEAD" 2>/dev/null)"
+        else
+            # Brand-new branch, nothing pushed yet -- every commit is unpushed
+            # and nothing can be "already an ancestor of origin".
+            remote_branch_exists=0
+            unpushed="$(git_hardened rev-list --count HEAD 2>/dev/null)"
+        fi
         case "$head_subject" in
             "$COMMIT_PREFIX"*)
                 if [ "${unpushed:-0}" -ge 1 ]; then
-                    git_hardened merge-base --is-ancestor HEAD origin/master >/dev/null 2>&1
-                    if [ $? -ne 0 ]; then
+                    is_ancestor=1
+                    if [ "$remote_branch_exists" -eq 1 ]; then
+                        git_hardened merge-base --is-ancestor HEAD "$upstream_ref" >/dev/null 2>&1
+                        is_ancestor=$?
+                    fi
+                    if [ "$is_ancestor" -ne 0 ]; then
                         committer_epoch="$(git_hardened log -1 --format=%ct)"
                         if [ $(( now_epoch - ${committer_epoch:-0} )) -lt "${AMEND_WINDOW_SECONDS:-900}" ]; then
                             can_amend=1
@@ -679,10 +739,22 @@ integrate() {
 }
 
 sync_push() {
-    local branch="$1" ahead diff_out attempt max_attempts out rc
+    local branch="$1" remote_exists="${2:-1}" set_upstream="${3:-0}"
+    local ahead diff_out attempt max_attempts out rc
     PUSH_PUSHED=0; PUSH_REASON="not-attempted"; PUSH_CONFLICT_FILES=""; PUSH_AUTH_FAILED=0
 
-    ahead="$(git_hardened rev-list --count "origin/$branch..HEAD" 2>/dev/null)"
+    local bu_reason
+    bu_reason="$(guard_branch_unchanged "$branch")"
+    if [ $? -ne 0 ]; then
+        PUSH_REASON="branch-changed-mid-pass"
+        return 0
+    fi
+
+    if [ "$remote_exists" -eq 1 ]; then
+        ahead="$(git_hardened rev-list --count "origin/$branch..HEAD" 2>/dev/null)"
+    else
+        ahead="$(git_hardened rev-list --count HEAD 2>/dev/null)"
+    fi
     ahead="${ahead:-0}"
     if [ "$ahead" -eq 0 ]; then PUSH_REASON="nothing-to-push"; return 0; fi
 
@@ -694,17 +766,24 @@ sync_push() {
         fi
     fi
 
-    if ! conflict_marker_gate "origin/$branch"; then
-        PUSH_REASON="held-conflict-markers"
-        write_log WARN guard "guard=conflict-marker-gate" "pass=false" "reason=conflict-markers-in-diff"
-        return 0
+    if [ "$remote_exists" -eq 1 ]; then
+        if ! conflict_marker_gate "origin/$branch"; then
+            PUSH_REASON="held-conflict-markers"
+            write_log WARN guard "guard=conflict-marker-gate" "pass=false" "reason=conflict-markers-in-diff"
+            return 0
+        fi
+        write_log DEBUG guard "guard=conflict-marker-gate" "pass=true" "reason=clean"
+    else
+        write_log DEBUG guard "guard=conflict-marker-gate" "pass=true" "reason=no-remote-branch"
     fi
-    write_log DEBUG guard "guard=conflict-marker-gate" "pass=true" "reason=clean"
 
     attempt=1
     max_attempts=$((1 + ${PUSH_RETRIES:-2}))
     while [ "$attempt" -le "$max_attempts" ]; do
-        out="$(git_hardened push --porcelain origin "HEAD:$branch" 2>&1)"
+        local push_args=(push --porcelain)
+        if [ "$set_upstream" -eq 1 ] && [ "$attempt" -eq 1 ]; then push_args+=(--set-upstream); fi
+        push_args+=(origin "HEAD:refs/heads/$branch")
+        out="$(git_hardened "${push_args[@]}" 2>&1)"
         rc=$?
 
         if [ "$rc" -eq 0 ]; then
@@ -722,6 +801,7 @@ sync_push() {
                 PUSH_REASON="conflict-on-retry"; PUSH_CONFLICT_FILES="$IG_CONFLICT_FILES"
                 return 0
             fi
+            remote_exists=1
             write_log INFO push-retry "attempt=$attempt"
             attempt=$((attempt+1))
             continue
@@ -814,10 +894,26 @@ run_pass() {
         write_summary skipped "$GUARD_REASON" "" "" "none" ""; exit_lock; trap - EXIT INT TERM; return 2
     fi
     local branch="$GUARD_REASON"
-    if ! run_simple_guard upstream guard_upstream; then
-        write_summary error "$GUARD_REASON" "" "" "none" ""; exit_lock; trap - EXIT INT TERM; return 4
+    PASS_BRANCH="$branch"
+
+    local track_current="${TRACK_CURRENT_MODE:-0}"
+    local upstream remote_exists=1 needs_set_upstream=0
+    if [ "$track_current" -eq 1 ]; then
+        if resolve_upstream "$branch" 1; then
+            write_log DEBUG guard "guard=upstream" "pass=true" "reason=$UPSTREAM_REASON"
+        else
+            write_log WARN guard "guard=upstream" "pass=false" "reason=$UPSTREAM_REASON"
+            write_summary error "$UPSTREAM_REASON" "" "" "none" ""
+            exit_lock; trap - EXIT INT TERM
+            return 4
+        fi
+        upstream="$UPSTREAM"; remote_exists="$REMOTE_EXISTS"; needs_set_upstream="$NEEDS_SET_UPSTREAM"
+    else
+        if ! run_simple_guard upstream guard_upstream; then
+            write_summary error "$GUARD_REASON" "" "" "none" ""; exit_lock; trap - EXIT INT TERM; return 4
+        fi
+        upstream="$GUARD_REASON"
     fi
-    local upstream="$GUARD_REASON"
     if ! run_simple_guard identity guard_identity; then
         write_summary error "$GUARD_REASON" "" "" "none" ""; exit_lock; trap - EXIT INT TERM; return 4
     fi
@@ -848,9 +944,27 @@ run_pass() {
     fi
     write_log DEBUG fetch-ok ""
 
+    local bu_reason
+    bu_reason="$(guard_branch_unchanged "$branch")"
+    if [ $? -ne 0 ]; then
+        write_log WARN guard "guard=branch-unchanged" "pass=false" "reason=$bu_reason"
+        write_summary skipped "$bu_reason" "" "" "none" ""
+        exit_lock; trap - EXIT INT TERM
+        return 2
+    fi
+    write_log DEBUG guard "guard=branch-unchanged" "pass=true" "reason=$bu_reason"
+
+    if [ "$track_current" -eq 1 ] && [ "$remote_exists" -eq 0 ]; then
+        # Pre-fetch, this clone may not have known origin/<branch> existed yet
+        # (e.g. a teammate pushed it moments ago) -- re-resolve now that fetch ran.
+        if resolve_upstream "$branch" 1; then
+            upstream="$UPSTREAM"; remote_exists="$REMOTE_EXISTS"; needs_set_upstream="$NEEDS_SET_UPSTREAM"
+        fi
+    fi
+
     AC_COMMITTED=0; AC_FILES=""; AC_SKIPPED=""; AC_SECRET_BLOCKED=0
     if [ "${AUTO_COMMIT:-true}" = "true" ]; then
-        auto_commit
+        auto_commit "$branch"
         if [ "$AC_SECRET_BLOCKED" -eq 1 ]; then
             set_pause_flag secret
             write_summary error "possible secret staged, auto-sync PAUSED (see log for path/rule -- never the matched text)" "" "" "none" ""
@@ -860,8 +974,16 @@ run_pass() {
     fi
 
     sync_status
+    local behind="$ST_BEHIND"
+    if [ "$remote_exists" -eq 1 ] && [ "$needs_set_upstream" -eq 1 ]; then
+        # No @{u} configured, so sync_status can't report ahead/behind --
+        # compute it directly against the resolved upstream instead.
+        behind="$(git_hardened rev-list --count "HEAD..$upstream" 2>/dev/null)"
+        behind="${behind:-0}"
+    fi
+
     IG_SUCCESS=1; IG_CONFLICT=0; IG_CONFLICT_FILES=""; IG_PULLED=""
-    if [ "$ST_BEHIND" -gt 0 ]; then
+    if [ "$remote_exists" -eq 1 ] && [ "$behind" -gt 0 ]; then
         if ! integrate "$branch" "$upstream"; then
             write_conflict_report "$branch" "$upstream" "$IG_CONFLICT_FILES"
             set_pause_flag conflict
@@ -873,12 +995,13 @@ run_pass() {
 
     PUSH_PUSHED=0; PUSH_REASON="auto-push-disabled"; PUSH_CONFLICT_FILES=""; PUSH_AUTH_FAILED=0
     if [ "${AUTO_PUSH:-true}" = "true" ]; then
-        sync_push "$branch"
+        sync_push "$branch" "$remote_exists" "$needs_set_upstream"
         if [ "$PUSH_AUTH_FAILED" -eq 1 ]; then
             set_state authBackoffUntilEpoch "$(( $(date -u +%s) + ${AUTH_BACKOFF_MINUTES:-30}*60 ))"
         fi
         if [ "$PUSH_REASON" = "conflict-on-retry" ]; then
-            write_conflict_report "$branch" "$upstream" "$PUSH_CONFLICT_FILES"
+            local upstream_display="${upstream:-origin/$branch}"
+            write_conflict_report "$branch" "$upstream_display" "$PUSH_CONFLICT_FILES"
             set_pause_flag conflict
         fi
     fi
@@ -931,10 +1054,11 @@ run_pass() {
 # ---------------------------------------------------------------------------
 
 cmd_install() {
-    local interval_min="${1:-5}"
-    local existing new_line
+    local interval_min="${1:-5}" track_flag="${2:-0}"
+    local existing new_line extra_args=""
+    [ "$track_flag" = "1" ] && extra_args=" --track-current-branch"
     existing="$(crontab -l 2>/dev/null | grep -v -F "$CRON_MARKER")"
-    new_line="*/$interval_min * * * * \"$SCRIPT_DIR/aura-sync.sh\" --once >/dev/null 2>&1 $CRON_MARKER"
+    new_line="*/$interval_min * * * * \"$SCRIPT_DIR/aura-sync.sh\" --once$extra_args >/dev/null 2>&1 $CRON_MARKER"
     { [ -n "$existing" ] && printf '%s\n' "$existing"; printf '%s\n' "$new_line"; } | crontab -
     echo "Installed cron entry: every $interval_min min (note: cron intervals must divide 60 evenly -- use 5/10/15/20/30, or --watch for arbitrary intervals)."
     echo "View with: crontab -l | grep aura-sync"
@@ -960,7 +1084,7 @@ cmd_status() {
 # ---------------------------------------------------------------------------
 
 ONCE=0; WATCH=0; DO_PAUSE=0; DO_RESUME=0; DO_STATUS=0; DO_INSTALL=0; DO_UNINSTALL=0
-PAUSE_MINUTES=0; PAUSE_REASON="manual"; INSTALL_INTERVAL=5
+PAUSE_MINUTES=0; PAUSE_REASON="manual"; INSTALL_INTERVAL=5; CLI_TRACK_CURRENT=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -974,6 +1098,7 @@ while [ $# -gt 0 ]; do
         --install) DO_INSTALL=1 ;;
         --interval-minutes) shift; INSTALL_INTERVAL="${1:-5}" ;;
         --uninstall) DO_UNINSTALL=1 ;;
+        --track-current-branch) CLI_TRACK_CURRENT=1 ;;
         -h|--help) grep '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 4 ;;
     esac
@@ -984,12 +1109,19 @@ load_config_file "$CONFIG_DEFAULTS"
 load_config_file "$CONFIG_LOCAL"
 apply_env_overrides
 
+# CLI flag > env var / config file, per the documented precedence -- applied
+# after every other config source has loaded so it can't be clobbered by them.
+[ "$CLI_TRACK_CURRENT" -eq 1 ] && SYNC_BRANCHES=current
+
+TRACK_CURRENT_MODE=0
+case "${SYNC_BRANCHES:-master}" in *current*) TRACK_CURRENT_MODE=1 ;; esac
+
 case "${PULL_STRATEGY:-rebase}" in
     rebase|merge|ff-only) ;;
     *) echo "sync.config: PULL_STRATEGY must be rebase|merge|ff-only, got '$PULL_STRATEGY'" >&2; exit 4 ;;
 esac
 
-if [ "$DO_INSTALL" -eq 1 ]; then cmd_install "$INSTALL_INTERVAL"; exit 0; fi
+if [ "$DO_INSTALL" -eq 1 ]; then cmd_install "$INSTALL_INTERVAL" "$CLI_TRACK_CURRENT"; exit 0; fi
 if [ "$DO_UNINSTALL" -eq 1 ]; then cmd_uninstall; exit 0; fi
 if [ "$DO_STATUS" -eq 1 ]; then cmd_status; exit 0; fi
 if [ "$DO_PAUSE" -eq 1 ]; then
@@ -1004,7 +1136,11 @@ fi
 if [ "$DO_RESUME" -eq 1 ]; then rm -f "$PAUSE_FILE"; echo "Auto-sync resumed."; exit 0; fi
 
 if [ "$WATCH" -eq 1 ]; then
-    echo "aura-sync watching -- interval ${INTERVAL_SECONDS:-300}s, branch(es): ${SYNC_BRANCHES:-master}. Ctrl+C to stop."
+    if [ "$TRACK_CURRENT_MODE" -eq 1 ]; then
+        echo "aura-sync watching -- interval ${INTERVAL_SECONDS:-300}s, mode=current (tracks whatever branch is checked out). Ctrl+C to stop."
+    else
+        echo "aura-sync watching -- interval ${INTERVAL_SECONDS:-300}s, branch(es): ${SYNC_BRANCHES:-master}. Ctrl+C to stop."
+    fi
     while :; do
         run_pass
         sleep "${INTERVAL_SECONDS:-300}"

@@ -29,7 +29,10 @@ chmod +x scripts/sync/aura-sync.sh
 
 That's it. Every 5 minutes (or whatever interval you pick) each of your clones
 will: fetch, auto-commit anything you've changed, pull the other person's
-changes, and push yours. Auto-sync is scoped to `master` only.
+changes, and push yours. Auto-sync is scoped to `master` by default -- opt
+into tracking whatever branch you're on instead, see
+["Tracking whatever branch you're on"](#tracking-whatever-branch-youre-on)
+below.
 
 ## What it actually does, in order
 
@@ -42,7 +45,8 @@ changes, and push yours. Auto-sync is scoped to `master` only.
 5. **Predicts conflicts before touching your files.** If pulling would conflict, it
    stops immediately — no merge is attempted, your working tree is untouched — writes
    `.autosync/CONFLICT.md`, pauses itself, and notifies you.
-6. If it's clean, **integrates** (rebase onto `origin/master` by default) and **pushes**.
+6. If it's clean, **integrates** (rebase onto the tracked branch's `origin/<branch>`
+   by default) and **pushes**.
 7. If your teammate pushed in the same instant, it retries once or twice with a short
    random delay before giving up for this pass (nothing is lost either way).
 8. Writes a **confirmation summary** to the console, `.autosync/last-run.txt`, and (if
@@ -93,14 +97,15 @@ recorded in the pause flag and the log.
 
 When aura-sync predicts a conflict, it stops before merging anything. Your
 files are exactly as you left them. Read `.autosync/CONFLICT.md` — it names
-the conflicting files and gives you the exact commands to resolve manually:
+the branch, the conflicting files, and gives you the exact commands to
+resolve manually:
 
 ```
-git pull --no-rebase origin master
+git pull --no-rebase origin <branch>
 # fix conflicts in the listed files
 git add <resolved files>
 git commit
-git push origin master
+git push origin <branch>
 ```
 
 Then resume: `-Resume` / `--resume`. Recovery refs for anything auto-sync
@@ -119,6 +124,7 @@ Key settings:
 | Key | Default | Meaning |
 |---|---|---|
 | `INTERVAL_SECONDS` | 300 | How often `-Watch`/`--watch` re-syncs |
+| `SYNC_BRANCHES` | `master` | `master` (fixed) \| `current` (track whatever's checked out) |
 | `PULL_STRATEGY` | `rebase` | `rebase` \| `merge` \| `ff-only` |
 | `AUTO_COMMIT` | `true` | Auto-commit local changes each pass |
 | `AUTO_PUSH` | `true` | Auto-push after a clean integrate |
@@ -130,6 +136,46 @@ Key settings:
 If you'd rather review before it publishes anything, set `AUTO_PUSH=false` in
 your local override — it'll still keep you up to date with your teammate's
 pushes, it just won't publish yours automatically.
+
+## Tracking whatever branch you're on
+
+By default aura-sync only ever does anything while `master` is checked out —
+on any other branch it silently skips the pass (`reason: branch-not-allowed:...`).
+If your work lives on feature branches instead (e.g. one branch per phase),
+that means aura-sync never touches it.
+
+Opt into "sync whatever branch is currently checked out" instead:
+
+```powershell
+# One-off run:
+.\scripts\sync\aura-sync.ps1 -TrackCurrentBranch
+
+# Persistent, this clone only (create/edit .autosync\sync.config.local):
+SYNC_BRANCHES=current
+
+# Bake it into the installed scheduled task:
+.\scripts\sync\aura-sync.ps1 -Install -IntervalMinutes 5 -TrackCurrentBranch
+```
+```bash
+./scripts/sync/aura-sync.sh --track-current-branch
+# persistent: SYNC_BRANCHES=current in .autosync/sync.config.local
+./scripts/sync/aura-sync.sh --install --interval-minutes 5 --track-current-branch
+```
+
+What this changes:
+
+- Every pass syncs **one** branch: whichever is checked out when that pass
+  starts. It never syncs multiple branches in one pass.
+- Switch branches between passes and the next pass just follows — no
+  reconfiguration needed. If you check out a *different* branch mid-pass
+  (during the jitter sleep or the fetch), that pass detects it and skips
+  cleanly (`branch-changed-mid-pass`) rather than acting on stale state.
+- Committing on a brand-new local branch that doesn't exist on `origin` yet
+  auto-creates it there on first push (`--set-upstream`, never `--force`).
+- Conflict prediction, the secret scan, the path denylist, and every other
+  guard apply exactly the same as in `master` mode — nothing about the
+  safety model changes, only which branch it runs against.
+- `master`-only usage (the default, no opt-in) is completely unaffected.
 
 ## Scheduling reference
 
@@ -179,6 +225,10 @@ Enable with `systemctl --user enable --now aura-sync.timer`.
 - Never runs two passes at once on the same machine (lock file), and retries
   cleanly if you and your teammate push at the same moment.
 - Auto-pauses itself after repeated failures instead of retrying forever.
+- Never force-pushes, and never pushes to any branch other than the one
+  currently checked out -- including in `SYNC_BRANCHES=current` mode, where a
+  diverged same-named remote branch is rejected non-fast-forward and handled
+  through the normal fetch/integrate/retry path, same as any other push.
 
 ## Trade-offs, stated plainly
 
