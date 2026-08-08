@@ -24,6 +24,9 @@ REAL_TEMPLATE_DIRS = (
     "errors",
     # UI modernization Stage C -- the Attention Center (app/attention/).
     "attention",
+    # UI modernization Stage D -- the enterprise table/list macro library
+    # (templates/components/table.html), imported by domain list screens.
+    "components",
 )
 
 # No-fixture-required GET routes: real, reachable, list/index/status pages.

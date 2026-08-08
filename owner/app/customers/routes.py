@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
-from sqlalchemy import select
 
 from app.auth.session import load_current_staff
 from app.customers.services import (
@@ -13,6 +12,7 @@ from app.customers.services import (
     create_customer,
     customer_visible_to_actor,
     find_duplicate_candidates,
+    list_customers as list_customers_query,
     update_customer,
 )
 from app.employees.queries import find_own_profile
@@ -21,7 +21,6 @@ from app.leads.engagement import create_customer_followup, log_customer_interact
 from app.leads.errors import CustomerCrmError, LeadError, LocationValidationError
 from app.leads.location import validate_location_fields
 from app.leads.notes import list_customer_notes_visible_to
-from app.leads.ownership import apply_ownership_filter
 from app.leads.services import capture_location
 from app.models.base import utcnow
 from app.models.customers import Customer
@@ -39,23 +38,31 @@ def _customer_visible_to(customer: Customer, actor) -> bool:
 @require_permission("customers.view")
 def list_customers():
     actor = load_current_staff()
-    status_filter = request.args.get("status")
-    stmt = select(Customer).order_by(Customer.created_at.desc())
-    if status_filter:
-        stmt = stmt.where(Customer.lifecycle_status == status_filter)
+    status_filter = request.args.get("status") or None
+    search = request.args.get("q") or None
+    sort = request.args.get("sort", "created_at")
+    direction = request.args.get("dir", "desc")
+    page = request.args.get("page", 1, type=int)
     # Phase 9.5C Milestone 3 -- customers.view only gates entry to this
     # route; the actual visibility SCOPE is customers.view_own (assigned
     # only) vs customers.view_all (everyone), enforced server-side via the
     # same shared apply_ownership_filter() every Lead query uses (never a
     # second, independently-written filter -- see
-    # docs/owner/phase9_5c/crm-record-ownership-contract.md).
+    # docs/owner/phase9_5c/crm-record-ownership-contract.md). UI
+    # modernization Stage D -- filtering/sort/pagination now live in
+    # customers.services.list_customers(), same factoring as
+    # leads.services.list_own_leads/list_all_leads.
     codes = get_staff_permission_codes(actor)
     all_held = "customers.view_all" in codes
-    if not all_held:
-        profile = find_own_profile(actor.id)
-        stmt = apply_ownership_filter(stmt, Customer, profile.id if profile else None, all_permission_held=False)
-    customers = db_session.execute(stmt).scalars().all()
-    return render_template("customers/list.html", customers=customers, status_filter=status_filter)
+    profile = None if all_held else find_own_profile(actor.id)
+    result = list_customers_query(
+        page=page, status=status_filter, search=search, sort=sort, direction=direction,
+        actor_employee_profile_id=profile.id if profile else None, all_permission_held=all_held,
+    )
+    return render_template(
+        "customers/list.html", result=result, status_filter=status_filter, search_value=search,
+        sort=sort, direction=direction,
+    )
 
 
 @bp.route("/new", methods=["GET"])

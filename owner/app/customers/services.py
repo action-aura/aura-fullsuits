@@ -9,10 +9,24 @@ from sqlalchemy import func, or_, select
 from app.audit.services import record as audit_record
 from app.extensions import db_session
 from app.leads.errors import CustomerCrmError
+from app.leads.ownership import apply_ownership_filter
 from app.models.base import utcnow
 from app.models.customers import Customer, CustomerContact, CustomerNote
 from app.models.leads import CustomerAssignment
 from app.models.staff import StaffUser
+from app.services.pagination import DEFAULT_PAGE_SIZE, paginate
+
+# UI modernization Stage D (enterprise-table-system) -- the only columns a
+# real, verified server-side ORDER BY exists for. Keys are the ?sort= query
+# param value; anything else (including no ?sort= at all) falls back to
+# created_at desc, the exact ordering the /customers route already used
+# unconditionally before this pass.
+CUSTOMER_SORT_COLUMNS = {
+    "legal_name": Customer.legal_name,
+    "country": Customer.country,
+    "lifecycle_status": Customer.lifecycle_status,
+    "created_at": Customer.created_at,
+}
 
 
 def normalize_phone(phone: str) -> str:
@@ -51,6 +65,49 @@ def find_duplicate_candidates(legal_name: str, commercial_registration_reference
             if normalize_phone(contact.business_phone) == normalized_phone and contact.customer not in candidates:
                 candidates.append(contact.customer)
     return candidates
+
+
+def list_customers(
+    *,
+    page: int = 1,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    status: str | None = None,
+    search: str | None = None,
+    sort: str = "created_at",
+    direction: str = "desc",
+    actor_employee_profile_id: uuid.UUID | None = None,
+    all_permission_held: bool = True,
+) -> dict:
+    """List customer organizations for the /customers screen.
+
+    UI modernization Stage D (enterprise-table-system) -- factored out of
+    customers/routes.py so the route stays thin and this is unit-testable
+    like every other domain's list function (leads.services.list_own_leads/
+    list_all_leads, employees.queries.list_employees). Behavior-preserving
+    by default: with no status/search/sort/direction override, this
+    reproduces the exact prior unconditional `order_by(created_at.desc())`,
+    unbounded-except-by-page-size query the route used to build inline --
+    search/sort are strictly additive, opt-in via real query params, never
+    a client-side filter over an unbounded fetch (the old route had no
+    LIMIT/OFFSET at all -- a real, disclosed performance risk per
+    screen-route-inventory.md -- this always paginates now).
+
+    Ownership scoping is unchanged: `all_permission_held=False` applies the
+    exact same shared apply_ownership_filter() the route used to call
+    directly (never a second, independently written filter).
+    """
+    stmt = select(Customer)
+    if status:
+        stmt = stmt.where(Customer.lifecycle_status == status)
+    if search:
+        like = f"%{search.strip()}%"
+        stmt = stmt.where(or_(Customer.legal_name.ilike(like), Customer.trade_name.ilike(like)))
+    if not all_permission_held:
+        stmt = apply_ownership_filter(stmt, Customer, actor_employee_profile_id, all_permission_held=False)
+    column = CUSTOMER_SORT_COLUMNS.get(sort, Customer.created_at)
+    order = column.asc() if direction == "asc" else column.desc()
+    stmt = stmt.order_by(order, Customer.id)
+    return paginate(stmt, page, page_size)
 
 
 def customer_visible_to_actor(customer: Customer, actor_staff_user_id: uuid.UUID, actor_permission_codes: set[str]) -> bool:

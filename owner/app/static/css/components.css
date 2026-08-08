@@ -666,3 +666,155 @@ code.masked {
   .aura-cp-overlay { padding-block-start: var(--aura-space-4); }
   .aura-cp-dialog { max-block-size: 85vh; }
 }
+
+/* ---------- Enterprise Table System (Stage D) ----------
+   Real, reusable list/table components built once in
+   templates/components/table.html (Jinja macros) + this CSS, instead of
+   ~40 screens each hand-rolling the same header/filter/table/pagination
+   markup (current-ui-audit.md sec 1). Sticky header + contained
+   horizontal scroll (.aura-table-scroll), never the legacy
+   .responsive-table card-flip stacking above -- that mechanism hides
+   <thead> under 720px, which is incompatible with sticky headers and
+   real sortable column links. The two mechanisms are kept deliberately
+   separate: .responsive-table (Phase 9.5B, above) still serves the ~40
+   legacy tables outside this pass's scope unchanged; any NEW table built
+   through table.html's table() macro always uses .aura-table +
+   .aura-table-scroll. Full reasoning in
+   docs/owner/ui-modernization/enterprise-table-system.md. */
+
+.aura-list-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--aura-space-3);
+  flex-wrap: wrap;
+  margin-block-end: var(--aura-space-3);
+}
+
+.aura-list-toolbar h2 { margin: 0; }
+
+.aura-list-filters { flex-wrap: wrap; }
+
+.aura-list-filters__search input[type="search"] { min-inline-size: 220px; }
+
+.aura-table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-block-end: var(--aura-space-2);
+}
+
+.aura-density-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--aura-space-1);
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--aura-color-text-secondary);
+  border-radius: var(--aura-radius-sm);
+  padding: 0.3rem 0.6rem;
+  font-size: var(--aura-font-size-xs);
+  cursor: pointer;
+}
+.aura-density-toggle:hover, .aura-density-toggle:focus-visible {
+  color: var(--aura-color-text-primary);
+  border-color: var(--aura-color-border-strong);
+}
+.aura-density-toggle[aria-pressed="true"] {
+  color: var(--aura-color-brand-primary);
+  border-color: var(--aura-color-brand-primary);
+}
+
+/* Real contained horizontal scroll -- the wrapper has no fixed
+   block-size, so its own overflow-y never activates independently and
+   the page scrolls normally; that keeps position:sticky below anchored
+   to the viewport (its nearest actually-scrolling ancestor), not a
+   clipped inner box. */
+.aura-table-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--aura-radius-md);
+}
+.aura-table-scroll table.aura-table { border: none; border-radius: 0; }
+
+table.aura-table { width: 100%; border-collapse: collapse; }
+table.aura-table th, table.aura-table td {
+  padding: var(--aura-table-cell-pad-comfortable);
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  white-space: nowrap;
+}
+table.aura-table td.aura-table__wrap { white-space: normal; }
+
+table.aura-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--aura-color-surface-raised);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  z-index: var(--aura-z-sticky);
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+table.aura-table th[aria-sort] { padding: 0; }
+.aura-table__sort-link {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: var(--aura-table-cell-pad-comfortable);
+  color: inherit;
+  text-decoration: none;
+  font: inherit;
+  text-transform: inherit;
+}
+.aura-table__sort-link:hover, .aura-table__sort-link:focus-visible { color: var(--aura-color-brand-primary); }
+.aura-table__sort-icon { font-size: 0.7em; opacity: 0.6; }
+th[aria-sort="ascending"] .aura-table__sort-icon, th[aria-sort="descending"] .aura-table__sort-icon { opacity: 1; }
+
+:root[data-table-density="compact"] table.aura-table th,
+:root[data-table-density="compact"] table.aura-table td {
+  padding: var(--aura-table-cell-pad-compact);
+}
+:root[data-table-density="compact"] .aura-table__sort-link { padding: var(--aura-table-cell-pad-compact); }
+
+.aura-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--aura-space-3);
+  margin-block-start: var(--aura-space-3);
+}
+.aura-pagination__summary { color: var(--muted); font-size: var(--aura-font-size-sm); margin: 0; }
+.aura-pagination__list {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex-wrap: wrap;
+}
+.aura-pagination__link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: 2rem;
+  block-size: 2rem;
+  padding-inline: 0.4rem;
+  border-radius: var(--aura-radius-sm);
+  border: 1px solid var(--border);
+  color: var(--aura-color-text-primary);
+  text-decoration: none;
+  font-size: var(--aura-font-size-sm);
+  background: var(--aura-color-surface-raised);
+}
+.aura-pagination__link:hover, .aura-pagination__link:focus-visible { border-color: var(--accent); color: var(--accent); }
+.aura-pagination__link--current { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.aura-pagination__link--disabled { color: var(--muted); background: var(--aura-color-surface-muted); cursor: not-allowed; }
+.aura-pagination__ellipsis { padding-inline: 0.3rem; color: var(--muted); }
+/* Prev/Next glyphs (&larr;/&rarr;) are directional -- "previous" must
+   visually point toward the reading-backward direction, which is the
+   opposite screen side under RTL. Same mirroring technique already used
+   for the sidebar's collapse-toggle icon (shell.css). */
+:root[dir="rtl"] [data-aura-pagination-dir] { transform: scaleX(-1); }
