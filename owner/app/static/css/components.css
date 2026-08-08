@@ -818,3 +818,86 @@ th[aria-sort="ascending"] .aura-table__sort-icon, th[aria-sort="descending"] .au
    opposite screen side under RTL. Same mirroring technique already used
    for the sidebar's collapse-toggle icon (shell.css). */
 :root[dir="rtl"] [data-aura-pagination-dir] { transform: scaleX(-1); }
+
+/* ---------- Customer 360 tabs (Stage D) ----------
+   Real ARIA tabs (role="tablist"/"tab"/"tabpanel"), progressively
+   enhanced from a plain in-page anchor-link list -- see static/js/tabs.js
+   and docs/owner/ui-modernization/customer-360-contract.md for the full
+   no-JS behavior contract. Without JS every panel below stays visible
+   (no [hidden] applied), so this stylesheet must not itself hide panels
+   -- only tabs.js ever sets the [hidden] attribute. */
+
+.aura-tabs__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--aura-space-1);
+  border-block-end: 1px solid var(--aura-color-border-default);
+  margin-block-end: var(--aura-space-4);
+  padding: 0;
+  list-style: none;
+}
+
+.aura-tabs__tab {
+  display: inline-block;
+  padding: var(--aura-space-2) var(--aura-space-3);
+  font-size: var(--aura-font-size-sm);
+  font-weight: var(--aura-font-weight-medium);
+  color: var(--aura-color-text-secondary);
+  text-decoration: none;
+  border-bottom: var(--aura-border-width-md) solid transparent;
+  margin-block-end: -1px;
+}
+.aura-tabs__tab:hover, .aura-tabs__tab:focus-visible {
+  color: var(--aura-color-brand-primary);
+}
+.aura-tabs__tab[aria-selected="true"] {
+  color: var(--aura-color-brand-primary);
+  border-block-end-color: var(--aura-color-brand-primary);
+  font-weight: var(--aura-font-weight-semibold);
+}
+
+.aura-tabs__panel { scroll-margin-block-start: var(--aura-space-4); }
+
+/* Bounded aggregate "commercial summary" tiles in the 360 header. */
+.aura-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--aura-space-3);
+  margin-block: var(--aura-space-3);
+}
+.aura-summary-tile {
+  background: var(--aura-color-surface-muted);
+  border-radius: var(--aura-radius-md);
+  padding: var(--aura-space-3);
+}
+.aura-summary-tile__value {
+  display: block;
+  font-size: var(--aura-font-size-lg);
+  font-weight: var(--aura-font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--aura-color-text-primary);
+}
+.aura-summary-tile__label {
+  display: block;
+  font-size: var(--aura-font-size-xs);
+  color: var(--aura-color-text-muted);
+}
+
+/* Real Timeline feed -- domain events only, never AuditLog/SecurityEvent
+   (see customer_360.py's own module docstring). */
+.aura-timeline { list-style: none; margin: 0; padding: 0; }
+.aura-timeline__item {
+  display: flex;
+  gap: var(--aura-space-3);
+  padding-block: var(--aura-space-2);
+  border-block-end: 1px solid var(--aura-color-border-default);
+}
+.aura-timeline__item:last-child { border-block-end: none; }
+.aura-timeline__when {
+  flex: 0 0 auto;
+  color: var(--aura-color-text-muted);
+  font-size: var(--aura-font-size-xs);
+  white-space: nowrap;
+  min-inline-size: 9rem;
+}
+.aura-timeline__label { font-size: var(--aura-font-size-sm); }
