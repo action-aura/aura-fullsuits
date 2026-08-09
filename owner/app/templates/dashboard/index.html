@@ -41,7 +41,7 @@
 {% if can_view_customers or can_view_subscriptions %}
 <div class="card">
   <h2>{{ _("Overview") }}</h2>
-  <div class="kv">
+  <dl class="kv">
     {% if can_view_customers %}
     <dt>{{ _("Total customers") }}</dt><dd>{{ format_owner_number(summary.total_customers) }}</dd>
     <dt>{{ _("Pilot customers") }}</dt><dd>{{ format_owner_number(summary.pilot_customers) }}</dd>
@@ -52,14 +52,14 @@
     <dt>{{ _("Subscriptions expiring in 7 days") }}</dt><dd>{{ format_owner_number(summary.expiring_7) }}</dd>
     <dt>{{ _("Subscriptions expiring in 30 days") }}</dt><dd>{{ format_owner_number(summary.expiring_30) }}</dd>
     {% endif %}
-  </div>
+  </dl>
 </div>
 {% endif %}
 
 {% if can_view_commercial_ops %}
 <div class="card">
   <h3>{{ _("Commercial operations") }}</h3>
-  <div class="kv">
+  <dl class="kv">
     {% if can_view_notifications %}
     <dt>{{ _("Open notifications") }}</dt><dd><a href="{{ url_for('commercial_ops_ui.list_notifications') }}">{{ format_owner_number(summary.open_notifications) }}</a></dd>
     <dt>{{ _("Renewals awaiting finance approval") }}</dt><dd><a href="{{ url_for('commercial_ops_ui.list_renewals', status='PAYMENT_RECORDED') }}">{{ format_owner_number(summary.renewals_awaiting_approval) }}</a></dd>
@@ -76,7 +76,7 @@
     {% if can_view_device_slots %}
     <dt>{{ _("Active device-slot exceptions") }}</dt><dd>{{ format_owner_number(summary.active_device_slot_exceptions) }}</dd>
     {% endif %}
-  </div>
+  </dl>
 </div>
 {% endif %}
 

@@ -64,7 +64,7 @@
 <div class="card">
   <h3>{{ _("Lines") }}</h3>
   <table class="responsive-table">
-    <thead><tr><th>{{ _("Item") }}</th><th>{{ _("Quantity") }}</th><th>{{ _("Unit price") }}</th><th>{{ _("Discount") }}</th><th>{{ _("Line total") }}</th><th></th></tr></thead>
+    <thead><tr><th>{{ _("Item") }}</th><th>{{ _("Quantity") }}</th><th>{{ _("Unit price") }}</th><th>{{ _("Discount") }}</th><th>{{ _("Line total") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>
     {% for l in lines %}
     <tr>
@@ -90,18 +90,18 @@
   {% if quote.status == "DRAFT" %}
   <form method="post" action="{{ url_for('commercial_sales_web.add_quote_line_route', quote_id=quote.id) }}" style="margin-top:0.75rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Plan") }}</label>
-    <select name="plan_id" required>
+    <label for="commercial-sales-quote-detail-plan-id">{{ _("Plan") }}</label>
+    <select id="commercial-sales-quote-detail-plan-id" name="plan_id" required>
       {% for p in plans %}<option value="{{ p.plan_id }}">{{ p.name }} ({{ p.plan_code }})</option>{% endfor %}
     </select>
-    <label>{{ _("Quantity") }}</label>
-    <input type="number" name="quantity" value="1" min="1" required>
-    <label>{{ _("Override unit price (optional)") }}</label>
-    <input name="override_unit_price" placeholder="{{ _('Leave blank to use catalog price') }}">
-    <label>{{ _("Override reason (required if overriding price)") }}</label>
-    <input name="override_reason">
-    <label>{{ _("Discount amount") }}</label>
-    <input name="discount_amount" value="0">
+    <label for="commercial-sales-quote-detail-quantity">{{ _("Quantity") }}</label>
+    <input id="commercial-sales-quote-detail-quantity" type="number" name="quantity" value="1" min="1" required>
+    <label for="commercial-sales-quote-detail-override-unit-price">{{ _("Override unit price (optional)") }}</label>
+    <input id="commercial-sales-quote-detail-override-unit-price" name="override_unit_price" placeholder="{{ _('Leave blank to use catalog price') }}">
+    <label for="commercial-sales-quote-detail-override-reason">{{ _("Override reason (required if overriding price)") }}</label>
+    <input id="commercial-sales-quote-detail-override-reason" name="override_reason">
+    <label for="commercial-sales-quote-detail-discount-amount">{{ _("Discount amount") }}</label>
+    <input id="commercial-sales-quote-detail-discount-amount" name="discount_amount" value="0">
     <button type="submit" class="btn" style="margin-top:0.5rem;">{{ _("Add line") }}</button>
   </form>
   {% endif %}
@@ -111,7 +111,7 @@
 <div class="card">
   <h3>{{ _("Pricing approvals") }}</h3>
   <table class="responsive-table">
-    <thead><tr><th>{{ _("Reason") }}</th><th>{{ _("Status") }}</th><th>{{ _("Requested") }}</th><th></th></tr></thead>
+    <thead><tr><th>{{ _("Reason") }}</th><th>{{ _("Status") }}</th><th>{{ _("Requested") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>
     {% for a in approvals %}
     <tr>

@@ -150,7 +150,7 @@
           </a>
         </th>
       {% else %}
-        <th scope="col"{% if col.align == "end" %} class="num"{% endif %}>{{ col.label }}</th>
+        <th scope="col"{% if col.align == "end" %} class="num"{% endif %}>{% if col.label %}{{ col.label }}{% else %}<span class="aura-sr-only">{{ _("Actions") }}</span>{% endif %}</th>
       {% endif %}
     {% endfor %}
     </tr>

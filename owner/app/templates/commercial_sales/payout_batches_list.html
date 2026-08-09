@@ -7,12 +7,12 @@
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   <form method="post" action="{{ url_for('commercial_sales_web.create_payout_batch_route') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Batch reference") }}</label>
-    <input name="batch_reference" required>
-    <label>{{ _("Period start") }}</label>
-    <input type="date" name="period_start" required>
-    <label>{{ _("Period end") }}</label>
-    <input type="date" name="period_end" required>
+    <label for="payout-batch-reference">{{ _("Batch reference") }}</label>
+    <input id="payout-batch-reference" name="batch_reference" required>
+    <label for="payout-period-start">{{ _("Period start") }}</label>
+    <input id="payout-period-start" type="date" name="period_start" required>
+    <label for="payout-period-end">{{ _("Period end") }}</label>
+    <input id="payout-period-end" type="date" name="period_end" required>
     <button type="submit" class="btn" style="margin-top:0.5rem;">{{ _("Create batch") }}</button>
   </form>
 </div>
@@ -50,7 +50,7 @@
 <div class="card">
   <h3>{{ _("Approved commission entries awaiting payout") }}</h3>
   <table class="responsive-table">
-    <thead><tr><th>{{ _("Amount") }}</th><th>{{ _("Employee") }}</th><th></th></tr></thead>
+    <thead><tr><th>{{ _("Amount") }}</th><th>{{ _("Employee") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>
     {% for e in approved_entries %}
     <tr>

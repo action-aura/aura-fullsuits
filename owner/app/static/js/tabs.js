@@ -42,6 +42,27 @@
     var panels = Array.prototype.slice.call(container.querySelectorAll("[data-tabs-panel-el]"));
     if (!tabs.length || !panels.length) return;
 
+    // Real tablist members only (real role="tab" elements inside the tab
+    // strip) get aria-selected/tabindex/keyboard-nav below. A page may also
+    // have plain in-page "jump to this tab" links elsewhere in its prose
+    // (e.g. Customer 360's "View full timeline" shortcut) -- those reuse
+    // data-tabs-panel to name their target but are NOT members of the
+    // role="tablist" strip, so giving them aria-selected/tabindex would be
+    // an invalid ARIA state (an attribute the element's own role doesn't
+    // support -- a real bug this fixed, found via a real axe-core scan).
+    // They get their own, much smaller click-only wiring below instead.
+    var jumpLinks = Array.prototype.slice.call(container.querySelectorAll("[data-tabs-jump]"));
+    jumpLinks.forEach(function (link) {
+      link.addEventListener("click", function (event) {
+        event.preventDefault();
+        var targetId = link.getAttribute("data-tabs-panel");
+        activate(container, tabs, panels, targetId, { focus: true });
+        if (window.history && window.history.replaceState) {
+          window.history.replaceState(null, "", "#" + targetId);
+        }
+      });
+    });
+
     // Deep-link support: if the URL's hash names a real panel, open it;
     // otherwise default to the first (real, permission-visible) tab --
     // matches the plain-anchor no-JS behavior exactly (a hash link lands

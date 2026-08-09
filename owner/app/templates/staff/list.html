@@ -59,7 +59,7 @@
   <h3>{{ _("Pending invitations") }}</h3>
   {% if invitations %}
   <table class="responsive-table">
-    <thead><tr><th>{{ _("Email") }}</th><th>{{ _("Roles") }}</th><th>{{ _("Expires") }}</th><th></th></tr></thead>
+    <thead><tr><th>{{ _("Email") }}</th><th>{{ _("Roles") }}</th><th>{{ _("Expires") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>
     {% for inv in invitations %}
     <tr>

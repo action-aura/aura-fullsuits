@@ -6,18 +6,18 @@
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   <form method="post" action="{{ url_for('operations_ui.create_note_route') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Title") }}</label>
-    <input name="title" required>
+    <label for="operations-ui-management-note-new-title">{{ _("Title") }}</label>
+    <input id="operations-ui-management-note-new-title" name="title" required>
     <label>{{ _("Body") }}</label>
     <textarea name="body" required></textarea>
-    <label>{{ _("Priority") }}</label>
-    <select name="priority">
+    <label for="operations-ui-management-note-new-priority">{{ _("Priority") }}</label>
+    <select id="operations-ui-management-note-new-priority" name="priority">
       <option value="LOW">{{ management_note_priority_label("LOW") }}</option>
       <option value="MEDIUM" selected>{{ management_note_priority_label("MEDIUM") }}</option>
       <option value="HIGH">{{ management_note_priority_label("HIGH") }}</option>
     </select>
-    <label>{{ _("Visibility") }}</label>
-    <select name="visibility">
+    <label for="operations-ui-management-note-new-visibility">{{ _("Visibility") }}</label>
+    <select id="operations-ui-management-note-new-visibility" name="visibility">
       <option value="MANAGEMENT_ONLY">{{ management_note_visibility_label("MANAGEMENT_ONLY") }}</option>
       <option value="ALL_STAFF">{{ management_note_visibility_label("ALL_STAFF") }}</option>
     </select>

@@ -12,9 +12,9 @@
   <div class="aura-mfa-qr">
     <img src="{{ qr_data_uri }}" alt="{{ _('QR code for MFA enrollment -- scan with an authenticator app, or use the manual secret below') }}" width="200" height="200">
   </div>
-  <div class="kv">
+  <dl class="kv">
     <dt>{{ _('Manual secret') }}</dt><dd><code dir="ltr">{{ secret }}</code></dd>
-  </div>
+  </dl>
   <form method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label for="code">{{ _('Enter the current 6-digit code to confirm') }}</label>

@@ -8,12 +8,12 @@
   <form method="post" action="{{ url_for('commercial_ops_ui.create_emergency_extension_route') }}"
         data-confirm="{{ _('Create this emergency extension? This action is audited.') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Subscription ID") }}</label>
-    <input name="subscription_id" value="{{ subscription.id if subscription else '' }}" required>
-    <label>{{ _("License ID (optional)") }}</label><input name="license_id">
-    <label>{{ _("Reason (required)") }}</label><input name="reason" required>
-    <label>{{ _("Incident / reference") }}</label><input name="incident_reference">
-    <label>{{ _("Duration (hours, capped at %(max_hours)s)", max_hours=format_owner_number(max_hours or 72)) }}</label><input name="duration_hours" type="number" min="1" max="{{ max_hours or 72 }}" required>
+    <label for="commercial-ops-emergency-extensions-new-subscription-id">{{ _("Subscription ID") }}</label>
+    <input id="commercial-ops-emergency-extensions-new-subscription-id" name="subscription_id" value="{{ subscription.id if subscription else '' }}" required>
+    <label for="commercial-ops-emergency-extensions-new-license-id">{{ _("License ID (optional)") }}</label><input id="commercial-ops-emergency-extensions-new-license-id" name="license_id">
+    <label for="commercial-ops-emergency-extensions-new-reason">{{ _("Reason (required)") }}</label><input id="commercial-ops-emergency-extensions-new-reason" name="reason" required>
+    <label for="commercial-ops-emergency-extensions-new-incident-reference">{{ _("Incident / reference") }}</label><input id="commercial-ops-emergency-extensions-new-incident-reference" name="incident_reference">
+    <label for="commercial-ops-emergency-extensions-new-duration-hours">{{ _("Duration (hours, capped at %(max_hours)s)", max_hours=format_owner_number(max_hours or 72)) }}</label><input id="commercial-ops-emergency-extensions-new-duration-hours" name="duration_hours" type="number" min="1" max="{{ max_hours or 72 }}" required>
     <div style="margin-top:0.5rem;"><button type="submit">{{ _("Create extension") }}</button></div>
   </form>
 </div>

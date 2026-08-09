@@ -24,7 +24,7 @@
   <form method="post" action="{{ url_for('commercial_ops_ui.revoke_emergency_extension_route', extension_id=extension.id) }}"
         data-confirm="{{ _('Revoke this emergency extension now?') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Reason (required)") }}</label><input name="reason" required>
+    <label for="commercial-ops-emergency-extension-detail-reason">{{ _("Reason (required)") }}</label><input id="commercial-ops-emergency-extension-detail-reason" name="reason" required>
     <button type="submit" class="danger">{{ _("Revoke") }}</button>
   </form>
 </div>

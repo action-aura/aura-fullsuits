@@ -18,16 +18,16 @@
   <form method="post" action="{{ url_for('commercial_ops_ui.activation_policy_create') }}"
         data-confirm="{{ _('Change activation policy? This affects every future activation for the selected product.') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Policy code") }}</label><input name="policy_code" required>
-    <label>{{ _("Product (leave blank for global default)") }}</label>
-    <select name="product_id"><option value="">{{ _("-- global default --") }}</option>{% for p in products %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select>
-    <label>{{ _("Mode") }}</label>
-    <select name="mode">
+    <label for="commercial-ops-activation-policy-policy-code">{{ _("Policy code") }}</label><input id="commercial-ops-activation-policy-policy-code" name="policy_code" required>
+    <label for="commercial-ops-activation-policy-product-id">{{ _("Product (leave blank for global default)") }}</label>
+    <select id="commercial-ops-activation-policy-product-id" name="product_id"><option value="">{{ _("-- global default --") }}</option>{% for p in products %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select>
+    <label for="commercial-ops-activation-policy-mode">{{ _("Mode") }}</label>
+    <select id="commercial-ops-activation-policy-mode" name="mode">
       <option value="AUTOMATIC">{{ activation_mode_label("AUTOMATIC") }}</option>
       <option value="MANUAL_APPROVAL">{{ activation_mode_label("MANUAL_APPROVAL") }}</option>
       <option value="RISK_REVIEW">{{ activation_mode_label("RISK_REVIEW") }}</option>
     </select>
-    <label>{{ _("Effective date") }}</label><input name="effective_date" type="date" required>
+    <label for="commercial-ops-activation-policy-effective-date">{{ _("Effective date") }}</label><input id="commercial-ops-activation-policy-effective-date" name="effective_date" type="date" required>
     <label>{{ _("Notes") }}</label><textarea name="notes"></textarea>
     <div style="margin-top:0.5rem;"><button type="submit">{{ _("Create policy") }}</button></div>
   </form>

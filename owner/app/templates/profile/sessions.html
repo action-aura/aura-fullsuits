@@ -6,7 +6,7 @@
   {% if sessions %}
   <table>
     <thead>
-    <tr><th>{{ _('Created') }}</th><th>{{ _('Last seen') }}</th><th>{{ _('Platform') }}</th><th>{{ _('Status') }}</th><th></th></tr>
+    <tr><th>{{ _('Created') }}</th><th>{{ _('Last seen') }}</th><th>{{ _('Platform') }}</th><th>{{ _('Status') }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr>
     </thead>
     <tbody>
     {% for s in sessions %}

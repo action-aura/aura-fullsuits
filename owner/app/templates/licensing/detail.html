@@ -53,10 +53,10 @@
   <form method="post" action="{{ url_for('licensing.transition', license_id=license.id) }}"
         data-confirm="{{ _('Change license status? This may affect any activated installation.') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <select name="to_status">
+    <select name="to_status" aria-label="{{ _("Change status to") }}">
       {% for s in allowed_transitions %}<option value="{{ s }}">{{ license_status_label(s) }}</option>{% endfor %}
     </select>
-    <label>{{ _("Reason") }}</label><input name="reason">
+    <label for="licensing-detail-reason">{{ _("Reason") }}</label><input id="licensing-detail-reason" name="reason">
     <div style="margin-top:0.5rem;"><button type="submit">{{ _("Apply (requires recent authentication)") }}</button></div>
   </form>
 </div>

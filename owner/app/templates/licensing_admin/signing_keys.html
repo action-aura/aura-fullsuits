@@ -21,7 +21,7 @@
   </div>
   <p style="color:#6b7785;font-size:0.85rem;">{{ _("Private key material is never shown here or stored in the database -- only public metadata.") }}</p>
   <table class="responsive-table">
-    <thead><tr><th>{{ _("Key ID") }}</th><th>{{ _("Algorithm") }}</th><th>{{ _("Status") }}</th><th>{{ _("Activated") }}</th><th>{{ _("Retired") }}</th><th></th></tr></thead>
+    <thead><tr><th>{{ _("Key ID") }}</th><th>{{ _("Algorithm") }}</th><th>{{ _("Status") }}</th><th>{{ _("Activated") }}</th><th>{{ _("Retired") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>
     {% for k in keys %}
     <tr>

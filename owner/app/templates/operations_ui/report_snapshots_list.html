@@ -22,16 +22,16 @@
   <h3>{{ _("Generate a snapshot") }}</h3>
   <form method="post" action="{{ url_for('operations_ui.generate_snapshot_route') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Report type") }}</label>
-    <select name="report_type" required>
+    <label for="operations-ui-report-snapshots-list-report-type">{{ _("Report type") }}</label>
+    <select id="operations-ui-report-snapshots-list-report-type" name="report_type" required>
       {% for rt in report_types %}<option value="{{ rt }}">{{ report_type_label(rt) }}</option>{% endfor %}
     </select>
-    <label>{{ _("Period start") }}</label>
-    <input name="period_start" type="date" required>
-    <label>{{ _("Period end") }}</label>
-    <input name="period_end" type="date" required>
-    <label>{{ _("Currency") }}</label>
-    <input name="currency" value="USD" maxlength="3">
+    <label for="operations-ui-report-snapshots-list-period-start">{{ _("Period start") }}</label>
+    <input id="operations-ui-report-snapshots-list-period-start" name="period_start" type="date" required>
+    <label for="operations-ui-report-snapshots-list-period-end">{{ _("Period end") }}</label>
+    <input id="operations-ui-report-snapshots-list-period-end" name="period_end" type="date" required>
+    <label for="operations-ui-report-snapshots-list-currency">{{ _("Currency") }}</label>
+    <input id="operations-ui-report-snapshots-list-currency" name="currency" value="USD" maxlength="3">
     <button type="submit">{{ _("Generate") }}</button>
   </form>
 </div>

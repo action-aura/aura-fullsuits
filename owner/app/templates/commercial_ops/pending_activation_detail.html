@@ -29,7 +29,7 @@
   <form method="post" action="{{ url_for('commercial_ops_ui.reject_pending_activation_route', pending_id=pending.id) }}" style="margin-top:0.5rem;"
         data-confirm="{{ _('Reject this activation?') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Reason (required)") }}</label><input name="reason" required>
+    <label for="commercial-ops-pending-activation-detail-reason">{{ _("Reason (required)") }}</label><input id="commercial-ops-pending-activation-detail-reason" name="reason" required>
     <button type="submit" class="danger">{{ _("Reject") }}</button>
   </form>
 </div>

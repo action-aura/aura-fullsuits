@@ -34,9 +34,9 @@
   <form method="post" action="{{ url_for('commercial_ops_ui.transition_renewal', renewal_id=renewal.id) }}"
         data-confirm="{{ _('Change renewal status?') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Move to") }}</label>
-    <select name="to_status">{% for s in options %}<option value="{{ s }}">{{ renewal_status_label(s) }}</option>{% endfor %}</select>
-    <label>{{ _("Reason") }}</label><input name="reason">
+    <label for="commercial-ops-renewal-detail-to-status">{{ _("Move to") }}</label>
+    <select id="commercial-ops-renewal-detail-to-status" name="to_status">{% for s in options %}<option value="{{ s }}">{{ renewal_status_label(s) }}</option>{% endfor %}</select>
+    <label for="commercial-ops-renewal-detail-reason">{{ _("Reason") }}</label><input id="commercial-ops-renewal-detail-reason" name="reason">
     <div style="margin-top:0.5rem;"><button type="submit">{{ _("Apply status change") }}</button></div>
   </form>
   {% endif %}
@@ -46,7 +46,7 @@
         data-confirm="{{ _('Approve this renewal? A confirmed payment must already be linked.') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <p><strong>{{ _("Approve") }}</strong> {{ _("requires recent authentication and cannot be done by the staff member who created this request.") }}</p>
-    <label>{{ _("Reason") }}</label><input name="reason">
+    <label for="commercial-ops-renewal-detail-reason-1">{{ _("Reason") }}</label><input id="commercial-ops-renewal-detail-reason-1" name="reason">
     <button type="submit">{{ _("Approve renewal") }}</button>
   </form>
   {% endif %}

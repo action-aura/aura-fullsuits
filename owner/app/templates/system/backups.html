@@ -11,7 +11,7 @@
   </div>
   <p style="color:#6b7785;font-size:0.85rem;">{{ _("Restricted to Super Admin with a fresh MFA confirmation. Restoring takes a pre-restore safety backup automatically before touching any data.") }}</p>
   <table class="responsive-table">
-    <thead><tr><th>{{ _("When") }}</th><th>{{ _("Status") }}</th><th>{{ _("Size") }}</th><th>{{ _("Checksum") }}</th><th></th></tr></thead>
+    <thead><tr><th>{{ _("When") }}</th><th>{{ _("Status") }}</th><th>{{ _("Size") }}</th><th>{{ _("Checksum") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>
     {% for r in rows %}
     <tr>

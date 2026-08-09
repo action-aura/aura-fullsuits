@@ -62,7 +62,7 @@
 <div class="card">
   <h3>{{ _("Payment allocations") }}</h3>
   <table class="responsive-table">
-    <thead><tr><th>{{ _("Payment") }}</th><th>{{ _("Amount") }}</th><th>{{ _("Allocated") }}</th><th></th></tr></thead>
+    <thead><tr><th>{{ _("Payment") }}</th><th>{{ _("Amount") }}</th><th>{{ _("Allocated") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>
     {% for a in allocations %}
     <tr>
@@ -87,10 +87,10 @@
   {% if can_issue and invoice.status in ("ISSUED", "PARTIALLY_PAID") %}
   <form method="post" action="{{ url_for('commercial_sales_web.allocate_payment_route', invoice_id=invoice.id) }}" style="margin-top:0.75rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Payment ID") }}</label>
-    <input name="payment_record_id" placeholder="{{ _('Confirmed payment UUID') }}" required>
-    <label>{{ _("Amount") }}</label>
-    <input name="amount" required>
+    <label for="commercial-sales-invoice-detail-payment-record-id">{{ _("Payment ID") }}</label>
+    <input id="commercial-sales-invoice-detail-payment-record-id" name="payment_record_id" placeholder="{{ _('Confirmed payment UUID') }}" required>
+    <label for="commercial-sales-invoice-detail-amount">{{ _("Amount") }}</label>
+    <input id="commercial-sales-invoice-detail-amount" name="amount" required>
     <button type="submit" class="btn" style="margin-top:0.5rem;">{{ _("Allocate payment") }}</button>
   </form>
   {% endif %}
@@ -99,7 +99,7 @@
 <div class="card">
   <h3>{{ _("Refunds") }}</h3>
   <table class="responsive-table">
-    <thead><tr><th>{{ _("Amount") }}</th><th>{{ _("Status") }}</th><th>{{ _("Reason") }}</th><th></th></tr></thead>
+    <thead><tr><th>{{ _("Amount") }}</th><th>{{ _("Status") }}</th><th>{{ _("Reason") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>
     {% for r in refunds %}
     <tr>
@@ -116,12 +116,12 @@
   {% if refundable > 0 %}
   <form method="post" action="{{ url_for('commercial_sales_web.create_refund_route', invoice_id=invoice.id) }}" style="margin-top:0.75rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Amount") }}</label>
-    <input name="amount" required>
-    <label>{{ _("Reason") }}</label>
-    <input name="reason" required>
-    <label>{{ _("Source payment (optional)") }}</label>
-    <input name="payment_record_id" placeholder="{{ _('Payment UUID') }}">
+    <label for="commercial-sales-invoice-detail-amount-1">{{ _("Amount") }}</label>
+    <input id="commercial-sales-invoice-detail-amount-1" name="amount" required>
+    <label for="commercial-sales-invoice-detail-reason">{{ _("Reason") }}</label>
+    <input id="commercial-sales-invoice-detail-reason" name="reason" required>
+    <label for="commercial-sales-invoice-detail-payment-record-id-1">{{ _("Source payment (optional)") }}</label>
+    <input id="commercial-sales-invoice-detail-payment-record-id-1" name="payment_record_id" placeholder="{{ _('Payment UUID') }}">
     <button type="submit" class="btn" style="margin-top:0.5rem;">{{ _("Request refund") }}</button>
   </form>
   {% endif %}

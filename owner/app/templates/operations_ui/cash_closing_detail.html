@@ -37,10 +37,10 @@
   {% if closing.status == 'DRAFT' and 'cash_closing.prepare' in codes %}
   <form method="post" action="{{ url_for('operations_ui.submit_closing_route', closing_id=closing.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Actual counted cash") }}</label>
-    <input name="actual_counted_cash" type="text" inputmode="decimal" required>
-    <label>{{ _("Variance explanation (required if nonzero)") }}</label>
-    <input name="variance_explanation">
+    <label for="operations-ui-cash-closing-detail-actual-counted-cash">{{ _("Actual counted cash") }}</label>
+    <input id="operations-ui-cash-closing-detail-actual-counted-cash" name="actual_counted_cash" type="text" inputmode="decimal" required>
+    <label for="operations-ui-cash-closing-detail-variance-explanation">{{ _("Variance explanation (required if nonzero)") }}</label>
+    <input id="operations-ui-cash-closing-detail-variance-explanation" name="variance_explanation">
     <button type="submit">{{ _("Submit closing") }}</button>
   </form>
   {% endif %}
@@ -72,8 +72,8 @@
   {% if closing.status not in ('APPROVED', 'CLOSED') and 'cash_closing.adjust' in codes %}
   <form method="post" action="{{ url_for('operations_ui.add_adjustment_route', closing_id=closing.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Adjustment amount") }}</label>
-    <input name="amount" type="text" inputmode="decimal" required>
+    <label for="operations-ui-cash-closing-detail-amount">{{ _("Adjustment amount") }}</label>
+    <input id="operations-ui-cash-closing-detail-amount" name="amount" type="text" inputmode="decimal" required>
     <input name="reason" placeholder="{{ _('Reason') }}" required>
     <button type="submit">{{ _("Add adjustment") }}</button>
   </form>

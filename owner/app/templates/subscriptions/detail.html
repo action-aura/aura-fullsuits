@@ -17,12 +17,12 @@
   <form method="post" action="{{ url_for('subscriptions.transition', subscription_id=subscription.id) }}"
         data-confirm="{{ _('Change subscription status?') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Change status to") }}</label>
-    <select name="to_status">
+    <label for="subscriptions-detail-to-status">{{ _("Change status to") }}</label>
+    <select id="subscriptions-detail-to-status" name="to_status">
       {% for s in allowed_transitions %}<option value="{{ s }}">{{ subscription_status_label(s) }}</option>{% endfor %}
     </select>
-    <label>{{ _("Reason (required for cancellation)") }}</label>
-    <input name="reason">
+    <label for="subscriptions-detail-reason">{{ _("Reason (required for cancellation)") }}</label>
+    <input id="subscriptions-detail-reason" name="reason">
     <div style="margin-top:0.5rem;"><button type="submit">{{ _("Apply") }}</button></div>
   </form>
   {% else %}<p class="empty">{{ _("No further status transitions available from %(status)s.", status=subscription_status_label(subscription.status)) }}</p>{% endif %}
@@ -32,8 +32,8 @@
   <h3>{{ _("Record a renewal") }}</h3>
   <form method="post" action="{{ url_for('subscriptions.renew', subscription_id=subscription.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("New end date") }}</label><input name="new_end_date" type="date" required>
-    <label>{{ _("Reason") }}</label><input name="reason">
+    <label for="subscriptions-detail-new-end-date">{{ _("New end date") }}</label><input id="subscriptions-detail-new-end-date" name="new_end_date" type="date" required>
+    <label for="subscriptions-detail-reason-1">{{ _("Reason") }}</label><input id="subscriptions-detail-reason-1" name="reason">
     <div style="margin-top:0.5rem;"><button type="submit">{{ _("Record renewal") }}</button></div>
   </form>
 </div>
@@ -57,13 +57,13 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="customer_id" value="{{ subscription.customer_id }}">
     <input type="hidden" name="subscription_id" value="{{ subscription.id }}">
-    <label>{{ _("Amount") }}</label><input name="amount" type="number" step="0.01" required>
-    <label>{{ _("Currency") }}</label><input name="currency" value="USD" required>
-    <label>{{ _("Method") }}</label><input name="method">
-    <label>{{ _("Payment date") }}</label><input name="payment_date" type="date" required>
-    <label>{{ _("Reference") }}</label><input name="reference">
-    <label>{{ _("Status") }}</label>
-    <select name="status">
+    <label for="subscriptions-detail-amount">{{ _("Amount") }}</label><input id="subscriptions-detail-amount" name="amount" type="number" step="0.01" required>
+    <label for="subscriptions-detail-currency">{{ _("Currency") }}</label><input id="subscriptions-detail-currency" name="currency" value="USD" required>
+    <label for="subscriptions-detail-method">{{ _("Method") }}</label><input id="subscriptions-detail-method" name="method">
+    <label for="subscriptions-detail-payment-date">{{ _("Payment date") }}</label><input id="subscriptions-detail-payment-date" name="payment_date" type="date" required>
+    <label for="subscriptions-detail-reference">{{ _("Reference") }}</label><input id="subscriptions-detail-reference" name="reference">
+    <label for="subscriptions-detail-status">{{ _("Status") }}</label>
+    <select id="subscriptions-detail-status" name="status">
       {% for s in ["PENDING","CONFIRMED","FAILED","REFUNDED","VOIDED"] %}<option value="{{ s }}">{{ payment_status_label(s) }}</option>{% endfor %}
     </select>
     <div style="margin-top:0.5rem;"><button type="submit">{{ _("Record payment") }}</button></div>

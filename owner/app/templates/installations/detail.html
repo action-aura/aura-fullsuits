@@ -20,10 +20,10 @@
   <form method="post" action="{{ url_for('installations.transition', installation_id=installation.id) }}"
         data-confirm="{{ _('Change installation status?') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <select name="to_status">
+    <select name="to_status" aria-label="{{ _("Change status to") }}">
       {% for s in allowed_transitions %}<option value="{{ s }}">{{ installation_status_label(s) }}</option>{% endfor %}
     </select>
-    <label>{{ _("Reason") }}</label><input name="reason">
+    <label for="installations-detail-reason">{{ _("Reason") }}</label><input id="installations-detail-reason" name="reason">
     <div style="margin-top:0.5rem;"><button type="submit">{{ _("Apply") }}</button></div>
   </form>
 </div>
@@ -36,13 +36,13 @@
   <form method="post" action="{{ url_for('commercial_ops_ui.release_installation', installation_id=installation.id) }}"
         data-confirm="{{ _('Release this device slot? The installation will be deactivated.') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Release this slot -- reason (required)") }}</label><input name="reason" required>
+    <label for="installations-detail-reason-1">{{ _("Release this slot -- reason (required)") }}</label><input id="installations-detail-reason-1" name="reason" required>
     <button type="submit" class="danger">{{ _("Release slot") }}</button>
   </form>
   <form method="post" action="{{ url_for('commercial_ops_ui.replace_installation', installation_id=installation.id) }}" style="margin-top:0.5rem;"
         data-confirm="{{ _('Mark this installation replaced? A new activation will be needed on the replacement device.') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Mark replaced -- reason (required)") }}</label><input name="reason" required>
+    <label for="installations-detail-reason-2">{{ _("Mark replaced -- reason (required)") }}</label><input id="installations-detail-reason-2" name="reason" required>
     <button type="submit">{{ _("Mark replaced") }}</button>
   </form>
 </div>

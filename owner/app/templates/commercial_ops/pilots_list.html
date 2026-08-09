@@ -5,8 +5,8 @@
   <h2>{{ _("Pilots") }}</h2>
   <div class="filters">
     <form method="get">
-      <label>{{ _("Status") }}</label>
-      <select name="status" onchange="this.form.submit()">
+      <label for="commercial-ops-pilots-list-status">{{ _("Status") }}</label>
+      <select id="commercial-ops-pilots-list-status" name="status" onchange="this.form.submit()">
         <option value="">{{ _("All") }}</option>
         {% for s in ["DRAFT","APPROVED","ACTIVE","EXTENDED","CONVERTED","COMPLETED","CANCELLED"] %}
         <option value="{{ s }}" {{ "selected" if status_filter == s else "" }}>{{ pilot_status_label(s) }}</option>
@@ -15,7 +15,7 @@
     </form>
   </div>
   <table class="responsive-table">
-    <thead><tr><th>{{ _("Customer") }}</th><th>{{ _("Subscription") }}</th><th>{{ _("Status") }}</th><th>{{ _("Pilot window") }}</th><th>{{ _("Extensions") }}</th><th></th></tr></thead>
+    <thead><tr><th>{{ _("Customer") }}</th><th>{{ _("Subscription") }}</th><th>{{ _("Status") }}</th><th>{{ _("Pilot window") }}</th><th>{{ _("Extensions") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>
     {% for p in pilots %}
     <tr>

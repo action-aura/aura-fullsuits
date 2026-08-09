@@ -93,8 +93,8 @@
   <form method="post" action="{{ url_for('customers.assign_route', customer_id=customer.id) }}" style="margin-top:0.75rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="version" value="{{ customer.version }}">
-    <label>{{ _("Reassign to (staff UUID)") }}</label>
-    <input name="assigned_to_staff_user_id">
+    <label for="assign-to-staff-id">{{ _("Reassign to (staff UUID)") }}</label>
+    <input id="assign-to-staff-id" name="assigned_to_staff_user_id">
     <input name="reason" placeholder="{{ _('Reason (required when reassigning)') }}">
     <button type="submit">{{ _("Reassign") }}</button>
   </form>
@@ -156,7 +156,7 @@
         </li>
         {% endfor %}
       </ul>
-      <p><a href="#panel-timeline" data-tabs-tab data-tabs-panel="panel-timeline">{{ _("View full timeline") }}</a></p>
+      <p><a href="#panel-timeline" data-tabs-jump data-tabs-panel="panel-timeline">{{ _("View full timeline") }}</a></p>
       {% else %}
       <p class="empty">{{ _("No activity recorded yet.") }}</p>
       {% endif %}
@@ -194,10 +194,10 @@
       {% if has_permission("customers.manage_contacts") %}
       <form method="post" action="{{ url_for('customers.add_contact_route', customer_id=customer.id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <label>{{ _("Name") }}</label><input name="name" required>
-        <label>{{ _("Title") }}</label><input name="title">
-        <label>{{ _("Email") }}</label><input name="business_email" type="email">
-        <label>{{ _("Phone") }}</label><input name="business_phone">
+        <label for="customers-detail-name">{{ _("Name") }}</label><input id="customers-detail-name" name="name" required>
+        <label for="customers-detail-title">{{ _("Title") }}</label><input id="customers-detail-title" name="title">
+        <label for="customers-detail-business-email">{{ _("Email") }}</label><input id="customers-detail-business-email" name="business_email" type="email">
+        <label for="customers-detail-business-phone">{{ _("Phone") }}</label><input id="customers-detail-business-phone" name="business_phone">
         <div style="margin-top:0.5rem;"><button type="submit">{{ _("Add contact") }}</button></div>
       </form>
       {% endif %}
@@ -237,8 +237,8 @@
       <form method="post" action="{{ url_for('customers.add_location_route', customer_id=customer.id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="source" value="MANUAL">
-        <label>{{ _("Manual address") }}</label>
-        <input name="manual_address">
+        <label for="customers-detail-manual-address">{{ _("Manual address") }}</label>
+        <input id="customers-detail-manual-address" name="manual_address">
         <div style="margin-top:0.5rem;"><button type="submit">{{ _("Save address") }}</button></div>
       </form>
       {% endif %}
@@ -256,7 +256,7 @@
       {% if has_any_permission("customers.update_own", "customers.update_all") %}
       <form method="post" action="{{ url_for('customers.add_interaction_route', customer_id=customer.id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <select name="interaction_type">
+        <select name="interaction_type" aria-label="{{ _("Interaction type") }}">
           {% for t in ["CALL","EMAIL","MEETING","WHATSAPP_MANUAL_NOTE","OTHER"] %}
           <option value="{{ t }}">{{ interaction_type_label(t) }}</option>
           {% endfor %}
@@ -291,7 +291,7 @@
       {% if has_any_permission("customers.update_own", "customers.update_all") %}
       <form method="post" action="{{ url_for('customers.add_followup_route', customer_id=customer.id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <label>{{ _("Due") }}</label><input name="due_at" type="datetime-local" required>
+        <label for="customers-detail-due-at">{{ _("Due") }}</label><input id="customers-detail-due-at" name="due_at" type="datetime-local" required>
         <textarea name="notes" rows="2" placeholder="{{ _('Notes') }}"></textarea>
         <div style="margin-top:0.5rem;"><button type="submit">{{ _("Add follow-up") }}</button></div>
       </form>
@@ -447,7 +447,7 @@
       <form method="post" action="{{ url_for('customers.add_note_route', customer_id=customer.id) }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <textarea name="body" rows="3" required></textarea>
-        <select name="visibility">
+        <select name="visibility" aria-label="{{ _("Note visibility") }}">
           {% for v in ["ASSIGNED_RECORD_USERS","AUTHOR_ONLY","MANAGEMENT_ONLY"] %}
           <option value="{{ v }}">{{ note_visibility_label(v) }}</option>
           {% endfor %}

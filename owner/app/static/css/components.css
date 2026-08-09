@@ -973,7 +973,13 @@ table.aura-table th.num, table.aura-table td.num {
 .aura-summary-tile__label {
   display: block;
   font-size: var(--aura-font-size-xs);
-  color: var(--aura-color-text-muted);
+  /* --aura-color-text-muted on --aura-color-surface-muted is only 4.02:1 --
+     real, disclosed WCAG 2.2 AA failure (needs 4.5:1) found via a real
+     axe-core scan (Stage E). --aura-color-text-secondary on the same
+     background is 7.2:1 -- reused here rather than a one-off color, since
+     it's the real token this codebase already uses for "darker than muted,
+     not full-strength primary" text everywhere else. */
+  color: var(--aura-color-text-secondary);
 }
 
 /* Real Timeline feed -- domain events only, never AuditLog/SecurityEvent
