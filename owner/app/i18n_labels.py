@@ -56,6 +56,18 @@ def account_status_label(*, is_active: bool, disabled: bool) -> str:
     return _("Disabled")
 
 
+def staff_account_filter_status_label(code: str) -> str:
+    """UI modernization Stage D.6 -- label for the /staff list screen's
+    status FILTER dropdown (?status=ACTIVE|DISABLED), distinct from
+    account_status_label()'s (is_active, disabled) keyword-only signature
+    (which labels one already-known account's own badge, not a filter
+    option code) -- components/table.html's filter_bar() macro calls its
+    status_label_fn as callable(code), the same single-argument contract
+    every other domain's *_status_label already satisfies."""
+    labels = {"ACTIVE": _("Active"), "DISABLED": _("Disabled")}
+    return labels.get(code, code)
+
+
 def session_status_label(*, revoked: bool) -> str:
     return _("Revoked") if revoked else _("Active")
 

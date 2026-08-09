@@ -9,6 +9,7 @@ from app.extensions import db_session
 from app.models.staff import Role, StaffInvitation, StaffUser
 from app.security.rbac import require_permission, require_recent_auth
 from app.security.super_admin_guard import LastSuperAdminError
+from app.staff import list_queries
 from app.staff.services import SelfEscalationError, assign_roles, create_invitation, disable_staff, reset_mfa, revoke_invitation
 
 bp = Blueprint("staff", __name__, url_prefix="/staff")
@@ -17,11 +18,19 @@ bp = Blueprint("staff", __name__, url_prefix="/staff")
 @bp.route("", methods=["GET"])
 @require_permission("staff.view")
 def list_staff():
-    staff_list = db_session.execute(select(StaffUser).order_by(StaffUser.created_at.desc())).scalars().all()
+    status_filter = request.args.get("status") or None
+    search = request.args.get("q") or None
+    sort = request.args.get("sort", "created_at")
+    direction = request.args.get("dir", "desc")
+    result = list_queries.list_staff_accounts(
+        page=request.args.get("page", 1, type=int), status=status_filter, search=search, sort=sort, direction=direction
+    )
     invitations = db_session.execute(
         select(StaffInvitation).where(StaffInvitation.accepted_at.is_(None)).order_by(StaffInvitation.created_at.desc())
     ).scalars().all()
-    return render_template("staff/list.html", staff_list=staff_list, invitations=invitations)
+    return render_template(
+        "staff/list.html", result=result, status_filter=status_filter, search=search, invitations=invitations
+    )
 
 
 @bp.route("/<uuid:staff_id>", methods=["GET"])

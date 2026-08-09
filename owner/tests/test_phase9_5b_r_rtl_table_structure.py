@@ -9,12 +9,18 @@ real <thead>/<tbody> to every gated table. This is the regression guard.
 """
 from __future__ import annotations
 
-from datetime import date
-
 from tests.conftest import force_login, make_staff
 
 GATED_TABLE_TEMPLATES = (
-    "app/templates/employees/list.html",
+    # employees/list.html deliberately removed here -- UI modernization
+    # Stage D.6 migrated it off .responsive-table entirely onto the
+    # Enterprise Table System's own <table class="aura-table"> (contained
+    # horizontal scroll, not thead-hiding -- see
+    # docs/owner/ui-modernization/enterprise-table-system.md's "Responsive-
+    # mode decision"). Its real <thead>/<tbody> now live in
+    # components/table.html's table() macro, shared by every migrated list
+    # screen, not duplicated per-template -- covered by that system's own
+    # test coverage, not this Phase 9.5B-R-era file-content check.
     "app/templates/employees/detail.html",
     "app/templates/employees/invitations.html",
     "app/templates/profile/sessions.html",
@@ -39,19 +45,28 @@ def test_responsive_table_thead_actually_hides_at_mobile_width(app, client, seed
     none; }) has something to actually match. This test can't render CSS,
     but it does confirm the structural precondition the CSS rule depends on
     is present in the real server response, not just in a static template
-    file (catches a route that might render a different/stale template)."""
+    file (catches a route that might render a different/stale template).
+
+    Retargeted at /staff's "Pending invitations" table (UI modernization
+    Stage D.6) -- /employees no longer uses .responsive-table at all for
+    its main list (migrated onto the Enterprise Table System's own
+    .aura-table-scroll contained-horizontal-scroll mechanism, a different,
+    already-covered responsive strategy, see
+    docs/owner/ui-modernization/enterprise-table-system.md). staff/list.html
+    still genuinely uses .responsive-table for its small, bounded
+    invitations sub-table (deliberately left unmigrated -- same reasoning
+    Stage D.5 applied to License's entitlements/Installation's devices
+    sub-tables), so the real regression this test guards against
+    (table.responsive-table thead { display: none; } having nothing to
+    match because <thead> was missing) still has a live target here."""
     admin_id = make_staff(app, "rtltable1@example.com", super_admin=True)
     with app.app_context():
-        from app.employees.services import activate_employee, create_employee_profile
+        from app.staff.services import create_invitation
 
-        profile = create_employee_profile(
-            {"staff_user_id": admin_id, "employee_number": "EMP-RTLT1", "full_name": "RTL Table Test", "employment_start_date": date(2026, 1, 1)},
-            actor_staff_user_id=admin_id,
-        )
-        activate_employee(profile, actor_staff_user_id=admin_id)
+        create_invitation("rtltable-invitee@example.com", ["VIEWER"], admin_id)
 
     force_login(client, app, admin_id)
-    resp = client.get("/employees")
+    resp = client.get("/staff")
     data = resp.get_data(as_text=True)
     assert "<table class=\"responsive-table\">" in data
     assert "<thead>" in data

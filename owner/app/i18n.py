@@ -81,6 +81,7 @@ def init_app(app) -> None:
     from app.i18n_format import format_owner_date, format_owner_datetime, format_owner_number
     from app.i18n_labels import (
         account_status_label,
+        staff_account_filter_status_label,
         activation_event_result_label,
         activation_event_type_label,
         activation_mode_label,
@@ -166,6 +167,7 @@ def init_app(app) -> None:
     from app.subscriptions.status_presentation import subscription_badge_class
     from app.licensing.status_presentation import license_badge_class, license_timeline
     from app.installations.status_presentation import installation_badge_class
+    from app.employees.status_presentation import employment_status_badge_class, presence_badge_class
 
     # Domain-label and formatting helpers are Jinja globals (not filters) --
     # exposed once, here, reused by every template rather than each screen
@@ -175,6 +177,9 @@ def init_app(app) -> None:
         presence_label=presence_label,
         role_label=role_label,
         account_status_label=account_status_label,
+        staff_account_filter_status_label=staff_account_filter_status_label,
+        employment_status_badge_class=employment_status_badge_class,
+        presence_badge_class=presence_badge_class,
         session_status_label=session_status_label,
         mfa_status_label=mfa_status_label,
         invitation_status_label=invitation_status_label,
