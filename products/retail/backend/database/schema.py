@@ -57,7 +57,9 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # have a declared FK pointing at it (purchase_orders.supplier_id
 # REFERENCES suppliers(id)), so this migration carries the same rename-away
 # hazard as products/categories -- see _migrate_suppliers_to_uuid below.
-RETAIL_SCHEMA_VERSION = 4
+# v5: adds products.supplier_id (TEXT, referencing suppliers(id) which is
+# already UUID by this point) -- see _migrate_products_add_supplier_fk below.
+RETAIL_SCHEMA_VERSION = 5
 
 
 def _get_path(name):
@@ -660,6 +662,27 @@ def _migrate_retail_schema(conn):
     _migrate_products_to_uuid(conn)
     _migrate_customers_to_uuid(conn)
     _migrate_suppliers_to_uuid(conn)
+    _migrate_products_add_supplier_fk(conn)
+
+
+def _migrate_products_add_supplier_fk(conn):
+    """One-time migration (schema v4 -> v5): adds products.supplier_id.
+
+    TEXT, not INTEGER -- suppliers.id is already UUID text by the time this
+    runs (_migrate_suppliers_to_uuid, just above, runs first). This is a
+    brand-new nullable column, not a change to an existing constraint, so
+    unlike _migrate_products_category_fk_on_delete_set_null above, no
+    DROP+RENAME rebuild is needed: SQLite allows ADD COLUMN with a
+    REFERENCES clause directly, and NULL always satisfies a foreign key
+    check, so existing rows are left unassigned rather than backfilled.
+
+    Idempotent: returns immediately if the column already exists.
+    """
+    cols = {row[1] for row in conn.execute('PRAGMA table_info(products)').fetchall()}
+    if 'supplier_id' in cols:
+        return
+    conn.execute('ALTER TABLE products ADD COLUMN supplier_id TEXT REFERENCES suppliers(id)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_products_supplier ON products(supplier_id)')
 
 
 def init_retail():

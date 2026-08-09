@@ -347,11 +347,11 @@ def create_product():
         cur = conn.cursor()
         pid = str(_uuid.uuid4())
         cur.execute("""
-            INSERT INTO products (id,company_id,sku,barcode,name,category_id,cost_price,
+            INSERT INTO products (id,company_id,sku,barcode,name,category_id,supplier_id,cost_price,
                                   sell_price,tax_rate,unit,reorder_level,status)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,'active')
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'active')
         """, (pid, cid, data['sku'], data.get('barcode',''), data['name'],
-              data.get('category_id'), data.get('cost_price',0), data.get('sell_price',0),
+              data.get('category_id'), data.get('supplier_id'), data.get('cost_price',0), data.get('sell_price',0),
               data.get('tax_rate',0), data.get('unit','pcs'), data.get('reorder_level',5)))
         # File opening stock under the company's working branch — the SAME branch that
         # sales/returns/adjustments resolve to (via _default_branch), so a sale always
@@ -369,7 +369,8 @@ def create_product():
         _audit(conn, 'PRODUCT_CREATED', 'product', pid, data['name'])
         _queue_sync_event(cur, 'product', pid, 'create', {
             'id': pid, 'sku': data['sku'], 'barcode': data.get('barcode', ''), 'name': data['name'],
-            'category_id': data.get('category_id'), 'cost_price': data.get('cost_price', 0),
+            'category_id': data.get('category_id'), 'supplier_id': data.get('supplier_id'),
+            'cost_price': data.get('cost_price', 0),
             'sell_price': data.get('sell_price', 0), 'tax_rate': data.get('tax_rate', 0),
             'unit': data.get('unit', 'pcs'), 'reorder_level': data.get('reorder_level', 5),
         })
@@ -388,7 +389,7 @@ def create_product():
 def update_product(pid):
     data = request.json or {}
     cid  = _cid()
-    allowed = ['name','barcode','category_id','cost_price','sell_price','tax_rate','unit','reorder_level','status']
+    allowed = ['name','barcode','category_id','supplier_id','cost_price','sell_price','tax_rate','unit','reorder_level','status']
     fields = {k: v for k, v in data.items() if k in allowed}
     if not fields:
         return jsonify({'status': 'error', 'message': 'No valid fields'}), 400
@@ -401,7 +402,7 @@ def update_product(pid):
         conn.close()
         return jsonify({'status': 'error', 'message': 'Product not found'}), 404
     _audit(conn, 'PRODUCT_UPDATED', 'product', pid)
-    row = conn.execute("SELECT sku,barcode,name,category_id,cost_price,sell_price,tax_rate,unit,reorder_level FROM products WHERE id=?", (pid,)).fetchone()
+    row = conn.execute("SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,reorder_level FROM products WHERE id=?", (pid,)).fetchone()
     _queue_sync_event(cur, 'product', pid, 'update', dict(row) | {'id': pid})
     conn.commit(); conn.close()
     _sync_nudge()

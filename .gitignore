@@ -13,6 +13,7 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+.venv-owner/
 *.egg-info/
 .pytest_cache/
 
@@ -31,6 +32,7 @@ node_modules/
 
 # Windows PyInstaller build outputs (never commit built exes -- see docs/release/wave1b)
 products/*/packaging/dist/
+presentation_package/
 
 # Android (two independent projects: android/aura-retail, android/aura-clinic)
 android/*/.gradle/

@@ -827,7 +827,6 @@ const RetailSystem = {
     const customerId = document.getElementById('pos-customer')?.value || null;
     const payload = {
       idempotency_key: `pos_${Date.now()}`,
-      branch_id: 1,
       customer_id: customerId || null,
       subtotal:         this._currentTotals.subtotal,
       discount_amount:  this._currentTotals.discount,

@@ -129,6 +129,14 @@ class DevelopmentConfig(BaseConfig):
     SIGNING_KEY_DIRECTORY = os.environ.get(
         "OWNER_SIGNING_KEY_DIRECTORY", os.path.join(os.getcwd(), "var", "signing-keys")
     )
+    # Flask-WTF's WTF_CSRF_SSL_STRICT defaults True, which over https://
+    # requires a Referer header matching Host -- correct for a real
+    # production TLS deployment, but a self-signed local-network cert (the
+    # only kind a dev/demo instance can have) reliably makes browsers
+    # withhold or alter Referer on the untrusted-cert warning flow, turning
+    # every POST into "Bad Request: The referrer header is missing." Off
+    # only here, never in Testing/Staging/Production.
+    WTF_CSRF_SSL_STRICT = False
 
 
 class TestingConfig(BaseConfig):

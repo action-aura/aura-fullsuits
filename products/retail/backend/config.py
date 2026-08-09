@@ -52,8 +52,21 @@ OWNER_LICENSING_BASE_URL = os.environ.get('AURA_OWNER_LICENSING_URL', '')
 # activation traffic against a frozen .exe. A frozen build now always
 # verifies TLS regardless of this variable; only unfrozen (source/dev) runs
 # honor the escape hatch.
-OWNER_LICENSING_VERIFY_TLS = True if getattr(sys, 'frozen', False) else (
-    os.environ.get('AURA_OWNER_LICENSING_INSECURE') != '1'
+#
+# AURA_OWNER_LICENSING_CA_BUNDLE is the correct way to reach an Owner
+# instance on a private LAN with no publicly-trusted certificate (e.g. an
+# on-prem/local-network deployment): a path to that specific Owner's CA/leaf
+# certificate. `requests`' `verify=` parameter accepts a CA bundle file path
+# exactly like it accepts a bool, so this still genuinely verifies -- against
+# the one certificate an operator explicitly trusted -- rather than disabling
+# verification. Deliberately honored even in a frozen build: naming one
+# specific trust anchor is not the same risk as AURA_*_INSECURE globally
+# turning verification off, so it does not need the same frozen-build floor.
+OWNER_LICENSING_CA_BUNDLE_PATH = os.environ.get('AURA_OWNER_LICENSING_CA_BUNDLE', '')
+OWNER_LICENSING_VERIFY_TLS = OWNER_LICENSING_CA_BUNDLE_PATH or (
+    True if getattr(sys, 'frozen', False) else (
+        os.environ.get('AURA_OWNER_LICENSING_INSECURE') != '1'
+    )
 )
 OWNER_LICENSING_TIMEOUT_SECONDS = float(os.environ.get('AURA_OWNER_LICENSING_TIMEOUT_SECONDS', '10'))
 # One shared trust anchor for both products (it names which Owner signing
@@ -82,8 +95,16 @@ SYNC_RELAY_TIMEOUT_SECONDS = float(os.environ.get('AURA_SYNC_RELAY_TIMEOUT_SECON
 # Same frozen-build TLS-verification floor as OWNER_LICENSING_VERIFY_TLS: a
 # frozen customer build always verifies TLS regardless of this env var; only
 # an unfrozen (source/dev) run honors the insecure escape hatch.
-SYNC_RELAY_VERIFY_TLS = True if getattr(sys, 'frozen', False) else (
-    os.environ.get('AURA_SYNC_RELAY_INSECURE') != '1'
+#
+# AURA_SYNC_RELAY_CA_BUNDLE mirrors AURA_OWNER_LICENSING_CA_BUNDLE above --
+# a path to the relay's own certificate, honored even in a frozen build,
+# for the same reason: it names one specific trust anchor rather than
+# disabling verification.
+SYNC_RELAY_CA_BUNDLE_PATH = os.environ.get('AURA_SYNC_RELAY_CA_BUNDLE', '')
+SYNC_RELAY_VERIFY_TLS = SYNC_RELAY_CA_BUNDLE_PATH or (
+    True if getattr(sys, 'frozen', False) else (
+        os.environ.get('AURA_SYNC_RELAY_INSECURE') != '1'
+    )
 )
 
 

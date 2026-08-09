@@ -1,67 +1,80 @@
 {% extends "layout/base.html" %}
 {% block title %}{{ _("License") }}{% endblock %}
 {% block content %}
+{# Read top-down during an activation walkthrough: whatever action is current
+   (the one-time key reveal, or Issue key on a DRAFT) is the only thing above
+   the fold. The rare admin actions and the audit trail are collapsed into
+   <details> -- present and one click away, never removed, never competing
+   with the primary action. Presentation only: every form below keeps its
+   exact method/action/inputs/data-confirm. #}
 {% if revealed_key %}
-<div class="card" style="border:2px solid #b3261e;">
-  <h2>{{ _("License key -- shown once") }}</h2>
-  <p><strong>{{ _("Copy this now. It will never be displayed again.") }}</strong></p>
-  <p><code style="font-size:1.1rem;" dir="ltr">{{ revealed_key }}</code></p>
+<div class="card" style="border:2px solid var(--danger);">
+  <h2 style="margin-block:0 0.5rem;">{{ _("License key -- shown once") }}</h2>
+  <p style="margin-block:0 0.6rem;"><strong>{{ _("Copy this now. It will never be displayed again.") }}</strong></p>
+  <p style="margin-block:0;"><code class="masked" style="font-size:1.25rem;display:inline-block;padding:0.5rem 0.75rem;" dir="ltr">{{ revealed_key }}</code></p>
 </div>
 {% endif %}
 
 <div class="card">
-  <h2>{{ license.customer.legal_name }} -- {{ license.product.product_code }} <span class="badge {{ 'active' if license.status in ('ACTIVE','ISSUED') else ('danger' if license.status == 'REVOKED' else 'draft') }}">{{ license_status_label(license.status) }}</span></h2>
-  <dl class="kv">
+  <div style="display:flex;flex-wrap:wrap;gap:0.5rem;justify-content:space-between;align-items:center;">
+    <h2 style="margin:0;">{{ license.customer.legal_name }} -- {{ license.product.product_code }}</h2>
+    <span class="badge {{ 'active' if license.status in ('ACTIVE','ISSUED') else ('danger' if license.status == 'REVOKED' else 'draft') }}">{{ license_status_label(license.status) }}</span>
+  </div>
+  <dl class="kv" style="margin-block:0.9rem 0.6rem;">
     <dt>{{ _("Masked key") }}</dt><dd>{% if license.key_prefix %}<code class="masked" dir="ltr">{{ license.key_prefix }}-...{{ license.key_suffix_masked }}</code>{% else %}<span class="empty">{{ _("not issued") }}</span>{% endif %}</dd>
     <dt>{{ _("Allowed platforms") }}</dt><dd><bdi dir="ltr">{{ license.allowed_platforms }}</bdi></dd>
     <dt>{{ _("Device limit") }}</dt><dd>{{ format_owner_number(license.device_limit) }}</dd>
     <dt>{{ _("Valid from / until") }}</dt><dd>{{ format_owner_date(license.valid_from) if license.valid_from else "-" }} / {{ format_owner_date(license.valid_until) if license.valid_until else "-" }}</dd>
   </dl>
-  <p><a href="{{ url_for('commercial_ops_ui.license_slot_exceptions', license_id=license.id) }}">{{ _("Device-slot exceptions") }}</a></p>
+  <p style="margin-block:0;font-size:0.85rem;"><a href="{{ url_for('commercial_ops_ui.license_slot_exceptions', license_id=license.id) }}">{{ _("Device-slot exceptions") }}</a></p>
+
+  {% if license.status == "DRAFT" %}
+  <div style="margin-block-start:1rem;padding:0.9rem 1rem;background:var(--bg);border-inline-start:4px solid var(--accent);border-radius:6px;">
+    <h3 style="margin:0 0 0.25rem;">{{ _("Issue key") }}</h3>
+    <p style="margin:0 0 0.75rem;color:var(--muted);font-size:0.85rem;">{{ _("Issuing requires a fresh MFA confirmation. The full key is shown exactly once.") }}</p>
+    <form method="post" action="{{ url_for('licensing.issue', license_id=license.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="idempotency_key" value="{{ issue_idempotency_key }}">
+      <button type="submit" style="font-size:1rem;padding:0.6rem 1.4rem;">{{ _("Issue license key") }}</button>
+    </form>
+  </div>
+  {% endif %}
 </div>
 
-{% if license.status == "DRAFT" %}
-<div class="card">
-  <h3>{{ _("Issue key") }}</h3>
-  <p>{{ _("Issuing requires a fresh MFA confirmation. The full key is shown exactly once.") }}</p>
-  <form method="post" action="{{ url_for('licensing.issue', license_id=license.id) }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="hidden" name="idempotency_key" value="{{ issue_idempotency_key }}">
-    <button type="submit">{{ _("Issue license key") }}</button>
-  </form>
-</div>
+{% if allowed_transitions or license.status in ("ACTIVE","ISSUED","SUSPENDED","EXPIRED") %}
+<details class="card" style="padding-block:0.75rem;">
+  <summary style="cursor:pointer;font-weight:600;font-size:0.9rem;color:var(--muted);">{{ _("Lifecycle actions") }}</summary>
+  {% if allowed_transitions %}
+  <div style="margin-block-start:0.9rem;">
+    <h3 style="margin:0 0 0.4rem;font-size:0.95rem;">{{ _("Change status") }}</h3>
+    <form method="post" action="{{ url_for('licensing.transition', license_id=license.id) }}"
+          data-confirm="{{ _('Change license status? This may affect any activated installation.') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <select name="to_status">
+        {% for s in allowed_transitions %}<option value="{{ s }}">{{ license_status_label(s) }}</option>{% endfor %}
+      </select>
+      <label>{{ _("Reason") }}</label><input name="reason">
+      <div style="margin-top:0.5rem;"><button type="submit">{{ _("Apply") }}</button></div>
+    </form>
+  </div>
+  {% endif %}
+  {% if license.status in ("ACTIVE","ISSUED","SUSPENDED","EXPIRED") %}
+  <div style="margin-block-start:0.9rem;padding-block-start:0.9rem;border-block-start:1px solid var(--border);">
+    <h3 style="margin:0 0 0.4rem;font-size:0.95rem;">{{ _("Replace license") }}</h3>
+    <p style="margin:0 0 0.6rem;color:var(--muted);font-size:0.85rem;">{{ _("Creates a new DRAFT license and revokes/replaces this one.") }}</p>
+    <form method="post" action="{{ url_for('licensing.replace', license_id=license.id) }}"
+          data-confirm="{{ _('Replace this license with a new one?') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="danger">{{ _("Replace") }}</button>
+    </form>
+  </div>
+  {% endif %}
+</details>
 {% endif %}
 
-{% if allowed_transitions %}
-<div class="card">
-  <h3>{{ _("Change status") }}</h3>
-  <form method="post" action="{{ url_for('licensing.transition', license_id=license.id) }}"
-        data-confirm="{{ _('Change license status? This may affect any activated installation.') }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <select name="to_status">
-      {% for s in allowed_transitions %}<option value="{{ s }}">{{ license_status_label(s) }}</option>{% endfor %}
-    </select>
-    <label>{{ _("Reason") }}</label><input name="reason">
-    <div style="margin-top:0.5rem;"><button type="submit">{{ _("Apply") }}</button></div>
-  </form>
-</div>
-{% endif %}
-
-{% if license.status in ("ACTIVE","ISSUED","SUSPENDED","EXPIRED") %}
-<div class="card">
-  <h3>{{ _("Replace license") }}</h3>
-  <p>{{ _("Creates a new DRAFT license and revokes/replaces this one.") }}</p>
-  <form method="post" action="{{ url_for('licensing.replace', license_id=license.id) }}"
-        data-confirm="{{ _('Replace this license with a new one?') }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" class="danger">{{ _("Replace") }}</button>
-  </form>
-</div>
-{% endif %}
-
-<div class="card">
-  <h3>{{ _("Status history") }}</h3>
-  <table class="responsive-table">
+<details class="card" style="padding-block:0.75rem;">
+  <summary style="cursor:pointer;font-weight:600;font-size:0.9rem;color:var(--muted);">{{ _("Status history") }} ({{ format_owner_number(license.status_history|length) }})</summary>
+  <table class="responsive-table" style="margin-block-start:0.9rem;">
     <thead><tr><th>{{ _("From") }}</th><th>{{ _("To") }}</th><th>{{ _("When") }}</th><th>{{ _("Reason") }}</th></tr></thead>
     <tbody>
     {% for h in license.status_history|sort(attribute="created_at", reverse=True) %}
@@ -70,5 +83,5 @@
     {% endfor %}
     </tbody>
   </table>
-</div>
+</details>
 {% endblock %}
