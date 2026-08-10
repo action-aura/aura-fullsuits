@@ -6,18 +6,23 @@ transport behavior is already covered end-to-end by test_relay_client.py.
 Local persistence uses a real sqlite file under tmp_path (same convention
 test_checkin_scheduler.py/test_state_repository.py use for
 LicenseStateRepository), built with the exact categories/sync_outbox/
-sync_cursor schema products/retail/backend/database/schema.py creates.
+sync_cursor schema products/retail/backend/database/schema.py creates
+(schema v7 shape -- see that file's RETAIL_SCHEMA_VERSION comment and its
+own retail_sync_outbox_wedge_migration_test.py for the existing-install
+migration path this file does not need to re-cover).
 """
 import json
 import sqlite3
 import threading
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from commercial_runtime.sync.relay_client import NetworkError, RelayRejected
 from commercial_runtime.sync.sync_service import (
+    DEFAULT_OUTBOX_PUSH_LIMIT,
     SyncService,
     nudge,
     register_active_service,
@@ -97,7 +102,7 @@ CREATE TABLE sync_outbox (
     entity_id TEXT NOT NULL,
     event_type TEXT NOT NULL,
     payload TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP NOT NULL
 );
 CREATE TABLE sync_cursor (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -135,13 +140,14 @@ def get_conn(db_path):
     return _get_conn
 
 
-def _insert_outbox_row(get_conn, entity_id=None, event_type="create", payload=None):
+def _insert_outbox_row(get_conn, entity_id=None, event_type="create", payload=None, created_at=None):
     entity_id = entity_id or str(uuid.uuid4())
     payload = payload if payload is not None else {"id": entity_id, "company_id": 1, "name": "Widgets", "description": ""}
+    created_at = created_at or "2026-08-06T00:00:00+00:00"
     conn = get_conn()
     conn.execute(
         "INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, payload, created_at) VALUES (?,?,?,?,?,?)",
-        (str(uuid.uuid4()), "category", entity_id, event_type, json.dumps(payload), "2026-08-06T00:00:00+00:00"),
+        (str(uuid.uuid4()), "category", entity_id, event_type, json.dumps(payload), created_at),
     )
     conn.commit()
     conn.close()
@@ -776,3 +782,151 @@ def test_nudge_and_a_concurrent_scheduled_tick_never_run_push_once_at_the_same_t
         time.sleep(0.05)
 
     assert concurrent_calls["max_active"] <= 1  # never two push() calls in flight at once
+
+
+# ── Outbox-wedge fix (2026-08-10 audit), chunked drain ───────────────────
+# Two properties proven below, mirroring the module docstring's "Outbox-
+# wedge fix" note:
+#   1. a backlog bigger than one chunk drains across several push_once()
+#      calls, never exceeding the per-call limit;
+#   2. read_outbox()'s new `created_at, rowid` ordering breaks a tie between
+#      two rows sharing the exact same created_at value, in true insertion
+#      (rowid) order -- the mixed LEGACY-FORMAT-vs-normal-format scenario
+#      that motivated the ordering fix in the first place is covered
+#      end-to-end (real migration + real normalization) by
+#      products/retail/tests/retail_sync_outbox_wedge_migration_test.py.
+#
+# A single row that is genuinely unpushable (rejected no matter what) is
+# NOT yet handled here -- chunking alone still lets that row wedge its own
+# (now smaller) batch forever; dead-letter isolation for that case is a
+# separate, later change.
+
+
+def test_read_outbox_respects_the_limit_parameter(get_conn):
+    for _ in range(5):
+        _insert_outbox_row(get_conn)
+    client = FakeRelayClient()
+    service = SyncService(lambda: client, get_conn)
+
+    conn = get_conn()
+    try:
+        events = service.read_outbox(conn, limit=2)
+    finally:
+        conn.close()
+
+    assert len(events) == 2
+
+
+def test_read_outbox_breaks_created_at_ties_using_rowid_insertion_order(get_conn):
+    """Several rows sharing the EXACT SAME created_at value (a real
+    possibility -- clock resolution, or several writes queued in the same
+    instant) must still come back in true insertion order, never an
+    arbitrary/unstable order -- proven by inserting them with IDENTICAL
+    created_at values and checking the returned order matches insertion
+    order exactly."""
+    same_timestamp = "2026-08-10T12:00:00+00:00"
+    inserted_entity_ids = []
+    for _ in range(6):
+        entity_id, _ = _insert_outbox_row(get_conn, created_at=same_timestamp)
+        inserted_entity_ids.append(entity_id)
+
+    client = FakeRelayClient()
+    service = SyncService(lambda: client, get_conn)
+
+    conn = get_conn()
+    try:
+        events = service.read_outbox(conn)
+    finally:
+        conn.close()
+
+    assert [e["entity_id"] for e in events] == inserted_entity_ids
+
+
+def test_push_once_drains_a_large_backlog_across_multiple_calls_without_exceeding_the_limit(get_conn):
+    """A push of 250 outbox rows must never be sent to the relay in a single
+    call larger than the configured limit (DEFAULT_OUTBOX_PUSH_LIMIT here,
+    comfortably under Owner's 200-row _MAX_PUSH_BATCH) -- proving push_once()
+    chunks rather than reading+pushing the entire backlog in one shot."""
+    total_rows = 250
+    base_time = datetime(2026, 8, 10, tzinfo=timezone.utc)
+    inserted_entity_ids = []
+    for i in range(total_rows):
+        # Strictly increasing created_at so ordering is unambiguous even
+        # before the rowid tiebreaker is considered.
+        created_at = (base_time + timedelta(seconds=i)).isoformat()
+        entity_id, _ = _insert_outbox_row(get_conn, created_at=created_at)
+        inserted_entity_ids.append(entity_id)
+
+    # Enough canned successes for every chunk this will take (ceil(250/100) = 3),
+    # plus a couple of spares so a test bug (an extra call) fails loudly with
+    # an IndexError from FakeRelayClient rather than an infinite loop below.
+    client = FakeRelayClient(push_responses=[{"stored": 1, "received": 1}] * 10)
+    service = SyncService(lambda: client, get_conn)
+
+    calls = 0
+    while _outbox_rows(get_conn):
+        service.push_once()
+        calls += 1
+        assert calls <= 10, "push_once() did not converge -- possible infinite loop"
+
+    assert calls == 3  # 100 + 100 + 50
+    for batch in client.push_calls:
+        assert len(batch) <= DEFAULT_OUTBOX_PUSH_LIMIT
+        assert len(batch) <= 200  # Owner relay's own _MAX_PUSH_BATCH cap -- never approached, let alone exceeded
+
+    pushed_entity_ids = [e["entity_id"] for batch in client.push_calls for e in batch]
+    assert pushed_entity_ids == inserted_entity_ids  # every row drained exactly once, in true order
+    assert _outbox_rows(get_conn) == []
+
+
+def test_ack_outbox_chunks_deletes_below_sqlite_variable_limit(get_conn, monkeypatch):
+    """ack_outbox() must never build a single DELETE ... WHERE id IN (...)
+    statement with more bound parameters than SQLite's own per-statement cap
+    -- proven by lowering the chunk size (via monkeypatch, so this test does
+    not need to actually insert 500+ real rows to exercise the chunking
+    branch) and confirming more than one DELETE statement is issued for a
+    batch of ids larger than that lowered size. `sqlite3.Connection` is a C
+    type that refuses attribute assignment directly (`execute` is
+    read-only), so this wraps the real connection in a thin proxy -- same
+    `_ConnWrapper` technique test_push_once_only_deletes_rows_that_were_
+    actually_pushed above already uses for the same reason."""
+    import commercial_runtime.sync.sync_service as sync_service_module
+
+    monkeypatch.setattr(sync_service_module, "_ACK_CHUNK_SIZE", 3)
+
+    ids = []
+    for _ in range(7):
+        entity_id, _ = _insert_outbox_row(get_conn)
+        ids.append(entity_id)
+    # ack_outbox() takes sync_outbox row ids, not entity_ids -- fetch the real ones.
+    conn = get_conn()
+    row_ids = [r["id"] for r in conn.execute("SELECT id FROM sync_outbox").fetchall()]
+    conn.close()
+    assert len(row_ids) == 7
+
+    executed_statements = []
+
+    class _TrackingConnWrapper:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def execute(self, sql, params=()):
+            if sql.strip().upper().startswith("DELETE FROM SYNC_OUTBOX"):
+                executed_statements.append(params)
+            return self._inner.execute(sql, params)
+
+        def __getattr__(self, item):
+            return getattr(self._inner, item)
+
+    real_conn = get_conn()
+    wrapped_conn = _TrackingConnWrapper(real_conn)
+    service = SyncService(lambda: None, lambda: wrapped_conn)
+    service.ack_outbox(wrapped_conn, row_ids)
+    real_conn.commit()
+    real_conn.close()
+
+    # 7 ids at chunk size 3 -> 3 DELETE statements (3 + 3 + 1), never one
+    # statement carrying all 7.
+    assert len(executed_statements) == 3
+    assert all(len(params) <= 3 for params in executed_statements)
+    assert _outbox_rows(get_conn) == []

@@ -31,6 +31,41 @@ locally-authoritative `company_id` (read fresh from the registry DB's
 every pulled row instead. `_apply_event` runs on a background thread with no
 Flask request/session context, so it cannot call `_cid()`/read
 `session.get('company_id')` -- it must read the value directly from disk.
+
+Outbox-wedge fix (2026-08-10 audit, HIGH severity), part 1/2 -- chunked
+drain: `push_once()` used to read the ENTIRE `sync_outbox` with no limit and
+push it in one call, while Owner's relay enforces a 200-event
+`_MAX_PUSH_BATCH` and rejects anything larger with a business-rejection
+(`RelayRejected`, never retried automatically -- see `relay_client.py`'s
+module docstring on why a rejection and a transient `NetworkError` are
+deliberately different exception types). Because `push_once()` also leaves
+the outbox completely untouched on ANY failure (correct for a transient/
+offline failure, see `push_once`'s own docstring), a single bulk import or a
+few days offline queuing >200 rows would wedge the outbox PERMANENTLY: every
+subsequent tick reads the same oversized batch, gets the same rejection, and
+nothing ever shrinks.
+
+`read_outbox` now takes a `limit` (default `DEFAULT_OUTBOX_PUSH_LIMIT`,
+comfortably under the relay's 200-row cap) and orders by `created_at,
+rowid` -- see `RETAIL_SCHEMA_VERSION`'s v7 comment in `database/schema.py`
+for why `created_at` alone was never a safe sort key, and why the
+tiebreaker is SQLite's own hidden `rowid` rather than the table's declared
+`id` column: `sync_outbox.id` is a client-generated UUID (`_queue_sync_event`
+in `retail_api.py`), not an autoincrementing key, so it has no relationship
+to insertion order at all. `rowid` is SQLite's own implicit,
+monotonically-assigned integer for any ordinary (non-`WITHOUT ROWID`) table
+-- exactly what an autoincrement tiebreaker would have given this table if
+`id` itself had been one. `push_once()` now drains in bounded per-tick
+chunks: one `limit`-sized read/push/ack per call, with a large backlog
+draining over several ticks rather than one oversized call. Correct only
+because of the ordering fix above -- a chunk boundary landing between an
+ambiguously-ordered create and its own later update would otherwise risk
+pushing them out of order.
+
+Chunking alone only stops a NEW install from wedging via one big import; it
+does nothing for a single row that is itself genuinely unpushable (a
+follow-up change adds dead-letter isolation for that case -- see this
+module's history/a later commit for that half of the fix).
 """
 from __future__ import annotations
 
@@ -40,6 +75,18 @@ import threading
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+# Comfortably under Owner relay's `_MAX_PUSH_BATCH = 200` (owner/app/sync/
+# routes.py -- not present in every worktree, since it's Owner-side code;
+# see this module's docstring) -- leaves headroom rather than pushing right
+# up to the server's own limit.
+DEFAULT_OUTBOX_PUSH_LIMIT = 100
+
+# SQLite's own per-statement bound-parameter cap is 999
+# (SQLITE_MAX_VARIABLE_NUMBER's historical default, sometimes compiled
+# lower). Comfortably under that so ack_outbox() never depends on exactly
+# which build of SQLite this runs against.
+_ACK_CHUNK_SIZE = 500
 
 
 def local_company_id_from_registry() -> Optional[str]:
@@ -78,6 +125,8 @@ class SyncService:
         client_factory: Callable[[], "SyncRelayClient"],
         get_conn: Callable[[], "sqlite3.Connection"],
         local_company_id_provider: Optional[Callable[[], Optional[str]]] = None,
+        *,
+        push_batch_limit: int = DEFAULT_OUTBOX_PUSH_LIMIT,
     ):
         """`client_factory` is called fresh on every push_once()/pull_once()
         attempt, not once at construction time -- deliberately, mirroring
@@ -99,10 +148,17 @@ class SyncService:
         function callers may pass in): a `SyncService` constructed without
         one raises loudly the first time a category event actually needs it,
         rather than silently touching a real on-disk registry DB a test (or
-        some future caller) never intended to read."""
+        some future caller) never intended to read.
+
+        `push_batch_limit` -- see the module docstring's "Outbox-wedge fix"
+        note. Constructor-overridable (default `DEFAULT_OUTBOX_PUSH_LIMIT`)
+        purely so tests can exercise chunking without needing to insert
+        hundreds of real rows; production code should never need to pass
+        this."""
         self._client_factory = client_factory
         self._get_conn = get_conn
         self._local_company_id_provider = local_company_id_provider
+        self._push_batch_limit = push_batch_limit
         self._timer: Optional[threading.Timer] = None
         self._stopped = threading.Event()
         # Serializes push_once/pull_once against each other -- the 10s timer
@@ -112,16 +168,22 @@ class SyncService:
         self._lock = threading.Lock()
 
     def push_once(self) -> None:
-        """Drains sync_outbox to Owner. Reads the current rows, pushes them,
-        and ONLY deletes exactly those rows on success -- a push failure
-        (network or a real Owner rejection) raises back to the caller with
-        the outbox left completely untouched (nothing read is deleted, and
-        nothing new that arrived concurrently is at risk, since only the
-        specific ids just pushed are ever deleted)."""
+        """Drains ONE bounded chunk (`self._push_batch_limit` rows, oldest
+        first) of sync_outbox to Owner per call -- see the module docstring's
+        "Outbox-wedge fix" note for why this is chunked at all. Reads the
+        current rows, pushes them, and ONLY deletes exactly those rows on
+        success -- a push failure (network or a real Owner rejection) raises
+        back to the caller with the outbox left completely untouched
+        (nothing read is deleted, and nothing new that arrived concurrently
+        is at risk, since only the specific ids just pushed are ever
+        deleted). A full backlog larger than one chunk drains over multiple
+        calls -- the normal timer tick (or a route-triggered nudge()) simply
+        picks up the next chunk next time, since ack_outbox() always removes
+        exactly (and only) the rows that were just genuinely accepted."""
         with self._lock:
             conn = self._get_conn()
             try:
-                events = self.read_outbox(conn)
+                events = self.read_outbox(conn, limit=self._push_batch_limit)
                 if not events:
                     return
                 self._client_factory().push(events)  # raises on failure -- nothing below runs
@@ -150,17 +212,34 @@ class SyncService:
             finally:
                 conn.close()
 
-    def read_outbox(self, conn) -> list:
-        """Reads (never deletes) the current sync_outbox rows, in the same
-        shape push() expects. Split out of push_once() (multi-device-sync-
-        foundation, Task 9) so Android's local `/_internal` sync routes can
-        read the batch Kotlin is about to push WITHOUT this Python process
-        ever calling `self._client_factory().push()` itself -- Android's
-        Python never holds the signing key (see
+    def read_outbox(self, conn, limit: int = DEFAULT_OUTBOX_PUSH_LIMIT) -> list:
+        """Reads (never deletes) up to `limit` of the OLDEST current
+        sync_outbox rows, in the same shape push() expects. Split out of
+        push_once() (multi-device-sync-foundation, Task 9) so Android's local
+        `/_internal` sync routes can read the batch Kotlin is about to push
+        WITHOUT this Python process ever calling `self._client_factory().push()`
+        itself -- Android's Python never holds the signing key (see
         commercial_runtime/licensing_contracts/android_bridge_identity.py),
         so Kotlin makes the actual signed HTTP call and this method only
-        hands it the rows to sign and send."""
-        rows = conn.execute("SELECT * FROM sync_outbox ORDER BY created_at").fetchall()
+        hands it the rows to sign and send.
+
+        Ordered `created_at, rowid` -- NOT `created_at` alone. `created_at`
+        is a plain string and, pre-schema-v7, was not even guaranteed to be
+        in the same (T-separated isoformat) shape for every row -- see
+        `database/schema.py`'s `RETAIL_SCHEMA_VERSION` v7 comment and this
+        module's own docstring for the full story. The tiebreaker is
+        SQLite's own hidden `rowid` (implicit on any ordinary, non-`WITHOUT
+        ROWID` table -- sync_outbox is not one), monotonically assigned in
+        insertion order, rather than this table's declared `id` column:
+        `id` is a client-generated UUID (`_queue_sync_event` in
+        `retail_api.py`), which carries no relationship to insertion order
+        at all and would make a just-as-broken tiebreaker as no tiebreaker.
+        `limit` bounds a chunk to `DEFAULT_OUTBOX_PUSH_LIMIT` rows by default
+        -- see the module docstring's "Outbox-wedge fix" note -- so a large
+        backlog drains over several calls instead of one oversized push()."""
+        rows = conn.execute(
+            "SELECT * FROM sync_outbox ORDER BY created_at, rowid LIMIT ?", (limit,)
+        ).fetchall()
         return [
             {
                 "id": r["id"],
@@ -177,12 +256,24 @@ class SyncService:
         """Deletes exactly the given outbox row ids -- the second half of
         the read_outbox()/ack_outbox() split push_once() now composes
         itself, and what Android's `/_internal/sync/outbox/ack` route calls
-        once Kotlin's push to Owner has genuinely succeeded. Caller commits."""
+        once Kotlin's push to Owner has genuinely succeeded. Caller commits.
+
+        Chunked at `_ACK_CHUNK_SIZE` (well under SQLite's own ~999
+        bound-parameter cap per statement) -- `read_outbox`'s own default
+        limit keeps a normal desktop-driven ack well under that on its own,
+        but `ids` can also arrive from Android's `/_internal/outbox/ack`
+        route with however many ids Kotlin's own (unbounded, out of scope
+        for this fix -- see commercial_runtime/sync/sync_service.py's module
+        docstring) push batch happened to contain, so this chunks
+        unconditionally rather than assuming the caller already bounded
+        it."""
         if not ids:
             return
-        conn.execute(
-            "DELETE FROM sync_outbox WHERE id IN ({})".format(",".join("?" * len(ids))), ids
-        )
+        for start in range(0, len(ids), _ACK_CHUNK_SIZE):
+            chunk = ids[start:start + _ACK_CHUNK_SIZE]
+            conn.execute(
+                "DELETE FROM sync_outbox WHERE id IN ({})".format(",".join("?" * len(chunk))), chunk
+            )
 
     def read_cursor(self, conn) -> int:
         cursor_row = conn.execute("SELECT last_seq FROM sync_cursor WHERE id=1").fetchone()
