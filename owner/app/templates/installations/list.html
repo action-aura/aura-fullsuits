@@ -1,32 +1,32 @@
 {% extends "layout/base.html" %}
-{% block title %}Installations{% endblock %}
+{% import "components/table.html" as table with context %}
+{% block title %}{{ _("Installations") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center;">
-    <h2>Installations</h2>
-    <a class="btn" href="{{ url_for('installations.new_form') }}">Register installation</a>
-  </div>
-  <form class="filters" method="get">
-    <div>
-      <label>Status</label>
-      <select name="status" onchange="this.form.submit()">
-        <option value="">All</option>
-        {% for s in ["REGISTERED","PENDING_ACTIVATION","ACTIVE","SUSPENDED","DEACTIVATED","REPLACED"] %}
-        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s }}</option>
-        {% endfor %}
-      </select>
-    </div>
-  </form>
-  <table>
-    <tr><th>Customer</th><th>Product</th><th>Label</th><th>Status</th><th></th></tr>
-    {% for i in installations %}
+  {{ table.toolbar(_("Installations"), url_for('installations.new_form'), _("Register installation"), new_permission="installations.register") }}
+  {{ table.filter_bar(
+      status_options=["REGISTERED","PENDING_ACTIVATION","ACTIVE","SUSPENDED","DEACTIVATED","REPLACED"], status_value=status_filter, status_label_fn=installation_status_label,
+      search_value=search, search_field="q", search_label=_("Search"), search_placeholder=_("Customer name, installation or device label")
+  ) }}
+  {{ table.density_toggle() }}
+  {% call table.table(
+      columns=[
+        {"label": _("Customer")},
+        {"label": _("Product")},
+        {"label": _("Label")},
+        {"label": _("Status"), "sort_key": "status"},
+        {"label": ""},
+      ],
+      has_rows=result.rows, empty_message=_("No installations yet."), caption=_("Installations")
+  ) %}
+    {% for i in result.rows %}
     <tr>
-      <td>{{ i.customer.legal_name }}</td><td>{{ i.product.product_code }}</td><td>{{ i.installation_label or "-" }}</td>
-      <td><span class="badge {{ 'active' if i.status == 'ACTIVE' else 'draft' }}">{{ i.status }}</span></td>
-      <td><a href="{{ url_for('installations.detail', installation_id=i.id) }}">View</a></td>
+      <td>{{ i.customer.legal_name }}</td><td><bdi dir="ltr">{{ i.product.product_code }}</bdi></td><td>{{ i.installation_label or "-" }}</td>
+      <td><span class="badge {{ installation_badge_class(i.status) }}">{{ installation_status_label(i.status) }}</span></td>
+      <td><a href="{{ url_for('installations.detail', installation_id=i.id) }}">{{ _("View") }}</a></td>
     </tr>
-    {% else %}<tr><td colspan="5" class="empty">No installations yet.</td></tr>
     {% endfor %}
-  </table>
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
 </div>
 {% endblock %}

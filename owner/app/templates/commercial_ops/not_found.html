@@ -1,5 +1,5 @@
 {% extends "layout/base.html" %}
-{% block title %}Not found{% endblock %}
+{% block title %}{{ _("Not found") }}{% endblock %}
 {% block content %}
-<div class="card"><p class="error">{{ entity }} not found.</p></div>
+<div class="card"><p class="error">{{ _("%(entity)s not found.", entity=entity) }}</p></div>
 {% endblock %}

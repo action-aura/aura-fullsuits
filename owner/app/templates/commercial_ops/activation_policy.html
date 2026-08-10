@@ -1,44 +1,47 @@
 {% extends "layout/base.html" %}
-{% block title %}Activation policy{% endblock %}
+{% block title %}{{ _("Activation policy") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Activation mode by product</h2>
-  <p class="empty">AUTOMATIC (no policy row) preserves exactly the pre-Phase-8 behavior: a validated
-  activation is approved and signed immediately, no review step. Changing this changes the security
-  posture of every future activation for the product -- restricted to Super Admin.</p>
-  <table>
-    <tr><th>Product</th><th>Current effective mode</th></tr>
-    {% for p in products %}<tr><td>{{ p.name }}</td><td><span class="badge {{ 'active' if modes[p.id] == 'AUTOMATIC' else 'pending' }}">{{ modes[p.id] }}</span></td></tr>{% endfor %}
+  <h2>{{ _("Activation mode by product") }}</h2>
+  <p class="empty">{{ _("AUTOMATIC (no policy row) preserves exactly the pre-Phase-8 behavior: a validated activation is approved and signed immediately, no review step. Changing this changes the security posture of every future activation for the product -- restricted to Super Admin.") }}</p>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Product") }}</th><th>{{ _("Current effective mode") }}</th></tr></thead>
+    <tbody>
+    {% for p in products %}<tr><td>{{ p.name }}</td><td><span class="badge {{ 'active' if modes[p.id] == 'AUTOMATIC' else 'pending' }}">{{ activation_mode_label(modes[p.id]) }}</span></td></tr>{% endfor %}
+    </tbody>
   </table>
 </div>
 
 <div class="card">
-  <h3>Create a policy</h3>
+  <h3>{{ _("Create a policy") }}</h3>
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
-  <form method="post" action="{{ url_for('commercial_ops_ui.activation_policy_create') }}">
+  <form method="post" action="{{ url_for('commercial_ops_ui.activation_policy_create') }}"
+        data-confirm="{{ _('Change activation policy? This affects every future activation for the selected product.') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Policy code</label><input name="policy_code" required>
-    <label>Product (leave blank for global default)</label>
-    <select name="product_id"><option value="">-- global default --</option>{% for p in products %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select>
-    <label>Mode</label>
-    <select name="mode">
-      <option value="AUTOMATIC">AUTOMATIC</option>
-      <option value="MANUAL_APPROVAL">MANUAL_APPROVAL</option>
-      <option value="RISK_REVIEW">RISK_REVIEW</option>
+    <label for="commercial-ops-activation-policy-policy-code">{{ _("Policy code") }}</label><input id="commercial-ops-activation-policy-policy-code" name="policy_code" required>
+    <label for="commercial-ops-activation-policy-product-id">{{ _("Product (leave blank for global default)") }}</label>
+    <select id="commercial-ops-activation-policy-product-id" name="product_id"><option value="">{{ _("-- global default --") }}</option>{% for p in products %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select>
+    <label for="commercial-ops-activation-policy-mode">{{ _("Mode") }}</label>
+    <select id="commercial-ops-activation-policy-mode" name="mode">
+      <option value="AUTOMATIC">{{ activation_mode_label("AUTOMATIC") }}</option>
+      <option value="MANUAL_APPROVAL">{{ activation_mode_label("MANUAL_APPROVAL") }}</option>
+      <option value="RISK_REVIEW">{{ activation_mode_label("RISK_REVIEW") }}</option>
     </select>
-    <label>Effective date</label><input name="effective_date" type="date" required>
-    <label>Notes</label><textarea name="notes"></textarea>
-    <div style="margin-top:0.5rem;"><button type="submit" onclick="return confirm('Change activation policy? This affects every future activation for the selected product.');">Create policy</button></div>
+    <label for="commercial-ops-activation-policy-effective-date">{{ _("Effective date") }}</label><input id="commercial-ops-activation-policy-effective-date" name="effective_date" type="date" required>
+    <label>{{ _("Notes") }}</label><textarea name="notes"></textarea>
+    <div style="margin-top:0.5rem;"><button type="submit">{{ _("Create policy") }}</button></div>
   </form>
 </div>
 
 <div class="card">
-  <h3>Policy history</h3>
-  <table>
-    <tr><th>Code</th><th>Product</th><th>Mode</th><th>Effective</th><th>Retired</th></tr>
+  <h3>{{ _("Policy history") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Code") }}</th><th>{{ _("Product") }}</th><th>{{ _("Mode") }}</th><th>{{ _("Effective") }}</th><th>{{ _("Retired") }}</th></tr></thead>
+    <tbody>
     {% for pol in policies %}
-    <tr><td>{{ pol.policy_code }}</td><td>{{ pol.product_id or "(global)" }}</td><td>{{ pol.mode }}</td><td>{{ pol.effective_date }}</td><td>{{ pol.retired_date or "-" }}</td></tr>
-    {% else %}<tr><td colspan="5" class="empty">No policies configured -- every product is AUTOMATIC.</td></tr>{% endfor %}
+    <tr><td><bdi dir="ltr">{{ pol.policy_code }}</bdi></td><td>{% if pol.product_id %}<bdi dir="ltr">{{ pol.product_id }}</bdi>{% else %}{{ _("(global)") }}{% endif %}</td><td>{{ activation_mode_label(pol.mode) }}</td><td>{{ format_owner_date(pol.effective_date) }}</td><td>{{ format_owner_date(pol.retired_date) if pol.retired_date else "-" }}</td></tr>
+    {% else %}<tr><td colspan="5" class="empty">{{ _("No policies configured -- every product is AUTOMATIC.") }}</td></tr>{% endfor %}
+    </tbody>
   </table>
 </div>
 {% endblock %}

@@ -1,31 +1,34 @@
 {% extends "layout/base.html" %}
-{% block title %}Reconciliation{% endblock %}
+{% block title %}{{ _("Reconciliation") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Reconciliation {{ "(notifications written)" if applied else "(dry run -- nothing written)" }}</h2>
+  <h2>{{ _("Reconciliation") }} {{ _("(notifications written)") if applied else _("(dry run -- nothing written)") }}</h2>
   <dl class="kv">
-    <dt>As of</dt><dd>{{ result.as_of }}</dd>
-    <dt>Licenses checked</dt><dd>{{ result.licenses_checked }}</dd>
-    <dt>Renewals checked</dt><dd>{{ result.renewals_checked }}</dd>
-    <dt>Pending activations checked</dt><dd>{{ result.pending_activations_checked }}</dd>
-    <dt>Notifications created</dt><dd>{{ result.notifications_created }}</dd>
-    <dt>Notifications deduped</dt><dd>{{ result.notifications_deduped }}</dd>
+    <dt>{{ _("As of") }}</dt><dd>{{ format_owner_datetime(result.as_of) }}</dd>
+    <dt>{{ _("Licenses checked") }}</dt><dd>{{ format_owner_number(result.licenses_checked) }}</dd>
+    <dt>{{ _("Renewals checked") }}</dt><dd>{{ format_owner_number(result.renewals_checked) }}</dd>
+    <dt>{{ _("Pending activations checked") }}</dt><dd>{{ format_owner_number(result.pending_activations_checked) }}</dd>
+    <dt>{{ _("Notifications created") }}</dt><dd>{{ format_owner_number(result.notifications_created) }}</dd>
+    <dt>{{ _("Notifications deduped") }}</dt><dd>{{ format_owner_number(result.notifications_deduped) }}</dd>
   </dl>
   {% if not applied %}
-  <form method="post" action="{{ url_for('commercial_ops_ui.reconciliation_run') }}">
+  <form method="post" action="{{ url_for('commercial_ops_ui.reconciliation_run') }}"
+        data-confirm="{{ _('Write notifications for every finding below? This never mutates any commercial record itself.') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" onclick="return confirm('Write notifications for every finding below? This never mutates any commercial record itself.');">Run and write notifications</button>
+    <button type="submit">{{ _("Run and write notifications") }}</button>
   </form>
   {% endif %}
 </div>
 
 <div class="card">
-  <h3>Findings</h3>
-  <table>
-    <tr><th>Check</th><th>Entity type</th><th>Entity</th><th>Detail</th></tr>
+  <h3>{{ _("Findings") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Check") }}</th><th>{{ _("Entity type") }}</th><th>{{ _("Entity") }}</th><th>{{ _("Detail") }}</th></tr></thead>
+    <tbody>
     {% for f in result.findings %}
-    <tr><td>{{ f.check }}</td><td>{{ f.entity_type }}</td><td>{{ f.entity_id }}</td><td>{{ f.detail }}</td></tr>
-    {% else %}<tr><td colspan="4" class="empty">No findings -- everything reconciles.</td></tr>{% endfor %}
+    <tr><td><bdi dir="ltr">{{ f.check }}</bdi></td><td><bdi dir="ltr">{{ f.entity_type }}</bdi></td><td><bdi dir="ltr">{{ f.entity_id }}</bdi></td><td>{{ f.detail }}</td></tr>
+    {% else %}<tr><td colspan="4" class="empty">{{ _("No findings -- everything reconciles.") }}</td></tr>{% endfor %}
+    </tbody>
   </table>
 </div>
 {% endblock %}

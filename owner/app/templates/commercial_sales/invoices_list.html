@@ -1,0 +1,31 @@
+{% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
+{% block title %}{{ _("Invoices") }}{% endblock %}
+{% block content %}
+<div class="card">
+  {{ table.toolbar(_("Invoices")) }}
+  {{ table.filter_bar(
+      status_options=["DRAFT","ISSUED","PARTIALLY_PAID","PAID","VOID","REFUNDED","PARTIALLY_REFUNDED"], status_value=status_filter, status_label_fn=commercial_invoice_status_label,
+      search_value=search, search_field="q", search_label=_("Search"), search_placeholder=_("Invoice number")
+  ) }}
+  {% call table.table(
+      columns=[
+        {"label": _("Number"), "sort_key": "invoice_number"},
+        {"label": _("Status"), "sort_key": "status"},
+        {"label": _("Total"), "sort_key": "total", "align": "end"},
+        {"label": _("Due"), "sort_key": "due_date"},
+      ],
+      has_rows=result.rows|length > 0, empty_message=_("No invoices yet."), caption=_("Invoices")
+  ) %}
+    {% for i in result.rows %}
+    <tr>
+      <td><a href="{{ url_for('commercial_sales_web.invoice_detail', invoice_id=i.id) }}"><bdi dir="ltr">{{ i.invoice_number }}</bdi></a></td>
+      <td><span class="badge {{ invoice_badge_class(i.status) }}">{{ commercial_invoice_status_label(i.status) }}</span></td>
+      <td class="num">{{ format_owner_number(i.total) }} {{ i.currency }}</td>
+      <td>{{ format_owner_date(i.due_date) if i.due_date else "-" }}</td>
+    </tr>
+    {% endfor %}
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
+</div>
+{% endblock %}

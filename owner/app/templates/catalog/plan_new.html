@@ -1,27 +1,27 @@
 {% extends "layout/base.html" %}
-{% block title %}New plan{% endblock %}
+{% block title %}{{ _("New plan") }}{% endblock %}
 {% block content %}
 <div class="card" style="max-width:480px;">
-  <h2>New plan</h2>
+  <h2>{{ _("New plan") }}</h2>
   <form method="post" action="{{ url_for('catalog.create_plan_route') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label for="product_id">Product</label>
+    <label for="product_id">{{ _("Product") }}</label>
     <select id="product_id" name="product_id" required>
       {% for p in products %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
     </select>
-    <label for="plan_code">Plan code</label>
-    <input id="plan_code" name="plan_code" required placeholder="e.g. CLINIC_PILOT_MONTHLY">
-    <label for="name">Name</label>
+    <label for="plan_code">{{ _("Plan code") }}</label>
+    <input id="plan_code" name="plan_code" required placeholder="{{ _('e.g. CLINIC_PILOT_MONTHLY') }}">
+    <label for="name">{{ _("Name") }}</label>
     <input id="name" name="name" required>
-    <label for="billing_model">Billing model</label>
+    <label for="billing_model">{{ _("Billing model") }}</label>
     <select id="billing_model" name="billing_model">
-      {% for b in ["ONE_TIME","MONTHLY","ANNUAL","PILOT","CUSTOM"] %}<option value="{{ b }}">{{ b }}</option>{% endfor %}
+      {% for b in ["ONE_TIME","MONTHLY","ANNUAL","PILOT","CUSTOM"] %}<option value="{{ b }}">{{ billing_model_label(b) }}</option>{% endfor %}
     </select>
-    <label for="currency">Currency</label>
+    <label for="currency">{{ _("Currency") }}</label>
     <input id="currency" name="currency" value="USD">
-    <label for="included_device_count">Included devices</label>
+    <label for="included_device_count">{{ _("Included devices") }}</label>
     <input id="included_device_count" name="included_device_count" type="number" value="1" min="1">
-    <div style="margin-top:1rem;"><button type="submit">Create plan (DRAFT)</button></div>
+    <div style="margin-top:1rem;"><button type="submit">{{ _("Create plan (DRAFT)") }}</button></div>
   </form>
 </div>
 {% endblock %}

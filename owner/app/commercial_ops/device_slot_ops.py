@@ -22,6 +22,7 @@ from sqlalchemy import select
 
 from app.audit.services import record as audit_record
 from app.commercial_ops.commercial_policy import create_notification
+from app.commercial_ops.errors import StableCodeError
 from app.extensions import db_session
 from app.installations.services import count_slot_consuming_installations, transition_installation
 from app.models.activation_governance import DeviceSlotException
@@ -34,19 +35,28 @@ MAX_DEVICE_SLOT_EXCEPTION_DAYS = 90
 _LICENSE_STATUSES_ELIGIBLE_FOR_SCAN = ("ISSUED", "ACTIVE")
 
 
-class DeviceSlotError(ValueError):
-    pass
+class DeviceSlotError(StableCodeError):
+    _MESSAGES = {
+        "REASON_REQUIRED_TO_RELEASE": "A reason is required to release a device slot.",
+        "REASON_REQUIRED_TO_REPLACE": "A reason is required to replace a device slot.",
+        "EXTRA_SLOTS_MUST_BE_POSITIVE": "extra_slots must be positive.",
+        "REASON_REQUIRED_TO_CREATE_EXCEPTION": "A reason is required to create a device slot exception.",
+        "EXPIRES_AT_BEFORE_STARTS_AT": "expires_at must be after starts_at.",
+        "EXCEPTION_EXCEEDS_MAX_DAYS": "Device slot exceptions may not exceed {max_days} days -- temporary means temporary.",
+        "INVALID_REVOKE_STATUS": "Cannot revoke a device slot exception in status {status}.",
+        "REASON_REQUIRED_TO_REVOKE": "A reason is required to revoke a device slot exception.",
+    }
 
 
 def release_device_slot(installation: Installation, *, reason: str, actor_staff_user_id) -> None:
     if not reason or not reason.strip():
-        raise DeviceSlotError("A reason is required to release a device slot.")
+        raise DeviceSlotError("REASON_REQUIRED_TO_RELEASE")
     transition_installation(installation, "DEACTIVATED", actor_staff_user_id, reason=reason)
 
 
 def replace_device_slot(old_installation: Installation, *, reason: str, actor_staff_user_id) -> None:
     if not reason or not reason.strip():
-        raise DeviceSlotError("A reason is required to replace a device slot.")
+        raise DeviceSlotError("REASON_REQUIRED_TO_REPLACE")
     transition_installation(old_installation, "REPLACED", actor_staff_user_id, reason=reason)
 
 
@@ -60,16 +70,14 @@ def create_device_slot_exception(
     starts_at: datetime | None = None,
 ) -> DeviceSlotException:
     if extra_slots <= 0:
-        raise DeviceSlotError("extra_slots must be positive.")
+        raise DeviceSlotError("EXTRA_SLOTS_MUST_BE_POSITIVE")
     if not reason or not reason.strip():
-        raise DeviceSlotError("A reason is required to create a device slot exception.")
+        raise DeviceSlotError("REASON_REQUIRED_TO_CREATE_EXCEPTION")
     starts_at = starts_at or utcnow()
     if expires_at <= starts_at:
-        raise DeviceSlotError("expires_at must be after starts_at.")
+        raise DeviceSlotError("EXPIRES_AT_BEFORE_STARTS_AT")
     if expires_at - starts_at > timedelta(days=MAX_DEVICE_SLOT_EXCEPTION_DAYS):
-        raise DeviceSlotError(
-            f"Device slot exceptions may not exceed {MAX_DEVICE_SLOT_EXCEPTION_DAYS} days -- temporary means temporary."
-        )
+        raise DeviceSlotError("EXCEPTION_EXCEEDS_MAX_DAYS", max_days=MAX_DEVICE_SLOT_EXCEPTION_DAYS)
 
     exception = DeviceSlotException(
         license_id=license_row.id, extra_slots=extra_slots, reason=reason,
@@ -92,9 +100,9 @@ def create_device_slot_exception(
 
 def revoke_device_slot_exception(exception: DeviceSlotException, *, reason: str, actor_staff_user_id) -> None:
     if exception.status != "ACTIVE":
-        raise DeviceSlotError(f"Cannot revoke a device slot exception in status {exception.status}.")
+        raise DeviceSlotError("INVALID_REVOKE_STATUS", status=exception.status)
     if not reason or not reason.strip():
-        raise DeviceSlotError("A reason is required to revoke a device slot exception.")
+        raise DeviceSlotError("REASON_REQUIRED_TO_REVOKE")
     exception.status = "REVOKED"
     exception.revoked_at = utcnow()
     exception.revoked_by_staff_user_id = actor_staff_user_id

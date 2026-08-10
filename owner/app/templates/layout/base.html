@@ -1,80 +1,148 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{ current_locale }}" dir="{{ current_direction }}">
 <head>
   <meta charset="utf-8">
-  <title>{% block title %}Aura Owner{% endblock %} -- Aura Owner Control Center</title>
+  <title>{% block title %}{{ _('Aura Owner') }}{% endblock %} -- {{ _('Aura Owner Control Center') }}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    :root { --border:#d8dee4; --muted:#6b7785; --accent:#2452b8; --danger:#b3261e; --bg:#f6f8fa; }
-    * { box-sizing: border-box; }
-    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; background: var(--bg); color: #1c2530; }
-    header.topbar { background: #101826; color: #fff; padding: 0.6rem 1rem; display: flex; align-items: center; justify-content: space-between; }
-    header.topbar a { color: #fff; text-decoration: none; margin-right: 1rem; font-size: 0.92rem; }
-    header.topbar a.brand { font-weight: 700; font-size: 1rem; }
-    nav.tabs { display: flex; flex-wrap: wrap; gap: 0; background: #16202f; padding: 0 1rem; }
-    nav.tabs a { color: #c7d0dc; text-decoration: none; padding: 0.5rem 0.75rem; font-size: 0.85rem; }
-    nav.tabs a:hover { color: #fff; background: #223049; }
-    main { max-width: 1100px; margin: 1.25rem auto; padding: 0 1rem; }
-    .card { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
-    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
-    th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); }
-    th { color: var(--muted); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; }
-    .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.72rem; font-weight: 600; background: #e7ecf3; color: #33455e; }
-    .badge.active, .badge.confirmed, .badge.success, .badge.ok { background: #dcf3e2; color: #1c6b34; }
-    .badge.warn, .badge.pending, .badge.draft { background: #fbeecb; color: #8a5c00; }
-    .badge.danger, .badge.revoked, .badge.failed, .badge.disabled { background: #fbdcda; color: #8a2119; }
-    form.inline { display: inline; }
-    input, select, textarea { padding: 0.4rem 0.5rem; border: 1px solid var(--border); border-radius: 5px; font-size: 0.9rem; width: 100%; }
-    label { display: block; font-size: 0.82rem; color: var(--muted); margin: 0.5rem 0 0.2rem; }
-    button, .btn { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 0.45rem 0.9rem; font-size: 0.85rem; cursor: pointer; text-decoration: none; display: inline-block; }
-    button.danger, .btn.danger { background: var(--danger); }
-    button.secondary, .btn.secondary { background: #fff; color: var(--accent); border: 1px solid var(--accent); }
-    .error { background: #fbdcda; color: #8a2119; padding: 0.5rem 0.75rem; border-radius: 6px; margin-bottom: 0.75rem; font-size: 0.85rem; }
-    .empty { color: var(--muted); font-style: italic; padding: 1rem 0; }
-    .filters { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; align-items: end; }
-    .kv { display: grid; grid-template-columns: 200px 1fr; gap: 0.3rem 1rem; font-size: 0.9rem; }
-    .kv dt { color: var(--muted); }
-    code.masked { background: #eef1f5; padding: 0.15rem 0.4rem; border-radius: 4px; }
-  </style>
+  {# Pre-paint shell-preference restore -- must execute before tokens.css
+     is parsed/applied (see static/js/theme-preload.js). A blocking
+     external <script src>, not inline: the app's CSP is script-src
+     'self' with no 'unsafe-inline' (app/security/headers.py), so an
+     inline <script> here would be silently blocked by the browser --
+     confirmed via real browser console output during this phase's own
+     shell-rebuild verification. #}
+  <script src="{{ url_for('static', filename='js/theme-preload.js') }}"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/shell.css') }}">
 </head>
 <body>
-  <header class="topbar">
-    <div><a class="brand" href="{{ url_for('dashboard.index') }}">Aura Owner Control Center</a></div>
-    <div>
-      {% if staff %}
-        <span>{{ staff.display_name }}</span>
-        <form class="inline" method="post" action="{{ url_for('auth.logout') }}">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" class="secondary">Log out</button>
-        </form>
-      {% endif %}
+  <a class="aura-sr-only" href="#main-content">{{ _('Skip to content') }}</a>
+  <div class="aura-shell">
+    {% if staff %}
+    <aside class="aura-sidebar" id="aura-sidebar" aria-label="{{ _('Primary') }}">
+      <div class="aura-sidebar__header">
+        <a class="aura-sidebar__brand" href="{{ url_for('dashboard.index') }}">
+          <span class="aura-sidebar__mark" aria-hidden="true">A</span>
+          <span class="aura-sidebar__name">{{ _('Aura Owner') }}</span>
+        </a>
+        <button type="button" class="aura-sidebar__toggle" id="aura-sidebar-toggle" aria-expanded="true" aria-controls="aura-sidebar">
+          <span class="aura-sidebar__toggle-icon" aria-hidden="true"></span>
+          <span class="aura-sr-only">{{ _('Collapse sidebar') }}</span>
+        </button>
+      </div>
+      <nav class="aura-sidebar__nav" aria-label="{{ _('Sections') }}">
+        {% include "layout/_sidebar.html" %}
+      </nav>
+    </aside>
+    {% endif %}
+    <div class="aura-shell__body">
+      <header class="aura-topbar">
+        <div class="aura-topbar__start">
+          {% if staff %}
+          <button type="button" class="aura-topbar__menu-btn" id="aura-sidebar-toggle-mobile" aria-expanded="false" aria-controls="aura-sidebar">
+            <span aria-hidden="true">&#9776;</span>
+            <span class="aura-sr-only">{{ _('Toggle navigation') }}</span>
+          </button>
+          {% endif %}
+          <div class="aura-topbar__heading">
+            <a class="aura-topbar__brand" href="{{ url_for('dashboard.index') }}">{{ _('Aura Owner Control Center') }}</a>
+            <h1 class="aura-topbar__title">{{ self.title() }}</h1>
+            {% block breadcrumb %}{% endblock %}
+          </div>
+        </div>
+        <div class="aura-topbar__end">
+          {% if staff %}
+          {# Real, working command palette trigger (Stage C) -- replaces
+             the former disabled search stub. Ctrl+K / Cmd+K opens it from
+             anywhere on the page too (command-palette.js). Quick-create
+             remains a separate, not-yet-built milestone (per-domain
+             "+" buttons on each list screen) -- unrelated to this one and
+             still an inert, disabled placeholder. #}
+          <button type="button" class="aura-topbar__stub aura-command-palette-trigger" id="aura-command-palette-trigger"
+                  aria-haspopup="dialog" aria-label="{{ _('Search (Ctrl+K)') }}">
+            <span aria-hidden="true">&#9906;</span>
+            <span class="aura-topbar__stub-label">{{ _('Search') }}</span>
+            <kbd>{{ _('Ctrl K') }}</kbd>
+          </button>
+          <button type="button" class="aura-topbar__stub aura-topbar__stub--icon" disabled aria-label="{{ _('Quick create (coming soon)') }}">
+            <span aria-hidden="true">+</span>
+          </button>
+          {% if can_view_attention_center %}
+          {# Real, permission-aware indicator (not a stub) -- links to the
+             real /attention page. Count is derived/real-time, computed
+             fresh on this request (no persisted "unread" state to go
+             stale -- see attention-center-contract.md). Renders even at
+             zero so the destination stays reachable; the number itself
+             is what communicates "nothing needs you right now". #}
+          <a class="aura-topbar__attention{{ ' has-items' if attention_count else '' }}" href="{{ url_for('attention.index') }}"
+             aria-label="{{ _('Attention Center: %(count)d item(s) need your attention', count=attention_count) }}">
+            <span aria-hidden="true">&#9888;</span>
+            <span class="aura-topbar__attention-count" aria-hidden="true">{{ format_owner_number(attention_count) }}</span>
+          </a>
+          {% endif %}
+          <div class="aura-theme-switch" role="group" aria-label="{{ _('Theme') }}">
+            <button type="button" class="aura-theme-switch__btn" data-theme-option="light" aria-pressed="false">{{ _('Light') }}</button>
+            <button type="button" class="aura-theme-switch__btn" data-theme-option="dark" aria-pressed="false">{{ _('Dark') }}</button>
+            <button type="button" class="aura-theme-switch__btn" data-theme-option="system" aria-pressed="true">{{ _('System') }}</button>
+          </div>
+          {% endif %}
+          <nav class="aura-lang-switch" aria-label="{{ _('Language') }}">
+            {% for code, name in supported_locales.items() %}
+            <a href="{{ url_for('locale.switch', code=code, next=request.path) }}"
+               lang="{{ code }}" {% if code == current_locale %}aria-current="true"{% endif %}>{{ name }}</a>
+            {% endfor %}
+          </nav>
+          {% if staff %}
+          <details class="aura-profile-menu">
+            <summary class="aura-profile-menu__trigger">
+              <span class="aura-profile-menu__name">{{ staff.display_name }}</span>
+              {% if staff.is_super_admin %}
+              <span class="aura-role-badge">{{ _('Super Admin') }}</span>
+              {% elif staff.role_assignments %}
+              <span class="aura-role-badge">{{ role_label(staff.role_assignments[0].role.code) }}</span>
+              {% endif %}
+            </summary>
+            <div class="aura-profile-menu__panel">
+              <a href="{{ url_for('profile.index') }}">{{ _('My Profile') }}</a>
+              <a href="{{ url_for('auth.change_password_form') }}">{{ _('Account') }}</a>
+              <a href="{{ url_for('dashboard.index', tour='reopen') }}">{{ _('Show welcome tour') }}</a>
+              <form class="aura-profile-menu__logout" method="post" action="{{ url_for('auth.logout') }}"
+                    data-confirm="{{ _('Log out of Aura Owner?') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="aura-profile-menu__logout-btn">{{ _('Log out') }}</button>
+              </form>
+            </div>
+          </details>
+          {% endif %}
+        </div>
+      </header>
+      <main class="aura-main{{ '' if staff else ' aura-main--unauthenticated' }}" id="main-content">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="flash-messages">
+          {% for category, message in messages %}
+          <p class="flash {{ 'error' if category == 'error' else 'info' }}" role="status">{{ message }}</p>
+          {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+      </main>
     </div>
-  </header>
+  </div>
   {% if staff %}
-  <nav class="tabs">
-    <a href="{{ url_for('dashboard.index') }}">Dashboard</a>
-    <a href="{{ url_for('customers.list_customers') }}">Customers</a>
-    <a href="{{ url_for('catalog.index') }}">Catalog</a>
-    <a href="{{ url_for('subscriptions.list_subscriptions') }}">Subscriptions</a>
-    <a href="{{ url_for('licensing.list_licenses') }}">Licenses</a>
-    <a href="{{ url_for('installations.list_installations') }}">Installations</a>
-    <a href="{{ url_for('commercial_ops_ui.list_renewals') }}">Renewals</a>
-    <a href="{{ url_for('commercial_ops_ui.list_pilots') }}">Pilots</a>
-    <a href="{{ url_for('commercial_ops_ui.list_emergency_extensions') }}">Emergency Ext.</a>
-    <a href="{{ url_for('commercial_ops_ui.list_pending_activations') }}">Activation Reviews</a>
-    <a href="{{ url_for('commercial_ops_ui.list_notifications') }}">Notifications</a>
-    <a href="{{ url_for('commercial_ops_ui.queue_view') }}">My Queue</a>
-    <a href="{{ url_for('commercial_ops_ui.reconciliation_view') }}">Reconciliation</a>
-    <a href="{{ url_for('staff.list_staff') }}">Staff</a>
-    <a href="{{ url_for('audit.list_audit') }}">Audit Log</a>
-    <a href="{{ url_for('audit.security_events') }}">Security Events</a>
-    <a href="{{ url_for('system.list_backups') }}">Backups</a>
-    <a href="{{ url_for('licensing_admin.status') }}">Activation Service</a>
-    <a href="{{ url_for('auth.change_password_form') }}">Account</a>
-  </nav>
+  {% include "layout/_command_palette.html" %}
   {% endif %}
-  <main>
-    {% block content %}{% endblock %}
-  </main>
+  <script src="{{ url_for('static', filename='js/confirm.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/sidebar.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/table-density.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/tabs.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/password-toggle.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/product-tour.js') }}"></script>
+  {% if staff %}
+  <script src="{{ url_for('static', filename='js/command-palette.js') }}"></script>
+  {% endif %}
 </body>
 </html>

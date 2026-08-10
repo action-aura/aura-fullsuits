@@ -78,9 +78,88 @@ python -m pytest owner/tests/ -q
 
 See `docs/owner/phase5/owner-test-report.md` for the full test report.
 
+## Staging (Phase 9)
+
+A hardened staging deployment path exists: `owner/Dockerfile.staging` +
+`docker-compose.staging.yml` (repo root), real `/health/live`/`/health/ready`,
+real structured/redacted logging, a real backup+restore drill, and a real
+scheduler for the commercial scan jobs. See `docs/owner/phase9/
+PHASE9-SECURE-STAGING-AND-PILOT-READINESS-HANDOVER.md` for what was actually
+verified (locally, natively, this machine has no cloud/VPS/Docker Engine)
+versus what remains NOT VERIFIED (a real remote host, real public TLS, real
+containerized deployment). As of Phase 9, staging is **not yet actually
+deployed anywhere reachable** -- the capability is real and tested, the real
+deployment is not.
+
+## Running the full product test matrix (not just Owner)
+
+`python products/run_all_tests.py` (optionally `retail`/`clinic`/
+`commercial_runtime`/`licensing_contracts` to scope it) is the one supported
+command for Retail/Clinic -- runs each test file in its own subprocess,
+deliberately, because `config.py`/`registry_db.py`/`schema.py` resolve
+`AURA_APP_DATA` once at import time (correct for a real single process, not
+safe to collect many test files into one `pytest` invocation). See
+`docs/owner/phase9/retail-test-isolation-root-cause.md` before "fixing" this
+any other way.
+
+## Internationalization (English/Arabic, RTL)
+
+Phase 9.5B-R added one canonical i18n/RTL foundation (Flask-Babel). Phase 9.5B-R2 completed Owner-wide
+coverage: every real current Owner template (67/67 -- layout/navigation, auth/setup/MFA, the employee
+portal, and every commercial-administration screen: catalog, customers, subscriptions, licensing,
+installations, commercial operations, staff, audit, system) is now translated. Real, compiled English +
+Arabic catalogs (742 messages, zero empty/fuzzy) live at `translations/{en,ar}/LC_MESSAGES/messages.po`.
+To add or update a translatable string:
+
+```
+python -m babel.messages.frontend extract -F babel.cfg -o translations/messages.pot .
+python -m babel.messages.frontend update -i translations/messages.pot -d translations
+# fill/correct English (identity) and Arabic (real translation) entries --
+# check both emptiness AND the fuzzy flag; pybabel's approximate-match
+# heuristic can silently pair a new string with the wrong old translation
+# (see docs/owner/phase9_5b_r2/rtl-defect-and-fix-log.md item 5)
+python -m babel.messages.frontend compile -d translations
+```
+
+`flask commercial preflight` validates the compiled catalogs exist, are non-empty, AND contain zero
+empty/fuzzy entries (Phase 9.5B-R2 extension). See `docs/owner/phase9_5b_r2/` for the full closure
+evidence, and `docs/owner/phase9_5b_r/translation-catalog-maintenance.md` /
+`translation-style-guide.md` for the original maintenance workflow and terminology glossary.
+
+Phase 9.5B-R3 closed the remaining verification gaps from R2: a nondeterministic Owner test failure
+(root-caused and fixed, see `docs/owner/phase9_5b_r3/flaky-test-root-cause-and-fix.md`), executed
+dependency/secret scans (`docs/owner/phase9_5b_r3/dependency-scan-final.md`,
+`secret-scan-final.md`), a request-context-free stable-code architecture for `commercial_ops` service
+exceptions (`docs/owner/phase9_5b_r3/service-error-architecture-result.md` -- raise
+`SomeError("CODE", **params)` in service code, never `_()`; localize only in
+`commercial_ops/ui_routes.py` via `localize_*_error()`), and complete browser/keyboard-focus
+validation across all 16 current route families (`docs/owner/phase9_5b_r3/
+complete-browser-family-validation.md`). Full closure record and final verdict:
+`docs/owner/phase9_5b_r3/PHASE9-5B-R3-FINAL-VERIFICATION-HANDOVER.md`.
+
+## Expense Management, Cash Control, Reporting & Management Collaboration (Phase 9.5E)
+
+Phase 9.5D added the commercial sales path (Lead→Quote→Order→Invoice→Payment→
+Refund→Commission); Phase 9.5E adds the operational-finance side: Expense
+lifecycle/approval/payments/attachments/duplicate-review (`app/expenses/`),
+Daily Cash Closing with an authoritative formula and MFA-gated reopen
+(`app/cash_closing/`), read-only operational aggregation + 3 role-scoped
+dashboards + idempotent scheduled report snapshots (`app/operational_reports/`),
+and the first real service layer over the Phase 9.5A `SharedManagementNote`
+schema (`app/management_notes/`). A 35-route `/api/operations/v1` API and a
+32-route web UI (11 templates) sit on top, fully EN/AR localized. Full
+closure record: `docs/owner/phase9_5e/PHASE9-5E-EXPENSES-REPORTING-HANDOVER.md`.
+
+`flask commercial preflight` remains the single blocking gate -- Phase 9.5E
+extends it (14 operational-finance sub-checks), it does not add a second
+command.
+
 ## What this is NOT
 
 Not connected to Retail or Clinic. Not enforcing any license inside either
-product. Not deployed anywhere. Not internet-reachable. Not collecting
-telemetry. See `docs/owner/phase5/owner-foundation-scope.md` and
-`docs/owner/phase5/owner-residual-risk-register.md`.
+product. Not internet-reachable. Not collecting telemetry. Not deployed to
+any real remote host as of Phase 9 (see Staging section above -- the
+capability exists, the real deployment does not). See
+`docs/owner/phase5/owner-foundation-scope.md` and
+`docs/owner/phase5/owner-residual-risk-register.md` for the original Phase 5
+scope this statement is inherited from.

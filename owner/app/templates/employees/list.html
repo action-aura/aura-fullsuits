@@ -1,0 +1,117 @@
+{% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
+{% block title %}{{ _('Employees') }}{% endblock %}
+{% block content %}
+<div class="card">
+  {{ table.toolbar(_("Employees"), url_for('employees.new_form'), _("Add employee"), new_permission="employees.create") }}
+  {#
+    Not table.filter_bar(): this screen has 4 real, independent select
+    filters (department/employment_status/role_code/presence) plus search,
+    sort, and an include_archived checkbox -- filter_bar() only supports
+    one status-shaped select + search + an optional sort/direction pair, a
+    shape built for the common case (Customers/Subscriptions/Licenses/...).
+    Forcing 4 selects through a single status_options param, or calling
+    filter_bar() more than once, would either drop real filters or split
+    them across multiple <form> elements (breaking combined submission --
+    a browser GET only serializes the fields inside the submitted form).
+    This hand-written form reuses the exact same "filters aura-list-filters"
+    classes and auto-submit-on-change convention filter_bar() itself uses,
+    for visual parity, without pretending the shared macro's narrower shape
+    fits. See docs/owner/ui-modernization/employee-permission-ui-contract.md.
+  #}
+  <form method="get" class="filters aura-list-filters">
+    <div class="aura-list-filters__search">
+      <label for="aura-filter-q">{{ _('Search') }}</label>
+      <input type="search" id="aura-filter-q" name="q" value="{{ filters.search or '' }}" placeholder="{{ _('Name or employee number') }}">
+    </div>
+    <div><label for="department">{{ _('Department') }}</label>
+      <select id="department" name="department" onchange="this.form.submit()">
+        <option value="">{{ _('All') }}</option>
+        {% for d in departments %}<option value="{{ d }}" {% if filters.department == d %}selected{% endif %}>{{ d }}</option>{% endfor %}
+      </select>
+    </div>
+    <div><label for="employment_status">{{ _('Status') }}</label>
+      <select id="employment_status" name="employment_status" onchange="this.form.submit()">
+        <option value="">{{ _('All') }}</option>
+        {% for s in ["PENDING","ACTIVE","SUSPENDED","TERMINATED","ARCHIVED"] %}
+        <option value="{{ s }}" {% if filters.employment_status == s %}selected{% endif %}>{{ employment_status_label(s) }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div><label for="role_code">{{ _('Role') }}</label>
+      <select id="role_code" name="role_code" onchange="this.form.submit()">
+        <option value="">{{ _('All') }}</option>
+        {% for r in roles %}<option value="{{ r.code }}" {% if filters.role_code == r.code %}selected{% endif %}>{{ role_label(r.code) }}</option>{% endfor %}
+      </select>
+    </div>
+    <div><label for="presence">{{ _('Presence') }}</label>
+      <select id="presence" name="presence" onchange="this.form.submit()">
+        <option value="">{{ _('All') }}</option>
+        {% for p in ["ONLINE","RECENTLY_ACTIVE","OFFLINE"] %}
+        <option value="{{ p }}" {% if filters.presence == p %}selected{% endif %}>{{ presence_label(p) }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div><label for="sort">{{ _('Sort by') }}</label>
+      <select id="sort" name="sort" onchange="this.form.submit()">
+        <option value="full_name" {% if filters.sort == "full_name" %}selected{% endif %}>{{ _('Name') }}</option>
+        <option value="employee_number" {% if filters.sort == "employee_number" %}selected{% endif %}>{{ _('Employee #') }}</option>
+        <option value="employment_start_date" {% if filters.sort == "employment_start_date" %}selected{% endif %}>{{ _('Start date') }}</option>
+        <option value="employment_status" {% if filters.sort == "employment_status" %}selected{% endif %}>{{ _('Status') }}</option>
+      </select>
+    </div>
+    <div>
+      <label for="include_archived" style="display:inline-flex;align-items:center;gap:0.35rem;font-weight:normal;color:inherit;">
+        <input type="checkbox" id="include_archived" name="include_archived" value="1" style="width:auto;"
+          {% if filters.include_archived %}checked{% endif %} onchange="this.form.submit()">
+        {{ _('Include archived') }}
+      </label>
+    </div>
+    <div><label>&nbsp;</label><button type="submit" class="secondary">{{ _('Search') }}</button></div>
+  </form>
+  {{ table.density_toggle() }}
+  {#
+    No sort_key on any column below: list_employees() (app/employees/
+    queries.py) has no direction/dir parameter at all -- it always orders
+    ascending regardless of column. table()'s sort-link mechanism always
+    offers an asc/desc toggle (that's how every other migrated screen's
+    real ORDER BY works); wiring it here would render a working-looking
+    descending arrow that silently has no effect on row order, a fabricated
+    control this phase's own principles forbid. The real ?sort= capability
+    (full_name/employee_number/employment_start_date/employment_status,
+    always ascending) is exposed instead via the "Sort by" select above --
+    preserved exactly, not weakened or duplicated.
+  #}
+  {% call table.table(
+      columns=[
+        {"label": _("Name")}, {"label": _("Employee #")}, {"label": _("Title")}, {"label": _("Department")},
+        {"label": _("Status")}, {"label": _("Presence")}, {"label": _("Start date")}, {"label": ""},
+      ],
+      has_rows=result.rows, empty_message=_("No employees match these filters."), caption=_("Employees")
+  ) %}
+    {% for e in result.rows %}
+    <tr>
+      <td>{{ e.full_name }}</td>
+      <td>{{ e.employee_number|bidi_isolate }}</td>
+      <td>{{ e.job_title or "-" }}</td>
+      <td>{{ e.department or "-" }}</td>
+      <td><span class="badge {{ employment_status_badge_class(e.employment_status) }}">{{ employment_status_label(e.employment_status) }}</span></td>
+      <td>
+        {% set p = presence_map.get(e.id, "OFFLINE") %}
+        <span class="badge {{ presence_badge_class(p) }}">{{ presence_label(p) }}</span>
+      </td>
+      <td>{{ format_owner_date(e.employment_start_date) }}</td>
+      <td><a href="{{ url_for('employees.detail', employee_id=e.id) }}">{{ _('View') }}</a></td>
+    </tr>
+    {% endfor %}
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
+</div>
+
+<div class="card">
+  <a class="btn secondary" href="{{ url_for('employees.dashboard') }}">{{ _('Dashboard') }}</a>
+  {% if has_permission('employees.create') %}
+  <a class="btn secondary" href="{{ url_for('employees.open_invitations') }}">{{ _('Pending invitations') }}</a>
+  {% endif %}
+</div>
+{% endblock %}

@@ -13,6 +13,7 @@ from datetime import date
 from sqlalchemy import select
 
 from app.audit.services import record as audit_record
+from app.commercial_ops.errors import StableCodeError
 from app.extensions import db_session
 from app.installations.services import count_slot_consuming_installations, transition_installation
 from app.models.activation_governance import ActivationPolicy, PendingActivation
@@ -23,12 +24,21 @@ from app.models.licensing import License
 DEFAULT_MODE = "AUTOMATIC"
 
 
-class ActivationPolicyError(ValueError):
-    pass
+class ActivationPolicyError(StableCodeError):
+    _MESSAGES = {
+        "UNKNOWN_ACTIVATION_MODE": "Unknown activation mode: {mode}",
+    }
 
 
-class PendingActivationError(ValueError):
-    pass
+class PendingActivationError(StableCodeError):
+    _MESSAGES = {
+        "INVALID_APPROVE_STATUS": "Cannot approve a pending activation in status {status}.",
+        "INSTALLATION_NOT_AWAITING_ACTIVATION": "Installation is no longer awaiting activation.",
+        "LICENSE_NOT_FOUND": "The license for this pending activation could not be found.",
+        "DEVICE_LIMIT_REACHED": "This license has already reached its device limit.",
+        "INVALID_REJECT_STATUS": "Cannot reject a pending activation in status {status}.",
+        "REASON_REQUIRED_TO_REJECT": "A reason is required to reject a pending activation.",
+    }
 
 
 def resolve_activation_mode(product_id, *, as_of: date | None = None) -> str:
@@ -77,7 +87,7 @@ def create_activation_policy(
     from app.models.activation_governance import ACTIVATION_MODES
 
     if mode not in ACTIVATION_MODES:
-        raise ActivationPolicyError(f"Unknown activation mode: {mode}")
+        raise ActivationPolicyError("UNKNOWN_ACTIVATION_MODE", mode=mode)
     policy = ActivationPolicy(
         policy_code=policy_code, product_id=product_id, mode=mode,
         effective_date=effective_date, notes=notes, created_by_staff_user_id=actor_staff_user_id,
@@ -138,13 +148,13 @@ def create_pending_activation(
 
 def approve_pending_activation(pending: PendingActivation, actor_staff_user_id) -> None:
     if pending.status != "PENDING_REVIEW":
-        raise PendingActivationError(f"Cannot approve a pending activation in status {pending.status}.")
+        raise PendingActivationError("INVALID_APPROVE_STATUS", status=pending.status)
 
     installation = db_session.execute(
         select(Installation).where(Installation.id == pending.installation_id).with_for_update()
     ).scalars().first()
     if installation is None or installation.status != "PENDING_ACTIVATION":
-        raise PendingActivationError("Installation is no longer awaiting activation.")
+        raise PendingActivationError("INSTALLATION_NOT_AWAITING_ACTIVATION")
 
     license_row = db_session.execute(
         select(License).where(License.id == pending.license_id).with_for_update()
@@ -180,9 +190,9 @@ def approve_pending_activation(pending: PendingActivation, actor_staff_user_id) 
 
 def reject_pending_activation(pending: PendingActivation, actor_staff_user_id, *, reason: str) -> None:
     if pending.status != "PENDING_REVIEW":
-        raise PendingActivationError(f"Cannot reject a pending activation in status {pending.status}.")
+        raise PendingActivationError("INVALID_REJECT_STATUS", status=pending.status)
     if not reason or not reason.strip():
-        raise PendingActivationError("A reason is required to reject a pending activation.")
+        raise PendingActivationError("REASON_REQUIRED_TO_REJECT")
 
     installation = db_session.execute(
         select(Installation).where(Installation.id == pending.installation_id).with_for_update()

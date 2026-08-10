@@ -1,0 +1,240 @@
+=== employee_own_expenses (Seq Scan on target table: False) ===
+Limit  (cost=390.20..390.33 rows=50 width=993) (actual time=1.654..1.663 rows=50 loops=1)
+  Buffers: shared hit=205
+  ->  Sort  (cost=390.20..390.70 rows=200 width=993) (actual time=1.652..1.656 rows=50 loops=1)
+        Sort Key: created_at DESC
+        Sort Method: top-N heapsort  Memory: 37kB
+        Buffers: shared hit=205
+        ->  Bitmap Heap Scan on owner_expenses  (cost=5.84..383.56 rows=200 width=993) (actual time=0.078..1.487 rows=200 loops=1)
+              Recheck Cond: (entered_by_employee_profile_id = '9b942042-d62f-4e17-b43b-195e40ef7ced'::uuid)
+              Heap Blocks: exact=200
+              Buffers: shared hit=202
+              ->  Bitmap Index Scan on ix_owner_expenses_entered_by_employee_profile_id  (cost=0.00..5.79 rows=200 width=0) (actual time=0.043..0.043 rows=200 loops=1)
+                    Index Cond: (entered_by_employee_profile_id = '9b942042-d62f-4e17-b43b-195e40ef7ced'::uuid)
+                    Buffers: shared hit=2
+Planning:
+  Buffers: shared hit=96
+Planning Time: 0.432 ms
+Execution Time: 1.722 ms
+
+=== management_all_expenses_by_status (Seq Scan on target table: False) ===
+Limit  (cost=642.37..642.50 rows=50 width=993) (actual time=4.675..4.683 rows=50 loops=1)
+  Buffers: shared hit=490
+  ->  Sort  (cost=642.37..648.60 rows=2489 width=993) (actual time=4.673..4.677 rows=50 loops=1)
+        Sort Key: created_at DESC
+        Sort Method: top-N heapsort  Memory: 37kB
+        Buffers: shared hit=490
+        ->  Bitmap Heap Scan on owner_expenses  (cost=39.58..559.69 rows=2489 width=993) (actual time=0.259..3.710 rows=2489 loops=1)
+              Recheck Cond: ((status)::text = 'SUBMITTED'::text)
+              Heap Blocks: exact=487
+              Buffers: shared hit=490
+              ->  Bitmap Index Scan on ix_owner_expenses_status  (cost=0.00..38.96 rows=2489 width=0) (actual time=0.189..0.190 rows=2489 loops=1)
+                    Index Cond: ((status)::text = 'SUBMITTED'::text)
+                    Buffers: shared hit=3
+Planning Time: 0.159 ms
+Execution Time: 4.771 ms
+
+=== approval_queue (Seq Scan on target table: False) ===
+Limit  (cost=532.32..532.45 rows=50 width=191) (actual time=4.777..4.783 rows=50 loops=1)
+  Buffers: shared hit=304
+  ->  Sort  (cost=532.32..541.86 rows=3816 width=191) (actual time=4.775..4.778 rows=50 loops=1)
+        Sort Key: requested_at DESC
+        Sort Method: top-N heapsort  Memory: 51kB
+        Buffers: shared hit=304
+        ->  Bitmap Heap Scan on owner_expense_approvals  (cost=57.86..405.56 rows=3816 width=191) (actual time=0.295..3.275 rows=3816 loops=1)
+              Recheck Cond: ((status)::text = 'PENDING'::text)
+              Heap Blocks: exact=300
+              Buffers: shared hit=304
+              ->  Bitmap Index Scan on ix_owner_expense_approvals_status  (cost=0.00..56.90 rows=3816 width=0) (actual time=0.239..0.240 rows=3816 loops=1)
+                    Index Cond: ((status)::text = 'PENDING'::text)
+                    Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=98
+Planning Time: 3.024 ms
+Execution Time: 4.812 ms
+
+=== approved_unpaid_expenses (Seq Scan on target table: True) ===
+Limit  (cost=0.00..15.13 rows=50 width=993) (actual time=0.014..0.088 rows=50 loops=1)
+  Buffers: shared hit=11
+  ->  Seq Scan on owner_expenses  (cost=0.00..739.00 rows=2442 width=993) (actual time=0.013..0.084 rows=50 loops=1)
+        Filter: ((status)::text = 'APPROVED'::text)
+        Rows Removed by Filter: 347
+        Buffers: shared hit=11
+Planning Time: 0.150 ms
+Execution Time: 0.104 ms
+
+=== partially_paid_expenses (Seq Scan on target table: True) ===
+Limit  (cost=0.00..15.15 rows=50 width=993) (actual time=0.012..0.063 rows=50 loops=1)
+  Buffers: shared hit=9
+  ->  Seq Scan on owner_expenses  (cost=0.00..739.00 rows=2439 width=993) (actual time=0.012..0.059 rows=50 loops=1)
+        Filter: ((status)::text = 'PARTIALLY_PAID'::text)
+        Rows Removed by Filter: 242
+        Buffers: shared hit=9
+Planning Time: 0.112 ms
+Execution Time: 0.077 ms
+
+=== expenses_by_category (Seq Scan on target table: False) ===
+GroupAggregate  (cost=20.04..526.55 rows=1 width=56) (actual time=0.964..0.964 rows=1 loops=1)
+  Buffers: shared hit=490
+  ->  Bitmap Heap Scan on owner_expenses  (cost=20.04..521.54 rows=1000 width=22) (actual time=0.190..0.770 rows=1000 loops=1)
+        Recheck Cond: (category_id = '705f7506-2bc8-46a8-b7d1-50442f6d5a4e'::uuid)
+        Heap Blocks: exact=488
+        Buffers: shared hit=490
+        ->  Bitmap Index Scan on ix_owner_expenses_category_id  (cost=0.00..19.79 rows=1000 width=0) (actual time=0.114..0.114 rows=1000 loops=1)
+              Index Cond: (category_id = '705f7506-2bc8-46a8-b7d1-50442f6d5a4e'::uuid)
+              Buffers: shared hit=2
+Planning:
+  Buffers: shared hit=16
+Planning Time: 0.241 ms
+Execution Time: 1.032 ms
+
+=== expenses_by_payee (Seq Scan on target table: False) ===
+Limit  (cost=4.60..128.06 rows=40 width=993) (actual time=0.040..0.083 rows=40 loops=1)
+  Buffers: shared hit=42
+  ->  Bitmap Heap Scan on owner_expenses  (cost=4.60..128.06 rows=40 width=993) (actual time=0.039..0.079 rows=40 loops=1)
+        Recheck Cond: (payee_id = 'c483190c-775a-40e6-8ed7-461788e3cb0a'::uuid)
+        Heap Blocks: exact=40
+        Buffers: shared hit=42
+        ->  Bitmap Index Scan on ix_owner_expenses_payee_id  (cost=0.00..4.59 rows=40 width=0) (actual time=0.024..0.024 rows=40 loops=1)
+              Index Cond: (payee_id = 'c483190c-775a-40e6-8ed7-461788e3cb0a'::uuid)
+              Buffers: shared hit=2
+Planning Time: 0.130 ms
+Execution Time: 0.102 ms
+
+=== expenses_by_requester (Seq Scan on target table: False) ===
+GroupAggregate  (cost=0.29..8.30 rows=1 width=24) (actual time=1.794..1.795 rows=1 loops=1)
+  Buffers: shared hit=3
+  ->  Index Only Scan using ix_owner_expenses_entered_by_employee_profile_id on owner_expenses  (cost=0.29..7.79 rows=200 width=16) (actual time=1.757..1.778 rows=200 loops=1)
+        Index Cond: (entered_by_employee_profile_id = '9b942042-d62f-4e17-b43b-195e40ef7ced'::uuid)
+        Heap Fetches: 0
+        Buffers: shared hit=3
+Planning Time: 0.113 ms
+Execution Time: 1.825 ms
+
+=== duplicate_external_reference_lookup (Seq Scan on target table: False) ===
+Bitmap Heap Scan on owner_expenses  (cost=4.34..29.93 rows=5 width=993) (actual time=0.044..0.052 rows=4 loops=1)
+  Recheck Cond: ((external_reference)::text = 'REF-0'::text)
+  Filter: ((status)::text <> ALL ('{VOID,REJECTED}'::text[]))
+  Rows Removed by Filter: 3
+  Heap Blocks: exact=7
+  Buffers: shared hit=9
+  ->  Bitmap Index Scan on ix_owner_expenses_external_reference  (cost=0.00..4.34 rows=7 width=0) (actual time=0.027..0.027 rows=7 loops=1)
+        Index Cond: ((external_reference)::text = 'REF-0'::text)
+        Buffers: shared hit=2
+Planning:
+  Buffers: shared hit=48
+Planning Time: 0.299 ms
+Execution Time: 0.069 ms
+
+=== attachment_hash_lookup (Seq Scan on target table: False) ===
+Index Scan using ix_owner_expense_attachments_content_hash on owner_expense_attachments  (cost=0.41..8.43 rows=1 width=238) (actual time=0.053..0.054 rows=1 loops=1)
+  Index Cond: ((content_hash)::text = 'ff206f5e5a0a45e9b821d1f2fdc03aca81c06f40a3ac47d4b434e4c0'::text)
+  Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=37
+Planning Time: 0.200 ms
+Execution Time: 0.064 ms
+
+=== expense_number_lookup (Seq Scan on target table: False) ===
+Index Scan using uq_expense_number on owner_expenses  (cost=0.29..8.30 rows=1 width=993) (actual time=0.029..0.029 rows=1 loops=1)
+  Index Cond: ((expense_number)::text = 'EXP-SCALE-010000'::text)
+  Buffers: shared hit=3
+Planning Time: 0.097 ms
+Execution Time: 0.041 ms
+
+=== cash_closing_lookup (Seq Scan on target table: False) ===
+Index Scan using uq_cash_closing_scope on owner_cash_closings  (cost=0.28..8.30 rows=1 width=245) (actual time=0.022..0.023 rows=1 loops=1)
+  Index Cond: ((business_date = '2026-03-01'::date) AND ((currency)::text = 'USD'::text))
+  Buffers: shared hit=3
+Planning:
+  Buffers: shared hit=142
+Planning Time: 2.362 ms
+Execution Time: 0.039 ms
+
+=== closing_variance_queue (Seq Scan on target table: False) ===
+Bitmap Heap Scan on owner_cash_closings  (cost=11.34..57.26 rows=395 width=245) (actual time=0.068..0.379 rows=395 loops=1)
+  Recheck Cond: ((status)::text = 'REVIEW_REQUIRED'::text)
+  Filter: ((currency)::text = 'USD'::text)
+  Heap Blocks: exact=39
+  Buffers: shared hit=41
+  ->  Bitmap Index Scan on ix_owner_cash_closings_status  (cost=0.00..11.24 rows=395 width=0) (actual time=0.045..0.045 rows=395 loops=1)
+        Index Cond: ((status)::text = 'REVIEW_REQUIRED'::text)
+        Buffers: shared hit=2
+Planning Time: 0.091 ms
+Execution Time: 0.411 ms
+
+=== snapshot_canonical_key_lookup (Seq Scan on target table: False) ===
+Index Scan using uq_report_snapshot_canonical_key on owner_report_snapshots  (cost=0.28..8.32 rows=1 width=296) (actual time=0.043..0.043 rows=1 loops=1)
+  Index Cond: (((report_type)::text = 'DAILY_OPERATIONAL_SUMMARY'::text) AND ((scope)::text = 'GLOBAL'::text) AND (period_start = '2026-03-01'::date) AND (period_end = '2026-03-01'::date) AND ((currency)::text = 'USD'::text) AND (definition_version = 1) AND (snapshot_version = 1))
+  Buffers: shared hit=3
+Planning:
+  Buffers: shared hit=127
+Planning Time: 2.234 ms
+Execution Time: 0.063 ms
+
+=== snapshot_history_by_type_status (Seq Scan on target table: False) ===
+Limit  (cost=211.70..211.82 rows=50 width=296) (actual time=1.412..1.419 rows=50 loops=1)
+  Buffers: shared hit=108
+  ->  Sort  (cost=211.70..215.82 rows=1649 width=296) (actual time=1.411..1.413 rows=50 loops=1)
+        Sort Key: period_start DESC
+        Sort Method: top-N heapsort  Memory: 51kB
+        Buffers: shared hit=108
+        ->  Bitmap Heap Scan on owner_report_snapshots  (cost=29.18..156.92 rows=1649 width=296) (actual time=0.121..0.928 rows=1649 loops=1)
+              Recheck Cond: (((report_type)::text = 'MONTHLY_OPERATIONAL_SUMMARY'::text) AND ((status)::text = 'PUBLISHED'::text))
+              Heap Blocks: exact=102
+              Buffers: shared hit=105
+              ->  Bitmap Index Scan on ix_report_snapshots_type_status  (cost=0.00..28.77 rows=1649 width=0) (actual time=0.092..0.092 rows=1649 loops=1)
+                    Index Cond: (((report_type)::text = 'MONTHLY_OPERATIONAL_SUMMARY'::text) AND ((status)::text = 'PUBLISHED'::text))
+                    Buffers: shared hit=3
+Planning:
+  Buffers: shared hit=5
+Planning Time: 0.132 ms
+Execution Time: 1.441 ms
+
+=== management_notes_by_status (Seq Scan on target table: True) ===
+Limit  (cost=778.83..778.96 rows=50 width=296) (actual time=5.599..5.605 rows=50 loops=1)
+  Buffers: shared hit=364
+  ->  Sort  (cost=778.83..791.24 rows=4962 width=296) (actual time=5.598..5.601 rows=50 loops=1)
+        Sort Key: created_at DESC
+        Sort Method: top-N heapsort  Memory: 34kB
+        Buffers: shared hit=364
+        ->  Seq Scan on owner_shared_management_notes  (cost=0.00..614.00 rows=4962 width=296) (actual time=0.021..4.670 rows=4962 loops=1)
+              Filter: ((status)::text = 'OPEN'::text)
+              Rows Removed by Filter: 15038
+              Buffers: shared hit=364
+Planning:
+  Buffers: shared hit=66
+Planning Time: 1.257 ms
+Execution Time: 5.628 ms
+
+=== dashboard_expense_totals_by_category (Seq Scan on target table: True) ===
+HashAggregate  (cost=933.62..933.87 rows=20 width=49) (actual time=13.788..13.802 rows=20 loops=1)
+  Group Key: c.name
+  Batches: 1  Memory Usage: 32kB
+  Buffers: shared hit=490
+  ->  Hash Join  (cost=1.45..846.12 rows=17500 width=23) (actual time=0.060..8.671 rows=17500 loops=1)
+        Hash Cond: (e.category_id = c.id)
+        Buffers: shared hit=490
+        ->  Seq Scan on owner_expenses e  (cost=0.00..789.00 rows=17500 width=22) (actual time=0.023..4.863 rows=17500 loops=1)
+              Filter: (((status)::text <> 'VOID'::text) AND ((currency)::text = 'USD'::text))
+              Rows Removed by Filter: 2500
+              Buffers: shared hit=489
+        ->  Hash  (cost=1.20..1.20 rows=20 width=33) (actual time=0.019..0.019 rows=20 loops=1)
+              Buckets: 1024  Batches: 1  Memory Usage: 10kB
+              Buffers: shared hit=1
+              ->  Seq Scan on owner_expense_categories c  (cost=0.00..1.20 rows=20 width=33) (actual time=0.010..0.013 rows=20 loops=1)
+                    Buffers: shared hit=1
+Planning:
+  Buffers: shared hit=56
+Planning Time: 0.776 ms
+Execution Time: 13.908 ms
+
+=== idempotency_lookup (Seq Scan on target table: False) ===
+Index Scan using uq_expense_payment_idempotency_key on owner_expense_payments  (cost=0.29..8.30 rows=1 width=648) (actual time=0.024..0.024 rows=0 loops=1)
+  Index Cond: ((idempotency_key)::text = 'no-such-key'::text)
+  Buffers: shared hit=2
+Planning:
+  Buffers: shared hit=85
+Planning Time: 3.079 ms
+Execution Time: 0.044 ms
+

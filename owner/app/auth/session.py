@@ -54,7 +54,27 @@ def create_session(staff_user: StaffUser) -> str:
     # every caller, not just this one call site.
     g.staff_session = record
     g.staff_user = staff_user
+    _activate_pending_employee_profile(staff_user)
     return raw_token
+
+
+def _activate_pending_employee_profile(staff_user: StaffUser) -> None:
+    """Phase 9.5B: create_session() is the one real choke point every login
+    path already calls at the moment a full session is established (plain
+    login, MFA verify, first-time forced MFA enrollment, post-password-change
+    re-login) -- so it's the correct single place to activate a still-PENDING
+    EmployeeProfile on first successful login, rather than duplicating this
+    check in every route that calls create_session(). Local import avoids a
+    package-load cycle (employees.services imports auth.session)."""
+    from app.models.employees import EmployeeProfile
+
+    profile = db_session.execute(
+        select(EmployeeProfile).where(EmployeeProfile.staff_user_id == staff_user.id)
+    ).scalars().first()
+    if profile is not None and profile.employment_status == "PENDING":
+        from app.employees.services import activate_employee
+
+        activate_employee(profile, actor_staff_user_id=staff_user.id)
 
 
 def _get_valid_session(raw_token: str) -> StaffSession | None:
@@ -133,3 +153,29 @@ def revoke_all_sessions_for_staff(staff_user_id: uuid.UUID, reason: str = "admin
         record.revoked_at = utcnow()
         record.revoked_reason = reason
     db_session.commit()
+
+
+def list_sessions_for_staff(staff_user_id: uuid.UUID) -> list[StaffSession]:
+    """Phase 9.5B -- safe session metadata for management/self-service
+    session-list screens. Callers must render only safe fields (id, created_at,
+    last_seen_at, expires_at, ip_address, user_agent, platform, revoked_at) --
+    never token_hash/refresh_token_hash (see session-management-contract.md)."""
+    stmt = select(StaffSession).where(StaffSession.staff_user_id == staff_user_id).order_by(
+        StaffSession.last_seen_at.desc()
+    )
+    return list(db_session.execute(stmt).scalars().all())
+
+
+def revoke_session_by_id(session_id: uuid.UUID, reason: str) -> bool:
+    """Revoke one specific session by its public UUID (management revoking a
+    single employee session, or an employee revoking one of their own other
+    sessions) -- distinct from revoke_session() (current request's own
+    cookie token) and revoke_all_sessions_for_staff() (every session).
+    Returns False if the session doesn't exist or is already revoked."""
+    record = db_session.get(StaffSession, session_id)
+    if record is None or record.revoked_at is not None:
+        return False
+    record.revoked_at = utcnow()
+    record.revoked_reason = reason
+    db_session.commit()
+    return True

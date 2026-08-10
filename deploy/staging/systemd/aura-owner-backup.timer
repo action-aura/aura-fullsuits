@@ -1,0 +1,12 @@
+# Runs before the 03:00 scan bundle so a same-day backup always predates
+# any commercial-state mutation those scans might apply.
+[Unit]
+Description=Daily Aura Owner staging backup
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

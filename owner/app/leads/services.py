@@ -1,0 +1,354 @@
+"""Phase 9.5A Milestone 22 -- LeadService / LeadAssignmentService /
+CustomerLocationService.
+
+Foundation operations only: create lead, list own (ownership-filtered +
+paginated), management list all, assign/reassign (append-only), change
+status (append-only history), add a lead/customer note, capture a location.
+Follows owner/app/customers/services.py's exact pattern.
+"""
+from __future__ import annotations
+
+import uuid
+
+from sqlalchemy import or_, select
+
+from app.audit.services import record as audit_record
+from app.extensions import db_session
+from app.leads.errors import NOTE_VISIBILITIES, LeadError, validate_lead_transition
+from app.leads.ownership import apply_ownership_filter
+from app.models.base import utcnow
+from app.models.commercial_sales import CommercialOperationsIdempotencyKey
+from app.models.employees import EmployeeProfile
+from app.models.leads import CustomerLocation, Lead, LeadAssignment, LeadNote, LeadStatusHistory
+from app.services.pagination import DEFAULT_PAGE_SIZE, paginate
+
+LEAD_CREATION_OPERATION_CODE = "LEAD_CREATION"
+
+UPDATABLE_LEAD_FIELDS = (
+    "organization_or_prospect_name", "primary_contact_name", "phone", "email", "source", "priority",
+    "estimated_value", "currency", "next_follow_up_at", "location_summary",
+)
+
+
+def create_lead(
+    fields: dict,
+    actor_employee_profile_id: uuid.UUID,
+    actor_staff_user_id: uuid.UUID,
+    *,
+    idempotency_key: str | None = None,
+) -> Lead:
+    if idempotency_key is not None:
+        existing_key = db_session.execute(
+            select(CommercialOperationsIdempotencyKey).where(
+                CommercialOperationsIdempotencyKey.idempotency_key == idempotency_key,
+                CommercialOperationsIdempotencyKey.operation_code == LEAD_CREATION_OPERATION_CODE,
+            )
+        ).scalars().first()
+        if existing_key is not None:
+            return db_session.get(Lead, existing_key.result_reference_id)
+
+    assigned_id = fields.get("assigned_employee_profile_id")
+    if assigned_id is not None:
+        destination = db_session.get(EmployeeProfile, assigned_id)
+        if destination is None or destination.employment_status != "ACTIVE":
+            raise LeadError("DESTINATION_EMPLOYEE_NOT_ACTIVE")
+
+    lead = Lead(**fields, created_by_employee_profile_id=actor_employee_profile_id, status="NEW")
+    db_session.add(lead)
+    db_session.flush()
+
+    db_session.add(
+        LeadStatusHistory(
+            lead_id=lead.id,
+            from_status=None,
+            to_status="NEW",
+            changed_by_employee_profile_id=actor_employee_profile_id,
+            changed_at=utcnow(),
+        )
+    )
+    if lead.assigned_employee_profile_id:
+        db_session.add(
+            LeadAssignment(
+                lead_id=lead.id,
+                assigned_to_employee_profile_id=lead.assigned_employee_profile_id,
+                assigned_by_employee_profile_id=actor_employee_profile_id,
+                assigned_at=utcnow(),
+            )
+        )
+    if idempotency_key is not None:
+        db_session.add(
+            CommercialOperationsIdempotencyKey(
+                idempotency_key=idempotency_key,
+                operation_code=LEAD_CREATION_OPERATION_CODE,
+                result_reference_id=lead.id,
+            )
+        )
+    db_session.commit()
+    audit_record(
+        actor_staff_user_id=actor_staff_user_id,
+        actor_role_snapshot=None,
+        action_code="LEAD_CREATED",
+        entity_type="lead",
+        entity_public_id=str(lead.id),
+        after_state={"organization_or_prospect_name": lead.organization_or_prospect_name, "status": lead.status},
+    )
+    return lead
+
+
+def update_lead(
+    lead: Lead,
+    fields: dict,
+    actor_employee_profile_id: uuid.UUID,
+    actor_staff_user_id: uuid.UUID,
+    *,
+    expected_version: int | None = None,
+) -> Lead:
+    """Bounded to non-lifecycle fields -- status/assignment/conversion each
+    have their own dedicated, audited function (change_lead_status,
+    assign_lead, conversion.convert) precisely so a generic update can never
+    silently reach the same effect through a wider field set (same
+    discipline as customers/routes.py's own update())."""
+    if expected_version is not None and lead.version != expected_version:
+        raise LeadError("STALE_LEAD_VERSION")
+
+    safe_fields = {k: v for k, v in fields.items() if k in UPDATABLE_LEAD_FIELDS}
+    before = {k: getattr(lead, k) for k in safe_fields}
+    for key, value in safe_fields.items():
+        setattr(lead, key, value)
+    lead.version += 1
+    db_session.commit()
+    audit_record(
+        actor_staff_user_id=actor_staff_user_id,
+        actor_role_snapshot=None,
+        action_code="LEAD_UPDATED",
+        entity_type="lead",
+        entity_public_id=str(lead.id),
+        before_state={k: str(v) for k, v in before.items()},
+        after_state={k: str(v) for k, v in safe_fields.items()},
+    )
+    return lead
+
+
+# UI modernization Stage D (enterprise-table-system) -- the only columns a
+# real, verified server-side ORDER BY exists for. Anything else (including
+# no ?sort= at all) falls back to created_at, the prior unconditional
+# ordering both list functions already used.
+LEAD_SORT_COLUMNS = {
+    "organization_or_prospect_name": Lead.organization_or_prospect_name,
+    "status": Lead.status,
+    "priority": Lead.priority,
+    "next_follow_up_at": Lead.next_follow_up_at,
+    "created_at": Lead.created_at,
+}
+
+
+def _apply_lead_list_filters(stmt, *, status: str | None, search: str | None):
+    """Shared status/search filtering for list_own_leads/list_all_leads.
+
+    UI modernization Stage D -- real bug fix, disclosed in
+    screen-route-inventory.md's "List pagination inconsistency" finding:
+    the old /leads route applied the status filter in Python, AFTER
+    pagination, over only the current page's already-limited rows, while
+    `result.total`/`total_pages` still reflected the unfiltered set --
+    filtered views could look incomplete or wrong (e.g. page 1 of 3 with a
+    status filter applied could show 0 rows while claiming 3 pages exist).
+    Filtering now happens in the WHERE clause, before LIMIT/OFFSET, so the
+    pagination metadata is always correct for what's actually being shown.
+    """
+    if status:
+        stmt = stmt.where(Lead.status == status)
+    if search:
+        like = f"%{search.strip()}%"
+        stmt = stmt.where(
+            or_(
+                Lead.organization_or_prospect_name.ilike(like),
+                Lead.primary_contact_name.ilike(like),
+                Lead.phone.ilike(like),
+                Lead.email.ilike(like),
+            )
+        )
+    return stmt
+
+
+def _lead_sort_order(sort: str, direction: str):
+    column = LEAD_SORT_COLUMNS.get(sort, Lead.created_at)
+    return column.asc() if direction == "asc" else column.desc()
+
+
+def list_own_leads(
+    actor_employee_profile_id: uuid.UUID,
+    *,
+    page: int = 1,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    status: str | None = None,
+    search: str | None = None,
+    sort: str = "created_at",
+    direction: str = "desc",
+) -> dict:
+    stmt = apply_ownership_filter(select(Lead), Lead, actor_employee_profile_id, all_permission_held=False)
+    stmt = _apply_lead_list_filters(stmt, status=status, search=search)
+    stmt = stmt.order_by(_lead_sort_order(sort, direction), Lead.id)
+    return paginate(stmt, page, page_size)
+
+
+def list_all_leads(
+    *,
+    page: int = 1,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    status: str | None = None,
+    search: str | None = None,
+    sort: str = "created_at",
+    direction: str = "desc",
+) -> dict:
+    stmt = _apply_lead_list_filters(select(Lead), status=status, search=search)
+    stmt = stmt.order_by(_lead_sort_order(sort, direction), Lead.id)
+    return paginate(stmt, page, page_size)
+
+
+def change_lead_status(
+    lead: Lead,
+    to_status: str,
+    actor_employee_profile_id: uuid.UUID,
+    actor_staff_user_id: uuid.UUID,
+    reason: str | None = None,
+    *,
+    expected_version: int | None = None,
+) -> Lead:
+    if expected_version is not None and lead.version != expected_version:
+        raise LeadError("STALE_LEAD_VERSION")
+    from_status = lead.status
+    validate_lead_transition(from_status, to_status, reason)
+    lead.status = to_status
+    lead.version += 1
+    if to_status == "LOST":
+        lead.lost_at = utcnow()
+    db_session.add(
+        LeadStatusHistory(
+            lead_id=lead.id,
+            from_status=from_status,
+            to_status=to_status,
+            changed_by_employee_profile_id=actor_employee_profile_id,
+            reason=reason,
+            changed_at=utcnow(),
+        )
+    )
+    db_session.commit()
+    audit_record(
+        actor_staff_user_id=actor_staff_user_id,
+        actor_role_snapshot=None,
+        action_code="LEAD_STATUS_CHANGED",
+        entity_type="lead",
+        entity_public_id=str(lead.id),
+        reason=reason,
+        before_state={"status": from_status},
+        after_state={"status": to_status},
+    )
+    return lead
+
+
+def assign_lead(
+    lead: Lead,
+    assigned_to_employee_profile_id: uuid.UUID,
+    actor_employee_profile_id: uuid.UUID,
+    actor_staff_user_id: uuid.UUID,
+    *,
+    reason: str | None = None,
+    expected_version: int | None = None,
+) -> LeadAssignment:
+    """Reassignment closes the currently-open assignment row and opens a new
+    one -- never an in-place update (lead-customer-domain-model.md)."""
+    if expected_version is not None and lead.version != expected_version:
+        raise LeadError("STALE_LEAD_VERSION")
+
+    destination = db_session.get(EmployeeProfile, assigned_to_employee_profile_id)
+    if destination is None or destination.employment_status != "ACTIVE":
+        raise LeadError("DESTINATION_EMPLOYEE_NOT_ACTIVE")
+
+    now = utcnow()
+    current = db_session.execute(
+        select(LeadAssignment).where(LeadAssignment.lead_id == lead.id, LeadAssignment.unassigned_at.is_(None))
+    ).scalars().first()
+    before_assignee = current.assigned_to_employee_profile_id if current else None
+    if current is not None and (reason or "").strip() == "":
+        raise LeadError("REASON_REQUIRED_FOR_REASSIGN")
+    if current is not None:
+        current.unassigned_at = now
+
+    new_assignment = LeadAssignment(
+        lead_id=lead.id,
+        assigned_to_employee_profile_id=assigned_to_employee_profile_id,
+        assigned_by_employee_profile_id=actor_employee_profile_id,
+        assigned_at=now,
+        reason=reason,
+    )
+    db_session.add(new_assignment)
+    lead.assigned_employee_profile_id = assigned_to_employee_profile_id
+    lead.version += 1
+    db_session.commit()
+    audit_record(
+        actor_staff_user_id=actor_staff_user_id,
+        actor_role_snapshot=None,
+        action_code="LEAD_REASSIGNED" if before_assignee else "LEAD_ASSIGNED",
+        entity_type="lead",
+        entity_public_id=str(lead.id),
+        reason=reason,
+        before_state={"assigned_to_employee_profile_id": str(before_assignee) if before_assignee else None},
+        after_state={"assigned_to_employee_profile_id": str(assigned_to_employee_profile_id)},
+    )
+    return new_assignment
+
+
+def add_lead_note(
+    lead: Lead,
+    body: str,
+    actor_employee_profile_id: uuid.UUID,
+    actor_staff_user_id: uuid.UUID,
+    *,
+    visibility: str = "ASSIGNED_RECORD_USERS",
+) -> LeadNote:
+    if visibility not in NOTE_VISIBILITIES:
+        raise LeadError("NOTE_VISIBILITY_INVALID", visibility=visibility)
+    note = LeadNote(lead_id=lead.id, author_employee_profile_id=actor_employee_profile_id, body=body, visibility=visibility)
+    db_session.add(note)
+    db_session.commit()
+    audit_record(
+        actor_staff_user_id=actor_staff_user_id,
+        actor_role_snapshot=None,
+        action_code="LEAD_NOTE_ADDED",
+        entity_type="lead",
+        entity_public_id=str(lead.id),
+    )
+    return note
+
+
+def capture_location(
+    *,
+    lead_id: uuid.UUID | None,
+    customer_id: uuid.UUID | None,
+    fields: dict,
+    actor_employee_profile_id: uuid.UUID,
+    actor_staff_user_id: uuid.UUID,
+) -> CustomerLocation:
+    """Exactly one of lead_id/customer_id must be set (DB CHECK constraint is
+    the ultimate guard; this raises early with a clear error instead of
+    relying only on the constraint violation)."""
+    if (lead_id is None) == (customer_id is None):
+        raise ValueError("capture_location requires exactly one of lead_id or customer_id")
+    location = CustomerLocation(
+        lead_id=lead_id,
+        customer_id=customer_id,
+        **fields,
+        captured_by_employee_profile_id=actor_employee_profile_id,
+        captured_at=utcnow(),
+    )
+    db_session.add(location)
+    db_session.commit()
+    audit_record(
+        actor_staff_user_id=actor_staff_user_id,
+        actor_role_snapshot=None,
+        action_code="CUSTOMER_LOCATION_CAPTURED",
+        entity_type="lead" if lead_id else "customer",
+        entity_public_id=str(lead_id or customer_id),
+        after_state={"source": location.source, "verified": location.verified},
+    )
+    return location

@@ -1,0 +1,114 @@
+{#
+  Aura Owner -- first-login employee welcome tour (Stage C).
+
+  Included only from dashboard/index.html (the real landing page after
+  login/MFA/onboarding). Client-side only: no onboarding-completion
+  field exists on StaffUser and none is added here (per the governing
+  checkpoint's explicit "do not add a migration merely to remember a
+  product tour" instruction) -- completion is tracked in
+  localStorage["aura-owner-tour-seen-<staff-id>"], scoped per staff id
+  so it works correctly if multiple employees share a browser/machine.
+  Reopenable at any time via the profile menu's "Show welcome tour"
+  link (base.html). Respects prefers-reduced-motion (product-tour.js).
+
+  Real data only -- every value below is server-rendered from the
+  actual logged-in staff record and actual permission checks (the same
+  has_permission()/has_any_permission() globals _sidebar.html uses),
+  never invented or hard-coded per role.
+#}
+{% set tour_crm = has_any_permission('leads.view_own', 'leads.view_all') or has_permission('customers.view') %}
+{% set tour_sales = has_any_permission('quotes.create', 'quotes.approve')
+  or has_any_permission('orders.create', 'orders.approve')
+  or has_any_permission('invoices.create', 'invoices.issue')
+  or has_permission('payments.view') %}
+{% set tour_finance_ops = has_any_permission('expenses.view_own', 'expenses.view_all')
+  or has_any_permission('cash_closing.view_own', 'cash_closing.view_all', 'cash_closing.prepare') %}
+{% set tour_licensing = has_permission('catalog.view') or has_permission('subscriptions.view')
+  or has_permission('licenses.view') or has_permission('installations.view') %}
+{% set tour_management = has_permission('staff.view') or has_permission('employees.view_all') %}
+{% set tour_system = has_permission('audit.view') or has_permission('system.view') %}
+{% set has_mfa = staff.mfa_credential is not none and staff.mfa_credential.confirmed %}
+
+<div id="aura-tour-root"
+     data-tour-storage-key="aura-owner-tour-seen-{{ staff.id }}"
+     data-tour-name="{{ staff.display_name }}"
+     data-tour-role="{% if staff.is_super_admin %}{{ _('Super Admin') }}{% elif staff.role_assignments %}{{ role_label(staff.role_assignments[0].role.code) }}{% else %}{{ _('No role assigned') }}{% endif %}"
+     data-tour-mfa-enabled="{{ 'true' if has_mfa else 'false' }}"
+     data-tour-force="{{ 'true' if request.args.get('tour') == 'reopen' else 'false' }}"
+     hidden>
+
+  <template id="aura-tour-template">
+    <div class="aura-tour-overlay" role="presentation">
+      <div class="aura-tour-dialog" role="dialog" aria-modal="true" aria-labelledby="aura-tour-title" tabindex="-1">
+        <button type="button" class="aura-tour-close" data-tour-action="close" aria-label="{{ _('Close tour') }}">&times;</button>
+        <div class="aura-tour-steps">
+
+          <section class="aura-tour-step" data-step="1">
+            <h2 id="aura-tour-title">{{ _('Welcome to Aura Owner') }}</h2>
+            <p>{{ _('This is Action Aura\'s internal command center for managing customers, sales, finance, and licensing. This short tour covers the essentials.') }}</p>
+          </section>
+
+          <section class="aura-tour-step" data-step="2" hidden>
+            <h2>{{ _('Your account') }}</h2>
+            <p class="aura-tour-identity">
+              <strong data-tour-fill="name"></strong><br>
+              <span class="aura-role-badge" data-tour-fill="role"></span>
+            </p>
+            <p>{{ _('Your role determines exactly which screens and actions you can access -- the navigation on the left only shows what you\'re actually permitted to use.') }}</p>
+          </section>
+
+          <section class="aura-tour-step" data-step="3" hidden>
+            <h2>{{ _('Your work areas') }}</h2>
+            <ul class="aura-tour-list">
+              {% if tour_crm %}<li>{{ _('CRM -- Leads and Customers') }}</li>{% endif %}
+              {% if tour_sales %}<li>{{ _('Sales -- Quotes, Orders, Invoices, Payments') }}</li>{% endif %}
+              {% if tour_finance_ops %}<li>{{ _('Finance / Operations -- Expenses, Cash Closing') }}</li>{% endif %}
+              {% if tour_licensing %}<li>{{ _('Licensing -- Subscriptions, Licenses, Installations') }}</li>{% endif %}
+              {% if tour_management %}<li>{{ _('Management -- Staff and Employees') }}</li>{% endif %}
+              {% if tour_system %}<li>{{ _('System -- Audit Log and Backups') }}</li>{% endif %}
+            </ul>
+          </section>
+
+          <section class="aura-tour-step" data-step="4" hidden>
+            <h2>{{ _('Account security') }}</h2>
+            {% if has_mfa %}
+            <p>{{ _('Multi-factor authentication is enabled on your account.') }}</p>
+            {% else %}
+            <p>{{ _('Multi-factor authentication is not yet enabled on your account. We recommend enabling it from your profile menu.') }}</p>
+            {% endif %}
+          </section>
+
+          <section class="aura-tour-step" data-step="5" hidden>
+            <h2>{{ _('Language and appearance') }}</h2>
+            <p>{{ _('Switch between English and Arabic, and Light/Dark/System theme, anytime from the top bar. Your choices are remembered on this device.') }}</p>
+          </section>
+
+          <section class="aura-tour-step" data-step="6" hidden>
+            <h2>{{ _('Getting around') }}</h2>
+            <p>{{ _('The sidebar groups everything by work area and can be collapsed for more space. Your profile menu (top right) has your account, security, and sign-out.') }}</p>
+          </section>
+
+          <section class="aura-tour-step" data-step="7" hidden>
+            <h2>{{ _('You\'re all set') }}</h2>
+            <p>{{ _('You can reopen this tour anytime from the profile menu.') }}</p>
+            <div class="aura-tour-quick-actions">
+              {% if tour_crm %}<a class="btn secondary" href="{{ url_for('leads.list_leads') }}">{{ _('View Leads') }}</a>{% endif %}
+              {% if tour_sales %}<a class="btn secondary" href="{{ url_for('commercial_sales_web.list_quotes') }}">{{ _('View Quotes') }}</a>{% endif %}
+              {% if tour_licensing %}<a class="btn secondary" href="{{ url_for('licensing.list_licenses') }}">{{ _('View Licenses') }}</a>{% endif %}
+              {% if tour_management %}<a class="btn secondary" href="{{ url_for('employees.list_view') }}">{{ _('View Employees') }}</a>{% endif %}
+            </div>
+          </section>
+
+        </div>
+        <div class="aura-tour-footer">
+          <div class="aura-tour-dots" data-tour-dots aria-hidden="true"></div>
+          <div class="aura-tour-nav">
+            <button type="button" class="btn secondary" data-tour-action="back">{{ _('Back') }}</button>
+            <button type="button" class="btn" data-tour-action="next">{{ _('Next') }}</button>
+            <button type="button" class="btn" data-tour-action="finish" hidden>{{ _('Go to dashboard') }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </template>
+</div>

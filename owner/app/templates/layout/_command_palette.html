@@ -1,0 +1,52 @@
+{#
+  Aura Owner -- Command Palette (Ctrl+K) markup + data island (Stage C).
+
+  Included only from layout/base.html, only when `staff` is set (mirrors
+  the topbar trigger button and _tour.html's own gating). Two real,
+  server-rendered inputs, nothing invented client-side:
+
+  1. `command_palette_data` (app/__init__.py's context processor, backed
+     by app/command_palette/service.py::get_static_commands()) -- a
+     small, fixed-size, already permission-filtered navigation/quick-
+     create command list, safe to render directly into the page (same
+     reasoning as _sidebar.html rendering only what the actor can reach).
+  2. `command_palette.search` -- the real, bounded, server-side search
+     endpoint entity results come from (never rendered here; fetched by
+     command-palette.js per keystroke, debounced).
+
+  No entity data (customers/leads/quotes/etc.) is ever embedded in this
+  page -- see command-palette-contract.md's explicit "do not download
+  all data to the browser" requirement.
+#}
+<div id="aura-command-palette-root"
+     data-search-url="{{ url_for('command_palette.search') }}"
+     data-min-query-length="2"
+     data-label-recent="{{ _('Recent') }}"
+     data-label-searching="{{ _('Searching...') }}"
+     data-empty-template="{{ _('No results for \"%(query)s\"', query='__QUERY__') }}"
+     hidden>
+  <script type="application/json" id="aura-command-palette-data">{{ command_palette_data | tojson }}</script>
+
+  <template id="aura-command-palette-template">
+    <div class="aura-cp-overlay" role="presentation">
+      <div class="aura-cp-dialog" role="dialog" aria-modal="true" aria-label="{{ _('Command palette') }}">
+        <div class="aura-cp-search-row">
+          <span class="aura-cp-search-icon" aria-hidden="true">&#9906;</span>
+          <input type="text" class="aura-cp-input" id="aura-cp-input" role="combobox"
+                 aria-expanded="false" aria-controls="aura-cp-listbox" aria-autocomplete="list"
+                 aria-activedescendant="" autocomplete="off" spellcheck="false"
+                 placeholder="{{ _('Search or jump to...') }}">
+          <button type="button" class="aura-cp-close" data-cp-action="close" aria-label="{{ _('Close') }}">&times;</button>
+        </div>
+        <div class="aura-cp-status aura-sr-only" role="status" aria-live="polite" data-cp-status></div>
+        <ul class="aura-cp-listbox" id="aura-cp-listbox" role="listbox" aria-label="{{ _('Command palette results') }}" data-cp-listbox></ul>
+        <p class="aura-cp-empty" data-cp-empty hidden></p>
+        <div class="aura-cp-footer">
+          <span><kbd>&#8593;</kbd><kbd>&#8595;</kbd> {{ _('to navigate') }}</span>
+          <span><kbd>{{ _('Enter') }}</kbd> {{ _('to select') }}</span>
+          <span><kbd>{{ _('Esc') }}</kbd> {{ _('to close') }}</span>
+        </div>
+      </div>
+    </div>
+  </template>
+</div>

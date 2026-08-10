@@ -1,64 +1,66 @@
 {% extends "layout/base.html" %}
-{% block title %}Notifications{% endblock %}
+{% block title %}{{ _("Notifications") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Internal notification center</h2>
+  <h2>{{ _("Internal notification center") }}</h2>
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   <div class="filters">
     <form method="get">
-      <label>Status</label>
-      <select name="status">
-        <option value="">Open/in-progress/acknowledged</option>
+      <label for="commercial-ops-notifications-list-status">{{ _("Status") }}</label>
+      <select id="commercial-ops-notifications-list-status" name="status">
+        <option value="">{{ _("Open/in-progress/acknowledged") }}</option>
         {% for s in ["OPEN","IN_PROGRESS","ACKNOWLEDGED","RESOLVED","DISMISSED"] %}
-        <option value="{{ s }}" {{ "selected" if status_filter == s else "" }}>{{ s }}</option>
+        <option value="{{ s }}" {{ "selected" if status_filter == s else "" }}>{{ notification_status_label(s) }}</option>
         {% endfor %}
       </select>
-      <label>Severity</label>
-      <select name="severity">
-        <option value="">All</option>
-        {% for s in ["INFO","WARNING","CRITICAL"] %}<option value="{{ s }}" {{ "selected" if severity_filter == s else "" }}>{{ s }}</option>{% endfor %}
+      <label for="commercial-ops-notifications-list-severity">{{ _("Severity") }}</label>
+      <select id="commercial-ops-notifications-list-severity" name="severity">
+        <option value="">{{ _("All") }}</option>
+        {% for s in ["INFO","WARNING","CRITICAL"] %}<option value="{{ s }}" {{ "selected" if severity_filter == s else "" }}>{{ notification_severity_label(s) }}</option>{% endfor %}
       </select>
-      <label>Assigned role</label>
-      <select name="assigned_role_code">
-        <option value="">All</option>
-        {% for r in ["SALES","FINANCE","SUPPORT","SUPER_ADMIN"] %}<option value="{{ r }}" {{ "selected" if role_filter == r else "" }}>{{ r }}</option>{% endfor %}
+      <label for="commercial-ops-notifications-list-assigned-role-code">{{ _("Assigned role") }}</label>
+      <select id="commercial-ops-notifications-list-assigned-role-code" name="assigned_role_code">
+        <option value="">{{ _("All") }}</option>
+        {% for r in ["SALES","FINANCE","SUPPORT","SUPER_ADMIN"] %}<option value="{{ r }}" {{ "selected" if role_filter == r else "" }}>{{ role_label(r) }}</option>{% endfor %}
       </select>
-      <button type="submit">Filter</button>
+      <button type="submit">{{ _("Filter") }}</button>
     </form>
   </div>
-  <table>
-    <tr><th>Severity</th><th>Type</th><th>Title</th><th>Status</th><th>Assigned role</th><th>Created</th><th>Actions</th></tr>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Severity") }}</th><th>{{ _("Type") }}</th><th>{{ _("Title") }}</th><th>{{ _("Status") }}</th><th>{{ _("Assigned role") }}</th><th>{{ _("Created") }}</th><th>{{ _("Actions") }}</th></tr></thead>
+    <tbody>
     {% for n in notifications %}
     <tr>
-      <td><span class="badge {{ 'danger' if n.severity == 'CRITICAL' else ('warn' if n.severity == 'WARNING' else '') }}">{{ n.severity }}</span></td>
-      <td>{{ n.notification_type }}</td>
+      <td><span class="badge {{ 'danger' if n.severity == 'CRITICAL' else ('warn' if n.severity == 'WARNING' else '') }}">{{ notification_severity_label(n.severity) }}</span></td>
+      <td><bdi dir="ltr">{{ n.notification_type }}</bdi></td>
       <td>{{ n.title }}</td>
-      <td><span class="badge {{ 'active' if n.status == 'RESOLVED' else 'pending' }}">{{ n.status }}</span></td>
-      <td>{{ n.assigned_role_code or "-" }}</td>
-      <td>{{ n.created_at }}</td>
+      <td><span class="badge {{ 'active' if n.status == 'RESOLVED' else 'pending' }}">{{ notification_status_label(n.status) }}</span></td>
+      <td>{{ role_label(n.assigned_role_code) if n.assigned_role_code else "-" }}</td>
+      <td>{{ format_owner_datetime(n.created_at) }}</td>
       <td>
         {% if n.status in ["OPEN","IN_PROGRESS"] %}
         <form method="post" action="{{ url_for('commercial_ops_ui.assign_notification_route', notification_id=n.id) }}" class="inline">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" class="secondary">Assign to me</button>
+          <button type="submit" class="secondary">{{ _("Assign to me") }}</button>
         </form>
         {% endif %}
         {% if n.status in ["OPEN","IN_PROGRESS"] %}
         <form method="post" action="{{ url_for('commercial_ops_ui.acknowledge_notification_route', notification_id=n.id) }}" class="inline">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" class="secondary">Acknowledge</button>
+          <button type="submit" class="secondary">{{ _("Acknowledge") }}</button>
         </form>
         {% endif %}
         {% if n.status not in ["RESOLVED","DISMISSED"] %}
         <form method="post" action="{{ url_for('commercial_ops_ui.resolve_notification_route', notification_id=n.id) }}" class="inline">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input name="resolution" placeholder="Resolution note" style="width:auto;display:inline-block;">
-          <button type="submit">Resolve</button>
+          <input name="resolution" placeholder="{{ _('Resolution note') }}" style="width:auto;display:inline-block;">
+          <button type="submit">{{ _("Resolve") }}</button>
         </form>
         {% endif %}
       </td>
     </tr>
-    {% else %}<tr><td colspan="7" class="empty">No notifications match this filter.</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="7" class="empty">{{ _("No notifications match this filter.") }}</td></tr>{% endfor %}
+    </tbody>
   </table>
 </div>
 {% endblock %}

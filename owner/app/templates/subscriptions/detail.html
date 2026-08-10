@@ -1,69 +1,72 @@
 {% extends "layout/base.html" %}
-{% block title %}Subscription{% endblock %}
+{% block title %}{{ _("Subscription") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>{{ subscription.customer.legal_name }} -- {{ subscription.plan.name }} <span class="badge {{ 'active' if subscription.status == 'ACTIVE' else 'draft' }}">{{ subscription.status }}</span></h2>
+  <h2>{{ subscription.customer.legal_name }} -- {{ subscription.plan.name }} <span class="badge {{ subscription_badge_class(subscription.status) }}">{{ subscription_status_label(subscription.status) }}</span></h2>
   <dl class="kv">
-    <dt>Start / End</dt><dd>{{ subscription.start_date or "-" }} / {{ subscription.end_date or "-" }}</dd>
-    <dt>Device allowance</dt><dd>{{ subscription.device_allowance or "-" }}</dd>
+    <dt>{{ _("Start / End") }}</dt><dd>{{ format_owner_date(subscription.start_date) if subscription.start_date else "-" }} / {{ format_owner_date(subscription.end_date) if subscription.end_date else "-" }}</dd>
+    <dt>{{ _("Device allowance") }}</dt><dd>{{ format_owner_number(subscription.device_allowance) if subscription.device_allowance else "-" }}</dd>
   </dl>
   <p>
-    <a href="{{ url_for('commercial_ops_ui.subscription_timeline', subscription_id=subscription.id) }}">Commercial timeline</a>
-    &middot; <a href="{{ url_for('commercial_ops_ui.new_renewal_form', subscription_id=subscription.id) }}">Create renewal (Phase 8 workflow)</a>
-    {% if subscription.status == "PILOT" %}&middot; <a href="{{ url_for('commercial_ops_ui.new_pilot_form', subscription_id=subscription.id) }}">Create pilot record</a>{% endif %}
-    &middot; <a href="{{ url_for('commercial_ops_ui.new_emergency_extension_form', subscription_id=subscription.id) }}">Create emergency extension</a>
+    <a href="{{ url_for('commercial_ops_ui.subscription_timeline', subscription_id=subscription.id) }}">{{ _("Commercial timeline") }}</a>
+    &middot; <a href="{{ url_for('commercial_ops_ui.new_renewal_form', subscription_id=subscription.id) }}">{{ _("Create renewal (Phase 8 workflow)") }}</a>
+    {% if subscription.status == "PILOT" %}&middot; <a href="{{ url_for('commercial_ops_ui.new_pilot_form', subscription_id=subscription.id) }}">{{ _("Create pilot record") }}</a>{% endif %}
+    &middot; <a href="{{ url_for('commercial_ops_ui.new_emergency_extension_form', subscription_id=subscription.id) }}">{{ _("Create emergency extension") }}</a>
   </p>
   {% if allowed_transitions %}
-  <form method="post" action="{{ url_for('subscriptions.transition', subscription_id=subscription.id) }}">
+  <form method="post" action="{{ url_for('subscriptions.transition', subscription_id=subscription.id) }}"
+        data-confirm="{{ _('Change subscription status?') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Change status to</label>
-    <select name="to_status">
-      {% for s in allowed_transitions %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+    <label for="subscriptions-detail-to-status">{{ _("Change status to") }}</label>
+    <select id="subscriptions-detail-to-status" name="to_status">
+      {% for s in allowed_transitions %}<option value="{{ s }}">{{ subscription_status_label(s) }}</option>{% endfor %}
     </select>
-    <label>Reason (required for cancellation)</label>
-    <input name="reason">
-    <div style="margin-top:0.5rem;"><button type="submit" onclick="return confirm('Change subscription status?');">Apply</button></div>
+    <label for="subscriptions-detail-reason">{{ _("Reason (required for cancellation)") }}</label>
+    <input id="subscriptions-detail-reason" name="reason">
+    <div style="margin-top:0.5rem;"><button type="submit">{{ _("Apply") }}</button></div>
   </form>
-  {% else %}<p class="empty">No further status transitions available from {{ subscription.status }}.</p>{% endif %}
+  {% else %}<p class="empty">{{ _("No further status transitions available from %(status)s.", status=subscription_status_label(subscription.status)) }}</p>{% endif %}
 </div>
 
 <div class="card">
-  <h3>Record a renewal</h3>
+  <h3>{{ _("Record a renewal") }}</h3>
   <form method="post" action="{{ url_for('subscriptions.renew', subscription_id=subscription.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>New end date</label><input name="new_end_date" type="date" required>
-    <label>Reason</label><input name="reason">
-    <div style="margin-top:0.5rem;"><button type="submit">Record renewal</button></div>
+    <label for="subscriptions-detail-new-end-date">{{ _("New end date") }}</label><input id="subscriptions-detail-new-end-date" name="new_end_date" type="date" required>
+    <label for="subscriptions-detail-reason-1">{{ _("Reason") }}</label><input id="subscriptions-detail-reason-1" name="reason">
+    <div style="margin-top:0.5rem;"><button type="submit">{{ _("Record renewal") }}</button></div>
   </form>
 </div>
 
 <div class="card">
-  <h3>Status history</h3>
-  <table>
-    <tr><th>From</th><th>To</th><th>When</th><th>Reason</th></tr>
+  <h3>{{ _("Status history") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("From") }}</th><th>{{ _("To") }}</th><th>{{ _("When") }}</th><th>{{ _("Reason") }}</th></tr></thead>
+    <tbody>
     {% for h in subscription.status_history|sort(attribute="created_at", reverse=True) %}
-    <tr><td>{{ h.from_status or "-" }}</td><td>{{ h.to_status }}</td><td>{{ h.created_at }}</td><td>{{ h.reason or "-" }}</td></tr>
-    {% else %}<tr><td colspan="4" class="empty">No status changes yet.</td></tr>
+    <tr><td>{{ subscription_status_label(h.from_status) if h.from_status else "-" }}</td><td>{{ subscription_status_label(h.to_status) }}</td><td>{{ format_owner_datetime(h.created_at) }}</td><td>{{ h.reason or "-" }}</td></tr>
+    {% else %}<tr><td colspan="4" class="empty">{{ _("No status changes yet.") }}</td></tr>
     {% endfor %}
+    </tbody>
   </table>
 </div>
 
 <div class="card">
-  <h3>Record a payment</h3>
+  <h3>{{ _("Record a payment") }}</h3>
   <form method="post" action="{{ url_for('subscriptions.create_payment') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="customer_id" value="{{ subscription.customer_id }}">
     <input type="hidden" name="subscription_id" value="{{ subscription.id }}">
-    <label>Amount</label><input name="amount" type="number" step="0.01" required>
-    <label>Currency</label><input name="currency" value="USD" required>
-    <label>Method</label><input name="method">
-    <label>Payment date</label><input name="payment_date" type="date" required>
-    <label>Reference</label><input name="reference">
-    <label>Status</label>
-    <select name="status">
-      {% for s in ["PENDING","CONFIRMED","FAILED","REFUNDED","VOIDED"] %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+    <label for="subscriptions-detail-amount">{{ _("Amount") }}</label><input id="subscriptions-detail-amount" name="amount" type="number" step="0.01" required>
+    <label for="subscriptions-detail-currency">{{ _("Currency") }}</label><input id="subscriptions-detail-currency" name="currency" value="USD" required>
+    <label for="subscriptions-detail-method">{{ _("Method") }}</label><input id="subscriptions-detail-method" name="method">
+    <label for="subscriptions-detail-payment-date">{{ _("Payment date") }}</label><input id="subscriptions-detail-payment-date" name="payment_date" type="date" required>
+    <label for="subscriptions-detail-reference">{{ _("Reference") }}</label><input id="subscriptions-detail-reference" name="reference">
+    <label for="subscriptions-detail-status">{{ _("Status") }}</label>
+    <select id="subscriptions-detail-status" name="status">
+      {% for s in ["PENDING","CONFIRMED","FAILED","REFUNDED","VOIDED"] %}<option value="{{ s }}">{{ payment_status_label(s) }}</option>{% endfor %}
     </select>
-    <div style="margin-top:0.5rem;"><button type="submit">Record payment</button></div>
+    <div style="margin-top:0.5rem;"><button type="submit">{{ _("Record payment") }}</button></div>
   </form>
 </div>
 {% endblock %}

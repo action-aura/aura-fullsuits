@@ -1,0 +1,25 @@
+# Phase 9 Milestone 7 -- staging backup container.
+# Runs deploy/staging/backup.py on a schedule (Milestone 9's scheduler
+# mechanism drives `docker compose run backup` or an equivalent systemd
+# timer in a real deployment). Revised: backup.py now delegates to the
+# real owner/app/system/backup.py (create_backup()) instead of shelling
+# pg_dump itself, so this image needs the full owner/ app package and its
+# real dependencies available, not just the standalone script + psql client.
+FROM python:3.11-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system aura && useradd --system --gid aura --home /app --shell /usr/sbin/nologin aura
+
+WORKDIR /app
+COPY requirements/base.txt requirements/owner-server.txt /app/requirements/
+RUN pip install --no-cache-dir -r requirements/owner-server.txt
+
+COPY owner/ /app/owner/
+COPY deploy/staging/backup.py /app/deploy/staging/backup.py
+RUN mkdir -p /backups && chown -R aura:aura /app /backups
+USER aura
+
+ENTRYPOINT ["python", "/app/deploy/staging/backup.py"]
+CMD ["--backup-dir", "/backups", "--signing-key-dir", "/app/owner/var/signing-keys"]

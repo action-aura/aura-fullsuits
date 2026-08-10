@@ -1,0 +1,38 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("New expense") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _("New expense") }}</h2>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form method="post" action="{{ url_for('operations_ui.create_expense_route') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="operations-ui-expense-new-category-id">{{ _("Category") }}</label>
+    <select id="operations-ui-expense-new-category-id" name="category_id" required>
+      {% for c in categories %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+    </select>
+    <label for="operations-ui-expense-new-payee-id">{{ _("Payee") }}</label>
+    <select id="operations-ui-expense-new-payee-id" name="payee_id" required>
+      {% for p in payees %}<option value="{{ p.id }}">{{ p.display_name }} ({{ payee_type_label(p.payee_type) }})</option>{% endfor %}
+    </select>
+    <label for="operations-ui-expense-new-amount">{{ _("Amount") }}</label>
+    <input id="operations-ui-expense-new-amount" name="amount" type="text" inputmode="decimal" required>
+    <label for="operations-ui-expense-new-currency">{{ _("Currency") }}</label>
+    <input id="operations-ui-expense-new-currency" name="currency" value="USD" maxlength="3" required>
+    <label for="operations-ui-expense-new-expense-date">{{ _("Expense date") }}</label>
+    <input id="operations-ui-expense-new-expense-date" name="expense_date" type="date" required>
+    <label for="operations-ui-expense-new-payment-method">{{ _("Payment method") }}</label>
+    <select id="operations-ui-expense-new-payment-method" name="payment_method">
+      <option value="CASH">{{ expense_payment_method_label("CASH") }}</option>
+      <option value="BANK_TRANSFER">{{ expense_payment_method_label("BANK_TRANSFER") }}</option>
+      <option value="CARD_OFFLINE">{{ expense_payment_method_label("CARD_OFFLINE") }}</option>
+      <option value="CHEQUE">{{ expense_payment_method_label("CHEQUE") }}</option>
+      <option value="OTHER">{{ expense_payment_method_label("OTHER") }}</option>
+    </select>
+    <label>{{ _("Business purpose") }}</label>
+    <textarea name="description" required></textarea>
+    <label for="operations-ui-expense-new-external-reference">{{ _("External reference (optional)") }}</label>
+    <input id="operations-ui-expense-new-external-reference" name="external_reference">
+    <button type="submit" style="margin-top:0.75rem;">{{ _("Save draft") }}</button>
+  </form>
+</div>
+{% endblock %}

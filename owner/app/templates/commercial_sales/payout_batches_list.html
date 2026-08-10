@@ -1,0 +1,73 @@
+{% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
+{% block title %}{{ _("Commission payouts") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _("Commission payout batches") }}</h2>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form method="post" action="{{ url_for('commercial_sales_web.create_payout_batch_route') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="payout-batch-reference">{{ _("Batch reference") }}</label>
+    <input id="payout-batch-reference" name="batch_reference" required>
+    <label for="payout-period-start">{{ _("Period start") }}</label>
+    <input id="payout-period-start" type="date" name="period_start" required>
+    <label for="payout-period-end">{{ _("Period end") }}</label>
+    <input id="payout-period-end" type="date" name="period_end" required>
+    <button type="submit" class="btn" style="margin-top:0.5rem;">{{ _("Create batch") }}</button>
+  </form>
+</div>
+
+<div class="card">
+  {{ table.filter_bar(search_value=search, search_field="q", search_label=_("Search"), search_placeholder=_("Batch reference")) }}
+  {% call table.table(
+      columns=[
+        {"label": _("Reference"), "sort_key": "batch_reference"},
+        {"label": _("Period"), "sort_key": "period_start"},
+        {"label": _("Status"), "sort_key": "status"},
+        {"label": ""},
+      ],
+      has_rows=result.rows|length > 0, empty_message=_("No payout batches yet."), caption=_("Commission payout batches")
+  ) %}
+    {% for b in result.rows %}
+    <tr>
+      <td><bdi dir="ltr">{{ b.batch_reference }}</bdi></td>
+      <td>{{ format_owner_date(b.period_start) }} &ndash; {{ format_owner_date(b.period_end) }}</td>
+      <td><span class="badge {{ payout_batch_badge_class(b.status) }}">{{ commission_payout_batch_status_label(b.status) }}</span></td>
+      <td>
+        {% if b.status == "DRAFT" %}
+        <form method="post" action="{{ url_for('commercial_sales_web.approve_payout_batch_route', batch_id=b.id) }}" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn">{{ _("Approve batch") }}</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
+</div>
+
+<div class="card">
+  <h3>{{ _("Approved commission entries awaiting payout") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Amount") }}</th><th>{{ _("Employee") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
+    <tbody>
+    {% for e in approved_entries %}
+    <tr>
+      <td data-label="{{ _('Amount') }}">{{ format_owner_number(e.commission_amount) }} {{ e.currency }}</td>
+      <td data-label="{{ _('Employee') }}"><bdi dir="ltr">{{ e.employee_profile_id }}</bdi></td>
+      <td>
+        {% for b in approved_batches %}
+        <form method="post" action="{{ url_for('commercial_sales_web.record_payout_route', batch_id=b.id, entry_id=e.id) }}" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit">{{ _("Pay via") }} <bdi dir="ltr">{{ b.batch_reference }}</bdi></button>
+        </form>
+        {% endfor %}
+      </td>
+    </tr>
+    {% else %}<tr><td colspan="3" class="empty">{{ _("No approved entries awaiting payout.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

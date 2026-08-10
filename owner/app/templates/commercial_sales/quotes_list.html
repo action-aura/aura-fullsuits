@@ -1,0 +1,31 @@
+{% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
+{% block title %}{{ _("Quotes") }}{% endblock %}
+{% block content %}
+<div class="card">
+  {{ table.toolbar(_("Quotes"), url_for('commercial_sales_web.new_quote_form'), _("New quote"), new_permission="quotes.create") }}
+  {{ table.filter_bar(
+      status_options=["DRAFT","SENT","ACCEPTED","REJECTED","EXPIRED","CANCELLED"], status_value=status_filter, status_label_fn=quote_status_label,
+      search_value=search, search_field="q", search_label=_("Search"), search_placeholder=_("Quote number")
+  ) }}
+  {% call table.table(
+      columns=[
+        {"label": _("Number"), "sort_key": "quote_number"},
+        {"label": _("Status"), "sort_key": "status"},
+        {"label": _("Total"), "sort_key": "total", "align": "end"},
+        {"label": _("Created"), "sort_key": "created_at"},
+      ],
+      has_rows=result.rows|length > 0, empty_message=_("No quotes yet."), caption=_("Quotes")
+  ) %}
+    {% for q in result.rows %}
+    <tr>
+      <td><a href="{{ url_for('commercial_sales_web.quote_detail', quote_id=q.id) }}"><bdi dir="ltr">{{ q.quote_number }}</bdi></a></td>
+      <td><span class="badge {{ quote_badge_class(q.status) }}">{{ quote_status_label(q.status) }}</span></td>
+      <td class="num">{{ format_owner_number(q.total) }} {{ q.currency }}</td>
+      <td>{{ format_owner_datetime(q.created_at) }}</td>
+    </tr>
+    {% endfor %}
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
+</div>
+{% endblock %}
