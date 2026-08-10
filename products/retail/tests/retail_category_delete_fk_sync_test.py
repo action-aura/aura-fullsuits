@@ -89,15 +89,18 @@ def test_schema_version_is_v6_and_products_fk_declares_on_delete_set_null():
     # Was v3 when this file was written; the multi-device sync foundation's
     # products.id -> UUID migration bumped this to v4, the customers/
     # suppliers UUID migration (database/schema.py's _migrate_customers_to_uuid /
-    # _migrate_suppliers_to_uuid) bumped it again to v5, and the PO-preview-by-
+    # _migrate_suppliers_to_uuid) bumped it again to v5, the PO-preview-by-
     # supplier foundation (database/schema.py's
-    # _migrate_add_supplier_contacts_and_po_split) bumped it again to v6. The
+    # _migrate_add_supplier_contacts_and_po_split) bumped it again to v6, and
+    # merging master's einvoicing work (feat/retail-mobile-build-baseline,
+    # 2026-08-10) bumped it once more to v7 -- see RETAIL_SCHEMA_VERSION's own
+    # comment for why that bump is load-bearing, not cosmetic. The
     # FK-on-delete-set-null assertion this test exists for is unaffected by
     # any of these later changes.
-    assert retail_schema.RETAIL_SCHEMA_VERSION == 6
+    assert retail_schema.RETAIL_SCHEMA_VERSION == 7
     conn = retail_schema.get_retail_conn()
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
         assert retail_schema._products_category_fk_is_set_null(conn) is True
     finally:
         conn.close()

@@ -37,6 +37,24 @@ def test_does_not_over_redact_ordinary_text():
     assert _redact(msg) == msg
 
 
+def test_redacts_release_download_bearer_token_from_url_path():
+    """Phase 9R M14/M11: the release-download token lives directly in the
+    URL path (/releases/download/<token>), not a key=value pair -- none of
+    the existing patterns match a bare path segment. Real gap found: every
+    request-logging line includes request.path, so without this fix the
+    token leaked into the access log for its own fetch request."""
+    token = "kR7x9zQmP3vN8wY2sT5uJ4hL6bA1cD0eF7gH9iK2mO4qR6s"
+    msg = f"GET /api/licensing/v1/releases/download/{token} -> 200 (5.0ms)"
+    out = _redact(msg)
+    assert token not in out
+    assert "/api/licensing/v1/releases/download/***REDACTED***" in out
+
+
+def test_does_not_over_redact_other_release_routes():
+    msg = "POST /api/licensing/v1/releases/authorize-download -> 201 (30.0ms)"
+    assert _redact(msg) == msg
+
+
 def test_formatter_produces_valid_structured_json():
     import logging
 

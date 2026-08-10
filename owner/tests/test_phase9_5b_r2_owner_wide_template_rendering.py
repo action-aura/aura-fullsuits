@@ -18,6 +18,15 @@ REAL_TEMPLATE_DIRS = (
     "dashboard", "audit", "catalog", "customers", "installations",
     "licensing", "licensing_admin", "staff", "subscriptions", "system",
     "commercial_ops", "leads", "commercial_sales", "operations_ui",
+    # UI modernization Stage C -- styled 401/403/CSRF pages
+    # (errors.py's register_error_handlers), replacing the bare
+    # Werkzeug default pages that existed before.
+    "errors",
+    # UI modernization Stage C -- the Attention Center (app/attention/).
+    "attention",
+    # UI modernization Stage D -- the enterprise table/list macro library
+    # (templates/components/table.html), imported by domain list screens.
+    "components",
 )
 
 # No-fixture-required GET routes: real, reachable, list/index/status pages.

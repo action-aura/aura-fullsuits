@@ -43,8 +43,8 @@
     {% else %}
     <form method="post" action="{{ url_for('commercial_ops_ui.extend_pilot_route', pilot_id=pilot.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <label>{{ _("New end date (current: %(current)s)", current=format_owner_date(pilot.pilot_end)) }}</label><input name="new_end_date" type="date" required>
-      <label>{{ _("Reason (required)") }}</label><input name="reason" required>
+      <label for="commercial-ops-pilot-detail-new-end-date">{{ _("New end date (current: %(current)s)", current=format_owner_date(pilot.pilot_end)) }}</label><input id="commercial-ops-pilot-detail-new-end-date" name="new_end_date" type="date" required>
+      <label for="commercial-ops-pilot-detail-reason">{{ _("Reason (required)") }}</label><input id="commercial-ops-pilot-detail-reason" name="reason" required>
       <button type="submit">{{ _("Extend") }}</button>
     </form>
     {% endif %}
@@ -56,14 +56,14 @@
 
   <form method="post" action="{{ url_for('commercial_ops_ui.complete_pilot_route', pilot_id=pilot.id) }}" style="margin-top:1rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Reason (no conversion)") }}</label><input name="reason">
+    <label for="commercial-ops-pilot-detail-reason-1">{{ _("Reason (no conversion)") }}</label><input id="commercial-ops-pilot-detail-reason-1" name="reason">
     <button type="submit" class="secondary">{{ _("Complete without converting") }}</button>
   </form>
 
   <form method="post" action="{{ url_for('commercial_ops_ui.cancel_pilot_route', pilot_id=pilot.id) }}" style="margin-top:0.5rem;"
         data-confirm="{{ _('Cancel this pilot?') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Reason (required)") }}</label><input name="reason" required>
+    <label for="commercial-ops-pilot-detail-reason-2">{{ _("Reason (required)") }}</label><input id="commercial-ops-pilot-detail-reason-2" name="reason" required>
     <button type="submit" class="danger">{{ _("Cancel pilot") }}</button>
   </form>
   {% endif %}

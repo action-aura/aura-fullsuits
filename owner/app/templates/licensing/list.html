@@ -1,35 +1,33 @@
 {% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
 {% block title %}{{ _("Licenses") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center;">
-    <h2>{{ _("Licenses") }}</h2>
-    <a class="btn" href="{{ url_for('licensing.new_form') }}">{{ _("New license") }}</a>
-  </div>
-  <form class="filters" method="get">
-    <div>
-      <label>{{ _("Status") }}</label>
-      <select name="status" onchange="this.form.submit()">
-        <option value="">{{ _("All") }}</option>
-        {% for s in ["DRAFT","ISSUED","ACTIVE","SUSPENDED","EXPIRED","REVOKED","REPLACED"] %}
-        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ license_status_label(s) }}</option>
-        {% endfor %}
-      </select>
-    </div>
-  </form>
-  <table class="responsive-table">
-    <thead><tr><th>{{ _("Customer") }}</th><th>{{ _("Product") }}</th><th>{{ _("Key") }}</th><th>{{ _("Status") }}</th><th></th></tr></thead>
-    <tbody>
-    {% for l in licenses %}
+  {{ table.toolbar(_("Licenses"), url_for('licensing.new_form'), _("New license"), new_permission="licenses.create") }}
+  {{ table.filter_bar(
+      status_options=["DRAFT","ISSUED","ACTIVE","SUSPENDED","EXPIRED","REVOKED","REPLACED"], status_value=status_filter, status_label_fn=license_status_label,
+      search_value=search, search_field="q", search_label=_("Search"), search_placeholder=_("Customer name or key prefix")
+  ) }}
+  {{ table.density_toggle() }}
+  {% call table.table(
+      columns=[
+        {"label": _("Customer")},
+        {"label": _("Product")},
+        {"label": _("Key")},
+        {"label": _("Status"), "sort_key": "status"},
+        {"label": ""},
+      ],
+      has_rows=result.rows, empty_message=_("No licenses yet."), caption=_("Licenses")
+  ) %}
+    {% for l in result.rows %}
     <tr>
       <td>{{ l.customer.legal_name }}</td><td><bdi dir="ltr">{{ l.product.product_code }}</bdi></td>
       <td>{% if l.key_prefix %}<code class="masked" dir="ltr">{{ l.key_prefix }}-...{{ l.key_suffix_masked }}</code>{% else %}<span class="empty">{{ _("not issued") }}</span>{% endif %}</td>
-      <td><span class="badge {{ 'active' if l.status in ('ACTIVE','ISSUED') else ('danger' if l.status == 'REVOKED' else 'draft') }}">{{ license_status_label(l.status) }}</span></td>
+      <td><span class="badge {{ license_badge_class(l.status) }}">{{ license_status_label(l.status) }}</span></td>
       <td><a href="{{ url_for('licensing.detail', license_id=l.id) }}">{{ _("View") }}</a></td>
     </tr>
-    {% else %}<tr><td colspan="5" class="empty">{{ _("No licenses yet.") }}</td></tr>
     {% endfor %}
-    </tbody>
-  </table>
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
 </div>
 {% endblock %}

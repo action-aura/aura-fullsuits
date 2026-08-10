@@ -1,13 +1,27 @@
 {% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
 {% block title %}{{ _("Staff") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>{{ _("Staff accounts") }}</h2>
-  {% if staff_list %}
-  <table class="responsive-table">
-    <thead><tr><th>{{ _("Name") }}</th><th>{{ _("Email") }}</th><th>{{ _("Status") }}</th><th>{{ _("Super Admin") }}</th><th>{{ _("MFA") }}</th><th></th></tr></thead>
-    <tbody>
-    {% for s in staff_list %}
+  {{ table.toolbar(_("Staff accounts")) }}
+  {{ table.filter_bar(
+      status_options=["ACTIVE","DISABLED"], status_value=status_filter, status_label_fn=staff_account_filter_status_label,
+      search_value=search, search_field="q", search_label=_("Search"), search_placeholder=_("Name or email")
+  ) }}
+  {{ table.density_toggle() }}
+  {% call table.table(
+      columns=[
+        {"label": _("Name"), "sort_key": "display_name"},
+        {"label": _("Email"), "sort_key": "email"},
+        {"label": _("Status")},
+        {"label": _("Super Admin")},
+        {"label": _("MFA")},
+        {"label": ""},
+      ],
+      has_rows=result.rows, empty_message=_("No staff accounts yet."), caption=_("Staff accounts"),
+      default_sort="created_at", default_dir="desc"
+  ) %}
+    {% for s in result.rows %}
     <tr>
       <td>{{ s.display_name }}</td>
       <td><bdi dir="ltr">{{ s.email }}</bdi></td>
@@ -17,13 +31,13 @@
       <td><a href="{{ url_for('staff.detail', staff_id=s.id) }}">{{ _("View") }}</a></td>
     </tr>
     {% endfor %}
-    </tbody>
-  </table>
-  {% else %}<p class="empty">{{ _("No staff accounts yet.") }}</p>{% endif %}
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
 </div>
 
 <div class="card">
   <h3>{{ _("Invite staff") }}</h3>
+  {% if has_permission('staff.create') %}
   <form method="post" action="{{ url_for('staff.invite') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label for="email">{{ _("Email") }}</label>
@@ -34,24 +48,31 @@
         <input type="checkbox" name="role_codes" value="{{ code }}" style="width:auto;"> {{ role_label(code) }}
       </label>
     {% endfor %}
-    <div style="margin-top:1rem;"><button type="submit">{{ _("Send invitation") }}</button></div>
+    <div style="margin-top:1rem;"><button type="submit">{{ _("Send invitation (requires recent authentication)") }}</button></div>
   </form>
+  {% else %}
+  <p class="empty">{{ _("You do not have permission to invite staff.") }}</p>
+  {% endif %}
 </div>
 
 <div class="card">
   <h3>{{ _("Pending invitations") }}</h3>
   {% if invitations %}
   <table class="responsive-table">
-    <thead><tr><th>{{ _("Email") }}</th><th>{{ _("Roles") }}</th><th>{{ _("Expires") }}</th><th></th></tr></thead>
+    <thead><tr><th>{{ _("Email") }}</th><th>{{ _("Roles") }}</th><th>{{ _("Expires") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>
     {% for inv in invitations %}
     <tr>
-      <td><bdi dir="ltr">{{ inv.email }}</bdi></td><td><bdi dir="ltr">{{ inv.role_codes }}</bdi></td><td>{{ format_owner_datetime(inv.expires_at) }}</td>
-      <td>
+      <td data-label="{{ _('Email') }}"><bdi dir="ltr">{{ inv.email }}</bdi></td>
+      <td data-label="{{ _('Roles') }}"><bdi dir="ltr">{{ inv.role_codes }}</bdi></td>
+      <td data-label="{{ _('Expires') }}">{{ format_owner_datetime(inv.expires_at) }}</td>
+      <td data-label="">
+        {% if has_permission('staff.create') %}
         <form class="inline" method="post" action="{{ url_for('staff.revoke_invite', invitation_id=inv.id) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="danger">{{ _("Revoke") }}</button>
         </form>
+        {% endif %}
       </td>
     </tr>
     {% endfor %}

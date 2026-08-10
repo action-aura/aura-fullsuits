@@ -1,35 +1,31 @@
 {% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
 {% block title %}{{ _("Payments") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center;">
-    <h2>{{ _("Payments") }}</h2>
-    <a class="btn" href="{{ url_for('commercial_sales_web.new_payment_form') }}">{{ _("Record payment") }}</a>
-  </div>
-  <form class="filters" method="get">
-    <div>
-      <label>{{ _("Status") }}</label>
-      <select name="status" onchange="this.form.submit()">
-        <option value="">{{ _("All") }}</option>
-        {% for s in ["PENDING","CONFIRMED","FAILED","REFUNDED","VOIDED"] %}
-        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ payment_status_label(s) }}</option>
-        {% endfor %}
-      </select>
-    </div>
-  </form>
-  <table class="responsive-table">
-    <thead><tr><th>{{ _("Amount") }}</th><th>{{ _("Method") }}</th><th>{{ _("Status") }}</th><th>{{ _("Date") }}</th></tr></thead>
-    <tbody>
-    {% for p in payments %}
+  {{ table.toolbar(_("Payments"), url_for('commercial_sales_web.new_payment_form'), _("Record payment"), new_permission="payments.create") }}
+  {{ table.filter_bar(
+      status_options=["PENDING","CONFIRMED","FAILED","REFUNDED","VOIDED"], status_value=status_filter, status_label_fn=payment_status_label,
+      search_value=search, search_field="q", search_label=_("Search"), search_placeholder=_("Reference")
+  ) }}
+  {% call table.table(
+      columns=[
+        {"label": _("Amount"), "sort_key": "amount", "align": "end"},
+        {"label": _("Method")},
+        {"label": _("Status"), "sort_key": "status"},
+        {"label": _("Date"), "sort_key": "payment_date"},
+      ],
+      has_rows=result.rows|length > 0, empty_message=_("No payments yet."), caption=_("Payments")
+  ) %}
+    {% for p in result.rows %}
     <tr>
-      <td data-label="{{ _('Amount') }}"><a href="{{ url_for('commercial_sales_web.payment_detail', payment_id=p.id) }}">{{ format_owner_number(p.amount) }} {{ p.currency }}</a></td>
-      <td data-label="{{ _('Method') }}">{{ p.method }}</td>
-      <td data-label="{{ _('Status') }}"><span class="badge {{ 'success' if p.status == 'CONFIRMED' else ('danger' if p.status in ('FAILED','VOIDED') else 'pending') }}">{{ payment_status_label(p.status) }}</span></td>
-      <td data-label="{{ _('Date') }}">{{ format_owner_date(p.payment_date) }}</td>
+      <td class="num"><a href="{{ url_for('commercial_sales_web.payment_detail', payment_id=p.id) }}">{{ format_owner_number(p.amount) }} {{ p.currency }}</a></td>
+      <td>{{ p.method }}</td>
+      <td><span class="badge {{ payment_badge_class(p.status) }}">{{ payment_status_label(p.status) }}</span></td>
+      <td>{{ format_owner_date(p.payment_date) }}</td>
     </tr>
-    {% else %}<tr><td colspan="4" class="empty">{{ _("No payments yet.") }}</td></tr>
     {% endfor %}
-    </tbody>
-  </table>
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
 </div>
 {% endblock %}

@@ -26,6 +26,7 @@ from app.models import daily_reports  # noqa: F401
 from app.models import cash_closing  # noqa: F401
 from app.models import report_snapshots  # noqa: F401
 from app.models import sync  # noqa: F401
+from app.models import release_distribution  # noqa: F401
 
 from app.models.staff import (  # noqa: F401
     Role,
@@ -159,3 +160,4 @@ from app.models.cash_closing import (  # noqa: F401
 )
 from app.models.report_snapshots import ReportSnapshot  # noqa: F401
 from app.models.sync import SyncEvent  # noqa: F401
+from app.models.release_distribution import ReleaseDownloadAuthorization  # noqa: F401

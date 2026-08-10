@@ -1,12 +1,24 @@
 {% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
 {% block title %}{{ _("Device Keys") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>{{ _("Device public keys") }}</h2>
-  <table class="responsive-table">
-    <thead><tr><th>{{ _("Fingerprint") }}</th><th>{{ _("Algorithm") }}</th><th>{{ _("Status") }}</th><th>{{ _("Installation") }}</th><th>{{ _("Last proof") }}</th><th></th></tr></thead>
-    <tbody>
-    {% for k in rows %}
+  {{ table.toolbar(_("Device public keys")) }}
+  {{ table.filter_bar(
+      status_options=["ACTIVE","REVOKED","REPLACED"], status_value=status_filter, status_label_fn=device_key_status_label
+  ) }}
+  {% call table.table(
+      columns=[
+        {"label": _("Fingerprint")},
+        {"label": _("Algorithm")},
+        {"label": _("Status"), "sort_key": "status"},
+        {"label": _("Installation")},
+        {"label": _("Last proof"), "sort_key": "last_proof_at"},
+        {"label": ""},
+      ],
+      has_rows=result.rows, empty_message=_("No device keys registered yet."), caption=_("Device public keys")
+  ) %}
+    {% for k in result.rows %}
     <tr>
       <td><code style="font-size:0.72rem;" dir="ltr">{{ k.fingerprint[:16] }}...</code></td>
       <td><bdi dir="ltr">{{ k.algorithm }}</bdi></td>
@@ -14,7 +26,7 @@
       <td><bdi dir="ltr">{{ (k.installation_id|string)[:8] }}</bdi></td>
       <td>{{ format_owner_datetime(k.last_proof_at) if k.last_proof_at else "-" }}</td>
       <td>
-        {% if k.status == "ACTIVE" %}
+        {% if k.status == "ACTIVE" and has_permission("device_keys.revoke") %}
         <form class="inline" method="post" action="{{ url_for('licensing_admin.revoke_device_key', device_key_id=k.id) }}"
               data-confirm="{{ _('Revoke this device key? The device will be unable to check in until it re-activates with a new key.') }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -23,9 +35,8 @@
         {% endif %}
       </td>
     </tr>
-    {% else %}<tr><td colspan="6" class="empty">{{ _("No device keys registered yet.") }}</td></tr>
     {% endfor %}
-    </tbody>
-  </table>
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
 </div>
 {% endblock %}

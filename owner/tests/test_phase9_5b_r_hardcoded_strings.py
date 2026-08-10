@@ -17,6 +17,15 @@ GATED_DIRS = (
     "dashboard", "audit", "catalog", "customers", "installations",
     "licensing", "licensing_admin", "staff", "subscriptions", "system",
     "commercial_ops", "leads", "commercial_sales", "operations_ui",
+    # UI modernization Stage C -- styled 401/403/CSRF pages
+    # (errors.py's register_error_handlers), replacing the bare
+    # Werkzeug default pages that existed before.
+    "errors",
+    # UI modernization Stage C -- the Attention Center (app/attention/).
+    "attention",
+    # UI modernization Stage D -- the enterprise table/list macro library
+    # (templates/components/table.html), imported by domain list screens.
+    "components",
 )
 
 # Attribute names whose value is never translatable prose (ids, urls, form
@@ -37,8 +46,11 @@ ALLOWLISTED_TEXT = {
     "&mdash;",  # decorative separator, not prose (Phase 9.5C: interaction/followup rows)
     "&rarr;",  # decorative arrow between two already-translated date/status values
     "&ndash;",  # decorative separator between two already-translated date values (Phase 9.5D: payout batch period)
+    "&times;",  # decorative close-icon glyph (UI modernization: tour/modal close buttons), aria-hidden and paired with a real translated aria-label on the button itself
     "flask import-release-manifest",  # literal CLI command name, not prose
     "flask seed-offline-policy",  # literal CLI command name, not prose
+    "&larr;",  # decorative pagination prev-page glyph (UI modernization: enterprise-table-system), aria-hidden/aria-disabled and paired with a real translated aria-label; RTL-mirrored via CSS (components.css [data-aura-pagination-dir])
+    "&hellip;",  # decorative pagination ellipsis glyph (UI modernization: enterprise-table-system), aria-hidden
 }
 
 
@@ -95,8 +107,12 @@ def test_no_hardcoded_english_text_node_outside_jinja_in_gated_templates():
 
 def test_scanner_allowlist_is_reviewed_and_bounded():
     """The allowlist itself must stay small and explicit -- a regression
-    guard against someone silently growing it to hide real violations."""
-    assert len(ALLOWLISTED_TEXT) <= 10
+    guard against someone silently growing it to hide real violations.
+    Bumped 10 -> 12 for UI modernization's enterprise-table-system
+    pagination glyphs (&larr;/&hellip;) -- each addition above still
+    carries its own real, reviewed justification comment, not a silent
+    bulk exemption."""
+    assert len(ALLOWLISTED_TEXT) <= 12
 
 
 def test_all_real_template_directories_are_now_gated():

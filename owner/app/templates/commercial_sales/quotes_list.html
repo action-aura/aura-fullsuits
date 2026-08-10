@@ -1,35 +1,31 @@
 {% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
 {% block title %}{{ _("Quotes") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center;">
-    <h2>{{ _("Quotes") }}</h2>
-    <a class="btn" href="{{ url_for('commercial_sales_web.new_quote_form') }}">{{ _("New quote") }}</a>
-  </div>
-  <form class="filters" method="get">
-    <div>
-      <label>{{ _("Status") }}</label>
-      <select name="status" onchange="this.form.submit()">
-        <option value="">{{ _("All") }}</option>
-        {% for s in ["DRAFT","SENT","ACCEPTED","REJECTED","EXPIRED","CANCELLED"] %}
-        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ quote_status_label(s) }}</option>
-        {% endfor %}
-      </select>
-    </div>
-  </form>
-  <table class="responsive-table">
-    <thead><tr><th>{{ _("Number") }}</th><th>{{ _("Status") }}</th><th>{{ _("Total") }}</th><th>{{ _("Created") }}</th></tr></thead>
-    <tbody>
-    {% for q in quotes %}
+  {{ table.toolbar(_("Quotes"), url_for('commercial_sales_web.new_quote_form'), _("New quote"), new_permission="quotes.create") }}
+  {{ table.filter_bar(
+      status_options=["DRAFT","SENT","ACCEPTED","REJECTED","EXPIRED","CANCELLED"], status_value=status_filter, status_label_fn=quote_status_label,
+      search_value=search, search_field="q", search_label=_("Search"), search_placeholder=_("Quote number")
+  ) }}
+  {% call table.table(
+      columns=[
+        {"label": _("Number"), "sort_key": "quote_number"},
+        {"label": _("Status"), "sort_key": "status"},
+        {"label": _("Total"), "sort_key": "total", "align": "end"},
+        {"label": _("Created"), "sort_key": "created_at"},
+      ],
+      has_rows=result.rows|length > 0, empty_message=_("No quotes yet."), caption=_("Quotes")
+  ) %}
+    {% for q in result.rows %}
     <tr>
-      <td data-label="{{ _('Number') }}"><a href="{{ url_for('commercial_sales_web.quote_detail', quote_id=q.id) }}"><bdi dir="ltr">{{ q.quote_number }}</bdi></a></td>
-      <td data-label="{{ _('Status') }}"><span class="badge {{ 'success' if q.status == 'ACCEPTED' else ('danger' if q.status in ('REJECTED','CANCELLED','EXPIRED') else 'pending') }}">{{ quote_status_label(q.status) }}</span></td>
-      <td data-label="{{ _('Total') }}">{{ format_owner_number(q.total) }} {{ q.currency }}</td>
-      <td data-label="{{ _('Created') }}">{{ format_owner_datetime(q.created_at) }}</td>
+      <td><a href="{{ url_for('commercial_sales_web.quote_detail', quote_id=q.id) }}"><bdi dir="ltr">{{ q.quote_number }}</bdi></a></td>
+      <td><span class="badge {{ quote_badge_class(q.status) }}">{{ quote_status_label(q.status) }}</span></td>
+      <td class="num">{{ format_owner_number(q.total) }} {{ q.currency }}</td>
+      <td>{{ format_owner_datetime(q.created_at) }}</td>
     </tr>
-    {% else %}<tr><td colspan="4" class="empty">{{ _("No quotes yet.") }}</td></tr>
     {% endfor %}
-    </tbody>
-  </table>
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
 </div>
 {% endblock %}

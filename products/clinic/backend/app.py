@@ -82,17 +82,53 @@ def _version():
 from commercial_runtime.identity.auth_routes import auth_bp
 from commercial_runtime.identity.onboarding_routes import onboarding_bp
 from commercial_runtime.identity.registry_db import init_registry_db
-from database.schema import init_clinic
+from database.schema import get_clinic_conn, init_clinic
 from api.clinic_api import clinic_bp
 from commercial_runtime.backup.routes import make_backup_blueprint
 from commercial_runtime.licensing_contracts.routes import make_licensing_blueprint
 from commercial_runtime.identity.device_routes import device_bp
+from commercial_runtime.einvoicing.routes import make_einvoicing_blueprint
+from commercial_runtime.einvoicing.worker import OutboxWorker
+from commercial_runtime.einvoicing.providers.mock import MockProvider
+from commercial_runtime.einvoicing import settings as _einvoicing_settings
+from core.clinic import einvoice_adapter as _einvoice_adapter
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(onboarding_bp)
 app.register_blueprint(clinic_bp)
 app.register_blueprint(make_backup_blueprint('clinic', DATABASE_DIR, APP_VERSION))
 app.register_blueprint(device_bp)
+
+# docs/einvoicing/phase1/ -- Jordan JoFotara e-invoicing. Mirrors
+# products/retail/backend/app.py's identical block -- see that file's
+# comments for the full rationale (default OFF, per-company worker
+# registry, why one fixed company_id at import time would be wrong).
+_EINVOICING_APP_DATA_DIR = str(Path(DATABASE_DIR).parent)
+_einvoicing_provider = MockProvider()  # Phase 1 default -- see providers/direct_istd.py
+_einvoicing_workers = {}
+
+
+def _get_or_create_einvoicing_worker(company_id):
+    if company_id not in _einvoicing_workers:
+        _einvoicing_workers[company_id] = OutboxWorker(
+            conn_factory=get_clinic_conn,
+            app_data_dir=_EINVOICING_APP_DATA_DIR,
+            company_id=company_id,
+            provider=_einvoicing_provider,
+            document_builder=_einvoice_adapter.build_document,
+            reconcile_fn=_einvoice_adapter.reconcile_missing_invoices,
+        )
+    return _einvoicing_workers[company_id]
+
+
+app.register_blueprint(make_einvoicing_blueprint(
+    product_code='AURA_CLINIC',
+    platform=LICENSING_PLATFORM,
+    app_data_dir=_EINVOICING_APP_DATA_DIR,
+    conn_factory=get_clinic_conn,
+    get_worker=_get_or_create_einvoicing_worker,
+    provider=_einvoicing_provider,
+))
 
 # Part H: Android's main.py sets AURA_PLATFORM='ANDROID' before importing this
 # module -- Windows (unset, defaults to 'WINDOWS') keeps making its own signed
@@ -131,7 +167,25 @@ def init_app():
     """Initialize the registry + clinic schema. Call once before serving."""
     init_registry_db()
     init_clinic()
+    _resume_einvoicing_workers()
     return app
+
+
+def _resume_einvoicing_workers():
+    """Mirrors products/retail/backend/app.py's identical function -- see
+    its docstring. A fresh/never-enabled install finds zero rows and starts
+    zero threads."""
+    conn = get_clinic_conn()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT company_id FROM einvoice_settings WHERE skey='enabled' AND svalue='1'"
+        ).fetchall()
+        for row in rows:
+            cid = row[0]
+            interval = int(_einvoicing_settings.get_setting(conn, cid, 'submit_interval_seconds'))
+            _get_or_create_einvoicing_worker(cid).start(interval_seconds=interval)
+    finally:
+        conn.close()
 
 
 if __name__ == '__main__':

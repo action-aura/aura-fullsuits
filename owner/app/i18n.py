@@ -81,6 +81,7 @@ def init_app(app) -> None:
     from app.i18n_format import format_owner_date, format_owner_datetime, format_owner_number
     from app.i18n_labels import (
         account_status_label,
+        staff_account_filter_status_label,
         activation_event_result_label,
         activation_event_type_label,
         activation_mode_label,
@@ -146,6 +147,27 @@ def init_app(app) -> None:
         localize_expense_error,
         localize_management_note_error,
     )
+    from app.commercial_sales.status_presentation import (
+        commission_entry_badge_class,
+        invoice_badge_class,
+        invoice_timeline,
+        order_badge_class,
+        order_timeline,
+        payment_badge_class,
+        payment_timeline,
+        payout_batch_badge_class,
+        quote_badge_class,
+        quote_timeline,
+        refund_badge_class,
+        refund_timeline,
+        approval_badge_class,
+    )
+    from app.expenses.status_presentation import expense_badge_class, expense_timeline
+    from app.cash_closing.status_presentation import cash_closing_badge_class, cash_closing_timeline
+    from app.subscriptions.status_presentation import subscription_badge_class
+    from app.licensing.status_presentation import license_badge_class, license_timeline
+    from app.installations.status_presentation import installation_badge_class
+    from app.employees.status_presentation import employment_status_badge_class, presence_badge_class
 
     # Domain-label and formatting helpers are Jinja globals (not filters) --
     # exposed once, here, reused by every template rather than each screen
@@ -155,6 +177,9 @@ def init_app(app) -> None:
         presence_label=presence_label,
         role_label=role_label,
         account_status_label=account_status_label,
+        staff_account_filter_status_label=staff_account_filter_status_label,
+        employment_status_badge_class=employment_status_badge_class,
+        presence_badge_class=presence_badge_class,
         session_status_label=session_status_label,
         mfa_status_label=mfa_status_label,
         invitation_status_label=invitation_status_label,
@@ -219,6 +244,38 @@ def init_app(app) -> None:
         management_note_priority_label=management_note_priority_label,
         localize_expense_error=localize_expense_error,
         localize_management_note_error=localize_management_note_error,
+        # UI modernization Stage D -- shared badge-color + status-step
+        # (timeline) helpers, see app/commercial_sales/status_presentation.py.
+        quote_badge_class=quote_badge_class,
+        order_badge_class=order_badge_class,
+        invoice_badge_class=invoice_badge_class,
+        payment_badge_class=payment_badge_class,
+        refund_badge_class=refund_badge_class,
+        commission_entry_badge_class=commission_entry_badge_class,
+        payout_batch_badge_class=payout_batch_badge_class,
+        approval_badge_class=approval_badge_class,
+        quote_timeline=quote_timeline,
+        order_timeline=order_timeline,
+        invoice_timeline=invoice_timeline,
+        refund_timeline=refund_timeline,
+        payment_timeline=payment_timeline,
+        # UI modernization Stage D (finance-ui-contract.md) -- Expenses/Cash
+        # Closing's own shared badge-color + status-step (timeline) helpers,
+        # see app/expenses/status_presentation.py and
+        # app/cash_closing/status_presentation.py.
+        expense_badge_class=expense_badge_class,
+        expense_timeline=expense_timeline,
+        cash_closing_badge_class=cash_closing_badge_class,
+        cash_closing_timeline=cash_closing_timeline,
+        # UI modernization Stage D.5 (licensing-command-center-contract.md)
+        # -- Subscriptions/Licenses/Installations' own shared badge-color
+        # (+ License's real status-step timeline) helpers. Subscription and
+        # Installation deliberately have no *_timeline() global -- see each
+        # module's own docstring for the linear-vs-cyclic reasoning.
+        subscription_badge_class=subscription_badge_class,
+        license_badge_class=license_badge_class,
+        license_timeline=license_timeline,
+        installation_badge_class=installation_badge_class,
     )
 
     @app.context_processor

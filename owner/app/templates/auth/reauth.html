@@ -1,16 +1,20 @@
 {% extends "layout/base.html" %}
 {% block title %}{{ _('Confirm identity') }}{% endblock %}
 {% block content %}
-<div class="card" style="max-width:380px;margin:2rem auto;">
+{# No aura-auth-brand block here -- unlike login/mfa-verify/mfa-enroll,
+   reauth is @require_login-gated (auth/routes.py), so the authenticated
+   shell's own sidebar brand is always already visible; a second brand
+   mark on this page would be redundant. #}
+<div class="aura-auth-card">
   <h2>{{ _('Confirm your identity') }}</h2>
   <p>{{ _('This action requires a fresh MFA confirmation.') }}</p>
-  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
   <form method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="next" value="{{ next }}">
     <label for="code">{{ _('6-digit code') }}</label>
-    <input id="code" name="code" required autofocus autocomplete="one-time-code">
-    <div style="margin-top:1rem;"><button type="submit">{{ _('Confirm') }}</button></div>
+    <input id="code" name="code" required autofocus autocomplete="one-time-code" inputmode="numeric">
+    <div class="aura-auth-actions"><button type="submit" class="btn">{{ _('Confirm') }}</button></div>
   </form>
 </div>
 {% endblock %}

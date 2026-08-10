@@ -1,0 +1,1002 @@
+/*
+ * Aura Owner -- shared component styles.
+ *
+ * Moved verbatim (same selectors/class names, so every one of the ~102
+ * child templates that already reference these classes keeps working
+ * unchanged) out of the old inline <style> block that used to live in
+ * layout/base.html, as part of the application-shell rebuild. Colors
+ * are now sourced from the canonical --aura-* tokens (tokens.css) instead
+ * of the old private --accent/--border/--muted/--danger/--bg constants,
+ * so every one of these components now also follows the light/dark theme
+ * automatically -- no visual class was renamed or removed.
+ */
+
+:root {
+  --border: var(--aura-color-border-default);
+  --muted: var(--aura-color-text-muted);
+  --accent: var(--aura-color-brand-primary);
+  --danger: var(--aura-color-danger);
+  --bg: var(--aura-color-surface-base);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: var(--aura-font-sans);
+  margin: 0;
+  background: var(--bg);
+  color: var(--aura-color-text-primary);
+}
+
+.card {
+  background: var(--aura-color-surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--aura-radius-md);
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+th, td {
+  text-align: start;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--aura-radius-full);
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--aura-color-surface-muted);
+  color: var(--aura-color-text-secondary);
+}
+.badge.active, .badge.confirmed, .badge.success, .badge.ok {
+  background: var(--aura-color-success-soft);
+  color: var(--aura-color-success);
+}
+.badge.warn, .badge.pending, .badge.draft {
+  background: var(--aura-color-warning-soft);
+  color: var(--aura-color-warning);
+}
+.badge.danger, .badge.revoked, .badge.failed, .badge.disabled {
+  background: var(--aura-color-danger-soft);
+  color: var(--aura-color-danger);
+}
+
+form.inline { display: inline; }
+
+input, select, textarea {
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--aura-radius-sm);
+  font-size: 0.9rem;
+  width: 100%;
+  background: var(--aura-color-surface-raised);
+  color: var(--aura-color-text-primary);
+  font-family: inherit;
+}
+
+label {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-block: 0.5rem 0.2rem;
+}
+
+button, .btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--aura-radius-sm);
+  padding: 0.45rem 0.9rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+  font-family: inherit;
+}
+button.danger, .btn.danger { background: var(--danger); }
+button.secondary, .btn.secondary {
+  background: var(--aura-color-surface-raised);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+.error {
+  background: var(--aura-color-danger-soft);
+  color: var(--aura-color-danger);
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--aura-radius-sm);
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.flash-messages { max-width: 900px; margin: 0 auto 0.75rem; }
+.flash.info {
+  background: var(--aura-color-info-soft);
+  color: var(--aura-color-info);
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--aura-radius-sm);
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.empty { color: var(--muted); font-style: italic; padding: 1rem 0; }
+
+.filters { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; align-items: end; }
+
+.kv { display: grid; grid-template-columns: 200px 1fr; gap: 0.3rem 1rem; font-size: 0.9rem; }
+.kv dt { color: var(--muted); }
+
+code.masked {
+  background: var(--aura-color-surface-muted);
+  color: var(--aura-color-text-primary);
+  padding: 0.15rem 0.4rem;
+  border-radius: var(--aura-radius-sm);
+}
+
+/* Bidirectional identifiers (email/UUID/employee number/correlation id)
+   are wrapped with the bidi_isolate filter -- <bdi dir="ltr"> -- which
+   needs no extra CSS; unicode-bidi:isolate is the element's own UA
+   default for <bdi>. */
+
+/* Phase 9.5B -- minimal, scoped responsive treatment for any table
+   opted into it via .responsive-table, reused by the new employee
+   screens. Does not touch any existing table (no class added there),
+   so nothing else in Owner changes behavior. Uses logical properties so
+   it works unchanged in RTL. */
+@media (max-width: 720px) {
+  table.responsive-table thead { display: none; }
+  table.responsive-table, table.responsive-table tbody, table.responsive-table tr, table.responsive-table td { display: block; width: 100%; }
+  table.responsive-table tr { border: 1px solid var(--border); border-radius: var(--aura-radius-md); margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; }
+  table.responsive-table td { border-bottom: none; padding-block: 0.25rem; }
+  table.responsive-table td[data-label]:not([data-label=""])::before { content: attr(data-label) ": "; font-weight: 600; color: var(--muted); }
+}
+
+/* Phase 9.5C -- Lead/Customer interactive cards (Milestone 6). Grid,
+   not a fixed-width flex row, so it reflows naturally at any viewport
+   without a separate mobile-only stylesheet; logical properties only,
+   so RTL mirrors automatically. */
+.responsive-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.75rem; margin-block: 0.75rem; }
+.crm-card {
+  display: block;
+  background: var(--aura-color-surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--aura-radius-md);
+  padding: 0.75rem 1rem;
+  text-decoration: none;
+  color: inherit;
+  font-size: 0.88rem;
+}
+.crm-card:hover, .crm-card:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(45, 95, 224, 0.15);
+}
+.crm-card .small { color: var(--muted); font-size: 0.78rem; margin-block-start: 0.3rem; }
+.pagination { display: flex; justify-content: flex-end; margin-block-start: 0.75rem; color: var(--muted); font-size: 0.82rem; }
+
+/* ---------- Auth / security pages (Stage C) ----------
+   Shared by login, MFA verify/enroll/recovery-codes, reauth,
+   change-password, accept-invitation, and errors/security.html.
+   Replaces the old per-template inline style="max-width:...;margin:...". */
+
+.aura-auth-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--aura-space-2);
+  margin-block-end: var(--aura-space-6);
+  color: var(--aura-color-text-primary);
+  font-weight: var(--aura-font-weight-semibold);
+  font-size: var(--aura-font-size-lg);
+}
+
+.aura-auth-brand__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 36px;
+  block-size: 36px;
+  border-radius: var(--aura-radius-md);
+  background: var(--aura-color-brand-primary);
+  color: #fff;
+  font-weight: var(--aura-font-weight-bold);
+}
+
+.aura-auth-card {
+  max-inline-size: 400px;
+  margin-inline: auto;
+  background: var(--aura-color-surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--aura-radius-lg);
+  box-shadow: var(--aura-shadow-md);
+  padding: var(--aura-space-8) var(--aura-space-6);
+}
+
+.aura-auth-card--wide { max-inline-size: 480px; }
+
+.aura-auth-card h2 {
+  margin-block-start: 0;
+  font-size: var(--aura-font-size-xl);
+}
+
+.aura-auth-card p {
+  color: var(--aura-color-text-secondary);
+  font-size: var(--aura-font-size-sm);
+}
+
+.aura-auth-notice {
+  background: var(--aura-color-info-soft);
+  color: var(--aura-color-info);
+  padding: var(--aura-space-3);
+  border-radius: var(--aura-radius-md);
+  font-size: var(--aura-font-size-sm);
+  margin-block-end: var(--aura-space-4);
+}
+
+.aura-auth-actions {
+  margin-block-start: var(--aura-space-4);
+}
+
+.aura-password-field {
+  position: relative;
+}
+
+.aura-password-field input {
+  padding-inline-end: var(--aura-space-8);
+}
+
+.aura-password-toggle {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  inline-size: 36px;
+  border: none;
+  background: transparent;
+  color: var(--aura-color-text-muted);
+  cursor: pointer;
+  font-size: var(--aura-font-size-xs);
+  font-weight: var(--aura-font-weight-medium);
+}
+
+.aura-password-toggle:hover,
+.aura-password-toggle:focus-visible {
+  color: var(--aura-color-text-primary);
+}
+
+.aura-mfa-qr {
+  display: flex;
+  justify-content: center;
+  margin-block: var(--aura-space-4);
+  padding: var(--aura-space-3);
+  background: #fff;
+  border-radius: var(--aura-radius-md);
+  border: 1px solid var(--border);
+}
+
+.aura-mfa-qr img {
+  inline-size: 200px;
+  block-size: 200px;
+}
+
+.aura-recovery-codes {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--aura-space-2);
+  margin-block: var(--aura-space-4);
+  padding: 0;
+  list-style: none;
+}
+
+.aura-recovery-codes li {
+  background: var(--aura-color-surface-muted);
+  border-radius: var(--aura-radius-sm);
+  padding: var(--aura-space-2) var(--aura-space-3);
+  font-family: var(--aura-font-mono);
+  font-size: var(--aura-font-size-sm);
+  text-align: center;
+}
+
+.aura-security-page {
+  text-align: center;
+}
+
+.aura-security-page__icon {
+  inline-size: 48px;
+  block-size: 48px;
+  margin-inline: auto;
+  margin-block-end: var(--aura-space-4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--aura-radius-full);
+  background: var(--aura-color-warning-soft);
+  color: var(--aura-color-warning);
+  font-size: var(--aura-font-size-xl);
+}
+
+/* ---------- First-login welcome tour (Stage C) ---------- */
+
+.aura-tour-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 10, 12, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--aura-space-4);
+  z-index: var(--aura-z-modal);
+}
+
+.aura-tour-dialog {
+  background: var(--aura-color-surface-raised);
+  border-radius: var(--aura-radius-lg);
+  box-shadow: var(--aura-shadow-lg);
+  max-inline-size: 480px;
+  width: 100%;
+  padding: var(--aura-space-6);
+  position: relative;
+}
+
+.aura-tour-close {
+  position: absolute;
+  inset-block-start: var(--aura-space-3);
+  inset-inline-end: var(--aura-space-3);
+  border: none;
+  background: transparent;
+  font-size: var(--aura-font-size-xl);
+  line-height: 1;
+  color: var(--aura-color-text-muted);
+  cursor: pointer;
+  padding: var(--aura-space-1);
+}
+
+.aura-tour-close:hover, .aura-tour-close:focus-visible { color: var(--aura-color-text-primary); }
+
+.aura-tour-step h2 {
+  margin-block-start: 0;
+  font-size: var(--aura-font-size-lg);
+}
+
+.aura-tour-step p { color: var(--aura-color-text-secondary); }
+
+.aura-tour-identity { font-size: var(--aura-font-size-md); }
+
+.aura-tour-list {
+  margin: 0;
+  padding-inline-start: var(--aura-space-5);
+  color: var(--aura-color-text-secondary);
+}
+.aura-tour-list li { margin-block-end: var(--aura-space-1); }
+
+.aura-tour-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--aura-space-2);
+  margin-block-start: var(--aura-space-3);
+}
+
+.aura-tour-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-block-start: var(--aura-space-5);
+  padding-block-start: var(--aura-space-4);
+  border-block-start: 1px solid var(--border);
+}
+
+.aura-tour-dots { display: flex; gap: var(--aura-space-1); }
+
+.aura-tour-dot {
+  inline-size: 6px;
+  block-size: 6px;
+  border-radius: var(--aura-radius-full);
+  background: var(--aura-color-border-strong);
+}
+
+.aura-tour-dot.is-active { background: var(--aura-color-brand-primary); }
+
+.aura-tour-nav { display: flex; gap: var(--aura-space-2); }
+
+/* .btn sets display:inline-block, which -- at equal specificity to the
+   UA stylesheet's [hidden]{display:none} -- wins by source order and
+   would otherwise keep a JS-hidden nav button visibly showing. Scoped
+   to the tour nav only, not a global [hidden] override. */
+.aura-tour-nav [hidden] { display: none !important; }
+
+/* ---------- Attention Center ----------
+   Real, derived, real-time list -- no "unread" state, so there is
+   deliberately no unread/read visual distinction here (see
+   attention-center-contract.md). Priority is communicated with a
+   left accent bar + text badge, never color alone (kept as text too,
+   for users who can't perceive the accent color). */
+
+.aura-attention-summary {
+  color: var(--muted);
+  font-size: var(--aura-font-size-sm);
+  margin-block-end: var(--aura-space-4);
+}
+
+.aura-attention-group { margin-block-end: var(--aura-space-5); }
+
+.aura-attention-group h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--aura-space-2);
+  font-size: var(--aura-font-size-md);
+}
+
+.aura-attention-group__count {
+  color: var(--muted);
+  font-size: var(--aura-font-size-sm);
+  font-weight: var(--aura-font-weight-medium);
+}
+
+.aura-attention-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--aura-space-2);
+}
+
+.aura-attention-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--aura-space-3);
+  padding: var(--aura-space-3) var(--aura-space-4);
+  background: var(--aura-color-surface-raised);
+  border: 1px solid var(--border);
+  border-inline-start: 3px solid var(--aura-color-border-strong);
+  border-radius: var(--aura-radius-md);
+}
+
+.aura-attention-item--urgent { border-inline-start-color: var(--aura-color-danger); }
+.aura-attention-item--normal { border-inline-start-color: var(--aura-color-warning); }
+.aura-attention-item--low { border-inline-start-color: var(--aura-color-border-strong); }
+
+.aura-attention-item__body { min-inline-size: 0; }
+
+.aura-attention-item__title {
+  font-weight: var(--aura-font-weight-medium);
+  color: var(--aura-color-text-primary);
+}
+
+.aura-attention-item__context {
+  color: var(--muted);
+  font-size: var(--aura-font-size-sm);
+  margin-block-start: 0.2rem;
+}
+
+.aura-attention-item__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--aura-space-1);
+  color: var(--muted);
+  font-size: var(--aura-font-size-xs);
+  margin-block-start: 0.35rem;
+}
+
+.aura-attention-item__action {
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.aura-attention-empty {
+  text-align: center;
+  padding: var(--aura-space-8) var(--aura-space-4);
+}
+
+.aura-attention-empty__icon {
+  inline-size: 48px;
+  block-size: 48px;
+  margin-inline: auto;
+  margin-block-end: var(--aura-space-4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--aura-radius-full);
+  background: var(--aura-color-success-soft);
+  color: var(--aura-color-success);
+  font-size: var(--aura-font-size-xl);
+}
+
+/* ---------- Command Palette (Ctrl+K, Stage C) ----------
+   Same overlay/dialog shape as .aura-tour-overlay/.aura-tour-dialog
+   above, at the dedicated --aura-z-command-palette layer (already
+   reserved above --aura-z-modal in tokens.css) rather than sharing the
+   tour's z-index, since either could in principle be triggered while
+   the other is open. Real ARIA combobox/listbox semantics -- see
+   command-palette-contract.md and command-palette.js. */
+
+.aura-cp-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 10, 12, 0.5);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: var(--aura-space-4);
+  padding-block-start: 12vh;
+  z-index: var(--aura-z-command-palette);
+}
+
+.aura-cp-dialog {
+  background: var(--aura-color-surface-raised);
+  border-radius: var(--aura-radius-lg);
+  box-shadow: var(--aura-shadow-lg);
+  max-inline-size: 560px;
+  width: 100%;
+  max-block-size: 70vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.aura-cp-search-row {
+  display: flex;
+  align-items: center;
+  gap: var(--aura-space-2);
+  padding: var(--aura-space-3) var(--aura-space-4);
+  border-block-end: 1px solid var(--aura-color-border-default);
+  flex: 0 0 auto;
+}
+
+.aura-cp-search-icon {
+  color: var(--aura-color-text-muted);
+  font-size: var(--aura-font-size-md);
+  flex: 0 0 auto;
+}
+
+.aura-cp-input {
+  flex: 1 1 auto;
+  border: none;
+  background: transparent;
+  color: var(--aura-color-text-primary);
+  font-size: var(--aura-font-size-md);
+  min-width: 0;
+}
+.aura-cp-input:focus { outline: none; }
+
+.aura-cp-close {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--aura-color-text-muted);
+  font-size: var(--aura-font-size-lg);
+  line-height: 1;
+  cursor: pointer;
+  padding: var(--aura-space-1);
+}
+.aura-cp-close:hover, .aura-cp-close:focus-visible { color: var(--aura-color-text-primary); }
+
+.aura-cp-listbox {
+  list-style: none;
+  margin: 0;
+  padding: var(--aura-space-2);
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+
+.aura-cp-group-label {
+  font-size: var(--aura-font-size-xs);
+  font-weight: var(--aura-font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--aura-color-text-muted);
+  padding: var(--aura-space-2) var(--aura-space-2) var(--aura-space-1);
+}
+
+.aura-cp-option {
+  display: flex;
+  align-items: baseline;
+  gap: var(--aura-space-2);
+  padding: var(--aura-space-2);
+  border-radius: var(--aura-radius-sm);
+  cursor: pointer;
+  color: var(--aura-color-text-primary);
+}
+.aura-cp-option.is-active {
+  background: var(--aura-color-brand-primary-soft);
+  color: var(--aura-color-brand-primary);
+}
+
+.aura-cp-option-label {
+  font-size: var(--aura-font-size-sm);
+  font-weight: var(--aura-font-weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.aura-cp-option-context {
+  font-size: var(--aura-font-size-xs);
+  color: var(--aura-color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-inline-size: 0;
+}
+.aura-cp-option.is-active .aura-cp-option-context { color: inherit; }
+
+.aura-cp-empty {
+  padding: var(--aura-space-6) var(--aura-space-4);
+  text-align: center;
+  color: var(--aura-color-text-muted);
+  font-size: var(--aura-font-size-sm);
+  margin: 0;
+}
+
+.aura-cp-footer {
+  display: flex;
+  gap: var(--aura-space-4);
+  padding: var(--aura-space-2) var(--aura-space-4);
+  border-block-start: 1px solid var(--aura-color-border-default);
+  color: var(--aura-color-text-muted);
+  font-size: var(--aura-font-size-xs);
+  flex: 0 0 auto;
+}
+.aura-cp-footer kbd {
+  font-family: var(--aura-font-mono);
+  font-size: var(--aura-font-size-xs);
+  background: var(--aura-color-surface-muted);
+  border: 1px solid var(--aura-color-border-default);
+  border-radius: 4px;
+  padding: 0 4px;
+  margin-inline-end: 2px;
+}
+
+@media (max-width: 640px) {
+  .aura-cp-overlay { padding-block-start: var(--aura-space-4); }
+  .aura-cp-dialog { max-block-size: 85vh; }
+}
+
+/* ---------- Enterprise Table System (Stage D) ----------
+   Real, reusable list/table components built once in
+   templates/components/table.html (Jinja macros) + this CSS, instead of
+   ~40 screens each hand-rolling the same header/filter/table/pagination
+   markup (current-ui-audit.md sec 1). Sticky header + contained
+   horizontal scroll (.aura-table-scroll), never the legacy
+   .responsive-table card-flip stacking above -- that mechanism hides
+   <thead> under 720px, which is incompatible with sticky headers and
+   real sortable column links. The two mechanisms are kept deliberately
+   separate: .responsive-table (Phase 9.5B, above) still serves the ~40
+   legacy tables outside this pass's scope unchanged; any NEW table built
+   through table.html's table() macro always uses .aura-table +
+   .aura-table-scroll. Full reasoning in
+   docs/owner/ui-modernization/enterprise-table-system.md. */
+
+.aura-list-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--aura-space-3);
+  flex-wrap: wrap;
+  margin-block-end: var(--aura-space-3);
+}
+
+.aura-list-toolbar h2 { margin: 0; }
+
+.aura-list-filters { flex-wrap: wrap; }
+
+.aura-list-filters__search input[type="search"] { min-inline-size: 220px; }
+
+.aura-table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-block-end: var(--aura-space-2);
+}
+
+.aura-density-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--aura-space-1);
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--aura-color-text-secondary);
+  border-radius: var(--aura-radius-sm);
+  padding: 0.3rem 0.6rem;
+  font-size: var(--aura-font-size-xs);
+  cursor: pointer;
+}
+.aura-density-toggle:hover, .aura-density-toggle:focus-visible {
+  color: var(--aura-color-text-primary);
+  border-color: var(--aura-color-border-strong);
+}
+.aura-density-toggle[aria-pressed="true"] {
+  color: var(--aura-color-brand-primary);
+  border-color: var(--aura-color-brand-primary);
+}
+
+/* Real contained horizontal scroll -- the wrapper has no fixed
+   block-size, so its own overflow-y never activates independently and
+   the page scrolls normally; that keeps position:sticky below anchored
+   to the viewport (its nearest actually-scrolling ancestor), not a
+   clipped inner box. */
+.aura-table-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--aura-radius-md);
+}
+.aura-table-scroll table.aura-table { border: none; border-radius: 0; }
+
+table.aura-table { width: 100%; border-collapse: collapse; }
+table.aura-table th, table.aura-table td {
+  padding: var(--aura-table-cell-pad-comfortable);
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  white-space: nowrap;
+}
+table.aura-table td.aura-table__wrap { white-space: normal; }
+
+table.aura-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--aura-color-surface-raised);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  z-index: var(--aura-z-sticky);
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+table.aura-table th[aria-sort] { padding: 0; }
+.aura-table__sort-link {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: var(--aura-table-cell-pad-comfortable);
+  color: inherit;
+  text-decoration: none;
+  font: inherit;
+  text-transform: inherit;
+}
+.aura-table__sort-link:hover, .aura-table__sort-link:focus-visible { color: var(--aura-color-brand-primary); }
+.aura-table__sort-icon { font-size: 0.7em; opacity: 0.6; }
+th[aria-sort="ascending"] .aura-table__sort-icon, th[aria-sort="descending"] .aura-table__sort-icon { opacity: 1; }
+
+:root[data-table-density="compact"] table.aura-table th,
+:root[data-table-density="compact"] table.aura-table td {
+  padding: var(--aura-table-cell-pad-compact);
+}
+:root[data-table-density="compact"] .aura-table__sort-link { padding: var(--aura-table-cell-pad-compact); }
+
+.aura-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--aura-space-3);
+  margin-block-start: var(--aura-space-3);
+}
+.aura-pagination__summary { color: var(--muted); font-size: var(--aura-font-size-sm); margin: 0; }
+.aura-pagination__list {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex-wrap: wrap;
+}
+.aura-pagination__link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: 2rem;
+  block-size: 2rem;
+  padding-inline: 0.4rem;
+  border-radius: var(--aura-radius-sm);
+  border: 1px solid var(--border);
+  color: var(--aura-color-text-primary);
+  text-decoration: none;
+  font-size: var(--aura-font-size-sm);
+  background: var(--aura-color-surface-raised);
+}
+.aura-pagination__link:hover, .aura-pagination__link:focus-visible { border-color: var(--accent); color: var(--accent); }
+.aura-pagination__link--current { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.aura-pagination__link--disabled { color: var(--muted); background: var(--aura-color-surface-muted); cursor: not-allowed; }
+.aura-pagination__ellipsis { padding-inline: 0.3rem; color: var(--muted); }
+/* Prev/Next glyphs (&larr;/&rarr;) are directional -- "previous" must
+   visually point toward the reading-backward direction, which is the
+   opposite screen side under RTL. Same mirroring technique already used
+   for the sidebar's collapse-toggle icon (shell.css). */
+:root[dir="rtl"] [data-aura-pagination-dir] { transform: scaleX(-1); }
+
+/* Financial/quantity column utility (Stage D commercial-sales pass) -- no
+   dedicated table-cell numeral utility existed before this pass (only the
+   unrelated .aura-summary-tile__value KPI-tile rule already used
+   tabular-nums, per typography-contract.md sec 3's general
+   font-variant-numeric requirement). `text-align: end` (logical, not
+   `right`) so column alignment mirrors correctly under RTL. Applied via
+   table()'s own optional {"align": "end"} column key on <th>; callers add
+   the matching class="num" to that column's own <td> cells. */
+table.aura-table th.num, table.aura-table td.num {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Commercial-record status timeline (Stage D) ----------
+   Real, pure-CSS/server-rendered step indicator for the five commercial-
+   sales detail screens (Quote/Order/Invoice/Payment/Refund) --
+   templates/components/commercial_record.html. Never JS-driven: the
+   caller (commercial_sales/status_presentation.py) computes each step's
+   done/current/upcoming state from the real persisted status + real
+   transition graph, this stylesheet only paints the result. See
+   docs/owner/ui-modernization/commercial-flow-ui-contract.md. */
+.aura-steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+  list-style: none;
+  margin: var(--aura-space-3) 0;
+  padding: 0;
+}
+.aura-steps__item {
+  display: flex;
+  align-items: center;
+  gap: var(--aura-space-2);
+  padding-inline-end: var(--aura-space-4);
+  position: relative;
+}
+.aura-steps__item:not(:last-child)::after {
+  content: "";
+  inline-size: var(--aura-space-6);
+  block-size: 1px;
+  background: var(--aura-color-border-default);
+  margin-inline: var(--aura-space-2);
+}
+.aura-steps__dot {
+  inline-size: 1.5rem;
+  block-size: 1.5rem;
+  border-radius: var(--aura-radius-full);
+  border: var(--aura-border-width-md) solid var(--aura-color-border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--aura-font-size-xs);
+  font-weight: var(--aura-font-weight-semibold);
+  color: var(--aura-color-text-muted);
+  background: var(--aura-color-surface-raised);
+  flex-shrink: 0;
+}
+.aura-steps__label { font-size: var(--aura-font-size-sm); color: var(--aura-color-text-secondary); }
+.aura-steps__timestamp { font-size: var(--aura-font-size-xs); color: var(--aura-color-text-muted); display: block; }
+
+.aura-steps__item--done .aura-steps__dot {
+  border-color: var(--aura-color-success);
+  background: var(--aura-color-success-soft);
+  color: var(--aura-color-success);
+}
+.aura-steps__item--done .aura-steps__label { color: var(--aura-color-text-primary); }
+.aura-steps__item--current .aura-steps__dot {
+  border-color: var(--aura-color-brand-primary);
+  background: var(--aura-color-brand-primary-soft);
+  color: var(--aura-color-brand-primary);
+}
+.aura-steps__item--current .aura-steps__label { color: var(--aura-color-text-primary); font-weight: var(--aura-font-weight-semibold); }
+
+.aura-steps__offpath {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--aura-space-2);
+  margin-inline-start: var(--aura-space-2);
+  padding-inline-start: var(--aura-space-4);
+  border-inline-start: 1px solid var(--aura-color-border-default);
+}
+
+.aura-related-records {
+  list-style: none;
+  margin: var(--aura-space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--aura-space-1);
+}
+.aura-related-records__label { color: var(--aura-color-text-muted); margin-inline-end: var(--aura-space-1); }
+
+/* ---------- Customer 360 tabs (Stage D) ----------
+   Real ARIA tabs (role="tablist"/"tab"/"tabpanel"), progressively
+   enhanced from a plain in-page anchor-link list -- see static/js/tabs.js
+   and docs/owner/ui-modernization/customer-360-contract.md for the full
+   no-JS behavior contract. Without JS every panel below stays visible
+   (no [hidden] applied), so this stylesheet must not itself hide panels
+   -- only tabs.js ever sets the [hidden] attribute. */
+
+.aura-tabs__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--aura-space-1);
+  border-block-end: 1px solid var(--aura-color-border-default);
+  margin-block-end: var(--aura-space-4);
+  padding: 0;
+  list-style: none;
+}
+
+.aura-tabs__tab {
+  display: inline-block;
+  padding: var(--aura-space-2) var(--aura-space-3);
+  font-size: var(--aura-font-size-sm);
+  font-weight: var(--aura-font-weight-medium);
+  color: var(--aura-color-text-secondary);
+  text-decoration: none;
+  border-bottom: var(--aura-border-width-md) solid transparent;
+  margin-block-end: -1px;
+}
+.aura-tabs__tab:hover, .aura-tabs__tab:focus-visible {
+  color: var(--aura-color-brand-primary);
+}
+.aura-tabs__tab[aria-selected="true"] {
+  color: var(--aura-color-brand-primary);
+  border-block-end-color: var(--aura-color-brand-primary);
+  font-weight: var(--aura-font-weight-semibold);
+}
+
+.aura-tabs__panel { scroll-margin-block-start: var(--aura-space-4); }
+
+/* Bounded aggregate "commercial summary" tiles in the 360 header. */
+.aura-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--aura-space-3);
+  margin-block: var(--aura-space-3);
+}
+.aura-summary-tile {
+  background: var(--aura-color-surface-muted);
+  border-radius: var(--aura-radius-md);
+  padding: var(--aura-space-3);
+}
+.aura-summary-tile__value {
+  display: block;
+  font-size: var(--aura-font-size-lg);
+  font-weight: var(--aura-font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--aura-color-text-primary);
+}
+.aura-summary-tile__label {
+  display: block;
+  font-size: var(--aura-font-size-xs);
+  /* --aura-color-text-muted on --aura-color-surface-muted is only 4.02:1 --
+     real, disclosed WCAG 2.2 AA failure (needs 4.5:1) found via a real
+     axe-core scan (Stage E). --aura-color-text-secondary on the same
+     background is 7.2:1 -- reused here rather than a one-off color, since
+     it's the real token this codebase already uses for "darker than muted,
+     not full-strength primary" text everywhere else. */
+  color: var(--aura-color-text-secondary);
+}
+
+/* Real Timeline feed -- domain events only, never AuditLog/SecurityEvent
+   (see customer_360.py's own module docstring). */
+.aura-timeline { list-style: none; margin: 0; padding: 0; }
+.aura-timeline__item {
+  display: flex;
+  gap: var(--aura-space-3);
+  padding-block: var(--aura-space-2);
+  border-block-end: 1px solid var(--aura-color-border-default);
+}
+.aura-timeline__item:last-child { border-block-end: none; }
+.aura-timeline__when {
+  flex: 0 0 auto;
+  color: var(--aura-color-text-muted);
+  font-size: var(--aura-font-size-xs);
+  white-space: nowrap;
+  min-inline-size: 9rem;
+}
+.aura-timeline__label { font-size: var(--aura-font-size-sm); }

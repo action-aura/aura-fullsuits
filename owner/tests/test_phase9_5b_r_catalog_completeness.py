@@ -64,11 +64,21 @@ def test_arabic_translations_are_real_arabic_not_placeholder_text():
     contain at least one Arabic-script character -- catches an accidentally
     left-empty-then-filled-with-English placeholder."""
     catalog = _read_catalog("ar")
+    # Deliberate, real exceptions -- see translation-style-guide.md:
+    # "Aura Owner" is the brand name; "Enter"/"Esc"/"Ctrl K" are literal
+    # physical-keyboard key labels rendered inside real <kbd> elements
+    # (layout/base.html, layout/_command_palette.html) -- every keyboard in
+    # an Arabic-speaking market still prints these Latin key names, so
+    # translating them would show a label that doesn't match the physical
+    # key (the same "بحث (Ctrl+K)" precedent already established for
+    # "Search (Ctrl+K)" -- the surrounding instructional text is real
+    # Arabic, the literal key name stays Latin).
+    ARABIC_SCRIPT_EXEMPT = {"Aura Owner", "Enter", "Esc", "Ctrl K"}
     ascii_only = []
     for m in catalog:
         if not m.id or not m.string:
             continue
-        if m.id == "Aura Owner":  # the one deliberate brand-name exception, see translation-style-guide.md
+        if m.id in ARABIC_SCRIPT_EXEMPT:
             continue
         if not any("؀" <= ch <= "ۿ" for ch in m.string):
             ascii_only.append(m.id)

@@ -36,7 +36,8 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # Represents "every ALTER in _apply_clinic_alters below has been applied."
 # Bump this (and add the new ALTER to that function) for any future schema
 # change; never lower it or reuse a number.
-CLINIC_SCHEMA_VERSION = 1
+# v2 (docs/einvoicing/phase1/): adds the einvoice_* tables.
+CLINIC_SCHEMA_VERSION = 2
 
 
 def _get_path(name):
@@ -277,6 +278,12 @@ def init_clinic():
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_clinic_payments_idempotency "
             "ON clinic_payments(idempotency_key) WHERE idempotency_key IS NOT NULL"
         )
+        # v1 -> v2 (docs/einvoicing/phase1/): adds the einvoice_* tables used
+        # by opt-in Jordan JoFotara e-invoicing. CREATE TABLE IF NOT EXISTS
+        # only -- appended last, after every pre-existing ALTER above, so
+        # this addition cannot change their order or behavior.
+        from commercial_runtime.einvoicing.schema import apply_einvoicing_schema
+        apply_einvoicing_schema(migrating_conn)
 
     from commercial_runtime.security.migration_safety import ensure_schema_version
     ensure_schema_version(

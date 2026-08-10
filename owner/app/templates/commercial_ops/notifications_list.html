@@ -6,20 +6,20 @@
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   <div class="filters">
     <form method="get">
-      <label>{{ _("Status") }}</label>
-      <select name="status">
+      <label for="commercial-ops-notifications-list-status">{{ _("Status") }}</label>
+      <select id="commercial-ops-notifications-list-status" name="status">
         <option value="">{{ _("Open/in-progress/acknowledged") }}</option>
         {% for s in ["OPEN","IN_PROGRESS","ACKNOWLEDGED","RESOLVED","DISMISSED"] %}
         <option value="{{ s }}" {{ "selected" if status_filter == s else "" }}>{{ notification_status_label(s) }}</option>
         {% endfor %}
       </select>
-      <label>{{ _("Severity") }}</label>
-      <select name="severity">
+      <label for="commercial-ops-notifications-list-severity">{{ _("Severity") }}</label>
+      <select id="commercial-ops-notifications-list-severity" name="severity">
         <option value="">{{ _("All") }}</option>
         {% for s in ["INFO","WARNING","CRITICAL"] %}<option value="{{ s }}" {{ "selected" if severity_filter == s else "" }}>{{ notification_severity_label(s) }}</option>{% endfor %}
       </select>
-      <label>{{ _("Assigned role") }}</label>
-      <select name="assigned_role_code">
+      <label for="commercial-ops-notifications-list-assigned-role-code">{{ _("Assigned role") }}</label>
+      <select id="commercial-ops-notifications-list-assigned-role-code" name="assigned_role_code">
         <option value="">{{ _("All") }}</option>
         {% for r in ["SALES","FINANCE","SUPPORT","SUPER_ADMIN"] %}<option value="{{ r }}" {{ "selected" if role_filter == r else "" }}>{{ role_label(r) }}</option>{% endfor %}
       </select>

@@ -26,8 +26,8 @@
   <form method="post" action="{{ url_for('leads.status', lead_id=lead.id) }}" style="margin-top:0.5rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="version" value="{{ lead.version }}">
-    <label>{{ _("Change status") }}</label>
-    <select name="status">
+    <label for="leads-detail-status">{{ _("Change status") }}</label>
+    <select id="leads-detail-status" name="status">
       {% for s in ["POTENTIAL","FOLLOW_UP","UNDER_OBSERVATION","QUALIFIED","NOT_INTERESTED_NOW","LOST","ARCHIVED"] %}
       <option value="{{ s }}">{{ lead_status_label(s) }}</option>
       {% endfor %}
@@ -60,9 +60,9 @@
   </table>
   <form method="post" action="{{ url_for('leads.add_contact_route', lead_id=lead.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Name") }}</label><input name="name" required>
-    <label>{{ _("Email") }}</label><input name="business_email" type="email">
-    <label>{{ _("Phone") }}</label><input name="business_phone">
+    <label for="leads-detail-name">{{ _("Name") }}</label><input id="leads-detail-name" name="name" required>
+    <label for="leads-detail-business-email">{{ _("Email") }}</label><input id="leads-detail-business-email" name="business_email" type="email">
+    <label for="leads-detail-business-phone">{{ _("Phone") }}</label><input id="leads-detail-business-phone" name="business_phone">
     <div style="margin-top:0.5rem;"><button type="submit">{{ _("Add contact") }}</button></div>
   </form>
 </div>
@@ -75,7 +75,7 @@
   {% endfor %}
   <form method="post" action="{{ url_for('leads.add_interaction_route', lead_id=lead.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <select name="interaction_type">
+    <select name="interaction_type" aria-label="{{ _("Interaction type") }}">
       {% for t in ["CALL","EMAIL","MEETING","WHATSAPP_MANUAL_NOTE","OTHER"] %}
       <option value="{{ t }}">{{ interaction_type_label(t) }}</option>
       {% endfor %}
@@ -104,7 +104,7 @@
   {% endfor %}
   <form method="post" action="{{ url_for('leads.add_followup_route', lead_id=lead.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Due") }}</label><input name="due_at" type="datetime-local" required>
+    <label for="leads-detail-due-at">{{ _("Due") }}</label><input id="leads-detail-due-at" name="due_at" type="datetime-local" required>
     <textarea name="notes" rows="2" placeholder="{{ _('Notes') }}"></textarea>
     <div style="margin-top:0.5rem;"><button type="submit">{{ _("Add follow-up") }}</button></div>
   </form>
@@ -119,7 +119,7 @@
   <form method="post" action="{{ url_for('leads.add_note_route', lead_id=lead.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <textarea name="body" rows="3" required></textarea>
-    <select name="visibility">
+    <select name="visibility" aria-label="{{ _("Note visibility") }}">
       {% for v in ["ASSIGNED_RECORD_USERS","AUTHOR_ONLY","MANAGEMENT_ONLY"] %}
       <option value="{{ v }}">{{ note_visibility_label(v) }}</option>
       {% endfor %}
@@ -162,8 +162,8 @@
   <form method="post" action="{{ url_for('leads.add_location_route', lead_id=lead.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="source" value="MANUAL">
-    <label>{{ _("Manual address") }}</label>
-    <input name="manual_address">
+    <label for="leads-detail-manual-address">{{ _("Manual address") }}</label>
+    <input id="leads-detail-manual-address" name="manual_address">
     <div style="margin-top:0.5rem;"><button type="submit">{{ _("Save address") }}</button></div>
   </form>
 </div>

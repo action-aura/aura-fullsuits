@@ -1,0 +1,400 @@
+/**
+ * Aura Retail -- Jordan JoFotara e-invoicing UI (docs/einvoicing/phase1/).
+ *
+ * Self-contained, mirroring products/retail/frontend/licensing.js exactly
+ * (same rationale: no shared SubsystemApp shell exists to plug into --
+ * see that file's docstring). Talks only to /api/einvoicing/* -- never
+ * touches /api/sub/retail/* itself.
+ *
+ * DOM is built with createElement/textContent throughout -- no
+ * innerHTML/outerHTML assignment anywhere in this file, same policy as
+ * licensing.js, so there is no XSS-sink pattern to audit.
+ */
+(function () {
+  'use strict';
+
+  const messageArea = document.getElementById('message-area');
+  const statusContent = document.getElementById('status-content');
+  const settingsContent = document.getElementById('settings-content');
+  const credentialsContent = document.getElementById('credentials-content');
+  const outboxContent = document.getElementById('outbox-content');
+
+  const OUTBOX_STATE_LABELS = {
+    QUEUED: { text: 'Queued', cls: 'state-neutral' },
+    SUBMITTING: { text: 'Submitting', cls: 'state-neutral' },
+    SUBMITTING_UNKNOWN: { text: 'Confirming…', cls: 'state-warning' },
+    AWAITING_CLEARANCE: { text: 'Awaiting clearance', cls: 'state-warning' },
+    CLEARED: { text: 'Cleared', cls: 'state-active' },
+    FAILED_PERMANENT: { text: 'Failed', cls: 'state-restricted' },
+    CANCELLED: { text: 'Cancelled', cls: 'state-neutral' },
+  };
+
+  function clearChildren(node) {
+    while (node.firstChild) node.removeChild(node.firstChild);
+  }
+
+  function el(tag, opts, children) {
+    const node = document.createElement(tag);
+    if (opts) {
+      if (opts.className) node.className = opts.className;
+      if (opts.id) node.id = opts.id;
+      if (opts.text !== undefined) node.textContent = opts.text;
+      if (opts.type) node.type = opts.type;
+      if (opts.value !== undefined) node.value = opts.value;
+      if (opts.placeholder) node.placeholder = opts.placeholder;
+      if (opts.checked !== undefined) node.checked = opts.checked;
+      if (opts.htmlFor) node.htmlFor = opts.htmlFor;
+      if (opts.disabled) node.disabled = true;
+    }
+    (children || []).forEach((c) => node.appendChild(c));
+    return node;
+  }
+
+  function showMessage(text, kind) {
+    clearChildren(messageArea);
+    messageArea.appendChild(el('div', { className: 'message message-' + kind, text: text }));
+  }
+
+  function clearMessage() {
+    clearChildren(messageArea);
+  }
+
+  async function apiGet(url) {
+    const res = await fetch(url, { credentials: 'include', cache: 'no-store' });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  }
+
+  async function apiPost(url, body) {
+    const res = await fetch(url, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  }
+
+  async function apiDelete(url) {
+    const res = await fetch(url, { method: 'DELETE', credentials: 'include' });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  }
+
+  function stateBadge(label) {
+    return el('span', { className: 'state-badge ' + label.cls, text: label.text });
+  }
+
+  // ─── status card ────────────────────────────────────────────────────
+
+  async function refreshStatus() {
+    const { status, body } = await apiGet('/api/einvoicing/status');
+    if (status !== 200) {
+      clearChildren(statusContent);
+      statusContent.appendChild(el('p', { text: 'Could not load status.' }));
+      return;
+    }
+    renderStatus(body.data);
+  }
+
+  function renderStatus(data) {
+    clearChildren(statusContent);
+    const badge = data.enabled
+      ? stateBadge({ text: 'Enabled', cls: 'state-active' })
+      : stateBadge({ text: 'Disabled', cls: 'state-neutral' });
+    statusContent.appendChild(badge);
+    if (data.killswitch && data.killswitch.disabled) {
+      statusContent.appendChild(stateBadge({ text: 'Paused: ' + data.killswitch.reason, cls: 'state-warning' }));
+    }
+
+    const dl = el('dl');
+    dl.appendChild(el('dt', { text: 'Provider' }));
+    dl.appendChild(el('dd', { text: data.provider }));
+    const counts = data.counts_by_state || {};
+    dl.appendChild(el('dt', { text: 'Queued' }));
+    dl.appendChild(el('dd', { text: String(counts.QUEUED || 0) }));
+    dl.appendChild(el('dt', { text: 'Cleared' }));
+    dl.appendChild(el('dd', { text: String(counts.CLEARED || 0) }));
+    dl.appendChild(el('dt', { text: 'Needs attention' }));
+    dl.appendChild(el('dd', {
+      text: String((counts.FAILED_PERMANENT || 0) + (counts.SUBMITTING_UNKNOWN || 0) + (counts.AWAITING_CLEARANCE || 0)),
+    }));
+    statusContent.appendChild(dl);
+
+    const row = el('div', { className: 'row' });
+    const runBtn = el('button', { className: 'secondary', text: 'Submit queue now' });
+    runBtn.addEventListener('click', () => onRunOnceClicked(runBtn));
+    row.appendChild(runBtn);
+
+    if (data.killswitch && data.killswitch.disabled) {
+      const resumeBtn = el('button', { text: 'Resume' });
+      resumeBtn.addEventListener('click', () => onKillswitchClicked(false));
+      row.appendChild(resumeBtn);
+    } else {
+      const pauseBtn = el('button', { className: 'danger', text: 'Pause immediately' });
+      pauseBtn.addEventListener('click', () => onKillswitchClicked(true));
+      row.appendChild(pauseBtn);
+    }
+    statusContent.appendChild(row);
+  }
+
+  async function onRunOnceClicked(btn) {
+    clearMessage();
+    btn.disabled = true;
+    try {
+      const { status, body } = await apiPost('/api/einvoicing/outbox/run-once', {});
+      if (status === 200) {
+        showMessage('Submission queue processed.', 'info');
+      } else {
+        showMessage(body.message || 'Could not process the queue.', 'error');
+      }
+    } catch (e) {
+      showMessage('Network error while contacting this installation.', 'error');
+    }
+    btn.disabled = false;
+    await Promise.all([refreshStatus(), refreshOutbox()]);
+  }
+
+  async function onKillswitchClicked(pause) {
+    clearMessage();
+    try {
+      if (pause) {
+        if (!window.confirm('Pause e-invoicing submission immediately? Existing queued invoices stay queued until resumed.')) return;
+        await apiPost('/api/einvoicing/killswitch', { reason: 'manual' });
+        showMessage('E-invoicing paused.', 'info');
+      } else {
+        await apiDelete('/api/einvoicing/killswitch');
+        showMessage('E-invoicing resumed.', 'info');
+      }
+    } catch (e) {
+      showMessage('Network error while contacting this installation.', 'error');
+    }
+    await refreshStatus();
+  }
+
+  // ─── settings card ──────────────────────────────────────────────────
+
+  async function refreshSettings() {
+    const { status, body } = await apiGet('/api/einvoicing/settings');
+    if (status !== 200) {
+      clearChildren(settingsContent);
+      settingsContent.appendChild(el('p', { text: 'Could not load settings.' }));
+      return;
+    }
+    renderSettings(body.data.settings);
+  }
+
+  function renderSettings(settings) {
+    clearChildren(settingsContent);
+
+    const toggleRow = el('div', { className: 'toggle-row' });
+    const toggleLabel = el('label', { text: 'Enable Jordan e-invoicing for this business', htmlFor: 'einv-enabled' });
+    toggleLabel.style.margin = '0';
+    const toggle = el('input', { id: 'einv-enabled', type: 'checkbox' });
+    toggle.checked = settings.enabled === '1';
+    toggleRow.appendChild(toggleLabel);
+    toggleRow.appendChild(toggle);
+    settingsContent.appendChild(toggleRow);
+    settingsContent.appendChild(el('div', {
+      className: 'hint', text: 'When off, nothing about your existing records or receipts changes.',
+    }));
+
+    settingsContent.appendChild(el('label', { text: 'Invoice type', htmlFor: 'einv-family' }));
+    const familySelect = el('select', { id: 'einv-family' });
+    [['income', 'Income invoice (not VAT-registered)'], ['general_sales', 'General sales invoice (VAT-registered)']]
+      .forEach(([value, label]) => {
+        const opt = el('option', { value: value, text: label });
+        if (settings.invoice_family === value) opt.selected = true;
+        familySelect.appendChild(opt);
+      });
+    settingsContent.appendChild(familySelect);
+
+    settingsContent.appendChild(el('label', { text: 'Business name (as registered with ISTD)', htmlFor: 'einv-seller-name' }));
+    settingsContent.appendChild(el('input', { id: 'einv-seller-name', type: 'text', value: settings.seller_name || '' }));
+
+    settingsContent.appendChild(el('label', { text: 'Tax identification number (TIN)', htmlFor: 'einv-seller-tin' }));
+    settingsContent.appendChild(el('input', { id: 'einv-seller-tin', type: 'text', value: settings.seller_tin || '' }));
+
+    settingsContent.appendChild(el('label', { text: 'Currency', htmlFor: 'einv-currency' }));
+    settingsContent.appendChild(el('input', { id: 'einv-currency', type: 'text', value: settings.currency || 'JOD' }));
+
+    const row = el('div', { className: 'row' });
+    const saveBtn = el('button', { text: 'Save settings' });
+    saveBtn.addEventListener('click', () => onSaveSettingsClicked(saveBtn));
+    row.appendChild(saveBtn);
+    settingsContent.appendChild(row);
+  }
+
+  async function onSaveSettingsClicked(btn) {
+    clearMessage();
+    btn.disabled = true;
+    const payload = {
+      enabled: document.getElementById('einv-enabled').checked ? '1' : '0',
+      invoice_family: document.getElementById('einv-family').value,
+      seller_name: document.getElementById('einv-seller-name').value,
+      seller_tin: document.getElementById('einv-seller-tin').value,
+      currency: document.getElementById('einv-currency').value,
+    };
+    try {
+      const { status, body } = await apiPost('/api/einvoicing/settings', payload);
+      if (status === 200) {
+        showMessage('Settings saved.', 'info');
+      } else {
+        showMessage(body.message || 'Could not save settings.', 'error');
+      }
+    } catch (e) {
+      showMessage('Network error while contacting this installation.', 'error');
+    }
+    btn.disabled = false;
+    await Promise.all([refreshStatus(), refreshSettings()]);
+  }
+
+  // ─── credentials card ───────────────────────────────────────────────
+
+  async function refreshCredentials() {
+    const { status, body } = await apiGet('/api/einvoicing/settings');
+    if (status !== 200) {
+      clearChildren(credentialsContent);
+      credentialsContent.appendChild(el('p', { text: 'Could not load credential status.' }));
+      return;
+    }
+    renderCredentials(body.data.credentials);
+  }
+
+  function renderCredentials(creds) {
+    clearChildren(credentialsContent);
+
+    if (creds.configured) {
+      const suffix = creds.client_id_last4 ? ' (ending ' + creds.client_id_last4 + ')' : '';
+      credentialsContent.appendChild(el('p', { text: 'JoFotara credentials are configured' + suffix + '.' }));
+      if (creds.readable === false) {
+        credentialsContent.appendChild(el('div', {
+          className: 'message message-error', text: 'Stored credentials could not be read. Please re-enter them below.',
+        }));
+      }
+      const wipeBtn = el('button', { className: 'danger', text: 'Remove credentials' });
+      wipeBtn.addEventListener('click', onWipeCredentialsClicked);
+      credentialsContent.appendChild(wipeBtn);
+      credentialsContent.appendChild(el('div', { className: 'hint', text: 'Enter new credentials below to replace them.' }));
+    } else {
+      credentialsContent.appendChild(el('p', { text: 'No JoFotara credentials configured yet.' }));
+    }
+
+    credentialsContent.appendChild(el('label', { text: 'Client ID', htmlFor: 'einv-client-id' }));
+    credentialsContent.appendChild(el('input', { id: 'einv-client-id', type: 'text', placeholder: 'From the JoFotara portal' }));
+
+    credentialsContent.appendChild(el('label', { text: 'Client secret', htmlFor: 'einv-client-secret' }));
+    credentialsContent.appendChild(el('input', { id: 'einv-client-secret', type: 'password', placeholder: 'From the JoFotara portal' }));
+
+    const row = el('div', { className: 'row' });
+    const saveBtn = el('button', { text: 'Save credentials' });
+    saveBtn.addEventListener('click', () => onSaveCredentialsClicked(saveBtn));
+    row.appendChild(saveBtn);
+    credentialsContent.appendChild(row);
+  }
+
+  async function onSaveCredentialsClicked(btn) {
+    clearMessage();
+    const clientId = document.getElementById('einv-client-id').value.trim();
+    const clientSecret = document.getElementById('einv-client-secret').value.trim();
+    if (!clientId || !clientSecret) {
+      showMessage('Enter both the client ID and client secret.', 'error');
+      return;
+    }
+    btn.disabled = true;
+    try {
+      const { status, body } = await apiPost('/api/einvoicing/credentials', { client_id: clientId, client_secret: clientSecret });
+      document.getElementById('einv-client-secret').value = '';
+      if (status === 200) {
+        showMessage('Credentials saved.', 'info');
+      } else {
+        showMessage(body.message || 'Could not save credentials.', 'error');
+      }
+    } catch (e) {
+      showMessage('Network error while contacting this installation.', 'error');
+    }
+    btn.disabled = false;
+    await refreshCredentials();
+  }
+
+  async function onWipeCredentialsClicked() {
+    if (!window.confirm('Remove the stored JoFotara credentials from this installation?')) return;
+    clearMessage();
+    try {
+      const { status, body } = await apiDelete('/api/einvoicing/credentials');
+      if (status === 200) {
+        showMessage('Credentials removed.', 'info');
+      } else {
+        showMessage(body.message || 'Could not remove credentials.', 'error');
+      }
+    } catch (e) {
+      showMessage('Network error while contacting this installation.', 'error');
+    }
+    await refreshCredentials();
+  }
+
+  // ─── outbox card ────────────────────────────────────────────────────
+
+  async function refreshOutbox() {
+    const { status, body } = await apiGet('/api/einvoicing/outbox?limit=25');
+    if (status !== 200) {
+      clearChildren(outboxContent);
+      outboxContent.appendChild(el('p', { text: 'Could not load the submission queue.' }));
+      return;
+    }
+    renderOutbox(body.data);
+  }
+
+  function renderOutbox(rows) {
+    clearChildren(outboxContent);
+    if (!rows.length) {
+      outboxContent.appendChild(el('p', { text: 'No invoices submitted yet.' }));
+      return;
+    }
+
+    const table = el('table');
+    const thead = el('thead');
+    const headRow = el('tr');
+    ['Invoice #', 'E-invoice #', 'Status', ''].forEach((h) => headRow.appendChild(el('th', { text: h })));
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = el('tbody');
+    rows.forEach((row) => {
+      const tr = el('tr');
+      tr.appendChild(el('td', { text: row.local_document_no || '—' }));
+      tr.appendChild(el('td', { text: row.einvoice_no }));
+      const label = OUTBOX_STATE_LABELS[row.status] || { text: row.status, cls: 'state-neutral' };
+      tr.appendChild(el('td', {}, [stateBadge(label)]));
+
+      const actionsCell = el('td');
+      if (row.status === 'FAILED_PERMANENT') {
+        const retryBtn = el('button', { className: 'small secondary', text: 'Retry' });
+        retryBtn.addEventListener('click', () => onRetryClicked(row.invoice_ref, retryBtn));
+        actionsCell.appendChild(retryBtn);
+      }
+      tr.appendChild(actionsCell);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    outboxContent.appendChild(table);
+  }
+
+  async function onRetryClicked(invoiceRef, btn) {
+    clearMessage();
+    btn.disabled = true;
+    try {
+      const { status, body } = await apiPost('/api/einvoicing/outbox/' + encodeURIComponent(invoiceRef) + '/retry', {});
+      if (status === 200) {
+        showMessage('Queued for retry.', 'info');
+      } else {
+        showMessage(body.message || 'Could not retry this entry.', 'error');
+      }
+    } catch (e) {
+      showMessage('Network error while contacting this installation.', 'error');
+    }
+    await Promise.all([refreshStatus(), refreshOutbox()]);
+  }
+
+  // ─── boot ───────────────────────────────────────────────────────────
+
+  Promise.all([refreshStatus(), refreshSettings(), refreshCredentials(), refreshOutbox()]);
+})();

@@ -4,8 +4,8 @@
 <div class="card">
   <h2>{{ _("Management Dashboard") }} (<bdi dir="ltr">{{ currency }}</bdi>)</h2>
   <form method="get">
-    <label>{{ _("Currency") }}</label>
-    <input name="currency" value="{{ currency }}" maxlength="3" onchange="this.form.submit()">
+    <label for="operations-ui-dashboard-management-currency">{{ _("Currency") }}</label>
+    <input id="operations-ui-dashboard-management-currency" name="currency" value="{{ currency }}" maxlength="3" onchange="this.form.submit()">
   </form>
 
   <h3>{{ _("Expense totals by Category") }}</h3>

@@ -35,6 +35,12 @@ POLICIES: dict[str, RateLimitPolicy] = {
     "check_in": RateLimitPolicy("check_in", max_requests=30, window_seconds=60),
     "signing_keys": RateLimitPolicy("signing_keys", max_requests=60, window_seconds=60),
     "service_info": RateLimitPolicy("service_info", max_requests=60, window_seconds=60),
+    # Phase 9R M11: bounded download-authorization attempts per client, and
+    # a separate, tighter bucket for the fetch step itself (fewer requests
+    # legitimately needed -- one fetch per authorization, so a burst here
+    # is a stronger signal of abuse than a burst of authorization requests).
+    "release_download_authorize": RateLimitPolicy("release_download_authorize", max_requests=20, window_seconds=60),
+    "release_download_fetch": RateLimitPolicy("release_download_fetch", max_requests=10, window_seconds=60),
 }
 
 

@@ -16,6 +16,7 @@
 <div class="card">
   <h3>{{ _("Change roles") }}</h3>
   <p>{{ _("Changing roles requires a fresh MFA confirmation and immediately revokes all of this account's active sessions.") }}</p>
+  {% if has_permission('staff.assign_roles') %}
   <form method="post" action="{{ url_for('staff.update_roles', staff_id=staff.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {% for role in roles %}
@@ -24,22 +25,27 @@
           {% if staff.role_assignments|selectattr("role.code","equalto",role.code)|list %}checked{% endif %}> {{ role_label(role.code) }}
       </label>
     {% endfor %}
-    <div style="margin-top:1rem;"><button type="submit">{{ _("Save roles") }}</button></div>
+    <div style="margin-top:1rem;"><button type="submit">{{ _("Save roles (requires recent authentication)") }}</button></div>
   </form>
+  {% else %}
+  <p class="empty">{{ _("You do not have permission to change this account's roles.") }}</p>
+  {% endif %}
 </div>
 
 <div class="card">
   <h3>{{ _("Account actions") }}</h3>
+  {% if has_permission('staff.reset_mfa') %}
   <form class="inline" method="post" action="{{ url_for('staff.reset_mfa_route', staff_id=staff.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" class="secondary">{{ _("Reset MFA") }}</button>
+    <button type="submit" class="secondary">{{ _("Reset MFA (requires recent authentication)") }}</button>
   </form>
-  {% if staff.is_active and not staff.disabled_at %}
+  {% endif %}
+  {% if staff.is_active and not staff.disabled_at and has_permission('staff.disable') %}
   <form class="inline" method="post" action="{{ url_for('staff.disable', staff_id=staff.id) }}"
         data-confirm="{{ _('Disable this staff account? This revokes all of its active sessions immediately.') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="reason" value="Disabled by administrator">
-    <button type="submit" class="danger">{{ _("Disable account") }}</button>
+    <button type="submit" class="danger">{{ _("Disable account (requires recent authentication)") }}</button>
   </form>
   {% endif %}
 </div>

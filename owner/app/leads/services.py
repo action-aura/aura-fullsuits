@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.audit.services import record as audit_record
 from app.extensions import db_session
@@ -129,15 +129,79 @@ def update_lead(
     return lead
 
 
-def list_own_leads(actor_employee_profile_id: uuid.UUID, *, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE) -> dict:
-    stmt = apply_ownership_filter(
-        select(Lead).order_by(Lead.created_at.desc()), Lead, actor_employee_profile_id, all_permission_held=False
-    )
+# UI modernization Stage D (enterprise-table-system) -- the only columns a
+# real, verified server-side ORDER BY exists for. Anything else (including
+# no ?sort= at all) falls back to created_at, the prior unconditional
+# ordering both list functions already used.
+LEAD_SORT_COLUMNS = {
+    "organization_or_prospect_name": Lead.organization_or_prospect_name,
+    "status": Lead.status,
+    "priority": Lead.priority,
+    "next_follow_up_at": Lead.next_follow_up_at,
+    "created_at": Lead.created_at,
+}
+
+
+def _apply_lead_list_filters(stmt, *, status: str | None, search: str | None):
+    """Shared status/search filtering for list_own_leads/list_all_leads.
+
+    UI modernization Stage D -- real bug fix, disclosed in
+    screen-route-inventory.md's "List pagination inconsistency" finding:
+    the old /leads route applied the status filter in Python, AFTER
+    pagination, over only the current page's already-limited rows, while
+    `result.total`/`total_pages` still reflected the unfiltered set --
+    filtered views could look incomplete or wrong (e.g. page 1 of 3 with a
+    status filter applied could show 0 rows while claiming 3 pages exist).
+    Filtering now happens in the WHERE clause, before LIMIT/OFFSET, so the
+    pagination metadata is always correct for what's actually being shown.
+    """
+    if status:
+        stmt = stmt.where(Lead.status == status)
+    if search:
+        like = f"%{search.strip()}%"
+        stmt = stmt.where(
+            or_(
+                Lead.organization_or_prospect_name.ilike(like),
+                Lead.primary_contact_name.ilike(like),
+                Lead.phone.ilike(like),
+                Lead.email.ilike(like),
+            )
+        )
+    return stmt
+
+
+def _lead_sort_order(sort: str, direction: str):
+    column = LEAD_SORT_COLUMNS.get(sort, Lead.created_at)
+    return column.asc() if direction == "asc" else column.desc()
+
+
+def list_own_leads(
+    actor_employee_profile_id: uuid.UUID,
+    *,
+    page: int = 1,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    status: str | None = None,
+    search: str | None = None,
+    sort: str = "created_at",
+    direction: str = "desc",
+) -> dict:
+    stmt = apply_ownership_filter(select(Lead), Lead, actor_employee_profile_id, all_permission_held=False)
+    stmt = _apply_lead_list_filters(stmt, status=status, search=search)
+    stmt = stmt.order_by(_lead_sort_order(sort, direction), Lead.id)
     return paginate(stmt, page, page_size)
 
 
-def list_all_leads(*, page: int = 1, page_size: int = DEFAULT_PAGE_SIZE) -> dict:
-    stmt = select(Lead).order_by(Lead.created_at.desc())
+def list_all_leads(
+    *,
+    page: int = 1,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    status: str | None = None,
+    search: str | None = None,
+    sort: str = "created_at",
+    direction: str = "desc",
+) -> dict:
+    stmt = _apply_lead_list_filters(select(Lead), status=status, search=search)
+    stmt = stmt.order_by(_lead_sort_order(sort, direction), Lead.id)
     return paginate(stmt, page, page_size)
 
 

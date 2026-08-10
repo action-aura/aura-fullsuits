@@ -34,6 +34,14 @@ _REDACTION_PATTERNS = [
         r'"?recovery_code"?\s*[:=]\s*"?[^"\s,}]+',
         r'"?signature"?\s*[:=]\s*"?[A-Za-z0-9+/=]{20,}',  # base64-looking signature blob
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
+        # Phase 9R M11: the release-download bearer token lives directly in
+        # the URL path (/releases/download/<token>), not a key=value pair --
+        # none of the patterns above match a bare path segment with no
+        # "key=" prefix. Every request-logging line includes request.path
+        # (see _log_request below), so without this the token would leak
+        # into every access log line for its own fetch. Redacts the token
+        # segment specifically, leaving the rest of the path visible.
+        r"(?<=/releases/download/)[A-Za-z0-9_-]{20,}",
     ]
 ]
 

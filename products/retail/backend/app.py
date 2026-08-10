@@ -130,12 +130,17 @@ def _index():
 from commercial_runtime.identity.auth_routes import auth_bp
 from commercial_runtime.identity.onboarding_routes import onboarding_bp
 from commercial_runtime.identity.registry_db import init_registry_db
-from database.schema import init_retail
+from database.schema import get_retail_conn, init_retail
 from api.retail_api import retail_bp
 from api.import_api import import_bp
 from commercial_runtime.backup.routes import make_backup_blueprint
 from commercial_runtime.licensing_contracts.routes import make_licensing_blueprint
 from commercial_runtime.identity.device_routes import device_bp
+from commercial_runtime.einvoicing.routes import make_einvoicing_blueprint
+from commercial_runtime.einvoicing.worker import OutboxWorker
+from commercial_runtime.einvoicing.providers.mock import MockProvider
+from commercial_runtime.einvoicing import settings as _einvoicing_settings
+from core.retail import einvoice_adapter as _einvoice_adapter
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(onboarding_bp)
@@ -143,6 +148,42 @@ app.register_blueprint(retail_bp)
 app.register_blueprint(import_bp)
 app.register_blueprint(make_backup_blueprint('retail', DATABASE_DIR, APP_VERSION))
 app.register_blueprint(device_bp)
+
+# docs/einvoicing/phase1/ -- Jordan JoFotara e-invoicing. Default OFF (see
+# commercial_runtime/einvoicing/settings.py's DEFAULTS); nothing here
+# changes behavior for an install that never turns it on.
+#
+# This registry's DB is genuinely multi-tenant (commercial_runtime/identity/
+# registry_db.py -- one install CAN host more than one company), so there is
+# no single fixed company_id to build one OutboxWorker for at import time.
+# Workers are created lazily, one per company, the first time that
+# company's settings are touched or its background job is resumed at boot.
+_EINVOICING_APP_DATA_DIR = str(Path(DATABASE_DIR).parent)
+_einvoicing_provider = MockProvider()  # Phase 1 default -- see providers/direct_istd.py
+_einvoicing_workers = {}
+
+
+def _get_or_create_einvoicing_worker(company_id):
+    if company_id not in _einvoicing_workers:
+        _einvoicing_workers[company_id] = OutboxWorker(
+            conn_factory=get_retail_conn,
+            app_data_dir=_EINVOICING_APP_DATA_DIR,
+            company_id=company_id,
+            provider=_einvoicing_provider,
+            document_builder=_einvoice_adapter.build_document,
+            reconcile_fn=_einvoice_adapter.reconcile_missing_sales,
+        )
+    return _einvoicing_workers[company_id]
+
+
+app.register_blueprint(make_einvoicing_blueprint(
+    product_code='AURA_RETAIL',
+    platform=LICENSING_PLATFORM,
+    app_data_dir=_EINVOICING_APP_DATA_DIR,
+    conn_factory=get_retail_conn,
+    get_worker=_get_or_create_einvoicing_worker,
+    provider=_einvoicing_provider,
+))
 
 # Part H: see products/clinic/backend/app.py's identical block for the full
 # rationale. Lazy-imported (Phase 7V-F): WindowsDpapiDeviceIdentityProvider
@@ -270,7 +311,27 @@ def init_app():
     init_retail()
     if _sync_service is not None:
         _sync_service.start()
+    _resume_einvoicing_workers()
     return app
+
+
+def _resume_einvoicing_workers():
+    """A company that had e-invoicing enabled before a restart (PC reboot,
+    app update) must keep submitting without waiting for a settings write
+    to notice -- sweep for companies with the feature already on and
+    resume their background workers. A fresh/never-enabled install finds
+    zero rows here and starts zero threads."""
+    conn = get_retail_conn()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT company_id FROM einvoice_settings WHERE skey='enabled' AND svalue='1'"
+        ).fetchall()
+        for row in rows:
+            cid = row[0]
+            interval = int(_einvoicing_settings.get_setting(conn, cid, 'submit_interval_seconds'))
+            _get_or_create_einvoicing_worker(cid).start(interval_seconds=interval)
+    finally:
+        conn.close()
 
 
 if __name__ == '__main__':

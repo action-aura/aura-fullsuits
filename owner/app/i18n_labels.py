@@ -56,6 +56,18 @@ def account_status_label(*, is_active: bool, disabled: bool) -> str:
     return _("Disabled")
 
 
+def staff_account_filter_status_label(code: str) -> str:
+    """UI modernization Stage D.6 -- label for the /staff list screen's
+    status FILTER dropdown (?status=ACTIVE|DISABLED), distinct from
+    account_status_label()'s (is_active, disabled) keyword-only signature
+    (which labels one already-known account's own badge, not a filter
+    option code) -- components/table.html's filter_bar() macro calls its
+    status_label_fn as callable(code), the same single-argument contract
+    every other domain's *_status_label already satisfies."""
+    labels = {"ACTIVE": _("Active"), "DISABLED": _("Disabled")}
+    return labels.get(code, code)
+
+
 def session_status_label(*, revoked: bool) -> str:
     return _("Revoked") if revoked else _("Active")
 
@@ -632,12 +644,12 @@ def generic_audit_action_label(code: str) -> str:
         "PAYMENT_RECORDED": _("Payment recorded"),
         "PAYMENT_CORRECTED": _("Payment corrected"),
         "LICENSE_ISSUED": _("License issued"),
-        "LICENSE_TRANSITIONED": _("License status changed"),
+        "LICENSE_STATUS_CHANGED": _("License status changed"),
         "LICENSE_REPLACED": _("License replaced"),
         "LICENSE_CREATED": _("License created"),
         "LICENSE_KEY_ISSUED": _("License key issued"),
         "INSTALLATION_REGISTERED": _("Installation registered"),
-        "INSTALLATION_TRANSITIONED": _("Installation status changed"),
+        "INSTALLATION_STATUS_CHANGED": _("Installation status changed"),
         "BACKUP_CREATED": _("Backup created"),
         "BACKUP_RESTORED": _("Backup restored"),
         "EMPLOYEE_PROFILE_CREATED": _("Employee profile created"),

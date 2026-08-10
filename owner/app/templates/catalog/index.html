@@ -19,7 +19,7 @@
     <a class="btn" href="{{ url_for('catalog.new_plan_form') }}">{{ _("New plan") }}</a>
   </div>
   <table class="responsive-table">
-    <thead><tr><th>{{ _("Code") }}</th><th>{{ _("Name") }}</th><th>{{ _("Billing model") }}</th><th>{{ _("Status") }}</th><th></th></tr></thead>
+    <thead><tr><th>{{ _("Code") }}</th><th>{{ _("Name") }}</th><th>{{ _("Billing model") }}</th><th>{{ _("Status") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>
     {% for p in plans %}
     <tr><td><bdi dir="ltr">{{ p.plan_code }}</bdi></td><td>{{ p.name }}</td><td><bdi dir="ltr">{{ p.billing_model }}</bdi></td><td><span class="badge">{{ plan_lifecycle_status_label(p.lifecycle_status) }}</span></td>
@@ -33,7 +33,7 @@
 <div class="card">
   <h2>{{ _("Add-ons") }}</h2>
   <table class="responsive-table">
-    <thead><tr><th>{{ _("Code") }}</th><th>{{ _("Name") }}</th><th>{{ _("Availability") }}</th><th></th></tr></thead>
+    <thead><tr><th>{{ _("Code") }}</th><th>{{ _("Name") }}</th><th>{{ _("Availability") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>
     {% for a in addons %}
     <tr>
@@ -42,7 +42,7 @@
       <td>
         <form class="inline" method="post" action="{{ url_for('catalog.update_addon_availability', addon_id=a.id) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <select name="status" onchange="this.form.submit()">
+          <select name="status" aria-label="{{ _('Change availability status') }}" onchange="this.form.submit()">
             {% for s in ["DRAFT","PLANNED","PILOT","AVAILABLE","RETIRED"] %}
             <option value="{{ s }}" {% if s == a.availability_status %}selected{% endif %}>{{ addon_availability_status_label(s) }}</option>
             {% endfor %}

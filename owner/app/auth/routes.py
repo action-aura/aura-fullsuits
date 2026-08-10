@@ -37,6 +37,17 @@ from app.security.tokens import hash_token
 
 bp = Blueprint("auth", __name__, url_prefix="/auth")
 
+
+def _qr_data_uri(uri: str) -> str:
+    """Renders the MFA provisioning URI as an inline SVG data: URI --
+    server-side only (segno, pure Python), no client-side request, no
+    external QR service. Presentation only: the manual secret/URI text
+    already shown alongside it remains the real, authoritative fallback."""
+    import segno
+
+    qr = segno.make(uri, error="m")
+    return qr.svg_data_uri(scale=4, border=2, dark="#12151C", light="#ffffff")
+
 _PENDING_MFA_SESSION_KEY = "pending_mfa_staff_id"
 _PENDING_MFA_TTL_SECONDS = 300
 
@@ -53,7 +64,9 @@ def _safe_next(value: str | None) -> str | None:
 def login_form():
     if load_current_staff() is not None:
         return redirect(url_for("dashboard.index"))
-    return render_template("auth/login.html", error=None)
+    reason = request.args.get("reason")
+    notice = _('Your session ended. Sign in again to continue.') if reason == "session_expired" else None
+    return render_template("auth/login.html", error=None, notice=notice)
 
 
 @bp.route("/login", methods=["POST"])
@@ -209,7 +222,9 @@ def mfa_enroll_form():
     raw_secret = generate_totp_secret()
     session["enroll_secret"] = raw_secret
     uri = provisioning_uri(raw_secret, staff.email)
-    return render_template("auth/mfa_enroll.html", provisioning_uri=uri, secret=raw_secret, error=None)
+    return render_template(
+        "auth/mfa_enroll.html", provisioning_uri=uri, qr_data_uri=_qr_data_uri(uri), secret=raw_secret, error=None
+    )
 
 
 @bp.route("/mfa-enroll", methods=["POST"])
@@ -222,9 +237,11 @@ def mfa_enroll_submit():
     raw_secret = session.get("enroll_secret")
     code = request.form.get("code", "")
     if not raw_secret or not verify_totp_code(raw_secret, code):
+        retry_uri = provisioning_uri(raw_secret or generate_totp_secret(), staff.email)
         return render_template(
             "auth/mfa_enroll.html",
-            provisioning_uri=provisioning_uri(raw_secret or generate_totp_secret(), staff.email),
+            provisioning_uri=retry_uri,
+            qr_data_uri=_qr_data_uri(retry_uri),
             secret=raw_secret,
             error="Invalid code -- scan the QR code again and try the current 6-digit code.",
         ), 401

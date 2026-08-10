@@ -81,4 +81,7 @@ def test_detail_page_no_longer_has_inline_onsubmit_confirm(app, client, seeded):
     resp = client.get(f"/employees/{profile_id}")
     data = resp.get_data(as_text=True)
     assert "onsubmit=" not in data
-    assert data.count("data-confirm=") == 2  # suspend + terminate
+    # suspend + terminate (this page) + the shell's own global logout
+    # confirm (layout/base.html, present on every authenticated page
+    # since the UI-modernization application-shell rebuild).
+    assert data.count("data-confirm=") == 3

@@ -53,6 +53,27 @@ a = Analysis(
         'commercial_runtime.launcher_support',
         'api.clinic_api',
         'database.schema',
+        # docs/einvoicing/phase1/ -- Jordan JoFotara e-invoicing. See
+        # products/retail/packaging/aura_retail.spec's identical block for
+        # why these are listed explicitly rather than left to PyInstaller's
+        # static analysis.
+        'core.clinic.einvoice_adapter',
+        'commercial_runtime.einvoicing.schema',
+        'commercial_runtime.einvoicing.settings',
+        'commercial_runtime.einvoicing.killswitch',
+        'commercial_runtime.einvoicing.credentials',
+        'commercial_runtime.einvoicing.sequence',
+        'commercial_runtime.einvoicing.document',
+        'commercial_runtime.einvoicing.ubl',
+        'commercial_runtime.einvoicing.qr',
+        'commercial_runtime.einvoicing.outbox',
+        'commercial_runtime.einvoicing.audit',
+        'commercial_runtime.einvoicing.worker',
+        'commercial_runtime.einvoicing.routes',
+        'commercial_runtime.einvoicing.providers.base',
+        'commercial_runtime.einvoicing.providers.mock',
+        'commercial_runtime.einvoicing.providers.direct_istd',
+        'segno',
     ],
     hookspath=[],
     runtime_hooks=[],

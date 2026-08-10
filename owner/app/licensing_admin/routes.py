@@ -9,14 +9,16 @@ from sqlalchemy import select
 
 from app.auth.session import load_current_staff
 from app.extensions import db_session
+from app.licensing_admin import list_queries
 from app.licensing_service import device_identity, offline_policy as offline_policy_service
 from app.licensing_service import signing as signing_service
 from app.licensing_service.entitlements import resolve_entitlements
 from app.licensing_service.health import internal_health
 from app.models.installations import Installation
 from app.models.licensing import License
-from app.models.licensing_service import ActivationRequest, DevicePublicKey, OfflinePolicy, SigningKey
+from app.models.licensing_service import DevicePublicKey, OfflinePolicy, SigningKey
 from app.security.rbac import require_permission, require_recent_auth
+from app.services.pagination import DEFAULT_PAGE_SIZE
 from datetime import datetime, timezone
 
 bp = Blueprint("licensing_admin", __name__, url_prefix="/licensing-admin")
@@ -79,19 +81,21 @@ def revoke_signing_key(key_id):
 @bp.route("/requests", methods=["GET"])
 @require_permission("activation_requests.view")
 def requests_list():
-    event_type_filter = request.args.get("event_type")
-    stmt = select(ActivationRequest).order_by(ActivationRequest.created_at.desc()).limit(200)
-    if event_type_filter:
-        stmt = stmt.where(ActivationRequest.event_type == event_type_filter)
-    rows = db_session.execute(stmt).scalars().all()
-    return render_template("licensing_admin/requests.html", rows=rows, event_type_filter=event_type_filter)
+    event_type_filter = request.args.get("event_type") or None
+    result = list_queries.list_activation_requests(
+        page=request.args.get("page", 1, type=int), page_size=DEFAULT_PAGE_SIZE, event_type=event_type_filter,
+    )
+    return render_template("licensing_admin/requests.html", result=result, event_type_filter=event_type_filter)
 
 
 @bp.route("/device-keys", methods=["GET"])
 @require_permission("device_keys.view")
 def device_keys():
-    rows = db_session.execute(select(DevicePublicKey).order_by(DevicePublicKey.created_at.desc()).limit(200)).scalars().all()
-    return render_template("licensing_admin/device_keys.html", rows=rows)
+    status_filter = request.args.get("status") or None
+    result = list_queries.list_device_keys(
+        page=request.args.get("page", 1, type=int), page_size=DEFAULT_PAGE_SIZE, status=status_filter,
+    )
+    return render_template("licensing_admin/device_keys.html", result=result, status_filter=status_filter)
 
 
 @bp.route("/device-keys/<uuid:device_key_id>/revoke", methods=["POST"])

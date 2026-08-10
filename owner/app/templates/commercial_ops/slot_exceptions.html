@@ -14,9 +14,9 @@
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   <form method="post" action="{{ url_for('commercial_ops_ui.create_slot_exception', license_id=license.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Extra slots") }}</label><input name="extra_slots" type="number" min="1" required>
-    <label>{{ _("Reason (required)") }}</label><input name="reason" required>
-    <label>{{ _("Expires at (max 90 days out, temporary means temporary)") }}</label><input name="expires_at" type="datetime-local" required>
+    <label for="commercial-ops-slot-exceptions-extra-slots">{{ _("Extra slots") }}</label><input id="commercial-ops-slot-exceptions-extra-slots" name="extra_slots" type="number" min="1" required>
+    <label for="commercial-ops-slot-exceptions-reason">{{ _("Reason (required)") }}</label><input id="commercial-ops-slot-exceptions-reason" name="reason" required>
+    <label for="commercial-ops-slot-exceptions-expires-at">{{ _("Expires at (max 90 days out, temporary means temporary)") }}</label><input id="commercial-ops-slot-exceptions-expires-at" name="expires_at" type="datetime-local" required>
     <div style="margin-top:0.5rem;"><button type="submit">{{ _("Create exception") }}</button></div>
   </form>
 </div>
@@ -24,7 +24,7 @@
 <div class="card">
   <h3>{{ _("Exception history") }}</h3>
   <table class="responsive-table">
-    <thead><tr><th>{{ _("Extra slots") }}</th><th>{{ _("Status") }}</th><th>{{ _("Window") }}</th><th>{{ _("Reason") }}</th><th></th></tr></thead>
+    <thead><tr><th>{{ _("Extra slots") }}</th><th>{{ _("Status") }}</th><th>{{ _("Window") }}</th><th>{{ _("Reason") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>
     {% for e in exceptions %}
     <tr>

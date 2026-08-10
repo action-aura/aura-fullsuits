@@ -1,26 +1,60 @@
 {% extends "layout/base.html" %}
+{% import "components/commercial_record.html" as record with context %}
 {% block title %}{{ _("Payment") }}{% endblock %}
 {% block content %}
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 <div class="card">
-  <h2>{{ format_owner_number(payment.amount) }} {{ payment.currency }} <span class="badge {{ 'success' if payment.status == 'CONFIRMED' else 'pending' }}">{{ payment_status_label(payment.status) }}</span></h2>
+  <h2>{{ format_owner_number(payment.amount) }} {{ payment.currency }} <span class="badge {{ payment_badge_class(payment.status) }}">{{ payment_status_label(payment.status) }}</span></h2>
+
+  {{ record.steps(payment_timeline(payment)) }}
+
   <dl class="kv">
     <dt>{{ _("Method") }}</dt><dd>{{ payment.method }}</dd>
     <dt>{{ _("Date") }}</dt><dd>{{ format_owner_date(payment.payment_date) }}</dd>
     <dt>{{ _("Reference") }}</dt><dd>{{ payment.reference or "-" }}</dd>
     {% if unallocated is not none %}<dt>{{ _("Unallocated balance") }}</dt><dd>{{ format_owner_number(unallocated) }}</dd>{% endif %}
+    <dt>{{ _("Recorded by") }}</dt><dd>{{ recorded_by_name or "-" }}</dd>
+    <dt>{{ _("Verified by") }}</dt><dd>{{ verified_by_name or "-" }}</dd>
   </dl>
+
+  {{ record.related_records([
+      (_("Customer"), url_for('customers.detail', customer_id=customer.id) if customer else None, customer.legal_name if customer else "-"),
+  ]) }}
 
   {% if payment.status == "PENDING" %}
   <form method="post" action="{{ url_for('commercial_sales_web.confirm_payment_route', payment_id=payment.id) }}" class="inline" data-confirm="{{ _('Confirm this payment?') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit">{{ _("Confirm payment") }}</button>
+    <button type="submit" class="btn">{{ _("Confirm payment") }}</button>
   </form>
   <form method="post" action="{{ url_for('commercial_sales_web.reject_payment_route', payment_id=payment.id) }}" class="inline" style="margin-inline-start:0.5rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input name="reason" placeholder="{{ _('Reason') }}" required>
-    <button type="submit" class="danger">{{ _("Reject payment") }}</button>
+    <button type="submit" class="btn danger">{{ _("Reject payment") }}</button>
   </form>
   {% endif %}
 </div>
+
+{% if allocations %}
+<div class="card">
+  <h3>{{ _("Invoices funded by this payment") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Invoice") }}</th><th>{{ _("Allocated amount") }}</th><th>{{ _("Allocated") }}</th></tr></thead>
+    <tbody>
+    {% for a in allocations %}
+    {% set inv = invoices_by_id.get(a.commercial_invoice_id) %}
+    <tr>
+      <td data-label="{{ _('Invoice') }}">
+        {% if inv %}<a href="{{ url_for('commercial_sales_web.invoice_detail', invoice_id=inv.id) }}"><bdi dir="ltr">{{ inv.invoice_number }}</bdi></a>{% else %}-{% endif %}
+      </td>
+      <td data-label="{{ _('Allocated amount') }}">{{ format_owner_number(a.allocated_amount) }}</td>
+      <td data-label="{{ _('Allocated') }}">
+        {{ format_owner_datetime(a.allocated_at) }}
+        {% if a.reversed_at %}<span class="badge danger">{{ _("Reversed") }}</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 {% endblock %}

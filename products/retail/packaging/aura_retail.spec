@@ -59,6 +59,30 @@ a = Analysis(
         'api.import_api',
         'database.schema',
         'core.retail.pricing',
+        # docs/einvoicing/phase1/ -- Jordan JoFotara e-invoicing. Listed
+        # explicitly, same as every other commercial_runtime.* package
+        # above: the trust_anchor.json precedent in this repo (see
+        # docs/licensing/phase7/) is a real prior instance of a
+        # non-statically-discoverable module/asset silently missing from a
+        # packaged build, so nothing here is left to PyInstaller's static
+        # analysis alone.
+        'core.retail.einvoice_adapter',
+        'commercial_runtime.einvoicing.schema',
+        'commercial_runtime.einvoicing.settings',
+        'commercial_runtime.einvoicing.killswitch',
+        'commercial_runtime.einvoicing.credentials',
+        'commercial_runtime.einvoicing.sequence',
+        'commercial_runtime.einvoicing.document',
+        'commercial_runtime.einvoicing.ubl',
+        'commercial_runtime.einvoicing.qr',
+        'commercial_runtime.einvoicing.outbox',
+        'commercial_runtime.einvoicing.audit',
+        'commercial_runtime.einvoicing.worker',
+        'commercial_runtime.einvoicing.routes',
+        'commercial_runtime.einvoicing.providers.base',
+        'commercial_runtime.einvoicing.providers.mock',
+        'commercial_runtime.einvoicing.providers.direct_istd',
+        'segno',
     ],
     hookspath=[],
     runtime_hooks=[],

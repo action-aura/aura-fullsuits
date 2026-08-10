@@ -5,8 +5,8 @@
   <h2>{{ _("Pending activation reviews") }}</h2>
   <div class="filters">
     <form method="get">
-      <label>{{ _("Status") }}</label>
-      <select name="status" onchange="this.form.submit()">
+      <label for="commercial-ops-pending-activations-list-status">{{ _("Status") }}</label>
+      <select id="commercial-ops-pending-activations-list-status" name="status" onchange="this.form.submit()">
         {% for s in ["PENDING_REVIEW","APPROVED","REJECTED",""] %}
         <option value="{{ s }}" {{ "selected" if status_filter == s else "" }}>{{ pending_activation_status_label(s) if s else _("All") }}</option>
         {% endfor %}
@@ -14,7 +14,7 @@
     </form>
   </div>
   <table class="responsive-table">
-    <thead><tr><th>{{ _("Installation") }}</th><th>{{ _("Mode") }}</th><th>{{ _("Status") }}</th><th>{{ _("Requested") }}</th><th></th></tr></thead>
+    <thead><tr><th>{{ _("Installation") }}</th><th>{{ _("Mode") }}</th><th>{{ _("Status") }}</th><th>{{ _("Requested") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>
     {% for p in rows %}
     <tr>

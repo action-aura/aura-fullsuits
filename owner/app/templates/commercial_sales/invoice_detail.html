@@ -1,9 +1,13 @@
 {% extends "layout/base.html" %}
+{% import "components/commercial_record.html" as record with context %}
 {% block title %}{{ invoice.invoice_number }}{% endblock %}
 {% block content %}
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 <div class="card">
-  <h2><bdi dir="ltr">{{ invoice.invoice_number }}</bdi> <span class="badge">{{ commercial_invoice_status_label(invoice.status) }}</span></h2>
+  <h2><bdi dir="ltr">{{ invoice.invoice_number }}</bdi> <span class="badge {{ invoice_badge_class(invoice.status) }}">{{ commercial_invoice_status_label(invoice.status) }}</span></h2>
+
+  {{ record.steps(invoice_timeline(invoice)) }}
+
   <dl class="kv">
     <dt>{{ _("Currency") }}</dt><dd>{{ invoice.currency }}</dd>
     <dt>{{ _("Subtotal") }}</dt><dd>{{ format_owner_number(invoice.subtotal) }}</dd>
@@ -12,13 +16,19 @@
     <dt>{{ _("Collected") }}</dt><dd>{{ format_owner_number(collected) }}</dd>
     <dt>{{ _("Refundable") }}</dt><dd>{{ format_owner_number(refundable) }}</dd>
     <dt>{{ _("Due") }}</dt><dd>{{ format_owner_date(invoice.due_date) if invoice.due_date else "-" }}</dd>
+    <dt>{{ _("Created by") }}</dt><dd>{{ created_by_name or "-" }}</dd>
   </dl>
+
+  {{ record.related_records([
+      (_("Customer"), url_for('customers.detail', customer_id=customer.id) if customer else None, customer.legal_name if customer else "-"),
+      (_("Sales order"), url_for('commercial_sales_web.order_detail', order_id=order.id) if order else None, order.order_number if order else "-"),
+  ]) }}
 
   {% if invoice.status == "DRAFT" and can_issue %}
   <form method="post" action="{{ url_for('commercial_sales_web.issue_invoice_route', invoice_id=invoice.id) }}" class="inline">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="version" value="{{ invoice.version }}">
-    <button type="submit">{{ _("Issue invoice") }}</button>
+    <button type="submit" class="btn">{{ _("Issue invoice") }}</button>
   </form>
   {% endif %}
   {% if invoice.status in ("DRAFT", "ISSUED") and can_issue %}
@@ -26,7 +36,7 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="version" value="{{ invoice.version }}">
     <input name="reason" placeholder="{{ _('Reason') }}" required>
-    <button type="submit" class="danger">{{ _("Void invoice") }}</button>
+    <button type="submit" class="btn danger">{{ _("Void invoice") }}</button>
   </form>
   {% endif %}
 </div>
@@ -52,7 +62,7 @@
 <div class="card">
   <h3>{{ _("Payment allocations") }}</h3>
   <table class="responsive-table">
-    <thead><tr><th>{{ _("Payment") }}</th><th>{{ _("Amount") }}</th><th>{{ _("Allocated") }}</th><th></th></tr></thead>
+    <thead><tr><th>{{ _("Payment") }}</th><th>{{ _("Amount") }}</th><th>{{ _("Allocated") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>
     {% for a in allocations %}
     <tr>
@@ -77,11 +87,11 @@
   {% if can_issue and invoice.status in ("ISSUED", "PARTIALLY_PAID") %}
   <form method="post" action="{{ url_for('commercial_sales_web.allocate_payment_route', invoice_id=invoice.id) }}" style="margin-top:0.75rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Payment ID") }}</label>
-    <input name="payment_record_id" placeholder="{{ _('Confirmed payment UUID') }}" required>
-    <label>{{ _("Amount") }}</label>
-    <input name="amount" required>
-    <button type="submit" style="margin-top:0.5rem;">{{ _("Allocate payment") }}</button>
+    <label for="commercial-sales-invoice-detail-payment-record-id">{{ _("Payment ID") }}</label>
+    <input id="commercial-sales-invoice-detail-payment-record-id" name="payment_record_id" placeholder="{{ _('Confirmed payment UUID') }}" required>
+    <label for="commercial-sales-invoice-detail-amount">{{ _("Amount") }}</label>
+    <input id="commercial-sales-invoice-detail-amount" name="amount" required>
+    <button type="submit" class="btn" style="margin-top:0.5rem;">{{ _("Allocate payment") }}</button>
   </form>
   {% endif %}
 </div>
@@ -89,12 +99,12 @@
 <div class="card">
   <h3>{{ _("Refunds") }}</h3>
   <table class="responsive-table">
-    <thead><tr><th>{{ _("Amount") }}</th><th>{{ _("Status") }}</th><th>{{ _("Reason") }}</th><th></th></tr></thead>
+    <thead><tr><th>{{ _("Amount") }}</th><th>{{ _("Status") }}</th><th>{{ _("Reason") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>
     {% for r in refunds %}
     <tr>
       <td data-label="{{ _('Amount') }}"><a href="{{ url_for('commercial_sales_web.refund_detail', refund_id=r.id) }}">{{ format_owner_number(r.amount) }}</a></td>
-      <td data-label="{{ _('Status') }}"><span class="badge {{ 'success' if r.status == 'PAID' else ('danger' if r.status == 'VOID' else 'pending') }}">{{ commercial_refund_status_label(r.status) }}</span></td>
+      <td data-label="{{ _('Status') }}"><span class="badge {{ refund_badge_class(r.status) }}">{{ commercial_refund_status_label(r.status) }}</span></td>
       <td data-label="{{ _('Reason') }}">{{ r.reason }}</td>
       <td></td>
     </tr>
@@ -106,13 +116,13 @@
   {% if refundable > 0 %}
   <form method="post" action="{{ url_for('commercial_sales_web.create_refund_route', invoice_id=invoice.id) }}" style="margin-top:0.75rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Amount") }}</label>
-    <input name="amount" required>
-    <label>{{ _("Reason") }}</label>
-    <input name="reason" required>
-    <label>{{ _("Source payment (optional)") }}</label>
-    <input name="payment_record_id" placeholder="{{ _('Payment UUID') }}">
-    <button type="submit" style="margin-top:0.5rem;">{{ _("Request refund") }}</button>
+    <label for="commercial-sales-invoice-detail-amount-1">{{ _("Amount") }}</label>
+    <input id="commercial-sales-invoice-detail-amount-1" name="amount" required>
+    <label for="commercial-sales-invoice-detail-reason">{{ _("Reason") }}</label>
+    <input id="commercial-sales-invoice-detail-reason" name="reason" required>
+    <label for="commercial-sales-invoice-detail-payment-record-id-1">{{ _("Source payment (optional)") }}</label>
+    <input id="commercial-sales-invoice-detail-payment-record-id-1" name="payment_record_id" placeholder="{{ _('Payment UUID') }}">
+    <button type="submit" class="btn" style="margin-top:0.5rem;">{{ _("Request refund") }}</button>
   </form>
   {% endif %}
 </div>

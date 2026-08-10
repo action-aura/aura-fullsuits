@@ -1,35 +1,31 @@
 {% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
 {% block title %}{{ _("Expenses") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center;">
-    <h2>{{ _("Expenses") }}</h2>
-    <a class="btn" href="{{ url_for('operations_ui.new_expense_form') }}">{{ _("New expense") }}</a>
-  </div>
-  <form class="filters" method="get">
-    <div>
-      <label>{{ _("Status") }}</label>
-      <select name="status" onchange="this.form.submit()">
-        <option value="">{{ _("All") }}</option>
-        {% for s in ["DRAFT","SUBMITTED","RETURNED","APPROVED","PARTIALLY_PAID","PAID","REJECTED","VOID"] %}
-        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ expense_status_label(s) }}</option>
-        {% endfor %}
-      </select>
-    </div>
-  </form>
-  <table class="responsive-table">
-    <thead><tr><th>{{ _("Number") }}</th><th>{{ _("Status") }}</th><th>{{ _("Amount") }}</th><th>{{ _("Date") }}</th></tr></thead>
-    <tbody>
-    {% for e in expenses %}
+  {{ table.toolbar(_("Expenses"), url_for('operations_ui.new_expense_form'), _("New expense"), new_permission="expenses.create") }}
+  {{ table.filter_bar(
+      status_options=["DRAFT","SUBMITTED","RETURNED","APPROVED","PARTIALLY_PAID","PAID","REJECTED","VOID"], status_value=status_filter, status_label_fn=expense_status_label,
+      search_value=search, search_field="q", search_label=_("Search"), search_placeholder=_("Description or reference")
+  ) }}
+  {% call table.table(
+      columns=[
+        {"label": _("Number"), "sort_key": "expense_number"},
+        {"label": _("Status"), "sort_key": "status"},
+        {"label": _("Amount"), "sort_key": "amount", "align": "end"},
+        {"label": _("Date"), "sort_key": "expense_date"},
+      ],
+      has_rows=result.rows|length > 0, empty_message=_("No expenses yet."), caption=_("Expenses")
+  ) %}
+    {% for e in result.rows %}
     <tr>
-      <td data-label="{{ _('Number') }}"><a href="{{ url_for('operations_ui.expense_detail', expense_id=e.id) }}"><bdi dir="ltr">{{ e.expense_number or e.id }}</bdi></a></td>
-      <td data-label="{{ _('Status') }}"><span class="badge {{ 'success' if e.status in ('PAID','APPROVED') else ('danger' if e.status in ('REJECTED','VOID') else 'pending') }}">{{ expense_status_label(e.status) }}</span></td>
-      <td data-label="{{ _('Amount') }}">{{ format_owner_number(e.amount) }} {{ e.currency }}</td>
-      <td data-label="{{ _('Date') }}">{{ format_owner_date(e.expense_date) }}</td>
+      <td><a href="{{ url_for('operations_ui.expense_detail', expense_id=e.id) }}"><bdi dir="ltr">{{ e.expense_number or e.id }}</bdi></a></td>
+      <td><span class="badge {{ expense_badge_class(e.status) }}">{{ expense_status_label(e.status) }}</span></td>
+      <td class="num">{{ format_owner_number(e.amount) }} {{ e.currency }}</td>
+      <td>{{ format_owner_date(e.expense_date) }}</td>
     </tr>
-    {% else %}<tr><td colspan="4" class="empty">{{ _("No expenses yet.") }}</td></tr>
     {% endfor %}
-    </tbody>
-  </table>
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
 </div>
 {% endblock %}

@@ -1,8 +1,12 @@
 {% extends "layout/base.html" %}
+{% import "components/commercial_record.html" as record with context %}
 {% block title %}{{ _("Expense") }} {{ expense.expense_number or "" }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2><bdi dir="ltr">{{ expense.expense_number or expense.id }}</bdi> <span class="badge {{ 'success' if expense.status in ('PAID','APPROVED') else ('danger' if expense.status in ('REJECTED','VOID') else 'pending') }}">{{ expense_status_label(expense.status) }}</span></h2>
+  <h2><bdi dir="ltr">{{ expense.expense_number or expense.id }}</bdi> <span class="badge {{ expense_badge_class(expense.status) }}">{{ expense_status_label(expense.status) }}</span></h2>
+
+  {{ record.steps(expense_timeline(expense, latest_approval)) }}
+
   <p>{{ _("Amount:") }} {{ format_owner_number(expense.amount) }} {{ expense.currency }}
     {% if expense.approved_amount is not none %}&middot; {{ _("Approved:") }} {{ format_owner_number(expense.approved_amount) }} {{ expense.currency }}{% endif %}
     {% if outstanding is not none %}&middot; {{ _("Outstanding:") }} {{ format_owner_number(outstanding) }} {{ expense.currency }}{% endif %}
@@ -10,6 +14,15 @@
   <p>{{ _("Date:") }} {{ format_owner_date(expense.expense_date) }} &middot; {{ _("Payment method:") }} {{ expense_payment_method_label(expense.payment_method) }}</p>
   <p>{{ expense.description }}</p>
   {% if expense.external_reference %}<p>{{ _("External reference:") }} <bdi dir="ltr">{{ expense.external_reference }}</bdi></p>{% endif %}
+
+  {{ record.related_records([
+      (_("Category"), None, category.name if category else "-"),
+      (_("Payee"), None, payee.display_name if payee else "-"),
+      (_("Beneficiary employee"), url_for('employees.detail', employee_id=expense.beneficiary_employee_profile_id) if expense.beneficiary_employee_profile_id else None,
+       beneficiary_name if beneficiary_name else _("No employee beneficiary")),
+  ]) }}
+
+  <p>{{ _("Entered by:") }} {{ entered_by_name or "-" }}{% if expense.approved_by_staff_user_id %} &middot; {{ _("Approved by:") }} {{ approved_by_name or "-" }}{% endif %}</p>
 
   {% if duplicate_signals %}
   <div class="error">
@@ -35,8 +48,8 @@
   {% if is_own and expense.status == 'RETURNED' %}
   <form method="post" action="{{ url_for('operations_ui.revise_expense_route', expense_id=expense.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Revised amount") }}</label>
-    <input name="amount" type="text" inputmode="decimal" placeholder="{{ expense.amount }}">
+    <label for="operations-ui-expense-detail-amount">{{ _("Revised amount") }}</label>
+    <input id="operations-ui-expense-detail-amount" name="amount" type="text" inputmode="decimal" placeholder="{{ expense.amount }}">
     <label>{{ _("Revised description") }}</label>
     <textarea name="description">{{ expense.description }}</textarea>
     <button type="submit">{{ _("Revise and resubmit") }}</button>
@@ -49,10 +62,10 @@
     <p>{{ _("Requested amount") }}: {{ format_owner_number(approval.requested_amount) }} {{ expense.currency }}</p>
     <form method="post" action="{{ url_for('operations_ui.decide_approval_route', expense_id=expense.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <label>{{ _("Approved amount (must not exceed requested)") }}</label>
-      <input name="approved_amount" type="text" inputmode="decimal" placeholder="{{ approval.requested_amount }}">
-      <label>{{ _("Reason (required for reject/return)") }}</label>
-      <input name="reason">
+      <label for="operations-ui-expense-detail-approved-amount">{{ _("Approved amount (must not exceed requested)") }}</label>
+      <input id="operations-ui-expense-detail-approved-amount" name="approved_amount" type="text" inputmode="decimal" placeholder="{{ approval.requested_amount }}">
+      <label for="operations-ui-expense-detail-reason">{{ _("Reason (required for reject/return)") }}</label>
+      <input id="operations-ui-expense-detail-reason" name="reason">
       <button type="submit" name="decision" value="APPROVED">{{ _("Approve") }}</button>
       <button type="submit" name="decision" value="RETURNED">{{ _("Return for correction") }}</button>
       <button type="submit" name="decision" value="REJECTED">{{ _("Reject") }}</button>
@@ -65,10 +78,10 @@
     <h3>{{ _("Record payment") }}</h3>
     <form method="post" action="{{ url_for('operations_ui.record_payment_route', expense_id=expense.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <label>{{ _("Amount") }}</label>
-      <input name="amount" type="text" inputmode="decimal" required>
-      <label>{{ _("Payment method") }}</label>
-      <select name="payment_method">
+      <label for="operations-ui-expense-detail-amount-1">{{ _("Amount") }}</label>
+      <input id="operations-ui-expense-detail-amount-1" name="amount" type="text" inputmode="decimal" required>
+      <label for="operations-ui-expense-detail-payment-method">{{ _("Payment method") }}</label>
+      <select id="operations-ui-expense-detail-payment-method" name="payment_method">
         <option value="CASH">{{ expense_payment_method_label("CASH") }}</option>
         <option value="BANK_TRANSFER">{{ expense_payment_method_label("BANK_TRANSFER") }}</option>
       </select>

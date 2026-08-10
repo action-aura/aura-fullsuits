@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
-from sqlalchemy import select
 
 from app.auth.session import load_current_staff
+from app.customers import customer_360
 from app.customers.services import (
     add_contact,
     add_note,
@@ -13,6 +13,7 @@ from app.customers.services import (
     create_customer,
     customer_visible_to_actor,
     find_duplicate_candidates,
+    list_customers as list_customers_query,
     update_customer,
 )
 from app.employees.queries import find_own_profile
@@ -21,11 +22,11 @@ from app.leads.engagement import create_customer_followup, log_customer_interact
 from app.leads.errors import CustomerCrmError, LeadError, LocationValidationError
 from app.leads.location import validate_location_fields
 from app.leads.notes import list_customer_notes_visible_to
-from app.leads.ownership import apply_ownership_filter
 from app.leads.services import capture_location
 from app.models.base import utcnow
 from app.models.customers import Customer
 from app.models.leads import CustomerAssignment, CustomerFollowup, CustomerInteraction, CustomerLocation
+from app.models.staff import StaffUser
 from app.security.rbac import get_staff_permission_codes, require_any_permission, require_permission
 
 bp = Blueprint("customers", __name__, url_prefix="/customers")
@@ -39,23 +40,31 @@ def _customer_visible_to(customer: Customer, actor) -> bool:
 @require_permission("customers.view")
 def list_customers():
     actor = load_current_staff()
-    status_filter = request.args.get("status")
-    stmt = select(Customer).order_by(Customer.created_at.desc())
-    if status_filter:
-        stmt = stmt.where(Customer.lifecycle_status == status_filter)
+    status_filter = request.args.get("status") or None
+    search = request.args.get("q") or None
+    sort = request.args.get("sort", "created_at")
+    direction = request.args.get("dir", "desc")
+    page = request.args.get("page", 1, type=int)
     # Phase 9.5C Milestone 3 -- customers.view only gates entry to this
     # route; the actual visibility SCOPE is customers.view_own (assigned
     # only) vs customers.view_all (everyone), enforced server-side via the
     # same shared apply_ownership_filter() every Lead query uses (never a
     # second, independently-written filter -- see
-    # docs/owner/phase9_5c/crm-record-ownership-contract.md).
+    # docs/owner/phase9_5c/crm-record-ownership-contract.md). UI
+    # modernization Stage D -- filtering/sort/pagination now live in
+    # customers.services.list_customers(), same factoring as
+    # leads.services.list_own_leads/list_all_leads.
     codes = get_staff_permission_codes(actor)
     all_held = "customers.view_all" in codes
-    if not all_held:
-        profile = find_own_profile(actor.id)
-        stmt = apply_ownership_filter(stmt, Customer, profile.id if profile else None, all_permission_held=False)
-    customers = db_session.execute(stmt).scalars().all()
-    return render_template("customers/list.html", customers=customers, status_filter=status_filter)
+    profile = None if all_held else find_own_profile(actor.id)
+    result = list_customers_query(
+        page=page, status=status_filter, search=search, sort=sort, direction=direction,
+        actor_employee_profile_id=profile.id if profile else None, all_permission_held=all_held,
+    )
+    return render_template(
+        "customers/list.html", result=result, status_filter=status_filter, search_value=search,
+        sort=sort, direction=direction,
+    )
 
 
 @bp.route("/new", methods=["GET"])
@@ -113,10 +122,57 @@ def detail(customer_id):
     from app.i18n_labels import localize_customer_crm_error
 
     error_text = localize_customer_crm_error(error_code) if error_code else None
+
+    # Customer 360 (UI modernization Stage D) -- real, bounded, permission-
+    # gated cross-domain queries for the new Quotes/Orders/Invoices/
+    # Payments/Subscriptions/Licenses/Installations tabs + Timeline. See
+    # app.customers.customer_360's own module docstring and
+    # docs/owner/ui-modernization/customer-360-contract.md for the full
+    # per-tab permission/ownership contract. Every function below returns
+    # an empty list when the actor lacks the real permission for that
+    # entity type -- the template hides the tab entirely in that case
+    # (has_any_permission/has_permission), matching the sidebar/command-
+    # palette's own presentation-only gating discipline.
+    profile = find_own_profile(actor.id)
+    profile_id = profile.id if profile else None
+    quotes = customer_360.get_quotes(customer_id, profile_id=profile_id, codes=codes)
+    orders = customer_360.get_orders(customer_id, profile_id=profile_id, codes=codes)
+    invoices = customer_360.get_invoices(customer_id, profile_id=profile_id, codes=codes)
+    payments = customer_360.get_payments(customer_id, codes=codes)
+    subscriptions = customer_360.get_subscriptions(customer_id, codes=codes)
+    licenses = customer_360.get_licenses(customer_id, codes=codes)
+    installations = customer_360.get_installations(customer_id, codes=codes)
+    refunds = customer_360.get_refunds(customer_id, codes=codes)
+    quote_approvals = customer_360.get_approved_quote_approvals([q.id for q in quotes], codes=codes)
+    installation_activations = customer_360.get_installation_activations([i.id for i in installations], codes=codes)
+
+    commercial_summary = customer_360.build_commercial_summary(
+        quotes=quotes, orders=orders, invoices=invoices, subscriptions=subscriptions,
+        licenses=licenses, installations=installations,
+    )
+    timeline = customer_360.build_timeline(
+        customer, contacts=customer.contacts, notes=notes, quotes=quotes, quote_approvals=quote_approvals,
+        orders=orders, invoices=invoices, payments=payments, subscriptions=subscriptions, licenses=licenses,
+        installation_activations=installation_activations, refunds=refunds,
+    )
+
+    assigned_staff = db_session.get(StaffUser, customer.assigned_sales_staff_id) if customer.assigned_sales_staff_id else None
+    primary_contact = next((c for c in customer.contacts if c.is_primary), None)
+
+    # Overview tab's bounded "open items" -- real, derived from the same
+    # followups/quotes rows already fetched above (never a new query).
+    open_followups = [f for f in followups if followup_status(f) == "OPEN"]
+    next_followup = min(open_followups, key=lambda f: f.due_at) if open_followups else None
+    open_quote = next((q for q in quotes if q.status in ("DRAFT", "SENT")), None) if quotes else None
+
     return render_template(
         "customers/detail.html", customer=customer, notes=notes, interactions=interactions, followups=followups,
         locations=locations, assignment_history=assignment_history, followup_status=followup_status,
         is_overdue=is_overdue, error=error_text,
+        quotes=quotes, orders=orders, invoices=invoices, payments=payments, subscriptions=subscriptions,
+        licenses=licenses, installations=installations, commercial_summary=commercial_summary, timeline=timeline,
+        assigned_staff=assigned_staff, primary_contact=primary_contact,
+        next_followup=next_followup, open_quote=open_quote,
     )
 
 

@@ -68,7 +68,21 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # migration -- ADD COLUMN + CREATE TABLE only, nothing renamed or retyped, so
 # unlike v1-v5 this needs no _new-table rebuild. See
 # _migrate_add_supplier_contacts_and_po_split below.
-RETAIL_SCHEMA_VERSION = 6
+# v7 (docs/einvoicing/phase1/): adds the einvoice_* tables used by opt-in
+# Jordan JoFotara e-invoicing -- CREATE TABLE IF NOT EXISTS only, nothing
+# existing is ALTERed, read, or written. This arrived on master as ITS v2
+# (master numbered v1 -> v2 einvoicing -> v3 products.supplier_id INTEGER)
+# while this lineage independently ran v1 -> v6; the two histories were
+# merged on 2026-08-10 (feat/retail-mobile-build-baseline). This lineage's
+# numbering wins and master's v2/v3 are superseded, never re-run: every step
+# in _migrate_retail_schema gates on the LIVE schema (PRAGMA table_info /
+# foreign_key_list), never on the version integer, so a database carrying
+# master's v3 marker migrates correctly even though "3" meant something
+# different there. The bump to 7 is load-bearing, not cosmetic:
+# ensure_schema_version returns early on current >= target, so a database
+# already at 6 from this lineage would NEVER receive the einvoice_* tables
+# if this stayed at 6.
+RETAIL_SCHEMA_VERSION = 7
 
 
 def _get_path(name):
@@ -167,6 +181,8 @@ def _migrate_categories_to_uuid(conn):
     try:
         conn.execute("BEGIN")
 
+        legacy_supplier_links = _legacy_supplier_link(conn)
+
         cat_rows = conn.execute(
             "SELECT id, company_id, name, description, created_at FROM categories"
         ).fetchall()
@@ -231,12 +247,73 @@ def _migrate_categories_to_uuid(conn):
         conn.execute("DROP TABLE products")
         conn.execute("ALTER TABLE products_new RENAME TO products")
 
+        _restore_supplier_link(conn, legacy_supplier_links)
+
         conn.commit()
     except Exception:
         conn.rollback()
         raise
     finally:
         conn.execute(f"PRAGMA foreign_keys={'ON' if fk_was_on else 'OFF'}")
+
+
+def _legacy_supplier_link(conn):
+    """Snapshot products.supplier_id as {product_id: supplier_id}, or None
+    when that column does not exist on the LIVE products table.
+
+    Merge safety (feat/retail-mobile-build-baseline, 2026-08-10): master and
+    this sync-foundation lineage each independently invented a
+    products.supplier_id column -- master's as
+    `INTEGER REFERENCES suppliers(id)` at ITS schema v3 (when suppliers.id was
+    still INTEGER), this lineage's as `TEXT REFERENCES suppliers(id)` at v5,
+    after _migrate_suppliers_to_uuid made suppliers.id a UUID. See
+    ROADMAP.md's supplier_id timing note.
+
+    A database that ran master's v3 therefore reaches this chain holding real,
+    user-entered supplier links in a column that EVERY products rebuild below
+    recreates from a FIXED column list -- _migrate_categories_to_uuid,
+    _migrate_products_category_fk_on_delete_set_null and
+    _migrate_products_to_uuid all do `CREATE TABLE products_new (...)` +
+    `DROP TABLE products`. Without this helper the column and all of its
+    values are silently dropped on the way to v7 and
+    _migrate_products_add_supplier_fk then re-adds it empty: verified against
+    the real code, every product's supplier link came back NULL, with no
+    error and no integrity_check failure. Each rebuild snapshots the column
+    here and restores it via _restore_supplier_link below;
+    _migrate_suppliers_to_uuid then remaps the surviving values from master's
+    integer supplier ids to the new supplier UUIDs, exactly as it already
+    does for purchase_orders.supplier_id and payments.party_id.
+    """
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(products)").fetchall()}
+    if "supplier_id" not in cols:
+        return None
+    return {
+        row["id"]: row["supplier_id"]
+        for row in conn.execute("SELECT id, supplier_id FROM products").fetchall()
+    }
+
+
+def _restore_supplier_link(conn, links, id_map=None):
+    """Re-add products.supplier_id after a rebuild and put `links` back.
+
+    `id_map` maps old products.id -> new products.id for the one rebuild that
+    also changes the primary key (_migrate_products_to_uuid); pass None when
+    the rebuild preserved ids verbatim. The column is declared with exactly
+    the DDL _migrate_products_add_supplier_fk uses, so a database that came
+    through master's v3 ends with a byte-identical `products` definition to a
+    fresh install's. No-ops when `links` is None, i.e. on this lineage's own
+    upgrade path where the column does not exist yet at rebuild time.
+    """
+    if links is None:
+        return
+    conn.execute("ALTER TABLE products ADD COLUMN supplier_id TEXT REFERENCES suppliers(id)")
+    for old_pid, supplier_id in links.items():
+        if supplier_id is None:
+            continue
+        new_pid = old_pid if id_map is None else id_map.get(old_pid)
+        if new_pid is None:
+            continue
+        conn.execute("UPDATE products SET supplier_id=? WHERE id=?", (supplier_id, new_pid))
 
 
 def _products_category_fk_is_set_null(conn):
@@ -304,6 +381,7 @@ def _migrate_products_category_fk_on_delete_set_null(conn):
     conn.execute("PRAGMA foreign_keys=OFF")
     try:
         conn.execute("BEGIN")
+        legacy_supplier_links = _legacy_supplier_link(conn)
         conn.execute("""
             CREATE TABLE products_new (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -333,6 +411,7 @@ def _migrate_products_category_fk_on_delete_set_null(conn):
         """)
         conn.execute("DROP TABLE products")
         conn.execute("ALTER TABLE products_new RENAME TO products")
+        _restore_supplier_link(conn, legacy_supplier_links)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -369,6 +448,8 @@ def _migrate_products_to_uuid(conn):
     conn.execute("PRAGMA foreign_keys=OFF")
     try:
         conn.execute("BEGIN")
+
+        legacy_supplier_links = _legacy_supplier_link(conn)
 
         prod_rows = conn.execute(
             "SELECT id, company_id, sku, barcode, name, category_id, cost_price, sell_price, "
@@ -465,6 +546,8 @@ def _migrate_products_to_uuid(conn):
                     )
             conn.execute(f"DROP TABLE {table}")
             conn.execute(f"ALTER TABLE {table}_new RENAME TO {table}")
+
+        _restore_supplier_link(conn, legacy_supplier_links, id_map)
 
         conn.commit()
     except Exception:
@@ -640,6 +723,18 @@ def _migrate_suppliers_to_uuid(conn):
         conn.execute("DROP TABLE suppliers")
         conn.execute("ALTER TABLE suppliers_new RENAME TO suppliers")
 
+        # Merge safety (2026-08-10): a database that ran master's schema v3
+        # carries master's INTEGER products.supplier_id values through this
+        # chain (see _legacy_supplier_link above). They point at exactly the
+        # old integer supplier ids being replaced right here, so they are
+        # remapped like purchase_orders.supplier_id below. Guarded because on
+        # this lineage's own upgrade path the column does not exist yet --
+        # _migrate_products_add_supplier_fk adds it one step later.
+        products_has_supplier_id = any(
+            row["name"] == "supplier_id"
+            for row in conn.execute("PRAGMA table_info(products)").fetchall()
+        )
+
         for row in sup_rows:
             old_id, new_id = row["id"], id_map[row["id"]]
             conn.execute("UPDATE purchase_orders SET supplier_id=? WHERE supplier_id=?", (new_id, old_id))
@@ -647,6 +742,8 @@ def _migrate_suppliers_to_uuid(conn):
                 "UPDATE payments SET party_id=? WHERE party_type='supplier' AND party_id=?",
                 (new_id, old_id),
             )
+            if products_has_supplier_id:
+                conn.execute("UPDATE products SET supplier_id=? WHERE supplier_id=?", (new_id, old_id))
 
         conn.commit()
     except Exception:
@@ -661,11 +758,16 @@ def _migrate_retail_schema(conn):
     migration this file owns, in version order, on any database behind
     RETAIL_SCHEMA_VERSION. `ensure_schema_version` only tells a migration
     "you are behind", not "you are behind by exactly one version", so a v1
-    install upgrading straight to v4 must run ALL steps in one pass. Each
+    install upgrading straight to v7 must run ALL steps in one pass. Each
     step is independently idempotent (each inspects the live schema and
     returns immediately when its own change is already present), so running
     them all is correct regardless of which version the database actually
-    starts from."""
+    starts from -- including a database that arrives stamped with master's
+    now-superseded v2/v3 numbering (docs/einvoicing/phase1/,
+    products.supplier_id as INTEGER; see _legacy_supplier_link/
+    _restore_supplier_link above and the RETAIL_SCHEMA_VERSION comment for
+    the full merge-reconciliation story, feat/retail-mobile-build-baseline,
+    2026-08-10)."""
     _migrate_categories_to_uuid(conn)
     _migrate_products_category_fk_on_delete_set_null(conn)
     _migrate_products_to_uuid(conn)
@@ -673,6 +775,16 @@ def _migrate_retail_schema(conn):
     _migrate_suppliers_to_uuid(conn)
     _migrate_products_add_supplier_fk(conn)
     _migrate_add_supplier_contacts_and_po_split(conn)
+    # v6 -> v7 (docs/einvoicing/phase1/): adds the einvoice_* tables used by
+    # opt-in Jordan JoFotara e-invoicing. CREATE TABLE IF NOT EXISTS only --
+    # no existing table is ALTERed, no existing row is read or written, so an
+    # install that never enables the feature gains only empty tables.
+    # Appended LAST, after every migration above, so this addition cannot
+    # change their order or behaviour -- exactly how
+    # products/clinic/backend/database/schema.py::_apply_clinic_alters wires
+    # the identical call.
+    from commercial_runtime.einvoicing.schema import apply_einvoicing_schema
+    apply_einvoicing_schema(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -686,12 +798,18 @@ def _migrate_products_add_supplier_fk(conn):
     REFERENCES clause directly, and NULL always satisfies a foreign key
     check, so existing rows are left unassigned rather than backfilled.
 
-    Idempotent: returns immediately if the column already exists.
+    Idempotent: skips the ALTER if the column already exists. Index creation
+    is deliberately OUTSIDE that guard: an index lives and dies with its
+    table, so every products rebuild earlier in this chain drops
+    idx_products_supplier along with the old table. Returning early on
+    "column already exists" (as this did before the merge-safety fix in
+    _legacy_supplier_link/_restore_supplier_link above) would leave a
+    database that arrived carrying master's v3 supplier_id with the column
+    present but no index. IF NOT EXISTS makes the normal path a no-op.
     """
     cols = {row[1] for row in conn.execute('PRAGMA table_info(products)').fetchall()}
-    if 'supplier_id' in cols:
-        return
-    conn.execute('ALTER TABLE products ADD COLUMN supplier_id TEXT REFERENCES suppliers(id)')
+    if 'supplier_id' not in cols:
+        conn.execute('ALTER TABLE products ADD COLUMN supplier_id TEXT REFERENCES suppliers(id)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_products_supplier ON products(supplier_id)')
 
 
@@ -1066,8 +1184,11 @@ def init_retail():
 
     # Wave 1B (Part K) / multi-device sync foundation (2026-08-06): first
     # real Retail schema changes -- see _migrate_retail_schema above, which
-    # chains _migrate_categories_to_uuid (v2) and
-    # _migrate_products_category_fk_on_delete_set_null (v3).
+    # chains the categories/products/customers/suppliers UUID migrations, the
+    # products.supplier_id and PO-split additions, and finally the einvoice_*
+    # tables (docs/einvoicing/phase1/) that reached this file from master's
+    # own, superseded v2/v3 numbering (see the RETAIL_SCHEMA_VERSION comment
+    # above for the full merge-reconciliation story).
     # Mirrors products/clinic/backend/database/schema.py's identical
     # ensure_schema_version pattern; see
     # commercial_runtime/security/migration_safety.py.

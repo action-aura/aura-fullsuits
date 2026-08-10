@@ -125,14 +125,25 @@ def list_leads():
     codes = get_staff_permission_codes(staff)
     page = request.args.get("page", 1, type=int)
     status_filter = request.args.get("status") or None
+    search = request.args.get("q") or None
+    sort = request.args.get("sort", "created_at")
+    direction = request.args.get("dir", "desc")
+    # UI modernization Stage D -- status/search filtering now happens
+    # inside list_all_leads/list_own_leads' own WHERE clause, before
+    # pagination (fixes the real, disclosed bug where the status filter
+    # used to be applied in Python only over the current page's rows,
+    # while result.total/total_pages still reflected the unfiltered set --
+    # see leads/services.py's _apply_lead_list_filters docstring).
     if "leads.view_all" in codes:
-        result = list_all_leads(page=page)
+        result = list_all_leads(page=page, status=status_filter, search=search, sort=sort, direction=direction)
     elif _missing_profile(profile):
         result = {"rows": [], "page": 1, "page_size": 25, "total": 0, "total_pages": 1, "has_prev": False, "has_next": False}
     else:
-        result = list_own_leads(profile.id, page=page)
-    rows = [r for r in result["rows"] if not status_filter or r.status == status_filter]
-    return render_template("leads/list.html", leads=rows, result=result, status_filter=status_filter)
+        result = list_own_leads(profile.id, page=page, status=status_filter, search=search, sort=sort, direction=direction)
+    return render_template(
+        "leads/list.html", result=result, status_filter=status_filter, search_value=search,
+        sort=sort, direction=direction,
+    )
 
 
 @bp.route("/new", methods=["GET"])

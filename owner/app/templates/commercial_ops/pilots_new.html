@@ -9,13 +9,13 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="subscription_id" value="{{ subscription.id }}">
     <p>{{ _("Customer:") }} <strong>{{ subscription.customer.legal_name }}</strong> {{ _("(subscription already in PILOT status).") }}</p>
-    <label>{{ _("Pilot start") }}</label><input name="pilot_start" type="date" required>
-    <label>{{ _("Pilot end") }}</label><input name="pilot_end" type="date" required>
-    <label>{{ _("Allowed device count") }}</label><input name="allowed_device_count" type="number" min="1" value="1">
-    <label>{{ _("Support level") }}</label><input name="support_level">
+    <label for="commercial-ops-pilots-new-pilot-start">{{ _("Pilot start") }}</label><input id="commercial-ops-pilots-new-pilot-start" name="pilot_start" type="date" required>
+    <label for="commercial-ops-pilots-new-pilot-end">{{ _("Pilot end") }}</label><input id="commercial-ops-pilots-new-pilot-end" name="pilot_end" type="date" required>
+    <label for="commercial-ops-pilots-new-allowed-device-count">{{ _("Allowed device count") }}</label><input id="commercial-ops-pilots-new-allowed-device-count" name="allowed_device_count" type="number" min="1" value="1">
+    <label for="commercial-ops-pilots-new-support-level">{{ _("Support level") }}</label><input id="commercial-ops-pilots-new-support-level" name="support_level">
     <label>{{ _("Agreed limitations") }}</label><textarea name="agreed_limitations"></textarea>
     <label>{{ _("Success criteria") }}</label><textarea name="success_criteria"></textarea>
-    <label>{{ _("Review date") }}</label><input name="review_date" type="date">
+    <label for="commercial-ops-pilots-new-review-date">{{ _("Review date") }}</label><input id="commercial-ops-pilots-new-review-date" name="review_date" type="date">
     <label>{{ _("Exit / rollback plan") }}</label><textarea name="exit_rollback_plan"></textarea>
     <div style="margin-top:0.5rem;"><button type="submit">{{ _("Create pilot") }}</button></div>
   </form>

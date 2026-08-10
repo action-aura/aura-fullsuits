@@ -1,0 +1,239 @@
+/*
+ * Aura Owner -- canonical design tokens.
+ * Source of truth: docs/owner/ui-modernization/design-token-system.md
+ * and docs/owner/ui-modernization/light-dark-theme-contract.md.
+ *
+ * Theme switch mechanism: [data-theme="dark"] on <html>, set before
+ * first paint (see application-shell-contract.md) to avoid a flash of
+ * the wrong theme. No theme attribute + no system preference match
+ * falls through to the light values below.
+ */
+
+:root {
+  /* Brand */
+  --aura-color-brand-primary: #2D5FE0;
+  --aura-color-brand-primary-hover: #244ECB;
+  --aura-color-brand-primary-active: #1B3DA3;
+  --aura-color-brand-primary-soft: #E8EEFC;
+  --aura-color-brand-secondary: #F0A030;
+  --aura-color-brand-accent: #8B5CF6;
+
+  /* Surfaces */
+  --aura-color-surface-base: #F6F8FA;
+  --aura-color-surface-raised: #FFFFFF;
+  --aura-color-surface-overlay: #FFFFFF;
+  --aura-color-surface-muted: #EEF1F4;
+
+  /* Text */
+  --aura-color-text-primary: #12151C;
+  --aura-color-text-secondary: #47505C;
+  --aura-color-text-muted: #6B7785;
+
+  /* Borders */
+  --aura-color-border-default: #D8DEE4;
+  --aura-color-border-strong: #B7C0CA;
+
+  /* Focus */
+  --aura-color-focus-ring: #2D5FE0;
+
+  /* Status */
+  --aura-color-success: #1C6B34;
+  --aura-color-success-soft: #DCF3E2;
+  --aura-color-warning: #8A5C00;
+  --aura-color-warning-soft: #FBEECB;
+  --aura-color-danger: #B3261E;
+  --aura-color-danger-soft: #FBDCDA;
+  --aura-color-info: #0E7490;
+  --aura-color-info-soft: #DCEEF3;
+
+  /* Chart */
+  --aura-chart-cat-1: var(--aura-color-brand-primary);
+  --aura-chart-cat-2: var(--aura-color-brand-secondary);
+  --aura-chart-cat-3: var(--aura-color-info);
+  --aura-chart-cat-4: var(--aura-color-brand-accent);
+  --aura-chart-cat-5: var(--aura-color-text-secondary);
+  --aura-chart-cat-6: var(--aura-color-danger);
+
+  /* Shadows -- light theme relies on real shadow depth */
+  --aura-shadow-sm: 0 1px 2px rgba(16, 24, 38, 0.06);
+  --aura-shadow-md: 0 2px 8px rgba(16, 24, 38, 0.08);
+  --aura-shadow-lg: 0 8px 24px rgba(16, 24, 38, 0.14);
+
+  /* Typography */
+  --aura-font-sans: system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans Arabic", "Noto Sans", sans-serif;
+  --aura-font-mono: ui-monospace, "SFMono-Regular", Consolas,
+    "Liberation Mono", Menlo, monospace;
+
+  --aura-font-size-xs: 0.75rem;
+  --aura-font-size-sm: 0.8125rem;
+  --aura-font-size-base: 0.875rem;
+  --aura-font-size-md: 1rem;
+  --aura-font-size-lg: 1.125rem;
+  --aura-font-size-xl: 1.375rem;
+  --aura-font-size-2xl: 1.75rem;
+
+  --aura-line-height-tight: 1.25;
+  --aura-line-height-base: 1.5;
+  --aura-line-height-dense: 1.35;
+
+  --aura-font-weight-regular: 400;
+  --aura-font-weight-medium: 500;
+  --aura-font-weight-semibold: 600;
+  --aura-font-weight-bold: 700;
+
+  /* Spacing (4px grid) */
+  --aura-space-0: 0;
+  --aura-space-1: 0.25rem;
+  --aura-space-2: 0.5rem;
+  --aura-space-3: 0.75rem;
+  --aura-space-4: 1rem;
+  --aura-space-5: 1.25rem;
+  --aura-space-6: 1.5rem;
+  --aura-space-8: 2rem;
+  --aura-space-10: 2.5rem;
+  --aura-space-12: 3rem;
+  --aura-space-16: 4rem;
+
+  /* Radius / borders */
+  --aura-radius-sm: 4px;
+  --aura-radius-md: 8px;
+  --aura-radius-lg: 12px;
+  --aura-radius-full: 999px;
+  --aura-border-width-sm: 1px;
+  --aura-border-width-md: 2px;
+
+  /* z-index layers */
+  --aura-z-base: 0;
+  --aura-z-sticky: 10;
+  --aura-z-dropdown: 100;
+  --aura-z-overlay: 200;
+  --aura-z-modal: 300;
+  --aura-z-toast: 400;
+  --aura-z-command-palette: 500;
+
+  /* Motion */
+  --aura-motion-instant: 90ms;
+  --aura-motion-fast: 150ms;
+  --aura-motion-base: 200ms;
+  --aura-motion-slow: 240ms;
+  --aura-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --aura-ease-decelerate: cubic-bezier(0, 0, 0, 1);
+  --aura-ease-accelerate: cubic-bezier(0.3, 0, 1, 1);
+
+  /* Icons / targets */
+  --aura-icon-sm: 16px;
+  --aura-icon-md: 20px;
+  --aura-icon-lg: 24px;
+  --aura-icon-xl: 32px;
+  --aura-target-compact: 32px;
+  --aura-target-comfortable: 40px;
+
+  /* Layout */
+  --aura-content-max-width: 1440px;
+  --aura-content-narrow: 720px;
+  --aura-sidebar-expanded: 260px;
+  --aura-sidebar-collapsed: 64px;
+  --aura-bp-sm: 768px;
+  --aura-bp-md: 1024px;
+  --aura-bp-lg: 1280px;
+  --aura-bp-xl: 1440px;
+  --aura-bp-2xl: 1920px;
+
+  /* Table / form density */
+  --aura-table-row-compact: 32px;
+  --aura-table-row-comfortable: 44px;
+  --aura-table-cell-pad-compact: 0.375rem 0.5rem;
+  --aura-table-cell-pad-comfortable: 0.625rem 0.75rem;
+  --aura-form-control-height: 36px;
+  --aura-form-label-gap: 0.375rem;
+  --aura-form-group-gap: 1.25rem;
+}
+
+:root[data-theme="dark"] {
+  --aura-color-brand-primary: #5B84EE;
+  --aura-color-brand-primary-hover: #6F94F1;
+  --aura-color-brand-primary-active: #4A6FD1;
+  --aura-color-brand-primary-soft: #1B2A4D;
+  --aura-color-brand-secondary: #F5B655;
+  --aura-color-brand-accent: #A78BFA;
+
+  --aura-color-surface-base: #12151C;
+  --aura-color-surface-raised: #1B1F29;
+  --aura-color-surface-overlay: #232837;
+  --aura-color-surface-muted: #171B24;
+
+  --aura-color-text-primary: #F3F5F8;
+  --aura-color-text-secondary: #B8C0CC;
+  --aura-color-text-muted: #8891A0;
+
+  --aura-color-border-default: #2A2F3B;
+  --aura-color-border-strong: #3B4250;
+
+  --aura-color-focus-ring: #6F94F1;
+
+  --aura-color-success: #3FBE6C;
+  --aura-color-success-soft: #163A22;
+  --aura-color-warning: #F0B429;
+  --aura-color-warning-soft: #3D2E05;
+  --aura-color-danger: #F0645C;
+  --aura-color-danger-soft: #3D1512;
+  --aura-color-info: #38BDF0;
+  --aura-color-info-soft: #0D2E36;
+
+  --aura-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --aura-shadow-md: 0 2px 8px rgba(0, 0, 0, 0.45);
+  --aura-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
+/* prefers-color-scheme fallback: only applies when the employee has no
+   explicit saved preference (application-shell-contract.md's "system"
+   option) -- the inline pre-paint script sets data-theme explicitly
+   whenever a saved preference exists, so this rule only ever fires for
+   the true "system" default state. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="dark"]) {
+    --aura-color-brand-primary: #5B84EE;
+    --aura-color-brand-primary-hover: #6F94F1;
+    --aura-color-brand-primary-active: #4A6FD1;
+    --aura-color-brand-primary-soft: #1B2A4D;
+    --aura-color-brand-secondary: #F5B655;
+    --aura-color-brand-accent: #A78BFA;
+
+    --aura-color-surface-base: #12151C;
+    --aura-color-surface-raised: #1B1F29;
+    --aura-color-surface-overlay: #232837;
+    --aura-color-surface-muted: #171B24;
+
+    --aura-color-text-primary: #F3F5F8;
+    --aura-color-text-secondary: #B8C0CC;
+    --aura-color-text-muted: #8891A0;
+
+    --aura-color-border-default: #2A2F3B;
+    --aura-color-border-strong: #3B4250;
+
+    --aura-color-focus-ring: #6F94F1;
+
+    --aura-color-success: #3FBE6C;
+    --aura-color-success-soft: #163A22;
+    --aura-color-warning: #F0B429;
+    --aura-color-warning-soft: #3D2E05;
+    --aura-color-danger: #F0645C;
+    --aura-color-danger-soft: #3D1512;
+    --aura-color-info: #38BDF0;
+    --aura-color-info-soft: #0D2E36;
+
+    --aura-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --aura-shadow-md: 0 2px 8px rgba(0, 0, 0, 0.45);
+    --aura-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.55);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --aura-motion-instant: 0ms;
+    --aura-motion-fast: 0ms;
+    --aura-motion-base: 0ms;
+    --aura-motion-slow: 0ms;
+  }
+}

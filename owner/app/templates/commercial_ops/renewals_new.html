@@ -11,22 +11,22 @@
     <p>{{ _("Customer:") }} <strong>{{ subscription.customer.legal_name }}</strong> {{ _("-- current plan") }}
       <strong>{{ subscription.plan.name }}</strong>, {{ _("current end date") }}
       <strong>{{ format_owner_date(subscription.end_date) if subscription.end_date else "-" }}</strong>.</p>
-    <label>{{ _("Date rule") }}</label>
-    <select name="date_rule">
+    <label for="commercial-ops-renewals-new-date-rule">{{ _("Date rule") }}</label>
+    <select id="commercial-ops-renewals-new-date-rule" name="date_rule">
       <option value="EARLY_RENEWAL_FROM_CURRENT_END">{{ _("Early renewal (from current end date)") }}</option>
       <option value="LATE_RENEWAL_FROM_APPROVAL_DATE">{{ _("Late renewal (from approval date)") }}</option>
     </select>
-    <label>{{ _("Proposed term start") }}</label><input name="proposed_term_start" type="date" required>
-    <label>{{ _("Proposed term end") }}</label><input name="proposed_term_end" type="date" required>
-    <label>{{ _("Currency") }}</label><input name="currency" value="USD" required>
-    <label>{{ _("Requested plan (leave blank to keep current plan)") }}</label>
-    <select name="requested_plan_id">
+    <label for="commercial-ops-renewals-new-proposed-term-start">{{ _("Proposed term start") }}</label><input id="commercial-ops-renewals-new-proposed-term-start" name="proposed_term_start" type="date" required>
+    <label for="commercial-ops-renewals-new-proposed-term-end">{{ _("Proposed term end") }}</label><input id="commercial-ops-renewals-new-proposed-term-end" name="proposed_term_end" type="date" required>
+    <label for="commercial-ops-renewals-new-currency">{{ _("Currency") }}</label><input id="commercial-ops-renewals-new-currency" name="currency" value="USD" required>
+    <label for="commercial-ops-renewals-new-requested-plan-id">{{ _("Requested plan (leave blank to keep current plan)") }}</label>
+    <select id="commercial-ops-renewals-new-requested-plan-id" name="requested_plan_id">
       <option value="">{{ _("-- keep current plan --") }}</option>
       {% for p in plans %}<option value="{{ p.id }}">{{ p.name }} ({{ p.plan_code }})</option>{% endfor %}
     </select>
-    <label>{{ _("Commercial amount") }}</label><input name="commercial_amount" type="number" step="0.01">
-    <label>{{ _("Device allowance after (leave blank to keep unchanged)") }}</label><input name="device_allowance_after" type="number" min="1">
-    <label>{{ _("Reason") }}</label><input name="reason">
+    <label for="commercial-ops-renewals-new-commercial-amount">{{ _("Commercial amount") }}</label><input id="commercial-ops-renewals-new-commercial-amount" name="commercial_amount" type="number" step="0.01">
+    <label for="commercial-ops-renewals-new-device-allowance-after">{{ _("Device allowance after (leave blank to keep unchanged)") }}</label><input id="commercial-ops-renewals-new-device-allowance-after" name="device_allowance_after" type="number" min="1">
+    <label for="commercial-ops-renewals-new-reason">{{ _("Reason") }}</label><input id="commercial-ops-renewals-new-reason" name="reason">
     <label>{{ _("Notes") }}</label><textarea name="notes"></textarea>
     <div style="margin-top:0.5rem;"><button type="submit">{{ _("Create renewal request") }}</button></div>
   </form>

@@ -6,22 +6,22 @@
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   <form method="post" action="{{ url_for('leads.create') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>{{ _("Prospect or organization name") }}</label>
-    <input name="organization_or_prospect_name" required maxlength="200">
-    <label>{{ _("Primary contact name") }}</label>
-    <input name="primary_contact_name" maxlength="200">
-    <label>{{ _("Phone") }}</label>
-    <input name="phone" maxlength="32">
-    <label>{{ _("Email") }}</label>
-    <input name="email" type="email" maxlength="200">
-    <label>{{ _("Source") }}</label>
-    <select name="source">
+    <label for="leads-new-organization-or-prospect-name">{{ _("Prospect or organization name") }}</label>
+    <input id="leads-new-organization-or-prospect-name" name="organization_or_prospect_name" required maxlength="200">
+    <label for="leads-new-primary-contact-name">{{ _("Primary contact name") }}</label>
+    <input id="leads-new-primary-contact-name" name="primary_contact_name" maxlength="200">
+    <label for="leads-new-phone">{{ _("Phone") }}</label>
+    <input id="leads-new-phone" name="phone" maxlength="32">
+    <label for="leads-new-email">{{ _("Email") }}</label>
+    <input id="leads-new-email" name="email" type="email" maxlength="200">
+    <label for="leads-new-source">{{ _("Source") }}</label>
+    <select id="leads-new-source" name="source">
       {% for s in ["WEBSITE","REFERRAL","COLD_OUTREACH","EVENT","OTHER"] %}
       <option value="{{ s }}">{{ lead_source_label(s) }}</option>
       {% endfor %}
     </select>
-    <label>{{ _("Priority") }}</label>
-    <select name="priority">
+    <label for="leads-new-priority">{{ _("Priority") }}</label>
+    <select id="leads-new-priority" name="priority">
       {% for p in ["LOW","MEDIUM","HIGH"] %}
       <option value="{{ p }}" {% if p == "MEDIUM" %}selected{% endif %}>{{ lead_priority_label(p) }}</option>
       {% endfor %}

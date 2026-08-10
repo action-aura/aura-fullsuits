@@ -163,3 +163,19 @@ def pending_approval_for_expense(expense: Expense) -> ExpenseApproval | None:
         .where(ExpenseApproval.expense_id == expense.id, ExpenseApproval.status == "PENDING")
         .order_by(ExpenseApproval.requested_at.desc())
     ).scalars().first()
+
+
+def latest_approval_for_expense(expense: Expense) -> ExpenseApproval | None:
+    """UI modernization Stage D -- read-only lookup for the status-timeline
+    UI (see app.expenses.status_presentation.expense_timeline). The most
+    recently *requested* approval cycle for this expense, PENDING or
+    decided -- always the row describing the expense's CURRENT cycle, even
+    after a RETURNED -> resubmit opened a brand-new PENDING row (Rule 6:
+    "Resubmission after RETURNED opens a brand-new PENDING cycle; old
+    decisions are immutable"). Distinct from pending_approval_for_expense()
+    (PENDING only, used by the live decision form) -- this one is never
+    used to decide or mutate anything, only to render a real, already-
+    persisted timestamp."""
+    return db_session.execute(
+        select(ExpenseApproval).where(ExpenseApproval.expense_id == expense.id).order_by(ExpenseApproval.requested_at.desc())
+    ).scalars().first()

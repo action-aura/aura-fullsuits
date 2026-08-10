@@ -16,12 +16,14 @@ from flask_babel import gettext as _
 from sqlalchemy import select
 
 from app.auth.session import has_recent_auth, load_current_staff
+from app.cash_closing import list_queries as cash_closing_list_queries
 from app.cash_closing import services as cash_closing_services
 from app.employees.queries import find_own_profile
 from app.expenses import approvals as expense_approvals
 from app.expenses import attachments as expense_attachments
 from app.expenses import duplicates as expense_duplicates
 from app.expenses import lifecycle as expense_lifecycle
+from app.expenses import list_queries as expense_list_queries
 from app.expenses import payees as expense_payees
 from app.expenses import payments as expense_payments
 from app.expenses.errors import ExpenseError
@@ -30,21 +32,44 @@ from app.i18n_labels import localize_expense_error, localize_management_note_err
 from app.management_notes import service as note_service
 from app.management_notes.errors import ManagementNoteError
 from app.models.cash_closing import CashClosing
+from app.models.employees import EmployeeProfile
 from app.models.expenses import Expense, ExpenseAttachment, ExpenseCategory, Payee
 from app.models.management_notes import ManagementNoteComment, SharedManagementNote
 from app.models.report_snapshots import REPORT_TYPES, ReportSnapshot
+from app.models.staff import StaffUser
 from app.operational_reports import scheduler as report_scheduler
 from app.security.rbac import get_staff_permission_codes, require_any_permission, require_permission, require_recent_auth
+from app.services.pagination import DEFAULT_PAGE_SIZE
 
 bp = Blueprint("operations_ui", __name__, url_prefix="/operations")
 
 _NO_PROFILE_MESSAGE = "This action requires a real employee profile; administrative accounts without one cannot perform it."
+
+_EMPTY_PAGE_RESULT = {"rows": [], "page": 1, "page_size": DEFAULT_PAGE_SIZE, "total": 0, "total_pages": 1, "has_prev": False, "has_next": False}
 
 
 def _actor():
     staff = load_current_staff()
     profile = find_own_profile(staff.id)
     return staff, profile
+
+
+# UI modernization Stage D -- actor/audit-context resolution, mirroring
+# commercial_sales/routes.py::_employee_profile_name/_staff_display_name's
+# exact db_session.get(...) pattern (a fresh, local copy per module, not a
+# cross-blueprint import -- same discipline as every other domain here).
+def _employee_profile_name(profile_id):
+    if profile_id is None:
+        return None
+    profile = db_session.get(EmployeeProfile, profile_id)
+    return profile.full_name if profile is not None else None
+
+
+def _staff_display_name(staff_user_id):
+    if staff_user_id is None:
+        return None
+    staff = db_session.get(StaffUser, staff_user_id)
+    return staff.display_name if staff is not None else None
 
 
 def _to_decimal(raw):
@@ -73,16 +98,27 @@ def list_expenses():
     staff, profile = _actor()
     codes = get_staff_permission_codes(staff)
     all_held = "expenses.view_all" in codes
-    stmt = select(Expense)
-    if not all_held:
-        if profile is None:
-            return render_template("operations_ui/expenses_list.html", expenses=[], status_filter=None)
-        stmt = stmt.where(Expense.entered_by_employee_profile_id == profile.id)
     status_filter = request.args.get("status") or None
-    if status_filter:
-        stmt = stmt.where(Expense.status == status_filter)
-    expenses = db_session.execute(stmt.order_by(Expense.created_at.desc()).limit(200)).scalars().all()
-    return render_template("operations_ui/expenses_list.html", expenses=expenses, status_filter=status_filter)
+    search = request.args.get("q") or None
+    sort = request.args.get("sort", "created_at")
+    direction = request.args.get("dir", "desc")
+    page = request.args.get("page", 1, type=int)
+    # UI modernization Stage D -- the `all_held` bypass is checked first
+    # (it is the outer condition here, same discipline
+    # commercial-flow-ui-contract.md requires: an _all-permission bypass
+    # must be verified before, or structurally independent of, any
+    # "no profile" guard), and the actual ownership scoping now delegates
+    # entirely to the shared apply_ownership_filter() (via
+    # expenses.list_queries.list_expenses()) rather than a hand-rolled
+    # `entered_by_employee_profile_id ==` filter.
+    if not all_held and profile is None:
+        result = dict(_EMPTY_PAGE_RESULT)
+    else:
+        result = expense_list_queries.list_expenses(
+            page=page, status=status_filter, search=search, sort=sort, direction=direction,
+            actor_employee_profile_id=profile.id if profile else None, all_permission_held=all_held,
+        )
+    return render_template("operations_ui/expenses_list.html", result=result, status_filter=status_filter, search=search)
 
 
 @bp.route("/expenses/new", methods=["GET"])
@@ -126,15 +162,29 @@ def expense_detail(expense_id):
     if expense is None:
         return render_template("commercial_sales/not_found.html"), 404
     approval = expense_approvals.pending_approval_for_expense(expense)
+    # UI modernization Stage D -- latest (not just pending) approval cycle,
+    # for the real status-timeline UI (see
+    # app.expenses.status_presentation.expense_timeline).
+    latest_approval = expense_approvals.latest_approval_for_expense(expense)
     attachments = db_session.execute(
         select(ExpenseAttachment).where(ExpenseAttachment.expense_id == expense.id, ExpenseAttachment.status == "ACTIVE")
     ).scalars().all()
     outstanding = expense_payments.outstanding_amount(expense) if expense.approved_amount is not None else None
     duplicate_signals = expense_duplicates.find_duplicate_signals(expense)
     is_own = profile is not None and expense.entered_by_employee_profile_id == profile.id
+    # UI modernization Stage D -- real, previously-unsurfaced context: which
+    # category/payee/beneficiary this expense belongs to, and who entered/
+    # approved it (real FKs, never shown on this page before this pass).
+    category = db_session.get(ExpenseCategory, expense.category_id)
+    payee = db_session.get(Payee, expense.payee_id) if expense.payee_id else None
+    beneficiary_name = _employee_profile_name(expense.beneficiary_employee_profile_id)
+    entered_by_name = _employee_profile_name(expense.entered_by_employee_profile_id)
+    approved_by_name = _staff_display_name(expense.approved_by_staff_user_id)
     return render_template(
-        "operations_ui/expense_detail.html", expense=expense, approval=approval, attachments=attachments,
-        outstanding=outstanding, duplicate_signals=duplicate_signals, is_own=is_own, codes=codes,
+        "operations_ui/expense_detail.html", expense=expense, approval=approval, latest_approval=latest_approval,
+        attachments=attachments, outstanding=outstanding, duplicate_signals=duplicate_signals, is_own=is_own, codes=codes,
+        category=category, payee=payee, beneficiary_name=beneficiary_name,
+        entered_by_name=entered_by_name, approved_by_name=approved_by_name,
     )
 
 
@@ -309,11 +359,38 @@ def create_payee_route():
 @bp.route("/cash-closings", methods=["GET"])
 @require_any_permission("cash_closing.view_own", "cash_closing.view_all", "cash_closing.prepare")
 def list_closings():
+    staff, profile = _actor()
+    codes = get_staff_permission_codes(staff)
+    # UI modernization Stage D -- `cash_closing.approve` ("Approve/reject a
+    # submitted cash closing", seed_data.py) must bypass the same as
+    # `view_all`: an approver reviews closings *other* preparers submitted
+    # by definition of maker-checker -- restricting an approve-only holder
+    # to their own prepared closings would make the permission functionally
+    # useless the moment a narrower approver-only role exists. Today every
+    # `cash_closing.*` holder is FINANCE with all codes together (view_all
+    # included), so this has no live behavioral effect yet -- same
+    # zero-current-impact, real-latent-gap shape already documented for the
+    # `view_own` fix itself.
+    view_all_held = bool({"cash_closing.view_all", "cash_closing.approve"} & codes)
     currency = request.args.get("currency", "USD")
-    closings = db_session.execute(
-        select(CashClosing).where(CashClosing.currency == currency).order_by(CashClosing.business_date.desc()).limit(60)
-    ).scalars().all()
-    return render_template("operations_ui/cash_closings_list.html", closings=closings, currency=currency)
+    status_filter = request.args.get("status") or None
+    sort = request.args.get("sort", "business_date")
+    direction = request.args.get("dir", "desc")
+    page = request.args.get("page", 1, type=int)
+    # UI modernization Stage D -- real, disclosed bug fix (see
+    # finance-ui-contract.md): this query previously filtered ONLY by
+    # currency, no ownership restriction at all, even though
+    # cash_closing.view_own's own seed_data.py label is "View cash
+    # closings this account prepared". Restriction is now real, bypassed
+    # by view_all/approve (see view_all_held's own comment above, checked
+    # first, same bypass-before-any-narrower-guard discipline every other
+    # list route here follows) -- see cash_closing/list_queries.py's own
+    # docstring for why this can't delegate to apply_ownership_filter().
+    result = cash_closing_list_queries.list_closings(
+        page=page, currency=currency, status=status_filter, sort=sort, direction=direction,
+        actor_staff_user_id=staff.id, view_all_held=view_all_held,
+    )
+    return render_template("operations_ui/cash_closings_list.html", result=result, currency=currency, status_filter=status_filter)
 
 
 @bp.route("/cash-closings/new", methods=["GET"])
@@ -345,8 +422,32 @@ def closing_detail(closing_id):
     if closing is None:
         return render_template("commercial_sales/not_found.html"), 404
     codes = get_staff_permission_codes(staff)
+    # UI modernization Stage D -- real IDOR-shaped gap found during
+    # curl-verification of the list-ownership fix above: this route had no
+    # per-record ownership check at all (unlike expense_detail's
+    # _expense_or_none), so a view_own-only holder could view ANY closing
+    # directly by ID even though the list already hid it from them -- same
+    # bug class as the list fix, just on the detail GET. Same bypass set
+    # (view_all OR approve, see list_closings()'s own comment); a
+    # prepare-only holder is restricted to their own prepared closings,
+    # matching cash_closing/list_queries.py's documented "scoped the same
+    # way view_own holders are" choice for prepare-only.
+    if not ({"cash_closing.view_all", "cash_closing.approve"} & codes) and closing.prepared_by_staff_user_id != staff.id:
+        return render_template("commercial_sales/not_found.html"), 404
     cash_closing_services.recalculate_expected(closing)
-    return render_template("operations_ui/cash_closing_detail.html", closing=closing, codes=codes, staff=staff)
+    # UI modernization Stage D -- real, previously-unsurfaced context for
+    # the status-timeline + related-records UI (see
+    # app.cash_closing.status_presentation.cash_closing_timeline).
+    prior_closing = cash_closing_services.prior_closing_for_display(closing)
+    latest_reopen_event = cash_closing_services.latest_reopen_event(closing)
+    prepared_by_name = _staff_display_name(closing.prepared_by_staff_user_id)
+    reviewed_by_name = _staff_display_name(closing.reviewed_by_staff_user_id)
+    approved_by_name = _staff_display_name(closing.approved_by_staff_user_id)
+    return render_template(
+        "operations_ui/cash_closing_detail.html", closing=closing, codes=codes, staff=staff,
+        prior_closing=prior_closing, latest_reopen_event=latest_reopen_event,
+        prepared_by_name=prepared_by_name, reviewed_by_name=reviewed_by_name, approved_by_name=approved_by_name,
+    )
 
 
 @bp.route("/cash-closings/<uuid:closing_id>/submit", methods=["POST"])

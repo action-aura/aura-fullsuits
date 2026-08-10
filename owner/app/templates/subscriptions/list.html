@@ -1,35 +1,34 @@
 {% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
 {% block title %}{{ _("Subscriptions") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center;">
-    <h2>{{ _("Subscriptions") }}</h2>
-    <a class="btn" href="{{ url_for('subscriptions.new_form') }}">{{ _("New subscription") }}</a>
-  </div>
-  <form class="filters" method="get">
-    <div>
-      <label>{{ _("Status") }}</label>
-      <select name="status" onchange="this.form.submit()">
-        <option value="">{{ _("All") }}</option>
-        {% for s in ["DRAFT","PILOT","ACTIVE","PAST_DUE","SUSPENDED","EXPIRED","CANCELLED","COMPLETED"] %}
-        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ subscription_status_label(s) }}</option>
-        {% endfor %}
-      </select>
-    </div>
-  </form>
-  <table class="responsive-table">
-    <thead><tr><th>{{ _("Customer") }}</th><th>{{ _("Plan") }}</th><th>{{ _("Status") }}</th><th>{{ _("End date") }}</th><th></th></tr></thead>
-    <tbody>
-    {% for s in subscriptions %}
+  {{ table.toolbar(_("Subscriptions"), url_for('subscriptions.new_form'), _("New subscription"), new_permission="subscriptions.create") }}
+  {{ table.filter_bar(
+      status_options=["DRAFT","PILOT","ACTIVE","PAST_DUE","SUSPENDED","EXPIRED","CANCELLED","COMPLETED"], status_value=status_filter, status_label_fn=subscription_status_label,
+      search_value=search, search_field="q", search_label=_("Search"), search_placeholder=_("Customer name")
+  ) }}
+  {{ table.density_toggle() }}
+  {% call table.table(
+      columns=[
+        {"label": _("Customer")},
+        {"label": _("Plan")},
+        {"label": _("Status"), "sort_key": "status"},
+        {"label": _("End date"), "sort_key": "end_date"},
+        {"label": ""},
+      ],
+      has_rows=result.rows, empty_message=_("No subscriptions yet."), caption=_("Subscriptions")
+  ) %}
+    {% for s in result.rows %}
     <tr>
-      <td>{{ s.customer.legal_name }}</td><td>{{ s.plan.name }}</td>
-      <td><span class="badge {{ 'active' if s.status == 'ACTIVE' else 'draft' }}">{{ subscription_status_label(s.status) }}</span></td>
+      <td>{{ s.customer.legal_name }}</td>
+      <td>{{ s.plan.name }}</td>
+      <td><span class="badge {{ subscription_badge_class(s.status) }}">{{ subscription_status_label(s.status) }}</span></td>
       <td>{{ format_owner_date(s.end_date) if s.end_date else "-" }}</td>
       <td><a href="{{ url_for('subscriptions.detail', subscription_id=s.id) }}">{{ _("View") }}</a></td>
     </tr>
-    {% else %}<tr><td colspan="5" class="empty">{{ _("No subscriptions yet.") }}</td></tr>
     {% endfor %}
-    </tbody>
-  </table>
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
 </div>
 {% endblock %}

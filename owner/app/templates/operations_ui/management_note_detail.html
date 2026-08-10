@@ -9,7 +9,7 @@
   {% if 'management_notes.manage' in codes %}
   <form method="post" action="{{ url_for('operations_ui.set_note_status_route', note_id=note.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <select name="status">
+    <select name="status" aria-label="{{ _("Change status to") }}">
       <option value="OPEN">{{ management_note_status_label("OPEN") }}</option>
       <option value="IN_PROGRESS">{{ management_note_status_label("IN_PROGRESS") }}</option>
       <option value="DONE">{{ management_note_status_label("DONE") }}</option>

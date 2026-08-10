@@ -1,40 +1,38 @@
 {% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
 {% block title %}{{ _("Commissions") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>{{ _("Commissions") }}</h2>
+  {{ table.toolbar(_("Commissions")) }}
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
-  <form class="filters" method="get">
-    <div>
-      <label>{{ _("Status") }}</label>
-      <select name="status" onchange="this.form.submit()">
-        <option value="">{{ _("All") }}</option>
-        {% for s in ["PENDING","EARNED","APPROVED","PAID","REVERSED","CANCELLED","DISPUTED"] %}
-        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ commission_entry_status_label(s) }}</option>
-        {% endfor %}
-      </select>
-    </div>
-  </form>
-  <table class="responsive-table">
-    <thead><tr><th>{{ _("Amount") }}</th><th>{{ _("Status") }}</th><th>{{ _("Earned") }}</th><th></th></tr></thead>
-    <tbody>
-    {% for e in entries %}
+  {{ table.filter_bar(
+      status_options=["PENDING","EARNED","APPROVED","PAID","REVERSED","CANCELLED","DISPUTED"], status_value=status_filter, status_label_fn=commission_entry_status_label
+  ) }}
+  {% call table.table(
+      columns=[
+        {"label": _("Amount"), "sort_key": "commission_amount", "align": "end"},
+        {"label": _("Status"), "sort_key": "status"},
+        {"label": _("Earned"), "sort_key": "earned_at"},
+        {"label": ""},
+      ],
+      has_rows=result.rows|length > 0, empty_message=_("No commission entries yet."), caption=_("Commissions")
+  ) %}
+    {% for e in result.rows %}
     <tr>
-      <td data-label="{{ _('Amount') }}">{{ format_owner_number(e.commission_amount) }} {{ e.currency }}</td>
-      <td data-label="{{ _('Status') }}"><span class="badge {{ 'success' if e.status in ('APPROVED','PAID') else ('danger' if e.status in ('REVERSED','CANCELLED') else 'pending') }}">{{ commission_entry_status_label(e.status) }}</span></td>
-      <td data-label="{{ _('Earned') }}">{{ format_owner_datetime(e.earned_at) if e.earned_at else "-" }}</td>
+      <td class="num">{{ format_owner_number(e.commission_amount) }} {{ e.currency }}</td>
+      <td><span class="badge {{ commission_entry_badge_class(e.status) }}">{{ commission_entry_status_label(e.status) }}</span></td>
+      <td>{{ format_owner_datetime(e.earned_at) if e.earned_at else "-" }}</td>
       <td>
         {% if e.status == "EARNED" and can_approve %}
         <form method="post" action="{{ url_for('commercial_sales_web.approve_commission_route', entry_id=e.id) }}" class="inline">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit">{{ _("Approve") }}</button>
+          <button type="submit" class="btn">{{ _("Approve") }}</button>
         </form>
         {% endif %}
       </td>
     </tr>
-    {% else %}<tr><td colspan="4" class="empty">{{ _("No commission entries yet.") }}</td></tr>
     {% endfor %}
-    </tbody>
-  </table>
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
 </div>
 {% endblock %}

@@ -34,12 +34,12 @@ from app.commercial_sales.quotes import (
 )
 from app.commercial_sales.refunds import approve_refund, confirm_refund, create_refund, refundable_balance, void_refund
 from app.commercial_sales.sales_orders import cancel_order, confirm_order, create_order_from_quote
+from app.commercial_sales import list_queries
 from app.commissions.errors import CommissionError
 from app.commissions.ledger import approve_commission_entry, approve_payout_batch, create_payout_batch, record_payout
 from app.employees.queries import find_own_profile
 from app.extensions import db_session
 from app.i18n_labels import localize_commercial_sales_error, localize_commission_error
-from app.leads.ownership import apply_ownership_filter
 from app.models.commercial_sales import (
     CommercialApproval,
     CommercialInvoice,
@@ -53,8 +53,11 @@ from app.models.commercial_sales import (
 )
 from app.models.commissions import CommissionLedgerEntry, CommissionPayoutBatch
 from app.models.customers import Customer
+from app.models.employees import EmployeeProfile
+from app.models.staff import StaffUser
 from app.models.subscriptions import PaymentRecord
 from app.security.rbac import get_staff_permission_codes, require_any_permission, require_permission, require_recent_auth
+from app.services.pagination import DEFAULT_PAGE_SIZE
 from sqlalchemy import select
 
 bp = Blueprint("commercial_sales_web", __name__)
@@ -94,6 +97,26 @@ def _own_or_all(codes, own_code, all_code):
     return all_code in codes
 
 
+# UI modernization Stage D -- actor/audit-context resolution, mirroring
+# customers/routes.py::detail's exact `db_session.get(StaffUser, ...)`
+# pattern for "Assigned employee". Quote/SalesOrder/CommercialInvoice/
+# CommercialRefund's own creator column is an EmployeeProfile id (not a
+# StaffUser id directly) -- EmployeeProfile.full_name is real and already
+# nullable=False, so no second join to StaffUser is needed for it.
+def _employee_profile_name(profile_id):
+    if profile_id is None:
+        return None
+    profile = db_session.get(EmployeeProfile, profile_id)
+    return profile.full_name if profile is not None else None
+
+
+def _staff_display_name(staff_user_id):
+    if staff_user_id is None:
+        return None
+    staff = db_session.get(StaffUser, staff_user_id)
+    return staff.display_name if staff is not None else None
+
+
 # --------------------------------------------------------------- Quotes --
 
 @bp.route("/quotes", methods=["GET"])
@@ -101,12 +124,17 @@ def _own_or_all(codes, own_code, all_code):
 def list_quotes():
     staff, profile = _actor()
     codes = get_staff_permission_codes(staff)
-    stmt = apply_ownership_filter(select(Quote), Quote, profile.id if profile else None, all_permission_held=_own_or_all(codes, "quotes.create", "quotes.approve"))
     status_filter = request.args.get("status") or None
-    if status_filter:
-        stmt = stmt.where(Quote.status == status_filter)
-    quotes = db_session.execute(stmt.order_by(Quote.created_at.desc()).limit(200)).scalars().all()
-    return render_template("commercial_sales/quotes_list.html", quotes=quotes, status_filter=status_filter)
+    search = request.args.get("q") or None
+    sort = request.args.get("sort", "created_at")
+    direction = request.args.get("dir", "desc")
+    result = list_queries.list_quotes(
+        page=request.args.get("page", 1, type=int), page_size=DEFAULT_PAGE_SIZE,
+        status=status_filter, search=search, sort=sort, direction=direction,
+        actor_employee_profile_id=profile.id if profile else None,
+        all_permission_held=_own_or_all(codes, "quotes.create", "quotes.approve"),
+    )
+    return render_template("commercial_sales/quotes_list.html", result=result, status_filter=status_filter, search=search)
 
 
 @bp.route("/quotes/new", methods=["GET"])
@@ -155,9 +183,22 @@ def quote_detail(quote_id):
     error_text = localize_commercial_sales_error(error_code) if error_code else None
     from app.catalog.services import read_active_catalog
 
+    # UI modernization Stage D -- real downstream relationship (Quote -> the
+    # SalesOrder created from it, if any): SalesOrder.quote_id is a real FK,
+    # not previously surfaced anywhere on this page.
+    order = db_session.execute(
+        select(SalesOrder).where(SalesOrder.quote_id == quote.id, SalesOrder.status != "CANCELLED")
+    ).scalars().first()
+    # Real upstream relationship (Quote -> Customer, when customer-based
+    # rather than lead-based -- Quote.customer_id is nullable per the
+    # Milestone 7 lead-quote-customer boundary, see app/models/
+    # commercial_sales.py's own comment on this column).
+    customer = db_session.get(Customer, quote.customer_id) if quote.customer_id else None
+
     return render_template(
-        "commercial_sales/quote_detail.html", quote=quote, lines=lines, approvals=approvals,
+        "commercial_sales/quote_detail.html", quote=quote, lines=lines, approvals=approvals, order=order, customer=customer,
         plans=read_active_catalog(), can_approve=("quotes.approve" in codes), error=error_text,
+        created_by_name=_employee_profile_name(quote.created_by_employee_profile_id),
     )
 
 
@@ -279,12 +320,17 @@ def decide_approval_route(approval_id):
 def list_orders():
     staff, profile = _actor()
     codes = get_staff_permission_codes(staff)
-    stmt = apply_ownership_filter(select(SalesOrder), SalesOrder, profile.id if profile else None, all_permission_held=_own_or_all(codes, "orders.create", "orders.approve"))
     status_filter = request.args.get("status") or None
-    if status_filter:
-        stmt = stmt.where(SalesOrder.status == status_filter)
-    orders = db_session.execute(stmt.order_by(SalesOrder.created_at.desc()).limit(200)).scalars().all()
-    return render_template("commercial_sales/orders_list.html", orders=orders, status_filter=status_filter)
+    search = request.args.get("q") or None
+    sort = request.args.get("sort", "created_at")
+    direction = request.args.get("dir", "desc")
+    result = list_queries.list_orders(
+        page=request.args.get("page", 1, type=int), page_size=DEFAULT_PAGE_SIZE,
+        status=status_filter, search=search, sort=sort, direction=direction,
+        actor_employee_profile_id=profile.id if profile else None,
+        all_permission_held=_own_or_all(codes, "orders.create", "orders.approve"),
+    )
+    return render_template("commercial_sales/orders_list.html", result=result, status_filter=status_filter, search=search)
 
 
 @bp.route("/orders/from-quote/<uuid:quote_id>", methods=["POST"])
@@ -313,11 +359,14 @@ def order_detail(order_id):
         return render_template("commercial_sales/not_found.html"), 404
     lines = db_session.execute(select(SalesOrderLine).where(SalesOrderLine.sales_order_id == order.id).order_by(SalesOrderLine.sort_order)).scalars().all()
     invoice = db_session.execute(select(CommercialInvoice).where(CommercialInvoice.sales_order_id == order.id, CommercialInvoice.status != "VOID")).scalars().first()
+    quote = db_session.get(Quote, order.quote_id) if order.quote_id else None
+    customer = db_session.get(Customer, order.customer_id)
     error_code = request.args.get("error")
     error_text = localize_commercial_sales_error(error_code) if error_code else None
     return render_template(
-        "commercial_sales/order_detail.html", order=order, lines=lines, invoice=invoice,
+        "commercial_sales/order_detail.html", order=order, lines=lines, invoice=invoice, quote=quote, customer=customer,
         can_approve=("orders.approve" in codes), error=error_text,
+        created_by_name=_employee_profile_name(order.created_by_employee_profile_id),
     )
 
 
@@ -370,12 +419,17 @@ def fulfill_order_route(order_id):
 def list_invoices():
     staff, profile = _actor()
     codes = get_staff_permission_codes(staff)
-    stmt = apply_ownership_filter(select(CommercialInvoice), CommercialInvoice, profile.id if profile else None, all_permission_held=_own_or_all(codes, "invoices.create", "invoices.issue"))
     status_filter = request.args.get("status") or None
-    if status_filter:
-        stmt = stmt.where(CommercialInvoice.status == status_filter)
-    invoices = db_session.execute(stmt.order_by(CommercialInvoice.created_at.desc()).limit(200)).scalars().all()
-    return render_template("commercial_sales/invoices_list.html", invoices=invoices, status_filter=status_filter)
+    search = request.args.get("q") or None
+    sort = request.args.get("sort", "created_at")
+    direction = request.args.get("dir", "desc")
+    result = list_queries.list_invoices(
+        page=request.args.get("page", 1, type=int), page_size=DEFAULT_PAGE_SIZE,
+        status=status_filter, search=search, sort=sort, direction=direction,
+        actor_employee_profile_id=profile.id if profile else None,
+        all_permission_held=_own_or_all(codes, "invoices.create", "invoices.issue"),
+    )
+    return render_template("commercial_sales/invoices_list.html", result=result, status_filter=status_filter, search=search)
 
 
 @bp.route("/orders/<uuid:order_id>/invoice", methods=["POST"])
@@ -405,12 +459,15 @@ def invoice_detail(invoice_id):
     lines = db_session.execute(select(CommercialInvoiceItem).where(CommercialInvoiceItem.commercial_invoice_id == invoice.id).order_by(CommercialInvoiceItem.sort_order)).scalars().all()
     allocations = db_session.execute(select(PaymentAllocation).where(PaymentAllocation.commercial_invoice_id == invoice.id).order_by(PaymentAllocation.allocated_at.desc())).scalars().all()
     refunds = db_session.execute(select(CommercialRefund).where(CommercialRefund.commercial_invoice_id == invoice.id).order_by(CommercialRefund.created_at.desc())).scalars().all()
+    order = db_session.get(SalesOrder, invoice.sales_order_id) if invoice.sales_order_id else None
+    customer = db_session.get(Customer, invoice.customer_id)
     error_code = request.args.get("error")
     error_text = localize_commercial_sales_error(error_code) if error_code else None
     return render_template(
-        "commercial_sales/invoice_detail.html", invoice=invoice, lines=lines, allocations=allocations, refunds=refunds,
+        "commercial_sales/invoice_detail.html", invoice=invoice, lines=lines, allocations=allocations, refunds=refunds, order=order, customer=customer,
         collected=confirmed_allocated_amount(invoice), refundable=refundable_balance(invoice),
         can_issue=("invoices.issue" in codes), error=error_text,
+        created_by_name=_employee_profile_name(invoice.created_by_employee_profile_id),
     )
 
 
@@ -481,11 +538,14 @@ def reverse_allocation_route(allocation_id):
 @require_permission("payments.view")
 def list_payments():
     status_filter = request.args.get("status") or None
-    stmt = select(PaymentRecord)
-    if status_filter:
-        stmt = stmt.where(PaymentRecord.status == status_filter)
-    payments = db_session.execute(stmt.order_by(PaymentRecord.created_at.desc()).limit(200)).scalars().all()
-    return render_template("commercial_sales/payments_list.html", payments=payments, status_filter=status_filter)
+    search = request.args.get("q") or None
+    sort = request.args.get("sort", "created_at")
+    direction = request.args.get("dir", "desc")
+    result = list_queries.list_payments(
+        page=request.args.get("page", 1, type=int), page_size=DEFAULT_PAGE_SIZE,
+        status=status_filter, search=search, sort=sort, direction=direction,
+    )
+    return render_template("commercial_sales/payments_list.html", result=result, status_filter=status_filter, search=search)
 
 
 @bp.route("/payments/new", methods=["GET"])
@@ -520,9 +580,28 @@ def payment_detail(payment_id):
     if payment is None:
         return render_template("commercial_sales/not_found.html"), 404
     unallocated = unallocated_payment_balance(payment) if payment.status == "CONFIRMED" else None
+    # UI modernization Stage D -- real downstream relationship (Payment ->
+    # the Invoice(s) it funds via PaymentAllocation): verified real FK,
+    # not previously surfaced anywhere on this page.
+    allocations = db_session.execute(
+        select(PaymentAllocation).where(PaymentAllocation.payment_record_id == payment.id).order_by(PaymentAllocation.allocated_at.desc())
+    ).scalars().all()
+    invoices_by_id = {}
+    if allocations:
+        invoice_ids = {a.commercial_invoice_id for a in allocations}
+        invoices_by_id = {
+            inv.id: inv
+            for inv in db_session.execute(select(CommercialInvoice).where(CommercialInvoice.id.in_(invoice_ids))).scalars().all()
+        }
+    customer = db_session.get(Customer, payment.customer_id)
     error_code = request.args.get("error")
     error_text = localize_commercial_sales_error(error_code) if error_code else None
-    return render_template("commercial_sales/payment_detail.html", payment=payment, unallocated=unallocated, error=error_text)
+    return render_template(
+        "commercial_sales/payment_detail.html", payment=payment, unallocated=unallocated, error=error_text,
+        allocations=allocations, invoices_by_id=invoices_by_id, customer=customer,
+        recorded_by_name=_staff_display_name(payment.recorded_by_staff_user_id),
+        verified_by_name=_staff_display_name(payment.verified_by_staff_user_id),
+    )
 
 
 @bp.route("/payments/<uuid:payment_id>/confirm", methods=["POST"])
@@ -559,11 +638,14 @@ def reject_payment_route(payment_id):
 @require_any_permission("refunds.create", "refunds.approve")
 def list_refunds():
     status_filter = request.args.get("status") or None
-    stmt = select(CommercialRefund)
-    if status_filter:
-        stmt = stmt.where(CommercialRefund.status == status_filter)
-    refunds = db_session.execute(stmt.order_by(CommercialRefund.created_at.desc()).limit(200)).scalars().all()
-    return render_template("commercial_sales/refunds_list.html", refunds=refunds, status_filter=status_filter)
+    search = request.args.get("q") or None
+    sort = request.args.get("sort", "created_at")
+    direction = request.args.get("dir", "desc")
+    result = list_queries.list_refunds(
+        page=request.args.get("page", 1, type=int), page_size=DEFAULT_PAGE_SIZE,
+        status=status_filter, search=search, sort=sort, direction=direction,
+    )
+    return render_template("commercial_sales/refunds_list.html", result=result, status_filter=status_filter, search=search)
 
 
 @bp.route("/invoices/<uuid:invoice_id>/refunds/new", methods=["POST"])
@@ -594,9 +676,20 @@ def refund_detail(refund_id):
     refund = db_session.get(CommercialRefund, refund_id)
     if refund is None:
         return render_template("commercial_sales/not_found.html"), 404
+    # UI modernization Stage D -- real upstream relationships (Refund's own
+    # real FKs, not previously surfaced anywhere on this page): the
+    # originating Invoice (required) and, when set, the source Payment.
+    invoice = db_session.get(CommercialInvoice, refund.commercial_invoice_id)
+    payment = db_session.get(PaymentRecord, refund.payment_record_id) if refund.payment_record_id else None
+    customer = db_session.get(Customer, invoice.customer_id) if invoice is not None else None
     error_code = request.args.get("error")
     error_text = localize_commercial_sales_error(error_code) if error_code else None
-    return render_template("commercial_sales/refund_detail.html", refund=refund, can_approve=("refunds.approve" in codes), error=error_text)
+    return render_template(
+        "commercial_sales/refund_detail.html", refund=refund, can_approve=("refunds.approve" in codes), error=error_text,
+        invoice=invoice, payment=payment, customer=customer,
+        created_by_name=_employee_profile_name(refund.created_by_employee_profile_id),
+        approved_by_name=_staff_display_name(refund.approved_by_staff_user_id),
+    )
 
 
 @bp.route("/refunds/<uuid:refund_id>/approve", methods=["POST"])
@@ -648,18 +741,17 @@ def void_refund_route(refund_id):
 def list_commissions():
     staff, profile = _actor()
     codes = get_staff_permission_codes(staff)
-    stmt = select(CommissionLedgerEntry)
-    if "commissions.view_all" not in codes:
-        if profile is None:
-            return render_template("commercial_sales/commissions_list.html", entries=[], status_filter=None, can_approve=False)
-        stmt = stmt.where(CommissionLedgerEntry.employee_profile_id == profile.id)
     status_filter = request.args.get("status") or None
-    if status_filter:
-        stmt = stmt.where(CommissionLedgerEntry.status == status_filter)
-    entries = db_session.execute(stmt.order_by(CommissionLedgerEntry.created_at.desc()).limit(200)).scalars().all()
+    sort = request.args.get("sort", "created_at")
+    direction = request.args.get("dir", "desc")
+    result = list_queries.list_commissions(
+        page=request.args.get("page", 1, type=int), page_size=DEFAULT_PAGE_SIZE,
+        status=status_filter, sort=sort, direction=direction,
+        employee_profile_id=profile.id if profile else None, view_all=("commissions.view_all" in codes),
+    )
     error_code = request.args.get("error")
     error_text = localize_commission_error(error_code) if error_code else None
-    return render_template("commercial_sales/commissions_list.html", entries=entries, status_filter=status_filter, can_approve=("commissions.approve" in codes), error=error_text)
+    return render_template("commercial_sales/commissions_list.html", result=result, status_filter=status_filter, can_approve=("commissions.approve" in codes), error=error_text)
 
 
 @bp.route("/commissions/<uuid:entry_id>/approve", methods=["POST"])
@@ -679,11 +771,35 @@ def approve_commission_route(entry_id):
 @bp.route("/commission-payouts", methods=["GET"])
 @require_permission("commissions.pay")
 def list_payout_batches():
-    batches = db_session.execute(select(CommissionPayoutBatch).order_by(CommissionPayoutBatch.created_at.desc()).limit(200)).scalars().all()
-    approved_entries = db_session.execute(select(CommissionLedgerEntry).where(CommissionLedgerEntry.status == "APPROVED")).scalars().all()
+    search = request.args.get("q") or None
+    sort = request.args.get("sort", "created_at")
+    direction = request.args.get("dir", "desc")
+    result = list_queries.list_payout_batches(
+        page=request.args.get("page", 1, type=int), page_size=DEFAULT_PAGE_SIZE,
+        search=search, sort=sort, direction=direction,
+    )
+    # Secondary, bounded embedded lists (the "pay via <batch>" form on this
+    # same page) -- deliberately NOT put behind their own ?page= (would
+    # need a second, separately-namespaced pagination control on one
+    # page); kept at the pre-existing unbounded (200-row-capped) query
+    # shape, same scoped-out reasoning enterprise-table-system.md used for
+    # customer_360's bounded-not-paginated tabs. approved_batches is
+    # deliberately a SEPARATE query from the paginated `result.rows`
+    # above (not filtered from it): an APPROVED batch beyond page 1 of
+    # the main table must still be payable from this same page, matching
+    # the exact real behavior the pre-pagination unconditional
+    # `.limit(200)` query already gave every batch, not a regression
+    # introduced by adding real pagination to the primary list.
+    approved_batches = db_session.execute(
+        select(CommissionPayoutBatch).where(CommissionPayoutBatch.status == "APPROVED").order_by(CommissionPayoutBatch.created_at.desc()).limit(200)
+    ).scalars().all()
+    approved_entries = db_session.execute(select(CommissionLedgerEntry).where(CommissionLedgerEntry.status == "APPROVED").limit(200)).scalars().all()
     error_code = request.args.get("error")
     error_text = localize_commission_error(error_code) if error_code else None
-    return render_template("commercial_sales/payout_batches_list.html", batches=batches, approved_entries=approved_entries, error=error_text)
+    return render_template(
+        "commercial_sales/payout_batches_list.html", result=result, approved_entries=approved_entries,
+        approved_batches=approved_batches, search=search, error=error_text,
+    )
 
 
 @bp.route("/commission-payouts", methods=["POST"])
