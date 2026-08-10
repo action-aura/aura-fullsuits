@@ -20,6 +20,7 @@ from commercial_runtime.sync.sync_service import nudge as _sync_nudge
 from database.schema import get_retail_conn, sub_create
 from datetime import datetime, timedelta, timezone
 from core.retail import pricing as tax_engine
+from core.retail import po_split
 from config import DATABASE_DIR
 
 retail_bp = Blueprint('retail_api', __name__, url_prefix='/api/sub/retail')
@@ -704,6 +705,154 @@ def delete_supplier(sid):
     _sync_nudge()
     return jsonify({'status': 'success', 'message': 'Supplier deactivated'})
 
+# ── Supplier Contacts (PO-preview-by-supplier foundation, schema v6) ───────────
+# A supplier can have several named contacts (orders/accounts/general), each
+# with its own preferred channel -- core/retail/po_split.py's contact
+# resolution ladder (resolve_contact) reads these to decide who a split
+# group's slice would be routed to. CRUD only here: nothing dispatches
+# anything yet (that lands with the routing routes later this week).
+
+@retail_bp.route('/suppliers/<string:sid>/contacts', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def list_supplier_contacts(sid):
+    cid = _cid()
+    conn = get_retail_conn()
+    sup = conn.execute("SELECT id FROM suppliers WHERE id=? AND company_id=?", (sid, cid)).fetchone()
+    if not sup:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Supplier not found'}), 404
+    rows = conn.execute(
+        "SELECT * FROM supplier_contacts WHERE company_id=? AND supplier_id=? ORDER BY is_primary DESC, name",
+        (cid, sid)
+    ).fetchall()
+    conn.close()
+    return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
+
+@retail_bp.route('/suppliers/<string:sid>/contacts', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.supplier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+def create_supplier_contact(sid):
+    data = request.json or {}
+    if not data.get('name'):
+        return jsonify({'status': 'error', 'message': 'Contact name required'}), 400
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        sup = conn.execute("SELECT id FROM suppliers WHERE id=? AND company_id=?", (sid, cid)).fetchone()
+        if not sup:
+            return jsonify({'status': 'error', 'message': 'Supplier not found'}), 404
+        role = data.get('role') or 'orders'
+        is_primary = 1 if data.get('is_primary') else 0
+        nid = str(_uuid.uuid4())
+        # BEGIN IMMEDIATE: the primary-contact invariant below (clear, then
+        # set) must not interleave with a concurrent request doing the same
+        # thing for the same (supplier, role) -- same reasoning as
+        # create_sale's stock-check BEGIN IMMEDIATE above.
+        conn.execute("BEGIN IMMEDIATE")
+        if is_primary:
+            # Enforced invariant: at most one primary contact per (supplier, role).
+            conn.execute(
+                "UPDATE supplier_contacts SET is_primary=0 WHERE company_id=? AND supplier_id=? AND role=?",
+                (cid, sid, role)
+            )
+        conn.execute("""
+            INSERT INTO supplier_contacts (id,company_id,supplier_id,name,role,email,phone,whatsapp,channel_preference,is_primary,status)
+            VALUES (?,?,?,?,?,?,?,?,?,?,'active')
+        """, (nid, cid, sid, data['name'], role, data.get('email'), data.get('phone'), data.get('whatsapp'),
+              data.get('channel_preference', 'whatsapp'), is_primary))
+        _audit(conn, 'SUPPLIER_CONTACT_CREATED', 'supplier_contact', nid, data['name'])
+        conn.commit()
+        return jsonify({'status': 'success', 'data': {'id': nid}})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        conn.close()
+
+@retail_bp.route('/suppliers/<string:sid>/contacts/<string:contact_id>', methods=['PATCH'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.supplier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+def update_supplier_contact(sid, contact_id):
+    data = request.json or {}
+    cid = _cid()
+    allowed = ['name', 'role', 'email', 'phone', 'whatsapp', 'channel_preference', 'is_primary', 'status']
+    fields = {k: v for k, v in data.items() if k in allowed}
+    if not fields:
+        return jsonify({'status': 'error', 'message': 'No valid fields'}), 400
+    conn = get_retail_conn()
+    try:
+        sup = conn.execute("SELECT id FROM suppliers WHERE id=? AND company_id=?", (sid, cid)).fetchone()
+        if not sup:
+            return jsonify({'status': 'error', 'message': 'Supplier not found'}), 404
+        existing = conn.execute(
+            "SELECT role FROM supplier_contacts WHERE id=? AND company_id=? AND supplier_id=?",
+            (contact_id, cid, sid)
+        ).fetchone()
+        if not existing:
+            return jsonify({'status': 'error', 'message': 'Contact not found'}), 404
+
+        # Route to whichever role this contact will hold AFTER this PATCH
+        # (its new role if role is being changed in the same request, else
+        # its current one) -- the invariant is scoped per (supplier, role).
+        role_for_invariant = fields.get('role', existing['role'])
+        if 'is_primary' in fields:
+            fields['is_primary'] = 1 if fields['is_primary'] else 0
+
+        conn.execute("BEGIN IMMEDIATE")
+        if fields.get('is_primary'):
+            # Enforced invariant: at most one primary contact per (supplier, role).
+            conn.execute(
+                "UPDATE supplier_contacts SET is_primary=0 WHERE company_id=? AND supplier_id=? AND role=?",
+                (cid, sid, role_for_invariant)
+            )
+        sets = ', '.join(f'{k}=?' for k in fields)
+        conn.execute(f'UPDATE supplier_contacts SET {sets} WHERE id=? AND company_id=? AND supplier_id=?',
+                     list(fields.values()) + [contact_id, cid, sid])
+        _audit(conn, 'SUPPLIER_CONTACT_UPDATED', 'supplier_contact', contact_id)
+        conn.commit()
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        conn.close()
+
+@retail_bp.route('/suppliers/<string:sid>/contacts/<string:contact_id>', methods=['DELETE'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.supplier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+def delete_supplier_contact(sid, contact_id):
+    """Soft-delete: sets status='inactive', never removes the row -- matches
+    delete_supplier's own soft-delete convention just above, and keeps the
+    contact's history (it may still be referenced by past split-preview
+    audit trails once routing lands)."""
+    cid = _cid()
+    conn = get_retail_conn()
+    sup = conn.execute("SELECT id FROM suppliers WHERE id=? AND company_id=?", (sid, cid)).fetchone()
+    if not sup:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Supplier not found'}), 404
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE supplier_contacts SET status='inactive' WHERE id=? AND company_id=? AND supplier_id=?",
+            (contact_id, cid, sid)
+        )
+        if cur.rowcount == 0:
+            return jsonify({'status': 'error', 'message': 'Contact not found'}), 404
+        _audit(conn, 'SUPPLIER_CONTACT_DELETED', 'supplier_contact', contact_id, 'Contact deactivated')
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("delete_supplier_contact(%s,%s) failed: %s", sid, contact_id, exc)
+        return jsonify({'status': 'error', 'message': 'Could not delete this contact.'}), 400
+    finally:
+        conn.close()
+    return jsonify({'status': 'success', 'message': 'Contact deactivated'})
+
 # ── Purchase Orders ───────────────────────────────────────────────────────────
 
 @retail_bp.route('/purchase-orders', methods=['GET'])
@@ -819,6 +968,111 @@ def receive_purchase_order(po_id):
     conn.commit(); conn.close()
     _emit('StockReceived', {'po_id': po_id, 'po_number': po['po_number']})
     return jsonify({'status': 'success'})
+
+@retail_bp.route('/purchase-orders/split-preview', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.purchase.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+def preview_po_split():
+    """Preview-only: groups a basket into per-supplier slices (Thursday demo,
+    Stream B). Computes and returns a SplitResult -- never writes anything to
+    the database (no PO/purchase_order_items rows are created here; that
+    lands with the routes that persist split_group_id/routing_status etc.
+    later this week -- see core/retail/po_split.py's module docstring).
+
+    Guarded with retail.purchase.create even though this route only reads/
+    computes: a restricted-mode install should get the same consistent block
+    as the real PO-creation route, rather than a preview of an action it
+    could never actually take.
+
+    Every product/supplier this route touches is looked up scoped to
+    _cid() -- unlike create_purchase_order above (a real, pre-existing bug:
+    AUDIT-follow-up, 2026-08-10 -- it never validates that supplier_id or any
+    product_id in the request actually belongs to the caller's company,
+    so a cross-tenant PO is creatable today). That bug is OUT OF SCOPE for
+    this route to fix; this route just must not repeat it.
+    """
+    data = request.json or {}
+    cid  = _cid()
+    items = data.get('items') or []
+    if not items:
+        return jsonify({'status': 'error', 'message': 'At least one item required'}), 400
+
+    conn = get_retail_conn()
+    try:
+        product_ids = []
+        for it in items:
+            pid = it.get('product_id')
+            if not pid:
+                return jsonify({'status': 'error', 'message': 'Every item requires a product_id'}), 400
+            product_ids.append(pid)
+
+        placeholders = ','.join('?' * len(product_ids))
+        prod_rows = conn.execute(
+            f"SELECT id, name, sku, supplier_id, cost_price FROM products "
+            f"WHERE company_id=? AND id IN ({placeholders})",
+            [cid, *product_ids]
+        ).fetchall()
+        products_by_id = {r['id']: dict(r) for r in prod_rows}
+
+        basket = []
+        supplier_ids = set()
+        for it in items:
+            pid = it['product_id']
+            product = products_by_id.get(pid)
+            if not product:
+                # Named explicitly, not a generic error -- the caller needs to
+                # know WHICH product_id in its basket doesn't belong to it.
+                return jsonify({'status': 'error', 'message': f'Unknown product_id: {pid}'}), 400
+
+            try:
+                qty = float(it.get('quantity'))
+            except (TypeError, ValueError):
+                return jsonify({'status': 'error', 'message': f'Invalid quantity for product_id {pid}'}), 400
+            if qty <= 0:
+                return jsonify({'status': 'error',
+                                 'message': f'Quantity must be greater than zero for product_id {pid}'}), 400
+
+            unit_cost = it.get('unit_cost')
+            if unit_cost is None:
+                unit_cost = product['cost_price']
+            else:
+                try:
+                    unit_cost = float(unit_cost)
+                except (TypeError, ValueError):
+                    return jsonify({'status': 'error',
+                                     'message': f'Invalid unit_cost for product_id {pid}'}), 400
+
+            supplier_id = product['supplier_id']
+            if supplier_id:
+                supplier_ids.add(supplier_id)
+            basket.append({
+                'product_id': pid, 'product_name': product['name'], 'sku': product['sku'],
+                'supplier_id': supplier_id, 'quantity': qty, 'unit_cost': unit_cost,
+            })
+
+        suppliers_by_id = {}
+        contacts_by_supplier = {}
+        if supplier_ids:
+            sp = ','.join('?' * len(supplier_ids))
+            sup_rows = conn.execute(
+                f"SELECT id, name, email, phone, min_order_value FROM suppliers "
+                f"WHERE company_id=? AND id IN ({sp})",
+                [cid, *supplier_ids]
+            ).fetchall()
+            suppliers_by_id = {r['id']: dict(r) for r in sup_rows}
+
+            contact_rows = conn.execute(
+                f"SELECT * FROM supplier_contacts WHERE company_id=? AND supplier_id IN ({sp})",
+                [cid, *supplier_ids]
+            ).fetchall()
+            for r in contact_rows:
+                contacts_by_supplier.setdefault(r['supplier_id'], []).append(dict(r))
+    finally:
+        conn.close()
+
+    result = po_split.group_basket_by_supplier(basket, suppliers=suppliers_by_id, contacts=contacts_by_supplier)
+    return jsonify({'status': 'success', 'data': result})
 
 # ── POS / Sales ───────────────────────────────────────────────────────────────
 
