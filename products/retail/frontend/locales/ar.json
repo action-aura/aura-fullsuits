@@ -153,5 +153,7 @@
   "No categories found.": "لم يتم العثور على فئات.",
   "Category updated": "تم تحديث الفئة",
   "Category added": "تمت إضافة الفئة",
-  "Name required": "الاسم مطلوب"
+  "Name required": "الاسم مطلوب",
+
+  "Supplier": "المورد"
 }

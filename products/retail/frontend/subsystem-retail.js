@@ -983,12 +983,14 @@ const RetailSystem = {
 
   async _loadProducts() {
     try {
-      const [prods, cats] = await Promise.all([
+      const [prods, cats, sups] = await Promise.all([
         this._get('/api/sub/retail/products'),
         this._get('/api/sub/retail/categories'),
+        this._get('/api/sub/retail/suppliers'),
       ]);
       this._products   = prods.data || [];
       this._categories = cats.data  || [];
+      this._suppliers  = sups.data  || [];
       this._renderProductTable(this._products);
     } catch(e) { console.error(e); }
   },
@@ -1029,7 +1031,8 @@ const RetailSystem = {
 
   _openAddProduct() {
     const catOpts = this._categories.map(c => `<option value="${this._esc(c.id)}">${this._esc(c.name)}</option>`).join('');
-    this._showProductModal({}, catOpts);
+    const supOpts = (this._suppliers||[]).map(s => `<option value="${this._esc(s.id)}">${this._esc(s.name)}</option>`).join('');
+    this._showProductModal({}, catOpts, supOpts);
   },
 
   _openEditProduct(pid) {
@@ -1037,10 +1040,12 @@ const RetailSystem = {
     if (!p) return;
     const catOpts = this._categories.map(c =>
       `<option value="${this._esc(c.id)}" ${c.id===p.category_id?'selected':''}>${this._esc(c.name)}</option>`).join('');
-    this._showProductModal(p, catOpts);
+    const supOpts = (this._suppliers||[]).map(s =>
+      `<option value="${this._esc(s.id)}" ${s.id===p.supplier_id?'selected':''}>${this._esc(s.name)}</option>`).join('');
+    this._showProductModal(p, catOpts, supOpts);
   },
 
-  _showProductModal(p, catOpts) {
+  _showProductModal(p, catOpts, supOpts) {
     const isEdit = !!p.id;
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
@@ -1066,7 +1071,8 @@ const RetailSystem = {
           <div class="ret-field"><label>Sell Price *</label><input type="number" id="pm-sell" value="${p.sell_price||0}" step="0.01" min="0" /></div>
           <div class="ret-field"><label>Tax Rate %</label><input type="number" id="pm-tax" value="${p.tax_rate||0}" step="0.1" min="0" /></div>
         </div>
-        <div class="ret-field-row">
+        <div class="ret-field-row3">
+          <div class="ret-field"><label>${t('Supplier')}</label><select id="pm-sup"><option value="">None</option>${supOpts}</select></div>
           <div class="ret-field"><label>Unit</label>
             <select id="pm-unit">
               ${['pcs','kg','g','l','ml','box','pack','pair','m','cm'].map(u=>`<option ${p.unit===u?'selected':''}>${u}</option>`).join('')}
@@ -1095,6 +1101,7 @@ const RetailSystem = {
       name, sku,
       barcode:      document.getElementById('pm-barcode')?.value,
       category_id:  document.getElementById('pm-cat')?.value || null,
+      supplier_id:  document.getElementById('pm-sup')?.value || null,
       cost_price:   +document.getElementById('pm-cost')?.value || 0,
       sell_price:   +document.getElementById('pm-sell')?.value || 0,
       tax_rate:     +document.getElementById('pm-tax')?.value  || 0,
