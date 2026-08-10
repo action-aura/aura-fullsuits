@@ -40,7 +40,7 @@ import uuid
 from datetime import datetime
 
 from flask import Blueprint, current_app, jsonify, request
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import DataError, IntegrityError
 
 from app.extensions import db_session
@@ -222,6 +222,96 @@ def _store_events(events: list, license_id, device_id) -> int:
     return stored
 
 
+def _lock_license_stream(license_id: uuid.UUID) -> None:
+    """Acquires a transaction-scoped Postgres advisory lock keyed by
+    license_id, closing the seq-visibility race documented as a
+    deliberately-unfixed "Residual gap" in
+    docs/superpowers/plans/2026-08-06-multi-device-sync-foundation.md until
+    now (search that file for _lock_license_stream).
+
+    THE RACE: owner_sync_events.seq is a Postgres IDENTITY column -- values
+    are ASSIGNED at INSERT time but only become VISIBLE to other
+    transactions at COMMIT time. Without this lock, two concurrent pushes
+    for the SAME license could assign seq in one order (say 10 then 11) but
+    commit in the other order (11 commits first, because the seq=10
+    transaction is slower for any reason -- network, client, GC pause).
+    A pull landing in that window sees seq=11 but not the not-yet-committed
+    seq=10, and advances its cursor past 11. When seq=10 finally commits, it
+    is permanently, silently invisible to that device -- its next pull is
+    `WHERE seq > 11`, so seq=10 never surfaces. No error, no retry, no
+    trace: silent per-device divergence.
+
+    `pg_advisory_xact_lock` serializes the INSERT-through-COMMIT critical
+    section of concurrent pushes for the SAME license, so for that
+    license's stream, commit order can never diverge from seq-assignment
+    order. It is transaction-scoped by definition -- it releases
+    automatically on COMMIT or ROLLBACK of the enclosing transaction, no
+    manual unlock required and no risk of a leaked lock if the request
+    errors out partway through.
+
+    WHY PER-LICENSE IS CORRECT -- NOT A GLOBAL LOCK (read this before you
+    "simplify" it into one lock covering every license; that would be a
+    regression, not a simplification):
+
+    owner_sync_events.seq IS one single table-wide identity sequence shared
+    across every license in the system -- that part is true. But a
+    per-license lock is still fully sufficient for correctness, because
+    pull() below is UNCONDITIONALLY scoped `.where(SyncEvent.license_id ==
+    license_id)`, and that license_id comes ONLY from the verified
+    Installation resolved inside _authenticate() -- never from
+    client-supplied input (see _authenticate's own docstring/comment on
+    this). A device can only ever ask "give me everything for MY license
+    newer than my cursor"; no pull request can span license boundaries.
+
+    That means: two DIFFERENT licenses' events can commit in any
+    interleaved order relative to each other, and it is completely
+    irrelevant to correctness -- no pull ever observes both streams
+    together, so there is nothing for cross-license ordering to violate.
+    Within any ONE license's own filtered stream, this per-license lock
+    guarantees commit order matches seq order, which is the only ordering
+    guarantee pull() actually depends on.
+
+    A single global lock (one fixed key for all licenses) would additionally
+    serialize every customer's push against every OTHER customer's push,
+    for zero correctness benefit over the per-license version -- pure,
+    actively harmful contention under real concurrent load across many
+    licenses, not a simplification.
+
+    CONTENTION: realistically a handful of devices per license (not
+    thousands) push concurrently, so contention on any single license's
+    lock is negligible -- worst case a push waits briefly for another push
+    on the SAME license to finish, which is the correct, desired
+    serialization, not a performance problem.
+
+    KEY SPACE: hashtext() hashes license_id's text form across the full
+    32-bit signed int4 range, implicitly widened to bigint for
+    pg_advisory_xact_lock's single-bigint-argument form. Verified against a
+    live Postgres 17 instance (not assumed from memory) before writing this:
+    the single-bigint-argument form shares its lock namespace between
+    session-level (pg_advisory_lock) and transaction-level
+    (pg_advisory_xact_lock) callers using the SAME numeric key -- a session
+    lock on key K genuinely blocks a transaction lock request for that same
+    key K. (The two-integer-argument form, e.g. pg_advisory_xact_lock(a, b),
+    was empirically confirmed to be a SEPARATE namespace from the
+    single-bigint form even for equal values -- not used here, noted only so
+    nobody "fixes" this comment by assuming otherwise.) The only other
+    fixed-key, single-bigint-form advisory lock in this codebase is
+    owner/tests/conftest.py's _TEST_SUITE_ADVISORY_LOCK_KEY (0x41757261 /
+    1095583329, session-level, used to serialize whole pytest processes
+    against each other -- unrelated purpose, but the SAME namespace this
+    function's key lives in). See test_sync_ordering_concurrency.py's
+    key-space assertion test, which checks this explicitly rather than
+    leaving it assumed.
+    """
+    # NOTE: no `::text` cast here -- SQLAlchemy's text() parses a bare `::`
+    # immediately after a bind name as colon-escaping syntax, not as
+    # Postgres's cast operator, which silently drops the parameter
+    # substitution (params ends up {} and the literal `:license_id::text`
+    # reaches psycopg as a syntax error). str(license_id) below is already
+    # Python text, so hashtext() receives a text argument without a cast.
+    db_session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:license_id))"), {"license_id": str(license_id)})
+
+
 @bp.route("/push", methods=["POST"])
 def push():
     body = request.get_json(silent=True)
@@ -233,6 +323,15 @@ def push():
     events = body.get("events") if isinstance(body, dict) else None
     if events is None or not isinstance(events, list) or len(events) > _MAX_PUSH_BATCH:
         return _error("INVALID_BATCH")
+
+    # Must be acquired inside the SAME transaction that will INSERT the
+    # events below and COMMIT at the end of this handler -- see
+    # _lock_license_stream's docstring for why per-license (not global) is
+    # correct, and AUDIT note in the sync-foundation plan for the race this
+    # closes. _authenticate() above already committed its own nonce-consumption
+    # transaction (replay.consume_nonce), so this starts a fresh transaction
+    # that naturally extends through _store_events and the commit() below.
+    _lock_license_stream(license_id)
 
     try:
         stored = _store_events(events, license_id, installation.id)
