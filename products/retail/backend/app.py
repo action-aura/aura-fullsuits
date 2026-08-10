@@ -136,6 +136,7 @@ from api.import_api import import_bp
 from commercial_runtime.backup.routes import make_backup_blueprint
 from commercial_runtime.licensing_contracts.routes import make_licensing_blueprint
 from commercial_runtime.identity.device_routes import device_bp
+from commercial_runtime.identity.mt_auth import mt_login_required
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(onboarding_bp)
@@ -167,6 +168,19 @@ app.register_blueprint(make_licensing_blueprint(
     trust_anchor_path=Path(LICENSING_TRUST_ANCHOR_PATH),
     device_identity_factory=_licensing_device_identity_factory,
     internal_shared_secret=LICENSING_INTERNAL_SHARED_SECRET,
+    # AUDIT P0-1: /activate, /check-in, /deactivate previously took no auth
+    # at all -- /deactivate in particular read no request body either, so
+    # any cross-origin <form method="POST"> the browser merely visited
+    # while this app was running could kill the license with zero
+    # interaction (no CSRFProtect anywhere in this codebase to have caught
+    # it). mt_login_required is Retail's own session decorator
+    # (commercial_runtime/identity/mt_auth.py) -- threaded in here rather
+    # than imported by routes.py itself, since licensing_contracts is
+    # product-agnostic and must not depend on a specific product's auth
+    # module. /status is deliberately excluded (see make_licensing_
+    # blueprint's auth_required docstring): a locked-out user must still be
+    # able to see why and find a path to recovery with no session.
+    auth_required=mt_login_required,
 ))
 
 # Multi-device sync foundation (2026-08-06), Task 5: the background push/pull

@@ -210,6 +210,39 @@ def test_deactivate_before_activation_is_a_noop_200(client):
     assert resp.get_json()["state"] == "NOT_CONFIGURED"
 
 
+# -- AUDIT P0-1: content-type defense-in-depth (independent of auth_required,
+# always active on this shared factory -- see make_licensing_blueprint's
+# _reject_non_json_body() docstring). This `app`/`client` fixture pair
+# builds the blueprint with no auth_required, so these tests isolate the
+# content-type check on its own, decoupled from Retail's session wiring
+# (covered separately in products/retail/tests).
+
+
+def test_form_encoded_post_to_deactivate_is_rejected_415(client):
+    # A plain HTML <form> can never set Content-Type: application/json --
+    # this is exactly the shape a cross-site drive-by POST would take.
+    resp = client.post("/api/licensing/deactivate", data={"foo": "bar"})
+    assert resp.status_code == 415
+    assert resp.get_json()["reason_code"] == "INVALID_REQUEST"
+
+
+def test_form_encoded_post_to_checkin_is_rejected_415(client):
+    resp = client.post("/api/licensing/check-in", data={"foo": "bar"})
+    assert resp.status_code == 415
+
+
+def test_form_encoded_post_to_activate_is_rejected_415(client):
+    resp = client.post("/api/licensing/activate", data={"license_key": "AURA-RETAIL-XXXX"})
+    assert resp.status_code == 415
+
+
+def test_bare_post_with_no_body_is_not_rejected_by_content_type_check(client):
+    # No Content-Type at all (this package's own pre-existing no-body
+    # check-in/deactivate calls) must still work exactly as before.
+    resp = client.post("/api/licensing/check-in")
+    assert resp.status_code == 200
+
+
 def test_full_activate_then_deactivate_flow(client, owner_key, monkeypatch):
     def _activate(self, **kwargs):
         fingerprint = _fingerprint_from_request(kwargs["device_public_key_b64"])

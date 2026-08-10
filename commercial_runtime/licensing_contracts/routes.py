@@ -49,6 +49,7 @@ def make_licensing_blueprint(
     device_identity_factory: DeviceIdentityFactory,
     release_channel: Optional[str] = "rc",
     internal_shared_secret: Optional[str] = None,
+    auth_required: Optional[Callable] = None,
 ) -> Blueprint:
     """internal_shared_secret: only set on Android. Enables the
     /_internal/sync-* routes (Part U) that the Kotlin layer -- which holds
@@ -67,11 +68,60 @@ def make_licensing_blueprint(
     anywhere but 127.0.0.1), so the shared secret's job is narrower: proving
     a request came from THIS app's own Kotlin process, not some other app
     on the same device probing the loopback port.
+
+    auth_required (AUDIT P0-1): an optional Flask route decorator (e.g.
+    Retail's commercial_runtime.identity.mt_auth.mt_login_required) applied
+    to /activate, /check-in, and /deactivate -- never to /status (see that
+    route's own comment: it must stay reachable with no session so a
+    locked-out user can still see why and find a path to recovery). This
+    package is product-agnostic and must never import a product's own auth
+    module directly (that would be a wrong-direction dependency) -- the
+    caller threads its own decorator in via this parameter instead (see
+    products/retail/backend/app.py's call site). Before this fix, /deactivate
+    took no auth AND read no request body, so a plain cross-origin HTML
+    <form method="POST" action=".../api/licensing/deactivate"> from any
+    website the user's browser merely visited while the app was running
+    could silently kill the license (no CSRF token existed anywhere in this
+    codebase to have stopped it either) -- a genuine drive-by remote
+    license-kill. Left None (e.g. Clinic's app.py, which does not pass one
+    yet -- that wiring is a deferred follow-up, tracked separately from this
+    Retail-scoped fix) preserves the exact old, unauthenticated behavior;
+    this parameter defaults to "no new requirement," not to "newly locked
+    down," so every existing caller keeps working unless it opts in.
     """
     bp = Blueprint("licensing", __name__, url_prefix="/api/licensing")
 
     licensing_dir = Path(app_data_dir) / "licensing"
     db_path = Path(app_data_dir) / "database" / "subsystems" / "licensing.db"
+
+    def _identity_decorator(f):
+        return f
+
+    _guard = auth_required or _identity_decorator
+
+    def _reject_non_json_body():
+        """Defense-in-depth (AUDIT P0-1), independent of auth_required
+        above: a plain HTML <form> POST -- the exact vector the drive-by
+        license-kill attack (and CSRF against any of these mutation routes
+        in general, CSRFProtect is not wired up anywhere in this codebase)
+        depends on -- can only ever produce
+        application/x-www-form-urlencoded, multipart/form-data, or
+        text/plain (a bare <form> has no way to set
+        Content-Type: application/json). Rejecting any request that DOES
+        carry an explicit non-JSON Content-Type closes this path even if
+        auth_required is ever left unset or a session is ever forged/
+        relaxed by some other bug -- belt-and-suspenders, not a replacement
+        for the auth check above. A request with NO Content-Type at all
+        (e.g. this package's own pre-existing no-body check-in/deactivate
+        calls, and this test suite's own bare client.post(url) calls) is
+        deliberately left alone -- those never carried a body to begin
+        with and are not the shape of this attack."""
+        if request.content_type and not request.is_json:
+            return (
+                jsonify({"reason_code": "INVALID_REQUEST", "detail": "Content-Type must be application/json."}),
+                415,
+            )
+        return None
 
     def _not_configured_response():
         return jsonify({"current_state": "NOT_CONFIGURED", "detail": "Owner licensing URL is not configured."}), 200
@@ -107,7 +157,12 @@ def make_licensing_blueprint(
         return jsonify(present_status(state_repository.load())), 200
 
     @bp.route("/activate", methods=["POST"])
+    @_guard
     def activate():
+        rejected = _reject_non_json_body()
+        if rejected:
+            return rejected
+
         if not owner_base_url:
             return jsonify({"reason_code": "SERVICE_TEMPORARILY_UNAVAILABLE", "detail": "Owner licensing URL is not configured."}), 503
 
@@ -150,7 +205,12 @@ def make_licensing_blueprint(
         return jsonify({"result": "SUCCESS", "state": result.state.value, "installation_id": result.owner_installation_id}), 200
 
     @bp.route("/check-in", methods=["POST"])
+    @_guard
     def check_in():
+        rejected = _reject_non_json_body()
+        if rejected:
+            return rejected
+
         if not owner_base_url:
             return _not_configured_response()
         state_repository, event_recorder, trust_store, signer, client = _build_context()
@@ -187,11 +247,20 @@ def make_licensing_blueprint(
         return jsonify(response_body), 200
 
     @bp.route("/deactivate", methods=["POST"])
+    @_guard
     def deactivate():
         # Deliberately NOT gated on owner_base_url being configured, and
         # never capability-guarded by license state (see module docstring):
         # this route, status, and activate together form the one interface
         # a customer always has to fix or reset their licensing state.
+        # It IS now gated on auth_required (see that parameter's docstring
+        # above) -- this was the single most exploitable finding in the
+        # P0 audit: no auth, no body read at all, so any cross-origin
+        # <form> POST could kill the license with zero interaction.
+        rejected = _reject_non_json_body()
+        if rejected:
+            return rejected
+
         state_repository, event_recorder, trust_store, signer, client = _build_context()
         try:
             new_state = perform_deactivation(
