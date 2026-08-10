@@ -622,3 +622,41 @@ def test_session_has_bounded_lifetime():
 def test_cookie_hardening_flags():
     assert app.config.get("SESSION_COOKIE_HTTPONLY") is True
     assert app.config.get("SESSION_COOKIE_SAMESITE") == "Lax"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 10. New routes (PO-preview-by-supplier foundation, Stream B) -- every new
+#     route must reject an unauthenticated request (401, same shape as
+#     test_no_auth_path_grants_privilege_without_stored_account /
+#     test_rejected_missing_session above) and a request from a session with
+#     no permission row for the retail subsystem (403, same shape as
+#     test_subsystem_access_denied_without_permission_row above). Fake ids
+#     are fine in the URLs below -- mt_require_subsystem runs before any
+#     route body/lookup logic, same reasoning as
+#     retail_capability_guard_test.py's test_restricted_blocks_supplier_payment.
+# ═════════════════════════════════════════════════════════════════════════════
+
+_NEW_ROUTES = [
+    ("post", "/api/sub/retail/purchase-orders/split-preview", {"items": []}),
+    ("get", "/api/sub/retail/suppliers/does-not-exist/contacts", None),
+    ("post", "/api/sub/retail/suppliers/does-not-exist/contacts", {"name": "x"}),
+    ("patch", "/api/sub/retail/suppliers/does-not-exist/contacts/also-fake", {"name": "x"}),
+    ("delete", "/api/sub/retail/suppliers/does-not-exist/contacts/also-fake", None),
+]
+
+
+@pytest.mark.parametrize("method,url,body", _NEW_ROUTES)
+def test_new_routes_reject_unauthenticated_requests(method, url, body):
+    with app.test_client() as c:
+        r = getattr(c, method)(url, json=body)
+        assert r.status_code == 401, (method, url, r.status_code)
+
+
+@pytest.mark.parametrize("method,url,body", _NEW_ROUTES)
+def test_new_routes_reject_session_without_retail_permission(method, url, body):
+    email = f"no-perm-{method}-{uuid.uuid4().hex[:8]}@test.local"
+    _make_company_user(email, "NoPermPW1", role="employee")
+    with app.test_client() as c:
+        c.post("/api/auth/login", json={"email": email, "password": "NoPermPW1"})
+        r = getattr(c, method)(url, json=body)
+        assert r.status_code == 403, (method, url, r.status_code)
