@@ -111,6 +111,21 @@ def reject_payment(payment: PaymentRecord, *, reason: str, actor_staff_user_id: 
     if not reason or not reason.strip():
         raise CommercialSalesError("REASON_REQUIRED")
 
+    # AUDIT-033: reject_payment_route is gated on payments.confirm, same as
+    # confirm_payment_route -- and FINANCE holds both payments.create and
+    # payments.confirm (payments.create is deliberately dual-granted to
+    # SALES and FINANCE, per payment-maker-checker-policy.md's Milestone 18
+    # addendum). Without this check, one FINANCE account could record a
+    # payment it received directly (e.g. a bank transfer) and unilaterally
+    # reject it too -- money off the books with a single signature, no
+    # second person involved. Mirrors confirm_payment()'s unconditional
+    # SELF_CONFIRMATION_FORBIDDEN block; reusing the same error code rather
+    # than adding a new one that would need parallel i18n_labels.py/.po
+    # catalog entries for a rule that is really the same maker-checker
+    # guarantee applied to the other terminal transition out of PENDING.
+    if payment.recorded_by_staff_user_id == actor_staff_user_id:
+        raise CommercialSalesError("SELF_CONFIRMATION_FORBIDDEN")
+
     correct_payment(payment, "FAILED", reason, actor_staff_user_id)
 
     audit_record(

@@ -235,6 +235,51 @@ def test_cross_customer_allocation_rejected_via_api(app, client, seeded):
     assert resp.get_json()["error"] == "PAYMENT_CUSTOMER_MISMATCH"
 
 
+def test_recorder_cannot_reject_own_payment(app, seeded):
+    """AUDIT-033: reject_payment() had no self-check, unlike confirm_payment()'s
+    unconditional SELF_CONFIRMATION_FORBIDDEN block. payments.create is
+    dual-granted to SALES and FINANCE (Milestone 18 addendum), and
+    payments.confirm gates both confirm and reject -- so a single FINANCE
+    account holding both could record a payment it received directly and
+    unilaterally reject it too, with no second person involved."""
+    staff_fin = make_staff(app, "sec9f@example.com", role_codes=["FINANCE"])
+    with app.app_context():
+        from app.commercial_sales.errors import CommercialSalesError
+        from app.commercial_sales.payments import reject_payment, submit_payment
+        from app.customers.services import create_customer
+        import pytest
+
+        customer = create_customer({"legal_name": "Sec9 Customer"}, actor_staff_user_id=staff_fin)
+        payment = submit_payment(
+            customer_id=customer.id, amount=Decimal("250.00"), currency="USD", method="BANK_TRANSFER",
+            payment_date=date.today(), actor_staff_user_id=staff_fin,
+        )
+        with pytest.raises(CommercialSalesError) as exc:
+            reject_payment(payment, reason="bounced", actor_staff_user_id=staff_fin)
+        assert exc.value.code == "SELF_CONFIRMATION_FORBIDDEN"
+
+
+def test_recorder_cannot_reject_own_payment_via_api(app, client, seeded):
+    staff_fin = make_staff(app, "sec10f@example.com", role_codes=["FINANCE"])
+    with app.app_context():
+        from app.customers.services import create_customer
+        customer_id = create_customer({"legal_name": "Sec10 Customer"}, actor_staff_user_id=staff_fin).id
+
+    force_login(client, app, staff_fin)
+    csrf = _csrf(client)
+    resp = client.post(
+        "/api/operations/v1/payments",
+        json={"customer_id": str(customer_id), "amount": "250.00", "currency": "USD", "method": "BANK_TRANSFER", "payment_date": date.today().isoformat()},
+        headers={"X-CSRFToken": csrf},
+    )
+    assert resp.status_code == 201
+    payment_id = resp.get_json()["id"]
+
+    resp = client.post(f"/api/operations/v1/payments/{payment_id}/reject", json={"reason": "bounced"}, headers={"X-CSRFToken": csrf})
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "SELF_CONFIRMATION_FORBIDDEN"
+
+
 def test_stale_version_on_order_confirm_rejected(app, client, seeded):
     """Tampering: a client submitting a stale/forged version must be
     rejected, not silently accepted -- optimistic locking is real, not
