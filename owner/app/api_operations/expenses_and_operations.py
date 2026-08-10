@@ -16,6 +16,7 @@ from flask import Blueprint, jsonify, request
 
 from app.audit.services import record as audit_record
 from app.auth.session import has_recent_auth, load_current_staff
+from app.cash_closing import list_queries as cash_closing_list_queries
 from app.cash_closing import services as cash_closing_services
 from app.employees.queries import find_own_profile
 from app.expenses import approvals as expense_approvals
@@ -475,17 +476,38 @@ def _serialize_closing(c: CashClosing) -> dict:
 @bp.route("/cash-closings", methods=["GET", "POST"])
 @require_any_permission("cash_closing.view_own", "cash_closing.view_all", "cash_closing.prepare")
 def cash_closings_route():
-    from sqlalchemy import select
-
     staff, profile = _actor()
     if request.method == "GET":
-        business_date = request.args.get("business_date")
         currency = request.args.get("currency", "USD")
-        stmt = select(CashClosing).where(CashClosing.currency == currency)
-        if business_date:
-            stmt = stmt.where(CashClosing.business_date == date.fromisoformat(business_date))
-        rows = db_session.execute(stmt.order_by(CashClosing.business_date.desc()).limit(200)).scalars().all()
-        return jsonify({"rows": [_serialize_closing(c) for c in rows]})
+        # AUDIT-031 -- this route used to run its own raw, unscoped
+        # `select(CashClosing)` here, bypassing the ownership scoping
+        # app.cash_closing.list_queries.list_closings() already enforces
+        # for the UI route (operations_ui/routes.py). A staff account
+        # holding only cash_closing.view_own (never cash_closing.view_all)
+        # could call this JSON endpoint directly and see every closing
+        # company-wide -- the exact bug list_queries.py's own docstring
+        # describes fixing, just never applied to this second entry point.
+        # Delegating here closes that gap instead of re-implementing
+        # scoping a second time (which is how the gap got created).
+        business_date_raw = request.args.get("business_date")
+        try:
+            business_date = date.fromisoformat(business_date_raw) if business_date_raw else None
+        except ValueError:
+            return jsonify({"error": "INVALID_REQUEST"}), 400
+        codes = get_staff_permission_codes(staff)
+        view_all_held = bool({"cash_closing.view_all", "cash_closing.approve"} & codes)
+        limit = min(int(request.args.get("limit", 200)), 200)
+        result = cash_closing_list_queries.list_closings(
+            page=request.args.get("page", 1, type=int), page_size=limit,
+            currency=currency, status=request.args.get("status"), business_date=business_date,
+            sort=request.args.get("sort", "business_date"), direction=request.args.get("dir", "desc"),
+            actor_staff_user_id=staff.id, view_all_held=view_all_held,
+        )
+        return jsonify({
+            "rows": [_serialize_closing(c) for c in result["rows"]],
+            "page": result["page"], "page_size": result["page_size"],
+            "total": result["total"], "total_pages": result["total_pages"],
+        })
 
     body = request.get_json(silent=True) or {}
     try:

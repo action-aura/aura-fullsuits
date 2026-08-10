@@ -107,10 +107,12 @@ in its respective stage's contract or report doc.
 
 ## Real, disclosed findings deliberately left unfixed (with reasons)
 
-- **`app/api_operations/expenses_and_operations.py`'s JSON API** has the
-  identical cash-closing ownership gap the web UI had — outside this
+- **`app/api_operations/expenses_and_operations.py`'s JSON API** had the
+  identical cash-closing ownership gap the web UI had — was outside this
   phase's `owner/app/operations_ui/` file scope, a separate API-contract
-  change (`finance-ui-contract.md`).
+  change (`finance-ui-contract.md`). **AUDIT-031, fixed in the Week 2
+  correctness pass** — `cash_closings_route()` now delegates to the same
+  scoped `list_closings()` query the web route uses.
 - **`employees.view_own`** and the **`employees.assign_role`/`staff.assign_roles`**
   twin-permission-code split — real, investigated, deliberately not
   "fixed" since the safe fix isn't obvious and the unsafe fix risks

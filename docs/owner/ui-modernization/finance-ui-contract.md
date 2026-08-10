@@ -426,12 +426,18 @@ below.
   (the JSON API's own `GET /api/operations/v1/cash-closings`)** — verified
   it has the exact same "filters only by currency/business_date, no
   ownership restriction" shape as the web route had before this pass.
-  **Not fixed** — it lives in a different blueprint entirely
-  (`api_operations`, not `operations_ui`), outside this task's named file
-  scope (`owner/app/operations_ui/`), and fixing a JSON API's response
-  shape/contract is a separate, disclosable pass of its own (a different
-  set of consumers, a different test surface) — not silently bundled into
-  a UI-layer pass. Disclosed here so it isn't lost.
+  Disclosed here as **not fixed** at the time, deliberately left out of
+  this task's named file scope (`owner/app/operations_ui/`) since fixing
+  a JSON API's response shape/contract is a separate, disclosable pass of
+  its own (a different set of consumers, a different test surface) — not
+  silently bundled into a UI-layer pass. **AUDIT-031, fixed in the Week 2
+  correctness pass**: `cash_closings_route()`'s GET branch now delegates
+  to `app.cash_closing.list_queries.list_closings()` (the same scoped
+  query the UI route already used), computing `view_all_held` from
+  `cash_closing.view_all`/`cash_closing.approve` exactly as
+  `operations_ui/routes.py::list_closings` does. The response envelope
+  gained additive `page`/`page_size`/`total`/`total_pages` keys but kept
+  `rows` backward compatible for existing consumers.
 - **No column visibility / saved views / CSV export / row selection+bulk
   actions** — same reasoning `enterprise-table-system.md` already
   documented for Customers/Leads (no persistence authority, no export

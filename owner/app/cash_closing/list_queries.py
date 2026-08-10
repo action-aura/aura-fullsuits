@@ -38,6 +38,7 @@ query."""
 from __future__ import annotations
 
 import uuid
+from datetime import date
 
 from sqlalchemy import Select, select
 
@@ -59,6 +60,7 @@ def list_closings(
     page_size: int = DEFAULT_PAGE_SIZE,
     currency: str = "USD",
     status: str | None = None,
+    business_date: date | None = None,
     sort: str = "business_date",
     direction: str = "desc",
     actor_staff_user_id: uuid.UUID,
@@ -71,12 +73,25 @@ def list_closings(
     sort dimensions). No "no profile" branch is needed the way Expense's
     list needs one -- prepared_by_staff_user_id is a StaffUser id, always
     real and available for any authenticated actor, unlike an
-    EmployeeProfile that might not exist yet."""
+    EmployeeProfile that might not exist yet.
+
+    `business_date` (AUDIT-031) exists so
+    app.api_operations.expenses_and_operations::cash_closings_route's JSON
+    GET branch can delegate here instead of re-implementing ownership
+    scoping inline -- that re-implementation is exactly how this query's
+    own now-fixed IDOR gap (see the module docstring) got introduced in
+    the first place, and how a second, undiscovered copy of the same bug
+    sat live in the API blueprint for an entire phase (finance-ui-
+    contract.md's own "not fixed -- lives in a different blueprint
+    entirely" disclosure). Kept purely additive/keyword-only so the
+    existing operations_ui/routes.py::list_closings caller is unaffected."""
     stmt: Select = select(CashClosing).where(CashClosing.currency == currency)
     if not view_all_held:
         stmt = stmt.where(CashClosing.prepared_by_staff_user_id == actor_staff_user_id)
     if status:
         stmt = stmt.where(CashClosing.status == status)
+    if business_date:
+        stmt = stmt.where(CashClosing.business_date == business_date)
     column = CASH_CLOSING_SORT_COLUMNS.get(sort, CashClosing.business_date)
     order = column.asc() if direction == "asc" else column.desc()
     stmt = stmt.order_by(order, CashClosing.id)
