@@ -312,6 +312,44 @@ def test_pull_missing_since_rejected_400(app, client, seeded, signing_key):
     assert resp.get_json()["reason_code"] == "INVALID_SINCE"
 
 
+def test_push_acquires_per_license_advisory_lock_before_storing_events(app, client, seeded, signing_key, monkeypatch):
+    """Unit-level wiring proof (fast, deterministic, no real Postgres
+    concurrency needed for this one -- that's what
+    test_sync_ordering_concurrency.py's real-connection tests are for):
+    push() must call _lock_license_stream exactly once, with the license_id
+    _authenticate() resolved from the verified installation (never from
+    request body input), and it must do so BEFORE _store_events runs.
+    Spies on both functions and records call order the same way
+    test_push_concurrent_duplicate_id_race_caught_not_500 above spies on
+    db_session.get."""
+    actor_id = make_staff(app, "sync-lockwiring@example.com")
+    license_id, _, installation_id, private_key = _do_activation(app, client, actor_id)
+
+    from app.sync import routes as sync_routes
+
+    call_order = []
+    lock_calls = []
+    real_store_events = sync_routes._store_events
+
+    def _spy_lock(passed_license_id):
+        lock_calls.append(passed_license_id)
+        call_order.append("lock")
+
+    def _spy_store_events(events, passed_license_id, device_id):
+        call_order.append("store")
+        return real_store_events(events, passed_license_id, device_id)
+
+    monkeypatch.setattr(sync_routes, "_lock_license_stream", _spy_lock)
+    monkeypatch.setattr(sync_routes, "_store_events", _spy_store_events)
+
+    event = _make_event()
+    resp = _push(client, _push_body(private_key, installation_id, [event]))
+    assert resp.status_code == 200, resp.get_json()
+
+    assert lock_calls == [license_id]  # exactly once, with the AUTHENTICATED license_id
+    assert call_order == ["lock", "store"]  # lock acquired strictly before storage
+
+
 def test_push_event_type_too_long_entity_type_rejected_cleanly_400(app, client, seeded, signing_key):
     actor_id = make_staff(app, "sync-longfield@example.com")
     _, _, installation_id, private_key = _do_activation(app, client, actor_id)

@@ -202,16 +202,19 @@ own conflict model in a later sub-project.
 
 - Push/pull network failure: retried with backoff; nothing is ever
   dropped, since the outbox only clears on confirmed relay receipt and the
-  cursor only advances after successful local apply.
-  **Caveat (added 2026-08-07 after the final whole-branch review):** this
-  "nothing is ever dropped" claim covers retry, crash-mid-apply and
-  duplicate delivery, but NOT concurrent commits. `seq` is assigned at
-  INSERT time and becomes visible at COMMIT time, so a push that takes a
-  lower `seq` but commits after a higher one can be skipped permanently by
-  a device that pulled in between. See "Residual gaps" in
+  cursor only advances after successful local apply. This now holds under
+  concurrent commits too, not just retry/crash-mid-apply/duplicate
+  delivery: `push()` acquires a transaction-scoped, per-license Postgres
+  advisory lock (`_lock_license_stream()` in `owner/app/sync/routes.py`,
+  branch `feat/seq-advisory-lock-fix`) immediately after authentication and
+  before storing events, so a push that takes a lower `seq` can no longer
+  commit after a higher one for the same license — commit order can never
+  diverge from `seq` order within one license's stream. See "Residual
+  gaps" in
   `docs/superpowers/plans/2026-08-06-multi-device-sync-foundation.md` for
-  the full mechanism and the two candidate fixes; it must be closed before
-  this guarantee holds under real concurrent multi-device write load.
+  the full before/after mechanism, and
+  `owner/tests/test_sync_ordering_concurrency.py` for the real-Postgres
+  concurrency proof.
 - Duplicate/replayed event: idempotent by `(entity_id, seq)` — a no-op.
 - Invalid/expired license session: sync endpoints reject explicitly
   (401/403); the client surfaces "sync paused — check license" rather than

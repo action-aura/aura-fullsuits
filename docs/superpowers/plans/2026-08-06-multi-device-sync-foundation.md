@@ -1321,42 +1321,53 @@ matrix exactly.
   (abuse-resistance) but does not add full rate limiting; noted in the
   spec as a deployment-time concern.
 
-- **`seq` ordering has a narrow concurrent-commit window in which an event
-  can be permanently skipped by a device.** Found in the final whole-branch
-  review (2026-08-07); documented rather than fixed, deliberately — the
-  window is narrow and closing it properly is a distributed-systems design
-  decision, not a one-line bug fix. The mechanism: `SyncEvent.seq`
-  (`owner/app/models/sync.py`) is a Postgres `Identity()` column, so its
-  value is drawn from a sequence at **INSERT** time, while the row only
-  becomes visible to other transactions at **COMMIT** time. Insert order and
-  commit order are therefore not the same order. If push A has already taken
-  `seq=10` but is still in flight when push B takes `seq=11` and commits
-  first, a device that pulls in that instant sees only event 11 and sets its
+- ~~**`seq` ordering has a narrow concurrent-commit window in which an event
+  can be permanently skipped by a device.**~~ **CLOSED** (branch
+  `feat/seq-advisory-lock-fix`) — see `_lock_license_stream()` in
+  `owner/app/sync/routes.py`. Found in the final whole-branch review
+  (2026-08-07); originally documented rather than fixed on the spot, because
+  closing it properly needed a real design decision, not a one-line patch.
+  The mechanism that caused it: `SyncEvent.seq` (`owner/app/models/sync.py`)
+  is a Postgres `Identity()` column, so its value is drawn from a sequence at
+  **INSERT** time, while the row only becomes visible to other transactions
+  at **COMMIT** time. Insert order and commit order were therefore not
+  guaranteed to be the same order. If push A had already taken `seq=10` but
+  was still in flight when push B took `seq=11` and committed first, a
+  device that pulled in that instant would see only event 11 and set its
   cursor to 11 — because `owner/app/sync/routes.py`'s pull is
   `WHERE seq > since` and its returned `cursor` is the highest `seq` in the
-  batch. When A commits a moment later, event 10 no longer satisfies
-  `seq > 11` for that device, and nothing ever re-offers it: the event is
-  permanently invisible **to that device only**, while other devices that
-  happened to pull later see both. The result is silent, per-device
+  batch. When A committed a moment later, event 10 no longer satisfied
+  `seq > 11` for that device, and nothing would ever re-offer it: the event
+  became permanently invisible **to that device only**, while other devices
+  that happened to pull later saw both. The result was silent, per-device
   divergence with no error anywhere — the outbox drained successfully, the
-  cursor advanced normally, and no code path can detect the hole after the
+  cursor advanced normally, and no code path could detect the hole after the
   fact.
 
-  This does not contradict the at-least-once guarantees the design spec
-  claims for the paths it does cover (retry, crash-mid-apply, duplicate
-  delivery) — but it does mean the spec's "nothing is ever dropped" wording
-  under **Error handling** is only true in the absence of concurrent commits,
-  which is exactly the condition that stops holding under real multi-device
-  load. Tonight's testing never hit it because pushes were effectively
-  serialized (one operator, two devices, 10-second poll intervals).
+  **The fix (option (a) below, implemented):** `push()` now acquires a
+  transaction-scoped Postgres advisory lock keyed by `hashtext(license_id)`
+  (`pg_advisory_xact_lock`) immediately after `_authenticate()` succeeds and
+  before `_store_events()` runs, so two concurrent pushes for the SAME
+  license can no longer INSERT-and-COMMIT out of order — the second push
+  genuinely blocks on the lock until the first one's transaction ends. It is
+  deliberately a **per-license** lock, not a global one: `pull()` is always
+  scoped `WHERE license_id = <the authenticated installation's own
+  license_id>`, so cross-license commit interleaving was never the problem,
+  and a global lock would have serialized every customer's push against
+  every other customer's for no correctness benefit. Full reasoning is in
+  `_lock_license_stream()`'s docstring; real-Postgres concurrency proof
+  (genuinely independent `psycopg` connections, not shared-pool SQLAlchemy
+  sessions) is in `owner/tests/test_sync_ordering_concurrency.py` — blocking
+  behavior, no-gap ordering under real concurrent load, cross-license
+  non-contention, and an explicit advisory-lock key-space collision check
+  against `owner/tests/conftest.py`'s own fixed test-serialization key.
 
-  Fixing it properly needs one of: (a) a transaction-level advisory lock (or
-  an explicitly serialized allocator) around `seq` assignment so commit order
-  can never diverge from `seq` order; or (b) a pull-side safety lag — never
-  advance a cursor past `max(seq)` minus a bounded window, or exclude events
-  newer than the oldest currently-open transaction (`pg_snapshot_xmin`), and
-  re-pull that trailing window each time, relying on the existing
-  apply-idempotency to absorb the repeats. Either must land **before** the
-  `seq` ordering guarantee can be trusted under genuine concurrent
-  multi-device write load; until then, `seq` ordering is reliable for the
-  single-writer-at-a-time usage this phase actually exercises.
+  This closes the gap the design spec's "nothing is ever dropped" wording
+  under **Error handling** previously did not actually cover: `seq` ordering
+  is now reliable under genuine concurrent multi-device write load for a
+  single license, not just for the single-writer-at-a-time usage this phase
+  originally exercised.
+
+  (Option (b) — a pull-side safety lag — was considered and not needed:
+  the per-license advisory lock closes the race at the source, so pull()
+  never needed a trailing-window workaround.)
