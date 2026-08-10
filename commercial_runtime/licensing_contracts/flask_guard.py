@@ -21,7 +21,7 @@ from typing import Callable, Optional
 
 from flask import jsonify
 
-from .capability_guard import evaluate_capability
+from .capability_guard import DENIAL_REASON_LICENSE_INACTIVE, evaluate_capability
 from .events import LicensingEventRecorder
 from .state_machine import LicenseState
 from .state_repository import LicenseStateRepository
@@ -46,7 +46,37 @@ def make_capability_guard(app_data_dir: str) -> Callable:
             def wrapper(*args, **kwargs):
                 state_repository = LicenseStateRepository(db_path)
                 record = state_repository.load()
-                current_state = LicenseState(record.current_state) if record else LicenseState.NOT_CONFIGURED
+                try:
+                    current_state = LicenseState(record.current_state) if record else LicenseState.NOT_CONFIGURED
+                except ValueError:
+                    # AUDIT P0-3: the persisted current_state string doesn't
+                    # match any known LicenseState member (a partial write,
+                    # or a future enum value an older client build doesn't
+                    # know about yet) -- LicenseState(...) raises ValueError
+                    # here with no handling at all before this fix, which
+                    # became an unhandled 500 on every guarded route for as
+                    # long as the corruption persisted. Deny-by-default
+                    # (this module's own docstring, Part T/S/10): mirror the
+                    # exact 403 response shape already used for a known-
+                    # restricted state below, never fall through to
+                    # granting access on a value this guard could not even
+                    # parse.
+                    event_recorder = LicensingEventRecorder(db_path)
+                    event_recorder.record(
+                        "CAPABILITY_DENIED",
+                        {"capability_code": capability_code},
+                        trusted_keys=frozenset({"capability_code"}),
+                    )
+                    return (
+                        jsonify(
+                            {
+                                "status": "error",
+                                "reason_code": DENIAL_REASON_LICENSE_INACTIVE,
+                                "message": "This action is not available in the current licensing state.",
+                            }
+                        ),
+                        403,
+                    )
                 entitlements = (
                     json.loads(record.entitlements_json) if record and record.entitlements_json else {}
                 )

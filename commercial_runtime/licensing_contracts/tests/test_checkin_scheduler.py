@@ -456,3 +456,81 @@ def test_reevaluate_only_before_activation_is_noop(trust_store, state_repo, even
     )
     scheduler = _scheduler(FakeClient(), trust_store, state_repo, events)
     assert scheduler.reevaluate_only() == LicenseState.ACTIVATION_REQUIRED
+
+
+# -- AUDIT P0-3: fail closed on monotonic-clock-rollback corruption ---------
+# trusted_time.trusted_now() raises TrustedTimeError when time.monotonic()
+# reads backward since the anchor was pinned (never supposed to happen on
+# any supported platform, but it fails closed rather than treating it as
+# zero elapsed -- see that function's docstring). Before this fix, that
+# exception was never caught anywhere in _reevaluate()'s call chain -- it
+# propagated straight out of run_once()/reevaluate_only() as an unhandled
+# exception (an unhandled 500 on the real /check-in HTTP route, since
+# routes.py's check_in() has no try/except of its own around
+# scheduler.run_once()).
+
+
+def test_monotonic_rollback_during_reevaluate_yields_clock_review_required_not_a_crash(
+    owner_key, trust_store, state_repo, events, monkeypatch
+):
+    import json
+    import time as time_module
+
+    envelope = _envelope(owner_key, "owner-1", _payload(expires_at=(NOW + timedelta(days=1)).isoformat()))
+    _seed_activated_record(
+        state_repo,
+        assertion_envelope_json=json.dumps(envelope),
+        trusted_time_anchor_server_time=NOW.isoformat(),
+        last_successful_checkin_at=NOW.isoformat(),
+    )
+    scheduler = _scheduler(FakeClient(), trust_store, state_repo, events)
+
+    # First evaluation pins the process-lifetime anchor cache (trusted_time.py)
+    # at monotonic=1000.0 -- mirrors the real sequence (an anchor gets pinned
+    # once, then reused across later re-evaluations of the same persisted
+    # server_time).
+    fake_monotonic = [1000.0]
+    monkeypatch.setattr(time_module, "monotonic", lambda: fake_monotonic[0])
+    first_result = scheduler.reevaluate_only(checkin_ok=False)
+    assert first_result != LicenseState.CLOCK_REVIEW_REQUIRED  # sanity: no rollback yet
+
+    # The monotonic clock reading backward is exactly the corruption this
+    # guards against -- must never happen on any real platform, but must be
+    # handled, not crash, if it somehow does.
+    fake_monotonic[0] = 900.0
+
+    result = scheduler.reevaluate_only(checkin_ok=False)  # must not raise
+
+    assert result == LicenseState.CLOCK_REVIEW_REQUIRED
+    assert state_repo.load().current_state == "CLOCK_REVIEW_REQUIRED"
+    event_types = [e.event_type for e in events.recent()]
+    assert "CLOCK_REVIEW_REQUIRED" in event_types
+
+
+def test_monotonic_rollback_during_run_once_yields_clock_review_required_not_a_crash(
+    owner_key, trust_store, state_repo, events, monkeypatch
+):
+    """Same corruption, but through run_once()'s failed-check-in fallback
+    path (the real Windows /check-in route's actual call), not just
+    reevaluate_only() directly."""
+    import json
+    import time as time_module
+
+    envelope = _envelope(owner_key, "owner-1", _payload(expires_at=(NOW + timedelta(days=1)).isoformat()))
+    _seed_activated_record(
+        state_repo,
+        assertion_envelope_json=json.dumps(envelope),
+        trusted_time_anchor_server_time=NOW.isoformat(),
+        last_successful_checkin_at=NOW.isoformat(),
+    )
+    client = FakeClient(checkin_responses=[LicensingClientError("NETWORK_UNAVAILABLE", "down")] * 2)
+    scheduler = _scheduler(client, trust_store, state_repo, events)
+
+    fake_monotonic = [2000.0]
+    monkeypatch.setattr(time_module, "monotonic", lambda: fake_monotonic[0])
+    scheduler.run_once()  # pins the anchor
+
+    fake_monotonic[0] = 1500.0  # backward
+    result = scheduler.run_once()  # must not raise
+
+    assert result == LicenseState.CLOCK_REVIEW_REQUIRED

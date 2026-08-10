@@ -18,7 +18,13 @@ from .policy_evaluator import evaluate as evaluate_policy
 from .state_machine import LicenseState
 from .state_repository import LicenseStateRecord, LicenseStateRepository
 from .trust_store import OwnerTrustStore
-from .trusted_time import TrustedTimeAnchor, cache_fresh_anchor, get_cached_or_rehydrate_anchor, new_anchor
+from .trusted_time import (
+    TrustedTimeAnchor,
+    TrustedTimeError,
+    cache_fresh_anchor,
+    get_cached_or_rehydrate_anchor,
+    new_anchor,
+)
 
 # States in which there is no installation_id yet to check in with --
 # run_once() is a no-op (by design, not an error) in these states.
@@ -274,24 +280,49 @@ class LicenseCheckInScheduler:
                 expected_device_key_fingerprint=self._device_fingerprint,
                 trusted_now=datetime.now(timezone.utc),
             )
+
+            anchor = self._resolve_anchor(record)
+            last_checkin = (
+                datetime.fromisoformat(record.last_successful_checkin_at)
+                if record.last_successful_checkin_at
+                else verified.evidence.not_before
+            )
+            return evaluate_policy(
+                evidence=verified.evidence,
+                anchor=anchor,
+                local_wall_clock_now=datetime.now(timezone.utc),
+                last_successful_checkin_at=last_checkin,
+                last_checkin_attempt_ok=checkin_ok,
+                local_safety_ceiling_seconds=self._safety_ceiling,
+            )
         except AssertionVerificationError:
             self._events.record("LOCAL_STATE_CORRUPT")
             return LicenseState.LOCAL_STATE_CORRUPT
-
-        anchor = self._resolve_anchor(record)
-        last_checkin = (
-            datetime.fromisoformat(record.last_successful_checkin_at)
-            if record.last_successful_checkin_at
-            else verified.evidence.not_before
-        )
-        return evaluate_policy(
-            evidence=verified.evidence,
-            anchor=anchor,
-            local_wall_clock_now=datetime.now(timezone.utc),
-            last_successful_checkin_at=last_checkin,
-            last_checkin_attempt_ok=checkin_ok,
-            local_safety_ceiling_seconds=self._safety_ceiling,
-        )
+        except TrustedTimeError:
+            # AUDIT P0-3: trusted_time.trusted_now() (called deep inside
+            # evaluate_policy() above, via policy_evaluator._trusted_now)
+            # raises this when the MONOTONIC clock reads backward since the
+            # anchor was pinned -- not supposed to be possible on any
+            # supported platform, but trusted_now() fails closed rather
+            # than silently treating it as zero elapsed (see that
+            # function's own docstring). Before this fix, this exception
+            # was never caught anywhere in this call chain -- it propagated
+            # all the way out of run_once()/ingest_checkin_response()/
+            # reevaluate_only() as an unhandled 500 on the check-in
+            # endpoint. This is a distinct detector from the WALL-clock
+            # rollback check (detect_rollback(), called earlier inside
+            # evaluate_policy() itself, which already returns
+            # CLOCK_REVIEW_REQUIRED as a normal value, never raises) --
+            # but it lands in the exact same "something about time is
+            # untrustworthy, a human needs to look" bucket, so it reuses
+            # the identical pre-existing state/reason-code rather than
+            # inventing a new one. _apply_state_transition() (called by
+            # every caller of _reevaluate()) fires the CLOCK_REVIEW_REQUIRED
+            # entry event automatically via _STATE_ENTRY_EVENTS below when
+            # this differs from the currently-persisted state, exactly as
+            # it already does for the detect_rollback() path -- no manual
+            # event record needed here.
+            return LicenseState.CLOCK_REVIEW_REQUIRED
 
     def _resolve_anchor(self, record: LicenseStateRecord) -> TrustedTimeAnchor:
         """Phase 7V-F fix (found via live production-like validation):

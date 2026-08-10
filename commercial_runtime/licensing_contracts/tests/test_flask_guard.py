@@ -113,3 +113,41 @@ def test_entitlement_gate_allows_when_present(flask_app, app_data_dir):
     _set_state(app_data_dir, "ACTIVE_ONLINE", entitlements={"digital_receipts_enabled": True})
     resp = flask_app.test_client().post("/settings")
     assert resp.status_code == 200
+
+
+# -- AUDIT P0-3: fail closed on a corrupted persisted current_state --------
+# LicenseState(record.current_state) raised a bare, unhandled ValueError
+# before this fix whenever the persisted string didn't match any known
+# LicenseState member (a partial write, or a future enum value an older
+# client build doesn't recognize yet) -- an unhandled 500 on every guarded
+# route for as long as the corruption persisted. Deny-by-default is this
+# module's own stated design (see its module docstring); this proves the
+# corrupt-state path actually denies rather than crashing OR silently
+# granting access.
+
+
+def test_corrupted_current_state_denies_mutation_403_not_500(flask_app, app_data_dir):
+    _set_state(app_data_dir, "TOTALLY_NOT_A_REAL_STATE")
+    resp = flask_app.test_client().post("/patients")
+    assert resp.status_code == 403
+    assert resp.get_json()["reason_code"] == "LICENSE_INACTIVE"
+
+
+def test_corrupted_current_state_denies_read_too(flask_app, app_data_dir):
+    # Unlike a genuinely-known RESTRICTED state (which still allows reads
+    # via restricted_mode_allowlist), an UNPARSEABLE state must not be
+    # special-cased into any allowlist -- deny-by-default means deny
+    # everything until a human resets it, never guess it might be one of
+    # the "safe" states.
+    _set_state(app_data_dir, "TOTALLY_NOT_A_REAL_STATE")
+    resp = flask_app.test_client().get("/patients")
+    assert resp.status_code == 403
+
+
+def test_corrupted_current_state_records_capability_denied_event(flask_app, app_data_dir):
+    _set_state(app_data_dir, "TOTALLY_NOT_A_REAL_STATE")
+    flask_app.test_client().post("/patients")
+    events = LicensingEventRecorder(_db_path(app_data_dir)).recent()
+    denied = [e for e in events if e.event_type == "CAPABILITY_DENIED"]
+    assert len(denied) == 1
+    assert denied[0].details["capability_code"] == "clinic.patient.create"

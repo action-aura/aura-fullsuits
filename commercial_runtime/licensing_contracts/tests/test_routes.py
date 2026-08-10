@@ -306,3 +306,54 @@ def test_checkin_response_flags_when_owner_reached_successfully(client, owner_ke
     resp = client.post("/api/licensing/check-in")
     assert resp.status_code == 200
     assert resp.get_json()["last_attempt_reached_owner"] is True
+
+
+def test_checkin_route_handles_monotonic_rollback_without_crashing(client, owner_key, monkeypatch):
+    """AUDIT P0-3: this route (check_in() above) has no try/except of its
+    own around scheduler.run_once() -- if trusted_time.trusted_now() raises
+    TrustedTimeError (the monotonic clock reading backward since the
+    anchor was pinned), that must be handled inside the scheduler itself
+    (checkin_scheduler._reevaluate()) or this HTTP route 500s. Proves the
+    fix holds at the real HTTP boundary, not just at the
+    LicenseCheckInScheduler unit level (see test_checkin_scheduler.py's
+    test_monotonic_rollback_during_run_once_yields_clock_review_required_
+    not_a_crash for that)."""
+    from commercial_runtime.licensing_contracts import trusted_time
+    import time as time_module
+
+    # A distinct installation_id avoids colliding with the process-lifetime
+    # anchor cache other tests in this file populate under
+    # "owner-assigned-inst-1"; clearing it too, for good measure.
+    trusted_time._ANCHOR_CACHE.clear()
+    installation_id = "owner-assigned-inst-clock-review"
+
+    def _activate(self, **kwargs):
+        fingerprint = _fingerprint_from_request(kwargs["device_public_key_b64"])
+        envelope = _envelope(owner_key, "owner-1", _payload(installation_id, fingerprint))
+        return {"result": "SUCCESS", "installation_id": installation_id, "signed_assertion": envelope}
+
+    monkeypatch.setattr(routes_module.LicensingClient, "activate", _activate)
+    activate_resp = client.post("/api/licensing/activate", json={"license_key": "AURA-RETAIL-XXXX-YYYY"})
+    assert activate_resp.status_code == 200
+
+    def _check_in_fails(self, **kwargs):
+        from commercial_runtime.licensing_contracts.client import NetworkError
+        raise NetworkError("NETWORK_UNAVAILABLE", "simulated outage")
+
+    monkeypatch.setattr(routes_module.LicensingClient, "check_in", _check_in_fails)
+
+    fake_monotonic = [5000.0]
+    monkeypatch.setattr(time_module, "monotonic", lambda: fake_monotonic[0])
+
+    # First failed check-in pins the anchor at monotonic=5000.0.
+    first_resp = client.post("/api/licensing/check-in")
+    assert first_resp.status_code == 200
+
+    # The monotonic clock reads backward on the next attempt -- must not 500.
+    fake_monotonic[0] = 4000.0
+    resp = client.post("/api/licensing/check-in")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["current_state"] == "CLOCK_REVIEW_REQUIRED"
+
+    trusted_time._ANCHOR_CACHE.clear()
