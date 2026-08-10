@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional, Union
 
 from .assertion_verifier import AssertionVerificationError, verify_assertion
 from .client import LicensingClient, LicensingClientError
+from .device_identity import LocalStateCorruptError
 from .events import LicensingEventRecorder
 from .policy_evaluator import evaluate as evaluate_policy
 from .state_machine import LicenseState
@@ -57,7 +58,7 @@ class LicenseCheckInScheduler:
         event_recorder: LicensingEventRecorder,
         product_code: str,
         platform: str,
-        device_public_key_fingerprint: str,
+        device_public_key_fingerprint: Union[str, Callable[[], str]],
         local_safety_ceiling_seconds: Optional[int] = None,
     ):
         self._client = client
@@ -67,10 +68,32 @@ class LicenseCheckInScheduler:
         self._events = event_recorder
         self._product_code = product_code
         self._platform = platform
+        # AUDIT P0-2: may be a fixed string (every pre-existing caller --
+        # routes.py's per-request /check-in scheduler, Android's internal-
+        # sync routes, every existing test) OR a zero-arg callable returning
+        # the CURRENT fingerprint (Retail's new boot-time periodic
+        # scheduler, products/retail/backend/app.py -- constructed ONCE and
+        # kept alive for the app's whole process lifetime via .start()). A
+        # fixed string captured once at construction would go stale the
+        # moment this device's very first activation generates its device
+        # key AFTER this long-lived scheduler was already built -- every
+        # later verify_assertion() call would then wrongly reject a
+        # perfectly valid, freshly-signed assertion as a device-fingerprint
+        # mismatch. See _resolve_device_fingerprint() below, called fresh at
+        # each point of use instead of read once here.
         self._device_fingerprint = device_public_key_fingerprint
         self._safety_ceiling = local_safety_ceiling_seconds
         self._timer: Optional[threading.Timer] = None
         self._stopped = threading.Event()
+
+    def _resolve_device_fingerprint(self) -> str:
+        """A plain string is never callable, so every pre-existing caller
+        (which always passes a fixed string, already resolved for the
+        lifetime of that per-request/per-call scheduler instance) is
+        completely unaffected -- only a caller that deliberately passes a
+        zero-arg callable gets fresh re-resolution on every call."""
+        fp = self._device_fingerprint
+        return fp() if callable(fp) else fp
 
     def run_once(self) -> LicenseState:
         """Windows path: this process owns the device key, so it also owns
@@ -112,12 +135,18 @@ class LicenseCheckInScheduler:
                     expected_product_code=self._product_code,
                     expected_platform=self._platform,
                     expected_installation_id=record.owner_installation_id,
-                    expected_device_key_fingerprint=self._device_fingerprint,
+                    expected_device_key_fingerprint=self._resolve_device_fingerprint(),
                     trusted_now=datetime.now(timezone.utc),
                 )
-            except AssertionVerificationError:
+            except (AssertionVerificationError, LocalStateCorruptError):
                 # Retain the previous valid assertion (Part L) -- do not
                 # overwrite record with anything from this response.
+                # LocalStateCorruptError (AUDIT P0-2): can only originate
+                # from _resolve_device_fingerprint() -> signer.get_metadata()
+                # above when a caller uses the callable form (a long-lived
+                # scheduler) and the device key file is unreadable at this
+                # exact instant -- treated the same as a failed signature
+                # check, never a crash.
                 self._events.record("ASSERTION_REJECTED")
             else:
                 # Phase 8V-P9: real finding -- verify_assertion() (signature +
@@ -277,7 +306,7 @@ class LicenseCheckInScheduler:
                 expected_product_code=self._product_code,
                 expected_platform=self._platform,
                 expected_installation_id=record.owner_installation_id,
-                expected_device_key_fingerprint=self._device_fingerprint,
+                expected_device_key_fingerprint=self._resolve_device_fingerprint(),
                 trusted_now=datetime.now(timezone.utc),
             )
 
@@ -295,7 +324,15 @@ class LicenseCheckInScheduler:
                 last_checkin_attempt_ok=checkin_ok,
                 local_safety_ceiling_seconds=self._safety_ceiling,
             )
-        except AssertionVerificationError:
+        except (AssertionVerificationError, LocalStateCorruptError):
+            # LocalStateCorruptError (AUDIT P0-2): can only originate from
+            # _resolve_device_fingerprint() -> signer.get_metadata() above
+            # when a caller uses the callable form (a long-lived scheduler,
+            # e.g. Retail's boot-time periodic scheduler) and the device key
+            # file is unreadable at this exact instant -- routed to the same
+            # LOCAL_STATE_CORRUPT bucket as a failed assertion signature
+            # check, since both mean "this installation's local state cannot
+            # currently be trusted," never a crash.
             self._events.record("LOCAL_STATE_CORRUPT")
             return LicenseState.LOCAL_STATE_CORRUPT
         except TrustedTimeError:

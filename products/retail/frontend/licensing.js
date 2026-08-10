@@ -277,5 +277,21 @@
     await refresh();
   }
 
+  // AUDIT P0-2: before this fix, this page only ever checked licensing
+  // status once, at initial page load -- if it was left open in the
+  // background (e.g. a pinned browser tab, or the desktop app window
+  // minimized) it would keep showing a stale state (Active, say) long
+  // after the backend's own periodic scheduler (see products/retail/
+  // backend/app.py's init_app(), commercial_runtime/licensing_contracts/
+  // checkin_scheduler.py) had already moved the persisted state to
+  // WARNING/GRACE_PERIOD/RESTRICTED/etc. This just re-polls the existing
+  // /status endpoint -- it deliberately does NOT itself POST /check-in on
+  // every tick; the scheduler tick server-side is the correct seam for
+  // actually re-evaluating and persisting state (see flask_guard.py's own
+  // design note: it only ever reads persisted state, never re-evaluates
+  // live per-request), this timer just re-reads whatever is currently
+  // persisted so the UI stays honest without a manual "Check Now" click.
+  const STATUS_POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
   refresh();
+  setInterval(refresh, STATUS_POLL_INTERVAL_MS);
 })();

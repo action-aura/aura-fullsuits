@@ -183,6 +183,84 @@ app.register_blueprint(make_licensing_blueprint(
     auth_required=mt_login_required,
 ))
 
+# AUDIT P0-2: periodic license re-evaluation for Windows (Retail's desktop
+# platform). Before this fix, nothing on Windows ever re-evaluated license
+# state after initial activation except a human manually opening
+# licensing.html and clicking "Check Now" -- an install could silently go
+# from valid to expired/revoked/restricted and the app would never notice
+# until someone happened to check by hand. Android already has its own path
+# via the /_internal/reevaluate route (Kotlin-driven -- see routes.py's
+# _register_internal_sync_routes docstring), so starting a second,
+# Windows-style background thread there would be redundant and wrong --
+# same LICENSING_PLATFORM != 'ANDROID' guard the sync block just below
+# already uses for the identical reason.
+#
+# Constructed here (module import time, mirroring how _sync_service is
+# constructed just below) via make_checkin_scheduler() -> the module-level
+# build_licensing_context(), which builds the EXACT SAME object graph
+# make_licensing_blueprint's own per-request _build_context() builds --
+# never a second device identity, never a second trust store. Module import
+# must stay side-effect-light though (no timers, no network I/O) -- this
+# only constructs the scheduler object; init_app() below is what actually
+# runs the synchronous boot-time check and starts the periodic timer.
+#
+# Design note: flask_guard.py deliberately keeps reading only PERSISTED
+# state on every guarded request (see that module's own docstring) rather
+# than re-evaluating live on each call -- live per-request evaluation would
+# need the trust store + signer invoked on every single guarded API call,
+# which is unnecessary overhead. This scheduler tick is the correct seam
+# for re-evaluation instead: it updates persisted state periodically, and
+# the guard just reads whatever is currently there.
+#
+# Safe to construct here even on a completely fresh install with no device
+# key yet (before this device's first-ever activation): make_checkin_
+# scheduler() threads device_public_key_fingerprint through as a lazily-
+# resolved callable, not a value resolved eagerly at construction time --
+# see that function's own docstring and LicenseCheckInScheduler.
+# _resolve_device_fingerprint() for why a long-lived scheduler specifically
+# cannot resolve this once, up front, the way the per-request /check-in
+# route above safely does.
+_DEFAULT_CHECK_IN_INTERVAL_SECONDS = 24 * 3600  # mirrors Owner's own default, owner/app/licensing_service/offline_policy.py
+
+_license_checkin_scheduler = None
+if LICENSING_PLATFORM != 'ANDROID':
+    from commercial_runtime.licensing_contracts.routes import make_checkin_scheduler
+
+    _license_checkin_scheduler = make_checkin_scheduler(
+        product_code='AURA_RETAIL',
+        platform=LICENSING_PLATFORM,
+        app_data_dir=str(Path(DATABASE_DIR).parent),
+        owner_base_url=OWNER_LICENSING_BASE_URL,
+        verify_tls=OWNER_LICENSING_VERIFY_TLS,
+        timeout_seconds=OWNER_LICENSING_TIMEOUT_SECONDS,
+        trust_anchor_path=Path(LICENSING_TRUST_ANCHOR_PATH),
+        device_identity_factory=_licensing_device_identity_factory,
+    )
+
+
+def _license_checkin_interval_seconds() -> int:
+    """Reads the Owner-signed check_in_interval_seconds out of the
+    currently persisted offline_policy_json (written by checkin_scheduler.
+    LicenseCheckInScheduler._persist_fresh_assertion on every successful
+    check-in/activation -- see policy_evaluator.OfflinePolicy for the full
+    signed-policy shape this field lives in). Falls back to
+    _DEFAULT_CHECK_IN_INTERVAL_SECONDS when there is no persisted record yet
+    (pre-activation -- a fresh install has no signed policy to read until
+    its first successful activation) or the stored JSON is missing/
+    malformed -- never crashes app boot over a licensing read."""
+    try:
+        from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
+        record = LicenseStateRepository(Path(DATABASE_DIR) / 'subsystems' / 'licensing.db').load()
+        if record and record.offline_policy_json:
+            import json
+            interval = json.loads(record.offline_policy_json).get('check_in_interval_seconds')
+            if isinstance(interval, int) and interval > 0:
+                return interval
+    except Exception:
+        pass
+    return _DEFAULT_CHECK_IN_INTERVAL_SECONDS
+
+
 # Multi-device sync foundation (2026-08-06), Task 5: the background push/pull
 # loop. Reuses the EXACT same licensing_dir/db_path/device-identity factory
 # make_licensing_blueprint's own _build_context() constructs above -- never a
@@ -279,11 +357,26 @@ def init_app():
     False on Android. Calling `.start()` on it would run Python's own
     push/pull timer, which would call its `client_factory` (`None`) and
     crash on the first tick -- Kotlin's SyncCoordinator is what drives
-    Android's push/pull loop instead."""
+    Android's push/pull loop instead.
+
+    AUDIT P0-2: also resumes periodic license re-evaluation on Windows --
+    `_license_checkin_scheduler` is None on Android (same guard as the sync
+    block), so this is a no-op there, exactly like the sync-loop start
+    above. reevaluate_only() runs once, synchronously, right here (a
+    same-thread boot-time check against whatever was last persisted --
+    cheap, no network I/O unless a route later triggers one) before
+    .start() hands periodic re-evaluation to its own background timer
+    thread, so a device that was left running past a WARNING/GRACE_PERIOD/
+    RESTRICTED boundary while asleep or before this fix existed gets
+    caught up immediately at the next launch, not just at the next timer
+    tick."""
     init_registry_db()
     init_retail()
     if _sync_service is not None:
         _sync_service.start()
+    if _license_checkin_scheduler is not None:
+        _license_checkin_scheduler.reevaluate_only()
+        _license_checkin_scheduler.start(_license_checkin_interval_seconds())
     return app
 
 

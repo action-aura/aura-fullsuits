@@ -36,6 +36,114 @@ from .trust_store import OwnerTrustStore
 DeviceIdentityFactory = Callable[[Path], object]  # -> DeviceIdentityProvider
 
 
+def build_licensing_context(
+    *,
+    app_data_dir: str,
+    owner_base_url: str,
+    verify_tls: bool,
+    timeout_seconds: float,
+    trust_anchor_path: Path,
+    device_identity_factory: DeviceIdentityFactory,
+):
+    """Constructs the licensing object graph (state repository, event
+    recorder, trust store, device signer, Owner HTTP client) from the same
+    raw config every caller already threads into make_licensing_blueprint().
+    Extracted (AUDIT P0-2) from what used to be make_licensing_blueprint's
+    own private per-request _build_context() closure -- pure extraction, no
+    behavior change -- so a second caller can build the IDENTICAL graph
+    without a second, drifting reimplementation. The Flask blueprint below
+    still calls this on every request (never cached, so a corrected
+    configuration or a newly-generated device key takes effect on the very
+    next request without an app restart); the new second caller is each
+    product's own init_app() (see products/retail/backend/app.py), which
+    uses it once at boot to build a LicenseCheckInScheduler via
+    make_checkin_scheduler() below."""
+    licensing_dir = Path(app_data_dir) / "licensing"
+    db_path = Path(app_data_dir) / "database" / "subsystems" / "licensing.db"
+
+    state_repository = LicenseStateRepository(db_path)
+    event_recorder = LicensingEventRecorder(db_path)
+    trust_store = OwnerTrustStore(licensing_dir / "trust_store.json")
+    signer = device_identity_factory(licensing_dir)
+
+    if not (licensing_dir / "trust_store.json").exists():
+        try:
+            anchor = load_bundled_trust_anchor(trust_anchor_path)
+            trust_store.bootstrap_from_anchor(anchor)
+        except TrustAnchorLoadError:
+            pass  # the /status route reports this clearly; do not crash the caller
+
+    client = LicensingClient(
+        LicensingClientConfig(base_url=owner_base_url, timeout_seconds=timeout_seconds, verify_tls=verify_tls)
+    )
+    return state_repository, event_recorder, trust_store, signer, client
+
+
+def make_checkin_scheduler(
+    *,
+    product_code: str,
+    platform: str,
+    app_data_dir: str,
+    owner_base_url: str,
+    verify_tls: bool,
+    timeout_seconds: float,
+    trust_anchor_path: Path,
+    device_identity_factory: DeviceIdentityFactory,
+) -> LicenseCheckInScheduler:
+    """AUDIT P0-2: the seam a product's init_app() uses to start periodic
+    background re-evaluation at boot (Windows only -- Android has its own
+    path via the /_internal/reevaluate route, driven by Kotlin, see
+    routes.py's _register_internal_sync_routes docstring). Builds a
+    ready-to-use LicenseCheckInScheduler from build_licensing_context()
+    above -- the identical object graph the HTTP blueprint's own /check-in
+    route builds per-request, never a second device identity or a second
+    trust store.
+
+    Before this fix, nothing on Windows ever re-evaluated license state
+    after initial activation except a human manually opening licensing.html
+    and clicking "Check Now" -- an install could silently go from valid to
+    expired/revoked/restricted and the app would never notice until someone
+    happened to check by hand.
+
+    device_public_key_fingerprint is threaded in as a zero-arg CALLABLE
+    (`lambda: _device_fingerprint(signer)`), not the pre-resolved string the
+    blueprint's own per-request /check-in route passes -- deliberately.
+    This scheduler is built ONCE, at import time, and kept alive for the
+    caller's whole process lifetime via .start() (unlike the blueprint's
+    route, which builds a fresh scheduler on every single HTTP request).
+    _device_fingerprint(signer) calls signer.get_metadata(), which raises
+    LocalStateCorruptError when no device key file exists yet on disk --
+    true on every fresh install, before this device's first-ever
+    activation. Resolving it eagerly here would either crash this factory
+    outright on a fresh install, or (if a caller worked around that)
+    freeze a stale/wrong fingerprint for this scheduler's entire remaining
+    lifetime once a real device key eventually IS generated at activation
+    time -- every later verify_assertion() call would then wrongly reject
+    a perfectly valid, freshly-signed assertion as a device-fingerprint
+    mismatch. See LicenseCheckInScheduler._resolve_device_fingerprint(),
+    which resolves this callable fresh at each actual point of use instead
+    of once here -- by which point (a real assertion existing to evaluate
+    at all) a device key is always guaranteed to already exist."""
+    state_repository, event_recorder, trust_store, signer, client = build_licensing_context(
+        app_data_dir=app_data_dir,
+        owner_base_url=owner_base_url,
+        verify_tls=verify_tls,
+        timeout_seconds=timeout_seconds,
+        trust_anchor_path=trust_anchor_path,
+        device_identity_factory=device_identity_factory,
+    )
+    return LicenseCheckInScheduler(
+        client=client,
+        signer=signer,
+        trust_store=trust_store,
+        state_repository=state_repository,
+        event_recorder=event_recorder,
+        product_code=product_code,
+        platform=platform,
+        device_public_key_fingerprint=lambda: _device_fingerprint(signer),
+    )
+
+
 def make_licensing_blueprint(
     *,
     product_code: str,
@@ -91,8 +199,10 @@ def make_licensing_blueprint(
     """
     bp = Blueprint("licensing", __name__, url_prefix="/api/licensing")
 
-    licensing_dir = Path(app_data_dir) / "licensing"
-    db_path = Path(app_data_dir) / "database" / "subsystems" / "licensing.db"
+    # licensing_dir/db_path are no longer computed here directly (AUDIT
+    # P0-2 extraction) -- _build_context() below delegates to the
+    # module-level build_licensing_context(), which derives both from
+    # app_data_dir itself.
 
     def _identity_decorator(f):
         return f
@@ -127,27 +237,20 @@ def make_licensing_blueprint(
         return jsonify({"current_state": "NOT_CONFIGURED", "detail": "Owner licensing URL is not configured."}), 200
 
     def _build_context():
-        """Constructs the per-request object graph. Cheap (sqlite/file
+        """Constructs the per-request object graph via build_licensing_
+        context() (module-level, extracted AUDIT P0-2). Cheap (sqlite/file
         handles only, no network I/O until a route actually needs it) -- not
         cached at blueprint-creation time so a corrected configuration or a
         newly-generated device key takes effect on the very next request
         without an app restart."""
-        state_repository = LicenseStateRepository(db_path)
-        event_recorder = LicensingEventRecorder(db_path)
-        trust_store = OwnerTrustStore(licensing_dir / "trust_store.json")
-        signer = device_identity_factory(licensing_dir)
-
-        if not (licensing_dir / "trust_store.json").exists():
-            try:
-                anchor = load_bundled_trust_anchor(trust_anchor_path)
-                trust_store.bootstrap_from_anchor(anchor)
-            except TrustAnchorLoadError:
-                pass  # status route below reports this clearly; do not crash the request
-
-        client = LicensingClient(
-            LicensingClientConfig(base_url=owner_base_url, timeout_seconds=timeout_seconds, verify_tls=verify_tls)
+        return build_licensing_context(
+            app_data_dir=app_data_dir,
+            owner_base_url=owner_base_url,
+            verify_tls=verify_tls,
+            timeout_seconds=timeout_seconds,
+            trust_anchor_path=trust_anchor_path,
+            device_identity_factory=device_identity_factory,
         )
-        return state_repository, event_recorder, trust_store, signer, client
 
     @bp.route("/status", methods=["GET"])
     def status():
