@@ -30,6 +30,13 @@ _app_data = os.environ.get('AURA_APP_DATA') or os.path.dirname(os.path.dirname(o
 _db_dir = os.path.join(_app_data, 'database')
 DB_PATH = os.path.join(_db_dir, 'registry.db')
 
+# v1: devices + user_devices (per-device login / Admin Device flag). See
+# docs/superpowers/specs/2026-08-10-per-device-login.md. registry.db had no
+# PRAGMA user_version at all before this -- every existing on-disk
+# registry.db implicitly reads version 0, so this migration is the first to
+# run against it via commercial_runtime.security.migration_safety.
+REGISTRY_SCHEMA_VERSION = 1
+
 
 def get_conn():
     os.makedirs(_db_dir, exist_ok=True)
@@ -134,6 +141,20 @@ def init_registry_db():
     ''')
 
     conn.commit()
+
+    # Versioned migration for everything added after the tables above (which
+    # predate PRAGMA user_version in this file and stay as unconditional
+    # CREATE TABLE IF NOT EXISTS). ensure_schema_version() takes a live
+    # backup and runs PRAGMA integrity_check before AND after, only
+    # advancing user_version on full success -- see
+    # commercial_runtime/security/migration_safety.py.
+    from commercial_runtime.security.migration_safety import ensure_schema_version
+    from commercial_runtime.identity.device_registry import apply_identity_device_schema
+    ensure_schema_version(
+        conn, DB_PATH, REGISTRY_SCHEMA_VERSION, apply_identity_device_schema,
+        backup_dir=os.path.join(_db_dir, 'migration_backups'),
+    )
+
     conn.close()
 
 
