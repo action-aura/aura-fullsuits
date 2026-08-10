@@ -1697,7 +1697,11 @@ const RetailSystem = {
 
   _addPOItem() {
     const prodSel  = document.getElementById('po-item-prod');
-    const prodId   = +prodSel?.value;
+    // AUDIT-follow-up (2026-08-10): product ids are UUID TEXT after the
+    // catalog/party UUID migration, not integers -- unary `+` coerced any
+    // real id to NaN, so "Select product and enter cost" fired even with a
+    // product selected. Keep the id as the opaque string it actually is.
+    const prodId   = prodSel?.value;
     const prodName = prodSel?.options[prodSel.selectedIndex]?.text?.split('(')[0]?.trim();
     const qty      = +document.getElementById('po-item-qty')?.value || 1;
     const cost     = +document.getElementById('po-item-cost')?.value || 0;
@@ -1736,7 +1740,11 @@ const RetailSystem = {
   },
 
   async _savePO() {
-    const supplierId = +document.getElementById('po-sup')?.value;
+    // AUDIT-follow-up (2026-08-10): same NaN-from-unary-`+` bug as
+    // _addPOItem above -- supplier ids are UUID TEXT too, so this made PO
+    // creation from the UI impossible (always short-circuited to the
+    // "Select a supplier" toast, even with a real supplier chosen).
+    const supplierId = document.getElementById('po-sup')?.value;
     if (!supplierId) { SubsystemApp.showToast('Select a supplier','error'); return; }
     if (!this._poItems.length) { SubsystemApp.showToast('Add at least one item','error'); return; }
     const btn = document.getElementById('po-save-btn');
