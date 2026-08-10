@@ -59,7 +59,16 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # hazard as products/categories -- see _migrate_suppliers_to_uuid below.
 # v5: adds products.supplier_id (TEXT, referencing suppliers(id) which is
 # already UUID by this point) -- see _migrate_products_add_supplier_fk below.
-RETAIL_SCHEMA_VERSION = 5
+# v6: PO-preview-by-supplier foundation (Thursday demo, Stream B). Adds
+# supplier_contacts (a supplier can have several named contacts -- orders/
+# accounts/general -- each with its own channel), plus split-group/routing/
+# idempotency columns on purchase_orders (the writers that populate them land
+# later this week; this bump only adds the columns) and suppliers.
+# min_order_value (used by the split preview's MOQ warning). Pure additive
+# migration -- ADD COLUMN + CREATE TABLE only, nothing renamed or retyped, so
+# unlike v1-v5 this needs no _new-table rebuild. See
+# _migrate_add_supplier_contacts_and_po_split below.
+RETAIL_SCHEMA_VERSION = 6
 
 
 def _get_path(name):
@@ -663,6 +672,7 @@ def _migrate_retail_schema(conn):
     _migrate_customers_to_uuid(conn)
     _migrate_suppliers_to_uuid(conn)
     _migrate_products_add_supplier_fk(conn)
+    _migrate_add_supplier_contacts_and_po_split(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -683,6 +693,97 @@ def _migrate_products_add_supplier_fk(conn):
         return
     conn.execute('ALTER TABLE products ADD COLUMN supplier_id TEXT REFERENCES suppliers(id)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_products_supplier ON products(supplier_id)')
+
+
+def _migrate_add_supplier_contacts_and_po_split(conn):
+    """One-time migration (schema v5 -> v6): PO-preview-by-supplier
+    foundation (Thursday demo, Stream B -- descoped to preview-only PO
+    splitting by supplier; the routes that write these columns land later
+    this week, not today).
+
+    Three independent additive pieces, each guarded by its own idempotency
+    check (mirrors _migrate_products_add_supplier_fk just above -- brand-new
+    nullable columns / IF NOT EXISTS tables, so unlike the UUID migrations
+    earlier in this chain, no DROP+RENAME rebuild is needed anywhere here):
+
+    1. `supplier_contacts` -- a supplier can have several named contacts
+       (orders/accounts/general), each with its own preferred channel. New
+       table entirely, so CREATE TABLE IF NOT EXISTS is itself idempotent.
+
+    2. `purchase_orders` gains split-group/routing/idempotency columns:
+       split_group_id/split_index/split_count identify which slice of a
+       supplier-split preview a PO belongs to; routing_status/routed_channel/
+       routed_at/routed_to record how (and whether) it was sent once routing
+       ships; idempotency_key gets the same partial-unique-index treatment as
+       `returns.idempotency_key` (see api/retail_api.py's
+       `_ensure_credit_schema`, `idx_returns_idempotency`) -- SQLite can't add
+       a UNIQUE column via ALTER TABLE, so a partial unique index does the
+       job instead, and NULLs (every pre-v6 row) are exempt, matching
+       SQLite's own UNIQUE-column NULL semantics.
+
+    3. `suppliers.min_order_value` -- procurement metadata the split
+       preview's MOQ warning reads; not touched by anything else yet.
+
+    Idempotent: each ALTER COLUMN is preceded by a PRAGMA table_info check,
+    each CREATE TABLE/INDEX already uses IF NOT EXISTS, so a second call
+    (or a fresh install that already has this shape via init_retail's base
+    executescript) is a clean no-op.
+    """
+    existing_tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+
+    if 'supplier_contacts' not in existing_tables:
+        conn.execute("""
+            CREATE TABLE supplier_contacts (
+                id TEXT PRIMARY KEY,
+                company_id TEXT,
+                supplier_id TEXT NOT NULL REFERENCES suppliers(id),
+                name TEXT NOT NULL,
+                role TEXT DEFAULT 'orders',
+                email TEXT,
+                phone TEXT,
+                whatsapp TEXT,
+                channel_preference TEXT DEFAULT 'whatsapp',
+                is_primary INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'active',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_supplier_contacts_supplier "
+        "ON supplier_contacts(company_id, supplier_id, status)"
+    )
+
+    if 'purchase_orders' in existing_tables:
+        po_cols = {row[1] for row in conn.execute('PRAGMA table_info(purchase_orders)').fetchall()}
+        for col, decl in [
+            ('split_group_id', 'TEXT'),
+            ('split_index', 'INTEGER'),
+            ('split_count', 'INTEGER'),
+            ('routing_status', 'TEXT'),
+            ('routed_channel', 'TEXT'),
+            ('routed_at', 'TEXT'),
+            ('routed_to', 'TEXT'),
+            ('idempotency_key', 'TEXT'),
+        ]:
+            if col not in po_cols:
+                conn.execute(f'ALTER TABLE purchase_orders ADD COLUMN {col} {decl}')
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_po_split_group "
+            "ON purchase_orders(company_id, split_group_id)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_po_idempotency "
+            "ON purchase_orders(idempotency_key) WHERE idempotency_key IS NOT NULL"
+        )
+
+    if 'suppliers' in existing_tables:
+        sup_cols = {row[1] for row in conn.execute('PRAGMA table_info(suppliers)').fetchall()}
+        if 'min_order_value' not in sup_cols:
+            conn.execute('ALTER TABLE suppliers ADD COLUMN min_order_value REAL DEFAULT 0')
 
 
 def init_retail():
@@ -770,7 +871,13 @@ def init_retail():
         email TEXT,
         address TEXT,
         status TEXT DEFAULT 'active',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        -- PO-preview-by-supplier foundation (schema v6): procurement
+        -- metadata the split preview's MOQ warning reads. See
+        -- _migrate_add_supplier_contacts_and_po_split below -- included
+        -- here too so a brand-new install gets v6 shape directly without
+        -- ever running that migration, same as sync_outbox/sync_cursor.
+        min_order_value REAL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS purchase_orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -786,6 +893,20 @@ def init_retail():
         ordered_at TEXT,
         received_at TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        -- PO-preview-by-supplier foundation (schema v6): split-group/
+        -- routing/idempotency columns -- the writers that populate them
+        -- land later this week, this only adds the columns. See
+        -- _migrate_add_supplier_contacts_and_po_split below -- included
+        -- here too so a brand-new install gets v6 shape directly without
+        -- ever running that migration, same as sync_outbox/sync_cursor.
+        split_group_id TEXT,
+        split_index INTEGER,
+        split_count INTEGER,
+        routing_status TEXT,
+        routed_channel TEXT,
+        routed_at TEXT,
+        routed_to TEXT,
+        idempotency_key TEXT,
         FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
     );
     CREATE TABLE IF NOT EXISTS purchase_order_items (
@@ -913,6 +1034,33 @@ def init_retail():
         last_seq INTEGER NOT NULL DEFAULT 0
     );
     INSERT OR IGNORE INTO sync_cursor (id, last_seq) VALUES (1, 0);
+    -- PO-preview-by-supplier foundation (schema v6): a supplier can have
+    -- several named contacts (orders/accounts/general), each with its own
+    -- preferred channel -- read by core/retail/po_split.py's contact
+    -- resolution ladder. See _migrate_add_supplier_contacts_and_po_split
+    -- below -- included here too so a brand-new install gets v6 shape
+    -- directly without ever running that migration, same as sync_outbox/
+    -- sync_cursor just above.
+    CREATE TABLE IF NOT EXISTS supplier_contacts (
+        id TEXT PRIMARY KEY,
+        company_id TEXT,
+        supplier_id TEXT NOT NULL REFERENCES suppliers(id),
+        name TEXT NOT NULL,
+        role TEXT DEFAULT 'orders',
+        email TEXT,
+        phone TEXT,
+        whatsapp TEXT,
+        channel_preference TEXT DEFAULT 'whatsapp',
+        is_primary INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'active',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_supplier_contacts_supplier
+        ON supplier_contacts(company_id, supplier_id, status);
+    CREATE INDEX IF NOT EXISTS idx_po_split_group
+        ON purchase_orders(company_id, split_group_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_po_idempotency
+        ON purchase_orders(idempotency_key) WHERE idempotency_key IS NOT NULL;
     """)
     conn.commit()
 
