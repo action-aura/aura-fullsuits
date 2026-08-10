@@ -86,11 +86,13 @@ from database.schema import init_clinic
 from api.clinic_api import clinic_bp
 from commercial_runtime.backup.routes import make_backup_blueprint
 from commercial_runtime.licensing_contracts.routes import make_licensing_blueprint
+from commercial_runtime.identity.device_routes import device_bp
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(onboarding_bp)
 app.register_blueprint(clinic_bp)
 app.register_blueprint(make_backup_blueprint('clinic', DATABASE_DIR, APP_VERSION))
+app.register_blueprint(device_bp)
 
 # Part H: Android's main.py sets AURA_PLATFORM='ANDROID' before importing this
 # module -- Windows (unset, defaults to 'WINDOWS') keeps making its own signed

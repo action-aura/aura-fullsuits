@@ -135,12 +135,14 @@ from api.retail_api import retail_bp
 from api.import_api import import_bp
 from commercial_runtime.backup.routes import make_backup_blueprint
 from commercial_runtime.licensing_contracts.routes import make_licensing_blueprint
+from commercial_runtime.identity.device_routes import device_bp
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(onboarding_bp)
 app.register_blueprint(retail_bp)
 app.register_blueprint(import_bp)
 app.register_blueprint(make_backup_blueprint('retail', DATABASE_DIR, APP_VERSION))
+app.register_blueprint(device_bp)
 
 # Part H: see products/clinic/backend/app.py's identical block for the full
 # rationale. Lazy-imported (Phase 7V-F): WindowsDpapiDeviceIdentityProvider
