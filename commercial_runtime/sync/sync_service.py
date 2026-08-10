@@ -259,39 +259,57 @@ class SyncService:
                 conn.execute("DELETE FROM categories WHERE id=?", (p.get("id"),))
         elif entity_type == "product":
             if event_type in ("create", "update"):
+                # AUDIT-follow-up (2026-08-10): supplier_id and status were both
+                # missing here even though retail_api.py's outbox payload already
+                # carries both -- supplier_id never propagated cross-device at
+                # all, and a soft-delete/restore (products.status) round-trip
+                # via an "update" event silently never took effect on other
+                # devices. `status` is parameterized (never a hardcoded 'active'
+                # literal) so `excluded.status` reflects the SENDING device's
+                # actual current status -- a create event's payload never
+                # carries status, so p.get(..., "active") preserves the
+                # previous create-time default exactly.
                 conn.execute(
-                    "INSERT INTO products (id, company_id, sku, barcode, name, category_id, cost_price, "
-                    "sell_price, tax_rate, unit, reorder_level, status) VALUES (?,?,?,?,?,?,?,?,?,?,?,'active') "
+                    "INSERT INTO products (id, company_id, sku, barcode, name, category_id, supplier_id, "
+                    "cost_price, sell_price, tax_rate, unit, reorder_level, status) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET sku=excluded.sku, barcode=excluded.barcode, name=excluded.name, "
-                    "category_id=excluded.category_id, cost_price=excluded.cost_price, sell_price=excluded.sell_price, "
-                    "tax_rate=excluded.tax_rate, unit=excluded.unit, reorder_level=excluded.reorder_level",
+                    "category_id=excluded.category_id, supplier_id=excluded.supplier_id, "
+                    "cost_price=excluded.cost_price, sell_price=excluded.sell_price, "
+                    "tax_rate=excluded.tax_rate, unit=excluded.unit, reorder_level=excluded.reorder_level, "
+                    "status=excluded.status",
                     (p.get("id"), local_company_id, p.get("sku"), p.get("barcode", ""), p.get("name"),
-                     p.get("category_id"), p.get("cost_price", 0), p.get("sell_price", 0), p.get("tax_rate", 0),
-                     p.get("unit", "pcs"), p.get("reorder_level", 5)),
+                     p.get("category_id"), p.get("supplier_id"), p.get("cost_price", 0), p.get("sell_price", 0),
+                     p.get("tax_rate", 0), p.get("unit", "pcs"), p.get("reorder_level", 5),
+                     p.get("status", "active")),
                 )
             elif event_type == "delete":
                 conn.execute("UPDATE products SET status='inactive' WHERE id=?", (p.get("id"),))
         elif entity_type == "customer":
             if event_type in ("create", "update"):
+                # `status` parameterized for the same reason as the product
+                # upsert above -- see that block's comment.
                 conn.execute(
                     "INSERT INTO customers (id, company_id, name, phone, email, address, status) "
-                    "VALUES (?,?,?,?,?,?,'active') "
+                    "VALUES (?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone, "
-                    "email=excluded.email, address=excluded.address",
+                    "email=excluded.email, address=excluded.address, status=excluded.status",
                     (p.get("id"), local_company_id, p.get("name"), p.get("phone", ""),
-                     p.get("email", ""), p.get("address", "")),
+                     p.get("email", ""), p.get("address", ""), p.get("status", "active")),
                 )
             elif event_type == "delete":
                 conn.execute("UPDATE customers SET status='inactive' WHERE id=?", (p.get("id"),))
         elif entity_type == "supplier":
             if event_type in ("create", "update"):
+                # `status` parameterized for the same reason as the product
+                # upsert above -- see that block's comment.
                 conn.execute(
                     "INSERT INTO suppliers (id, company_id, name, phone, email, address, status) "
-                    "VALUES (?,?,?,?,?,?,'active') "
+                    "VALUES (?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone, "
-                    "email=excluded.email, address=excluded.address",
+                    "email=excluded.email, address=excluded.address, status=excluded.status",
                     (p.get("id"), local_company_id, p.get("name"), p.get("phone", ""),
-                     p.get("email", ""), p.get("address", "")),
+                     p.get("email", ""), p.get("address", ""), p.get("status", "active")),
                 )
             elif event_type == "delete":
                 conn.execute("UPDATE suppliers SET status='inactive' WHERE id=?", (p.get("id"),))

@@ -402,7 +402,13 @@ def update_product(pid):
         conn.close()
         return jsonify({'status': 'error', 'message': 'Product not found'}), 404
     _audit(conn, 'PRODUCT_UPDATED', 'product', pid)
-    row = conn.execute("SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,reorder_level FROM products WHERE id=?", (pid,)).fetchone()
+    # `status` included here (AUDIT-follow-up, 2026-08-10): a PATCH restoring a
+    # soft-deleted product (`allowed` above includes 'status') is an "update"
+    # event, not a "delete" one -- without status in this SELECT, the outbox
+    # payload could never carry the restore, so the other device stayed
+    # stuck showing the product inactive forever. See sync_service.py's
+    # product upsert for the matching apply-side fix.
+    row = conn.execute("SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,reorder_level,status FROM products WHERE id=?", (pid,)).fetchone()
     _queue_sync_event(cur, 'product', pid, 'update', dict(row) | {'id': pid})
     conn.commit(); conn.close()
     _sync_nudge()
@@ -650,7 +656,21 @@ def update_supplier(sid):
         conn.close()
         return jsonify({'status': 'error', 'message': 'Supplier not found'}), 404
     _audit(conn, 'SUPPLIER_UPDATED', 'supplier', sid)
-    row = conn.execute("SELECT name,phone,email,address FROM suppliers WHERE id=?", (sid,)).fetchone()
+    # `status` and `payment_terms` included here (AUDIT-follow-up, 2026-08-10):
+    # both are in this route's own `allowed` fields list above (payment_terms
+    # can be PATCHed even though it's never set at creation -- create_supplier
+    # doesn't accept it at all), so both were silently patchable locally but
+    # never carried in the outbox payload. `status` completes the same
+    # soft-delete/restore round-trip fix as update_product's SELECT above --
+    # see sync_service.py's supplier upsert. `payment_terms` is included here
+    # for forward-compatible payload completeness, matching this codebase's
+    # existing "unknown field/entity type is silently ignored, not an error"
+    # pattern (see sync_service.py's module docstring) -- sync_service.py's
+    # supplier upsert does not yet apply it (payment_terms/credit_balance are
+    # not first-class synced columns in this phase; see
+    # docs/superpowers/specs/2026-08-07-retail-catalog-party-sync-expansion-design.md),
+    # so it does not cross-device propagate yet even after this change.
+    row = conn.execute("SELECT name,phone,email,address,status,payment_terms FROM suppliers WHERE id=?", (sid,)).fetchone()
     _queue_sync_event(cur, 'supplier', sid, 'update', dict(row) | {'id': sid})
     conn.commit(); conn.close()
     _sync_nudge()

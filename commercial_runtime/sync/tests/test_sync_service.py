@@ -58,6 +58,39 @@ CREATE TABLE categories (
     name TEXT NOT NULL,
     description TEXT
 );
+CREATE TABLE products (
+    id TEXT PRIMARY KEY,
+    company_id INTEGER DEFAULT 1,
+    sku TEXT NOT NULL,
+    barcode TEXT,
+    name TEXT NOT NULL,
+    category_id TEXT,
+    supplier_id TEXT,
+    cost_price REAL DEFAULT 0,
+    sell_price REAL DEFAULT 0,
+    tax_rate REAL DEFAULT 0,
+    unit TEXT DEFAULT 'pcs',
+    reorder_level INTEGER DEFAULT 5,
+    status TEXT DEFAULT 'active'
+);
+CREATE TABLE customers (
+    id TEXT PRIMARY KEY,
+    company_id INTEGER DEFAULT 1,
+    name TEXT NOT NULL,
+    phone TEXT,
+    email TEXT,
+    address TEXT,
+    status TEXT DEFAULT 'active'
+);
+CREATE TABLE suppliers (
+    id TEXT PRIMARY KEY,
+    company_id INTEGER DEFAULT 1,
+    name TEXT NOT NULL,
+    phone TEXT,
+    email TEXT,
+    address TEXT,
+    status TEXT DEFAULT 'active'
+);
 CREATE TABLE sync_outbox (
     id TEXT PRIMARY KEY,
     entity_type TEXT NOT NULL,
@@ -125,6 +158,27 @@ def _outbox_rows(get_conn):
 def _categories(get_conn):
     conn = get_conn()
     rows = [dict(r) for r in conn.execute("SELECT * FROM categories").fetchall()]
+    conn.close()
+    return rows
+
+
+def _products(get_conn):
+    conn = get_conn()
+    rows = [dict(r) for r in conn.execute("SELECT * FROM products").fetchall()]
+    conn.close()
+    return rows
+
+
+def _customers(get_conn):
+    conn = get_conn()
+    rows = [dict(r) for r in conn.execute("SELECT * FROM customers").fetchall()]
+    conn.close()
+    return rows
+
+
+def _suppliers(get_conn):
+    conn = get_conn()
+    rows = [dict(r) for r in conn.execute("SELECT * FROM suppliers").fetchall()]
     conn.close()
     return rows
 
@@ -245,6 +299,31 @@ def _pull_event(entity_id, event_type, payload):
     }
 
 
+def _pull_event_of(entity_type, entity_id, event_type, payload):
+    """Same shape as `_pull_event` above, for the product/customer/supplier
+    entity types added by retail-catalog-party-sync-expansion -- kept
+    separate rather than adding an entity_type parameter to `_pull_event`
+    itself so every existing category test above stays untouched."""
+    return {
+        "id": str(uuid.uuid4()), "entity_type": entity_type, "entity_id": entity_id,
+        "event_type": event_type, "payload": payload, "created_at": "2026-08-06T00:00:00+00:00",
+    }
+
+
+def _product_payload(pid, **overrides):
+    """A full product row payload, matching what update_product's outbox
+    SELECT actually sends (retail_api.py) -- every field present, status
+    defaulting to omitted (create events never send it; _apply_event's own
+    p.get("status", "active") covers that case)."""
+    payload = {
+        "id": pid, "company_id": 1, "sku": "SKU-1", "barcode": "", "name": "Widget",
+        "category_id": None, "supplier_id": None, "cost_price": 1.5, "sell_price": 3.0,
+        "tax_rate": 0, "unit": "pcs", "reorder_level": 5,
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_pull_once_upserts_on_create(get_conn):
     cat_id = str(uuid.uuid4())
     event = _pull_event(cat_id, "create", {"id": cat_id, "company_id": 1, "name": "Electronics", "description": "d"})
@@ -290,6 +369,127 @@ def test_pull_once_hard_deletes_on_delete(get_conn):
 
     assert _categories(get_conn) == []
     assert _cursor(get_conn) == 2
+
+
+# ── product/customer/supplier upsert regressions (2026-08-10) ────────────
+# Two confirmed-by-reading, silent, permanent data-divergence bugs in
+# _apply_event's product/customer/supplier upserts:
+#
+#   Bug 1 (product only): supplier_id was in retail_api.py's outbox payload
+#   for both create and update but never in this upsert's INSERT column
+#   list or ON CONFLICT DO UPDATE SET -- it silently never propagated to a
+#   second device, ever.
+#
+#   Bug 2 (product, customer, supplier): `status` (the soft-delete flag)
+#   was missing from ON CONFLICT DO UPDATE SET for all three entity types.
+#   A restore (PATCH setting status back to 'active', which for
+#   product/supplier is an ordinary "update" event, not "delete") never
+#   took effect on another device -- it stayed stuck showing the record
+#   inactive forever, even though the soft-delete itself (a "delete" event,
+#   applied by a separate, always-worked UPDATE ... SET status='inactive'
+#   branch) DID propagate correctly.
+
+def test_pull_once_product_upsert_round_trips_supplier_id(get_conn):
+    pid = str(uuid.uuid4())
+    supplier_id = str(uuid.uuid4())
+    event = _pull_event_of("product", pid, "create", _product_payload(pid, supplier_id=supplier_id))
+    client = FakeRelayClient(pull_responses=[{"events": [event], "cursor": 1}])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+
+    rows = _products(get_conn)
+    assert len(rows) == 1
+    assert rows[0]["supplier_id"] == supplier_id
+
+
+def test_pull_once_product_upsert_updates_supplier_id_on_conflict(get_conn):
+    """The bug as it actually manifested: a create followed by an update
+    that changes supplier_id must overwrite it on the receiving device, not
+    just apply it once and then silently ignore it forever after."""
+    pid = str(uuid.uuid4())
+    supplier_a = str(uuid.uuid4())
+    supplier_b = str(uuid.uuid4())
+    create_event = _pull_event_of("product", pid, "create", _product_payload(pid, supplier_id=supplier_a))
+    update_event = _pull_event_of("product", pid, "update", _product_payload(pid, supplier_id=supplier_b))
+    client = FakeRelayClient(pull_responses=[
+        {"events": [create_event], "cursor": 1},
+        {"events": [update_event], "cursor": 2},
+    ])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+    assert _products(get_conn)[0]["supplier_id"] == supplier_a
+    service.pull_once()
+    assert _products(get_conn)[0]["supplier_id"] == supplier_b
+
+
+def test_pull_once_product_status_round_trips_through_soft_delete_then_restore(get_conn):
+    pid = str(uuid.uuid4())
+    create_event = _pull_event_of("product", pid, "create", _product_payload(pid))
+    delete_event = _pull_event_of("product", pid, "delete", {"id": pid})
+    restore_event = _pull_event_of("product", pid, "update", _product_payload(pid, status="active"))
+    client = FakeRelayClient(pull_responses=[
+        {"events": [create_event], "cursor": 1},
+        {"events": [delete_event], "cursor": 2},
+        {"events": [restore_event], "cursor": 3},
+    ])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+    assert _products(get_conn)[0]["status"] == "active"
+
+    service.pull_once()  # soft-delete -- already worked before this fix
+    assert _products(get_conn)[0]["status"] == "inactive"
+
+    service.pull_once()  # restore -- the part Bug 2 broke
+    assert _products(get_conn)[0]["status"] == "active"
+
+
+def test_pull_once_customer_status_round_trips_through_soft_delete_then_restore(get_conn):
+    cust_id = str(uuid.uuid4())
+    base = {"id": cust_id, "company_id": 1, "name": "Acme Co", "phone": "", "email": "", "address": ""}
+    create_event = _pull_event_of("customer", cust_id, "create", base)
+    delete_event = _pull_event_of("customer", cust_id, "delete", {"id": cust_id})
+    restore_event = _pull_event_of("customer", cust_id, "update", dict(base, status="active"))
+    client = FakeRelayClient(pull_responses=[
+        {"events": [create_event], "cursor": 1},
+        {"events": [delete_event], "cursor": 2},
+        {"events": [restore_event], "cursor": 3},
+    ])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+    assert _customers(get_conn)[0]["status"] == "active"
+
+    service.pull_once()
+    assert _customers(get_conn)[0]["status"] == "inactive"
+
+    service.pull_once()
+    assert _customers(get_conn)[0]["status"] == "active"
+
+
+def test_pull_once_supplier_status_round_trips_through_soft_delete_then_restore(get_conn):
+    sup_id = str(uuid.uuid4())
+    base = {"id": sup_id, "company_id": 1, "name": "Acme Supply Co", "phone": "", "email": "", "address": ""}
+    create_event = _pull_event_of("supplier", sup_id, "create", base)
+    delete_event = _pull_event_of("supplier", sup_id, "delete", {"id": sup_id})
+    restore_event = _pull_event_of("supplier", sup_id, "update", dict(base, status="active"))
+    client = FakeRelayClient(pull_responses=[
+        {"events": [create_event], "cursor": 1},
+        {"events": [delete_event], "cursor": 2},
+        {"events": [restore_event], "cursor": 3},
+    ])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+    assert _suppliers(get_conn)[0]["status"] == "active"
+
+    service.pull_once()
+    assert _suppliers(get_conn)[0]["status"] == "inactive"
+
+    service.pull_once()
+    assert _suppliers(get_conn)[0]["status"] == "active"
 
 
 # ── Cross-device company_id bug fix (2026-08-07) ─────────────────────────
