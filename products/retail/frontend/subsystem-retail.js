@@ -136,6 +136,26 @@ const RetailSystem = {
       .ret-kpi-change-up   { color:#10b981;font-size:12px; }
       .ret-kpi-change-down { color:#ef4444;font-size:12px; }
       .ret-po-item { display:grid;grid-template-columns:2fr 1fr 1fr 1fr auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05); }
+      /* Supplier modal tabs (Details / Contacts) -- no prior tab pattern existed
+         in this file, so this is the new baseline; kept visually consistent
+         with .ret-btn-ghost's muted/active language rather than inventing a
+         new color language. */
+      .ret-tabs { display:flex;gap:18px;margin-bottom:18px;border-bottom:1px solid rgba(255,255,255,0.08); }
+      .ret-tab { background:none;border:none;color:var(--text-muted);padding:10px 2px;font-size:13px;font-weight:600;cursor:pointer;border-bottom:2px solid transparent; }
+      .ret-tab:hover { color:#fff; }
+      .ret-tab.active { color:#fff;border-bottom-color:var(--sub-accent); }
+      /* PO split-preview cards (Thursday demo, Stream B) -- one per supplier
+         group, plus the Unassigned bucket which reuses the same card shape
+         with an amber border to flag it needs operator action. */
+      .ret-po-split-card { background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:16px;margin-bottom:14px; }
+      .ret-po-split-card-hdr { display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;gap:12px; }
+      .ret-po-split-supplier { color:#fff;font-weight:700;font-size:15px; }
+      .ret-po-split-meta { color:var(--text-muted);font-size:12px;margin-top:2px; }
+      .ret-po-split-total { color:#10b981;font-weight:700;font-size:16px;white-space:nowrap; }
+      .ret-po-split-warning { background:rgba(251,191,36,0.12);color:#fbbf24;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:600;margin-bottom:10px; }
+      .ret-po-split-contact { display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap; }
+      .ret-po-split-contact-detail { color:var(--text-muted);font-size:12px; }
+      .ret-po-split-unassigned { border-color:rgba(251,191,36,0.35); }
     `;
     document.head.appendChild(s);
   },
@@ -1540,28 +1560,210 @@ const RetailSystem = {
   _openAddSupplier() { this._showSupplierModal({}); },
   _openEditSupplier(id, name, phone, email, address) { this._showSupplierModal({id,name,phone,email,address}); },
 
+  // isEdit gets a "Contacts" tab alongside "Details" -- a brand-new supplier
+  // (no id yet) can't have contacts (supplier_contacts.supplier_id is
+  // NOT NULL, references suppliers(id)), so Add Supplier stays the plain
+  // single-panel form it always was; only Edit Supplier grows tabs. Details
+  // panel below is otherwise byte-for-byte the pre-existing form (same
+  // ids/fields) just moved inside #sm-panel-details.
   _showSupplierModal(s) {
     const isEdit = !!s.id;
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-sup-modal';
     overlay.innerHTML = `
-      <div class="ret-modal" style="width:440px">
+      <div class="ret-modal ${isEdit ? 'ret-modal-wide' : ''}" ${isEdit ? '' : 'style="width:440px"'}>
         <h3>${isEdit?'✏️ Edit Supplier':'🏭 Add Supplier'}</h3>
-        <div class="ret-field"><label>Company Name *</label><input id="sm-name" value="${s.name||''}" /></div>
-        <div class="ret-field-row">
-          <div class="ret-field"><label>Phone</label><input id="sm-phone" value="${s.phone||''}" /></div>
-          <div class="ret-field"><label>Email</label><input id="sm-email" value="${s.email||''}" /></div>
+        ${isEdit ? `
+        <div class="ret-tabs">
+          <button type="button" class="ret-tab active" id="sm-tab-details" onclick="RetailSystem._switchSupplierTab('details')">${t('Details')}</button>
+          <button type="button" class="ret-tab" id="sm-tab-contacts" onclick="RetailSystem._switchSupplierTab('contacts')">${t('Contacts')}</button>
+        </div>` : ''}
+        <div id="sm-panel-details">
+          <div class="ret-field"><label>Company Name *</label><input id="sm-name" value="${s.name||''}" /></div>
+          <div class="ret-field-row">
+            <div class="ret-field"><label>Phone</label><input id="sm-phone" value="${s.phone||''}" /></div>
+            <div class="ret-field"><label>Email</label><input id="sm-email" value="${s.email||''}" /></div>
+          </div>
+          <div class="ret-field"><label>Address</label><input id="sm-addr" value="${s.address||''}" /></div>
+          <div class="ret-modal-footer">
+            <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-sup-modal').remove()">Cancel</button>
+            <button class="ret-btn ret-btn-primary" id="sm-btn" onclick="RetailSystem._saveSupplier(${s.id ? `'${this._esc(s.id)}'` : 'null'})">${isEdit?'Save':'Add Supplier'}</button>
+          </div>
         </div>
-        <div class="ret-field"><label>Address</label><input id="sm-addr" value="${s.address||''}" /></div>
-        <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-sup-modal').remove()">Cancel</button>
-          <button class="ret-btn ret-btn-primary" id="sm-btn" onclick="RetailSystem._saveSupplier(${s.id ? `'${this._esc(s.id)}'` : 'null'})">${isEdit?'Save':'Add Supplier'}</button>
-        </div>
+        ${isEdit ? `
+        <div id="sm-panel-contacts" style="display:none">
+          <div id="sup-contacts-list"><p style="color:var(--text-muted)">${t('Loading…')}</p></div>
+          <div id="sup-contact-form" style="display:none"></div>
+          <div class="ret-modal-footer">
+            <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-sup-modal').remove()">${t('Cancel')}</button>
+            <button class="ret-btn ret-btn-primary" onclick="RetailSystem._openAddSupplierContact('${this._esc(s.id)}')">+ ${t('Add Contact')}</button>
+          </div>
+        </div>` : ''}
       </div>`;
     document.body.appendChild(overlay);
     overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
     document.getElementById('sm-name')?.focus();
+    if (isEdit) this._loadSupplierContacts(s.id);
+  },
+
+  _switchSupplierTab(tab) {
+    const details  = document.getElementById('sm-panel-details');
+    const contacts = document.getElementById('sm-panel-contacts');
+    if (!details || !contacts) return;
+    const showContacts = tab === 'contacts';
+    details.style.display  = showContacts ? 'none' : 'block';
+    contacts.style.display = showContacts ? 'block' : 'none';
+    document.getElementById('sm-tab-details')?.classList.toggle('active', !showContacts);
+    document.getElementById('sm-tab-contacts')?.classList.toggle('active', showContacts);
+  },
+
+  // ── Supplier Contacts tab (schema v6 supplier_contacts, PO-split-preview
+  // foundation) -- CRUD against /api/sub/retail/suppliers/<sid>/contacts.
+  // list_supplier_contacts in retail_api.py deliberately returns EVERY
+  // contact regardless of status (no `AND status='active'` filter -- see
+  // that route's comment: soft-deleted rows may still be referenced by past
+  // split-preview audit trails later). So "active list" is a CLIENT-side
+  // filter here, not a server one -- that's what makes a DELETE (soft-
+  // delete to status='inactive') visibly disappear from this list without
+  // ever hard-deleting the row.
+  async _loadSupplierContacts(sid) {
+    const listEl = document.getElementById('sup-contacts-list');
+    try {
+      const d = await this._get(`/api/sub/retail/suppliers/${sid}/contacts`);
+      this._supplierContacts = d.data || [];
+      this._renderSupplierContactsList(sid);
+    } catch (e) {
+      if (listEl) listEl.innerHTML = `<p style="color:var(--text-muted)">${t('Error')}</p>`;
+    }
+  },
+
+  _renderSupplierContactsList(sid) {
+    const listEl = document.getElementById('sup-contacts-list');
+    if (!listEl) return;
+    const active = (this._supplierContacts || []).filter(c => c.status !== 'inactive');
+    if (!active.length) {
+      listEl.innerHTML = `<p style="color:var(--text-muted)">${t('No contacts yet.')}</p>`;
+      return;
+    }
+    const roleLabels = { orders: t('Orders'), accounts: t('Accounts'), general: t('General') };
+    listEl.innerHTML = `<table class="ret-table">
+      <thead><tr><th>${t('Name')}</th><th>${t('Role')}</th><th>${t('Channel')}</th><th>${t('Actions')}</th></tr></thead>
+      <tbody>${active.map(c => `<tr>
+        <td style="font-weight:600">${this._esc(c.name)}${c.is_primary ? ` ${this._badge(t('Primary'),'green')}` : ''}</td>
+        <td>${this._esc(roleLabels[c.role] || c.role)}</td>
+        <td style="color:var(--text-muted)">${this._esc(c.channel_preference||'—')}<div style="font-size:11px">${this._esc(c.email||c.phone||c.whatsapp||'—')}</div></td>
+        <td>
+          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditSupplierContact('${this._esc(sid)}','${this._esc(c.id)}')">${t('Edit')}</button>
+          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._deleteSupplierContact('${this._esc(sid)}','${this._esc(c.id)}','${this._esc(c.name).replace(/'/g,"\\'")}')">${t('Delete')}</button>
+        </td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  },
+
+  _openAddSupplierContact(sid) { this._showSupplierContactForm(sid, {}); },
+
+  _openEditSupplierContact(sid, contactId) {
+    const c = (this._supplierContacts || []).find(x => String(x.id) === String(contactId));
+    if (!c) return;
+    this._showSupplierContactForm(sid, c);
+  },
+
+  _showSupplierContactForm(sid, c) {
+    const isEdit = !!c.id;
+    const formEl = document.getElementById('sup-contact-form');
+    if (!formEl) return;
+    formEl.style.display = 'block';
+    formEl.innerHTML = `
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,0.08)">
+        <div style="color:#fff;font-weight:600;margin-bottom:10px">${isEdit ? t('Edit Contact') : t('Add Contact')}</div>
+        <div class="ret-field-row">
+          <div class="ret-field"><label>${t('Name')} *</label><input id="scf-name" value="${this._esc(c.name||'')}" /></div>
+          <div class="ret-field"><label>${t('Role')}</label>
+            <select id="scf-role">
+              <option value="orders" ${!c.role||c.role==='orders'?'selected':''}>${t('Orders')}</option>
+              <option value="accounts" ${c.role==='accounts'?'selected':''}>${t('Accounts')}</option>
+              <option value="general" ${c.role==='general'?'selected':''}>${t('General')}</option>
+            </select>
+          </div>
+        </div>
+        <div class="ret-field-row">
+          <div class="ret-field"><label>${t('Email')}</label><input id="scf-email" value="${this._esc(c.email||'')}" /></div>
+          <div class="ret-field"><label>${t('Phone')}</label><input id="scf-phone" value="${this._esc(c.phone||'')}" /></div>
+        </div>
+        <div class="ret-field-row">
+          <div class="ret-field"><label>${t('WhatsApp')}</label><input id="scf-whatsapp" value="${this._esc(c.whatsapp||'')}" placeholder="+962791234567" /></div>
+          <div class="ret-field"><label>${t('Preferred Channel')}</label>
+            <select id="scf-channel">
+              <option value="whatsapp" ${(!c.channel_preference||c.channel_preference==='whatsapp')?'selected':''}>${t('WhatsApp')}</option>
+              <option value="email" ${c.channel_preference==='email'?'selected':''}>${t('Email')}</option>
+              <option value="phone" ${c.channel_preference==='phone'?'selected':''}>${t('Phone')}</option>
+            </select>
+          </div>
+        </div>
+        <div class="ret-field" style="display:flex;align-items:center;gap:8px">
+          <input type="checkbox" id="scf-primary" ${c.is_primary?'checked':''} style="width:auto" />
+          <label style="margin:0;text-transform:none;font-size:13px;color:#fff" for="scf-primary">${t('Primary contact for this role')}</label>
+        </div>
+        <div class="ret-modal-footer" style="margin-top:10px">
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeSupplierContactForm()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-primary" id="scf-save-btn" onclick="RetailSystem._saveSupplierContact('${this._esc(sid)}',${isEdit?`'${this._esc(c.id)}'`:'null'})">${isEdit?t('Save'):t('Add Contact')}</button>
+        </div>
+      </div>`;
+    document.getElementById('scf-name')?.focus();
+  },
+
+  _closeSupplierContactForm() {
+    const formEl = document.getElementById('sup-contact-form');
+    if (formEl) { formEl.style.display = 'none'; formEl.innerHTML = ''; }
+  },
+
+  async _saveSupplierContact(sid, contactId) {
+    const name = document.getElementById('scf-name')?.value.trim();
+    if (!name) { SubsystemApp.showToast(t('Contact name required'),'error'); return; }
+    const payload = {
+      name,
+      role: document.getElementById('scf-role')?.value || 'orders',
+      email: document.getElementById('scf-email')?.value || '',
+      phone: document.getElementById('scf-phone')?.value || '',
+      whatsapp: document.getElementById('scf-whatsapp')?.value || '',
+      channel_preference: document.getElementById('scf-channel')?.value || 'whatsapp',
+      is_primary: !!document.getElementById('scf-primary')?.checked,
+    };
+    const btn = document.getElementById('scf-save-btn');
+    if (btn) { btn.disabled = true; btn.textContent = t('Saving…'); }
+    try {
+      const d = contactId
+        ? await this._patch(`/api/sub/retail/suppliers/${sid}/contacts/${contactId}`, payload)
+        : await this._post(`/api/sub/retail/suppliers/${sid}/contacts`, payload);
+      if (d.status === 'success') {
+        SubsystemApp.showToast(contactId ? t('Contact updated') : t('Contact added'),'success');
+        this._closeSupplierContactForm();
+        await this._loadSupplierContacts(sid);
+      } else {
+        SubsystemApp.showToast(d.message || t('Error'),'error');
+        if (btn) { btn.disabled=false; btn.textContent=t('Save'); }
+      }
+    } catch (e) { if (btn) { btn.disabled=false; btn.textContent=t('Save'); } }
+  },
+
+  // Mirrors _deleteSupplier's confirm-then-call-then-always-refresh shape --
+  // a failed delete must be VISIBLE, not a silent no-op (same reasoning as
+  // _deleteCategory/_deleteCustomer/_deleteSupplier).
+  async _deleteSupplierContact(sid, contactId, name) {
+    if (!confirm(`${t('Delete')} "${name}"?`)) return;
+    try {
+      const d = await this._del(`/api/sub/retail/suppliers/${sid}/contacts/${contactId}`);
+      if (d && d.status === 'success') {
+        SubsystemApp.showToast(d.message || t('Contact deactivated'),'success');
+      } else {
+        SubsystemApp.showToast((d && d.message) || t('Error'),'error');
+      }
+      await this._loadSupplierContacts(sid);
+    } catch (e) {
+      console.error('Supplier contact delete failed', e);
+      SubsystemApp.showToast(t('Error'),'error');
+    }
   },
 
   async _saveSupplier(sid) {
@@ -1646,17 +1848,33 @@ const RetailSystem = {
     } catch(e) { console.error(e); }
   },
 
+  // ── PO SPLIT PREVIEW (Thursday demo, Stream B) ─────────────────────────────
+  // _openCreatePO used to be a single-step, single-supplier PO form (one
+  // top-level "Supplier *" select, one PO created immediately via
+  // POST .../purchase-orders). It is now a two-step preview flow:
+  //   Step 1 (#po-step-basket) is the SAME basket-building mechanism as
+  //   before -- _addPOItem/_renderPOItems are untouched -- just without the
+  //   old top-level Supplier/Notes fields, because a basket can now span
+  //   MULTIPLE suppliers: each line's supplier comes from its own product's
+  //   supplier_id, resolved server-side in preview_po_split (never trusted
+  //   from the client -- see that route's docstring in retail_api.py).
+  //   Step 2 (#po-step-preview, _renderPOSplitPreview) calls
+  //   POST .../purchase-orders/split-preview and renders one card per
+  //   supplier group plus an Unassigned bucket. Nothing here writes a real
+  //   PO yet -- the footer's "Create N Purchase Orders" button is
+  //   deliberately disabled (see _renderPOSplitPreview) until the routes
+  //   that persist split_group_id/routing_status land later this week.
   async _openCreatePO(supplierId=null, supplierName='') {
     const [sups, prods] = await Promise.all([
       this._get('/api/sub/retail/suppliers'),
       this._get('/api/sub/retail/products'),
     ]).catch(() => [{data:[]},{data:[]}]);
-    const suppliers = sups.data || [];
+    this._suppliers = sups.data || [];
     const products  = prods.data || [];
     this._products  = products;
+    this._poItems = [];
+    this._poSplitResult = null;
 
-    const supOpts = suppliers.map(s =>
-      `<option value="${s.id}" ${s.id===supplierId?'selected':''}>${s.name}</option>`).join('');
     const prodOpts = products.map(p =>
       `<option value="${p.id}" data-cost="${p.cost_price}">${p.name} (${p.sku}) — Stock: ${p.total_stock}</option>`).join('');
 
@@ -1666,35 +1884,34 @@ const RetailSystem = {
     overlay.innerHTML = `
       <div class="ret-modal ret-modal-wide">
         <h3>📋 New Purchase Order${supplierName?' — '+supplierName:''}</h3>
-        <div class="ret-field-row">
-          <div class="ret-field"><label>Supplier *</label>
-            <select id="po-sup"><option value="">Select supplier…</option>${supOpts}</select></div>
-          <div class="ret-field"><label>Notes</label><input id="po-notes" placeholder="Optional notes" /></div>
-        </div>
-        <div style="margin:16px 0 8px;color:#fff;font-weight:600">Order Items</div>
-        <div id="po-items"></div>
-        <div style="margin:12px 0">
-          <div class="ret-field-row" style="grid-template-columns:3fr 1fr 1fr auto;gap:8px;align-items:end">
-            <div class="ret-field" style="margin:0"><label>Product</label>
-              <select id="po-item-prod"><option value="">Select product…</option>${prodOpts}</select></div>
-            <div class="ret-field" style="margin:0"><label>Qty</label>
-              <input type="number" id="po-item-qty" value="1" min="1" /></div>
-            <div class="ret-field" style="margin:0"><label>Unit Cost</label>
-              <input type="number" id="po-item-cost" step="0.01" min="0" /></div>
-            <button class="ret-btn ret-btn-ghost" style="margin-bottom:1px" onclick="RetailSystem._addPOItem()">+ Add</button>
+
+        <div id="po-step-basket">
+          <div style="margin:0 0 8px;color:#fff;font-weight:600">Order Items</div>
+          <div id="po-items"></div>
+          <div style="margin:12px 0">
+            <div class="ret-field-row" style="grid-template-columns:3fr 1fr 1fr auto;gap:8px;align-items:end">
+              <div class="ret-field" style="margin:0"><label>Product</label>
+                <select id="po-item-prod"><option value="">Select product…</option>${prodOpts}</select></div>
+              <div class="ret-field" style="margin:0"><label>Qty</label>
+                <input type="number" id="po-item-qty" value="1" min="1" /></div>
+              <div class="ret-field" style="margin:0"><label>Unit Cost</label>
+                <input type="number" id="po-item-cost" step="0.01" min="0" /></div>
+              <button class="ret-btn ret-btn-ghost" style="margin-bottom:1px" onclick="RetailSystem._addPOItem()">+ Add</button>
+            </div>
+          </div>
+          <div style="text-align:right;color:#fff;font-size:16px;font-weight:700;margin-bottom:16px">
+            Total: <span id="po-total-display">$0.00</span>
+          </div>
+          <div class="ret-modal-footer">
+            <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-po-modal').remove()">Cancel</button>
+            <button class="ret-btn ret-btn-primary" id="po-preview-btn" onclick="RetailSystem._previewPOSplit()">${t('Preview split')}</button>
           </div>
         </div>
-        <div style="text-align:right;color:#fff;font-size:16px;font-weight:700;margin-bottom:16px">
-          Total: <span id="po-total-display">$0.00</span>
-        </div>
-        <div class="ret-modal-footer">
-          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-po-modal').remove()">Cancel</button>
-          <button class="ret-btn ret-btn-primary" id="po-save-btn" onclick="RetailSystem._savePO()">Create Purchase Order</button>
-        </div>
+
+        <div id="po-step-preview" style="display:none"></div>
       </div>`;
     document.body.appendChild(overlay);
     overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
-    this._poItems = [];
     document.getElementById('po-item-prod')?.addEventListener('change', function() {
       const opt = this.options[this.selectedIndex];
       const cost = opt?.dataset?.cost || 0;
@@ -1746,28 +1963,159 @@ const RetailSystem = {
     if (totalEl) totalEl.textContent = this._fmt(total);
   },
 
-  async _savePO() {
-    // AUDIT-follow-up (2026-08-10): same NaN-from-unary-`+` bug as
-    // _addPOItem above -- supplier ids are UUID TEXT too, so this made PO
-    // creation from the UI impossible (always short-circuited to the
-    // "Select a supplier" toast, even with a real supplier chosen).
-    const supplierId = document.getElementById('po-sup')?.value;
-    if (!supplierId) { SubsystemApp.showToast('Select a supplier','error'); return; }
-    if (!this._poItems.length) { SubsystemApp.showToast('Add at least one item','error'); return; }
-    const btn = document.getElementById('po-save-btn');
-    if (btn) { btn.disabled=true; btn.textContent='Creating…'; }
+  // Preview-only: POSTs the in-memory basket to preview_po_split, which
+  // groups it by each product's OWN supplier_id (never a client-sent one --
+  // see that route's docstring) and resolves each group's contact via
+  // po_split.py's 5-rung ladder. Writes nothing; see _renderPOSplitPreview
+  // for why the footer's create button stays disabled.
+  async _previewPOSplit() {
+    if (!this._poItems || !this._poItems.length) {
+      SubsystemApp.showToast(t('Add at least one item'),'error');
+      return;
+    }
+    const btn = document.getElementById('po-preview-btn');
+    if (btn) { btn.disabled=true; btn.textContent=t('Loading…'); }
     try {
-      const d = await this._post('/api/sub/retail/purchase-orders', {
-        supplier_id: supplierId,
-        notes: document.getElementById('po-notes')?.value||'',
-        items: this._poItems,
-      });
-      if (d.status==='success') {
-        SubsystemApp.showToast(`PO created: ${d.data.po_number}`,'success');
-        document.getElementById('ret-po-modal')?.remove();
-        this._loadPurchaseOrders();
-      } else { SubsystemApp.showToast(d.message||'Error','error'); if(btn){btn.disabled=false;btn.textContent='Create PO';} }
-    } catch(e) { if(btn){btn.disabled=false;btn.textContent='Create PO';} }
+      const items = this._poItems.map(i => ({
+        product_id: i.product_id, quantity: i.quantity, unit_cost: i.unit_cost,
+      }));
+      const d = await this._post('/api/sub/retail/purchase-orders/split-preview', { items });
+      if (d.status === 'success') {
+        this._poSplitResult = d.data;
+        this._showPOSplitStep();
+      } else {
+        SubsystemApp.showToast(d.message || t('Error'),'error');
+      }
+    } catch (e) {
+      SubsystemApp.showToast(t('Error'),'error');
+    } finally {
+      if (btn) { btn.disabled=false; btn.textContent=t('Preview split'); }
+    }
+  },
+
+  _showPOSplitStep() {
+    const basket  = document.getElementById('po-step-basket');
+    const preview = document.getElementById('po-step-preview');
+    if (basket)  basket.style.display  = 'none';
+    if (preview) preview.style.display = 'block';
+    this._renderPOSplitPreview();
+  },
+
+  _backToPOBasket() {
+    const basket  = document.getElementById('po-step-basket');
+    const preview = document.getElementById('po-step-preview');
+    if (basket)  basket.style.display  = 'block';
+    if (preview) preview.style.display = 'none';
+  },
+
+  // An "unassigned" line has no product.supplier_id yet. Assigning one here
+  // is a real catalog edit (PATCH the product, same route/field the product
+  // modal's own Supplier <select> already uses) rather than a preview-local
+  // override -- supplier_id lives on `products`, not on a basket line, and
+  // preview_po_split always re-reads it fresh from the DB. So the fix is to
+  // update the product, then simply re-run the preview.
+  async _assignItemSupplier(productId, supplierId) {
+    if (!supplierId) return;
+    try {
+      const d = await this._patch(`/api/sub/retail/products/${productId}`, { supplier_id: supplierId });
+      if (d.status === 'success') {
+        const p = (this._products || []).find(x => String(x.id) === String(productId));
+        if (p) p.supplier_id = supplierId;
+        SubsystemApp.showToast(t('Supplier assigned'),'success');
+        await this._previewPOSplit();
+      } else {
+        SubsystemApp.showToast(d.message || t('Error'),'error');
+      }
+    } catch (e) {
+      SubsystemApp.showToast(t('Error'),'error');
+    }
+  },
+
+  // Maps po_split.py's resolve_contact() source rung -> a short label + a
+  // badge color, so the operator can see at a glance which of the 5 fixed
+  // priority rungs matched (contact_primary_role > contact_role >
+  // contact_primary > supplier_fallback > none -- see resolve_contact's
+  // docstring). Each rung gets its OWN label/color rather than collapsing
+  // contact_primary_role/contact_role into one -- rung 2 is explicitly a
+  // NON-primary match (rung 1 already claims every primary role-match), so
+  // labeling both "Primary…" would misreport rung 2's result.
+  _CONTACT_SOURCE_META: {
+    contact_primary_role: { label: 'Primary orders contact', color: 'green'  },
+    contact_role:         { label: 'Orders contact',         color: 'blue'   },
+    contact_primary:      { label: 'Primary contact',        color: 'purple' },
+    supplier_fallback:    { label: 'Supplier fallback',      color: 'yellow' },
+    none:                 { label: 'No contact',             color: 'red'    },
+  },
+
+  _renderPOSplitPreview() {
+    const result = this._poSplitResult || { groups: [], unassigned: { lines: [] } };
+    const groups = result.groups || [];
+    const unassigned = result.unassigned || { lines: [] };
+
+    const groupCards = groups.map(g => {
+      const contact = g.contact || {};
+      const meta = this._CONTACT_SOURCE_META[contact.source] || this._CONTACT_SOURCE_META.none;
+      const contactLine = contact.name
+        ? [contact.name, contact.email, contact.phone].filter(Boolean).map(v => this._esc(v)).join(' · ')
+        : t('No contact');
+      return `<div class="ret-po-split-card">
+        <div class="ret-po-split-card-hdr">
+          <div>
+            <div class="ret-po-split-supplier">${this._esc(g.supplier_name || t('Unknown supplier'))}</div>
+            <div class="ret-po-split-meta">${this._esc(g.line_count)} ${t('items')} · ${t('Subtotal')}: ${this._fmt(g.subtotal)}</div>
+          </div>
+          <div class="ret-po-split-total">${this._fmt(g.total)}</div>
+        </div>
+        ${g.below_min_order ? `<div class="ret-po-split-warning">⚠ ${t('Below minimum order value')}: ${this._fmt(g.min_order_value)}</div>` : ''}
+        <div class="ret-po-split-contact">
+          ${this._badge(t(meta.label), meta.color)}
+          <span class="ret-po-split-contact-detail">${contactLine}</span>
+        </div>
+        <table class="ret-table">
+          <thead><tr><th>${t('Product')}</th><th>${t('Qty')}</th><th>${t('Unit Cost')}</th><th>${t('Total')}</th></tr></thead>
+          <tbody>${g.lines.map(l => `<tr>
+            <td>${this._esc(l.product_name)}</td>
+            <td>${this._esc(l.quantity)}</td>
+            <td>${this._fmt(l.unit_cost)}</td>
+            <td>${this._fmt(l.line_total)}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>`;
+    }).join('');
+
+    const unassignedLines = unassigned.lines || [];
+    const unassignedBlock = unassignedLines.length ? `
+      <div class="ret-po-split-card ret-po-split-unassigned">
+        <div class="ret-po-split-card-hdr">
+          <div class="ret-po-split-supplier">⚠ ${t('Unassigned')}</div>
+          <div class="ret-po-split-total">${this._fmt(unassigned.subtotal)}</div>
+        </div>
+        <table class="ret-table">
+          <thead><tr><th>${t('Product')}</th><th>${t('Qty')}</th><th>${t('Unit Cost')}</th><th>${t('Total')}</th><th>${t('Supplier')}</th></tr></thead>
+          <tbody>${unassignedLines.map(l => `<tr>
+            <td>${this._esc(l.product_name)}</td>
+            <td>${this._esc(l.quantity)}</td>
+            <td>${this._fmt(l.unit_cost)}</td>
+            <td>${this._fmt(l.line_total)}</td>
+            <td>
+              <select onchange="RetailSystem._assignItemSupplier('${this._esc(l.product_id)}', this.value)">
+                <option value="">${t('Assign supplier…')}</option>
+                ${(this._suppliers||[]).map(s => `<option value="${this._esc(s.id)}">${this._esc(s.name)}</option>`).join('')}
+              </select>
+            </td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>` : '';
+
+    const container = document.getElementById('po-step-preview');
+    if (!container) return;
+    container.innerHTML = `
+      ${groupCards || `<p style="color:var(--text-muted)">${t('No supplier groups yet.')}</p>`}
+      ${unassignedBlock}
+      <div class="ret-modal-footer">
+        <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._backToPOBasket()">${t('Back')}</button>
+        <button class="ret-btn ret-btn-primary" disabled title="${t('Not implemented yet')}">${t('Create')} ${groups.length} ${t('Purchase Orders')} (${t('coming next')})</button>
+      </div>`;
   },
 
   async _receivePO(poId, poNumber) {
