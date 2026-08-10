@@ -52,6 +52,20 @@ class CashClosing(Base, UUIDPKMixin, TimestampMixin):
     prepared_by_staff_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_staff_users.id"), nullable=False
     )
+    # AUDIT-032 -- prepared_by is set once at DRAFT creation and never
+    # reassigned (see class docstring), but the (business_date, currency)
+    # scope is shared: whoever first opens a given day gets that draft
+    # back, and ANY cash_closing.prepare holder may later submit it with
+    # their own counted-cash figure. decide_closing()'s self-approval
+    # block only ever compared the approver against prepared_by, so the
+    # actual submitter -- the person who supplied the figures actually
+    # being approved -- went unchecked: a second FINANCE account could
+    # submit someone else's draft, then approve its own submission.
+    # Nullable so every pre-existing row (submitted before this column
+    # existed) is unaffected.
+    submitted_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
+    )
     reviewed_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
     )

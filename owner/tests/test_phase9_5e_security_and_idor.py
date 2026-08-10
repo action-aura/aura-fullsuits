@@ -55,6 +55,25 @@ def _seed_payee(app, creator_staff_id):
         return payee.id
 
 
+def _seed_role_with_permissions(app, role_code, permission_codes):
+    """Bespoke test-only role, since no seeded role holds cash_closing.view_own
+    without also holding cash_closing.view_all (both only ever granted
+    together to FINANCE, per seed_data.py) -- the exact real-world gap that
+    made AUDIT-031's list-scoping bug invisible until this pass."""
+    from app.extensions import db_session
+    from app.models.staff import Permission, Role, RolePermission
+    from sqlalchemy import select
+
+    with app.app_context():
+        role = Role(code=role_code, name=role_code, description="test-only role", is_system_role=False)
+        db_session.add(role)
+        db_session.flush()
+        for code in permission_codes:
+            perm = db_session.execute(select(Permission).where(Permission.code == code)).scalars().first()
+            db_session.add(RolePermission(role_id=role.id, permission_id=perm.id))
+        db_session.commit()
+
+
 # --------------------------------------------------------------- Payment IDOR --
 
 def test_expense_payment_record_not_leaked_to_unauthorized_peer(app, client, seeded):
@@ -193,7 +212,160 @@ def test_concurrent_cash_closing_creation_for_same_scope_does_not_duplicate(app,
         assert len(rows) == 1
 
 
-# --------------------------------------------------------- Report snapshot access --
+# ------------------------------------------------ Cash-closing list IDOR (API) --
+
+def test_cash_closing_list_api_scopes_to_own_prepared_closings(app, client, seeded):
+    """AUDIT-031 regression: cash_closings_route()'s GET branch used to run
+    its own raw, unscoped query, bypassing the ownership scoping
+    list_queries.list_closings() already enforced for the web route -- a
+    view_own-only account could see every closing company-wide via the
+    JSON API directly."""
+    from app.cash_closing.services import get_or_create_draft_closing
+
+    _seed_role_with_permissions(app, "CASH_PREPARER_ONLY", ["cash_closing.prepare", "cash_closing.view_own"])
+    alice, _ = _seed_active_employee(app, "cc20alice@example.com", ["CASH_PREPARER_ONLY"])
+    bob, _ = _seed_active_employee(app, "cc20bob@example.com", ["CASH_PREPARER_ONLY"])
+
+    with app.app_context():
+        alice_closing = get_or_create_draft_closing(date(2026, 8, 13), "USD", prepared_by_staff_user_id=alice, opening_cash_override=Decimal("0"), opening_cash_override_reason="t")
+        bob_closing = get_or_create_draft_closing(date(2026, 8, 14), "USD", prepared_by_staff_user_id=bob, opening_cash_override=Decimal("0"), opening_cash_override_reason="t")
+        alice_id, bob_id = str(alice_closing.id), str(bob_closing.id)
+
+    force_login(client, app, alice)
+    resp = client.get("/api/operations/v1/cash-closings?currency=USD")
+    assert resp.status_code == 200
+    rows = resp.get_json()["rows"]
+    ids = {r["id"] for r in rows}
+    assert alice_id in ids
+    assert bob_id not in ids, "view_own-only account must not see a peer's closing via the JSON API"
+
+
+def test_cash_closing_list_api_view_all_holder_sees_every_closing(app, client, seeded):
+    from app.cash_closing.services import get_or_create_draft_closing
+
+    alice, _ = _seed_active_employee(app, "cc21alice@example.com", ["FINANCE"])
+    bob, _ = _seed_active_employee(app, "cc21bob@example.com", ["FINANCE"])
+
+    with app.app_context():
+        alice_closing = get_or_create_draft_closing(date(2026, 8, 15), "USD", prepared_by_staff_user_id=alice, opening_cash_override=Decimal("0"), opening_cash_override_reason="t")
+        bob_closing = get_or_create_draft_closing(date(2026, 8, 16), "USD", prepared_by_staff_user_id=bob, opening_cash_override=Decimal("0"), opening_cash_override_reason="t")
+        alice_id, bob_id = str(alice_closing.id), str(bob_closing.id)
+
+    force_login(client, app, alice)
+    resp = client.get("/api/operations/v1/cash-closings?currency=USD")
+    assert resp.status_code == 200
+    ids = {r["id"] for r in resp.get_json()["rows"]}
+    assert {alice_id, bob_id} <= ids
+
+
+def test_cash_closing_list_api_approve_holder_bypasses_ownership(app, client, seeded):
+    """cash_closing.approve must also bypass ownership scoping in the query
+    itself, matching the web route's own bypass set exactly -- an approver
+    reviews submissions from other preparers by definition of maker-checker.
+    The route decorator only accepts view_own/view_all/prepare (identically
+    on both the web and API routes, a pre-existing, already-disclosed,
+    zero-live-effect latent gap -- see finance-ui-contract.md -- not
+    something this pass changes), so the test role also holds `prepare` to
+    reach the endpoint at all; `approve`, not `prepare`'s own narrower
+    scoping, is what's under test here."""
+    from app.cash_closing.services import get_or_create_draft_closing
+
+    _seed_role_with_permissions(app, "CASH_APPROVER_ONLY", ["cash_closing.prepare", "cash_closing.approve"])
+    approver, _ = _seed_active_employee(app, "cc22approver@example.com", ["CASH_APPROVER_ONLY"])
+    preparer, _ = _seed_active_employee(app, "cc22prep@example.com", ["FINANCE"])
+
+    with app.app_context():
+        closing = get_or_create_draft_closing(date(2026, 8, 17), "USD", prepared_by_staff_user_id=preparer, opening_cash_override=Decimal("0"), opening_cash_override_reason="t")
+        closing_id = str(closing.id)
+
+    force_login(client, app, approver)
+    resp = client.get("/api/operations/v1/cash-closings?currency=USD")
+    assert resp.status_code == 200
+    assert closing_id in {r["id"] for r in resp.get_json()["rows"]}, "cash_closing.approve must bypass ownership scoping in the query, not just the route decorator"
+
+
+def test_cash_closing_list_api_response_shape_is_backward_compatible(app, client, seeded):
+    from app.cash_closing.services import get_or_create_draft_closing
+
+    staff, _ = _seed_active_employee(app, "cc23@example.com", ["FINANCE"])
+    with app.app_context():
+        get_or_create_draft_closing(date(2026, 8, 18), "USD", prepared_by_staff_user_id=staff, opening_cash_override=Decimal("0"), opening_cash_override_reason="t")
+
+    force_login(client, app, staff)
+    resp = client.get("/api/operations/v1/cash-closings?currency=USD")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert isinstance(body["rows"], list)
+    row = body["rows"][0]
+    assert set(row.keys()) == {
+        "id", "business_date", "currency", "status", "opening_cash", "confirmed_cash_collections",
+        "confirmed_cash_refunds", "cash_expense_payments", "cash_commission_payouts", "approved_cash_adjustments",
+        "expected_closing_cash", "actual_counted_cash", "variance", "variance_explanation", "version", "reopen_count",
+    }
+    assert {"page", "page_size", "total", "total_pages"} <= body.keys()
+
+
+def test_cash_closing_list_api_rejects_malformed_business_date(app, client, seeded):
+    staff, _ = _seed_active_employee(app, "cc24@example.com", ["FINANCE"])
+    force_login(client, app, staff)
+    resp = client.get("/api/operations/v1/cash-closings?business_date=not-a-date")
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "INVALID_REQUEST"
+
+
+# ------------------------------------------- Cash-closing submitter maker-checker --
+
+def test_submitter_cannot_approve_via_api(app, client, seeded):
+    """AUDIT-032 regression, driven through the real HTTP boundary: Bob
+    submits Alice's draft with his own counted-cash figure, then tries to
+    approve his own submission via the JSON API."""
+    alice, _ = _seed_active_employee(app, "cc25alice@example.com", ["FINANCE"])
+    bob, _ = _seed_active_employee(app, "cc25bob@example.com", ["FINANCE"])
+
+    from app.cash_closing.services import get_or_create_draft_closing
+    with app.app_context():
+        closing = get_or_create_draft_closing(date(2026, 8, 19), "USD", prepared_by_staff_user_id=alice, opening_cash_override=Decimal("0"), opening_cash_override_reason="t")
+        closing_id = str(closing.id)
+
+    force_login(client, app, bob)
+    csrf = _csrf(client)
+    resp = client.post(f"/api/operations/v1/cash-closings/{closing_id}/submit", json={"actual_counted_cash": "0.00"}, headers={"X-CSRFToken": csrf})
+    assert resp.status_code == 200
+
+    resp = client.post(f"/api/operations/v1/cash-closings/{closing_id}/decision", json={"decision": "APPROVED"}, headers={"X-CSRFToken": csrf})
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "SELF_APPROVAL_FORBIDDEN_CLOSING"
+
+
+def test_submitter_cannot_approve_via_web(app, client, seeded):
+    """Same scenario through the web/UI layer -- this codebase's proven
+    failure mode is 'fixed at one entry point, not the twin' (AUDIT-031),
+    so the fix must be verified at both boundaries."""
+    alice, _ = _seed_active_employee(app, "cc26alice@example.com", ["FINANCE"])
+    bob, _ = _seed_active_employee(app, "cc26bob@example.com", ["FINANCE"])
+
+    from app.cash_closing.services import get_or_create_draft_closing
+    with app.app_context():
+        closing = get_or_create_draft_closing(date(2026, 8, 20), "USD", prepared_by_staff_user_id=alice, opening_cash_override=Decimal("0"), opening_cash_override_reason="t")
+        closing_id = closing.id
+
+    force_login(client, app, bob)
+    csrf = _csrf(client)
+    resp = client.post(f"/operations/cash-closings/{closing_id}/submit", data={"csrf_token": csrf, "actual_counted_cash": "0.00"})
+    assert resp.status_code in (302, 303)
+
+    resp = client.post(f"/operations/cash-closings/{closing_id}/decision", data={"csrf_token": csrf, "decision": "APPROVED"})
+    assert resp.status_code in (302, 303)
+
+    from app.extensions import db_session
+    from app.models.cash_closing import CashClosing
+    with app.app_context():
+        refreshed = db_session.get(CashClosing, closing_id)
+        assert refreshed.status != "APPROVED", "self-approval block must fire for the web route too"
+        assert refreshed.status == "SUBMITTED"
+
+
+# ----------------------------------------------------------- Report snapshot access --
 
 def test_report_snapshot_list_and_generate_require_permission(app, client, seeded):
     staff = make_staff(app, "sec5@example.com", role_codes=["SALES"])

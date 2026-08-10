@@ -196,6 +196,13 @@ def submit_closing(
         _check_transition("SUBMITTED", "REVIEW_REQUIRED")
     closing.status = target_status
     closing.submitted_at = utcnow()
+    # AUDIT-032 -- prepared_by_staff_user_id is set once at draft creation
+    # and never reassigned, but ANY cash_closing.prepare holder may submit
+    # a draft someone else created (the (business_date, currency) scope is
+    # shared, not per-employee). Recording the real submitter here lets
+    # decide_closing() block the person who actually supplied the figures
+    # being approved, not just the original draft creator.
+    closing.submitted_by_staff_user_id = actor_staff_user_id
     closing.version += 1
     db_session.commit()
 
@@ -210,7 +217,15 @@ def submit_closing(
 def decide_closing(closing: CashClosing, *, decision: str, actor_staff_user_id: uuid.UUID, reason: str | None = None) -> CashClosing:
     if decision not in ("APPROVED", "REJECTED"):
         raise ValueError(f"Unknown decision: {decision!r}")
-    if closing.prepared_by_staff_user_id == actor_staff_user_id:
+    # AUDIT-032 -- blocks both maker roles, not just the original draft
+    # creator: the preparer (prepared_by, set once at DRAFT creation) and
+    # the actual submitter (submitted_by, who supplied the counted-cash
+    # figure and variance explanation this decision is actually judging).
+    # Without the submitted_by half, a second FINANCE account could submit
+    # someone else's draft with its own figures, then approve its own
+    # submission -- prepared_by alone never catches that, since it still
+    # names the original (uninvolved) preparer.
+    if actor_staff_user_id in (closing.prepared_by_staff_user_id, closing.submitted_by_staff_user_id):
         raise ExpenseError("SELF_APPROVAL_FORBIDDEN_CLOSING")
     _check_transition(closing.status, decision)
 
