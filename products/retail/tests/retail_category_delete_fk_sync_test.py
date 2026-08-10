@@ -85,15 +85,16 @@ def _seed_category_with_product(cat_id, company_id=1):
 
 # ── The schema change itself ────────────────────────────────────────────────
 
-def test_schema_version_is_v4_and_products_fk_declares_on_delete_set_null():
+def test_schema_version_is_v5_and_products_fk_declares_on_delete_set_null():
     # Was v3 when this file was written; the multi-device sync foundation's
-    # products.id -> UUID migration (see database/schema.py's
-    # _migrate_products_to_uuid) bumped this to v4. The FK-on-delete-set-null
-    # assertion this test exists for is unaffected by that later change.
-    assert retail_schema.RETAIL_SCHEMA_VERSION == 4
+    # products.id -> UUID migration bumped this to v4, and the customers/
+    # suppliers UUID migration (database/schema.py's _migrate_customers_to_uuid /
+    # _migrate_suppliers_to_uuid) bumped it again to v5. The FK-on-delete-set-null
+    # assertion this test exists for is unaffected by either later change.
+    assert retail_schema.RETAIL_SCHEMA_VERSION == 5
     conn = retail_schema.get_retail_conn()
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
         assert retail_schema._products_category_fk_is_set_null(conn) is True
     finally:
         conn.close()
