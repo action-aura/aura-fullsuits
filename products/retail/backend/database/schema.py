@@ -68,7 +68,35 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # migration -- ADD COLUMN + CREATE TABLE only, nothing renamed or retyped, so
 # unlike v1-v5 this needs no _new-table rebuild. See
 # _migrate_add_supplier_contacts_and_po_split below.
-RETAIL_SCHEMA_VERSION = 6
+# v7: outbox-wedge fix (2026-08-10 audit, HIGH severity -- see
+# commercial_runtime/sync/sync_service.py's module docstring). Three pieces:
+#   1. sync_outbox.created_at loses `DEFAULT CURRENT_TIMESTAMP` and becomes
+#      NOT NULL. SQLite's CURRENT_TIMESTAMP renders space-separated
+#      ("YYYY-MM-DD HH:MM:SS"); the sole writer (_queue_sync_event in
+#      api/retail_api.py, mirrored by scripts/seed_demo_sweets.py) always
+#      supplies its own T-separated `datetime.now(timezone.utc).isoformat()`
+#      value instead. Space (0x20) sorts before 'T' (0x54) in a plain string
+#      comparison, so a row that ever fell back to the column default would
+#      sort ahead of every explicitly-timestamped row regardless of real
+#      insertion order -- silently able to reorder a delete before its own
+#      create. Forcing every future writer to supply created_at explicitly
+#      turns a missing value into a loud NOT NULL constraint violation
+#      instead of a silently-misordered timestamp. SQLite has no ALTER
+#      COLUMN, so this needs the same rebuild-under-`_new`-then-swap
+#      technique as v1/v2's UUID migrations -- see
+#      _migrate_sync_outbox_ordering_and_dead_letter below.
+#   2. sync_outbox gains attempt_count/last_error -- diagnostic columns
+#      SyncService.push_once() now uses to detect a row that fails the same
+#      way on every retry (a real, permanently-malformed event) rather than
+#      an ordinary transient/offline failure.
+#   3. sync_dead_letter (new table) -- mirrors sync_outbox's shape plus the
+#      two diagnostic columns above and a dead_lettered_at timestamp. The
+#      landing spot for a row push_once() has isolated, via bisection, as
+#      the specific offender in a batch the relay keeps rejecting -- removed
+#      from the active outbox so the REST of the batch can keep draining
+#      instead of the whole outbox wedging on one bad row forever.
+# See _migrate_sync_outbox_ordering_and_dead_letter below.
+RETAIL_SCHEMA_VERSION = 7
 
 
 def _get_path(name):
@@ -673,6 +701,7 @@ def _migrate_retail_schema(conn):
     _migrate_suppliers_to_uuid(conn)
     _migrate_products_add_supplier_fk(conn)
     _migrate_add_supplier_contacts_and_po_split(conn)
+    _migrate_sync_outbox_ordering_and_dead_letter(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -784,6 +813,134 @@ def _migrate_add_supplier_contacts_and_po_split(conn):
         sup_cols = {row[1] for row in conn.execute('PRAGMA table_info(suppliers)').fetchall()}
         if 'min_order_value' not in sup_cols:
             conn.execute('ALTER TABLE suppliers ADD COLUMN min_order_value REAL DEFAULT 0')
+
+
+def _normalize_legacy_outbox_created_at(value):
+    """Best-effort normalization of a pre-v7 sync_outbox.created_at value
+    into the same shape the sole writer (_queue_sync_event) has always
+    produced: `datetime.now(timezone.utc).isoformat()`, T-separated.
+
+    Only ever touches a value that could not have come from that writer --
+    i.e. one that still has SQLite's own space-separated
+    `CURRENT_TIMESTAMP` shape ("YYYY-MM-DD HH:MM:SS"), which only a row that
+    fell back to the (about to be removed) column default could have. Real
+    installs on this branch are not expected to actually have any such row
+    (the writer has always supplied its own value), but this is written
+    defensively in case one exists rather than assuming it never happened.
+    CURRENT_TIMESTAMP is documented UTC, so a bare space -> 'T' swap plus an
+    explicit '+00:00' offset is a faithful (if second-precision-only)
+    isoformat equivalent -- exact sub-second ordering among normalized rows
+    is still resolved correctly by the `rowid` tiebreaker read_outbox() now
+    also orders by, so losing sub-second precision here is harmless."""
+    if not value or 'T' in value:
+        return value  # already isoformat-shaped (or empty/NULL) -- leave untouched
+    normalized = value.replace(' ', 'T', 1)
+    if '+' not in normalized and 'Z' not in normalized:
+        normalized += '+00:00'
+    return normalized
+
+
+def _migrate_sync_outbox_ordering_and_dead_letter(conn):
+    """One-time migration (schema v6 -> v7): closes the outbox-wedge bug
+    found in the 2026-08-10 audit -- see RETAIL_SCHEMA_VERSION's v7 comment
+    above and commercial_runtime/sync/sync_service.py's module docstring for
+    the full writeup. Three independent pieces, applied together because the
+    first (the rebuild) is the natural place to add the other two's columns
+    without a second full-table rebuild:
+
+    1. sync_outbox is rebuilt (SQLite has no ALTER COLUMN) so created_at
+       loses `DEFAULT CURRENT_TIMESTAMP` and becomes NOT NULL -- see
+       _normalize_legacy_outbox_created_at above for why existing rows are
+       safe to carry across as-is (or normalized, for the one shape that
+       would not be). Uses the same CREATE-`_new`-then-DROP-then-RENAME
+       technique as _migrate_categories_to_uuid (v1 -> v2) -- no other table
+       declares a FOREIGN KEY against sync_outbox, so unlike that migration
+       this needs no `PRAGMA foreign_keys=OFF` dance.
+
+    2. attempt_count (INTEGER NOT NULL DEFAULT 0) / last_error (TEXT) added
+       to the rebuilt table -- read/written by SyncService.push_once()'s new
+       rejection-tracking and bisection logic.
+
+    3. sync_dead_letter created (CREATE TABLE IF NOT EXISTS -- new table,
+       trivially idempotent on its own).
+
+    Idempotent as a whole: guarded by a PRAGMA table_info check on
+    sync_outbox's own `created_at` column (dflt_value already NULL and
+    notnull already 1 means this already ran) before doing anything else.
+
+    Defensive against sync_outbox not existing at all yet: several
+    hand-built pre-sync-foundation test databases (and, in principle, a
+    real install that started life on a schema version before sync_outbox
+    was introduced and is upgrading straight through several versions in
+    one `ensure_schema_version` pass) legitimately have no sync_outbox table
+    the instant before this runs. That case just creates it directly in the
+    final v7 shape -- there is nothing to copy, so no rebuild is needed.
+    """
+    existing_tables = {
+        row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }
+
+    if 'sync_outbox' not in existing_tables:
+        conn.execute("""
+            CREATE TABLE sync_outbox (
+                id TEXT PRIMARY KEY,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT
+            )
+        """)
+    else:
+        cols = {row["name"]: row for row in conn.execute('PRAGMA table_info(sync_outbox)').fetchall()}
+        created_at_col = cols.get('created_at')
+        already_rebuilt = (
+            created_at_col is not None
+            and created_at_col["dflt_value"] is None
+            and created_at_col["notnull"] == 1
+        )
+
+        if not already_rebuilt:
+            conn.execute("""
+                CREATE TABLE sync_outbox_new (
+                    id TEXT PRIMARY KEY,
+                    entity_type TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TIMESTAMP NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT
+                )
+            """)
+            rows = conn.execute(
+                "SELECT id, entity_type, entity_id, event_type, payload, created_at FROM sync_outbox"
+            ).fetchall()
+            for row in rows:
+                created_at = _normalize_legacy_outbox_created_at(row["created_at"])
+                conn.execute(
+                    "INSERT INTO sync_outbox_new (id, entity_type, entity_id, event_type, payload, created_at) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (row["id"], row["entity_type"], row["entity_id"], row["event_type"], row["payload"], created_at),
+                )
+            conn.execute("DROP TABLE sync_outbox")
+            conn.execute("ALTER TABLE sync_outbox_new RENAME TO sync_outbox")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sync_dead_letter (
+            id TEXT PRIMARY KEY,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            dead_lettered_at TIMESTAMP NOT NULL
+        )
+    """)
 
 
 def init_retail():
@@ -1021,19 +1178,49 @@ def init_retail():
     -- single-row (id=1) high-water-mark of the last Owner-side seq this
     -- device has pulled. Consumed by Task 4 (routes write to sync_outbox)
     -- and Task 5 (sync client reads/writes both).
+    --
+    -- Outbox-wedge fix (schema v7): created_at is NOT NULL with NO default
+    -- -- the sole writer (_queue_sync_event in api/retail_api.py, mirrored
+    -- by scripts/seed_demo_sweets.py) has always supplied its own
+    -- T-separated isoformat() value; a silent fallback to SQLite's own
+    -- space-separated CURRENT_TIMESTAMP default sorts BEFORE every real
+    -- value in a plain string ORDER BY, which can reorder a delete before
+    -- its own create. See _migrate_sync_outbox_ordering_and_dead_letter
+    -- below for the existing-install migration and the full writeup, and
+    -- commercial_runtime/sync/sync_service.py's module docstring for how
+    -- attempt_count/last_error are used. Included here too so a brand-new
+    -- install gets v7 shape directly without ever running that migration,
+    -- same as every other version bump in this file.
     CREATE TABLE IF NOT EXISTS sync_outbox (
         id TEXT PRIMARY KEY,
         entity_type TEXT NOT NULL,
         entity_id TEXT NOT NULL,
         event_type TEXT NOT NULL,
         payload TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT
     );
     CREATE TABLE IF NOT EXISTS sync_cursor (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         last_seq INTEGER NOT NULL DEFAULT 0
     );
     INSERT OR IGNORE INTO sync_cursor (id, last_seq) VALUES (1, 0);
+    -- Outbox-wedge fix (schema v7): landing spot for a sync_outbox row
+    -- SyncService.push_once() has isolated, via bisection, as the specific
+    -- offender in a batch the relay keeps rejecting -- see
+    -- _migrate_sync_outbox_ordering_and_dead_letter below.
+    CREATE TABLE IF NOT EXISTS sync_dead_letter (
+        id TEXT PRIMARY KEY,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        dead_lettered_at TIMESTAMP NOT NULL
+    );
     -- PO-preview-by-supplier foundation (schema v6): a supplier can have
     -- several named contacts (orders/accounts/general), each with its own
     -- preferred channel -- read by core/retail/po_split.py's contact

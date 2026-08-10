@@ -85,19 +85,21 @@ def _seed_category_with_product(cat_id, company_id=1):
 
 # ── The schema change itself ────────────────────────────────────────────────
 
-def test_schema_version_is_v6_and_products_fk_declares_on_delete_set_null():
+def test_schema_version_is_v7_and_products_fk_declares_on_delete_set_null():
     # Was v3 when this file was written; the multi-device sync foundation's
     # products.id -> UUID migration bumped this to v4, the customers/
     # suppliers UUID migration (database/schema.py's _migrate_customers_to_uuid /
-    # _migrate_suppliers_to_uuid) bumped it again to v5, and the PO-preview-by-
+    # _migrate_suppliers_to_uuid) bumped it again to v5, the PO-preview-by-
     # supplier foundation (database/schema.py's
-    # _migrate_add_supplier_contacts_and_po_split) bumped it again to v6. The
-    # FK-on-delete-set-null assertion this test exists for is unaffected by
-    # any of these later changes.
-    assert retail_schema.RETAIL_SCHEMA_VERSION == 6
+    # _migrate_add_supplier_contacts_and_po_split) bumped it again to v6, and
+    # the outbox-wedge fix (database/schema.py's
+    # _migrate_sync_outbox_ordering_and_dead_letter) bumped it again to v7.
+    # The FK-on-delete-set-null assertion this test exists for is unaffected
+    # by any of these later changes.
+    assert retail_schema.RETAIL_SCHEMA_VERSION == 7
     conn = retail_schema.get_retail_conn()
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
         assert retail_schema._products_category_fk_is_set_null(conn) is True
     finally:
         conn.close()
