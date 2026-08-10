@@ -32,47 +32,60 @@ every pulled row instead. `_apply_event` runs on a background thread with no
 Flask request/session context, so it cannot call `_cid()`/read
 `session.get('company_id')` -- it must read the value directly from disk.
 
-Outbox-wedge fix (2026-08-10 audit, HIGH severity), part 1/2 -- chunked
-drain: `push_once()` used to read the ENTIRE `sync_outbox` with no limit and
-push it in one call, while Owner's relay enforces a 200-event
-`_MAX_PUSH_BATCH` and rejects anything larger with a business-rejection
-(`RelayRejected`, never retried automatically -- see `relay_client.py`'s
-module docstring on why a rejection and a transient `NetworkError` are
-deliberately different exception types). Because `push_once()` also leaves
-the outbox completely untouched on ANY failure (correct for a transient/
-offline failure, see `push_once`'s own docstring), a single bulk import or a
-few days offline queuing >200 rows would wedge the outbox PERMANENTLY: every
-subsequent tick reads the same oversized batch, gets the same rejection, and
-nothing ever shrinks.
+Outbox-wedge fix (2026-08-10 audit, HIGH severity): `push_once()` used to
+read the ENTIRE `sync_outbox` with no limit and push it in one call, while
+Owner's relay enforces a 200-event `_MAX_PUSH_BATCH` and rejects anything
+larger with a business-rejection (`RelayRejected`, never retried
+automatically -- see `relay_client.py`'s module docstring on why a rejection
+and a transient `NetworkError` are deliberately different exception types).
+Because `push_once()` also leaves the outbox completely untouched on ANY
+failure (correct for a transient/offline failure, see `push_once`'s own
+docstring), a single bulk import or a few days offline queuing >200 rows
+would wedge the outbox PERMANENTLY: every subsequent tick reads the same
+oversized batch, gets the same rejection, and nothing ever shrinks. Two
+fixes, in the order they had to land:
 
-`read_outbox` now takes a `limit` (default `DEFAULT_OUTBOX_PUSH_LIMIT`,
-comfortably under the relay's 200-row cap) and orders by `created_at,
-rowid` -- see `RETAIL_SCHEMA_VERSION`'s v7 comment in `database/schema.py`
-for why `created_at` alone was never a safe sort key, and why the
-tiebreaker is SQLite's own hidden `rowid` rather than the table's declared
-`id` column: `sync_outbox.id` is a client-generated UUID (`_queue_sync_event`
-in `retail_api.py`), not an autoincrementing key, so it has no relationship
-to insertion order at all. `rowid` is SQLite's own implicit,
-monotonically-assigned integer for any ordinary (non-`WITHOUT ROWID`) table
--- exactly what an autoincrement tiebreaker would have given this table if
-`id` itself had been one. `push_once()` now drains in bounded per-tick
-chunks: one `limit`-sized read/push/ack per call, with a large backlog
-draining over several ticks rather than one oversized call. Correct only
-because of the ordering fix above -- a chunk boundary landing between an
-ambiguously-ordered create and its own later update would otherwise risk
-pushing them out of order.
+1. `read_outbox` now takes a `limit` (default `DEFAULT_OUTBOX_PUSH_LIMIT`,
+   comfortably under the relay's 200-row cap) and orders by
+   `created_at, rowid` -- see `RETAIL_SCHEMA_VERSION`'s v7 comment in
+   `database/schema.py` for why `created_at` alone was never a safe sort key,
+   and why the tiebreaker is SQLite's own hidden `rowid` rather than the
+   table's declared `id` column: `sync_outbox.id` is a client-generated UUID
+   (`_queue_sync_event` in `retail_api.py`), not an autoincrementing key, so
+   it has no relationship to insertion order at all. `rowid` is SQLite's own
+   implicit, monotonically-assigned integer for any ordinary (non-`WITHOUT
+   ROWID`) table -- exactly what an autoincrement tiebreaker would have
+   given this table if `id` itself had been one. `push_once()` now drains in
+   bounded per-tick chunks: one `limit`-sized read/push/ack per call, with
+   a large backlog draining over several ticks rather than one oversized
+   call. Correct only because of the ordering fix above -- a chunk boundary
+   landing between an ambiguously-ordered create and its own later update
+   would otherwise risk pushing them out of order.
 
-Chunking alone only stops a NEW install from wedging via one big import; it
-does nothing for a single row that is itself genuinely unpushable (a
-follow-up change adds dead-letter isolation for that case -- see this
-module's history/a later commit for that half of the fix).
+2. Chunking alone only stops a NEW install from wedging via one big import;
+   it does nothing for a single row that is itself genuinely unpushable
+   (malformed payload, a reference to since-deleted data, ...) -- that row
+   would still fail identically forever, just in a smaller batch. On a
+   `RelayRejected`, `push_once()` now records the rejection against every
+   row in the batch (`attempt_count`/`last_error`), and once a batch has
+   been rejected `DEAD_LETTER_THRESHOLD` times in a row, bisects it --
+   repeatedly halving and re-pushing sub-batches -- to isolate the actual
+   offending row(s), moves each one to `sync_dead_letter` (removed from the
+   active outbox, so it can never block anything again), and lets the rest
+   of the batch keep draining normally. `RelayRejected` is escalated to
+   `logger.error` (was `logger.info`) the moment bisection actually starts --
+   a wedge condition is no longer a silent, INFO-level, forever-retried
+   no-op.
 """
 from __future__ import annotations
 
 import json
 import logging
 import threading
+from datetime import datetime, timezone
 from typing import Callable, Optional
+
+from commercial_runtime.sync.relay_client import RelayRejected
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +94,22 @@ logger = logging.getLogger(__name__)
 # see this module's docstring) -- leaves headroom rather than pushing right
 # up to the server's own limit.
 DEFAULT_OUTBOX_PUSH_LIMIT = 100
+
+# How many CONSECUTIVE RelayRejected responses the exact same (still
+# unbisected) batch has to accumulate before push_once() gives up retrying
+# it whole and starts bisecting to find the actual offending row(s). Chosen
+# as 5, not 1, deliberately: only a genuine business rejection increments
+# this counter at all (a transient NetworkError never does -- see
+# push_once() below), so even attempt #1 already means Owner understood and
+# rejected the request. The extra headroom to 5 exists as defense-in-depth
+# against a rejection that reflects transient SERVER-side state rather than
+# a truly malformed payload (e.g. a brief Owner-side hiccup misreported as a
+# business rejection instead of a 5xx), and gives an operator watching the
+# new ERROR-level log a few ticks' warning before a row is irreversibly
+# quarantined. At the default 10s tick interval that is well under a
+# minute; a route-triggered nudge() reaches it far faster. Still bounded and
+# still small -- nowhere near "forever".
+DEAD_LETTER_THRESHOLD = 5
 
 # SQLite's own per-statement bound-parameter cap is 999
 # (SQLITE_MAX_VARIABLE_NUMBER's historical default, sometimes compiled
@@ -172,29 +201,163 @@ class SyncService:
         first) of sync_outbox to Owner per call -- see the module docstring's
         "Outbox-wedge fix" note for why this is chunked at all. Reads the
         current rows, pushes them, and ONLY deletes exactly those rows on
-        success -- a push failure (network or a real Owner rejection) raises
-        back to the caller with the outbox left completely untouched
-        (nothing read is deleted, and nothing new that arrived concurrently
-        is at risk, since only the specific ids just pushed are ever
-        deleted). A full backlog larger than one chunk drains over multiple
-        calls -- the normal timer tick (or a route-triggered nudge()) simply
-        picks up the next chunk next time, since ack_outbox() always removes
-        exactly (and only) the rows that were just genuinely accepted."""
+        success -- a transient push failure (`NetworkError`: network or
+        Owner temporarily unavailable) raises back to the caller with the
+        outbox left completely untouched, exactly as before (nothing read is
+        deleted, and nothing new that arrived concurrently is at risk, since
+        only the specific ids just pushed are ever deleted). A full backlog
+        larger than one chunk drains over multiple calls -- the normal timer
+        tick (or a route-triggered nudge()) simply picks up the next chunk
+        next time, since ack_outbox() always removes exactly (and only) the
+        rows that were just genuinely accepted.
+
+        A business rejection (`RelayRejected` -- Owner reached the request
+        and said no) is handled differently from a transient failure: see
+        `_handle_rejected_batch` below."""
         with self._lock:
             conn = self._get_conn()
             try:
                 events = self.read_outbox(conn, limit=self._push_batch_limit)
                 if not events:
                     return
-                self._client_factory().push(events)  # raises on failure -- nothing below runs
-                self.ack_outbox(conn, [e["id"] for e in events])
-                conn.commit()
+                try:
+                    self._client_factory().push(events)
+                except RelayRejected as exc:
+                    self._handle_rejected_batch(conn, events, exc)
+                else:
+                    self.ack_outbox(conn, [e["id"] for e in events])
+                    conn.commit()
             finally:
                 # conn.close() with no prior commit() discards any
-                # uncommitted work on this connection -- if push() raised,
-                # the DELETE above never ran, so there is nothing to lose;
-                # this only guarantees the connection itself is never leaked.
+                # uncommitted work on this connection -- if push() raised
+                # and _handle_rejected_batch already committed everything it
+                # did (see that method), there is nothing left to lose here;
+                # this only guarantees the connection itself is never
+                # leaked.
                 conn.close()
+
+    def _handle_rejected_batch(self, conn, events: list, exc: "RelayRejected") -> None:
+        """Called from push_once() the moment Owner rejects the current
+        chunk as a whole. Records the rejection against every row in the
+        batch, then either re-raises (ordinary swallow-and-retry-next-tick,
+        via run_once()'s own try/except -- ordinary "not yet at threshold"
+        path) or, once the SAME batch has now been rejected
+        `DEAD_LETTER_THRESHOLD` times in a row, bisects it to isolate and
+        quarantine the actual offending row(s) -- see `_bisect_and_quarantine`
+        below. Caller (push_once) is responsible for `conn.close()`; this
+        method commits its own work as it goes so a mid-bisection failure
+        (e.g. a `NetworkError` on one sub-batch) never loses attempt/
+        dead-letter progress already made on the OTHER sub-batch."""
+        ids = [e["id"] for e in events]
+        self._record_rejection(conn, ids, exc)
+        conn.commit()
+        if not self._is_batch_over_threshold(conn, ids):
+            raise exc  # below threshold -- ordinary retry-next-tick path
+        logger.error(
+            "Sync outbox batch of %d row(s) rejected %d+ times in a row "
+            "(reason_code=%s); bisecting to isolate the offending row(s) "
+            "instead of leaving the whole outbox wedged behind them.",
+            len(events), DEAD_LETTER_THRESHOLD, exc.reason_code,
+        )
+        self._bisect_and_quarantine(conn, events)
+
+    def _record_rejection(self, conn, ids: list, exc: "RelayRejected") -> None:
+        """Increments attempt_count and records last_error for exactly the
+        given outbox row ids -- called once per rejected (sub-)batch, so
+        every row that was actually part of THIS rejection is tracked, never
+        rows outside it."""
+        if not ids:
+            return
+        for start in range(0, len(ids), _ACK_CHUNK_SIZE):
+            chunk = ids[start:start + _ACK_CHUNK_SIZE]
+            conn.execute(
+                "UPDATE sync_outbox SET attempt_count = attempt_count + 1, last_error = ? "
+                "WHERE id IN ({})".format(",".join("?" * len(chunk))),
+                [f"{exc.reason_code}: {exc}"] + chunk,
+            )
+
+    def _is_batch_over_threshold(self, conn, ids: list) -> bool:
+        """True once ANY row in `ids` has reached DEAD_LETTER_THRESHOLD
+        attempts. A batch that has never been bisected always has every row
+        at the same attempt_count (they only ever fail together), so this is
+        equivalent to checking the batch as a whole -- checking `any(...)`
+        rather than `all(...)` keeps it correct once bisection is under way
+        too, where different sub-batches can be at different counts."""
+        if not ids:
+            return False
+        rows = conn.execute(
+            "SELECT attempt_count FROM sync_outbox WHERE id IN ({})".format(",".join("?" * len(ids))),
+            ids,
+        ).fetchall()
+        return any(r["attempt_count"] >= DEAD_LETTER_THRESHOLD for r in rows)
+
+    def _bisect_and_quarantine(self, conn, events: list) -> None:
+        """Recursively narrows a confirmed-bad `events` batch down to the
+        individual offending row(s): splits it in half, pushes each half as
+        its OWN push() call, and recurses into whichever half still gets
+        rejected. A half that pushes successfully is genuinely accepted by
+        Owner right there (it is NOT re-pushed again by push_once() after
+        this returns) -- immediately ack'd and committed. A single-row
+        "half" (the recursion's base case) that is STILL rejected after
+        everything else has been ruled out IS the offender -- moved to
+        sync_dead_letter and removed from the active outbox.
+
+        A `NetworkError` at any point during bisection (a real connectivity
+        blip, not a business rejection) is deliberately allowed to propagate
+        all the way out of push_once() unhandled -- whatever bisection has
+        already resolved (ack'd or dead-lettered) up to that point stays
+        committed, and whatever is left unresolved simply stays in
+        sync_outbox with its attempt_count as far as this got; the next tick
+        re-reads it and continues narrowing rather than this being
+        misdiagnosed as "the row is bad" from a transient blip."""
+        if len(events) == 1:
+            self._dead_letter_row(conn, events[0], "isolated by bisection: still rejected with nothing left to narrow against")
+            conn.commit()
+            return
+
+        mid = len(events) // 2
+        for half in (events[:mid], events[mid:]):
+            if not half:
+                continue
+            try:
+                self._client_factory().push(half)
+            except RelayRejected as exc:
+                half_ids = [e["id"] for e in half]
+                self._record_rejection(conn, half_ids, exc)
+                conn.commit()
+                self._bisect_and_quarantine(conn, half)
+            else:
+                self.ack_outbox(conn, [e["id"] for e in half])
+                conn.commit()
+
+    def _dead_letter_row(self, conn, event: dict, note: str) -> None:
+        """Moves exactly one sync_outbox row (by id) to sync_dead_letter and
+        removes it from the active outbox, so it can never block another
+        batch again. Reads the row fresh from sync_outbox (rather than
+        trusting the in-memory `event` dict, whose `payload` is already
+        JSON-decoded) so sync_dead_letter's `payload` column stays the same
+        raw-JSON-TEXT shape sync_outbox itself uses."""
+        row = conn.execute("SELECT * FROM sync_outbox WHERE id=?", (event["id"],)).fetchone()
+        if row is None:
+            return  # already moved by an earlier/concurrent call -- nothing to do
+        conn.execute(
+            "INSERT INTO sync_dead_letter "
+            "(id, entity_type, entity_id, event_type, payload, created_at, attempt_count, last_error, dead_lettered_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                row["id"], row["entity_type"], row["entity_id"], row["event_type"], row["payload"],
+                row["created_at"], row["attempt_count"], row["last_error"] or note,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.execute("DELETE FROM sync_outbox WHERE id=?", (row["id"],))
+        logger.error(
+            "Sync outbox row %s (entity_type=%s entity_id=%s event_type=%s) permanently "
+            "rejected after %d attempt(s); moved to sync_dead_letter for manual review. "
+            "last_error=%s",
+            row["id"], row["entity_type"], row["entity_id"], row["event_type"],
+            row["attempt_count"], row["last_error"],
+        )
 
     def pull_once(self) -> None:
         """Pulls events newer than the local cursor and applies them, then

@@ -6,10 +6,10 @@ transport behavior is already covered end-to-end by test_relay_client.py.
 Local persistence uses a real sqlite file under tmp_path (same convention
 test_checkin_scheduler.py/test_state_repository.py use for
 LicenseStateRepository), built with the exact categories/sync_outbox/
-sync_cursor schema products/retail/backend/database/schema.py creates
-(schema v7 shape -- see that file's RETAIL_SCHEMA_VERSION comment and its
-own retail_sync_outbox_wedge_migration_test.py for the existing-install
-migration path this file does not need to re-cover).
+sync_cursor/sync_dead_letter schema products/retail/backend/database/schema.py
+creates (schema v7 shape -- see that file's RETAIL_SCHEMA_VERSION comment
+and its own retail_sync_outbox_wedge_migration_test.py for the
+existing-install migration path this file does not need to re-cover).
 """
 import json
 import sqlite3
@@ -22,6 +22,7 @@ import pytest
 
 from commercial_runtime.sync.relay_client import NetworkError, RelayRejected
 from commercial_runtime.sync.sync_service import (
+    DEAD_LETTER_THRESHOLD,
     DEFAULT_OUTBOX_PUSH_LIMIT,
     SyncService,
     nudge,
@@ -102,7 +103,20 @@ CREATE TABLE sync_outbox (
     entity_id TEXT NOT NULL,
     event_type TEXT NOT NULL,
     payload TEXT NOT NULL,
-    created_at TIMESTAMP NOT NULL
+    created_at TIMESTAMP NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT
+);
+CREATE TABLE sync_dead_letter (
+    id TEXT PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    dead_lettered_at TIMESTAMP NOT NULL
 );
 CREATE TABLE sync_cursor (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -157,6 +171,13 @@ def _insert_outbox_row(get_conn, entity_id=None, event_type="create", payload=No
 def _outbox_rows(get_conn):
     conn = get_conn()
     rows = [dict(r) for r in conn.execute("SELECT * FROM sync_outbox").fetchall()]
+    conn.close()
+    return rows
+
+
+def _dead_letter_rows(get_conn):
+    conn = get_conn()
+    rows = [dict(r) for r in conn.execute("SELECT * FROM sync_dead_letter").fetchall()]
     conn.close()
     return rows
 
@@ -784,8 +805,8 @@ def test_nudge_and_a_concurrent_scheduled_tick_never_run_push_once_at_the_same_t
     assert concurrent_calls["max_active"] <= 1  # never two push() calls in flight at once
 
 
-# ── Outbox-wedge fix (2026-08-10 audit), chunked drain ───────────────────
-# Two properties proven below, mirroring the module docstring's "Outbox-
+# ── Outbox-wedge fix (2026-08-10 audit) ──────────────────────────────────
+# Three properties proven below, mirroring the module docstring's "Outbox-
 # wedge fix" note:
 #   1. a backlog bigger than one chunk drains across several push_once()
 #      calls, never exceeding the per-call limit;
@@ -794,12 +815,10 @@ def test_nudge_and_a_concurrent_scheduled_tick_never_run_push_once_at_the_same_t
 #      (rowid) order -- the mixed LEGACY-FORMAT-vs-normal-format scenario
 #      that motivated the ordering fix in the first place is covered
 #      end-to-end (real migration + real normalization) by
-#      products/retail/tests/retail_sync_outbox_wedge_migration_test.py.
-#
-# A single row that is genuinely unpushable (rejected no matter what) is
-# NOT yet handled here -- chunking alone still lets that row wedge its own
-# (now smaller) batch forever; dead-letter isolation for that case is a
-# separate, later change.
+#      products/retail/tests/retail_sync_outbox_wedge_migration_test.py;
+#   3. a single row that is genuinely unpushable (rejected no matter what)
+#      gets isolated via bisection and dead-lettered, while every OTHER row
+#      in the same batch still drains -- the actual "self-healing" fix.
 
 
 def test_read_outbox_respects_the_limit_parameter(get_conn):
@@ -877,6 +896,119 @@ def test_push_once_drains_a_large_backlog_across_multiple_calls_without_exceedin
     pushed_entity_ids = [e["entity_id"] for batch in client.push_calls for e in batch]
     assert pushed_entity_ids == inserted_entity_ids  # every row drained exactly once, in true order
     assert _outbox_rows(get_conn) == []
+
+
+def test_push_once_below_dead_letter_threshold_raises_and_leaves_outbox_untouched(get_conn):
+    """Below DEAD_LETTER_THRESHOLD, a rejected batch behaves like before the
+    fix in every way that matters to the caller (raises, outbox row count
+    unchanged) -- attempt_count/last_error tracking is new, but it must never
+    be visible as a behavior change until the threshold is actually hit."""
+    entity_id, _ = _insert_outbox_row(get_conn)
+    client = FakeRelayClient(push_responses=[RelayRejected("INVALID_PAYLOAD", "bad row")])
+    service = SyncService(lambda: client, get_conn)
+
+    with pytest.raises(RelayRejected):
+        service.push_once()
+
+    rows = _outbox_rows(get_conn)
+    assert len(rows) == 1
+    assert rows[0]["entity_id"] == entity_id
+    assert rows[0]["attempt_count"] == 1
+    assert "INVALID_PAYLOAD" in rows[0]["last_error"]
+    assert _dead_letter_rows(get_conn) == []
+
+
+class _PoisonRelayClient:
+    """A batch-level relay double: rejects the WHOLE batch whenever it
+    contains the designated poison entity_id, accepts it otherwise --
+    mirroring a real relay's actual rejection granularity (batch, not row),
+    which is exactly why push_once() has to bisect a rejected batch to find
+    out WHICH row is actually bad rather than being told directly."""
+
+    def __init__(self, poison_entity_id):
+        self._poison_entity_id = poison_entity_id
+        self.push_calls = []
+        self.accepted_calls = []
+
+    def push(self, events):
+        self.push_calls.append(events)
+        if any(e["entity_id"] == self._poison_entity_id for e in events):
+            raise RelayRejected("INVALID_PAYLOAD", f"entity {self._poison_entity_id} is malformed")
+        self.accepted_calls.append(events)
+        return {"stored": len(events), "received": len(events)}
+
+    def pull(self, since):
+        return {"events": [], "cursor": since}
+
+
+def test_push_once_bisects_and_dead_letters_the_one_bad_row_while_draining_the_rest(get_conn):
+    """The core self-healing proof: nine genuinely pushable rows plus one
+    deliberately unpushable ("poison") row, all in the same chunk. After
+    DEAD_LETTER_THRESHOLD consecutive rejections of the batch as a whole,
+    push_once() must bisect, isolate the poison row into sync_dead_letter,
+    and successfully drain the other nine -- never discarding a good row,
+    never leaving the poison row stuck in sync_outbox forever."""
+    good_entity_ids = []
+    for _ in range(9):
+        entity_id, _ = _insert_outbox_row(get_conn)
+        good_entity_ids.append(entity_id)
+    poison_entity_id, _ = _insert_outbox_row(get_conn)
+
+    client = _PoisonRelayClient(poison_entity_id)
+    service = SyncService(lambda: client, get_conn)
+
+    # First DEAD_LETTER_THRESHOLD - 1 calls: ordinary "below threshold" path
+    # -- raises, nothing removed yet.
+    for _ in range(DEAD_LETTER_THRESHOLD - 1):
+        with pytest.raises(RelayRejected):
+            service.push_once()
+        assert _dead_letter_rows(get_conn) == []
+        assert len(_outbox_rows(get_conn)) == 10
+
+    # The DEAD_LETTER_THRESHOLD-th call crosses the threshold WITHIN this
+    # same call -- bisects and fully resolves the batch, no exception raised.
+    service.push_once()
+
+    remaining = _outbox_rows(get_conn)
+    assert remaining == []  # every good row drained, poison row removed from the active outbox
+
+    dead = _dead_letter_rows(get_conn)
+    assert len(dead) == 1
+    assert dead[0]["entity_id"] == poison_entity_id
+    assert dead[0]["attempt_count"] >= DEAD_LETTER_THRESHOLD
+    assert dead[0]["last_error"] is not None
+    assert dead[0]["dead_lettered_at"] is not None
+
+    # Every good row was genuinely accepted by the relay at some point during
+    # bisection (not silently dropped) -- collected across every successful
+    # sub-batch push, in any order (bisection does not guarantee which half
+    # of a split is tried/accepted first).
+    accepted_entity_ids = {e["entity_id"] for batch in client.accepted_calls for e in batch}
+    assert accepted_entity_ids == set(good_entity_ids)
+
+    # The poison row itself was NEVER part of any accepted call.
+    assert poison_entity_id not in accepted_entity_ids
+
+
+def test_push_once_bisection_never_calls_the_relay_with_more_than_one_bad_row_batch_size_one(get_conn):
+    """Narrower unit check on the recursion's base case: with only ONE row
+    in the outbox and that row itself poison, bisection has nothing left to
+    narrow against (len(events) == 1) and must dead-letter it directly on
+    the DEAD_LETTER_THRESHOLD-th rejection, without erroring."""
+    poison_entity_id, _ = _insert_outbox_row(get_conn)
+    client = _PoisonRelayClient(poison_entity_id)
+    service = SyncService(lambda: client, get_conn)
+
+    for _ in range(DEAD_LETTER_THRESHOLD - 1):
+        with pytest.raises(RelayRejected):
+            service.push_once()
+
+    service.push_once()  # crosses the threshold -- dead-letters directly
+
+    assert _outbox_rows(get_conn) == []
+    dead = _dead_letter_rows(get_conn)
+    assert len(dead) == 1
+    assert dead[0]["entity_id"] == poison_entity_id
 
 
 def test_ack_outbox_chunks_deletes_below_sqlite_variable_limit(get_conn, monkeypatch):
