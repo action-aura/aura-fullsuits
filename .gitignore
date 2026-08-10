@@ -16,6 +16,10 @@ venv/
 *.egg-info/
 .pytest_cache/
 .coverage
+.coverage.*
+coverage.xml
+coverage.json
+htmlcov/
 
 # Databases (dev artifacts — never ship real customer data)
 *.db

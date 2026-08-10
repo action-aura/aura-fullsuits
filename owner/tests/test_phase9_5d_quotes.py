@@ -223,8 +223,23 @@ def test_expire_stale_quotes_only_affects_sent_not_accepted(app, seeded):
     with app.app_context():
         from app.commercial_sales.quotes import add_quote_line, create_quote, expire_stale_quotes, record_customer_decision, submit_quote
 
+        # One reference date drives BOTH the backdated valid_until values and
+        # expire_stale_quotes()'s as_of.
+        #
+        # The bug this closes: the test backdated valid_until against LOCAL
+        # date.today() but let expire_stale_quotes() default as_of to UTC
+        # utcnow().date() (quotes.py:354). East of UTC those disagree for the
+        # first N hours of each local day -- at UTC+3, 00:00-03:00 local -- so
+        # valid_until == as_of, the `valid_until < as_of` filter is false, the
+        # quote never expires, and both `count == 1` and the EXPIRED assertion
+        # fail. Deterministic within that window, not a race.
+        #
+        # expire_stale_quotes() already accepts as_of for exactly this reason,
+        # so pinning it is more surgical than freezing the process clock.
+        today = date.today()
+
         quote_sent = create_quote(
-            {"customer_id": customer_id, "currency": "USD", "valid_until": date.today() - timedelta(days=1)},
+            {"customer_id": customer_id, "currency": "USD", "valid_until": today - timedelta(days=1)},
             actor_employee_profile_id=profile_id, actor_staff_user_id=staff_id,
         )
         add_quote_line(quote_sent, plan_id=plan_id, addon_id=None, quantity=1, actor_staff_user_id=staff_id)
@@ -241,9 +256,9 @@ def test_expire_stale_quotes_only_affects_sent_not_accepted(app, seeded):
         add_quote_line(quote_accepted, plan_id=plan_id, addon_id=None, quantity=1, actor_staff_user_id=staff_id)
         submit_quote(quote_accepted, actor_staff_user_id=staff_id)
         record_customer_decision(quote_accepted, accepted=True, actor_staff_user_id=staff_id)
-        quote_accepted.valid_until = date.today() - timedelta(days=1)
+        quote_accepted.valid_until = today - timedelta(days=1)
 
-        count = expire_stale_quotes()
+        count = expire_stale_quotes(as_of=today)
         assert count == 1
         assert quote_sent.status == "EXPIRED"
         assert quote_accepted.status == "ACCEPTED"  # never silently expires

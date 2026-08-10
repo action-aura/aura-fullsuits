@@ -2,14 +2,35 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+from freezegun import freeze_time
 
 from tests.conftest import make_staff
 
 _employee_number_counter = iter(range(1, 100000))
+
+# A fixed absolute instant used only to pin issue_invoice()'s notion of "today".
+#
+# The bug this closes: issue_invoice() computes due_date from utcnow().date()
+# (a UTC calendar date, app/models/base.py::utcnow) while this test asserted
+# against date.today() (a LOCAL calendar date). On any machine east of UTC the
+# two disagree for the first N hours of every local day -- at UTC+3 (Jordan,
+# this project's real locale) that is a deterministic 3-hour window per day in
+# which due_date is off by exactly one day and the test fails. Not a race; a
+# real multi-hour window.
+#
+# Under freeze_time, freezegun's tz_offset defaults to 0, so BOTH
+# datetime.now(timezone.utc) and date.today() return this exact UTC date on
+# every machine -- the runner's local timezone stops being an input at all.
+# That is what makes this safe across the entire IANA offset range (UTC on
+# GitHub Actions, UTC+3 locally, UTC-11 or UTC+14 for anyone else) rather than
+# just the two we happen to use. Midday rather than midnight is belt-and-braces
+# in case a tz_offset is ever added: no offset in [-12, +12] can push 12:00 UTC
+# into a neighbouring calendar day.
+DUE_DATE_FREEZE_INSTANT = datetime(2026, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def _seed_sales_employee(app, email):
@@ -121,11 +142,19 @@ def test_issue_invoice_sets_default_due_date(app, seeded):
 
         order = _make_confirmed_order(app, staff_id, profile_id, customer_id, plan_id)
         invoice = create_invoice_from_order(order, actor_employee_profile_id=profile_id, actor_staff_user_id=staff_id, idempotency_key=str(uuid.uuid4()))
-        issue_invoice(invoice, actor_staff_user_id=staff_id)
 
-        assert invoice.status == "ISSUED"
-        assert invoice.issued_at is not None
-        assert invoice.due_date == date.today() + timedelta(days=30)
+        # Freeze ONLY the issue_invoice() call and its assertions. Deliberately
+        # NOT the seeding above: _seed_plan() registers a PlanPrice effective
+        # from the REAL date.today() - 1, and catalog price resolution requires
+        # effective_date <= as_of (app/catalog/services.py:250-257). Freezing
+        # the seeding to a fixed past date would make that price not-yet-
+        # effective and break add_quote_line() inside _make_confirmed_order().
+        with freeze_time(DUE_DATE_FREEZE_INSTANT):
+            issue_invoice(invoice, actor_staff_user_id=staff_id)
+
+            assert invoice.status == "ISSUED"
+            assert invoice.issued_at is not None
+            assert invoice.due_date == DUE_DATE_FREEZE_INSTANT.date() + timedelta(days=30)
 
 
 def test_void_invoice_with_no_payments(app, seeded):

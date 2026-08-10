@@ -12,7 +12,12 @@ pyotp==2.9.0
 # UI modernization -- renders the MFA enrollment QR code server-side as an
 # inline SVG data URI (no client-side JS, no external request, no CDN).
 # Pure-Python, zero transitive dependencies.
-segno==1.6.1
+#
+# Pinned to 1.6.6 to match requirements/base.txt -- requirements/development.txt
+# includes BOTH files, and two different == pins of the same package make
+# `pip install -r requirements/development.txt` fail with ResolutionImpossible.
+# That conflict is why CI could never get past its first step (E-W0.3).
+segno==1.6.6
 cryptography==50.0.0
 gunicorn==22.0.0
 jsonschema==4.23.0

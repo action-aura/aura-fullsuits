@@ -6,3 +6,16 @@ requires-python = ">=3.11"
 
 [tool.pytest.ini_options]
 testpaths = ["products/retail/tests", "products/clinic/tests", "tests", "owner/tests"]
+markers = [
+    "slow: takes seconds, not milliseconds -- spawns a real subprocess or server",
+]
+
+[tool.coverage.run]
+# Required: the 4 CI shards each produce a .coverage.shard-<x> data file on a
+# different runner, and `coverage combine` in the owner-coverage job must be
+# able to line them up. Relative paths make that robust even if the checkout
+# path ever differs between jobs.
+relative_files = true
+
+[tool.coverage.report]
+precision = 2

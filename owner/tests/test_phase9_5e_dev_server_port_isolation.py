@@ -2,6 +2,7 @@
 picks a fixed port and never terminates a process it did not start itself."""
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -15,6 +16,23 @@ import port_isolation  # noqa: E402
 
 OWNER_DIR = Path(__file__).resolve().parents[1]
 DATABASE_URL = "postgresql+psycopg://aura_owner:aura_owner_dev@localhost:5432/aura_owner_dev"
+
+# port_isolation.py is a Windows-only helper by construction: _pid_alive() and
+# _process_commandline() shell out to powershell.exe (Win32_Process CIM query),
+# stop_server() shells out to taskkill, and start_server() resolves
+# .venv\Scripts\python.exe. On a non-Windows host -- including the
+# ubuntu-latest GitHub Actions runner these tests now run on -- powershell.exe
+# does not exist and subprocess.run raises FileNotFoundError before any
+# assertion is reached (_pid_alive does not catch OSError; _process_commandline
+# does). There is no non-Windows behaviour of this module to assert, so
+# skipping is the honest outcome rather than a weakened test.
+#
+# Deliberately NOT applied module-wide: pick_free_port() is pure socket code
+# and genuinely cross-platform, so it keeps running everywhere.
+requires_windows = pytest.mark.skipif(
+    os.name != "nt",
+    reason="port_isolation.py is Windows-only (powershell.exe / taskkill / Scripts\\python.exe)",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -32,6 +50,7 @@ def test_pick_free_port_returns_usable_distinct_ports():
     assert 1024 < b < 65536
 
 
+@requires_windows
 def test_reap_stale_handle_clears_dead_pid():
     dead_handle = port_isolation.ServerHandle(pid=999999, port=59999, started_at=time.time(), health_path="/login")
     port_isolation.RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
@@ -45,6 +64,7 @@ def test_reap_stale_handle_clears_dead_pid():
     assert port_isolation._read_handle() is None
 
 
+@requires_windows
 def test_stop_server_refuses_to_kill_a_live_non_matching_process():
     proc = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(30)"],
@@ -64,6 +84,7 @@ def test_stop_server_refuses_to_kill_a_live_non_matching_process():
         proc.wait(timeout=5)
 
 
+@requires_windows
 def test_stop_server_is_a_noop_when_pid_already_dead():
     proc = subprocess.Popen(
         [sys.executable, "-c", "pass"],
@@ -83,6 +104,7 @@ def test_stop_server_is_a_noop_when_pid_already_dead():
     assert port_isolation._read_handle() is None
 
 
+@requires_windows
 @pytest.mark.slow
 def test_real_server_start_health_check_and_stop_cycle():
     """Real end-to-end proof against the real Owner Flask app on a real,
