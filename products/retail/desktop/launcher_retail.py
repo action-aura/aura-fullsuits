@@ -45,7 +45,15 @@ from commercial_runtime.launcher_support import (  # noqa: E402
 )
 
 APP_NAME = 'Aura Retail'
-HOST = '127.0.0.1'  # loopback only -- never bind a LAN-accessible interface
+HOST = '127.0.0.1'  # what THIS machine's own UI/readiness-checks talk to --
+# always loopback, regardless of bind mode below (binding 0.0.0.0 still
+# accepts loopback connections, so this never needs to change).
+# AURA_LAN_DEMO_MODE opts the socket into binding all interfaces instead of
+# loopback-only, so another device on the same LAN (e.g. a phone browser)
+# can reach this same backend -- one shared database, no sync engine
+# involved. Off by default: a normal customer build is unaffected, this is
+# opt-in for a live demo where the operator controls the network.
+BIND_HOST = '0.0.0.0' if os.environ.get('AURA_LAN_DEMO_MODE') == '1' else HOST
 DEFAULT_PORT = 5000
 READY_TIMEOUT_SECONDS = 45.0
 
@@ -100,7 +108,7 @@ def _bind_free_socket(start=DEFAULT_PORT, stop=DEFAULT_PORT + 20):
         if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
             s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         try:
-            s.bind((HOST, port))
+            s.bind((BIND_HOST, port))
             s.listen(128)
             return s
         except OSError:
@@ -113,7 +121,7 @@ def _run_server(sock):
     import app as retail_app
     retail_app.init_app()
     from waitress import serve as _serve
-    log.info(f'Starting server on http://{HOST}:{sock.getsockname()[1]}')
+    log.info(f'Starting server on http://{BIND_HOST}:{sock.getsockname()[1]}')
     _serve(retail_app.app, sockets=[sock], threads=12,
            channel_timeout=120, connection_limit=200, _quiet=True)
 

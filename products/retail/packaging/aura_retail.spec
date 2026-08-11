@@ -35,13 +35,26 @@ _licensing_datas = []
 if os.path.exists(_trust_anchor):
     _licensing_datas.append((_trust_anchor, os.path.join('commercial_runtime', 'licensing_contracts')))
 
+# certifi's cacert.pem is a data file, not a module -- PyInstaller's
+# built-in hook-certifi.py (pyinstaller-hooks-contrib) is supposed to
+# collect it automatically, but wasn't firing in this build environment:
+# requests/utils.py's DEFAULT_CA_BUNDLE_PATH = certifi.where() resolves at
+# import time to a path that only exists in the *build* venv, and without
+# the data file bundled alongside it, every requests.Session() (Owner
+# licensing/sync HTTP calls) crashes the whole app at import with
+# FileNotFoundError before the server ever starts. Collected explicitly
+# here instead of trusting hook auto-discovery -- same reasoning as the
+# trust_anchor.json / einvoicing hiddenimports above.
+from PyInstaller.utils.hooks import collect_data_files
+_certifi_datas = collect_data_files('certifi')
+
 a = Analysis(
     [os.path.join(DESKTOP, 'launcher_retail.py')],
     pathex=[ROOT, BACKEND],
     binaries=[],
     datas=[
         (FRONTEND, os.path.join('products', 'retail', 'frontend')),
-    ] + _licensing_datas,
+    ] + _licensing_datas + _certifi_datas,
     hiddenimports=[
         'flask', 'flask_cors', 'werkzeug', 'waitress',
         'commercial_runtime.identity.mt_auth',
