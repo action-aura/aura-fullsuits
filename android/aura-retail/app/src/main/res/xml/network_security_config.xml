@@ -1,10 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Permit cleartext ONLY to the embedded loopback server. All other traffic stays
-     HTTPS-only. The app makes no external network calls (fully offline). -->
+     HTTPS-only.
+
+     base-config's trust-anchors deliberately adds "user" alongside "system":
+     a real Owner Control Center instance (licensing/sync) is reached over a
+     self-signed cert on a LAN/venue IP that changes per deployment; there
+     is no public CA for it and no way to know the IP at build time. Rather
+     than bundle a cert file into the APK (a per-venue rebuild dependency,
+     and a missing-resource build failure risk if forgotten), the operator
+     installs the Owner instance's generated CA cert as a user cert on the
+     device (Settings > Security > Install a certificate) once per venue.
+     Android does not trust user certs by default from API 24+; this line
+     is what opts back in, standard practice for exactly this "self-hosted
+     server with an operator-controlled device" scenario. System CAs stay
+     trusted too, so this changes nothing for any future real-domain/
+     real-cert deployment (e.g. a public HTTPS demo instance). -->
 <network-security-config>
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">127.0.0.1</domain>
         <domain includeSubdomains="false">localhost</domain>
     </domain-config>
-    <base-config cleartextTrafficPermitted="false" />
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
 </network-security-config>
