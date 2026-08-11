@@ -7,15 +7,19 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
+import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
+import kotlin.random.Random
 
 /**
  * Task 10 (multi-device-sync-foundation) -- the real push/pull
@@ -44,15 +48,23 @@ import kotlinx.serialization.json.longOrNull
  *    surfaced/retried by the caller, never silently papered over") --
  *    signing happens BEFORE `SyncTransport`'s own internal `try`, so that
  *    exception genuinely propagates out of `push()`/`pull()` uncaught.
- *    This class therefore never wraps a push/pull call in a blanket
- *    `catch (e: Exception)` anywhere (neither here nor in [start]'s loop
- *    nor in [nudge]) -- doing so, as the brief's own draft does, would
- *    silently swallow exactly that signer failure forever, one tick at a
- *    time, in direct violation of the one invariant Task 7 established.
- *    A signer failure is allowed to fail the specific coroutine it
- *    occurred in loudly; callers construct [scope] with a `SupervisorJob`
- *    (`AuraAppContainer`'s own choice) so that failure never cascades to
- *    unrelated coroutines sharing the same scope.
+ *    Neither [pushOnce] nor [pullOnce] themselves ever catch that signer
+ *    exception -- doing so there, as the brief's own draft does, would
+ *    silently swallow it in the true sense the brief warns against: no
+ *    trace anywhere, forever. [start]'s loop and [nudge] DO now catch it,
+ *    narrowly (`catch (e: IllegalStateException)`, never a blanket
+ *    `catch (e: Exception)`), but only to record it as observable
+ *    [SyncHalfHealth.Degraded] health and let the loop survive to retry --
+ *    which is surfacing the failure, not papering over it, and is exactly
+ *    what `PlatformDeviceSigner`'s own contract ("must be surfaced/retried
+ *    by the caller") asks for. Before this, letting the coroutine die
+ *    meant sync stopped forever with zero signal anywhere -- that silent-
+ *    forever-stop was the actual bug, not the narrow catch that replaced
+ *    it. `CancellationException` is always rethrown first, so [stop]'s
+ *    structured-concurrency cancellation is unaffected; callers still
+ *    construct [scope] with a `SupervisorJob` (`AuraAppContainer`'s own
+ *    choice) so an exception here never cascades to unrelated coroutines
+ *    sharing the same scope regardless.
  * 2. **The gate's [DatabaseWriteGate.mutex] is held only around the local
  *    SQLite read/write, never across the network round-trip.** The
  *    draft's `gate.mutex.withLock { ... transport.push(events) ... }`
@@ -88,6 +100,13 @@ class SyncOrchestrator(
     private var pollJob: Job? = null
     private val wireJson = Json { ignoreUnknownKeys = true }
 
+    private val _health = MutableStateFlow(SyncHealthSnapshot())
+    /** The one observable sync-health authority. This module has NO logging
+     *  facility of any kind (no Napier/Kermit/println in commonMain), so
+     *  this StateFlow IS the observability surface -- it is how a failure
+     *  stops being invisible. */
+    val health: StateFlow<SyncHealthSnapshot> = _health
+
     /**
      * Drains `syncOutbox` and pushes it as one batch. A no-op (not an
      * error) when sync isn't configured/activated yet ([transportProvider]
@@ -96,9 +115,18 @@ class SyncOrchestrator(
      * class's own KDoc point 2.
      */
     suspend fun pushOnce() {
+        // Not configured/not activated yet is the `configured` axis, not
+        // health -- deliberately left health-neutral (also required for
+        // start()'s existing exact-tick-count test, which uses a
+        // transportProvider that always resolves null).
         val transport = transportProvider() ?: return
         val outbox = gate.mutex.withLock { database.syncQueries.selectOutbox().executeAsList() }
-        if (outbox.isEmpty()) return
+        if (outbox.isEmpty()) {
+            // Nothing stuck in the outbox -- push health means exactly that,
+            // matching desktop's sync_service.py and Android's SyncCoordinator.
+            recordSuccess(isPush = true)
+            return
+        }
 
         val events = outbox.map { it.toEnvelope() }
         val outcome = transport.push(events)
@@ -108,10 +136,15 @@ class SyncOrchestrator(
                     outbox.forEach { database.syncQueries.deleteOutboxEvent(it.id) }
                 }
             }
+            recordSuccess(isPush = true)
+        } else {
+            // Previously this branch did NOTHING -- not state, not a log,
+            // not a timing change. A dead relay was indistinguishable from
+            // a healthy one. Every outbox row is still left exactly as it
+            // was -- retried whole on the next tick/nudge, never partially
+            // cleared.
+            recordFailure(isPush = true, outcome.healthReason())
         }
-        // Any other outcome (Timeout/NetworkFailure/TlsFailure/Rejected/
-        // MalformedResponse) leaves every outbox row exactly as it was --
-        // retried whole on the next tick/nudge, never partially cleared.
     }
 
     /**
@@ -137,6 +170,7 @@ class SyncOrchestrator(
                         outcome.value.events.forEach { applyEvent(it) }
                         database.syncQueries.updateCursor(outcome.value.cursor)
                     }
+                    recordSuccess(isPush = false)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -158,9 +192,43 @@ class SyncOrchestrator(
                     // conflict is resolved. Real conflict resolution is
                     // out of this task's scope (not asked for in the
                     // brief); flagged in the task report as a known gap.
+                    // Still real, previously-invisible degraded state --
+                    // recorded here so it isn't.
+                    recordFailure(isPush = false, "LOCAL_APPLY_CONFLICT")
                 }
             }
+        } else {
+            recordFailure(isPush = false, outcome.healthReason())
         }
+    }
+
+    private fun recordSuccess(isPush: Boolean) {
+        val now = Clock.System.now()
+        _health.value = if (isPush) _health.value.copy(push = SyncHalfHealth.Healthy(now))
+                        else        _health.value.copy(pull = SyncHalfHealth.Healthy(now))
+    }
+
+    private fun recordFailure(isPush: Boolean, reason: String) {
+        val now = Clock.System.now()
+        val prev = if (isPush) _health.value.push else _health.value.pull
+        val next = SyncHalfHealth.Degraded(
+            lastSuccessAt = prev.lastSuccessAt,
+            reason = reason,
+            since = (prev as? SyncHalfHealth.Degraded)?.since ?: now,
+            lastFailureAt = now,
+            consecutiveFailures = prev.failureCount() + 1,
+        )
+        _health.value = if (isPush) _health.value.copy(push = next) else _health.value.copy(pull = next)
+    }
+
+    /** Short, human-safe label -- never a raw body/URL. */
+    private fun SyncTransportOutcome<*>.healthReason(): String = when (this) {
+        is SyncTransportOutcome.Rejected          -> reasonCode
+        is SyncTransportOutcome.MalformedResponse -> "MALFORMED_RESPONSE"
+        SyncTransportOutcome.Timeout              -> "REQUEST_TIMED_OUT"
+        SyncTransportOutcome.TlsFailure           -> "TLS_VERIFICATION_FAILED"
+        is SyncTransportOutcome.NetworkFailure    -> "NETWORK_UNAVAILABLE"
+        is SyncTransportOutcome.Success           -> "SUCCESS"
     }
 
     private fun applyEvent(ev: PulledSyncEvent) {
@@ -196,11 +264,34 @@ class SyncOrchestrator(
         if (pollJob?.isActive == true) return
         pollJob = scope.launch {
             while (isActive) {
-                pushOnce()
-                pullOnce()
-                delay(pollIntervalMs)
+                try {
+                    pushOnce()
+                    pullOnce()
+                } catch (e: CancellationException) {
+                    throw e          // MUST rethrow: swallowing this breaks stop()/structured concurrency
+                } catch (e: IllegalStateException) {
+                    // Narrow, deliberate, and NOT "silently papered over"
+                    // (see class KDoc point 1): the DeviceSigner failure is
+                    // recorded as observable Degraded health on BOTH halves
+                    // and the loop survives to retry. Previously this
+                    // propagated out of the launch{}, killed pollJob, and
+                    // sync stopped forever with zero signal anywhere -- the
+                    // bug this replaced.
+                    val reason = "DEVICE_SIGNING_KEY_UNUSABLE"
+                    recordFailure(isPush = true, reason)
+                    recordFailure(isPush = false, reason)
+                }
+                delay(nextDelayMillis(pollIntervalMs))
             }
         }
+    }
+
+    private fun nextDelayMillis(baseMs: Long): Long {
+        val failures = _health.value.consecutiveFailures
+        if (failures == 0) return baseMs
+        val exponent = minOf(failures - 1, 16)
+        val capped = minOf(baseMs shl exponent, BACKOFF_MAX_MS)
+        return minOf(capped + Random.nextLong(0, capped / 5 + 1), BACKOFF_MAX_MS)
     }
 
     fun stop() {
@@ -211,13 +302,25 @@ class SyncOrchestrator(
     /**
      * Call this right after any local category write commits -- makes
      * "push the instant connectivity/activation returns" real, not just
-     * eventual within the poll interval. Fire-and-forget on [scope],
-     * deliberately never wrapped in a `try/catch` here either (see class
-     * KDoc point 1) -- a caller that wants nudge failures observed can
-     * inspect [scope]'s own exception handling.
+     * eventual within the poll interval. Fire-and-forget on [scope]. Catches
+     * the signer `IllegalStateException` the same narrow way [start] does
+     * (see class KDoc point 1) -- a nudge racing a corrupt signing key must
+     * record Degraded health too, not just [start]'s own loop.
      */
     fun nudge() {
-        scope.launch { pushOnce() }
+        scope.launch {
+            try {
+                pushOnce()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: IllegalStateException) {
+                recordFailure(isPush = true, "DEVICE_SIGNING_KEY_UNUSABLE")
+            }
+        }
+    }
+
+    private companion object {
+        const val BACKOFF_MAX_MS = 300_000L
     }
 
     private fun SyncOutbox.toEnvelope(): SyncEventEnvelope = SyncEventEnvelope(

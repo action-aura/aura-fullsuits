@@ -201,6 +201,75 @@ class SyncOrchestratorTest {
         assertEquals(0L, db.syncQueries.selectCursor().executeAsOne())
     }
 
+    // ---- health ----
+
+    @Test
+    fun healthIsHealthyBeforeAnyTickHasEverRun() = runTest {
+        val db = newDb()
+        val orchestrator = SyncOrchestrator({ null }, db, DatabaseWriteGate(), this)
+
+        assertTrue(orchestrator.health.value.isHealthy, "never-attempted must never read as broken")
+        assertEquals(0, orchestrator.health.value.consecutiveFailures)
+    }
+
+    @Test
+    fun aNonSuccessOutcomeRecordsDegradedPushHealthInsteadOfBeingSilentlyIgnored() = runTest {
+        val db = newDb()
+        db.syncQueries.insertOutboxEvent("e1", "category", "c1", "create", """{"id":"c1","name":"Beverages"}""", 1000L)
+        val engine = MockEngine { respond("""{"reason_code":"INVALID_EVENT"}""", HttpStatusCode.BadRequest, headersOf(HttpHeaders.ContentType, "application/json")) }
+        val orchestrator = SyncOrchestrator({ transportWith(engine) }, db, DatabaseWriteGate(), this)
+
+        orchestrator.pushOnce()
+
+        val push = orchestrator.health.value.push
+        assertTrue(push is SyncHalfHealth.Degraded, "a rejected push must now be recorded as Degraded health -- previously this outcome was silently ignored entirely, not even logged")
+        assertEquals("INVALID_EVENT", (push as SyncHalfHealth.Degraded).reason)
+        assertEquals(1, push.consecutiveFailures)
+    }
+
+    @Test
+    fun aSuccessfulPushResetsConsecutiveFailuresToZero() = runTest {
+        val db = newDb()
+        db.syncQueries.insertOutboxEvent("e1", "category", "c1", "create", """{"id":"c1","name":"Beverages"}""", 1000L)
+        var shouldFail = true
+        val engine = MockEngine {
+            if (shouldFail) respond("""{"reason_code":"INVALID_EVENT"}""", HttpStatusCode.BadRequest, headersOf(HttpHeaders.ContentType, "application/json"))
+            else respond("""{"stored":1,"received":1}""", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val orchestrator = SyncOrchestrator({ transportWith(engine) }, db, DatabaseWriteGate(), this)
+
+        orchestrator.pushOnce()
+        assertTrue(orchestrator.health.value.push is SyncHalfHealth.Degraded)
+        assertEquals(1, (orchestrator.health.value.push as SyncHalfHealth.Degraded).consecutiveFailures)
+
+        shouldFail = false
+        orchestrator.pushOnce()
+
+        assertTrue(orchestrator.health.value.push is SyncHalfHealth.Healthy, "a successful push must reset the failure streak, not just decrement it")
+    }
+
+    @Test
+    fun startSurvivesASignerFailureAndRecordsItAsDegradedInsteadOfKillingThePollLoop() = runTest {
+        val db = newDb()
+        var providerCalls = 0
+        val engine = MockEngine { error("must never reach the network -- signing must fail first") }
+        val throwingSigner = object : DeviceSigner {
+            override suspend fun publicKeyBytes(): ByteArray = error("device signing key unavailable")
+            override suspend fun sign(message: ByteArray): ByteArray = error("device signing key unavailable")
+        }
+        val orchestrator = SyncOrchestrator({ providerCalls++; transportWith(engine, throwingSigner) }, db, DatabaseWriteGate(), this)
+
+        orchestrator.start(pollIntervalMs = 1_000)
+        advanceTimeBy(2_500) // several ticks -- proves the loop is still alive, not dead after the first signer failure
+
+        assertTrue(providerCalls >= 2, "the poll loop must still be ticking after a signer failure, not dead after the first one -- this is the exact bug this task fixes")
+        assertTrue(orchestrator.health.value.push is SyncHalfHealth.Degraded, "the signer failure must be recorded as observable health, not silently swallowed")
+        assertTrue(orchestrator.health.value.pull is SyncHalfHealth.Degraded)
+
+        orchestrator.stop()
+        advanceUntilIdle()
+    }
+
     // ---- nudge / start / stop ----
     //
     // These lifecycle tests deliberately never construct a real
