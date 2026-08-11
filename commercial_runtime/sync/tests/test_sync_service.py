@@ -19,6 +19,7 @@ import pytest
 from commercial_runtime.sync.relay_client import NetworkError, RelayRejected
 from commercial_runtime.sync.sync_service import (
     SyncService,
+    get_active_health,
     nudge,
     register_active_service,
     unregister_active_service,
@@ -671,6 +672,76 @@ def test_run_once_swallows_pull_failure(get_conn):
     service.run_once()  # must not raise
 
 
+# ── Health tracking ───────────────────────────────────────────────────────
+
+def test_run_once_records_push_failure_and_pull_success_independently(get_conn):
+    client = FakeRelayClient(
+        push_responses=[NetworkError("NETWORK_UNAVAILABLE", "offline")],
+        pull_responses=[{"events": [], "cursor": 0}],
+    )
+    _insert_outbox_row(get_conn)
+    service = SyncService(lambda: client, get_conn)
+
+    service.run_once()
+
+    health = service.get_health()
+    assert health["push"]["healthy"] is False
+    assert health["push"]["consecutive_failures"] == 1
+    assert health["pull"]["healthy"] is True
+    assert health["pull"]["consecutive_failures"] == 0
+    assert health["healthy"] is False  # overall is False when either half is unhealthy
+
+
+def test_consecutive_failures_increments_then_resets_on_success(get_conn):
+    client = FakeRelayClient(
+        pull_responses=[
+            NetworkError("NETWORK_UNAVAILABLE", "offline"),
+            NetworkError("NETWORK_UNAVAILABLE", "offline"),
+            {"events": [], "cursor": 0},
+        ],
+    )
+    service = SyncService(lambda: client, get_conn)
+
+    service.run_once()
+    assert service.get_health()["pull"]["consecutive_failures"] == 1
+    service.run_once()
+    assert service.get_health()["pull"]["consecutive_failures"] == 2
+    service.run_once()
+    health = service.get_health()
+    assert health["pull"]["consecutive_failures"] == 0
+    assert health["pull"]["healthy"] is True
+
+
+def test_health_failure_reason_is_the_relay_reason_code_never_a_raw_message(get_conn):
+    client = FakeRelayClient(
+        pull_responses=[NetworkError("NETWORK_UNAVAILABLE", "offline relay at https://owner.example.invalid/api/sync/v1/pull")],
+    )
+    service = SyncService(lambda: client, get_conn)
+
+    service.run_once()
+
+    reason = service.get_health()["pull"]["last_failure_reason"]
+    assert reason == "NETWORK_UNAVAILABLE"
+    assert "owner.example.invalid" not in reason
+
+
+def test_next_interval_backs_off_exponentially_and_caps(get_conn):
+    client = FakeRelayClient()
+    service = SyncService(lambda: client, get_conn)
+
+    service._health["push"]["consecutive_failures"] = 1
+    assert 10.0 <= service._next_interval_seconds() <= 12.0
+
+    service._health["push"]["consecutive_failures"] = 3
+    assert 40.0 <= service._next_interval_seconds() <= 48.0
+
+    service._health["push"]["consecutive_failures"] = 99
+    assert service._next_interval_seconds() <= 300.0
+
+    service._health["push"]["consecutive_failures"] = 5000
+    assert service._next_interval_seconds() <= 300.0  # must not raise OverflowError
+
+
 # ── start()/stop() lifecycle ─────────────────────────────────────────────
 
 def test_start_and_stop_lifecycle_does_not_raise(get_conn):
@@ -691,6 +762,22 @@ def _clear_active_service():
 
 def test_nudge_with_no_registered_service_is_a_harmless_noop():
     nudge()  # must not raise, must not spawn anything observable
+
+
+def test_get_active_health_with_no_registered_service_reports_not_configured():
+    assert get_active_health() == {"configured": False}
+
+
+def test_get_active_health_reflects_the_registered_services_own_health(get_conn):
+    client = FakeRelayClient(pull_responses=[{"events": [], "cursor": 0}])
+    service = SyncService(lambda: client, get_conn)
+    register_active_service(service)
+
+    service.run_once()
+
+    health = get_active_health()
+    assert health["configured"] is True
+    assert health["healthy"] is True
 
 
 def test_nudge_fires_push_once_without_blocking_the_caller(get_conn):

@@ -36,10 +36,17 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 import threading
+from datetime import datetime, timezone
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+_BACKOFF_MULTIPLIER = 2.0
+_BACKOFF_MAX_SECONDS = 300.0
+_BACKOFF_JITTER_FRACTION = 0.2
+_BACKOFF_MAX_EXPONENT = 32
 
 
 def local_company_id_from_registry() -> Optional[str]:
@@ -110,6 +117,21 @@ class SyncService:
         # two different threads at once, both reading/draining the same
         # sync_outbox rows.
         self._lock = threading.Lock()
+        self._interval_seconds = 10.0
+        self._current_interval_seconds = 10.0
+        # Deliberately a SEPARATE lock from self._lock above, not a reuse of
+        # it: self._lock is held across the entire network round-trip in
+        # push_once()/pull_once() (up to timeout_seconds * max_retries), so a
+        # get_health() call from a Flask request thread must never risk
+        # blocking behind a dead relay -- that would defeat the entire point
+        # of a health-status endpoint. Health is always recorded from
+        # run_once()/nudge() OUTSIDE any self._lock block, so the two locks
+        # are never nested and there is no lock-ordering hazard.
+        self._health_lock = threading.Lock()
+        self._health = {
+            "push": self._fresh_half_health(),
+            "pull": self._fresh_half_health(),
+        }
 
     def push_once(self) -> None:
         """Drains sync_outbox to Owner. Reads the current rows, pushes them,
@@ -333,16 +355,90 @@ class SyncService:
         its own outbox is currently able to drain."""
         try:
             self.push_once()
-        except Exception:
-            logger.info("Sync push attempt failed (offline or rejected); will retry on the next tick.", exc_info=True)
+            # An empty outbox returns early without contacting the relay --
+            # still recorded as success: push health means "nothing is stuck
+            # in the outbox", and the pull half below is what detects a real
+            # outage on a device that happens to have nothing to send.
+            self._record_sync_success("push")
+        except Exception as exc:
+            failures = self._record_sync_failure("push", exc)
+            logger.error(
+                "Sync push FAILED (reason=%s, consecutive failures=%d); the outbox was "
+                "left untouched and will be retried on the next tick.",
+                self._failure_reason(exc), failures, exc_info=True,
+            )
         try:
             self.pull_once()
-        except Exception:
-            logger.info("Sync pull attempt failed (offline or rejected); will retry on the next tick.", exc_info=True)
+            self._record_sync_success("pull")
+        except Exception as exc:
+            failures = self._record_sync_failure("pull", exc)
+            logger.error(
+                "Sync pull FAILED (reason=%s, consecutive failures=%d); the local cursor "
+                "was not advanced and the same range will be re-pulled on the next tick.",
+                self._failure_reason(exc), failures, exc_info=True,
+            )
+
+    @staticmethod
+    def _fresh_half_health() -> dict:
+        return {
+            "healthy": True, "last_success_at": None, "last_failure_at": None,
+            "last_failure_reason": None, "consecutive_failures": 0,
+        }
+
+    @staticmethod
+    def _failure_reason(exc: BaseException) -> str:
+        """Short, human-safe failure label -- NEVER str(exc): a requests
+        NetworkError message embeds the full relay URL. SyncRelayClientError
+        subclasses already carry the exact reason_code Owner returned."""
+        return getattr(exc, "reason_code", None) or type(exc).__name__
+
+    def _record_sync_success(self, half: str) -> None:
+        with self._health_lock:
+            h = self._health[half]
+            h["healthy"] = True
+            h["consecutive_failures"] = 0
+            h["last_success_at"] = datetime.now(timezone.utc).isoformat()
+
+    def _record_sync_failure(self, half: str, exc: BaseException) -> int:
+        with self._health_lock:
+            h = self._health[half]
+            h["healthy"] = False
+            h["consecutive_failures"] += 1
+            h["last_failure_at"] = datetime.now(timezone.utc).isoformat()
+            h["last_failure_reason"] = self._failure_reason(exc)
+            return h["consecutive_failures"]
+
+    def get_health(self) -> dict:
+        with self._health_lock:
+            push = dict(self._health["push"])
+            pull = dict(self._health["pull"])
+        return {
+            "configured": True,
+            "running": self._timer is not None and not self._stopped.is_set(),
+            "healthy": push["healthy"] and pull["healthy"],
+            "interval_seconds": self._interval_seconds,
+            "retry_interval_seconds": self._current_interval_seconds,
+            "push": push,
+            "pull": pull,
+        }
+
+    def _next_interval_seconds(self) -> float:
+        with self._health_lock:
+            failures = max(
+                self._health["push"]["consecutive_failures"],
+                self._health["pull"]["consecutive_failures"],
+            )
+        if failures == 0:
+            return self._interval_seconds
+        exponent = min(failures - 1, _BACKOFF_MAX_EXPONENT)
+        delay = self._interval_seconds * (_BACKOFF_MULTIPLIER ** exponent)
+        jitter = delay * _BACKOFF_JITTER_FRACTION * secrets.randbelow(100) / 100.0
+        return min(delay + jitter, _BACKOFF_MAX_SECONDS)
 
     def start(self, interval_seconds: float = 10.0) -> None:
+        self._interval_seconds = interval_seconds
         self._stopped.clear()
-        self._schedule_next(interval_seconds)
+        self._schedule_next(interval_seconds)  # first tick always at base interval
 
     def stop(self) -> None:
         self._stopped.set()
@@ -350,17 +446,26 @@ class SyncService:
             self._timer.cancel()
             self._timer = None
 
-    def _schedule_next(self, interval_seconds: float) -> None:
+    def _schedule_next(self, interval_seconds: Optional[float] = None) -> None:
+        """Recomputes the delay from current health on EVERY reschedule (the
+        interval is no longer captured once in start()) -- this is the whole
+        backoff mechanism. A nudge() that succeeds resets the failure counter
+        but deliberately does NOT cancel/reschedule the pending timer: doing
+        so from the nudge thread would race _tick()'s own _schedule_next()
+        call. Worst case is one extra backoff-capped wait (5 min) after
+        recovery before the shorter interval takes effect."""
         if self._stopped.is_set():
             return
+        delay = self._next_interval_seconds() if interval_seconds is None else interval_seconds
+        self._current_interval_seconds = delay
 
         def _tick():
             try:
                 self.run_once()
             finally:
-                self._schedule_next(interval_seconds)
+                self._schedule_next()
 
-        self._timer = threading.Timer(interval_seconds, _tick)
+        self._timer = threading.Timer(delay, _tick)
         self._timer.daemon = True
         self._timer.start()
 
@@ -387,6 +492,20 @@ def unregister_active_service() -> None:
     _active_service = None
 
 
+def get_active_health() -> dict:
+    """Health of the currently registered SyncService, or
+    {"configured": False} when none is registered -- mirroring nudge()'s own
+    "no-op when inert" precedent exactly. Returns "not configured" on two
+    distinct real installs: SYNC_RELAY_BASE_URL unset (app.py never
+    constructs a service), and Android (app.py deliberately never calls
+    register_active_service() there -- Kotlin's SyncCoordinator owns
+    Android's push/pull loop and its own health state)."""
+    service = _active_service
+    if service is None:
+        return {"configured": False}
+    return service.get_health()
+
+
 def nudge() -> None:
     """Best-effort, non-blocking push attempt. Safe to call unconditionally
     from a route handler: a no-op when no service is registered (sync
@@ -401,7 +520,13 @@ def nudge() -> None:
     def _push():
         try:
             service.push_once()
-        except Exception:
-            logger.info("Sync nudge push failed (offline or rejected); the next timer tick will retry.", exc_info=True)
+            service._record_sync_success("push")
+        except Exception as exc:
+            failures = service._record_sync_failure("push", exc)
+            logger.error(
+                "Sync nudge push FAILED (reason=%s, consecutive failures=%d); the "
+                "next timer tick will retry.",
+                service._failure_reason(exc), failures, exc_info=True,
+            )
 
     threading.Thread(target=_push, daemon=True).start()
