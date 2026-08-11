@@ -132,7 +132,13 @@ class SyncRelayClient:
 
     def pull(self, since: int) -> dict:
         body = self._signed_body({"since": since})
-        result = self._request("GET", "/api/sync/v1/pull", body)
+        # POST, not GET -- see owner/app/sync/routes.py's pull() docstring
+        # (2026-08-12): a frozen PyInstaller build of this exact client
+        # reproducibly got an empty response body on GET-with-body, isolated
+        # via a non-frozen interpreter hitting the same route successfully.
+        # The server accepts both; Android's own GET-with-body client is
+        # unaffected and unchanged.
+        result = self._request("POST", "/api/sync/v1/pull", body)
         self._raise_if_rejected(result)
         return result
 
@@ -162,6 +168,7 @@ class SyncRelayClient:
                 delay = self._config.retry_base_backoff_seconds * (2 ** (attempt - 1))
                 jitter = delay * 0.25 * secrets.randbelow(100) / 100.0
                 self._sleep(min(delay + jitter, self._config.retry_max_backoff_seconds))
+            headers = {"Content-Type": "application/json"}
             try:
                 response = self._session.request(
                     method,
@@ -169,7 +176,7 @@ class SyncRelayClient:
                     json=json_body,
                     timeout=self._config.timeout_seconds,
                     verify=self._config.verify_tls,
-                    headers={"Content-Type": "application/json"},
+                    headers=headers,
                 )
             except requests.exceptions.Timeout as exc:
                 last_error = NetworkError("REQUEST_TIMED_OUT", str(exc))

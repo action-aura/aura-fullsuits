@@ -347,7 +347,7 @@ def push():
     return jsonify({"stored": stored, "received": len(events)}), 200
 
 
-@bp.route("/pull", methods=["GET"])
+@bp.route("/pull", methods=["GET", "POST"])
 def pull():
     # GET with a signed JSON body: no existing route in this codebase
     # authenticates a GET request (api_external/routes.py's only two GET
@@ -356,6 +356,16 @@ def pull():
     # GET convention to defer to here. This follows the same signed-JSON-
     # body shape push already uses, just over GET -- Flask's
     # request.get_json() does not restrict itself by HTTP method.
+    #
+    # POST also accepted (2026-08-12): the Windows desktop client's frozen
+    # PyInstaller build reproducibly gets an empty response body on
+    # GET-with-body specifically -- push (POST) and the same GET-with-body
+    # call from a non-frozen interpreter both work fine against this exact
+    # route, isolating it to something in the frozen build's networking
+    # stack, not this route or the sync protocol. Android's existing
+    # GET-with-body client (SyncRelayClient.kt's hand-rolled raw-socket
+    # executeGetWithBody, needed because OkHttp itself forbids GET+body)
+    # is unaffected and keeps using GET -- this is purely additive.
     #
     # `since` lives INSIDE the signed body (not a `?since=` query param) --
     # see the module docstring: a free query param would let a captured

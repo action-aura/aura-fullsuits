@@ -1,8 +1,16 @@
 """sync_events table
 
 Revision ID: c52eef9a82cc
-Revises: f5959fdb9738
+Revises: 86e9229f85c1
 Create Date: 2026-08-06 20:25:31.004077
+
+Re-parented from f5959fdb9738 to 86e9229f85c1 (2026-08-12) -- this branch's
+sync lineage and the Phase9R UI-modernization lineage both branched off
+f5959fdb9738 independently, leaving two heads (this migration and
+86e9229f85c1) once both were present in the same tree. Safe re-parent: this
+migration only CREATE TABLEs owner_sync_events + one index, touches no table
+the Phase9R M4/M10/M11 chain reads or writes, so linearizing after them is a
+pure ordering change with no data dependency either way.
 
 Append-only cross-device sync event log (Task 1 of the multi-device
 data-sync foundation plan). `id` is client-generated (the push endpoint's
@@ -24,7 +32,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision = 'c52eef9a82cc'
-down_revision = 'f5959fdb9738'
+down_revision = '86e9229f85c1'
 branch_labels = None
 depends_on = None
 

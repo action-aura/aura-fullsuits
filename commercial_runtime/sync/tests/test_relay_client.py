@@ -101,16 +101,22 @@ def test_push_body_carries_events_and_signature():
     assert "timestamp" in sent_body
 
 
-def test_pull_is_a_get_request_with_since_inside_the_signed_body():
+def test_pull_is_a_post_request_with_since_inside_the_signed_body():
     """Contract note (Task 2's post-replay-protection fix): `since` must
     live inside the signed JSON body, never a `?since=` query parameter --
     a free query param would let a captured pull request be replayed with a
-    different `since` and walk more history than originally signed for."""
+    different `since` and walk more history than originally signed for.
+
+    POST, not GET (2026-08-12): a frozen PyInstaller build of this exact
+    client reproducibly got an empty response body on GET-with-body,
+    isolated via a non-frozen interpreter hitting the same Owner route
+    successfully. Owner's /pull route accepts both GET and POST -- Android's
+    separate GET-with-body client is unaffected by this change."""
     session = FakeSession([FakeResponse(200, {"events": [], "cursor": 5})])
     client = _client(session)
     result = client.pull(5)
     assert result == {"events": [], "cursor": 5}
-    assert session.calls[0]["method"] == "GET"
+    assert session.calls[0]["method"] == "POST"
     assert session.calls[0]["url"] == "http://127.0.0.1:5551/api/sync/v1/pull"
     sent_body = session.calls[0]["json"]
     assert sent_body["since"] == 5
