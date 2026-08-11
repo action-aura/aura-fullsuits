@@ -205,6 +205,9 @@ const LogoSystem = {
 const SubsystemApp = {
   active: null,
   currentSection: 'dashboard',
+  _syncHealthTimer: null,
+  _syncBannerEl: null,
+  _syncPollDisabled: false,
 
   // Identity of the logged-in user (populated from /api/auth/session in init()).
   currentUser: {},
@@ -330,6 +333,7 @@ const SubsystemApp = {
     this._renderShell(sys, systemId);
     this._navigate(this.currentSection);
     LogoSystem.init();
+    this._startSyncHealthPoll();
   },
 
   exit() {
@@ -338,6 +342,10 @@ const SubsystemApp = {
     this.launch('retail', 'dashboard');
   },
   async logout() {
+    // Stopped BEFORE the logout fetch, not after: the global auth guard
+    // intercepts any /api/ 401 and pops the relogin modal, so a sync-health
+    // poll racing this logout would trigger a spurious relogin modal.
+    this._stopSyncHealthPoll();
     try {
       await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
     } catch(e) {}
@@ -756,6 +764,78 @@ const SubsystemApp = {
       document.head.appendChild(s);
     }
     hdr.parentNode?.insertBefore(badge, hdr.nextSibling);
+  },
+
+  // ── Multi-device sync health banner ───────────────────────────────────────
+  // Persistent (NOT showToast -- a 3s auto-dismissing toast is the wrong
+  // shape for a condition that can last hours). Appended to document.body,
+  // never into #subsystem-shell, because _renderShell() replaces that
+  // element's entire innerHTML on every launch().
+  SYNC_POLL_MS: 30000,
+  SYNC_DEGRADED_THRESHOLD: 3,
+
+  _startSyncHealthPoll() {
+    if (this._syncHealthTimer || this._syncPollDisabled) return;
+    this._pollSyncHealth();                       // immediate first check
+    this._syncHealthTimer = setInterval(() => this._pollSyncHealth(), this.SYNC_POLL_MS);
+  },
+
+  _stopSyncHealthPoll() {
+    if (this._syncHealthTimer) { clearInterval(this._syncHealthTimer); this._syncHealthTimer = null; }
+    this._renderSyncBanner(null);
+  },
+
+  async _pollSyncHealth() {
+    let data = null;
+    try {
+      const res = await fetch('/api/sub/retail/sync/health', { credentials: 'include', cache: 'no-store' });
+      if (!res.ok) return;                        // transient -- leave the banner as-is
+      data = (await res.json()).data;
+    } catch (e) { return; }                       // never let a poll break the app
+    if (!data || data.configured !== true) {
+      // Sync was never turned on for this install. Stop polling entirely --
+      // app.py builds _sync_service at import time, so this can never flip
+      // without a restart. Zero cost for installs that never opted in.
+      this._syncPollDisabled = true;
+      this._stopSyncHealthPoll();
+      return;
+    }
+    this._renderSyncBanner(data);
+  },
+
+  _renderSyncBanner(data) {
+    const T = this.SYNC_DEGRADED_THRESHOLD;
+    const pushBad = !!data && data.push.consecutive_failures >= T;
+    const pullBad = !!data && data.pull.consecutive_failures >= T;
+
+    if (!pushBad && !pullBad) {
+      if (this._syncBannerEl) { this._syncBannerEl.remove(); this._syncBannerEl = null; }
+      return;
+    }
+
+    let headline;
+    if (pushBad && pullBad) headline = t("Not syncing with your other devices right now");
+    else if (pushBad)       headline = t("This device's recent changes haven't reached your other devices yet");
+    else                    headline = t("This device isn't receiving updates from your other devices right now");
+    const detail = t("This device is still working normally. Everything will catch up automatically once the connection comes back.");
+
+    if (!this._syncBannerEl) {
+      const el = document.createElement('div');
+      el.id = 'aura-sync-banner';
+      el.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#1e1e2e;'
+        + 'border-bottom:2px solid #fbbf24;color:white;padding:9px 18px;font-size:13px;'
+        + 'line-height:1.45;text-align:center;z-index:99998;'
+        + 'box-shadow:0 4px 18px rgba(0,0,0,.35);';
+      document.body.appendChild(el);
+      this._syncBannerEl = el;
+    }
+    // last_failure_reason goes ONLY in title= -- support can hover for the
+    // real code, the shop owner never sees "INVALID_SIGNATURE".
+    const reason = (pushBad ? data.push.last_failure_reason : data.pull.last_failure_reason) || '';
+    this._syncBannerEl.title = reason ? ('Sync detail: ' + reason) : '';
+    this._syncBannerEl.innerHTML =
+      '<span style="color:#fbbf24;font-weight:700;">⚠ ' + headline + '</span>'
+      + '<span style="opacity:.8;margin-left:10px;">' + detail + '</span>';
   },
 
   // ── Wire up real-time WebSocket refresh (called once after init) ─────────────

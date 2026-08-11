@@ -198,5 +198,10 @@
   "Contact name required": "اسم جهة الاتصال مطلوب",
   "Contact updated": "تم تحديث جهة الاتصال",
   "Contact added": "تمت إضافة جهة الاتصال",
-  "Contact deactivated": "تم إلغاء تفعيل جهة الاتصال"
+  "Contact deactivated": "تم إلغاء تفعيل جهة الاتصال",
+
+  "Not syncing with your other devices right now": "لا تتم المزامنة مع أجهزتك الأخرى حاليًا",
+  "This device's recent changes haven't reached your other devices yet": "التغييرات الأخيرة على هذا الجهاز لم تصل بعد إلى أجهزتك الأخرى",
+  "This device isn't receiving updates from your other devices right now": "هذا الجهاز لا يستقبل التحديثات من أجهزتك الأخرى حاليًا",
+  "This device is still working normally. Everything will catch up automatically once the connection comes back.": "هذا الجهاز يعمل بشكل طبيعي. سيتم تحديث كل شيء تلقائيًا فور عودة الاتصال."
 }

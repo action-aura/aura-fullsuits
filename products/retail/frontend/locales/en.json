@@ -198,5 +198,10 @@
   "Contact name required": "Contact name required",
   "Contact updated": "Contact updated",
   "Contact added": "Contact added",
-  "Contact deactivated": "Contact deactivated"
+  "Contact deactivated": "Contact deactivated",
+
+  "Not syncing with your other devices right now": "Not syncing with your other devices right now",
+  "This device's recent changes haven't reached your other devices yet": "This device's recent changes haven't reached your other devices yet",
+  "This device isn't receiving updates from your other devices right now": "This device isn't receiving updates from your other devices right now",
+  "This device is still working normally. Everything will catch up automatically once the connection comes back.": "This device is still working normally. Everything will catch up automatically once the connection comes back."
 }
