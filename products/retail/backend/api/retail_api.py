@@ -17,6 +17,7 @@ from flask import Blueprint, request, jsonify, session, current_app
 from commercial_runtime.identity.mt_auth import mt_login_required, mt_require_subsystem
 from commercial_runtime.licensing_contracts.flask_guard import make_capability_guard
 from commercial_runtime.sync.sync_service import nudge as _sync_nudge
+from commercial_runtime.sync.sync_service import get_active_health as _sync_get_active_health
 from database.schema import get_retail_conn, sub_create
 from datetime import datetime, timedelta, timezone
 from core.retail import pricing as tax_engine
@@ -2236,3 +2237,20 @@ def demo_seed():
     from commercial_runtime.security.audit import record as _sec_audit, DEMO_RESET_EXECUTED
     _sec_audit(cid, _uid(), DEMO_RESET_EXECUTED, context={'action': 'demo_seed'})
     return jsonify({'status': 'success', 'message': 'Retail seeded.'})
+
+
+# ── Sync health ───────────────────────────────────────────────────────────────
+
+@retail_bp.route('/sync/health', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def sync_health():
+    """Multi-device sync health for this device. Reached through the same
+    module-level seam nudge() already uses (never by reaching into app.py's
+    own _sync_service variable) -- see commercial_runtime/sync/sync_service.py.
+
+    {"configured": false} is the honest answer on two real installs and is
+    NOT an error: SYNC_RELAY_BASE_URL unset (the default -- most installs
+    never turn sync on), and Android (Kotlin's SyncCoordinator owns that
+    loop). The frontend banner must stay completely silent on it."""
+    return jsonify({'status': 'success', 'data': _sync_get_active_health()})
