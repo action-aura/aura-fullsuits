@@ -31,6 +31,7 @@ import os
 import subprocess
 import sys
 import ctypes
+import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(sys.argv[0] if getattr(sys, 'frozen', False) else __file__))
 APP_EXE = os.path.join(HERE, 'AuraRetail', 'AuraRetail.exe')
@@ -74,7 +75,14 @@ def main():
     owner_url = owner_cfg.get('OWNER_URL', '')
     if owner_url:
         env['AURA_OWNER_LICENSING_URL'] = owner_url
-        env['AURA_SYNC_RELAY_URL'] = owner_url
+        # Licensing and sync are reached at DIFFERENT path depths on the same
+        # Owner host: licensing wants the full "/api/licensing/v1" prefix
+        # (owner_url as configured), but relay_client.py builds sync URLs by
+        # appending "/api/sync/v1/push"/"pull" to the base itself -- passing
+        # the licensing URL here doubles the path and 404s every sync call.
+        # Strip back to the bare origin (scheme://host:port) for sync.
+        _parsed = urllib.parse.urlsplit(owner_url)
+        env['AURA_SYNC_RELAY_URL'] = f'{_parsed.scheme}://{_parsed.netloc}'
         ca_bundle = owner_cfg.get('CA_BUNDLE', '')
         if ca_bundle:
             if not os.path.isabs(ca_bundle):
