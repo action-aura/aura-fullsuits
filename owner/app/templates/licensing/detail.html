@@ -3,10 +3,10 @@
 {% block title %}{{ _("License") }}{% endblock %}
 {% block content %}
 {% if revealed_key %}
-<div class="card" style="border:2px solid #b3261e;">
+<div class="card card--critical">
   <h2>{{ _("License key -- shown once") }}</h2>
   <p><strong>{{ _("Copy this now. It will never be displayed again.") }}</strong></p>
-  <p><code style="font-size:1.1rem;" dir="ltr">{{ revealed_key }}</code></p>
+  <p><code class="masked" dir="ltr">{{ revealed_key }}</code></p>
 </div>
 {% endif %}
 
@@ -33,22 +33,29 @@
   ]) }}
 
   <p><a href="{{ url_for('commercial_ops_ui.license_slot_exceptions', license_id=license.id) }}">{{ _("Device-slot exceptions") }}</a></p>
+
+  {% if license.status == "DRAFT" %}
+  <div class="card--action">
+    <h3>{{ _("Issue key") }}</h3>
+    <p>{{ _("Issuing requires a fresh MFA confirmation. The full key is shown exactly once.") }}</p>
+    {% if recent_auth_ok %}
+    <form method="post" action="{{ url_for('licensing.issue', license_id=license.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="idempotency_key" value="{{ issue_idempotency_key }}">
+      <button type="submit" class="btn--primary-action">{{ _("Issue license key (requires recent authentication)") }}</button>
+    </form>
+    {% else %}
+    <p><a href="{{ url_for('auth.reauth_form', next=url_for('licensing.detail', license_id=license.id)) }}">{{ _("Issue license key (requires recent authentication)") }}</a></p>
+    {% endif %}
+  </div>
+  {% endif %}
 </div>
 
-{% if license.status == "DRAFT" %}
-<div class="card">
-  <h3>{{ _("Issue key") }}</h3>
-  <p>{{ _("Issuing requires a fresh MFA confirmation. The full key is shown exactly once.") }}</p>
-  <form method="post" action="{{ url_for('licensing.issue', license_id=license.id) }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="hidden" name="idempotency_key" value="{{ issue_idempotency_key }}">
-    <button type="submit">{{ _("Issue license key (requires recent authentication)") }}</button>
-  </form>
-</div>
-{% endif %}
+{% if allowed_transitions or license.status in ("ACTIVE","ISSUED","SUSPENDED","EXPIRED") %}
+<details class="card">
+  <summary>{{ _('Lifecycle actions') }}</summary>
 
-{% if allowed_transitions %}
-<div class="card">
+  {% if allowed_transitions %}
   <h3>{{ _("Change status") }}</h3>
   <form method="post" action="{{ url_for('licensing.transition', license_id=license.id) }}"
         data-confirm="{{ _('Change license status? This may affect any activated installation.') }}">
@@ -59,11 +66,9 @@
     <label for="licensing-detail-reason">{{ _("Reason") }}</label><input id="licensing-detail-reason" name="reason">
     <div style="margin-top:0.5rem;"><button type="submit">{{ _("Apply (requires recent authentication)") }}</button></div>
   </form>
-</div>
-{% endif %}
+  {% endif %}
 
-{% if license.status in ("ACTIVE","ISSUED","SUSPENDED","EXPIRED") %}
-<div class="card">
+  {% if license.status in ("ACTIVE","ISSUED","SUSPENDED","EXPIRED") %}
   <h3>{{ _("Replace license") }}</h3>
   <p>{{ _("Creates a new DRAFT license and revokes/replaces this one. Requires a fresh MFA confirmation.") }}</p>
   <form method="post" action="{{ url_for('licensing.replace', license_id=license.id) }}"
@@ -71,11 +76,12 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit" class="danger">{{ _("Replace") }}</button>
   </form>
-</div>
+  {% endif %}
+</details>
 {% endif %}
 
-<div class="card">
-  <h3>{{ _("Status history") }}</h3>
+<details class="card">
+  <summary>{{ _('Status history') }}</summary>
   <table class="responsive-table">
     <thead><tr><th>{{ _("From") }}</th><th>{{ _("To") }}</th><th>{{ _("When") }}</th><th>{{ _("Reason") }}</th></tr></thead>
     <tbody>
@@ -85,5 +91,5 @@
     {% endfor %}
     </tbody>
   </table>
-</div>
+</details>
 {% endblock %}

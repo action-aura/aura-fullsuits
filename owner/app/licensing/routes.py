@@ -7,7 +7,7 @@ import uuid
 from flask import Blueprint, current_app, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import select
 
-from app.auth.session import load_current_staff
+from app.auth.session import has_recent_auth, load_current_staff
 from app.extensions import db_session
 from app.licensing import list_queries
 from app.licensing.services import (
@@ -80,6 +80,7 @@ def detail(license_id):
     return render_template(
         "licensing/detail.html", license=license_row, revealed_key=None,
         allowed_transitions=allowed_transitions, issue_idempotency_key=str(uuid.uuid4()),
+        recent_auth_ok=has_recent_auth(),
     )
 
 
@@ -100,7 +101,10 @@ def issue(license_id):
         return jsonify({"error": str(exc)}), 400
     allowed_transitions = sorted(VALID_TRANSITIONS.get(license_row.status, set()))
     # full_key is shown exactly once, in this response only -- reloading /licenses/<id> never shows it again.
-    return render_template("licensing/detail.html", license=license_row, revealed_key=full_key, allowed_transitions=allowed_transitions)
+    return render_template(
+        "licensing/detail.html", license=license_row, revealed_key=full_key,
+        allowed_transitions=allowed_transitions, recent_auth_ok=has_recent_auth(),
+    )
 
 
 @bp.route("/<uuid:license_id>/transition", methods=["POST"])
