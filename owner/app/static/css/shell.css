@@ -149,7 +149,7 @@ summary:focus-visible {
   padding: var(--aura-space-3);
   display: flex;
   flex-direction: column;
-  gap: var(--aura-space-4);
+  gap: var(--aura-space-3);
 }
 
 .aura-nav-group__title {
@@ -160,6 +160,11 @@ summary:focus-visible {
   color: var(--aura-color-text-muted);
   padding: 0 var(--aura-space-2);
   margin-block-end: var(--aura-space-1);
+  position: sticky;
+  inset-block-start: 0;
+  background: var(--aura-color-surface-raised);
+  padding-block: var(--aura-space-1);
+  z-index: 1;
 }
 
 .aura-nav-group__list {
@@ -175,7 +180,7 @@ summary:focus-visible {
   display: flex;
   align-items: center;
   gap: var(--aura-space-2);
-  padding: var(--aura-space-2);
+  padding: 0.3rem var(--aura-space-2);
   border-radius: var(--aura-radius-sm);
   color: var(--aura-color-text-secondary);
   text-decoration: none;
@@ -189,6 +194,8 @@ summary:focus-visible {
   background: var(--aura-color-brand-primary-soft);
   color: var(--aura-color-brand-primary);
   font-weight: var(--aura-font-weight-medium);
+  border-inline-start: 3px solid var(--aura-color-brand-primary);
+  padding-inline-start: calc(var(--aura-space-2) - 3px);
 }
 
 /* Mobile: sidebar becomes an off-canvas panel toggled by the top-bar
@@ -259,7 +266,7 @@ summary:focus-visible {
 }
 .aura-topbar__title {
   margin: 0;
-  font-size: var(--aura-font-size-lg);
+  font-size: var(--aura-font-size-xl);
   font-weight: var(--aura-font-weight-semibold);
   color: var(--aura-color-text-primary);
   white-space: nowrap;

@@ -26,7 +26,24 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--aura-color-text-primary);
+  font-size: var(--aura-font-size-base);
+  line-height: var(--aura-line-height-base);
 }
+
+/* ---------- Type scale (Stage F -- typography-contract.md sec 2) ----------
+   Heading/body hierarchy driven by the shared scale instead of ad hoc
+   per-template sizes -- no content wording or _() call site changed. */
+h2 { font-size: var(--aura-font-size-lg); font-weight: var(--aura-font-weight-semibold); line-height: var(--aura-line-height-tight); margin: 0 0 var(--aura-space-3); }
+h3 { font-size: var(--aura-font-size-md); font-weight: var(--aura-font-weight-semibold); line-height: var(--aura-line-height-tight); margin: 0 0 var(--aura-space-2); }
+h4 { font-size: var(--aura-font-size-base); font-weight: var(--aura-font-weight-semibold); margin: 0 0 var(--aura-space-2); }
+p { margin: 0 0 var(--aura-space-3); }
+
+/* ---------- Links (Stage F) -- near the top so class-based anchor
+   styles further down the cascade (.aura-nav-link, .aura-pagination__link,
+   .btn, etc.) keep winning by source order + specificity. Focus styles
+   stay in shell.css (:focus-visible), untouched here. */
+a, a:visited { color: var(--aura-color-brand-primary); text-underline-offset: 0.15em; }
+a:hover { color: var(--aura-color-brand-primary-hover); text-decoration-thickness: 2px; }
 
 .card {
   background: var(--aura-color-surface-raised);
@@ -35,6 +52,17 @@ body {
   padding: 1rem 1.25rem;
   margin-bottom: 1rem;
 }
+
+/* ---------- Card rank + collapse (Stage F) ----------
+   Additive: highlights the primary action card on a screen (.card--action),
+   flags a critical one-time-reveal card (.card--critical), and styles
+   <details class="card"> so secondary/lifecycle content can collapse below
+   the fold without any JS. Logical properties throughout -- mirrors under RTL. */
+.card--action { border-inline-start: 3px solid var(--aura-color-brand-primary); background: var(--aura-color-surface-raised); }
+.card--critical { border: 2px solid var(--aura-color-danger); }
+details.card > summary { cursor: pointer; font-size: var(--aura-font-size-base); font-weight: 600; color: var(--aura-color-text-secondary); list-style-position: inside; }
+details.card > summary:hover { color: var(--aura-color-text-primary); }
+details.card[open] > summary { margin-block-end: var(--aura-space-4); padding-block-end: var(--aura-space-3); border-block-end: 1px solid var(--border); }
 
 table {
   width: 100%;
@@ -57,9 +85,9 @@ th {
 
 .badge {
   display: inline-block;
-  padding: 0.1rem 0.5rem;
+  padding: 0.15rem 0.55rem;
   border-radius: var(--aura-radius-full);
-  font-size: 0.72rem;
+  font-size: var(--aura-font-size-xs);
   font-weight: 600;
   background: var(--aura-color-surface-muted);
   color: var(--aura-color-text-secondary);
@@ -108,6 +136,7 @@ button, .btn {
   text-decoration: none;
   display: inline-block;
   font-family: inherit;
+  transition: background var(--aura-motion-fast) var(--aura-ease-standard);
 }
 button.danger, .btn.danger { background: var(--danger); }
 button.secondary, .btn.secondary {
@@ -115,6 +144,15 @@ button.secondary, .btn.secondary {
   color: var(--accent);
   border: 1px solid var(--accent);
 }
+button:hover, .btn:hover { background: var(--aura-color-brand-primary-hover); }
+button:active, .btn:active { background: var(--aura-color-brand-primary-active); }
+button.secondary:hover, .btn.secondary:hover { background: var(--aura-color-brand-primary-soft); }
+button.danger:hover, .btn.danger:hover { filter: brightness(0.92); }
+button:disabled, .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Higher-emphasis call-to-action variant, additive (Stage F) -- e.g. the
+   "Issue license key" primary action on licensing/detail.html. */
+.btn--primary-action { font-size: var(--aura-font-size-md); padding: var(--aura-space-3) var(--aura-space-6); font-weight: var(--aura-font-weight-semibold); }
 
 .error {
   background: var(--aura-color-danger-soft);
@@ -125,7 +163,7 @@ button.secondary, .btn.secondary {
   font-size: 0.85rem;
 }
 
-.flash-messages { max-width: 900px; margin: 0 auto 0.75rem; }
+.flash-messages { max-width: none; margin: 0 0 var(--aura-space-4); }
 .flash.info {
   background: var(--aura-color-info-soft);
   color: var(--aura-color-info);
@@ -139,7 +177,7 @@ button.secondary, .btn.secondary {
 
 .filters { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; align-items: end; }
 
-.kv { display: grid; grid-template-columns: 200px 1fr; gap: 0.3rem 1rem; font-size: 0.9rem; }
+.kv { display: grid; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr); max-inline-size: 720px; gap: 0.3rem 1rem; font-size: 0.9rem; }
 .kv dt { color: var(--muted); }
 
 code.masked {
