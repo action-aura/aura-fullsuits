@@ -17,6 +17,7 @@ import java.util.Timer
 import java.util.TimerTask
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
+import kotlin.random.Random
 
 /**
  * Drives Android's push/pull sync loop (multi-device-sync-foundation, Task 9
@@ -43,13 +44,38 @@ import kotlin.concurrent.thread
  * an unconfigured build means sync never runs, never a hidden default Owner
  * instance.
  */
+
+/** One half (push or pull) of this device's sync health. Immutable so a
+ *  @Volatile reference swap publishes a coherent snapshot with no lock on
+ *  the read path -- the Kotlin equivalent of what sync_service.py needs a
+ *  dedicated _health_lock for (there, dicts are mutated in place). */
+data class SyncHalfHealth(
+    val healthy: Boolean = true,
+    val lastSuccessAtMillis: Long? = null,
+    val lastFailureAtMillis: Long? = null,
+    val lastFailureReason: String? = null,
+    val consecutiveFailures: Int = 0,
+)
+
+data class SyncHealth(
+    val configured: Boolean,
+    val running: Boolean,
+    val push: SyncHalfHealth,
+    val pull: SyncHalfHealth,
+) {
+    val healthy: Boolean get() = push.healthy && pull.healthy
+}
+
 object SyncCoordinator {
 
     private const val TAG = "SyncCoordinator"
+    private const val BACKOFF_MAX_SECONDS = 300L
     private const val INTERVAL_SECONDS = 10L
 
     @Volatile private var identity: DeviceIdentity? = null
     @Volatile private var running = false
+    @Volatile private var pushHealth = SyncHalfHealth()
+    @Volatile private var pullHealth = SyncHalfHealth()
     private var timer: Timer? = null
     private val lock = Object()
 
@@ -105,10 +131,55 @@ object SyncCoordinator {
         thread(isDaemon = true, name = "sync-nudge") {
             try {
                 pushOnce()
+                recordSuccess(isPush = true)
             } catch (exc: Exception) {
-                Log.i(TAG, "Sync nudge push failed (offline or rejected); the next timer tick will retry.", exc)
+                val n = recordFailure(isPush = true, exc)
+                Log.e(TAG, "Sync nudge push to the Owner relay FAILED (reason=${reasonOf(exc)}, " +
+                           "consecutive push failures=$n); the outbox was left untouched and the " +
+                           "next timer tick will retry.", exc)
             }
         }
+    }
+
+    private fun reasonOf(exc: Throwable): String = when (exc) {
+        is SyncRelayClientError -> exc.reasonCode
+        is LocalSyncApiError    -> "LOCAL_API_HTTP_${exc.statusCode}"
+        else                    -> exc::class.simpleName ?: "UNKNOWN"
+    }
+
+    private fun recordSuccess(isPush: Boolean) = synchronized(lock) {
+        val now = System.currentTimeMillis()
+        if (isPush) pushHealth = pushHealth.copy(healthy = true, consecutiveFailures = 0, lastSuccessAtMillis = now)
+        else        pullHealth = pullHealth.copy(healthy = true, consecutiveFailures = 0, lastSuccessAtMillis = now)
+    }
+
+    /** Returns the new consecutive-failure count so the caller's Log.e line can name it. */
+    private fun recordFailure(isPush: Boolean, exc: Throwable): Int = synchronized(lock) {
+        val now = System.currentTimeMillis()
+        val prev = if (isPush) pushHealth else pullHealth
+        val next = prev.copy(healthy = false, consecutiveFailures = prev.consecutiveFailures + 1,
+                             lastFailureAtMillis = now, lastFailureReason = reasonOf(exc))
+        if (isPush) pushHealth = next else pullHealth = next
+        next.consecutiveFailures
+    }
+
+    /** Queryable sync health. No UI consumes this yet (deliberate -- native
+     *  Android has no StateFlow anywhere in this module, and the UI-banner
+     *  ask for this task was for the web frontend, not this app); this
+     *  exists so a failure is inspectable rather than invisible, and is the
+     *  seam any future UI would read. */
+    fun health(): SyncHealth = SyncHealth(
+        configured = BuildConfig.OWNER_SYNC_BASE_URL.isNotBlank(),
+        running = running, push = pushHealth, pull = pullHealth,
+    )
+
+    private fun nextDelayMillis(): Long {
+        val failures = maxOf(pushHealth.consecutiveFailures, pullHealth.consecutiveFailures)
+        if (failures == 0) return INTERVAL_SECONDS * 1000
+        val exponent = minOf(failures - 1, 16)          // 10 << 16 already far past the cap; guards overflow
+        val capped = minOf(INTERVAL_SECONDS shl exponent, BACKOFF_MAX_SECONDS)
+        val jitter = (capped * 0.2 * Random.nextDouble()).toLong()
+        return minOf(capped + jitter, BACKOFF_MAX_SECONDS) * 1000
     }
 
     private fun scheduleNext() {
@@ -122,7 +193,7 @@ object SyncCoordinator {
                     scheduleNext()
                 }
             }
-        }, INTERVAL_SECONDS * 1000)
+        }, nextDelayMillis())
         timer = t
     }
 
@@ -135,13 +206,24 @@ object SyncCoordinator {
         // regardless of whether its own outbox can currently drain.
         try {
             pushOnce()
+            // Empty outbox / not-yet-activated returns early without touching
+            // the relay -- still a success: push health means "nothing is
+            // stuck in the outbox".
+            recordSuccess(isPush = true)
         } catch (exc: Exception) {
-            Log.i(TAG, "Sync push attempt failed (offline or rejected); will retry on the next tick.", exc)
+            val n = recordFailure(isPush = true, exc)
+            Log.e(TAG, "Sync push to the Owner relay FAILED (reason=${reasonOf(exc)}, " +
+                       "consecutive push failures=$n); the outbox was left untouched and will " +
+                       "be retried on the next tick.", exc)
         }
         try {
             pullOnce()
+            recordSuccess(isPush = false)
         } catch (exc: Exception) {
-            Log.i(TAG, "Sync pull attempt failed (offline or rejected); will retry on the next tick.", exc)
+            val n = recordFailure(isPush = false, exc)
+            Log.e(TAG, "Sync pull from the Owner relay FAILED (reason=${reasonOf(exc)}, " +
+                       "consecutive pull failures=$n); the local cursor was not advanced and " +
+                       "the same range will be re-pulled on the next tick.", exc)
         }
     }
 
