@@ -1175,11 +1175,18 @@ def init_retail():
     );
     CREATE INDEX IF NOT EXISTS idx_supplier_contacts_supplier
         ON supplier_contacts(company_id, supplier_id, status);
-    CREATE INDEX IF NOT EXISTS idx_po_split_group
-        ON purchase_orders(company_id, split_group_id);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_po_idempotency
-        ON purchase_orders(idempotency_key) WHERE idempotency_key IS NOT NULL;
     """)
+    # idx_po_split_group / idx_po_idempotency are deliberately NOT created
+    # here even though a brand-new install already has the columns (line
+    # ~1020 above): this executescript runs BEFORE ensure_schema_version()
+    # below, so on any pre-v6 install whose purchase_orders table predates
+    # split_group_id/idempotency_key, an unconditional CREATE INDEX on those
+    # columns crashes init_retail() before the version-gated migration ever
+    # gets a chance to ALTER them in. _migrate_add_supplier_contacts_and_po_split
+    # already creates both indexes safely (column-existence-checked ALTER,
+    # then CREATE INDEX IF NOT EXISTS) for both fresh and legacy installs --
+    # see ensure_schema_version() call below. Found via a real desktop .exe
+    # launch against a genuine pre-v6 AppData database, not a synthetic test.
     conn.commit()
 
     # Wave 1B (Part K) / multi-device sync foundation (2026-08-06): first
