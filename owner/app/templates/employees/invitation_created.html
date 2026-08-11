@@ -1,0 +1,10 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _('Employee invited') }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _('Employee invitation created') }}</h2>
+  <p>{{ _('Send this one-time setup link to %(email)s through a secure, trusted channel. It is shown here only once and expires in 3 days.', email=invitation.email|bidi_isolate) }}</p>
+  <p><code class="masked" dir="ltr">{{ link }}</code></p>
+  <a class="btn" href="{{ url_for('employees.list_view') }}">{{ _('Back to employees') }}</a>
+</div>
+{% endblock %}

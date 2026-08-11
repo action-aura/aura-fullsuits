@@ -7,7 +7,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -16,6 +16,14 @@ from app.models.base import Base, TimestampMixin, UUIDPKMixin
 
 class Installation(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_installations"
+    __table_args__ = (
+        # Phase 9R M4: every activation and check-in/refresh request looks
+        # up an installation by exactly this pair
+        # (app/licensing_service/activation.py) -- previously an unindexed
+        # full-table scan on every request. Found by inspecting real query
+        # patterns against pg_indexes, not assumed.
+        Index("ix_owner_installations_license_id_installation_label", "license_id", "installation_label"),
+    )
 
     customer_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False

@@ -1,0 +1,34 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _('Pending employee invitations') }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _('Pending employee invitations') }}</h2>
+  {% if invitations %}
+  <table>
+    <thead>
+    <tr><th>{{ _('Email') }}</th><th>{{ _('Roles') }}</th><th>{{ _('Expires') }}</th><th>{{ _('Status') }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr>
+    </thead>
+    <tbody>
+    {% for inv in invitations %}
+    <tr>
+      <td>{{ inv.email|bidi_isolate }}</td>
+      <td dir="ltr">{{ inv.role_codes }}</td>
+      <td>{{ format_owner_datetime(inv.expires_at) }}</td>
+      <td>{% if inv.expires_at < now %}<span class="badge danger">{{ invitation_status_label(expired=True) }}</span>{% else %}<span class="badge active">{{ invitation_status_label(expired=False) }}</span>{% endif %}</td>
+      <td>
+        <form class="inline" method="post" action="{{ url_for('employees.reissue_invitation', invitation_id=inv.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="secondary">{{ _('Reissue') }}</button>
+        </form>
+        <form class="inline" method="post" action="{{ url_for('staff.revoke_invite', invitation_id=inv.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="danger">{{ _('Revoke') }}</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="empty">{{ _('No pending invitations.') }}</p>{% endif %}
+</div>
+{% endblock %}

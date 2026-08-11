@@ -527,7 +527,9 @@ def test_viewer_queue_shows_counts_not_items(app, client, seeded):
     force_login(client, app, staff_id)
     resp = client.get("/commercial-ops/ui/queue")
     assert resp.status_code == 200
-    assert b"VIEWER" in resp.data
+    # Phase 9.5B-R2: the role code is now rendered through role_label() for
+    # localization -- "Viewer" (title case), not the raw "VIEWER" code.
+    assert b"Viewer" in resp.data
 
 
 def test_reconciliation_view_and_run(app, client, seeded):
@@ -560,4 +562,7 @@ def test_subscription_timeline_shows_events(app, client, seeded):
     force_login(client, app, staff_id)
     resp = client.get(f"/commercial-ops/ui/timeline/subscription/{sub_id}")
     assert resp.status_code == 200
-    assert b"SUBSCRIPTION" in resp.data
+    # Phase 9.5B-R2: the event category badge is now rendered through
+    # timeline_category_label() for localization -- "Subscription" (title
+    # case), not the raw "SUBSCRIPTION" code.
+    assert b"Subscription" in resp.data

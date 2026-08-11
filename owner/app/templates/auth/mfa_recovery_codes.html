@@ -1,16 +1,18 @@
 {% extends "layout/base.html" %}
-{% block title %}Recovery codes{% endblock %}
+{% block title %}{{ _('Recovery codes') }}{% endblock %}
 {% block content %}
-<div class="card" style="max-width:460px;margin:2rem auto;">
-  <h2>Save your recovery codes</h2>
-  <p>Each code can be used once if you lose access to your authenticator. They will <strong>never be shown again</strong> after you leave this page.</p>
+<div class="aura-auth-card aura-auth-card--wide">
+  <h2>{{ _('Save your recovery codes') }}</h2>
+  <p>{{ _('Each code can be used once if you lose access to your authenticator. They will never be shown again after you leave this page.') }}</p>
   {% if codes %}
-  <ul>
-    {% for c in codes %}<li><code>{{ c }}</code></li>{% endfor %}
+  <ul class="aura-recovery-codes">
+    {% for c in codes %}<li><code dir="ltr">{{ c }}</code></li>{% endfor %}
   </ul>
   {% else %}
-  <p class="empty">No codes to display -- this page can only be viewed once, immediately after generation.</p>
+  <p class="empty">{{ _('No codes to display -- this page can only be viewed once, immediately after generation.') }}</p>
   {% endif %}
-  <a class="btn" href="{{ url_for('dashboard.index') }}">Continue to dashboard</a>
+  <div class="aura-auth-actions">
+    <a class="btn" href="{{ url_for('dashboard.index') }}">{{ _('Continue to dashboard') }}</a>
+  </div>
 </div>
 {% endblock %}

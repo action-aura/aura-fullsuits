@@ -1,58 +1,83 @@
 {% extends "layout/base.html" %}
-{% block title %}Staff{% endblock %}
+{% import "components/table.html" as table with context %}
+{% block title %}{{ _("Staff") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Staff accounts</h2>
-  {% if staff_list %}
-  <table>
-    <tr><th>Name</th><th>Email</th><th>Status</th><th>Super Admin</th><th>MFA</th><th></th></tr>
-    {% for s in staff_list %}
+  {{ table.toolbar(_("Staff accounts")) }}
+  {{ table.filter_bar(
+      status_options=["ACTIVE","DISABLED"], status_value=status_filter, status_label_fn=staff_account_filter_status_label,
+      search_value=search, search_field="q", search_label=_("Search"), search_placeholder=_("Name or email")
+  ) }}
+  {{ table.density_toggle() }}
+  {% call table.table(
+      columns=[
+        {"label": _("Name"), "sort_key": "display_name"},
+        {"label": _("Email"), "sort_key": "email"},
+        {"label": _("Status")},
+        {"label": _("Super Admin")},
+        {"label": _("MFA")},
+        {"label": ""},
+      ],
+      has_rows=result.rows, empty_message=_("No staff accounts yet."), caption=_("Staff accounts"),
+      default_sort="created_at", default_dir="desc"
+  ) %}
+    {% for s in result.rows %}
     <tr>
       <td>{{ s.display_name }}</td>
-      <td>{{ s.email }}</td>
-      <td>{% if s.is_active and not s.disabled_at %}<span class="badge active">Active</span>{% else %}<span class="badge disabled">Disabled</span>{% endif %}</td>
-      <td>{{ "Yes" if s.is_super_admin else "No" }}</td>
-      <td>{% if s.mfa_credential and s.mfa_credential.confirmed %}<span class="badge active">Enrolled</span>{% else %}<span class="badge warn">Not enrolled</span>{% endif %}</td>
-      <td><a href="{{ url_for('staff.detail', staff_id=s.id) }}">View</a></td>
+      <td><bdi dir="ltr">{{ s.email }}</bdi></td>
+      <td>{% if s.is_active and not s.disabled_at %}<span class="badge active">{{ account_status_label(is_active=True, disabled=False) }}</span>{% else %}<span class="badge disabled">{{ account_status_label(is_active=False, disabled=True) }}</span>{% endif %}</td>
+      <td>{{ _("Yes") if s.is_super_admin else _("No") }}</td>
+      <td>{% if s.mfa_credential and s.mfa_credential.confirmed %}<span class="badge active">{{ mfa_status_label(enrolled=True, required=False) }}</span>{% else %}<span class="badge warn">{{ mfa_status_label(enrolled=False, required=False) }}</span>{% endif %}</td>
+      <td><a href="{{ url_for('staff.detail', staff_id=s.id) }}">{{ _("View") }}</a></td>
     </tr>
     {% endfor %}
-  </table>
-  {% else %}<p class="empty">No staff accounts yet.</p>{% endif %}
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
 </div>
 
 <div class="card">
-  <h3>Invite staff</h3>
+  <h3>{{ _("Invite staff") }}</h3>
+  {% if has_permission('staff.create') %}
   <form method="post" action="{{ url_for('staff.invite') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label for="email">Email</label>
+    <label for="email">{{ _("Email") }}</label>
     <input id="email" type="email" name="email" required>
-    <label>Roles</label>
+    <label>{{ _("Roles") }}</label>
     {% for code in ["SUPER_ADMIN","SALES","SUPPORT","FINANCE","VIEWER"] %}
       <label style="display:inline-block;margin-right:1rem;font-weight:normal;color:inherit;">
-        <input type="checkbox" name="role_codes" value="{{ code }}" style="width:auto;"> {{ code }}
+        <input type="checkbox" name="role_codes" value="{{ code }}" style="width:auto;"> {{ role_label(code) }}
       </label>
     {% endfor %}
-    <div style="margin-top:1rem;"><button type="submit">Send invitation</button></div>
+    <div style="margin-top:1rem;"><button type="submit">{{ _("Send invitation (requires recent authentication)") }}</button></div>
   </form>
+  {% else %}
+  <p class="empty">{{ _("You do not have permission to invite staff.") }}</p>
+  {% endif %}
 </div>
 
 <div class="card">
-  <h3>Pending invitations</h3>
+  <h3>{{ _("Pending invitations") }}</h3>
   {% if invitations %}
-  <table>
-    <tr><th>Email</th><th>Roles</th><th>Expires</th><th></th></tr>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Email") }}</th><th>{{ _("Roles") }}</th><th>{{ _("Expires") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
+    <tbody>
     {% for inv in invitations %}
     <tr>
-      <td>{{ inv.email }}</td><td>{{ inv.role_codes }}</td><td>{{ inv.expires_at }}</td>
-      <td>
+      <td data-label="{{ _('Email') }}"><bdi dir="ltr">{{ inv.email }}</bdi></td>
+      <td data-label="{{ _('Roles') }}"><bdi dir="ltr">{{ inv.role_codes }}</bdi></td>
+      <td data-label="{{ _('Expires') }}">{{ format_owner_datetime(inv.expires_at) }}</td>
+      <td data-label="">
+        {% if has_permission('staff.create') %}
         <form class="inline" method="post" action="{{ url_for('staff.revoke_invite', invitation_id=inv.id) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" class="danger">Revoke</button>
+          <button type="submit" class="danger">{{ _("Revoke") }}</button>
         </form>
+        {% endif %}
       </td>
     </tr>
     {% endfor %}
+    </tbody>
   </table>
-  {% else %}<p class="empty">No pending invitations.</p>{% endif %}
+  {% else %}<p class="empty">{{ _("No pending invitations.") }}</p>{% endif %}
 </div>
 {% endblock %}

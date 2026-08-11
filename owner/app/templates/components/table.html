@@ -1,0 +1,250 @@
+{#
+  Aura Owner -- Enterprise Table System (Stage D).
+
+  Real, reusable Jinja macro library for domain list screens. Replaces the
+  hand-rolled "extends base -> .card -> header row -> .filters form ->
+  table/cards -> text-only pagination" boilerplate every one of the ~40
+  list screens in the app currently copy-pastes independently (see
+  docs/owner/ui-modernization/current-ui-audit.md sec 1). Every macro here
+  wires to REAL server-side GET params (page/status/q/sort/dir) -- there is
+  no client-side sort/filter/fetch anywhere in this file.
+
+  Usage (always import WITH CONTEXT -- several macros below read `request`,
+  `has_permission`, and the Flask/babel globals `_`/`url_for` from the
+  calling template's render context, which a context-less {% import %}
+  would not provide):
+
+    {% import "components/table.html" as table with context %}
+
+  Full capability/scope contract (what's real vs. explicitly deferred and
+  why) lives in docs/owner/ui-modernization/enterprise-table-system.md --
+  read that before extending this file to a new domain.
+#}
+
+{# ---------- List header row: title + permission-gated "New X" action.
+   Fixes a real, disclosed defect (screen-route-inventory.md): the old
+   per-template markup rendered "New customer"/"New lead" unconditionally,
+   so a viewer lacking the create permission saw a live button that 403'd
+   on click. `new_permission` is optional -- omit it for a toolbar with no
+   create action at all. Hiding the button is presentation-only; the
+   underlying route stays independently @require_permission-protected
+   regardless (Non-Negotiable Principle 6, same discipline as the sidebar
+   and command palette). #}
+{% macro toolbar(title, new_url=None, new_label=None, new_permission=None) %}
+<div class="aura-list-toolbar">
+  <h2>{{ title }}</h2>
+  {% if new_url and (new_permission is none or has_permission(new_permission)) %}
+  <a class="btn" href="{{ new_url }}">{{ new_label }}</a>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{# ---------- Filter bar: search + status select + optional sort select,
+   one real GET form (server round-trip, never client-side). Reuses the
+   existing `.filters` auto-submit-on-change convention for the status/sort
+   selects (matches every pre-existing list screen); the search box needs
+   its own explicit submit button since auto-submitting on every keystroke
+   would mean a full page reload per character typed -- not attempted here.
+
+   status_options: list of raw status codes (e.g. ["NEW","QUALIFIED"]).
+   status_label_fn: callable(code) -> localized label (the existing
+     *_status_label() Jinja globals already used by every screen).
+   sort_options: optional list of (value, label) tuples for a "Sort by"
+     dropdown -- used for card-grid screens (e.g. Leads) that have no
+     table <th> to attach a sort link to. Table-mode screens (e.g.
+     Customers) get sorting via table()'s own column-header links instead
+     and should leave sort_options unset. #}
+{% macro filter_bar(status_options=None, status_value=None, status_label_fn=None, status_field="status",
+                     search_value=None, search_field="q", search_label=None, search_placeholder=None,
+                     sort_options=None, sort_value=None, sort_field="sort",
+                     direction_value=None, direction_field="dir") %}
+<form class="filters aura-list-filters" method="get">
+  {% if search_label is not none %}
+  <div class="aura-list-filters__search">
+    <label for="aura-filter-{{ search_field }}">{{ search_label }}</label>
+    <input type="search" id="aura-filter-{{ search_field }}" name="{{ search_field }}"
+           value="{{ search_value or '' }}" placeholder="{{ search_placeholder or '' }}">
+  </div>
+  {% endif %}
+  {% if status_options %}
+  <div>
+    <label for="aura-filter-{{ status_field }}">{{ _("Status") }}</label>
+    <select id="aura-filter-{{ status_field }}" name="{{ status_field }}" onchange="this.form.submit()">
+      <option value="">{{ _("All") }}</option>
+      {% for s in status_options %}
+      <option value="{{ s }}" {% if status_value == s %}selected{% endif %}>{{ status_label_fn(s) if status_label_fn else s }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  {% endif %}
+  {% if sort_options %}
+  <div>
+    <label for="aura-filter-{{ sort_field }}">{{ _("Sort by") }}</label>
+    <select id="aura-filter-{{ sort_field }}" name="{{ sort_field }}" onchange="this.form.submit()">
+      {% for value, label in sort_options %}
+      <option value="{{ value }}" {% if sort_value == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label for="aura-filter-{{ direction_field }}">{{ _("Direction") }}</label>
+    <select id="aura-filter-{{ direction_field }}" name="{{ direction_field }}" onchange="this.form.submit()">
+      <option value="asc" {% if direction_value == "asc" %}selected{% endif %}>{{ _("Ascending") }}</option>
+      <option value="desc" {% if direction_value == "desc" %}selected{% endif %}>{{ _("Descending") }}</option>
+    </select>
+  </div>
+  {% endif %}
+  {% if search_label is not none %}
+  <div><label>&nbsp;</label><button type="submit" class="secondary">{{ _("Search") }}</button></div>
+  {% endif %}
+</form>
+{% endmacro %}
+
+{# ---------- Table shell: sticky header, contained horizontal scroll,
+   real semantic markup (scope=col, optional <caption>), optional real
+   sortable column-header links. Body rows are supplied by the caller via
+   {% call %} so per-row cell markup (badges, bdi-wrapped identifiers,
+   action links) stays exactly as expressive as the current hand-written
+   templates -- this macro only owns the wrapper/thead/empty-state, never
+   the per-domain cell content.
+
+   columns: list of dicts, each either {"label": ...} (plain header) or
+     {"label": ..., "sort_key": ...} (real sortable header -- only include
+     sort_key for a column with verified server-side ORDER BY support).
+     Optional {"align": "end"} marks a real financial/quantity column --
+     adds the shared `.num` utility class (tabular-nums + end-aligned,
+     `components.css`'s "Enterprise Table System" section) to the
+     rendered <th>; the caller's own {% call %} block is responsible for
+     adding the matching class="num" to that column's <td> cells (this
+     macro only ever owns the <thead>, never per-row cell markup).
+   has_rows: whether the caller's block will render at least one <tr>.
+   default_sort/default_dir: the route's default ordering when no ?sort/
+     ?dir query param is present yet (must match the service function's
+     own default so the header's arrow/aria-sort reflects reality on the
+     first, param-less page load). #}
+{% macro _sort_href(sort_field, dir_field, key, next_dir) -%}
+{%- set qs = request.args.to_dict() -%}
+{%- set _upd = qs.update({sort_field: key, dir_field: next_dir, "page": "1"}) -%}
+{{- url_for(request.endpoint, **qs) -}}
+{%- endmacro %}
+
+{% macro table(columns, has_rows=true, empty_message=None, caption=None,
+                default_sort="created_at", default_dir="desc",
+                sort_field="sort", dir_field="dir") %}
+{% set current_sort = request.args.get(sort_field, default_sort) %}
+{% set current_dir = request.args.get(dir_field, default_dir) %}
+<div class="aura-table-scroll">
+<table class="aura-table">
+  {% if caption %}<caption class="aura-sr-only">{{ caption }}</caption>{% endif %}
+  <thead>
+    <tr>
+    {% for col in columns %}
+      {% if col.sort_key %}
+        {% set is_current = current_sort == col.sort_key %}
+        {% set next_dir = "desc" if (is_current and current_dir == "asc") else "asc" %}
+        {% set aria = "ascending" if (is_current and current_dir == "asc") else ("descending" if (is_current and current_dir == "desc") else "none") %}
+        <th scope="col" aria-sort="{{ aria }}"{% if col.align == "end" %} class="num"{% endif %}>
+          <a class="aura-table__sort-link" href="{{ _sort_href(sort_field, dir_field, col.sort_key, next_dir) }}">
+            <span>{{ col.label }}</span>
+            <span class="aura-table__sort-icon" aria-hidden="true">{% if is_current and current_dir == "asc" %}&#9650;{% elif is_current and current_dir == "desc" %}&#9660;{% else %}&#8645;{% endif %}</span>
+          </a>
+        </th>
+      {% else %}
+        <th scope="col"{% if col.align == "end" %} class="num"{% endif %}>{% if col.label %}{{ col.label }}{% else %}<span class="aura-sr-only">{{ _("Actions") }}</span>{% endif %}</th>
+      {% endif %}
+    {% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {{ caller() }}
+    {% if not has_rows %}
+    <tr><td colspan="{{ columns|length }}" class="empty">{{ empty_message or _("No records found.") }}</td></tr>
+    {% endif %}
+  </tbody>
+</table>
+</div>
+{% endmacro %}
+
+{# ---------- Real server-side pagination: focusable <a> links (not
+   JS-only handlers), preserves every other active query param (status/q/
+   sort/dir) so Next/Previous never silently drops the current filter --
+   a real bug in the pre-existing employees/list.html Next/Previous links,
+   not repeated here. Shows a bounded page-number window (max 7 links)
+   plus first/last with an ellipsis when the range is large; renders
+   nothing but a total-count line when there's only one page. #}
+{% macro _pn_href(page) -%}
+{%- set qs = request.args.to_dict() -%}
+{%- set _upd = qs.update({"page": page|string}) -%}
+{{- url_for(request.endpoint, **qs) -}}
+{%- endmacro %}
+
+{% macro pagination_nav(result) %}
+{% if result.total_pages and result.total_pages > 1 %}
+{% set current = result.page %}
+{% set total_pages = result.total_pages %}
+{% set window_start = ([1, current - 2] | max) %}
+{% set window_end = ([total_pages, current + 2] | min) %}
+<nav class="aura-pagination" aria-label="{{ _('Pagination') }}">
+  <p class="aura-pagination__summary">{{ _("Page %(page)s of %(total_pages)s — %(total)s total", page=current, total_pages=total_pages, total=result.total) }}</p>
+  <ul class="aura-pagination__list">
+    <li>
+      {% if result.has_prev %}
+      <a class="aura-pagination__link" href="{{ _pn_href(current - 1) }}" rel="prev" data-aura-pagination-dir="prev" aria-label="{{ _('Previous page') }}">&larr;</a>
+      {% else %}
+      <span class="aura-pagination__link aura-pagination__link--disabled" data-aura-pagination-dir="prev" aria-disabled="true" aria-label="{{ _('Previous page') }}">&larr;</span>
+      {% endif %}
+    </li>
+    {% if window_start > 1 %}
+    <li><a class="aura-pagination__link" href="{{ _pn_href(1) }}">1</a></li>
+    {% if window_start > 2 %}<li><span class="aura-pagination__ellipsis" aria-hidden="true">&hellip;</span></li>{% endif %}
+    {% endif %}
+    {% for p in range(window_start, window_end + 1) %}
+    <li>
+      {% if p == current %}
+      <span class="aura-pagination__link aura-pagination__link--current" aria-current="page">{{ p }}</span>
+      {% else %}
+      <a class="aura-pagination__link" href="{{ _pn_href(p) }}">{{ p }}</a>
+      {% endif %}
+    </li>
+    {% endfor %}
+    {% if window_end < total_pages %}
+    {% if window_end < total_pages - 1 %}<li><span class="aura-pagination__ellipsis" aria-hidden="true">&hellip;</span></li>{% endif %}
+    <li><a class="aura-pagination__link" href="{{ _pn_href(total_pages) }}">{{ total_pages }}</a></li>
+    {% endif %}
+    <li>
+      {% if result.has_next %}
+      <a class="aura-pagination__link" href="{{ _pn_href(current + 1) }}" rel="next" data-aura-pagination-dir="next" aria-label="{{ _('Next page') }}">&rarr;</a>
+      {% else %}
+      <span class="aura-pagination__link aura-pagination__link--disabled" data-aura-pagination-dir="next" aria-disabled="true" aria-label="{{ _('Next page') }}">&rarr;</span>
+      {% endif %}
+    </li>
+  </ul>
+</nav>
+{% elif result.total %}
+<p class="aura-pagination__summary">{{ _("%(total)s total", total=result.total) }}</p>
+{% endif %}
+{% endmacro %}
+
+{# ---------- Density toggle: compact/comfortable row height, using the
+   --aura-table-row-compact/--aura-table-row-comfortable/
+   --aura-table-cell-pad-* tokens already defined in tokens.css. Real
+   client preference persisted to localStorage, presentation-only -- same
+   status as the sidebar's collapsed/expanded preference
+   (application-shell-contract.md), wired by static/js/table-density.js.
+   No server persistence, matches the governing spec's scope for this kind
+   of preference. #}
+{% macro density_toggle() %}
+<div class="aura-table-toolbar">
+  <button type="button" class="aura-density-toggle" data-density-toggle aria-pressed="false"
+          data-label-compact="{{ _('Compact view') }}" data-label-comfortable="{{ _('Comfortable view') }}">
+    <span data-density-toggle-label>{{ _("Compact view") }}</span>
+  </button>
+</div>
+{% endmacro %}
+
+{# ---------- Generic empty state for non-table contexts (e.g. the Leads
+   card grid). Table-mode screens get their empty row via table()'s own
+   empty_message param instead -- this macro is for the card-grid case. #}
+{% macro empty_state(message) %}
+<p class="empty">{{ message }}</p>
+{% endmacro %}

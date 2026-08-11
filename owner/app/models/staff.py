@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -45,6 +45,13 @@ class RolePermission(Base, UUIDPKMixin, TimestampMixin):
 
 class StaffUser(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_staff_users"
+    __table_args__ = (
+        # Phase 9.5B-R -- defense-in-depth: the real, authoritative allowlist
+        # is app.config["LANGUAGES"] (app/i18n.py), never trusted from client
+        # input in the first place; this constraint just makes a direct/
+        # migration-mistake write structurally impossible too.
+        CheckConstraint("locale IS NULL OR locale IN ('en', 'ar')", name="ck_staff_users_locale_supported"),
+    )
 
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -57,6 +64,10 @@ class StaffUser(Base, UUIDPKMixin, TimestampMixin):
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     disabled_reason: Mapped[str | None] = mapped_column(Text)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Phase 9.5B-R -- persisted display-language preference (presentation
+    # only, see app/i18n.py). NULL = no explicit preference yet, falls
+    # through to the cookie/Accept-Language/default precedence.
+    locale: Mapped[str | None] = mapped_column(String(8))
 
     role_assignments: Mapped[list["StaffRoleAssignment"]] = relationship(
         back_populates="staff_user",
@@ -99,6 +110,14 @@ class StaffSession(Base, UUIDPKMixin, TimestampMixin):
     mfa_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_reason: Mapped[str | None] = mapped_column(Text)
+    # Phase 9.5A -- additive mobile-session extension (see
+    # docs/owner/phase9_5a/mobile-session-contract.md). NULL/default for
+    # every existing browser-cookie session; a mobile login populates these
+    # on the same StaffSession row rather than a parallel session table.
+    refresh_token_hash: Mapped[str | None] = mapped_column(String(128), unique=True)
+    refresh_token_family_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    access_token_last_issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    platform: Mapped[str] = mapped_column(String(16), default="WEB", nullable=False)
 
 
 class StaffInvitation(Base, UUIDPKMixin, TimestampMixin):
@@ -116,6 +135,16 @@ class StaffInvitation(Base, UUIDPKMixin, TimestampMixin):
     created_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
     )
+    # Phase 9.5B -- additive. JSON-encoded EmployeeProfile field draft
+    # (employee_number/full_name/phone/job_title/department/
+    # employment_start_date/manager_employee_profile_id/commission_plan_id),
+    # captured at invitation time and materialized into a real
+    # EmployeeProfile row transactionally on acceptance (see
+    # app.staff.services.create_staff_from_invitation). NULL for an
+    # invitation that only creates a bare StaffUser account (pre-9.5B
+    # behavior, unchanged). Never contains a secret -- same redaction
+    # discipline as every other audited field.
+    employee_profile_draft: Mapped[str | None] = mapped_column(Text)
 
 
 class MfaCredential(Base, UUIDPKMixin, TimestampMixin):

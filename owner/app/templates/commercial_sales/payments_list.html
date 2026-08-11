@@ -1,0 +1,31 @@
+{% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
+{% block title %}{{ _("Payments") }}{% endblock %}
+{% block content %}
+<div class="card">
+  {{ table.toolbar(_("Payments"), url_for('commercial_sales_web.new_payment_form'), _("Record payment"), new_permission="payments.create") }}
+  {{ table.filter_bar(
+      status_options=["PENDING","CONFIRMED","FAILED","REFUNDED","VOIDED"], status_value=status_filter, status_label_fn=payment_status_label,
+      search_value=search, search_field="q", search_label=_("Search"), search_placeholder=_("Reference")
+  ) }}
+  {% call table.table(
+      columns=[
+        {"label": _("Amount"), "sort_key": "amount", "align": "end"},
+        {"label": _("Method")},
+        {"label": _("Status"), "sort_key": "status"},
+        {"label": _("Date"), "sort_key": "payment_date"},
+      ],
+      has_rows=result.rows|length > 0, empty_message=_("No payments yet."), caption=_("Payments")
+  ) %}
+    {% for p in result.rows %}
+    <tr>
+      <td class="num"><a href="{{ url_for('commercial_sales_web.payment_detail', payment_id=p.id) }}">{{ format_owner_number(p.amount) }} {{ p.currency }}</a></td>
+      <td>{{ p.method }}</td>
+      <td><span class="badge {{ payment_badge_class(p.status) }}">{{ payment_status_label(p.status) }}</span></td>
+      <td>{{ format_owner_date(p.payment_date) }}</td>
+    </tr>
+    {% endfor %}
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
+</div>
+{% endblock %}

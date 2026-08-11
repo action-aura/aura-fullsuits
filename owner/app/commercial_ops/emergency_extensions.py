@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from app.audit.services import record as audit_record
+from app.commercial_ops.errors import StableCodeError
 from app.extensions import db_session
 from app.models.base import utcnow
 from app.models.commercial_ops import EmergencyExtension
@@ -23,8 +24,15 @@ from app.models.subscriptions import Subscription
 MAX_EMERGENCY_EXTENSION_HOURS = 72
 
 
-class EmergencyExtensionError(ValueError):
-    pass
+class EmergencyExtensionError(StableCodeError):
+    _MESSAGES = {
+        "REASON_REQUIRED_TO_CREATE": "A reason is required to create an emergency extension.",
+        "INVALID_DURATION_HOURS": "duration_hours must be between 1 and {max_hours} (explicit, short-lived only).",
+        "LICENSE_REVOKED": "Cannot create an emergency extension for a REVOKED license.",
+        "ALREADY_HAS_ACTIVE_EXTENSION": "Subscription already has an active emergency extension (id={extension_id}) until {expires_at}.",
+        "INVALID_REVOKE_STATUS": "Cannot revoke an emergency extension in status {status}.",
+        "REASON_REQUIRED_TO_REVOKE": "A reason is required to revoke an emergency extension.",
+    }
 
 
 def _active_extension_for(subscription_id, now: datetime) -> EmergencyExtension | None:
@@ -51,13 +59,11 @@ def create_emergency_extension(
     now: datetime | None = None,
 ) -> EmergencyExtension:
     if not reason or not reason.strip():
-        raise EmergencyExtensionError("A reason is required to create an emergency extension.")
+        raise EmergencyExtensionError("REASON_REQUIRED_TO_CREATE")
     if duration_hours <= 0 or duration_hours > MAX_EMERGENCY_EXTENSION_HOURS:
-        raise EmergencyExtensionError(
-            f"duration_hours must be between 1 and {MAX_EMERGENCY_EXTENSION_HOURS} (explicit, short-lived only)."
-        )
+        raise EmergencyExtensionError("INVALID_DURATION_HOURS", max_hours=MAX_EMERGENCY_EXTENSION_HOURS)
     if license is not None and license.status == "REVOKED":
-        raise EmergencyExtensionError("Cannot create an emergency extension for a REVOKED license.")
+        raise EmergencyExtensionError("LICENSE_REVOKED")
 
     # Phase 8V-P5: found by real physical validation -- this used to default to
     # the naive, deprecated datetime.utcnow() (a UTC *value* with no tzinfo).
@@ -75,9 +81,7 @@ def create_emergency_extension(
     # via explicit revoke-then-recreate, never silent overlap.
     existing = _active_extension_for(subscription.id, now)
     if existing is not None:
-        raise EmergencyExtensionError(
-            f"Subscription already has an active emergency extension (id={existing.id}) until {existing.expires_at}."
-        )
+        raise EmergencyExtensionError("ALREADY_HAS_ACTIVE_EXTENSION", extension_id=existing.id, expires_at=existing.expires_at)
 
     extension = EmergencyExtension(
         subscription_id=subscription.id,
@@ -112,9 +116,9 @@ def revoke_emergency_extension(
     extension: EmergencyExtension, *, reason: str, actor_staff_user_id, now: datetime | None = None
 ) -> None:
     if extension.status != "ACTIVE":
-        raise EmergencyExtensionError(f"Cannot revoke an emergency extension in status {extension.status}.")
+        raise EmergencyExtensionError("INVALID_REVOKE_STATUS", status=extension.status)
     if not reason or not reason.strip():
-        raise EmergencyExtensionError("A reason is required to revoke an emergency extension.")
+        raise EmergencyExtensionError("REASON_REQUIRED_TO_REVOKE")
 
     now = now or utcnow()
     extension.status = "REVOKED"

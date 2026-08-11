@@ -13,6 +13,7 @@ from datetime import date
 from sqlalchemy import select
 
 from app.audit.services import record as audit_record
+from app.commercial_ops.errors import StableCodeError
 from app.extensions import db_session
 from app.models.base import utcnow
 from app.models.commercial_ops import NOTIFICATION_STATUSES, CommercialPolicy, InternalNotification
@@ -22,11 +23,20 @@ DEFAULT_POLICY_CODE = "default-commercial-policy-v1"
 
 
 class CommercialPolicyError(ValueError):
-    pass
+    """OPERATOR/MACHINE ONLY -- NOT TRANSLATABLE. Raised only by
+    create_commercial_policy()'s config-validation guard, never caught by
+    any Flask route (verified: no `except CommercialPolicyError` exists
+    anywhere in app/commercial_ops/ui_routes.py or routes.py) -- reachable
+    only from CLI/seed/admin-script callers, never from a staff member's
+    browser. Left as a plain English ValueError deliberately; see
+    service-message-call-path-audit.md."""
 
 
-class NotificationError(ValueError):
-    pass
+class NotificationError(StableCodeError):
+    _MESSAGES = {
+        "INVALID_ACKNOWLEDGE_STATUS": "Cannot acknowledge a notification in status {status}.",
+        "ALREADY_RESOLVED_OR_DISMISSED": "This notification is already {status}.",
+    }
 
 
 def resolve_policy_for_subscription(subscription: Subscription, *, as_of: date | None = None) -> CommercialPolicy | None:
@@ -156,7 +166,7 @@ def create_notification(
 
 def acknowledge_notification(notification: InternalNotification, actor_staff_user_id) -> None:
     if notification.status not in ("OPEN", "IN_PROGRESS"):
-        raise NotificationError(f"Cannot acknowledge a notification in status {notification.status}.")
+        raise NotificationError("INVALID_ACKNOWLEDGE_STATUS", status=notification.status)
     notification.status = "ACKNOWLEDGED"
     notification.acknowledged_at = utcnow()
     notification.acknowledged_by_staff_user_id = actor_staff_user_id
@@ -173,7 +183,7 @@ def acknowledge_notification(notification: InternalNotification, actor_staff_use
 
 def resolve_notification(notification: InternalNotification, actor_staff_user_id, resolution: str) -> None:
     if notification.status in ("RESOLVED", "DISMISSED"):
-        raise NotificationError(f"Notification already {notification.status}.")
+        raise NotificationError("ALREADY_RESOLVED_OR_DISMISSED", status=notification.status)
     notification.status = "RESOLVED"
     notification.resolved_at = utcnow()
     notification.resolved_by_staff_user_id = actor_staff_user_id

@@ -1,0 +1,36 @@
+{% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
+{% block title %}{{ _("Cash Closing") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="aura-list-toolbar">
+    <h2>{{ _("Daily Cash Closing") }} (<bdi dir="ltr">{{ currency }}</bdi>)</h2>
+    {% if has_permission("cash_closing.prepare") %}
+    <a class="btn" href="{{ url_for('operations_ui.new_closing_form') }}">{{ _("New closing") }}</a>
+    {% endif %}
+  </div>
+  {{ table.filter_bar(
+      status_options=["DRAFT","SUBMITTED","REVIEW_REQUIRED","APPROVED","REJECTED","REOPENED","CLOSED"], status_value=status_filter, status_label_fn=cash_closing_status_label
+  ) }}
+  {% call table.table(
+      columns=[
+        {"label": _("Business date"), "sort_key": "business_date"},
+        {"label": _("Status"), "sort_key": "status"},
+        {"label": _("Expected"), "sort_key": "expected_closing_cash", "align": "end"},
+        {"label": _("Variance"), "sort_key": "variance", "align": "end"},
+      ],
+      has_rows=result.rows|length > 0, empty_message=_("No cash closings yet."), caption=_("Cash closings"),
+      default_sort="business_date"
+  ) %}
+    {% for c in result.rows %}
+    <tr>
+      <td><a href="{{ url_for('operations_ui.closing_detail', closing_id=c.id) }}">{{ format_owner_date(c.business_date) }}</a></td>
+      <td><span class="badge {{ cash_closing_badge_class(c.status) }}">{{ cash_closing_status_label(c.status) }}</span></td>
+      <td class="num">{{ format_owner_number(c.expected_closing_cash) }} {{ c.currency }}</td>
+      <td class="num">{% if c.variance is not none %}{{ format_owner_number(c.variance) }} {{ c.currency }}{% endif %}</td>
+    </tr>
+    {% endfor %}
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
+</div>
+{% endblock %}

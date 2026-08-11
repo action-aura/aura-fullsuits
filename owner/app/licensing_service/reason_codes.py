@@ -46,6 +46,22 @@ PUBLIC_REASON_CODES = frozenset(
         # Deliberately normalized/generic public code for the whole license-
         # validity family below -- see _PUBLIC_NORMALIZATION.
         "ACTIVATION_REJECTED",
+        # Phase 9R M11: same normalization pattern, for release
+        # availability -- RELEASE_NOT_FOUND vs RELEASE_NOT_PUBLISHED would
+        # let a caller distinguish "no such release" from "a real, unpublished
+        # draft exists with this ID," leaking internal release-pipeline
+        # information (an unannounced upcoming version). Both normalize here.
+        "RELEASE_NOT_AVAILABLE",
+        # A download token is a single-use, 256-bit random value (never
+        # guessable), so distinguishing not-found/expired/already-used/
+        # revoked externally carries no meaningful enumeration risk -- kept
+        # as distinct public codes for legitimate client debuggability,
+        # unlike the license-key family above.
+        "TOKEN_NOT_FOUND",
+        "TOKEN_EXPIRED",
+        "TOKEN_ALREADY_USED",
+        "TOKEN_REVOKED",
+        "ARTIFACT_UNAVAILABLE",
     }
 )
 
@@ -67,6 +83,9 @@ INTERNAL_ONLY_REASON_CODES = frozenset(
         "SUBSCRIPTION_SUSPENDED",
         "SUBSCRIPTION_EXPIRED",
         "SUBSCRIPTION_CANCELLED",
+        # Phase 9R M11
+        "RELEASE_NOT_FOUND",
+        "RELEASE_NOT_PUBLISHED",
     }
 )
 
@@ -81,6 +100,12 @@ ALL_REASON_CODES = PUBLIC_REASON_CODES | INTERNAL_ONLY_REASON_CODES
 # previously-activated device -- but still never differentiates
 # not-found-style ambiguity.
 _PUBLIC_NORMALIZATION = {code: "ACTIVATION_REJECTED" for code in INTERNAL_ONLY_REASON_CODES}
+# Phase 9R M11: RELEASE_NOT_FOUND/RELEASE_NOT_PUBLISHED normalize to their
+# own public code, not ACTIVATION_REJECTED -- a download-authorization
+# rejection reported as "activation rejected" would be actively misleading
+# to a legitimate client trying to debug a real failure.
+_PUBLIC_NORMALIZATION["RELEASE_NOT_FOUND"] = "RELEASE_NOT_AVAILABLE"
+_PUBLIC_NORMALIZATION["RELEASE_NOT_PUBLISHED"] = "RELEASE_NOT_AVAILABLE"
 
 
 def to_public_reason_code(internal_code: str) -> str:

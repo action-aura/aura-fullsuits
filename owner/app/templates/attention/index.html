@@ -1,0 +1,64 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Attention Center") }}{% endblock %}
+{% block content %}
+{#
+  Role-aware Attention Center (Stage F). Real, derived, real-time view --
+  NOT a persistent notification inbox: there is no "read"/"unread" state
+  anywhere in this page, by design. An item appears here for exactly as
+  long as its underlying real record needs action, and disappears the
+  moment that's no longer true (completed, approved, paid, reactivated,
+  ...). See docs/owner/ui-modernization/attention-center-contract.md for
+  the full audit of what is/isn't real-data-backed here, and why.
+
+  Every item below was already independently permission-checked and
+  ownership-filtered in app/attention/service.py before this template
+  ever saw it -- nothing here re-derives or loosens that. Each item's
+  "act on it" link is the exact real route this same employee can
+  already reach (reused via url_for, never a fabricated path).
+#}
+{% set priority_labels = {
+  "urgent": _("Urgent"),
+  "normal": _("Needs attention"),
+  "low": _("Low priority"),
+} %}
+
+<div class="card">
+  <h2>{{ _("Attention Center") }}</h2>
+  <p class="aura-attention-summary">
+    {% if items %}
+      {{ _("%(count)d item(s) across your permitted areas need action right now.", count=items|length) }}
+    {% else %}
+      {{ _("This is computed fresh from real records every time you open it -- nothing is stored as read or unread.") }}
+    {% endif %}
+  </p>
+
+  {% if not items %}
+  <div class="aura-attention-empty">
+    <div class="aura-attention-empty__icon" aria-hidden="true">&#10003;</div>
+    <p>{{ _("Nothing needs your attention right now.") }}</p>
+    <p class="empty">{{ _("If your role doesn't include any of the permissions this page checks (leads, quotes, invoices, payments, expenses, commissions, licenses, subscriptions, or system administration), this page will always be empty for you -- use the sidebar to reach the screens you're permitted to work in.") }}</p>
+  </div>
+  {% else %}
+    {% for category_label, group_items in grouped.items() %}
+    <div class="aura-attention-group">
+      <h3>{{ category_label }} <span class="aura-attention-group__count">({{ format_owner_number(group_items|length) }})</span></h3>
+      <ul class="aura-attention-list">
+        {% for item in group_items %}
+        <li class="aura-attention-item aura-attention-item--{{ item.priority }}" aria-label="{{ item.accessible_label }}">
+          <div class="aura-attention-item__body">
+            <div class="aura-attention-item__title">{{ item.title }}</div>
+            <div class="aura-attention-item__context">{{ item.context }}</div>
+            <div class="aura-attention-item__meta">
+              <span class="badge {{ 'danger' if item.priority == 'urgent' else ('warn' if item.priority == 'normal' else '') }}">{{ priority_labels[item.priority] }}</span>
+              <span><bdi dir="ltr">{{ format_owner_datetime(item.occurred_at) }}</bdi></span>
+            </div>
+          </div>
+          <a class="btn secondary aura-attention-item__action" href="{{ item.action_url }}">{{ item.action_label }}</a>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endfor %}
+  {% endif %}
+</div>
+{% endblock %}

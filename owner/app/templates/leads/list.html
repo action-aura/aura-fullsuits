@@ -1,0 +1,47 @@
+{% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
+{% block title %}{{ _("Leads") }}{% endblock %}
+{% block content %}
+<div class="card">
+  {{ table.toolbar(_("Leads"), new_url=url_for('leads.new_form'), new_label=_("New lead"), new_permission="leads.create") }}
+  {{ table.filter_bar(
+       status_options=["NEW", "POTENTIAL", "FOLLOW_UP", "UNDER_OBSERVATION", "QUALIFIED", "NOT_INTERESTED_NOW", "CONFIRMED", "LOST", "ARCHIVED"],
+       status_value=status_filter, status_label_fn=lead_status_label,
+       search_value=search_value, search_label=_("Search"), search_placeholder=_("Organization, contact, phone, or email"),
+       sort_options=[
+         ("created_at", _("Created")),
+         ("organization_or_prospect_name", _("Name")),
+         ("next_follow_up_at", _("Next follow-up")),
+         ("priority", _("Priority")),
+         ("status", _("Status")),
+       ],
+       sort_value=sort, direction_value=direction
+     ) }}
+  {# Card grid (.responsive-cards/.crm-card, Phase 9.5C), kept -- not
+     migrated to table()'s <table> shell. Leads has no fixed set of
+     tabular columns worth a sticky header/sortable <th> row; the card
+     already surfaces multiple fields (name, status, phone/email,
+     priority, source, next follow-up) at a glance, which a narrow table
+     would either truncate or force onto many columns. Real sort now
+     comes from the dropdown above (backed by the same server-side
+     ORDER BY as table-mode screens) rather than column headers -- see
+     docs/owner/ui-modernization/enterprise-table-system.md for the full
+     reasoning. #}
+  <div class="responsive-cards">
+    {% for lead in result.rows %}
+    <a class="crm-card" href="{{ url_for('leads.detail', lead_id=lead.id) }}">
+      <div style="display:flex;justify-content:space-between;">
+        <strong>{{ lead.organization_or_prospect_name }}</strong>
+        <span class="badge {{ 'active' if lead.status in ('QUALIFIED', 'CONFIRMED') else 'draft' }}">{{ lead_status_label(lead.status) }}</span>
+      </div>
+      <div><bdi dir="ltr">{{ lead.phone or lead.email or "-" }}</bdi></div>
+      <div>{{ lead_priority_label(lead.priority) }} &middot; {{ lead_source_label(lead.source) }}</div>
+      {% if lead.next_follow_up_at %}<div class="small">{{ _("Next follow-up") }}: {{ format_owner_datetime(lead.next_follow_up_at) }}</div>{% endif %}
+    </a>
+    {% else %}
+    {{ table.empty_state(_("No leads yet.")) }}
+    {% endfor %}
+  </div>
+  {{ table.pagination_nav(result) }}
+</div>
+{% endblock %}

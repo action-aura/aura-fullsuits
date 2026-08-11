@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 
+import psycopg
 import pyotp
 import pytest
 from sqlalchemy import text
@@ -17,9 +18,35 @@ os.environ["OWNER_ENV"] = "testing"
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Fixed, arbitrary key for the session-level advisory lock below -- must stay
+# constant across processes so they all contend for the same lock.
+_TEST_SUITE_ADVISORY_LOCK_KEY = 0x41757261  # "Aura" in hex, first 4 bytes
+
 
 @pytest.fixture(scope="session", autouse=True)
-def _migrated_schema():
+def _serialize_concurrent_test_runs():
+    """Holds a Postgres session-level advisory lock for the whole pytest
+    session so two pytest processes can never run against
+    OWNER_TEST_DATABASE_URL concurrently. Without this, one process's
+    per-test `TRUNCATE ... RESTART IDENTITY CASCADE` (see the `app` fixture
+    below) can fire while another process's session still holds a live
+    reference to a row from before the truncate, raising SQLAlchemy
+    ObjectDeletedError -- the exact failure mode diagnosed in Phase
+    9.5B-R3 Milestones 1-2. A second concurrent pytest process now simply
+    blocks on `pg_advisory_lock` until the first finishes, instead of
+    racing it."""
+    dsn = TEST_DB_URL.replace("postgresql+psycopg://", "postgresql://")
+    conn = psycopg.connect(dsn, autocommit=True)
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_lock(%s)", (_TEST_SUITE_ADVISORY_LOCK_KEY,))
+    yield
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_unlock(%s)", (_TEST_SUITE_ADVISORY_LOCK_KEY,))
+    conn.close()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _migrated_schema(_serialize_concurrent_test_runs):
     owner_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     env = {**os.environ, "OWNER_DATABASE_URL": TEST_DB_URL}
     subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=owner_dir, env=env, check=True)

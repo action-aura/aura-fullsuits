@@ -1,21 +1,23 @@
 {% extends "layout/base.html" %}
-{% block title %}Offline Policies{% endblock %}
+{% block title %}{{ _("Offline Policies") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Offline-grace policies</h2>
-  <table>
-    <tr><th>Code</th><th>Check-in interval</th><th>Offline grace</th><th>Warning starts</th><th>Hard expiry behavior</th></tr>
+  <h2>{{ _("Offline-grace policies") }}</h2>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Code") }}</th><th>{{ _("Check-in interval") }}</th><th>{{ _("Offline grace") }}</th><th>{{ _("Warning starts") }}</th><th>{{ _("Hard expiry behavior") }}</th></tr></thead>
+    <tbody>
     {% for p in policies %}
     <tr>
-      <td>{{ p.policy_code }} (v{{ p.policy_version }})</td>
-      <td>{{ p.check_in_interval_seconds }}s</td>
-      <td>{{ p.offline_grace_seconds }}s</td>
-      <td>{{ p.warning_start_seconds }}s before grace ends</td>
-      <td>{{ p.hard_expiry_behavior }}</td>
+      <td><bdi dir="ltr">{{ p.policy_code }}</bdi> ({{ _("v%(version)s", version=p.policy_version) }})</td>
+      <td>{{ _("%(seconds)ss", seconds=format_owner_number(p.check_in_interval_seconds)) }}</td>
+      <td>{{ _("%(seconds)ss", seconds=format_owner_number(p.offline_grace_seconds)) }}</td>
+      <td>{{ _("%(seconds)ss before grace ends", seconds=format_owner_number(p.warning_start_seconds)) }}</td>
+      <td><bdi dir="ltr">{{ p.hard_expiry_behavior }}</bdi></td>
     </tr>
-    {% else %}<tr><td colspan="5" class="empty">No offline policies seeded yet -- run `flask seed-offline-policy`.</td></tr>
+    {% else %}<tr><td colspan="5" class="empty">{{ _("No offline policies seeded yet -- run") }} <code dir="ltr">flask seed-offline-policy</code></td></tr>
     {% endfor %}
+    </tbody>
   </table>
-  <p style="color:#6b7785;font-size:0.85rem;">Policy is DEFINED and RETURNED to clients only -- Phase 6 does not enforce it inside Retail or Clinic.</p>
+  <p style="color:#6b7785;font-size:0.85rem;">{{ _("Policy is DEFINED and RETURNED to clients only -- Phase 6 does not enforce it inside Retail or Clinic.") }}</p>
 </div>
 {% endblock %}

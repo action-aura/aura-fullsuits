@@ -42,6 +42,12 @@ class Subscription(Base, UUIDPKMixin, TimestampMixin):
     approved_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
     )
+    # Phase 9.5A -- additive fulfillment bookkeeping link to the SalesOrder
+    # this subscription was issued for, when applicable. NULL for a
+    # subscription created directly (unchanged Phase 6/8 behavior). Does not
+    # change any existing subscription-issuance condition -- see
+    # docs/owner/phase9_5a/payment-and-fulfillment-contract.md.
+    sales_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_sales_orders.id"))
 
     customer: Mapped["Customer"] = relationship()  # noqa: F821
     product: Mapped["Product"] = relationship()  # noqa: F821
@@ -140,6 +146,15 @@ class PaymentRecord(Base, UUIDPKMixin, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("owner_staff_users.id")
     )
     internal_note: Mapped[str | None] = mapped_column(Text)
+    # Phase 9.5A -- additive link to the new commercial-invoice document
+    # this payment confirms, when applicable. NULL for a payment recorded
+    # against a subscription directly (unchanged Phase 8 behavior -- this
+    # column is purely additive, PaymentRecord remains the one real payment
+    # table, never duplicated -- see
+    # docs/owner/phase9_5a/commercial-document-lifecycle.md).
+    commercial_invoice_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_commercial_invoices.id")
+    )
 
     customer: Mapped["Customer"] = relationship()  # noqa: F821
     subscription: Mapped[Subscription | None] = relationship()

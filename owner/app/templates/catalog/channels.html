@@ -1,13 +1,15 @@
 {% extends "layout/base.html" %}
-{% block title %}Release channels{% endblock %}
+{% block title %}{{ _("Release channels") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Release channels</h2>
-  <table>
-    <tr><th>Code</th><th>Name</th></tr>
+  <h2>{{ _("Release channels") }}</h2>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Code") }}</th><th>{{ _("Name") }}</th></tr></thead>
+    <tbody>
     {% for c in channels %}
-    <tr><td>{{ c.channel_code }}</td><td>{{ c.name }}</td></tr>
+    <tr><td><bdi dir="ltr">{{ c.channel_code }}</bdi></td><td>{{ c.name }}</td></tr>
     {% endfor %}
+    </tbody>
   </table>
 </div>
 {% endblock %}

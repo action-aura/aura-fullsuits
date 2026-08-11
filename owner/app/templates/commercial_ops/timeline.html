@@ -1,19 +1,21 @@
 {% extends "layout/base.html" %}
-{% block title %}Timeline{% endblock %}
+{% block title %}{{ _("Timeline") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Commercial timeline -- {{ subscription.customer.legal_name }}</h2>
-  <p><a href="{{ url_for('subscriptions.detail', subscription_id=subscription.id) }}">Back to subscription</a></p>
-  <table>
-    <tr><th>When</th><th>Category</th><th>Event</th><th>Reason</th></tr>
+  <h2>{{ _("Commercial timeline -- %(customer)s", customer=subscription.customer.legal_name) }}</h2>
+  <p><a href="{{ url_for('subscriptions.detail', subscription_id=subscription.id) }}">{{ _("Back to subscription") }}</a></p>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("When") }}</th><th>{{ _("Category") }}</th><th>{{ _("Event") }}</th><th>{{ _("Reason") }}</th></tr></thead>
+    <tbody>
     {% for e in events|sort(attribute="timestamp", reverse=True) %}
     <tr>
-      <td>{{ e.timestamp }}</td>
-      <td><span class="badge">{{ e.category }}</span></td>
+      <td>{{ format_owner_datetime(e.timestamp) }}</td>
+      <td><span class="badge">{{ timeline_category_label(e.category) }}</span></td>
       <td>{{ e.description }}</td>
       <td>{{ e.reason or "-" }}</td>
     </tr>
-    {% else %}<tr><td colspan="4" class="empty">No commercial events recorded yet.</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="4" class="empty">{{ _("No commercial events recorded yet.") }}</td></tr>{% endfor %}
+    </tbody>
   </table>
 </div>
 {% endblock %}

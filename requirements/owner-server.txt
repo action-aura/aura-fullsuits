@@ -1,14 +1,24 @@
 # Aura Owner Control Center — new codebase, not extracted from Action Aura Enterprise.
-flask==3.0.3
-werkzeug==3.0.3
-flask-cors==4.0.1
+flask==3.1.3
+werkzeug==3.1.6
+flask-cors==6.0.0
 flask-wtf==1.2.1
 psycopg[binary]==3.2.1
 sqlalchemy==2.0.32
 alembic==1.13.2
 argon2-cffi==23.1.0
-pyjwt==2.9.0
+pyjwt==2.13.0
 pyotp==2.9.0
-cryptography==43.0.1
+# UI modernization -- renders the MFA enrollment QR code server-side as an
+# inline SVG data URI (no client-side JS, no external request, no CDN).
+# Pure-Python, zero transitive dependencies.
+segno==1.6.1
+cryptography==50.0.0
 gunicorn==22.0.0
 jsonschema==4.23.0
+
+# Phase 9.5B-R -- Owner-wide internationalization (English/Arabic, RTL).
+# flask-babel wraps the canonical Babel gettext toolchain (extract/update/
+# compile) with Jinja/Flask integration -- not an ad-hoc translation engine.
+flask-babel==4.0.0
+babel==2.18.0

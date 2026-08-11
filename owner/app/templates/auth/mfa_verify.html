@@ -1,14 +1,19 @@
 {% extends "layout/base.html" %}
-{% block title %}Verify MFA{% endblock %}
+{% block title %}{{ _('Verify MFA') }}{% endblock %}
 {% block content %}
-<div class="card" style="max-width:380px;margin:2rem auto;">
-  <h2>Enter your authenticator code</h2>
-  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+<div class="aura-auth-brand">
+  <span class="aura-auth-brand__mark" aria-hidden="true">A</span>
+  <span>{{ _('Aura Owner') }}</span>
+</div>
+<div class="aura-auth-card">
+  <h2>{{ _('Enter your authenticator code') }}</h2>
+  <p>{{ _('Open your authenticator app and enter the current 6-digit code, or use one of your saved recovery codes.') }}</p>
+  {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
   <form method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label for="code">6-digit code (or a recovery code)</label>
-    <input id="code" name="code" required autofocus autocomplete="one-time-code">
-    <div style="margin-top:1rem;"><button type="submit">Verify</button></div>
+    <label for="code">{{ _('6-digit code (or a recovery code)') }}</label>
+    <input id="code" name="code" required autofocus autocomplete="one-time-code" inputmode="numeric">
+    <div class="aura-auth-actions"><button type="submit" class="btn">{{ _('Verify') }}</button></div>
   </form>
 </div>
 {% endblock %}

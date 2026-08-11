@@ -1,0 +1,224 @@
+{#
+  Aura Owner -- primary sidebar navigation.
+
+  Included only from layout/base.html, only when `staff` is set. Every
+  destination is wrapped in the real permission check for its route (the
+  exact decorator on the view function, verified by reading
+  app/**/routes.py directly -- see docs/owner/ui-modernization/
+  screen-route-inventory.md for the cross-check), using the
+  has_permission()/has_any_permission() Jinja globals injected by
+  app/__init__.py's context processor. This is presentation-only: every
+  route below is independently protected server-side regardless of what
+  this template shows (app/security/rbac.py). A group heading only
+  renders when at least one of its links is visible.
+
+  Profile/account destinations (My Profile, Account, Log out) are NOT
+  here -- they live in the top-bar profile menu (layout/base.html).
+#}
+{% macro nav_link(endpoint, label) %}
+  {% set is_current = (request.endpoint == endpoint) %}
+  <li>
+    <a class="aura-nav-link{{ ' is-active' if is_current else '' }}"
+       href="{{ url_for(endpoint) }}"
+       {% if is_current %}aria-current="page"{% endif %}>
+      <span class="aura-nav-link__text">{{ label }}</span>
+    </a>
+  </li>
+{% endmacro %}
+
+{# ---------- OVERVIEW ---------- #}
+<div class="aura-nav-group">
+  <div class="aura-nav-group__title">{{ _('Overview') }}</div>
+  <ul class="aura-nav-group__list">
+    {{ nav_link('dashboard.index', _('Dashboard')) }}
+    {% if can_view_attention_center %}
+      {{ nav_link('attention.index', _('Attention Center')) }}
+    {% endif %}
+  </ul>
+</div>
+
+{# ---------- CRM ---------- #}
+{% set crm_visible = has_any_permission('leads.view_own', 'leads.view_all') or has_permission('customers.view') %}
+{% if crm_visible %}
+<div class="aura-nav-group">
+  <div class="aura-nav-group__title">{{ _('CRM') }}</div>
+  <ul class="aura-nav-group__list">
+    {% if has_any_permission('leads.view_own', 'leads.view_all') %}
+      {{ nav_link('leads.list_leads', _('Leads')) }}
+      {{ nav_link('leads.crm_dashboard', _('CRM Dashboard')) }}
+    {% endif %}
+    {% if has_permission('customers.view') %}
+      {{ nav_link('customers.list_customers', _('Customers')) }}
+    {% endif %}
+  </ul>
+</div>
+{% endif %}
+
+{# ---------- SALES ---------- #}
+{% set sales_visible = has_any_permission('quotes.create', 'quotes.approve')
+  or has_any_permission('orders.create', 'orders.approve')
+  or has_any_permission('invoices.create', 'invoices.issue')
+  or has_permission('payments.view')
+  or has_any_permission('refunds.create', 'refunds.approve')
+  or has_any_permission('commissions.view_own', 'commissions.view_all')
+  or has_permission('commissions.pay')
+  or has_any_permission('quotes.create', 'orders.create', 'invoices.create')
+  or has_permission('commissions.view_all') %}
+{% if sales_visible %}
+<div class="aura-nav-group">
+  <div class="aura-nav-group__title">{{ _('Sales') }}</div>
+  <ul class="aura-nav-group__list">
+    {% if has_any_permission('quotes.create', 'quotes.approve') %}
+      {{ nav_link('commercial_sales_web.list_quotes', _('Quotes')) }}
+    {% endif %}
+    {% if has_any_permission('orders.create', 'orders.approve') %}
+      {{ nav_link('commercial_sales_web.list_orders', _('Sales Orders')) }}
+    {% endif %}
+    {% if has_any_permission('invoices.create', 'invoices.issue') %}
+      {{ nav_link('commercial_sales_web.list_invoices', _('Invoices')) }}
+    {% endif %}
+    {% if has_permission('payments.view') %}
+      {{ nav_link('commercial_sales_web.list_payments', _('Payments')) }}
+    {% endif %}
+    {% if has_any_permission('refunds.create', 'refunds.approve') %}
+      {{ nav_link('commercial_sales_web.list_refunds', _('Refunds')) }}
+    {% endif %}
+    {% if has_any_permission('commissions.view_own', 'commissions.view_all') %}
+      {{ nav_link('commercial_sales_web.list_commissions', _('Commissions')) }}
+    {% endif %}
+    {% if has_permission('commissions.pay') %}
+      {{ nav_link('commercial_sales_web.list_payout_batches', _('Commission Payouts')) }}
+    {% endif %}
+    {% if has_any_permission('quotes.create', 'orders.create', 'invoices.create') %}
+      {{ nav_link('commercial_sales_web.employee_dashboard_view', _('Commercial Dashboard')) }}
+    {% endif %}
+    {% if has_permission('commissions.view_all') %}
+      {{ nav_link('commercial_sales_web.finance_dashboard_view', _('Finance Dashboard')) }}
+    {% endif %}
+  </ul>
+</div>
+{% endif %}
+
+{# ---------- FINANCE / OPERATIONS ---------- #}
+{% set finance_ops_visible = has_any_permission('expenses.view_own', 'expenses.view_all')
+  or has_any_permission('expenses.create', 'expenses.manage_payees')
+  or has_any_permission('cash_closing.view_own', 'cash_closing.view_all', 'cash_closing.prepare')
+  or has_permission('report_snapshots.view')
+  or has_permission('management_notes.view')
+  or has_permission('dashboard.view_own')
+  or has_permission('dashboard.view_all') %}
+{% if finance_ops_visible %}
+<div class="aura-nav-group">
+  <div class="aura-nav-group__title">{{ _('Finance / Operations') }}</div>
+  <ul class="aura-nav-group__list">
+    {% if has_any_permission('expenses.view_own', 'expenses.view_all') %}
+      {{ nav_link('operations_ui.list_expenses', _('Expenses')) }}
+    {% endif %}
+    {% if has_any_permission('expenses.create', 'expenses.manage_payees') %}
+      {{ nav_link('operations_ui.list_payees', _('Expense Payees')) }}
+    {% endif %}
+    {% if has_any_permission('cash_closing.view_own', 'cash_closing.view_all', 'cash_closing.prepare') %}
+      {{ nav_link('operations_ui.list_closings', _('Cash Closing')) }}
+    {% endif %}
+    {% if has_permission('report_snapshots.view') %}
+      {{ nav_link('operations_ui.list_snapshots', _('Operational Reports')) }}
+    {% endif %}
+    {% if has_permission('management_notes.view') %}
+      {{ nav_link('operations_ui.list_notes', _('Management Notes')) }}
+    {% endif %}
+    {% if has_permission('dashboard.view_own') %}
+      {{ nav_link('operations_ui.employee_expense_dashboard_view', _('My Expense Dashboard')) }}
+    {% endif %}
+    {% if has_permission('dashboard.view_all') %}
+      {{ nav_link('operations_ui.management_operational_dashboard_view', _('Operational Management Dashboard')) }}
+      {{ nav_link('operations_ui.finance_operational_dashboard_view', _('Operational Finance Dashboard')) }}
+    {% endif %}
+  </ul>
+</div>
+{% endif %}
+
+{# ---------- LICENSING ---------- #}
+{% set licensing_visible = has_permission('catalog.view')
+  or has_permission('subscriptions.view')
+  or has_permission('licenses.view')
+  or has_permission('installations.view')
+  or has_permission('pilots.view')
+  or has_permission('emergency_extensions.view')
+  or has_permission('pending_activations.view')
+  or has_permission('system.view')
+  or has_permission('activation_service.view') %}
+{% if licensing_visible %}
+<div class="aura-nav-group">
+  <div class="aura-nav-group__title">{{ _('Licensing') }}</div>
+  <ul class="aura-nav-group__list">
+    {% if has_permission('catalog.view') %}
+      {{ nav_link('catalog.index', _('Catalog')) }}
+    {% endif %}
+    {% if has_permission('subscriptions.view') %}
+      {{ nav_link('subscriptions.list_subscriptions', _('Subscriptions')) }}
+    {% endif %}
+    {% if has_permission('licenses.view') %}
+      {{ nav_link('licensing.list_licenses', _('Licenses')) }}
+    {% endif %}
+    {% if has_permission('installations.view') %}
+      {{ nav_link('installations.list_installations', _('Installations')) }}
+    {% endif %}
+    {% if has_permission('subscriptions.view') %}
+      {{ nav_link('commercial_ops_ui.list_renewals', _('Renewals')) }}
+    {% endif %}
+    {% if has_permission('pilots.view') %}
+      {{ nav_link('commercial_ops_ui.list_pilots', _('Pilots')) }}
+    {% endif %}
+    {% if has_permission('emergency_extensions.view') %}
+      {{ nav_link('commercial_ops_ui.list_emergency_extensions', _('Emergency Ext.')) }}
+    {% endif %}
+    {% if has_permission('pending_activations.view') %}
+      {{ nav_link('commercial_ops_ui.list_pending_activations', _('Activation Reviews')) }}
+    {% endif %}
+    {% if has_permission('subscriptions.view') %}
+      {{ nav_link('commercial_ops_ui.list_notifications', _('Notifications')) }}
+      {{ nav_link('commercial_ops_ui.queue_view', _('My Queue')) }}
+    {% endif %}
+    {% if has_permission('system.view') %}
+      {{ nav_link('commercial_ops_ui.reconciliation_view', _('Reconciliation')) }}
+    {% endif %}
+    {% if has_permission('activation_service.view') %}
+      {{ nav_link('licensing_admin.status', _('Activation Service')) }}
+    {% endif %}
+  </ul>
+</div>
+{% endif %}
+
+{# ---------- MANAGEMENT ---------- #}
+{% set management_visible = has_permission('staff.view') or has_permission('employees.view_all') %}
+{% if management_visible %}
+<div class="aura-nav-group">
+  <div class="aura-nav-group__title">{{ _('Management') }}</div>
+  <ul class="aura-nav-group__list">
+    {% if has_permission('staff.view') %}
+      {{ nav_link('staff.list_staff', _('Staff')) }}
+    {% endif %}
+    {% if has_permission('employees.view_all') %}
+      {{ nav_link('employees.list_view', _('Employees')) }}
+      {{ nav_link('employees.dashboard', _('Employee Dashboard')) }}
+    {% endif %}
+  </ul>
+</div>
+{% endif %}
+
+{# ---------- SYSTEM ---------- #}
+{% set system_visible = has_permission('audit.view') or has_permission('system.view') %}
+{% if system_visible %}
+<div class="aura-nav-group">
+  <div class="aura-nav-group__title">{{ _('System') }}</div>
+  <ul class="aura-nav-group__list">
+    {% if has_permission('audit.view') %}
+      {{ nav_link('audit.list_audit', _('Audit Log')) }}
+      {{ nav_link('audit.security_events', _('Security Events')) }}
+    {% endif %}
+    {% if has_permission('system.view') %}
+      {{ nav_link('system.list_backups', _('Backups')) }}
+    {% endif %}
+  </ul>
+</div>
+{% endif %}

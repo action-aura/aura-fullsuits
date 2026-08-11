@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from app.auth.session import load_current_staff
 from app.extensions import db_session
+from app.installations import list_queries
 from app.installations.services import (
     VALID_TRANSITIONS,
     InvalidInstallationTransitionError,
@@ -18,6 +19,7 @@ from app.models.catalog import Platform
 from app.models.installations import Installation
 from app.models.licensing import License
 from app.security.rbac import require_permission
+from app.services.pagination import DEFAULT_PAGE_SIZE
 
 bp = Blueprint("installations", __name__, url_prefix="/installations")
 
@@ -25,12 +27,15 @@ bp = Blueprint("installations", __name__, url_prefix="/installations")
 @bp.route("", methods=["GET"])
 @require_permission("installations.view")
 def list_installations():
-    status_filter = request.args.get("status")
-    stmt = select(Installation).order_by(Installation.created_at.desc())
-    if status_filter:
-        stmt = stmt.where(Installation.status == status_filter)
-    installations = db_session.execute(stmt).scalars().all()
-    return render_template("installations/list.html", installations=installations, status_filter=status_filter)
+    status_filter = request.args.get("status") or None
+    search = request.args.get("q") or None
+    sort = request.args.get("sort", "created_at")
+    direction = request.args.get("dir", "desc")
+    result = list_queries.list_installations(
+        page=request.args.get("page", 1, type=int), page_size=DEFAULT_PAGE_SIZE,
+        status=status_filter, search=search, sort=sort, direction=direction,
+    )
+    return render_template("installations/list.html", result=result, status_filter=status_filter, search=search)
 
 
 @bp.route("/new", methods=["GET"])

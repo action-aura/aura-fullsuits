@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHash, VerifyMismatchError
+from flask_babel import gettext as _
 
 _hasher = PasswordHasher()
 
@@ -21,7 +22,11 @@ class PasswordPolicyError(ValueError):
 
 def validate_password_policy(password: str) -> None:
     if not password or len(password) < MIN_PASSWORD_LENGTH:
-        raise PasswordPolicyError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
+        # %(min_length)s (not an f-string) so pybabel's extractor can see a
+        # real, static msgid with a named placeholder -- an f-string
+        # argument to _() cannot be extracted at all (Milestone 8's own
+        # catalog-completeness requirement depends on this).
+        raise PasswordPolicyError(_("Password must be at least %(min_length)s characters.") % {"min_length": MIN_PASSWORD_LENGTH})
     classes = sum(
         [
             any(c.islower() for c in password),
@@ -31,7 +36,7 @@ def validate_password_policy(password: str) -> None:
         ]
     )
     if classes < 3:
-        raise PasswordPolicyError("Password must mix at least 3 of: lowercase, uppercase, digit, symbol.")
+        raise PasswordPolicyError(_("Password must mix at least 3 of: lowercase, uppercase, digit, symbol."))
 
 
 def hash_password(password: str) -> str:

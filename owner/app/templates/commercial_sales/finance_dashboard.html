@@ -1,0 +1,31 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Finance dashboard") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _("Commercial finance overview") }}</h2>
+  <h3>{{ _("Quotes") }}</h3>
+  <dl class="kv">
+    {% for status, count in data.quotes_by_status.items() %}<dt>{{ quote_status_label(status) }}</dt><dd>{{ count }}</dd>{% endfor %}
+  </dl>
+  <h3>{{ _("Orders") }}</h3>
+  <dl class="kv">
+    {% for status, count in data.orders_by_status.items() %}<dt>{{ sales_order_status_label(status) }}</dt><dd>{{ count }}</dd>{% endfor %}
+  </dl>
+  <h3>{{ _("Invoices") }}</h3>
+  <dl class="kv">
+    {% for status, count in data.invoices_by_status.items() %}<dt>{{ commercial_invoice_status_label(status) }}</dt><dd>{{ count }}</dd>{% endfor %}
+  </dl>
+</div>
+
+<div class="card">
+  <h3>{{ _("Action queues") }}</h3>
+  <dl class="kv">
+    <dt>{{ _("Quote/pricing approvals pending") }}</dt><dd>{{ data.quote_approvals_pending }}</dd>
+    <dt>{{ _("Refunds pending approval") }}</dt><dd>{{ data.refunds_pending_approval }}</dd>
+    <dt>{{ _("Commissions pending approval") }}</dt><dd>{{ data.commissions_pending_approval }}</dd>
+    <dt>{{ _("Commissions approved, awaiting payout") }}</dt><dd>{{ data.commissions_approved_unpaid }}</dd>
+    <dt>{{ _("Payout batches pending approval") }}</dt><dd>{{ data.payout_batches_pending_approval }}</dd>
+    <dt>{{ _("Outstanding invoice total") }}</dt><dd>{{ data.outstanding_invoice_total }}</dd>
+  </dl>
+</div>
+{% endblock %}

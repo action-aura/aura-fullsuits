@@ -1,5 +1,7 @@
 # Environments / secrets
 .env
+.env.*
+!.env.*.example
 *.local.env
 android/*/keystore.properties
 android/*/local.properties
@@ -54,6 +56,17 @@ owner/var/backups/
 owner/var/signing-keys/
 owner/var/signing-keys-test/
 *.pem
+
+# Aura Owner -- private Expense attachment storage (Phase 9.5E) -- never
+# committed, matches signing-keys' private-storage treatment above.
+owner/var/expense-attachments/
+owner/var/expense-attachments-test/
+
+# Aura Owner -- private release-artifact storage, local/test adapter
+# (Phase 9R M11) -- never committed, same treatment as the two above. A
+# real deployment uses external object storage, never this directory.
+owner/var/release-artifacts/
+owner/var/release-artifacts-test/
 owner/tools/activation_simulator/.device/
 owner/tools/activation_simulator/**/*.key
 

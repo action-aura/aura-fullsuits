@@ -1,0 +1,38 @@
+{% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
+{% block title %}{{ _("Commissions") }}{% endblock %}
+{% block content %}
+<div class="card">
+  {{ table.toolbar(_("Commissions")) }}
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  {{ table.filter_bar(
+      status_options=["PENDING","EARNED","APPROVED","PAID","REVERSED","CANCELLED","DISPUTED"], status_value=status_filter, status_label_fn=commission_entry_status_label
+  ) }}
+  {% call table.table(
+      columns=[
+        {"label": _("Amount"), "sort_key": "commission_amount", "align": "end"},
+        {"label": _("Status"), "sort_key": "status"},
+        {"label": _("Earned"), "sort_key": "earned_at"},
+        {"label": ""},
+      ],
+      has_rows=result.rows|length > 0, empty_message=_("No commission entries yet."), caption=_("Commissions")
+  ) %}
+    {% for e in result.rows %}
+    <tr>
+      <td class="num">{{ format_owner_number(e.commission_amount) }} {{ e.currency }}</td>
+      <td><span class="badge {{ commission_entry_badge_class(e.status) }}">{{ commission_entry_status_label(e.status) }}</span></td>
+      <td>{{ format_owner_datetime(e.earned_at) if e.earned_at else "-" }}</td>
+      <td>
+        {% if e.status == "EARNED" and can_approve %}
+        <form method="post" action="{{ url_for('commercial_sales_web.approve_commission_route', entry_id=e.id) }}" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn">{{ _("Approve") }}</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
+</div>
+{% endblock %}

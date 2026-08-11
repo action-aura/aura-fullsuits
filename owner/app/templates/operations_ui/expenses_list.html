@@ -1,0 +1,31 @@
+{% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
+{% block title %}{{ _("Expenses") }}{% endblock %}
+{% block content %}
+<div class="card">
+  {{ table.toolbar(_("Expenses"), url_for('operations_ui.new_expense_form'), _("New expense"), new_permission="expenses.create") }}
+  {{ table.filter_bar(
+      status_options=["DRAFT","SUBMITTED","RETURNED","APPROVED","PARTIALLY_PAID","PAID","REJECTED","VOID"], status_value=status_filter, status_label_fn=expense_status_label,
+      search_value=search, search_field="q", search_label=_("Search"), search_placeholder=_("Description or reference")
+  ) }}
+  {% call table.table(
+      columns=[
+        {"label": _("Number"), "sort_key": "expense_number"},
+        {"label": _("Status"), "sort_key": "status"},
+        {"label": _("Amount"), "sort_key": "amount", "align": "end"},
+        {"label": _("Date"), "sort_key": "expense_date"},
+      ],
+      has_rows=result.rows|length > 0, empty_message=_("No expenses yet."), caption=_("Expenses")
+  ) %}
+    {% for e in result.rows %}
+    <tr>
+      <td><a href="{{ url_for('operations_ui.expense_detail', expense_id=e.id) }}"><bdi dir="ltr">{{ e.expense_number or e.id }}</bdi></a></td>
+      <td><span class="badge {{ expense_badge_class(e.status) }}">{{ expense_status_label(e.status) }}</span></td>
+      <td class="num">{{ format_owner_number(e.amount) }} {{ e.currency }}</td>
+      <td>{{ format_owner_date(e.expense_date) }}</td>
+    </tr>
+    {% endfor %}
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
+</div>
+{% endblock %}

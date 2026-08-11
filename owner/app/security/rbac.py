@@ -38,7 +38,11 @@ def require_login(view):
         if staff is None:
             if _wants_json():
                 return jsonify({"error": "authentication_required"}), 401
-            return redirect(url_for("auth.login_form", next=request.path))
+            # Presentation-only hint for login.html to show a calm "your
+            # session ended, sign in again" message instead of a bare
+            # login form -- never trusted for anything security-relevant,
+            # the actual authorization decision above is already made.
+            return redirect(url_for("auth.login_form", next=request.path, reason="session_expired"))
         return view(*args, **kwargs)
 
     return wrapped
@@ -51,6 +55,30 @@ def require_permission(permission_code: str):
         def wrapped(*args, **kwargs):
             staff = load_current_staff()
             if permission_code not in get_staff_permission_codes(staff):
+                if _wants_json():
+                    return jsonify({"error": "forbidden"}), 403
+                abort(403)
+            return view(*args, **kwargs)
+
+        return wrapped
+
+    return decorator
+
+
+def require_any_permission(*permission_codes: str):
+    """Phase 9.5C -- for the real _own/_all permission-pair shape (e.g.
+    leads.view_own vs leads.view_all): a role may hold only one of the
+    two (VIEWER has leads.view_all but not leads.view_own), so gating a
+    route on a single fixed code locks that role out entirely even
+    though the ownership-scoping logic underneath already handles both
+    cases correctly. Passes if the actor holds ANY of the listed codes."""
+    def decorator(view):
+        @wraps(view)
+        @require_login
+        def wrapped(*args, **kwargs):
+            staff = load_current_staff()
+            codes = get_staff_permission_codes(staff)
+            if not any(code in codes for code in permission_codes):
                 if _wants_json():
                     return jsonify({"error": "forbidden"}), 403
                 abort(403)

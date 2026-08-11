@@ -11,6 +11,21 @@ from app.models import audit  # noqa: F401
 from app.models import licensing_service  # noqa: F401
 from app.models import commercial_ops  # noqa: F401
 from app.models import activation_governance  # noqa: F401
+# Phase 9.5A -- commercial-operations foundation. Import order matters only
+# in that every module referencing another module's table by ForeignKey
+# STRING (never a Python import) is safe regardless of order -- SQLAlchemy
+# resolves string-form ForeignKey targets against Base.metadata once every
+# module below has been imported, not at each individual import statement.
+from app.models import employees  # noqa: F401
+from app.models import leads  # noqa: F401
+from app.models import commercial_sales  # noqa: F401
+from app.models import commissions  # noqa: F401
+from app.models import expenses  # noqa: F401
+from app.models import management_notes  # noqa: F401
+from app.models import daily_reports  # noqa: F401
+from app.models import cash_closing  # noqa: F401
+from app.models import report_snapshots  # noqa: F401
+from app.models import release_distribution  # noqa: F401
 
 from app.models.staff import (  # noqa: F401
     Role,
@@ -74,6 +89,9 @@ from app.models.activation_governance import (  # noqa: F401
     ActivationPolicy,
     PendingActivation,
     DeviceSlotException,
+    DevicePolicyProfile,
+    DevicePolicyPlatformRule,
+    SubscriptionDevicePolicyOverride,
 )
 from app.models.licensing_service import (  # noqa: F401
     SigningKey,
@@ -89,3 +107,55 @@ from app.models.licensing_service import (  # noqa: F401
     RateLimitCounter,
     ServiceHealthEvent,
 )
+from app.models.employees import EmployeeProfile, EmployeePresenceSession  # noqa: F401
+from app.models.leads import (  # noqa: F401
+    Lead,
+    LeadProductInterest,
+    LeadStatusHistory,
+    LeadAssignment,
+    LeadInteraction,
+    LeadFollowup,
+    LeadNote,
+    CustomerLocation,
+    CustomerInteraction,
+    CustomerFollowup,
+)
+from app.models.commercial_sales import (  # noqa: F401
+    Quote,
+    QuoteLine,
+    SalesOrder,
+    SalesOrderLine,
+    CommercialInvoice,
+    CommercialInvoiceItem,
+    CommercialRefund,
+    CommercialOperationsIdempotencyKey,
+)
+from app.models.commissions import (  # noqa: F401
+    CommissionPlan,
+    CommissionRuleVersion,
+    EmployeeCommissionPlanAssignment,
+    CommissionLedgerEntry,
+    CommissionPayoutBatch,
+    CommissionPayoutLine,
+)
+from app.models.expenses import (  # noqa: F401
+    ExpenseCategory,
+    Expense,
+    Payee,
+    ExpenseApproval,
+    ExpensePayment,
+    ExpenseAttachment,
+)
+from app.models.management_notes import (  # noqa: F401
+    SharedManagementNote,
+    ManagementNoteVisibilityGrant,
+    ManagementNoteComment,
+)
+from app.models.daily_reports import DailyActivitySnapshot  # noqa: F401
+from app.models.cash_closing import (  # noqa: F401
+    CashClosing,
+    CashClosingAdjustment,
+    CashClosingReopenEvent,
+)
+from app.models.report_snapshots import ReportSnapshot  # noqa: F401
+from app.models.release_distribution import ReleaseDownloadAuthorization  # noqa: F401

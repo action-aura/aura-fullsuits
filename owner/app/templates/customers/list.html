@@ -1,32 +1,36 @@
 {% extends "layout/base.html" %}
-{% block title %}Customers{% endblock %}
+{% import "components/table.html" as table with context %}
+{% block title %}{{ _("Customers") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <div style="display:flex;justify-content:space-between;align-items:center;">
-    <h2>Customer organizations</h2>
-    <a class="btn" href="{{ url_for('customers.new_form') }}">New customer</a>
-  </div>
-  <form class="filters" method="get">
-    <div>
-      <label>Status</label>
-      <select name="status" onchange="this.form.submit()">
-        <option value="">All</option>
-        {% for s in ["LEAD","PROSPECT","PILOT","ACTIVE","SUSPENDED","CLOSED","ARCHIVED"] %}
-        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s }}</option>
-        {% endfor %}
-      </select>
-    </div>
-  </form>
-  <table>
-    <tr><th>Legal name</th><th>Country</th><th>Status</th><th></th></tr>
-    {% for c in customers %}
+  {{ table.toolbar(_("Customer organizations"), new_url=url_for('customers.new_form'), new_label=_("New customer"), new_permission="customers.create") }}
+  {{ table.filter_bar(
+       status_options=["LEAD", "PROSPECT", "PILOT", "ACTIVE", "SUSPENDED", "CLOSED", "ARCHIVED"],
+       status_value=status_filter, status_label_fn=customer_status_label,
+       search_value=search_value, search_label=_("Search"), search_placeholder=_("Legal or trade name")
+     ) }}
+  {{ table.density_toggle() }}
+  {% call table.table(
+       columns=[
+         {"label": _("Legal name"), "sort_key": "legal_name"},
+         {"label": _("Country"), "sort_key": "country"},
+         {"label": _("Status"), "sort_key": "lifecycle_status"},
+         {"label": ""},
+       ],
+       has_rows=result.rows,
+       empty_message=_("No customers yet."),
+       caption=_("Customer organizations"),
+       default_sort="created_at", default_dir="desc"
+     ) %}
+    {% for c in result.rows %}
     <tr>
-      <td>{{ c.legal_name }}</td><td>{{ c.country or "-" }}</td>
-      <td><span class="badge {{ 'active' if c.lifecycle_status == 'ACTIVE' else 'draft' }}">{{ c.lifecycle_status }}</span></td>
-      <td><a href="{{ url_for('customers.detail', customer_id=c.id) }}">View</a></td>
+      <td>{{ c.legal_name }}</td>
+      <td>{{ c.country or "-" }}</td>
+      <td><span class="badge {{ 'active' if c.lifecycle_status == 'ACTIVE' else 'draft' }}">{{ customer_status_label(c.lifecycle_status) }}</span></td>
+      <td><a href="{{ url_for('customers.detail', customer_id=c.id) }}">{{ _("View") }}</a></td>
     </tr>
-    {% else %}<tr><td colspan="4" class="empty">No customers yet.</td></tr>
     {% endfor %}
-  </table>
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
 </div>
 {% endblock %}
