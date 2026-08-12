@@ -88,6 +88,27 @@ data class CreatePatientRequest(
 data class CreatedRow(val id: Int = 0, val patient_code: String? = null)
 data class CreatedResponse(val status: String = "", val message: String? = null, val data: CreatedRow? = null)
 
+// Retail entities moved off autoincrement INTEGER ids to client-generated
+// UUID TEXT ids server-side (multi-device sync foundation, 2026-08-06 --
+// see products/retail/backend/database/schema.py's _migrate_products_to_uuid
+// / _migrate_customers_to_uuid / _migrate_suppliers_to_uuid, all gated behind
+// RETAIL_SCHEMA_VERSION 7). CreatedRow.id: Int is still correct for Clinic's
+// create* endpoints (patient/appointment/invoice/payment/lab-expense keep
+// integer ids), so it can't be widened in place: Gson's GsonConverterFactory
+// throws NumberFormatException trying to read a UUID string into an Int
+// field, which surfaced to the user as a false "Couldn't reach the server"
+// on Add Product -- even though the product had already been committed
+// server-side (product create is commit-then-respond; only parsing the
+// response failed). Root-caused on the physical demo device 2026-08-12,
+// first repro immediately after real license activation succeeded --
+// coincidence of timing, not cause: this was the first product-create
+// attempt against the already-migrated (v7) schema, not a sync/licensing
+// interaction. createCategory/createCustomer/createSupplier return the same
+// UUID-shaped `data.id` and hit the identical failure the first time each is
+// exercised; routed through this same type for all four.
+data class CreatedRowId(val id: String? = null)
+data class CreatedIdResponse(val status: String = "", val message: String? = null, val data: CreatedRowId? = null)
+
 // ── Visits / Appointments / Prescriptions / Invoices ─────────────────────────
 data class Visit(
     val id: Int = 0, val doctor_id: Int? = null, val status: String? = null,
@@ -149,8 +170,14 @@ data class CreateLabExpenseRequest(
 )
 
 // ── Retail (POS) ──────────────────────────────────────────────────────────────
+// id: String, not Int -- products.id is a client-generated UUID TEXT primary
+// key server-side (multi-device sync foundation, RETAIL_SCHEMA_VERSION 7 /
+// _migrate_products_to_uuid). See CreatedIdResponse's doc comment for the
+// full story: this mismatch is what broke "Add Product" (create response)
+// AND the Products list / POS cart / checkout / receipts (every response
+// that carries a product id), first surfaced physically 2026-08-12.
 data class Product(
-    val id: Int = 0, val sku: String? = null, val name: String? = null,
+    val id: String = "", val sku: String? = null, val name: String? = null,
     val sell_price: Double = 0.0, val cost_price: Double = 0.0, val tax_rate: Double = 0.0,
     val total_stock: Double = 0.0, val reorder_level: Int = 0, val unit: String? = null,
     val category_name: String? = null,
@@ -197,7 +224,7 @@ data class StockAdjustResponse(val status: String = "", val new_stock: Double = 
 // added in this migration phase), so it always defaults to 0 here.
 // unit_price/tax_rate/line_total are never sent -- the server always
 // resolves them from the product row, never from the request body.
-data class SaleItemReq(val product_id: Int, val quantity: Double, val discount_pct: Double = 0.0)
+data class SaleItemReq(val product_id: String, val quantity: Double, val discount_pct: Double = 0.0)
 
 // subtotal/discount_amount/tax_amount/total are deliberately NOT fields
 // here (Wave 0: the server computes and ignores any client-submitted
@@ -215,7 +242,7 @@ data class SaleItemReq(val product_id: Int, val quantity: Double, val discount_p
 data class CreateSaleRequest(
     val amount_paid: Double? = null, val payment_method: String = "cash",
     val items: List<SaleItemReq>, val idempotency_key: String,
-    val customer_id: Int? = null, val due_date: String? = null,
+    val customer_id: String? = null, val due_date: String? = null,
 )
 
 // Mirrors the authoritative response contract in
@@ -233,8 +260,10 @@ data class SaleResult(
 data class SaleResponse(val status: String = "", val message: String? = null, val data: SaleResult? = null)
 
 // ── Retail customers + credit (Accounts Receivable) ──────────────────────────
+// id: String -- customers.id is also a UUID TEXT primary key (same
+// migration/rationale as Product.id above; see _migrate_customers_to_uuid).
 data class Customer(
-    val id: Int = 0, val name: String? = null, val phone: String? = null, val email: String? = null,
+    val id: String = "", val name: String? = null, val phone: String? = null, val email: String? = null,
     val credit_mode: String? = "none", val credit_limit: Double = 0.0, val credit_balance: Double = 0.0,
 )
 data class CustomersResponse(val status: String = "", val data: List<Customer> = emptyList())
@@ -272,7 +301,7 @@ data class Sale(
 data class SalesResponse(val status: String = "", val data: List<Sale> = emptyList())
 
 data class SaleLine(
-    val product_id: Int = 0,
+    val product_id: String = "",
     val product_name: String? = null, val sku: String? = null,
     val quantity: Double = 0.0, val unit_price: Double = 0.0, val line_total: Double = 0.0,
 )
@@ -280,8 +309,10 @@ data class SaleDetail(val sale: Sale? = null, val items: List<SaleLine> = emptyL
 data class SaleDetailResponse(val status: String = "", val data: SaleDetail? = null)
 
 // ── Retail: suppliers ────────────────────────────────────────────────────────
+// id: String -- suppliers.id is also a UUID TEXT primary key (same
+// migration/rationale as Product.id above; see _migrate_suppliers_to_uuid).
 data class Supplier(
-    val id: Int = 0, val name: String? = null, val phone: String? = null,
+    val id: String = "", val name: String? = null, val phone: String? = null,
     val email: String? = null, val address: String? = null, val order_count: Int = 0,
     val payment_terms: String? = "none", val credit_balance: Double = 0.0,
 )
@@ -307,8 +338,8 @@ data class PoLine(
 data class PoDetail(val po: PurchaseOrder? = null, val items: List<PoLine> = emptyList())
 data class PoDetailResponse(val status: String = "", val data: PoDetail? = null)
 
-data class PoItemReq(val product_id: Int, val quantity: Double, val unit_cost: Double)
-data class CreatePoRequest(val supplier_id: Int, val notes: String = "", val items: List<PoItemReq>,
+data class PoItemReq(val product_id: String, val quantity: Double, val unit_cost: Double)
+data class CreatePoRequest(val supplier_id: String, val notes: String = "", val items: List<PoItemReq>,
     val amount_paid: Double = 0.0)
 
 // ── Retail: supplier AP, daily cash, settings, payment methods (Phase 3) ─────
@@ -372,7 +403,7 @@ data class ReturnsResponse(val status: String = "", val data: List<Return> = emp
 // from the ORIGINAL sale_items row for that sale+product (Wave 0,
 // AUDIT-004), proportional to the quantity being returned, tax-inclusive.
 // See docs/corrections/wave0/retail-return-correction.md.
-data class ReturnItemReq(val product_id: Int, val quantity: Double)
+data class ReturnItemReq(val product_id: String, val quantity: Double)
 data class CreateReturnRequest(
     val sale_id: Int, val reason: String = "Customer return",
     val refund_method: String = "cash", val items: List<ReturnItemReq>,

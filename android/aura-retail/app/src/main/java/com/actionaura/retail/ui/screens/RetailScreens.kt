@@ -66,7 +66,7 @@ private fun catColor(key: String?): Color {
 
 // A parked POS cart (Hold / Resume). Held in a process-wide singleton so parked
 // sales survive navigating away from POS while the app is running.
-data class HeldSale(val id: Long, val items: Map<Int, Double>, val total: Double, val count: Int)
+data class HeldSale(val id: Long, val items: Map<String, Double>, val total: Double, val count: Int)
 object HeldSales { val list = androidx.compose.runtime.mutableStateListOf<HeldSale>() }
 
 @Composable
@@ -75,7 +75,7 @@ fun PosScreen(snackbar: SnackbarHostState) {
     var loading by remember { mutableStateOf(true) }
     var query by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("All") }
-    val cart = remember { mutableStateMapOf<Int, Double>() } // productId -> qty
+    val cart = remember { mutableStateMapOf<String, Double>() } // productId -> qty
     var showCart by remember { mutableStateOf(false) }
     var charging by remember { mutableStateOf(false) }
     // Wave 1B (Part O): holds the full authoritative SaleResult (not just its

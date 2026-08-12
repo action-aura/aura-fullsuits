@@ -655,7 +655,7 @@ fun ReceivablesScreen(snackbar: SnackbarHostState) {
     var rows by remember { mutableStateOf<List<Customer>>(emptyList()) }
     var total by remember { mutableStateOf(0.0) }
     var loading by remember { mutableStateOf(true) }
-    var stmtId by remember { mutableStateOf<Int?>(null) }
+    var stmtId by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     suspend fun load() {
         val r = try { ApiClient.get().receivables() } catch (e: Exception) { null }
@@ -701,7 +701,7 @@ fun ReceivablesScreen(snackbar: SnackbarHostState) {
 }
 
 @Composable
-private fun StatementSheet(customerId: Int, onDismiss: () -> Unit, onPaid: () -> Unit) {
+private fun StatementSheet(customerId: String, onDismiss: () -> Unit, onPaid: () -> Unit) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     var stmt by remember { mutableStateOf<CustomerStatement?>(null) }
@@ -889,7 +889,7 @@ fun PayablesScreen(snackbar: SnackbarHostState) {
     var rows by remember { mutableStateOf<List<Supplier>>(emptyList()) }
     var total by remember { mutableStateOf(0.0) }
     var loading by remember { mutableStateOf(true) }
-    var stmtId by remember { mutableStateOf<Int?>(null) }
+    var stmtId by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     suspend fun load() {
         val r = try { ApiClient.get().payables() } catch (e: Exception) { null }
@@ -932,7 +932,7 @@ fun PayablesScreen(snackbar: SnackbarHostState) {
 }
 
 @Composable
-private fun SupplierStatementSheet(supplierId: Int, onDismiss: () -> Unit, onPaid: () -> Unit) {
+private fun SupplierStatementSheet(supplierId: String, onDismiss: () -> Unit, onPaid: () -> Unit) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     var stmt by remember { mutableStateOf<SupplierStatement?>(null) }

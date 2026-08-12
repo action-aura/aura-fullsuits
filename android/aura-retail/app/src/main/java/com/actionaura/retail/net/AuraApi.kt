@@ -85,19 +85,24 @@ interface AuraApi {
     suspend fun categories(): CategoriesResponse
 
     @POST("api/sub/retail/categories")
-    suspend fun createCategory(@Body body: CreateCategoryRequest): CreatedResponse
+    suspend fun createCategory(@Body body: CreateCategoryRequest): CreatedIdResponse
 
+    // CreatedIdResponse, not CreatedResponse: CategoriesScreen.kt assigns
+    // `val r = if (...) createCategory(...) else updateCategory(...)`, so
+    // both branches must share a return type -- see CreatedIdResponse's
+    // doc comment in Models.kt for why category/product/customer/supplier
+    // create/update responses can't use the Int-keyed CreatedRow.
     @PUT("api/sub/retail/categories/{id}")
-    suspend fun updateCategory(@Path("id") id: String, @Body body: CreateCategoryRequest): CreatedResponse
+    suspend fun updateCategory(@Path("id") id: String, @Body body: CreateCategoryRequest): CreatedIdResponse
 
     @POST("api/sub/retail/products")
-    suspend fun createProduct(@Body body: CreateProductRequest): CreatedResponse
+    suspend fun createProduct(@Body body: CreateProductRequest): CreatedIdResponse
 
     @PATCH("api/sub/retail/products/{id}")
-    suspend fun updateProduct(@Path("id") id: Int, @Body body: UpdateProductRequest): CreatedResponse
+    suspend fun updateProduct(@Path("id") id: String, @Body body: UpdateProductRequest): CreatedResponse
 
     @POST("api/sub/retail/products/{id}/stock-adjust")
-    suspend fun adjustStock(@Path("id") id: Int, @Body body: AdjustStockRequest): StockAdjustResponse
+    suspend fun adjustStock(@Path("id") id: String, @Body body: AdjustStockRequest): StockAdjustResponse
 
     @POST("api/sub/retail/sales")
     suspend fun createSale(@Body body: CreateSaleRequest): SaleResponse
@@ -107,19 +112,19 @@ interface AuraApi {
     suspend fun customers(@Query("q") q: String? = null): CustomersResponse
 
     @POST("api/sub/retail/customers")
-    suspend fun createCustomer(@Body body: CreateCustomerRequest): CreatedResponse
+    suspend fun createCustomer(@Body body: CreateCustomerRequest): CreatedIdResponse
 
     @PATCH("api/sub/retail/customers/{id}")
-    suspend fun updateCustomerCredit(@Path("id") id: Int, @Body body: UpdateCustomerCreditRequest): CreatedResponse
+    suspend fun updateCustomerCredit(@Path("id") id: String, @Body body: UpdateCustomerCreditRequest): CreatedResponse
 
     @GET("api/sub/retail/customers/receivables")
     suspend fun receivables(): ReceivablesResponse
 
     @GET("api/sub/retail/customers/{id}/statement")
-    suspend fun customerStatement(@Path("id") id: Int): CustomerStatementResponse
+    suspend fun customerStatement(@Path("id") id: String): CustomerStatementResponse
 
     @POST("api/sub/retail/customers/{id}/payments")
-    suspend fun customerPayment(@Path("id") id: Int, @Body body: PaymentRequest): PaymentResultResponse
+    suspend fun customerPayment(@Path("id") id: String, @Body body: PaymentRequest): PaymentResultResponse
 
     @POST("api/sub/retail/payments/{id}/void")
     suspend fun voidPayment(@Path("id") id: Int, @Body body: Map<String, String> = mapOf("reason" to "Voided from app")): CreatedResponse
@@ -136,7 +141,7 @@ interface AuraApi {
     suspend fun suppliers(): SuppliersResponse
 
     @POST("api/sub/retail/suppliers")
-    suspend fun createSupplier(@Body body: CreateSupplierRequest): CreatedResponse
+    suspend fun createSupplier(@Body body: CreateSupplierRequest): CreatedIdResponse
 
     // Purchase orders
     @GET("api/sub/retail/purchase-orders")
@@ -159,10 +164,10 @@ interface AuraApi {
     suspend fun payables(): PayablesResponse
 
     @GET("api/sub/retail/suppliers/{id}/statement")
-    suspend fun supplierStatement(@Path("id") id: Int): SupplierStatementResponse
+    suspend fun supplierStatement(@Path("id") id: String): SupplierStatementResponse
 
     @POST("api/sub/retail/suppliers/{id}/payments")
-    suspend fun supplierPayment(@Path("id") id: Int, @Body body: PaymentRequest): PaymentResultResponse
+    suspend fun supplierPayment(@Path("id") id: String, @Body body: PaymentRequest): PaymentResultResponse
 
     // Daily cash + settings + payment methods
     @GET("api/sub/retail/reports/daily-cash")
