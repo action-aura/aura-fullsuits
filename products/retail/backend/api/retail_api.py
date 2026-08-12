@@ -350,11 +350,12 @@ def create_product():
         pid = str(_uuid.uuid4())
         cur.execute("""
             INSERT INTO products (id,company_id,sku,barcode,name,category_id,supplier_id,cost_price,
-                                  sell_price,tax_rate,unit,reorder_level,status)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'active')
+                                  sell_price,tax_rate,unit,reorder_level,reorder_method,status)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'active')
         """, (pid, cid, data['sku'], data.get('barcode',''), data['name'],
               data.get('category_id'), data.get('supplier_id'), data.get('cost_price',0), data.get('sell_price',0),
-              data.get('tax_rate',0), data.get('unit','pcs'), data.get('reorder_level',5)))
+              data.get('tax_rate',0), data.get('unit','pcs'), data.get('reorder_level',5),
+              data.get('reorder_method','none')))
         # File opening stock under the company's working branch — the SAME branch that
         # sales/returns/adjustments resolve to (via _default_branch), so a sale always
         # decrements the row this created. Self-heals a branch on fresh/standalone installs.
@@ -375,6 +376,10 @@ def create_product():
             'cost_price': data.get('cost_price', 0),
             'sell_price': data.get('sell_price', 0), 'tax_rate': data.get('tax_rate', 0),
             'unit': data.get('unit', 'pcs'), 'reorder_level': data.get('reorder_level', 5),
+            # reorder automation foundation: propagated through the outbox so
+            # a second device's SyncService._apply_event product upsert
+            # picks it up too -- see that function's product branch.
+            'reorder_method': data.get('reorder_method', 'none'),
         })
         conn.commit(); conn.close()
         _emit('ProductCreated', {'product_id': pid})
@@ -391,7 +396,7 @@ def create_product():
 def update_product(pid):
     data = request.json or {}
     cid  = _cid()
-    allowed = ['name','barcode','category_id','supplier_id','cost_price','sell_price','tax_rate','unit','reorder_level','status']
+    allowed = ['name','barcode','category_id','supplier_id','cost_price','sell_price','tax_rate','unit','reorder_level','reorder_method','status']
     fields = {k: v for k, v in data.items() if k in allowed}
     if not fields:
         return jsonify({'status': 'error', 'message': 'No valid fields'}), 400
@@ -410,7 +415,7 @@ def update_product(pid):
     # payload could never carry the restore, so the other device stayed
     # stuck showing the product inactive forever. See sync_service.py's
     # product upsert for the matching apply-side fix.
-    row = conn.execute("SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,reorder_level,status FROM products WHERE id=?", (pid,)).fetchone()
+    row = conn.execute("SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,reorder_level,reorder_method,status FROM products WHERE id=?", (pid,)).fetchone()
     _queue_sync_event(cur, 'product', pid, 'update', dict(row) | {'id': pid})
     conn.commit(); conn.close()
     _sync_nudge()
@@ -1075,6 +1080,174 @@ def preview_po_split():
     result = po_split.group_basket_by_supplier(basket, suppliers=suppliers_by_id, contacts=contacts_by_supplier)
     return jsonify({'status': 'success', 'data': result})
 
+# ── Reorder Requests (feat/reorder-automation-foundation) ───────────────────────
+# Foundation only: schema + the post-sale trigger (core/retail/reorder_hook.py,
+# called from create_sale below) + this accept/decline surface for the Admin
+# Center page (app-shell.js/subsystem-retail.js). The WhatsApp send itself is
+# explicitly deferred -- see database/schema.py's
+# _migrate_add_reorder_automation_foundation docstring.
+
+@retail_bp.route('/reorder-requests', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def list_reorder_requests():
+    """Company-scoped list of PENDING reorder requests, each carrying its
+    product/branch context for the Admin Center page. Read-only, so --
+    matching list_products/list_purchase_orders above -- this route carries
+    no @require_license_capability guard and no is_admin_device check of
+    its own; the admin-only gate is client-side (app-shell.js hides the nav
+    entry unless GET /api/devices/me reports is_admin_device=true). An
+    optional `?branch_id=` filters to one branch; omitted, every branch for
+    this company is returned -- an admin reviewing requests across branches
+    is the normal case this page exists for."""
+    cid = _cid()
+    conn = get_retail_conn()
+    branch_id = request.args.get('branch_id')
+    query = """
+        SELECT r.*, p.name AS product_name, p.sku, p.reorder_level, p.supplier_id,
+               b.name AS branch_name
+        FROM reorder_requests r
+        JOIN products p ON p.id = r.product_id
+        LEFT JOIN branches b ON b.id = r.branch_id
+        WHERE r.company_id=? AND r.status='pending'
+    """
+    params = [cid]
+    if branch_id:
+        query += " AND r.branch_id=?"
+        params.append(branch_id)
+    query += " ORDER BY r.created_at DESC"
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
+
+
+@retail_bp.route('/reorder-requests/<string:rid>/accept', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.reorder.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+def accept_reorder_request(rid):
+    """Accepts a pending reorder request: creates a purchase_order LOCALLY
+    ONLY -- deliberately never queued to sync_outbox. See
+    database/schema.py's _migrate_add_reorder_automation_foundation
+    docstring for exactly why: purchase_orders.id is still INTEGER
+    AUTOINCREMENT, and Owner's relay (owner/app/sync/routes.py) 400-rejects
+    the WHOLE push batch on the first non-UUID entity_id it sees -- syncing
+    this PO would permanently jam every other entity's sync behind it. Only
+    the reorder_requests status change itself is synced below -- that row's
+    id IS a real client-generated UUID, so it safely crosses devices; the PO
+    it spawns stays this device's own local procurement record, exactly
+    like every PO created through the ordinary /purchase-orders route
+    today (which was never synced either -- this doesn't regress anything).
+    """
+    cid = _cid()
+    conn = get_retail_conn()
+    _ensure_credit_schema(conn)
+    try:
+        cur = conn.cursor()
+        req = conn.execute(
+            "SELECT * FROM reorder_requests WHERE id=? AND company_id=?", (rid, cid)
+        ).fetchone()
+        if not req:
+            return jsonify({'status': 'error', 'message': 'Reorder request not found'}), 404
+        if req['status'] != 'pending':
+            return jsonify({'status': 'error', 'message': 'This request was already resolved.'}), 409
+
+        product = conn.execute(
+            "SELECT id, name, supplier_id, cost_price, reorder_level FROM products WHERE id=? AND company_id=?",
+            (req['product_id'], cid),
+        ).fetchone()
+        if not product:
+            return jsonify({'status': 'error', 'message': 'Product no longer exists.'}), 404
+
+        # Phase-1 foundation heuristic (see core/retail/reorder_hook.py's
+        # module docstring): restock exactly back up to reorder_level, never
+        # a demand-based forecast -- refining this is explicitly out of
+        # scope for this foundation wave. Uses products.supplier_id (schema
+        # v5) -- deliberately NOT a new default_supplier_id column, which
+        # would just duplicate that existing, already-synced FK.
+        qty = max(float(product['reorder_level'] or 0), 1)
+        unit_cost = float(product['cost_price'] or 0)
+        total = _money(unit_cost * qty)
+        supplier_id = product['supplier_id']
+        branch_id = req['branch_id'] or _default_branch(conn, cid)
+
+        po_number = _next_ref(conn, cid, 'po')
+        cur.execute("""
+            INSERT INTO purchase_orders (company_id,po_number,supplier_id,branch_id,status,subtotal,total,notes,
+                                         ordered_at,amount_paid,payment_status)
+            VALUES (?,?,?,?,?,?,?,?,?,0,'unpaid')
+        """, (cid, po_number, supplier_id, branch_id, 'pending', total, total,
+              f'Auto-drafted from reorder request {rid}',
+              datetime.now().strftime('%Y-%m-%d')))
+        po_id = cur.lastrowid
+        cur.execute("""
+            INSERT INTO purchase_order_items (po_id,product_id,quantity,unit_cost,total)
+            VALUES (?,?,?,?,?)
+        """, (po_id, product['id'], qty, unit_cost, total))
+        # Deliberately NOT _queue_sync_event(...) for this PO -- see this
+        # route's own docstring above.
+
+        now = datetime.now(timezone.utc).isoformat()
+        cur.execute(
+            "UPDATE reorder_requests SET status='accepted', resolved_at=? WHERE id=?",
+            (now, rid),
+        )
+        _queue_sync_event(cur, 'reorder_request', rid, 'update', {
+            'id': rid, 'branch_id': req['branch_id'], 'product_id': req['product_id'],
+            'status': 'accepted', 'draft_message': req['draft_message'], 'resolved_at': now,
+        })
+        _audit(conn, 'REORDER_REQUEST_ACCEPTED', 'reorder_request', rid,
+               f'PO {po_number} drafted for product {product["name"]}')
+        _audit(conn, 'PO_CREATED', 'purchase_order', po_id, po_number)
+        conn.commit()
+        _sync_nudge()
+        return jsonify({'status': 'success', 'data': {'purchase_order_id': po_id, 'po_number': po_number}})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@retail_bp.route('/reorder-requests/<string:rid>/decline', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.reorder.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+def decline_reorder_request(rid):
+    """Declines a pending reorder request -- marks it declined and queues
+    the sync event. Creates nothing else; unlike accept, there is no
+    purchase_order to (deliberately not) sync here."""
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        cur = conn.cursor()
+        req = conn.execute(
+            "SELECT * FROM reorder_requests WHERE id=? AND company_id=?", (rid, cid)
+        ).fetchone()
+        if not req:
+            return jsonify({'status': 'error', 'message': 'Reorder request not found'}), 404
+        if req['status'] != 'pending':
+            return jsonify({'status': 'error', 'message': 'This request was already resolved.'}), 409
+
+        now = datetime.now(timezone.utc).isoformat()
+        cur.execute(
+            "UPDATE reorder_requests SET status='declined', resolved_at=? WHERE id=?",
+            (now, rid),
+        )
+        _queue_sync_event(cur, 'reorder_request', rid, 'update', {
+            'id': rid, 'branch_id': req['branch_id'], 'product_id': req['product_id'],
+            'status': 'declined', 'draft_message': req['draft_message'], 'resolved_at': now,
+        })
+        _audit(conn, 'REORDER_REQUEST_DECLINED', 'reorder_request', rid)
+        conn.commit()
+        _sync_nudge()
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        conn.close()
+
 # ── POS / Sales ───────────────────────────────────────────────────────────────
 
 @retail_bp.route('/sales', methods=['POST'])
@@ -1303,6 +1476,27 @@ def create_sale():
         except Exception as e:
             import logging
             logging.getLogger('aura.retail').warning('e-invoice enqueue skipped: %s', type(e).__name__)
+
+        # feat/reorder-automation-foundation -- same "never touch the sale"
+        # contract as the e-invoicing block just above: its own connection
+        # (core/retail/reorder_hook.maybe_trigger_reorder), broad try/except,
+        # log-only on failure. Unlike e-invoicing, this NEVER adds a key to
+        # response_data -- reorder automation is invisible to the checkout
+        # API's contract by design (see
+        # retail_reorder_hook_regression_test.py, which asserts the response
+        # is byte-for-byte identical whether this hook succeeds, no-ops, or
+        # raises). Checks every DISTINCT product sold, not just one line --
+        # a multi-item sale can drop several products below their own
+        # reorder_level at once.
+        try:
+            from database.schema import get_retail_conn as _get_retail_conn_for_reorder
+            from core.retail.reorder_hook import maybe_trigger_reorder as _maybe_trigger_reorder
+            distinct_product_ids = list({line['product_id'] for line in resolved_lines})
+            _maybe_trigger_reorder(_get_retail_conn_for_reorder, company_id=cid, branch_id=bid,
+                                    product_ids=distinct_product_ids)
+        except Exception as e:
+            import logging
+            logging.getLogger('aura.retail').warning('reorder hook skipped: %s', type(e).__name__)
 
         return jsonify({'status': 'success', 'data': response_data})
     except Exception as e:

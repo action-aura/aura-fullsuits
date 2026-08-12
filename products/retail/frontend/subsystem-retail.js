@@ -74,6 +74,7 @@ const RetailSystem = {
       case 'returns':   return this._renderReturns(c);
       case 'reports':   return this._renderReports(c);
       case 'scanner':   return this._renderScannerSettings(c);
+      case 'admin-center': return this._renderAdminCenter(c);
       default:
         c.innerHTML = `<div style="text-align:center;padding:80px;color:var(--text-muted)"><h2>${sectionId}</h2><p>Coming soon.</p></div>`;
     }
@@ -2191,6 +2192,93 @@ const RetailSystem = {
       document.body.appendChild(overlay);
       overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
     } catch(e) {}
+  },
+
+  // ── ADMIN CENTER (feat/reorder-automation-foundation) ───────────────────────
+  // Gated at the nav level (app-shell.js's adminOnly filter, resolved once
+  // via GET /api/devices/me at shell init) -- this render function itself
+  // assumes it was only ever reached through that gate, same as e.g.
+  // _renderScannerSettings assumes desktopOnly already filtered Android.
+  // Foundation scope: only the low-stock reorder request queue exists so
+  // far. Future admin-only surfaces land as additional cards on this same
+  // page rather than new top-level nav entries.
+  async _renderAdminCenter(c) {
+    this._injectStyles();
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <h2 class="ret-title">${t('Admin Center')}</h2>
+      </div>
+      <div class="sub-chart-card">
+        <h3 style="color:#fff;margin:0 0 14px;font-size:15px">${t('Low-Stock Reorder Requests')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
+          ${t('Automatically drafted when a sale drops a product at or below its reorder level. Accept drafts a local purchase order for this device; Decline dismisses it.')}
+        </p>
+        <div style="overflow-x:auto">
+          <table class="ret-table" id="reorder-req-table">
+            <thead><tr><th>${t('Product')}</th><th>${t('Branch')}</th><th>${t('Note')}</th><th>${t('Requested')}</th><th>${t('Actions')}</th></tr></thead>
+            <tbody><tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
+          </table>
+        </div>
+      </div>`;
+    await this._loadReorderRequests();
+  },
+
+  async _loadReorderRequests() {
+    try {
+      const data = (await this._get('/api/sub/retail/reorder-requests')).data || [];
+      this._reorderRequests = data;
+      const tbody = document.querySelector('#reorder-req-table tbody');
+      if (!tbody) return;
+      if (!data.length) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:30px">${t('No pending reorder requests.')}</td></tr>`;
+        return;
+      }
+      // Every interpolated value is escaped (see this._esc) -- reorder
+      // request ids/product names can arrive from ANOTHER DEVICE over the
+      // sync relay, same trust boundary as Category/Supplier rows.
+      tbody.innerHTML = data.map(r => `<tr>
+        <td style="font-weight:600">${this._esc(r.product_name)}<div style="font-size:11px;color:var(--text-muted)">${this._esc(r.sku||'')}</div></td>
+        <td>${r.branch_name ? this._esc(r.branch_name) : '—'}</td>
+        <td style="color:var(--text-muted);max-width:320px">${this._esc(r.draft_message||'')}</td>
+        <td style="color:var(--text-muted)">${r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</td>
+        <td>
+          <button class="ret-btn ret-btn-primary ret-btn-sm" onclick="RetailSystem._acceptReorderRequest('${this._esc(r.id)}')">${t('Accept')}</button>
+          <button class="ret-btn ret-btn-ghost ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._declineReorderRequest('${this._esc(r.id)}')">${t('Decline')}</button>
+        </td>
+      </tr>`).join('');
+    } catch(e) { console.error(e); }
+  },
+
+  async _acceptReorderRequest(rid) {
+    if (!confirm(t('Accept this request and draft a local purchase order?'))) return;
+    try {
+      const d = await this._post(`/api/sub/retail/reorder-requests/${rid}/accept`, {});
+      if (d && d.status === 'success') {
+        SubsystemApp.showToast(d.data && d.data.po_number ? `${t('Purchase order drafted')}: ${d.data.po_number}` : t('Request accepted'), 'success');
+      } else {
+        SubsystemApp.showToast((d && d.message) || t('Could not accept this request.'), 'error');
+      }
+      this._loadReorderRequests();
+    } catch(e) {
+      console.error('Reorder request accept failed', e);
+      SubsystemApp.showToast(t('Could not accept this request.'), 'error');
+    }
+  },
+
+  async _declineReorderRequest(rid) {
+    if (!confirm(t('Decline this reorder request?'))) return;
+    try {
+      const d = await this._post(`/api/sub/retail/reorder-requests/${rid}/decline`, {});
+      if (d && d.status === 'success') {
+        SubsystemApp.showToast(t('Request declined'), 'success');
+      } else {
+        SubsystemApp.showToast((d && d.message) || t('Could not decline this request.'), 'error');
+      }
+      this._loadReorderRequests();
+    } catch(e) {
+      console.error('Reorder request decline failed', e);
+      SubsystemApp.showToast(t('Could not decline this request.'), 'error');
+    }
   },
 
   // ── RETURNS ───────────────────────────────────────────────────────────────

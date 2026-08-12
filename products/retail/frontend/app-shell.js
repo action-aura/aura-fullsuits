@@ -251,6 +251,13 @@ const SubsystemApp = {
         { id: 'returns',    label: 'Returns',           icon: '↩️' },
         { id: 'reports',    label: 'Reports',           icon: '📊' },
         { id: 'scanner',    label: 'Barcode Scanner',   icon: '🔦', desktopOnly: true },
+        // feat/reorder-automation-foundation: gated on this.isAdminDevice
+        // (resolved once at init() via GET /api/devices/me -- see that
+        // method), same adminOnly mechanism the _renderShell nav filter
+        // below applies to every entry with this flag. Hidden entirely
+        // (not just disabled) on any device that isn't this company's
+        // single admin device, fail-closed if the check couldn't run.
+        { id: 'admin-center', label: 'Admin Center',    icon: '🛡️', adminOnly: true },
       ]
     },
   },
@@ -260,6 +267,13 @@ const SubsystemApp = {
     this._installAuthGuard();
     ThemeEngine.init();
     KPIDragManager.init();
+    // feat/reorder-automation-foundation: fail-closed default -- the
+    // Admin Center nav entry (adminOnly: true, see `systems.retail.nav`
+    // below) stays hidden unless GET /api/devices/me is reached AND
+    // explicitly reports is_admin_device=true. Set BEFORE the auth gate
+    // below so any early return (setup/relogin modal) still leaves this
+    // defined and hidden, never undefined.
+    this.isAdminDevice = false;
   // ── Auth gate ─────────────────────────────────────────────────────────────
   // Before rendering anything, check if the user is authenticated.
   // On first launch (no admin exists) → show account setup.
@@ -291,6 +305,21 @@ const SubsystemApp = {
         this.currentUser = sess.user || {};
         this.role        = (sess.user && sess.user.role) || '';
         this.clinicRole  = (sess.user && sess.user.clinic_role) || '';
+        // feat/reorder-automation-foundation: resolved once, here, BEFORE
+        // _renderShell ever builds the nav list -- mirrors the desktopOnly
+        // gate's own mechanism (a plain boolean flag on `this`, read by the
+        // nav filter in _renderShell), except desktopOnly is derived
+        // synchronously from navigator.userAgent while this needs one
+        // network round-trip first. Any failure (network error, non-200,
+        // missing field) leaves isAdminDevice at its fail-closed default
+        // (false) set above -- never assumed true.
+        try {
+          const dev = await fetch('/api/devices/me', { credentials: 'include', cache: 'no-store' })
+            .then(r => r.ok ? r.json() : { success: false });
+          this.isAdminDevice = !!(dev && dev.success && dev.device && dev.device.is_admin_device === true);
+        } catch (e) {
+          this.isAdminDevice = false;
+        }
       } catch(e) {
         // Can't reach server — proceed and let individual API calls handle 401s
       }
@@ -597,7 +626,7 @@ const SubsystemApp = {
         </div>
 
         <nav class="sub-nav" id="sub-nav">
-          ${sys.nav.filter(item => (!item.roles || this.canClinic(...item.roles)) && (!item.desktopOnly || !/Android/i.test(navigator.userAgent || ''))).map(item => `
+          ${sys.nav.filter(item => (!item.roles || this.canClinic(...item.roles)) && (!item.desktopOnly || !/Android/i.test(navigator.userAgent || '')) && (!item.adminOnly || this.isAdminDevice)).map(item => `
             <a class="sub-nav-item ${item.id === 'dashboard' ? 'active' : ''}"
                data-section="${item.id}"
                onclick="SubsystemApp._navigate('${item.id}')">

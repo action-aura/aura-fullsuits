@@ -82,7 +82,17 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # ensure_schema_version returns early on current >= target, so a database
 # already at 6 from this lineage would NEVER receive the einvoice_* tables
 # if this stayed at 6.
-RETAIL_SCHEMA_VERSION = 7
+# v8 (reorder automation foundation, feat/reorder-automation-foundation):
+# adds products.reorder_method (TEXT DEFAULT 'none' -- per-product opt-in;
+# an install that never sets this on any product gets zero behavior change)
+# and the reorder_requests table (client-generated UUID id, same convention
+# as every other sync-eligible entity since the multi-device sync
+# foundation -- never autoincrement, so this table CAN be synced through
+# Owner's relay, unlike purchase_orders; see
+# _migrate_add_reorder_automation_foundation below for the full reasoning).
+# Pure additive migration -- ADD COLUMN + CREATE TABLE only, same shape as
+# v5/v6, so no _new-table rebuild is needed here either.
+RETAIL_SCHEMA_VERSION = 8
 
 
 def _get_path(name):
@@ -785,6 +795,11 @@ def _migrate_retail_schema(conn):
     # the identical call.
     from commercial_runtime.einvoicing.schema import apply_einvoicing_schema
     apply_einvoicing_schema(conn)
+    # v7 -> v8 (reorder automation foundation): appended LAST, after every
+    # migration above (including einvoicing), for the identical reason
+    # einvoicing itself is appended last -- see this function's own
+    # docstring and the RETAIL_SCHEMA_VERSION v8 comment above.
+    _migrate_add_reorder_automation_foundation(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -902,6 +917,96 @@ def _migrate_add_supplier_contacts_and_po_split(conn):
         sup_cols = {row[1] for row in conn.execute('PRAGMA table_info(suppliers)').fetchall()}
         if 'min_order_value' not in sup_cols:
             conn.execute('ALTER TABLE suppliers ADD COLUMN min_order_value REAL DEFAULT 0')
+
+
+def _migrate_add_reorder_automation_foundation(conn):
+    """One-time migration (schema v7 -> v8): reorder automation foundation
+    (feat/reorder-automation-foundation) -- the SAFE subset of a proposed
+    "low-stock auto-reorder via WhatsApp" feature: schema + the post-sale
+    trigger + an Admin Center accept/decline page. The WhatsApp send itself
+    is explicitly deferred (out of scope for this migration and everything
+    it enables).
+
+    Two independent additive pieces, each guarded by its own idempotency
+    check (mirrors _migrate_add_supplier_contacts_and_po_split immediately
+    above -- brand-new nullable column / IF NOT EXISTS table, so no
+    DROP+RENAME rebuild is needed here either):
+
+    1. `products.reorder_method` -- per-product opt-in ('none' by default,
+       so an install that never touches this column gets zero behavior
+       change from the post-sale hook that reads it). Deliberately reuses
+       the EXISTING `products.supplier_id` column (schema v5) for "which
+       supplier to draft the reorder against" rather than adding a new
+       `default_supplier_id` -- that would have been a redundant column
+       duplicating data v5 already carries.
+
+    2. `reorder_requests` -- one row per auto-detected low-stock event
+       needing human accept/decline. `id` is a client-generated UUID, NOT
+       autoincrement -- deliberately, so this table CAN be relayed through
+       Owner's sync (commercial_runtime/sync/sync_service.py's
+       `_apply_event` gains a matching `reorder_request` branch). This is
+       the opposite choice from `purchase_orders` (still
+       INTEGER PRIMARY KEY AUTOINCREMENT): Owner's relay
+       (owner/app/sync/routes.py) requires `entity_id` to parse as a UUID
+       and 400-rejects the WHOLE PUSH BATCH on the first entity_id that
+       doesn't -- syncing purchase_orders directly would permanently jam
+       every other entity's sync behind one malformed event the instant a
+       PO existed. reorder_requests never has that problem because it was
+       never given an autoincrement id in the first place. The PO an Accept
+       action creates, by contrast, IS a real purchase_orders row and is
+       therefore deliberately never queued to sync_outbox at all -- see
+       api/retail_api.py's accept route.
+
+       `status` is 'pending' | 'accepted' | 'declined'. The partial unique
+       index below (idx_reorder_requests_open) enforces the idempotency
+       invariant the post-sale hook relies on -- at most one OPEN
+       ('pending' or 'accepted') request per (company_id, product_id) at a
+       time -- as a real database constraint, not just an application-level
+       check, mirroring purchase_orders.idempotency_key's partial-unique-
+       index treatment (_migrate_add_supplier_contacts_and_po_split above).
+       A 'declined' request does NOT hold this slot open, so a later sale
+       dropping the same product below its reorder_level again is free to
+       open a new request.
+
+    Idempotent: the ALTER COLUMN is preceded by a PRAGMA table_info check,
+    the CREATE TABLE/INDEX statements already use IF NOT EXISTS, so a
+    second call (or a fresh install migrating 0 -> 8 in one pass, same as
+    every step above) is a clean no-op.
+    """
+    cols = {row[1] for row in conn.execute('PRAGMA table_info(products)').fetchall()}
+    if 'reorder_method' not in cols:
+        conn.execute("ALTER TABLE products ADD COLUMN reorder_method TEXT DEFAULT 'none'")
+
+    existing_tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if 'reorder_requests' not in existing_tables:
+        conn.execute("""
+            CREATE TABLE reorder_requests (
+                id TEXT PRIMARY KEY,
+                company_id TEXT,
+                branch_id INTEGER,
+                product_id TEXT NOT NULL REFERENCES products(id),
+                status TEXT NOT NULL DEFAULT 'pending',
+                draft_message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                resolved_at TEXT
+            )
+        """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_reorder_requests_company "
+        "ON reorder_requests(company_id, status)"
+    )
+    # Idempotency guard for the post-sale hook (retail_api.py::create_sale
+    # via core/retail/reorder_hook.py): at most one pending OR accepted
+    # request per product at a time. Declined rows are exempt (status not
+    # in the predicate), same NULL/exempt-row shape as idx_po_idempotency.
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_reorder_requests_open "
+        "ON reorder_requests(company_id, product_id) WHERE status IN ('pending','accepted')"
+    )
 
 
 def init_retail():
