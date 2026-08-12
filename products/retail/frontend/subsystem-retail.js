@@ -2616,12 +2616,15 @@ const RetailSystem = {
   // ── REPORTS ───────────────────────────────────────────────────────────────
   async _renderReports(c) {
     this._injectStyles();
-    const days = 14;
     c.innerHTML = `
       <div class="ret-hdr">
         <h2 class="ret-title">Analytics & Reports</h2>
         <div style="display:flex;gap:8px;align-items:center">
-          <select id="rep-days" onchange="RetailSystem._loadReports(+this.value)"
+          <select id="rep-branch" onchange="RetailSystem._loadReports()"
+            style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;padding:8px 12px;outline:none">
+            <option value="">All branches</option>
+          </select>
+          <select id="rep-days" onchange="RetailSystem._loadReports()"
             style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;padding:8px 12px;outline:none">
             <option value="7">Last 7 days</option>
             <option value="14" selected>Last 14 days</option>
@@ -2630,12 +2633,20 @@ const RetailSystem = {
           </select>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:16px;margin-bottom:20px" id="rep-kpis">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:16px;margin-bottom:8px" id="rep-kpis">
         <div class="ret-kpi"><div class="ret-kpi-label">Revenue</div><div class="ret-kpi-value" id="rep-rev">—</div></div>
         <div class="ret-kpi"><div class="ret-kpi-label">Transactions</div><div class="ret-kpi-value" id="rep-txn">—</div></div>
         <div class="ret-kpi"><div class="ret-kpi-label">Gross Profit</div><div class="ret-kpi-value" id="rep-profit" style="color:#10b981">—</div></div>
         <div class="ret-kpi"><div class="ret-kpi-label">Avg Ticket</div><div class="ret-kpi-value" id="rep-avg">—</div></div>
       </div>
+      <!-- Only sales-trend/top-products are branch_id-filterable server-side today
+           (see report_sales_trend/report_top_products in retail_api.py) -- the KPI
+           tiles above and Payment Methods chart below stay company-wide on purpose,
+           so this note only appears once a specific branch is picked, instead of
+           silently showing numbers that look branch-scoped but aren't. -->
+      <p id="rep-branch-note" style="display:none;color:var(--text-muted);font-size:12px;margin:0 0 16px">
+        Branch filter applies to Revenue Trend and Top Selling Products only — KPI totals and Payment Methods remain company-wide.
+      </p>
       <div style="display:grid;grid-template-columns:2fr 1fr;gap:20px;margin-bottom:20px">
         <div class="sub-chart-card">
           <div class="sub-chart-title" style="margin-bottom:14px">Daily Revenue Trend</div>
@@ -2646,21 +2657,58 @@ const RetailSystem = {
           <div style="height:260px"><canvas id="rep-pay"></canvas></div>
         </div>
       </div>
-      <div class="sub-chart-card">
-        <div class="sub-chart-title" style="margin-bottom:14px">Top Selling Products</div>
-        <div style="height:260px"><canvas id="rep-top"></canvas></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+        <div class="sub-chart-card">
+          <div class="sub-chart-title" style="margin-bottom:14px">Top Selling Products</div>
+          <div style="height:260px"><canvas id="rep-top"></canvas></div>
+        </div>
+        <div class="sub-chart-card">
+          <div class="sub-chart-title" style="margin-bottom:14px">Revenue by Branch</div>
+          <div style="height:260px"><canvas id="rep-branch-chart"></canvas></div>
+        </div>
       </div>`;
 
-    await this._loadReports(days);
+    await this._loadBranchFilterOptions();
+    await this._loadReports();
   },
 
-  async _loadReports(days) {
+  // Populates the #rep-branch dropdown from GET /branches (already used
+  // elsewhere for PO/reorder branch context). "All branches" is always the
+  // first option and stays selected by default -- nothing here changes what
+  // _loadReports() sends until a user explicitly picks a branch.
+  async _loadBranchFilterOptions() {
     try {
-      const [trend, top, pay, summary] = await Promise.all([
-        this._get(`/api/sub/retail/reports/sales-trend?days=${days}`),
-        this._get(`/api/sub/retail/reports/top-products?limit=8`),
+      const branches = (await this._get('/api/sub/retail/branches')).data || [];
+      this._branches = branches;
+      const sel = document.getElementById('rep-branch');
+      if (!sel) return;
+      sel.innerHTML = '<option value="">All branches</option>' +
+        branches.map(b => `<option value="${this._esc(b.id)}">${this._esc(b.name)}</option>`).join('');
+    } catch(e) { console.error('Failed to load branches for report filter', e); }
+  },
+
+  async _loadReports() {
+    const daysEl   = document.getElementById('rep-days');
+    const branchEl = document.getElementById('rep-branch');
+    const days     = daysEl ? +daysEl.value : 14;
+    const branchId = branchEl ? branchEl.value : '';
+    const note = document.getElementById('rep-branch-note');
+    if (note) note.style.display = branchId ? 'block' : 'none';
+
+    try {
+      // branchQS is appended only to the two routes that actually honor
+      // branch_id server-side (sales-trend, top-products). Sending it to
+      // payment-methods/summary would be silently ignored anyway (they
+      // don't read the param), so it's left off there rather than implying
+      // a filter that doesn't apply. by-branch never takes branch_id at all
+      // -- it IS the all-branches comparison, by design.
+      const branchQS = branchId ? `&branch_id=${encodeURIComponent(branchId)}` : '';
+      const [trend, top, pay, summary, byBranch] = await Promise.all([
+        this._get(`/api/sub/retail/reports/sales-trend?days=${days}${branchQS}`),
+        this._get(`/api/sub/retail/reports/top-products?limit=8${branchQS}`),
         this._get(`/api/sub/retail/reports/payment-methods?days=${days}`),
         this._get(`/api/sub/retail/reports/summary?days=${days}`),
+        this._get(`/api/sub/retail/reports/by-branch?days=${days}`),
       ]);
 
       const s = summary.data || {};
@@ -2701,6 +2749,17 @@ const RetailSystem = {
               plugins:{ legend:{labels:{color:'#94a3b8'}} },
               scales:{ y:{ticks:{color:'#94a3b8'},grid:{color:'rgba(255,255,255,0.05)'}},
                 x:{ticks:{color:'#94a3b8',maxRotation:30},grid:{display:false}} } }
+          }],
+          ['rep-branch-chart', { type:'bar',
+            data:{ labels:byBranch.labels||[], datasets:[
+              { label:'Revenue', data:byBranch.data||[], backgroundColor:'#38bdf8' },
+              { label:'Transactions', data:byBranch.transactions||[], backgroundColor:'#a855f7', yAxisID:'y1' }
+            ]},
+            opts:{ responsive:true, maintainAspectRatio:false,
+              plugins:{ legend:{labels:{color:'#94a3b8'}} },
+              scales:{ y:{ticks:{color:'#94a3b8',callback:v=>'$'+v},grid:{color:'rgba(255,255,255,0.05)'}},
+                y1:{position:'right',ticks:{color:'#a855f7'},grid:{display:false}},
+                x:{ticks:{color:'#94a3b8'},grid:{display:false}} } }
           }],
         ];
         chartDefs.forEach(([id, cfg]) => {
