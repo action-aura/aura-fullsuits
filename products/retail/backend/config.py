@@ -177,17 +177,18 @@ SYNC_RELAY_URL_PROBLEMS = validate_sync_relay_url(SYNC_RELAY_BASE_URL)
 # ── AI Assistant (Retail sidebar chat) ──────────────────────────────────────
 # Proxies the sidebar "AI Assistant" button (see app-shell.js's `hasAI` /
 # `sub-ai.js`'s SubAI module) to a small hosted LLM (phi3:mini behind an
-# Ollama-compatible /api/generate endpoint). Unlike OWNER_LICENSING_BASE_URL
-# and SYNC_RELAY_BASE_URL above, this one does NOT default to empty: those
-# two gate optional infrastructure that must be inert until an operator
-# explicitly configures a real Owner/relay instance, whereas this is a single
-# already-provisioned demo endpoint that the feature is meaningless without
-# -- defaulting it on is what makes the button work out of the box instead of
-# shipping another "looks wired, does nothing" control. Override both via env
-# vars for any deployment other than this demo branch (see .env.example).
-# The token is read here, server-side, only -- retail_api.py's
-# /api/sub/retail/ai/chat route is the one place it is used, and it is never
-# sent to the browser.
+# Ollama-compatible /api/generate endpoint). The URL defaults to the
+# demo droplet since it's not secret and the feature is meaningless without
+# it -- defaulting it on is what makes the button work out of the box instead
+# of shipping another "looks wired, does nothing" control. The bearer token
+# is a real credential and must NEVER have a hardcoded default (2026-08-12:
+# an earlier version of this file did exactly that and got a live token
+# committed to git history -- the token was rotated immediately after
+# discovery, but the lesson stands). An unset token here means the /ai/chat
+# route's request to the droplet gets a 401, which the route already treats
+# as "AI assistant is temporarily unavailable" -- fails closed and gracefully,
+# never a crash. Set AURA_AI_BEARER_TOKEN in the environment (see
+# .env.example) to actually enable the feature.
 AURA_AI_ENDPOINT_URL = os.environ.get('AURA_AI_ENDPOINT_URL', 'https://104-248-35-215.sslip.io/api/generate')
-AURA_AI_BEARER_TOKEN = os.environ.get('AURA_AI_BEARER_TOKEN', '10b5738f2cc2c5c5915c2ae76251780b24a5c20c4fa94bc1d35836786ad22b82')
+AURA_AI_BEARER_TOKEN = os.environ.get('AURA_AI_BEARER_TOKEN', '')
 AURA_AI_TIMEOUT_SECONDS = float(os.environ.get('AURA_AI_TIMEOUT_SECONDS', '15'))
