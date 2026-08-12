@@ -93,16 +93,19 @@ def test_schema_version_is_v6_and_products_fk_declares_on_delete_set_null():
     # supplier foundation (database/schema.py's
     # _migrate_add_supplier_contacts_and_po_split) bumped it again to v6, and
     # merging master's einvoicing work (feat/retail-mobile-build-baseline,
-    # 2026-08-10) bumped it once more to v7, and the reorder automation
+    # 2026-08-10) bumped it once more to v7, the reorder automation
     # foundation (feat/reorder-automation-foundation, database/schema.py's
-    # _migrate_add_reorder_automation_foundation) bumped it once more to v8
-    # -- see RETAIL_SCHEMA_VERSION's own comment for why that bump is
-    # load-bearing, not cosmetic. The FK-on-delete-set-null assertion this
-    # test exists for is unaffected by any of these later changes.
-    assert retail_schema.RETAIL_SCHEMA_VERSION == 8
+    # _migrate_add_reorder_automation_foundation) bumped it once more to v8,
+    # and the email outbox foundation (feat/email-outbox-foundation,
+    # database/schema.py's _migrate_add_notifications_foundation) bumped it
+    # once more to v9 -- see RETAIL_SCHEMA_VERSION's own comment for why
+    # that bump is load-bearing, not cosmetic. The FK-on-delete-set-null
+    # assertion this test exists for is unaffected by any of these later
+    # changes.
+    assert retail_schema.RETAIL_SCHEMA_VERSION == 9
     conn = retail_schema.get_retail_conn()
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
         assert retail_schema._products_category_fk_is_set_null(conn) is True
     finally:
         conn.close()

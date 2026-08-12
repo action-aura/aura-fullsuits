@@ -18,6 +18,8 @@ from commercial_runtime.identity.mt_auth import mt_login_required, mt_require_su
 from commercial_runtime.licensing_contracts.flask_guard import make_capability_guard
 from commercial_runtime.sync.sync_service import nudge as _sync_nudge
 from commercial_runtime.sync.sync_service import get_active_health as _sync_get_active_health
+from commercial_runtime.notifications import settings as _notification_settings
+from commercial_runtime.notifications.outbox import EmailOutboxRepository as _EmailOutboxRepository
 from database.schema import get_retail_conn, sub_create
 from datetime import datetime, timedelta, timezone
 from core.retail import pricing as tax_engine
@@ -1774,13 +1776,13 @@ def report_payment_methods():
     conn.close()
     return jsonify({'success': True, 'data': [dict(r) for r in rows]})
 
-@retail_bp.route('/reports/summary', methods=['GET'])
-@mt_login_required
-@mt_require_subsystem('retail')
-def report_summary():
-    cid   = _cid()
-    days  = int(request.args.get('days', 30))
-    conn  = get_retail_conn()
+def _compute_report_summary(conn, cid, days):
+    """Extracted from report_summary() (feat/email-outbox-foundation) so
+    the existing GET route and the new POST /reports/email route below
+    share ONE implementation of this query set -- never two copies to keep
+    in sync. Does not close `conn` -- same convention as every other
+    helper in this file that takes a connection instead of opening its
+    own (_settings, _record_payment, ...)."""
     period_start = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
     prev_start   = (datetime.now() - timedelta(days=days*2)).strftime('%Y-%m-%d')
 
@@ -1800,13 +1802,12 @@ def report_summary():
         FROM inventory_balances b JOIN products p ON b.product_id=p.id
         WHERE b.company_id=? AND p.status='active'
     """, cid)
-    conn.close()
 
     gross_profit = cur_rev - cur_cost
     margin_pct   = round(gross_profit / cur_rev * 100, 1) if cur_rev > 0 else 0
     rev_change   = round((cur_rev - prev_rev) / prev_rev * 100, 1) if prev_rev > 0 else 0
 
-    return jsonify({'success': True, 'data': {
+    return {
         'period_days':    days,
         'revenue':        round(cur_rev, 2),
         'prev_revenue':   round(prev_rev, 2),
@@ -1817,7 +1818,75 @@ def report_summary():
         'gross_profit':   round(gross_profit, 2),
         'margin_pct':     margin_pct,
         'inventory_value': round(inv_value, 2),
-    }})
+    }
+
+@retail_bp.route('/reports/summary', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def report_summary():
+    cid  = _cid()
+    days = int(request.args.get('days', 30))
+    conn = get_retail_conn()
+    data = _compute_report_summary(conn, cid, days)
+    conn.close()
+    return jsonify({'success': True, 'data': data})
+
+def _render_report_email_body(data):
+    """Plain-text only, no templating engine (matches this whole feature's
+    "no templating engine dependency" scope, same restraint
+    smtp_client.py's own docstring names for the transport layer)."""
+    lines = [
+        f"Aura Retail -- {data['period_days']}-day summary report",
+        "",
+        f"Revenue: {data['revenue']:.2f} ({data['revenue_change']:+.1f}% vs prior period)",
+        f"Transactions: {data['transactions']}",
+        f"Average ticket: {data['avg_ticket']:.2f}",
+        f"COGS: {data['cogs']:.2f}",
+        f"Gross profit: {data['gross_profit']:.2f}",
+        f"Margin: {data['margin_pct']:.1f}%",
+        f"Current inventory value: {data['inventory_value']:.2f}",
+    ]
+    return '\n'.join(lines)
+
+# docs/einvoicing/phase1/'s outbox pattern, mirrored for this new trigger
+# (feat/email-outbox-foundation, CLAUDE.md's "New async/external-facing
+# features... should follow the e-invoicing outbox pattern" convention):
+# ALWAYS queued via EmailOutboxRepository, never sent inline/synchronously
+# from this request -- "could be asked when the person wants" (the user's
+# own framing) means on-demand at request time, not scheduled, but it is
+# still the background worker (commercial_runtime/notifications/worker.py)
+# that actually talks to SMTP, exactly like a sale's e-invoice is enqueued
+# here and submitted later by OutboxWorker.
+@retail_bp.route('/reports/email', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.report.email", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+def report_summary_email():
+    cid  = _cid()
+    data_in = request.json or {}
+    days = int(data_in.get('days', 30))
+    conn = get_retail_conn()
+    try:
+        recipient = (data_in.get('recipient') or '').strip()
+        if not recipient:
+            recipient = _notification_settings.recipient_for(conn, cid, 'reports_recipient') or ''
+        if not recipient:
+            return jsonify({'status': 'error',
+                             'message': 'No recipient provided and no default reports_recipient configured'}), 400
+        if not _notification_settings.is_enabled(conn, cid):
+            return jsonify({'status': 'error',
+                             'message': 'Email notifications are not enabled for this company'}), 409
+
+        summary = _compute_report_summary(conn, cid, days)
+        row_id = _EmailOutboxRepository(conn).enqueue(
+            company_id=cid, email_type='report_summary', recipient=recipient,
+            subject=f"Aura Retail -- {days}-day summary report",
+            body_text=_render_report_email_body(summary),
+        )
+        conn.commit()
+        return jsonify({'status': 'success', 'data': {'queued': row_id is not None, 'recipient': recipient}})
+    finally:
+        conn.close()
 
 # ── Branches ──────────────────────────────────────────────────────────────────
 

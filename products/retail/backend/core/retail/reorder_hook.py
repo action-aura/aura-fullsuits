@@ -34,12 +34,28 @@ heuristic is explicitly out of scope for this foundation wave; the
 WhatsApp-facing quantity/urgency messaging this eventually feeds is
 deferred entirely (see the migration's own docstring in database/schema.py
 and ROADMAP.md).
+
+feat/email-outbox-foundation (2026-08-12): the SAME event that opens a new
+`reorder_requests` row now ALSO queues a low-stock alert email, on the SAME
+connection/transaction as that row (see `_maybe_queue_low_stock_email`
+below) -- reusing idx_reorder_requests_open's existing idempotency
+guarantee for free instead of inventing a second one: an email is only ever
+queued when a brand-new pending request is actually created, so "at most
+one open request per product" already implies "at most one low-stock email
+per open low-stock event" with no extra table or check needed. Queuing is
+itself gated on commercial_runtime.notifications.settings.is_enabled() (SMTP
+configured AND this company opted in) and a configured recipient -- an
+install that has done neither sees ZERO behavior change from this addition:
+same reorder_requests row, same sync_outbox event, nothing more.
 """
 from __future__ import annotations
 
 import json
 import uuid as _uuid
 from datetime import datetime, timezone
+
+from commercial_runtime.notifications import settings as _notification_settings
+from commercial_runtime.notifications.outbox import EmailOutboxRepository as _EmailOutboxRepository
 
 
 def maybe_trigger_reorder(conn_factory, *, company_id, branch_id, product_ids):
@@ -79,7 +95,7 @@ def _maybe_create_request_for_product(conn, company_id, branch_id, product_id) -
     conn.execute("BEGIN IMMEDIATE")
     try:
         product = conn.execute(
-            "SELECT reorder_method, reorder_level FROM products WHERE id=? AND company_id=?",
+            "SELECT name, reorder_method, reorder_level FROM products WHERE id=? AND company_id=?",
             (product_id, company_id),
         ).fetchone()
         if not product or (product['reorder_method'] or 'none') == 'none':
@@ -118,11 +134,48 @@ def _maybe_create_request_for_product(conn, company_id, branch_id, product_id) -
         )
         _queue_reorder_sync_event(conn, request_id, company_id, branch_id, product_id,
                                    'pending', draft_message, now, 'create')
+        _maybe_queue_low_stock_email(conn, company_id, product_name=product['name'] or 'Product',
+                                      on_hand=on_hand, reorder_level=reorder_level,
+                                      draft_message=draft_message)
         conn.commit()
         return True
     except Exception:
         conn.rollback()
         raise
+
+
+def _maybe_queue_low_stock_email(conn, company_id, *, product_name, on_hand, reorder_level, draft_message):
+    """Queues (never sends inline) a low-stock alert email on the SAME
+    connection/transaction as the reorder_requests row just created --
+    see this module's own docstring for why that gives this call its
+    idempotency for free, and why this is safe to run inside the same
+    try/except-rollback the caller already wraps this whole function in:
+    a failure here rolls back the reorder_requests row too, which is
+    correct (an email that can never be queued for a request that was
+    never actually created is not a partial success worth keeping), and
+    that rollback+raise is itself caught by retail_api.py::create_sale's
+    own broad try/except around the whole hook (see reorder_hook.py's
+    module docstring) -- so a bug here still can never touch the sale's
+    response, exactly like every other failure mode in this file.
+
+    A no-op, not an error, when notifications aren't configured/enabled or
+    this company has no low_stock_recipient set -- most installs will hit
+    this branch every single time, by design."""
+    if not _notification_settings.is_enabled(conn, company_id):
+        return
+    recipient = _notification_settings.recipient_for(conn, company_id, 'low_stock_recipient')
+    if not recipient:
+        return
+    subject = f"Low stock alert: {product_name}"
+    body_text = (
+        f"{product_name} has dropped to {on_hand:g} units on hand "
+        f"(reorder level {reorder_level:g}).\n\n{draft_message}\n\n"
+        "Review and accept/decline this reorder request in Aura Retail's Admin Center."
+    )
+    _EmailOutboxRepository(conn).enqueue(
+        company_id=company_id, email_type='low_stock_alert', recipient=recipient,
+        subject=subject, body_text=body_text,
+    )
 
 
 def _queue_reorder_sync_event(conn, request_id, company_id, branch_id, product_id,
