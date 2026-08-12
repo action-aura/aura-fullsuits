@@ -191,4 +191,10 @@ SYNC_RELAY_URL_PROBLEMS = validate_sync_relay_url(SYNC_RELAY_BASE_URL)
 # .env.example) to actually enable the feature.
 AURA_AI_ENDPOINT_URL = os.environ.get('AURA_AI_ENDPOINT_URL', 'https://104-248-35-215.sslip.io/api/generate')
 AURA_AI_BEARER_TOKEN = os.environ.get('AURA_AI_BEARER_TOKEN', '')
-AURA_AI_TIMEOUT_SECONDS = float(os.environ.get('AURA_AI_TIMEOUT_SECONDS', '15'))
+# 2026-08-12: bumped from 15s after a real, realistic prompt (verified via
+# timed curl against the actual droplet, not assumed) took 36.5s -- the
+# original 15s was benchmarked against a 2-token "Say OK" reply, not
+# representative. retail_api.py's _AI_REPLY_MAX_TOKENS now caps the model's
+# own output length too, so this is a safety margin on top of that cap, not
+# the only mitigation.
+AURA_AI_TIMEOUT_SECONDS = float(os.environ.get('AURA_AI_TIMEOUT_SECONDS', '45'))

@@ -34,12 +34,13 @@
   const SEND_ID = 'sub-ai-send';
   const TYPING_ID = 'sub-ai-typing';
 
-  // Server-side timeout (config.py's AURA_AI_TIMEOUT_SECONDS) is ~15s.
-  // This client-side backstop sits above it so a hung network connection
-  // (not just a slow model) still resolves into the friendly error state
-  // instead of leaving the send button disabled and the orb "thinking"
-  // forever.
-  const CLIENT_TIMEOUT_MS = 20000;
+  // Server-side timeout (config.py's AURA_AI_TIMEOUT_SECONDS) is 45s as of
+  // 2026-08-12 (bumped from 15s -- a real prompt took 36.5s against the
+  // actual small CPU droplet, verified by timed curl). This client-side
+  // backstop sits above it so a hung network connection (not just a slow
+  // model) still resolves into the friendly error state instead of leaving
+  // the send button disabled and the orb "thinking" forever.
+  const CLIENT_TIMEOUT_MS = 50000;
   const HISTORY_TURNS_SENT = 10;
   const UNAVAILABLE_MSG = () => t('AI assistant is temporarily unavailable. Please try again in a moment.');
   const GREETING_MSG = () => t("Hi! I'm your Aura Retail assistant. Ask me anything about using the system.");

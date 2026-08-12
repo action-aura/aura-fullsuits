@@ -2266,14 +2266,30 @@ def sync_health():
 
 AI_SYSTEM_PREFACE = (
     "You are a helpful assistant embedded in Aura Retail, a point-of-sale "
-    "system. Answer briefly and practically."
+    "system. Answer in 2-3 short sentences, practically, no long lists "
+    "unless the user explicitly asks for step-by-step detail."
 )
 
-# Small model (phi3:mini, ~4GB) on a small droplet -- keep the prompt itself
-# small so latency stays reasonable. Caps mirror _AI_HISTORY_TURNS below.
+# Small model (phi3:mini, ~4GB) on a small CPU-only droplet -- keep the
+# prompt itself small so latency stays reasonable. Caps mirror
+# _AI_HISTORY_TURNS below. Real measured throughput on this droplet is
+# ~7 tokens/sec, so _AI_REPLY_MAX_TOKENS bounds worst-case generation time
+# almost as much as prompt size does -- see _AI_REPLY_MAX_TOKENS' own
+# comment for the incident that made this explicit.
 _AI_MESSAGE_MAX_CHARS = 4000
 _AI_HISTORY_TURN_MAX_CHARS = 2000
 _AI_HISTORY_TURNS = 10
+
+# 2026-08-12: a real, realistic prompt ("How do I add a new product?")
+# produced a 254-token reply that took 36.5s to generate against the real
+# droplet -- verified by direct timed curl, not assumed -- well past the
+# then-15s server timeout. The earlier ~7s benchmark this route's comments
+# reference was a 2-token "Say OK" reply, not representative. Capping the
+# model's own output length (via Ollama's num_predict) directly bounds
+# worst-case generation time, on top of the system preface asking for
+# brevity -- two independent mitigations, since a model can ignore prompt
+# instructions but num_predict is enforced by the server regardless.
+_AI_REPLY_MAX_TOKENS = 150
 
 
 def _build_ai_prompt(message, history):
@@ -2321,13 +2337,18 @@ def ai_chat():
         resp = requests.post(
             AURA_AI_ENDPOINT_URL,
             headers={'Authorization': f'Bearer {AURA_AI_BEARER_TOKEN}'},
-            json={'model': 'phi3:mini', 'prompt': prompt, 'stream': False},
+            json={
+                'model': 'phi3:mini', 'prompt': prompt, 'stream': False,
+                'options': {'num_predict': _AI_REPLY_MAX_TOKENS},
+            },
             timeout=AURA_AI_TIMEOUT_SECONDS,
         )
     except requests.exceptions.RequestException as e:
-        # Real observed latency for this model/droplet is ~7s for a short
-        # reply -- a timeout or connection error here means the upstream
-        # host is genuinely unreachable/overloaded, not a bug in this route.
+        # 2026-08-12: real observed latency for a REALISTIC prompt on this
+        # model/droplet is ~35s uncapped (see _AI_REPLY_MAX_TOKENS' comment)
+        # -- a timeout here now means the upstream host is genuinely
+        # unreachable/overloaded even with the reply-length cap in place,
+        # not a bug in this route.
         current_app.logger.warning('AI assistant proxy request failed: %s', type(e).__name__)
         return jsonify({'success': False, 'error': 'AI assistant is temporarily unavailable.'}), 503
 

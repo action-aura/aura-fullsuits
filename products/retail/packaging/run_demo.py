@@ -25,7 +25,16 @@ already has everywhere else -- never a crash.
 Expected owner_config.txt format (KEY=value, one per line, # comments ok):
     OWNER_URL=https://<owner-host>:5551
     CA_BUNDLE=owner-cert.pem
+    AI_TOKEN=<bearer token for the AI assistant's cloud LLM endpoint>
 CA_BUNDLE is resolved relative to this launcher's own folder if not absolute.
+AI_TOKEN follows the same "edit a text file, not a rebuild" reasoning as
+everything else here -- config.py's AURA_AI_BEARER_TOKEN has no hardcoded
+default on purpose (2026-08-12: an earlier version did, and a live token got
+committed to git as a result -- see the fix commit's message), so without
+this the AI assistant button still renders but every chat request gets a 401
+from the LLM endpoint, surfaced to the user as "temporarily unavailable" --
+inert, never a crash, same failure shape as a missing OWNER_URL. This file
+itself must never be committed to git.
 """
 import os
 import subprocess
@@ -72,6 +81,10 @@ def main():
     env.setdefault('AURA_STANDALONE', '0')  # dev/demo mode: sample-data seeding path stays available
 
     owner_cfg = _read_owner_config()
+    ai_token = owner_cfg.get('AI_TOKEN', '')
+    if ai_token:
+        env['AURA_AI_BEARER_TOKEN'] = ai_token
+
     owner_url = owner_cfg.get('OWNER_URL', '')
     if owner_url:
         env['AURA_OWNER_LICENSING_URL'] = owner_url
