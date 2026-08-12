@@ -180,3 +180,26 @@ would need to become `TEXT` if/when it's actually integrated onto the
 real UUID'd schema (documented as a known follow-up, not done yet).
 Neither issue blocks either branch standing alone; both need this
 reconciled at actual merge time, not before.
+
+**Final correction on the UUID point:** the migration functions
+(`_migrate_products_to_uuid` etc.) genuinely do NOT exist at `93a3320` —
+confirmed by grep on that checkout: only `_apply_retail_alters` (the old,
+much smaller v2→v3 migrate_fn) is present. They were added somewhere in
+the ~1583 files of drift between `93a3320` and the tip — schema.py itself
+is one of the changed files. So on `93a3320`, `products.id`/`customers.id`/
+`sales.customer_id`/`sale_items.product_id` really are plain integers,
+full stop, no migration to reconcile with. The earlier note above (about
+the migration existing and applying "on any database behind the version
+marker") is real and correct **only for `feat/retail-mobile-build-baseline`
+itself** — it doesn't retroactively apply to code that predates the
+migration being written. Both can be true at once; check which branch's
+actual checked-out file you're reasoning about, not just its ancestry.
+
+**Separately flagged, not fixed, real latent bug:** `subsystem-retail.js`'s
+`_saveReturn` does `product_id:+cb.dataset.pid` (numeric coercion) —
+pre-existing code, unrelated to tonight's work. Harmless today since
+`93a3320`-based branches have integer product ids anyway, but this would
+silently break Returns on any branch that actually carries the UUID
+migration. Whoever eventually reconciles these branches should grep for
+this pattern (`+`-coercion on an id field) more broadly before merging
+onto the UUID'd schema.
