@@ -72,6 +72,7 @@ CREATE TABLE products (
     tax_rate REAL DEFAULT 0,
     unit TEXT DEFAULT 'pcs',
     reorder_level INTEGER DEFAULT 5,
+    reorder_method TEXT DEFAULT 'none',
     status TEXT DEFAULT 'active'
 );
 CREATE TABLE customers (
@@ -91,6 +92,16 @@ CREATE TABLE suppliers (
     email TEXT,
     address TEXT,
     status TEXT DEFAULT 'active'
+);
+CREATE TABLE reorder_requests (
+    id TEXT PRIMARY KEY,
+    company_id TEXT,
+    branch_id INTEGER,
+    product_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    draft_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TEXT
 );
 CREATE TABLE sync_outbox (
     id TEXT PRIMARY KEY,
@@ -180,6 +191,13 @@ def _customers(get_conn):
 def _suppliers(get_conn):
     conn = get_conn()
     rows = [dict(r) for r in conn.execute("SELECT * FROM suppliers").fetchall()]
+    conn.close()
+    return rows
+
+
+def _reorder_requests(get_conn):
+    conn = get_conn()
+    rows = [dict(r) for r in conn.execute("SELECT * FROM reorder_requests").fetchall()]
     conn.close()
     return rows
 
@@ -491,6 +509,89 @@ def test_pull_once_supplier_status_round_trips_through_soft_delete_then_restore(
 
     service.pull_once()
     assert _suppliers(get_conn)[0]["status"] == "active"
+
+
+# ── reorder_request create/accept/decline round trip (2026-08-12) ────────
+# feat/reorder-automation-foundation. Unlike category/product/customer/
+# supplier above, this entity has no "delete" event type at all (see
+# sync_service.py's module docstring) -- only create (the post-sale hook
+# opening a request) and update (an accept/decline status change).
+
+def test_pull_once_reorder_request_create_upserts_a_pending_row(get_conn):
+    rid = str(uuid.uuid4())
+    pid = str(uuid.uuid4())
+    event = _pull_event_of("reorder_request", rid, "create", {
+        "id": rid, "branch_id": 1, "product_id": pid, "status": "pending",
+        "draft_message": "Stock low.", "resolved_at": None,
+    })
+    client = FakeRelayClient(pull_responses=[{"events": [event], "cursor": 1}])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+
+    rows = _reorder_requests(get_conn)
+    assert len(rows) == 1
+    assert rows[0]["id"] == rid
+    assert rows[0]["product_id"] == pid
+    assert rows[0]["status"] == "pending"
+    assert rows[0]["company_id"] == "receiving-company"  # receiving device's own id, never the sender's
+    assert rows[0]["resolved_at"] is None
+
+
+def test_pull_once_reorder_request_round_trips_through_accept(get_conn):
+    """The exact flow an Accept action on ANOTHER device produces: a create
+    event (status='pending'), then an update event (status='accepted',
+    resolved_at set) -- both must be visible here, and there must still be
+    only one row, not two."""
+    rid = str(uuid.uuid4())
+    pid = str(uuid.uuid4())
+    create_event = _pull_event_of("reorder_request", rid, "create", {
+        "id": rid, "branch_id": 1, "product_id": pid, "status": "pending",
+        "draft_message": "Stock low.", "resolved_at": None,
+    })
+    accept_event = _pull_event_of("reorder_request", rid, "update", {
+        "id": rid, "branch_id": 1, "product_id": pid, "status": "accepted",
+        "draft_message": "Stock low.", "resolved_at": "2026-08-12T00:00:00+00:00",
+    })
+    client = FakeRelayClient(pull_responses=[
+        {"events": [create_event], "cursor": 1},
+        {"events": [accept_event], "cursor": 2},
+    ])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+    assert _reorder_requests(get_conn)[0]["status"] == "pending"
+
+    service.pull_once()
+    rows = _reorder_requests(get_conn)
+    assert len(rows) == 1  # still one row, not two
+    assert rows[0]["status"] == "accepted"
+    assert rows[0]["resolved_at"] == "2026-08-12T00:00:00+00:00"
+
+
+def test_pull_once_reorder_request_round_trips_through_decline(get_conn):
+    rid = str(uuid.uuid4())
+    pid = str(uuid.uuid4())
+    create_event = _pull_event_of("reorder_request", rid, "create", {
+        "id": rid, "branch_id": 1, "product_id": pid, "status": "pending",
+        "draft_message": "Stock low.", "resolved_at": None,
+    })
+    decline_event = _pull_event_of("reorder_request", rid, "update", {
+        "id": rid, "branch_id": 1, "product_id": pid, "status": "declined",
+        "draft_message": "Stock low.", "resolved_at": "2026-08-12T00:00:00+00:00",
+    })
+    client = FakeRelayClient(pull_responses=[
+        {"events": [create_event], "cursor": 1},
+        {"events": [decline_event], "cursor": 2},
+    ])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+    service.pull_once()
+
+    rows = _reorder_requests(get_conn)
+    assert len(rows) == 1
+    assert rows[0]["status"] == "declined"
 
 
 # ── Cross-device company_id bug fix (2026-08-07) ─────────────────────────

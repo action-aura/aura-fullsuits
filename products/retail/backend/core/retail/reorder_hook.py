@@ -1,0 +1,144 @@
+"""Aura Retail -- post-sale reorder-automation trigger
+(feat/reorder-automation-foundation).
+
+Turns a just-completed sale into zero or more `reorder_requests` rows: for
+every DISTINCT product sold, if the product opted in
+(`products.reorder_method != 'none'`) and its post-sale stock balance has
+dropped to or below `products.reorder_level`, and no request is already
+open for that product, this creates one pending row and queues it for sync.
+
+Mirrors core/retail/einvoice_adapter.py's `enqueue_sale` structural
+precedent closely on purpose (same codebase, same "never let a side-feature
+touch the sale" contract) -- see that file's own module docstring:
+
+  - Called AFTER the sale's own request has already committed and returned
+    its response shape (retail_api.py::create_sale). Opens its OWN
+    independent connection via `conn_factory`, never reuses the sale's
+    connection, so this can never roll back, block, or in any way affect
+    the sale transaction that already succeeded.
+  - The caller (create_sale) wraps this in a broad try/except regardless --
+    belt and suspenders, exactly like the einvoicing call site. Nothing in
+    this module is allowed to propagate an exception that would change the
+    sale's HTTP response; see
+    products/retail/tests/retail_reorder_hook_regression_test.py.
+  - Unlike einvoicing, this NEVER adds a key to the sale's response --
+    reorder automation is invisible from the checkout API's own contract,
+    not merely best-effort. There is no equivalent of einvoicing's
+    'einvoice' response key here, by design.
+
+Quantity note (Phase 1 foundation, deliberately simple): the local
+purchase_order an Accept action drafts (see retail_api.py's accept route)
+orders exactly `reorder_level` units of the product -- restocking back up
+to the reorder threshold itself, not a demand-based forecast. Refining that
+heuristic is explicitly out of scope for this foundation wave; the
+WhatsApp-facing quantity/urgency messaging this eventually feeds is
+deferred entirely (see the migration's own docstring in database/schema.py
+and ROADMAP.md).
+"""
+from __future__ import annotations
+
+import json
+import uuid as _uuid
+from datetime import datetime, timezone
+
+
+def maybe_trigger_reorder(conn_factory, *, company_id, branch_id, product_ids):
+    """Called once per completed sale with the DISTINCT product ids that sale
+    just sold (a multi-line sale can drop several products below their own
+    reorder_level at once -- each is evaluated independently). Returns the
+    list of product_ids a new pending reorder_requests row was actually
+    created for (empty list is the overwhelmingly common case: most
+    products never opt in, and most sales don't cross the threshold).
+
+    Opens exactly one connection for the whole batch (not one per product)
+    -- cheaper, and the idempotency guard below is safe per-product anyway
+    since each product's check-then-insert is its own short transaction.
+    """
+    if not product_ids:
+        return []
+    conn = conn_factory()
+    try:
+        created = []
+        for product_id in product_ids:
+            if _maybe_create_request_for_product(conn, company_id, branch_id, product_id):
+                created.append(product_id)
+        return created
+    finally:
+        conn.close()
+
+
+def _maybe_create_request_for_product(conn, company_id, branch_id, product_id) -> bool:
+    """One product, one short BEGIN IMMEDIATE transaction -- mirrors
+    create_sale's own use of BEGIN IMMEDIATE (retail_api.py) to avoid a
+    check-then-insert race between two near-simultaneous sales of the same
+    product both observing "no open request yet" before either commits.
+    idx_reorder_requests_open (database/schema.py) is the real backstop if
+    that race is ever hit anyway -- this transaction just avoids relying on
+    a raised IntegrityError as the normal-case control flow.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        product = conn.execute(
+            "SELECT reorder_method, reorder_level FROM products WHERE id=? AND company_id=?",
+            (product_id, company_id),
+        ).fetchone()
+        if not product or (product['reorder_method'] or 'none') == 'none':
+            conn.rollback()
+            return False
+
+        reorder_level = float(product['reorder_level'] or 0)
+
+        balance = conn.execute(
+            "SELECT quantity_on_hand FROM inventory_balances WHERE company_id=? AND product_id=? AND branch_id=?",
+            (company_id, product_id, branch_id),
+        ).fetchone()
+        on_hand = float(balance['quantity_on_hand']) if balance else 0.0
+        if on_hand > reorder_level:
+            conn.rollback()
+            return False
+
+        existing = conn.execute(
+            "SELECT id FROM reorder_requests WHERE company_id=? AND product_id=? AND status IN ('pending','accepted')",
+            (company_id, product_id),
+        ).fetchone()
+        if existing:
+            conn.rollback()
+            return False
+
+        request_id = str(_uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        draft_message = (
+            f"Stock for this product is at {on_hand:g} (reorder level {reorder_level:g}). "
+            f"Suggested reorder quantity: {max(reorder_level, 1):g}."
+        )
+        conn.execute(
+            "INSERT INTO reorder_requests (id, company_id, branch_id, product_id, status, draft_message, created_at) "
+            "VALUES (?,?,?,?,'pending',?,?)",
+            (request_id, company_id, branch_id, product_id, draft_message, now),
+        )
+        _queue_reorder_sync_event(conn, request_id, company_id, branch_id, product_id,
+                                   'pending', draft_message, now, 'create')
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def _queue_reorder_sync_event(conn, request_id, company_id, branch_id, product_id,
+                               status, draft_message, timestamp, event_type):
+    """Same INSERT shape as retail_api.py's `_queue_sync_event` -- this
+    module runs outside any Flask request context (its own connection, no
+    `cur` handed in from a route), so it cannot import that helper without
+    creating a core/retail -> api import (backwards from every other
+    dependency in this codebase); this is a deliberate, minimal duplicate
+    of that one INSERT statement, not a divergent implementation."""
+    conn.execute(
+        "INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, payload, created_at) VALUES (?,?,?,?,?,?)",
+        (str(_uuid.uuid4()), 'reorder_request', request_id, event_type,
+         json.dumps({
+             'id': request_id, 'branch_id': branch_id, 'product_id': product_id,
+             'status': status, 'draft_message': draft_message, 'resolved_at': None,
+         }),
+         timestamp),
+    )

@@ -6,12 +6,23 @@
 daemon thread, `threading.Event` stop flag.
 
 Scope note: only `entity_type in ("category", "product", "customer",
-"supplier")` is understood by `_apply_event` -- this sub-project
-(multi-device-sync-foundation, retail-catalog-party-sync-expansion) only
-wires category/product/customer/supplier routes through the outbox. A
-future entity type arriving from Owner is silently skipped, not an error --
-forward compatibility for a relay that may carry entity types this
-particular product build doesn't know how to apply yet.
+"supplier", "reorder_request")` is understood by `_apply_event` -- this
+sub-project (multi-device-sync-foundation, retail-catalog-party-sync-
+expansion, reorder-automation-foundation) only wires
+category/product/customer/supplier/reorder_request routes through the
+outbox. A future entity type arriving from Owner is silently skipped, not
+an error -- forward compatibility for a relay that may carry entity types
+this particular product build doesn't know how to apply yet.
+
+`reorder_request` (feat/reorder-automation-foundation) is a narrower case
+than the other four: its `id` is a real client-generated UUID (unlike
+`purchase_orders`, which stays local-only and is never pushed through this
+outbox at all -- see products/retail/backend/database/schema.py's
+`_migrate_add_reorder_automation_foundation` docstring for why that
+distinction matters to Owner's relay), and it only ever arrives as
+`create` (the post-sale hook opening a new request) or `update` (an
+accept/decline status change) -- there is no `delete` event type for this
+entity, so `_apply_event`'s reorder_request branch has no delete case.
 
 Cross-device `company_id` bug fix (2026-08-07, found in live device
 testing): a pulled event's `payload["company_id"]` is the SENDING device's
@@ -229,7 +240,8 @@ class SyncService:
         # still apply those without raising.
         local_company_id = None
         if any(
-            ev.get("entity_type") in ("category", "product", "customer", "supplier") and ev.get("event_type") in ("create", "update")
+            ev.get("entity_type") in ("category", "product", "customer", "supplier", "reorder_request")
+            and ev.get("event_type") in ("create", "update")
             for ev in events
         ):
             local_company_id = self._get_local_company_id()
@@ -262,7 +274,7 @@ class SyncService:
 
     def _apply_event(self, conn, ev: dict, local_company_id: Optional[str] = None) -> None:
         entity_type = ev.get("entity_type")
-        if entity_type not in ("category", "product", "customer", "supplier"):
+        if entity_type not in ("category", "product", "customer", "supplier", "reorder_request"):
             return
         p = ev.get("payload") or {}
         event_type = ev.get("event_type")
@@ -291,19 +303,24 @@ class SyncService:
                 # actual current status -- a create event's payload never
                 # carries status, so p.get(..., "active") preserves the
                 # previous create-time default exactly.
+                # reorder_method (feat/reorder-automation-foundation): same
+                # p.get(..., "none") shape as status/reorder_level above -- a
+                # payload that predates this column (an older device's outbox
+                # entry, or a hand-built test payload) is treated as the
+                # column's own default, never as NULL.
                 conn.execute(
                     "INSERT INTO products (id, company_id, sku, barcode, name, category_id, supplier_id, "
-                    "cost_price, sell_price, tax_rate, unit, reorder_level, status) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "cost_price, sell_price, tax_rate, unit, reorder_level, reorder_method, status) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET sku=excluded.sku, barcode=excluded.barcode, name=excluded.name, "
                     "category_id=excluded.category_id, supplier_id=excluded.supplier_id, "
                     "cost_price=excluded.cost_price, sell_price=excluded.sell_price, "
                     "tax_rate=excluded.tax_rate, unit=excluded.unit, reorder_level=excluded.reorder_level, "
-                    "status=excluded.status",
+                    "reorder_method=excluded.reorder_method, status=excluded.status",
                     (p.get("id"), local_company_id, p.get("sku"), p.get("barcode", ""), p.get("name"),
                      p.get("category_id"), p.get("supplier_id"), p.get("cost_price", 0), p.get("sell_price", 0),
                      p.get("tax_rate", 0), p.get("unit", "pcs"), p.get("reorder_level", 5),
-                     p.get("status", "active")),
+                     p.get("reorder_method", "none"), p.get("status", "active")),
                 )
             elif event_type == "delete":
                 conn.execute("UPDATE products SET status='inactive' WHERE id=?", (p.get("id"),))
@@ -335,6 +352,25 @@ class SyncService:
                 )
             elif event_type == "delete":
                 conn.execute("UPDATE suppliers SET status='inactive' WHERE id=?", (p.get("id"),))
+        elif entity_type == "reorder_request":
+            # feat/reorder-automation-foundation. Only create/update ever
+            # arrive for this entity -- there is no delete event type (see
+            # this module's docstring) -- so unlike the four branches above,
+            # this one has no `elif event_type == "delete"` case at all.
+            # `status` is parameterized exactly like the other entities'
+            # soft-delete flag, so an accept/decline relayed from another
+            # device (an "update" event changing status from 'pending' to
+            # 'accepted'/'declined') actually takes effect here, not just on
+            # the device that made the decision.
+            if event_type in ("create", "update"):
+                conn.execute(
+                    "INSERT INTO reorder_requests (id, company_id, branch_id, product_id, status, "
+                    "draft_message, resolved_at) VALUES (?,?,?,?,?,?,?) "
+                    "ON CONFLICT(id) DO UPDATE SET status=excluded.status, "
+                    "draft_message=excluded.draft_message, resolved_at=excluded.resolved_at",
+                    (p.get("id"), local_company_id, p.get("branch_id"), p.get("product_id"),
+                     p.get("status", "pending"), p.get("draft_message"), p.get("resolved_at")),
+                )
 
     def run_once(self) -> None:
         """The one entry point the timer tick (and the manual/CLI caller)
