@@ -203,3 +203,53 @@ silently break Returns on any branch that actually carries the UUID
 migration. Whoever eventually reconciles these branches should grep for
 this pattern (`+`-coercion on an id field) more broadly before merging
 onto the UUID'd schema.
+
+## 2026-08-12 — Three branches merged onto feat/retail-mobile-build-baseline (RETAIL_SCHEMA_VERSION now 8)
+
+Executed the merge plan from the ledger above, in the specified order, with
+a full individual-file retail regression run + a fresh-temp-dir boot/schema
+smoke test after each step. All three landed clean; none required a
+judgment call risky enough to stop for. `feat/pos-hold-resume-sale` (v9,
+rebases onto v8) was deliberately **not** touched — still pending its
+author's explicit sign-off, as flagged.
+
+1. **`feat/reorder-automation-foundation`** → merge commit `de5c0d5`.
+   Schema-version writer: bumps `RETAIL_SCHEMA_VERSION` 7→8
+   (`products.reorder_method`, `reorder_requests` table), adds the
+   post-sale reorder hook and the Admin Center page. One real conflict,
+   in `app-shell.js`'s `init()`: both this branch and the (already-merged,
+   untouchable) AI Assistant work insert setup code at the same point,
+   right after `KPIDragManager.init()` — this branch's `isAdminDevice`
+   fail-closed default vs. HEAD's `/api/auth/active-modules` fetch for the
+   AI Assistant button. Independent, non-competing additions; kept both
+   verbatim (isAdminDevice default first, then the AI fetch, both still
+   ahead of the auth gate). AI Assistant code (`/ai/chat`, `sub-ai.js`,
+   `AI_TOKEN` handling) was never actually at risk — this branch predates
+   that feature and has no history of `sub-ai.js` at all, so git's 3-way
+   merge treated it as a clean one-sided addition, not a conflict.
+2. **`fix/i18n-language-switch-freeze`** → merge commit `335ea1a`. Exactly
+   as advertised: `i18n.js` only, +27/-3 lines, zero conflicts, merged
+   cleanly onto v8.
+3. **`feat/sales-invoices-screen`** → merge commit `bcabf60`. Adds the
+   Sales History screen and extends `GET /sales/recent` with optional
+   `q`/`date_from`/`date_to` filters (backward-compatible, zero schema
+   change). Branched from `93a3320` as documented; verified the real 3-way
+   merge (base `93a3320`, not the ~1583-file drift diff against the tip)
+   resolved automatically with zero conflicts, touching only
+   `retail_api.py` and `subsystem-retail.js` — it never actually touches
+   `app-shell.js`, so the plausible nav-entry collision with
+   reorder-automation's Admin Center entry the plan flagged as a risk
+   didn't materialize.
+
+**Regression status:** all 30 `products/retail/tests/*.py` files, run
+individually (per this codebase's known cross-file test-pollution issue),
+355 tests total, 0 failures / 0 errors, after *each* of the three merges.
+Boot + schema-migration smoke test (fresh `tempfile.mkdtemp()` data dir,
+`OWNER_LICENSING_BASE_URL`/`SYNC_RELAY_BASE_URL` unset, deleted after each
+run — no real `AURA_APP_DATA`/`dist*`/demo database touched at any point)
+passed after each merge: `PRAGMA user_version` = 8, `PRAGMA integrity_check`
+= `ok`.
+
+**Still pending, unchanged:** `feat/pos-hold-resume-sale` (v9) — flagged by
+its own author for explicit human sign-off before merging this close to the
+demo; that stands, not merged here.
