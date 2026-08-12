@@ -72,6 +72,7 @@ const RetailSystem = {
       case 'suppliers': return this._renderSuppliers(c);
       case 'purchases': return this._renderPurchases(c);
       case 'returns':   return this._renderReturns(c);
+      case 'sales':     return this._renderSalesHistory(c);
       case 'reports':   return this._renderReports(c);
       case 'scanner':   return this._renderScannerSettings(c);
       case 'admin-center': return this._renderAdminCenter(c);
@@ -206,7 +207,10 @@ const RetailSystem = {
       <div class="sub-chart-card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
           <div class="sub-chart-title">Recent Transactions</div>
-          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="SubsystemApp._navigate('reports')">Full Report →</button>
+          <div style="display:flex;gap:8px">
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="SubsystemApp._navigate('sales')">🧾 Sales History</button>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="SubsystemApp._navigate('reports')">Full Report →</button>
+          </div>
         </div>
         <div style="overflow-x:auto">
           <table class="ret-table" id="r-dash-recent">
@@ -294,7 +298,7 @@ const RetailSystem = {
       if (recent.length === 0) {
         tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">No transactions yet today</td></tr>';
       } else {
-        tbody.innerHTML = recent.map(s => `<tr>
+        tbody.innerHTML = recent.map(s => `<tr style="cursor:pointer" onclick="RetailSystem._viewSale(${s.id})" title="View invoice">
           <td style="font-family:monospace;color:var(--sub-accent)">${s.sale_number}</td>
           <td>${s.customer_name||'Walk-in'}</td>
           <td style="color:var(--text-muted)">${s.item_count||0} items</td>
@@ -1523,7 +1527,7 @@ const RetailSystem = {
       if (!hist.length) { el.textContent = 'No purchases yet.'; return; }
       el.outerHTML = `<table class="ret-table">
         <thead><tr><th>Receipt #</th><th>Items</th><th>Method</th><th>Total</th><th>Date</th></tr></thead>
-        <tbody>${hist.map(s=>`<tr>
+        <tbody>${hist.map(s=>`<tr style="cursor:pointer" onclick="RetailSystem._viewSale(${s.id})" title="View invoice">
           <td style="font-family:monospace;color:var(--sub-accent)">${s.sale_number}</td>
           <td>${s.items||0}</td>
           <td>${this._badge(s.payment_method,'blue')}</td>
@@ -2415,6 +2419,198 @@ const RetailSystem = {
         this._loadReturns();
       } else { SubsystemApp.showToast(d.message||'Error','error'); if(btn){btn.disabled=false;btn.textContent='Process Refund';} }
     } catch(e) { if(btn){btn.disabled=false;btn.textContent='Process Refund';} }
+  },
+
+  // ── SALES HISTORY ────────────────────────────────────────────────────────
+  // Dedicated invoices screen. Real hands-on-testing feedback: "The invoices
+  // are there, but you can't add details to them. There's no dedicated
+  // screen for invoices where I can see each sold invoice, its contents,
+  // and whether to edit or reprint it." GET /sales/recent and GET
+  // /sales/<id> already existed and already carried every field a receipt
+  // needs (proof: _printReceipt below already knows how to render a full
+  // receipt from this exact shape) -- the checkout-time receipt modal
+  // (_showReceipt) was always the only place that data was ever shown, and
+  // it auto-dismisses after 8s with no way to bring it back. The actual gap
+  // was purely "no page ever lists past sales or re-opens one," which is
+  // what this section adds. Editing a completed sale is intentionally NOT
+  // offered here -- financial records like this should not be silently
+  // mutable; a correction should go through the existing Returns flow (a
+  // server-authoritative reversal, AUDIT-004), not an in-place edit.
+  async _renderSalesHistory(c) {
+    this._injectStyles();
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <h2 class="ret-title">🧾 Sales History</h2>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <input class="ret-search" id="sh-search" placeholder="Search receipt # or customer…" oninput="RetailSystem._debounceSalesSearch()" />
+          <input type="date" id="sh-date-from" title="From date"
+            style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;padding:9px 12px;outline:none"
+            onchange="RetailSystem._loadSalesHistory()" />
+          <input type="date" id="sh-date-to" title="To date"
+            style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;padding:9px 12px;outline:none"
+            onchange="RetailSystem._loadSalesHistory()" />
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._clearSalesFilters()">Clear</button>
+        </div>
+      </div>
+      <div class="sub-chart-card">
+        <div style="overflow-x:auto">
+          <table class="ret-table" id="sh-table">
+            <thead><tr><th>Receipt #</th><th>Date</th><th>Customer</th><th>Items</th><th>Payment</th><th>Total</th><th>Status</th></tr></thead>
+            <tbody><tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:30px">Loading…</td></tr></tbody>
+          </table>
+        </div>
+        <div id="sh-count" style="color:var(--text-muted);font-size:12px;margin-top:10px"></div>
+      </div>`;
+    await this._loadSalesHistory();
+  },
+
+  // Debounced so every keystroke in the search box doesn't fire its own
+  // request -- matches _filterProducts' instant client-side filtering in
+  // spirit, but this list is server-searched (see /sales/recent's q param)
+  // rather than client-filtered, so a company's full sales history is
+  // searchable, not just whatever page happened to be loaded already.
+  _debounceSalesSearch() {
+    clearTimeout(this._shSearchTimer);
+    this._shSearchTimer = setTimeout(() => this._loadSalesHistory(), 300);
+  },
+
+  _clearSalesFilters() {
+    const s = document.getElementById('sh-search');    if (s) s.value = '';
+    const f = document.getElementById('sh-date-from'); if (f) f.value = '';
+    const t = document.getElementById('sh-date-to');   if (t) t.value = '';
+    this._loadSalesHistory();
+  },
+
+  async _loadSalesHistory() {
+    const tbody = document.querySelector('#sh-table tbody');
+    if (!tbody) return;
+    const q    = document.getElementById('sh-search')?.value.trim() || '';
+    const from = document.getElementById('sh-date-from')?.value || '';
+    const to   = document.getElementById('sh-date-to')?.value || '';
+    const params = new URLSearchParams({ limit: '300' });
+    if (q)    params.set('q', q);
+    if (from) params.set('date_from', from);
+    if (to)   params.set('date_to', to);
+    try {
+      const data = (await this._get(`/api/sub/retail/sales/recent?${params}`)).data || [];
+      const countEl = document.getElementById('sh-count');
+      if (countEl) {
+        countEl.textContent = data.length === 300
+          ? '300 sales shown (most recent) — narrow with search or a date range to reach older sales'
+          : `${data.length} sale${data.length===1?'':'s'}`;
+      }
+      if (!data.length) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:30px">No sales found.</td></tr>';
+        return;
+      }
+      const statusColor = { completed:'green', pending:'yellow', cancelled:'red', voided:'red' };
+      tbody.innerHTML = data.map(s => `<tr style="cursor:pointer" onclick="RetailSystem._viewSale(${s.id})" title="View invoice">
+        <td style="font-family:monospace;color:var(--sub-accent)">${s.sale_number}</td>
+        <td style="color:var(--text-muted)">${(s.created_at||'').slice(0,16)}</td>
+        <td>${s.customer_name||'Walk-in'}</td>
+        <td style="color:var(--text-muted)">${s.item_count||0}</td>
+        <td>${this._badge(s.payment_method||'cash', s.payment_method==='cash'?'green':'blue')}</td>
+        <td style="font-weight:700">${this._fmt(s.total)}</td>
+        <td>${this._badge(s.status||'completed', statusColor[s.status]||'green')}</td>
+      </tr>`).join('');
+    } catch(e) { console.error(e); }
+  },
+
+  // Sale detail / receipt view. Reads the full line-item breakdown from
+  // GET /sales/<id> -- its `items` already carry a resolved product_name/sku
+  // (via that route's JOIN), unlike POST /sales's own response `lines`,
+  // which only ever resolves product_id (see _reprintSale's comment below).
+  async _viewSale(saleId) {
+    try {
+      const resp  = (await this._get(`/api/sub/retail/sales/${saleId}`)).data || {};
+      const sale  = resp.sale || {};
+      const items = resp.items || [];
+      // Cached for _reprintSale -- avoids a second round-trip just to print
+      // what's already on screen, and keeps the print action working even
+      // if this modal was opened from a stale/cached table row.
+      this._lastViewedSale = { sale, items };
+      const statusColor = { completed:'green', pending:'yellow', cancelled:'red', voided:'red' };
+      const overlay = document.createElement('div');
+      overlay.className = 'ret-modal-overlay';
+      overlay.id = 'ret-sale-modal';
+      overlay.innerHTML = `
+        <div class="ret-modal ret-modal-wide">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+            <div>
+              <h3 style="margin:0">Invoice ${sale.sale_number||''}</h3>
+              <p style="color:var(--text-muted);margin:4px 0 0;font-size:13px">${(sale.created_at||'').slice(0,16)}</p>
+            </div>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()">✕ Close</button>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px">
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Customer</div><div style="color:#fff;font-weight:600">${sale.customer_name||'Walk-in'}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Cashier</div><div style="color:#fff;font-weight:600">${sale.cashier||'—'}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Payment</div><div>${this._badge(sale.payment_method||'cash','blue')}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Status</div><div>${this._badge(sale.status||'completed', statusColor[sale.status]||'green')}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Total</div><div style="color:#10b981;font-weight:700">${this._fmt(sale.total)}</div></div>
+          </div>
+          <table class="ret-table">
+            <thead><tr><th>Product</th><th>SKU</th><th>Qty</th><th>Unit Price</th><th>Discount</th><th>Tax</th><th>Line Total</th></tr></thead>
+            <tbody>${items.map(i=>`<tr>
+              <td>${i.product_name||('#'+i.product_id)}</td>
+              <td style="font-family:monospace;color:var(--text-muted)">${i.sku||'—'}</td>
+              <td>${i.quantity}</td>
+              <td>${this._fmt(i.unit_price)}</td>
+              <td style="color:var(--text-muted)">${i.discount_pct?i.discount_pct+'%':'—'}</td>
+              <td style="color:var(--text-muted)">${i.tax_rate?i.tax_rate+'%':'—'}</td>
+              <td style="font-weight:600">${this._fmt(i.line_total)}</td>
+            </tr>`).join('')}</tbody>
+          </table>
+          <div style="display:flex;justify-content:flex-end;margin-top:16px">
+            <div style="width:260px">
+              <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span style="color:var(--text-muted)">Subtotal</span><span style="color:#fff">${this._fmt(sale.subtotal)}</span></div>
+              ${sale.discount_amount>0?`<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span style="color:var(--text-muted)">Discount</span><span style="color:#ef4444">-${this._fmt(sale.discount_amount)}</span></div>`:''}
+              ${sale.tax_amount>0?`<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span style="color:var(--text-muted)">Tax</span><span style="color:#fff">${this._fmt(sale.tax_amount)}</span></div>`:''}
+              <div style="display:flex;justify-content:space-between;font-size:15px;font-weight:700;border-top:1px dashed rgba(255,255,255,0.1);padding-top:8px;margin-top:4px"><span style="color:#fff">Total</span><span style="color:#fff">${this._fmt(sale.total)}</span></div>
+              <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:6px"><span style="color:var(--text-muted)">Paid</span><span style="color:#fff">${this._fmt(sale.amount_paid)}</span></div>
+              ${sale.change_amount>0?`<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-muted)">Change</span><span style="color:#10b981">${this._fmt(sale.change_amount)}</span></div>`:''}
+              ${sale.due_date?`<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-muted)">Due date</span><span style="color:#fbbf24">${sale.due_date}</span></div>`:''}
+            </div>
+          </div>
+          ${sale.notes?`<p style="color:var(--text-muted);margin-top:14px;font-size:13px">Notes: ${sale.notes}</p>`:''}
+          <div class="ret-modal-footer">
+            <button class="ret-btn ret-btn-primary" onclick="RetailSystem._reprintSale()">🖨️ Reprint Receipt</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+    } catch(e) { SubsystemApp.showToast('Could not load invoice','error'); }
+  },
+
+  // Reuses the existing checkout-time receipt printer (_printReceipt, Wave
+  // 1B Part O/P above) rather than a second print implementation -- adapts
+  // GET /sales/<id>'s {sale, items} shape into the `saleData` shape
+  // _printReceipt already expects from POST /sales's response: same field
+  // set, just renamed (change_amount -> change, items -> lines) and with
+  // `name` resolved onto each line from items.product_name (POST /sales's
+  // own `lines` never carries a product name -- only product_id -- so a
+  // receipt reprinted from here actually shows product names where an
+  // immediate post-checkout print would not). einvoice clearance status
+  // isn't returned by the detail route, so that block is simply omitted;
+  // _printReceipt / _einvoiceReceiptBlock already no-op cleanly when
+  // saleData.einvoice is absent -- an e-invoicing-disabled install's
+  // reprinted receipt is unaffected either way.
+  async _reprintSale() {
+    const cached = this._lastViewedSale;
+    if (!cached) return;
+    const { sale, items } = cached;
+    const saleData = {
+      sale_number:     sale.sale_number,
+      created_at:      sale.created_at,
+      subtotal:        sale.subtotal,
+      discount_amount: sale.discount_amount,
+      tax_amount:      sale.tax_amount,
+      total:           sale.total,
+      amount_paid:     sale.amount_paid,
+      change:          sale.change_amount,
+      lines: items.map(i => ({ name: i.product_name || ('#'+i.product_id), quantity: i.quantity, line_total: i.line_total })),
+    };
+    await this._printReceipt(saleData);
   },
 
   // ── REPORTS ───────────────────────────────────────────────────────────────
