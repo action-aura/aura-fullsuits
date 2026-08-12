@@ -117,9 +117,66 @@ of a one-off integration.
 
 ## Open items carried from earlier review (not yet actioned)
 
-- No RBAC / staff permission matrix (only a bare `role` string today).
+- No RBAC / staff permission matrix beyond admin/not-admin for retail actions
+  (2026-08-12 correction: an audit trail already exists and is already
+  populated — `_audit()` in `retail_api.py`, 26 call sites including refunds
+  and voids — it just has no viewer UI. The real gap is a permission matrix
+  and a manager-approval/override flow, not the audit log itself).
 - No shift management (cash-drawer float, X/Z reports).
-- No promotions/discounts/loyalty engine.
+- Promotions/discounts engine not started (2026-08-12 correction: basic
+  loyalty — `loyalty_points`/`total_spent` accrual at 1pt/$10 — is already
+  live on every sale, `retail_api.py:1259`. Gap is a rules engine and point
+  *redemption* — points can currently only be earned, never spent).
 - No inter-branch stock transfer workflow.
 - Stock-check bug (hardcoded `branch_id: 1` in POS checkout payload) — **fixed**,
   `products/retail/frontend/subsystem-retail.js`.
+
+## 2026-08-12 — Schema-version ledger + branch coordination (demo postponed to Sunday 2026-08-16)
+
+Multiple agents worked this branch concurrently tonight. `schema.py` /
+`RETAIL_SCHEMA_VERSION` is a single-writer resource — migrations must merge
+into `_migrate_retail_schema` in ascending version order, one open at a time,
+never claimed in parallel. Ledger:
+
+- **v8 — reorder-automation** (`feat/reorder-automation-foundation`). Claimed
+  first, real migration code already written (`products.reorder_method`,
+  `reorder_requests` table). Merges first.
+- **v9 — hold/park-sale** (`feat/pos-hold-resume-sale`). Rebases onto v8 once
+  merged; do not claim v8.
+- **v10 — reserved for shift/cash-drawer (X/Z reports)**, if/when started.
+  Touches the same checkout path as hold/park — must be built serially
+  after it, never in parallel against the same base.
+
+**Investigated same day, corrected after being wrong about it twice:**
+`feat/pos-hold-resume-sale` and `feat/sales-invoices-screen` both branched
+from `93a3320`, an early point on `feat/retail-mobile-build-baseline`'s own
+history (`93a3320` **is a genuine ancestor** of the current tip — same
+linear lineage, not a diverged side-branch; an earlier claim in this same
+review round that it was "pre-merge lineage"/a different branch was wrong
+and got independently caught and corrected by the agent working from it).
+What IS real: ~1583 files of drift between `93a3320` and the tip
+(`63418e4` as of this entry), almost entirely unrelated feature work
+(PO-split/routing, sync/device-registry, reorder-automation) that neither
+branch touches or needs.
+
+On the UUID question specifically: `products.id`/`customers.id`/
+`suppliers.id`/`categories.id` do NOT stay INTEGER on `93a3320` — the
+static `CREATE TABLE IF NOT EXISTS` text shows the pre-migration shape,
+but `_migrate_retail_schema` (schema.py:756) runs
+`_migrate_products_to_uuid`/`_migrate_customers_to_uuid`/
+`_migrate_suppliers_to_uuid` unconditionally on any database behind the
+version marker, remapping `sale_items.product_id`/`sales.customer_id`/
+`payments.party_id` to real UUID strings in the same pass. `sales.id`/
+`sale_items.id` themselves are NOT converted (out of that migration's
+scope) and stay plain autoincrement ints on every branch. Anyone reasoning
+about "is branch X's schema stale" should check what the migration chain
+actually does at runtime, not just the literal `CREATE TABLE` text.
+
+Net: both branches stayed on `93a3320` rather than rebasing, by deliberate
+decision after direct verification — for `sales-invoices-screen`,
+confirmed its two touched routes are byte-for-byte unchanged at the tip;
+for `pos-hold-resume-sale`, its `held_sales.customer_id INTEGER` column
+would need to become `TEXT` if/when it's actually integrated onto the
+real UUID'd schema (documented as a known follow-up, not done yet).
+Neither issue blocks either branch standing alone; both need this
+reconciled at actual merge time, not before.
