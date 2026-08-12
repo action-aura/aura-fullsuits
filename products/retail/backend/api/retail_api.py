@@ -154,7 +154,7 @@ def dashboard_stats():
 
     # Recent sales
     recent = conn.execute("""
-        SELECT s.sale_number, s.total, s.payment_method, s.created_at,
+        SELECT s.id, s.sale_number, s.total, s.payment_method, s.created_at,
                COALESCE(c.name,'Walk-in') as customer_name,
                COUNT(si.id) as item_count
         FROM sales s
@@ -430,7 +430,7 @@ def customer_sales(cust_id):
     cid = _cid()
     conn = get_retail_conn()
     rows = conn.execute("""
-        SELECT s.sale_number, s.total, s.payment_method, s.created_at,
+        SELECT s.id, s.sale_number, s.total, s.payment_method, s.created_at,
                COUNT(si.id) as items
         FROM sales s LEFT JOIN sale_items si ON si.sale_id=s.id
         WHERE s.company_id=? AND s.customer_id=?
@@ -849,17 +849,55 @@ def create_sale():
 @mt_login_required
 @mt_require_subsystem('retail')
 def recent_sales():
+    """Recent sales list. Also powers the Sales History screen's "browse all
+    sales" view (frontend/subsystem-retail.js _renderSalesHistory) -- a
+    dedicated invoices screen was requested (see friend hands-on-testing
+    feedback logged in the sales-invoices-screen branch) but the existing
+    /sales/<id> detail route already had everything needed; the only gap
+    was a way to FIND a past sale beyond the last `limit` rows. Extended
+    here, backward-compatibly (q/date_from/date_to all optional, default
+    behavior unchanged), with:
+      - q: LIKE search on sale_number OR customer name, same convention as
+        list_customers() above.
+      - date_from/date_to: inclusive date(created_at) range, same
+        date(...) comparison convention already used by the /reports/*
+        endpoints below (report_sales_trend, report_payment_methods).
+    No offset/page param was added -- this codebase's other list endpoints
+    (products, customers, suppliers) all use the same "big LIMIT, no
+    pagination" convention rather than true offset pagination, so q/date
+    filtering (which scales to a company's full sales history without an
+    unbounded row fetch) matches existing precedent better than introducing
+    a new pagination pattern this file doesn't otherwise have.
+    """
     cid   = _cid()
     limit = int(request.args.get('limit', 50))
+    q         = request.args.get('q', '').strip()
+    date_from = request.args.get('date_from', '').strip()
+    date_to   = request.args.get('date_to', '').strip()
+
+    conditions = ["s.company_id=?"]
+    params = [cid]
+    if q:
+        conditions.append("(s.sale_number LIKE ? OR c.name LIKE ?)")
+        params.extend([f'%{q}%', f'%{q}%'])
+    if date_from:
+        conditions.append("date(s.created_at) >= date(?)")
+        params.append(date_from)
+    if date_to:
+        conditions.append("date(s.created_at) <= date(?)")
+        params.append(date_to)
+    params.append(limit)
+
     conn  = get_retail_conn()
-    rows  = conn.execute("""
+    rows  = conn.execute(f"""
         SELECT s.*, COALESCE(c.name,'Walk-in') as customer_name,
                COUNT(si.id) as item_count
         FROM sales s
         LEFT JOIN customers c ON s.customer_id=c.id
         LEFT JOIN sale_items si ON s.id=si.sale_id
-        WHERE s.company_id=? GROUP BY s.id ORDER BY s.created_at DESC LIMIT ?
-    """, (cid, limit)).fetchall()
+        WHERE {' AND '.join(conditions)}
+        GROUP BY s.id ORDER BY s.created_at DESC LIMIT ?
+    """, params).fetchall()
     conn.close()
     return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
 
