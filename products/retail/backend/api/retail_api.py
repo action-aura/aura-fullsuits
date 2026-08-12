@@ -1714,18 +1714,29 @@ def create_return():
 @mt_login_required
 @mt_require_subsystem('retail')
 def report_sales_trend():
-    cid  = _cid()
-    days = int(request.args.get('days', 14))
+    """Optional `?branch_id=` scopes the trend to one branch; omitted (the
+    default, and everything every existing caller already sends) runs the
+    exact same query text/params as before this filter was added -- see
+    products/retail/tests/retail_report_branch_filter_test.py for the
+    byte-identical-output proof this default path was never changed."""
+    cid       = _cid()
+    days      = int(request.args.get('days', 14))
+    branch_id = request.args.get('branch_id')
     conn = get_retail_conn()
-    rows = conn.execute("""
+    query = """
         SELECT date(created_at) as day,
                COALESCE(SUM(total),0) as revenue,
                COUNT(*) as transactions,
                COALESCE(AVG(total),0) as avg_ticket
         FROM sales WHERE company_id=?
           AND date(created_at) >= date('now', 'localtime', ?)
-        GROUP BY day ORDER BY day
-    """, (cid, f'-{days} days')).fetchall()
+    """
+    params = [cid, f'-{days} days']
+    if branch_id:
+        query += " AND branch_id=?"
+        params.append(branch_id)
+    query += " GROUP BY day ORDER BY day"
+    rows = conn.execute(query, params).fetchall()
     conn.close()
     return jsonify({'success': True,
                     'labels': [r['day'] for r in rows],
@@ -1737,10 +1748,14 @@ def report_sales_trend():
 @mt_login_required
 @mt_require_subsystem('retail')
 def report_top_products():
-    cid   = _cid()
-    limit = int(request.args.get('limit', 10))
+    """Optional `?branch_id=` scopes to one branch's sale_items; omitted (the
+    default) runs the exact same query text/params as before this filter was
+    added -- see retail_report_branch_filter_test.py."""
+    cid       = _cid()
+    limit     = int(request.args.get('limit', 10))
+    branch_id = request.args.get('branch_id')
     conn  = get_retail_conn()
-    rows  = conn.execute("""
+    query = """
         SELECT p.name, p.sku,
                SUM(si.quantity) as units_sold,
                SUM(si.line_total) as revenue,
@@ -1750,8 +1765,14 @@ def report_top_products():
         JOIN products p ON si.product_id=p.id
         JOIN sales s ON si.sale_id=s.id
         WHERE s.company_id=?
-        GROUP BY p.id ORDER BY units_sold DESC LIMIT ?
-    """, (cid, limit)).fetchall()
+    """
+    params = [cid]
+    if branch_id:
+        query += " AND s.branch_id=?"
+        params.append(branch_id)
+    query += " GROUP BY p.id ORDER BY units_sold DESC LIMIT ?"
+    params.append(limit)
+    rows  = conn.execute(query, params).fetchall()
     conn.close()
     return jsonify({'success': True,
                     'labels': [r['name'] for r in rows],
@@ -1818,6 +1839,48 @@ def report_summary():
         'margin_pct':     margin_pct,
         'inventory_value': round(inv_value, 2),
     }})
+
+@retail_bp.route('/reports/by-branch', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def report_by_branch():
+    """Revenue/transactions per branch for the Reports page's branch-comparison
+    chart (new -- no branch-scoped report existed before this route; every
+    other report under /reports either has no branch dimension at all or, for
+    sales-trend/top-products, defaults to unfiltered/all-branches).
+
+    Branches are the base of the LEFT JOIN (not sales), so every active
+    branch appears -- including ones with zero sales in the window -- rather
+    than only branches that happened to sell something. This is what makes a
+    comparison chart meaningful (a branch with 0 revenue is a real, visible
+    bar, not a silently missing one).
+
+    Deliberately NOT filtered by the page's own `?branch_id=` selector --
+    "compare branches" and "scope to one branch" are contradictory asks for
+    the same chart, so this route always returns every branch regardless of
+    what the branch dropdown is set to; only `days` (the shared date-range
+    control) applies here."""
+    cid  = _cid()
+    days = int(request.args.get('days', 30))
+    conn = get_retail_conn()
+    rows = conn.execute("""
+        SELECT b.id as branch_id, b.name as branch_name,
+               COALESCE(SUM(s.total),0) as revenue,
+               COUNT(s.id) as transactions,
+               COALESCE(AVG(s.total),0) as avg_ticket
+        FROM branches b
+        LEFT JOIN sales s ON s.branch_id = b.id AND s.company_id = ?
+          AND date(s.created_at) >= date('now', 'localtime', ?)
+        WHERE b.company_id=? AND b.status='active'
+        GROUP BY b.id, b.name ORDER BY b.name
+    """, (cid, f'-{days} days', cid)).fetchall()
+    conn.close()
+    return jsonify({'success': True,
+                    'labels':        [r['branch_name'] for r in rows],
+                    'data':          [round(r['revenue'], 2) for r in rows],
+                    'transactions':  [r['transactions'] for r in rows],
+                    'avg_ticket':    [round(r['avg_ticket'], 2) for r in rows],
+                    'branch_ids':    [r['branch_id'] for r in rows]})
 
 # ── Branches ──────────────────────────────────────────────────────────────────
 
