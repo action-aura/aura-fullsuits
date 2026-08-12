@@ -33,6 +33,25 @@ android {
 
         ndk {
             // Chaquopy's Python 3.12 ships only these ABIs.
+            //
+            // Investigated 2026-08 (backup test device, Samsung SM-T515 /
+            // Galaxy Tab A, reports only armeabi-v7a,armeabi via
+            // `adb shell getprop ro.product.cpu.abilist` -- INSTALL_FAILED_
+            // NO_MATCHING_ABIS): adding "armeabi-v7a" here is NOT a one-line
+            // fix. Confirmed by an actual `assembleDebug` attempt against
+            // this exact Chaquopy 16.0.0 pin (see root build.gradle) --
+            // Gradle fails at configuration time with:
+            //   "Variant 'debug': Python 3.12 is not available for the ABI
+            //    'armeabi-v7a'. Supported ABIs are [arm64-v8a, x86_64]."
+            // Chaquopy's own changelog: 32-bit ABIs (armeabi-v7a, x86) were
+            // dropped for Python 3.12+ as of Chaquopy 16.0.0 and remain
+            // dropped through 17.0.0. The only way to regain armeabi-v7a
+            // support is lowering chaquopy.defaultConfig.version below 3.12
+            // (Chaquopy's own build warning suggests 3.8) -- a project-wide
+            // Python-runtime downgrade needing full pip-wheel-availability
+            // and functional reverification across every ABI, not a scoped
+            // Gradle tweak. Deliberately not done here (backup device, hours
+            // before demo) -- flagged for a real decision, not shoehorned in.
             abiFilters "arm64-v8a", "x86_64"
         }
 
