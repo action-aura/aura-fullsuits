@@ -22,7 +22,7 @@ from database.schema import get_retail_conn, sub_create
 from datetime import datetime, timedelta, timezone
 from core.retail import pricing as tax_engine
 from core.retail import po_split
-from config import DATABASE_DIR
+from config import DATABASE_DIR, AURA_AI_ENDPOINT_URL, AURA_AI_BEARER_TOKEN, AURA_AI_TIMEOUT_SECONDS
 
 retail_bp = Blueprint('retail_api', __name__, url_prefix='/api/sub/retail')
 
@@ -2254,3 +2254,93 @@ def sync_health():
     never turn sync on), and Android (Kotlin's SyncCoordinator owns that
     loop). The frontend banner must stay completely silent on it."""
     return jsonify({'status': 'success', 'data': _sync_get_active_health()})
+
+
+# ── AI Assistant (sidebar chat) ─────────────────────────────────────────────
+# Wires up the previously-dead "AI Assistant" sidebar button (see
+# app-shell.js's `hasAI` gate and frontend/sub-ai.js's SubAI module) to a
+# real, already-deployed cloud LLM. See config.py's AURA_AI_* block for the
+# endpoint/token/timeout configuration and why it defaults to a real,
+# already-provisioned endpoint rather than the empty-by-default
+# OWNER_LICENSING_BASE_URL / SYNC_RELAY_BASE_URL pattern.
+
+AI_SYSTEM_PREFACE = (
+    "You are a helpful assistant embedded in Aura Retail, a point-of-sale "
+    "system. Answer briefly and practically."
+)
+
+# Small model (phi3:mini, ~4GB) on a small droplet -- keep the prompt itself
+# small so latency stays reasonable. Caps mirror _AI_HISTORY_TURNS below.
+_AI_MESSAGE_MAX_CHARS = 4000
+_AI_HISTORY_TURN_MAX_CHARS = 2000
+_AI_HISTORY_TURNS = 10
+
+
+def _build_ai_prompt(message, history):
+    """phi3:mini via /api/generate takes one flat prompt string, not a
+    structured chat-messages array, so multi-turn context has to be
+    flattened here. `history` is the optional client-supplied
+    [{role, content}] list -- only the most recent turns are kept and each
+    turn is truncated, so a long-running chat session can't balloon the
+    prompt sent to a 4GB model on a small droplet."""
+    lines = [AI_SYSTEM_PREFACE, '']
+    for turn in (history or [])[-_AI_HISTORY_TURNS:]:
+        if not isinstance(turn, dict):
+            continue
+        role = 'User' if turn.get('role') == 'user' else 'Assistant'
+        content = str(turn.get('content') or '')[:_AI_HISTORY_TURN_MAX_CHARS].strip()
+        if content:
+            lines.append(f"{role}: {content}")
+    lines.append(f"User: {message}")
+    lines.append("Assistant:")
+    return "\n".join(lines)
+
+
+@retail_bp.route('/ai/chat', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def ai_chat():
+    """Proxy one chat turn to the hosted AI assistant. Must never crash or
+    hang the app: any network failure, timeout, non-200, or unparseable
+    response returns a clean 503 JSON error -- never a 500/stack trace --
+    that the frontend renders as "AI assistant is temporarily unavailable."
+    The bearer token lives only in this process's env/config; it is never
+    included in the response sent to the browser."""
+    data = request.get_json(silent=True) or {}
+    message = str(data.get('message') or '').strip()[:_AI_MESSAGE_MAX_CHARS]
+    if not message:
+        return jsonify({'success': False, 'error': 'Message is required.'}), 400
+
+    history = data.get('history')
+    if not isinstance(history, list):
+        history = []
+
+    prompt = _build_ai_prompt(message, history)
+
+    try:
+        resp = requests.post(
+            AURA_AI_ENDPOINT_URL,
+            headers={'Authorization': f'Bearer {AURA_AI_BEARER_TOKEN}'},
+            json={'model': 'phi3:mini', 'prompt': prompt, 'stream': False},
+            timeout=AURA_AI_TIMEOUT_SECONDS,
+        )
+    except requests.exceptions.RequestException as e:
+        # Real observed latency for this model/droplet is ~7s for a short
+        # reply -- a timeout or connection error here means the upstream
+        # host is genuinely unreachable/overloaded, not a bug in this route.
+        current_app.logger.warning('AI assistant proxy request failed: %s', type(e).__name__)
+        return jsonify({'success': False, 'error': 'AI assistant is temporarily unavailable.'}), 503
+
+    if resp.status_code != 200:
+        current_app.logger.warning('AI assistant proxy got HTTP %s from upstream', resp.status_code)
+        return jsonify({'success': False, 'error': 'AI assistant is temporarily unavailable.'}), 503
+
+    try:
+        reply = str((resp.json() or {}).get('response') or '').strip()
+    except ValueError:
+        reply = ''
+
+    if not reply:
+        return jsonify({'success': False, 'error': 'AI assistant is temporarily unavailable.'}), 503
+
+    return jsonify({'success': True, 'data': {'reply': reply}})

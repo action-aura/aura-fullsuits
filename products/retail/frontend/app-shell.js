@@ -260,6 +260,27 @@ const SubsystemApp = {
     this._installAuthGuard();
     ThemeEngine.init();
     KPIDragManager.init();
+
+    // Which optional modules (e.g. the AI Assistant) this installation is
+    // licensed for. The standalone-shell trim (2026-08-06) removed the old
+    // multi-subsystem chooser's active-modules fetch/filter entirely since
+    // there was no chooser left to filter -- but `hasAI` in _renderShell()
+    // was deliberately left reading `this.activeModules`, so it silently
+    // evaluated to false with nothing ever populating it. Restored here as
+    // its own standalone fetch (no chooser dependency): backend route is
+    // commercial_runtime/identity/auth_routes.py's /api/auth/active-modules,
+    // which defaults to ['all'] whenever AURA_APP_DATA/config.json doesn't
+    // explicitly restrict `modules` -- i.e. every install shows the AI
+    // button unless it was deliberately license-restricted. Never blocks
+    // the rest of init(): a failed/slow fetch just leaves the button hidden,
+    // same as any other network hiccup.
+    try {
+      const mods = await fetch('/api/auth/active-modules', { cache: 'no-store' }).then(r => r.json());
+      this.activeModules = (mods && mods.modules) || [];
+    } catch (e) {
+      this.activeModules = [];
+    }
+
   // ── Auth gate ─────────────────────────────────────────────────────────────
   // Before rendering anything, check if the user is authenticated.
   // On first launch (no admin exists) → show account setup.
