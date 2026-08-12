@@ -258,6 +258,14 @@ const SubsystemApp = {
         // (not just disabled) on any device that isn't this company's
         // single admin device, fail-closed if the check couldn't run.
         { id: 'admin-center', label: 'Admin Center',    icon: '🛡️', adminOnly: true },
+        // feat/audit-log-viewer: same adminOnly mechanism as Admin Center
+        // above -- refund/void/product-change audit trail carries every
+        // user's attribution, not just this device's, so it's gated the
+        // same way rather than shown to every logged-in user. The backend
+        // route (GET /api/sub/retail/audit-log) also enforces this itself
+        // (see retail_api.py's _is_admin_device) -- unlike Admin Center's
+        // reorder-requests route, this one does NOT rely on nav-hiding alone.
+        { id: 'audit-log',   label: 'Audit Log',        icon: '📜', adminOnly: true },
       ]
     },
   },

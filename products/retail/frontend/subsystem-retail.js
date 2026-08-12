@@ -75,6 +75,7 @@ const RetailSystem = {
       case 'reports':   return this._renderReports(c);
       case 'scanner':   return this._renderScannerSettings(c);
       case 'admin-center': return this._renderAdminCenter(c);
+      case 'audit-log':    return this._renderAuditLog(c);
       default:
         c.innerHTML = `<div style="text-align:center;padding:80px;color:var(--text-muted)"><h2>${sectionId}</h2><p>Coming soon.</p></div>`;
     }
@@ -2279,6 +2280,180 @@ const RetailSystem = {
       console.error('Reorder request decline failed', e);
       SubsystemApp.showToast(t('Could not decline this request.'), 'error');
     }
+  },
+
+  // ── AUDIT LOG (read-only viewer, feat/audit-log-viewer) ─────────────────────
+  // _audit() in retail_api.py has written every row this page shows since the
+  // very first version of that file -- refunds, voids, product/customer/
+  // supplier CRUD, PO lifecycle, reorder decisions, payments -- with real
+  // user_id attribution. This is the first (and only) place any of it is
+  // ever read back. Gated adminOnly in app-shell.js's nav AND enforced
+  // server-side (list_audit_log 403s a non-admin device directly) -- see
+  // that route's docstring for why this one doesn't rely on nav-hiding alone
+  // the way Admin Center's reorder-requests page does.
+  async _renderAuditLog(c) {
+    this._injectStyles();
+    // Local UI state, not persisted -- a fresh page visit always starts on
+    // page 1 with no filters, same as every other list page in this file.
+    this._auditLog = { page: 1, limit: 50, date_from: '', date_to: '', action: '', entity: '', totalPages: 1 };
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <h2 class="ret-title">${t('Audit Log')}</h2>
+      </div>
+      <div class="sub-chart-card">
+        <div class="ret-field-row" style="grid-template-columns:1fr 1fr 1.3fr 1.3fr auto;gap:10px;align-items:end;margin-bottom:18px">
+          <div class="ret-field" style="margin:0"><label>${t('From')}</label>
+            <input type="date" id="aud-from" onchange="RetailSystem._applyAuditFilters()" /></div>
+          <div class="ret-field" style="margin:0"><label>${t('To')}</label>
+            <input type="date" id="aud-to" onchange="RetailSystem._applyAuditFilters()" /></div>
+          <div class="ret-field" style="margin:0"><label>${t('Action')}</label>
+            <select id="aud-action" onchange="RetailSystem._applyAuditFilters()"><option value="">${t('All actions')}</option></select></div>
+          <div class="ret-field" style="margin:0"><label>${t('Entity')}</label>
+            <select id="aud-entity" onchange="RetailSystem._applyAuditFilters()"><option value="">${t('All entities')}</option></select></div>
+          <button class="ret-btn ret-btn-ghost" style="height:38px" onclick="RetailSystem._clearAuditFilters()">${t('Clear')}</button>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="ret-table" id="aud-table">
+            <thead><tr><th>${t('Timestamp')}</th><th>${t('User')}</th><th>${t('Action')}</th><th>${t('Entity')}</th><th>${t('Details')}</th></tr></thead>
+            <tbody><tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
+          </table>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px">
+          <span id="aud-summary" style="color:var(--text-muted);font-size:12px"></span>
+          <div>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" id="aud-prev" onclick="RetailSystem._auditPage(-1)">${t('‹ Prev')}</button>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" id="aud-next" style="margin-left:6px" onclick="RetailSystem._auditPage(1)">${t('Next ›')}</button>
+          </div>
+        </div>
+      </div>`;
+    await this._loadAuditLog();
+  },
+
+  async _loadAuditLog() {
+    const s = this._auditLog;
+    const qs = new URLSearchParams();
+    qs.set('page', s.page);
+    qs.set('limit', s.limit);
+    if (s.date_from) qs.set('date_from', s.date_from);
+    if (s.date_to)   qs.set('date_to', s.date_to);
+    if (s.action)    qs.set('action', s.action);
+    if (s.entity)    qs.set('entity', s.entity);
+
+    const tbody = document.querySelector('#aud-table tbody');
+    const summary = document.getElementById('aud-summary');
+    try {
+      const res = await this._get(`/api/sub/retail/audit-log?${qs.toString()}`);
+      if (res.status !== 'success') {
+        // Reachable if a non-admin device somehow lands on this page directly
+        // (URL typed by hand, bookmark, etc) -- the nav entry is hidden, but
+        // the server's own _is_admin_device check (list_audit_log) is what
+        // actually enforces this, so show its real message rather than a
+        // generic "no results" that would misrepresent a permission denial.
+        if (tbody) tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#ef4444;padding:30px">${this._esc(res.message || t('Could not load the audit log.'))}</td></tr>`;
+        if (summary) summary.textContent = '';
+        return;
+      }
+      const data = res.data || [];
+      const meta = res.meta || {};
+      this._populateAuditFilterOptions(meta.actions || [], meta.entities || []);
+
+      if (!tbody) return;
+      if (!data.length) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:30px">${t('No audit entries match these filters.')}</td></tr>`;
+      } else {
+        tbody.innerHTML = data.map(r => `<tr>
+          <td style="color:var(--text-muted);white-space:nowrap">${this._auditTimestamp(r.timestamp)}</td>
+          <td style="font-family:monospace;font-size:12px">${this._esc(r.user_id || 'system')}</td>
+          <td>${this._badge(this._esc(r.action || ''), this._auditActionColor(r.action))}</td>
+          <td style="color:var(--text-muted)">${this._esc(r.entity || '—')}${r.entity_id != null ? ' #' + this._esc(r.entity_id) : ''}</td>
+          <td style="color:var(--text-muted);max-width:360px;white-space:normal">${this._esc(r.details || '')}</td>
+        </tr>`).join('');
+      }
+
+      const total = meta.total || 0;
+      const limit = meta.limit || s.limit;
+      const page  = meta.page || s.page;
+      s.totalPages = Math.max(1, Math.ceil(total / limit));
+      if (summary) summary.textContent = `${t('Page')} ${page} ${t('of')} ${s.totalPages} · ${total} ${t('total entries')}`;
+      const prevBtn = document.getElementById('aud-prev');
+      const nextBtn = document.getElementById('aud-next');
+      if (prevBtn) prevBtn.disabled = page <= 1;
+      if (nextBtn) nextBtn.disabled = page >= s.totalPages;
+    } catch (e) {
+      console.error('Audit log load failed', e);
+      if (tbody) tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#ef4444;padding:30px">${t('Could not load the audit log.')}</td></tr>`;
+    }
+  },
+
+  // Only builds each <select>'s options once per page visit (guarded by
+  // dataset.built) -- meta.actions/meta.entities are identical across pages
+  // of the SAME filter set, and rebuilding on every _loadAuditLog() call
+  // would blow away whatever the user just picked.
+  _populateAuditFilterOptions(actions, entities) {
+    const s = this._auditLog;
+    const actionSel = document.getElementById('aud-action');
+    const entitySel = document.getElementById('aud-entity');
+    if (actionSel && !actionSel.dataset.built) {
+      actionSel.innerHTML = `<option value="">${t('All actions')}</option>` +
+        actions.map(a => `<option value="${this._esc(a)}">${this._esc(a)}</option>`).join('');
+      actionSel.value = s.action;
+      actionSel.dataset.built = '1';
+    }
+    if (entitySel && !entitySel.dataset.built) {
+      entitySel.innerHTML = `<option value="">${t('All entities')}</option>` +
+        entities.map(en => `<option value="${this._esc(en)}">${this._esc(en)}</option>`).join('');
+      entitySel.value = s.entity;
+      entitySel.dataset.built = '1';
+    }
+  },
+
+  _applyAuditFilters() {
+    const s = this._auditLog;
+    s.date_from = document.getElementById('aud-from').value;
+    s.date_to   = document.getElementById('aud-to').value;
+    s.action    = document.getElementById('aud-action').value;
+    s.entity    = document.getElementById('aud-entity').value;
+    s.page = 1;
+    this._loadAuditLog();
+  },
+
+  _clearAuditFilters() {
+    document.getElementById('aud-from').value = '';
+    document.getElementById('aud-to').value = '';
+    document.getElementById('aud-action').value = '';
+    document.getElementById('aud-entity').value = '';
+    this._applyAuditFilters();
+  },
+
+  _auditPage(delta) {
+    const s = this._auditLog;
+    const next = s.page + delta;
+    if (next < 1 || next > (s.totalPages || 1)) return;
+    s.page = next;
+    this._loadAuditLog();
+  },
+
+  _auditActionColor(action) {
+    const a = String(action || '');
+    if (a.includes('DELETE') || a.includes('VOID')) return 'red';
+    if (a.includes('CREATE')) return 'green';
+    if (a.includes('UPDATE') || a.includes('ADJUST')) return 'blue';
+    if (a.includes('PAYMENT')) return 'purple';
+    return 'yellow';
+  },
+
+  // audit_log.timestamp is SQLite's raw CURRENT_TIMESTAMP default -- UTC,
+  // formatted "YYYY-MM-DD HH:MM:SS" with no 'T' and no zone suffix. Handing
+  // that string to `new Date()` as-is gets parsed as LOCAL time (silently
+  // wrong by the server's UTC offset) -- the exact class of bug
+  // process_return's created_at comment above warns about, just the mirror
+  // case: that route writes local time deliberately; this table stores UTC
+  // deliberately (it's an append-only audit trail, never netted by local
+  // calendar day), so the fix here is on the READ side, not the write side.
+  _auditTimestamp(ts) {
+    if (!ts) return '—';
+    const d = new Date(String(ts).replace(' ', 'T') + 'Z');
+    return isNaN(d.getTime()) ? this._esc(ts) : d.toLocaleString();
   },
 
   // ── RETURNS ───────────────────────────────────────────────────────────────
