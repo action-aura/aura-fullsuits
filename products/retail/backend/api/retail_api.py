@@ -1546,6 +1546,173 @@ def get_sale(sale_id):
     conn.close()
     return jsonify({'status': 'success', 'data': {'sale': dict(sale), 'items': [dict(i) for i in items]}})
 
+# ── Held Sales (park / resume) ─────────────────────────────────────────────────
+# "I had two transactions -- one was mid-payment, I forgot something, wanted
+# to pause it, ring up the second customer, then come back and finish the
+# first" -- real hands-on-testing feedback; the POS cart previously lived
+# ONLY in RetailSystem._cart (frontend/subsystem-retail.js), reset to []
+# every time _renderPOS() runs, so navigating away (or nothing at all --
+# see _renderPOS's unconditional reset) silently dropped it.
+#
+# A held sale is PRE-completion cart state, not a commercial transaction --
+# deliberately its own table (held_sales, schema.py v9->v11 -- see
+# _migrate_add_held_sales for why this skips v10, claimed by the unmerged
+# feat/shift-cash-drawer branch), never a row in sales/sale_items, and this
+# section never calls into create_sale or touches
+# its financial-record guarantees. subtotal/total stored here are
+# DISPLAY-ONLY (rendered in the resume picker); POST /sales (unchanged)
+# always recomputes the real, authoritative figures from live product data
+# when a resumed cart is actually checked out, exactly as it would for any
+# freshly-built cart -- AUDIT-002/AUDIT-003's server-authority guarantee is
+# untouched by this feature.
+#
+# Local-only / not part of commercial_runtime/sync/'s outbox -- explicit
+# design decision, not an oversight: a mid-edit cart on one till has no
+# reason to appear on another device, and syncing it would require solving
+# conflict resolution (two devices resuming/editing the same held sale) that
+# this feature doesn't need to take on. If multi-device hold/resume is ever
+# wanted, treat it as a new, separate design pass, not a bolt-on here.
+#
+# All three mutation routes below share POST /sales's own capability gate
+# (retail.sale.create) -- holding, resuming, and discarding a held sale are
+# all part of the same "can this install work a new sale at all" workflow,
+# not separate capabilities. The GET (list) route has no capability gate,
+# matching every other read-only list_* route in this file (always allowed,
+# restricted-mode or not).
+
+@retail_bp.route('/held-sales', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def list_held_sales():
+    cid = _cid()
+    conn = get_retail_conn()
+    _ensure_credit_schema(conn)
+    rows = conn.execute("""
+        SELECT hs.id, hs.hold_number, hs.label, hs.item_count, hs.subtotal, hs.total,
+               hs.customer_id, COALESCE(c.name,'Walk-in') as customer_name,
+               hs.held_by, hs.created_at
+        FROM held_sales hs LEFT JOIN customers c ON hs.customer_id=c.id AND c.company_id=hs.company_id
+        WHERE hs.company_id=? ORDER BY hs.created_at DESC
+    """, (cid,)).fetchall()
+    conn.close()
+    return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
+
+@retail_bp.route('/held-sales', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.sale.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+def hold_sale():
+    """Snapshot the current in-progress cart; the frontend clears its own
+    `_cart` immediately after a successful hold so the till is free for the
+    next customer (mirrors how _checkout() already clears the cart on a
+    successful sale)."""
+    data = request.json or {}
+    items = data.get('items') or []
+    if not items:
+        return jsonify({'status': 'error', 'message': 'Cannot hold an empty cart.'}), 400
+
+    cid = _cid()
+    conn = get_retail_conn()
+    _ensure_credit_schema(conn)
+    cur = conn.cursor()
+    try:
+        bid = int(data.get('branch_id') or _default_branch(conn, cid))
+        customer_id = data.get('customer_id') or None
+        label = (data.get('label') or '').strip()[:200]
+        discount_pct = tax_engine.clamp_discount_pct(data.get('discount_pct', 0))
+        payment_method = data.get('payment_method', 'cash')
+
+        # Client-submitted, DISPLAY-ONLY -- never fed into a financial record
+        # (see section banner above). Falls back to summing the cart's own
+        # line_total figures if the client didn't send pre-computed totals.
+        item_count = len(items)
+        subtotal = _money(data.get('subtotal', sum(float(i.get('line_total', 0)) for i in items)))
+        total = _money(data.get('total', subtotal))
+
+        snapshot = json.dumps({
+            'items': items,
+            'discount_pct': discount_pct,
+            'payment_method': payment_method,
+            'customer_id': customer_id,
+        })
+
+        hold_number = f"{_next_ref(conn, cid, 'hold')}-{str(cid)[:8]}"
+        cur.execute("""
+            INSERT INTO held_sales (company_id,branch_id,customer_id,hold_number,label,
+                                     cart_json,item_count,subtotal,total,held_by)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+        """, (cid, bid, customer_id, hold_number, label, snapshot, item_count, subtotal, total, _uid()))
+        held_id = cur.lastrowid
+        _audit(conn, 'SALE_HELD', 'held_sale', held_id, f'{hold_number} items={item_count} total={total}')
+        conn.commit()
+        return jsonify({'status': 'success', 'data': {
+            'id': held_id, 'hold_number': hold_number, 'item_count': item_count,
+            'subtotal': subtotal, 'total': total,
+        }})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        conn.close()
+
+@retail_bp.route('/held-sales/<int:held_id>/resume', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.sale.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+def resume_held_sale(held_id):
+    """Loads the snapshot back out and deletes the held row in the same
+    transaction -- a resumed sale is either completed or re-held under a
+    brand-new hold_number; there is no "resumed but still parked" state, so
+    nothing lingers. company_id-scoped lookup, same as every other by-id
+    route in this file -- a caller cannot resume another company's held sale
+    by guessing an id. History of the action survives in audit_log even
+    though the held_sales row itself is gone."""
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM held_sales WHERE id=? AND company_id=?", (held_id, cid)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'Held sale not found.'}), 404
+        conn.execute("DELETE FROM held_sales WHERE id=? AND company_id=?", (held_id, cid))
+        _audit(conn, 'SALE_RESUMED', 'held_sale', held_id, row['hold_number'])
+        conn.commit()
+        snapshot = json.loads(row['cart_json'])
+        return jsonify({'status': 'success', 'data': {
+            'id': row['id'], 'hold_number': row['hold_number'], 'label': row['label'],
+            'items': snapshot.get('items', []),
+            'discount_pct': snapshot.get('discount_pct', 0),
+            'payment_method': snapshot.get('payment_method', 'cash'),
+            'customer_id': snapshot.get('customer_id'),
+        }})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        conn.close()
+
+@retail_bp.route('/held-sales/<int:held_id>', methods=['DELETE'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.sale.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+def discard_held_sale(held_id):
+    """Explicit delete only -- no silent/automatic expiry of stale held
+    sales (see schema.py v3->v4 comment). A cashier who parked a sale by
+    mistake, or one that's gone stale, must consciously discard it; nothing
+    in this feature ever removes a held_sales row on its own."""
+    cid = _cid()
+    conn = get_retail_conn()
+    row = conn.execute("SELECT hold_number FROM held_sales WHERE id=? AND company_id=?", (held_id, cid)).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Held sale not found.'}), 404
+    conn.execute("DELETE FROM held_sales WHERE id=? AND company_id=?", (held_id, cid))
+    _audit(conn, 'HELD_SALE_DISCARDED', 'held_sale', held_id, row['hold_number'])
+    conn.commit(); conn.close()
+    return jsonify({'status': 'success'})
+
 # ── Returns ───────────────────────────────────────────────────────────────────
 
 @retail_bp.route('/returns', methods=['GET'])
@@ -1939,7 +2106,7 @@ def _money(x):
 def _now():
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-_REF_PREFIX = {'sale': 'SALE', 'receipt': 'REC', 'po': 'PO', 'supplier_payment': 'PAY', 'return': 'RET'}
+_REF_PREFIX = {'sale': 'SALE', 'receipt': 'REC', 'po': 'PO', 'supplier_payment': 'PAY', 'return': 'RET', 'hold': 'HOLD'}
 
 def _next_ref(conn, cid, doc_type):
     """Atomic, zero-padded, human-readable + searchable reference (e.g. REC-000053)."""

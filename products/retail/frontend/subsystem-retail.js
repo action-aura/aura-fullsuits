@@ -170,6 +170,15 @@ const RetailSystem = {
   },
   _fmtNum(n) { return (+(n||0)).toLocaleString(); },
   _badge(text, color) { return `<span class="ret-badge ret-badge-${color||'blue'}">${text}</span>`; },
+  // Held-sale labels are free text a cashier types on the spot (unlike
+  // product/customer names, which come from admin-entered catalog data) --
+  // escaped before going into innerHTML so a stray `<`/`"`/`'` can't break
+  // the held-sales list markup or self-XSS the page.
+  _esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+  },
 
   // ── DASHBOARD ─────────────────────────────────────────────────────────────
   async _renderDashboard(c) {
@@ -347,6 +356,8 @@ const RetailSystem = {
           <div class="pos-pane-hdr">
             <h3 style="margin:0;color:#fff;font-size:17px">Products</h3>
             <div style="display:flex;gap:10px;align-items:center">
+              <button class="ret-btn ret-btn-ghost ret-btn-sm" id="pos-held-btn" onclick="RetailSystem._openHeldSalesModal()"
+                title="Browse and resume sales you've held">📋 Held (<span id="pos-held-count">0</span>)</button>
               <input class="pos-search" id="pos-search" placeholder="Search or scan barcode…" oninput="RetailSystem._filterPOS()" />
             </div>
           </div>
@@ -364,6 +375,8 @@ const RetailSystem = {
               <select id="pos-customer" style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:7px;color:#94a3b8;padding:6px 10px;font-size:12px;outline:none">
                 <option value="">Walk-in</option>
               </select>
+              <button onclick="RetailSystem._holdSale()" title="Park this sale and start a new one"
+                style="background:none;border:none;color:#fbbf24;cursor:pointer;font-size:12px;font-weight:600">⏸ Hold</button>
               <button onclick="RetailSystem._clearCart()" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:12px;font-weight:600">Clear</button>
             </div>
           </div>
@@ -413,11 +426,12 @@ const RetailSystem = {
 
   async _loadPOSData() {
     try {
-      const [prods, cats, custs, taxSettings] = await Promise.all([
+      const [prods, cats, custs, taxSettings, held] = await Promise.all([
         this._get('/api/sub/retail/products'),
         this._get('/api/sub/retail/categories'),
         this._get('/api/sub/retail/customers'),
         this._get('/api/sub/retail/settings/tax').catch(() => null),
+        this._get('/api/sub/retail/held-sales').catch(() => null),
       ]);
       this._products   = prods.data || [];
       this._categories = cats.data  || [];
@@ -425,6 +439,8 @@ const RetailSystem = {
       // Company's configured tax-calculation policy (core/retail/pricing.py
       // is the authoritative spec for what these two modes compute).
       this._taxMode = (taxSettings && taxSettings.data && taxSettings.data.tax_calculation_mode) || 'after_discount';
+      const heldCountEl = document.getElementById('pos-held-count');
+      if (heldCountEl) heldCountEl.textContent = (held && held.data || []).length;
 
       // Populate category bar
       const catBar = document.getElementById('pos-cats');
@@ -531,6 +547,183 @@ const RetailSystem = {
   _clearCart() {
     this._cart = [];
     this._renderCart();
+  },
+
+  // ── Hold / Resume sale (park a cart, come back to it later) ────────────────
+  // Real hands-on-testing feedback: a cashier mid-payment on one sale had no
+  // way to set it aside, ring up a second customer, then come back and
+  // finish the first — the cart lives only in `this._cart`, and _renderPOS()
+  // resets it to [] every time the POS screen renders. This gives that cart
+  // a server-side parking spot (POST /api/sub/retail/held-sales) so it
+  // survives navigating away, without ever touching the real checkout
+  // (/sales) endpoint or its financial-record guarantees.
+  _holdSale() {
+    if (!this._cart.length) { SubsystemApp.showToast('Cart is empty — nothing to hold', 'error'); return; }
+    const overlay = document.createElement('div');
+    overlay.className = 'ret-modal-overlay';
+    overlay.id = 'ret-hold-modal';
+    overlay.innerHTML = `
+      <div class="ret-modal" style="width:420px">
+        <h3>⏸ Hold This Sale</h3>
+        <p style="color:var(--text-muted);margin:0 0 18px;font-size:13px;line-height:1.5">
+          The cart is parked and cleared here so you can start a new sale. Resume it later from "Held Sales".
+        </p>
+        <div class="ret-field">
+          <label>Note (optional — e.g. "Table 4", customer name)</label>
+          <input id="hold-label" placeholder="Helps you find it later" maxlength="200" />
+        </div>
+        <div class="ret-modal-footer">
+          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-hold-modal').remove()">Cancel</button>
+          <button class="ret-btn ret-btn-primary" id="hold-save-btn" onclick="RetailSystem._saveHold()">Hold Sale</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    document.getElementById('hold-label')?.focus();
+  },
+
+  async _saveHold() {
+    const btn = document.getElementById('hold-save-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Holding…'; }
+    const label = document.getElementById('hold-label')?.value.trim() || '';
+    const customerId = document.getElementById('pos-customer')?.value || null;
+    const payload = {
+      items: this._cart,
+      // customer_id is a UUID string on this schema (customers.id, since the
+      // multi-device sync foundation's UUID migration) -- NOT coerced with
+      // `+` the way an earlier version of this branch did. That coercion
+      // was written back when customers.id was still a plain autoincrement
+      // integer; against a real UUID it silently produces NaN, which
+      // JSON.stringify then serializes as null, dropping the customer link
+      // without any visible error. _checkout() below already sends
+      // customer_id the same un-coerced way -- this mirrors that.
+      customer_id: customerId || null,
+      label,
+      discount_pct: parseFloat(document.getElementById('pos-disc')?.value || 0),
+      payment_method: this._paymentMethod,
+      // Display-only figures for the resume picker (see held-sales route
+      // comments in retail_api.py) — the real checkout total is always
+      // recomputed server-side from live product data when this cart is
+      // eventually resumed and actually charged.
+      subtotal: this._currentTotals.subtotal || 0,
+      total: this._currentTotals.total || 0,
+    };
+    try {
+      const data = await this._post('/api/sub/retail/held-sales', payload);
+      if (data.status === 'success') {
+        document.getElementById('ret-hold-modal')?.remove();
+        this._clearCart();
+        const discInput = document.getElementById('pos-disc');
+        if (discInput) discInput.value = 0;
+        const tenderedInput = document.getElementById('pos-tendered');
+        if (tenderedInput) tenderedInput.value = '';
+        SubsystemApp.showToast(`Sale held — ${data.data.hold_number}`, 'success');
+        this._refreshHeldCount();
+      } else {
+        SubsystemApp.showToast(data.message || 'Could not hold sale', 'error');
+        if (btn) { btn.disabled = false; btn.textContent = 'Hold Sale'; }
+      }
+    } catch (e) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Hold Sale'; }
+    }
+  },
+
+  async _refreshHeldCount() {
+    try {
+      const data = await this._get('/api/sub/retail/held-sales');
+      const el = document.getElementById('pos-held-count');
+      if (el) el.textContent = (data.data || []).length;
+    } catch (e) { /* non-fatal — badge just stays stale until the next POS load */ }
+  },
+
+  _openHeldSalesModal() {
+    const overlay = document.createElement('div');
+    overlay.className = 'ret-modal-overlay';
+    overlay.id = 'ret-held-modal';
+    overlay.innerHTML = `
+      <div class="ret-modal ret-modal-wide">
+        <h3>📋 Held Sales</h3>
+        <div id="held-list" style="max-height:50vh;overflow-y:auto">
+          <div style="text-align:center;color:var(--text-muted);padding:30px">Loading…</div>
+        </div>
+        <div class="ret-modal-footer">
+          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-held-modal').remove()">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    this._loadHeldList();
+  },
+
+  async _loadHeldList() {
+    const box = document.getElementById('held-list');
+    if (!box) return;
+    try {
+      const data = await this._get('/api/sub/retail/held-sales');
+      const rows = data.data || [];
+      const countEl = document.getElementById('pos-held-count');
+      if (countEl) countEl.textContent = rows.length;
+      if (!rows.length) {
+        box.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:30px">No held sales.</div>';
+        return;
+      }
+      box.innerHTML = rows.map(r => {
+        const when = new Date((r.created_at || '').replace(' ', 'T')).toLocaleString();
+        const noteHtml = r.label ? ` — ${this._esc(r.label)}` : '';
+        return `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 4px;border-bottom:1px solid rgba(255,255,255,0.06)">
+          <div>
+            <div style="color:#fff;font-weight:600;font-size:13px">${this._esc(r.hold_number)}${noteHtml}</div>
+            <div style="color:var(--text-muted);font-size:11px">${r.item_count} item${r.item_count===1?'':'s'} · ${this._esc(r.customer_name)} · ${when}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="color:#fff;font-weight:700">${this._fmt(r.total)}</span>
+            <button class="ret-btn ret-btn-primary ret-btn-sm" onclick="RetailSystem._resumeHeldSale(${r.id})">Resume</button>
+            <button class="ret-btn ret-btn-danger ret-btn-sm" onclick="RetailSystem._discardHeldSale(${r.id})">Discard</button>
+          </div>
+        </div>`;
+      }).join('');
+    } catch (e) {
+      box.innerHTML = '<div style="text-align:center;color:#ef4444;padding:20px">Failed to load held sales.</div>';
+    }
+  },
+
+  async _resumeHeldSale(id) {
+    if (this._cart.length && !confirm('Your current cart is not empty. Resuming will replace it with the held sale. Continue?')) return;
+    try {
+      const data = await this._post(`/api/sub/retail/held-sales/${id}/resume`, {});
+      if (data.status !== 'success') { SubsystemApp.showToast(data.message || 'Could not resume sale', 'error'); return; }
+      const snap = data.data;
+      this._cart = snap.items || [];
+      this._paymentMethod = snap.payment_method || 'cash';
+      document.getElementById('ret-held-modal')?.remove();
+      this._renderCart();
+      const discInput = document.getElementById('pos-disc');
+      if (discInput) discInput.value = snap.discount_pct || 0;
+      if (snap.customer_id) {
+        const sel = document.getElementById('pos-customer');
+        if (sel) sel.value = String(snap.customer_id);
+      }
+      document.querySelectorAll('.pos-pay-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.method === this._paymentMethod);
+      });
+      this._recalc();
+      this._refreshHeldCount();
+      SubsystemApp.showToast(`Resumed ${snap.hold_number}`, 'success');
+    } catch (e) { /* _fetch already surfaces auth errors via toast/redirect */ }
+  },
+
+  async _discardHeldSale(id) {
+    if (!confirm('Discard this held sale? This cannot be undone.')) return;
+    try {
+      const data = await this._del(`/api/sub/retail/held-sales/${id}`);
+      if (data.status === 'success') {
+        SubsystemApp.showToast('Held sale discarded', 'success');
+        this._loadHeldList();
+      } else {
+        SubsystemApp.showToast(data.message || 'Could not discard held sale', 'error');
+      }
+    } catch (e) { /* _fetch already surfaces auth errors via toast/redirect */ }
   },
 
   _renderCart() {

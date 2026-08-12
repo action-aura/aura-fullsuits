@@ -30,6 +30,10 @@ Built directly from every `@retail_bp.route` in `products/retail/backend/api/ret
 | `/sales/<id>` | GET | `retail.records.read` | Yes |
 | `/returns` | GET | `retail.records.read` | Yes |
 | `/returns` | POST | `retail.return.create` | **Policy decision required -- see below** |
+| `/held-sales` | GET | `retail.records.read` | Yes |
+| `/held-sales` | POST | `retail.sale.create` (feat/pos-hold-resume-sale -- same gate as `/sales` POST; holding a cart is part of the same new-sale workflow, not a distinct capability) | **No** |
+| `/held-sales/<id>/resume` | POST | `retail.sale.create` (same reasoning) | **No** |
+| `/held-sales/<id>` | DELETE | `retail.sale.create` (same reasoning -- discarding a held draft is still part of the gated new-sale workflow, consistent with every other mutation route in this file carrying a capability decorator) | **No** |
 | `/reports/sales-trend` | GET | `retail.report.view` | Yes |
 | `/reports/top-products` | GET | `retail.report.view` | Yes |
 | `/reports/payment-methods` | GET | `retail.report.view` | Yes |
