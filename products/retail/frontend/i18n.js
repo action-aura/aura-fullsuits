@@ -116,7 +116,9 @@
       this.current = lang;
       localStorage.setItem('aura_lang', lang);
       this.apply();
-      // The header isn't re-rendered on language change, so update the toggle label in place.
+      // Immediate feedback while the rebuild below runs; _renderShell() (via
+      // launch(), just below) recreates this exact button with the correct
+      // label moments later, so this is belt-and-braces, not load-bearing.
       const _tb = document.getElementById('aura-lang-toggle');
       if (_tb) _tb.textContent = (lang === 'ar') ? 'EN' : 'ع';
       // Persist to the user account (best-effort; ignored pre-login / offline)
@@ -127,10 +129,32 @@
           body: JSON.stringify({ language: lang }),
         });
       } catch (e) { /* localStorage already holds it */ }
-      // Re-render the active product view so t() re-runs (no full page reload)
+      // Rebuild the WHOLE shell (sidebar + header), not just #sub-content.
+      //
+      // Bug (reported by hands-on tester, pre-demo): switch language then
+      // switch back -> sidebar nav labels and the header title stay stuck
+      // in the previous language until a manual page refresh. Root cause:
+      // this used to call SubsystemApp._navigate(), which only replaces
+      // #sub-content. The sidebar/header live in #subsystem-shell, built by
+      // SubsystemApp._renderShell() -- only launch() calls that. Meanwhile
+      // apply() above already mutated the OLD sidebar/header text nodes
+      // in place via _translateTree()'s bare text-node sweep (not just the
+      // tagged [data-i18n] elements), and that sweep is destructive: it
+      // overwrites node.nodeValue with the translation and keeps no record
+      // of the original English string, so there is nothing for apply()'s
+      // English fast-path (`if (this.current === 'en') return;` above) to
+      // restore later -- the only way those specific nodes see English
+      // again is by being regenerated from the `t()`-driven template
+      // strings in _renderShell(), which _navigate() alone never runs.
+      // No JS error was ever thrown, which is why this looked like a
+      // silent freeze rather than a crash. launch() re-runs the exact same
+      // render path app boot already uses (idempotent: re-arms the sync
+      // banner poll and drag-init behind guards, harmless to call again),
+      // so this fixes the round trip instead of papering over it with a
+      // programmatic location.reload().
       try {
         if (window.SubsystemApp && SubsystemApp.active) {
-          SubsystemApp._navigate(SubsystemApp.currentSection || 'dashboard');
+          SubsystemApp.launch(SubsystemApp.active, SubsystemApp.currentSection || 'dashboard');
         } else if (window.SubsystemApp && typeof SubsystemApp.init === 'function') {
           SubsystemApp.init();
         }
