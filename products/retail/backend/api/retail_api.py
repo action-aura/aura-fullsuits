@@ -92,6 +92,31 @@ def _default_branch(conn, cid):
                 (cid, 'Main Branch', '', ''))
     return cur.lastrowid
 
+def _open_cash_session_id(conn, cid, bid):
+    """Best-effort lookup of the currently OPEN cash_sessions row for this
+    company+branch (feat/shift-cash-drawer, schema v10), used to stamp
+    sales.session_id / returns.session_id at write time so the X/Z report
+    math can attribute a sale/return to the EXACT session it happened in.
+
+    A direct FK stamp, not a branch+time-range lookup at report time --
+    see database/schema.py's RETAIL_SCHEMA_VERSION v10 comment for why a
+    time-range query is the wrong choice here (silently wrong the instant a
+    session spans midnight, or whenever two sessions on the same branch sit
+    back-to-back). Deliberately NEVER raises: returns None on any failure
+    (table not migrated yet, DB error, whatever) rather than let a cash-
+    session lookup ever touch a sale or return's success -- see
+    retail_cash_drawer_regression_test.py, which asserts create_sale's
+    response is byte-for-byte identical whether or not a session is open."""
+    try:
+        row = conn.execute(
+            "SELECT id FROM cash_sessions WHERE company_id=? AND branch_id=? AND status='open' "
+            "ORDER BY opened_at DESC LIMIT 1",
+            (cid, bid)
+        ).fetchone()
+        return row['id'] if row else None
+    except Exception:
+        return None
+
 def _audit(conn, action, entity, entity_id, details=''):
     try:
         conn.execute(
@@ -1327,6 +1352,13 @@ def create_sale():
         now_local = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         bid = int(data.get('branch_id') or _default_branch(conn, cid))
         mode = _settings(conn, cid).get('tax_calculation_mode', tax_engine.DEFAULT_MODE)
+        # feat/shift-cash-drawer (schema v10): best-effort stamp of the
+        # currently open cash session, if any -- see _open_cash_session_id's
+        # own docstring. NULL (an install that never opens a cash session)
+        # changes nothing about this sale; never added to response_data
+        # below, matching core/retail/reorder_hook.py's "never adds a key"
+        # contract exactly (see retail_cash_drawer_regression_test.py).
+        cash_session_id = _open_cash_session_id(conn, cid, bid)
 
         # ── Resolve authoritative line data (server is the sole financial
         # authority -- AUDIT-002/AUDIT-003). unit_price/tax_rate always come
@@ -1438,11 +1470,12 @@ def create_sale():
         cur.execute("""
             INSERT INTO sales (company_id,sale_number,branch_id,customer_id,cashier,
                                subtotal,discount_amount,tax_amount,total,amount_paid,
-                               change_amount,payment_method,status,idempotency_key,notes,created_at,due_date)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?)
+                               change_amount,payment_method,status,idempotency_key,notes,created_at,due_date,
+                               session_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?,?)
         """, (cid, sale_number, bid, customer_id, data.get('cashier', _uid()),
               subtotal, discount, tax, total, paid, change,
-              pm, idem, data.get('notes',''), now_local, due_date))
+              pm, idem, data.get('notes',''), now_local, due_date, cash_session_id))
         sale_id = cur.lastrowid
 
         for line in resolved_lines:
@@ -1682,6 +1715,9 @@ def create_return():
         conn.execute("BEGIN IMMEDIATE")
         bid = sale['branch_id'] or data.get('branch_id') or _default_branch(conn, cid)
         mode = _settings(conn, cid).get('tax_calculation_mode', tax_engine.DEFAULT_MODE)
+        # feat/shift-cash-drawer (schema v10): same best-effort session stamp
+        # as create_sale above -- see _open_cash_session_id's docstring.
+        cash_session_id = _open_cash_session_id(conn, cid, bid)
 
         resolved_items = []
         refund_total = Decimal('0')
@@ -1743,10 +1779,12 @@ def create_return():
         now_local = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         cur.execute("""
             INSERT INTO returns (company_id,return_number,sale_id,branch_id,cashier,
-                                 reason,refund_method,refund_amount,status,idempotency_key,created_at)
-            VALUES (?,?,?,?,?,?,?,?,'completed',?,?)
+                                 reason,refund_method,refund_amount,status,idempotency_key,created_at,
+                                 session_id)
+            VALUES (?,?,?,?,?,?,?,?,'completed',?,?,?)
         """, (cid, ret_num, sale_id, bid, _uid(),
-              data.get('reason','Customer return'), data.get('refund_method','cash'), refund, idem, now_local))
+              data.get('reason','Customer return'), data.get('refund_method','cash'), refund, idem, now_local,
+              cash_session_id))
         ret_id = cur.lastrowid
         for line in resolved_items:
             pid, qty = line['product_id'], line['quantity']
@@ -1773,6 +1811,307 @@ def create_return():
             'idempotency_key': idem, 'items': resolved_items,
             'calculation_version': tax_engine.CALCULATION_VERSION,
         }})
+    except Exception as e:
+        conn.rollback(); conn.close()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# ── Cash Drawer / Shift Management (feat/shift-cash-drawer, schema v10) ────────
+# Real cash-drawer management: opening float, mid-shift float in/out (and
+# ad-hoc paid-in/paid-out) tracking, and X/Z reports. X = a live, read-only
+# snapshot of what the drawer SHOULD contain right now -- never locks
+# anything, callable any number of times mid-shift. Z = the end-of-shift
+# close-out: counts the drawer, compares counted vs. expected, records the
+# variance, and locks the session (status -> 'closed'; no route below ever
+# reopens or edits a closed session -- immutability once closed, matching
+# this file's "never edit/delete, only reverse" policy for payments above).
+#
+# Every mutation route below is guarded with require_license_capability using
+# NEW capability strings that are deliberately NOT in RETAIL_RESTRICTED_
+# ALLOWLIST -- a restricted/expired license blocks opening a shift, recording
+# a movement, or closing a shift, same default-blocked treatment as every
+# other mutation not explicitly carved out (see that allowlist's own comment
+# above). The GET routes (current/x-report/list/get-one) carry NO capability
+# guard at all, matching every other read-only report route in this file
+# (daily_cash, aging_report, report_sales_trend) -- always allowed.
+def _cash_session_report(conn, cid, sess):
+    """Live X/Z math for one cash_sessions row -- a pure read, safe to call
+    from both GET .../x-report (mid-shift, non-destructive, callable any
+    number of times) and POST .../close (which persists the SAME numbers
+    this returns as the Z report's locked figures, computed inside that
+    route's own BEGIN IMMEDIATE transaction so nothing can be added to the
+    session between "compute expected" and "lock the session").
+
+    expected_cash = opening_float
+                    + cash_sales - cash_refunds
+                    + float_in - float_out + paid_in - paid_out
+
+    cash_sales is read from the SAME unified `payments` ledger daily_cash()
+    above already trusts (direction='in', method='cash', related_type='sale')
+    -- create_sale's own _record_payment call feeds that ledger, including
+    the cash portion of a partial-credit sale (see create_sale's own comment
+    on why a credit sale's upfront deposit is recorded there with
+    method='cash'). cash_refunds is read directly from `returns.refund_amount`
+    /`refund_method` instead -- create_return has NO _record_payment call at
+    all (refunds never touch the `payments` ledger in this codebase today),
+    so querying `payments` for refunds would silently undercount to zero.
+    Both queries filter on sales.session_id/returns.session_id -- the direct
+    FK stamp _open_cash_session_id() writes -- not a time-range, per this
+    session_id column's own migration-docstring reasoning.
+
+    paid_in/paid_out are folded into the same expected-cash total as
+    float_in/float_out (not tracked-but-ignored): a paid_out (e.g. till cash
+    used to pay a delivery driver COD) really does leave the drawer, and
+    omitting it from the math would leave a permanent phantom variance at
+    close for any install that actually uses that movement type.
+    """
+    session_id = sess['id']
+    bid = sess['branch_id']
+    window_end = sess['closed_at'] or _now()
+
+    cash_sales = conn.execute("""
+        SELECT COALESCE(SUM(p.amount),0) FROM payments p
+        JOIN sales s ON p.sale_id = s.id
+        WHERE p.company_id=? AND s.branch_id=? AND s.session_id=?
+          AND p.direction='in' AND p.method='cash' AND p.related_type='sale'
+          AND COALESCE(p.status,'active')='active'
+    """, (cid, bid, session_id)).fetchone()[0]
+
+    cash_refunds = conn.execute("""
+        SELECT COALESCE(SUM(refund_amount),0) FROM returns
+        WHERE company_id=? AND branch_id=? AND session_id=?
+          AND refund_method='cash' AND status='completed'
+    """, (cid, bid, session_id)).fetchone()[0]
+
+    movement_rows = conn.execute("""
+        SELECT type, COALESCE(SUM(amount),0) as amount FROM cash_movements
+        WHERE session_id=? GROUP BY type
+    """, (session_id,)).fetchall()
+    movements = {'float_in': 0.0, 'float_out': 0.0, 'paid_in': 0.0, 'paid_out': 0.0}
+    for r in movement_rows:
+        if r['type'] in movements:
+            movements[r['type']] = float(r['amount'] or 0)
+
+    opening_float = float(sess['opening_float'] or 0)
+    expected = _money(
+        opening_float + cash_sales - cash_refunds
+        + movements['float_in'] - movements['float_out']
+        + movements['paid_in'] - movements['paid_out']
+    )
+    return {
+        'session_id': session_id, 'status': sess['status'],
+        'opening_float': opening_float,
+        'cash_sales': _money(cash_sales), 'cash_refunds': _money(cash_refunds),
+        'movements': {k: _money(v) for k, v in movements.items()},
+        'expected_cash': expected,
+        'window_start': sess['opened_at'], 'window_end': window_end,
+    }
+
+_CASH_MOVEMENT_TYPES = frozenset({'float_in', 'float_out', 'paid_in', 'paid_out'})
+
+@retail_bp.route('/cash-sessions/open', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.cash_session.open", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+def open_cash_session():
+    data = request.json or {}
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        bid = int(data.get('branch_id') or _default_branch(conn, cid))
+        try:
+            opening_float = _money(data.get('opening_float', 0))
+        except Exception:
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'Invalid opening float.'}), 400
+        if opening_float < 0:
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'Opening float cannot be negative.'}), 400
+
+        existing = conn.execute(
+            "SELECT id FROM cash_sessions WHERE company_id=? AND branch_id=? AND status='open'",
+            (cid, bid)
+        ).fetchone()
+        if existing:
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'A cash session is already open for this branch.',
+                             'data': {'session_id': existing['id']}}), 409
+
+        session_id = str(_uuid.uuid4())
+        now_local = _now()
+        try:
+            conn.execute("""
+                INSERT INTO cash_sessions (id,company_id,branch_id,opened_by,opened_at,opening_float,status)
+                VALUES (?,?,?,?,?,?,'open')
+            """, (session_id, cid, bid, _uid(), now_local, opening_float))
+        except sqlite3.IntegrityError:
+            # idx_cash_sessions_one_open_per_branch backstop -- a concurrent
+            # open() for the same branch won the race between the SELECT
+            # above and this INSERT.
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'A cash session is already open for this branch.'}), 409
+        _audit(conn, 'CASH_SESSION_OPENED', 'cash_session', session_id, f'opening_float={opening_float}')
+        conn.commit()
+        sess = conn.execute("SELECT * FROM cash_sessions WHERE id=?", (session_id,)).fetchone()
+        conn.close()
+        return jsonify({'status': 'success', 'data': dict(sess)})
+    except Exception as e:
+        conn.rollback(); conn.close()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@retail_bp.route('/cash-sessions/current', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def current_cash_session():
+    cid = _cid()
+    conn = get_retail_conn()
+    bid = int(request.args.get('branch_id') or _default_branch(conn, cid))
+    sess = conn.execute(
+        "SELECT * FROM cash_sessions WHERE company_id=? AND branch_id=? AND status='open'",
+        (cid, bid)
+    ).fetchone()
+    conn.close()
+    return jsonify({'status': 'success', 'data': dict(sess) if sess else None})
+
+@retail_bp.route('/cash-sessions', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def list_cash_sessions():
+    cid = _cid()
+    limit = int(request.args.get('limit', 50))
+    conn = get_retail_conn()
+    rows = conn.execute(
+        "SELECT * FROM cash_sessions WHERE company_id=? ORDER BY opened_at DESC LIMIT ?",
+        (cid, limit)
+    ).fetchall()
+    conn.close()
+    return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
+
+@retail_bp.route('/cash-sessions/<session_id>', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def get_cash_session(session_id):
+    cid = _cid()
+    conn = get_retail_conn()
+    sess = conn.execute("SELECT * FROM cash_sessions WHERE id=? AND company_id=?", (session_id, cid)).fetchone()
+    if not sess:
+        conn.close(); return jsonify({'status': 'error', 'message': 'Cash session not found.'}), 404
+    movements = conn.execute(
+        "SELECT * FROM cash_movements WHERE session_id=? ORDER BY created_at", (session_id,)
+    ).fetchall()
+    conn.close()
+    return jsonify({'status': 'success', 'data': {
+        'session': dict(sess), 'movements': [dict(m) for m in movements],
+    }})
+
+@retail_bp.route('/cash-sessions/<session_id>/movements', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.cash_session.movement.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+def create_cash_movement(session_id):
+    data = request.json or {}
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        sess = conn.execute("SELECT * FROM cash_sessions WHERE id=? AND company_id=?", (session_id, cid)).fetchone()
+        if not sess:
+            conn.close(); return jsonify({'status': 'error', 'message': 'Cash session not found.'}), 404
+        if sess['status'] != 'open':
+            conn.close(); return jsonify({'status': 'error', 'message': 'Cash session is closed.'}), 409
+
+        mtype = data.get('type')
+        if mtype not in _CASH_MOVEMENT_TYPES:
+            conn.close()
+            return jsonify({'status': 'error',
+                             'message': f"type must be one of {sorted(_CASH_MOVEMENT_TYPES)}."}), 400
+        try:
+            amount = _money(data.get('amount'))
+        except Exception:
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'Invalid amount.'}), 400
+        if amount <= 0.005:
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'Amount must be greater than zero.'}), 400
+
+        movement_id = str(_uuid.uuid4())
+        now_local = _now()
+        conn.execute("""
+            INSERT INTO cash_movements (id,session_id,type,amount,reason,created_by,created_at)
+            VALUES (?,?,?,?,?,?,?)
+        """, (movement_id, session_id, mtype, amount, data.get('reason', ''), _uid(), now_local))
+        _audit(conn, 'CASH_MOVEMENT_RECORDED', 'cash_session', session_id, f'{mtype} amount={amount}')
+        conn.commit()
+        movement = conn.execute("SELECT * FROM cash_movements WHERE id=?", (movement_id,)).fetchone()
+        conn.close()
+        return jsonify({'status': 'success', 'data': dict(movement)})
+    except Exception as e:
+        conn.rollback(); conn.close()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@retail_bp.route('/cash-sessions/<session_id>/x-report', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def cash_session_x_report(session_id):
+    cid = _cid()
+    conn = get_retail_conn()
+    sess = conn.execute("SELECT * FROM cash_sessions WHERE id=? AND company_id=?", (session_id, cid)).fetchone()
+    if not sess:
+        conn.close(); return jsonify({'status': 'error', 'message': 'Cash session not found.'}), 404
+    report = _cash_session_report(conn, cid, sess)
+    conn.close()
+    return jsonify({'status': 'success', 'data': report})
+
+@retail_bp.route('/cash-sessions/<session_id>/close', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.cash_session.close", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+def close_cash_session(session_id):
+    data = request.json or {}
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        # BEGIN IMMEDIATE: the expected-cash figure locked into this Z report
+        # must be computed from the SAME snapshot the close actually commits
+        # against -- a movement or sale racing in between "compute expected"
+        # and "lock the session" must not be silently dropped from the
+        # numbers this session is closed with.
+        conn.execute("BEGIN IMMEDIATE")
+        sess = conn.execute("SELECT * FROM cash_sessions WHERE id=? AND company_id=?", (session_id, cid)).fetchone()
+        if not sess:
+            conn.rollback(); conn.close()
+            return jsonify({'status': 'error', 'message': 'Cash session not found.'}), 404
+        if sess['status'] != 'open':
+            conn.rollback(); conn.close()
+            return jsonify({'status': 'error', 'message': 'Cash session is already closed.'}), 409
+
+        try:
+            counted = _money(data.get('closing_float_counted'))
+        except Exception:
+            conn.rollback(); conn.close()
+            return jsonify({'status': 'error', 'message': 'Invalid closing float counted.'}), 400
+        if counted < 0:
+            conn.rollback(); conn.close()
+            return jsonify({'status': 'error', 'message': 'Closing float counted cannot be negative.'}), 400
+
+        report = _cash_session_report(conn, cid, sess)
+        expected = report['expected_cash']
+        variance = _money(counted - expected)
+        now_local = _now()
+
+        conn.execute("""
+            UPDATE cash_sessions SET status='closed', closed_by=?, closed_at=?,
+                   closing_float_counted=?, closing_float_expected=?, variance=?
+            WHERE id=?
+        """, (_uid(), now_local, counted, expected, variance, session_id))
+        _audit(conn, 'CASH_SESSION_CLOSED', 'cash_session', session_id,
+               f'counted={counted} expected={expected} variance={variance}')
+        conn.commit()
+
+        sess = conn.execute("SELECT * FROM cash_sessions WHERE id=?", (session_id,)).fetchone()
+        conn.close()
+        report['status'] = 'closed'
+        report['closing_float_counted'] = counted
+        report['variance'] = variance
+        return jsonify({'status': 'success', 'data': {'session': dict(sess), 'report': report}})
     except Exception as e:
         conn.rollback(); conn.close()
         return jsonify({'status': 'error', 'message': str(e)}), 500

@@ -102,7 +102,40 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # queues a low-stock alert email, but only when both of those are true, so
 # an install that never configures either one sees byte-for-byte the same
 # reorder_requests-only behavior v8 already shipped.
-RETAIL_SCHEMA_VERSION = 9
+# v10 (feat/shift-cash-drawer): real shift / cash-drawer management -- cash
+# float in/out tracking plus X (mid-shift, non-destructive) and Z (end-of-
+# shift, locking) reports. Two brand-new tables only, same additive shape as
+# v8/v9 (CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT EXISTS, nothing
+# existing dropped or retyped):
+#   - `cash_sessions`: one row per opened-to-closed till session
+#     (company_id/branch_id-scoped, id is a client-generated UUID -- same
+#     convention as reorder_requests/supplier_contacts, never autoincrement,
+#     so this table CAN ride the sync outbox later without hitting the
+#     purchase_orders-style UUID-parse wall reorder_requests' own v8 comment
+#     explains). A partial UNIQUE index (idx_cash_sessions_one_open_per_branch)
+#     enforces "at most one OPEN session per branch" as a real constraint,
+#     mirroring idx_reorder_requests_open's technique exactly.
+#   - `cash_movements`: one row per float-in/float-out/paid-in/paid-out event
+#     against an open session. Scoped ONLY via session_id (no company_id/
+#     branch_id of its own) -- a movement has no meaning outside the session
+#     it belongs to, so the FK is the only scope it needs, same shape as
+#     sale_items scoping through sale_id rather than repeating company_id.
+# PLUS two nullable additive columns -- `sales.session_id` and
+# `returns.session_id` (both TEXT, REFERENCES cash_sessions(id)) -- so a
+# completed sale/return can be attributed to the exact till session it
+# happened in. Stamped at write time in retail_api.py::create_sale /
+# create_return via the new `_open_cash_session_id()` helper, which NEVER
+# raises and defaults to NULL on any failure -- an install that never opens a
+# cash session sees byte-for-byte the same sales/returns behavior as before
+# this migration (see retail_cash_drawer_regression_test.py). This is a
+# direct FK stamp, not a branch+time-range lookup at report time -- a
+# time-range query silently breaks the instant a session spans midnight, or
+# whenever two sessions on the same branch sit back-to-back with no visible
+# gap between them; a stamped id is unambiguous regardless of wall-clock
+# weirdness (DST, backdated imports, clock skew across devices), the same
+# reasoning `sync_outbox` already relies on entity ids for, never timestamps,
+# to identify what a relayed event is actually about.
+RETAIL_SCHEMA_VERSION = 10
 
 
 def _get_path(name):
@@ -813,6 +846,9 @@ def _migrate_retail_schema(conn):
     # v8 -> v9 (feat/email-outbox-foundation): appended LAST, same reasoning
     # again -- see the RETAIL_SCHEMA_VERSION v9 comment above.
     _migrate_add_notifications_foundation(conn)
+    # v9 -> v10 (feat/shift-cash-drawer): appended LAST, same reasoning again
+    # -- see the RETAIL_SCHEMA_VERSION v10 comment above.
+    _migrate_add_shift_cash_drawer(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -1041,6 +1077,123 @@ def _migrate_add_notifications_foundation(conn):
     """
     from commercial_runtime.notifications.schema import apply_notifications_schema
     apply_notifications_schema(conn)
+
+
+def _migrate_add_shift_cash_drawer(conn):
+    """One-time migration (schema v9 -> v10): shift / cash-drawer management
+    (feat/shift-cash-drawer) -- cash float in/out tracking plus X (mid-shift,
+    non-destructive) and Z (end-of-shift, locking) reports.
+
+    Three independent additive pieces, each guarded by its own idempotency
+    check (same shape as _migrate_add_reorder_automation_foundation above --
+    brand-new nullable columns / IF NOT EXISTS tables, so no DROP+RENAME
+    rebuild is needed here either):
+
+    1. `cash_sessions` -- one row per opened-to-closed till session. `id` is a
+       client-generated UUID, NOT autoincrement, matching reorder_requests'
+       reasoning exactly (see this file's own RETAIL_SCHEMA_VERSION v8
+       comment): a UUID id means this table COULD be relayed through Owner's
+       sync later without hitting the purchase_orders-style "entity_id must
+       parse as a UUID" wall, even though it isn't wired into sync_outbox
+       yet. idx_cash_sessions_one_open_per_branch is a partial UNIQUE index
+       enforcing "at most one OPEN session per (company_id, branch_id)" as a
+       real database constraint, not just an application-level check --
+       identical technique to idx_reorder_requests_open.
+
+    2. `cash_movements` -- one row per float-in/float-out/paid-in/paid-out
+       event against a session. Deliberately has NO company_id/branch_id of
+       its own: a movement has no meaning outside the session it belongs to,
+       so `session_id` is the only scope it needs (same shape as sale_items
+       scoping entirely through sale_id rather than repeating company_id).
+
+    3. `sales.session_id` / `returns.session_id` -- nullable TEXT columns
+       referencing cash_sessions(id), stamped at write time by
+       retail_api.py's `_open_cash_session_id()` helper so the X/Z report
+       math can attribute a sale/return to the EXACT session it happened in,
+       via a direct FK rather than a branch+time-range lookup -- see the
+       RETAIL_SCHEMA_VERSION v10 comment above for why a time-range lookup
+       is the wrong choice here (breaks across midnight / back-to-back
+       sessions). NULL for every row written before this migration, and for
+       every row written by an install that never opens a cash session --
+       zero behavior change to create_sale/create_return in that case (see
+       retail_cash_drawer_regression_test.py).
+
+    Idempotent: each ALTER COLUMN is preceded by a PRAGMA table_info check,
+    each CREATE TABLE/INDEX already uses IF NOT EXISTS, so a second call (or
+    a fresh install migrating 0 -> 10 in one pass, same as every step above)
+    is a clean no-op.
+    """
+    existing_tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+
+    if 'cash_sessions' not in existing_tables:
+        conn.execute("""
+            CREATE TABLE cash_sessions (
+                id TEXT PRIMARY KEY,
+                company_id TEXT,
+                branch_id INTEGER NOT NULL,
+                opened_by TEXT,
+                opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                opening_float REAL NOT NULL DEFAULT 0,
+                closed_by TEXT,
+                closed_at TIMESTAMP,
+                closing_float_counted REAL,
+                closing_float_expected REAL,
+                variance REAL,
+                status TEXT NOT NULL DEFAULT 'open'
+            )
+        """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cash_sessions_company "
+        "ON cash_sessions(company_id, branch_id, status)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_sessions_one_open_per_branch "
+        "ON cash_sessions(company_id, branch_id) WHERE status='open'"
+    )
+
+    if 'cash_movements' not in existing_tables:
+        conn.execute("""
+            CREATE TABLE cash_movements (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES cash_sessions(id),
+                type TEXT NOT NULL,
+                amount REAL NOT NULL,
+                reason TEXT,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_cash_movements_session ON cash_movements(session_id)"
+    )
+
+    # `sales`/`returns` are guarded by existence the same way
+    # _migrate_add_supplier_contacts_and_po_split guards `purchase_orders`
+    # above -- every real install has both (init_retail's own executescript
+    # creates them), but some test fixtures hand-build a MINIMAL schema
+    # (e.g. retail_category_delete_fk_sync_test.py's v1/v2 fixtures, which
+    # only contain categories/products/inventory_movements) and call
+    # `_migrate_retail_schema` directly against it. An unconditional ALTER
+    # here would crash that fixture with "no such table: sales" even though
+    # this migration has nothing to do with categories/products at all.
+    # `existing_tables` (captured before cash_sessions/cash_movements were
+    # created above) is still accurate for sales/returns -- neither of those
+    # CREATE TABLE calls could have created or dropped sales/returns.
+    if 'sales' in existing_tables:
+        sales_cols = {row[1] for row in conn.execute('PRAGMA table_info(sales)').fetchall()}
+        if 'session_id' not in sales_cols:
+            conn.execute('ALTER TABLE sales ADD COLUMN session_id TEXT REFERENCES cash_sessions(id)')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_sales_session ON sales(session_id)')
+
+    if 'returns' in existing_tables:
+        returns_cols = {row[1] for row in conn.execute('PRAGMA table_info(returns)').fetchall()}
+        if 'session_id' not in returns_cols:
+            conn.execute('ALTER TABLE returns ADD COLUMN session_id TEXT REFERENCES cash_sessions(id)')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_returns_session ON returns(session_id)')
 
 
 def init_retail():
