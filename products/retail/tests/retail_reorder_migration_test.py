@@ -240,16 +240,21 @@ def test_fresh_install_lands_on_v8_with_reorder_schema_present():
     this genuinely exercises init_retail(), not just the bare migration
     function already covered above.
 
-    Asserts v9, not v8 (this test's own name still says v8, describing the
+    Asserts v11, not v8 (this test's own name still says v8, describing the
     reorder-automation schema it was written to cover -- the version
-    NUMBER moved again under it when feat/email-outbox-foundation bumped
-    RETAIL_SCHEMA_VERSION to 9, same as this file's sibling
+    NUMBER moved again under it, first when feat/email-outbox-foundation
+    bumped RETAIL_SCHEMA_VERSION to 9, then again when feat/pos-hold-
+    resume-sale bumped it to 11 (database/schema.py's
+    _migrate_add_held_sales -- NOT v10, which the unmerged
+    feat/shift-cash-drawer branch independently claimed for real on the
+    same v9 base; see RETAIL_SCHEMA_VERSION's own comment for the full
+    collision story), same as this file's sibling
     test_ensure_schema_version_advances_user_version_to_8 test intentionally
     keeps testing the v7->v8 step in isolation at a frozen target=8. This
     one, unlike that one, calls the REAL init_retail() and therefore always
     reflects whatever RETAIL_SCHEMA_VERSION currently is -- see
     retail_category_delete_fk_sync_test.py's identical
-    RETAIL_SCHEMA_VERSION==9 update for the same reasoning)."""
+    RETAIL_SCHEMA_VERSION==11 update for the same reasoning)."""
     data_dir = Path(tempfile.mkdtemp(prefix="aura_retail_reorder_freshinstall_"))
     (data_dir / "database" / "subsystems").mkdir(parents=True, exist_ok=True)
     old_app_data = os.environ.get("AURA_APP_DATA")
@@ -265,7 +270,7 @@ def test_fresh_install_lands_on_v8_with_reorder_schema_present():
 
         conn = retail_schema.get_retail_conn()
         try:
-            assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
             cols = {r[1] for r in conn.execute("PRAGMA table_info(products)").fetchall()}
             assert "reorder_method" in cols
             tables = {r[0] for r in conn.execute(
