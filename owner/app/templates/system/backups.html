@@ -1,35 +1,37 @@
 {% extends "layout/base.html" %}
-{% block title %}Owner database backups{% endblock %}
+{% block title %}{{ _("Owner database backups") }}{% endblock %}
 {% block content %}
 <div class="card">
   <div style="display:flex;justify-content:space-between;align-items:center;">
-    <h2>Owner database backups</h2>
+    <h2>{{ _("Owner database backups") }}</h2>
     <form method="post" action="{{ url_for('system.create_backup_route') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit">Create backup now</button>
+      <button type="submit">{{ _("Create backup now") }}</button>
     </form>
   </div>
-  <p style="color:#6b7785;font-size:0.85rem;">Restricted to Super Admin with a fresh MFA confirmation. Restoring takes a pre-restore safety backup automatically before touching any data.</p>
-  <table>
-    <tr><th>When</th><th>Status</th><th>Size</th><th>Checksum</th><th></th></tr>
+  <p style="color:#6b7785;font-size:0.85rem;">{{ _("Restricted to Super Admin with a fresh MFA confirmation. Restoring takes a pre-restore safety backup automatically before touching any data.") }}</p>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("When") }}</th><th>{{ _("Status") }}</th><th>{{ _("Size") }}</th><th>{{ _("Checksum") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
+    <tbody>
     {% for r in rows %}
     <tr>
-      <td>{{ r.created_at }}</td>
-      <td><span class="badge {{ 'success' if r.status == 'SUCCESS' else 'danger' }}">{{ r.status }}</span></td>
-      <td>{{ r.size_bytes or "-" }}</td>
-      <td><code style="font-size:0.72rem;">{{ (r.checksum_sha256 or "")[:16] }}...</code></td>
+      <td>{{ format_owner_datetime(r.created_at) }}</td>
+      <td><span class="badge {{ 'success' if r.status == 'SUCCESS' else 'danger' }}">{{ backup_status_label(r.status) }}</span></td>
+      <td>{{ format_owner_number(r.size_bytes) if r.size_bytes else "-" }}</td>
+      <td><code style="font-size:0.72rem;" dir="ltr">{{ (r.checksum_sha256 or "")[:16] }}...</code></td>
       <td>
         {% if r.status == "SUCCESS" %}
         <form class="inline" method="post" action="{{ url_for('system.restore_backup_route', backup_id=r.id) }}"
-              onsubmit="return confirm('Restore the Owner database from this backup? A pre-restore safety backup is taken automatically, but this replaces current data.');">
+              data-confirm="{{ _('Restore the Owner database from this backup? A pre-restore safety backup is taken automatically, but this replaces current data.') }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" class="danger">Restore</button>
+          <button type="submit" class="danger">{{ _("Restore") }}</button>
         </form>
         {% endif %}
       </td>
     </tr>
-    {% else %}<tr><td colspan="5" class="empty">No backups taken yet.</td></tr>
+    {% else %}<tr><td colspan="5" class="empty">{{ _("No backups taken yet.") }}</td></tr>
     {% endfor %}
+    </tbody>
   </table>
 </div>
 {% endblock %}

@@ -1,21 +1,21 @@
 {% extends "layout/base.html" %}
-{% block title %}Activation Service Status{% endblock %}
+{% block title %}{{ _("Activation Service Status") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Licensing &amp; Activation Service</h2>
+  <h2>{{ _("Licensing & Activation Service") }}</h2>
   <dl class="kv">
-    <dt>External API enabled</dt><dd><span class="badge {{ 'active' if external_enabled else 'draft' }}">{{ "YES" if external_enabled else "NO (default, safe)" }}</span></dd>
-    <dt>Overall</dt><dd><span class="badge {{ 'success' if health.overall == 'OK' else 'danger' }}">{{ health.overall }}</span></dd>
-    <dt>Database</dt><dd><span class="badge {{ 'success' if health.database == 'OK' else 'danger' }}">{{ health.database }}</span></dd>
-    <dt>Replay/rate-limit store (PostgreSQL)</dt><dd><span class="badge {{ 'success' if health.replay_store == 'OK' else 'danger' }}">{{ health.replay_store }}</span></dd>
-    <dt>Signing key</dt><dd><span class="badge {{ 'success' if health.signing_key == 'OK' else 'danger' }}">{{ health.signing_key }}</span> {{ health.signing_key_detail }}</dd>
+    <dt>{{ _("External API enabled") }}</dt><dd><span class="badge {{ 'active' if external_enabled else 'draft' }}">{{ _("Yes") if external_enabled else _("No (default, safe)") }}</span></dd>
+    <dt>{{ _("Overall") }}</dt><dd><span class="badge {{ 'success' if health.overall == 'OK' else 'danger' }}">{{ health_status_label(health.overall) }}</span></dd>
+    <dt>{{ _("Database") }}</dt><dd><span class="badge {{ 'success' if health.database == 'OK' else 'danger' }}">{{ health_status_label(health.database) }}</span></dd>
+    <dt>{{ _("Replay/rate-limit store (PostgreSQL)") }}</dt><dd><span class="badge {{ 'success' if health.replay_store == 'OK' else 'danger' }}">{{ health_status_label(health.replay_store) }}</span></dd>
+    <dt>{{ _("Signing key") }}</dt><dd><span class="badge {{ 'success' if health.signing_key == 'OK' else 'danger' }}">{{ health_status_label(health.signing_key) }}</span> {{ health.signing_key_detail }}</dd>
   </dl>
 </div>
 <div class="card">
-  <h3>Quick links</h3>
-  <p><a href="{{ url_for('licensing_admin.signing_keys') }}">Signing keys</a> &middot;
-     <a href="{{ url_for('licensing_admin.requests_list') }}">Recent activation/check-in requests</a> &middot;
-     <a href="{{ url_for('licensing_admin.device_keys') }}">Device keys</a> &middot;
-     <a href="{{ url_for('licensing_admin.offline_policies') }}">Offline policies</a></p>
+  <h3>{{ _("Quick links") }}</h3>
+  <p><a href="{{ url_for('licensing_admin.signing_keys') }}">{{ _("Signing keys") }}</a> &middot;
+     <a href="{{ url_for('licensing_admin.requests_list') }}">{{ _("Recent activation/check-in requests") }}</a> &middot;
+     <a href="{{ url_for('licensing_admin.device_keys') }}">{{ _("Device keys") }}</a> &middot;
+     <a href="{{ url_for('licensing_admin.offline_policies') }}">{{ _("Offline policies") }}</a></p>
 </div>
 {% endblock %}

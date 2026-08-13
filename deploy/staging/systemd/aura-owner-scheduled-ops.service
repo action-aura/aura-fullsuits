@@ -1,0 +1,21 @@
+# Phase 9 -- staging scheduled commercial-ops unit. Real deployment: copy to
+# /etc/systemd/system/, `systemctl daemon-reload`, enable the matching .timer
+# (not this .service directly). Runs deploy/staging/run_scheduled_ops.py
+# inside the already-built owner staging image, so it shares the exact same
+# code/config/dependencies the running Owner service uses.
+[Unit]
+Description=Aura Owner staging scheduled commercial operations
+After=docker.service
+Requires=docker.service
+# OnFailure hook -- real deployment should point this at a unit that posts
+# to the alert channel (Milestone 8/alert-catalog.md's "Reconciliation scan
+# failure" / "Backup failure" rows). Not built this session (no real host).
+# OnFailure=aura-owner-alert@%n.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/aura-fullsuits/.env.staging
+WorkingDirectory=/opt/aura-fullsuits
+ExecStart=/usr/bin/docker compose -f docker-compose.staging.yml run --rm \
+    -e OWNER_ENV=staging owner python /app/../deploy/staging/run_scheduled_ops.py
+TimeoutStartSec=300

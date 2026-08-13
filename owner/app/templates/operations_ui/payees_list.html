@@ -1,0 +1,33 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Expense Payees") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _("Expense Payees") }}</h2>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Name") }}</th><th>{{ _("Type") }}</th></tr></thead>
+    <tbody>
+    {% for p in payees %}
+    <tr><td data-label="{{ _('Name') }}">{{ p.display_name }}</td><td data-label="{{ _('Type') }}">{{ payee_type_label(p.payee_type) }}</td></tr>
+    {% else %}<tr><td colspan="2" class="empty">{{ _("No payees yet.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="card">
+  <h3>{{ _("New payee") }}</h3>
+  <form method="post" action="{{ url_for('operations_ui.create_payee_route') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="operations-ui-payees-list-payee-type">{{ _("Type") }}</label>
+    <select id="operations-ui-payees-list-payee-type" name="payee_type">
+      <option value="EXTERNAL">{{ payee_type_label("EXTERNAL") }}</option>
+      <option value="EMPLOYEE">{{ payee_type_label("EMPLOYEE") }}</option>
+    </select>
+    <label for="operations-ui-payees-list-display-name">{{ _("Display name") }}</label>
+    <input id="operations-ui-payees-list-display-name" name="display_name" required>
+    <label for="operations-ui-payees-list-external-contact-reference">{{ _("External contact reference (optional)") }}</label>
+    <input id="operations-ui-payees-list-external-contact-reference" name="external_contact_reference">
+    <button type="submit">{{ _("Create payee") }}</button>
+  </form>
+</div>
+{% endblock %}

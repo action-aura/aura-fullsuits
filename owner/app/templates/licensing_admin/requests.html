@@ -1,31 +1,34 @@
 {% extends "layout/base.html" %}
-{% block title %}Activation Requests{% endblock %}
+{% import "components/table.html" as table with context %}
+{% block title %}{{ _("Activation Requests") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Recent activation/check-in/deactivation requests (most recent 200)</h2>
-  <form class="filters" method="get">
-    <div>
-      <label>Type</label>
-      <select name="event_type" onchange="this.form.submit()">
-        <option value="">All</option>
-        {% for t in ["ACTIVATION","CHECK_IN","DEACTIVATION"] %}
-        <option value="{{ t }}" {% if event_type_filter == t %}selected{% endif %}>{{ t }}</option>
-        {% endfor %}
-      </select>
-    </div>
-  </form>
-  <table>
-    <tr><th>When</th><th>Type</th><th>Result</th><th>Reason</th><th>Installation</th><th>Source IP</th></tr>
-    {% for r in rows %}
+  {{ table.toolbar(_("Recent activation/check-in/deactivation requests")) }}
+  {{ table.filter_bar(
+      status_options=["ACTIVATION","CHECK_IN","DEACTIVATION"], status_value=event_type_filter, status_label_fn=activation_event_type_label,
+      status_field="event_type"
+  ) }}
+  {% call table.table(
+      columns=[
+        {"label": _("When"), "sort_key": "created_at"},
+        {"label": _("Type"), "sort_key": "event_type"},
+        {"label": _("Result"), "sort_key": "result"},
+        {"label": _("Reason")},
+        {"label": _("Installation")},
+        {"label": _("Source IP")},
+      ],
+      has_rows=result.rows, empty_message=_("No requests recorded yet."), caption=_("Activation requests")
+  ) %}
+    {% for r in result.rows %}
     <tr>
-      <td>{{ r.created_at }}</td><td>{{ r.event_type }}</td>
-      <td><span class="badge {{ 'success' if r.result == 'ACCEPTED' else 'danger' }}">{{ r.result }}</span></td>
-      <td>{{ r.reason_code }}</td>
-      <td>{{ (r.installation_id|string)[:8] if r.installation_id else "-" }}</td>
-      <td>{{ r.source_ip or "-" }}</td>
+      <td>{{ format_owner_datetime(r.created_at) }}</td><td>{{ activation_event_type_label(r.event_type) }}</td>
+      <td><span class="badge {{ 'success' if r.result == 'ACCEPTED' else 'danger' }}">{{ activation_event_result_label(r.result) }}</span></td>
+      <td><bdi dir="ltr">{{ r.reason_code }}</bdi></td>
+      <td><bdi dir="ltr">{{ (r.installation_id|string)[:8] if r.installation_id else "-" }}</bdi></td>
+      <td><bdi dir="ltr">{{ r.source_ip or "-" }}</bdi></td>
     </tr>
-    {% else %}<tr><td colspan="6" class="empty">No requests recorded yet.</td></tr>
     {% endfor %}
-  </table>
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
 </div>
 {% endblock %}

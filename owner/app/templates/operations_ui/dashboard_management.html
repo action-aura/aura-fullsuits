@@ -1,0 +1,47 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Management Dashboard") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _("Management Dashboard") }} (<bdi dir="ltr">{{ currency }}</bdi>)</h2>
+  <form method="get">
+    <label for="operations-ui-dashboard-management-currency">{{ _("Currency") }}</label>
+    <input id="operations-ui-dashboard-management-currency" name="currency" value="{{ currency }}" maxlength="3" onchange="this.form.submit()">
+  </form>
+
+  <h3>{{ _("Expense totals by Category") }}</h3>
+  <table class="responsive-table">
+    <tbody>
+    {% for name, total in data.expense_totals_by_category.items() %}
+    <tr><td>{{ name }}</td><td>{{ format_owner_number(total) }} {{ currency }}</td></tr>
+    {% else %}<tr><td colspan="2" class="empty">{{ _("No data.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h3>{{ _("Queues") }}</h3>
+  <table class="responsive-table">
+    <tbody>
+      <tr><td>{{ _("Approval queue") }}</td><td>{{ data.approval_queue_count }}</td></tr>
+      <tr><td>{{ _("Duplicate-review queue") }}</td><td>{{ data.duplicate_review_queue_count }}</td></tr>
+      <tr><td>{{ _("Approved unpaid Expenses") }}</td><td>{{ data.approved_unpaid_count }}</td></tr>
+      <tr><td>{{ _("Partially paid Expenses") }}</td><td>{{ data.partially_paid_count }}</td></tr>
+      <tr><td>{{ _("Closing-variance queue") }}</td><td>{{ data.closing_variance_queue_count }}</td></tr>
+      <tr><td>{{ _("Overdue Invoices") }}</td><td>{{ data.overdue_invoices }}</td></tr>
+      <tr><td>{{ _("Fulfillment exceptions") }}</td><td>{{ data.fulfillment_exceptions }}</td></tr>
+      <tr><td>{{ _("Management Notes requiring action") }}</td><td>{{ data.management_notes_requiring_action }}</td></tr>
+    </tbody>
+  </table>
+
+  <h3>{{ _("Operational cash movement (month to date)") }}</h3>
+  <table class="responsive-table">
+    <tbody>
+      <tr><td>{{ _("Confirmed collections") }}</td><td>{{ format_owner_number(data.confirmed_collections) }} {{ currency }}</td></tr>
+      <tr><td>{{ _("Confirmed Refunds") }}</td><td>-{{ format_owner_number(data.confirmed_refunds) }} {{ currency }}</td></tr>
+      <tr><td>{{ _("Paid Expenses") }}</td><td>-{{ format_owner_number(data.paid_expenses) }} {{ currency }}</td></tr>
+      <tr><td>{{ _("Recorded Commission payouts") }}</td><td>-{{ format_owner_number(data.recorded_commission_payouts) }} {{ currency }}</td></tr>
+      <tr><td><strong>{{ _("Net operational cash movement") }}</strong></td><td><strong>{{ format_owner_number(data.net_operational_cash_movement) }} {{ currency }}</strong></td></tr>
+      <tr><td>{{ _("Outstanding Receivables") }}</td><td>{{ format_owner_number(data.outstanding_receivables) }} {{ currency }}</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endblock %}

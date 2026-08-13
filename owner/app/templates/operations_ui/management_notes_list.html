@@ -1,0 +1,24 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Management Notes") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <h2>{{ _("Management Notes") }}</h2>
+    {% if 'management_notes.manage' in codes %}<a class="btn" href="{{ url_for('operations_ui.new_note_form') }}">{{ _("New note") }}</a>{% endif %}
+  </div>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Title") }}</th><th>{{ _("Status") }}</th><th>{{ _("Visibility") }}</th><th>{{ _("Priority") }}</th></tr></thead>
+    <tbody>
+    {% for n in notes %}
+    <tr>
+      <td data-label="{{ _('Title') }}"><a href="{{ url_for('operations_ui.note_detail', note_id=n.id) }}">{{ n.title }}</a></td>
+      <td data-label="{{ _('Status') }}"><span class="badge {{ 'success' if n.status == 'DONE' else ('pending' if n.status == 'OPEN' else '') }}">{{ management_note_status_label(n.status) }}</span></td>
+      <td data-label="{{ _('Visibility') }}">{{ management_note_visibility_label(n.visibility) }}</td>
+      <td data-label="{{ _('Priority') }}">{{ management_note_priority_label(n.priority) }}</td>
+    </tr>
+    {% else %}<tr><td colspan="4" class="empty">{{ _("No notes visible to you.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

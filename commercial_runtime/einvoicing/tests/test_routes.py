@@ -1,4 +1,5 @@
 import sqlite3
+import sys
 
 import pytest
 from flask import Flask
@@ -7,6 +8,17 @@ from commercial_runtime.einvoicing.outbox import OutboxRepository
 from commercial_runtime.einvoicing.providers.mock import MockProvider
 from commercial_runtime.einvoicing.routes import make_einvoicing_blueprint
 from commercial_runtime.einvoicing.schema import apply_einvoicing_schema
+
+# app_and_db hardcodes platform='WINDOWS' to match this app's real default
+# (config.py's LICENSING_PLATFORM defaults to WINDOWS -- desktop ships on
+# Windows, AURA_PLATFORM=ANDROID is set explicitly for the Android build).
+# The 3 tests below actually exercise credential storage through that
+# platform, which selects the real DPAPI backend -- Windows-only, no Linux
+# equivalent, so they're skipped on the Linux CI runner rather than mocked.
+_windows_only = pytest.mark.skipif(
+    sys.platform != 'win32',
+    reason='exercises the real DPAPI credential-storage backend, Windows-only',
+)
 
 
 @pytest.fixture
@@ -176,6 +188,7 @@ def test_settings_post_rejects_unknown_key(app_and_db):
 
 # ─── credentials never echoed ───────────────────────────────────────────
 
+@_windows_only
 def test_post_credentials_never_echoes_the_secret(app_and_db):
     client = _client(app_and_db)
     _login(client)
@@ -188,6 +201,7 @@ def test_post_credentials_never_echoes_the_secret(app_and_db):
     assert data['client_id_last4'] == 'c123'
 
 
+@_windows_only
 def test_get_settings_credentials_section_never_contains_secret(app_and_db):
     client = _client(app_and_db)
     _login(client)
@@ -204,6 +218,7 @@ def test_post_credentials_requires_both_fields(app_and_db):
     assert r.status_code == 400
 
 
+@_windows_only
 def test_delete_credentials_wipes(app_and_db):
     client = _client(app_and_db)
     _login(client)

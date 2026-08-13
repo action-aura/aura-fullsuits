@@ -1,0 +1,365 @@
+# CI validation pipeline -- Owner Control Center + product suites.
+#
+# E-W0.3: this workflow now runs on real GitHub Actions infrastructure
+# (origin https://github.com/action-aura/aura-fullsuits.git). The previous
+# header comment claiming "no git remote configured, no GH Actions runner has
+# ever executed this file" was stale and has been removed.
+#
+# Owner tests are split across 4 matrix shards rather than pytest-xdist.
+# Reason: owner/tests/conftest.py::_serialize_concurrent_test_runs takes a
+# session-level pg_advisory_lock for the entire pytest session, because the
+# `app` fixture TRUNCATEs every owner_* table between every single test. Two
+# xdist workers against one shared database would simply block on that lock and
+# fully serialize -- no speedup, plus lock-contention overhead. Each matrix
+# entry instead gets its own fresh runner AND its own fresh postgres:17 service
+# container, so the four shards are genuinely independent. This is why every
+# shard can reuse the identical OWNER_TEST_DATABASE_URL: same URL, four
+# different containers.
+#
+# No automatic deployment to any real production environment (Non-Negotiable
+# Principle 9) -- the last real stage is staging deployment PACKAGE creation.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master, "phase9/**", "phase9.5/**", "feat/**"]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Real test-time-only values, never real secrets -- matches
+  # owner/tests/conftest.py's own OWNER_TEST_DATABASE_URL default.
+  OWNER_TEST_DATABASE_URL: postgresql+psycopg://aura_owner:aura_owner_dev@localhost:5432/aura_owner_test
+  OWNER_ENV: testing
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  owner-tests:
+    name: Owner tests (shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    strategy:
+      # One failing shard must not cancel the other three -- otherwise a single
+      # failure destroys the coverage baseline and 3/4 of the test signal.
+      fail-fast: false
+      matrix:
+        include:
+          # Shard A is the explicit COMPLEMENT of B/C/D, not a "not phaseN"
+          # list. That makes the 4 shards a provably exhaustive partition: any
+          # future test file (test_phase9_5f_*.py, test_phase10_*.py, a new
+          # non-phase file) automatically lands in shard A and still runs.
+          # A positive "not phase6/7/8/9" list would instead silently DROP a
+          # future test_phase9_5f_*.py -- excluded from A by `not phase9`, and
+          # not named in B/C/D either.
+          # Balance as of E-W0.3: A=299 B=259 C=262 D=243 (1063 total, 141
+          # files, on the branch this landed on -- a separate, still-open
+          # payment-SoD/cash-closing-IDOR PR adds ~12 more to B/D once merged).
+          # Rebalance here if shard A outgrows the others.
+          - shard: a
+            filter: "not (phase9_5d or phase9_5c or phase7) and not (phase9_5b or phase9r or phase8) and not (phase9_5e or phase6 or phase9_5a)"
+          - shard: b
+            filter: "phase9_5d or phase9_5c or phase7"
+          # `phase8` intentionally also matches the phase8v files -- both belong
+          # in shard C.
+          - shard: c
+            filter: "phase9_5b or phase9r or phase8"
+          - shard: d
+            filter: "phase9_5e or phase6 or phase9_5a"
+    # POSTGRES_USER intentionally left unset -- the image then bootstraps as
+    # "postgres" instead of "aura_owner". Real Postgres refuses to let the
+    # cluster's bootstrap role ever lose SUPERUSER ("permission denied to
+    # alter role -- DETAIL: The bootstrap superuser must have the SUPERUSER
+    # attribute", hit for real trying to ALTER ROLE aura_owner NOSUPERUSER
+    # against a container where aura_owner WAS the bootstrap role). aura_owner
+    # is created explicitly below as a genuinely separate, non-superuser
+    # role -- the real dev/staging pattern already documented in
+    # docs/owner/phase9/postgresql-hardening.md, just done once per ephemeral
+    # container instead of once by a human.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres-bootstrap-ci-only-not-app-credential
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - name: Source checkout
+        uses: actions/checkout@v4
+
+      - name: Dependency setup
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/*.txt
+      - run: pip install -r requirements/development.txt
+
+      # ubuntu-latest ships pg_dump 16 by default (older than the postgres:17
+      # service container above) -- pg_dump refuses to dump a server newer
+      # than itself ("aborting because of server version mismatch"), which
+      # test_backup_restore.py's real pg_dump calls hit directly. The v16
+      # package is baked into the runner image directly, NOT via an active
+      # PGDG apt source (confirmed: `apt-get install postgresql-client-17`
+      # alone fails with "Unable to locate package") -- so the PGDG repo has
+      # to be added first. apt.postgresql.org.sh ships in postgresql-common
+      # (already present, that's what provides the pg_dump version-selection
+      # wrapper) and is PGDG's own documented script for exactly this in CI:
+      # detects the Ubuntu codename, adds the signed repo, refreshes the
+      # package index.
+      - name: Install PostgreSQL 17 client (match postgres:17 service for pg_dump/pg_restore)
+        run: |
+          sudo sh /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-17
+
+      # aura_owner is a genuinely separate, non-superuser role -- see the
+      # services.postgres comment above for why (the bootstrap role can never
+      # lose SUPERUSER, so it can't just be "postgres" ALTERed in place).
+      # CREATEDB is kept -- test_migration_runs_clean_from_empty_database_and_rolls_back
+      # needs it (same real requirement documented in
+      # docs/owner/phase5/owner-local-development-guide.md).
+      - name: Provision the aura_owner application role (non-superuser, matches real dev/staging posture)
+        env:
+          PGPASSWORD: postgres-bootstrap-ci-only-not-app-credential
+        run: |
+          psql -h localhost -U postgres -c "CREATE ROLE aura_owner LOGIN PASSWORD 'aura_owner_dev' CREATEDB NOSUPERUSER NOCREATEROLE;"
+          psql -h localhost -U postgres -c "CREATE DATABASE aura_owner_test OWNER aura_owner;"
+
+      # No explicit `alembic upgrade head` needed here:
+      # owner/tests/conftest.py::_migrated_schema is a session-scoped autouse
+      # fixture that runs it (cwd=owner/, OWNER_DATABASE_URL overridden) before
+      # the first test in this shard executes. The dedicated owner-migrations
+      # job below covers `alembic upgrade head` + `alembic check` explicitly.
+      - name: Owner tests (shard ${{ matrix.shard }})
+        env:
+          # Unique per shard so the four data files can be combined later.
+          COVERAGE_FILE: .coverage.shard-${{ matrix.shard }}
+        run: >-
+          python -m pytest owner/tests -q --no-header
+          -k "${{ matrix.filter }}"
+          --cov=owner/app --cov-report=
+
+      # Explicit named localization gate. These 26 tests across 8 files are
+      # already inside shard C's selection, so this is a re-run for visibility
+      # only -- hence it costs no extra job or service container.
+      # NOTE: the previous filter was `-k localization`, which matched ZERO
+      # tests (pytest then exits 5 = "no tests collected" and the step fails).
+      # The i18n work is named i18n/locale/rtl, never "localization".
+      - name: Localization checks
+        if: matrix.shard == 'c'
+        run: python -m pytest owner/tests -k "i18n or locale or rtl" -q --no-header
+
+      - name: Upload shard coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-shard-${{ matrix.shard }}
+          path: .coverage.shard-${{ matrix.shard }}
+          # REQUIRED: upload-artifact@v4 skips dotfiles by default, and the
+          # coverage data file starts with a dot.
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: error
+
+  owner-coverage:
+    name: Owner coverage baseline
+    runs-on: ubuntu-latest
+    needs: [owner-tests]
+    # Publish the baseline even if a shard failed -- partial coverage is still
+    # more useful than none, and it keeps the number visible on red runs.
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Must be the SAME coverage version the shards ran, or `coverage combine`
+      # rejects the data files. Pinned in requirements/development.txt.
+      - run: pip install "coverage[toml]==7.6.1"
+
+      - name: Download all shard coverage data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-shard-*
+          merge-multiple: true
+          path: .
+
+      - name: Combine shards and render reports
+        run: |
+          python -m coverage combine
+          python -m coverage report
+          python -m coverage xml -o coverage.xml
+          python -m coverage html -d htmlcov
+          python -m coverage json -o coverage.json
+
+      - name: Publish line-coverage baseline to job summary
+        run: |
+          TOTAL=$(python -c "import json; print(f\"{json.load(open('coverage.json'))['totals']['percent_covered']:.2f}\")")
+          {
+            echo "## Owner Control Center - line coverage baseline"
+            echo ""
+            echo "**Total line coverage: ${TOTAL}%** (\`owner/app\`, 4 shards combined)"
+            echo ""
+            echo "<details><summary>Per-file breakdown</summary>"
+            echo ""
+            echo '```'
+            python -m coverage report
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: owner-coverage-report
+          path: |
+            coverage.xml
+            coverage.json
+            htmlcov/
+          retention-days: 30
+
+  owner-migrations:
+    name: Owner migrations (alembic upgrade head + check)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: aura_owner
+          POSTGRES_PASSWORD: aura_owner_dev
+          POSTGRES_DB: aura_owner_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U aura_owner -d aura_owner_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/*.txt
+      - run: pip install -r requirements/development.txt
+
+      - name: Migration check
+        working-directory: owner
+        env:
+          # REQUIRED. owner/migrations/env.py:23 reads OWNER_DATABASE_URL and
+          # otherwise falls back to alembic.ini's literal placeholder
+          # `driver://user:pass@localhost/dbname`, which raises
+          # NoSuchModuleError: Can't load plugin: sqlalchemy.dialects:driver.
+          # The pre-E-W0.3 version of this step set only OWNER_TEST_DATABASE_URL
+          # and could never have succeeded.
+          OWNER_DATABASE_URL: ${{ env.OWNER_TEST_DATABASE_URL }}
+        run: |
+          python -m alembic upgrade head
+          python -m alembic check
+
+  product-tests:
+    name: Retail / Clinic / commercial_runtime tests
+    runs-on: ubuntu-latest
+    # No postgres service on purpose: these suites are raw sqlite3 (CLAUDE.md,
+    # "No ORM. No Alembic. No SQLAlchemy."). Only owner/ needs Postgres.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/*.txt
+      - run: pip install -r requirements/development.txt
+
+      - name: commercial_runtime tests
+        run: python -m pytest commercial_runtime -q --no-header
+
+      - name: Retail tests (canonical runner -- see retail-test-isolation-resolution.md)
+        run: python products/run_all_tests.py retail
+
+      - name: Clinic tests (canonical runner)
+        run: python products/run_all_tests.py clinic
+
+      # Android tests: NOT run in this workflow -- no Android SDK/Gradle
+      # toolchain provisioning step exists in this repository. Real local
+      # evidence for Android unit/lint/build exists from Phase 8V-P9.
+
+  security-scan:
+    name: Security and supply-chain scans
+    runs-on: ubuntu-latest
+    # Split out of the old monolithic job so a bandit/detect-secrets/pip-audit
+    # finding can no longer abort the run before the test results are known.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/*.txt
+      - run: pip install -r requirements/development.txt
+
+      - name: Lint / static checks (bandit)
+        run: |
+          pip install bandit
+          bandit -r owner/app -f json -o bandit-results.json || true
+          python -c "import json,sys; d=json.load(open('bandit-results.json')); h=[r for r in d['results'] if r['issue_severity'] in ('HIGH','MEDIUM')]; sys.exit(1 if h else 0)"
+
+      - name: Secret scanning
+        # .secrets.baseline holds the disposition from
+        # docs/owner/phase9_5b_r3/secret-scan-false-positive-review.md, where
+        # every finding across this codebase (dev-only placeholder secrets,
+        # localhost-only dev DB connection strings, synthetic test fixtures,
+        # Alembic's own auto-generated revision hashes, historical evidence
+        # docs) was individually reviewed and justified -- not a blanket
+        # allowlist, an audited disposition of specific, already-reviewed
+        # findings. `scan --baseline` only reports entries NOT already in it
+        # (i.e. genuinely new), so this still catches a real new secret while
+        # not re-failing on content already reviewed line-by-line.
+        run: |
+          pip install detect-secrets
+          detect-secrets scan --baseline .secrets.baseline
+          python -c "
+          import json
+          d = json.load(open('.secrets.baseline'))
+          unaudited = [(f, r['line_number']) for f, entries in d['results'].items() for r in entries if 'is_secret' not in r]
+          assert not unaudited, f'new, unaudited potential secret(s): {unaudited} -- review and run: detect-secrets audit .secrets.baseline'
+          "
+
+      - name: Dependency scanning
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements/base.txt -r requirements/owner-server.txt
+
+      - name: Artifact manifest + checksum generation
+        run: |
+          echo "commit=$(git rev-parse HEAD)" > build-manifest.txt
+          echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> build-manifest.txt
+          sha256sum requirements/*.txt >> build-manifest.txt
+
+      - name: SBOM generation
+        run: |
+          pip install cyclonedx-bom
+          python -m cyclonedx_py environment --output-format json --output-file sbom.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-evidence
+          path: |
+            bandit-results.json
+            build-manifest.txt
+            sbom.json
+
+  staging-package:
+    name: Staging deployment package config check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # docker-compose.staging.yml's own header comment documents this exact
+      # step for local use: copy the NAMES-ONLY template, fill in real values.
+      # CI only needs `config` (dry validation, no `up`) to succeed, so the
+      # blank-valued template is enough -- no real secret ever enters this job.
+      - name: Provision placeholder .env.staging for dry-run validation
+        run: cp deploy/staging/.env.staging.example .env.staging
+      - name: Staging deployment package creation
+        run: docker compose -f docker-compose.staging.yml config

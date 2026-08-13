@@ -13,6 +13,8 @@ from app.models.customers import Customer
 from app.models.catalog import Plan
 from app.models.subscriptions import PaymentRecord, Subscription
 from app.security.rbac import require_permission
+from app.services.pagination import DEFAULT_PAGE_SIZE
+from app.subscriptions import list_queries
 from app.subscriptions.services import (
     VALID_TRANSITIONS,
     InvalidTransitionError,
@@ -29,12 +31,15 @@ bp = Blueprint("subscriptions", __name__, url_prefix="/subscriptions")
 @bp.route("", methods=["GET"])
 @require_permission("subscriptions.view")
 def list_subscriptions():
-    status_filter = request.args.get("status")
-    stmt = select(Subscription).order_by(Subscription.created_at.desc())
-    if status_filter:
-        stmt = stmt.where(Subscription.status == status_filter)
-    subscriptions = db_session.execute(stmt).scalars().all()
-    return render_template("subscriptions/list.html", subscriptions=subscriptions, status_filter=status_filter)
+    status_filter = request.args.get("status") or None
+    search = request.args.get("q") or None
+    sort = request.args.get("sort", "created_at")
+    direction = request.args.get("dir", "desc")
+    result = list_queries.list_subscriptions(
+        page=request.args.get("page", 1, type=int), page_size=DEFAULT_PAGE_SIZE,
+        status=status_filter, search=search, sort=sort, direction=direction,
+    )
+    return render_template("subscriptions/list.html", result=result, status_filter=status_filter, search=search)
 
 
 @bp.route("/new", methods=["GET"])

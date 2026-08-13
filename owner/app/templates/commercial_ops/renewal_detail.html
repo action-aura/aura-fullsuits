@@ -1,71 +1,76 @@
 {% extends "layout/base.html" %}
-{% block title %}Renewal{% endblock %}
+{% block title %}{{ _("Renewal") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Renewal for {{ renewal.customer.legal_name }} <span class="badge {{ 'active' if renewal.status == 'APPLIED' else ('danger' if renewal.status in ['REJECTED','VOIDED'] else 'pending') }}">{{ renewal.status }}</span></h2>
+  <h2>{{ _("Renewal for %(customer)s", customer=renewal.customer.legal_name) }} <span class="badge {{ 'active' if renewal.status == 'APPLIED' else ('danger' if renewal.status in ['REJECTED','VOIDED'] else 'pending') }}">{{ renewal_status_label(renewal.status) }}</span></h2>
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   <dl class="kv">
-    <dt>Subscription</dt><dd><a href="{{ url_for('subscriptions.detail', subscription_id=renewal.subscription_id) }}">{{ renewal.subscription_id }}</a></dd>
-    <dt>Product</dt><dd>{{ renewal.product.name }}</dd>
-    <dt>Current plan</dt><dd>{{ renewal.current_plan.name }}</dd>
-    <dt>Proposed plan</dt><dd>{{ renewal.requested_plan.name if renewal.requested_plan else "(unchanged)" }}</dd>
-    <dt>Current term</dt><dd>{{ renewal.current_term_start or "-" }} &rarr; {{ renewal.current_term_end or "-" }}</dd>
-    <dt>Proposed term</dt><dd>{{ renewal.proposed_term_start or "-" }} &rarr; {{ renewal.proposed_term_end or "-" }}</dd>
-    <dt>Device allowance</dt><dd>{{ renewal.device_allowance_before or "-" }} &rarr; {{ renewal.device_allowance_after or "(unchanged)" }}</dd>
-    <dt>Commercial amount</dt><dd>{{ renewal.commercial_amount or "-" }} {{ renewal.currency }}</dd>
-    <dt>Date rule</dt><dd>{{ renewal.date_rule or "-" }}</dd>
-    <dt>Sales owner</dt><dd>{{ renewal.sales_owner_staff_user_id or "-" }}</dd>
-    <dt>Created by</dt><dd>{{ renewal.created_by_staff_user_id or "-" }}</dd>
-    <dt>Approved by</dt><dd>{{ renewal.approved_by_staff_user_id or "-" }} {{ ("(" ~ renewal.approved_at|string ~ ")") if renewal.approved_at else "" }}</dd>
-    <dt>Applied by</dt><dd>{{ renewal.applied_by_staff_user_id or "-" }} {{ ("(" ~ renewal.applied_at|string ~ ")") if renewal.applied_at else "" }}</dd>
-    <dt>Reason</dt><dd>{{ renewal.reason or "-" }}</dd>
-    <dt>Notes</dt><dd>{{ renewal.notes or "-" }}</dd>
-    <dt>Optimistic version</dt><dd>{{ renewal.version }}</dd>
+    <dt>{{ _("Subscription") }}</dt><dd><a href="{{ url_for('subscriptions.detail', subscription_id=renewal.subscription_id) }}"><bdi dir="ltr">{{ renewal.subscription_id }}</bdi></a></dd>
+    <dt>{{ _("Product") }}</dt><dd>{{ renewal.product.name }}</dd>
+    <dt>{{ _("Current plan") }}</dt><dd>{{ renewal.current_plan.name }}</dd>
+    <dt>{{ _("Proposed plan") }}</dt><dd>{{ renewal.requested_plan.name if renewal.requested_plan else _("(unchanged)") }}</dd>
+    <dt>{{ _("Current term") }}</dt><dd>{{ format_owner_date(renewal.current_term_start) if renewal.current_term_start else "-" }} &rarr; {{ format_owner_date(renewal.current_term_end) if renewal.current_term_end else "-" }}</dd>
+    <dt>{{ _("Proposed term") }}</dt><dd>{{ format_owner_date(renewal.proposed_term_start) if renewal.proposed_term_start else "-" }} &rarr; {{ format_owner_date(renewal.proposed_term_end) if renewal.proposed_term_end else "-" }}</dd>
+    <dt>{{ _("Device allowance") }}</dt><dd>{{ format_owner_number(renewal.device_allowance_before) if renewal.device_allowance_before else "-" }} &rarr; {{ format_owner_number(renewal.device_allowance_after) if renewal.device_allowance_after else _("(unchanged)") }}</dd>
+    <dt>{{ _("Commercial amount") }}</dt><dd>{{ format_owner_number(renewal.commercial_amount) if renewal.commercial_amount else "-" }} <bdi dir="ltr">{{ renewal.currency }}</bdi></dd>
+    <dt>{{ _("Date rule") }}</dt><dd>{{ renewal_date_rule_label(renewal.date_rule) if renewal.date_rule else "-" }}</dd>
+    <dt>{{ _("Sales owner") }}</dt><dd><bdi dir="ltr">{{ renewal.sales_owner_staff_user_id or "-" }}</bdi></dd>
+    <dt>{{ _("Created by") }}</dt><dd><bdi dir="ltr">{{ renewal.created_by_staff_user_id or "-" }}</bdi></dd>
+    <dt>{{ _("Approved by") }}</dt><dd><bdi dir="ltr">{{ renewal.approved_by_staff_user_id or "-" }}</bdi> {{ ("(" ~ format_owner_datetime(renewal.approved_at) ~ ")") if renewal.approved_at else "" }}</dd>
+    <dt>{{ _("Applied by") }}</dt><dd><bdi dir="ltr">{{ renewal.applied_by_staff_user_id or "-" }}</bdi> {{ ("(" ~ format_owner_datetime(renewal.applied_at) ~ ")") if renewal.applied_at else "" }}</dd>
+    <dt>{{ _("Reason") }}</dt><dd>{{ renewal.reason or "-" }}</dd>
+    <dt>{{ _("Notes") }}</dt><dd>{{ renewal.notes or "-" }}</dd>
+    <dt>{{ _("Optimistic version") }}</dt><dd>{{ format_owner_number(renewal.version) }}</dd>
   </dl>
-  <p><a href="{{ url_for('commercial_ops_ui.subscription_timeline', subscription_id=renewal.subscription_id) }}">View full subscription timeline</a></p>
+  <p><a href="{{ url_for('commercial_ops_ui.subscription_timeline', subscription_id=renewal.subscription_id) }}">{{ _("View full subscription timeline") }}</a></p>
 </div>
 
 {% if renewal.status not in ["APPLIED","REJECTED","CANCELLED","VOIDED"] %}
 <div class="card">
-  <h3>Actions</h3>
+  <h3>{{ _("Actions") }}</h3>
   {% set simple_next = {"DRAFT": ["QUOTED","CANCELLED"], "QUOTED": ["AWAITING_CONFIRMATION","CANCELLED"], "AWAITING_CONFIRMATION": ["AWAITING_PAYMENT","REJECTED","CANCELLED"], "AWAITING_PAYMENT": ["PAYMENT_RECORDED","CANCELLED","VOIDED"], "PAYMENT_RECORDED": ["REJECTED","CANCELLED"], "APPROVED": ["CANCELLED","VOIDED"]} %}
   {% set options = simple_next.get(renewal.status, []) %}
   {% if options %}
-  <form method="post" action="{{ url_for('commercial_ops_ui.transition_renewal', renewal_id=renewal.id) }}">
+  <form method="post" action="{{ url_for('commercial_ops_ui.transition_renewal', renewal_id=renewal.id) }}"
+        data-confirm="{{ _('Change renewal status?') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Move to</label>
-    <select name="to_status">{% for s in options %}<option value="{{ s }}">{{ s }}</option>{% endfor %}</select>
-    <label>Reason</label><input name="reason">
-    <div style="margin-top:0.5rem;"><button type="submit" onclick="return confirm('Change renewal status?');">Apply status change</button></div>
+    <label for="commercial-ops-renewal-detail-to-status">{{ _("Move to") }}</label>
+    <select id="commercial-ops-renewal-detail-to-status" name="to_status">{% for s in options %}<option value="{{ s }}">{{ renewal_status_label(s) }}</option>{% endfor %}</select>
+    <label for="commercial-ops-renewal-detail-reason">{{ _("Reason") }}</label><input id="commercial-ops-renewal-detail-reason" name="reason">
+    <div style="margin-top:0.5rem;"><button type="submit">{{ _("Apply status change") }}</button></div>
   </form>
   {% endif %}
 
   {% if renewal.status == "PAYMENT_RECORDED" %}
-  <form method="post" action="{{ url_for('commercial_ops_ui.approve_renewal', renewal_id=renewal.id) }}" style="margin-top:1rem;">
+  <form method="post" action="{{ url_for('commercial_ops_ui.approve_renewal', renewal_id=renewal.id) }}" style="margin-top:1rem;"
+        data-confirm="{{ _('Approve this renewal? A confirmed payment must already be linked.') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <p><strong>Approve</strong> requires recent authentication and cannot be done by the staff member who created this request.</p>
-    <label>Reason</label><input name="reason">
-    <button type="submit" onclick="return confirm('Approve this renewal? A confirmed payment must already be linked.');">Approve renewal</button>
+    <p><strong>{{ _("Approve") }}</strong> {{ _("requires recent authentication and cannot be done by the staff member who created this request.") }}</p>
+    <label for="commercial-ops-renewal-detail-reason-1">{{ _("Reason") }}</label><input id="commercial-ops-renewal-detail-reason-1" name="reason">
+    <button type="submit">{{ _("Approve renewal") }}</button>
   </form>
   {% endif %}
 
   {% if renewal.status == "APPROVED" %}
-  <form method="post" action="{{ url_for('commercial_ops_ui.apply_renewal', renewal_id=renewal.id) }}" style="margin-top:1rem;">
+  <form method="post" action="{{ url_for('commercial_ops_ui.apply_renewal', renewal_id=renewal.id) }}" style="margin-top:1rem;"
+        data-confirm="{{ _('Apply this renewal now? The subscription term will change immediately.') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <p><strong>Apply</strong> extends the subscription term from {{ renewal.current_term_end }} to {{ renewal.proposed_term_end }} and requires recent authentication. This cannot be undone by applying again (idempotent, row-locked).</p>
-    <button type="submit" class="danger" onclick="return confirm('Apply this renewal now? The subscription term will change immediately.');">Apply renewal</button>
+    <p><strong>{{ _("Apply") }}</strong> {{ _("extends the subscription term from %(from_date)s to %(to_date)s and requires recent authentication. This cannot be undone by applying again (idempotent, row-locked).", from_date=format_owner_date(renewal.current_term_end), to_date=format_owner_date(renewal.proposed_term_end)) }}</p>
+    <button type="submit" class="danger">{{ _("Apply renewal") }}</button>
   </form>
   {% endif %}
 </div>
 {% endif %}
 
 <div class="card">
-  <h3>Status history</h3>
-  <table>
-    <tr><th>From</th><th>To</th><th>When</th><th>Reason</th></tr>
+  <h3>{{ _("Status history") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("From") }}</th><th>{{ _("To") }}</th><th>{{ _("When") }}</th><th>{{ _("Reason") }}</th></tr></thead>
+    <tbody>
     {% for h in renewal.status_history|sort(attribute="created_at", reverse=True) %}
-    <tr><td>{{ h.from_status or "-" }}</td><td>{{ h.to_status }}</td><td>{{ h.created_at }}</td><td>{{ h.reason or "-" }}</td></tr>
-    {% else %}<tr><td colspan="4" class="empty">No status changes yet.</td></tr>{% endfor %}
+    <tr><td>{{ renewal_status_label(h.from_status) if h.from_status else "-" }}</td><td>{{ renewal_status_label(h.to_status) }}</td><td>{{ format_owner_datetime(h.created_at) }}</td><td>{{ h.reason or "-" }}</td></tr>
+    {% else %}<tr><td colspan="4" class="empty">{{ _("No status changes yet.") }}</td></tr>{% endfor %}
+    </tbody>
   </table>
 </div>
 {% endblock %}

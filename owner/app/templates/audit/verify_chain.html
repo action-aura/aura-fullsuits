@@ -1,13 +1,13 @@
 {% extends "layout/base.html" %}
-{% block title %}Audit chain verification{% endblock %}
+{% block title %}{{ _("Audit chain verification") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Audit hash-chain verification</h2>
+  <h2>{{ _("Audit hash-chain verification") }}</h2>
   {% if ok %}
-  <p><span class="badge success">OK</span> The entire audit log chain is intact -- no tampered or out-of-order entries detected.</p>
+  <p><span class="badge success">{{ _("OK") }}</span> {{ _("The entire audit log chain is intact -- no tampered or out-of-order entries detected.") }}</p>
   {% else %}
-  <p><span class="badge danger">BROKEN</span> Chain verification failed at entry <code>{{ broken_id }}</code>.</p>
+  <p><span class="badge danger">{{ _("BROKEN") }}</span> {{ _("Chain verification failed at entry:") }} <code dir="ltr">{{ broken_id }}</code></p>
   {% endif %}
-  <a class="btn secondary" href="{{ url_for('audit.list_audit') }}">Back to audit log</a>
+  <a class="btn secondary" href="{{ url_for('audit.list_audit') }}">{{ _("Back to audit log") }}</a>
 </div>
 {% endblock %}

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import getpass
 import json
-from datetime import date
+from datetime import date, timedelta
 
 import click
 from flask import Flask
@@ -285,6 +285,96 @@ def register_cli(app: Flask) -> None:
                     if result.dry_run
                     else [],
                 },
+                indent=2,
+            )
+        )
+    @app.cli.group("reports")
+    def reports_group():
+        """Phase 9R M5 -- scheduled report-snapshot generation. Meant to be
+        invoked by a systemd timer (see deploy/systemd/), never by more than
+        one designated process."""
+
+    @reports_group.command("generate-scheduled")
+    @click.option(
+        "--period-type", type=click.Choice(["daily", "weekly", "monthly"]), required=True,
+        help="Which completed period (relative to --as-of) to generate snapshots for.",
+    )
+    @click.option("--currency", default=None, help="Required for the operational-summary report types.")
+    @click.option("--as-of", default=None, help="ISO date to compute the completed period against (default: today).")
+    def generate_scheduled_reports_cmd(period_type: str, currency: str | None, as_of: str | None):
+        """Generates the report snapshot(s) for the most recently completed
+        daily/weekly/monthly period. Refuses to run unless OWNER_SCHEDULER_ROLE
+        is explicitly "owner" (app/config.py, Phase 9R M2) -- the same
+        systemd unit file must never be allowed to fire from two hosts (or
+        from every Gunicorn worker) and silently double-generate. The
+        underlying generate_snapshot() call is additionally idempotent
+        (Postgres advisory lock + unique constraint,
+        app/operational_reports/scheduler.py) as defense in depth, not as a
+        substitute for this check -- a second, accidentally-enabled
+        scheduler host should never even attempt the call, not merely fail
+        to duplicate data if it does."""
+        from app.operational_reports import scheduler as report_scheduler
+        from app.scheduling import SchedulerNotOwnerError, require_scheduler_owner
+
+        try:
+            require_scheduler_owner(app.config)
+        except SchedulerNotOwnerError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+        as_of_date = date.fromisoformat(as_of) if as_of else date.today()
+        generated = []
+
+        if period_type == "daily":
+            period_start = period_end = as_of_date - timedelta(days=1)
+            if not currency:
+                raise click.ClickException("--currency is required for period-type=daily (DAILY_OPERATIONAL_SUMMARY)")
+            generated.append(
+                report_scheduler.generate_snapshot(
+                    report_type="DAILY_OPERATIONAL_SUMMARY", period_start=period_start, period_end=period_end,
+                    currency=currency, generated_by="SCHEDULER",
+                )
+            )
+            generated.append(
+                report_scheduler.generate_snapshot(
+                    report_type="DAILY_CASH_CLOSING_EXCEPTIONS", period_start=period_start, period_end=period_end,
+                    currency=None, generated_by="SCHEDULER",
+                )
+            )
+        elif period_type == "weekly":
+            # Most recently completed Monday-Sunday week strictly before as_of.
+            last_sunday = as_of_date - timedelta(days=as_of_date.isoweekday())
+            period_start = last_sunday - timedelta(days=6)
+            period_end = last_sunday
+            if not currency:
+                raise click.ClickException("--currency is required for period-type=weekly")
+            generated.append(
+                report_scheduler.generate_snapshot(
+                    report_type="WEEKLY_OPERATIONAL_SUMMARY", period_start=period_start, period_end=period_end,
+                    currency=currency, generated_by="SCHEDULER",
+                )
+            )
+        else:  # monthly
+            first_of_this_month = as_of_date.replace(day=1)
+            period_end = first_of_this_month - timedelta(days=1)
+            period_start = period_end.replace(day=1)
+            if not currency:
+                raise click.ClickException("--currency is required for period-type=monthly")
+            generated.append(
+                report_scheduler.generate_snapshot(
+                    report_type="MONTHLY_OPERATIONAL_SUMMARY", period_start=period_start, period_end=period_end,
+                    currency=currency, generated_by="SCHEDULER",
+                )
+            )
+
+        click.echo(
+            json.dumps(
+                [
+                    {
+                        "report_type": s.report_type, "period_start": s.period_start.isoformat(),
+                        "period_end": s.period_end.isoformat(), "snapshot_version": s.snapshot_version,
+                    }
+                    for s in generated
+                ],
                 indent=2,
             )
         )

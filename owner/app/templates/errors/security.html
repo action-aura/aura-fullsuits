@@ -1,0 +1,22 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+{% if not staff %}
+<div class="aura-auth-brand">
+  <span class="aura-auth-brand__mark" aria-hidden="true">A</span>
+  <span>{{ _('Aura Owner') }}</span>
+</div>
+{% endif %}
+<div class="aura-auth-card aura-security-page">
+  <div class="aura-security-page__icon" aria-hidden="true">!</div>
+  <h2>{{ heading }}</h2>
+  <p>{{ message }}</p>
+  <div class="aura-auth-actions">
+    {% if staff %}
+    <a class="btn" href="{{ url_for('dashboard.index') }}">{{ _('Back to dashboard') }}</a>
+    {% else %}
+    <a class="btn" href="{{ url_for('auth.login_form') }}">{{ _('Go to login') }}</a>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

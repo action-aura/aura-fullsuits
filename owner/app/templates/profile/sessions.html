@@ -1,0 +1,33 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _('My sessions') }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _('My sessions') }}</h2>
+  {% if sessions %}
+  <table>
+    <thead>
+    <tr><th>{{ _('Created') }}</th><th>{{ _('Last seen') }}</th><th>{{ _('Platform') }}</th><th>{{ _('Status') }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr>
+    </thead>
+    <tbody>
+    {% for s in sessions %}
+    <tr>
+      <td>{{ format_owner_datetime(s.created_at) }}</td><td>{{ format_owner_datetime(s.last_seen_at) }}</td><td dir="ltr">{{ s.platform }}</td>
+      <td>
+        {% if s.id == current_session_id %}<span class="badge active">{{ _('This device') }}</span>
+        {% elif s.revoked_at %}<span class="badge revoked">{{ _('Revoked') }}</span>
+        {% else %}<span class="badge">{{ _('Active') }}</span>{% endif %}
+      </td>
+      <td>
+        {% if s.id != current_session_id and not s.revoked_at %}
+        <form method="post" action="{{ url_for('profile.revoke_session_route', session_id=s.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="danger">{{ _('Revoke') }}</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="empty">{{ _('No sessions.') }}</p>{% endif %}
+</div>
+{% endblock %}

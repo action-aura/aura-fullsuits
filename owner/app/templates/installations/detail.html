@@ -1,60 +1,81 @@
 {% extends "layout/base.html" %}
-{% block title %}Installation{% endblock %}
+{% block title %}{{ _("Installation") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>{{ installation.installation_label or installation.id }} <span class="badge {{ 'active' if installation.status == 'ACTIVE' else 'draft' }}">{{ installation.status }}</span></h2>
+  <h2>{{ installation.installation_label or installation.id }} <span class="badge {{ installation_badge_class(installation.status) }}">{{ installation_status_label(installation.status) }}</span></h2>
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   <dl class="kv">
-    <dt>Customer</dt><dd>{{ installation.customer.legal_name }}</dd>
-    <dt>Product</dt><dd>{{ installation.product.product_code }}</dd>
-    <dt>Device label</dt><dd>{{ installation.device_label or "-" }}</dd>
-    <dt>App version</dt><dd>{{ installation.app_version or "-" }}</dd>
-    <dt>First registered</dt><dd>{{ installation.first_registered_at }}</dd>
-    <dt>Last check-in</dt><dd>{{ installation.last_check_in_at or "Never" }}</dd>
+    <dt>{{ _("Customer") }}</dt><dd>{{ installation.customer.legal_name }}</dd>
+    <dt>{{ _("Product") }}</dt><dd><bdi dir="ltr">{{ installation.product.product_code }}</bdi></dd>
+    <dt>{{ _("Device label") }}</dt><dd>{{ installation.device_label or "-" }}</dd>
+    <dt>{{ _("App version") }}</dt><dd><bdi dir="ltr">{{ installation.app_version or "-" }}</bdi></dd>
+    <dt>{{ _("First registered") }}</dt><dd>{{ format_owner_datetime(installation.first_registered_at) }}</dd>
+    <dt>{{ _("Last check-in") }}</dt><dd>{{ format_owner_datetime(installation.last_check_in_at) if installation.last_check_in_at else _("Never") }}</dd>
   </dl>
 </div>
 
 {% if allowed_transitions %}
 <div class="card">
-  <h3>Change status</h3>
+  <h3>{{ _("Change status") }}</h3>
   <form method="post" action="{{ url_for('installations.transition', installation_id=installation.id) }}"
-        onsubmit="return confirm('Change installation status?');">
+        data-confirm="{{ _('Change installation status?') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <select name="to_status">
-      {% for s in allowed_transitions %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+    <select name="to_status" aria-label="{{ _("Change status to") }}">
+      {% for s in allowed_transitions %}<option value="{{ s }}">{{ installation_status_label(s) }}</option>{% endfor %}
     </select>
-    <label>Reason</label><input name="reason">
-    <div style="margin-top:0.5rem;"><button type="submit">Apply</button></div>
+    <label for="installations-detail-reason">{{ _("Reason") }}</label><input id="installations-detail-reason" name="reason">
+    <div style="margin-top:0.5rem;"><button type="submit">{{ _("Apply") }}</button></div>
   </form>
 </div>
 {% endif %}
 
 {% if installation.status not in ["DEACTIVATED", "REPLACED"] %}
 <div class="card">
-  <h3>Device-slot operations (Phase 8)</h3>
-  <p class="empty">These require a reason and are the recommended path (over the generic status
-  change above) for releasing or replacing a device slot -- the audit record is more specific.</p>
-  <form method="post" action="{{ url_for('commercial_ops_ui.release_installation', installation_id=installation.id) }}">
+  <h3>{{ _("Device-slot operations (Phase 8)") }}</h3>
+  <p class="empty">{{ _("These require a reason and are the recommended path (over the generic status change above) for releasing or replacing a device slot -- the audit record is more specific.") }}</p>
+  <form method="post" action="{{ url_for('commercial_ops_ui.release_installation', installation_id=installation.id) }}"
+        data-confirm="{{ _('Release this device slot? The installation will be deactivated.') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Release this slot -- reason (required)</label><input name="reason" required>
-    <button type="submit" class="danger" onclick="return confirm('Release this device slot? The installation will be deactivated.');">Release slot</button>
+    <label for="installations-detail-reason-1">{{ _("Release this slot -- reason (required)") }}</label><input id="installations-detail-reason-1" name="reason" required>
+    <button type="submit" class="danger">{{ _("Release slot") }}</button>
   </form>
-  <form method="post" action="{{ url_for('commercial_ops_ui.replace_installation', installation_id=installation.id) }}" style="margin-top:0.5rem;">
+  <form method="post" action="{{ url_for('commercial_ops_ui.replace_installation', installation_id=installation.id) }}" style="margin-top:0.5rem;"
+        data-confirm="{{ _('Mark this installation replaced? A new activation will be needed on the replacement device.') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Mark replaced -- reason (required)</label><input name="reason" required>
-    <button type="submit" onclick="return confirm('Mark this installation replaced? A new activation will be needed on the replacement device.');">Mark replaced</button>
+    <label for="installations-detail-reason-2">{{ _("Mark replaced -- reason (required)") }}</label><input id="installations-detail-reason-2" name="reason" required>
+    <button type="submit">{{ _("Mark replaced") }}</button>
   </form>
 </div>
 {% endif %}
 
+{# Real, previously-missing status-history table (InstallationStatusHistory)
+   -- Subscriptions and Licenses already show their own equivalent history
+   table; Installations only showed "Activation events" (a distinct,
+   protocol-level log) and never this one, a real, disclosed, additive gap
+   fixed this pass. See docs/owner/ui-modernization/licensing-command-center-contract.md. #}
 <div class="card">
-  <h3>Activation events</h3>
-  <table>
-    <tr><th>Type</th><th>Result</th><th>When</th></tr>
-    {% for e in installation.activation_events|sort(attribute="created_at", reverse=True) %}
-    <tr><td>{{ e.event_type }}</td><td>{{ e.result }}</td><td>{{ e.created_at }}</td></tr>
-    {% else %}<tr><td colspan="3" class="empty">No activation events yet.</td></tr>
+  <h3>{{ _("Status history") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("From") }}</th><th>{{ _("To") }}</th><th>{{ _("When") }}</th><th>{{ _("Reason") }}</th></tr></thead>
+    <tbody>
+    {% for h in installation.status_history|sort(attribute="created_at", reverse=True) %}
+    <tr><td>{{ installation_status_label(h.from_status) if h.from_status else "-" }}</td><td>{{ installation_status_label(h.to_status) }}</td><td>{{ format_owner_datetime(h.created_at) }}</td><td>{{ h.reason or "-" }}</td></tr>
+    {% else %}<tr><td colspan="4" class="empty">{{ _("No status changes yet.") }}</td></tr>
     {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h3>{{ _("Activation events") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Type") }}</th><th>{{ _("Result") }}</th><th>{{ _("When") }}</th></tr></thead>
+    <tbody>
+    {% for e in installation.activation_events|sort(attribute="created_at", reverse=True) %}
+    <tr><td><bdi dir="ltr">{{ e.event_type }}</bdi></td><td>{{ activation_event_result_label(e.result) }}</td><td>{{ format_owner_datetime(e.created_at) }}</td></tr>
+    {% else %}<tr><td colspan="3" class="empty">{{ _("No activation events yet.") }}</td></tr>
+    {% endfor %}
+    </tbody>
   </table>
 </div>
 {% endblock %}

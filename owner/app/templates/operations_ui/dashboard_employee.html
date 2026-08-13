@@ -1,0 +1,20 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("My Expense Dashboard") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _("My Expense Dashboard") }}</h2>
+  <table class="responsive-table">
+    <tbody>
+      <tr><td>{{ expense_status_label("DRAFT") }}</td><td>{{ data.draft }}</td></tr>
+      <tr><td>{{ expense_status_label("SUBMITTED") }}</td><td>{{ data.submitted }}</td></tr>
+      <tr><td>{{ expense_status_label("RETURNED") }}</td><td>{{ data.returned_for_correction }}</td></tr>
+      <tr><td>{{ _("Approved unpaid") }}</td><td>{{ data.approved_unpaid }}</td></tr>
+      <tr><td>{{ expense_status_label("PARTIALLY_PAID") }}</td><td>{{ data.partially_paid }}</td></tr>
+      <tr><td>{{ expense_status_label("PAID") }}</td><td>{{ data.paid }}</td></tr>
+      <tr><td>{{ expense_status_label("REJECTED") }}</td><td>{{ data.rejected }}</td></tr>
+      <tr><td><strong>{{ _("Required actions") }}</strong></td><td><strong>{{ data.required_actions }}</strong></td></tr>
+    </tbody>
+  </table>
+  <a class="btn" href="{{ url_for('operations_ui.list_expenses') }}">{{ _("View my expenses") }}</a>
+</div>
+{% endblock %}

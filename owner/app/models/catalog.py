@@ -73,6 +73,33 @@ class ProductVersion(Base, UUIDPKMixin, TimestampMixin):
     is_deprecated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     imported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # -- Phase 9R M10: product release authority --
+    build_number: Mapped[int | None] = mapped_column()
+    # Clients below this version are told an update is available but not
+    # required (compared against the client's own reported app_version at
+    # check-in/refresh time -- comparison logic lives in the licensing
+    # service, not here; this column is just the published policy value).
+    min_supported_version: Mapped[str | None] = mapped_column(String(64))
+    # Clients below THIS version are told the update is mandatory. Always
+    # >= min_supported_version when both are set (enforced by
+    # publish_release(), not a DB constraint -- semver comparison isn't
+    # expressible in SQL).
+    forced_upgrade_threshold: Mapped[str | None] = mapped_column(String(64))
+    artifact_size_bytes: Mapped[int | None] = mapped_column()
+    # DRAFT: imported/created, not yet visible to any client or download
+    # authorization check. PUBLISHED: live -- immutable from here on
+    # (version/checksum/artifact_path/build_number never change after
+    # publish; a correction is a new row, not an edit). WITHDRAWN: was
+    # published, no longer authorized for new downloads or activations,
+    # but existing installations already running it are not retroactively
+    # broken (see private-distribution-contract.md).
+    publication_state: Mapped[str] = mapped_column(String(16), default="DRAFT", nullable=False)
+    created_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_staff_users.id"))
+    published_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_staff_users.id"))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    withdrawn_reason: Mapped[str | None] = mapped_column(Text)
+
     product: Mapped[Product] = relationship()
     platform: Mapped[Platform] = relationship()
     release_channel: Mapped[ReleaseChannel] = relationship()

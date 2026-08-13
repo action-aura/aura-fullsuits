@@ -1,19 +1,21 @@
 {% extends "layout/base.html" %}
-{% block title %}Versions{% endblock %}
+{% block title %}{{ _("Versions") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Product versions</h2>
-  <table>
-    <tr><th>Product</th><th>Platform</th><th>Version</th><th>Channel</th><th>Stable</th><th>Checksum</th></tr>
+  <h2>{{ _("Product versions") }}</h2>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Product") }}</th><th>{{ _("Platform") }}</th><th>{{ _("Version") }}</th><th>{{ _("Channel") }}</th><th>{{ _("Stable") }}</th><th>{{ _("Checksum") }}</th></tr></thead>
+    <tbody>
     {% for v in versions %}
     <tr>
-      <td>{{ v.product.product_code }}</td><td>{{ v.platform.platform_code }}</td><td>{{ v.version }}</td>
-      <td>{{ v.release_channel.channel_code if v.release_channel else "-" }}</td>
-      <td>{{ "Yes" if v.is_current_stable else "No" }}</td>
-      <td><code style="font-size:0.75rem;">{{ v.artifact_checksum_sha256 or "-" }}</code></td>
+      <td><bdi dir="ltr">{{ v.product.product_code }}</bdi></td><td><bdi dir="ltr">{{ v.platform.platform_code }}</bdi></td><td><bdi dir="ltr">{{ v.version }}</bdi></td>
+      <td><bdi dir="ltr">{{ v.release_channel.channel_code if v.release_channel else "-" }}</bdi></td>
+      <td>{{ _("Yes") if v.is_current_stable else _("No") }}</td>
+      <td><code style="font-size:0.75rem;" dir="ltr">{{ v.artifact_checksum_sha256 or "-" }}</code></td>
     </tr>
-    {% else %}<tr><td colspan="6" class="empty">No versions imported yet.</td></tr>
+    {% else %}<tr><td colspan="6" class="empty">{{ _("No versions imported yet.") }}</td></tr>
     {% endfor %}
+    </tbody>
   </table>
 </div>
 {% endblock %}

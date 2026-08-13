@@ -19,5 +19,15 @@ Scope: the Owner Foundation application as built this phase (internal, not inter
 | 13 | Invitation token replay/guessing | Token generated via `secrets.token_urlsafe(32)` (>=256 bits), stored only as a hash, one-time use enforced at the DB row level, short expiry | N/A |
 | 14 | Denial of service via login endpoint | Per-identifier + per-IP login throttling | No distributed rate-limit store (single-process); acceptable for an internal, low-traffic app; would need Redis at real scale |
 
+**Superseded (Phase 9R M7, 2026-08-04):** the "single-process" residual risk
+in #14 no longer describes the current implementation.
+`app/security/ratelimit.py`'s `is_locked_out()`/`record_attempt()` are
+backed by the persistent `owner_login_attempts` PostgreSQL table, queried
+identically by every Gunicorn worker process — already a real distributed
+store, not in-memory, verified under simulated multi-worker concurrency in
+`owner/tests/test_phase9r_rate_limit_multi_worker.py`. This entry is kept
+as a historical record of Phase 5's own accurate assessment at the time,
+not edited in place.
+
 ## Explicitly out of scope this phase
 Network-level threats (this app is not deployed to a reachable network yet), physical security of the host, supply-chain compromise of a pinned dependency, multi-instance/distributed rate limiting.

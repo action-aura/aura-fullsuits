@@ -1,16 +1,25 @@
 {% extends "layout/base.html" %}
-{% block title %}Login{% endblock %}
+{% block title %}{{ _('Login') }}{% endblock %}
 {% block content %}
-<div class="card" style="max-width:380px;margin:2rem auto;">
-  <h2>Aura Owner Control Center</h2>
-  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+<div class="aura-auth-brand">
+  <span class="aura-auth-brand__mark" aria-hidden="true">A</span>
+  <span>{{ _('Aura Owner') }}</span>
+</div>
+<div class="aura-auth-card">
+  <h2>{{ _('Sign in') }}</h2>
+  {% if notice %}<div class="aura-auth-notice">{{ notice }}</div>{% endif %}
+  {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
   <form method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label for="email">Email</label>
-    <input id="email" type="email" name="email" required autofocus>
-    <label for="password">Password</label>
-    <input id="password" type="password" name="password" required>
-    <div style="margin-top:1rem;"><button type="submit">Log in</button></div>
+    <label for="email">{{ _('Email') }}</label>
+    <input id="email" type="email" name="email" required autofocus autocomplete="username">
+    <label for="password">{{ _('Password') }}</label>
+    <div class="aura-password-field">
+      <input id="password" type="password" name="password" required autocomplete="current-password"
+             data-show-text="{{ _('Show') }}" data-hide-text="{{ _('Hide') }}"
+             data-show-label="{{ _('Show password') }}" data-hide-label="{{ _('Hide password') }}">
+    </div>
+    <div class="aura-auth-actions"><button type="submit" class="btn">{{ _('Log in') }}</button></div>
   </form>
 </div>
 {% endblock %}

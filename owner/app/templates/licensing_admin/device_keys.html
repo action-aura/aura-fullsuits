@@ -1,29 +1,42 @@
 {% extends "layout/base.html" %}
-{% block title %}Device Keys{% endblock %}
+{% import "components/table.html" as table with context %}
+{% block title %}{{ _("Device Keys") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Device public keys</h2>
-  <table>
-    <tr><th>Fingerprint</th><th>Algorithm</th><th>Status</th><th>Installation</th><th>Last proof</th><th></th></tr>
-    {% for k in rows %}
+  {{ table.toolbar(_("Device public keys")) }}
+  {{ table.filter_bar(
+      status_options=["ACTIVE","REVOKED","REPLACED"], status_value=status_filter, status_label_fn=device_key_status_label
+  ) }}
+  {% call table.table(
+      columns=[
+        {"label": _("Fingerprint")},
+        {"label": _("Algorithm")},
+        {"label": _("Status"), "sort_key": "status"},
+        {"label": _("Installation")},
+        {"label": _("Last proof"), "sort_key": "last_proof_at"},
+        {"label": ""},
+      ],
+      has_rows=result.rows, empty_message=_("No device keys registered yet."), caption=_("Device public keys")
+  ) %}
+    {% for k in result.rows %}
     <tr>
-      <td><code style="font-size:0.72rem;">{{ k.fingerprint[:16] }}...</code></td>
-      <td>{{ k.algorithm }}</td>
-      <td><span class="badge {{ 'active' if k.status == 'ACTIVE' else ('danger' if k.status == 'REVOKED' else 'draft') }}">{{ k.status }}</span></td>
-      <td>{{ (k.installation_id|string)[:8] }}</td>
-      <td>{{ k.last_proof_at or "-" }}</td>
+      <td><code style="font-size:0.72rem;" dir="ltr">{{ k.fingerprint[:16] }}...</code></td>
+      <td><bdi dir="ltr">{{ k.algorithm }}</bdi></td>
+      <td><span class="badge {{ 'active' if k.status == 'ACTIVE' else ('danger' if k.status == 'REVOKED' else 'draft') }}">{{ device_key_status_label(k.status) }}</span></td>
+      <td><bdi dir="ltr">{{ (k.installation_id|string)[:8] }}</bdi></td>
+      <td>{{ format_owner_datetime(k.last_proof_at) if k.last_proof_at else "-" }}</td>
       <td>
-        {% if k.status == "ACTIVE" %}
+        {% if k.status == "ACTIVE" and has_permission("device_keys.revoke") %}
         <form class="inline" method="post" action="{{ url_for('licensing_admin.revoke_device_key', device_key_id=k.id) }}"
-              onsubmit="return confirm('Revoke this device key? The device will be unable to check in until it re-activates with a new key.');">
+              data-confirm="{{ _('Revoke this device key? The device will be unable to check in until it re-activates with a new key.') }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" class="danger">Revoke</button>
+          <button type="submit" class="danger">{{ _("Revoke") }}</button>
         </form>
         {% endif %}
       </td>
     </tr>
-    {% else %}<tr><td colspan="6" class="empty">No device keys registered yet.</td></tr>
     {% endfor %}
-  </table>
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
 </div>
 {% endblock %}

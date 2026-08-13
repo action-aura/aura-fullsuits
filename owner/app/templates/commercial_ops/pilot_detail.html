@@ -1,91 +1,96 @@
 {% extends "layout/base.html" %}
-{% block title %}Pilot{% endblock %}
+{% block title %}{{ _("Pilot") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Pilot for {{ pilot.customer.legal_name }} <span class="badge {{ 'active' if pilot.status in ['ACTIVE','EXTENDED','CONVERTED'] else 'draft' }}">{{ pilot.status }}</span></h2>
+  <h2>{{ _("Pilot for %(customer)s", customer=pilot.customer.legal_name) }} <span class="badge {{ 'active' if pilot.status in ['ACTIVE','EXTENDED','CONVERTED'] else 'draft' }}">{{ pilot_status_label(pilot.status) }}</span></h2>
   {% if error %}<p class="error">{{ error }}</p>{% endif %}
   <dl class="kv">
-    <dt>Subscription</dt><dd><a href="{{ url_for('subscriptions.detail', subscription_id=pilot.subscription_id) }}">{{ pilot.subscription_id }}</a></dd>
-    <dt>Window</dt><dd>{{ pilot.pilot_start }} &rarr; {{ pilot.pilot_end }}</dd>
-    <dt>Allowed devices</dt><dd>{{ pilot.allowed_device_count }}</dd>
-    <dt>Support level</dt><dd>{{ pilot.support_level or "-" }}</dd>
-    <dt>Success criteria</dt><dd>{{ pilot.success_criteria or "-" }}</dd>
-    <dt>Agreed limitations</dt><dd>{{ pilot.agreed_limitations or "-" }}</dd>
-    <dt>Review date</dt><dd>{{ pilot.review_date or "-" }}</dd>
-    <dt>Exit / rollback plan</dt><dd>{{ pilot.exit_rollback_plan or "-" }}</dd>
-    <dt>Extensions used</dt><dd>{{ pilot.extension_count }} / {{ pilot.max_extensions_allowed }} (hard cap)</dd>
-    <dt>Conversion decision</dt><dd>{{ pilot.conversion_decision }}</dd>
-    <dt>Converted via renewal</dt><dd>{% if pilot.converted_renewal_request_id %}<a href="{{ url_for('commercial_ops_ui.renewal_detail', renewal_id=pilot.converted_renewal_request_id) }}">{{ pilot.converted_renewal_request_id }}</a>{% else %}-{% endif %}</dd>
+    <dt>{{ _("Subscription") }}</dt><dd><a href="{{ url_for('subscriptions.detail', subscription_id=pilot.subscription_id) }}"><bdi dir="ltr">{{ pilot.subscription_id }}</bdi></a></dd>
+    <dt>{{ _("Window") }}</dt><dd>{{ format_owner_date(pilot.pilot_start) }} &rarr; {{ format_owner_date(pilot.pilot_end) }}</dd>
+    <dt>{{ _("Allowed devices") }}</dt><dd>{{ format_owner_number(pilot.allowed_device_count) }}</dd>
+    <dt>{{ _("Support level") }}</dt><dd>{{ pilot.support_level or "-" }}</dd>
+    <dt>{{ _("Success criteria") }}</dt><dd>{{ pilot.success_criteria or "-" }}</dd>
+    <dt>{{ _("Agreed limitations") }}</dt><dd>{{ pilot.agreed_limitations or "-" }}</dd>
+    <dt>{{ _("Review date") }}</dt><dd>{{ format_owner_date(pilot.review_date) if pilot.review_date else "-" }}</dd>
+    <dt>{{ _("Exit / rollback plan") }}</dt><dd>{{ pilot.exit_rollback_plan or "-" }}</dd>
+    <dt>{{ _("Extensions used") }}</dt><dd>{{ _("%(used)s / %(max)s (hard cap)", used=format_owner_number(pilot.extension_count), max=format_owner_number(pilot.max_extensions_allowed)) }}</dd>
+    <dt>{{ _("Conversion decision") }}</dt><dd>{{ pilot_conversion_decision_label(pilot.conversion_decision) }}</dd>
+    <dt>{{ _("Converted via renewal") }}</dt><dd>{% if pilot.converted_renewal_request_id %}<a href="{{ url_for('commercial_ops_ui.renewal_detail', renewal_id=pilot.converted_renewal_request_id) }}"><bdi dir="ltr">{{ pilot.converted_renewal_request_id }}</bdi></a>{% else %}-{% endif %}</dd>
   </dl>
 </div>
 
 {% if pilot.status not in ["CONVERTED","COMPLETED","CANCELLED"] %}
 <div class="card">
-  <h3>Actions</h3>
+  <h3>{{ _("Actions") }}</h3>
   {% if pilot.status == "DRAFT" %}
   <form method="post" action="{{ url_for('commercial_ops_ui.approve_pilot_route', pilot_id=pilot.id) }}" class="inline">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit">Approve pilot</button>
+    <button type="submit">{{ _("Approve pilot") }}</button>
   </form>
   {% endif %}
   {% if pilot.status == "APPROVED" %}
   <form method="post" action="{{ url_for('commercial_ops_ui.activate_pilot_route', pilot_id=pilot.id) }}" class="inline">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit">Activate pilot</button>
+    <button type="submit">{{ _("Activate pilot") }}</button>
   </form>
   {% endif %}
 
   {% if pilot.status in ["ACTIVE","EXTENDED"] %}
   <div style="margin-top:1rem;">
-    <h4>Extend pilot</h4>
+    <h4>{{ _("Extend pilot") }}</h4>
     {% if pilot.extension_count >= pilot.max_extensions_allowed %}
-    <p class="empty">Maximum extensions ({{ pilot.max_extensions_allowed }}) already used -- no indefinite rolling pilot.</p>
+    <p class="empty">{{ _("Maximum extensions (%(max)s) already used -- no indefinite rolling pilot.", max=format_owner_number(pilot.max_extensions_allowed)) }}</p>
     {% else %}
     <form method="post" action="{{ url_for('commercial_ops_ui.extend_pilot_route', pilot_id=pilot.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <label>New end date (current: {{ pilot.pilot_end }})</label><input name="new_end_date" type="date" required>
-      <label>Reason (required)</label><input name="reason" required>
-      <button type="submit">Extend</button>
+      <label for="commercial-ops-pilot-detail-new-end-date">{{ _("New end date (current: %(current)s)", current=format_owner_date(pilot.pilot_end)) }}</label><input id="commercial-ops-pilot-detail-new-end-date" name="new_end_date" type="date" required>
+      <label for="commercial-ops-pilot-detail-reason">{{ _("Reason (required)") }}</label><input id="commercial-ops-pilot-detail-reason" name="reason" required>
+      <button type="submit">{{ _("Extend") }}</button>
     </form>
     {% endif %}
   </div>
 
   <div style="margin-top:1rem;">
-    <a class="btn" href="{{ url_for('commercial_ops_ui.convert_pilot_form', pilot_id=pilot.id) }}">Convert to paid plan</a>
+    <a class="btn" href="{{ url_for('commercial_ops_ui.convert_pilot_form', pilot_id=pilot.id) }}">{{ _("Convert to paid plan") }}</a>
   </div>
 
   <form method="post" action="{{ url_for('commercial_ops_ui.complete_pilot_route', pilot_id=pilot.id) }}" style="margin-top:1rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Reason (no conversion)</label><input name="reason">
-    <button type="submit" class="secondary">Complete without converting</button>
+    <label for="commercial-ops-pilot-detail-reason-1">{{ _("Reason (no conversion)") }}</label><input id="commercial-ops-pilot-detail-reason-1" name="reason">
+    <button type="submit" class="secondary">{{ _("Complete without converting") }}</button>
   </form>
 
-  <form method="post" action="{{ url_for('commercial_ops_ui.cancel_pilot_route', pilot_id=pilot.id) }}" style="margin-top:0.5rem;">
+  <form method="post" action="{{ url_for('commercial_ops_ui.cancel_pilot_route', pilot_id=pilot.id) }}" style="margin-top:0.5rem;"
+        data-confirm="{{ _('Cancel this pilot?') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Reason (required)</label><input name="reason" required>
-    <button type="submit" class="danger" onclick="return confirm('Cancel this pilot?');">Cancel pilot</button>
+    <label for="commercial-ops-pilot-detail-reason-2">{{ _("Reason (required)") }}</label><input id="commercial-ops-pilot-detail-reason-2" name="reason" required>
+    <button type="submit" class="danger">{{ _("Cancel pilot") }}</button>
   </form>
   {% endif %}
 </div>
 {% endif %}
 
 <div class="card">
-  <h3>Extension history</h3>
-  <table>
-    <tr><th>#</th><th>Previous end</th><th>New end</th><th>Reason</th><th>Approved by</th></tr>
+  <h3>{{ _("Extension history") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>#</th><th>{{ _("Previous end") }}</th><th>{{ _("New end") }}</th><th>{{ _("Reason") }}</th><th>{{ _("Approved by") }}</th></tr></thead>
+    <tbody>
     {% for e in pilot.extensions|sort(attribute="created_at", reverse=True) %}
-    <tr><td>{{ e.extension_number }}</td><td>{{ e.previous_end_date }}</td><td>{{ e.new_end_date }}</td><td>{{ e.reason }}</td><td>{{ e.approved_by_staff_user_id or "-" }}</td></tr>
-    {% else %}<tr><td colspan="5" class="empty">No extensions yet.</td></tr>{% endfor %}
+    <tr><td>{{ format_owner_number(e.extension_number) }}</td><td>{{ format_owner_date(e.previous_end_date) }}</td><td>{{ format_owner_date(e.new_end_date) }}</td><td>{{ e.reason }}</td><td><bdi dir="ltr">{{ e.approved_by_staff_user_id or "-" }}</bdi></td></tr>
+    {% else %}<tr><td colspan="5" class="empty">{{ _("No extensions yet.") }}</td></tr>{% endfor %}
+    </tbody>
   </table>
 </div>
 
 <div class="card">
-  <h3>Status history</h3>
-  <table>
-    <tr><th>From</th><th>To</th><th>When</th><th>Reason</th></tr>
+  <h3>{{ _("Status history") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("From") }}</th><th>{{ _("To") }}</th><th>{{ _("When") }}</th><th>{{ _("Reason") }}</th></tr></thead>
+    <tbody>
     {% for h in pilot.status_history|sort(attribute="created_at", reverse=True) %}
-    <tr><td>{{ h.from_status or "-" }}</td><td>{{ h.to_status }}</td><td>{{ h.created_at }}</td><td>{{ h.reason or "-" }}</td></tr>
-    {% else %}<tr><td colspan="4" class="empty">No status changes yet.</td></tr>{% endfor %}
+    <tr><td>{{ pilot_status_label(h.from_status) if h.from_status else "-" }}</td><td>{{ pilot_status_label(h.to_status) }}</td><td>{{ format_owner_datetime(h.created_at) }}</td><td>{{ h.reason or "-" }}</td></tr>
+    {% else %}<tr><td colspan="4" class="empty">{{ _("No status changes yet.") }}</td></tr>{% endfor %}
+    </tbody>
   </table>
 </div>
 {% endblock %}

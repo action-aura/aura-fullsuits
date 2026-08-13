@@ -1,4 +1,5 @@
 import logging
+import sys
 
 import pytest
 
@@ -12,15 +13,23 @@ from commercial_runtime.einvoicing.credentials import (
 
 SECRET_MARKER = 'super-secret-client-secret-value-9f8e7d'
 
-# Both real backends are exercised -- this environment is genuinely Windows,
-# so the DPAPI path is not mocked; it goes through real CryptProtectData.
+# Both real backends are exercised on Windows -- the dpapi path is not
+# mocked there, it goes through real CryptProtectData. DPAPI has no Linux
+# equivalent (AppSecretDerivedSecretBox is the intended cross-platform
+# fallback, used on Android per test_get_secret_box_selects_app_secret_derived_on_android
+# below), so the dpapi case is skipped rather than mocked on non-Windows CI
+# runners -- mocking CryptProtectData would just test the mock, not DPAPI.
+_windows_only = pytest.mark.skipif(
+    sys.platform != 'win32',
+    reason='DPAPI (CryptProtectData/CryptUnprotectData) is a Windows-only API',
+)
 BACKEND_FACTORIES = [
-    ('dpapi', lambda tmp_path: WindowsDpapiSecretBox(str(tmp_path))),
-    ('app-secret-aes-gcm', lambda tmp_path: AppSecretDerivedSecretBox(str(tmp_path))),
+    pytest.param('dpapi', lambda tmp_path: WindowsDpapiSecretBox(str(tmp_path)), marks=_windows_only, id='dpapi'),
+    pytest.param('app-secret-aes-gcm', lambda tmp_path: AppSecretDerivedSecretBox(str(tmp_path)), id='app-secret-aes-gcm'),
 ]
 
 
-@pytest.mark.parametrize('name,factory', BACKEND_FACTORIES, ids=[n for n, _ in BACKEND_FACTORIES])
+@pytest.mark.parametrize('name,factory', BACKEND_FACTORIES)
 def test_round_trip(tmp_path, name, factory):
     box = factory(tmp_path)
     creds = EInvoiceCredentials(client_id='client-abc123', client_secret=SECRET_MARKER)
@@ -32,14 +41,14 @@ def test_round_trip(tmp_path, name, factory):
     assert loaded.client_secret == SECRET_MARKER
 
 
-@pytest.mark.parametrize('name,factory', BACKEND_FACTORIES, ids=[n for n, _ in BACKEND_FACTORIES])
+@pytest.mark.parametrize('name,factory', BACKEND_FACTORIES)
 def test_load_without_store_raises_unavailable(tmp_path, name, factory):
     box = factory(tmp_path)
     with pytest.raises(CredentialsUnavailable):
         box.load()
 
 
-@pytest.mark.parametrize('name,factory', BACKEND_FACTORIES, ids=[n for n, _ in BACKEND_FACTORIES])
+@pytest.mark.parametrize('name,factory', BACKEND_FACTORIES)
 def test_wipe_removes_credentials(tmp_path, name, factory):
     box = factory(tmp_path)
     box.store(EInvoiceCredentials(client_id='c', client_secret=SECRET_MARKER))
@@ -54,7 +63,7 @@ def test_wipe_when_never_stored_does_not_raise(tmp_path):
     box.wipe()  # must not raise
 
 
-@pytest.mark.parametrize('name,factory', BACKEND_FACTORIES, ids=[n for n, _ in BACKEND_FACTORIES])
+@pytest.mark.parametrize('name,factory', BACKEND_FACTORIES)
 def test_describe_never_contains_the_secret(tmp_path, name, factory):
     box = factory(tmp_path)
     box.store(EInvoiceCredentials(client_id='client-abc123', client_secret=SECRET_MARKER))
@@ -104,7 +113,7 @@ def test_repr_and_str_redact():
     assert '***' in repr(creds)
 
 
-@pytest.mark.parametrize('name,factory', BACKEND_FACTORIES, ids=[n for n, _ in BACKEND_FACTORIES])
+@pytest.mark.parametrize('name,factory', BACKEND_FACTORIES)
 def test_no_secret_substring_in_logs_across_full_lifecycle(tmp_path, caplog, name, factory):
     caplog.set_level(logging.DEBUG)
     box = factory(tmp_path)

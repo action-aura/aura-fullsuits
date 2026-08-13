@@ -1,73 +1,83 @@
 {% extends "layout/base.html" %}
-{% block title %}Catalog{% endblock %}
+{% block title %}{{ _("Catalog") }}{% endblock %}
 {% block content %}
 <div class="card">
-  <h2>Products</h2>
-  <table>
-    <tr><th>Code</th><th>Name</th><th>Commercial status</th><th>Sellable</th></tr>
+  <h2>{{ _("Products") }}</h2>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Code") }}</th><th>{{ _("Name") }}</th><th>{{ _("Commercial status") }}</th><th>{{ _("Sellable") }}</th></tr></thead>
+    <tbody>
     {% for p in products %}
-    <tr><td>{{ p.product_code }}</td><td>{{ p.name }}</td><td><span class="badge">{{ p.commercial_status }}</span></td><td>{{ "Yes" if p.is_sellable else "No" }}</td></tr>
+    <tr><td><bdi dir="ltr">{{ p.product_code }}</bdi></td><td>{{ p.name }}</td><td><span class="badge">{{ product_commercial_status_label(p.commercial_status) }}</span></td><td>{{ _("Yes") if p.is_sellable else _("No") }}</td></tr>
     {% endfor %}
+    </tbody>
   </table>
 </div>
 
 <div class="card">
   <div style="display:flex;justify-content:space-between;align-items:center;">
-    <h2>Plans</h2>
-    <a class="btn" href="{{ url_for('catalog.new_plan_form') }}">New plan</a>
+    <h2>{{ _("Plans") }}</h2>
+    <a class="btn" href="{{ url_for('catalog.new_plan_form') }}">{{ _("New plan") }}</a>
   </div>
-  <table>
-    <tr><th>Code</th><th>Name</th><th>Billing model</th><th>Status</th><th></th></tr>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Code") }}</th><th>{{ _("Name") }}</th><th>{{ _("Billing model") }}</th><th>{{ _("Status") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
+    <tbody>
     {% for p in plans %}
-    <tr><td>{{ p.plan_code }}</td><td>{{ p.name }}</td><td>{{ p.billing_model }}</td><td><span class="badge">{{ p.lifecycle_status }}</span></td>
-      <td><a href="{{ url_for('catalog.plan_detail', plan_id=p.id) }}">View</a></td></tr>
-    {% else %}<tr><td colspan="5" class="empty">No plans yet.</td></tr>
+    <tr><td><bdi dir="ltr">{{ p.plan_code }}</bdi></td><td>{{ p.name }}</td><td><bdi dir="ltr">{{ p.billing_model }}</bdi></td><td><span class="badge">{{ plan_lifecycle_status_label(p.lifecycle_status) }}</span></td>
+      <td><a href="{{ url_for('catalog.plan_detail', plan_id=p.id) }}">{{ _("View") }}</a></td></tr>
+    {% else %}<tr><td colspan="5" class="empty">{{ _("No plans yet.") }}</td></tr>
     {% endfor %}
+    </tbody>
   </table>
 </div>
 
 <div class="card">
-  <h2>Add-ons</h2>
-  <table>
-    <tr><th>Code</th><th>Name</th><th>Availability</th><th></th></tr>
+  <h2>{{ _("Add-ons") }}</h2>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Code") }}</th><th>{{ _("Name") }}</th><th>{{ _("Availability") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
+    <tbody>
     {% for a in addons %}
     <tr>
-      <td>{{ a.addon_code }}</td><td>{{ a.name }}</td>
-      <td><span class="badge {{ 'active' if a.availability_status == 'AVAILABLE' else 'draft' }}">{{ a.availability_status }}</span></td>
+      <td><bdi dir="ltr">{{ a.addon_code }}</bdi></td><td>{{ a.name }}</td>
+      <td><span class="badge {{ 'active' if a.availability_status == 'AVAILABLE' else 'draft' }}">{{ addon_availability_status_label(a.availability_status) }}</span></td>
       <td>
         <form class="inline" method="post" action="{{ url_for('catalog.update_addon_availability', addon_id=a.id) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <select name="status" onchange="this.form.submit()">
+          <select name="status" aria-label="{{ _('Change availability status') }}" onchange="this.form.submit()">
             {% for s in ["DRAFT","PLANNED","PILOT","AVAILABLE","RETIRED"] %}
-            <option value="{{ s }}" {% if s == a.availability_status %}selected{% endif %}>{{ s }}</option>
+            <option value="{{ s }}" {% if s == a.availability_status %}selected{% endif %}>{{ addon_availability_status_label(s) }}</option>
             {% endfor %}
           </select>
         </form>
       </td>
     </tr>
     {% endfor %}
+    </tbody>
   </table>
 </div>
 
 <div class="card">
-  <h2>Entitlement definitions</h2>
-  <table>
-    <tr><th>Code</th><th>Type</th><th>Description</th></tr>
+  <h2>{{ _("Entitlement definitions") }}</h2>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Code") }}</th><th>{{ _("Type") }}</th><th>{{ _("Description") }}</th></tr></thead>
+    <tbody>
     {% for e in entitlements %}
-    <tr><td>{{ e.entitlement_code }}</td><td>{{ e.value_type }}</td><td>{{ e.description }}</td></tr>
+    <tr><td><bdi dir="ltr">{{ e.entitlement_code }}</bdi></td><td><bdi dir="ltr">{{ e.value_type }}</bdi></td><td>{{ e.description }}</td></tr>
     {% endfor %}
+    </tbody>
   </table>
 </div>
 
 <div class="card">
-  <h2>Recently imported versions</h2>
-  <table>
-    <tr><th>Product</th><th>Platform</th><th>Version</th><th>Checksum</th><th>Imported</th></tr>
+  <h2>{{ _("Recently imported versions") }}</h2>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Product") }}</th><th>{{ _("Platform") }}</th><th>{{ _("Version") }}</th><th>{{ _("Checksum") }}</th><th>{{ _("Imported") }}</th></tr></thead>
+    <tbody>
     {% for v in versions %}
-    <tr><td>{{ v.product.product_code }}</td><td>{{ v.platform.platform_code }}</td><td>{{ v.version }}</td>
-      <td><code style="font-size:0.75rem;">{{ (v.artifact_checksum_sha256 or "")[:16] }}...</code></td><td>{{ v.imported_at }}</td></tr>
-    {% else %}<tr><td colspan="5" class="empty">No versions imported yet -- use `flask import-release-manifest`.</td></tr>
+    <tr><td><bdi dir="ltr">{{ v.product.product_code }}</bdi></td><td><bdi dir="ltr">{{ v.platform.platform_code }}</bdi></td><td><bdi dir="ltr">{{ v.version }}</bdi></td>
+      <td><code style="font-size:0.75rem;" dir="ltr">{{ (v.artifact_checksum_sha256 or "")[:16] }}...</code></td><td>{{ format_owner_datetime(v.imported_at) }}</td></tr>
+    {% else %}<tr><td colspan="5" class="empty">{{ _("No versions imported yet -- use") }} <code dir="ltr">flask import-release-manifest</code></td></tr>
     {% endfor %}
+    </tbody>
   </table>
 </div>
 {% endblock %}

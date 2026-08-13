@@ -1,0 +1,37 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("CRM Dashboard") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _("CRM Dashboard") }}</h2>
+  {% if is_management %}
+  <dl class="kv">
+    <dt>{{ _("Total active leads") }}</dt><dd>{{ summary.total_active_leads }}</dd>
+    <dt>{{ _("Unassigned leads") }}</dt><dd>{{ summary.unassigned_leads }}</dd>
+    <dt>{{ _("Records requiring reassignment") }}</dt><dd>{{ summary.reassignment_required_leads }}</dd>
+    <dt>{{ _("Follow-ups due today") }}</dt><dd>{{ summary.followups_due_today }}</dd>
+    <dt>{{ _("Follow-ups overdue") }}</dt><dd>{{ summary.followups_overdue }}</dd>
+  </dl>
+  <h3>{{ _("Leads by status") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Status") }}</th><th>{{ _("Count") }}</th></tr></thead>
+    <tbody>
+    {% for status, count in summary.leads_by_status.items() %}
+    <tr><td>{{ lead_status_label(status) }}</td><td>{{ count }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <dl class="kv">
+    <dt>{{ _("My active leads") }}</dt><dd>{{ summary.own_active_leads }}</dd>
+    <dt>{{ _("New") }}</dt><dd>{{ summary.new_leads }}</dd>
+    <dt>{{ _("Potential") }}</dt><dd>{{ summary.potential_leads }}</dd>
+    <dt>{{ _("Qualified") }}</dt><dd>{{ summary.qualified_leads }}</dd>
+    <dt>{{ _("Converted") }}</dt><dd>{{ summary.converted_leads }}</dd>
+    <dt>{{ _("Lost") }}</dt><dd>{{ summary.lost_leads }}</dd>
+    <dt>{{ _("Follow-ups due today") }}</dt><dd>{{ summary.followups_due_today }}</dd>
+    <dt>{{ _("Follow-ups overdue") }}</dt><dd>{{ summary.followups_overdue }}</dd>
+    <dt>{{ _("Interactions in the last 7 days") }}</dt><dd>{{ summary.recent_interactions }}</dd>
+  </dl>
+  {% endif %}
+</div>
+{% endblock %}

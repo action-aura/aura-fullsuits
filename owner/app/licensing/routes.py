@@ -7,8 +7,9 @@ import uuid
 from flask import Blueprint, current_app, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import select
 
-from app.auth.session import load_current_staff
+from app.auth.session import has_recent_auth, load_current_staff
 from app.extensions import db_session
+from app.licensing import list_queries
 from app.licensing.services import (
     VALID_TRANSITIONS,
     InvalidLicenseTransitionError,
@@ -21,6 +22,7 @@ from app.models.customers import Customer
 from app.models.licensing import License
 from app.models.subscriptions import Subscription
 from app.security.rbac import require_login, require_permission, require_recent_auth
+from app.services.pagination import DEFAULT_PAGE_SIZE
 
 bp = Blueprint("licensing", __name__, url_prefix="/licenses")
 
@@ -28,12 +30,15 @@ bp = Blueprint("licensing", __name__, url_prefix="/licenses")
 @bp.route("", methods=["GET"])
 @require_permission("licenses.view")
 def list_licenses():
-    status_filter = request.args.get("status")
-    stmt = select(License).order_by(License.created_at.desc())
-    if status_filter:
-        stmt = stmt.where(License.status == status_filter)
-    licenses = db_session.execute(stmt).scalars().all()
-    return render_template("licensing/list.html", licenses=licenses, status_filter=status_filter)
+    status_filter = request.args.get("status") or None
+    search = request.args.get("q") or None
+    sort = request.args.get("sort", "created_at")
+    direction = request.args.get("dir", "desc")
+    result = list_queries.list_licenses(
+        page=request.args.get("page", 1, type=int), page_size=DEFAULT_PAGE_SIZE,
+        status=status_filter, search=search, sort=sort, direction=direction,
+    )
+    return render_template("licensing/list.html", result=result, status_filter=status_filter, search=search)
 
 
 @bp.route("/new", methods=["GET"])
@@ -75,6 +80,7 @@ def detail(license_id):
     return render_template(
         "licensing/detail.html", license=license_row, revealed_key=None,
         allowed_transitions=allowed_transitions, issue_idempotency_key=str(uuid.uuid4()),
+        recent_auth_ok=has_recent_auth(),
     )
 
 
@@ -95,7 +101,10 @@ def issue(license_id):
         return jsonify({"error": str(exc)}), 400
     allowed_transitions = sorted(VALID_TRANSITIONS.get(license_row.status, set()))
     # full_key is shown exactly once, in this response only -- reloading /licenses/<id> never shows it again.
-    return render_template("licensing/detail.html", license=license_row, revealed_key=full_key, allowed_transitions=allowed_transitions)
+    return render_template(
+        "licensing/detail.html", license=license_row, revealed_key=full_key,
+        allowed_transitions=allowed_transitions, recent_auth_ok=has_recent_auth(),
+    )
 
 
 @bp.route("/<uuid:license_id>/transition", methods=["POST"])

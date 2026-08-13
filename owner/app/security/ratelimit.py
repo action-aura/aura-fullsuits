@@ -1,6 +1,16 @@
-"""Login throttling, backed by the persistent owner_login_attempts table
-(survives process restart, unlike an in-memory counter; documented single-process
-limitation in owner-threat-model.md #14)."""
+"""Login/MFA/recovery-code throttling, backed by the persistent
+owner_login_attempts table (real PostgreSQL, shared by every Gunicorn
+worker -- not an in-memory counter).
+
+Phase 9R M7: owner-threat-model.md #14 (Phase 5) describes this as a
+"single-process" limitation needing Redis at scale -- that was accurate
+when threat #14 was written, but not for the current implementation: every
+worker process queries the same Postgres table via the same
+is_locked_out()/record_attempt() functions below, so the limit is already
+enforced consistently across every worker, not per-process. Verified by
+owner/tests/test_phase9r_rate_limit_multi_worker.py, which simulates two
+independent worker processes as two separate DB sessions. The threat-model
+entry is stale and should be read historically, not as current status."""
 from __future__ import annotations
 
 from datetime import timedelta

@@ -23,7 +23,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.extensions import db_session
 from app.licensing_service import signing as signing_service
@@ -288,6 +288,540 @@ def _check_super_admin_mfa(checks: list[PreflightCheck]) -> None:
         checks.append(PreflightCheck("super_admin_mfa_required", "OK", "Every Super Admin account requires MFA."))
 
 
+def _check_employee_domain_integrity(checks: list[PreflightCheck]) -> bool:
+    """Phase 9.5B, Milestone 21. Every condition here is already structurally
+    guaranteed by a real DB constraint (UNIQUE employee_number, FK
+    staff_user_id) -- these are defense-in-depth checks, the same
+    "catch it before a real activation call fails" spirit as the rest of
+    this module, not a substitute for the constraints themselves."""
+    from app.employees.presence import ONLINE_THRESHOLD_SECONDS, RECENTLY_ACTIVE_THRESHOLD_SECONDS
+    from app.models.employees import EmployeeProfile
+    from app.security.super_admin_guard import usable_super_admin_count
+
+    ok = True
+
+    numbers = db_session.execute(select(EmployeeProfile.employee_number)).scalars().all()
+    duplicates = {n for n in numbers if numbers.count(n) > 1}
+    if duplicates:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_duplicate_employee_numbers", "FAIL",
+            f"{len(duplicates)} employee_number value(s) appear more than once: {sorted(duplicates)}. "
+            "The UNIQUE constraint should make this structurally impossible -- report immediately if seen.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_duplicate_employee_numbers", "OK", f"{len(numbers)} employee_number value(s), all unique."))
+
+    orphans = db_session.execute(
+        select(EmployeeProfile.id).outerjoin(StaffUser, StaffUser.id == EmployeeProfile.staff_user_id).where(StaffUser.id.is_(None))
+    ).scalars().all()
+    if orphans:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_orphan_employee_profiles", "FAIL",
+            f"{len(orphans)} EmployeeProfile row(s) reference a staff_user_id with no matching StaffUser. "
+            "The FK (ON DELETE RESTRICT, no cascade) should make this structurally impossible.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_orphan_employee_profiles", "OK", "Every EmployeeProfile resolves to a real StaffUser."))
+
+    admin_count = usable_super_admin_count()
+    total_staff = db_session.execute(select(StaffUser)).scalars().all()
+    if not total_staff:
+        # Not yet bootstrapped -- expected on a fresh install/test database
+        # before 'flask create-superadmin' has ever run, same non-blocking
+        # spirit as _check_super_admin_mfa's own "synthetic/dev setup"
+        # allowance. Never a FAIL by itself.
+        checks.append(PreflightCheck(
+            "at_least_one_usable_super_admin", "WARNING",
+            "No StaffUser accounts exist yet -- expected before the first 'flask create-superadmin'. "
+            "Not a failure; will become one if staff exist but none are a usable Super Admin.",
+        ))
+    elif admin_count < 1:
+        ok = False
+        checks.append(PreflightCheck(
+            "at_least_one_usable_super_admin", "FAIL",
+            f"{len(total_staff)} StaffUser account(s) exist but zero are a usable Super Admin "
+            "(is_super_admin AND is_active AND not disabled). No one can perform a SUPER_ADMIN-only "
+            "action, including recovering from this state through the UI. Fix: re-enable an existing "
+            "Super Admin account directly (e.g. via a database console), since 'flask create-superadmin' "
+            "refuses to run when any Super Admin already exists, usable or not.",
+        ))
+    else:
+        checks.append(PreflightCheck("at_least_one_usable_super_admin", "OK", f"{admin_count} usable Super Admin account(s)."))
+
+    if not (0 < ONLINE_THRESHOLD_SECONDS < RECENTLY_ACTIVE_THRESHOLD_SECONDS):
+        ok = False
+        checks.append(PreflightCheck(
+            "presence_thresholds_valid", "FAIL",
+            f"ONLINE_THRESHOLD_SECONDS={ONLINE_THRESHOLD_SECONDS} must be a positive number strictly less than "
+            f"RECENTLY_ACTIVE_THRESHOLD_SECONDS={RECENTLY_ACTIVE_THRESHOLD_SECONDS}.",
+        ))
+    else:
+        checks.append(PreflightCheck(
+            "presence_thresholds_valid", "OK",
+            f"ONLINE < {ONLINE_THRESHOLD_SECONDS}s, RECENTLY_ACTIVE < {RECENTLY_ACTIVE_THRESHOLD_SECONDS}s.",
+        ))
+
+    return ok
+
+
+def _check_i18n_configuration(checks: list[PreflightCheck]) -> bool:
+    """Phase 9.5B-R, Milestone 21. Validates the real Flask-Babel/locale
+    configuration without printing any personal data, secret, or session
+    content -- only locale codes, file paths, and byte counts."""
+    from flask import current_app
+
+    ok = True
+
+    languages = current_app.config.get("LANGUAGES") or {}
+    default_locale = current_app.config.get("BABEL_DEFAULT_LOCALE")
+    if not languages:
+        ok = False
+        checks.append(PreflightCheck("i18n_supported_locales_configured", "FAIL", "app.config['LANGUAGES'] is empty or missing."))
+    else:
+        checks.append(PreflightCheck("i18n_supported_locales_configured", "OK", f"Supported locales: {sorted(languages.keys())}."))
+
+    if not default_locale or default_locale not in languages:
+        ok = False
+        checks.append(PreflightCheck(
+            "i18n_default_locale_valid", "FAIL",
+            f"BABEL_DEFAULT_LOCALE={default_locale!r} is not a member of the supported-locale allowlist.",
+        ))
+    else:
+        checks.append(PreflightCheck("i18n_default_locale_valid", "OK", f"Default locale: {default_locale!r}."))
+
+    translations_dir = current_app.config.get("BABEL_TRANSLATION_DIRECTORIES", "")
+    for code in languages:
+        mo_path = os.path.join(translations_dir, code, "LC_MESSAGES", "messages.mo")
+        if not os.path.isfile(mo_path):
+            ok = False
+            checks.append(PreflightCheck(
+                f"i18n_catalog_compiled_{code}", "FAIL",
+                f"Compiled catalog missing for locale {code!r}. Fix: 'python -m babel.messages.frontend compile -d translations'.",
+            ))
+        elif os.path.getsize(mo_path) == 0:
+            ok = False
+            checks.append(PreflightCheck(f"i18n_catalog_compiled_{code}", "FAIL", f"Compiled catalog for {code!r} is empty (0 bytes)."))
+        else:
+            checks.append(PreflightCheck(f"i18n_catalog_compiled_{code}", "OK", f"Compiled catalog present for {code!r}."))
+
+    invalid_locales = db_session.execute(
+        select(StaffUser.locale).where(StaffUser.locale.is_not(None), StaffUser.locale.not_in(list(languages.keys())))
+    ).scalars().all()
+    if invalid_locales:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_invalid_stored_staff_locale", "FAIL",
+            f"{len(invalid_locales)} StaffUser row(s) have a locale value outside the supported allowlist. "
+            "The DB CHECK constraint should make this structurally impossible -- report immediately if seen.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_invalid_stored_staff_locale", "OK", "Every stored StaffUser.locale value is NULL or supported."))
+
+    # Phase 9.5B-R2: catalog completeness (empty/fuzzy entries) -- checked
+    # against the compiled .po source, not just .mo presence/size above,
+    # since a fuzzy entry compiles to a real (but silently wrong or
+    # missing, depending on babel version) translation rather than a
+    # zero-byte file -- the real bug this wave found and fixed
+    # (rtl-defect-and-fix-log.md item 5) would not have been caught by the
+    # existing .mo-presence check alone.
+    try:
+        from babel.messages.pofile import read_po
+
+        for code in languages:
+            po_path = os.path.join(translations_dir, code, "LC_MESSAGES", "messages.po")
+            if not os.path.isfile(po_path):
+                continue
+            with open(po_path, "r", encoding="utf-8") as f:
+                catalog = read_po(f)
+            empty = sum(1 for m in catalog if m.id and not m.string)
+            fuzzy = sum(1 for m in catalog if m.fuzzy)
+            if empty or fuzzy:
+                ok = False
+                checks.append(PreflightCheck(
+                    f"i18n_catalog_complete_{code}", "FAIL",
+                    f"Locale {code!r} catalog has {empty} empty and {fuzzy} fuzzy translation(s). "
+                    "Fix: review with 'python -m babel.messages.pofile', fill/correct, then recompile.",
+                ))
+            else:
+                checks.append(PreflightCheck(f"i18n_catalog_complete_{code}", "OK", f"Locale {code!r} catalog has zero empty/fuzzy entries."))
+    except Exception as exc:  # pragma: no cover - defensive, .po source may not ship in every deployment
+        checks.append(PreflightCheck("i18n_catalog_complete_source_check", "OK", f"Skipped (source .po not available in this deployment: {exc})."))
+
+    return ok
+
+
+def _check_crm_domain_integrity(checks: list[PreflightCheck]) -> bool:
+    """Phase 9.5C, Milestone 26. Same defense-in-depth spirit as
+    _check_employee_domain_integrity(): every condition here should
+    already be structurally impossible (a real service-layer invariant),
+    these checks exist to catch a bypass -- a direct DB write, a bug in a
+    future migration -- before a real user hits it."""
+    from app.leads.errors import NOTE_VISIBILITIES
+    from app.models.customers import CustomerContact, CustomerNote
+    from app.models.leads import LEAD_SOURCES, LEAD_STATUSES, CustomerLocation, Lead, LeadContact, LeadNote
+
+    ok = True
+
+    invalid_statuses = db_session.execute(
+        select(Lead.status).where(Lead.status.notin_(LEAD_STATUSES)).distinct()
+    ).scalars().all()
+    if invalid_statuses:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_invalid_lead_status", "FAIL",
+            f"{len(invalid_statuses)} Lead row(s) have a status outside the canonical set {LEAD_STATUSES}: "
+            f"{invalid_statuses}. Should be structurally impossible via change_lead_status()'s transition guard.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_invalid_lead_status", "OK", "Every Lead.status is a canonical value."))
+
+    for label, model, parent_col in (("lead", LeadContact, LeadContact.lead_id), ("customer", CustomerContact, CustomerContact.customer_id)):
+        dupes = db_session.execute(
+            select(parent_col, func.count(model.id))
+            .where(model.is_primary.is_(True), model.archived_at.is_(None))
+            .group_by(parent_col)
+            .having(func.count(model.id) > 1)
+        ).all()
+        if dupes:
+            ok = False
+            checks.append(PreflightCheck(
+                f"no_duplicate_primary_{label}_contact", "FAIL",
+                f"{len(dupes)} {label} record(s) have more than one contact marked is_primary. "
+                "Should be structurally impossible via the primary-demotion transaction in add_contact()/add_lead_contact().",
+            ))
+        else:
+            checks.append(PreflightCheck(f"no_duplicate_primary_{label}_contact", "OK", f"No {label} has more than one primary contact."))
+
+    for label, model in (("lead", LeadNote), ("customer", CustomerNote)):
+        invalid_vis = db_session.execute(
+            select(func.count(model.id)).where(model.visibility.notin_(NOTE_VISIBILITIES))
+        ).scalar_one()
+        if invalid_vis:
+            ok = False
+            checks.append(PreflightCheck(
+                f"no_invalid_{label}_note_visibility", "FAIL",
+                f"{invalid_vis} {label} note(s) have a visibility value outside {NOTE_VISIBILITIES}.",
+            ))
+        else:
+            checks.append(PreflightCheck(f"no_invalid_{label}_note_visibility", "OK", f"Every {label} note has a canonical visibility value."))
+
+    orphan_locations = db_session.execute(
+        select(func.count(CustomerLocation.id)).where(CustomerLocation.lead_id.is_(None), CustomerLocation.customer_id.is_(None))
+    ).scalar_one()
+    if orphan_locations:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_orphan_locations", "FAIL",
+            f"{orphan_locations} CustomerLocation row(s) reference neither a Lead nor a Customer. "
+            "Should be structurally impossible via the ck_customer_locations_exactly_one_owner CHECK constraint.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_orphan_locations", "OK", "Every location row references exactly one parent."))
+
+    return ok
+
+
+def _check_commercial_sales_domain_integrity(checks: list[PreflightCheck]) -> bool:
+    """Phase 9.5D, Milestone 28. Same defense-in-depth spirit as
+    _check_crm_domain_integrity(): every condition here should already be
+    structurally impossible via the real service-layer invariants built
+    across Milestones 3-24, these checks exist to catch a bypass -- a
+    direct DB write, a bug in a future migration -- before a real user
+    hits it."""
+    from app.commercial_sales.invoices import confirmed_allocated_amount
+    from app.commercial_sales.refunds import total_confirmed_refunds
+    from app.models.commercial_sales import (
+        APPROVAL_STATUSES,
+        INVOICE_STATUSES,
+        QUOTE_STATUSES,
+        REFUND_STATUSES,
+        SALES_ORDER_STATUSES,
+        CommercialApproval,
+        CommercialInvoice,
+        CommercialRefund,
+        PaymentAllocation,
+        Quote,
+        SalesOrder,
+    )
+    from app.models.commissions import COMMISSION_ENTRY_STATUSES, CommissionLedgerEntry
+
+    ok = True
+
+    for label, model, allowed in (
+        ("quote", Quote, QUOTE_STATUSES),
+        ("sales_order", SalesOrder, SALES_ORDER_STATUSES),
+        ("commercial_invoice", CommercialInvoice, INVOICE_STATUSES),
+        ("commercial_refund", CommercialRefund, REFUND_STATUSES),
+        ("commercial_approval", CommercialApproval, APPROVAL_STATUSES),
+        ("commission_ledger_entry", CommissionLedgerEntry, COMMISSION_ENTRY_STATUSES),
+    ):
+        invalid = db_session.execute(select(model.status).where(model.status.notin_(allowed)).distinct()).scalars().all()
+        if invalid:
+            ok = False
+            checks.append(PreflightCheck(
+                f"no_invalid_{label}_status", "FAIL",
+                f"{len(invalid)} {label} row(s) have a status outside the canonical set {allowed}: {invalid}.",
+            ))
+        else:
+            checks.append(PreflightCheck(f"no_invalid_{label}_status", "OK", f"Every {label}.status is a canonical value."))
+
+    orphan_quotes = db_session.execute(
+        select(func.count(Quote.id)).where(Quote.customer_id.is_(None), Quote.lead_id.is_(None))
+    ).scalar_one()
+    if orphan_quotes:
+        ok = False
+        checks.append(PreflightCheck(
+            "quote_has_customer_or_lead", "FAIL",
+            f"{orphan_quotes} Quote row(s) reference neither a Customer nor a Lead. "
+            "Should be structurally impossible via the ck_owner_quotes_at_least_one_of_customer_lead CHECK constraint.",
+        ))
+    else:
+        checks.append(PreflightCheck("quote_has_customer_or_lead", "OK", "Every Quote references a Customer and/or a Lead."))
+
+    # Financial invariants: confirmed allocations/refunds must never exceed
+    # the invoice's own total/collected amount -- the exact class of bug
+    # Milestone 24 found and fixed in confirm_refund() (no lock + re-check
+    # at confirm time). These checks are the production backstop for the
+    # same invariant, not a re-test of the fix.
+    over_allocated = 0
+    for invoice_id, total in db_session.execute(select(CommercialInvoice.id, CommercialInvoice.total)).all():
+        allocated = db_session.execute(
+            select(func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0)).where(
+                PaymentAllocation.commercial_invoice_id == invoice_id, PaymentAllocation.reversed_at.is_(None)
+            )
+        ).scalar_one()
+        if allocated > total:
+            over_allocated += 1
+    if over_allocated:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_over_allocated_invoice", "FAIL",
+            f"{over_allocated} CommercialInvoice row(s) have confirmed PaymentAllocation total exceeding the invoice total.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_over_allocated_invoice", "OK", "No invoice has allocated payments exceeding its total."))
+
+    over_refunded = 0
+    for invoice_id in db_session.execute(select(CommercialInvoice.id)).scalars().all():
+        invoice = db_session.get(CommercialInvoice, invoice_id)
+        if total_confirmed_refunds(invoice) > confirmed_allocated_amount(invoice):
+            over_refunded += 1
+    if over_refunded:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_over_refunded_invoice", "FAIL",
+            f"{over_refunded} CommercialInvoice row(s) have confirmed refunds exceeding the amount actually collected.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_over_refunded_invoice", "OK", "No invoice has confirmed refunds exceeding what was collected."))
+
+    return ok
+
+
+def _check_operational_finance_domain_integrity(checks: list[PreflightCheck]) -> bool:
+    """Phase 9.5E, Milestones 19/25. Same defense-in-depth spirit as
+    _check_commercial_sales_domain_integrity(): every condition here should
+    already be structurally impossible via the real service-layer
+    invariants (approval SoD, row-locked payments, DB unique constraints),
+    these checks exist to catch a bypass -- a direct DB write, a bug in a
+    future migration -- before a real user hits it. Never outputs
+    attachment contents, storage paths, or note bodies (redaction
+    discipline matches every other preflight check in this module)."""
+    from app.expenses.payments import outstanding_amount
+    from app.models.cash_closing import CASH_CLOSING_STATUSES, CashClosing
+    from app.models.employees import EmployeeProfile
+    from app.models.expenses import (
+        EXPENSE_APPROVAL_STATUSES,
+        EXPENSE_ATTACHMENT_STATUSES,
+        EXPENSE_PAYMENT_STATUSES,
+        EXPENSE_STATUSES,
+        Expense,
+        ExpenseApproval,
+        ExpenseAttachment,
+        ExpensePayment,
+    )
+    from app.models.management_notes import MANAGEMENT_NOTE_STATUSES, MANAGEMENT_NOTE_VISIBILITIES, SharedManagementNote
+    from app.models.report_snapshots import ReportSnapshot
+
+    ok = True
+
+    for label, model, allowed in (
+        ("expense", Expense, EXPENSE_STATUSES),
+        ("expense_approval", ExpenseApproval, EXPENSE_APPROVAL_STATUSES),
+        ("expense_payment", ExpensePayment, EXPENSE_PAYMENT_STATUSES),
+        ("expense_attachment", ExpenseAttachment, EXPENSE_ATTACHMENT_STATUSES),
+        ("cash_closing", CashClosing, CASH_CLOSING_STATUSES),
+        ("management_note", SharedManagementNote, MANAGEMENT_NOTE_STATUSES),
+    ):
+        invalid = db_session.execute(select(model.status).where(model.status.notin_(allowed)).distinct()).scalars().all()
+        if invalid:
+            ok = False
+            checks.append(PreflightCheck(
+                f"no_invalid_{label}_status", "FAIL",
+                f"{len(invalid)} {label} row(s) have a status outside the canonical set {allowed}: {invalid}.",
+            ))
+        else:
+            checks.append(PreflightCheck(f"no_invalid_{label}_status", "OK", f"Every {label}.status is a canonical value."))
+
+    invalid_visibility = db_session.execute(
+        select(SharedManagementNote.visibility).where(SharedManagementNote.visibility.notin_(MANAGEMENT_NOTE_VISIBILITIES)).distinct()
+    ).scalars().all()
+    if invalid_visibility:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_invalid_management_note_visibility", "FAIL",
+            f"{len(invalid_visibility)} SharedManagementNote row(s) have a visibility outside the canonical set.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_invalid_management_note_visibility", "OK", "Every SharedManagementNote.visibility is a canonical value."))
+
+    # Overpayment: exactly the invariant record_expense_payment()'s row lock
+    # is meant to make structurally impossible -- this is the production
+    # backstop, not a re-test of that fix.
+    over_paid = 0
+    for expense in db_session.execute(select(Expense).where(Expense.approved_amount.is_not(None))).scalars().all():
+        if outstanding_amount(expense) < 0:
+            over_paid += 1
+    if over_paid:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_overpaid_expense", "FAIL",
+            f"{over_paid} Expense row(s) have paid amount exceeding their approved amount.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_overpaid_expense", "OK", "No expense has payments exceeding its approved amount."))
+
+    # Self-approval: exactly the invariant check_approver_eligibility() is
+    # meant to make structurally impossible.
+    self_approved = db_session.execute(
+        select(func.count(ExpenseApproval.id))
+        .select_from(ExpenseApproval)
+        .join(Expense, Expense.id == ExpenseApproval.expense_id)
+        .join(StaffUser, StaffUser.id == ExpenseApproval.decided_by_staff_user_id)
+        .join(EmployeeProfile, EmployeeProfile.staff_user_id == StaffUser.id)
+        .where(ExpenseApproval.status == "APPROVED", EmployeeProfile.id == Expense.entered_by_employee_profile_id)
+    ).scalar_one()
+    if self_approved:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_self_approved_expense", "FAIL",
+            f"{self_approved} ExpenseApproval row(s) were approved by the same employee who requested the expense.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_self_approved_expense", "OK", "No expense was approved by its own requester."))
+
+    # Beneficiary-conflict: same reasoning, the other half of Rule 3.
+    beneficiary_approved = db_session.execute(
+        select(func.count(ExpenseApproval.id))
+        .select_from(ExpenseApproval)
+        .join(Expense, Expense.id == ExpenseApproval.expense_id)
+        .join(StaffUser, StaffUser.id == ExpenseApproval.decided_by_staff_user_id)
+        .join(EmployeeProfile, EmployeeProfile.staff_user_id == StaffUser.id)
+        .where(
+            ExpenseApproval.status == "APPROVED", Expense.beneficiary_employee_profile_id.is_not(None),
+            EmployeeProfile.id == Expense.beneficiary_employee_profile_id,
+        )
+    ).scalar_one()
+    if beneficiary_approved:
+        ok = False
+        checks.append(PreflightCheck(
+            "no_beneficiary_approved_expense", "FAIL",
+            f"{beneficiary_approved} ExpenseApproval row(s) were approved by the expense's own recorded beneficiary.",
+        ))
+    else:
+        checks.append(PreflightCheck("no_beneficiary_approved_expense", "OK", "No expense was approved by its own beneficiary."))
+
+    # --- Milestone 25: attachment integrity ---
+    from app.expenses.attachments import ALLOWED_CONTENT_TYPES
+
+    orphan_attachments = db_session.execute(
+        select(func.count(ExpenseAttachment.id))
+        .select_from(ExpenseAttachment)
+        .outerjoin(Expense, Expense.id == ExpenseAttachment.expense_id)
+        .where(Expense.id.is_(None))
+    ).scalar_one()
+    if orphan_attachments:
+        ok = False
+        checks.append(PreflightCheck("no_orphan_expense_attachment", "FAIL", f"{orphan_attachments} ExpenseAttachment row(s) reference a non-existent Expense."))
+    else:
+        checks.append(PreflightCheck("no_orphan_expense_attachment", "OK", "Every ExpenseAttachment references a real Expense."))
+
+    bad_mime = db_session.execute(
+        select(func.count(ExpenseAttachment.id)).where(ExpenseAttachment.content_type.notin_(list(ALLOWED_CONTENT_TYPES.keys())))
+    ).scalar_one()
+    if bad_mime:
+        ok = False
+        checks.append(PreflightCheck("no_unsupported_attachment_mime", "FAIL", f"{bad_mime} ExpenseAttachment row(s) have a content_type outside the allowlist."))
+    else:
+        checks.append(PreflightCheck("no_unsupported_attachment_mime", "OK", "Every ExpenseAttachment.content_type is within the allowlist."))
+
+    traversal_keys = 0
+    for storage_key in db_session.execute(select(ExpenseAttachment.storage_key)).scalars().all():
+        if ".." in storage_key or storage_key.startswith("/") or "\\" in storage_key:
+            traversal_keys += 1
+    if traversal_keys:
+        ok = False
+        checks.append(PreflightCheck("no_traversal_storage_key", "FAIL", f"{traversal_keys} ExpenseAttachment row(s) have a storage_key containing a traversal/absolute-path pattern."))
+    else:
+        checks.append(PreflightCheck("no_traversal_storage_key", "OK", "No ExpenseAttachment.storage_key contains a traversal or absolute-path pattern."))
+
+    # --- Milestone 25: scheduler/report-snapshot integrity ---
+    # The canonical-key/version uniqueness is already enforced by the real
+    # DB constraint (uq_report_snapshot_canonical_key) -- this check
+    # verifies that structural guarantee actually holds, the same
+    # defense-in-depth reasoning as every other check in this function.
+    dup_snapshots = db_session.execute(
+        select(
+            ReportSnapshot.report_type, ReportSnapshot.scope, ReportSnapshot.period_start, ReportSnapshot.period_end,
+            ReportSnapshot.currency, ReportSnapshot.definition_version, ReportSnapshot.snapshot_version, func.count(ReportSnapshot.id),
+        )
+        .group_by(
+            ReportSnapshot.report_type, ReportSnapshot.scope, ReportSnapshot.period_start, ReportSnapshot.period_end,
+            ReportSnapshot.currency, ReportSnapshot.definition_version, ReportSnapshot.snapshot_version,
+        )
+        .having(func.count(ReportSnapshot.id) > 1)
+    ).all()
+    if dup_snapshots:
+        ok = False
+        checks.append(PreflightCheck("no_duplicate_report_snapshot_canonical_key", "FAIL", f"{len(dup_snapshots)} canonical report-snapshot key(s) have more than one row."))
+    else:
+        checks.append(PreflightCheck("no_duplicate_report_snapshot_canonical_key", "OK", "Every report-snapshot canonical key has at most one row."))
+
+    multiple_published = db_session.execute(
+        select(
+            ReportSnapshot.report_type, ReportSnapshot.scope, ReportSnapshot.period_start, ReportSnapshot.period_end,
+            ReportSnapshot.currency, ReportSnapshot.definition_version, func.count(ReportSnapshot.id),
+        )
+        .where(ReportSnapshot.status == "PUBLISHED")
+        .group_by(
+            ReportSnapshot.report_type, ReportSnapshot.scope, ReportSnapshot.period_start, ReportSnapshot.period_end,
+            ReportSnapshot.currency, ReportSnapshot.definition_version,
+        )
+        .having(func.count(ReportSnapshot.id) > 1)
+    ).all()
+    if multiple_published:
+        ok = False
+        checks.append(PreflightCheck("no_multiple_published_report_snapshots", "FAIL", f"{len(multiple_published)} report key(s) have more than one PUBLISHED snapshot simultaneously."))
+    else:
+        checks.append(PreflightCheck("no_multiple_published_report_snapshots", "OK", "Every report key has at most one PUBLISHED snapshot."))
+
+    # --- Milestone 25: cash-closing uniqueness (structural backstop) ---
+    dup_closings = db_session.execute(
+        select(CashClosing.business_date, CashClosing.currency, func.count(CashClosing.id))
+        .group_by(CashClosing.business_date, CashClosing.currency)
+        .having(func.count(CashClosing.id) > 1)
+    ).all()
+    if dup_closings:
+        ok = False
+        checks.append(PreflightCheck("no_duplicate_active_cash_closing", "FAIL", f"{len(dup_closings)} (business_date, currency) scope(s) have more than one CashClosing row."))
+    else:
+        checks.append(PreflightCheck("no_duplicate_active_cash_closing", "OK", "Every (business_date, currency) scope has at most one CashClosing row."))
+
+    return ok
+
+
 def run_preflight(*, key_directory: str) -> PreflightResult:
     checks: list[PreflightCheck] = []
     blocking_ok = True
@@ -299,6 +833,11 @@ def run_preflight(*, key_directory: str) -> PreflightResult:
     blocking_ok &= _check_permission_seed(checks)
     blocking_ok &= _check_role_permission_assignments(checks)
     blocking_ok &= _check_license_pepper(checks)
+    blocking_ok &= _check_employee_domain_integrity(checks)
+    blocking_ok &= _check_i18n_configuration(checks)
+    blocking_ok &= _check_crm_domain_integrity(checks)
+    blocking_ok &= _check_commercial_sales_domain_integrity(checks)
+    blocking_ok &= _check_operational_finance_domain_integrity(checks)
     _check_super_admin_mfa(checks)  # informational only, never blocking
 
     return PreflightResult(ok=bool(blocking_ok), checks=checks)

@@ -1,0 +1,17 @@
+.git
+.venv
+**/__pycache__
+**/*.pyc
+node_modules
+android/**/build
+android/**/.gradle
+dist
+build
+*.apk
+*.aab
+*.exe
+.env
+.env.*
+var/signing-keys
+var/backups
+docs

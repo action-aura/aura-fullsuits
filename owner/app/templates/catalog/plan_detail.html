@@ -4,27 +4,29 @@
 <div class="card">
   <h2>{{ plan.name }} ({{ plan.plan_code }})</h2>
   <dl class="kv">
-    <dt>Billing model</dt><dd>{{ plan.billing_model }}</dd>
-    <dt>Status</dt><dd><span class="badge">{{ plan.lifecycle_status }}</span></dd>
-    <dt>Included devices</dt><dd>{{ plan.included_device_count }}</dd>
+    <dt>{{ _("Billing model") }}</dt><dd>{{ billing_model_label(plan.billing_model) }}</dd>
+    <dt>{{ _("Status") }}</dt><dd><span class="badge">{{ plan_lifecycle_status_label(plan.lifecycle_status) }}</span></dd>
+    <dt>{{ _("Included devices") }}</dt><dd>{{ format_owner_number(plan.included_device_count) }}</dd>
   </dl>
 </div>
 <div class="card">
-  <h3>Price history</h3>
-  <table>
-    <tr><th>Base price</th><th>Currency</th><th>Effective from</th><th>Effective until</th></tr>
+  <h3>{{ _("Price history") }}</h3>
+  <table class="responsive-table">
+    <thead><tr><th>{{ _("Base price") }}</th><th>{{ _("Currency") }}</th><th>{{ _("Effective from") }}</th><th>{{ _("Effective until") }}</th></tr></thead>
+    <tbody>
     {% for pr in plan.prices|sort(attribute="effective_from", reverse=True) %}
-    <tr><td>{{ pr.base_price }}</td><td>{{ pr.currency }}</td><td>{{ pr.effective_from }}</td><td>{{ pr.effective_until or "current" }}</td></tr>
-    {% else %}<tr><td colspan="4" class="empty">No price set yet.</td></tr>
+    <tr><td>{{ format_owner_number(pr.base_price) }}</td><td><bdi dir="ltr">{{ pr.currency }}</bdi></td><td>{{ format_owner_date(pr.effective_from) }}</td><td>{{ format_owner_date(pr.effective_until) if pr.effective_until else _("current") }}</td></tr>
+    {% else %}<tr><td colspan="4" class="empty">{{ _("No price set yet.") }}</td></tr>
     {% endfor %}
+    </tbody>
   </table>
-  <h4>Add a new price (never overwrites history)</h4>
+  <h4>{{ _("Add a new price (never overwrites history)") }}</h4>
   <form method="post" action="{{ url_for('catalog.add_price', plan_id=plan.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Base price</label><input name="base_price" type="number" step="0.01" required>
-    <label>Currency</label><input name="currency" value="{{ plan.currency }}" required>
-    <label>Effective from</label><input name="effective_from" type="date" required>
-    <div style="margin-top:1rem;"><button type="submit">Add price</button></div>
+    <label for="catalog-plan-detail-base-price">{{ _("Base price") }}</label><input id="catalog-plan-detail-base-price" name="base_price" type="number" step="0.01" required>
+    <label for="catalog-plan-detail-currency">{{ _("Currency") }}</label><input id="catalog-plan-detail-currency" name="currency" value="{{ plan.currency }}" required>
+    <label for="catalog-plan-detail-effective-from">{{ _("Effective from") }}</label><input id="catalog-plan-detail-effective-from" name="effective_from" type="date" required>
+    <div style="margin-top:1rem;"><button type="submit">{{ _("Add price") }}</button></div>
   </form>
 </div>
 {% endblock %}

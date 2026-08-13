@@ -1,51 +1,486 @@
 {% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
 {% block title %}{{ customer.legal_name }}{% endblock %}
 {% block content %}
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+{% set show_quotes = has_any_permission("quotes.create", "quotes.approve") %}
+{% set show_orders = has_any_permission("orders.create", "orders.approve") %}
+{% set show_invoices = has_any_permission("invoices.create", "invoices.issue") %}
+{% set show_payments = has_permission("payments.view") %}
+{% set show_subscriptions = has_permission("subscriptions.view") %}
+{% set show_licenses = has_permission("licenses.view") %}
+{% set show_installations = has_permission("installations.view") %}
+
+{# ================= Header: name/status/assigned employee/primary
+   contact/quick actions/commercial summary/account age/archive state.
+   Real data sources documented in
+   docs/owner/ui-modernization/customer-360-contract.md. ================= #}
 <div class="card">
-  <h2>{{ customer.legal_name }} <span class="badge">{{ customer.lifecycle_status }}</span></h2>
+  <h2>{{ customer.legal_name }}
+    <span class="badge {{ 'danger' if customer.lifecycle_status == 'ARCHIVED' else ('active' if customer.lifecycle_status in ('ACTIVE', 'PILOT') else 'draft') }}">{{ customer_status_label(customer.lifecycle_status) }}</span>
+  </h2>
   <dl class="kv">
-    <dt>Trade name</dt><dd>{{ customer.trade_name or "-" }}</dd>
-    <dt>Country / City</dt><dd>{{ customer.country or "-" }} / {{ customer.city or "-" }}</dd>
-    <dt>Registration ref</dt><dd>{{ customer.commercial_registration_reference or "-" }}</dd>
+    <dt>{{ _("Assigned employee") }}</dt><dd>{{ assigned_staff.display_name if assigned_staff else _("Unassigned") }}</dd>
+    <dt>{{ _("Primary contact") }}</dt>
+    <dd>
+      {% if primary_contact %}
+      {{ primary_contact.name }}{% if primary_contact.business_email %} &middot; <bdi dir="ltr">{{ primary_contact.business_email }}</bdi>{% endif %}
+      {% else %}-{% endif %}
+    </dd>
+    <dt>{{ _("Customer since") }}</dt><dd>{{ format_owner_date(customer.created_at.date()) if customer.created_at else "-" }}</dd>
+    <dt>{{ _("Archive state") }}</dt>
+    <dd>{% if customer.archived_at %}{{ _("Archived on %(date)s", date=format_owner_datetime(customer.archived_at)) }}{% else %}{{ _("Not archived") }}{% endif %}</dd>
+    <dt>{{ _("Trade name") }}</dt><dd>{{ customer.trade_name or "-" }}</dd>
+    <dt>{{ _("Country / City") }}</dt><dd>{{ customer.country or "-" }} / {{ customer.city or "-" }}</dd>
+    <dt>{{ _("Registration ref") }}</dt><dd><bdi dir="ltr">{{ customer.commercial_registration_reference or "-" }}</bdi></dd>
+    {% if customer.converted_from_lead_id %}
+    <dt>{{ _("Converted from lead") }}</dt><dd><a href="{{ url_for('leads.detail', lead_id=customer.converted_from_lead_id) }}">{{ _("View source lead") }}</a></dd>
+    {% endif %}
   </dl>
-  {% if customer.lifecycle_status != "ARCHIVED" %}
-  <form method="post" action="{{ url_for('customers.archive', customer_id=customer.id) }}"
-        onsubmit="return confirm('Archive this customer? Records are kept, not deleted.');">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" class="danger">Archive</button>
-  </form>
+
+  {% if commercial_summary %}
+  {# Bounded, real aggregate numbers -- reuses the exact rows already
+     fetched for the tabs below, never a second/separate query. A key is
+     simply absent when the actor lacks permission for that entity type
+     or there is nothing to show, never a fabricated zero. #}
+  <div class="aura-summary-grid">
+    {% if commercial_summary.quotes_count is defined %}
+    <div class="aura-summary-tile"><span class="aura-summary-tile__value">{{ format_owner_number(commercial_summary.quotes_count) }}</span><span class="aura-summary-tile__label">{{ _("Quotes") }}</span></div>
+    {% endif %}
+    {% if commercial_summary.orders_count is defined %}
+    <div class="aura-summary-tile"><span class="aura-summary-tile__value">{{ format_owner_number(commercial_summary.orders_count) }}</span><span class="aura-summary-tile__label">{{ _("Sales orders") }}</span></div>
+    {% endif %}
+    {% if commercial_summary.open_invoices_total is defined %}
+    <div class="aura-summary-tile"><span class="aura-summary-tile__value">{{ format_owner_number(commercial_summary.open_invoices_total) }} {{ commercial_summary.open_invoices_currency }}</span><span class="aura-summary-tile__label">{{ _("Open invoices (%(count)s)", count=commercial_summary.open_invoices_count) }}</span></div>
+    {% endif %}
+    {% if commercial_summary.active_subscriptions_count is defined %}
+    <div class="aura-summary-tile"><span class="aura-summary-tile__value">{{ format_owner_number(commercial_summary.active_subscriptions_count) }}</span><span class="aura-summary-tile__label">{{ _("Active subscriptions") }}</span></div>
+    {% endif %}
+    {% if commercial_summary.active_licenses_count is defined %}
+    <div class="aura-summary-tile"><span class="aura-summary-tile__value">{{ format_owner_number(commercial_summary.active_licenses_count) }}</span><span class="aura-summary-tile__label">{{ _("Active licenses") }}</span></div>
+    {% endif %}
+    {% if commercial_summary.active_installations_count is defined %}
+    <div class="aura-summary-tile"><span class="aura-summary-tile__value">{{ format_owner_number(commercial_summary.active_installations_count) }}</span><span class="aura-summary-tile__label">{{ _("Active installations") }}</span></div>
+    {% endif %}
+  </div>
   {% endif %}
-</div>
 
-<div class="card">
-  <h3>Contacts</h3>
-  <table>
-    <tr><th>Name</th><th>Title</th><th>Email</th><th>Phone</th><th>Primary</th></tr>
-    {% for c in customer.contacts %}
-    <tr><td>{{ c.name }}</td><td>{{ c.title or "-" }}</td><td>{{ c.business_email or "-" }}</td><td>{{ c.business_phone or "-" }}</td><td>{{ "Yes" if c.is_primary else "" }}</td></tr>
-    {% else %}<tr><td colspan="5" class="empty">No contacts yet.</td></tr>
-    {% endfor %}
-  </table>
-  <form method="post" action="{{ url_for('customers.add_contact_route', customer_id=customer.id) }}">
+  {# Quick actions: real, existing forms/routes only -- never an invented
+     capability. New-record links are shown only when the actor holds the
+     real create permission AND the target form is a genuine, currently
+     reachable route; none of quotes/payments/subscriptions "new" forms
+     accept a customer_id prefill (verified against their real routes), so
+     these link to the plain form, not a pre-filled one. #}
+  <div class="aura-quick-actions" style="display:flex;flex-wrap:wrap;gap:0.75rem;align-items:center;margin-block-start:0.75rem;">
+    {% if customer.lifecycle_status != "ARCHIVED" %}
+    <form method="post" action="{{ url_for('customers.archive', customer_id=customer.id) }}"
+          data-confirm="{{ _('Archive this customer? Records are kept, not deleted.') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="danger">{{ _("Archive") }}</button>
+    </form>
+    {% endif %}
+    {% if has_permission("quotes.create") %}
+    <a class="btn secondary" href="{{ url_for('commercial_sales_web.new_quote_form') }}">{{ _("New quote") }}</a>
+    {% endif %}
+    {% if has_permission("payments.create") %}
+    <a class="btn secondary" href="{{ url_for('commercial_sales_web.new_payment_form') }}">{{ _("Record payment") }}</a>
+    {% endif %}
+    {% if has_permission("subscriptions.create") %}
+    <a class="btn secondary" href="{{ url_for('subscriptions.new_form') }}">{{ _("New subscription") }}</a>
+    {% endif %}
+  </div>
+  <form method="post" action="{{ url_for('customers.assign_route', customer_id=customer.id) }}" style="margin-top:0.75rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Name</label><input name="name" required>
-    <label>Title</label><input name="title">
-    <label>Email</label><input name="business_email" type="email">
-    <label>Phone</label><input name="business_phone">
-    <div style="margin-top:0.5rem;"><button type="submit">Add contact</button></div>
+    <input type="hidden" name="version" value="{{ customer.version }}">
+    <label for="assign-to-staff-id">{{ _("Reassign to (staff UUID)") }}</label>
+    <input id="assign-to-staff-id" name="assigned_to_staff_user_id">
+    <input name="reason" placeholder="{{ _('Reason (required when reassigning)') }}">
+    <button type="submit">{{ _("Reassign") }}</button>
   </form>
 </div>
 
-<div class="card">
-  <h3>Internal notes</h3>
-  {% for n in customer.notes|sort(attribute="created_at", reverse=True) %}
-  <p style="border-bottom:1px solid #eee;padding-bottom:0.4rem;">{{ n.body }}<br><small style="color:#6b7785;">{{ n.created_at }}</small></p>
-  {% else %}<p class="empty">No notes yet.</p>
-  {% endfor %}
-  <form method="post" action="{{ url_for('customers.add_note_route', customer_id=customer.id) }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <textarea name="body" rows="3" required></textarea>
-    <div style="margin-top:0.5rem;"><button type="submit">Add note</button></div>
-  </form>
+{# ================= Real ARIA tabs (progressively enhanced from plain
+   in-page anchor links -- see static/js/tabs.js's own header comment for
+   the full no-JS contract: every panel below is server-rendered and
+   visible by default; tabs.js is the only thing that ever hides one). #}
+<div class="aura-tabs" data-tabs>
+  <div class="aura-tabs__list" role="tablist" aria-label="{{ _('Customer sections') }}" data-tabs-list>
+    <a class="aura-tabs__tab" id="tab-overview" href="#panel-overview" role="tab" aria-selected="true" aria-controls="panel-overview" tabindex="0" data-tabs-tab data-tabs-panel="panel-overview">{{ _("Overview") }}</a>
+    <a class="aura-tabs__tab" id="tab-contacts" href="#panel-contacts" role="tab" aria-selected="false" aria-controls="panel-contacts" tabindex="-1" data-tabs-tab data-tabs-panel="panel-contacts">{{ _("Contacts") }}</a>
+    <a class="aura-tabs__tab" id="tab-interactions" href="#panel-interactions" role="tab" aria-selected="false" aria-controls="panel-interactions" tabindex="-1" data-tabs-tab data-tabs-panel="panel-interactions">{{ _("Interactions") }}</a>
+    <a class="aura-tabs__tab" id="tab-followups" href="#panel-followups" role="tab" aria-selected="false" aria-controls="panel-followups" tabindex="-1" data-tabs-tab data-tabs-panel="panel-followups">{{ _("Follow-ups") }}</a>
+    {% if show_quotes %}<a class="aura-tabs__tab" id="tab-quotes" href="#panel-quotes" role="tab" aria-selected="false" aria-controls="panel-quotes" tabindex="-1" data-tabs-tab data-tabs-panel="panel-quotes">{{ _("Quotes") }}</a>{% endif %}
+    {% if show_orders %}<a class="aura-tabs__tab" id="tab-orders" href="#panel-orders" role="tab" aria-selected="false" aria-controls="panel-orders" tabindex="-1" data-tabs-tab data-tabs-panel="panel-orders">{{ _("Orders") }}</a>{% endif %}
+    {% if show_invoices %}<a class="aura-tabs__tab" id="tab-invoices" href="#panel-invoices" role="tab" aria-selected="false" aria-controls="panel-invoices" tabindex="-1" data-tabs-tab data-tabs-panel="panel-invoices">{{ _("Invoices") }}</a>{% endif %}
+    {% if show_payments %}<a class="aura-tabs__tab" id="tab-payments" href="#panel-payments" role="tab" aria-selected="false" aria-controls="panel-payments" tabindex="-1" data-tabs-tab data-tabs-panel="panel-payments">{{ _("Payments") }}</a>{% endif %}
+    {% if show_subscriptions %}<a class="aura-tabs__tab" id="tab-subscriptions" href="#panel-subscriptions" role="tab" aria-selected="false" aria-controls="panel-subscriptions" tabindex="-1" data-tabs-tab data-tabs-panel="panel-subscriptions">{{ _("Subscriptions") }}</a>{% endif %}
+    {% if show_licenses %}<a class="aura-tabs__tab" id="tab-licenses" href="#panel-licenses" role="tab" aria-selected="false" aria-controls="panel-licenses" tabindex="-1" data-tabs-tab data-tabs-panel="panel-licenses">{{ _("Licenses") }}</a>{% endif %}
+    {% if show_installations %}<a class="aura-tabs__tab" id="tab-installations" href="#panel-installations" role="tab" aria-selected="false" aria-controls="panel-installations" tabindex="-1" data-tabs-tab data-tabs-panel="panel-installations">{{ _("Installations") }}</a>{% endif %}
+    <a class="aura-tabs__tab" id="tab-notes" href="#panel-notes" role="tab" aria-selected="false" aria-controls="panel-notes" tabindex="-1" data-tabs-tab data-tabs-panel="panel-notes">{{ _("Notes") }}</a>
+    <a class="aura-tabs__tab" id="tab-timeline" href="#panel-timeline" role="tab" aria-selected="false" aria-controls="panel-timeline" tabindex="-1" data-tabs-tab data-tabs-panel="panel-timeline">{{ _("Timeline") }}</a>
+  </div>
+
+  {# ---------------- Overview: key facts restated, open items, most
+     recent activity, assignment history (folded in here -- see
+     customer-360-contract.md's placement rationale). ---------------- #}
+  <section class="aura-tabs__panel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0" data-tabs-panel-el>
+    <div class="card">
+      <h3>{{ _("Summary") }}</h3>
+      <dl class="kv">
+        <dt>{{ _("Assigned employee") }}</dt><dd>{{ assigned_staff.display_name if assigned_staff else _("Unassigned") }}</dd>
+        <dt>{{ _("Primary contact") }}</dt><dd>{{ primary_contact.name if primary_contact else "-" }}</dd>
+        <dt>{{ _("Customer since") }}</dt><dd>{{ format_owner_date(customer.created_at.date()) if customer.created_at else "-" }}</dd>
+        <dt>{{ _("Archive state") }}</dt><dd>{% if customer.archived_at %}{{ _("Archived on %(date)s", date=format_owner_datetime(customer.archived_at)) }}{% else %}{{ _("Not archived") }}{% endif %}</dd>
+      </dl>
+    </div>
+    {% if next_followup or open_quote %}
+    <div class="card">
+      <h3>{{ _("Open items") }}</h3>
+      {% if next_followup %}
+      <p>{{ _("Next follow-up due: %(when)s", when=format_owner_datetime(next_followup.due_at)) }}{% if is_overdue(next_followup) %} <span class="badge danger">{{ _("Overdue") }}</span>{% endif %}</p>
+      {% endif %}
+      {% if open_quote %}
+      <p>{{ _("Open quote:") }} <a href="{{ url_for('commercial_sales_web.quote_detail', quote_id=open_quote.id) }}"><bdi dir="ltr">{{ open_quote.quote_number }}</bdi></a> &middot; {{ quote_status_label(open_quote.status) }}</p>
+      {% endif %}
+    </div>
+    {% endif %}
+    <div class="card">
+      <h3>{{ _("Recent activity") }}</h3>
+      {% if timeline %}
+      <ul class="aura-timeline">
+        {% for event in timeline[:5] %}
+        <li class="aura-timeline__item">
+          <span class="aura-timeline__when">{{ format_owner_datetime(event.timestamp) }}</span>
+          <span class="aura-timeline__label">{% if event.url %}<a href="{{ event.url }}">{{ event.label }}</a>{% else %}{{ event.label }}{% endif %}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      <p><a href="#panel-timeline" data-tabs-jump data-tabs-panel="panel-timeline">{{ _("View full timeline") }}</a></p>
+      {% else %}
+      <p class="empty">{{ _("No activity recorded yet.") }}</p>
+      {% endif %}
+    </div>
+    <div class="card">
+      <h3>{{ _("Assignment history") }}</h3>
+      <table class="responsive-table">
+        <thead><tr><th>{{ _("Assigned to") }}</th><th>{{ _("Reason") }}</th><th>{{ _("When") }}</th></tr></thead>
+        <tbody>
+        {% for a in assignment_history %}
+        <tr><td><bdi dir="ltr">{{ a.assigned_to_staff_user_id }}</bdi></td><td>{{ a.reason or "-" }}</td><td>{{ format_owner_datetime(a.assigned_at) }}</td></tr>
+        {% else %}<tr><td colspan="3" class="empty">{{ _("No reassignments yet.") }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {# ---------------- Contacts (existing content, moved as-is) + Location
+     (folded in here -- see customer-360-contract.md's placement
+     rationale: Location sits naturally beside primary-contact info).
+     ---------------- #}
+  <section class="aura-tabs__panel" id="panel-contacts" role="tabpanel" aria-labelledby="tab-contacts" tabindex="0" data-tabs-panel-el>
+    <div class="card">
+      <h3>{{ _("Contacts") }}</h3>
+      <table class="responsive-table">
+        <thead><tr><th>{{ _("Name") }}</th><th>{{ _("Title") }}</th><th>{{ _("Email") }}</th><th>{{ _("Phone") }}</th><th>{{ _("Primary") }}</th></tr></thead>
+        <tbody>
+        {% for c in customer.contacts %}
+        <tr><td>{{ c.name }}</td><td>{{ c.title or "-" }}</td><td><bdi dir="ltr">{{ c.business_email or "-" }}</bdi></td><td><bdi dir="ltr">{{ c.business_phone or "-" }}</bdi></td><td>{{ _("Yes") if c.is_primary else "" }}</td></tr>
+        {% else %}<tr><td colspan="5" class="empty">{{ _("No contacts yet.") }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% if has_permission("customers.manage_contacts") %}
+      <form method="post" action="{{ url_for('customers.add_contact_route', customer_id=customer.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label for="customers-detail-name">{{ _("Name") }}</label><input id="customers-detail-name" name="name" required>
+        <label for="customers-detail-title">{{ _("Title") }}</label><input id="customers-detail-title" name="title">
+        <label for="customers-detail-business-email">{{ _("Email") }}</label><input id="customers-detail-business-email" name="business_email" type="email">
+        <label for="customers-detail-business-phone">{{ _("Phone") }}</label><input id="customers-detail-business-phone" name="business_phone">
+        <div style="margin-top:0.5rem;"><button type="submit">{{ _("Add contact") }}</button></div>
+      </form>
+      {% endif %}
+    </div>
+    <div class="card">
+      <h3>{{ _("Location") }}</h3>
+      {% for loc in locations %}
+      <p>
+        <bdi dir="ltr">{{ loc.latitude }}, {{ loc.longitude }}</bdi>
+        &middot;
+        {{ location_source_label(loc.source) }}
+        &middot;
+        {{ location_verification_label(loc.verified) }}
+        &middot;
+        {{ format_owner_datetime(loc.captured_at) }}
+        {% if not loc.verified and has_permission("customers.verify_location") %}
+        <form method="post" action="{{ url_for('crm_shared.verify_location_route', location_id=loc.id) }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input name="reason" placeholder="{{ _('Verification reason') }}" required>
+          <button type="submit">{{ _("Verify") }}</button>
+        </form>
+        {% endif %}
+      </p>
+      {% else %}<p class="empty">{{ _("No location captured yet.") }}</p>
+      {% endfor %}
+      {% if has_permission("customers.capture_location") %}
+      <button type="button" id="capture-location-btn"
+              data-error-unsupported="{{ _('Geolocation is not supported by this browser.') }}"
+              data-error-denied="{{ _('Location permission was denied or unavailable.') }}">{{ _("Capture current location") }}</button>
+      <form method="post" id="location-form" action="{{ url_for('customers.add_location_route', customer_id=customer.id) }}" style="display:none;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="latitude" id="loc-lat">
+        <input type="hidden" name="longitude" id="loc-lng">
+        <input type="hidden" name="accuracy_meters" id="loc-acc">
+        <input type="hidden" name="source" value="GPS">
+      </form>
+      <form method="post" action="{{ url_for('customers.add_location_route', customer_id=customer.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="source" value="MANUAL">
+        <label for="customers-detail-manual-address">{{ _("Manual address") }}</label>
+        <input id="customers-detail-manual-address" name="manual_address">
+        <div style="margin-top:0.5rem;"><button type="submit">{{ _("Save address") }}</button></div>
+      </form>
+      {% endif %}
+    </div>
+  </section>
+
+  {# ---------------- Interactions (existing content, moved as-is). ---------------- #}
+  <section class="aura-tabs__panel" id="panel-interactions" role="tabpanel" aria-labelledby="tab-interactions" tabindex="0" data-tabs-panel-el>
+    <div class="card">
+      <h3>{{ _("Interactions") }}</h3>
+      {% for i in interactions %}
+      <p>{{ interaction_type_label(i.interaction_type) }} &mdash; {{ i.summary or "" }}<br><small>{{ format_owner_datetime(i.occurred_at) }}</small></p>
+      {% else %}<p class="empty">{{ _("No interactions logged yet.") }}</p>
+      {% endfor %}
+      {% if has_any_permission("customers.update_own", "customers.update_all") %}
+      <form method="post" action="{{ url_for('customers.add_interaction_route', customer_id=customer.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <select name="interaction_type" aria-label="{{ _("Interaction type") }}">
+          {% for t in ["CALL","EMAIL","MEETING","WHATSAPP_MANUAL_NOTE","OTHER"] %}
+          <option value="{{ t }}">{{ interaction_type_label(t) }}</option>
+          {% endfor %}
+        </select>
+        <textarea name="summary" rows="2" placeholder="{{ _('Summary') }}"></textarea>
+        <div style="margin-top:0.5rem;"><button type="submit">{{ _("Log interaction") }}</button></div>
+      </form>
+      {% endif %}
+    </div>
+  </section>
+
+  {# ---------------- Follow-ups (existing content, moved as-is, including
+     the real overdue badge/complete action). ---------------- #}
+  <section class="aura-tabs__panel" id="panel-followups" role="tabpanel" aria-labelledby="tab-followups" tabindex="0" data-tabs-panel-el>
+    <div class="card">
+      <h3>{{ _("Follow-ups") }}</h3>
+      {% for f in followups %}
+      <p>
+        {{ format_owner_datetime(f.due_at) }} &mdash;
+        <span class="badge {{ 'active' if followup_status(f) == 'OPEN' else 'draft' }}">{{ followup_status_label(followup_status(f)) }}</span>
+        {% if is_overdue(f) %}<span class="badge danger">{{ _("Overdue") }}</span>{% endif %}
+        {{ f.notes or "" }}
+        {% if followup_status(f) == "OPEN" and has_any_permission("leads.update_own", "leads.update_all") %}
+        <form method="post" action="{{ url_for('crm_shared.complete_followup', followup_id=f.id) }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit">{{ _("Complete") }}</button>
+        </form>
+        {% endif %}
+      </p>
+      {% else %}<p class="empty">{{ _("No follow-ups yet.") }}</p>
+      {% endfor %}
+      {% if has_any_permission("customers.update_own", "customers.update_all") %}
+      <form method="post" action="{{ url_for('customers.add_followup_route', customer_id=customer.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label for="customers-detail-due-at">{{ _("Due") }}</label><input id="customers-detail-due-at" name="due_at" type="datetime-local" required>
+        <textarea name="notes" rows="2" placeholder="{{ _('Notes') }}"></textarea>
+        <div style="margin-top:0.5rem;"><button type="submit">{{ _("Add follow-up") }}</button></div>
+      </form>
+      {% endif %}
+    </div>
+  </section>
+
+  {# ---------------- Quotes (NEW). ---------------- #}
+  {% if show_quotes %}
+  <section class="aura-tabs__panel" id="panel-quotes" role="tabpanel" aria-labelledby="tab-quotes" tabindex="0" data-tabs-panel-el>
+    <div class="card">
+      {% call table.table(columns=[{"label": _("Number")}, {"label": _("Status")}, {"label": _("Total")}, {"label": _("Created")}], has_rows=(quotes|length > 0), empty_message=_("No quotes for this customer yet."), caption=_("Quotes for this customer")) %}
+        {% for q in quotes %}
+        <tr>
+          <td><a href="{{ url_for('commercial_sales_web.quote_detail', quote_id=q.id) }}"><bdi dir="ltr">{{ q.quote_number }}</bdi></a></td>
+          <td><span class="badge {{ 'success' if q.status == 'ACCEPTED' else ('danger' if q.status in ('REJECTED', 'CANCELLED', 'EXPIRED') else 'pending') }}">{{ quote_status_label(q.status) }}</span></td>
+          <td>{{ format_owner_number(q.total) }} {{ q.currency }}</td>
+          <td>{{ format_owner_datetime(q.created_at) }}</td>
+        </tr>
+        {% endfor %}
+      {% endcall %}
+      {% if quotes|length >= 50 %}<p class="empty">{{ _("Showing the most recent 50 quotes.") }}</p>{% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  {# ---------------- Orders (NEW). ---------------- #}
+  {% if show_orders %}
+  <section class="aura-tabs__panel" id="panel-orders" role="tabpanel" aria-labelledby="tab-orders" tabindex="0" data-tabs-panel-el>
+    <div class="card">
+      {% call table.table(columns=[{"label": _("Number")}, {"label": _("Status")}, {"label": _("Total")}, {"label": _("Created")}], has_rows=(orders|length > 0), empty_message=_("No sales orders for this customer yet."), caption=_("Sales orders for this customer")) %}
+        {% for o in orders %}
+        <tr>
+          <td><a href="{{ url_for('commercial_sales_web.order_detail', order_id=o.id) }}"><bdi dir="ltr">{{ o.order_number }}</bdi></a></td>
+          <td><span class="badge {{ 'success' if o.status in ('CONFIRMED', 'FULFILLED') else ('danger' if o.status == 'CANCELLED' else 'pending') }}">{{ sales_order_status_label(o.status) }}</span></td>
+          <td>{{ format_owner_number(o.total) }} {{ o.currency }}</td>
+          <td>{{ format_owner_datetime(o.created_at) }}</td>
+        </tr>
+        {% endfor %}
+      {% endcall %}
+      {% if orders|length >= 50 %}<p class="empty">{{ _("Showing the most recent 50 orders.") }}</p>{% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  {# ---------------- Invoices (NEW). ---------------- #}
+  {% if show_invoices %}
+  <section class="aura-tabs__panel" id="panel-invoices" role="tabpanel" aria-labelledby="tab-invoices" tabindex="0" data-tabs-panel-el>
+    <div class="card">
+      {% call table.table(columns=[{"label": _("Number")}, {"label": _("Status")}, {"label": _("Total")}, {"label": _("Due")}], has_rows=(invoices|length > 0), empty_message=_("No invoices for this customer yet."), caption=_("Invoices for this customer")) %}
+        {% for inv in invoices %}
+        <tr>
+          <td><a href="{{ url_for('commercial_sales_web.invoice_detail', invoice_id=inv.id) }}"><bdi dir="ltr">{{ inv.invoice_number }}</bdi></a></td>
+          <td><span class="badge {{ 'success' if inv.status == 'PAID' else ('danger' if inv.status == 'VOID' else 'pending') }}">{{ commercial_invoice_status_label(inv.status) }}</span></td>
+          <td>{{ format_owner_number(inv.total) }} {{ inv.currency }}</td>
+          <td>{{ format_owner_date(inv.due_date) if inv.due_date else "-" }}</td>
+        </tr>
+        {% endfor %}
+      {% endcall %}
+      {% if invoices|length >= 50 %}<p class="empty">{{ _("Showing the most recent 50 invoices.") }}</p>{% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  {# ---------------- Payments (NEW). ---------------- #}
+  {% if show_payments %}
+  <section class="aura-tabs__panel" id="panel-payments" role="tabpanel" aria-labelledby="tab-payments" tabindex="0" data-tabs-panel-el>
+    <div class="card">
+      {% call table.table(columns=[{"label": _("Amount")}, {"label": _("Method")}, {"label": _("Status")}, {"label": _("Date")}], has_rows=(payments|length > 0), empty_message=_("No payments for this customer yet."), caption=_("Payments for this customer")) %}
+        {% for p in payments %}
+        <tr>
+          <td><a href="{{ url_for('commercial_sales_web.payment_detail', payment_id=p.id) }}">{{ format_owner_number(p.amount) }} {{ p.currency }}</a></td>
+          <td>{{ p.method or "-" }}</td>
+          <td><span class="badge {{ 'success' if p.status == 'CONFIRMED' else ('danger' if p.status in ('FAILED', 'VOIDED') else 'pending') }}">{{ payment_status_label(p.status) }}</span></td>
+          <td>{{ format_owner_date(p.payment_date) }}</td>
+        </tr>
+        {% endfor %}
+      {% endcall %}
+      {% if payments|length >= 50 %}<p class="empty">{{ _("Showing the most recent 50 payments.") }}</p>{% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  {# ---------------- Subscriptions (NEW). ---------------- #}
+  {% if show_subscriptions %}
+  <section class="aura-tabs__panel" id="panel-subscriptions" role="tabpanel" aria-labelledby="tab-subscriptions" tabindex="0" data-tabs-panel-el>
+    <div class="card">
+      {% call table.table(columns=[{"label": _("Product")}, {"label": _("Plan")}, {"label": _("Status")}, {"label": _("End date")}, {"label": ""}], has_rows=(subscriptions|length > 0), empty_message=_("No subscriptions for this customer yet."), caption=_("Subscriptions for this customer")) %}
+        {% for s in subscriptions %}
+        <tr>
+          <td>{{ s.product.name }}</td>
+          <td>{{ s.plan.name }}</td>
+          <td><span class="badge {{ 'active' if s.status == 'ACTIVE' else 'draft' }}">{{ subscription_status_label(s.status) }}</span></td>
+          <td>{{ format_owner_date(s.end_date) if s.end_date else "-" }}</td>
+          <td><a href="{{ url_for('subscriptions.detail', subscription_id=s.id) }}">{{ _("View") }}</a></td>
+        </tr>
+        {% endfor %}
+      {% endcall %}
+      {% if subscriptions|length >= 50 %}<p class="empty">{{ _("Showing the most recent 50 subscriptions.") }}</p>{% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  {# ---------------- Licenses (NEW). ---------------- #}
+  {% if show_licenses %}
+  <section class="aura-tabs__panel" id="panel-licenses" role="tabpanel" aria-labelledby="tab-licenses" tabindex="0" data-tabs-panel-el>
+    <div class="card">
+      {% call table.table(columns=[{"label": _("Product")}, {"label": _("Key")}, {"label": _("Status")}, {"label": ""}], has_rows=(licenses|length > 0), empty_message=_("No licenses for this customer yet."), caption=_("Licenses for this customer")) %}
+        {% for lic in licenses %}
+        <tr>
+          <td><bdi dir="ltr">{{ lic.product.product_code }}</bdi></td>
+          <td>{% if lic.key_prefix %}<code class="masked" dir="ltr">{{ lic.key_prefix }}-...{{ lic.key_suffix_masked }}</code>{% else %}<span class="empty">{{ _("not issued") }}</span>{% endif %}</td>
+          <td><span class="badge {{ 'active' if lic.status in ('ACTIVE', 'ISSUED') else ('danger' if lic.status == 'REVOKED' else 'draft') }}">{{ license_status_label(lic.status) }}</span></td>
+          <td><a href="{{ url_for('licensing.detail', license_id=lic.id) }}">{{ _("View") }}</a></td>
+        </tr>
+        {% endfor %}
+      {% endcall %}
+      {% if licenses|length >= 50 %}<p class="empty">{{ _("Showing the most recent 50 licenses.") }}</p>{% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  {# ---------------- Installations (NEW). ---------------- #}
+  {% if show_installations %}
+  <section class="aura-tabs__panel" id="panel-installations" role="tabpanel" aria-labelledby="tab-installations" tabindex="0" data-tabs-panel-el>
+    <div class="card">
+      {% call table.table(columns=[{"label": _("Product")}, {"label": _("Label")}, {"label": _("Status")}, {"label": ""}], has_rows=(installations|length > 0), empty_message=_("No installations for this customer yet."), caption=_("Installations for this customer")) %}
+        {% for i in installations %}
+        <tr>
+          <td><bdi dir="ltr">{{ i.product.product_code }}</bdi></td>
+          <td>{{ i.installation_label or "-" }}</td>
+          <td><span class="badge {{ 'active' if i.status == 'ACTIVE' else 'draft' }}">{{ installation_status_label(i.status) }}</span></td>
+          <td><a href="{{ url_for('installations.detail', installation_id=i.id) }}">{{ _("View") }}</a></td>
+        </tr>
+        {% endfor %}
+      {% endcall %}
+      {% if installations|length >= 50 %}<p class="empty">{{ _("Showing the most recent 50 installations.") }}</p>{% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  {# ---------------- Notes (existing content, moved as-is -- visibility
+     already correctly scoped via list_customer_notes_visible_to, reused
+     unchanged; never weakened or duplicated here). ---------------- #}
+  <section class="aura-tabs__panel" id="panel-notes" role="tabpanel" aria-labelledby="tab-notes" tabindex="0" data-tabs-panel-el>
+    <div class="card">
+      <h3>{{ _("Internal notes") }}</h3>
+      {% for n in notes %}
+      <p style="border-bottom:1px solid var(--aura-color-border-default);padding-bottom:0.4rem;">{{ n.body }}<br><small style="color:var(--aura-color-text-muted);">{{ note_visibility_label(n.visibility) }} &middot; {{ format_owner_datetime(n.created_at) }}</small></p>
+      {% else %}<p class="empty">{{ _("No notes yet.") }}</p>
+      {% endfor %}
+      {% if has_permission("customers.manage_notes") %}
+      <form method="post" action="{{ url_for('customers.add_note_route', customer_id=customer.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <textarea name="body" rows="3" required></textarea>
+        <select name="visibility" aria-label="{{ _("Note visibility") }}">
+          {% for v in ["ASSIGNED_RECORD_USERS","AUTHOR_ONLY","MANAGEMENT_ONLY"] %}
+          <option value="{{ v }}">{{ note_visibility_label(v) }}</option>
+          {% endfor %}
+        </select>
+        <div style="margin-top:0.5rem;"><button type="submit">{{ _("Add note") }}</button></div>
+      </form>
+      {% endif %}
+    </div>
+  </section>
+
+  {# ---------------- Timeline (NEW) -- built purely from the same
+     domain-event rows already fetched for the tabs above, never
+     AuditLog/SecurityEvent. See app.customers.customer_360's own module
+     docstring and customer-360-contract.md. ---------------- #}
+  <section class="aura-tabs__panel" id="panel-timeline" role="tabpanel" aria-labelledby="tab-timeline" tabindex="0" data-tabs-panel-el>
+    <div class="card">
+      <h3>{{ _("Timeline") }}</h3>
+      {% if timeline %}
+      <ul class="aura-timeline">
+        {% for event in timeline %}
+        <li class="aura-timeline__item">
+          <span class="aura-timeline__when">{{ format_owner_datetime(event.timestamp) }}</span>
+          <span class="aura-timeline__label">{% if event.url %}<a href="{{ event.url }}">{{ event.label }}</a>{% else %}{{ event.label }}{% endif %}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% if timeline|length >= 50 %}<p class="empty">{{ _("Showing the most recent 50 events.") }}</p>{% endif %}
+      {% else %}
+      <p class="empty">{{ _("No timeline events yet.") }}</p>
+      {% endif %}
+    </div>
+  </section>
 </div>
+
+<script src="{{ url_for('static', filename='js/geolocation-capture.js') }}"></script>
 {% endblock %}
