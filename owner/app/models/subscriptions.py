@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -13,6 +13,11 @@ from app.models.base import Base, TimestampMixin, UUIDPKMixin
 
 class Subscription(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_subscriptions"
+    # Real backstop against concurrent fulfill_order() calls both creating a
+    # Subscription for the same order (migration 5de3f36f4c21) -- nullable-
+    # safe, Postgres allows unlimited NULLs in a unique column, so this never
+    # blocks a Subscription created outside fulfillment (sales_order_id NULL).
+    __table_args__ = (UniqueConstraint("sales_order_id", name="uq_subscriptions_one_per_sales_order"),)
 
     customer_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_customers.id"), nullable=False

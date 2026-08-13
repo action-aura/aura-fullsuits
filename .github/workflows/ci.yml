@@ -67,16 +67,24 @@ jobs:
             filter: "phase9_5b or phase9r or phase8"
           - shard: d
             filter: "phase9_5e or phase6 or phase9_5a"
+    # POSTGRES_USER intentionally left unset -- the image then bootstraps as
+    # "postgres" instead of "aura_owner". Real Postgres refuses to let the
+    # cluster's bootstrap role ever lose SUPERUSER ("permission denied to
+    # alter role -- DETAIL: The bootstrap superuser must have the SUPERUSER
+    # attribute", hit for real trying to ALTER ROLE aura_owner NOSUPERUSER
+    # against a container where aura_owner WAS the bootstrap role). aura_owner
+    # is created explicitly below as a genuinely separate, non-superuser
+    # role -- the real dev/staging pattern already documented in
+    # docs/owner/phase9/postgresql-hardening.md, just done once per ephemeral
+    # container instead of once by a human.
     services:
       postgres:
         image: postgres:17
         env:
-          POSTGRES_USER: aura_owner
-          POSTGRES_PASSWORD: aura_owner_dev
-          POSTGRES_DB: aura_owner_test
+          POSTGRES_PASSWORD: postgres-bootstrap-ci-only-not-app-credential
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U aura_owner -d aura_owner_test"
+          --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - name: Source checkout
@@ -107,19 +115,18 @@ jobs:
           sudo sh /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
           sudo apt-get install -y postgresql-client-17
 
-      # The official postgres Docker image always makes its bootstrap
-      # POSTGRES_USER a real superuser -- that's just how the image's own
-      # initdb works, unlike real dev/staging Postgres (docs/owner/phase9/
-      # postgresql-hardening.md: aura_owner is confirmed rolsuper=f there,
-      # created explicitly via CREATE ROLE without SUPERUSER by a real admin).
-      # test_application_role_is_not_superuser (test_phase9r_postgresql_hardening.py)
-      # enforces that real production invariant, so the CI container has to
-      # match it: revoke SUPERUSER/CREATEROLE from aura_owner post-bootstrap.
+      # aura_owner is a genuinely separate, non-superuser role -- see the
+      # services.postgres comment above for why (the bootstrap role can never
+      # lose SUPERUSER, so it can't just be "postgres" ALTERed in place).
       # CREATEDB is kept -- test_migration_runs_clean_from_empty_database_and_rolls_back
       # needs it (same real requirement documented in
       # docs/owner/phase5/owner-local-development-guide.md).
-      - name: De-privilege the CI Postgres role to match the real non-superuser posture
-        run: PGPASSWORD=aura_owner_dev psql -h localhost -U aura_owner -d aura_owner_test -c "ALTER ROLE aura_owner NOSUPERUSER NOCREATEROLE;"
+      - name: Provision the aura_owner application role (non-superuser, matches real dev/staging posture)
+        env:
+          PGPASSWORD: postgres-bootstrap-ci-only-not-app-credential
+        run: |
+          psql -h localhost -U postgres -c "CREATE ROLE aura_owner LOGIN PASSWORD 'aura_owner_dev' CREATEDB NOSUPERUSER NOCREATEROLE;"
+          psql -h localhost -U postgres -c "CREATE DATABASE aura_owner_test OWNER aura_owner;"
 
       # No explicit `alembic upgrade head` needed here:
       # owner/tests/conftest.py::_migrated_schema is a session-scoped autouse
