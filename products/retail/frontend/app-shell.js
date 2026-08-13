@@ -423,66 +423,59 @@ const SubsystemApp = {
   },
 
   // ── FIRST-TIME SETUP MODAL ────────────────────────────────────────────────
+  // Visual layer lives in main.css (.auth-*) — this used to be a wall of
+  // inline styles with a hardcoded teal that matched nothing in the product.
+  // The accent vars are applied here the same way launch() applies them, so
+  // the very first screen a customer sees already carries the product brand.
   showSetupModal() {
     document.getElementById('aura-relogin-modal')?.remove();
     this._authModalOpen = true;
+    document.documentElement.style.setProperty('--sub-accent', this.systems.retail.accent);
+    document.documentElement.style.setProperty('--sub-accent-rgb', this.systems.retail.accentRgb);
     const overlay = document.createElement('div');
     overlay.id = 'aura-relogin-modal';
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,0.95);display:flex;align-items:center;justify-content:center;z-index:99999;backdrop-filter:blur(12px);';
+    overlay.className = 'auth-overlay';
     overlay.innerHTML = `
-      <div style="position:relative;background:linear-gradient(135deg,#0f172a,#1e293b);border:1px solid rgba(20,184,166,0.3);border-radius:24px;padding:44px;width:480px;box-shadow:0 40px 100px rgba(0,0,0,0.8),0 0 60px rgba(20,184,166,0.08);">
-        <button onclick="AuraI18n.toggle()" title="Language / اللغة" style="position:absolute;top:14px;inset-inline-end:14px;background:none;border:1px solid rgba(255,255,255,0.2);color:#94a3b8;border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer;">EN | ع</button>
-        <div style="text-align:center;margin-bottom:32px;">
-          <div style="width:72px;height:72px;border-radius:20px;background:linear-gradient(135deg,#14b8a6,#0d9488);display:flex;align-items:center;justify-content:center;font-size:36px;margin:0 auto 16px;box-shadow:0 8px 28px rgba(20,184,166,0.35);">⚡</div>
-          <h2 style="color:#fff;margin:0 0 8px;font-size:26px;font-weight:800;letter-spacing:-0.5px;">${t('Welcome to Action Aura')}</h2>
-          <p style="color:#64748b;margin:0;font-size:15px;">${t('Create your administrator account to get started.')}</p>
-          <p style="color:#94a3b8;margin:8px 0 0;font-size:12px;background:rgba(20,184,166,0.08);border:1px solid rgba(20,184,166,0.2);border-radius:8px;padding:8px;">This setup runs <strong style="color:#14b8a6">only once</strong>. Your credentials will be saved permanently.</p>
+      <div class="auth-card">
+        <button onclick="AuraI18n.toggle()" title="Language / اللغة" class="auth-lang-btn">EN | ع</button>
+        <div class="auth-head">
+          <div class="auth-icon">⚡</div>
+          <h2 class="auth-title">${t('Welcome to Action Aura')}</h2>
+          <p class="auth-sub">${t('Create your administrator account to get started.')}</p>
+          <p class="auth-note">This setup runs <strong>only once</strong>. Your credentials will be saved permanently.</p>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
-          <div>
-            <label style="display:block;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;">Full Name *</label>
+        <div class="auth-grid-2">
+          <div class="auth-field">
+            <label for="su-name">Full Name *</label>
             <input id="su-name" type="text" placeholder="Your full name" autocomplete="name"
-              style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:#fff;padding:11px 14px;font-size:14px;outline:none;box-sizing:border-box;transition:.2s;"
-              onfocus="this.style.borderColor='#14b8a6'" onblur="this.style.borderColor='rgba(255,255,255,0.1)'"
               onkeydown="if(event.key==='Enter')document.getElementById('su-company').focus()" />
           </div>
-          <div>
-            <label style="display:block;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;">Company Name</label>
+          <div class="auth-field">
+            <label for="su-company">Company Name</label>
             <input id="su-company" type="text" placeholder="Your company" autocomplete="organization"
-              style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:#fff;padding:11px 14px;font-size:14px;outline:none;box-sizing:border-box;transition:.2s;"
-              onfocus="this.style.borderColor='#14b8a6'" onblur="this.style.borderColor='rgba(255,255,255,0.1)'"
               onkeydown="if(event.key==='Enter')document.getElementById('su-email').focus()" />
           </div>
         </div>
-        <div style="margin-bottom:14px;">
-          <label style="display:block;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;">Email Address *</label>
+        <div class="auth-field">
+          <label for="su-email">Email Address *</label>
           <input id="su-email" type="email" placeholder="admin@yourcompany.com" autocomplete="email"
-            style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:#fff;padding:11px 14px;font-size:14px;outline:none;box-sizing:border-box;transition:.2s;"
-            onfocus="this.style.borderColor='#14b8a6'" onblur="this.style.borderColor='rgba(255,255,255,0.1)'"
             onkeydown="if(event.key==='Enter')document.getElementById('su-pass').focus()" />
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">
-          <div>
-            <label style="display:block;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;">Password *</label>
+        <div class="auth-grid-2">
+          <div class="auth-field">
+            <label for="su-pass">Password *</label>
             <input id="su-pass" type="password" placeholder="Min. 6 characters" autocomplete="new-password"
-              style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:#fff;padding:11px 14px;font-size:14px;outline:none;box-sizing:border-box;transition:.2s;"
-              onfocus="this.style.borderColor='#14b8a6'" onblur="this.style.borderColor='rgba(255,255,255,0.1)'"
               onkeydown="if(event.key==='Enter')document.getElementById('su-pass2').focus()" />
           </div>
-          <div>
-            <label style="display:block;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;">Confirm Password *</label>
+          <div class="auth-field">
+            <label for="su-pass2">Confirm Password *</label>
             <input id="su-pass2" type="password" placeholder="Repeat password" autocomplete="new-password"
-              style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:#fff;padding:11px 14px;font-size:14px;outline:none;box-sizing:border-box;transition:.2s;"
-              onfocus="this.style.borderColor='#14b8a6'" onblur="this.style.borderColor='rgba(255,255,255,0.1)'"
               onkeydown="if(event.key==='Enter')SubsystemApp._setupSubmit()" />
           </div>
         </div>
-        <div id="su-error" style="color:#f87171;font-size:13px;margin-bottom:14px;display:none;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:8px;padding:10px 14px;"></div>
-        <button id="su-btn" onclick="SubsystemApp._setupSubmit()"
-          style="width:100%;background:linear-gradient(135deg,#14b8a6,#0d9488);color:#fff;border:none;border-radius:12px;padding:15px;font-size:16px;font-weight:700;cursor:pointer;letter-spacing:.3px;transition:opacity .2s;box-shadow:0 8px 24px rgba(20,184,166,0.3);">
-          Create Account &amp; Launch
-        </button>
-        <p style="text-align:center;color:#475569;font-size:12px;margin:16px 0 0;">Your data is stored locally on this device. No cloud required.</p>
+        <div id="su-error" class="auth-error"></div>
+        <button id="su-btn" class="auth-submit" onclick="SubsystemApp._setupSubmit()">Create Account &amp; Launch</button>
+        <p class="auth-foot">Your data is stored locally on this device. No cloud required.</p>
       </div>`;
     document.body.appendChild(overlay);
     setTimeout(() => document.getElementById('su-name')?.focus(), 150);
@@ -532,7 +525,7 @@ const SubsystemApp = {
       overlay.innerHTML = `
         <div style="font-size:56px;margin-bottom:16px;">✅</div>
         <h2 style="font-size:28px;font-weight:800;margin:0 0 8px;">Account Created!</h2>
-        <p style="color:#64748b;margin:0;font-size:16px;">Welcome, <strong id="aura-setup-complete-name" style="color:#14b8a6"></strong>. Loading your platform…</p>`;
+        <p style="color:#64748b;margin:0;font-size:16px;">Welcome, <strong id="aura-setup-complete-name" style="color:var(--sub-accent,#14b8a6)"></strong>. Loading your platform…</p>`;
       const nameEl = overlay.querySelector('#aura-setup-complete-name');
       if (nameEl) nameEl.textContent = name;
       document.body.appendChild(overlay);
@@ -552,39 +545,37 @@ const SubsystemApp = {
   },
 
   // ── RETURNING USER LOGIN MODAL ────────────────────────────────────────────
+  // Same auth-* component family as the setup modal (main.css) — one visual
+  // language for both halves of the auth flow, branded with the product
+  // accent instead of the old off-brand teal.
   showReloginModal(msg = 'Your session has expired. Please log in again.') {
     document.getElementById('aura-relogin-modal')?.remove();
     this._authModalOpen = true;
+    document.documentElement.style.setProperty('--sub-accent', this.systems.retail.accent);
+    document.documentElement.style.setProperty('--sub-accent-rgb', this.systems.retail.accentRgb);
     const overlay = document.createElement('div');
     overlay.id = 'aura-relogin-modal';
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,0.92);display:flex;align-items:center;justify-content:center;z-index:99999;backdrop-filter:blur(10px);';
+    overlay.className = 'auth-overlay';
     overlay.innerHTML = `
-      <div style="position:relative;background:linear-gradient(135deg,#0f172a,#1e293b);border:1px solid rgba(255,255,255,0.1);border-radius:24px;padding:44px;width:420px;box-shadow:0 40px 100px rgba(0,0,0,0.8);">
-        <button onclick="AuraI18n.toggle()" title="Language / اللغة" style="position:absolute;top:14px;inset-inline-end:14px;background:none;border:1px solid rgba(255,255,255,0.2);color:#94a3b8;border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer;">EN | ع</button>
-        <div style="text-align:center;margin-bottom:32px;">
-          <div style="width:64px;height:64px;border-radius:18px;background:linear-gradient(135deg,#1e293b,#0f172a);border:1px solid rgba(20,184,166,0.3);display:flex;align-items:center;justify-content:center;font-size:32px;margin:0 auto 16px;">🔐</div>
-          <h2 style="color:#fff;margin:0 0 8px;font-size:24px;font-weight:800;">${t('Sign In Required')}</h2>
-          <p style="color:#64748b;margin:0;font-size:14px;">${t(msg)}</p>
+      <div class="auth-card auth-card-compact">
+        <button onclick="AuraI18n.toggle()" title="Language / اللغة" class="auth-lang-btn">EN | ع</button>
+        <div class="auth-head">
+          <div class="auth-icon">🔐</div>
+          <h2 class="auth-title">${t('Sign In Required')}</h2>
+          <p class="auth-sub">${t(msg)}</p>
         </div>
-        <div style="margin-bottom:14px;">
-          <label style="display:block;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;">${t('Email')}</label>
+        <div class="auth-field">
+          <label for="rl-email">${t('Email')}</label>
           <input id="rl-email" type="email" placeholder="admin@yourcompany.com" autocomplete="email"
-            style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:#fff;padding:11px 14px;font-size:14px;outline:none;box-sizing:border-box;transition:.2s;"
-            onfocus="this.style.borderColor='#14b8a6'" onblur="this.style.borderColor='rgba(255,255,255,0.1)'"
             onkeydown="if(event.key==='Enter')document.getElementById('rl-pass').focus()" />
         </div>
-        <div style="margin-bottom:22px;">
-          <label style="display:block;color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px;">${t('Password')}</label>
+        <div class="auth-field" style="margin-bottom:20px;">
+          <label for="rl-pass">${t('Password')}</label>
           <input id="rl-pass" type="password" placeholder="••••••••" autocomplete="current-password"
-            style="width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:#fff;padding:11px 14px;font-size:14px;outline:none;box-sizing:border-box;transition:.2s;"
-            onfocus="this.style.borderColor='#14b8a6'" onblur="this.style.borderColor='rgba(255,255,255,0.1)'"
             onkeydown="if(event.key==='Enter')SubsystemApp._reloginSubmit()" />
         </div>
-        <div id="rl-error" style="color:#f87171;font-size:13px;margin-bottom:14px;display:none;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:8px;padding:10px 14px;"></div>
-        <button id="rl-btn" onclick="SubsystemApp._reloginSubmit()"
-          style="width:100%;background:linear-gradient(135deg,#14b8a6,#0d9488);color:#fff;border:none;border-radius:12px;padding:14px;font-size:16px;font-weight:700;cursor:pointer;box-shadow:0 8px 24px rgba(20,184,166,0.25);transition:opacity .2s;">
-          ${t('Log In')}
-        </button>
+        <div id="rl-error" class="auth-error"></div>
+        <button id="rl-btn" class="auth-submit" onclick="SubsystemApp._reloginSubmit()">${t('Log In')}</button>
       </div>`;
     document.body.appendChild(overlay);
     setTimeout(() => document.getElementById('rl-email')?.focus(), 100);
