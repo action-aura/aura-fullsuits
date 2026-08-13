@@ -183,23 +183,97 @@ const RetailSystem = {
   },
 
   // ── DASHBOARD ─────────────────────────────────────────────────────────────
+  // UI/UX polish (feat/retail-ui-ux-polish): all dashboard-only styling is
+  // scoped under .rdash in this render's own <style> block (same pattern the
+  // POS screen already uses) so the shared .ret-* classes that Products/
+  // Customers/etc. also consume are NOT restyled from here. Two goals:
+  //   1. Hierarchy — Revenue (Net) is the number an owner opens this screen
+  //      for, so it alone gets the accent "hero" treatment; the other four
+  //      KPIs stay quiet.
+  //   2. Theme correctness — the old hardcoded #fff/rgba(0,0,0,.25) values
+  //      rendered white-on-white in light mode; everything now reads the
+  //      semantic tokens (--text/--surface-card/--border-soft) instead.
   async _renderDashboard(c) {
     this._injectStyles();
     c.innerHTML = `
+      <style>
+        .rdash .ret-title { color:var(--text);font-size:26px;letter-spacing:-0.4px; }
+        .rdash-date { color:var(--text-faint);font-size:13px;margin:4px 0 0; }
+        /* KPI grid: the hero card gets more track than the four supporting
+           cards; below 1300px it spans a full row of its own. */
+        .rdash .ret-kpi-grid { grid-template-columns:minmax(230px,1.4fr) repeat(4,minmax(0,1fr)); }
+        @media(max-width:1300px){
+          .rdash .ret-kpi-grid { grid-template-columns:repeat(2,1fr); }
+          .rdash .ret-kpi-hero { grid-column:1/-1; }
+        }
+        .rdash .ret-kpi {
+          background:var(--surface-card);border-color:var(--border-soft);
+          transition:transform .22s cubic-bezier(.2,.8,.2,1), box-shadow .22s ease, border-color .22s ease;
+          will-change:transform;
+          animation:rdashRise .4s cubic-bezier(.22,1,.36,1) both;
+        }
+        .rdash .ret-kpi:nth-child(2){animation-delay:.05s} .rdash .ret-kpi:nth-child(3){animation-delay:.1s}
+        .rdash .ret-kpi:nth-child(4){animation-delay:.15s} .rdash .ret-kpi:nth-child(5){animation-delay:.2s}
+        @keyframes rdashRise { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:none} }
+        .rdash .ret-kpi::before { opacity:.06; }
+        .rdash .ret-kpi:hover {
+          transform:translateY(-3px);
+          border-color:rgba(var(--sub-accent-rgb),0.35);
+          box-shadow:0 12px 28px rgba(0,0,0,0.22);
+        }
+        .rdash .ret-kpi-value { color:var(--text);font-variant-numeric:tabular-nums; }
+        .rdash .ret-kpi-value.is-danger { color:#ef4444; }
+        .rdash .ret-kpi-sub { color:var(--text-faint); }
+        .rdash .ret-kpi-label { color:var(--text-faint); }
+        .rdash .ret-kpi-breakdown { border-top-color:var(--border-soft); }
+        .rdash .ret-kpi-breakdown-item { color:var(--text-faint); }
+        /* Hero (Revenue Net): the single accent-loud element on the screen. */
+        .rdash .ret-kpi-hero {
+          border-color:rgba(var(--sub-accent-rgb),0.35);
+          background:linear-gradient(135deg, rgba(var(--sub-accent-rgb),0.10), var(--surface-card) 60%);
+        }
+        .rdash .ret-kpi-hero::before { opacity:.14; }
+        .rdash .ret-kpi-hero .ret-kpi-label { color:var(--sub-accent);font-weight:700; }
+        .rdash .ret-kpi-hero .ret-kpi-value { font-size:34px;letter-spacing:-1px; }
+        /* Day-over-day delta as a designed chip, not raw colored text. */
+        .rdash-delta {
+          display:inline-flex;align-items:center;gap:4px;padding:2px 9px;margin-top:2px;
+          border-radius:20px;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;
+        }
+        .rdash-delta.up   { background:rgba(16,185,129,0.14);color:#10b981; }
+        .rdash-delta.down { background:rgba(239,68,68,0.14);color:#ef4444; }
+        /* Recent-transactions table: theme-correct + a visible row affordance
+           (rows are clickable — cursor alone wasn't signalling that). */
+        .rdash .ret-table { color:var(--text); }
+        .rdash .ret-table th { color:var(--text-faint);border-bottom-color:var(--border-mid); }
+        .rdash .ret-table td { border-bottom-color:var(--border-soft); }
+        .rdash .ret-table tbody tr { transition:background .15s ease; }
+        .rdash .ret-table tbody tr:hover { background:rgba(var(--sub-accent-rgb),0.06); }
+        .rdash .ret-btn-ghost {
+          background:var(--surface-soft);color:var(--text-dim);border-color:var(--border-mid);
+          transition:background .15s ease, color .15s ease, transform .15s ease;
+        }
+        .rdash .ret-btn-ghost:hover { background:var(--surface-hover);color:var(--text);transform:translateY(-1px); }
+        .rdash .ret-btn-ghost:focus-visible { outline:2px solid var(--sub-accent);outline-offset:2px; }
+        @media (prefers-reduced-motion: reduce) {
+          .rdash .ret-kpi { animation:none;transition:none; }
+        }
+      </style>
+      <div class="rdash">
       <div class="ret-hdr">
         <div>
           <h2 class="ret-title">${t('Retail Overview')}</h2>
-          <p style="color:var(--text-muted);margin:4px 0 0">${new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</p>
+          <p class="rdash-date">${new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</p>
         </div>
         <div style="display:flex;gap:10px">
           <button class="sub-btn-primary" onclick="SubsystemApp._navigate('pos')">🛒 Open POS</button>
         </div>
       </div>
       <div class="ret-kpi-grid">
-        <div class="ret-kpi"><div class="ret-kpi-label">Revenue (Net)</div><div class="ret-kpi-value" id="r-k-rev">—</div><div class="ret-kpi-sub" id="r-k-rev-chg"></div><div class="ret-kpi-breakdown" id="r-k-rev-breakdown"></div></div>
+        <div class="ret-kpi ret-kpi-hero"><div class="ret-kpi-label">Revenue (Net)</div><div class="ret-kpi-value" id="r-k-rev">—</div><div class="ret-kpi-sub" id="r-k-rev-chg"></div><div class="ret-kpi-breakdown" id="r-k-rev-breakdown"></div></div>
         <div class="ret-kpi"><div class="ret-kpi-label">Transactions</div><div class="ret-kpi-value" id="r-k-txn">—</div><div class="ret-kpi-sub" id="r-k-txn-sub"></div></div>
         <div class="ret-kpi"><div class="ret-kpi-label">Month-to-Date</div><div class="ret-kpi-value" id="r-k-mtd">—</div><div class="ret-kpi-sub" id="r-k-mtd-sub"></div></div>
-        <div class="ret-kpi"><div class="ret-kpi-label">Low Stock</div><div class="ret-kpi-value" id="r-k-low" style="color:#ef4444">—</div><div class="ret-kpi-sub">items need reorder</div></div>
+        <div class="ret-kpi"><div class="ret-kpi-label">Low Stock</div><div class="ret-kpi-value is-danger" id="r-k-low">—</div><div class="ret-kpi-sub">items need reorder</div></div>
         <div class="ret-kpi"><div class="ret-kpi-label">Customers</div><div class="ret-kpi-value" id="r-k-cust">—</div><div class="ret-kpi-sub" id="r-k-prod"></div></div>
       </div>
       <div style="display:grid;grid-template-columns:2fr 1fr;gap:20px;margin-bottom:20px">
@@ -228,6 +302,7 @@ const RetailSystem = {
             <tbody><tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">Loading…</td></tr></tbody>
           </table>
         </div>
+      </div>
       </div>`;
 
     try {
@@ -246,9 +321,12 @@ const RetailSystem = {
 
       const chg = d.sales_change_pct || 0;
       const chgEl = document.getElementById('r-k-rev-chg');
+      // Same data, presented as a designed chip (.rdash-delta) instead of a
+      // raw colored text run — the old ret-kpi-change-* spans still exist in
+      // _injectStyles for any other consumer.
       chgEl.innerHTML = chg >= 0
-        ? `<span class="ret-kpi-change-up">▲ ${Math.abs(chg)}% vs yesterday</span>`
-        : `<span class="ret-kpi-change-down">▼ ${Math.abs(chg)}% vs yesterday</span>`;
+        ? `<span class="rdash-delta up">▲ ${Math.abs(chg)}% vs yesterday</span>`
+        : `<span class="rdash-delta down">▼ ${Math.abs(chg)}% vs yesterday</span>`;
 
       // Revenue (Net) = Sales − Returns. Accounting logic is unchanged (the
       // backend already nets returns out of `today_sales`) — this is purely
@@ -267,17 +345,28 @@ const RetailSystem = {
       }
 
       if (window.Chart) {
+        // Presentational only: Chart.js can't consume CSS var() strings, so
+        // resolve the live token values once per render. The dashboard
+        // re-renders every 60 s (auto-refresh in app-shell), so a theme
+        // toggle is picked up on the next refresh/navigation.
+        const isLight  = document.documentElement.getAttribute('data-theme') === 'light';
+        const accentRgb = (getComputedStyle(document.documentElement)
+          .getPropertyValue('--sub-accent-rgb') || '244,63,94').trim();
+        const tickClr = isLight ? '#51607a' : '#94a3b8';
+        const gridClr = isLight ? 'rgba(20,32,60,0.08)' : 'rgba(255,255,255,0.05)';
+
         // Hourly chart
         const hCtx = document.getElementById('r-dash-hourly');
         if (hCtx && (d.hourly_labels||[]).length) {
           new Chart(hCtx.getContext('2d'), {
             type: 'bar',
             data: { labels: d.hourly_labels, datasets: [{ label: 'Revenue ($)', data: d.hourly_data,
-              backgroundColor: 'rgba(244,63,94,0.5)', borderColor: '#f43f5e', borderWidth: 1 }] },
+              backgroundColor: `rgba(${accentRgb},0.5)`, borderColor: `rgb(${accentRgb})`, borderWidth: 1,
+              borderRadius: 3 }] },
             options: { responsive:true, maintainAspectRatio:false,
               plugins:{ legend:{display:false} },
-              scales:{ y:{grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#94a3b8',callback:v=>'$'+v}},
-                       x:{grid:{display:false},ticks:{color:'#94a3b8'}} } }
+              scales:{ y:{grid:{color:gridClr},ticks:{color:tickClr,callback:v=>'$'+v}},
+                       x:{grid:{display:false},ticks:{color:tickClr}} } }
           });
         } else if (hCtx) {
           hCtx.parentElement.innerHTML = '<div style="height:200px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:14px">No sales today yet</div>';
@@ -295,7 +384,7 @@ const RetailSystem = {
               backgroundColor: ['#10b981','#3b82f6','#f59e0b','#a855f7','#ef4444'],
               borderWidth: 0 }] },
             options: { responsive:true, maintainAspectRatio:false,
-              plugins:{ legend:{position:'right',labels:{color:'#94a3b8',font:{size:12}}} } }
+              plugins:{ legend:{position:'right',labels:{color:tickClr,font:{size:12}}} } }
           });
         } else if (pCtx) {
           pCtx.parentElement.innerHTML = '<div style="height:200px;display:flex;align-items:center;justify-content:center;color:var(--text-muted)">No transactions today</div>';
@@ -321,45 +410,100 @@ const RetailSystem = {
   },
 
   // ── POS ───────────────────────────────────────────────────────────────────
+  // UI/UX polish (feat/retail-ui-ux-polish). Design intents, in order:
+  //   1. Selected ≠ hovered — category pills and payment buttons previously
+  //      used the SAME visual for :hover and .active, so a cashier scanning
+  //      the bar couldn't tell what was selected. Hover is now a tinted
+  //      outline; selected is a solid/inset accent fill.
+  //   2. The grand total is the most important number in the whole app —
+  //      it gets the largest type on the screen (26px tabular numerals).
+  //   3. Press feedback everywhere a finger lands (product card, qty, pay,
+  //      charge) via transform-only :active states — compositor-friendly,
+  //      matches this repo's animation performance rules.
+  //   4. All hardcoded dark values (#0f172a, #fff, rgba(255,255,255,…))
+  //      replaced with the semantic tokens so light mode renders correctly.
   _renderPOS(c) {
     this._injectStyles();
     c.innerHTML = `
       <style>
         .pos-wrap { display:grid;grid-template-columns:2fr 1fr;gap:20px;height:calc(100vh - 120px); }
-        .pos-left { background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.07);border-radius:14px;display:flex;flex-direction:column;overflow:hidden; }
-        .pos-right { background:#0f172a;border:1px solid var(--sub-accent);border-radius:14px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 0 40px rgba(244,63,94,0.1); }
-        .pos-pane-hdr { padding:14px 20px;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;justify-content:space-between;align-items:center; }
-        .pos-search { background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);padding:9px 14px;border-radius:8px;color:#fff;width:260px;outline:none; }
-        .pos-search:focus { border-color:var(--sub-accent); }
-        .pos-cat-bar { display:flex;gap:8px;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,0.06);overflow-x:auto;flex-shrink:0; }
-        .pos-cat-btn { padding:5px 14px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid rgba(255,255,255,0.15);background:transparent;color:#94a3b8;white-space:nowrap;transition:.15s; }
-        .pos-cat-btn.active,.pos-cat-btn:hover { background:var(--sub-accent);border-color:var(--sub-accent);color:#fff; }
+        .pos-left { background:var(--surface-card);border:1px solid var(--border-soft);border-radius:16px;display:flex;flex-direction:column;overflow:hidden; }
+        .pos-right { background:var(--surface);border:1px solid rgba(var(--sub-accent-rgb),0.4);border-radius:16px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 0 44px rgba(var(--sub-accent-rgb),0.10); }
+        .pos-pane-hdr { padding:14px 20px;border-bottom:1px solid var(--border-soft);display:flex;justify-content:space-between;align-items:center;flex-shrink:0; }
+        .pos-pane-title { margin:0;color:var(--text);font-size:16px;font-weight:700; }
+        /* Cart header carries a faint accent wash so the "money side" of the
+           screen reads as one zone at a glance. */
+        .pos-cart-hdr { background:linear-gradient(180deg, rgba(var(--sub-accent-rgb),0.10), transparent); }
+        .pos-search { background:var(--input-bg);border:1px solid var(--border-mid);padding:9px 14px;border-radius:9px;color:var(--text);width:280px;outline:none;transition:border-color .18s ease, box-shadow .18s ease; }
+        .pos-search::placeholder { color:var(--text-faint); }
+        .pos-search:focus { border-color:var(--sub-accent);box-shadow:0 0 0 3px rgba(var(--sub-accent-rgb),0.15); }
+        .pos-cat-bar { display:flex;gap:8px;padding:12px 16px;border-bottom:1px solid var(--border-soft);overflow-x:auto;flex-shrink:0; }
+        .pos-cat-btn { padding:6px 14px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--border-mid);background:transparent;color:var(--text-dim);white-space:nowrap;transition:background .15s ease, color .15s ease, border-color .15s ease, transform .12s ease; }
+        .pos-cat-btn:hover { border-color:rgba(var(--sub-accent-rgb),0.5);color:var(--text);background:rgba(var(--sub-accent-rgb),0.08); }
+        .pos-cat-btn.active { background:var(--sub-accent);border-color:var(--sub-accent);color:#fff;box-shadow:0 4px 14px rgba(var(--sub-accent-rgb),0.35); }
+        .pos-cat-btn:active { transform:scale(0.96); }
         .pos-product-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px;padding:16px;overflow-y:auto;flex:1; }
-        .pos-card { background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:14px 10px;text-align:center;cursor:pointer;transition:all .15s;user-select:none;position:relative; }
-        .pos-card:hover { transform:translateY(-2px);border-color:var(--sub-accent);background:rgba(255,255,255,0.08); }
+        .pos-card { background:var(--surface-soft);border:1px solid var(--border-soft);border-radius:12px;padding:14px 10px;text-align:center;cursor:pointer;user-select:none;position:relative;will-change:transform;transition:transform .16s cubic-bezier(.2,.8,.2,1), border-color .16s ease, box-shadow .16s ease; }
+        .pos-card:hover { transform:translateY(-3px);border-color:rgba(var(--sub-accent-rgb),0.55);box-shadow:0 10px 22px rgba(0,0,0,0.22); }
+        .pos-card:active { transform:translateY(-1px) scale(0.97); }
         .pos-card-outofstock { opacity:.35;cursor:not-allowed; }
+        .pos-card-outofstock:hover, .pos-card-outofstock:active { transform:none;border-color:var(--border-soft);box-shadow:none; }
         .pos-card-icon { font-size:28px;margin-bottom:8px; }
-        .pos-card-name { color:#fff;font-size:12px;font-weight:600;margin-bottom:4px;line-height:1.3;height:30px;overflow:hidden; }
-        .pos-card-price { color:var(--sub-accent);font-weight:700;font-size:14px; }
-        .pos-card-stock { font-size:10px;color:var(--text-muted);margin-top:3px; }
+        .pos-card-name { color:var(--text);font-size:12px;font-weight:600;margin-bottom:4px;line-height:1.3;height:30px;overflow:hidden; }
+        .pos-card-price { color:var(--sub-accent);font-weight:800;font-size:15px;font-variant-numeric:tabular-nums; }
+        .pos-card-stock { font-size:10px;color:var(--text-faint);margin-top:3px; }
         .pos-cart-items { flex:1;overflow-y:auto;padding:12px 14px; }
-        .pos-cart-row { display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid rgba(255,255,255,0.05);background:rgba(0,0,0,0.2);margin-bottom:5px;border-radius:8px; }
-        .pos-qty-btn { background:rgba(255,255,255,0.1);border:none;color:#fff;width:24px;height:24px;border-radius:5px;cursor:pointer;transition:.1s; }
-        .pos-qty-btn:hover { background:var(--sub-accent); }
-        .pos-summary { padding:16px;background:rgba(0,0,0,0.3);border-top:1px solid rgba(255,255,255,0.08); }
-        .pos-sum-row { display:flex;justify-content:space-between;margin-bottom:8px;color:#94a3b8;font-size:13px; }
-        .pos-grand { display:flex;justify-content:space-between;padding-top:12px;border-top:1px dashed rgba(255,255,255,0.15);color:#fff;font-size:22px;font-weight:800;margin-bottom:12px; }
-        .pos-pay-btns { display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px; }
-        .pos-pay-btn { padding:9px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid rgba(255,255,255,0.15);background:transparent;color:#94a3b8;transition:.15s; }
-        .pos-pay-btn.active { background:var(--sub-accent);border-color:var(--sub-accent);color:#fff; }
-        .pos-checkout-btn { width:100%;padding:15px;background:linear-gradient(135deg,#10b981,#059669);border:none;border-radius:10px;color:#fff;font-weight:700;font-size:17px;cursor:pointer;transition:.2s;box-shadow:0 4px 15px rgba(16,185,129,0.3); }
-        .pos-checkout-btn:hover { transform:translateY(-2px); }
-        .pos-checkout-btn:disabled { opacity:.5;cursor:not-allowed;transform:none; }
+        .pos-cart-row { display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-soft);border:1px solid var(--border-soft);margin-bottom:6px;border-radius:10px; }
+        /* Only the row just added animates (see _renderCart) — re-animating
+           the whole list on every qty change would read as flicker. */
+        .pos-row-new { animation:posRowIn .28s cubic-bezier(.22,1,.36,1) both; }
+        @keyframes posRowIn { from{opacity:0;transform:translateY(-6px) scale(0.98)} to{opacity:1;transform:none} }
+        .pos-item-name { color:var(--text);font-size:13px;font-weight:600; }
+        .pos-item-meta { color:var(--text-faint);font-size:11px;font-variant-numeric:tabular-nums; }
+        .pos-qty-wrap { display:flex;align-items:center;gap:3px;background:var(--input-bg);border:1px solid var(--border-soft);padding:2px;border-radius:8px; }
+        .pos-qty-btn { background:transparent;border:none;color:var(--text);width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;line-height:1;transition:background .12s ease, color .12s ease, transform .12s ease; }
+        .pos-qty-btn:hover { background:var(--sub-accent);color:#fff; }
+        .pos-qty-btn:active { transform:scale(0.88); }
+        .pos-qty-val { color:var(--text);font-size:13px;font-weight:700;min-width:22px;text-align:center;font-variant-numeric:tabular-nums; }
+        .pos-line-total { color:var(--text);font-weight:700;width:64px;text-align:right;font-variant-numeric:tabular-nums; }
+        .pos-remove-btn { background:none;border:none;color:var(--text-faint);cursor:pointer;font-size:14px;width:26px;height:26px;border-radius:6px;transition:background .12s ease, color .12s ease; }
+        .pos-remove-btn:hover { color:#ef4444;background:rgba(239,68,68,0.12); }
+        .pos-empty { display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;color:var(--text-faint);padding-top:44px;font-size:13px; }
+        .pos-empty-icon { font-size:34px;opacity:.5; }
+        .pos-summary { padding:16px;background:var(--surface-soft);border-top:1px solid var(--border-soft); }
+        .pos-sum-row { display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;color:var(--text-dim);font-size:13px;font-variant-numeric:tabular-nums; }
+        .pos-mini-input { background:var(--input-bg);border:1px solid var(--border-mid);border-radius:6px;color:var(--text);text-align:right;outline:none;transition:border-color .15s ease, box-shadow .15s ease; }
+        .pos-mini-input:focus { border-color:var(--sub-accent);box-shadow:0 0 0 2px rgba(var(--sub-accent-rgb),0.15); }
+        .pos-grand { display:flex;justify-content:space-between;align-items:baseline;padding-top:12px;border-top:1px dashed var(--border-mid);margin-bottom:12px; }
+        .pos-grand-label { font-size:12px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px; }
+        .pos-grand-value { font-size:26px;font-weight:800;letter-spacing:-0.5px;color:var(--text);font-variant-numeric:tabular-nums; }
+        .pos-pay-btns { display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:12px; }
+        .pos-pay-btn { padding:9px 4px;border-radius:9px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--border-mid);background:transparent;color:var(--text-dim);transition:background .15s ease, color .15s ease, border-color .15s ease, transform .12s ease; }
+        .pos-pay-btn:hover { border-color:rgba(var(--sub-accent-rgb),0.5);color:var(--text);background:rgba(var(--sub-accent-rgb),0.07); }
+        .pos-pay-btn.active { background:rgba(var(--sub-accent-rgb),0.15);border-color:var(--sub-accent);color:var(--sub-accent);box-shadow:inset 0 0 0 1px var(--sub-accent); }
+        .pos-pay-btn:active { transform:scale(0.96); }
+        .pos-clear-btn { background:none;border:none;color:#ef4444;cursor:pointer;font-size:12px;font-weight:600;padding:4px 8px;border-radius:6px;transition:background .12s ease; }
+        .pos-clear-btn:hover { background:rgba(239,68,68,0.10); }
+        .pos-hold-btn { background:none;border:none;color:#fbbf24;cursor:pointer;font-size:12px;font-weight:600;padding:4px 8px;border-radius:6px;transition:background .12s ease; }
+        .pos-hold-btn:hover { background:rgba(251,191,36,0.10); }
+        .pos-cust-select { background:var(--input-bg);border:1px solid var(--border-mid);border-radius:7px;color:var(--text-dim);padding:6px 10px;font-size:12px;outline:none;transition:border-color .15s ease; }
+        .pos-cust-select:focus { border-color:var(--sub-accent); }
+        .pos-checkout-btn { width:100%;padding:15px;background:linear-gradient(135deg,#10b981,#059669);border:none;border-radius:12px;color:#fff;font-weight:800;font-size:17px;letter-spacing:.2px;cursor:pointer;font-variant-numeric:tabular-nums;box-shadow:0 6px 20px rgba(16,185,129,0.30);transition:transform .16s ease, box-shadow .16s ease, opacity .16s ease; }
+        .pos-checkout-btn:hover { transform:translateY(-2px);box-shadow:0 12px 28px rgba(16,185,129,0.40); }
+        .pos-checkout-btn:active { transform:translateY(0) scale(0.98); }
+        .pos-checkout-btn:disabled { opacity:.45;cursor:not-allowed;transform:none;box-shadow:none; }
+        .pos-cat-btn:focus-visible,.pos-pay-btn:focus-visible,.pos-qty-btn:focus-visible,
+        .pos-remove-btn:focus-visible,.pos-clear-btn:focus-visible,.pos-hold-btn:focus-visible,.pos-checkout-btn:focus-visible,
+        .pos-search:focus-visible,.pos-cust-select:focus-visible { outline:2px solid var(--sub-accent);outline-offset:2px; }
+        @media (prefers-reduced-motion: reduce) {
+          .pos-row-new { animation:none; }
+          .pos-card,.pos-checkout-btn,.pos-cat-btn,.pos-pay-btn,.pos-qty-btn { transition:none; }
+        }
       </style>
       <div class="pos-wrap">
         <div class="pos-left">
           <div class="pos-pane-hdr">
-            <h3 style="margin:0;color:#fff;font-size:17px">Products</h3>
+            <h3 class="pos-pane-title">Products</h3>
             <div style="display:flex;gap:10px;align-items:center">
               <button class="ret-btn ret-btn-ghost ret-btn-sm" id="pos-held-btn" onclick="RetailSystem._openHeldSalesModal()"
                 title="Browse and resume sales you've held">📋 Held (<span id="pos-held-count">0</span>)</button>
@@ -374,19 +518,18 @@ const RetailSystem = {
           </div>
         </div>
         <div class="pos-right">
-          <div class="pos-pane-hdr" style="background:rgba(0,0,0,0.2)">
-            <h3 style="margin:0;color:#fff;font-size:16px">Current Sale</h3>
+          <div class="pos-pane-hdr pos-cart-hdr">
+            <h3 class="pos-pane-title">Current Sale</h3>
             <div style="display:flex;gap:8px;align-items:center">
-              <select id="pos-customer" style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:7px;color:#94a3b8;padding:6px 10px;font-size:12px;outline:none">
+              <select id="pos-customer" class="pos-cust-select">
                 <option value="">Walk-in</option>
               </select>
-              <button onclick="RetailSystem._holdSale()" title="Park this sale and start a new one"
-                style="background:none;border:none;color:#fbbf24;cursor:pointer;font-size:12px;font-weight:600">⏸ Hold</button>
-              <button onclick="RetailSystem._clearCart()" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:12px;font-weight:600">Clear</button>
+              <button class="pos-hold-btn" onclick="RetailSystem._holdSale()" title="Park this sale and start a new one">⏸ Hold</button>
+              <button class="pos-clear-btn" onclick="RetailSystem._clearCart()">Clear</button>
             </div>
           </div>
           <div class="pos-cart-items" id="pos-cart">
-            <div style="text-align:center;color:var(--text-muted);padding-top:40px;font-size:14px">Cart is empty — tap a product to add</div>
+            <div class="pos-empty"><span class="pos-empty-icon">🛒</span><span>Cart is empty — tap a product to add</span></div>
           </div>
           <div class="pos-summary">
             <div class="pos-sum-row"><span>Subtotal</span><span id="pos-sub">$0.00</span></div>
@@ -394,16 +537,16 @@ const RetailSystem = {
               <span>Discount</span>
               <span style="display:flex;gap:6px;align-items:center">
                 <input type="number" id="pos-disc" value="0" min="0" max="100" step="0.5"
-                  style="width:55px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:5px;color:#fff;padding:3px 7px;font-size:12px;text-align:right;outline:none"
+                  class="pos-mini-input" style="width:55px;padding:3px 7px;font-size:12px"
                   oninput="RetailSystem._recalc()" /> %
               </span>
             </div>
             <div class="pos-sum-row"><span>Tax</span><span id="pos-tax">$0.00</span></div>
-            <div class="pos-grand"><span>Total</span><span id="pos-total">$0.00</span></div>
+            <div class="pos-grand"><span class="pos-grand-label">Total</span><span class="pos-grand-value" id="pos-total">$0.00</span></div>
             <div class="pos-sum-row">
               <span>Cash Tendered</span>
               <input type="number" id="pos-tendered" placeholder="0.00" min="0" step="0.01"
-                style="width:90px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:#fff;padding:4px 8px;font-size:14px;text-align:right;outline:none"
+                class="pos-mini-input" style="width:90px;padding:4px 8px;font-size:14px"
                 oninput="RetailSystem._calcChange()" />
             </div>
             <div class="pos-sum-row" id="pos-change-row" style="color:#10b981;font-weight:700;display:none">
@@ -545,6 +688,10 @@ const RetailSystem = {
         line_total: p.sell_price, max_stock: p.total_stock
       });
     }
+    // Presentational: mark which row _renderCart should animate in. Only the
+    // touched row moves — re-animating the whole list on every add/increment
+    // reads as flicker at real cashier speed.
+    this._lastAddedId = productId;
     this._renderCart();
   },
 
@@ -743,25 +890,29 @@ const RetailSystem = {
     const container = document.getElementById('pos-cart');
     if (!container) return;
     if (!this._cart.length) {
-      container.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding-top:40px;font-size:14px">Cart is empty</div>';
+      container.innerHTML = '<div class="pos-empty"><span class="pos-empty-icon">🛒</span><span>Cart is empty — tap a product to add</span></div>';
       this._recalc();
       return;
     }
+    // pos-row-new: entrance animation for the row the cashier just touched
+    // (set by _addToCart), cleared immediately after so qty edits and
+    // removals don't re-trigger it.
+    const newId = this._lastAddedId;
+    this._lastAddedId = null;
     container.innerHTML = this._cart.map((item, i) => `
-      <div class="pos-cart-row">
+      <div class="pos-cart-row${item.product_id === newId ? ' pos-row-new' : ''}">
         <div style="flex:1">
-          <div style="color:#fff;font-size:13px;font-weight:600">${item.name}</div>
-          <div style="color:var(--text-muted);font-size:11px">${this._fmt(item.unit_price)} × ${item.quantity}</div>
+          <div class="pos-item-name">${item.name}</div>
+          <div class="pos-item-meta">${this._fmt(item.unit_price)} × ${item.quantity}</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px">
-          <div style="display:flex;align-items:center;gap:3px;background:rgba(0,0,0,0.3);padding:2px;border-radius:6px">
-            <button class="pos-qty-btn" onclick="RetailSystem._updateQty(${i},-1)">−</button>
-            <span style="color:#fff;font-size:13px;width:22px;text-align:center">${item.quantity}</span>
-            <button class="pos-qty-btn" onclick="RetailSystem._updateQty(${i},1)">+</button>
+          <div class="pos-qty-wrap">
+            <button class="pos-qty-btn" onclick="RetailSystem._updateQty(${i},-1)" title="Decrease">−</button>
+            <span class="pos-qty-val">${item.quantity}</span>
+            <button class="pos-qty-btn" onclick="RetailSystem._updateQty(${i},1)" title="Increase">+</button>
           </div>
-          <span style="color:#fff;font-weight:700;width:62px;text-align:right">${this._fmt(item.line_total)}</span>
-          <button onclick="RetailSystem._cart.splice(${i},1);RetailSystem._renderCart()"
-            style="background:none;border:none;color:#64748b;cursor:pointer;font-size:15px" title="Remove">✕</button>
+          <span class="pos-line-total">${this._fmt(item.line_total)}</span>
+          <button class="pos-remove-btn" onclick="RetailSystem._cart.splice(${i},1);RetailSystem._renderCart()" title="Remove">✕</button>
         </div>
       </div>`).join('');
     this._recalc();

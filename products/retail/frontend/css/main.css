@@ -3413,3 +3413,163 @@ html[data-theme="light"] .cl-modal h3      { color: var(--text); }
     height: 100vh; max-height: 100vh !important; border-radius: 0 !important;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   RETAIL UI/UX POLISH — feat/retail-ui-ux-polish
+   Scope: onboarding/login (auth-*), Dashboard + POS (their own runtime-
+   injected styles in subsystem-retail.js reference the same tokens), and the
+   shared .sub-btn-primary. Everything below builds ON TOP of the existing
+   semantic token system (--sub-accent / --sub-accent-rgb / --surface* /
+   --text* / --border*) rather than introducing a parallel palette, so the
+   light theme and the data-app-theme dark variants keep working unchanged.
+═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── AUTH SCREENS (first-run setup + returning login) ──────────────────────
+   Replaces the old inline-styled modals in app-shell.js. Design intent:
+   - Brand the first impression with the PRODUCT accent (--sub-accent, set by
+     showSetupModal/showReloginModal exactly the way launch() sets it), not
+     the old hardcoded teal that matched nothing else in the app.
+   - Real focus/hover/active states driven by CSS (:focus-visible included),
+     replacing the old onfocus/onblur inline JS border swaps that gave
+     keyboard users no ring at all.
+   - Tokenized surfaces so the card renders correctly in BOTH themes. */
+.auth-overlay {
+  position: fixed; inset: 0; z-index: 99999;
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px; overflow-y: auto;
+  background:
+    radial-gradient(900px 620px at 72% 12%, rgba(var(--sub-accent-rgb),0.10), transparent 60%),
+    radial-gradient(700px 500px at 18% 88%, rgba(var(--sub-accent-rgb),0.05), transparent 60%),
+    rgba(4,6,16,0.93);
+  backdrop-filter: blur(12px);
+}
+html[data-theme="light"] .auth-overlay {
+  background:
+    radial-gradient(900px 620px at 72% 12%, rgba(var(--sub-accent-rgb),0.08), transparent 60%),
+    radial-gradient(700px 500px at 18% 88%, rgba(var(--sub-accent-rgb),0.04), transparent 60%),
+    rgba(238,241,246,0.94);
+}
+
+.auth-card {
+  position: relative; width: 480px; max-width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border-mid);
+  border-radius: 22px;
+  padding: 40px 42px 32px;
+  box-shadow: 0 40px 90px rgba(0,0,0,0.55), 0 0 0 1px rgba(var(--sub-accent-rgb),0.05);
+  overflow: hidden;
+  animation: authCardIn 0.45s cubic-bezier(0.22,1,0.36,1) both;
+}
+html[data-theme="light"] .auth-card { box-shadow: 0 30px 70px rgba(20,32,60,0.18); }
+.auth-card-compact { width: 420px; }
+/* Accent ridge along the top edge — the one loud element on the card. */
+.auth-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  background: linear-gradient(90deg, transparent 4%, var(--sub-accent), transparent 96%);
+}
+@keyframes authCardIn {
+  from { opacity: 0; transform: translateY(16px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+
+.auth-lang-btn {
+  position: absolute; top: 14px; inset-inline-end: 14px;
+  background: none; border: 1px solid var(--border-mid);
+  color: var(--text-dim); border-radius: 8px; padding: 4px 10px;
+  font-size: 12px; cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.auth-lang-btn:hover { background: var(--surface-soft); color: var(--text); }
+.auth-lang-btn:focus-visible { outline: 2px solid var(--sub-accent); outline-offset: 2px; }
+
+.auth-head { text-align: center; margin-bottom: 28px; }
+.auth-icon {
+  width: 66px; height: 66px; border-radius: 18px;
+  margin: 0 auto 16px;
+  display: flex; align-items: center; justify-content: center; font-size: 30px;
+  background: linear-gradient(135deg, rgba(var(--sub-accent-rgb),0.20), rgba(var(--sub-accent-rgb),0.05));
+  border: 1px solid rgba(var(--sub-accent-rgb),0.35);
+  box-shadow: 0 10px 30px rgba(var(--sub-accent-rgb),0.22);
+}
+.auth-title {
+  color: var(--text); margin: 0 0 8px;
+  font-size: 25px; font-weight: 800; letter-spacing: -0.5px;
+}
+.auth-sub { color: var(--text-dim); margin: 0; font-size: 14px; line-height: 1.5; }
+.auth-note {
+  color: var(--text-dim); margin: 12px 0 0; font-size: 12px; line-height: 1.5;
+  background: rgba(var(--sub-accent-rgb),0.07);
+  border: 1px solid rgba(var(--sub-accent-rgb),0.18);
+  border-radius: 8px; padding: 8px 12px;
+}
+.auth-note strong { color: var(--sub-accent); }
+
+.auth-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 520px) { .auth-grid-2 { grid-template-columns: 1fr; } }
+
+.auth-field { margin-bottom: 14px; }
+.auth-field label {
+  display: block; color: var(--text-faint); font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 6px;
+  font-weight: 600;
+}
+.auth-field input {
+  width: 100%; box-sizing: border-box;
+  background: var(--input-bg);
+  border: 1px solid var(--border-mid);
+  border-radius: 10px; color: var(--text);
+  padding: 11px 14px; font-size: 14px; font-family: inherit;
+  outline: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.auth-field input::placeholder { color: var(--text-faint); }
+.auth-field input:hover { border-color: rgba(var(--sub-accent-rgb),0.45); }
+.auth-field input:focus {
+  border-color: var(--sub-accent);
+  box-shadow: 0 0 0 3px rgba(var(--sub-accent-rgb),0.16);
+}
+
+/* JS contract preserved: _setupSubmit/_reloginSubmit toggle inline
+   display:block/none on this element, which overrides the class default. */
+.auth-error {
+  display: none;
+  color: #f87171; font-size: 13px; margin-bottom: 14px;
+  background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.22);
+  border-radius: 8px; padding: 10px 14px;
+  animation: authCardIn 0.25s ease both;
+}
+
+.auth-submit {
+  width: 100%; padding: 14px; margin-top: 6px;
+  border: none; border-radius: 12px;
+  font-size: 15px; font-weight: 700; letter-spacing: 0.3px;
+  color: #fff; cursor: pointer;
+  background: linear-gradient(135deg, var(--sub-accent), rgba(var(--sub-accent-rgb),0.72));
+  box-shadow: 0 10px 26px rgba(var(--sub-accent-rgb),0.32);
+  /* transform/opacity/box-shadow only — compositor-friendly. */
+  transition: transform 0.16s ease, box-shadow 0.16s ease, opacity 0.16s ease;
+}
+.auth-submit:hover { transform: translateY(-1px); box-shadow: 0 14px 32px rgba(var(--sub-accent-rgb),0.42); }
+.auth-submit:active { transform: translateY(0) scale(0.985); }
+.auth-submit:disabled { opacity: 0.55; cursor: wait; transform: none; box-shadow: none; }
+.auth-submit:focus-visible { outline: 2px solid var(--sub-accent); outline-offset: 3px; }
+
+.auth-foot { text-align: center; color: var(--text-faint); font-size: 12px; margin: 16px 0 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-card, .auth-error { animation: none; }
+  .auth-submit, .auth-field input { transition: none; }
+}
+
+/* ── Shared primary button (used by Dashboard's "Open POS") ────────────────
+   Old version put near-black text on the rose accent (poor contrast) and had
+   no press or keyboard-focus state. Declared after the original rule so equal
+   specificity resolves in this block's favor. */
+.sub-btn-primary {
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(var(--sub-accent-rgb),0.28);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, opacity 0.16s ease;
+}
+.sub-btn-primary:hover { opacity: 1; transform: translateY(-1px); box-shadow: 0 10px 24px rgba(var(--sub-accent-rgb),0.4); }
+.sub-btn-primary:active { transform: translateY(0) scale(0.97); }
+.sub-btn-primary:focus-visible { outline: 2px solid var(--sub-accent); outline-offset: 2px; }
