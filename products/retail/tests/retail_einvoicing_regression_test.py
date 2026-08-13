@@ -81,7 +81,17 @@ SALES_TABLE_COLUMNS = [
     'id', 'company_id', 'sale_number', 'branch_id', 'customer_id', 'cashier',
     'subtotal', 'discount_amount', 'tax_amount', 'total', 'amount_paid',
     'change_amount', 'payment_method', 'status', 'idempotency_key', 'notes',
-    'created_at', 'due_date',
+    'created_at',
+    # feat/shift-cash-drawer (schema v10, database/schema.py's
+    # _migrate_add_shift_cash_drawer): sales.session_id -- a real, expected
+    # additive shape change. It lands BEFORE due_date in this list (not
+    # after) because it's added by the versioned schema migration that runs
+    # at app boot (init_app() -> init_retail() -> ensure_schema_version()),
+    # while due_date is added later, lazily, the first time any request
+    # calls _ensure_credit_schema() -- see that function's own addcol('sales',
+    # 'due_date', ...) call. SQLite's PRAGMA table_info always reflects
+    # physical ALTER TABLE order, not declaration/logical order.
+    'session_id', 'due_date',
 ]
 SALE_ITEMS_TABLE_COLUMNS = [
     'id', 'sale_id', 'product_id', 'quantity', 'unit_price', 'discount_pct',
@@ -102,7 +112,10 @@ CUSTOMERS_TABLE_COLUMNS = [
 RETURNS_TABLE_COLUMNS = [
     'id', 'company_id', 'return_number', 'sale_id', 'branch_id', 'cashier',
     'reason', 'refund_method', 'refund_amount', 'status', 'created_at',
-    'idempotency_key',
+    # feat/shift-cash-drawer (schema v10): returns.session_id, same boot-time-
+    # migration-vs-lazy-addcol ordering reasoning as SALES_TABLE_COLUMNS
+    # above -- idempotency_key is also a lazy _ensure_credit_schema addcol.
+    'session_id', 'idempotency_key',
 ]
 BASELINE_THREAD_NAMES = {'MainThread'}
 

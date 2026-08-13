@@ -409,6 +409,14 @@ const RetailSystem = {
     this._activeCat = null;
     this._loadPOSData();
     // The barcode scanner engine is initialised globally in render(); nothing to do here.
+
+    // feat/shift-cash-drawer: mounts a status bar just below the POS header
+    // showing whether a cash session is open for this branch (soft warning
+    // if not -- see cash-drawer.js's own module docstring for why this is
+    // never a hard checkout gate). Guarded so a build that hasn't loaded
+    // cash-drawer.js (e.g. an older cached index.html) still renders the
+    // rest of the POS screen exactly as before.
+    if (window.CashDrawer) CashDrawer.mount(c);
   },
 
   async _loadPOSData() {

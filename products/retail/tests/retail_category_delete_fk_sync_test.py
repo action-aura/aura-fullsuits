@@ -98,14 +98,16 @@ def test_schema_version_is_v6_and_products_fk_declares_on_delete_set_null():
     # _migrate_add_reorder_automation_foundation) bumped it once more to v8,
     # and the email outbox foundation (feat/email-outbox-foundation,
     # database/schema.py's _migrate_add_notifications_foundation) bumped it
-    # once more to v9 -- see RETAIL_SCHEMA_VERSION's own comment for why
-    # that bump is load-bearing, not cosmetic. The FK-on-delete-set-null
-    # assertion this test exists for is unaffected by any of these later
-    # changes.
-    assert retail_schema.RETAIL_SCHEMA_VERSION == 9
+    # once more to v9, and the shift/cash-drawer foundation
+    # (feat/shift-cash-drawer, database/schema.py's
+    # _migrate_add_shift_cash_drawer) bumped it once more to v10 -- see
+    # RETAIL_SCHEMA_VERSION's own comment for why that bump is load-bearing,
+    # not cosmetic. The FK-on-delete-set-null assertion this test exists for
+    # is unaffected by any of these later changes.
+    assert retail_schema.RETAIL_SCHEMA_VERSION == 10
     conn = retail_schema.get_retail_conn()
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
         assert retail_schema._products_category_fk_is_set_null(conn) is True
     finally:
         conn.close()
