@@ -21,6 +21,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.audit.services import record as audit_record
 from app.commercial_sales.catalog_for_sales import describe_plan_for_sale
@@ -155,18 +156,35 @@ def fulfill_order(
         # one.
         subscription = db_session.execute(select(Subscription).where(Subscription.sales_order_id == order.id)).scalars().first()
         if subscription is None:
-            # Canonical service call -- never a direct model-row insert.
-            subscription = create_subscription(
-                {
-                    "customer_id": order.customer_id,
-                    "product_id": plan.product_id,
-                    "plan_id": plan.id,
-                    "sales_order_id": order.id,
-                    "device_allowance": plan.included_device_count,
-                    "sales_owner_staff_user_id": actor_staff_user_id,
-                },
-                actor_staff_user_id,
-            )
+            try:
+                # Canonical service call -- never a direct model-row insert.
+                subscription = create_subscription(
+                    {
+                        "customer_id": order.customer_id,
+                        "product_id": plan.product_id,
+                        "plan_id": plan.id,
+                        "sales_order_id": order.id,
+                        "device_allowance": plan.included_device_count,
+                        "sales_owner_staff_user_id": actor_staff_user_id,
+                    },
+                    actor_staff_user_id,
+                )
+            except IntegrityError:
+                # Real race (item #3): the SELECT ... FOR UPDATE lock above
+                # only holds until create_subscription()'s own internal
+                # commit -- released before this function's own order.status
+                # write, so a concurrent caller can slip through the same
+                # window before that status is visible. uq_subscriptions_one_
+                # per_sales_order (migration 5de3f36f4c21) is the real
+                # backstop: whoever loses this race hits it here and reuses
+                # the winner's row, same as the existing crash-recovery reuse
+                # path above -- never a silent duplicate.
+                db_session.rollback()
+                subscription = db_session.execute(
+                    select(Subscription).where(Subscription.sales_order_id == order.id)
+                ).scalars().first()
+                if subscription is None:
+                    raise
         elif subscription.status not in _RESUMABLE_SUBSCRIPTION_STATUSES:
             # Item #4: an incompatible existing state (e.g. CANCELLED,
             # EXPIRED, SUSPENDED) means something else already happened
