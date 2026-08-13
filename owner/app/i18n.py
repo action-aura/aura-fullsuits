@@ -299,6 +299,11 @@ def init_app(app) -> None:
         (never itself translated or reversed)."""
         if value is None:
             return ""
-        from markupsafe import Markup, escape
+        from markupsafe import Markup
 
-        return Markup(f'<bdi dir="ltr">{escape(value)}</bdi>')
+        # Markup(...).format(value), not an f-string -- markupsafe's Markup.format()
+        # auto-escapes substituted values (unlike a plain f-string, which does not).
+        # Bandit's B704 flags Markup(f"...") because it can't statically verify manual
+        # pre-escaping was applied; .format() is both the provably-safe form and, per
+        # its own escaping guarantee, doesn't need a manual escape() call at all.
+        return Markup('<bdi dir="ltr">{}</bdi>').format(value)
