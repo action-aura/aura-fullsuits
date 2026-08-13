@@ -326,18 +326,6 @@ jobs:
           assert not unaudited, f'new, unaudited potential secret(s): {unaudited} -- review and run: detect-secrets audit .secrets.baseline'
           "
 
-      - name: Upload updated secrets baseline (debug -- captures Linux-computed hashes for any new/unaudited entry)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: secrets-baseline-debug
-          path: .secrets.baseline
-          # REQUIRED: upload-artifact@v4 skips dotfiles by default (same gotcha
-          # as the coverage-shard upload above), and .secrets.baseline starts
-          # with a dot.
-          include-hidden-files: true
-          retention-days: 3
-
       - name: Dependency scanning
         run: |
           pip install pip-audit
