@@ -15,6 +15,8 @@ import requests
 from decimal import Decimal, ROUND_HALF_UP
 from flask import Blueprint, request, jsonify, session, current_app
 from commercial_runtime.identity.mt_auth import mt_login_required, mt_require_subsystem
+from commercial_runtime.identity import device_context
+from commercial_runtime.identity.registry_db import get_conn as _registry_conn
 from commercial_runtime.licensing_contracts.flask_guard import make_capability_guard
 from commercial_runtime.sync.sync_service import nudge as _sync_nudge
 from commercial_runtime.sync.sync_service import get_active_health as _sync_get_active_health
@@ -93,6 +95,30 @@ def _audit(conn, action, entity, entity_id, details=''):
         )
     except Exception:
         pass
+
+# feat/audit-log-viewer: server-side half of the same admin-device gate
+# app-shell.js already uses to hide the Admin Center nav entry (GET
+# /api/devices/me -- see commercial_runtime/identity/device_routes.py).
+# list_reorder_requests() above documents that THAT route relies on
+# client-side hiding alone, with no is_admin_device check of its own,
+# because a stale reorder draft isn't sensitive if someone types the URL.
+# audit_log rows include refund/void trails with real user_id attribution
+# for every user in the company, which is a materially more sensitive
+# surface -- worth the extra real enforcement here rather than trusting
+# nav-hiding alone. Fail-closed by design: resolve_local_device() can raise
+# DeviceCompanyMismatchError/LocalDeviceStateCorruptError (see
+# device_context.py), and ANY failure to affirmatively resolve "this is
+# the admin device" is treated as NOT admin -- never fails open.
+def _is_admin_device(cid):
+    try:
+        conn = _registry_conn()
+        try:
+            device = device_context.resolve_local_device(conn, cid)
+        finally:
+            conn.close()
+        return bool(device and device.get('is_admin_device'))
+    except Exception:
+        return False
 
 def _emit(event_type, payload):
     """Best-effort local event emission. In the source monolith this posted
@@ -2399,6 +2425,79 @@ def void_payment(pid):
         return jsonify({'status': 'success'})
     except Exception as e:
         conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# ── Audit Log (read-only viewer) ────────────────────────────────────────────
+# _audit() above has written to this table from ~26 real call sites (product
+# CRUD, stock adjustments, customer/supplier CRUD, PO lifecycle, reorder
+# accept/decline, returns/refunds, customer/supplier/PO payments, payment
+# voids) since the very first version of this file, with real user_id
+# attribution on every row -- but until this route, nothing ever read it
+# back. Admin-device gated (see _is_admin_device above) rather than visible
+# to every user: this is the one surface in the app that shows what EVERY
+# user in the company did, including reversals of their own sales/refunds.
+@retail_bp.route('/audit-log', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def list_audit_log():
+    cid = _cid()
+    if not _is_admin_device(cid):
+        return jsonify({'status': 'error',
+                         'message': 'The Audit Log is only visible on this company\'s admin device.'}), 403
+
+    conn = get_retail_conn()
+    try:
+        try:
+            page = int(request.args.get('page', 1))
+        except (TypeError, ValueError):
+            page = 1
+        page = max(1, page)
+        try:
+            limit = int(request.args.get('limit', 50))
+        except (TypeError, ValueError):
+            limit = 50
+        limit = max(1, min(limit, 200))  # hard ceiling -- this is a viewer, not a bulk export
+        offset = (page - 1) * limit
+
+        where = ['company_id=?']
+        params = [cid]
+        date_from = request.args.get('date_from')
+        if date_from:
+            where.append('date(timestamp) >= date(?)')
+            params.append(date_from)
+        date_to = request.args.get('date_to')
+        if date_to:
+            where.append('date(timestamp) <= date(?)')
+            params.append(date_to)
+        action = request.args.get('action')
+        if action:
+            where.append('action=?')
+            params.append(action)
+        entity = request.args.get('entity')
+        if entity:
+            where.append('entity=?')
+            params.append(entity)
+        where_sql = ' AND '.join(where)
+
+        total = conn.execute(f'SELECT COUNT(*) FROM audit_log WHERE {where_sql}', params).fetchone()[0]
+        rows = conn.execute(f'''
+            SELECT id, user_id, action, entity, entity_id, details, timestamp
+            FROM audit_log WHERE {where_sql}
+            ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?
+        ''', params + [limit, offset]).fetchall()
+
+        # Real values currently on record for THIS company, not a hardcoded
+        # action/entity list -- so the frontend's filter dropdowns can never
+        # drift out of sync with whatever _audit() call sites actually exist.
+        actions = [r[0] for r in conn.execute(
+            'SELECT DISTINCT action FROM audit_log WHERE company_id=? ORDER BY action', (cid,)).fetchall()]
+        entities = [r[0] for r in conn.execute(
+            'SELECT DISTINCT entity FROM audit_log WHERE company_id=? AND entity IS NOT NULL ORDER BY entity', (cid,)).fetchall()]
+
+        return jsonify({'status': 'success', 'data': [dict(r) for r in rows],
+                         'meta': {'total': total, 'page': page, 'limit': limit,
+                                  'actions': actions, 'entities': entities}})
+    finally:
+        conn.close()
 
 # ── Demo seed/wipe ─────────────────────────────────────────────────────────────
 # Hard production boundary (Phase 1 remediation): these two routes delete data.
