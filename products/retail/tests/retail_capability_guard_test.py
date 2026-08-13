@@ -191,3 +191,42 @@ def test_licensing_status_route_never_blocked(client_and_company):
     _set_state("REVOKED")
     r = c.get('/api/licensing/status')
     assert r.status_code != 403
+
+
+# ── Held sales (feat/pos-hold-resume-sale) ──────────────────────────────────
+# Same gate as POST /sales throughout -- holding/resuming/discarding a
+# parked cart is part of the same "can this install work a new sale at all"
+# workflow, not a separate capability (see retail-restriction-capability-
+# matrix.md's held-sales rows).
+
+def test_restricted_blocks_holding_a_sale(client_and_company):
+    c, _ = client_and_company
+    pid = _seed_product(c)
+    _set_state("RESTRICTED")
+    r = c.post('/api/sub/retail/held-sales', json={'items': [{'product_id': pid, 'quantity': 1, 'line_total': 100}]})
+    assert r.status_code == 403
+    assert r.get_json()["reason_code"] == "LICENSE_INACTIVE"
+
+
+def test_restricted_allows_listing_held_sales(client_and_company):
+    c, _ = client_and_company
+    _seed_product(c)
+    _set_state("RESTRICTED")
+    r = c.get('/api/sub/retail/held-sales')
+    assert r.status_code == 200
+
+
+def test_restricted_blocks_resuming_and_discarding_a_held_sale(client_and_company):
+    c, _ = client_and_company
+    pid = _seed_product(c)
+    held = c.post('/api/sub/retail/held-sales', json={
+        'items': [{'product_id': pid, 'quantity': 1, 'line_total': 100}],
+    })
+    assert held.status_code == 200, held.get_json()
+    held_id = held.get_json()['data']['id']
+
+    _set_state("RESTRICTED")
+    r_resume = c.post(f'/api/sub/retail/held-sales/{held_id}/resume', json={})
+    assert r_resume.status_code == 403
+    r_discard = c.delete(f'/api/sub/retail/held-sales/{held_id}')
+    assert r_discard.status_code == 403

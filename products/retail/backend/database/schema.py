@@ -135,7 +135,53 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # weirdness (DST, backdated imports, clock skew across devices), the same
 # reasoning `sync_outbox` already relies on entity ids for, never timestamps,
 # to identify what a relayed event is actually about.
-RETAIL_SCHEMA_VERSION = 10
+# v11 (feat/pos-hold-resume-sale): adds the held_sales table (park/resume a
+# sale on the POS screen). CREATE TABLE IF NOT EXISTS only -- no existing
+# table is ALTERed, read, or written, same "pure additive" shape as v8/v9.
+#
+# *** RENUMBERED AT INTEGRATION TIME, TWICE -- this branch originally
+# shipped as v4, cut from an old point of feat/retail-mobile-build-baseline
+# (RETAIL_SCHEMA_VERSION was 3 there at the time; see git history on
+# feat/pos-hold-resume-sale for that original commit's own collision-risk
+# note, which correctly predicted this renumbering would be needed). The
+# ROADMAP.md ledger (2026-08-12) reserved v9 for this feature, but
+# feat/email-outbox-foundation claimed v9 first (merged into this lineage
+# ahead of held-sales landing) -- verified directly by reading this file at
+# feat/email-outbox-foundation's tip before renumbering, not assumed from
+# the ledger alone. This branch was first rebased onto that v9 tip and
+# renumbered to v10 -- but before that landed, feat/shift-cash-drawer
+# (commit 41d24cf, cash_sessions/cash_movements/X-Z reports) independently
+# claimed v10 for real, directly on the SAME v9 base (83b5bcb), and that
+# commit exists with its own passing tests. So v10 is now taken by a
+# sibling branch this task is explicitly scoped to never touch or merge
+# with -- v11 is the actual next-free number, verified the same way (read
+# feat/shift-cash-drawer's schema.py directly, not inferred). There is
+# consequently a deliberate GAP at v10 in THIS branch's own migration
+# chain -- it never claims or runs anything for "v10" because that number
+# belongs to a different, unmerged branch's schema change. This is
+# harmless: ensure_schema_version only cares that the target integer is
+# higher than whatever a real database's PRAGMA user_version currently is,
+# never that every integer up to it was independently used by THIS
+# lineage (see this file's own v1-v3 vs. master's superseded v2/v3
+# numbering, above, for the precedent). Whoever eventually reconciles
+# feat/pos-hold-resume-sale with feat/shift-cash-drawer at real merge time
+# will need to pick a final relative order and may renumber one of them
+# again -- that is their decision, not made here.
+#
+# `held_sales.customer_id` is TEXT here (not the original commit's INTEGER)
+# to match `customers.id`, which is UUID TEXT on this lineage since the
+# multi-device sync foundation's v1->v4 migrations (see
+# _migrate_customers_to_uuid below) -- an INTEGER-declared column would
+# still physically store a UUID string fine (SQLite column affinity is
+# soft), but a declared type that lies about the real shape of the data is
+# a bug waiting to bite the next reader/writer, so it's fixed here rather
+# than carried forward. See _migrate_add_held_sales below for the
+# corresponding table definition and subsystem-retail.js's _saveHold() for
+# the matching frontend fix (was `+customerId`, a numeric coercion that
+# silently turned every UUID customer id into NaN -> null -- the exact
+# `+`-coercion-on-an-id-field bug pattern ROADMAP.md's 2026-08-12 entry
+# flagged whoever reconciled this branch to grep for).
+RETAIL_SCHEMA_VERSION = 11
 
 
 def _get_path(name):
@@ -849,6 +895,11 @@ def _migrate_retail_schema(conn):
     # v9 -> v10 (feat/shift-cash-drawer): appended LAST, same reasoning again
     # -- see the RETAIL_SCHEMA_VERSION v10 comment above.
     _migrate_add_shift_cash_drawer(conn)
+    # v10 -> v11 (feat/pos-hold-resume-sale): appended LAST, same reasoning
+    # again -- see the RETAIL_SCHEMA_VERSION v11 comment above for the full
+    # renumbering/collision story. Runs after shift-cash-drawer since both
+    # branches were reconciled together at this merge.
+    _migrate_add_held_sales(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -1194,6 +1245,70 @@ def _migrate_add_shift_cash_drawer(conn):
         if 'session_id' not in returns_cols:
             conn.execute('ALTER TABLE returns ADD COLUMN session_id TEXT REFERENCES cash_sessions(id)')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_returns_session ON returns(session_id)')
+
+
+def _migrate_add_held_sales(conn):
+    """One-time migration (schema v9 -> v11, deliberately skipping v10 --
+    see RETAIL_SCHEMA_VERSION's comment for the full collision story with
+    feat/shift-cash-drawer, which claimed v10 on the same base): hold/resume
+    sale ("park a cart") on the POS screen (feat/pos-hold-resume-sale). Adds
+    the held_sales table. CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT
+    EXISTS only -- no existing table is ALTERed, read, or written, identical
+    shape to v7/v8/v9's additive migrations above.
+
+    A held sale is PRE-completion cart state -- a cashier's in-progress
+    draft, never a commercial transaction -- so this is deliberately its own
+    table, never a row in `sales`/`sale_items`. `subtotal`/`total` here are
+    DISPLAY-ONLY (rendered in the resume picker) -- they are never read by
+    create_sale/POST /sales, which always recomputes the real, authoritative
+    figures from live product data the same way it does for any freshly-
+    built cart (AUDIT-002/AUDIT-003's server-authority guarantee is
+    unchanged; this table sits entirely outside that financial-authority
+    boundary). `cart_json` carries the full line-item snapshot
+    (product_id/quantity/unit_price/tax_rate/line_total/max_stock, mirroring
+    RetailSystem._cart's own shape) plus discount_pct/payment_method/
+    customer_id so a resume can repopulate the POS screen exactly as it was
+    left.
+
+    `customer_id` is TEXT, not INTEGER -- unlike the original commit this
+    migration was renumbered from (schema v3 -> v4 on an old base where
+    customers.id was still a plain autoincrement integer), customers.id is
+    UUID TEXT on this lineage as of _migrate_customers_to_uuid above, so the
+    declared column type is fixed here to match the real shape of the value
+    it stores. `branch_id` stays INTEGER -- branches.id was never part of
+    the UUID migration (see _migrate_categories_to_uuid/_migrate_products_
+    to_uuid/_migrate_customers_to_uuid/_migrate_suppliers_to_uuid above;
+    branches was never in that list).
+
+    Local-only, NOT part of commercial_runtime/sync/'s outbox -- a mid-edit
+    cart isn't a natural sync entity (two devices don't need to see each
+    other's in-progress carts, and syncing this table would require solving
+    conflict resolution this feature doesn't need to take on); explicit
+    scope decision, not an oversight.
+
+    Idempotent: CREATE TABLE/INDEX already use IF NOT EXISTS, so a second
+    call -- or a fresh install migrating 0 -> 11 in one pass, same as every
+    step above -- is a clean no-op.
+    """
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS held_sales (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER DEFAULT 1,
+            branch_id INTEGER,
+            customer_id TEXT,
+            hold_number TEXT,
+            label TEXT DEFAULT '',
+            cart_json TEXT NOT NULL,
+            item_count INTEGER DEFAULT 0,
+            subtotal REAL DEFAULT 0,
+            total REAL DEFAULT 0,
+            held_by TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (customer_id) REFERENCES customers(id),
+            FOREIGN KEY (branch_id) REFERENCES branches(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_held_sales_company ON held_sales(company_id, created_at);
+    """)
 
 
 def init_retail():
