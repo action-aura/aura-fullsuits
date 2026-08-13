@@ -1,9 +1,14 @@
 """week2_cash_closing_submitted_by
 
 Revision ID: 56216a528eff
-Revises: 86e9229f85c1
+Revises: 5de3f36f4c21
 Create Date: 2026-08-10 00:00:00.000000
 
+Rebased down_revision from 86e9229f85c1 (this commit's original branch point,
+before it diverged from master) to 5de3f36f4c21 (master's actual current
+head as of this cherry-pick) -- the original value would have created a
+second migration head/branch, which `alembic check`'s real CI job (E-W0.3)
+would have caught.
 """
 from alembic import op
 import sqlalchemy as sa
@@ -11,7 +16,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision = '56216a528eff'
-down_revision = '86e9229f85c1'
+down_revision = '5de3f36f4c21'
 branch_labels = None
 depends_on = None
 
