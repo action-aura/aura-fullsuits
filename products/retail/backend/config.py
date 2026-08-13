@@ -176,8 +176,9 @@ SYNC_RELAY_URL_PROBLEMS = validate_sync_relay_url(SYNC_RELAY_BASE_URL)
 
 # ── AI Assistant (Retail sidebar chat) ──────────────────────────────────────
 # Proxies the sidebar "AI Assistant" button (see app-shell.js's `hasAI` /
-# `sub-ai.js`'s SubAI module) to a small hosted LLM (phi3:mini behind an
-# Ollama-compatible /api/generate endpoint). The URL defaults to the
+# `sub-ai.js`'s SubAI module) to a small hosted LLM (phi3.5:3.8b as of
+# 2026-08-13, see AURA_AI_MODEL_NAME below, behind an Ollama-compatible
+# /api/generate endpoint). The URL defaults to the
 # demo droplet since it's not secret and the feature is meaningless without
 # it -- defaulting it on is what makes the button work out of the box instead
 # of shipping another "looks wired, does nothing" control. The bearer token
@@ -198,3 +199,22 @@ AURA_AI_BEARER_TOKEN = os.environ.get('AURA_AI_BEARER_TOKEN', '')
 # own output length too, so this is a safety margin on top of that cap, not
 # the only mitigation.
 AURA_AI_TIMEOUT_SECONDS = float(os.environ.get('AURA_AI_TIMEOUT_SECONDS', '45'))
+
+# 2026-08-13: switched the deployed model from phi3:mini to phi3.5:3.8b after
+# real, on-droplet benchmarking (same CPU-only 4vCPU/8GB droplet, same
+# realistic "How do I add a new product?" prompt, same num_predict=150 cap
+# used in production -- via direct curl against http://localhost:11434,
+# not assumed). Measured generation throughput: phi3:mini ~6.6 tok/s vs phi3.5:3.8b
+# ~8.5-9.4 tok/s (roughly 30-40% faster) at the SAME disk footprint (2.2GB)
+# and the same resident-memory class (~3.9GB while loaded) -- a strict
+# improvement, not a resize. Two larger 7B-class candidates (qwen2.5:7b,
+# and qwen2.5:3b as a smaller/faster-hoped-for option) were also pulled and
+# benchmarked on the same droplet; qwen2.5:7b was ~3.4 tok/s with a ~20s
+# cold-load alone (would blow the 45s timeout on a full-length reply) and
+# qwen2.5:3b was slower per-token than phi3.5:3.8b despite being smaller
+# (5.96 tok/s) -- both were deleted from the droplet after benchmarking
+# (`ollama rm`), not left installed. phi3:mini itself is deliberately left
+# installed (not deleted) as an instant rollback -- set AURA_AI_MODEL_NAME
+# back to 'phi3:mini' with no droplet changes needed if phi3.5:3.8b ever
+# regresses in practice.
+AURA_AI_MODEL_NAME = os.environ.get('AURA_AI_MODEL_NAME', 'phi3.5:3.8b')

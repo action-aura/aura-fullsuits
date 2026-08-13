@@ -26,7 +26,10 @@ from database.schema import get_retail_conn, sub_create
 from datetime import datetime, timedelta, timezone
 from core.retail import pricing as tax_engine
 from core.retail import po_split
-from config import DATABASE_DIR, AURA_AI_ENDPOINT_URL, AURA_AI_BEARER_TOKEN, AURA_AI_TIMEOUT_SECONDS
+from config import (
+    DATABASE_DIR, AURA_AI_ENDPOINT_URL, AURA_AI_BEARER_TOKEN, AURA_AI_TIMEOUT_SECONDS,
+    AURA_AI_MODEL_NAME,
+)
 
 retail_bp = Blueprint('retail_api', __name__, url_prefix='/api/sub/retail')
 
@@ -2733,12 +2736,15 @@ AI_SYSTEM_PREFACE = (
     "unless the user explicitly asks for step-by-step detail."
 )
 
-# Small model (phi3:mini, ~4GB) on a small CPU-only droplet -- keep the
-# prompt itself small so latency stays reasonable. Caps mirror
+# Small model (phi3.5:3.8b as of 2026-08-13, ~4GB resident; see config.py's
+# AURA_AI_MODEL_NAME comment for the benchmark that picked it over phi3:mini
+# and two larger 7B-class candidates) on a small CPU-only droplet -- keep
+# the prompt itself small so latency stays reasonable. Caps mirror
 # _AI_HISTORY_TURNS below. Real measured throughput on this droplet is
-# ~7 tokens/sec, so _AI_REPLY_MAX_TOKENS bounds worst-case generation time
-# almost as much as prompt size does -- see _AI_REPLY_MAX_TOKENS' own
-# comment for the incident that made this explicit.
+# ~8.5-9.4 tokens/sec (phi3:mini's baseline was ~6.6-7), so
+# _AI_REPLY_MAX_TOKENS bounds worst-case generation time almost as much as
+# prompt size does -- see _AI_REPLY_MAX_TOKENS' own comment for the incident
+# that made this explicit.
 _AI_MESSAGE_MAX_CHARS = 4000
 _AI_HISTORY_TURN_MAX_CHARS = 2000
 _AI_HISTORY_TURNS = 10
@@ -2755,14 +2761,169 @@ _AI_HISTORY_TURNS = 10
 _AI_REPLY_MAX_TOKENS = 150
 
 
-def _build_ai_prompt(message, history):
-    """phi3:mini via /api/generate takes one flat prompt string, not a
+# ── AI Assistant retrieval context (RAG) -- 2026-08-13 ──────────────────────
+# THE single place real business data is allowed to enter the AI prompt.
+# Server-side retrieval ONLY: the model is never given database access, a
+# tool, or any ability to run its own query -- it only ever sees the small,
+# pre-filtered, already company-scoped text _build_ai_context() returns
+# below. Every query in this block filters on company_id=cid using the SAME
+# _cid() value every other route in this file scopes its reads/writes to
+# (see this file's `_cid()` near the top) -- per CLAUDE.md's "every business
+# table is company_id-scoped" rule, a query here that skipped that filter
+# would be a real cross-tenant data leak into an LLM prompt, not a
+# simplification. See retail_ai_rag_multitenant_test.py for the isolation
+# test this rule is verified against.
+#
+# Kept intentionally small and cheap: a lightweight keyword match on the
+# user's OWN message (never the model's output) picks AT MOST one data
+# category, so an irrelevant message ("hello") costs nothing extra and a
+# real business question costs exactly one indexed, LIMIT-bounded query --
+# never a full-table dump. This can't be "dump the whole database into every
+# prompt" both because the CPU-bound model can't afford the extra prompt
+# tokens (see _AI_MESSAGE_MAX_CHARS' comment above) and because a company
+# could plausibly have thousands of products/sales rows.
+_AI_CONTEXT_MAX_CHARS = 600
+
+_AI_INTENT_KEYWORDS = {
+    # Dict order = match priority: 'low_stock' is checked before the generic
+    # 'products' bucket so "what's low on stock" / "what needs reordering"
+    # returns the actual low-stock list, not just a plain product count.
+    'low_stock': ('low stock', 'low on stock', 'reorder', 'running out', 'running low', 'restock', 'out of stock'),
+    'sales':     ('sale', 'sales', 'revenue', 'sold', 'transaction', 'best seller', 'top seller', 'top product', 'income'),
+    'customers': ('customer', 'client'),
+    'suppliers': ('supplier', 'vendor'),
+    'products':  ('product', 'item', 'sku', 'inventory', 'catalog', 'stock'),
+}
+
+
+def _detect_ai_intent(message):
+    """Keyword match ONLY on the user's message text -- cheap, deterministic,
+    no model call involved in deciding what to fetch. Returns the first
+    matching category (see _AI_INTENT_KEYWORDS' ordering note) or None if the
+    message doesn't look like a business-data question at all."""
+    text = message.lower()
+    for category, keywords in _AI_INTENT_KEYWORDS.items():
+        if any(kw in text for kw in keywords):
+            return category
+    return None
+
+
+def _ai_context_low_stock(conn, cid):
+    rows = conn.execute("""
+        SELECT p.name, p.sku, COALESCE(b.qty, 0) as on_hand, p.reorder_level
+        FROM products p
+        LEFT JOIN (SELECT product_id, SUM(quantity_on_hand) as qty
+                   FROM inventory_balances WHERE company_id=? GROUP BY product_id) b ON p.id=b.product_id
+        WHERE p.company_id=? AND p.status='active' AND COALESCE(b.qty,0) <= p.reorder_level
+        ORDER BY COALESCE(b.qty,0) ASC LIMIT 5
+    """, (cid, cid)).fetchall()
+    if not rows:
+        return "Low-stock check: no products are currently at or below their reorder level."
+    items = '; '.join(f"{r['name']} ({r['on_hand']:.0f} on hand, reorder level {r['reorder_level']:.0f})" for r in rows)
+    return f"Low-stock products (most urgent first, showing up to 5): {items}."
+
+
+def _ai_context_products(conn, cid):
+    total = conn.execute(
+        "SELECT COUNT(*) FROM products WHERE company_id=? AND status='active'", (cid,)
+    ).fetchone()[0] or 0
+    examples = conn.execute(
+        "SELECT name, sku FROM products WHERE company_id=? AND status='active' "
+        "ORDER BY created_at DESC LIMIT 3", (cid,)
+    ).fetchall()
+    text = f"This company has {total} active product(s)."
+    if examples:
+        text += " Examples: " + ', '.join(f"{r['name']} (SKU {r['sku']})" for r in examples) + "."
+    return text
+
+
+def _ai_context_sales(conn, cid):
+    today = datetime.now().strftime('%Y-%m-%d')
+    today_row = conn.execute(
+        "SELECT COALESCE(SUM(total),0) as rev, COUNT(*) as cnt FROM sales WHERE company_id=? AND date(created_at)=?",
+        (cid, today)
+    ).fetchone()
+    top = conn.execute("""
+        SELECT p.name, SUM(si.quantity) as units
+        FROM sale_items si JOIN products p ON si.product_id=p.id JOIN sales s ON si.sale_id=s.id
+        WHERE s.company_id=? GROUP BY p.id ORDER BY units DESC LIMIT 3
+    """, (cid,)).fetchall()
+    text = f"Today's sales: {today_row['rev']:.2f} total across {today_row['cnt']} transaction(s)."
+    if top:
+        text += " Top-selling products overall: " + ', '.join(f"{r['name']} ({r['units']:.0f} sold)" for r in top) + "."
+    return text
+
+
+def _ai_context_customers(conn, cid):
+    total = conn.execute("SELECT COUNT(*) FROM customers WHERE company_id=?", (cid,)).fetchone()[0] or 0
+    return f"This company has {total} customer(s) on file."
+
+
+def _ai_context_suppliers(conn, cid):
+    total = conn.execute(
+        "SELECT COUNT(*) FROM suppliers WHERE company_id=? AND status='active'", (cid,)
+    ).fetchone()[0] or 0
+    return f"This company has {total} active supplier(s) on file."
+
+
+_AI_CONTEXT_BUILDERS = {
+    'low_stock': _ai_context_low_stock,
+    'products':  _ai_context_products,
+    'sales':     _ai_context_sales,
+    'customers': _ai_context_customers,
+    'suppliers': _ai_context_suppliers,
+}
+
+
+def _build_ai_context(cid, message):
+    """Fetch a small, real, company-scoped data summary for the ONE category
+    (if any) _detect_ai_intent() matched. `cid` must be the caller's own
+    _cid() -- never trust a company id from the request body, there isn't
+    one; this function only ever takes the value the session already
+    resolved, same as every other route. Returns '' (no extra context, no
+    extra query) for anything that doesn't look like a business question."""
+    category = _detect_ai_intent(message)
+    if not category:
+        return ''
+    builder = _AI_CONTEXT_BUILDERS.get(category)
+    if not builder:
+        return ''
+    conn = get_retail_conn()
+    try:
+        text = builder(conn, cid)
+    except Exception as e:
+        # Real business data is a nice-to-have for a sharper answer, never a
+        # requirement -- a query failure here (locked DB, unusual
+        # mid-migration schema state, etc. -- see CLAUDE.md's Sync section)
+        # must degrade to a plain chatbot reply, not break the whole route.
+        current_app.logger.warning('AI context lookup failed for category=%s: %s', category, type(e).__name__)
+        text = ''
+    finally:
+        conn.close()
+    return text[:_AI_CONTEXT_MAX_CHARS]
+
+
+def _build_ai_prompt(message, history, context=''):
+    """Ollama's /api/generate (used for both phi3:mini and phi3.5:3.8b, the
+    small models this route has run) takes one flat prompt string, not a
     structured chat-messages array, so multi-turn context has to be
     flattened here. `history` is the optional client-supplied
     [{role, content}] list -- only the most recent turns are kept and each
     turn is truncated, so a long-running chat session can't balloon the
-    prompt sent to a 4GB model on a small droplet."""
-    lines = [AI_SYSTEM_PREFACE, '']
+    prompt sent to a ~4GB model on a small CPU-only droplet. `context`, if
+    non-empty, is the server-fetched, already company-scoped data summary
+    from _build_ai_context() -- injected as its own labeled block so the
+    model can tell it apart from conversation history, with an explicit
+    instruction not to invent numbers when real data was/wasn't supplied."""
+    lines = [AI_SYSTEM_PREFACE]
+    if context:
+        lines.append('')
+        lines.append(
+            "Real data for this business (use these exact figures if relevant; "
+            "do not invent numbers not shown here):"
+        )
+        lines.append(context)
+    lines.append('')
     for turn in (history or [])[-_AI_HISTORY_TURNS:]:
         if not isinstance(turn, dict):
             continue
@@ -2784,7 +2945,16 @@ def ai_chat():
     response returns a clean 503 JSON error -- never a 500/stack trace --
     that the frontend renders as "AI assistant is temporarily unavailable."
     The bearer token lives only in this process's env/config; it is never
-    included in the response sent to the browser."""
+    included in the response sent to the browser.
+
+    2026-08-13: now also injects a small, server-fetched, company-scoped
+    business-data summary (see _build_ai_context()) so the assistant can
+    answer real questions like "how many products do I have" instead of
+    being a pure text chatbot with no access to this install's data. `cid`
+    is resolved via _cid() -- the SAME session-derived company id every
+    other route in this file uses -- BEFORE any DB read, so a user can only
+    ever get their own company's data injected into their own chat prompt."""
+    cid = _cid()
     data = request.get_json(silent=True) or {}
     message = str(data.get('message') or '').strip()[:_AI_MESSAGE_MAX_CHARS]
     if not message:
@@ -2794,14 +2964,15 @@ def ai_chat():
     if not isinstance(history, list):
         history = []
 
-    prompt = _build_ai_prompt(message, history)
+    context = _build_ai_context(cid, message)
+    prompt = _build_ai_prompt(message, history, context)
 
     try:
         resp = requests.post(
             AURA_AI_ENDPOINT_URL,
             headers={'Authorization': f'Bearer {AURA_AI_BEARER_TOKEN}'},
             json={
-                'model': 'phi3:mini', 'prompt': prompt, 'stream': False,
+                'model': AURA_AI_MODEL_NAME, 'prompt': prompt, 'stream': False,
                 'options': {'num_predict': _AI_REPLY_MAX_TOKENS},
             },
             timeout=AURA_AI_TIMEOUT_SECONDS,

@@ -5,9 +5,11 @@
  * already shipped in css/main.css: `.sub-ai-panel`, `.ai-orb`,
  * `.ai-input-bar textarea`) to a real backend proxy at
  * POST /api/sub/<systemId>/ai/chat (products/retail/backend/api/retail_api.py
- * -- `ai_chat()`), which in turn calls a hosted phi3:mini model. See that
- * route's docstring for the server-side timeout/error-handling contract this
- * module relies on: every failure mode (timeout, connection error, non-200,
+ * -- `ai_chat()`), which in turn calls a hosted small LLM (phi3.5:3.8b as of
+ * 2026-08-13 -- see backend/config.py's AURA_AI_MODEL_NAME comment for the
+ * on-droplet benchmark that picked it). See that route's docstring for the
+ * server-side timeout/error-handling contract this module relies on: every
+ * failure mode (timeout, connection error, non-200,
  * empty reply) comes back as `{success:false, error:'...'}` with a friendly
  * message, never a raw 500.
  *
