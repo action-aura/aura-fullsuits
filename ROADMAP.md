@@ -253,3 +253,120 @@ passed after each merge: `PRAGMA user_version` = 8, `PRAGMA integrity_check`
 **Still pending, unchanged:** `feat/pos-hold-resume-sale` (v9) — flagged by
 its own author for explicit human sign-off before merging this close to the
 demo; that stands, not merged here.
+
+## 2026-08-13 — Four more branches merged onto feat/retail-mobile-build-baseline (RETAIL_SCHEMA_VERSION now 9)
+
+Continuation of the batch above. All four were pre-verified in isolated
+worktrees, based on the same `ab01d4f` tip (`feat/reorder-automation-foundation`)
+already merged into this branch, so each was a comparatively clean 3-way
+merge. Executed in the specified order — three additive/no-schema-change
+branches first, the schema-version writer last — with a full individual-file
+retail regression run + a fresh-temp-dir boot/schema smoke test after each
+step. All four landed clean; zero conflicts required a judgment call across
+any of the four (git's 3-way merge auto-resolved everything, including the
+two overlapping touches on `app-shell.js` and the three overlapping touches
+on `retail_api.py`, since each branch's edits landed in different regions of
+those files). `feat/pos-hold-resume-sale` and the AI Assistant RAG/model-
+upgrade work (`feat/ai-assistant-rag-and-model-upgrade`, currently active on
+its own branch) were both deliberately left untouched, as instructed.
+
+1. **`feat/reports-branch-comparison`** → merge commit `ac91664`. Adds
+   `GET /reports/by-branch` and an optional `branch_id` filter on existing
+   reports routes, plus a branch-comparison chart. No schema change; default
+   (no `branch_id`) behavior previously verified byte-identical via MD5.
+   Touched `retail_api.py` and `subsystem-retail.js` only — auto-merged
+   cleanly against the drift already on this branch from
+   `feat/sales-invoices-screen`'s earlier `retail_api.py` changes (different
+   regions of the file).
+2. **`feat/audit-log-viewer`** → merge commit `bcbcf18`. Read-only audit log
+   viewer reading the existing `audit_log` table (populated by `_audit()`
+   since the first version of `retail_api.py`, 26 call sites, never read
+   back until now). Real server-side admin-device gate on the route itself
+   (`_is_admin_device()`, fail-closed on any resolution error — not just
+   nav-hiding), verified by reading the diff directly. One nav-entry addition
+   to `app-shell.js` right after Admin Center's entry — additive, no
+   conflict. No schema change.
+3. **`feat/sync-freshness-indicator`** → merge commit `c819191`. Replaces
+   the failure-only sync banner with a calm, persistent "Synced Ns ago · N
+   pending" state sharing the same `#aura-sync-banner` element with the
+   original full-width alarm state (unchanged, still triggers at
+   `SYNC_DEGRADED_THRESHOLD`+ consecutive failures). Touches
+   `commercial_runtime/sync/sync_service.py` (adds `pending_count` to
+   `get_health()`) and `app-shell.js`'s sync-banner functions (~line 795+) —
+   a completely different region from audit-log-viewer's nav-entry addition
+   (~line 258), so no conflict despite both branches touching the same file.
+   No schema change.
+4. **`feat/email-outbox-foundation`** → merge commit `6f8c776`. Schema-
+   version writer: bumps `RETAIL_SCHEMA_VERSION` 8→9. Adds
+   `commercial_runtime/notifications/` (SMTP outbox, worker, tokens,
+   settings — mirrors the e-invoicing outbox pattern, per this repo's
+   established convention for external-facing async features), plus
+   low-stock/report/verification email triggers wired into `retail_api.py`,
+   `app.py`'s `init_app()`, and `core/retail/reorder_hook.py`. Also extends
+   two existing test files (`retail_category_delete_fk_sync_test.py`,
+   `retail_reorder_migration_test.py`) — verified before merging that both
+   were byte-identical between `ab01d4f` and this branch's merge base, so
+   the patches applied cleanly with no interleaving-edit risk. `retail_api.py`
+   auto-merged cleanly against the accumulated changes from merges 1–2
+   above (three branches touching the same file, three different regions).
+
+**Schema-version ledger correction:** the 2026-08-12 ledger above reserved
+v9 for `feat/pos-hold-resume-sale` ("rebases onto v8 once merged; do not
+claim v8"). `feat/email-outbox-foundation` was *not* on that ledger and
+also branched from the v8 tip (`ab01d4f`) claiming v9 independently — a
+genuine collision on the single-writer resource the ledger exists to
+prevent, caught here rather than at merge time by chance (the two branches
+never touched schema.py's version comment in a way git would conflict on;
+`_migrate_retail_schema` gates on live schema shape, not the version
+integer, so this would NOT have failed loudly if merged in the wrong order
+either). Net effect: `RETAIL_SCHEMA_VERSION` is now genuinely 9 via
+email-outbox-foundation. `feat/pos-hold-resume-sale`, when it merges, must
+be rebased to claim **v10**, not v9 — its own migration code (adding
+`held_sales` and friends) has not been reconciled with this. The previous
+ledger's "v10 — reserved for shift/cash-drawer" is bumped to **v11**
+accordingly. Both `feat/pos-hold-resume-sale` and `feat/shift-cash-drawer`
+are active on their own branches right now — whoever merges either next
+should re-read this correction first, not just the original ledger.
+
+**Regression status:** all `products/retail/tests/*.py` files, run
+individually (per this codebase's known cross-file test-pollution issue),
+after *each* of the four merges:
+- After merge 1 (reports-branch-comparison): 31 files (30 + new
+  `retail_report_branch_filter_test.py`), 363 tests, 0 failures / 0 errors.
+- After merge 2 (audit-log-viewer): 32 files (+ `retail_audit_log_test.py`),
+  0 failures / 0 errors.
+- After merge 3 (sync-freshness-indicator): 32 files, 0 failures / 0
+  errors. Also ran `commercial_runtime/sync/tests/test_sync_service.py`
+  directly (not part of the retail suite) — 38 passed.
+- After merge 4 (email-outbox-foundation, final): 33 files (+
+  `retail_email_outbox_test.py`), 0 failures / 0 errors. Also ran all of
+  `commercial_runtime/notifications/tests/*.py` directly — 47 passed
+  (`test_outbox_repository` 13, `test_settings` 11, `test_smtp_client` 9,
+  `test_tokens` 5, `test_worker` 9).
+
+Boot + schema-migration smoke test (fresh `tempfile.mkdtemp()` data dir,
+`AURA_STANDALONE=1`, no `OWNER_LICENSING_BASE_URL`/`SYNC_RELAY_BASE_URL`
+set, deleted after each run — no real `AURA_APP_DATA`/`dist*`/demo database
+touched at any point) passed after each of the four merges: `PRAGMA
+user_version` = 8 (merges 1–3), then 9 (merge 4); `PRAGMA integrity_check`
+= `ok` throughout. After merge 4 specifically, also verified on the fresh
+install that both the v8 shape (`products.reorder_method`,
+`reorder_requests`) and the new v9 tables
+(`email_settings`/`email_outbox`/`email_verification_tokens`) are present.
+
+**Untouched, as instructed:** `feat/pos-hold-resume-sale` (still not an
+ancestor of HEAD — confirmed via `git merge-base --is-ancestor`) and the AI
+Assistant RAG/model-upgrade work (`feat/ai-assistant-rag-and-model-upgrade`,
+confirmed still exactly at `25279c8`, its merge-base with HEAD — i.e.
+untouched, not diverged). `owner/`, `docs/owner/`, `android/`, `dist/`,
+`dist2/` all confirmed unchanged across all four merge commits. Nothing
+pushed to any remote — branch remains local-only, `ahead 20` of
+`origin/feat/retail-mobile-build-baseline`.
+
+**Tooling note:** `rtk`'s compact `git log` filter was observed dropping
+merge commits from `--oneline` output entirely during this session (showing
+a branch tip commit as HEAD instead of the actual merge commit on top of
+it) — misleading enough that it looked like a merge hadn't happened.
+`git rev-parse`, `git reflog`, and `git show --stat` were reliable and used
+for all verification in this entry instead. Worth a closer look before
+trusting `rtk git log` output around merge commits again.
