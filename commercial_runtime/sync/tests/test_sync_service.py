@@ -826,6 +826,34 @@ def test_health_failure_reason_is_the_relay_reason_code_never_a_raw_message(get_
     assert "owner.example.invalid" not in reason
 
 
+def test_get_health_reports_zero_pending_count_on_an_empty_outbox(get_conn):
+    service = SyncService(lambda: FakeRelayClient(), get_conn)
+
+    assert service.get_health()["pending_count"] == 0
+
+
+def test_get_health_pending_count_reflects_unsynced_outbox_rows(get_conn):
+    service = SyncService(lambda: FakeRelayClient(), get_conn)
+    _insert_outbox_row(get_conn)
+    _insert_outbox_row(get_conn)
+
+    assert service.get_health()["pending_count"] == 2
+
+
+def test_get_health_pending_count_drops_to_zero_after_a_successful_push(get_conn):
+    """The freshness indicator's "N pending" must track real outbox state,
+    not a cached/derived counter -- pending_count is a live COUNT(*), so it
+    has to fall the moment push_once() acks the rows it just sent."""
+    _insert_outbox_row(get_conn)
+    client = FakeRelayClient(push_responses=[{"stored": 1, "received": 1}])
+    service = SyncService(lambda: client, get_conn)
+    assert service.get_health()["pending_count"] == 1
+
+    service.push_once()
+
+    assert service.get_health()["pending_count"] == 0
+
+
 def test_next_interval_backs_off_exponentially_and_caps(get_conn):
     client = FakeRelayClient()
     service = SyncService(lambda: client, get_conn)

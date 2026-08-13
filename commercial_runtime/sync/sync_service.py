@@ -444,6 +444,25 @@ class SyncService:
             h["last_failure_reason"] = self._failure_reason(exc)
             return h["consecutive_failures"]
 
+    def _pending_outbox_count(self) -> int:
+        """Rows currently sitting in `sync_outbox`, not yet relayed to
+        Owner -- feeds the frontend's calm "Synced Ns ago -- N pending"
+        state (app-shell.js's _renderSyncCalmState(), feat/sync-freshness-
+        indicator). read_outbox()/ack_outbox() above already establish the
+        invariant this relies on: a row lives in sync_outbox from the
+        moment a route commits it (Task 4's category/product/customer/
+        supplier/reorder_request routes) until push_once() confirms Owner
+        accepted it and deletes exactly that row -- so the table holds
+        ONLY unsynced writes. There is no status column on sync_outbox at
+        all (see schema.py's `CREATE TABLE sync_outbox`), so a plain
+        COUNT(*) is already exactly "pending"; no WHERE clause needed."""
+        conn = self._get_conn()
+        try:
+            row = conn.execute("SELECT COUNT(*) AS n FROM sync_outbox").fetchone()
+            return row["n"] if row else 0
+        finally:
+            conn.close()
+
     def get_health(self) -> dict:
         with self._health_lock:
             push = dict(self._health["push"])
@@ -454,6 +473,13 @@ class SyncService:
             "healthy": push["healthy"] and pull["healthy"],
             "interval_seconds": self._interval_seconds,
             "retry_interval_seconds": self._current_interval_seconds,
+            # feat/sync-freshness-indicator: last_success_at was already
+            # present on push/pull below but the frontend previously threw
+            # it away (consecutive_failures/last_failure_reason only) -- no
+            # indicator rendered at all while sync was healthy. pending_count
+            # is the other half of the calm-state label; read fresh on every
+            # call (not cached) so it's always current as of this request.
+            "pending_count": self._pending_outbox_count(),
             "push": push,
             "pull": pull,
         }

@@ -824,11 +824,24 @@ const SubsystemApp = {
     hdr.parentNode?.insertBefore(badge, hdr.nextSibling);
   },
 
-  // ── Multi-device sync health banner ───────────────────────────────────────
+  // ── Multi-device sync health indicator ──────────────────────────────────────
   // Persistent (NOT showToast -- a 3s auto-dismissing toast is the wrong
-  // shape for a condition that can last hours). Appended to document.body,
-  // never into #subsystem-shell, because _renderShell() replaces that
-  // element's entire innerHTML on every launch().
+  // shape for a condition that can last hours, and the calm state below is
+  // meant to stay visible indefinitely, not flash once). Appended to
+  // document.body, never into #subsystem-shell, because _renderShell()
+  // replaces that element's entire innerHTML on every launch().
+  //
+  // feat/sync-freshness-indicator: before this change, the banner was
+  // failure-only -- nothing rendered at all while sync was healthy, so
+  // there was no way to tell "sync is fine" from "sync was never checked".
+  // sync_service.py's get_health() always included last_success_at on both
+  // push and pull, but it was thrown away here. Two states now share the
+  // SAME persistent element (#aura-sync-banner), swapped on every poll tick
+  // by _renderSyncBanner():
+  //   - calm  (default/healthy): small bottom-right pill, "Synced Ns ago ·
+  //     N pending" -- ambient, ignorable.
+  //   - alarm (SYNC_DEGRADED_THRESHOLD+ consecutive failures on either
+  //     half): the original full-width top banner, unchanged.
   SYNC_POLL_MS: 30000,
   SYNC_DEGRADED_THRESHOLD: 3,
 
@@ -861,39 +874,112 @@ const SubsystemApp = {
     this._renderSyncBanner(data);
   },
 
-  _renderSyncBanner(data) {
-    const T = this.SYNC_DEGRADED_THRESHOLD;
-    const pushBad = !!data && data.push.consecutive_failures >= T;
-    const pullBad = !!data && data.pull.consecutive_failures >= T;
+  // Relative-time formatter for last_success_at -- no library. Only the
+  // fixed unit word goes through t(): t() is a whole-string exact-match
+  // dictionary lookup (see i18n.js), and a dictionary key per possible
+  // number isn't something that API can express, so the number itself is
+  // plain-concatenated (same compromise subsystem-retail.js's scanner
+  // status "Xs ago"/"Xm ago" already makes -- this version at least routes
+  // its static words through t(), which that one never did).
+  _formatRelativeTime(isoString) {
+    if (!isoString) return null;
+    const then = new Date(isoString).getTime();
+    if (Number.isNaN(then)) return null;
+    const diffSeconds = Math.max(0, Math.round((Date.now() - then) / 1000));
+    if (diffSeconds < 5) return t('just now');
+    if (diffSeconds < 60) return diffSeconds + t('s ago');
+    const minutes = Math.round(diffSeconds / 60);
+    if (minutes < 60) return minutes + t('m ago');
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return hours + t('h ago');
+    const days = Math.round(hours / 24);
+    return days + t('d ago');
+  },
 
-    if (!pushBad && !pullBad) {
+  // Whichever of push/pull most recently succeeded -- either half talking
+  // to the relay counts as "this device is in contact with sync".
+  _mostRecentSyncIso(pushIso, pullIso) {
+    if (!pushIso) return pullIso || null;
+    if (!pullIso) return pushIso;
+    return new Date(pushIso).getTime() >= new Date(pullIso).getTime() ? pushIso : pullIso;
+  },
+
+  // "Synced 12s ago · 0 pending" -- the calm state's label. pending_count
+  // comes straight from sync_service.py's get_health() (a live COUNT(*)
+  // over sync_outbox -- that table holds ONLY rows not yet acked by a
+  // successful push, see ack_outbox()'s docstring, so no status filter is
+  // needed on the backend and none is needed here either).
+  _syncIndicatorText(data) {
+    const lastSuccess = this._mostRecentSyncIso(data.push.last_success_at, data.pull.last_success_at);
+    const pending = Number.isFinite(data.pending_count) ? data.pending_count : 0;
+    const head = lastSuccess
+      ? (t('Synced') + ' ' + this._formatRelativeTime(lastSuccess))
+      : t('Waiting for first sync');
+    return head + ' · ' + pending + ' ' + t('pending');
+  },
+
+  _renderSyncBanner(data) {
+    if (!data) {
       if (this._syncBannerEl) { this._syncBannerEl.remove(); this._syncBannerEl = null; }
       return;
     }
 
+    const T = this.SYNC_DEGRADED_THRESHOLD;
+    const pushBad = data.push.consecutive_failures >= T;
+    const pullBad = data.pull.consecutive_failures >= T;
+
+    if (!this._syncBannerEl) {
+      const el = document.createElement('div');
+      el.id = 'aura-sync-banner';
+      document.body.appendChild(el);
+      this._syncBannerEl = el;
+    }
+
+    if (pushBad || pullBad) this._renderSyncAlarmState(data, pushBad, pullBad);
+    else this._renderSyncCalmState(data);
+  },
+
+  // The original failure-only banner, unchanged in look and behavior: full-
+  // width, top of page, impossible to miss. Reached only once either half
+  // has failed SYNC_DEGRADED_THRESHOLD times in a row -- a single blip
+  // never triggers it (see sync_service.py's run_once()/per-tick retry).
+  _renderSyncAlarmState(data, pushBad, pullBad) {
+    const el = this._syncBannerEl;
     let headline;
     if (pushBad && pullBad) headline = t("Not syncing with your other devices right now");
     else if (pushBad)       headline = t("This device's recent changes haven't reached your other devices yet");
     else                    headline = t("This device isn't receiving updates from your other devices right now");
     const detail = t("This device is still working normally. Everything will catch up automatically once the connection comes back.");
 
-    if (!this._syncBannerEl) {
-      const el = document.createElement('div');
-      el.id = 'aura-sync-banner';
-      el.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#1e1e2e;'
-        + 'border-bottom:2px solid #fbbf24;color:white;padding:9px 18px;font-size:13px;'
-        + 'line-height:1.45;text-align:center;z-index:99998;'
-        + 'box-shadow:0 4px 18px rgba(0,0,0,.35);';
-      document.body.appendChild(el);
-      this._syncBannerEl = el;
-    }
+    el.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#1e1e2e;'
+      + 'border-bottom:2px solid #fbbf24;color:white;padding:9px 18px;font-size:13px;'
+      + 'line-height:1.45;text-align:center;z-index:99998;'
+      + 'box-shadow:0 4px 18px rgba(0,0,0,.35);';
     // last_failure_reason goes ONLY in title= -- support can hover for the
     // real code, the shop owner never sees "INVALID_SIGNATURE".
     const reason = (pushBad ? data.push.last_failure_reason : data.pull.last_failure_reason) || '';
-    this._syncBannerEl.title = reason ? ('Sync detail: ' + reason) : '';
-    this._syncBannerEl.innerHTML =
+    el.title = reason ? ('Sync detail: ' + reason) : '';
+    el.innerHTML =
       '<span style="color:#fbbf24;font-weight:700;">⚠ ' + headline + '</span>'
       + '<span style="opacity:.8;margin-left:10px;">' + detail + '</span>';
+  },
+
+  // New calm state: a small, unobtrusive bottom-right pill -- ambient
+  // confirmation that sync is alive, not an alert. This is the whole point
+  // of the freshness indicator: previously NOTHING rendered here while sync
+  // was working normally. pointer-events:none so it never sits in the way
+  // of whatever's underneath it in that corner.
+  _renderSyncCalmState(data) {
+    const el = this._syncBannerEl;
+    el.style.cssText = 'position:fixed;bottom:14px;right:14px;display:inline-flex;'
+      + 'align-items:center;gap:7px;padding:6px 12px;border-radius:20px;'
+      + 'background:rgba(16,185,129,0.10);border:1px solid rgba(16,185,129,0.28);'
+      + 'color:#a7f3d0;font-size:12px;font-weight:500;letter-spacing:.2px;'
+      + 'z-index:99997;box-shadow:0 4px 14px rgba(0,0,0,.25);pointer-events:none;';
+    el.title = '';
+    el.innerHTML =
+      '<span style="width:6px;height:6px;border-radius:50%;background:#10b981;display:inline-block;flex-shrink:0;"></span>'
+      + '<span>' + this._syncIndicatorText(data) + '</span>';
   },
 
   // ── Wire up real-time WebSocket refresh (called once after init) ─────────────

@@ -203,5 +203,14 @@
   "Not syncing with your other devices right now": "Not syncing with your other devices right now",
   "This device's recent changes haven't reached your other devices yet": "This device's recent changes haven't reached your other devices yet",
   "This device isn't receiving updates from your other devices right now": "This device isn't receiving updates from your other devices right now",
-  "This device is still working normally. Everything will catch up automatically once the connection comes back.": "This device is still working normally. Everything will catch up automatically once the connection comes back."
+  "This device is still working normally. Everything will catch up automatically once the connection comes back.": "This device is still working normally. Everything will catch up automatically once the connection comes back.",
+
+  "Synced": "Synced",
+  "Waiting for first sync": "Waiting for first sync",
+  "pending": "pending",
+  "just now": "just now",
+  "s ago": "s ago",
+  "m ago": "m ago",
+  "h ago": "h ago",
+  "d ago": "d ago"
 }
