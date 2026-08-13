@@ -93,13 +93,19 @@ jobs:
       # ubuntu-latest ships pg_dump 16 by default (older than the postgres:17
       # service container above) -- pg_dump refuses to dump a server newer
       # than itself ("aborting because of server version mismatch"), which
-      # test_backup_restore.py's real pg_dump calls hit directly. The PGDG
-      # apt repo is already configured on GH-hosted runners (that's where the
-      # default v16 package comes from), so installing -17 is enough; the
-      # postgresql-common version wrapper then picks it as the highest
-      # installed version automatically.
+      # test_backup_restore.py's real pg_dump calls hit directly. The v16
+      # package is baked into the runner image directly, NOT via an active
+      # PGDG apt source (confirmed: `apt-get install postgresql-client-17`
+      # alone fails with "Unable to locate package") -- so the PGDG repo has
+      # to be added first. apt.postgresql.org.sh ships in postgresql-common
+      # (already present, that's what provides the pg_dump version-selection
+      # wrapper) and is PGDG's own documented script for exactly this in CI:
+      # detects the Ubuntu codename, adds the signed repo, refreshes the
+      # package index.
       - name: Install PostgreSQL 17 client (match postgres:17 service for pg_dump/pg_restore)
-        run: sudo apt-get install -y postgresql-client-17
+        run: |
+          sudo sh /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-17
 
       # No explicit `alembic upgrade head` needed here:
       # owner/tests/conftest.py::_migrated_schema is a session-scoped autouse
@@ -298,6 +304,14 @@ jobs:
           unaudited = [(f, r['line_number']) for f, entries in d['results'].items() for r in entries if 'is_secret' not in r]
           assert not unaudited, f'new, unaudited potential secret(s): {unaudited} -- review and run: detect-secrets audit .secrets.baseline'
           "
+
+      - name: Upload updated secrets baseline (debug -- captures Linux-computed hashes for any new/unaudited entry)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: secrets-baseline-debug
+          path: .secrets.baseline
+          retention-days: 3
 
       - name: Dependency scanning
         run: |
