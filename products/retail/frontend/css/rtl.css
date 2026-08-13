@@ -46,3 +46,22 @@ body.rtl .iw-modal { text-align: right; }
 
 /* --- Numeric cells / money should remain LTR so figures read correctly ----- */
 body.rtl .num, body.rtl .money, body.rtl .iw-num { direction: ltr; display: inline-block; }
+
+/* --- AI Assistant chat bubble "tail" corner (2026-08-13) -------------------
+   main.css's .ai-msg-bubble/.ai-msg.user rules give each bubble a small
+   4px corner radius ("tail") on the side facing its own avatar --
+   top-left for the assistant (avatar on the far left in LTR, row:
+   avatar-then-bubble), top-right for the user (avatar on the far right in
+   LTR, via flex-direction:row-reverse). Neither .ai-msg's flex-direction
+   nor that per-corner radius is a logical property, so under body.rtl's
+   direction:rtl the row's own avatar/bubble ordering auto-mirrors (row ->
+   avatar right/bubble left; row-reverse -> avatar left/bubble right, both
+   correct and automatic) but the tail's radius does NOT auto-mirror with
+   it -- confirmed via computed-style inspection in a real RTL session
+   (Playwright): the tail stayed on its original LTR corner while the
+   avatar moved to the opposite side, so the tail visually pointed AWAY
+   from its own avatar instead of toward it. These two rules swap the tail
+   to the corner that matches the RTL-mirrored avatar position; the base
+   16px/4px radii themselves are untouched, only which corner gets the 4px. */
+body.rtl .ai-msg-bubble { border-top-left-radius: 16px; border-top-right-radius: 4px; }
+body.rtl .ai-msg.user .ai-msg-bubble { border-top-right-radius: 16px; border-top-left-radius: 4px; }

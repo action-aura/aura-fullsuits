@@ -69,6 +69,23 @@
     _translateNode(node, d) {
       const raw = node.nodeValue;
       if (!raw) return;
+      // 2026-08-13 (AI panel bug found via live testing, not assumed): a
+      // bare `[data-no-i18n]` marker on an ancestor element is NOT enough
+      // on its own -- _translateTree()'s TreeWalker below already honors it
+      // (see its own acceptNode check), but _startObserver() ALSO calls
+      // this function directly whenever a MutationObserver record's
+      // addedNodes contains a lone text node (nodeType===3), bypassing
+      // _translateTree()/its ancestor check entirely. That exact shape --
+      // a single text node added with no wrapping element -- is precisely
+      // what `el.textContent = someString` produces when `el` previously
+      // had no children, which is exactly how sub-ai.js's SubAI renders
+      // (and re-renders, once per streamed token) chat bubbles. Verified
+      // live: without this check, a bubble carrying `data-no-i18n` still
+      // got its text silently rewritten by the AR dictionary sweep the
+      // instant Arabic mode was active. Checking here, not just in
+      // _translateTree, covers both call paths from one place.
+      const p = node.parentNode;
+      if (p && p.closest && p.closest('[data-no-i18n]')) return;
       const key = raw.trim();
       if (key && (key in d) && d[key] !== key) {
         node.nodeValue = raw.replace(key, d[key]);   // preserve surrounding whitespace

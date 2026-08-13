@@ -7,13 +7,14 @@ Extracted verbatim (business logic unchanged) from Action Aura Enterprise's
 api/subsystems/retail_api.py -- see docs/migration/retail-extraction-report.md.
 """
 import os
+import re
 import time
 import json
 import sqlite3
 import uuid as _uuid
 import requests
 from decimal import Decimal, ROUND_HALF_UP
-from flask import Blueprint, request, jsonify, session, current_app
+from flask import Blueprint, request, jsonify, session, current_app, Response, stream_with_context
 from commercial_runtime.identity.mt_auth import mt_login_required, mt_require_subsystem
 from commercial_runtime.identity import device_context
 from commercial_runtime.identity.registry_db import get_conn as _registry_conn
@@ -3266,6 +3267,104 @@ _AI_HISTORY_TURNS = 10
 # instructions but num_predict is enforced by the server regardless.
 _AI_REPLY_MAX_TOKENS = 150
 
+# 2026-08-13, speed pass: direct on-droplet benchmarking (SSH, `GET
+# /api/ps`) showed Ollama's default idle-unload cost a real ~4.89s
+# `load_duration` on the first request after idle vs ~0.08s once warm -- a
+# real, measured latency tax on the FIRST message of a session (or any
+# message after a >~5min gap), separate from the per-token generation cost
+# `_AI_REPLY_MAX_TOKENS` bounds. `keep_alive` tells Ollama how long to keep
+# the model resident after a request; it is a TOP-LEVEL field of the
+# `/api/generate` request body -- a sibling of `model`/`prompt`/`stream`,
+# NOT a member of `options` (getting this wrong silently does nothing, since
+# Ollama ignores unknown fields inside `options`). 30 minutes covers a real
+# chat session's think-time between messages without paying the cold-load
+# penalty on every turn; it does NOT help the very first request after a
+# genuinely idle period. Costs ~4GB of resident RAM on the droplet for up to
+# 30 min after the last request -- accepted, this droplet is dedicated to
+# this feature (8GB box, model is the only real resident consumer).
+_AI_KEEP_ALIVE = '30m'
+
+
+# ── AI Assistant language support -- 2026-08-13 ─────────────────────────────
+# AI_SYSTEM_PREFACE never told the model what language to answer in, so an
+# Arabic-speaking user got whatever phi3.5:3.8b happened to default to (see
+# retail_ai_language_test.py's module docstring for the real before/after
+# transcripts this was verified against). Two signals decide the reply
+# language, in priority order:
+#   1. The client-supplied UI locale (`AuraI18n.current`, sub-ai.js's `send()`)
+#      -- an explicit user choice, sent as the `lang` field on the request
+#      body. This WINS even when it disagrees with the message's own script:
+#      an English-UI user who happens to type an Arabic product name still
+#      gets an English reply. That is a deliberate decision, not an
+#      oversight -- the UI locale is the strongest signal of what language
+#      the user actually wants to read.
+#   2. A cheap heuristic on the message text itself (script-ratio, not
+#      "contains any character") -- the fallback for callers that don't send
+#      `lang` at all (non-browser callers, older frontend builds) or send a
+#      garbage value.
+# `_resolve_ai_language()` below is the single choke point for this
+# decision -- see its own docstring for why the client value is whitelisted
+# rather than trusted.
+_AI_SUPPORTED_LANGS = ('en', 'ar')
+
+_AI_LANGUAGE_INSTRUCTIONS = {
+    'en': "Reply in English.",
+    'ar': "Reply ONLY in Arabic (العربية). Do not answer in English.",
+}
+
+# Written in English even for the Arabic case -- a 3.8B instruction-tuned
+# model follows English instructions more reliably than Arabic ones in
+# practice; the literal 'العربية' token is an in-language anchor, not the
+# instruction language itself.
+
+# Arabic, Arabic Supplement, Arabic Extended-A, and Arabic Presentation
+# Forms A/B. U+0660-0669 (Arabic-Indic digits) falls inside the first range
+# on purpose -- a user typing Arabic-Indic numerals is an Arabic-locale
+# user, not a numeric-only message.
+_ARABIC_CHAR_RE = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]')
+_LATIN_CHAR_RE = re.compile(r'[A-Za-z]')
+
+
+def _detect_message_language(message):
+    """Cheap heuristic fallback for when the caller sends no `lang` field
+    (or an invalid one) -- a ratio of scripts, not "contains any Arabic
+    character", so an Arabic product name embedded in an English question
+    ("how many منتج do I have") doesn't flip the whole reply to Arabic,
+    while a genuinely Arabic question with one embedded Latin SKU still
+    resolves to Arabic. No tunable threshold constant on purpose: "whichever
+    script the caller actually wrote more of" is self-evidently correct at
+    both extremes and needs no calibration. Empty or numeric-only input
+    returns 'en' (the product's existing default), never raises."""
+    text = message or ''
+    arabic_count = len(_ARABIC_CHAR_RE.findall(text))
+    latin_count = len(_LATIN_CHAR_RE.findall(text))
+    return 'ar' if arabic_count > latin_count else 'en'
+
+
+def _resolve_ai_language(requested, message):
+    """Single choke point for the client-locale-wins-but-whitelisted
+    decision documented in the module comment above `_AI_SUPPORTED_LANGS`.
+
+    `requested` is `data.get('lang')` from the request body -- untrusted
+    client input that gets concatenated into an LLM prompt below
+    (_build_ai_prompt). It is WHITELISTED, never interpolated: anything that
+    isn't exactly 'en'/'ar' after strip+lower is discarded wholesale, not
+    sanitized, because an unvalidated string here would be a direct
+    prompt-injection channel into `_AI_LANGUAGE_INSTRUCTIONS`. Non-str
+    values (None, a number, a dict/list from a malformed client) hit the
+    isinstance guard and fall straight through to the heuristic rather than
+    raising -- the language signal is a nice-to-have, never a reason to 500
+    a chat message.
+
+    The heuristic fallback is a real, live path (not dead code): it's the
+    only signal available for a non-browser caller, an older frontend build
+    that never sends `lang`, or a tampered/garbage value."""
+    if isinstance(requested, str):
+        normalized = requested.strip().lower()
+        if normalized in _AI_SUPPORTED_LANGS:
+            return normalized
+    return _detect_message_language(message)
+
 
 # ── AI Assistant retrieval context (RAG) -- 2026-08-13 ──────────────────────
 # THE single place real business data is allowed to enter the AI prompt.
@@ -3409,7 +3508,7 @@ def _build_ai_context(cid, message):
     return text[:_AI_CONTEXT_MAX_CHARS]
 
 
-def _build_ai_prompt(message, history, context=''):
+def _build_ai_prompt(message, history, context='', lang='en'):
     """Ollama's /api/generate (used for both phi3:mini and phi3.5:3.8b, the
     small models this route has run) takes one flat prompt string, not a
     structured chat-messages array, so multi-turn context has to be
@@ -3420,8 +3519,15 @@ def _build_ai_prompt(message, history, context=''):
     non-empty, is the server-fetched, already company-scoped data summary
     from _build_ai_context() -- injected as its own labeled block so the
     model can tell it apart from conversation history, with an explicit
-    instruction not to invent numbers when real data was/wasn't supplied."""
-    lines = [AI_SYSTEM_PREFACE]
+    instruction not to invent numbers when real data was/wasn't supplied.
+
+    `lang` (2026-08-13, 'en' or 'ar', see _resolve_ai_language()) selects
+    the language instruction appended right after AI_SYSTEM_PREFACE, before
+    the RAG context block -- AI_SYSTEM_PREFACE's own text is never modified,
+    since the same brevity instruction applies regardless of language.
+    Defaults to 'en' so every existing/future caller that doesn't pass
+    `lang` behaves exactly as before this change."""
+    lines = [AI_SYSTEM_PREFACE, _AI_LANGUAGE_INSTRUCTIONS.get(lang, _AI_LANGUAGE_INSTRUCTIONS['en'])]
     if context:
         lines.append('')
         lines.append(
@@ -3442,6 +3548,23 @@ def _build_ai_prompt(message, history, context=''):
     return "\n".join(lines)
 
 
+def _ai_upstream_payload(prompt, stream):
+    """The single builder for the request body sent to Ollama's
+    /api/generate, used by BOTH the streaming and non-streaming branches of
+    ai_chat() below -- one place so the two branches can never silently
+    drift on model/cap/keep_alive. `keep_alive` is deliberately a top-level
+    key here (a sibling of `model`/`prompt`/`stream`), not nested inside
+    `options` -- see _AI_KEEP_ALIVE's own comment for why that placement
+    matters."""
+    return {
+        'model': AURA_AI_MODEL_NAME,
+        'prompt': prompt,
+        'stream': bool(stream),
+        'keep_alive': _AI_KEEP_ALIVE,
+        'options': {'num_predict': _AI_REPLY_MAX_TOKENS},
+    }
+
+
 @retail_bp.route('/ai/chat', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -3453,13 +3576,23 @@ def ai_chat():
     The bearer token lives only in this process's env/config; it is never
     included in the response sent to the browser.
 
-    2026-08-13: now also injects a small, server-fetched, company-scoped
+    2026-08-13 (RAG): also injects a small, server-fetched, company-scoped
     business-data summary (see _build_ai_context()) so the assistant can
     answer real questions like "how many products do I have" instead of
     being a pure text chatbot with no access to this install's data. `cid`
     is resolved via _cid() -- the SAME session-derived company id every
     other route in this file uses -- BEFORE any DB read, so a user can only
-    ever get their own company's data injected into their own chat prompt."""
+    ever get their own company's data injected into their own chat prompt.
+
+    2026-08-13 (speed + Arabic): `stream` (request body, bool) opts into an
+    NDJSON streaming reply instead of the original one-shot JSON response --
+    OPT-IN, not the default, so this route's existing JSON contract stays
+    byte-for-byte unchanged for every caller that doesn't ask (matches
+    CLAUDE.md's "invisible unless opted in" philosophy, and is what keeps
+    retail_ai_rag_multitenant_test.py's non-streaming assertions green with
+    zero edits to that file). `lang` (request body, 'en'/'ar') selects the
+    reply language via _resolve_ai_language() -- see that function's
+    docstring for why the client value is whitelisted rather than trusted."""
     cid = _cid()
     data = request.get_json(silent=True) or {}
     message = str(data.get('message') or '').strip()[:_AI_MESSAGE_MAX_CHARS]
@@ -3470,38 +3603,148 @@ def ai_chat():
     if not isinstance(history, list):
         history = []
 
+    lang = _resolve_ai_language(data.get('lang'), message)
+    # Strict identity check, not truthiness: a sloppy or hostile client
+    # sending "true"/1/"yes" for `stream` must NOT silently flip this
+    # route's response content-type out from under a caller that only
+    # expects the original JSON shape.
+    want_stream = data.get('stream') is True
     context = _build_ai_context(cid, message)
-    prompt = _build_ai_prompt(message, history, context)
+    prompt = _build_ai_prompt(message, history, context, lang)
+    payload = _ai_upstream_payload(prompt, want_stream)
+    headers = {'Authorization': f'Bearer {AURA_AI_BEARER_TOKEN}'}
 
+    if not want_stream:
+        try:
+            resp = requests.post(
+                AURA_AI_ENDPOINT_URL, headers=headers, json=payload,
+                timeout=AURA_AI_TIMEOUT_SECONDS,
+            )
+        except requests.exceptions.RequestException as e:
+            # 2026-08-12: real observed latency for a REALISTIC prompt on this
+            # model/droplet is ~35s uncapped (see _AI_REPLY_MAX_TOKENS' comment)
+            # -- a timeout here now means the upstream host is genuinely
+            # unreachable/overloaded even with the reply-length cap in place,
+            # not a bug in this route.
+            current_app.logger.warning('AI assistant proxy request failed: %s', type(e).__name__)
+            return jsonify({'success': False, 'error': 'AI assistant is temporarily unavailable.'}), 503
+
+        if resp.status_code != 200:
+            current_app.logger.warning('AI assistant proxy got HTTP %s from upstream', resp.status_code)
+            return jsonify({'success': False, 'error': 'AI assistant is temporarily unavailable.'}), 503
+
+        try:
+            body = resp.json() or {}
+        except ValueError:
+            body = {}
+        reply = str(body.get('response') or '').strip()
+        # 2026-08-13: log only generation stats (never prompt/reply text --
+        # that is real customer business data via the RAG context above) so
+        # slow-generation and truncation patterns are diagnosable in
+        # production without logging anything sensitive.
+        current_app.logger.info(
+            'AI chat (non-stream): eval_count=%s eval_duration_s=%s done_reason=%s',
+            body.get('eval_count'), (body.get('eval_duration') or 0) / 1e9, body.get('done_reason'),
+        )
+
+        if not reply:
+            return jsonify({'success': False, 'error': 'AI assistant is temporarily unavailable.'}), 503
+
+        return jsonify({'success': True, 'data': {'reply': reply}})
+
+    # ── Streaming branch (2026-08-13 speed pass) ────────────────────────────
+    # Total generation time for a realistic ~150-token reply is CPU-bound at
+    # ~17-27s on this droplet either way (measured 2026-08-13, see this
+    # branch's own commit message for the before/after numbers) -- streaming
+    # does NOT change that. What it changes is time-to-first-visible-token:
+    # the browser can start rendering the
+    # reply as soon as the first fragment arrives instead of waiting for the
+    # entire generation to finish, which is what made the non-streaming path
+    # above genuinely race its own 45s timeout on this exact realistic
+    # prompt (observed 503 in manual testing) -- a stream has no equivalent
+    # single deadline, since `timeout=` below becomes a PER-READ (inter-chunk)
+    # inactivity timeout once `stream=True`, not a total-request timeout.
     try:
         resp = requests.post(
-            AURA_AI_ENDPOINT_URL,
-            headers={'Authorization': f'Bearer {AURA_AI_BEARER_TOKEN}'},
-            json={
-                'model': AURA_AI_MODEL_NAME, 'prompt': prompt, 'stream': False,
-                'options': {'num_predict': _AI_REPLY_MAX_TOKENS},
-            },
-            timeout=AURA_AI_TIMEOUT_SECONDS,
+            AURA_AI_ENDPOINT_URL, headers=headers, json=payload,
+            timeout=AURA_AI_TIMEOUT_SECONDS, stream=True,
         )
     except requests.exceptions.RequestException as e:
-        # 2026-08-12: real observed latency for a REALISTIC prompt on this
-        # model/droplet is ~35s uncapped (see _AI_REPLY_MAX_TOKENS' comment)
-        # -- a timeout here now means the upstream host is genuinely
-        # unreachable/overloaded even with the reply-length cap in place,
-        # not a bug in this route.
         current_app.logger.warning('AI assistant proxy request failed: %s', type(e).__name__)
         return jsonify({'success': False, 'error': 'AI assistant is temporarily unavailable.'}), 503
 
     if resp.status_code != 200:
+        # With stream=True, requests returns as soon as response HEADERS
+        # arrive, so a non-200 upstream status is still caught here, before
+        # any byte is committed to our own client -- that's what lets this
+        # branch keep the exact same 503 JSON contract as the non-streaming
+        # path for connect failures and auth/upstream errors. Once the
+        # generator below starts yielding 200 OK has already been sent to
+        # the browser and the response shape is frozen to NDJSON.
+        resp.close()
         current_app.logger.warning('AI assistant proxy got HTTP %s from upstream', resp.status_code)
         return jsonify({'success': False, 'error': 'AI assistant is temporarily unavailable.'}), 503
 
-    try:
-        reply = str((resp.json() or {}).get('response') or '').strip()
-    except ValueError:
-        reply = ''
+    # stream_with_context() (used below) keeps the request context alive for
+    # the generator's lifetime, so current_app.logger would still resolve
+    # correctly inside _generate() even without this -- captured into a
+    # plain local anyway, defensively, so this generator's logging never
+    # depends on Flask's context-preservation behavior at all.
+    logger = current_app.logger
 
-    if not reply:
-        return jsonify({'success': False, 'error': 'AI assistant is temporarily unavailable.'}), 503
+    def _generate():
+        got_any = False
+        try:
+            for line in resp.iter_lines():
+                if not line:
+                    continue  # Ollama sends occasional blank keep-alive lines
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue  # a malformed upstream line must never abort an otherwise-good stream
+                frag = obj.get('response')
+                if frag:
+                    got_any = True
+                    yield json.dumps({'delta': frag}) + '\n'
+                if obj.get('done'):
+                    logger.info(
+                        'AI chat (stream): eval_count=%s eval_duration_s=%s done_reason=%s',
+                        obj.get('eval_count'), (obj.get('eval_duration') or 0) / 1e9, obj.get('done_reason'),
+                    )
+                    break
+        except Exception as e:
+            # Broad by design: ChunkedEncodingError, ConnectionError, a
+            # socket read timeout, and any JSON edge case all must collapse
+            # to the same friendly in-band error line -- a half-sent NDJSON
+            # stream can never surface a raw traceback to the browser, the
+            # same "never a 500" contract the non-streaming branch keeps via
+            # its try/except above.
+            logger.warning('AI assistant stream failed mid-generation: %s', type(e).__name__)
+            yield json.dumps({'error': 'AI assistant is temporarily unavailable.'}) + '\n'
+            return
+        finally:
+            resp.close()
 
-    return jsonify({'success': True, 'data': {'reply': reply}})
+        if not got_any:
+            yield json.dumps({'error': 'AI assistant is temporarily unavailable.'}) + '\n'
+        else:
+            yield json.dumps({'done': True}) + '\n'
+
+    # NDJSON with our OWN envelope ({"delta":...}/{"done":true}/{"error":...}),
+    # not a raw passthrough of Ollama's wire format: Ollama's final `done`
+    # object carries a multi-KB `context` token-id array and other model
+    # internals that would waste bandwidth and leak upstream implementation
+    # detail into the browser if re-emitted verbatim. NDJSON rather than
+    # SSE: EventSource cannot issue a POST, so SSE's one real advantage
+    # (a native browser client) is unavailable here anyway, and its
+    # `data:`/blank-line framing would be pure overhead on top of the
+    # getReader() loop sub-ai.js has to write either way. `ensure_ascii`
+    # (json.dumps' default) keeps the wire pure ASCII -- Arabic goes out as
+    # \uXXXX escapes -- so no charset negotiation anywhere in the chain
+    # (waitress -> WebView2/browser -> TextDecoder -> JSON.parse) can
+    # corrupt it; JSON.parse restores the exact characters on the other end.
+    return Response(
+        stream_with_context(_generate()),
+        content_type='application/x-ndjson; charset=utf-8',
+        headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'},
+    )
