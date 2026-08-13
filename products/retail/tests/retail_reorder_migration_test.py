@@ -231,13 +231,25 @@ def test_ensure_schema_version_advances_user_version_to_8():
 
 def test_fresh_install_lands_on_v8_with_reorder_schema_present():
     """A brand-new install (no pre-existing database file at all) must boot
-    straight to schema v8 -- init_retail() runs the FULL migration chain in
-    one pass from PRAGMA user_version=0 (see _migrate_retail_schema's own
-    docstring: 'a v1 install upgrading straight to v7 must run ALL steps in
-    one pass' -- v8 extends that same guarantee by one more step). Uses a
-    fresh AURA_APP_DATA temp dir and a fresh Python import of database.schema
-    so this genuinely exercises init_retail(), not just the bare migration
-    function already covered above."""
+    straight to the CURRENT live schema version -- init_retail() runs the
+    FULL migration chain in one pass from PRAGMA user_version=0 (see
+    _migrate_retail_schema's own docstring: 'a v1 install upgrading
+    straight to v7 must run ALL steps in one pass' -- each later bump
+    extends that same guarantee by one more step). Uses a fresh
+    AURA_APP_DATA temp dir and a fresh Python import of database.schema so
+    this genuinely exercises init_retail(), not just the bare migration
+    function already covered above.
+
+    Asserts v9, not v8 (this test's own name still says v8, describing the
+    reorder-automation schema it was written to cover -- the version
+    NUMBER moved again under it when feat/email-outbox-foundation bumped
+    RETAIL_SCHEMA_VERSION to 9, same as this file's sibling
+    test_ensure_schema_version_advances_user_version_to_8 test intentionally
+    keeps testing the v7->v8 step in isolation at a frozen target=8. This
+    one, unlike that one, calls the REAL init_retail() and therefore always
+    reflects whatever RETAIL_SCHEMA_VERSION currently is -- see
+    retail_category_delete_fk_sync_test.py's identical
+    RETAIL_SCHEMA_VERSION==9 update for the same reasoning)."""
     data_dir = Path(tempfile.mkdtemp(prefix="aura_retail_reorder_freshinstall_"))
     (data_dir / "database" / "subsystems").mkdir(parents=True, exist_ok=True)
     old_app_data = os.environ.get("AURA_APP_DATA")
@@ -253,13 +265,20 @@ def test_fresh_install_lands_on_v8_with_reorder_schema_present():
 
         conn = retail_schema.get_retail_conn()
         try:
-            assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
             cols = {r[1] for r in conn.execute("PRAGMA table_info(products)").fetchall()}
             assert "reorder_method" in cols
             tables = {r[0] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()}
             assert "reorder_requests" in tables
+            # feat/email-outbox-foundation rides along on this same fresh-
+            # install chain now (v8 -> v9) -- assert its tables exist too,
+            # same "prove the WHOLE chain ran, not just the step this file
+            # was originally written for" spirit as the reorder assertions
+            # just above.
+            assert "email_outbox" in tables
+            assert "email_settings" in tables
         finally:
             conn.close()
     finally:

@@ -141,6 +141,9 @@ from commercial_runtime.einvoicing.worker import OutboxWorker
 from commercial_runtime.einvoicing.providers.mock import MockProvider
 from commercial_runtime.einvoicing import settings as _einvoicing_settings
 from core.retail import einvoice_adapter as _einvoice_adapter
+from commercial_runtime.notifications.routes import make_notifications_blueprint
+from commercial_runtime.notifications.worker import EmailOutboxWorker
+from commercial_runtime.notifications import settings as _notification_settings
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(onboarding_bp)
@@ -183,6 +186,31 @@ app.register_blueprint(make_einvoicing_blueprint(
     conn_factory=get_retail_conn,
     get_worker=_get_or_create_einvoicing_worker,
     provider=_einvoicing_provider,
+))
+
+# feat/email-outbox-foundation -- outbound email (low-stock alerts, on-
+# demand report emails, verification codes). Default OFF: AURA_SMTP_HOST is
+# unset by default (commercial_runtime/notifications/smtp_client.py), which
+# is this feature's own hard-off gate, independent of the per-company
+# `email_settings.enabled` toggle below -- see
+# commercial_runtime/notifications/settings.py::is_enabled. Same lazy,
+# per-company worker registry pattern as einvoicing just above, for the
+# identical reason (this registry is genuinely multi-tenant).
+_notifications_workers = {}
+
+
+def _get_or_create_notifications_worker(company_id):
+    if company_id not in _notifications_workers:
+        _notifications_workers[company_id] = EmailOutboxWorker(
+            conn_factory=get_retail_conn,
+            company_id=company_id,
+        )
+    return _notifications_workers[company_id]
+
+
+app.register_blueprint(make_notifications_blueprint(
+    conn_factory=get_retail_conn,
+    get_worker=_get_or_create_notifications_worker,
 ))
 
 # Part H: see products/clinic/backend/app.py's identical block for the full
@@ -312,6 +340,7 @@ def init_app():
     if _sync_service is not None:
         _sync_service.start()
     _resume_einvoicing_workers()
+    _resume_notifications_workers()
     return app
 
 
@@ -330,6 +359,25 @@ def _resume_einvoicing_workers():
             cid = row[0]
             interval = int(_einvoicing_settings.get_setting(conn, cid, 'submit_interval_seconds'))
             _get_or_create_einvoicing_worker(cid).start(interval_seconds=interval)
+    finally:
+        conn.close()
+
+
+def _resume_notifications_workers():
+    """Mirrors _resume_einvoicing_workers() immediately above -- same
+    reasoning: a company that had email notifications enabled before a
+    restart must keep draining its outbox without waiting for a settings
+    write to notice. A fresh/never-enabled install finds zero rows here and
+    starts zero threads, same as einvoicing's own sweep."""
+    conn = get_retail_conn()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT company_id FROM email_settings WHERE skey='enabled' AND svalue='1'"
+        ).fetchall()
+        for row in rows:
+            cid = row[0]
+            interval = int(_notification_settings.get_setting(conn, cid, 'submit_interval_seconds'))
+            _get_or_create_notifications_worker(cid).start(interval_seconds=interval)
     finally:
         conn.close()
 

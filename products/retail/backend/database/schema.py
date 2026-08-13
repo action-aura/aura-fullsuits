@@ -92,7 +92,17 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # _migrate_add_reorder_automation_foundation below for the full reasoning).
 # Pure additive migration -- ADD COLUMN + CREATE TABLE only, same shape as
 # v5/v6, so no _new-table rebuild is needed here either.
-RETAIL_SCHEMA_VERSION = 8
+# v9 (feat/email-outbox-foundation): adds the email_* tables owned by
+# commercial_runtime/notifications -- CREATE TABLE IF NOT EXISTS only,
+# nothing existing is ALTERed, read, or written. Same "opt-in, invisible
+# until configured" shape as v7's einvoice_* addition: an install that never
+# sets AURA_SMTP_HOST (commercial_runtime/notifications/smtp_client.py) or
+# any company's `email_settings.enabled` gets zero behavior change -- the
+# reorder-automation post-sale hook (core/retail/reorder_hook.py) now also
+# queues a low-stock alert email, but only when both of those are true, so
+# an install that never configures either one sees byte-for-byte the same
+# reorder_requests-only behavior v8 already shipped.
+RETAIL_SCHEMA_VERSION = 9
 
 
 def _get_path(name):
@@ -800,6 +810,9 @@ def _migrate_retail_schema(conn):
     # einvoicing itself is appended last -- see this function's own
     # docstring and the RETAIL_SCHEMA_VERSION v8 comment above.
     _migrate_add_reorder_automation_foundation(conn)
+    # v8 -> v9 (feat/email-outbox-foundation): appended LAST, same reasoning
+    # again -- see the RETAIL_SCHEMA_VERSION v9 comment above.
+    _migrate_add_notifications_foundation(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -1007,6 +1020,27 @@ def _migrate_add_reorder_automation_foundation(conn):
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_reorder_requests_open "
         "ON reorder_requests(company_id, product_id) WHERE status IN ('pending','accepted')"
     )
+
+
+def _migrate_add_notifications_foundation(conn):
+    """One-time migration (schema v8 -> v9): email outbox foundation
+    (feat/email-outbox-foundation) -- adds the email_* tables owned by
+    commercial_runtime/notifications (settings, outbox, verification
+    tokens). CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS only,
+    identical shape to v7's einvoice_* addition above -- see
+    commercial_runtime/notifications/schema.py's own docstring for the full
+    table-by-table reasoning; nothing product-specific lives in that
+    module, so this function's only job is to call it inside the same
+    ensure_schema_version() transaction every other step in this chain
+    already runs inside.
+
+    Idempotent by construction (every statement inside
+    apply_notifications_schema() is already IF NOT EXISTS), so a second
+    call -- or a fresh install migrating 0 -> 9 in one pass, same as every
+    step above -- is a clean no-op.
+    """
+    from commercial_runtime.notifications.schema import apply_notifications_schema
+    apply_notifications_schema(conn)
 
 
 def init_retail():
