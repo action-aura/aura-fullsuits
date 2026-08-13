@@ -38,9 +38,18 @@ def _sanitize_display_filename(original_filename: str) -> str:
     """Used only for the Content-Disposition header on download -- never as
     part of the storage path. Strips directory components and any
     non-alphanumeric character (defeats traversal sequences, absolute paths,
-    unicode homograph tricks, and null-byte injection in one pass)."""
-    base = os.path.basename(original_filename or "attachment")
+    unicode homograph tricks, and null-byte injection in one pass).
+
+    os.path.basename() is platform-dependent -- on POSIX it only splits on
+    "/", not "\\", so a Windows-style traversal payload ("..\\..\\secrets")
+    sails through untouched when this runs on a Linux server (real finding:
+    the dots survive because the allowlist regex below permits "." for real
+    extensions). Attacker input can use either separator regardless of host
+    OS, so both are normalized explicitly instead of relying on the
+    platform's own basename()."""
+    base = original_filename or "attachment"
     base = base.replace("\x00", "")
+    base = base.replace("\\", "/").rsplit("/", 1)[-1]
     cleaned = _SAFE_FILENAME_RE.sub("_", base)
     return cleaned[:200] or "attachment"
 

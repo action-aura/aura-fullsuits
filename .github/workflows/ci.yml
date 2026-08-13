@@ -107,6 +107,20 @@ jobs:
           sudo sh /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
           sudo apt-get install -y postgresql-client-17
 
+      # The official postgres Docker image always makes its bootstrap
+      # POSTGRES_USER a real superuser -- that's just how the image's own
+      # initdb works, unlike real dev/staging Postgres (docs/owner/phase9/
+      # postgresql-hardening.md: aura_owner is confirmed rolsuper=f there,
+      # created explicitly via CREATE ROLE without SUPERUSER by a real admin).
+      # test_application_role_is_not_superuser (test_phase9r_postgresql_hardening.py)
+      # enforces that real production invariant, so the CI container has to
+      # match it: revoke SUPERUSER/CREATEROLE from aura_owner post-bootstrap.
+      # CREATEDB is kept -- test_migration_runs_clean_from_empty_database_and_rolls_back
+      # needs it (same real requirement documented in
+      # docs/owner/phase5/owner-local-development-guide.md).
+      - name: De-privilege the CI Postgres role to match the real non-superuser posture
+        run: PGPASSWORD=aura_owner_dev psql -h localhost -U aura_owner -d aura_owner_test -c "ALTER ROLE aura_owner NOSUPERUSER NOCREATEROLE;"
+
       # No explicit `alembic upgrade head` needed here:
       # owner/tests/conftest.py::_migrated_schema is a session-scoped autouse
       # fixture that runs it (cwd=owner/, OWNER_DATABASE_URL overridden) before
@@ -311,6 +325,10 @@ jobs:
         with:
           name: secrets-baseline-debug
           path: .secrets.baseline
+          # REQUIRED: upload-artifact@v4 skips dotfiles by default (same gotcha
+          # as the coverage-shard upload above), and .secrets.baseline starts
+          # with a dot.
+          include-hidden-files: true
           retention-days: 3
 
       - name: Dependency scanning
