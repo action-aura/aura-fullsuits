@@ -90,6 +90,17 @@ jobs:
           cache-dependency-path: requirements/*.txt
       - run: pip install -r requirements/development.txt
 
+      # ubuntu-latest ships pg_dump 16 by default (older than the postgres:17
+      # service container above) -- pg_dump refuses to dump a server newer
+      # than itself ("aborting because of server version mismatch"), which
+      # test_backup_restore.py's real pg_dump calls hit directly. The PGDG
+      # apt repo is already configured on GH-hosted runners (that's where the
+      # default v16 package comes from), so installing -17 is enough; the
+      # postgresql-common version wrapper then picks it as the highest
+      # installed version automatically.
+      - name: Install PostgreSQL 17 client (match postgres:17 service for pg_dump/pg_restore)
+        run: sudo apt-get install -y postgresql-client-17
+
       # No explicit `alembic upgrade head` needed here:
       # owner/tests/conftest.py::_migrated_schema is a session-scoped autouse
       # fixture that runs it (cwd=owner/, OWNER_DATABASE_URL overridden) before
@@ -268,10 +279,25 @@ jobs:
           python -c "import json,sys; d=json.load(open('bandit-results.json')); h=[r for r in d['results'] if r['issue_severity'] in ('HIGH','MEDIUM')]; sys.exit(1 if h else 0)"
 
       - name: Secret scanning
+        # .secrets.baseline holds the disposition from
+        # docs/owner/phase9_5b_r3/secret-scan-false-positive-review.md, where
+        # every finding across this codebase (dev-only placeholder secrets,
+        # localhost-only dev DB connection strings, synthetic test fixtures,
+        # Alembic's own auto-generated revision hashes, historical evidence
+        # docs) was individually reviewed and justified -- not a blanket
+        # allowlist, an audited disposition of specific, already-reviewed
+        # findings. `scan --baseline` only reports entries NOT already in it
+        # (i.e. genuinely new), so this still catches a real new secret while
+        # not re-failing on content already reviewed line-by-line.
         run: |
           pip install detect-secrets
-          detect-secrets scan --all-files > secrets-baseline.json
-          python -c "import json; d=json.load(open('secrets-baseline.json')); assert not d.get('results'), 'potential secret found -- see secrets-baseline.json'"
+          detect-secrets scan --baseline .secrets.baseline
+          python -c "
+          import json
+          d = json.load(open('.secrets.baseline'))
+          unaudited = [(f, r['line_number']) for f, entries in d['results'].items() for r in entries if 'is_secret' not in r]
+          assert not unaudited, f'new, unaudited potential secret(s): {unaudited} -- review and run: detect-secrets audit .secrets.baseline'
+          "
 
       - name: Dependency scanning
         run: |
