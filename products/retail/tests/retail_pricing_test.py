@@ -434,3 +434,55 @@ def test_dashboard_breakdown_internally_consistent():
     assert gross_from_net_plus_returns == pytest.approx(true_gross, abs=0.01)
     # Wave 0 / AUDIT-004: tax-inclusive refund, see test_partial_return.
     assert d["today_returns"] == pytest.approx(115.0, abs=0.01)
+
+
+def test_hourly_chart_zero_fills_quiet_hours_instead_of_dropping_them(monkeypatch):
+    """Regression for the dashboard's "Revenue Today (by Hour)" chart:
+    dashboard_stats() used to GROUP BY hr over sales rows only, so any hour
+    with zero revenue was dropped from hourly_labels/hourly_data entirely
+    instead of appearing as an explicit zero. Chart.js renders a plain
+    category axis (one bar per array entry -- subsystem-retail.js), so
+    dropping quiet hours made e.g. a sale at 09:00 and nothing again until
+    15:00 render as two ADJACENT bars, indistinguishable from sales at 09:00
+    and 10:00 -- a business day with real gaps looked continuous.
+
+    "Now" is frozen to 15:30 so the expected hour range (00:00..15:00) is
+    deterministic regardless of when the suite actually runs.
+    """
+    client, cid, pid, bid = _make_admin_and_client()
+
+    import api.retail_api as retail_api_module
+    import datetime as _dt_module
+
+    class _FrozenDateTime(_dt_module.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return _dt_module.datetime(2026, 1, 1, 15, 30, 0)
+
+    monkeypatch.setattr(retail_api_module, 'datetime', _FrozenDateTime)
+
+    rconn = get_retail_conn()
+    # The exact scenario from the bug report: one sale at 09:00, the next
+    # not until 15:00 -- everything in between (and before/after) must still
+    # show up as a real zero, not be missing from the arrays.
+    for hr, total in (('09', 120.0), ('15', 80.0)):
+        rconn.execute(
+            "INSERT INTO sales (company_id,sale_number,branch_id,total,payment_method,idempotency_key,created_at) "
+            "VALUES (?,?,?,?, 'cash', ?, ?)",
+            (cid, f'SALE-HR-{hr}-{uuid.uuid4().hex[:8]}', bid, total, str(uuid.uuid4()), f'2026-01-01 {hr}:00:00'),
+        )
+    rconn.commit()
+    rconn.close()
+
+    d = _dashboard(client)
+
+    # 00:00 through 15:00 inclusive == 16 entries, not just the 2 hours that
+    # actually had a sale.
+    assert d['hourly_labels'] == [f'{h:02d}:00' for h in range(16)]
+    assert len(d['hourly_data']) == 16
+
+    by_label = dict(zip(d['hourly_labels'], d['hourly_data']))
+    assert by_label['09:00'] == 120.0
+    assert by_label['15:00'] == 80.0
+    for quiet_hr in ('00:00', '05:00', '10:00', '12:00', '14:00'):
+        assert by_label[quiet_hr] == 0.0, f'{quiet_hr} should be a real zero, not dropped'

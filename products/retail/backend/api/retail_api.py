@@ -210,14 +210,22 @@ def dashboard_stats():
         WHERE p.company_id=? AND COALESCE(b.qty,0) <= p.reorder_level AND p.status='active'
     """, (cid, cid)).fetchone()[0] or 0
 
-    # Hourly breakdown today
-    hourly = conn.execute("""
+    # Hourly breakdown today -- zero-fill every hour from midnight through the
+    # current hour instead of only emitting hours that had a sale. GROUP BY hr
+    # alone drops quiet hours entirely, so e.g. sales at 09:00 and then not
+    # again until 15:00 used to produce two ADJACENT array entries; Chart.js
+    # renders a plain category axis (one bar per entry, subsystem-retail.js),
+    # so the gap silently disappeared and the chart looked like a continuous
+    # business day instead of showing the real slow period.
+    hourly_rows = conn.execute("""
         SELECT strftime('%H',created_at) as hr, COALESCE(SUM(total),0) as rev, COUNT(*) as cnt
         FROM sales WHERE company_id=? AND date(created_at)=?
         GROUP BY hr ORDER BY hr
     """, (cid, today)).fetchall()
-    hourly_labels = [f"{r['hr']}:00" for r in hourly]
-    hourly_data   = [round(r['rev'], 2) for r in hourly]
+    hourly_by_hr = {r['hr']: r['rev'] for r in hourly_rows}
+    current_hour = int(datetime.now().strftime('%H'))  # local time, matching `today`'s local-date boundary above
+    hourly_labels = [f"{h:02d}:00" for h in range(current_hour + 1)]
+    hourly_data   = [round(hourly_by_hr.get(f"{h:02d}", 0.0), 2) for h in range(current_hour + 1)]
 
     # Payment method breakdown today
     pay_rows = conn.execute("""
