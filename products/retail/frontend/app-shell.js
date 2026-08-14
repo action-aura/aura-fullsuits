@@ -399,6 +399,26 @@ const SubsystemApp = {
     // retail dashboard — there is no other subsystem to choose between.
     this.launch('retail', 'dashboard');
   },
+
+  // Device license activation/status page (licensing.html + licensing.js,
+  // wired to /api/licensing/* since Phase 7 Part G) was never linked from
+  // this shell -- no nav entry, no settings section, no restricted-license
+  // banner anywhere reached it, so once OWNER_LICENSING_BASE_URL is
+  // configured there was no discoverable way for an installer/admin to
+  // activate or reactivate a device short of being told the raw URL
+  // out-of-band. Plain same-window navigation (not window.open/new tab):
+  // this shell also runs inside the pywebview desktop window and the
+  // Edge --app fallback (products/retail/desktop/launcher_retail.py),
+  // neither of which reliably opens a second window/tab the way a normal
+  // browser does, so in-place navigation is the one approach that behaves
+  // the same across native window, Edge --app, and default-browser launch.
+  // licensing.html carries its own "Back to Aura Retail" link (see that
+  // file) to return here, mirroring the Android app's onOpenLicensing /
+  // onBack round trip (android/aura-retail/.../ui/AppRoot.kt).
+  openLicensing() {
+    location.href = '/static/licensing.html';
+  },
+
   async logout() {
     // Stopped BEFORE the logout fetch, not after: the global auth guard
     // intercepts any /api/ 401 and pops the relogin modal, so a sync-health
@@ -663,6 +683,9 @@ const SubsystemApp = {
             <span class="ai-pulse"></span>
           </button>
           ` : ''}
+          <button class="sub-exit-btn" onclick="SubsystemApp.openLicensing()" title="Device license activation and status">
+            <span>🔑</span> <span>${t('License')}</span>
+          </button>
           <button class="sub-exit-btn" onclick="SubsystemApp.logout()" style="background:rgba(239,68,68,0.1);border-color:rgba(239,68,68,0.25);color:#f87171;margin-top:4px;">
             <span>⏻</span> <span>${t('Log Out')}</span>
           </button>

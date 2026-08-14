@@ -60,12 +60,24 @@
   dt { font-size: 0.78rem; color: #777; margin-top: 10px; }
   dd { margin: 0; font-size: 0.92rem; }
   .support { font-size: 0.85rem; color: #777; margin-top: 24px; }
+  .back-link {
+    display: inline-block; margin-bottom: 18px; font-size: 0.85rem;
+    color: #2563eb; text-decoration: none;
+  }
+  .back-link:hover { text-decoration: underline; }
+  @media (prefers-color-scheme: dark) { .back-link { color: #8fb4ff; } }
   .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #fff;
     border-top-color: transparent; border-radius: 50%; animation: spin 0.7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
+  <!-- This page is a standalone route (see licensing.js header comment) that
+       was, until now, unreachable from and unable to return to the main app
+       shell -- there was no nav entry into it and no link back out of it.
+       This anchor closes the loop: index.html's root route ('/') re-renders
+       the authenticated shell from the existing session cookie. -->
+  <a class="back-link" href="/">&larr; Back to Aura Retail</a>
   <h1>Aura Retail Licensing</h1>
   <div class="subtitle">Activation and license status for this installation.</div>
 
