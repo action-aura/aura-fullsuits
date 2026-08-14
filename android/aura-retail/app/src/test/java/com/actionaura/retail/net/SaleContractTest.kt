@@ -62,7 +62,7 @@ class SaleContractTest {
     fun createSaleRequest_serializes_only_commercial_intent_json_keys() {
         val req = CreateSaleRequest(
             amount_paid = 88.0, payment_method = "cash",
-            items = listOf(SaleItemReq(product_id = 1, quantity = 1.0, discount_pct = 20.0)),
+            items = listOf(SaleItemReq(product_id = "1", quantity = 1.0, discount_pct = 20.0)),
             idempotency_key = "test-key-1",
         )
         val json = gson.toJsonTree(req).asJsonObject
@@ -122,7 +122,7 @@ class SaleContractTest {
         // proof that no zero-tax value can even be sent.
         val req = CreateSaleRequest(
             amount_paid = 999.0, payment_method = "cash",
-            items = listOf(SaleItemReq(product_id = 7, quantity = 1.0)),
+            items = listOf(SaleItemReq(product_id = "7", quantity = 1.0)),
             idempotency_key = UUID.randomUUID().toString(),
         )
         assertEquals(0.0, req.items[0].discount_pct, 0.0)   // default, not an assumption of "no tax"
