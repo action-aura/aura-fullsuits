@@ -1251,9 +1251,20 @@ const RetailSystem = {
     if (this._paymentMethod === 'cash' && tendered > 0 && tendered < total) {
       SubsystemApp.showToast('Cash tendered is less than total', 'error'); return;
     }
+    const customerId = document.getElementById('pos-customer')?.value || null;
+    // AUDIT: mirrors retail_api.py's credit-sale rule ("Credit sales require
+    // a customer (walk-in not allowed).") on this side of the wire too.
+    // Before this check, clicking Credit with no customer selected sailed
+    // straight into _post() -- the button flipped to "Processing…", then
+    // reverted a beat later once the server's 400 came back, with the only
+    // explanation being a toast the cashier had to read fast. Catching it
+    // here means the button never even starts processing for a sale that
+    // was never going to succeed.
+    if (this._paymentMethod === 'credit' && !customerId) {
+      SubsystemApp.showToast('Credit sales require a customer (walk-in not allowed)', 'error'); return;
+    }
     const btn = document.getElementById('pos-checkout-btn');
     if (btn) { btn.textContent = 'Processing…'; btn.disabled = true; }
-    const customerId = document.getElementById('pos-customer')?.value || null;
     const payload = {
       idempotency_key: `pos_${Date.now()}`,
       customer_id: customerId || null,
