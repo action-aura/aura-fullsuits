@@ -403,6 +403,22 @@ def create_product():
         if existing:
             conn.close()
             return jsonify({'status': 'error', 'message': 'SKU already exists'}), 409
+        # AUDIT (2026-08-14): barcode had no uniqueness check here, unlike SKU above --
+        # two products could end up sharing one barcode (typo, or the same physical
+        # label scanned twice). Both the desktop scanner lookup (_findByCode) and the
+        # Android ProductLookup.findProductByCode resolve a scanned code with a
+        # first-match lookup, so a duplicate barcode makes scanning silently resolve
+        # to whichever product sorts first -- wrong item, wrong price, no warning to
+        # the cashier. Blank barcodes are exempt (most products never get one) and
+        # deactivated products still count, matching the SKU check's own behavior.
+        if data.get('barcode'):
+            existing_barcode = conn.execute(
+                "SELECT id FROM products WHERE company_id=? AND barcode=?",
+                (cid, data['barcode'])
+            ).fetchone()
+            if existing_barcode:
+                conn.close()
+                return jsonify({'status': 'error', 'message': 'Barcode already exists'}), 409
         cur = conn.cursor()
         pid = str(_uuid.uuid4())
         cur.execute("""
@@ -458,6 +474,19 @@ def update_product(pid):
     if not fields:
         return jsonify({'status': 'error', 'message': 'No valid fields'}), 400
     conn = get_retail_conn()
+    # AUDIT (2026-08-14): PATCH let barcode be set to any value with no uniqueness
+    # check at all -- see the matching create_product fix above for why a shared
+    # barcode is a real scanning-safety bug, not just a data-quality nit. Same
+    # blank-exempt rule as create; excludes this product's own row so re-saving
+    # an unchanged barcode doesn't false-positive against itself.
+    if fields.get('barcode'):
+        existing_barcode = conn.execute(
+            "SELECT id FROM products WHERE company_id=? AND barcode=? AND id<>?",
+            (cid, fields['barcode'], pid)
+        ).fetchone()
+        if existing_barcode:
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'Barcode already exists'}), 409
     cur = conn.cursor()
     sets = ', '.join(f'{k}=?' for k in fields)
     cur.execute(f'UPDATE products SET {sets} WHERE id=? AND company_id=?',
