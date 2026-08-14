@@ -1539,10 +1539,28 @@ def create_sale():
                 WHERE id=? AND company_id=?
             """, (total, pts, customer_id, cid))
 
-        # Ledger: record the amount actually received now (feeds the daily cash
-        # summary), and push any unpaid balance onto the customer's AR.
-        if paid > 0.005:
-            _record_payment(conn, cid, ('customer' if customer_id else None), customer_id, 'in', paid,
+        # Ledger: record the amount actually RETAINED now (feeds the daily
+        # cash summary/drawer close), and push any unpaid balance onto the
+        # customer's AR.
+        #
+        # Real bug fixed here: `paid` is the gross amount tendered (e.g. $50
+        # handed over for a $42 sale) -- `change` (computed above) is the
+        # portion handed straight back out and never stays in the drawer.
+        # This ledger entry used to record the full `paid`, so
+        # cash_session_summary()'s cash_sales total (SUM of this same
+        # ledger, filtered to method='cash') silently counted change given
+        # back as money still in the drawer -- every cash sale with change
+        # inflated the expected-cash figure by exactly that change amount,
+        # showing a phantom shortage at close. net_received = min(paid,
+        # total) is the correct amount actually retained: unchanged from
+        # `paid` for a partial/credit sale (paid <= total, nothing given
+        # back), reduced to `total` whenever change was given. The `sales`
+        # row itself still stores the full amount_paid/change_amount split
+        # untouched -- receipts keep showing the real tendered/change
+        # breakdown; only this ledger entry (drawer math) changes.
+        net_received = min(paid, total)
+        if net_received > 0.005:
+            _record_payment(conn, cid, ('customer' if customer_id else None), customer_id, 'in', net_received,
                             method=(pm if pm != 'credit' else 'cash'),
                             related_type='sale', related_id=sale_id, doc_type='receipt')
         if is_credit and balance_due > 0.005 and customer_id:
@@ -1910,7 +1928,10 @@ def create_return():
                 conn.close()
                 return jsonify({'status': 'success', 'data': {'id': ex['id'], 'return_number': ex['return_number']}})
 
-        sale = cur.execute("SELECT id, branch_id FROM sales WHERE id=? AND company_id=?", (sale_id, cid)).fetchone()
+        sale = cur.execute(
+            "SELECT id, branch_id, customer_id, total, amount_paid FROM sales WHERE id=? AND company_id=?",
+            (sale_id, cid)
+        ).fetchone()
         if not sale:
             conn.close()
             return jsonify({'status': 'error', 'message': 'Original sale not found.'}), 404
@@ -2023,6 +2044,34 @@ def create_return():
                 INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,created_by)
                 VALUES (?,?,?,'return_in',?,?,?)
             """, (cid, pid, bid, qty, ret_num, _uid()))
+
+        # Real bug fixed here: a return against a sale that was never fully
+        # paid (credit sale, or a partial-payment cash sale) never touched
+        # the customer's credit_balance at all -- they'd still owe the full
+        # original amount after getting the item back. sale.total/
+        # amount_paid are the ORIGINAL sale's own immutable figures (never
+        # edited after the fact, per this file's "never edit/delete, only
+        # reverse" policy), so original_balance_due is exactly what was
+        # ever actually owed on this specific sale. Credited amount is
+        # capped at min(refund, original_balance_due, current
+        # credit_balance): the first cap keeps a return that's smaller than
+        # the outstanding balance from over-crediting; the second guards
+        # against multiple partial returns against the same credit sale
+        # ever driving credit_balance negative (this file has no per-return
+        # AR-credited ledger to attribute exactly, so the customer's live
+        # balance is the real, final backstop -- it can never go below what
+        # they'd otherwise be credited elsewhere).
+        if sale['customer_id']:
+            original_balance_due = max(0.0, _money(float(sale['total']) - float(sale['amount_paid'] or 0)))
+            if original_balance_due > 0.005:
+                current_balance = cur.execute(
+                    "SELECT COALESCE(credit_balance,0) FROM customers WHERE id=? AND company_id=?",
+                    (sale['customer_id'], cid)
+                ).fetchone()[0]
+                ar_credit = min(refund, original_balance_due, float(current_balance))
+                if ar_credit > 0.005:
+                    _adjust_credit(conn, 'customers', sale['customer_id'], cid, -ar_credit)
+
         _audit(conn, 'RETURN_PROCESSED', 'return', ret_id, f'{ret_num} refund={refund}')
         conn.commit()
         return jsonify({'status': 'success', 'data': {

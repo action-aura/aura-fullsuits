@@ -366,3 +366,29 @@ def test_no_background_thread_exists_from_cash_session_routes():
     _close(client, sid, 15.0)
     names = {t.name for t in threading.enumerate()}
     assert names.issubset(baseline | {'MainThread'})
+
+
+def test_cash_change_given_is_not_counted_as_still_in_the_drawer():
+    """Real bug, fixed: a cash sale's ledger entry (which cash_sales sums)
+    used to record the full amount TENDERED, not what's actually retained
+    after change goes back out. A customer handing over $150 for a $100
+    sale leaves $100 in the drawer, not $150 -- every shift with change
+    given showed a phantom shortage at close of exactly the total change
+    given. sales.amount_paid/change_amount (the receipt's own tendered/
+    change breakdown) are untouched by this fix; only the drawer-facing
+    ledger entry changed."""
+    client, cid, pid = _make_admin_and_product(price=100.0)
+    sid = _open_shift(client, 0.0).get_json()['data']['id']
+
+    # $150 handed over for a $100 sale -- $50 change given back.
+    sale = _sell_cash(client, pid, qty=1, amount_paid=150.0).get_json()['data']
+    assert sale['amount_paid'] == 150.0
+    assert sale['change'] == 50.0
+
+    report = _x_report(client, sid).get_json()['data']
+    assert report['cash_sales'] == 100.0, "must be the sale total actually retained, not the $150 tendered"
+    assert report['expected_cash'] == 100.0
+
+    close_resp = _close(client, sid, 100.0)
+    assert close_resp.get_json()['data']['session']['variance'] == 0.0, \
+        "counting the real $100 in the drawer must show zero variance, not a $50 phantom shortage"

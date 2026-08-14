@@ -300,3 +300,106 @@ def test_discounted_sale_return_reverses_discount_and_tax_proportionally():
     r = _return(client, sale['id'], pid, quantity=1)
     assert r.status_code == 200, r.get_json()
     assert r.get_json()['data']['refund_amount'] == 88.0
+
+
+def _make_credit_customer(cid, name='Credit Customer'):
+    """Direct DB insert + credit_mode set to 'unlimited', matching this
+    file's own established pattern of setting up fixtures directly via
+    get_retail_conn() (see _make_admin_and_product's branch/product/stock
+    setup above) rather than exercising unrelated API surface. credit_mode
+    defaults to 'none' per customer row (schema.py) regardless of the
+    company-wide settings/credit default -- that default only ever applies
+    as a fallback when a customer's OWN credit_mode is NULL, which the
+    schema default never actually leaves it as."""
+    rconn = get_retail_conn()
+    customer_id = str(uuid.uuid4())
+    rconn.execute(
+        "INSERT INTO customers (id,company_id,name,credit_mode,credit_limit,credit_balance) "
+        "VALUES (?,?,?,'unlimited',0,0)",
+        (customer_id, cid, name),
+    )
+    rconn.commit()
+    rconn.close()
+    return customer_id
+
+
+def _credit_balance(cid, customer_id):
+    """There is no GET /customers/<id> route (only PATCH/DELETE) -- read
+    the real column directly, same as this file's other DB-verification
+    assertions (e.g. the inventory_balances checks above)."""
+    rconn = get_retail_conn()
+    bal = rconn.execute(
+        "SELECT credit_balance FROM customers WHERE id=? AND company_id=?", (customer_id, cid)
+    ).fetchone()[0]
+    rconn.close()
+    return bal
+
+
+def test_return_against_unpaid_credit_sale_reduces_ar():
+    """Real bug, fixed: create_return() never touched credit_balance at all
+    -- a customer returning goods bought entirely on credit still owed the
+    full original amount afterward. A full return of a fully-unpaid sale
+    must credit the customer's AR down to zero, not leave it unchanged."""
+    client, cid, pid, bid = _make_admin_and_product(price=100.0, tax_rate=15.0, stock=10)
+    customer_id = _make_credit_customer(cid)
+
+    sale = client.post('/api/sub/retail/sales', json={
+        'items': [{'product_id': pid, 'quantity': 1}],
+        'customer_id': customer_id, 'amount_paid': 0, 'payment_method': 'credit',
+        'idempotency_key': str(uuid.uuid4()),
+    }).get_json()['data']
+    assert sale['total'] == 115.0
+    assert sale['balance_due'] == 115.0
+    assert _credit_balance(cid, customer_id) == 115.0
+
+    r = _return(client, sale['id'], pid, quantity=1)
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['data']['refund_amount'] == 115.0
+
+    assert _credit_balance(cid, customer_id) == 0.0, \
+        "returning the only item on a fully-unpaid sale must zero out what's owed"
+
+
+def test_return_against_partially_paid_sale_reduces_ar_by_the_outstanding_portion_only():
+    """A sale that was PARTLY paid in cash, partly on credit -- the return
+    must only credit back the still-outstanding portion, never more than
+    what was actually left unpaid (the cash portion isn't AR to begin
+    with)."""
+    client, cid, pid, bid = _make_admin_and_product(price=100.0, tax_rate=15.0, stock=10)
+    customer_id = _make_credit_customer(cid)
+
+    # Total 115: $65 paid now, $50 left on credit.
+    sale = client.post('/api/sub/retail/sales', json={
+        'items': [{'product_id': pid, 'quantity': 1}],
+        'customer_id': customer_id, 'amount_paid': 65.0, 'payment_method': 'credit',
+        'idempotency_key': str(uuid.uuid4()),
+    }).get_json()['data']
+    assert sale['balance_due'] == 50.0
+    assert _credit_balance(cid, customer_id) == 50.0
+
+    r = _return(client, sale['id'], pid, quantity=1)
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['data']['refund_amount'] == 115.0  # full refund figure, unrelated to AR crediting
+
+    assert _credit_balance(cid, customer_id) == 0.0, \
+        "must credit exactly the $50 that was actually owed, not the full $115 refund"
+
+
+def test_return_against_fully_paid_cash_sale_never_touches_credit_balance():
+    """A plain cash sale (no customer, or a customer who paid in full) has
+    no AR to reduce -- this must be a true no-op on credit_balance, not
+    just 'doesn't crash'."""
+    client, cid, pid, bid = _make_admin_and_product(price=100.0, tax_rate=15.0, stock=10)
+    customer_id = _make_credit_customer(cid)
+
+    sale = client.post('/api/sub/retail/sales', json={
+        'items': [{'product_id': pid, 'quantity': 1}],
+        'customer_id': customer_id, 'amount_paid': 115.0, 'payment_method': 'cash',
+        'idempotency_key': str(uuid.uuid4()),
+    }).get_json()['data']
+    assert sale['balance_due'] == 0.0
+
+    r = _return(client, sale['id'], pid, quantity=1)
+    assert r.status_code == 200, r.get_json()
+
+    assert _credit_balance(cid, customer_id) == 0.0

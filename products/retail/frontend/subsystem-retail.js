@@ -1265,6 +1265,19 @@ const RetailSystem = {
     }
     const btn = document.getElementById('pos-checkout-btn');
     if (btn) { btn.textContent = 'Processing…'; btn.disabled = true; }
+    // Real bug fixed here: create_sale() (retail_api.py) is server-
+    // authoritative on price by design (AUDIT-002/AUDIT-003) -- it computes
+    // subtotal/discount_amount/tax_amount/total itself and IGNORES those
+    // same top-level fields on this payload, deriving discount PER LINE
+    // from each item's own discount_pct instead. _addToCart() never set
+    // discount_pct on a cart item at all, so every line was silently 0%
+    // regardless of what's typed in the POS discount field -- the on-screen
+    // total was discounted (client-side display only, this._recalc()), but
+    // the actual charge was always full price. The single POS discount
+    // field means "X% off this whole sale," so the same discPct is applied
+    // to every line here, matching what the cashier and customer both see
+    // on screen.
+    const discPct = parseFloat(document.getElementById('pos-disc')?.value || 0);
     const payload = {
       idempotency_key: `pos_${Date.now()}`,
       customer_id: customerId || null,
@@ -1274,7 +1287,7 @@ const RetailSystem = {
       total,
       amount_paid:      this._paymentMethod === 'cash' ? Math.max(tendered, total) : total,
       payment_method:   this._paymentMethod,
-      items: this._cart,
+      items: this._cart.map(i => ({ ...i, discount_pct: discPct })),
     };
     try {
       const data = await this._post('/api/sub/retail/sales', payload);
