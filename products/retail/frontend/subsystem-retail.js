@@ -381,7 +381,11 @@ const RetailSystem = {
           new Chart(pCtx.getContext('2d'), {
             type: 'doughnut',
             data: { labels: pmLabels, datasets: [{ data: pmData,
-              backgroundColor: ['#10b981','#3b82f6','#f59e0b','#a855f7','#ef4444'],
+              // POS supports 6 payment methods (cash/card/mobile/transfer/credit/voucher,
+              // see the pos-pay-btns buttons below) so this palette must supply 6 colors --
+              // a 5-color array left the 6th slice on Chart.js's undefined-color fallback
+              // whenever a business day used every method.
+              backgroundColor: ['#10b981','#3b82f6','#f59e0b','#a855f7','#ef4444','#06b6d4'],
               borderWidth: 0 }] },
             options: { responsive:true, maintainAspectRatio:false,
               plugins:{ legend:{position:'right',labels:{color:tickClr,font:{size:12}}} } }
