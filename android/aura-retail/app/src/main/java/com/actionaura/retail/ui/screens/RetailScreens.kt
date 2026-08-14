@@ -116,8 +116,24 @@ fun PosScreen(snackbar: SnackbarHostState) {
     // lookup+add-to-cart logic as a CameraX/ML Kit camera scan below --
     // neither the cart nor the cashier can tell which physical source a
     // given scan came from, by design.
+    //
+    // Bug fix: HidScanBus.lastScan is a process-wide singleton with no "only
+    // while POS is on screen" gate, so this LaunchedEffect used to fire
+    // immediately with whatever scan was already sitting there the moment
+    // PosScreen (re-)entered composition -- e.g. the cashier scanned an item
+    // while on another tab, or simply reopened POS after already scanning
+    // earlier in the session (the cart above is plain `remember` and gets
+    // discarded on tab switch, but HidScanBus.lastScan is not). That stale
+    // scan would get silently applied to the now-different cart. We remember
+    // the seq already seen at the moment this screen entered composition and
+    // only ever act on a strictly newer one (see isUnconsumedScan).
+    var lastConsumedScanSeq by remember {
+        mutableStateOf(com.actionaura.retail.barcode.HidScanBus.lastScan?.seq ?: -1L)
+    }
     LaunchedEffect(com.actionaura.retail.barcode.HidScanBus.lastScan) {
         val event = com.actionaura.retail.barcode.HidScanBus.lastScan ?: return@LaunchedEffect
+        if (!com.actionaura.retail.barcode.isUnconsumedScan(event, lastConsumedScanSeq)) return@LaunchedEffect
+        lastConsumedScanSeq = event.seq
         val p = com.actionaura.retail.barcode.findProductByCode(products, event.code)
         if (p != null) {
             lastScanned = if (addOne(p)) "✓ ${p.name}"
