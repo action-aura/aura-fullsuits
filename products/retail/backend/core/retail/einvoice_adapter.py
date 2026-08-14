@@ -70,11 +70,35 @@ def build_document(conn, outbox_row) -> EInvoiceDocument:
         (source_id,),
     ).fetchall()
 
+    # Read the company's configured tax_calculation_mode the SAME way
+    # retail_api.py::create_sale() did when it originally priced this sale
+    # (SELECT against retail_settings -- see that module's _settings()) and
+    # schema.py's _seed_retail demo seeder does for the identical lookup.
+    # Without this, calculate_line() below silently falls back to its own
+    # DEFAULT_MODE (TAX_AFTER_DISCOUNT), so a company configured for
+    # TAX_BEFORE_DISCOUNT would get EInvoiceLine.discount_amount/tax_amount
+    # that disagree with what the sale actually charged. core/retail must
+    # not import api.retail_api's _settings() to get this (api/ already
+    # imports THIS module -- see enqueue_sale's callers -- so the reverse
+    # import would invert that layering), hence the direct query here
+    # instead, wrapped the same defensive way schema.py's copy is (a
+    # brand-new company whose retail_settings table row doesn't exist yet
+    # must still build a valid, if default-mode, document).
+    try:
+        _mode_row = conn.execute(
+            "SELECT svalue FROM retail_settings WHERE company_id=? AND skey='tax_calculation_mode'",
+            (company_id,),
+        ).fetchone()
+        tax_mode = tax_engine.normalize_mode(_mode_row[0] if _mode_row else None)
+    except Exception:
+        tax_mode = tax_engine.DEFAULT_MODE  # retail_settings not created yet (fresh install) -- use the default
+
     lines = []
     for item in item_rows:
         calc = tax_engine.calculate_line(
             float(item['unit_price']), float(item['quantity']),
             float(item['discount_pct'] or 0), float(item['tax_rate'] or 0),
+            mode=tax_mode,
         )
         lines.append(EInvoiceLine(
             description=item['product_name'], quantity=float(item['quantity']),

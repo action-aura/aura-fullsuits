@@ -252,6 +252,44 @@ def test_build_document_uses_outbox_row_invoice_family_not_live_setting():
     )
 
 
+def test_build_document_respects_configured_tax_calculation_mode():
+    """Regression test: build_document() must price EInvoiceLine.discount_amount/
+    tax_amount using the COMPANY'S configured tax_calculation_mode (retail_settings),
+    the same setting retail_api.py::create_sale() already used to compute the
+    real, persisted sale/sale_items figures -- not pricing.py's DEFAULT_MODE
+    (TAX_AFTER_DISCOUNT). Before this fix, calculate_line() was called here
+    with no mode= argument at all, so a company configured for
+    TAX_BEFORE_DISCOUNT still silently got TAX_AFTER_DISCOUNT math baked into
+    these two fields (currently inert -- ubl.py never reads them -- but wrong
+    the moment anything starts reading them)."""
+    client, cid, pid, bid = _make_admin_and_product(price=100.0, tax_rate=16.0)
+    r = client.post('/api/sub/retail/settings/tax', json={'tax_calculation_mode': 'before_discount'})
+    assert r.status_code == 200, r.get_json()
+    client.post('/api/einvoicing/settings', json={'enabled': '1'})
+
+    sale = _sell(client, pid, extra={'items': [{'product_id': pid, 'quantity': 1, 'discount_pct': 10}]})
+    ref = sale['einvoice']['invoice_ref']
+
+    import core.retail.einvoice_adapter as adapter
+    conn = get_retail_conn()
+    row = conn.execute("SELECT * FROM einvoice_outbox WHERE invoice_ref=?", (ref,)).fetchone()
+    doc = adapter.build_document(conn, row)
+    conn.close()
+
+    line = doc.lines[0]
+    # unit_price=100, qty=1, discount_pct=10%, tax_rate=16%, mode=before_discount:
+    #   tax ignores the discount -> tax = 100 * 0.16 = 16.00
+    #   discount_amount = 100 * 0.10 = 10.00
+    # (the old no-mode-passed bug would wrongly compute TAX_AFTER_DISCOUNT's
+    # tax = (100 - 10) * 0.16 = 14.40 instead.)
+    assert line.tax_amount == 16.00, (
+        f"expected tax_amount=16.00 under TAX_BEFORE_DISCOUNT, got {line.tax_amount} -- "
+        "build_document() is not passing the company's configured tax_calculation_mode "
+        "into calculate_line()"
+    )
+    assert line.discount_amount == 10.00
+
+
 def test_enabled_at_prevents_backfilling_pre_enablement_sales():
     client, cid, pid, bid = _make_admin_and_product()
     # Sale happens BEFORE the feature is ever enabled.
