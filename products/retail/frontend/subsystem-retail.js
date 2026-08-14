@@ -655,6 +655,21 @@ const RetailSystem = {
     this._renderPOSGrid();
   },
 
+  // Stored-XSS fix: p.name (and item.name / i.name at the cart, sale-complete
+  // modal, and printed-receipt call sites below) is rendered here even
+  // though it was set by _esc()'s own original rationale for "locally-
+  // created records" -- that reasoning doesn't hold for product names.
+  // Unlike this file's own hand-typed strings, a product name can arrive
+  // from the CSV Import Wizard (no sanitization there) or from any logged-in
+  // user, and CLAUDE.md is explicit that this app has "no real RBAC -- only
+  // a bare role string" -- so a low-trust user can plant a name like
+  // `"><img src=x onerror=...>` that then executes in a manager's or
+  // cashier's browser (with cookies, via credentials:'include' fetches) the
+  // moment the product is shown on the POS grid, added to the cart, shown on
+  // the sale-complete receipt modal, or printed. _renderProductTable already
+  // escapes this exact field (this._esc(p.name)) on the Products table --
+  // this makes the POS-side rendering consistent with that existing
+  // convention instead of trusting the same field raw.
   _renderPOSGrid(filter = '') {
     const grid = document.getElementById('pos-product-grid');
     if (!grid) return;
@@ -678,7 +693,7 @@ const RetailSystem = {
       return `<div class="pos-card${outOfStock?' pos-card-outofstock':''}"
           onclick="${outOfStock ? "SubsystemApp.showToast('Out of stock','error')" : `RetailSystem._addToCart('${this._esc(p.id)}')`}">
         <div class="pos-card-icon">${icon}</div>
-        <div class="pos-card-name" title="${p.name}">${p.name}</div>
+        <div class="pos-card-name" title="${this._esc(p.name)}">${this._esc(p.name)}</div>
         <div class="pos-card-price">${this._fmt(p.sell_price)}</div>
         <div class="pos-card-stock" style="color:${stockClr}">
           ${outOfStock ? 'Out of stock' : `Stock: ${p.total_stock} ${p.unit||''}`}
@@ -924,7 +939,7 @@ const RetailSystem = {
     container.innerHTML = this._cart.map((item, i) => `
       <div class="pos-cart-row${item.product_id === newId ? ' pos-row-new' : ''}">
         <div style="flex:1">
-          <div class="pos-item-name">${item.name}</div>
+          <div class="pos-item-name">${this._esc(item.name)}</div>
           <div class="pos-item-meta">${this._fmt(item.unit_price)} × ${item.quantity}</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px">
@@ -1292,7 +1307,7 @@ const RetailSystem = {
         <p style="color:var(--text-muted);margin:0 0 20px">Receipt #${saleData.sale_number}</p>
         <div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:16px;text-align:left;margin-bottom:20px">
           ${(saleData.lines||[]).map(i=>`<div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px">
-            <span style="color:#94a3b8">${i.name || ('#'+i.product_id)} ×${i.quantity}</span>
+            <span style="color:#94a3b8">${this._esc(i.name || ('#'+i.product_id))} ×${i.quantity}</span>
             <span style="color:#fff">${this._fmt(i.line_total)}</span>
           </div>`).join('')}
           <div style="border-top:1px dashed rgba(255,255,255,0.1);margin:10px 0;padding-top:10px">
@@ -1356,7 +1371,7 @@ const RetailSystem = {
     const widthMm = cfg.paperWidth === '58mm' ? 58 : 80;
     const lines = (saleData.lines || []).map(i => `
       <div class="rcpt-line">
-        <span>${(i.name || ('#'+i.product_id))} ×${i.quantity}</span>
+        <span>${this._esc(i.name || ('#'+i.product_id))} ×${i.quantity}</span>
         <span>${this._fmt(i.line_total)}</span>
       </div>`).join('');
     const einvoiceBlock = await this._einvoiceReceiptBlock(saleData);
