@@ -299,7 +299,7 @@ const RetailSystem = {
         <div style="overflow-x:auto">
           <table class="ret-table" id="r-dash-recent">
             <thead><tr><th>Receipt #</th><th>Customer</th><th>Items</th><th>Payment</th><th>Total</th><th>Time</th></tr></thead>
-            <tbody><tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">Loading…</td></tr></tbody>
+            <tbody><tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:30px">Loading…</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -395,15 +395,15 @@ const RetailSystem = {
       const tbody = document.querySelector('#r-dash-recent tbody');
       const recent = d.recent_sales || [];
       if (recent.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">No transactions yet today</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:30px">No transactions yet today</td></tr>';
       } else {
         tbody.innerHTML = recent.map(s => `<tr style="cursor:pointer" onclick="RetailSystem._viewSale(${s.id})" title="View invoice">
           <td style="font-family:monospace;color:var(--sub-accent)">${s.sale_number}</td>
           <td>${s.customer_name||'Walk-in'}</td>
-          <td style="color:var(--text-muted)">${s.item_count||0} items</td>
+          <td style="color:var(--text-dim)">${s.item_count||0} items</td>
           <td>${this._badge(s.payment_method||'cash', s.payment_method==='cash'?'green':'blue')}</td>
           <td style="font-weight:700">${this._fmt(s.total)}</td>
-          <td style="color:var(--text-muted);font-family:monospace">${(s.created_at||'').slice(11,16)}</td>
+          <td style="color:var(--text-dim);font-family:monospace">${(s.created_at||'').slice(11,16)}</td>
         </tr>`).join('');
       }
     } catch(e) {
