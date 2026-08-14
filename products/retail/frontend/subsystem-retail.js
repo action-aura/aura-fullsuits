@@ -1481,6 +1481,19 @@ const RetailSystem = {
     ));
   },
 
+  // Stored-XSS fix: the Stock/Delete buttons' onclick attribute used to
+  // build the JS argument from p.name with only apostrophes
+  // backslash-escaped (`p.name.replace(/'/g,"\\'")`), never routed through
+  // this._esc() the way the name `<td>` two lines above already does. A
+  // double quote in the name (e.g. from the CSV Import Wizard, which does
+  // no sanitization, or from any logged-in user -- CLAUDE.md: "no real RBAC")
+  // terminated the double-quoted onclick="..." attribute early, letting the
+  // rest of the name plant a brand new attribute (like onmouseover=...) on
+  // the <button> that the browser then executes. Matches the same
+  // this._esc(name).replace(/'/g,"\\'") convention already used for
+  // suppliers below, and this._esc(name) is applied again at the
+  // Stock-adjust modal's title in _openStockAdjust since that's a second,
+  // independent innerHTML sink for the same field.
   _renderProductTable(prods) {
     const tbody = document.querySelector('#prod-table tbody');
     if (!tbody) return;
@@ -1501,8 +1514,8 @@ const RetailSystem = {
         <td>${this._badge('Active','green')}</td>
         <td onclick="event.stopPropagation()" style="display:flex;gap:6px">
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditProduct('${this._esc(p.id)}')">Edit</button>
-          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openStockAdjust('${this._esc(p.id)}','${p.name.replace(/'/g,"\\'")}',${p.total_stock})">Stock</button>
-          <button class="ret-btn ret-btn-danger ret-btn-sm" onclick="RetailSystem._deleteProduct('${this._esc(p.id)}','${p.name.replace(/'/g,"\\'")}')">Delete</button>
+          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openStockAdjust('${this._esc(p.id)}','${this._esc(p.name).replace(/'/g,"\\'")}',${p.total_stock})">Stock</button>
+          <button class="ret-btn ret-btn-danger ret-btn-sm" onclick="RetailSystem._deleteProduct('${this._esc(p.id)}','${this._esc(p.name).replace(/'/g,"\\'")}')">Delete</button>
         </td>
       </tr>`;
     }).join('');
@@ -1609,7 +1622,7 @@ const RetailSystem = {
     overlay.id = 'ret-stock-modal';
     overlay.innerHTML = `
       <div class="ret-modal" style="width:380px">
-        <h3>📦 Adjust Stock — ${name}</h3>
+        <h3>📦 Adjust Stock — ${this._esc(name)}</h3>
         <p style="color:var(--text-muted);margin:0 0 20px">Current stock: <strong style="color:#fff">${currentStock}</strong></p>
         <div class="ret-field"><label>Adjustment Quantity (+ to add, − to deduct)</label>
           <input type="number" id="sa-qty" placeholder="+10 or -5" step="1" /></div>
