@@ -20,6 +20,7 @@ Run:
     pytest products/clinic/tests/clinic_onboarding_auth_test.py -v
 """
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -225,6 +226,36 @@ def test_disabled_account_cannot_login():
     with app.test_client() as c:
         r = c.post('/api/auth/login', json={'email': email, 'password': 'DisabledPW1'})
         assert r.status_code == 403
+
+
+def test_employee_setup_rejects_password_shorter_than_six_chars():
+    """Regression: employee_setup() (the self-service invite-link password
+    form) used to enforce no minimum password length at all, unlike
+    create_admin() which requires 6+ characters -- hash_password() itself
+    only rejects an EMPTY string, so a 1-character password sailed straight
+    through and got hashed/stored. Exercises the real end-to-end flow
+    (admin -> create-employee -> invite link -> employee/setup) rather than
+    inserting a row directly, so it proves the HTTP-layer policy gate."""
+    admin_email = f'setup-admin-{uuid.uuid4().hex[:8]}@test.local'
+    _make_company_user(admin_email, 'SetupAdminPW1', role='admin')
+    admin = app.test_client()
+    r = admin.post('/api/auth/login', json={'email': admin_email, 'password': 'SetupAdminPW1'})
+    assert r.status_code == 200, r.get_json()
+
+    staff_email = f'weak-setup-{uuid.uuid4().hex[:8]}@test.local'
+    r2 = admin.post('/api/admin/employees', json={'email': staff_email})
+    assert r2.status_code == 200, r2.get_json()
+    setup_url = r2.get_json()['setup_link']
+    token = re.search(r'/#setup/([0-9a-f]+)', setup_url).group(1)
+
+    setup_client = app.test_client()
+    r3 = setup_client.post('/api/auth/employee/setup', json={'token': token, 'password': 'x'})
+    assert r3.status_code == 400, r3.get_json()
+
+    # The rejected request must not have logged the employee in with a
+    # 1-character password.
+    r4 = app.test_client().post('/api/auth/login', json={'email': staff_email, 'password': 'x'})
+    assert r4.status_code in (401, 403)
 
 
 def test_cookie_hardening_flags():

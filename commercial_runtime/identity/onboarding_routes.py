@@ -518,6 +518,13 @@ def employee_setup():
     password = data.get('password')
     if not token or not password:
         return jsonify({'error': 'Missing data'}), 400
+    # Same minimum-length policy create_admin() enforces (line ~107) -- this
+    # is the OTHER account-creation path (invite-link self-service), and
+    # without this check an employee could set a 1-character password:
+    # hash_password() itself only rejects an empty string, it is not a
+    # policy gate.
+    if len(password) < 6:
+        return jsonify({'error': 'Password must be at least 6 characters.'}), 400
 
     conn = get_conn()
     try:
