@@ -170,16 +170,26 @@ class SaleContractTest {
 
     @Test
     fun returnResult_deserializes_authoritative_tax_inclusive_refund() {
+        // product_id here is a real UUID string, not a small integer --
+        // return_items.product_id (and products.id) has been TEXT since
+        // RETAIL_SCHEMA_VERSION 7, and create_return() (retail_api.py)
+        // echoes it back verbatim in this exact response shape. A fixture
+        // using a bare numeric product_id (as this test previously did)
+        // would still deserialize fine into an Int field and never catch
+        // ReturnItemResult.product_id being mistyped as Int -- only a
+        // UUID-shaped value exercises the real production wire format.
         val json = """{"status":"success","data":{
             "id": 5, "return_number": "RET-000005-abcd1234",
             "refund_amount": 115.0, "idempotency_key": "r-1",
-            "items": [{"product_id": 7, "quantity": 1.0, "unit_price": 100.0,
-                       "discount_amount": 0.0, "tax_amount": 15.0, "line_total": 115.0}],
+            "items": [{"product_id": "3f2504e0-4f89-11d3-9a0c-0305e82c3301", "quantity": 1.0,
+                       "unit_price": 100.0, "discount_amount": 0.0, "tax_amount": 15.0,
+                       "line_total": 115.0}],
             "calculation_version": "retail-pricing-v2-wave0"
         }}"""
         val resp = gson.fromJson(json, CreateReturnResponse::class.java)
         assertEquals(115.0, resp.data!!.refund_amount, 0.0001)
         assertEquals(1, resp.data!!.items.size)
+        assertEquals("3f2504e0-4f89-11d3-9a0c-0305e82c3301", resp.data!!.items[0].product_id)
     }
 
     @Test

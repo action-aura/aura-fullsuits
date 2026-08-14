@@ -418,8 +418,24 @@ data class CreateReturnRequest(
 // docs/architecture/financial-authority-contracts.md's Retail return
 // contract. The client must display refund_amount from here, never a
 // locally-summed estimate, once the return has actually been submitted.
+//
+// product_id: String, NOT Int -- this is the same "Int field vs UUID string"
+// class of bug documented above (line 91) for CreatedRowId, just never
+// applied to this sibling field. create_return() (retail_api.py) echoes
+// back the client-generated UUID product_id verbatim from ReturnItemReq
+// (return_items.product_id is TEXT since RETAIL_SCHEMA_VERSION 7), so the
+// non-lenient GsonConverterFactory (ApiClient.kt) throws
+// NumberFormatException parsing that UUID string into an Int here -- the
+// return has already been committed server-side (row inserted, inventory
+// already adjusted) when this parse failure surfaces to the user as a false
+// "Couldn't reach the server". Worse than the CreatedRowId case: the
+// idempotency_key in RetailExtraScreens.kt's "Process refund" handler is
+// regenerated fresh via UUID.randomUUID().toString() on every button press
+// rather than cached across retry attempts, so a user retrying after this
+// false failure creates a genuine second return/refund -- double-crediting
+// the customer and double-adjusting inventory, not just a UI glitch.
 data class ReturnItemResult(
-    val product_id: Int = 0, val quantity: Double = 0.0, val unit_price: Double = 0.0,
+    val product_id: String = "", val quantity: Double = 0.0, val unit_price: Double = 0.0,
     val discount_amount: Double = 0.0, val tax_amount: Double = 0.0, val line_total: Double = 0.0,
 )
 data class ReturnResult(
