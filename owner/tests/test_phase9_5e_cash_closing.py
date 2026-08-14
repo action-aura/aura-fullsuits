@@ -142,6 +142,62 @@ def test_super_admin_preparer_still_cannot_self_approve(app, seeded):
         assert exc.value.code == "SELF_APPROVAL_FORBIDDEN_CLOSING"
 
 
+def test_submitter_who_did_not_prepare_cannot_approve_the_closing(app, seeded):
+    """AUDIT-032 regression: prepared_by_staff_user_id is set once at draft
+    creation and never reassigned, but the (business_date, currency) scope
+    is shared -- any cash_closing.prepare holder may submit a draft someone
+    else created. The self-approval block must catch the actual submitter,
+    not just the original (uninvolved) preparer."""
+    from app.cash_closing.services import decide_closing, get_or_create_draft_closing, submit_closing
+    from app.expenses.errors import ExpenseError
+
+    alice_id, _ = _seed_employee(app, "cc11alice@example.com", ["FINANCE"])
+    bob_id, _ = _seed_employee(app, "cc11bob@example.com", ["FINANCE"])
+    with app.app_context():
+        closing = get_or_create_draft_closing(
+            date(2026, 8, 10), "USD", prepared_by_staff_user_id=alice_id,
+            opening_cash_override=Decimal("100.00"), opening_cash_override_reason="test",
+        )
+        submit_closing(closing, actor_staff_user_id=bob_id, actual_counted_cash=Decimal("100.00"), variance_explanation=None)
+        with pytest.raises(ExpenseError) as exc:
+            decide_closing(closing, decision="APPROVED", actor_staff_user_id=bob_id)
+        assert exc.value.code == "SELF_APPROVAL_FORBIDDEN_CLOSING"
+
+
+def test_submitted_by_is_persisted_and_distinct_from_prepared_by(app, seeded):
+    from app.cash_closing.services import get_or_create_draft_closing, submit_closing
+
+    alice_id, _ = _seed_employee(app, "cc12alice@example.com", ["FINANCE"])
+    bob_id, _ = _seed_employee(app, "cc12bob@example.com", ["FINANCE"])
+    with app.app_context():
+        closing = get_or_create_draft_closing(
+            date(2026, 8, 11), "USD", prepared_by_staff_user_id=alice_id,
+            opening_cash_override=Decimal("100.00"), opening_cash_override_reason="test",
+        )
+        submit_closing(closing, actor_staff_user_id=bob_id, actual_counted_cash=Decimal("100.00"), variance_explanation=None)
+        assert closing.prepared_by_staff_user_id == alice_id
+        assert closing.submitted_by_staff_user_id == bob_id
+
+
+def test_third_party_approver_still_succeeds_after_submitter_block(app, seeded):
+    """Guards against over-blocking: a real third party (neither preparer
+    nor submitter) must still be able to approve."""
+    from app.cash_closing.services import decide_closing, get_or_create_draft_closing, submit_closing
+
+    alice_id, _ = _seed_employee(app, "cc13alice@example.com", ["FINANCE"])
+    bob_id, _ = _seed_employee(app, "cc13bob@example.com", ["FINANCE"])
+    carol_id, _ = _seed_employee(app, "cc13carol@example.com", ["FINANCE"])
+    with app.app_context():
+        closing = get_or_create_draft_closing(
+            date(2026, 8, 12), "USD", prepared_by_staff_user_id=alice_id,
+            opening_cash_override=Decimal("100.00"), opening_cash_override_reason="test",
+        )
+        submit_closing(closing, actor_staff_user_id=bob_id, actual_counted_cash=Decimal("100.00"), variance_explanation=None)
+        decide_closing(closing, decision="APPROVED", actor_staff_user_id=carol_id)
+        assert closing.status == "APPROVED"
+        assert closing.approved_by_staff_user_id == carol_id
+
+
 def test_approved_closing_immutable_and_reopen_requires_auth_and_reason(app, seeded):
     from app.cash_closing.services import close_closing, decide_closing, get_or_create_draft_closing, reopen_closing, submit_closing
     from app.expenses.errors import ExpenseError

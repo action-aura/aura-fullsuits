@@ -16,6 +16,7 @@ from flask import Blueprint, jsonify, request
 
 from app.audit.services import record as audit_record
 from app.auth.session import has_recent_auth, load_current_staff
+from app.cash_closing import list_queries as cash_closing_list_queries
 from app.cash_closing import services as cash_closing_services
 from app.employees.queries import find_own_profile
 from app.expenses import approvals as expense_approvals
@@ -475,17 +476,35 @@ def _serialize_closing(c: CashClosing) -> dict:
 @bp.route("/cash-closings", methods=["GET", "POST"])
 @require_any_permission("cash_closing.view_own", "cash_closing.view_all", "cash_closing.prepare")
 def cash_closings_route():
-    from sqlalchemy import select
-
     staff, profile = _actor()
     if request.method == "GET":
-        business_date = request.args.get("business_date")
-        currency = request.args.get("currency", "USD")
-        stmt = select(CashClosing).where(CashClosing.currency == currency)
-        if business_date:
-            stmt = stmt.where(CashClosing.business_date == date.fromisoformat(business_date))
-        rows = db_session.execute(stmt.order_by(CashClosing.business_date.desc()).limit(200)).scalars().all()
-        return jsonify({"rows": [_serialize_closing(c) for c in rows]})
+        # AUDIT-031's JSON-API twin: this branch used to run its own raw,
+        # unscoped query (no ownership restriction, no shared pagination
+        # shape, and date.fromisoformat() crashing 500 on a malformed
+        # ?business_date= instead of a clean 400) -- bypassing
+        # cash_closing.list_queries.list_closings(), which the web route
+        # (operations_ui/routes.py::list_closings) already used for real
+        # ownership scoping. Same bypass-set logic (view_all_held), same
+        # shared query, same paginated response shape as the web route now.
+        business_date_raw = request.args.get("business_date")
+        try:
+            business_date = date.fromisoformat(business_date_raw) if business_date_raw else None
+        except ValueError:
+            return jsonify({"error": "INVALID_REQUEST"}), 400
+        codes = get_staff_permission_codes(staff)
+        view_all_held = bool({"cash_closing.view_all", "cash_closing.approve"} & codes)
+        result = cash_closing_list_queries.list_closings(
+            page=request.args.get("page", 1, type=int),
+            currency=request.args.get("currency", "USD"),
+            status=request.args.get("status") or None,
+            business_date=business_date,
+            sort=request.args.get("sort", "business_date"),
+            direction=request.args.get("dir", "desc"),
+            actor_staff_user_id=staff.id,
+            view_all_held=view_all_held,
+        )
+        result["rows"] = [_serialize_closing(c) for c in result["rows"]]
+        return jsonify(result)
 
     body = request.get_json(silent=True) or {}
     try:
