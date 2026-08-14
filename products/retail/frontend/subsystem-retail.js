@@ -2048,6 +2048,13 @@ const RetailSystem = {
   // single-panel form it always was; only Edit Supplier grows tabs. Details
   // panel below is otherwise byte-for-byte the pre-existing form (same
   // ids/fields) just moved inside #sm-panel-details.
+  //
+  // name/phone/email/address are escaped via this._esc() here for the same
+  // reason as the Fix 7 / _showCustomerModal comment above: the supplier
+  // table listing (_loadSuppliers) already escapes these fields, but this
+  // modal was rebuilding its inputs from the raw `s` object -- so a supplier
+  // named `<img src=x onerror=...>` rendered safely in the table but
+  // executed the moment its own row's Edit was opened.
   _showSupplierModal(s) {
     const isEdit = !!s.id;
     const overlay = document.createElement('div');
@@ -2062,12 +2069,12 @@ const RetailSystem = {
           <button type="button" class="ret-tab" id="sm-tab-contacts" onclick="RetailSystem._switchSupplierTab('contacts')">${t('Contacts')}</button>
         </div>` : ''}
         <div id="sm-panel-details">
-          <div class="ret-field"><label>Company Name *</label><input id="sm-name" value="${s.name||''}" /></div>
+          <div class="ret-field"><label>Company Name *</label><input id="sm-name" value="${this._esc(s.name||'')}" /></div>
           <div class="ret-field-row">
-            <div class="ret-field"><label>Phone</label><input id="sm-phone" value="${s.phone||''}" /></div>
-            <div class="ret-field"><label>Email</label><input id="sm-email" value="${s.email||''}" /></div>
+            <div class="ret-field"><label>Phone</label><input id="sm-phone" value="${this._esc(s.phone||'')}" /></div>
+            <div class="ret-field"><label>Email</label><input id="sm-email" value="${this._esc(s.email||'')}" /></div>
           </div>
-          <div class="ret-field"><label>Address</label><input id="sm-addr" value="${s.address||''}" /></div>
+          <div class="ret-field"><label>Address</label><input id="sm-addr" value="${this._esc(s.address||'')}" /></div>
           <div class="ret-modal-footer">
             <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-sup-modal').remove()">Cancel</button>
             <button class="ret-btn ret-btn-primary" id="sm-btn" onclick="RetailSystem._saveSupplier(${s.id ? `'${this._esc(s.id)}'` : 'null'})">${isEdit?'Save':'Add Supplier'}</button>
