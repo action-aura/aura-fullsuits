@@ -123,6 +123,7 @@ const RetailSystem = {
       .ret-btn-ghost { background:rgba(255,255,255,0.05);color:#cbd5e1;border:1px solid rgba(255,255,255,0.1); }
       .ret-btn-ghost:hover { background:rgba(255,255,255,0.1); }
       .ret-btn-danger { background:rgba(239,68,68,0.12);color:#ef4444;border:1px solid rgba(239,68,68,0.25); }
+      .ret-btn-danger:hover { background:rgba(239,68,68,0.22); }
       .ret-btn-sm { padding:4px 12px;font-size:12px; }
       .ret-search { background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;padding:9px 14px;font-size:14px;outline:none;width:240px; }
       .ret-search:focus { border-color:var(--sub-accent); }
