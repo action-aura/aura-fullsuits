@@ -2400,6 +2400,20 @@ def _compute_report_summary(conn, cid, days):
 
     cur_rev   = q("SELECT COALESCE(SUM(total),0) FROM sales WHERE company_id=? AND date(created_at)>=?", cid, period_start)
     prev_rev  = q("SELECT COALESCE(SUM(total),0) FROM sales WHERE company_id=? AND date(created_at)>=? AND date(created_at)<?", cid, prev_start, period_start)
+
+    # Returns/refunds reduce revenue -- net them out here too, same reasoning
+    # dashboard_stats() already applies ("a refund must lower today's revenue,
+    # not leave it flat"). revenue/gross_profit/margin_pct/avg_ticket below all
+    # derive from cur_rev/prev_rev, so netting returns out of just these two
+    # sums is enough to correct every figure this report/email route returns.
+    try:
+        cur_returns  = q("SELECT COALESCE(SUM(refund_amount),0) FROM returns WHERE company_id=? AND date(created_at)>=?", cid, period_start)
+        prev_returns = q("SELECT COALESCE(SUM(refund_amount),0) FROM returns WHERE company_id=? AND date(created_at)>=? AND date(created_at)<?", cid, prev_start, period_start)
+    except Exception:
+        cur_returns = prev_returns = 0
+    cur_rev  -= cur_returns
+    prev_rev -= prev_returns
+
     cur_txns  = q("SELECT COUNT(*) FROM sales WHERE company_id=? AND date(created_at)>=?", cid, period_start)
     cur_cost  = q("""
         SELECT COALESCE(SUM(si.quantity * p.cost_price),0)
@@ -2516,21 +2530,36 @@ def report_by_branch():
     "compare branches" and "scope to one branch" are contradictory asks for
     the same chart, so this route always returns every branch regardless of
     what the branch dropdown is set to; only `days` (the shared date-range
-    control) applies here."""
+    control) applies here.
+
+    Revenue nets returns/refunds out per branch -- same reasoning
+    dashboard_stats() already applies ("a refund must lower today's revenue,
+    not leave it flat"): a return is only ever recorded in the `returns`
+    table and never mutates sales.total (see create_return()), so a raw
+    SUM(sales.total) overstates exactly the branches that had refunds. The
+    refund subquery is pre-aggregated per branch_id and LEFT JOINed once
+    (rather than joined row-for-row alongside `sales`) so it can't fan out
+    the SUM(s.total)/COUNT(s.id) aggregates above it."""
     cid  = _cid()
     days = int(request.args.get('days', 30))
     conn = get_retail_conn()
     rows = conn.execute("""
         SELECT b.id as branch_id, b.name as branch_name,
-               COALESCE(SUM(s.total),0) as revenue,
+               COALESCE(SUM(s.total),0) - COALESCE(rt.refunds,0) as revenue,
                COUNT(s.id) as transactions,
                COALESCE(AVG(s.total),0) as avg_ticket
         FROM branches b
         LEFT JOIN sales s ON s.branch_id = b.id AND s.company_id = ?
           AND date(s.created_at) >= date('now', 'localtime', ?)
+        LEFT JOIN (
+            SELECT branch_id, COALESCE(SUM(refund_amount),0) as refunds
+            FROM returns
+            WHERE company_id = ? AND date(created_at) >= date('now', 'localtime', ?)
+            GROUP BY branch_id
+        ) rt ON rt.branch_id = b.id
         WHERE b.company_id=? AND b.status='active'
-        GROUP BY b.id, b.name ORDER BY b.name
-    """, (cid, f'-{days} days', cid)).fetchall()
+        GROUP BY b.id, b.name, rt.refunds ORDER BY b.name
+    """, (cid, f'-{days} days', cid, f'-{days} days', cid)).fetchall()
     conn.close()
     return jsonify({'success': True,
                     'labels':        [r['branch_name'] for r in rows],

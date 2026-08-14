@@ -312,3 +312,38 @@ def test_payment_methods_and_summary_untouched_by_this_change(seeded):
     assert summary['success'] is True
     assert summary['data']['revenue'] == 600.0
     assert summary['data']['transactions'] == 5
+
+
+# ── Returns must net out of revenue, not just leave it flat ────────────────
+
+def test_by_branch_and_summary_net_out_returns(seeded):
+    """A refund is recorded ONLY in the `returns` table and never mutates
+    sales.total (see create_return()'s docstring) -- so a report that sums
+    raw sales.total without also subtracting returns.refund_amount silently
+    overstates revenue for any branch/period with a refund in it.
+    dashboard_stats() already nets returns out ("a refund must lower today's
+    revenue, not leave it flat"); this is the same guarantee for
+    /reports/by-branch and /reports/summary, which is what the Reports
+    page's branch-comparison chart and summary KPI actually render.
+
+    Main sold 3 sales (qty 2,1,3 = 6 units = $300, seeded module-wide by the
+    `seeded` fixture); this test returns 1 of the 6 units (0% tax, so
+    refund_amount == price exactly) and asserts Main's reported revenue
+    drops by that $50 -- not just that a return record exists."""
+    client = seeded['client']
+    main_sale = seeded['main_sales'][0]  # qty=2 sale on Main -> $100
+    r = client.post('/api/sub/retail/returns', json={
+        'sale_id': main_sale['id'],
+        'items': [{'product_id': seeded['pid'], 'quantity': 1}],
+    })
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['data']['refund_amount'] == 50.0
+
+    by_branch = client.get('/api/sub/retail/reports/by-branch?days=365').get_json()
+    by_name = dict(zip(by_branch['labels'], by_branch['data']))
+    assert by_name['Main'] == 250.0       # $300 - $50 refund, not flat at $300
+    assert by_name['Downtown'] == 300.0   # untouched -- refund was on Main
+    assert sum(by_branch['data']) == 550.0
+
+    summary = client.get('/api/sub/retail/reports/summary?days=365').get_json()['data']
+    assert summary['revenue'] == 550.0    # $600 - $50 refund, not flat at $600
