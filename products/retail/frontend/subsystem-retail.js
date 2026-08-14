@@ -1861,6 +1861,14 @@ const RetailSystem = {
     if (cu) this._showCustomerModal(cu);
   },
 
+  // Escape name/phone/email/address here too, same reasoning as the Fix 7
+  // comment on _loadCustomers above: this record can arrive from ANOTHER
+  // DEVICE over the sync relay. The table listing already escaped these
+  // fields via this._esc(), but the Edit modal was rebuilding its inputs
+  // from the raw `cu` object -- so a customer named `<img src=x onerror=...>`
+  // rendered safely in the table but executed the moment its own row's
+  // Edit/View was opened (by any user/device, including the one that
+  // created it). Same class of bug as Fix 7, just missed on this path.
   _showCustomerModal(cu) {
     const isEdit = !!cu.id;
     const overlay = document.createElement('div');
@@ -1869,12 +1877,12 @@ const RetailSystem = {
     overlay.innerHTML = `
       <div class="ret-modal" style="width:440px">
         <h3>${isEdit?'✏️ Edit Customer':'👤 Add Customer'}</h3>
-        <div class="ret-field"><label>Full Name *</label><input id="cm-name" value="${cu.name||''}" /></div>
+        <div class="ret-field"><label>Full Name *</label><input id="cm-name" value="${this._esc(cu.name||'')}" /></div>
         <div class="ret-field-row">
-          <div class="ret-field"><label>Phone</label><input id="cm-phone" value="${cu.phone||''}" /></div>
-          <div class="ret-field"><label>Email</label><input type="email" id="cm-email" value="${cu.email||''}" /></div>
+          <div class="ret-field"><label>Phone</label><input id="cm-phone" value="${this._esc(cu.phone||'')}" /></div>
+          <div class="ret-field"><label>Email</label><input type="email" id="cm-email" value="${this._esc(cu.email||'')}" /></div>
         </div>
-        <div class="ret-field"><label>Address</label><input id="cm-addr" value="${cu.address||''}" /></div>
+        <div class="ret-field"><label>Address</label><input id="cm-addr" value="${this._esc(cu.address||'')}" /></div>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-cust-modal').remove()">Cancel</button>
           <button class="ret-btn ret-btn-primary" id="cm-btn" onclick="RetailSystem._saveCustomer(${cu.id ? `'${this._esc(cu.id)}'` : 'null'})">${isEdit?'Save':'Add Customer'}</button>
@@ -1925,6 +1933,8 @@ const RetailSystem = {
     }
   },
 
+  // Same escaping gap as _showCustomerModal above: cu.name/cu.phone were
+  // going into innerHTML unescaped in this detail view too.
   async _viewCustomer(cid) {
     const cu = this._customers.find(x=>String(x.id)===String(cid));
     if (!cu) return;
@@ -1933,7 +1943,7 @@ const RetailSystem = {
     overlay.innerHTML = `
       <div class="ret-modal ret-modal-wide">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
-          <h3 style="margin:0">${cu.name}</h3>
+          <h3 style="margin:0">${this._esc(cu.name)}</h3>
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()">✕ Close</button>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:14px;margin-bottom:20px">
@@ -1951,7 +1961,7 @@ const RetailSystem = {
           </div>
           <div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:14px;text-align:center">
             <div style="color:var(--text-muted);font-size:11px;text-transform:uppercase;margin-bottom:6px">Phone</div>
-            <div style="color:#fff;font-size:16px;font-weight:600">${cu.phone||'—'}</div>
+            <div style="color:#fff;font-size:16px;font-weight:600">${cu.phone?this._esc(cu.phone):'—'}</div>
           </div>
         </div>
         <div class="sub-chart-title" style="margin-bottom:12px">Purchase History</div>
