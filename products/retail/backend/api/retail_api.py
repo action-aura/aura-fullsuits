@@ -1889,6 +1889,17 @@ def create_return():
 
         resolved_items = []
         refund_total = Decimal('0')
+        # AUDIT: quantity-validation-bypass -- the already_returned SELECT below
+        # only sees return_items rows already COMMITTED before this request
+        # started; it can never see sibling lines of this same request, since
+        # those INSERTs only happen in the second loop after this whole
+        # validation loop finishes. Without this in-request accumulator, two
+        # lines in one payload for the same product_id would each be validated
+        # against the same pre-request "already returned" snapshot and both
+        # pass, refunding/restocking that product twice over. Track quantity
+        # already claimed by earlier lines in THIS request per product_id and
+        # subtract it from what remains returnable for later lines.
+        claimed_this_request = {}
         for item in items:
             pid = item.get('product_id')
             try:
@@ -1914,12 +1925,15 @@ def create_return():
                 "WHERE r.sale_id=? AND ri.product_id=? AND r.company_id=?",
                 (sale_id, pid, cid)
             ).fetchone()[0]
-            remaining = float(sold['quantity']) - float(already_returned or 0)
+            already_claimed = claimed_this_request.get(pid, 0.0)
+            remaining = float(sold['quantity']) - float(already_returned or 0) - already_claimed
             if qty > remaining + 0.0001:
                 conn.rollback(); conn.close()
                 return jsonify({'status': 'error', 'message':
                     f'Cannot return {qty} of product {pid}: only {remaining} remain returnable '
-                    f'(sold {sold["quantity"]}, already returned {already_returned}).'}), 400
+                    f'(sold {sold["quantity"]}, already returned {already_returned}, '
+                    f'already claimed earlier in this request {already_claimed}).'}), 400
+            claimed_this_request[pid] = already_claimed + qty
 
             calc = tax_engine.calculate_line(
                 float(sold['unit_price']), qty, float(sold['discount_pct'] or 0),

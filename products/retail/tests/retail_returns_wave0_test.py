@@ -232,6 +232,46 @@ def test_multi_line_return_refunds_sum_of_lines():
     assert ret.get_json()['data']['refund_amount'] == 165.0
 
 
+def test_duplicate_product_lines_in_one_request_do_not_multiply_refund_or_stock():
+    # AUDIT: quantity-validation-bypass -- the already-returned check inside
+    # the per-line validation loop only sees return_items rows committed
+    # BEFORE this request started; it never accounted for other lines in the
+    # SAME request (those INSERTs happen in a separate, later loop). A
+    # payload with two lines for the same product_id therefore validated
+    # each line against the same stale "nothing returned yet" snapshot and
+    # let both pass, doubling the refund and crediting back twice the units
+    # actually sold. Only 2 units were sold; a single request asking to
+    # return 2+2 of the same product must be rejected outright, and nothing
+    # (refund, return row, inventory) may be applied partially.
+    client, cid, pid, bid = _make_admin_and_product(price=100.0, tax_rate=15.0, stock=10)
+    sale = _sell(client, pid, quantity=2)  # total = 230.0, 2 units sold
+
+    before = get_retail_conn()
+    stock_before = before.execute(
+        "SELECT quantity_on_hand FROM inventory_balances WHERE company_id=? AND product_id=? AND branch_id=?",
+        (cid, pid, bid)
+    ).fetchone()[0]
+    before.close()
+
+    r = client.post('/api/sub/retail/returns', json={
+        'sale_id': sale['id'],
+        'items': [{'product_id': pid, 'quantity': 2}, {'product_id': pid, 'quantity': 2}],
+        'reason': 'duplicate-line probe', 'idempotency_key': str(uuid.uuid4()),
+    })
+    assert r.status_code == 400, r.get_json()
+    assert 'remain returnable' in r.get_json()['message'].lower()
+
+    rconn = get_retail_conn()
+    return_count = rconn.execute("SELECT COUNT(*) FROM returns WHERE company_id=?", (cid,)).fetchone()[0]
+    stock_after = rconn.execute(
+        "SELECT quantity_on_hand FROM inventory_balances WHERE company_id=? AND product_id=? AND branch_id=?",
+        (cid, pid, bid)
+    ).fetchone()[0]
+    rconn.close()
+    assert return_count == 0
+    assert stock_after == stock_before  # no partial inventory credit from the rejected request
+
+
 def test_return_restores_inventory():
     client, cid, pid, bid = _make_admin_and_product(stock=10)
     sale = _sell(client, pid, quantity=3)
