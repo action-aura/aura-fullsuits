@@ -128,17 +128,27 @@
   function render(status) {
     const state = status.current_state;
     if (state === 'NOT_CONFIGURED' || state === 'ACTIVATION_REQUIRED') {
-      renderActivationForm(state);
+      renderActivationForm(state, status);
       return;
     }
     renderLicenseStatus(status);
   }
 
-  function renderActivationForm(state) {
+  function renderActivationForm(state, status) {
     clearChildren(content);
     content.appendChild(el('div', {}, [stateBadge(state)]));
 
-    const detailText = state === 'NOT_CONFIGURED'
+    // NOT_CONFIGURED is ambiguous by itself: the backend returns it both
+    // when licensing is genuinely unconfigured for this build AND when
+    // it's configured but this device has simply never activated (no
+    // state record yet) -- see routes.py::_not_configured_response() vs
+    // status_presenter.py::present_status(None). Only the first case
+    // attaches a "detail" field, so its presence is the real signal --
+    // showing "not connected to a licensing server" on a device that's
+    // actually just pre-activation is confusing and wrong (caught via a
+    // real screenshot of the gate feature this message shares).
+    const genuinelyUnconfigured = state === 'NOT_CONFIGURED' && !!status.detail;
+    const detailText = genuinelyUnconfigured
       ? 'This installation is not yet connected to a licensing server. Owner licensing is not configured for this build.'
       : 'Enter your Aura Retail license key to activate this installation.';
     content.appendChild(el('p', { text: detailText }));

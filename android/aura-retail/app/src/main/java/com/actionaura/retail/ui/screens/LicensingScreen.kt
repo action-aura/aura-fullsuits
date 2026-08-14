@@ -111,8 +111,18 @@ fun LicensingScreen(onBack: () -> Unit, snackbar: SnackbarHostState, onActivated
                 leadingIcon = { Icon(Icons.Default.VerifiedUser, null, tint = color) })
 
             if (state == "NOT_CONFIGURED" || state == "ACTIVATION_REQUIRED") {
+                // NOT_CONFIGURED is ambiguous by itself: the backend returns it
+                // both when licensing is genuinely unconfigured for this build
+                // AND when it's configured but this device has simply never
+                // activated (no state record yet) -- see routes.py's
+                // _not_configured_response() vs present_status(None). Only the
+                // first case attaches a "detail" field, so its presence is the
+                // real signal -- same fix applied to licensing.js's identical
+                // message (caught via a real screenshot of the desktop gate
+                // this message shares the wording with).
+                val genuinelyUnconfigured = state == "NOT_CONFIGURED" && status["detail"] != null
                 Text(
-                    if (state == "NOT_CONFIGURED")
+                    if (genuinelyUnconfigured)
                         tr("This installation is not yet connected to a licensing server. Owner licensing is not configured for this build.")
                     else tr("Enter your Aura Retail license key to activate this installation."),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
