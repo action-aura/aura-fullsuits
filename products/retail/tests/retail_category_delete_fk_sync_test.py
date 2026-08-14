@@ -102,14 +102,16 @@ def test_schema_version_is_v6_and_products_fk_declares_on_delete_set_null():
     # (feat/shift-cash-drawer, database/schema.py's
     # _migrate_add_shift_cash_drawer) bumped it once more to v10, and
     # hold/resume sale (feat/pos-hold-resume-sale, database/schema.py's
-    # _migrate_add_held_sales) bumped it once more to v11 -- see
+    # _migrate_add_held_sales) bumped it once more to v11, and the
+    # whatsapp-recipients feature (database/schema.py's
+    # _migrate_add_whatsapp_recipients) bumped it once more to v12 -- see
     # RETAIL_SCHEMA_VERSION's own comment for why that bump is load-bearing,
     # not cosmetic. The FK-on-delete-set-null assertion this test exists for
     # is unaffected by any of these later changes.
-    assert retail_schema.RETAIL_SCHEMA_VERSION == 11
+    assert retail_schema.RETAIL_SCHEMA_VERSION == 12
     conn = retail_schema.get_retail_conn()
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
         assert retail_schema._products_category_fk_is_set_null(conn) is True
     finally:
         conn.close()

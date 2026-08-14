@@ -24,13 +24,63 @@ from . import whatsapp_client
 
 DEFAULTS = {
     'enabled': '0',
-    'low_stock_recipient_phone': '',  # E.164, e.g. '+15551234567' -- where a queued low-stock alert goes
+    # Superseded by the whatsapp_recipients table (whatsapp_recipients.py) --
+    # that table is the real, multi-recipient/role/branch-scoped routing
+    # this codebase actually needs (see its own module docstring). Kept here
+    # only because get_all_settings()/existing tests pin this exact key set;
+    # the new routing path (whatsapp_hook.py) never reads this value.
+    'low_stock_recipient_phone': '',  # E.164, e.g. '+15551234567' -- unused by new routing, see above
     'low_stock_template_name': '',    # must match a template already approved in Meta Business Manager
+    'daily_sales_template_name': '',
+    'shift_close_template_name': '',
+    'ar_overdue_template_name': '',
+    # Reference copy of each template's approved wording -- NOT wired to
+    # sending in any way. WhatsApp's Cloud API sends whatever is actually
+    # approved on Meta's side under `*_template_name`; this codebase has no
+    # ability to change that from here (see whatsapp_client.py's docstring --
+    # pre-approved templates only, no free text). These four fields exist so
+    # an admin can edit/keep a local note of what they submitted to Meta
+    # without leaving the app -- editing this text never changes what gets
+    # sent. Defaults match the exact wording handed to the business owner at
+    # feature-launch time; kept here only as the starting reference text, not
+    # re-synced from anywhere.
+    'daily_sales_template_body': (
+        'Aura Retail daily summary for {{1}} — {{2}}. Revenue: {{3}} JOD across {{4}} '
+        'transactions (avg ticket {{5}} JOD). Gross profit: {{6}} JOD.'
+    ),
+    'shift_close_template_body': (
+        'Shift closed at {{1}} on {{2}}. Expected cash: {{3}} JOD. Counted: {{4}} JOD. '
+        'Variance: {{5}} JOD.'
+    ),
+    'low_stock_template_body': (
+        'Low stock alert: {{1}} is down to {{2}} units (reorder level {{3}}) at {{4}}. '
+        "Review the reorder request in Aura Retail's Admin Center."
+    ),
+    'ar_overdue_template_body': (
+        'Receivables alert: {{1}} JOD is overdue from {{2}} customers, including {{3}} JOD '
+        'outstanding more than 90 days.'
+    ),
+    'default_language_code': 'en_US',
     'max_attempts': '8',
     'submit_interval_seconds': '60',
 }
 
 _KNOWN_KEYS = frozenset(DEFAULTS.keys())
+
+# The four report types whatsapp_hook.py can enqueue, and which DEFAULTS key
+# holds the (Meta-approved) template name for each -- one place both the
+# settings UI and the enqueue routing read from, so a new report type is
+# added by extending this dict, never by hardcoding a key string at a call
+# site.
+REPORT_TYPES = frozenset({
+    'daily_sales_summary', 'shift_close_report', 'low_stock_alert', 'ar_overdue_alert',
+})
+TEMPLATE_NAME_KEY_BY_REPORT_TYPE = {
+    'daily_sales_summary': 'daily_sales_template_name',
+    'shift_close_report': 'shift_close_template_name',
+    'low_stock_alert': 'low_stock_template_name',
+    'ar_overdue_alert': 'ar_overdue_template_name',
+}
 
 # Same real gap email's settings.py already found and fixed itself
 # (AUDIT: HIGH -- notifications outbox settings write with zero numeric
@@ -108,3 +158,16 @@ def recipient_phone_for(conn: sqlite3.Connection, company_id, key: str) -> Optio
     call site (mirrors settings.py::recipient_for)."""
     value = get_setting(conn, company_id, key)
     return value or None
+
+
+def template_name_for(conn: sqlite3.Connection, company_id, report_type: str) -> Optional[str]:
+    """Returns the configured (Meta-approved) template name for a report
+    type, or None when blank/unset -- same None-not-empty-string contract as
+    recipient_phone_for() above, so a caller can use one `is None` check
+    instead of re-deriving "not configured" from an empty string. Raises
+    UnknownSettingError via get_setting() if report_type isn't a real key in
+    TEMPLATE_NAME_KEY_BY_REPORT_TYPE (KeyError surfaces as-is -- an unknown
+    report_type here is a programming error at the call site, not a runtime
+    condition to handle gracefully)."""
+    key = TEMPLATE_NAME_KEY_BY_REPORT_TYPE[report_type]
+    return get_setting(conn, company_id, key) or None

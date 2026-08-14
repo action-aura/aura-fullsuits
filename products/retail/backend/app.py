@@ -144,6 +144,9 @@ from core.retail import einvoice_adapter as _einvoice_adapter
 from commercial_runtime.notifications.routes import make_notifications_blueprint
 from commercial_runtime.notifications.worker import EmailOutboxWorker
 from commercial_runtime.notifications import settings as _notification_settings
+from commercial_runtime.notifications.whatsapp_routes import make_whatsapp_notifications_blueprint
+from commercial_runtime.notifications.whatsapp_worker import WhatsAppOutboxWorker
+from commercial_runtime.notifications import whatsapp_settings as _whatsapp_settings
 
 app.register_blueprint(auth_bp)
 app.register_blueprint(onboarding_bp)
@@ -211,6 +214,31 @@ def _get_or_create_notifications_worker(company_id):
 app.register_blueprint(make_notifications_blueprint(
     conn_factory=get_retail_conn,
     get_worker=_get_or_create_notifications_worker,
+))
+
+# whatsapp-recipients -- outbound WhatsApp reports (daily sales, shift
+# close, low stock, AR overdue), routed to multiple role/branch-scoped
+# recipients (commercial_runtime/notifications/whatsapp_recipients.py).
+# Default OFF: AURA_WHATSAPP_PHONE_NUMBER_ID is unset by default
+# (commercial_runtime/notifications/whatsapp_client.py), this feature's own
+# hard-off gate, independent of the per-company `whatsapp_settings.enabled`
+# toggle below -- see whatsapp_settings.py::is_enabled. Same lazy,
+# per-company worker registry pattern as email notifications just above.
+_whatsapp_workers = {}
+
+
+def _get_or_create_whatsapp_worker(company_id):
+    if company_id not in _whatsapp_workers:
+        _whatsapp_workers[company_id] = WhatsAppOutboxWorker(
+            conn_factory=get_retail_conn,
+            company_id=company_id,
+        )
+    return _whatsapp_workers[company_id]
+
+
+app.register_blueprint(make_whatsapp_notifications_blueprint(
+    conn_factory=get_retail_conn,
+    get_worker=_get_or_create_whatsapp_worker,
 ))
 
 # Part H: see products/clinic/backend/app.py's identical block for the full
@@ -341,6 +369,7 @@ def init_app():
         _sync_service.start()
     _resume_einvoicing_workers()
     _resume_notifications_workers()
+    _resume_whatsapp_workers()
     return app
 
 
@@ -378,6 +407,25 @@ def _resume_notifications_workers():
             cid = row[0]
             interval = int(_notification_settings.get_setting(conn, cid, 'submit_interval_seconds'))
             _get_or_create_notifications_worker(cid).start(interval_seconds=interval)
+    finally:
+        conn.close()
+
+
+def _resume_whatsapp_workers():
+    """Mirrors _resume_notifications_workers() immediately above -- same
+    reasoning: a company that had WhatsApp reports enabled before a restart
+    must keep draining its outbox without waiting for a settings write to
+    notice. A fresh/never-enabled install finds zero rows here and starts
+    zero threads, same as email's own sweep."""
+    conn = get_retail_conn()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT company_id FROM whatsapp_settings WHERE skey='enabled' AND svalue='1'"
+        ).fetchall()
+        for row in rows:
+            cid = row[0]
+            interval = int(_whatsapp_settings.get_setting(conn, cid, 'submit_interval_seconds'))
+            _get_or_create_whatsapp_worker(cid).start(interval_seconds=interval)
     finally:
         conn.close()
 

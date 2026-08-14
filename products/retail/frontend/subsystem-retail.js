@@ -2692,6 +2692,13 @@ const RetailSystem = {
             <tbody><tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
           </table>
         </div>
+      </div>
+      <div class="sub-chart-card">
+        <h3 style="color:#fff;margin:0 0 14px;font-size:15px">${t('WhatsApp Reports')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
+          ${t('Send daily sales, shift-close, low-stock, and overdue-balance reports to multiple phone numbers by role or branch. Off by default.')}
+        </p>
+        <button class="ret-btn ret-btn-primary" onclick="location.href='/static/whatsapp.html'">${t('Manage WhatsApp Reports')}</button>
       </div>`;
     await this._loadReorderRequests();
   },

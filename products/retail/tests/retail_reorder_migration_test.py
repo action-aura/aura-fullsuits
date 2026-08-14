@@ -245,13 +245,15 @@ def test_fresh_install_lands_on_v8_with_reorder_schema_present():
     NUMBER moved again under it, first when feat/email-outbox-foundation
     bumped RETAIL_SCHEMA_VERSION to 9, then when feat/shift-cash-drawer
     bumped it to 10, then when feat/pos-hold-resume-sale bumped it to 11
-    (database/schema.py's _migrate_add_held_sales), same as this file's
-    sibling test_ensure_schema_version_advances_user_version_to_8 test
-    intentionally keeps testing the v7->v8 step in isolation at a frozen
-    target=8. This one, unlike that one, calls the REAL init_retail() and
-    therefore always reflects whatever RETAIL_SCHEMA_VERSION currently is --
-    see retail_category_delete_fk_sync_test.py's identical
-    RETAIL_SCHEMA_VERSION==11 update for the same reasoning)."""
+    (database/schema.py's _migrate_add_held_sales), then when the
+    whatsapp-recipients feature bumped it to 12 (database/schema.py's
+    _migrate_add_whatsapp_recipients), same as this file's sibling
+    test_ensure_schema_version_advances_user_version_to_8 test intentionally
+    keeps testing the v7->v8 step in isolation at a frozen target=8. This
+    one, unlike that one, calls the REAL init_retail() and therefore always
+    reflects whatever RETAIL_SCHEMA_VERSION currently is -- see
+    retail_category_delete_fk_sync_test.py's identical
+    RETAIL_SCHEMA_VERSION==12 update for the same reasoning)."""
     data_dir = Path(tempfile.mkdtemp(prefix="aura_retail_reorder_freshinstall_"))
     (data_dir / "database" / "subsystems").mkdir(parents=True, exist_ok=True)
     old_app_data = os.environ.get("AURA_APP_DATA")
@@ -267,7 +269,7 @@ def test_fresh_install_lands_on_v8_with_reorder_schema_present():
 
         conn = retail_schema.get_retail_conn()
         try:
-            assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
             cols = {r[1] for r in conn.execute("PRAGMA table_info(products)").fetchall()}
             assert "reorder_method" in cols
             tables = {r[0] for r in conn.execute(

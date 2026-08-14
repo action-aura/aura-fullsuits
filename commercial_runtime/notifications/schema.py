@@ -143,3 +143,61 @@ def apply_notifications_schema(conn: sqlite3.Connection) -> None:
             ON whatsapp_outbox(company_id, status);
         """
     )
+
+
+def apply_whatsapp_recipients_schema(conn: sqlite3.Connection) -> None:
+    """Separate function, separate call site (products/retail/backend/
+    database/schema.py's own v11->v12 migration), NOT folded into
+    apply_notifications_schema() above -- that function's exact behavior is
+    pinned by existing tests/migrations at earlier schema versions, so it
+    stays byte-identical and this table gets its own idempotent entry point
+    instead of growing that one's executescript.
+
+    whatsapp_recipients -- "who gets which report", answering the real gap
+    whatsapp_settings.low_stock_recipient_phone left open: that column is a
+    single phone number, one purpose, one per company. A retail install
+    needs MANY numbers (owner, per-branch manager, accountant, ...), each
+    subscribed to a subset of report types, some scoped to one branch and
+    some to the whole company. `id` is a client-generated UUID TEXT, matching
+    every other post-UUID-migration company-scoped table in this lineage
+    (customers/suppliers/products), not AUTOINCREMENT.
+
+    `role_label` is a free-form TEXT, not a foreign key into any permissions
+    table -- this codebase has no real RBAC yet (see root CLAUDE.md: "only a
+    bare `role` string, no permission matrix"), so this column is a display
+    label a shop owner types in ("Owner", "Downtown Manager"), never
+    something the routing logic branches on.
+
+    `branch_id` is INTEGER (nullable) to match `branches.id`'s own declared
+    type elsewhere in this codebase (e.g. reorder_requests.branch_id) --
+    NULL means "all branches", not "unset"; see whatsapp_recipients.py's
+    recipients_for() for the exact matching rule this enables.
+
+    `report_types_json` is a JSON array of report-type keys (see
+    whatsapp_settings.py's REPORT_TYPES) rather than one row per
+    (recipient, report_type) pair -- the set per recipient is small (at most
+    4 today) and always read/written as a whole from the settings UI, so a
+    join table would add write complexity (multi-row transactions on every
+    save) for no query this module actually needs (nothing filters WHERE
+    report_type=X across recipients at the SQL layer; whatsapp_recipients.py
+    decodes and filters in Python, over a handful of rows per company).
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS whatsapp_recipients (
+            id                 TEXT    PRIMARY KEY,
+            company_id         TEXT    NOT NULL,
+            branch_id          INTEGER,                      -- NULL = all branches
+            display_name       TEXT    NOT NULL,
+            role_label         TEXT,                          -- free-form; no RBAC matrix exists to key off
+            phone_e164         TEXT    NOT NULL,
+            report_types_json  TEXT    NOT NULL DEFAULT '[]', -- JSON array, subset of whatsapp_settings.REPORT_TYPES
+            language_code      TEXT    NOT NULL DEFAULT 'en_US',
+            status             TEXT    NOT NULL DEFAULT 'active',  -- 'active' | 'inactive'
+            created_at         TEXT    NOT NULL,
+            updated_at         TEXT    NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_whatsapp_recipients_company
+            ON whatsapp_recipients(company_id, status);
+        """
+    )

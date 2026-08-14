@@ -23,10 +23,12 @@ from commercial_runtime.sync.sync_service import nudge as _sync_nudge
 from commercial_runtime.sync.sync_service import get_active_health as _sync_get_active_health
 from commercial_runtime.notifications import settings as _notification_settings
 from commercial_runtime.notifications.outbox import EmailOutboxRepository as _EmailOutboxRepository
+from commercial_runtime.notifications import whatsapp_settings as _whatsapp_settings
 from database.schema import get_retail_conn, sub_create
 from datetime import datetime, timedelta, timezone
 from core.retail import pricing as tax_engine
 from core.retail import po_split
+from core.retail import whatsapp_hook as _whatsapp_hook
 from config import (
     DATABASE_DIR, AURA_AI_ENDPOINT_URL, AURA_AI_BEARER_TOKEN, AURA_AI_TIMEOUT_SECONDS,
     AURA_AI_MODEL_NAME,
@@ -2379,6 +2381,26 @@ def close_cash_session(session_id):
         report['status'] = 'closed'
         report['closing_float_counted'] = counted
         report['variance'] = variance
+
+        # WhatsApp shift-close report -- best-effort, never blocks or fails
+        # the close that already committed above. Opens its OWN connection
+        # (whatsapp_hook.queue_shift_close_report), same reasoning as the
+        # e-invoicing call site in create_sale(): a failure here cannot roll
+        # back or otherwise touch the response this route already built.
+        try:
+            branch_conn = get_retail_conn()
+            branch_row = branch_conn.execute(
+                "SELECT name FROM branches WHERE id=? AND company_id=?", (sess['branch_id'], cid)
+            ).fetchone()
+            branch_conn.close()
+            _whatsapp_hook.queue_shift_close_report(
+                get_retail_conn, company_id=cid, branch_id=sess['branch_id'],
+                branch_name=(branch_row['name'] if branch_row else None), report=report,
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"WhatsApp shift-close report enqueue failed: {e}")
+
         return jsonify({'status': 'success', 'data': {'session': dict(sess), 'report': report}})
     except Exception as e:
         conn.rollback(); conn.close()
@@ -2594,6 +2616,85 @@ def report_summary_email():
         )
         conn.commit()
         return jsonify({'status': 'success', 'data': {'queued': row_id is not None, 'recipient': recipient}})
+    finally:
+        conn.close()
+
+# On-demand WhatsApp report send -- sibling of POST /reports/email above,
+# same "queued, never sent inline" outbox pattern (commercial_runtime/
+# notifications/whatsapp_worker.py drains it later, exactly like
+# OutboxWorker/EmailOutboxWorker do for their own channels). Reuses the
+# EXISTING "retail.report.email" capability string rather than minting a new
+# one -- this is still "send a report", the channel is an implementation
+# detail a license capability has no reason to distinguish.
+@retail_bp.route('/reports/whatsapp', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.report.email", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+def report_whatsapp():
+    cid = _cid()
+    data_in = request.json or {}
+    report_type = data_in.get('report_type')
+    if report_type not in ('daily_sales_summary', 'ar_overdue_alert'):
+        return jsonify({'status': 'error',
+                         'message': "report_type must be 'daily_sales_summary' or 'ar_overdue_alert'."}), 400
+    conn = get_retail_conn()
+    try:
+        if not _whatsapp_settings.is_enabled(conn, cid):
+            return jsonify({'status': 'error', 'message': 'WhatsApp reports are not enabled for this company'}), 409
+        if _whatsapp_settings.template_name_for(conn, cid, report_type) is None:
+            return jsonify({'status': 'error',
+                             'message': f'No template name configured for {report_type}'}), 400
+
+        if report_type == 'daily_sales_summary':
+            summary = _compute_report_summary(conn, cid, 1)
+            queued = _whatsapp_hook.queue_daily_sales_summary(
+                conn, company_id=cid, business_name='Aura Retail', summary=summary,
+            )
+        else:
+            # Same bucketing logic as GET /reports/aging(type='receivable') --
+            # duplicated here as a handful of lines rather than refactoring
+            # that route's inline query into a shared helper under time
+            # pressure; see aging_report() above for the reference version
+            # this must stay in sync with if that route's math ever changes.
+            _ensure_credit_schema(conn)
+            parties = conn.execute(
+                "SELECT id, credit_balance FROM customers WHERE company_id=? AND COALESCE(credit_balance,0)>0.005",
+                (cid,),
+            ).fetchall()
+            today = datetime.now()
+            overdue_total = 0.0
+            bucket_90_plus = 0.0
+            customer_count = 0
+            for p in parties:
+                oldest = conn.execute(
+                    "SELECT MIN(created_at) FROM sales WHERE company_id=? AND customer_id=? "
+                    "AND (total-amount_paid)>0.005",
+                    (cid, p['id']),
+                ).fetchone()[0]
+                days = 0
+                if oldest:
+                    try:
+                        days = (today - datetime.strptime(str(oldest)[:10], '%Y-%m-%d')).days
+                    except Exception:
+                        days = 0
+                if days <= 0:
+                    continue  # 'current' bucket is not overdue
+                bal = float(p['credit_balance'] or 0)
+                overdue_total += bal
+                customer_count += 1
+                if days > 90:
+                    bucket_90_plus += bal
+            queued = _whatsapp_hook.queue_ar_overdue_alert(
+                conn, company_id=cid, overdue_total=overdue_total,
+                customer_count=customer_count, bucket_90_plus=bucket_90_plus,
+            )
+
+        if queued == 0:
+            conn.rollback()
+            return jsonify({'status': 'error',
+                             'message': 'No WhatsApp recipients are subscribed to this report'}), 400
+        conn.commit()
+        return jsonify({'status': 'success', 'data': {'queued': queued}})
     finally:
         conn.close()
 

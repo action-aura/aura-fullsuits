@@ -181,7 +181,13 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # silently turned every UUID customer id into NaN -> null -- the exact
 # `+`-coercion-on-an-id-field bug pattern ROADMAP.md's 2026-08-12 entry
 # flagged whoever reconciled this branch to grep for).
-RETAIL_SCHEMA_VERSION = 11
+# v11 -> v12 (feat/retail-mobile-build-baseline, whatsapp-recipients):
+# adds whatsapp_recipients (commercial_runtime/notifications/schema.py::
+# apply_whatsapp_recipients_schema) -- multi-recipient, role/branch-scoped
+# WhatsApp report routing. Pure additive CREATE TABLE IF NOT EXISTS, same
+# shape as every notifications-owned table before it; no existing table is
+# touched. See _migrate_add_whatsapp_recipients below.
+RETAIL_SCHEMA_VERSION = 12
 
 
 def _get_path(name):
@@ -900,6 +906,9 @@ def _migrate_retail_schema(conn):
     # renumbering/collision story. Runs after shift-cash-drawer since both
     # branches were reconciled together at this merge.
     _migrate_add_held_sales(conn)
+    # v11 -> v12 (whatsapp-recipients): appended LAST, same reasoning again --
+    # see the RETAIL_SCHEMA_VERSION v12 comment above.
+    _migrate_add_whatsapp_recipients(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -1309,6 +1318,25 @@ def _migrate_add_held_sales(conn):
         );
         CREATE INDEX IF NOT EXISTS idx_held_sales_company ON held_sales(company_id, created_at);
     """)
+
+
+def _migrate_add_whatsapp_recipients(conn):
+    """One-time migration (schema v11 -> v12): adds the whatsapp_recipients
+    table owned by commercial_runtime/notifications (multi-recipient,
+    role/branch-scoped WhatsApp report routing) -- identical shape to v9's
+    email/whatsapp-outbox addition above: CREATE TABLE IF NOT EXISTS /
+    CREATE INDEX IF NOT EXISTS only, nothing product-specific lives in that
+    module, so this function's only job is to call it inside the same
+    ensure_schema_version() transaction every other step in this chain
+    already runs inside.
+
+    Idempotent by construction (every statement inside
+    apply_whatsapp_recipients_schema() is already IF NOT EXISTS), so a
+    second call -- or a fresh install migrating 0 -> 12 in one pass, same as
+    every step above -- is a clean no-op.
+    """
+    from commercial_runtime.notifications.schema import apply_whatsapp_recipients_schema
+    apply_whatsapp_recipients_schema(conn)
 
 
 def init_retail():

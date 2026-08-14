@@ -56,6 +56,7 @@ from datetime import datetime, timezone
 
 from commercial_runtime.notifications import settings as _notification_settings
 from commercial_runtime.notifications.outbox import EmailOutboxRepository as _EmailOutboxRepository
+from core.retail import whatsapp_hook as _whatsapp_hook
 
 
 def maybe_trigger_reorder(conn_factory, *, company_id, branch_id, product_ids):
@@ -137,6 +138,17 @@ def _maybe_create_request_for_product(conn, company_id, branch_id, product_id) -
         _maybe_queue_low_stock_email(conn, company_id, product_name=product['name'] or 'Product',
                                       on_hand=on_hand, reorder_level=reorder_level,
                                       draft_message=draft_message)
+        # WhatsApp -- same same-transaction/same-idempotency reasoning as the
+        # email call immediately above (see this module's docstring, 2026-08-14
+        # addition); a gated no-op when unconfigured, same as email.
+        branch_row = conn.execute(
+            "SELECT name FROM branches WHERE id=? AND company_id=?", (branch_id, company_id)
+        ).fetchone()
+        _whatsapp_hook.queue_low_stock_alert(
+            conn, company_id=company_id, branch_id=branch_id,
+            branch_name=(branch_row['name'] if branch_row else None),
+            product_name=product['name'] or 'Product', on_hand=on_hand, reorder_level=reorder_level,
+        )
         conn.commit()
         return True
     except Exception:
