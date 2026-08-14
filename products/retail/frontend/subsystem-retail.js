@@ -1036,13 +1036,26 @@ const RetailSystem = {
     const gap = now - st.lastAt;
     st.lastAt = now;
 
-    // A pause longer than the timeout starts a fresh sequence (human typing or a
+    // cfg.inputMode ("Auto Detect" vs "Keyboard HID" in Scanner Settings) used
+    // to be saved but never read here, so both options behaved identically --
+    // a dead setting that looked live in the UI. Auto Detect keeps the tight
+    // default window, sized to guess between an unconfirmed device and a
+    // human typist. Keyboard HID means the admin has explicitly confirmed a
+    // dedicated HID keyboard-wedge scanner is wired up (not shared with
+    // manual typing), so we trust it with 3x the per-key timing slack --
+    // enough to absorb a slower/jittery scanner or a laggy remote-desktop
+    // session without falling back to manual entry, but still bounded (not
+    // unlimited) so a stray, never-terminated keystroke can't linger
+    // indefinitely and corrupt a later scan.
+    const resetWindowMs = cfg.inputMode === 'keyboard' ? cfg.timeoutMs * 3 : cfg.timeoutMs;
+
+    // A pause longer than the window starts a fresh sequence (human typing or a
     // new scan). This is what keeps manual typing + Enter from looking like a scan.
-    if (gap > cfg.timeoutMs) { st.buffer = ''; st.firstAt = now; }
+    if (gap > resetWindowMs) { st.buffer = ''; st.firstAt = now; }
 
     if (e.key === 'Enter') {
       const code = this._applyAffixes(st.buffer, cfg);
-      const fastBurst = st.firstAt && ((now - st.firstAt) <= cfg.timeoutMs * (st.buffer.length + 2));
+      const fastBurst = st.firstAt && ((now - st.firstAt) <= resetWindowMs * (st.buffer.length + 2));
       st.buffer = '';
       if (code.length >= cfg.minLength && (fastBurst || capturing)) {
         e.preventDefault(); e.stopPropagation();
