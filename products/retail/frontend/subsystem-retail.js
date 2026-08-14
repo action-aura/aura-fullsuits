@@ -406,7 +406,19 @@ const RetailSystem = {
           <td style="color:var(--text-muted);font-family:monospace">${(s.created_at||'').slice(11,16)}</td>
         </tr>`).join('');
       }
-    } catch(e) { console.error('Retail dashboard error:', e.message); }
+    } catch(e) {
+      console.error('Retail dashboard error:', e.message);
+      // AUDIT: this used to swallow the error silently, leaving every KPI
+      // tile frozen on its "—" placeholder and the recent-transactions table
+      // stuck on "Loading…" forever, WHILE app-shell's _navigate() still saw
+      // this render() call resolve cleanly and lit the green "● LIVE" badge
+      // (app-shell.js's _updateLiveBadge(true)) -- actively telling the
+      // operator the dashboard was live/current when it was dead. Rethrow so
+      // _navigate's own try/catch (app-shell.js) takes over: it turns the
+      // LIVE badge off and renders the existing "Failed to load" + Retry
+      // panel that every other section already gets on a render failure.
+      throw e;
+    }
   },
 
   // ── POS ───────────────────────────────────────────────────────────────────
