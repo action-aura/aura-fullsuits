@@ -94,5 +94,52 @@ def apply_notifications_schema(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_lookup
             ON email_verification_tokens(company_id, recipient, purpose, consumed_at);
+
+        -- WhatsApp -- same two-table shape as email_settings/email_outbox
+        -- above (this module's docstring already names WhatsApp as one of
+        -- the channels it exists to eventually house). Transport config
+        -- (phone_number_id/access_token) is env-var-only for the same
+        -- reason SMTP host/credentials are -- see whatsapp_client.py's
+        -- module docstring -- one set per installation, not per company.
+        CREATE TABLE IF NOT EXISTS whatsapp_settings (
+            company_id TEXT    NOT NULL,
+            skey       TEXT    NOT NULL,
+            svalue     TEXT,
+            updated_at TEXT,
+            PRIMARY KEY (company_id, skey)
+        );
+
+        -- One row per WhatsApp message this install has ever queued.
+        -- template_name/language_code/component_params_json instead of
+        -- email_outbox's subject/body_text/body_html: WhatsApp sends a
+        -- pre-approved message TEMPLATE, never free text, for a business-
+        -- initiated message (see whatsapp_client.py's module docstring for
+        -- the real Cloud API constraint this reflects) -- there is no
+        -- "body" to store, only the template name and its ordered
+        -- placeholder values, captured in full at enqueue time for the
+        -- same reason email_outbox captures its content up front (the
+        -- triggering event may not still have the data by send time).
+        CREATE TABLE IF NOT EXISTS whatsapp_outbox (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id            TEXT    NOT NULL,
+            message_type          TEXT    NOT NULL,   -- 'low_stock_alert' | 'report_summary' -- mirrors email_type's vocabulary
+            recipient_phone_e164  TEXT    NOT NULL,
+            template_name         TEXT    NOT NULL,
+            language_code         TEXT    NOT NULL DEFAULT 'en_US',
+            component_params_json TEXT,                -- JSON array of ordered {{1}},{{2}},... body values, or NULL
+            status                TEXT    NOT NULL DEFAULT 'QUEUED',
+            attempt_count         INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at       TEXT,
+            lease_expires_at      TEXT,
+            last_error            TEXT,                -- sanitized exception type name, never a raw API transcript
+            wamid                 TEXT,                 -- WhatsApp's own message id, once sent
+            created_at            TEXT    NOT NULL,
+            updated_at            TEXT    NOT NULL,
+            sent_at               TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_whatsapp_outbox_due
+            ON whatsapp_outbox(status, next_attempt_at);
+        CREATE INDEX IF NOT EXISTS idx_whatsapp_outbox_company
+            ON whatsapp_outbox(company_id, status);
         """
     )
