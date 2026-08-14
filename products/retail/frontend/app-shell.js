@@ -271,6 +271,36 @@ const SubsystemApp = {
   },
 
   async init() {
+    // ── Device activation gate ─────────────────────────────────────────────
+    // Checked before anything else, including the auth gate below, so an
+    // unactivated device on a real licensed install never reaches setup or
+    // login. Skipped in demo mode (matches the auth gate's own skip) and
+    // skipped when licensing isn't wired up on this install at all --
+    // /api/licensing/status's NOT_CONFIGURED shape is ambiguous by itself
+    // (returned both when genuinely unconfigured AND when configured but
+    // never activated -- see commercial_runtime/licensing_contracts's own
+    // test_status_before_activation_is_not_configured_shape, which pins the
+    // configured-but-fresh case on purpose), but the "detail" field is only
+    // ever attached by the genuinely-unconfigured branch
+    // (routes.py::_not_configured_response) -- present_status(None) never
+    // sets it, so its presence is the real disambiguating signal, no
+    // backend change needed.
+    if (!window.isDemoMode && sessionStorage.getItem('demo_mode') !== 'true') {
+      try {
+        const lic = await fetch('/api/licensing/status', { cache: 'no-store' }).then(r => r.json());
+        const needsActivation = lic.current_state === 'ACTIVATION_REQUIRED'
+          || lic.current_state === 'ACTIVATING'
+          || (lic.current_state === 'NOT_CONFIGURED' && !lic.detail);
+        if (needsActivation) {
+          location.href = '/static/licensing.html?gate=1';
+          return;
+        }
+      } catch (e) {
+        // Network hiccup: fail open, same as every other best-effort check
+        // in this init() sequence (active-modules fetch above does the same).
+      }
+    }
+
     this._authPrompted = false;     // re-arm the 401 guard on every (re)init
     this._installAuthGuard();
     ThemeEngine.init();

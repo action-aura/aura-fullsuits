@@ -38,7 +38,33 @@ import com.actionaura.retail.ui.screens.*
 import com.actionaura.retail.ui.theme.AuroraTeal
 import kotlinx.coroutines.launch
 
-private enum class Phase { LOADING, SETUP, LOGIN, READY }
+private enum class Phase { LOADING, LICENSE, SETUP, LOGIN, READY }
+
+// States that mean "this device has never completed activation" -- /status
+// deliberately returns NOT_CONFIGURED for this case too, not just for a
+// truly unconfigured build (see commercial_runtime/licensing_contracts's
+// own test_status_before_activation_is_not_configured_shape, which pins
+// this on purpose), so BuildConfig.OWNER_LICENSING_BASE_URL is the real
+// signal for "is licensing even wired up on this build" -- the state
+// string alone can't distinguish "unconfigured" from "configured but never
+// activated."
+private val NEEDS_ACTIVATION_STATES = setOf("NOT_CONFIGURED", "ACTIVATION_REQUIRED", "ACTIVATING")
+
+// Everything after the activation gate: unchanged from before Phase.LICENSE
+// existed, just factored out so both the initial boot check and the
+// post-activation callback (LicensingScreen's onActivated) can reach the
+// same setup/login/ready decision without duplicating it.
+private suspend fun phaseAfterActivationGate(): Phase {
+    val needsSetup = try { ApiClient.get().onboardingStatus().needs_setup } catch (e: Exception) { false }
+    if (needsSetup) return Phase.SETUP
+    val session = try { ApiClient.get().session() } catch (e: Exception) { null }
+    return if (session?.authenticated == true) {
+        // Admin-gating state (Wave 1A, Part G), derived from the same
+        // session check that already gates navigation.
+        RetailSession.update(session.user)
+        Phase.READY
+    } else Phase.LOGIN
+}
 
 @Composable
 fun AppRoot() {
@@ -55,23 +81,32 @@ fun AppRoot() {
             // own doc comment) -- never blocks the phase transition below,
             // since it only schedules a timer and returns immediately.
             SyncCoordinator.start(ctx)
-            val needsSetup = try { ApiClient.get().onboardingStatus().needs_setup } catch (e: Exception) { false }
-            if (needsSetup) Phase.SETUP
-            else {
-                val session = try { ApiClient.get().session() } catch (e: Exception) { null }
-                if (session?.authenticated == true) {
-                    // Admin-gating state (Wave 1A, Part G), derived from the
-                    // same session check that already gates navigation.
-                    RetailSession.update(session.user)
-                    Phase.READY
-                } else Phase.LOGIN
+
+            // Device activation gate, checked first (before setup/login) so
+            // an unactivated device on a real licensed build never reaches
+            // the app at all -- matches the desktop shell's equivalent gate.
+            // Skipped entirely when this build has no licensing URL baked
+            // in (BuildConfig.OWNER_LICENSING_BASE_URL blank), matching this
+            // codebase's "unset == not enforced" convention (same as
+            // OWNER_LICENSING_BASE_URL's own documented behavior) -- an
+            // unlicensed dev/test build behaves exactly as before this gate
+            // existed.
+            val licensingConfigured = com.actionaura.retail.BuildConfig.OWNER_LICENSING_BASE_URL.isNotBlank()
+            val needsActivation = if (!licensingConfigured) false else {
+                val state = try {
+                    com.actionaura.retail.licensing.LicensingCoordinator(ctx).status()["current_state"] as? String
+                } catch (e: Exception) { null }
+                state in NEEDS_ACTIVATION_STATES
             }
+
+            if (needsActivation) Phase.LICENSE else phaseAfterActivationGate()
         } catch (e: Exception) { Phase.LOGIN }
     }
 
     // Flip the whole UI to right-to-left when Arabic is active. Reading AppLocale.lang
     // here makes the app recompose (and re-mirror) the moment the language is switched.
     val layoutDir = if (AppLocale.isRtl) LayoutDirection.Rtl else LayoutDirection.Ltr
+    val scope = rememberCoroutineScope()
     NebulaBackground {
         // Transparent containers don't resolve a content color, so set the default
         // (light) text color for the whole app — otherwise unstyled text renders black.
@@ -82,6 +117,10 @@ fun AppRoot() {
             Crossfade(targetState = phase, animationSpec = tween(280), label = "phase") { p ->
                 when (p) {
                     Phase.LOADING -> LoadingScreen()
+                    Phase.LICENSE -> LicensingScreen(
+                        onBack = {}, snackbar = remember { SnackbarHostState() },
+                        onActivated = { scope.launch { phase = phaseAfterActivationGate() } },
+                    )
                     Phase.SETUP -> SetupScreen(onDone = { phase = Phase.READY })
                     Phase.LOGIN -> LoginScreen(onLoggedIn = { phase = Phase.READY })
                     Phase.READY -> MainShell(onLogout = { phase = Phase.LOGIN })

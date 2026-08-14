@@ -65,7 +65,7 @@ private fun stateLabel(state: String): Pair<String, Color> = when (state) {
 }
 
 @Composable
-fun LicensingScreen(onBack: () -> Unit, snackbar: SnackbarHostState) {
+fun LicensingScreen(onBack: () -> Unit, snackbar: SnackbarHostState, onActivated: (() -> Unit)? = null) {
     val ctx = LocalContext.current
     val coordinator = remember { LicensingCoordinator(ctx) }
     val scope = rememberCoroutineScope()
@@ -136,6 +136,11 @@ fun LicensingScreen(onBack: () -> Unit, snackbar: SnackbarHostState) {
                             }
                             if (result["result"] == "SUCCESS") {
                                 infoMessage = tr("Activation successful.")
+                                // Pre-login gate usage (AppRoot's Phase.LICENSE) passes this
+                                // to advance to the login screen; the settings-accessed path
+                                // (already logged in) passes null and just stays here showing
+                                // the now-active status, same as before this param existed.
+                                onActivated?.invoke()
                             } else if (result["result"] == "PENDING") {
                                 // Phase 8 Part O: Owner is holding this activation for
                                 // manual approval, not rejecting it -- a distinct,

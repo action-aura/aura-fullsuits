@@ -177,6 +177,15 @@
       input.value = '';
       if (status === 200 && body.result === 'SUCCESS') {
         showMessage('Activation successful.', 'info');
+        // Reached via app-shell.js's pre-login activation gate (?gate=1) --
+        // bounce back to '/' so init() re-runs and, now that this device is
+        // activated, proceeds straight to setup/login. The settings-accessed
+        // path (Settings -> Licensing, already logged in) has no ?gate=1 and
+        // deliberately stays here showing the now-active status card, same
+        // as before this gate existed.
+        if (new URLSearchParams(location.search).get('gate') === '1') {
+          setTimeout(() => { location.href = '/'; }, 900);
+        }
       } else if (status === 202 && body.result === 'PENDING') {
         // Phase 8 Part O: Owner is holding this activation for manual
         // approval, not rejecting it -- a distinct, non-error state.
