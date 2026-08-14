@@ -1277,6 +1277,17 @@ const RetailSystem = {
         if (btn) { btn.textContent = `Charge — ${this._fmt(total)}`; btn.disabled = false; }
       }
     } catch(e) {
+      // AUDIT: this used to reset the button with zero visible feedback on
+      // any non-401 failure (server unreachable, a 500 with a non-JSON
+      // body making _post's res.json() throw a SyntaxError, etc.) --
+      // _fetch() above only throws for HTTP 401, which already shows its
+      // own relogin modal via checkAuthAndSetup. Every other failure mode
+      // landed here silently: the cashier watched "Processing…" flash back
+      // to "Charge" with no indication of whether the sale went through,
+      // whether to retry, or whether the customer's cash was recorded --
+      // on the single most consequential action on this screen.
+      console.error('Checkout failed:', e);
+      SubsystemApp.showToast('Checkout failed — check the connection and try again', 'error');
       if (btn) { btn.textContent = `Charge — ${this._fmt(total)}`; btn.disabled = false; }
     }
   },
