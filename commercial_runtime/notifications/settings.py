@@ -46,8 +46,23 @@ DEFAULTS = {
 
 _KNOWN_KEYS = frozenset(DEFAULTS.keys())
 
+# Keys every caller eventually int()-casts with no try/except of its own --
+# worker.py::_apply_retry's max_attempts read and app.py's
+# _resume_notifications_workers()/routes.py's submit_interval_seconds reads
+# all trust these are parseable. Validate here, at the single write path,
+# rather than guarding every downstream int() call: a bad value must never
+# reach the table in the first place, since an already-stored bad value
+# still wedges the outbox (worker.py) or crashes init_app() on the next
+# restart (app.py) the moment it's read back (AUDIT: HIGH -- notifications
+# outbox settings write with zero numeric validation).
+_NUMERIC_KEYS = frozenset({'max_attempts', 'submit_interval_seconds'})
+
 
 class UnknownSettingError(ValueError):
+    pass
+
+
+class InvalidSettingValueError(ValueError):
     pass
 
 
@@ -76,6 +91,17 @@ def get_all_settings(conn: sqlite3.Connection, company_id) -> dict:
 def set_setting(conn: sqlite3.Connection, company_id, key: str, value: str) -> None:
     if key not in _KNOWN_KEYS:
         raise UnknownSettingError(f"Unknown notifications setting: {key!r}.")
+    if key in _NUMERIC_KEYS:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            raise InvalidSettingValueError(
+                f"{key!r} must be a positive integer, got {value!r}."
+            ) from None
+        if parsed < 1:
+            raise InvalidSettingValueError(
+                f"{key!r} must be a positive integer, got {value!r}."
+            )
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
         "INSERT INTO email_settings (company_id, skey, svalue, updated_at) VALUES (?,?,?,?) "

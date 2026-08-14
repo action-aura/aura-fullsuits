@@ -70,6 +70,30 @@ def test_is_enabled_scoped_per_company(conn, monkeypatch):
     assert settings.is_enabled(conn, 2) is False
 
 
+# ── numeric setting validation (AUDIT: HIGH -- max_attempts/
+#    submit_interval_seconds were persisted with zero validation that they
+#    were numeric, and every reader does a bare int() cast; a bad value
+#    wedged the outbox worker forever and crashed init_app() on restart) ──
+
+@pytest.mark.parametrize('key', ['max_attempts', 'submit_interval_seconds'])
+@pytest.mark.parametrize('bad_value', ['', 'abc', None, '1.5', '0', '-3'])
+def test_numeric_setting_rejects_non_positive_integer_on_write(conn, key, bad_value):
+    with pytest.raises(settings.InvalidSettingValueError):
+        settings.set_setting(conn, 1, key, bad_value)
+    # rejected write must not have persisted -- the reader still sees the
+    # documented default, never the bad value.
+    assert settings.get_setting(conn, 1, key) == settings.DEFAULTS[key]
+
+
+@pytest.mark.parametrize('key', ['max_attempts', 'submit_interval_seconds'])
+def test_numeric_setting_accepts_positive_integer_on_write(conn, key):
+    settings.set_setting(conn, 1, key, '30')
+    assert settings.get_setting(conn, 1, key) == '30'
+    # value must always be int()-castable by downstream callers
+    # (worker.py::_apply_retry, app.py::_resume_notifications_workers).
+    assert int(settings.get_setting(conn, 1, key)) == 30
+
+
 def test_garbage_enabled_value_fails_closed(conn, monkeypatch):
     """Only the literal '1' turns the feature on -- matches
     einvoicing/settings.py's identical fail-closed guarantee."""

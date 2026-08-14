@@ -104,7 +104,7 @@ def make_notifications_blueprint(
             for key, value in payload.items():
                 try:
                     settings.set_setting(conn, cid, key, str(value))
-                except settings.UnknownSettingError as exc:
+                except (settings.UnknownSettingError, settings.InvalidSettingValueError) as exc:
                     conn.rollback()
                     return jsonify({'status': 'error', 'message': str(exc)}), 400
             conn.commit()
