@@ -106,11 +106,17 @@ def _install_fake_llm(monkeypatch):
 
 
 def _make_user():
-    """One minimal real login -- language detection doesn't need seeded
-    business data (Arabic/English messages match no _AI_INTENT_KEYWORDS
-    entry; those keywords are English-only and _detect_ai_intent lowercases
-    only the message, never RAG-relevant here), so this is deliberately
-    lighter than retail_ai_rag_multitenant_test.py's _make_company()."""
+    """One minimal real login -- this suite only asserts on the
+    language-instruction text in the built prompt, never on RAG content, so
+    it doesn't need seeded business data the way
+    retail_ai_rag_multitenant_test.py's _make_company() does. Note: since
+    2026-08-14, _AI_INTENT_KEYWORDS has Arabic entries too, so ARABIC_MSG
+    below (it contains 'منتج') now DOES match the 'products' category and
+    triggers a real _build_ai_context() query -- harmless here because a
+    company with no seeded products just gets an honest "0 active
+    product(s)" summary appended to the prompt, which none of this file's
+    assertions look at. See retail_ai_rag_multitenant_test.py for the actual
+    Arabic-RAG-content regression coverage."""
     email = f'ai-lang-{uuid.uuid4().hex[:8]}@test.local'
     password = 'AiLangTestPW1'
     company_id = str(uuid.uuid4())

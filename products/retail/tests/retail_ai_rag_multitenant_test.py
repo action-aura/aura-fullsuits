@@ -305,7 +305,38 @@ def test_supplier_question_reflects_only_own_company(companies, monkeypatch):
 
 
 # ═════════════════════════════════════════════════════════════════════════
-# 5. Generic / irrelevant questions inject no data at all (no leak surface)
+# 5. Arabic business questions get real data too (regression test)
+# ═════════════════════════════════════════════════════════════════════════
+
+def test_arabic_product_question_gets_real_business_data(companies, monkeypatch):
+    """Regression test for a real bug: _AI_INTENT_KEYWORDS was English-only,
+    so an Arabic business question like "كم عدد المنتجات لدي؟" (how many
+    products do I have) matched no category at all -- _detect_ai_intent()
+    returned None, _build_ai_context() short-circuited to '' with zero DB
+    queries, and the reply still rendered correctly in Arabic
+    (_resolve_ai_language() is independent of this) but with none of the
+    real company data the RAG upgrade exists to inject. Before the
+    2026-08-14 fix this assertion failed outright: the prompt contained no
+    product count at all, Arabic or otherwise."""
+    reply_a = _ask(companies['a']['client'], 'كم عدد المنتجات لدي؟', monkeypatch)
+    reply_b = _ask(companies['b']['client'], 'كم عدد المنتجات لدي؟', monkeypatch)
+    assert '2 active product' in reply_a
+    assert '3 active product' in reply_b
+    # Same cross-tenant isolation guarantee as the English equivalent above.
+    assert '3 active product' not in reply_a
+    assert '2 active product' not in reply_b
+
+
+def test_arabic_low_stock_question_gets_real_business_data(companies, monkeypatch):
+    """Same regression, for the 'low_stock' category (checked ahead of the
+    generic 'products' bucket -- see _AI_INTENT_KEYWORDS' ordering note)."""
+    reply_a = _ask(companies['a']['client'], 'ما هي المنتجات ذات المخزون منخفض؟', monkeypatch)
+    assert 'Aardvark Widget' in reply_a
+    assert 'Bravo Beanie' not in reply_a
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# 6. Generic / irrelevant questions inject no data at all (no leak surface)
 # ═════════════════════════════════════════════════════════════════════════
 
 def test_irrelevant_message_injects_no_business_data(companies, monkeypatch):
@@ -316,7 +347,7 @@ def test_irrelevant_message_injects_no_business_data(companies, monkeypatch):
 
 
 # ═════════════════════════════════════════════════════════════════════════
-# 6. Direct unit-level isolation check against _build_ai_context() itself
+# 7. Direct unit-level isolation check against _build_ai_context() itself
 # ═════════════════════════════════════════════════════════════════════════
 
 def test_context_builder_direct_db_isolation(companies):

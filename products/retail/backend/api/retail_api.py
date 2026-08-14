@@ -3472,15 +3472,35 @@ def _resolve_ai_language(requested, message):
 # could plausibly have thousands of products/sales rows.
 _AI_CONTEXT_MAX_CHARS = 600
 
+# 2026-08-14: _AI_INTENT_KEYWORDS was English-only, so an Arabic business
+# question (e.g. "كم عدد المنتجات لدي؟" -- "how many products do I have")
+# matched no category at all: _detect_ai_intent() returned None,
+# _build_ai_context() short-circuited to '' with zero DB queries, and the
+# reply still rendered correctly in Arabic (_resolve_ai_language() is
+# independent of this) but with none of the real company data the whole RAG
+# upgrade exists to inject. Each English bucket below now has an Arabic
+# counterpart covering the same intents, not a literal translation of every
+# English entry -- picked to match how these questions are actually phrased
+# in Arabic, same as the English list was.
 _AI_INTENT_KEYWORDS = {
     # Dict order = match priority: 'low_stock' is checked before the generic
     # 'products' bucket so "what's low on stock" / "what needs reordering"
     # returns the actual low-stock list, not just a plain product count.
-    'low_stock': ('low stock', 'low on stock', 'reorder', 'running out', 'running low', 'restock', 'out of stock'),
-    'sales':     ('sale', 'sales', 'revenue', 'sold', 'transaction', 'best seller', 'top seller', 'top product', 'income'),
-    'customers': ('customer', 'client'),
-    'suppliers': ('supplier', 'vendor'),
-    'products':  ('product', 'item', 'sku', 'inventory', 'catalog', 'stock'),
+    'low_stock': (
+        'low stock', 'low on stock', 'reorder', 'running out', 'running low', 'restock', 'out of stock',
+        'مخزون منخفض', 'منخفض المخزون', 'إعادة الطلب', 'اعادة الطلب', 'أعد الطلب',
+        'نفد المخزون', 'نفدت الكمية', 'أوشك على النفاد', 'اوشك على النفاد', 'إعادة تخزين', 'اعادة تخزين',
+    ),
+    'sales': (
+        'sale', 'sales', 'revenue', 'sold', 'transaction', 'best seller', 'top seller', 'top product', 'income',
+        'مبيعات', 'بيع', 'إيراد', 'ايراد', 'الأكثر مبيعا', 'الاكثر مبيعا', 'معاملة', 'دخل',
+    ),
+    'customers': ('customer', 'client', 'عميل', 'عملاء', 'زبون', 'زبائن'),
+    'suppliers': ('supplier', 'vendor', 'مورد', 'موردين', 'موردون'),
+    'products':  (
+        'product', 'item', 'sku', 'inventory', 'catalog', 'stock',
+        'منتج', 'منتجات', 'صنف', 'أصناف', 'اصناف', 'مخزون', 'كتالوج',
+    ),
 }
 
 
