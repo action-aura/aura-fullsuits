@@ -2031,9 +2031,9 @@ const RetailSystem = {
         <td style="color:var(--text-muted)">${s.address?this._esc(s.address):'—'}</td>
         <td>${this._esc(s.order_count||0)}</td>
         <td>
-          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditSupplier('${this._esc(s.id)}','${this._esc(s.name).replace(/'/g,"\\'")}','${this._esc(s.phone||'')}','${this._esc(s.email||'')}','${this._esc(s.address||'')}')">Edit</button>
-          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._deleteSupplier('${this._esc(s.id)}','${this._esc(s.name).replace(/'/g,"\\'")}')">${t('Delete')}</button>
-          <button class="ret-btn ret-btn-primary ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._openCreatePO('${this._esc(s.id)}','${this._esc(s.name).replace(/'/g,"\\'")}')">+ PO</button>
+          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditSupplier('${this._esc(s.id)}','${this._esc(s.name.replace(/'/g,"\\'"))}','${this._esc(s.phone||'')}','${this._esc(s.email||'')}','${this._esc(s.address||'')}')">Edit</button>
+          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._deleteSupplier('${this._esc(s.id)}','${this._esc(s.name.replace(/'/g,"\\'"))}')">${t('Delete')}</button>
+          <button class="ret-btn ret-btn-primary ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._openCreatePO('${this._esc(s.id)}','${this._esc(s.name.replace(/'/g,"\\'"))}')">+ PO</button>
         </td>
       </tr>`).join('');
     } catch(e) { console.error(e); }
@@ -2144,7 +2144,7 @@ const RetailSystem = {
         <td style="color:var(--text-muted)">${this._esc(c.channel_preference||'—')}<div style="font-size:11px">${this._esc(c.email||c.phone||c.whatsapp||'—')}</div></td>
         <td>
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditSupplierContact('${this._esc(sid)}','${this._esc(c.id)}')">${t('Edit')}</button>
-          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._deleteSupplierContact('${this._esc(sid)}','${this._esc(c.id)}','${this._esc(c.name).replace(/'/g,"\\'")}')">${t('Delete')}</button>
+          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._deleteSupplierContact('${this._esc(sid)}','${this._esc(c.id)}','${this._esc(c.name.replace(/'/g,"\\'"))}')">${t('Delete')}</button>
         </td>
       </tr>`).join('')}</tbody>
     </table>`;
