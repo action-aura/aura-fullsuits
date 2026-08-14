@@ -298,7 +298,7 @@ const RetailSystem = {
         </div>
         <div style="overflow-x:auto">
           <table class="ret-table" id="r-dash-recent">
-            <thead><tr><th>Receipt #</th><th>Customer</th><th>Items</th><th>Payment</th><th>Total</th><th>Time</th></tr></thead>
+            <thead><tr><th>Receipt #</th><th>Customer</th><th>Items</th><th>Payment</th><th>Total</th><th>Date</th></tr></thead>
             <tbody><tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:30px">Loading…</td></tr></tbody>
           </table>
         </div>
@@ -407,7 +407,13 @@ const RetailSystem = {
           <td style="color:var(--text-dim)">${s.item_count||0} items</td>
           <td>${this._badge(s.payment_method||'cash', s.payment_method==='cash'?'green':'blue')}</td>
           <td style="font-weight:700">${this._fmt(s.total)}</td>
-          <td style="color:var(--text-dim);font-family:monospace">${(s.created_at||'').slice(11,16)}</td>
+          <!-- AUDIT: the recent-sales query (retail_api.py) has no date filter,
+               just ORDER BY created_at DESC LIMIT 8, so on a day with fewer than
+               8 sales so far, rows here can be from earlier days. HH:MM-only used
+               to make those indistinguishable from today's sales; show the full
+               date+time here (matches the Date column convention used by the
+               Sales History and Purchase History tables elsewhere in this file). -->
+          <td style="color:var(--text-dim);font-family:monospace">${(s.created_at||'').slice(0,16)}</td>
         </tr>`).join('');
       }
     } catch(e) {
