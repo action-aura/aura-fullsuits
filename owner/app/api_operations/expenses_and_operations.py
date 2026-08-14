@@ -490,7 +490,7 @@ def cash_closings_route():
         try:
             business_date = date.fromisoformat(business_date_raw) if business_date_raw else None
         except ValueError:
-            return jsonify({"error": "invalid business_date"}), 400
+            return jsonify({"error": "INVALID_REQUEST"}), 400
         codes = get_staff_permission_codes(staff)
         view_all_held = bool({"cash_closing.view_all", "cash_closing.approve"} & codes)
         result = cash_closing_list_queries.list_closings(
