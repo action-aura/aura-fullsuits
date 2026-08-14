@@ -217,6 +217,41 @@ def test_reconciliation_sweep_picks_up_a_lost_enqueue():
     assert len(matching) == 1, "reconciliation sweep must have enqueued the previously-lost sale"
 
 
+def test_build_document_uses_outbox_row_invoice_family_not_live_setting():
+    """Regression test for the invoice_family drift bug: _enqueue_on_conn()
+    stamps outbox_row['invoice_family'] atomically with the sequence-
+    allocated einvoice_no (same BEGIN IMMEDIATE transaction, same settings
+    read) specifically so the two can never disagree. build_document() must
+    reuse that stamped value -- if it re-reads the live 'invoice_family'
+    setting instead, a company changing the setting between enqueue and
+    worker submission (worker.py polls on submit_interval_seconds, default
+    60s -- plenty of time for an admin to hit /api/einvoicing/settings) would
+    submit a document whose declared invoice_family disagrees with the
+    number series already baked into its own einvoice_no."""
+    client, cid, pid, bid = _make_admin_and_product()
+    client.post('/api/einvoicing/settings', json={'enabled': '1', 'invoice_family': 'income'})
+
+    sale = _sell(client, pid)
+    ref = sale['einvoice']['invoice_ref']
+
+    # Changed AFTER enqueue, BEFORE the worker ever submits this row --
+    # simulates an admin editing settings mid-flight.
+    client.post('/api/einvoicing/settings', json={'invoice_family': 'general_sales'})
+
+    import core.retail.einvoice_adapter as adapter
+    conn = get_retail_conn()
+    row = conn.execute("SELECT * FROM einvoice_outbox WHERE invoice_ref=?", (ref,)).fetchone()
+    assert row['invoice_family'] == 'income', "outbox row must keep the family stamped at enqueue time"
+
+    doc = adapter.build_document(conn, row)
+    conn.close()
+    assert doc.invoice_family == 'income', (
+        "build_document must use the outbox row's own invoice_family, not a fresh settings "
+        "read -- otherwise the submitted document's declared family can disagree with the "
+        "series already baked into its own einvoice_no"
+    )
+
+
 def test_enabled_at_prevents_backfilling_pre_enablement_sales():
     client, cid, pid, bid = _make_admin_and_product()
     # Sale happens BEFORE the feature is ever enabled.

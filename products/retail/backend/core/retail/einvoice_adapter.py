@@ -83,7 +83,19 @@ def build_document(conn, outbox_row) -> EInvoiceDocument:
         ))
 
     buyer_name, buyer_id = _fetch_buyer(conn, company_id, sale['customer_id'])
-    invoice_family = settings.get_setting(conn, company_id, 'invoice_family')
+    # Use the outbox row's OWN invoice_family, not a fresh settings read.
+    # _enqueue_on_conn() reads invoice_family once and uses that single value
+    # both to allocate einvoice_no (sequence.allocate_einvoice_number --
+    # different families are different number series, e.g. 'INC-000042' vs
+    # a 'general_sales' series) and to stamp outbox_row['invoice_family'],
+    # committed together in the same BEGIN IMMEDIATE transaction. If this
+    # function re-read the live setting instead, a company changing
+    # invoice_family between enqueue and worker submission would submit a
+    # document whose declared invoice_family disagrees with the series
+    # already baked into its own einvoice_no -- see this file's module
+    # docstring pattern and docs/einvoicing/phase1/invoice-numbering-audit.md
+    # for why einvoice_no/invoice_family must never drift apart post-enqueue.
+    invoice_family = outbox_row['invoice_family']
     currency = settings.get_setting(conn, company_id, 'currency')
     seller_name = settings.get_setting(conn, company_id, 'seller_name') or 'Aura Retail Merchant'
     seller_tin = settings.get_setting(conn, company_id, 'seller_tin')
