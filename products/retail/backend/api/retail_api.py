@@ -2800,7 +2800,14 @@ def customers_receivables():
     cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn)
     rows = conn.execute("SELECT id,name,phone,credit_mode,credit_limit,credit_balance FROM customers "
                         "WHERE company_id=? AND COALESCE(credit_balance,0) > 0.005 ORDER BY credit_balance DESC", (cid,)).fetchall()
-    total = conn.execute("SELECT COALESCE(SUM(credit_balance),0) FROM customers WHERE company_id=?", (cid,)).fetchone()[0]
+    # Must use the same >0.005 filter as the rows query above. Without it, a
+    # customer with a negative (overpaid) credit_balance -- reachable because
+    # customer_payment() below only validates amount>0 and never caps it at
+    # the outstanding balance -- silently nets against and understates the
+    # genuine receivables of every other customer, so total_receivable no
+    # longer equals the sum of the rows actually shown to the user.
+    total = conn.execute("SELECT COALESCE(SUM(credit_balance),0) FROM customers "
+                         "WHERE company_id=? AND COALESCE(credit_balance,0) > 0.005", (cid,)).fetchone()[0]
     conn.close()
     return jsonify({'status': 'success', 'total_receivable': _money(total), 'data': [dict(r) for r in rows]})
 
@@ -2861,7 +2868,11 @@ def suppliers_payables():
     cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn)
     rows = conn.execute("SELECT id,name,phone,payment_terms,credit_balance FROM suppliers "
                         "WHERE company_id=? AND COALESCE(credit_balance,0) > 0.005 ORDER BY credit_balance DESC", (cid,)).fetchall()
-    total = conn.execute("SELECT COALESCE(SUM(credit_balance),0) FROM suppliers WHERE company_id=?", (cid,)).fetchone()[0]
+    # Same fix as customers_receivables() above -- filter the total the same
+    # way as the listed rows so an overpaid (negative-balance) supplier can't
+    # silently net against and understate the total_payable shown to the user.
+    total = conn.execute("SELECT COALESCE(SUM(credit_balance),0) FROM suppliers "
+                         "WHERE company_id=? AND COALESCE(credit_balance,0) > 0.005", (cid,)).fetchone()[0]
     conn.close()
     return jsonify({'status': 'success', 'total_payable': _money(total), 'data': [dict(r) for r in rows]})
 
