@@ -258,6 +258,49 @@ def test_employee_setup_rejects_password_shorter_than_six_chars():
     assert r4.status_code in (401, 403)
 
 
+def test_employee_setup_strips_whitespace_from_password_like_login_does():
+    """Regression: employee_setup() used to hash the submitted password
+    exactly as-is (no .strip()), while login() always strips the submitted
+    password before verifying it. An invite-link password with incidental
+    leading/trailing whitespace (common with clipboard-copied generated
+    passwords or mobile-keyboard auto-space) would get baked verbatim into
+    the stored hash, but every future login attempt strips first -- so the
+    account could never authenticate again, even re-entering the exact
+    original string. Exercises the real end-to-end flow (admin ->
+    create-employee -> invite link -> employee/setup) so it proves the
+    HTTP-layer strip behavior actually matches login()'s, not just that
+    hash_password()/verify_password() agree in isolation."""
+    admin_email = f'strip-admin-{uuid.uuid4().hex[:8]}@test.local'
+    _make_company_user(admin_email, 'StripAdminPW1', role='admin')
+    admin = app.test_client()
+    r = admin.post('/api/auth/login', json={'email': admin_email, 'password': 'StripAdminPW1'})
+    assert r.status_code == 200, r.get_json()
+
+    staff_email = f'padded-setup-{uuid.uuid4().hex[:8]}@test.local'
+    r2 = admin.post('/api/admin/employees', json={'email': staff_email})
+    assert r2.status_code == 200, r2.get_json()
+    setup_url = r2.get_json()['setup_link']
+    token = re.search(r'/#setup/([0-9a-f]+)', setup_url).group(1)
+
+    setup_client = app.test_client()
+    r3 = setup_client.post('/api/auth/employee/setup',
+                            json={'token': token, 'password': '  PaddedPW1  '})
+    assert r3.status_code == 200, r3.get_json()
+
+    # Logging in with the exact (whitespace-padded) string the employee
+    # actually typed at setup time must succeed -- both endpoints must
+    # strip identically, or this is a permanent lockout with no recovery.
+    r4 = app.test_client().post('/api/auth/login',
+                                 json={'email': staff_email, 'password': '  PaddedPW1  '})
+    assert r4.status_code == 200, r4.get_json()
+
+    # The trimmed value must also work (this direction already worked
+    # before the fix, and must keep working).
+    r5 = app.test_client().post('/api/auth/login',
+                                 json={'email': staff_email, 'password': 'PaddedPW1'})
+    assert r5.status_code == 200, r5.get_json()
+
+
 def test_cookie_hardening_flags():
     assert app.config.get('SESSION_COOKIE_HTTPONLY') is True
     assert app.config.get('SESSION_COOKIE_SAMESITE') == 'Lax'

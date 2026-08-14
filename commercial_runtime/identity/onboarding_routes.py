@@ -515,7 +515,13 @@ def company_settings():
 def employee_setup():
     data = request.json or {}
     token = data.get('token')
-    password = data.get('password')
+    # .strip() matches create_admin() (line ~97) and login()
+    # (auth_routes.py:29) -- without it, a stray leading/trailing space from
+    # a clipboard-copied invite password gets baked into the stored hash
+    # here, but login() always strips before verifying, so the account can
+    # never authenticate again with any input (AUDIT: employee_setup
+    # password-strip mismatch).
+    password = (data.get('password') or '').strip()
     if not token or not password:
         return jsonify({'error': 'Missing data'}), 400
     # Same minimum-length policy create_admin() enforces (line ~107) -- this
