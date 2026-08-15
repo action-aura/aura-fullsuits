@@ -97,7 +97,9 @@ class WhatsAppOutboxWorker:
             reclaimed = repo.reclaim_expired_leases()
             conn.commit()
 
-            claimed = repo.claim_due(batch_size=self._batch_size, lease_seconds=self._lease_seconds)
+            claimed = repo.claim_due(
+                company_id=self._company_id, batch_size=self._batch_size, lease_seconds=self._lease_seconds,
+            )
             conn.commit()
 
             outcomes = {'sent': 0, 'retry': 0, 'failed_permanent': 0}

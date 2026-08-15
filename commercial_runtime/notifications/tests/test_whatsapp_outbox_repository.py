@@ -46,18 +46,18 @@ def test_enqueue_always_inserts_no_dedup(repo):
 
 def test_claim_due_moves_to_sending_and_is_exclusive(repo):
     row_id = _enqueue(repo)
-    claimed = repo.claim_due(batch_size=10, lease_seconds=60)
+    claimed = repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     assert len(claimed) == 1
     assert claimed[0]['id'] == row_id
     assert repo.get(row_id)['status'] == 'SENDING'
 
-    claimed_again = repo.claim_due(batch_size=10, lease_seconds=60)
+    claimed_again = repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     assert claimed_again == []
 
 
 def test_mark_sent_records_wamid_and_is_terminal(repo):
     row_id = _enqueue(repo)
-    repo.claim_due(batch_size=10, lease_seconds=60)
+    repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     assert repo.mark_sent(row_id, wamid='wamid.HBgLMTU1NTEyMzQ1NjcVAgARGB==') is True
     row = repo.get(row_id)
     assert row['status'] == 'SENT'
@@ -69,7 +69,7 @@ def test_mark_sent_records_wamid_and_is_terminal(repo):
 
 def test_mark_retry_increments_attempt_count_and_requeues(repo):
     row_id = _enqueue(repo)
-    repo.claim_due(batch_size=10, lease_seconds=60)
+    repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     assert repo.mark_retry(row_id, error='WhatsAppSendError', next_attempt_at='2099-01-01T00:00:00+00:00') is True
     row = repo.get(row_id)
     assert row['status'] == 'QUEUED'
@@ -80,7 +80,7 @@ def test_mark_retry_increments_attempt_count_and_requeues(repo):
 
 def test_mark_failed_permanent_is_terminal(repo):
     row_id = _enqueue(repo)
-    repo.claim_due(batch_size=10, lease_seconds=60)
+    repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     assert repo.mark_failed_permanent(row_id, error='MaxAttemptsExceeded') is True
     row = repo.get(row_id)
     assert row['status'] == 'FAILED_PERMANENT'
@@ -95,7 +95,7 @@ def test_cancel_moves_a_queued_row_to_cancelled(repo):
 
 def test_cancel_on_terminal_row_is_a_safe_noop(repo):
     row_id = _enqueue(repo)
-    repo.claim_due(batch_size=10, lease_seconds=60)
+    repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     repo.mark_sent(row_id, wamid='x')
     assert repo.cancel(row_id) is False
     assert repo.get(row_id)['status'] == 'SENT'
@@ -109,7 +109,7 @@ def test_illegal_transition_raises(repo):
 
 def test_reclaim_expired_leases_returns_sending_rows_to_queued(repo):
     row_id = _enqueue(repo)
-    repo.claim_due(batch_size=10, lease_seconds=-1)
+    repo.claim_due(company_id=1, batch_size=10, lease_seconds=-1)
     assert repo.get(row_id)['status'] == 'SENDING'
 
     reclaimed = repo.reclaim_expired_leases()
@@ -121,15 +121,29 @@ def test_reclaim_expired_leases_returns_sending_rows_to_queued(repo):
 
 def test_reclaim_expired_leases_ignores_rows_with_time_remaining(repo):
     row_id = _enqueue(repo)
-    repo.claim_due(batch_size=10, lease_seconds=3600)
+    repo.claim_due(company_id=1, batch_size=10, lease_seconds=3600)
     assert repo.reclaim_expired_leases() == 0
     assert repo.get(row_id)['status'] == 'SENDING'
+
+
+def test_claim_due_does_not_claim_another_companys_rows(repo):
+    """AUDIT-fix regression test: claim_due() used to have no company_id
+    filter at all, so company 2's worker could claim (and send, using its
+    own max_attempts) company 1's queued rows."""
+    row_id = _enqueue(repo, company_id=1)
+    claimed_by_other_company = repo.claim_due(company_id=2, batch_size=10, lease_seconds=60)
+    assert claimed_by_other_company == []
+    assert repo.get(row_id)['status'] == 'QUEUED'
+
+    claimed_by_owner = repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
+    assert len(claimed_by_owner) == 1
+    assert claimed_by_owner[0]['id'] == row_id
 
 
 def test_counts_by_state(repo):
     _enqueue(repo)
     id2 = _enqueue(repo)
-    repo.claim_due(batch_size=10, lease_seconds=60)
+    repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     repo.mark_sent(id2, wamid='x')
 
     counts = repo.counts_by_state(1)
