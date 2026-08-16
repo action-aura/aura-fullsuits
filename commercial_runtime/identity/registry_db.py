@@ -35,7 +35,22 @@ DB_PATH = os.path.join(_db_dir, 'registry.db')
 # PRAGMA user_version at all before this -- every existing on-disk
 # registry.db implicitly reads version 0, so this migration is the first to
 # run against it via commercial_runtime.security.migration_safety.
-REGISTRY_SCHEMA_VERSION = 1
+# v2: email verification + password reset (users.email_verified_at,
+# secure_links.purpose) -- see verification_schema.py.
+REGISTRY_SCHEMA_VERSION = 2
+
+
+def _migrate_registry_schema(conn):
+    """The single `migrate_fn` handed to `ensure_schema_version` -- runs
+    every migration this file owns, in version order, on any database
+    behind REGISTRY_SCHEMA_VERSION, same "run every step, each
+    independently idempotent" shape as products/retail/backend/database/
+    schema.py::_migrate_retail_schema. A v0 (pre-user_version) database
+    upgrading straight to v2 runs both steps in one pass."""
+    from commercial_runtime.identity.device_registry import apply_identity_device_schema
+    from commercial_runtime.identity.verification_schema import apply_email_verification_schema
+    apply_identity_device_schema(conn)
+    apply_email_verification_schema(conn)
 
 
 def get_conn():
@@ -149,9 +164,8 @@ def init_registry_db():
     # advancing user_version on full success -- see
     # commercial_runtime/security/migration_safety.py.
     from commercial_runtime.security.migration_safety import ensure_schema_version
-    from commercial_runtime.identity.device_registry import apply_identity_device_schema
     ensure_schema_version(
-        conn, DB_PATH, REGISTRY_SCHEMA_VERSION, apply_identity_device_schema,
+        conn, DB_PATH, REGISTRY_SCHEMA_VERSION, _migrate_registry_schema,
         backup_dir=os.path.join(_db_dir, 'migration_backups'),
     )
 

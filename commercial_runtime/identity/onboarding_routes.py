@@ -28,6 +28,7 @@ from flask import Blueprint, request, jsonify, session
 
 from commercial_runtime.identity.registry_db import get_conn
 from commercial_runtime.identity.mt_auth import create_session
+from commercial_runtime.identity import verification as _verification
 from commercial_runtime.security.passwords import hash_password
 from commercial_runtime.security.audit import record as _security_audit, ADMIN_CREATED
 
@@ -179,9 +180,21 @@ def create_admin():
             'require_password_change': False, 'email': email,
         })
 
+        # Best-effort: a verification-email send failure (SMTP not
+        # configured on this install, or a transient transport error) must
+        # never fail account creation -- the account and session above are
+        # already committed. `email_sent` tells the frontend whether to show
+        # "check your inbox" or a quieter "verify later from Settings"
+        # state; it is not a security signal (email_verified_at is).
+        email_sent = _verification.send_verification_email(
+            conn, company_id=company_id, user_email=email, base_url=request.host_url,
+        )
+        conn.commit()
+
         return jsonify({
             'success': True,
-            'user': {'id': user_id, 'email': email, 'role': 'admin', 'company': company}
+            'user': {'id': user_id, 'email': email, 'role': 'admin', 'company': company},
+            'email_verification_sent': email_sent,
         })
     except Exception as e:
         # Safe even if the transaction already committed above (nothing left
@@ -192,6 +205,111 @@ def create_admin():
         except Exception:
             pass
         return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@onboarding_bp.route('/api/auth/verify-email', methods=['POST'])
+def verify_email():
+    data = request.json or {}
+    token = (data.get('token') or '').strip()
+    if not token:
+        return jsonify({'error': 'Missing token.'}), 400
+    conn = get_conn()
+    try:
+        user_id = _verification.verify_email(conn, token)
+        if user_id is None:
+            conn.rollback()
+            return jsonify({'error': 'This verification link is invalid or has expired.'}), 400
+        conn.commit()
+        return jsonify({'success': True})
+    finally:
+        conn.close()
+
+
+@onboarding_bp.route('/api/auth/verify-email/resend', methods=['POST'])
+def resend_verification_email():
+    """Only for the currently-signed-in user, re-sending to their own
+    address -- unauthenticated resend would be an open email-bombing vector
+    identical to the one request_password_reset's cooldown guards against,
+    but that guard only applies to password-reset links, so this path needs
+    its own session gate instead."""
+    if 'mt_user_id' not in session:
+        return jsonify({'error': 'Sign in required.'}), 401
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT email, email_verified_at FROM users WHERE id=?", (session['mt_user_id'],)
+        ).fetchone()
+        if row is None:
+            return jsonify({'error': 'User not found.'}), 404
+        if row['email_verified_at']:
+            return jsonify({'success': True, 'already_verified': True})
+        sent = _verification.send_verification_email(
+            conn, company_id=session['company_id'], user_email=row['email'], base_url=request.host_url,
+        )
+        conn.commit()
+        return jsonify({'success': True, 'email_verification_sent': sent})
+    finally:
+        conn.close()
+
+
+@onboarding_bp.route('/api/auth/forgot-password', methods=['POST'])
+def forgot_password():
+    """Always responds 200/success regardless of whether the email belongs
+    to a real account -- see verification.request_password_reset's own
+    docstring for why that guard lives there, not just here."""
+    data = request.json or {}
+    email = (data.get('email') or '').strip().lower()
+    if not email:
+        return jsonify({'error': 'Email is required.'}), 400
+    conn = get_conn()
+    try:
+        _verification.request_password_reset(conn, email=email, base_url=request.host_url)
+        conn.commit()
+        return jsonify({'success': True})
+    finally:
+        conn.close()
+
+
+@onboarding_bp.route('/api/auth/reset-password', methods=['POST'])
+def reset_password():
+    data = request.json or {}
+    token = (data.get('token') or '').strip()
+    password = (data.get('password') or '').strip()
+    if not token or not password:
+        return jsonify({'error': 'Missing data.'}), 400
+    if len(password) < 6:
+        return jsonify({'error': 'Password must be at least 6 characters.'}), 400
+
+    conn = get_conn()
+    try:
+        link = _verification.consume_link(conn, token, purpose='password_reset')
+        if link is None:
+            conn.rollback()
+            return jsonify({'error': 'This reset link is invalid or has expired.'}), 400
+        user = conn.execute("SELECT id FROM users WHERE email=?", (link['email_target'],)).fetchone()
+        if user is None:
+            conn.rollback()
+            return jsonify({'error': 'This reset link is invalid or has expired.'}), 400
+        # Bumping session_version invalidates every session issued before
+        # this reset -- same pattern update_clinic_role/update_perms use for
+        # any other security-relevant change to a user row.
+        conn.execute(
+            "UPDATE users SET password_hash=?, session_version=session_version+1, "
+            "failed_login_count=0, locked_until=NULL WHERE id=?",
+            (hash_password(password), user['id']),
+        )
+        try:
+            conn.execute(
+                "INSERT INTO audit_logs (id, company_id, user_id, action, entity_type, entity_id, new_value_json) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (str(uuid.uuid4()), link['company_id'], user['id'], 'PASSWORD_RESET', 'USER', user['id'], '{}'),
+            )
+        except Exception:
+            pass
+        conn.commit()
+        return jsonify({'success': True})
     finally:
         conn.close()
 
