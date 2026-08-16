@@ -3,6 +3,16 @@
  * Sections: Dashboard · POS · Products · Customers · Suppliers · Purchases · Returns · Reports
  */
 
+// Shared across every payment-method donut chart in this file (dashboard +
+// reports) so the same method always renders the same color regardless of
+// which page's API call happens to order it differently (both endpoints
+// sort by revenue, so a positional palette flipped colors between pages for
+// the identical data). Covers all 6 POS payment methods (see pos-pay-btns).
+const RETAIL_PAYMENT_METHOD_COLORS = {
+  cash: '#10b981', card: '#3b82f6', mobile: '#f59e0b',
+  transfer: '#a855f7', credit: '#ef4444', voucher: '#06b6d4',
+};
+
 const RetailSystem = {
   _cart: [],
   _products: [],
@@ -89,7 +99,7 @@ const RetailSystem = {
     s.id = 'ret-styles';
     s.textContent = `
       .ret-hdr { display:flex;justify-content:space-between;align-items:center;margin-bottom:22px; }
-      .ret-title { color:#fff;margin:0;font-size:24px;font-weight:700; }
+      .ret-title { color:var(--text);margin:0;font-size:24px;font-weight:700; }
       .ret-table { width:100%;border-collapse:collapse;color:#fff;font-size:13px; }
       .ret-table th { color:var(--text-muted);font-weight:500;padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.08);text-align:left; }
       .ret-table td { padding:11px 12px;border-bottom:1px solid rgba(255,255,255,0.04);vertical-align:middle; }
@@ -129,13 +139,13 @@ const RetailSystem = {
       .ret-search:focus { border-color:var(--sub-accent); }
       .ret-kpi-grid { display:grid;grid-template-columns:repeat(5,1fr);gap:16px;margin-bottom:22px; }
       @media(max-width:1300px){ .ret-kpi-grid{grid-template-columns:repeat(3,1fr);} }
-      .ret-kpi { background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.07);border-radius:14px;padding:20px;position:relative;overflow:hidden; }
+      .ret-kpi { background:var(--surface-card);border:1px solid var(--border-soft);border-radius:14px;padding:20px;position:relative;overflow:hidden; }
       .ret-kpi::before { content:'';position:absolute;inset:0;background:radial-gradient(circle at 80% 20%,var(--sub-accent),transparent 65%);opacity:.1; }
-      .ret-kpi-label { color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px; }
-      .ret-kpi-value { font-size:28px;font-weight:800;color:#fff; }
-      .ret-kpi-sub { font-size:12px;color:var(--text-muted);margin-top:4px; }
-      .ret-kpi-breakdown { display:flex;gap:14px;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.08); }
-      .ret-kpi-breakdown-item { font-size:11px;color:var(--text-muted); }
+      .ret-kpi-label { color:var(--text-faint);font-size:11px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px; }
+      .ret-kpi-value { font-size:28px;font-weight:800;color:var(--text); }
+      .ret-kpi-sub { font-size:12px;color:var(--text-faint);margin-top:4px; }
+      .ret-kpi-breakdown { display:flex;gap:14px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border-soft); }
+      .ret-kpi-breakdown-item { font-size:11px;color:var(--text-faint); }
       .ret-kpi-breakdown-item b { display:block;font-size:14px;font-weight:700;margin-top:1px; }
       .ret-kpi-change-up   { color:#10b981;font-size:12px; }
       .ret-kpi-change-down { color:#ef4444;font-size:12px; }
@@ -382,11 +392,13 @@ const RetailSystem = {
           new Chart(pCtx.getContext('2d'), {
             type: 'doughnut',
             data: { labels: pmLabels, datasets: [{ data: pmData,
-              // POS supports 6 payment methods (cash/card/mobile/transfer/credit/voucher,
-              // see the pos-pay-btns buttons below) so this palette must supply 6 colors --
-              // a 5-color array left the 6th slice on Chart.js's undefined-color fallback
-              // whenever a business day used every method.
-              backgroundColor: ['#10b981','#3b82f6','#f59e0b','#a855f7','#ef4444','#06b6d4'],
+              // Keyed by method name, not array position -- the API orders
+              // payment methods by revenue, so a positional palette assigned
+              // a different color to the same method depending on which one
+              // happened to earn more that period (e.g. cash green on one
+              // page, blue on another). Named lookup keeps cash/card/etc.
+              // the same color everywhere this chart is rendered.
+              backgroundColor: pmLabels.map(m => RETAIL_PAYMENT_METHOD_COLORS[m] || '#94a3b8'),
               borderWidth: 0 }] },
             options: { responsive:true, maintainAspectRatio:false,
               plugins:{ legend:{position:'right',labels:{color:tickClr,font:{size:12}}} } }
@@ -969,7 +981,14 @@ const RetailSystem = {
   // added once at the end, so `total = subtotal - discAmt + tax` holds for
   // both modes — only what the tax is computed ON changes.
   _recalc() {
-    const discPct = parseFloat(document.getElementById('pos-disc')?.value || 0);
+    // AUDIT-fix: the #pos-disc input's min/max=0/100 is decorative HTML
+    // only -- a typed value outside that range still reaches parseFloat
+    // unclamped, which made discAmt exceed subtotal and total go negative
+    // in this preview. Server-side create_sale() independently clamps via
+    // tax_engine.clamp_discount_pct(), so the charged amount was never at
+    // risk -- this was a client display bug only, fixed at the source read
+    // so every downstream use (subtotal/tax/total/change) is consistent.
+    const discPct = Math.min(100, Math.max(0, parseFloat(document.getElementById('pos-disc')?.value || 0)));
     const discFrac = discPct / 100;
     const beforeDiscount = this._taxMode === 'before_discount';
     let subtotal = 0, tax = 0;
@@ -1277,7 +1296,11 @@ const RetailSystem = {
     // field means "X% off this whole sale," so the same discPct is applied
     // to every line here, matching what the cashier and customer both see
     // on screen.
-    const discPct = parseFloat(document.getElementById('pos-disc')?.value || 0);
+    // Clamped the same way _recalc() clamps it (AUDIT-fix) -- keeps the
+    // submitted per-line discount_pct consistent with what's on screen.
+    // Server-side clamp_discount_pct() would catch an out-of-range value
+    // regardless; this just keeps display and charge from ever disagreeing.
+    const discPct = Math.min(100, Math.max(0, parseFloat(document.getElementById('pos-disc')?.value || 0)));
     const payload = {
       idempotency_key: `pos_${Date.now()}`,
       customer_id: customerId || null,
@@ -3384,7 +3407,11 @@ const RetailSystem = {
           ['rep-pay', { type:'doughnut',
             data:{ labels:(pay.data||[]).map(r=>r.payment_method), datasets:[{
               data:(pay.data||[]).map(r=>r.revenue),
-              backgroundColor:['#10b981','#3b82f6','#f59e0b','#a855f7','#ef4444'],
+              // Named lookup, not array position -- see the identical
+              // r-dash-pay chart above for why (this page's API also orders
+              // methods by revenue, which used to flip colors vs. the
+              // dashboard's own chart for the same data).
+              backgroundColor:(pay.data||[]).map(r => RETAIL_PAYMENT_METHOD_COLORS[r.payment_method] || '#94a3b8'),
               borderWidth:0
             }]},
             opts:{ responsive:true, maintainAspectRatio:false,

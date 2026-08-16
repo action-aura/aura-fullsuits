@@ -74,6 +74,21 @@ def _enqueue_for_recipients(conn, *, company_id, report_type, template_name, bra
     matched = _recipients.recipients_for(conn, company_id, report_type, branch_id=branch_id)
     if not matched:
         return 0
+    # AUDIT-fix: whatsapp_recipients has no (company_id, phone_e164)
+    # uniqueness constraint -- two distinct recipient rows (e.g. "Owner" and
+    # "Accountant") can legitimately share one real phone number. Without
+    # this dedup, both rows matching the same report_type would enqueue two
+    # separate WhatsApp sends to that one number for the same event. Keep
+    # the first match per phone number; a recipient's own row order (from
+    # recipients_for()'s SQL) is otherwise not meaningful here.
+    seen_phones = set()
+    deduped = []
+    for recipient in matched:
+        if recipient['phone_e164'] in seen_phones:
+            continue
+        seen_phones.add(recipient['phone_e164'])
+        deduped.append(recipient)
+    matched = deduped
     params = [_oneline(p) for p in params_fn()]
     repo = _WhatsAppOutboxRepository(conn)
     for recipient in matched:

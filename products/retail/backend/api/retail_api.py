@@ -1458,7 +1458,12 @@ def create_sale():
         tax      = float(tax.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
         total    = float(total.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
 
-        paid      = _money(data.get('amount_paid', total))
+        # AUDIT-fix: amount_paid was never floored at 0. A negative value
+        # (only reachable via a direct API call, never the POS UI, which
+        # always sends Math.max(tendered, total)) inflated balance_due
+        # beyond total, which could force is_credit=True and record a
+        # customer owing MORE than the sale's own total.
+        paid      = max(0.0, _money(data.get('amount_paid', total)))
         change    = max(0.0, _money(paid - total))
         pm        = data.get('payment_method', 'cash')
         customer_id = data.get('customer_id')

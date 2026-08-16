@@ -175,6 +175,36 @@ def test_negative_discount_is_clamped_to_zero():
     assert r.get_json()['data']['total'] == 100.0
 
 
+def test_negative_amount_paid_is_clamped_to_zero_not_credited():
+    """AUDIT-fix regression test: amount_paid was never floored at 0. For a
+    credit sale, a negative value inflated balance_due beyond the sale's own
+    total (total - (-X) = total + X), recording a named customer owing MORE
+    than the sale itself. Only reachable via a direct API call -- the POS UI
+    always sends Math.max(tendered, total) -- but a real financial-integrity
+    gap regardless of the client's own behavior."""
+    client, cid, pid, bid = _make_admin_and_product(price=100.0, tax_rate=0.0)
+    rconn = get_retail_conn()
+    customer_id = str(uuid.uuid4())
+    rconn.execute(
+        "INSERT INTO customers (id,company_id,name,credit_mode,credit_limit,credit_balance) "
+        "VALUES (?,?,?,'unlimited',0,0)",
+        (customer_id, cid, "Credit Customer"),
+    )
+    rconn.commit()
+    rconn.close()
+
+    r = client.post('/api/sub/retail/sales', json={
+        'items': [{'product_id': pid, 'quantity': 1}],
+        'amount_paid': -50.0, 'payment_method': 'credit', 'customer_id': customer_id,
+        'idempotency_key': str(uuid.uuid4()),
+    })
+    assert r.status_code == 200, r.get_json()
+    data = r.get_json()['data']
+    assert data['amount_paid'] == 0.0
+    assert data['balance_due'] == 100.0  # not 150.0 (100 - (-50)), pre-fix
+    assert data['change'] == 0.0
+
+
 def test_zero_and_negative_quantity_rejected():
     client, cid, pid, bid = _make_admin_and_product()
     for bad_qty in (0, -1):

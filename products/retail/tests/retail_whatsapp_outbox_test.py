@@ -235,6 +235,25 @@ def test_low_stock_sale_queues_an_alert_for_each_subscribed_recipient(client, db
     assert all(r['template_name'] == 'aura_low_stock' for r in rows)
 
 
+def test_low_stock_sale_dedupes_two_recipients_sharing_one_phone(client, db_conn, monkeypatch):
+    """AUDIT-fix regression test: whatsapp_recipients has no (company_id,
+    phone_e164) uniqueness constraint, so two distinct recipient rows (e.g.
+    "Owner" and "Accountant") can legitimately share one real phone number.
+    Both being subscribed to the same report type must still send only ONE
+    WhatsApp message to that number, not two."""
+    monkeypatch.setenv('AURA_WHATSAPP_PHONE_NUMBER_ID', '1234567890')
+    _enable_whatsapp(client.test_company_id, templates={'low_stock_template_name': 'aura_low_stock'})
+    _add_recipient(client.test_company_id, phone='+15550009999', report_types=['low_stock_alert'])
+    _add_recipient(client.test_company_id, phone='+15550009999', report_types=['low_stock_alert'])
+
+    pid = _make_product(client, reorder_level=5, initial_stock=6)
+    _sell(client, pid, 2)  # 6 - 2 = 4 <= 5
+
+    rows = _whatsapp_outbox_rows(db_conn, client.test_company_id, message_type='low_stock_alert')
+    assert len(rows) == 1
+    assert rows[0]['recipient_phone_e164'] == '+15550009999'
+
+
 def test_two_low_stock_sales_back_to_back_only_queue_once(client, db_conn, monkeypatch):
     """Same idempotency guard as the email trigger -- see reorder_hook.py's
     module docstring."""
