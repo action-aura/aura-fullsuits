@@ -108,8 +108,8 @@ def _authenticate(body: dict, *, nonce_scope: str) -> tuple[Installation, uuid.U
         raise SyncAuthError("INSTALLATION_NOT_FOUND")
 
     try:
-        request_timestamp = datetime.fromisoformat(body["timestamp"])
-    except (ValueError, TypeError):
+        request_timestamp = replay.parse_request_timestamp(body["timestamp"])
+    except (ValueError, TypeError, AttributeError):
         raise SyncAuthError("INVALID_TIMESTAMP")
     try:
         replay.validate_timestamp(request_timestamp, current_app.config["ACTIVATION_TIMESTAMP_SKEW_SECONDS"])
@@ -168,7 +168,7 @@ def _build_event(raw) -> SyncEvent:
         entity_id = uuid.UUID(str(raw["entity_id"]))
         event_type = raw["event_type"]
         payload = raw["payload"]
-        client_created_at = datetime.fromisoformat(raw["created_at"])
+        client_created_at = replay.parse_request_timestamp(raw["created_at"])
     except (KeyError, ValueError, TypeError, AttributeError):
         raise InvalidEventError("malformed event")
 

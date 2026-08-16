@@ -78,8 +78,8 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
     # Steps 1-2: shape + timestamp
     _validate_shape(body)
     try:
-        request_timestamp = datetime.fromisoformat(body["timestamp"])
-    except (ValueError, TypeError):
+        request_timestamp = replay.parse_request_timestamp(body["timestamp"])
+    except (ValueError, TypeError, AttributeError):
         raise ActivationRejected("INVALID_TIMESTAMP")
     try:
         replay.validate_timestamp(request_timestamp, config["timestamp_skew_seconds"])

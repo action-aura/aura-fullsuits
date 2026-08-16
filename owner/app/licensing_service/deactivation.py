@@ -42,8 +42,8 @@ def process_deactivation(body: dict, *, source_ip: str | None, config: dict) -> 
         raise DeactivationRejected("INSTALLATION_NOT_FOUND")
 
     try:
-        request_timestamp = datetime.fromisoformat(body["timestamp"])
-    except (ValueError, TypeError):
+        request_timestamp = replay.parse_request_timestamp(body["timestamp"])
+    except (ValueError, TypeError, AttributeError):
         raise DeactivationRejected("INVALID_TIMESTAMP")
     try:
         replay.validate_timestamp(request_timestamp, config["timestamp_skew_seconds"])

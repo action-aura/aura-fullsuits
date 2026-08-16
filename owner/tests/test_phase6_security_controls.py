@@ -59,6 +59,28 @@ def test_timestamp_within_window_accepted(app):
     validate_timestamp(close, skew_seconds=300, now=now)  # must not raise
 
 
+def test_parse_request_timestamp_accepts_z_suffix(app):
+    """Regression test: Java's Instant.toString() (Android's timestamp
+    format, via Kotlin) always emits the 'Z' UTC designator, which
+    datetime.fromisoformat() only accepts natively from Python 3.11 -- this
+    server ran 3.10 in production, causing every Android activation/
+    check-in/sync request to be rejected as INVALID_TIMESTAMP while
+    structurally identical desktop requests (Python's own isoformat(),
+    '+00:00' suffix) succeeded."""
+    from app.licensing_service.replay import parse_request_timestamp
+
+    parsed = parse_request_timestamp("2026-08-15T23:40:26.850Z")
+    assert parsed == datetime(2026, 8, 15, 23, 40, 26, 850000, tzinfo=timezone.utc)
+
+
+def test_parse_request_timestamp_accepts_offset_suffix(app):
+    """Python's own desktop-client format ('+00:00') must keep working."""
+    from app.licensing_service.replay import parse_request_timestamp
+
+    parsed = parse_request_timestamp("2026-08-15T23:40:26.850000+00:00")
+    assert parsed == datetime(2026, 8, 15, 23, 40, 26, 850000, tzinfo=timezone.utc)
+
+
 def test_replay_protection_available_check(app):
     with app.app_context():
         from app.licensing_service.replay import check_replay_protection_available

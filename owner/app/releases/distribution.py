@@ -80,8 +80,8 @@ def authorize_download(body: dict, *, source_ip: str | None, config: dict) -> tu
         raise DownloadAuthorizationRejected("INVALID_REQUEST")
 
     try:
-        request_timestamp = datetime.fromisoformat(body["timestamp"])
-    except (ValueError, TypeError):
+        request_timestamp = replay.parse_request_timestamp(body["timestamp"])
+    except (ValueError, TypeError, AttributeError):
         raise DownloadAuthorizationRejected("INVALID_TIMESTAMP")
     try:
         replay.validate_timestamp(request_timestamp, config["timestamp_skew_seconds"])

@@ -52,8 +52,8 @@ def process_checkin(body: dict, *, source_ip: str | None, config: dict) -> dict:
         raise CheckInRejected("INSTALLATION_NOT_FOUND")
 
     try:
-        request_timestamp = datetime.fromisoformat(body["timestamp"])
-    except (ValueError, TypeError):
+        request_timestamp = replay.parse_request_timestamp(body["timestamp"])
+    except (ValueError, TypeError, AttributeError):
         raise CheckInRejected("INVALID_TIMESTAMP")
     try:
         replay.validate_timestamp(request_timestamp, config["timestamp_skew_seconds"])

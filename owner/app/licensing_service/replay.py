@@ -22,6 +22,21 @@ class ReplayStoreUnavailableError(RuntimeError):
     pass
 
 
+def parse_request_timestamp(value: str) -> datetime:
+    """Parses a client-submitted ISO-8601 timestamp.
+
+    datetime.fromisoformat() only accepts the 'Z' UTC designator from Python
+    3.11 onward (this server runs 3.10) -- but 'Z' is valid ISO-8601, and
+    every non-Python client in this codebase (Android's Kotlin
+    Instant.toString(), and any future client) emits it that way. Normalizing
+    'Z' -> '+00:00' before parsing makes every caller accept both forms,
+    rather than only the Python desktop client's own datetime.isoformat()
+    output -- confirmed as the real cause of Android activation/check-in/sync
+    requests failing with INVALID_TIMESTAMP while structurally identical
+    desktop requests succeeded."""
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
 def validate_timestamp(request_timestamp: datetime, skew_seconds: int, *, now: datetime | None = None) -> None:
     now = now or datetime.now(timezone.utc)
     if request_timestamp.tzinfo is None:
