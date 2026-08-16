@@ -98,8 +98,24 @@ def log(msg: str) -> None:
         f.write(line + "\n")
 
 
+def _kill_running_exe() -> None:
+    """PyInstaller's COLLECT step deletes and rewrites presentation_package/
+    AuraRetail/_internal/*.pyd -- Windows refuses to delete a DLL a running
+    process has loaded, so every rebuild while the packaged exe happens to be
+    open fails with PermissionError. Testing the app means relaunching it
+    often, so this isn't an edge case, it's the common case -- killing it
+    first (silently, exit-code-and-output ignored: "no such process" is the
+    normal/expected outcome) makes every rebuild reliable instead of manual
+    intervention being required each time."""
+    subprocess.run(
+        ["taskkill", "/F", "/IM", "AuraRetail.exe"],
+        capture_output=True, text=True,
+    )
+
+
 def build() -> bool:
     log("Change detected -- rebuilding AuraRetail.exe...")
+    _kill_running_exe()
     started = time.time()
     result = subprocess.run(
         [

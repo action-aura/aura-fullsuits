@@ -65,6 +65,21 @@ android {
         // started), never a hidden default Owner instance.
         buildConfigField "String", "OWNER_SYNC_BASE_URL",
                 "\"${project.findProperty('ownerSyncBaseUrl') ?: ''}\""
+
+        // AI Assistant + WhatsApp reports -- same empty-by-default,
+        // build-property-overridden pattern as the two fields above. Neither
+        // had ANY path onto Android before this (see main.py::start_server's
+        // docstring); both features were silently off on every Android build
+        // regardless of what Windows had configured. Overridden via
+        // -PaiBearerToken=... / -PwhatsappPhoneNumberId=... /
+        // -PwhatsappAccessToken=..., never hardcoded here -- these are real
+        // secrets, must never be committed.
+        buildConfigField "String", "AURA_AI_BEARER_TOKEN",
+                "\"${project.findProperty('aiBearerToken') ?: ''}\""
+        buildConfigField "String", "AURA_WHATSAPP_PHONE_NUMBER_ID",
+                "\"${project.findProperty('whatsappPhoneNumberId') ?: ''}\""
+        buildConfigField "String", "AURA_WHATSAPP_ACCESS_TOKEN",
+                "\"${project.findProperty('whatsappAccessToken') ?: ''}\""
     }
 
     // ── Python (Chaquopy) ───────────────────────────────────────────────────────

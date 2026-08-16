@@ -55,13 +55,27 @@ def _run_server(port: int):
            channel_timeout=120, connection_limit=200, _quiet=True)
 
 
-def start_server(files_dir: str, port: int = 5000, owner_base_url: str = '', internal_shared_secret: str = '') -> int:
+def start_server(
+    files_dir: str, port: int = 5000, owner_base_url: str = '', internal_shared_secret: str = '',
+    ai_bearer_token: str = '', whatsapp_phone_number_id: str = '', whatsapp_access_token: str = '',
+) -> int:
     """Start the embedded Flask server. Called once from Kotlin with the app's
     private filesDir. Returns the actual port the server is bound to. Idempotent.
 
     owner_base_url/internal_shared_secret (Phase 7 Part H): threaded in from
     ServerBootstrap.kt the same way filesDir already is -- see
     android/aura-clinic's identical main.py docstring for the full rationale.
+
+    ai_bearer_token/whatsapp_phone_number_id/whatsapp_access_token: same
+    reasoning -- none of AURA_AI_BEARER_TOKEN, AURA_WHATSAPP_PHONE_NUMBER_ID,
+    AURA_WHATSAPP_ACCESS_TOKEN (products/retail/backend/config.py,
+    commercial_runtime/notifications/whatsapp_client.py) had any path onto
+    Android at all (unlike Windows, where they're plain OS environment
+    variables), so both the AI Assistant and WhatsApp reports were always
+    silently off on every Android build regardless of what the desktop side
+    had configured. Optional/empty-string defaults match owner_base_url --
+    a build that doesn't pass one just leaves that feature off, same
+    fail-closed contract as before.
     """
     with _lock:
         if _state['port']:
@@ -79,6 +93,12 @@ def start_server(files_dir: str, port: int = 5000, owner_base_url: str = '', int
             os.environ['AURA_OWNER_LICENSING_URL'] = owner_base_url
         if internal_shared_secret:
             os.environ['AURA_INTERNAL_SHARED_SECRET'] = internal_shared_secret
+        if ai_bearer_token:
+            os.environ['AURA_AI_BEARER_TOKEN'] = ai_bearer_token
+        if whatsapp_phone_number_id:
+            os.environ['AURA_WHATSAPP_PHONE_NUMBER_ID'] = whatsapp_phone_number_id
+        if whatsapp_access_token:
+            os.environ['AURA_WHATSAPP_ACCESS_TOKEN'] = whatsapp_access_token
 
         actual = _find_free_port(port, port + 20) or port
         t = threading.Thread(target=_run_server, args=(actual,), daemon=True)

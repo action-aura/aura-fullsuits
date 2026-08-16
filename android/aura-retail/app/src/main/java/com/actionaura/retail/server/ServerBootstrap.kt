@@ -49,11 +49,14 @@ object ServerBootstrap {
         val py = Python.getInstance()
         val main = py.getModule("main")
         val filesDir = context.filesDir.absolutePath
-        // OWNER_LICENSING_BASE_URL defaults to "" (see build.gradle) -- an
-        // unconfigured build leaves licensing NOT_CONFIGURED, same fail-safe
-        // default as Windows (config.py), never a hidden fallback URL.
+        // OWNER_LICENSING_BASE_URL / AI_BEARER_TOKEN / WHATSAPP_* all default to
+        // "" (see build.gradle) -- an unconfigured build leaves the matching
+        // feature off entirely, same fail-safe default as Windows (config.py /
+        // whatsapp_client.py), never a hidden fallback value.
         val p = main.callAttr(
-            "start_server", filesDir, 5000, BuildConfig.OWNER_LICENSING_BASE_URL, internalSharedSecret
+            "start_server", filesDir, 5000, BuildConfig.OWNER_LICENSING_BASE_URL, internalSharedSecret,
+            BuildConfig.AURA_AI_BEARER_TOKEN, BuildConfig.AURA_WHATSAPP_PHONE_NUMBER_ID,
+            BuildConfig.AURA_WHATSAPP_ACCESS_TOKEN,
         ).toInt()
         main.callAttr("wait_until_ready", p, 45)
         port = p

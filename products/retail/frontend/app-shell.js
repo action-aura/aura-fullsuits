@@ -257,7 +257,7 @@ const SubsystemApp = {
         // below applies to every entry with this flag. Hidden entirely
         // (not just disabled) on any device that isn't this company's
         // single admin device, fail-closed if the check couldn't run.
-        { id: 'admin-center', label: 'Admin Center',    icon: '🛡️', adminOnly: true },
+        { id: 'admin-center', label: 'Settings',        icon: '⚙️', adminOnly: true },
         // feat/audit-log-viewer: same adminOnly mechanism as Admin Center
         // above -- refund/void/product-change audit trail carries every
         // user's attribution, not just this device's, so it's gated the

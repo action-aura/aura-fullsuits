@@ -2702,7 +2702,7 @@ const RetailSystem = {
     this._injectStyles();
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title">${t('Admin Center')}</h2>
+        <h2 class="ret-title">${t('Settings')}</h2>
       </div>
       <div class="sub-chart-card">
         <h3 style="color:#fff;margin:0 0 14px;font-size:15px">${t('Low-Stock Reorder Requests')}</h3>
