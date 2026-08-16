@@ -197,9 +197,9 @@
 
     REPORT_TYPES.forEach((rt) => {
       const block = el('div', { className: 'template-block' });
-      block.appendChild(el('label', { text: rt.label + ' -- template name', htmlFor: 'wa-name-' + rt.key }));
+      block.appendChild(el('label', { text: rt.label + ' — template name', htmlFor: 'wa-name-' + rt.key }));
       block.appendChild(el('input', { id: 'wa-name-' + rt.key, type: 'text', value: settings[rt.nameKey] || '', placeholder: 'e.g. ' + rt.namePlaceholder }));
-      block.appendChild(el('label', { text: 'Reference text (not sent -- see note above)', htmlFor: 'wa-body-' + rt.key }));
+      block.appendChild(el('label', { text: 'Reference text (not sent — see note above)', htmlFor: 'wa-body-' + rt.key }));
       block.appendChild(el('textarea', { id: 'wa-body-' + rt.key, rows: 2, value: settings[rt.bodyKey] || '' }));
       templatesContent.appendChild(block);
     });
@@ -309,10 +309,10 @@
     form.appendChild(el('label', { text: 'Name', htmlFor: 'wa-r-name' }));
     form.appendChild(el('input', { id: 'wa-r-name', type: 'text', value: (prefill && prefill.display_name) || '', placeholder: 'e.g. Owner, Downtown Manager' }));
 
-    form.appendChild(el('label', { text: 'Phone (with country code, e.g. +15551234567)', htmlFor: 'wa-r-phone' }));
+    form.appendChild(el('label', { text: 'Phone (with country code, e.g. +962791234567)', htmlFor: 'wa-r-phone' }));
     form.appendChild(el('input', { id: 'wa-r-phone', type: 'tel', value: (prefill && prefill.phone_e164) || '' }));
 
-    form.appendChild(el('label', { text: 'Role (label only)', htmlFor: 'wa-r-role' }));
+    form.appendChild(el('label', { text: 'Role (optional)', htmlFor: 'wa-r-role' }));
     form.appendChild(el('input', { id: 'wa-r-role', type: 'text', value: (prefill && prefill.role_label) || '', placeholder: 'e.g. Owner, Manager, Accountant' }));
 
     form.appendChild(el('label', { text: 'Branch', htmlFor: 'wa-r-branch' }));

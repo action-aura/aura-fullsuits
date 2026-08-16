@@ -348,7 +348,7 @@ const SubsystemApp = {
           if (status.needs_setup) {
             this.showSetupModal();
           } else {
-            this.showReloginModal('Please log in to access the Enterprise Platform.');
+            this.showReloginModal('Sign in to your store');
           }
           return; // Modal's success handler will call SubsystemApp.init() again
         }
@@ -619,7 +619,7 @@ const SubsystemApp = {
         <button onclick="AuraI18n.toggle()" title="Language / اللغة" class="auth-lang-btn">EN | ع</button>
         <div class="auth-head">
           <div class="auth-icon">🔐</div>
-          <h2 class="auth-title">${t('Sign In Required')}</h2>
+          <h2 class="auth-title">${t('Welcome to Aura Retail')}</h2>
           <p class="auth-sub">${t(msg)}</p>
         </div>
         <div class="auth-field">

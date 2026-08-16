@@ -29,6 +29,10 @@
     CANCELLED: { text: 'Cancelled', cls: 'state-neutral' },
   };
 
+  const PROVIDER_LABELS = {
+    mock: 'Test mode — no live submissions',
+  };
+
   function clearChildren(node) {
     while (node.firstChild) node.removeChild(node.firstChild);
   }
@@ -107,7 +111,7 @@
 
     const dl = el('dl');
     dl.appendChild(el('dt', { text: 'Provider' }));
-    dl.appendChild(el('dd', { text: data.provider }));
+    dl.appendChild(el('dd', { text: PROVIDER_LABELS[data.provider] || data.provider }));
     const counts = data.counts_by_state || {};
     dl.appendChild(el('dt', { text: 'Queued' }));
     dl.appendChild(el('dd', { text: String(counts.QUEUED || 0) }));

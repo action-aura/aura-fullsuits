@@ -69,9 +69,16 @@
   @media (prefers-color-scheme: dark) { th, td { border-color: #2a2d33; } }
   .hint { font-size: 0.78rem; color: #777; margin-top: 4px; }
   @media (prefers-color-scheme: dark) { .hint { color: #999; } }
+  .back-link {
+    display: inline-block; margin-bottom: 18px; font-size: 0.85rem;
+    color: #2563eb; text-decoration: none;
+  }
+  .back-link:hover { text-decoration: underline; }
+  @media (prefers-color-scheme: dark) { .back-link { color: #8fb4ff; } }
 </style>
 </head>
 <body>
+  <a class="back-link" href="/">&larr; Back to Aura Retail</a>
   <h1>Jordan E-Invoicing (JoFotara)</h1>
   <div class="subtitle">Government e-invoicing status and settings for this installation. Off by default.</div>
 
