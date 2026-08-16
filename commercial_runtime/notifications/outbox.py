@@ -88,16 +88,23 @@ class EmailOutboxRepository:
         self._conn.row_factory = sqlite3.Row
         return self._conn.execute("SELECT * FROM email_outbox WHERE id=?", (row_id,)).fetchone()
 
-    def claim_due(self, *, batch_size: int, lease_seconds: int) -> list:
+    def claim_due(self, *, company_id, batch_size: int, lease_seconds: int) -> list:
         """Same conditional-UPDATE-with-rowcount-check technique as
-        einvoicing/outbox.py::claim_due -- see that method's docstring."""
+        einvoicing/outbox.py::claim_due -- see that method's docstring.
+
+        AUDIT-fix: scoped by company_id -- each EmailOutboxWorker is
+        one-per-company (see worker.py), but this query used to have no
+        company_id filter at all, so any company's worker could claim (and
+        send, with that company's own max_attempts) another company's
+        queued rows. Same bug, same fix, as whatsapp_outbox.py's claim_due()
+        -- this file is the one it was structurally copied from."""
         self._conn.row_factory = sqlite3.Row
         now = _now()
         candidates = self._conn.execute(
-            "SELECT id FROM email_outbox WHERE status='QUEUED' "
+            "SELECT id FROM email_outbox WHERE company_id=? AND status='QUEUED' "
             "AND (next_attempt_at IS NULL OR next_attempt_at <= ?) "
             "ORDER BY id LIMIT ?",
-            (now, batch_size),
+            (company_id, now, batch_size),
         ).fetchall()
 
         claimed = []
@@ -106,8 +113,8 @@ class EmailOutboxRepository:
             lease_expires = self._lease_expiry(lease_seconds)
             cur = self._conn.execute(
                 "UPDATE email_outbox SET status='SENDING', lease_expires_at=?, updated_at=? "
-                "WHERE id=? AND status='QUEUED'",
-                (lease_expires, now, row_id),
+                "WHERE id=? AND company_id=? AND status='QUEUED'",
+                (lease_expires, now, row_id, company_id),
             )
             if cur.rowcount == 1:
                 claimed.append(self._conn.execute(

@@ -120,7 +120,9 @@ class OutboxWorker:
                 self._resolve_reclaimed(conn, repo, row)
                 conn.commit()
 
-            claimed = repo.claim_due(batch_size=self._batch_size, lease_seconds=self._lease_seconds)
+            claimed = repo.claim_due(
+                company_id=self._company_id, batch_size=self._batch_size, lease_seconds=self._lease_seconds,
+            )
             conn.commit()
 
             outcomes = {'cleared': 0, 'rejected': 0, 'retry': 0, 'pending': 0, 'unknown': 0}

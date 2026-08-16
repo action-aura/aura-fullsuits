@@ -263,7 +263,7 @@ def test_crash_recovery_lease_reclaim_resolves_via_check_status_not_a_resubmit(t
     # Simulate the crash: claim the row (as the worker's claim_due step
     # would) with an already-expired lease, but never process it further.
     conn = sqlite3.connect(db_path)
-    OutboxRepository(conn).claim_due(batch_size=1, lease_seconds=-1)
+    OutboxRepository(conn).claim_due(company_id=1, batch_size=1, lease_seconds=-1)
     conn.commit()
     conn.close()
 

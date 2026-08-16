@@ -113,18 +113,24 @@ class OutboxRepository:
             "SELECT * FROM einvoice_outbox WHERE invoice_ref=?", (invoice_ref,)
         ).fetchone()
 
-    def claim_due(self, *, batch_size: int, lease_seconds: int) -> list:
+    def claim_due(self, *, company_id, batch_size: int, lease_seconds: int) -> list:
         """Layer 2 of the idempotency guarantee: each row's UPDATE only
         succeeds (rowcount==1) if it is still QUEUED at the moment this
         specific claim runs -- two concurrent callers can never both claim
-        the same row."""
+        the same row.
+
+        AUDIT-fix: scoped by company_id -- each OutboxWorker is
+        one-per-company (see worker.py), but this query used to have no
+        company_id filter at all, so any company's worker could claim (and
+        submit to the tax authority under that company's own provider
+        credentials/sequence) another company's queued invoices."""
         self._conn.row_factory = sqlite3.Row
         now = _now()
         candidates = self._conn.execute(
-            "SELECT id FROM einvoice_outbox WHERE status='QUEUED' "
+            "SELECT id FROM einvoice_outbox WHERE company_id=? AND status='QUEUED' "
             "AND (next_attempt_at IS NULL OR next_attempt_at <= ?) "
             "ORDER BY id LIMIT ?",
-            (now, batch_size),
+            (company_id, now, batch_size),
         ).fetchall()
 
         claimed = []
@@ -133,8 +139,8 @@ class OutboxRepository:
             lease_expires = self._lease_expiry(lease_seconds)
             cur = self._conn.execute(
                 "UPDATE einvoice_outbox SET status='SUBMITTING', lease_expires_at=?, "
-                "submit_started_at=?, updated_at=? WHERE id=? AND status='QUEUED'",
-                (lease_expires, now, now, row_id),
+                "submit_started_at=?, updated_at=? WHERE id=? AND company_id=? AND status='QUEUED'",
+                (lease_expires, now, now, row_id, company_id),
             )
             if cur.rowcount == 1:
                 claimed.append(self._conn.execute(

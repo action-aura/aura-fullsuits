@@ -61,7 +61,7 @@ def test_claim_due_transitions_to_submitting(tmp_path):
     repo = OutboxRepository(conn)
     _enqueue(repo)
     conn.commit()
-    claimed = repo.claim_due(batch_size=10, lease_seconds=60)
+    claimed = repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     conn.commit()
     assert len(claimed) == 1
     assert claimed[0]['status'] == 'SUBMITTING'
@@ -74,12 +74,33 @@ def test_claim_due_does_not_reclaim_an_already_submitting_row(tmp_path):
     repo = OutboxRepository(conn)
     _enqueue(repo)
     conn.commit()
-    first = repo.claim_due(batch_size=10, lease_seconds=60)
+    first = repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     conn.commit()
-    second = repo.claim_due(batch_size=10, lease_seconds=60)
+    second = repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     conn.commit()
     assert len(first) == 1
     assert len(second) == 0
+
+
+def test_claim_due_does_not_claim_another_companys_rows(tmp_path):
+    """AUDIT-fix regression test: claim_due() used to have no company_id
+    filter at all, so company 2's worker could claim (and submit to the tax
+    authority under its own provider credentials/sequence) company 1's
+    queued invoices."""
+    _, conn = _make_db(tmp_path)
+    repo = OutboxRepository(conn)
+    _enqueue(repo, ref='ref-1', company_id=1)
+    conn.commit()
+
+    claimed_by_other_company = repo.claim_due(company_id=2, batch_size=10, lease_seconds=60)
+    conn.commit()
+    assert claimed_by_other_company == []
+    assert repo.get_by_ref('ref-1')['status'] == 'QUEUED'
+
+    claimed_by_owner = repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
+    conn.commit()
+    assert len(claimed_by_owner) == 1
+    assert claimed_by_owner[0]['invoice_ref'] == 'ref-1'
 
 
 def test_concurrent_claim_never_double_claims_the_same_row(tmp_path):
@@ -98,7 +119,7 @@ def test_concurrent_claim_never_double_claims_the_same_row(tmp_path):
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA busy_timeout=30000")
         r = OutboxRepository(c)
-        claimed = r.claim_due(batch_size=10, lease_seconds=60)
+        claimed = r.claim_due(company_id=1, batch_size=10, lease_seconds=60)
         c.commit()
         c.close()
         with lock:
@@ -119,7 +140,7 @@ def test_mark_cleared_from_submitting(tmp_path):
     repo = OutboxRepository(conn)
     row_id = _enqueue(repo)
     conn.commit()
-    repo.claim_due(batch_size=10, lease_seconds=60)
+    repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     conn.commit()
     ok = repo.mark_cleared(row_id, provider_uuid='uuid-1', qr_payload='payload', qr_image_base64=None)
     conn.commit()
@@ -135,7 +156,7 @@ def test_mark_rejected_from_submitting(tmp_path):
     repo = OutboxRepository(conn)
     row_id = _enqueue(repo)
     conn.commit()
-    repo.claim_due(batch_size=10, lease_seconds=60)
+    repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     conn.commit()
     ok = repo.mark_rejected(row_id, reason_code='BAD_TIN', detail='seller TIN invalid')
     conn.commit()
@@ -150,7 +171,7 @@ def test_mark_retry_increments_attempt_count_and_returns_to_queued(tmp_path):
     repo = OutboxRepository(conn)
     row_id = _enqueue(repo)
     conn.commit()
-    repo.claim_due(batch_size=10, lease_seconds=60)
+    repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     conn.commit()
     ok = repo.mark_retry(row_id, reason_code='NETWORK', detail='timeout', next_attempt_at='2099-01-01T00:00:00+00:00')
     conn.commit()
@@ -166,11 +187,11 @@ def test_retried_row_not_claimable_before_next_attempt_at(tmp_path):
     repo = OutboxRepository(conn)
     row_id = _enqueue(repo)
     conn.commit()
-    repo.claim_due(batch_size=10, lease_seconds=60)
+    repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     conn.commit()
     repo.mark_retry(row_id, reason_code='NETWORK', detail=None, next_attempt_at='2099-01-01T00:00:00+00:00')
     conn.commit()
-    claimed = repo.claim_due(batch_size=10, lease_seconds=60)
+    claimed = repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     conn.commit()
     assert claimed == [], "a row scheduled for the far future must not be claimed yet"
 
@@ -180,7 +201,7 @@ def test_mark_pending_then_resolve_cleared(tmp_path):
     repo = OutboxRepository(conn)
     row_id = _enqueue(repo)
     conn.commit()
-    repo.claim_due(batch_size=10, lease_seconds=60)
+    repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     conn.commit()
     repo.mark_pending(row_id)
     conn.commit()
@@ -195,7 +216,7 @@ def test_mark_unknown_then_resolve_not_received_returns_to_queued(tmp_path):
     repo = OutboxRepository(conn)
     row_id = _enqueue(repo)
     conn.commit()
-    repo.claim_due(batch_size=10, lease_seconds=60)
+    repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     conn.commit()
     repo.mark_unknown(row_id, reason_code='CONN_DROPPED', detail=None)
     conn.commit()
@@ -214,7 +235,7 @@ def test_mark_unknown_then_resolve_cleared_never_touches_queued(tmp_path):
     repo = OutboxRepository(conn)
     row_id = _enqueue(repo)
     conn.commit()
-    repo.claim_due(batch_size=10, lease_seconds=60)
+    repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     conn.commit()
     repo.mark_unknown(row_id, reason_code='CONN_DROPPED', detail=None)
     conn.commit()
@@ -242,7 +263,7 @@ def test_stale_transition_returns_false_not_raise(tmp_path):
     repo = OutboxRepository(conn)
     row_id = _enqueue(repo)
     conn.commit()
-    repo.claim_due(batch_size=10, lease_seconds=60)
+    repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     conn.commit()
     first = repo.mark_cleared(row_id, provider_uuid='u1', qr_payload='p', qr_image_base64=None)
     conn.commit()
@@ -270,7 +291,7 @@ def test_cancel_from_terminal_state_fails(tmp_path):
     repo = OutboxRepository(conn)
     row_id = _enqueue(repo)
     conn.commit()
-    repo.claim_due(batch_size=10, lease_seconds=60)
+    repo.claim_due(company_id=1, batch_size=10, lease_seconds=60)
     conn.commit()
     repo.mark_cleared(row_id, provider_uuid='u', qr_payload='p', qr_image_base64=None)
     conn.commit()
@@ -285,7 +306,7 @@ def test_reclaim_expired_leases_goes_to_submitting_unknown_never_queued(tmp_path
     repo = OutboxRepository(conn)
     row_id = _enqueue(repo)
     conn.commit()
-    repo.claim_due(batch_size=10, lease_seconds=-1)  # already expired
+    repo.claim_due(company_id=1, batch_size=10, lease_seconds=-1)  # already expired
     conn.commit()
     assert repo.get_by_ref('ref-1')['status'] == 'SUBMITTING'
 
@@ -304,7 +325,7 @@ def test_reclaim_expired_leases_ignores_fresh_leases(tmp_path):
     repo = OutboxRepository(conn)
     row_id = _enqueue(repo)
     conn.commit()
-    repo.claim_due(batch_size=10, lease_seconds=3600)  # far future
+    repo.claim_due(company_id=1, batch_size=10, lease_seconds=3600)  # far future
     conn.commit()
     reclaimed = repo.reclaim_expired_leases()
     conn.commit()
@@ -318,7 +339,7 @@ def test_counts_by_state(tmp_path):
     _enqueue(repo, ref='a')
     _enqueue(repo, ref='b')
     conn.commit()
-    repo.claim_due(batch_size=1, lease_seconds=60)
+    repo.claim_due(company_id=1, batch_size=1, lease_seconds=60)
     conn.commit()
     counts = repo.counts_by_state(company_id=1)
     assert counts['QUEUED'] == 1

@@ -192,7 +192,7 @@ def test_crash_recovery_reclaims_expired_lease_and_resends(tmp_path, monkeypatch
         _enqueue_directly(db_path)
 
         conn = sqlite3.connect(db_path)
-        EmailOutboxRepository(conn).claim_due(batch_size=1, lease_seconds=-1)
+        EmailOutboxRepository(conn).claim_due(company_id=1, batch_size=1, lease_seconds=-1)
         conn.commit()
         conn.close()
 
