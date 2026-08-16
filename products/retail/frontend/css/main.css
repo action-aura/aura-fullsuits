@@ -3555,6 +3555,8 @@ html[data-theme="light"] .auth-card { box-shadow: 0 30px 70px rgba(20,32,60,0.18
 .auth-submit:focus-visible { outline: 2px solid var(--sub-accent); outline-offset: 3px; }
 
 .auth-foot { text-align: center; color: var(--text-faint); font-size: 12px; margin: 16px 0 0; }
+.auth-foot a { color: var(--sub-accent); text-decoration: none; font-weight: 600; }
+.auth-foot a:hover { text-decoration: underline; }
 
 @media (prefers-reduced-motion: reduce) {
   .auth-card, .auth-error { animation: none; }

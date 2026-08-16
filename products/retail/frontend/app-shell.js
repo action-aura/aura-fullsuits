@@ -271,6 +271,23 @@ const SubsystemApp = {
   },
 
   async init() {
+    // ── Email verification / password reset links ──────────────────────────
+    // Checked before the licensing/auth gates below -- these are one-time
+    // links a user opens directly (from the email verification.py sends),
+    // not part of the normal boot sequence, and must render regardless of
+    // activation/session state. Same "#fragment/token" shape as the
+    // (currently frontend-unwired) employee-invite link this was modeled
+    // after -- see commercial_runtime/identity/onboarding_routes.py.
+    const hash = location.hash || '';
+    if (hash.startsWith('#verify-email/')) {
+      this._showVerifyEmailScreen(hash.slice('#verify-email/'.length));
+      return;
+    }
+    if (hash.startsWith('#reset-password/')) {
+      this._showResetPasswordScreen(hash.slice('#reset-password/'.length));
+      return;
+    }
+
     // ── Device activation gate ─────────────────────────────────────────────
     // Checked before anything else, including the auth gate below, so an
     // unactivated device on a real licensed install never reaches setup or
@@ -634,6 +651,7 @@ const SubsystemApp = {
         </div>
         <div id="rl-error" class="auth-error"></div>
         <button id="rl-btn" class="auth-submit" onclick="SubsystemApp._reloginSubmit()">${t('Log In')}</button>
+        <p class="auth-foot"><a href="#" onclick="SubsystemApp._showForgotPasswordScreen();return false;">${t('Forgot password?')}</a></p>
       </div>`;
     document.body.appendChild(overlay);
     setTimeout(() => document.getElementById('rl-email')?.focus(), 100);
@@ -675,6 +693,175 @@ const SubsystemApp = {
     } catch(e) {
       if (errEl) { errEl.textContent='Network error. Check the server is running.'; errEl.style.display='block'; }
       if (btn) { btn.textContent='Log In'; btn.disabled=false; }
+    }
+  },
+
+  // ── FORGOT / RESET PASSWORD ────────────────────────────────────────────────
+  // Reuses the relogin modal's own overlay element (swaps its innerHTML)
+  // rather than creating a second overlay -- there is only ever one of
+  // these on screen at a time, same assumption showReloginModal/
+  // showSetupModal already make with their shared #aura-relogin-modal id.
+  _showForgotPasswordScreen() {
+    const overlay = document.getElementById('aura-relogin-modal');
+    if (!overlay) return;
+    overlay.querySelector('.auth-card').innerHTML = `
+      <div class="auth-head">
+        <div class="auth-icon">✉️</div>
+        <h2 class="auth-title">${t('Reset your password')}</h2>
+        <p class="auth-sub">${t("Enter your account email and we'll send a reset link.")}</p>
+      </div>
+      <div class="auth-field">
+        <label for="fp-email">${t('Email')}</label>
+        <input id="fp-email" type="email" placeholder="admin@yourcompany.com" autocomplete="email"
+          onkeydown="if(event.key==='Enter')SubsystemApp._forgotPasswordSubmit()" />
+      </div>
+      <div id="fp-error" class="auth-error"></div>
+      <button id="fp-btn" class="auth-submit" onclick="SubsystemApp._forgotPasswordSubmit()">${t('Send reset link')}</button>
+      <p class="auth-foot"><a href="#" onclick="SubsystemApp.showReloginModal();return false;">${t('Back to sign in')}</a></p>`;
+    setTimeout(() => document.getElementById('fp-email')?.focus(), 100);
+  },
+
+  async _forgotPasswordSubmit() {
+    const email = document.getElementById('fp-email')?.value.trim();
+    const errEl = document.getElementById('fp-error');
+    const btn   = document.getElementById('fp-btn');
+    if (!email || !email.includes('@')) {
+      if (errEl) { errEl.textContent = 'A valid email address is required.'; errEl.style.display = 'block'; }
+      return;
+    }
+    if (btn) { btn.textContent = 'Sending…'; btn.disabled = true; }
+    if (errEl) errEl.style.display = 'none';
+    try {
+      await fetch('/api/auth/forgot-password', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+    } catch (e) { /* deliberately silent -- see the confirmation message below */ }
+
+    // Identical message regardless of what actually happened (unknown
+    // email, real email, network hiccup) -- the backend's own
+    // enumeration-safety guarantee (verification.request_password_reset)
+    // is worthless if this screen leaks the answer some other way.
+    const overlay = document.getElementById('aura-relogin-modal');
+    if (overlay) {
+      overlay.querySelector('.auth-card').innerHTML = `
+        <div class="auth-head">
+          <div class="auth-icon">✅</div>
+          <h2 class="auth-title">${t('Check your email')}</h2>
+          <p class="auth-sub">${t('If an account exists for that email, a reset link is on its way.')}</p>
+        </div>
+        <p class="auth-foot"><a href="#" onclick="SubsystemApp.showReloginModal();return false;">${t('Back to sign in')}</a></p>`;
+    }
+  },
+
+  // ── VERIFY EMAIL LANDING SCREEN (from #verify-email/<token>) ──────────────
+  _showVerifyEmailScreen(token) {
+    document.documentElement.style.setProperty('--sub-accent', this.systems.retail.accent);
+    document.documentElement.style.setProperty('--sub-accent-rgb', this.systems.retail.accentRgb);
+    const overlay = document.createElement('div');
+    overlay.id = 'aura-verify-email-screen';
+    overlay.className = 'auth-overlay';
+    overlay.innerHTML = `
+      <div class="auth-card auth-card-compact">
+        <div class="auth-head">
+          <div class="auth-icon">✉️</div>
+          <h2 class="auth-title" id="ve-title">${t('Verifying your email…')}</h2>
+          <p class="auth-sub" id="ve-sub"></p>
+        </div>
+        <button id="ve-continue" class="auth-submit" style="display:none"
+          onclick="location.hash='';SubsystemApp.init();">${t('Continue')}</button>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    fetch('/api/auth/verify-email', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    }).then(r => r.json()).then(data => {
+      const titleEl = document.getElementById('ve-title');
+      const subEl = document.getElementById('ve-sub');
+      const btn = document.getElementById('ve-continue');
+      if (data.success) {
+        if (titleEl) titleEl.textContent = t('Email verified');
+        if (subEl) subEl.textContent = t('Your email address has been confirmed.');
+      } else {
+        if (titleEl) titleEl.textContent = t('Link invalid or expired');
+        if (subEl) subEl.textContent = data.error || t('Please request a new verification email and try again.');
+      }
+      if (btn) btn.style.display = 'block';
+    }).catch(() => {
+      const titleEl = document.getElementById('ve-title');
+      const subEl = document.getElementById('ve-sub');
+      const btn = document.getElementById('ve-continue');
+      if (titleEl) titleEl.textContent = t('Network error');
+      if (subEl) subEl.textContent = t('Make sure the server is running and try again.');
+      if (btn) btn.style.display = 'block';
+    });
+  },
+
+  // ── RESET PASSWORD LANDING SCREEN (from #reset-password/<token>) ──────────
+  _showResetPasswordScreen(token) {
+    document.documentElement.style.setProperty('--sub-accent', this.systems.retail.accent);
+    document.documentElement.style.setProperty('--sub-accent-rgb', this.systems.retail.accentRgb);
+    const overlay = document.createElement('div');
+    overlay.id = 'aura-reset-password-screen';
+    overlay.className = 'auth-overlay';
+    overlay.innerHTML = `
+      <div class="auth-card auth-card-compact">
+        <div class="auth-head">
+          <div class="auth-icon">🔑</div>
+          <h2 class="auth-title">${t('Set a new password')}</h2>
+        </div>
+        <div class="auth-field">
+          <label for="rp-pass">${t('New password')}</label>
+          <input id="rp-pass" type="password" placeholder="Min. 6 characters" autocomplete="new-password"
+            onkeydown="if(event.key==='Enter')document.getElementById('rp-pass2').focus()" />
+        </div>
+        <div class="auth-field" style="margin-bottom:20px;">
+          <label for="rp-pass2">${t('Confirm new password')}</label>
+          <input id="rp-pass2" type="password" placeholder="Repeat password" autocomplete="new-password"
+            onkeydown="if(event.key==='Enter')SubsystemApp._resetPasswordSubmit('${token}')" />
+        </div>
+        <div id="rp-error" class="auth-error"></div>
+        <button id="rp-btn" class="auth-submit" onclick="SubsystemApp._resetPasswordSubmit('${token}')">${t('Set password')}</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    setTimeout(() => document.getElementById('rp-pass')?.focus(), 100);
+  },
+
+  async _resetPasswordSubmit(token) {
+    const pass  = document.getElementById('rp-pass')?.value;
+    const pass2 = document.getElementById('rp-pass2')?.value;
+    const errEl = document.getElementById('rp-error');
+    const btn   = document.getElementById('rp-btn');
+    const showErr = (msg) => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } if (btn) { btn.textContent = 'Set password'; btn.disabled = false; } };
+    if (!pass || pass.length < 6) return showErr('Password must be at least 6 characters.');
+    if (pass !== pass2) return showErr('Passwords do not match.');
+
+    if (btn) { btn.textContent = 'Saving…'; btn.disabled = true; }
+    if (errEl) errEl.style.display = 'none';
+    try {
+      const res = await fetch('/api/auth/reset-password', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, password: pass }),
+      });
+      const data = await res.json();
+      if (!data.success) return showErr(data.error || 'This reset link is invalid or has expired.');
+
+      const overlay = document.getElementById('aura-reset-password-screen');
+      if (overlay) {
+        overlay.querySelector('.auth-card').innerHTML = `
+          <div class="auth-head">
+            <div class="auth-icon">✅</div>
+            <h2 class="auth-title">${t('Password updated')}</h2>
+            <p class="auth-sub">${t('You can now sign in with your new password.')}</p>
+          </div>
+          <button class="auth-submit" onclick="location.hash='';SubsystemApp.init();">${t('Continue to sign in')}</button>`;
+      }
+    } catch (e) {
+      showErr('Network error. Make sure the server is running.');
     }
   },
 
