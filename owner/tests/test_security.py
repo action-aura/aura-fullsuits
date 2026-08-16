@@ -106,8 +106,12 @@ def test_expired_invitation_rejected(app, client, seeded):
 
 
 def test_login_does_not_leak_stack_traces_on_bad_input(client):
+    # No csrf_token field at all -- also exercises the CSRF-recovery redirect
+    # (app/errors.py) added for the bare login POST, which is intentionally
+    # a 302 now instead of a raw 400 for this exact case (see test_auth.py::
+    # test_login_stale_csrf_token_redirects_to_fresh_login_not_dead_end).
     resp = client.post("/auth/login", data={"email": "not-a-real-email-format", "password": ""})
-    assert resp.status_code in (400, 401)
+    assert resp.status_code in (302, 400, 401)
     assert b"Traceback" not in resp.data
 
 

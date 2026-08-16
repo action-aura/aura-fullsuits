@@ -12,6 +12,37 @@ def test_bootstrap_creates_no_default_credentials(app):
         assert db_session.query(StaffUser).count() == 0
 
 
+def test_login_stale_csrf_token_redirects_to_fresh_login_not_dead_end(app, client, seeded):
+    """AUDIT-fix regression test: a stale/missing CSRF token on the bare
+    login POST (page left open too long, or the same login page open in
+    another tab) used to render errors/security.html -- a dead end with no
+    way back except manually re-navigating. Nothing is authenticated yet at
+    this point, so recovering automatically is safe: this must now redirect
+    straight back to a fresh login form instead."""
+    make_staff(app, "stale-csrf@example.com", password="Correct-Password-1!")
+    resp = client.post(
+        "/auth/login",
+        data={"csrf_token": "not-a-real-token", "email": "stale-csrf@example.com", "password": "Correct-Password-1!"},
+    )
+    assert resp.status_code == 302
+    assert resp.headers["Location"].startswith("/auth/login")
+    assert "reason=session_expired" in resp.headers["Location"]
+
+
+def test_other_csrf_failures_still_show_the_dead_end_page(app, client, seeded):
+    """The auto-recovery above is scoped to the bare login POST only -- a
+    CSRF failure on an authenticated, stateful route (any other POST) must
+    still show the generic security error page, not silently discard
+    whatever the user was doing."""
+    staff_id = make_staff(app, "other-csrf@example.com", role_codes=["SALES"])
+    from tests.conftest import force_login
+
+    force_login(client, app, staff_id)
+    resp = client.post("/customers", data={"csrf_token": "not-a-real-token", "legal_name": "Some Co"})
+    assert resp.status_code == 400
+    assert b"Session check failed" in resp.data
+
+
 def test_login_wrong_password_rejected(app, client, seeded):
     make_staff(app, "user@example.com", password="Correct-Password-1!")
     resp = login(client, "user@example.com", password="wrong-password")
