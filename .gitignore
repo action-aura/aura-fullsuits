@@ -34,6 +34,11 @@ node_modules/
 # Windows PyInstaller build outputs (never commit built exes -- see docs/release/wave1b)
 products/*/packaging/dist/
 presentation_package/
+build_pyinstaller/
+build_launcher/
+dist2/
+dist_launcher/
+.debug_tmp/
 
 # Android (two independent projects: android/aura-retail, android/aura-clinic)
 android/*/.gradle/

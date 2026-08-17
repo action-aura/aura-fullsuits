@@ -172,6 +172,18 @@ def set_admin_device(conn: sqlite3.Connection, company_id: str, device_id: str) 
     return get_device(conn, device_id)
 
 
+def has_admin_device(conn: sqlite3.Connection, company_id: str) -> bool:
+    """True if some device already holds `is_admin_device` for this company.
+    Used by device_context.resolve_local_device() to auto-bootstrap the
+    first-ever device as the admin device -- see that call site's own
+    comment for why nothing else in this codebase ever did that."""
+    row = conn.execute(
+        "SELECT 1 FROM devices WHERE company_id=? AND is_admin_device=1 LIMIT 1",
+        (company_id,),
+    ).fetchone()
+    return row is not None
+
+
 def revoke_device(conn: sqlite3.Connection, device_id: str) -> dict:
     """Mark a device 'revoked' and clear its admin flag if it held one.
 

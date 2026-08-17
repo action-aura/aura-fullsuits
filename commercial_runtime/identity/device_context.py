@@ -259,6 +259,21 @@ def resolve_local_device(conn, company_id: str, device_label: str = None, platfo
             platform=platform,
             device_fingerprint=fingerprint,
         )
+        # AUDIT-fix 2026-08-17: no code path anywhere in this codebase ever
+        # called device_registry.set_admin_device() outside of tests (the
+        # feature that gates the frontend's Settings/Admin Center/Audit Log
+        # nav items -- app-shell.js's adminOnly flag -- on "is this the
+        # company's single admin device"). That left is_admin_device=0 on
+        # every real device forever: a real admin account, on the only
+        # device the company has ever used, could never see Settings.
+        # Bootstrapping "the first device this company ever resolves
+        # becomes its admin device" here -- the one place every login path
+        # already funnels through -- means a fresh company/install always
+        # ends up with exactly one admin device with zero extra user
+        # action, matching the single-admin-device model's own invariant
+        # (idx_devices_one_admin) instead of leaving it permanently unset.
+        if not device_registry.has_admin_device(conn, company_id):
+            row = device_registry.set_admin_device(conn, company_id, device_id)
         _cached_device = row
         return row
 

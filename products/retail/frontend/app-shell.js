@@ -514,7 +514,7 @@ const SubsystemApp = {
       <div class="auth-card">
         <button onclick="AuraI18n.toggle()" title="Language / اللغة" class="auth-lang-btn">EN | ع</button>
         <div class="auth-head">
-          <div class="auth-icon">⚡</div>
+          <div class="auth-icon">${AuraIcons.render('zap', 32)}</div>
           <h2 class="auth-title">${t('Welcome to Action Aura')}</h2>
           <p class="auth-sub">${t('Create your administrator account to get started.')}</p>
           <p class="auth-note">This setup runs <strong>only once</strong>. Your credentials will be saved permanently.</p>
@@ -635,7 +635,7 @@ const SubsystemApp = {
       <div class="auth-card auth-card-compact">
         <button onclick="AuraI18n.toggle()" title="Language / اللغة" class="auth-lang-btn">EN | ع</button>
         <div class="auth-head">
-          <div class="auth-icon">🔐</div>
+          <div class="auth-icon">${AuraIcons.render('lock', 32)}</div>
           <h2 class="auth-title">${t('Welcome to Aura Retail')}</h2>
           <p class="auth-sub">${t(msg)}</p>
         </div>
@@ -706,7 +706,7 @@ const SubsystemApp = {
     if (!overlay) return;
     overlay.querySelector('.auth-card').innerHTML = `
       <div class="auth-head">
-        <div class="auth-icon">✉️</div>
+        <div class="auth-icon">${AuraIcons.render('mail', 32)}</div>
         <h2 class="auth-title">${t('Reset your password')}</h2>
         <p class="auth-sub">${t("Enter your account email and we'll send a reset link.")}</p>
       </div>
@@ -747,7 +747,7 @@ const SubsystemApp = {
     if (overlay) {
       overlay.querySelector('.auth-card').innerHTML = `
         <div class="auth-head">
-          <div class="auth-icon">✅</div>
+          <div class="auth-icon">${AuraIcons.render('circle-check-big', 32)}</div>
           <h2 class="auth-title">${t('Check your email')}</h2>
           <p class="auth-sub">${t('If an account exists for that email, a reset link is on its way.')}</p>
         </div>
@@ -765,7 +765,7 @@ const SubsystemApp = {
     overlay.innerHTML = `
       <div class="auth-card auth-card-compact">
         <div class="auth-head">
-          <div class="auth-icon">✉️</div>
+          <div class="auth-icon">${AuraIcons.render('mail', 32)}</div>
           <h2 class="auth-title" id="ve-title">${t('Verifying your email…')}</h2>
           <p class="auth-sub" id="ve-sub"></p>
         </div>
@@ -810,7 +810,7 @@ const SubsystemApp = {
     overlay.innerHTML = `
       <div class="auth-card auth-card-compact">
         <div class="auth-head">
-          <div class="auth-icon">🔑</div>
+          <div class="auth-icon">${AuraIcons.render('key-round', 32)}</div>
           <h2 class="auth-title">${t('Set a new password')}</h2>
         </div>
         <div class="auth-field">
@@ -854,7 +854,7 @@ const SubsystemApp = {
       if (overlay) {
         overlay.querySelector('.auth-card').innerHTML = `
           <div class="auth-head">
-            <div class="auth-icon">✅</div>
+            <div class="auth-icon">${AuraIcons.render('circle-check-big', 32)}</div>
             <h2 class="auth-title">${t('Password updated')}</h2>
             <p class="auth-sub">${t('You can now sign in with your new password.')}</p>
           </div>

@@ -26,6 +26,8 @@ Expected owner_config.txt format (KEY=value, one per line, # comments ok):
     OWNER_URL=https://<owner-host>:5551
     CA_BUNDLE=owner-cert.pem
     AI_TOKEN=<bearer token for the AI assistant's cloud LLM endpoint>
+    WHATSAPP_PHONE_NUMBER_ID=<Meta Cloud API phone_number_id>
+    WHATSAPP_ACCESS_TOKEN=<Meta System User permanent access token>
 CA_BUNDLE is resolved relative to this launcher's own folder if not absolute.
 AI_TOKEN follows the same "edit a text file, not a rebuild" reasoning as
 everything else here -- config.py's AURA_AI_BEARER_TOKEN has no hardcoded
@@ -33,8 +35,11 @@ default on purpose (2026-08-12: an earlier version did, and a live token got
 committed to git as a result -- see the fix commit's message), so without
 this the AI assistant button still renders but every chat request gets a 401
 from the LLM endpoint, surfaced to the user as "temporarily unavailable" --
-inert, never a crash, same failure shape as a missing OWNER_URL. This file
-itself must never be committed to git.
+inert, never a crash, same failure shape as a missing OWNER_URL. WHATSAPP_*
+follows the exact same reasoning and is read the same way -- missing/blank
+just means whatsapp_client.is_configured() is False (outbound WhatsApp
+inert, per its own module docstring), never a crash. This file itself must
+never be committed to git.
 """
 import os
 import subprocess
@@ -84,6 +89,12 @@ def main():
     ai_token = owner_cfg.get('AI_TOKEN', '')
     if ai_token:
         env['AURA_AI_BEARER_TOKEN'] = ai_token
+
+    wa_phone_id = owner_cfg.get('WHATSAPP_PHONE_NUMBER_ID', '')
+    wa_token = owner_cfg.get('WHATSAPP_ACCESS_TOKEN', '')
+    if wa_phone_id and wa_token:
+        env['AURA_WHATSAPP_PHONE_NUMBER_ID'] = wa_phone_id
+        env['AURA_WHATSAPP_ACCESS_TOKEN'] = wa_token
 
     owner_url = owner_cfg.get('OWNER_URL', '')
     if owner_url:

@@ -178,7 +178,34 @@ def test_my_device_happy_path_response_shape(app_data, client, db_path):
     assert device["company_id"] == "company-1"
     assert "is_admin_device" in device, "is_admin_device must be explicitly present for the notification worker self-gate"
     assert isinstance(device["is_admin_device"], bool), "is_admin_device must be a real bool, not 0/1"
-    assert device["is_admin_device"] is False, "a freshly resolved device is never the admin device by default"
+    # AUDIT-fix 2026-08-17: this is the FIRST device ever resolved for
+    # company-1 -- device_context.resolve_local_device() now auto-promotes
+    # it to admin (see that function's own comment for why: nothing in
+    # production code ever called set_admin_device() otherwise, so
+    # Settings/Audit Log were permanently hidden for every real install).
+    assert device["is_admin_device"] is True, "the first device a company ever resolves becomes its admin device"
+
+
+def test_my_device_second_device_for_same_company_is_not_admin(app_data, client, db_path):
+    """The auto-promotion above must not just default every device to
+    admin -- once a company already has one, a second device resolving
+    for the first time stays a plain (non-admin) device."""
+    _insert_user(db_path, "user-1")
+    _login(client, "user-1", "company-1")
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    upsert_local_device(conn, "already-admin-device", "company-1")
+    from commercial_runtime.identity.device_registry import set_admin_device
+    set_admin_device(conn, "company-1", "already-admin-device")
+    conn.close()
+
+    r = client.get("/api/devices/me")
+
+    assert r.status_code == 200
+    device = r.get_json()["device"]
+    assert device["id"] != "already-admin-device"
+    assert device["is_admin_device"] is False
 
 
 def test_my_device_reflects_admin_flag_as_bool_true(app_data, client, db_path):
