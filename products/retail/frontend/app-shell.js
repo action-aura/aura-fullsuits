@@ -288,34 +288,28 @@ const SubsystemApp = {
       return;
     }
 
-    // ── Device activation gate ─────────────────────────────────────────────
-    // Checked before anything else, including the auth gate below, so an
-    // unactivated device on a real licensed install never reaches setup or
-    // login. Skipped in demo mode (matches the auth gate's own skip) and
-    // skipped when licensing isn't wired up on this install at all --
-    // /api/licensing/status's NOT_CONFIGURED shape is ambiguous by itself
-    // (returned both when genuinely unconfigured AND when configured but
-    // never activated -- see commercial_runtime/licensing_contracts's own
-    // test_status_before_activation_is_not_configured_shape, which pins the
-    // configured-but-fresh case on purpose), but the "detail" field is only
-    // ever attached by the genuinely-unconfigured branch
-    // (routes.py::_not_configured_response) -- present_status(None) never
-    // sets it, so its presence is the real disambiguating signal, no
-    // backend change needed.
+    // ── Onboarding status ───────────────────────────────────────────────────
+    // AUDIT-fix 2026-08-17: must run BEFORE the device-activation gate that
+    // used to sit here unconditionally. A brand-new install (no admin
+    // account yet) used to hit a pre-login "enter your license key" screen
+    // FIRST, then a completely separate "create your account" screen after
+    // -- two disconnected steps, key-before-account, with no way to land on
+    // one coherent "get started" action. Registration now collects the
+    // license key itself (see showSetupModal()), so a fresh install skips
+    // this old pre-login gate entirely and goes straight there instead.
+    let needsSetup = false;
     if (!window.isDemoMode && sessionStorage.getItem('demo_mode') !== 'true') {
       try {
-        const lic = await fetch('/api/licensing/status', { cache: 'no-store' }).then(r => r.json());
-        const needsActivation = lic.current_state === 'ACTIVATION_REQUIRED'
-          || lic.current_state === 'ACTIVATING'
-          || (lic.current_state === 'NOT_CONFIGURED' && !lic.detail);
-        if (needsActivation) {
-          location.href = '/static/licensing.html?gate=1';
-          return;
-        }
+        const status = await fetch('/api/onboarding/status', { cache: 'no-store' }).then(r => r.json());
+        needsSetup = !!status.needs_setup;
       } catch (e) {
-        // Network hiccup: fail open, same as every other best-effort check
-        // in this init() sequence (active-modules fetch above does the same).
+        // Network hiccup: fail open (needsSetup stays false), same as every
+        // other best-effort check in this init() sequence.
       }
+    }
+    if (needsSetup) {
+      this.showSetupModal();
+      return;
     }
 
     this._authPrompted = false;     // re-arm the 401 guard on every (re)init
@@ -360,13 +354,11 @@ const SubsystemApp = {
         const sess = await fetch('/api/auth/session', { credentials: 'include', cache: 'no-store' })
           .then(r => r.json()).catch(() => ({}));
         if (!sess.authenticated) {
-          const status = await fetch('/api/onboarding/status', { cache: 'no-store' })
-            .then(r => r.json()).catch(() => ({ needs_setup: false }));
-          if (status.needs_setup) {
-            this.showSetupModal();
-          } else {
-            this.showReloginModal('Sign in to your store');
-          }
+          // needsSetup was already checked above (and would have returned
+          // this init() call early) -- an admin account is guaranteed to
+          // exist by this point, so this is always a returning-user login,
+          // never account creation.
+          this.showReloginModal('Sign in to your store');
           return; // Modal's success handler will call SubsystemApp.init() again
         }
         // Authenticated: apply the account's saved UI language before rendering,
@@ -395,6 +387,36 @@ const SubsystemApp = {
           this.isAdminDevice = !!(dev && dev.success && dev.device && dev.device.is_admin_device === true);
         } catch (e) {
           this.isAdminDevice = false;
+        }
+
+        // ── Device activation gate ───────────────────────────────────────
+        // Moved here (2026-08-17) from before the auth gate: "log in, THEN
+        // enter your key the first time" for an existing account with no
+        // key yet, rather than a pre-login key screen every returning user
+        // used to see too. A brand-new install never reaches this at all --
+        // needsSetup above sends it to showSetupModal(), which collects the
+        // key as part of registration itself.
+        // /api/licensing/status's NOT_CONFIGURED shape is ambiguous by
+        // itself (returned both when genuinely unconfigured AND when
+        // configured but never activated -- see commercial_runtime/
+        // licensing_contracts's own test_status_before_activation_is_not_
+        // configured_shape, which pins the configured-but-fresh case on
+        // purpose), but the "detail" field is only ever attached by the
+        // genuinely-unconfigured branch (routes.py::_not_configured_
+        // response) -- present_status(None) never sets it, so its presence
+        // is the real disambiguating signal, no backend change needed.
+        try {
+          const lic = await fetch('/api/licensing/status', { cache: 'no-store' }).then(r => r.json());
+          const needsActivation = lic.current_state === 'ACTIVATION_REQUIRED'
+            || lic.current_state === 'ACTIVATING'
+            || (lic.current_state === 'NOT_CONFIGURED' && !lic.detail);
+          if (needsActivation) {
+            location.href = '/static/licensing.html?gate=1';
+            return;
+          }
+        } catch (e) {
+          // Network hiccup: fail open, same as every other best-effort
+          // check in this init() sequence.
         }
       } catch(e) {
         // Can't reach server — proceed and let individual API calls handle 401s
@@ -503,11 +525,28 @@ const SubsystemApp = {
   // inline styles with a hardcoded teal that matched nothing in the product.
   // The accent vars are applied here the same way launch() applies them, so
   // the very first screen a customer sees already carries the product brand.
-  showSetupModal() {
+  async showSetupModal() {
     document.getElementById('aura-relogin-modal')?.remove();
     this._authModalOpen = true;
     document.documentElement.style.setProperty('--sub-accent', this.systems.retail.accent);
     document.documentElement.style.setProperty('--sub-accent-rgb', this.systems.retail.accentRgb);
+
+    // AUDIT-fix 2026-08-17: registration now collects the license key
+    // itself instead of the old separate pre-login "enter your key" screen
+    // -- see init()'s own comment for the full before/after. Only shown
+    // when this install actually has licensing configured (OWNER_LICENSING_
+    // BASE_URL set) -- an install with no Owner wired up stays fully
+    // unlocked per CLAUDE.md's "invisible unless opted in" rule, so forcing
+    // a key field there would be actively wrong, not just unnecessary.
+    let needsKey = false;
+    try {
+      const lic = await fetch('/api/licensing/status', { cache: 'no-store' }).then(r => r.json());
+      needsKey = lic.current_state === 'ACTIVATION_REQUIRED'
+        || lic.current_state === 'ACTIVATING'
+        || (lic.current_state === 'NOT_CONFIGURED' && !lic.detail);
+    } catch (e) { /* fail open: no key field, same as the old pre-login gate's own fail-open */ }
+    this._setupNeedsKey = needsKey;
+
     const overlay = document.createElement('div');
     overlay.id = 'aura-relogin-modal';
     overlay.className = 'auth-overlay';
@@ -537,6 +576,13 @@ const SubsystemApp = {
           <input id="su-email" type="email" placeholder="admin@yourcompany.com" autocomplete="email"
             onkeydown="if(event.key==='Enter')document.getElementById('su-pass').focus()" />
         </div>
+        ${needsKey ? `
+        <div class="auth-field">
+          <label for="su-key">License Key *</label>
+          <input id="su-key" type="text" placeholder="AURA-RETAIL-XXXX-YYYY-ZZZZ" autocomplete="off"
+            style="text-transform:uppercase" onkeydown="if(event.key==='Enter')document.getElementById('su-pass').focus()" />
+          <p class="hint" style="margin:4px 0 0;font-size:12px;color:var(--text-muted)">${t('From your Aura order confirmation. Activated together with your account below.')}</p>
+        </div>` : ''}
         <div class="auth-grid-2">
           <div class="auth-field">
             <label for="su-pass">Password *</label>
@@ -561,6 +607,7 @@ const SubsystemApp = {
     const name    = document.getElementById('su-name')?.value.trim();
     const company = document.getElementById('su-company')?.value.trim() || 'My Company';
     const email   = document.getElementById('su-email')?.value.trim().toLowerCase();
+    const key     = document.getElementById('su-key')?.value.trim().toUpperCase();
     const pass    = document.getElementById('su-pass')?.value;
     const pass2   = document.getElementById('su-pass2')?.value;
     const errEl   = document.getElementById('su-error');
@@ -570,6 +617,7 @@ const SubsystemApp = {
 
     if (!name)                   return showErr('Full name is required.');
     if (!email || !email.includes('@')) return showErr('A valid email address is required.');
+    if (this._setupNeedsKey && !key) return showErr('A license key is required.');
     if (!pass)                   return showErr('Password is required.');
     if (pass.length < 6)         return showErr('Password must be at least 6 characters.');
     if (pass !== pass2)          return showErr('Passwords do not match.');
@@ -587,6 +635,30 @@ const SubsystemApp = {
 
       if (!data.success) return showErr(data.error || 'Could not create account. Please try again.');
 
+      // Account exists and this session is already authenticated (create-
+      // admin calls create_session() itself) from this point on -- a key
+      // failure below must NEVER send the user back through registration.
+      if (this._setupNeedsKey && key) {
+        if (btn) btn.textContent = 'Activating license…';
+        let activation = null;
+        try {
+          const actRes = await fetch('/api/licensing/activate', {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ license_key: key }),
+          });
+          activation = await actRes.json();
+          activation._status = actRes.status;
+        } catch (e) {
+          activation = { result: 'NETWORK_ERROR' };
+        }
+        if (activation.result !== 'SUCCESS' && activation.result !== 'PENDING') {
+          // Account created, key rejected -- ask for a valid one in place,
+          // never re-show the registration form (the account already exists).
+          return this._setupKeyRetry(name, activation.detail || 'That license key was not accepted.');
+        }
+      }
+
       // Mark onboarding complete
       await fetch('/api/onboarding/complete', { method: 'POST', credentials: 'include' }).catch(() => {});
 
@@ -599,7 +671,7 @@ const SubsystemApp = {
       overlay.id = 'aura-setup-complete-overlay';
       overlay.style.cssText = 'position:fixed;inset:0;background:#020617;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;font-family:Inter,sans-serif;z-index:99999;';
       overlay.innerHTML = `
-        <div style="font-size:56px;margin-bottom:16px;">✅</div>
+        <div style="font-size:56px;margin-bottom:16px;color:var(--sub-accent,#14b8a6)">${AuraIcons.render('circle-check-big', 56)}</div>
         <h2 style="font-size:28px;font-weight:800;margin:0 0 8px;">Account Created!</h2>
         <p style="color:#64748b;margin:0;font-size:16px;">Welcome, <strong id="aura-setup-complete-name" style="color:var(--sub-accent,#14b8a6)"></strong>. Loading your platform…</p>`;
       const nameEl = overlay.querySelector('#aura-setup-complete-name');
@@ -616,6 +688,54 @@ const SubsystemApp = {
       }, 1400);
 
     } catch(e) {
+      showErr('Network error. Make sure the server is running.');
+    }
+  },
+
+  // The account from _setupSubmit() above is already created and this
+  // session is already authenticated -- this is key-entry only, reusing
+  // the same overlay/.auth-card in place (same pattern as _showForgotPasswordScreen).
+  _setupKeyRetry(name, reason) {
+    const overlay = document.getElementById('aura-relogin-modal');
+    if (!overlay) return;
+    overlay.querySelector('.auth-card').innerHTML = `
+      <div class="auth-head">
+        <div class="auth-icon">${AuraIcons.render('key-round', 32)}</div>
+        <h2 class="auth-title">${t('Almost there')}</h2>
+        <p class="auth-sub">${t('Your account was created. Enter a valid license key to finish.')}</p>
+      </div>
+      <div class="auth-field">
+        <label for="su-key-2">${t('License Key')}</label>
+        <input id="su-key-2" type="text" placeholder="AURA-RETAIL-XXXX-YYYY-ZZZZ" autocomplete="off"
+          style="text-transform:uppercase" onkeydown="if(event.key==='Enter')SubsystemApp._setupKeyRetrySubmit()" />
+      </div>
+      <div id="su-key-2-error" class="auth-error" style="display:block">${this._esc ? this._esc(reason) : reason}</div>
+      <button id="su-key-2-btn" class="auth-submit" onclick="SubsystemApp._setupKeyRetrySubmit()">${t('Activate')}</button>`;
+    setTimeout(() => document.getElementById('su-key-2')?.focus(), 100);
+  },
+
+  async _setupKeyRetrySubmit() {
+    const key   = document.getElementById('su-key-2')?.value.trim().toUpperCase();
+    const errEl = document.getElementById('su-key-2-error');
+    const btn   = document.getElementById('su-key-2-btn');
+    const showErr = (msg) => { if(errEl){errEl.textContent=msg;errEl.style.display='block';} if(btn){btn.textContent=t('Activate');btn.disabled=false;} };
+    if (!key) return showErr('A license key is required.');
+    if (btn) { btn.textContent = 'Activating…'; btn.disabled = true; }
+    try {
+      const res = await fetch('/api/licensing/activate', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ license_key: key }),
+      });
+      const data = await res.json();
+      if (data.result !== 'SUCCESS' && data.result !== 'PENDING') {
+        return showErr(data.detail || 'That license key was not accepted.');
+      }
+      await fetch('/api/onboarding/complete', { method: 'POST', credentials: 'include' }).catch(() => {});
+      document.getElementById('aura-relogin-modal')?.remove();
+      this._authModalOpen = false;
+      await SubsystemApp.init();
+    } catch (e) {
       showErr('Network error. Make sure the server is running.');
     }
   },
