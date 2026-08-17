@@ -1,22 +1,15 @@
 {% extends "layout/base.html" %}
+{% import "layout/_charts.html" as charts %}
 {% block title %}{{ _("Dashboard") }}{% endblock %}
 {% block content %}
 {% include "layout/_tour.html" %}
 {#
-  Role-aware dashboard (Stage C). Every card below is gated on the real
-  permission that governs its underlying data -- the same codes
-  layout/_sidebar.html uses for the equivalent nav destination -- not
-  on role name or "is this a management-looking metric" guesswork.
-  Before this, get_dashboard_summary()'s full result (customer/
-  subscription/license/installation/commercial-ops/backup counts) was
-  rendered unconditionally to every logged-in employee regardless of
-  permission -- a real over-exposure: a SALES-only account could see
-  company-wide backup status and commercial-ops activity it has no
-  route access to. dashboard/services.py's own query set is unchanged
-  (its return shape is covered by existing tests -- see
-  role-dashboard-contract.md for why filtering happens here, in the
-  template, rather than in the service); this stage's fix is that
-  unauthorized sections are no longer rendered to the browser at all.
+  Role-aware, department-sectioned dashboard (Dashboard Interactive Kit).
+  Every section below is gated on the exact same real permission that
+  governed its equivalent row in the pre-redesign <dl>-based dashboard --
+  see docs/owner/ui-modernization/dashboard-interactive-kit-contract.md
+  and role-dashboard-contract.md. dashboard/services.py's return shape is
+  unchanged; this file only changes how it is rendered.
 #}
 {% set can_view_customers = has_permission('customers.view') %}
 {% set can_view_subscriptions = has_permission('subscriptions.view') %}
@@ -31,6 +24,27 @@
 {% set can_view_device_slots = has_permission('device_slot_exceptions.view') %}
 {% set can_view_commercial_ops = can_view_notifications or can_view_pilots or can_view_activations or can_view_emergency_ext or can_view_device_slots %}
 
+{# ---------- Quick actions (Overview) ----------
+   Reuses command_palette_data.create (app/command_palette/service.py::
+   get_static_commands(), already computed once per request by
+   app/__init__.py's context processor) rather than a second, independently
+   gated card list. Filtered to a fixed priority order by stable `key`,
+   never by translated label text (locale-safe). #}
+{% set quick_action_priority = ['new_quote', 'new_payment', 'new_lead', 'new_expense', 'new_cash_closing'] %}
+{% set quick_actions = command_palette_data.create | selectattr('key', 'in', quick_action_priority) | list %}
+{% if quick_actions or can_view_attention_center %}
+<div class="aura-quick-actions">
+  {% for key in quick_action_priority %}
+    {% for action in quick_actions if action.key == key %}
+    <a class="aura-quick-action-card" href="{{ action.url }}">{{ action.label }}</a>
+    {% endfor %}
+  {% endfor %}
+  {% if can_view_attention_center %}
+  <a class="aura-quick-action-card" href="{{ url_for('attention.index') }}">{{ _("Attention Center") }} ({{ format_owner_number(attention_count) }})</a>
+  {% endif %}
+</div>
+{% endif %}
+
 {% if not (can_view_customers or can_view_subscriptions or can_view_licenses or can_view_installations or can_view_backups or can_view_audit or can_view_commercial_ops) %}
 <div class="card">
   <h2>{{ _("Overview") }}</h2>
@@ -41,81 +55,67 @@
 {% if can_view_customers or can_view_subscriptions %}
 <div class="card">
   <h2>{{ _("Overview") }}</h2>
-  <dl class="kv">
+  <div class="aura-stat-tile-row">
     {% if can_view_customers %}
-    <dt>{{ _("Total customers") }}</dt><dd>{{ format_owner_number(summary.total_customers) }}</dd>
-    <dt>{{ _("Pilot customers") }}</dt><dd>{{ format_owner_number(summary.pilot_customers) }}</dd>
-    <dt>{{ _("Active customers") }}</dt><dd>{{ format_owner_number(summary.active_customers) }}</dd>
+    {{ charts.stat_tile(_("Total customers"), format_owner_number(summary.total_customers), href=url_for('customers.list_customers')) }}
+    {{ charts.stat_tile(_("Pilot customers"), format_owner_number(summary.pilot_customers)) }}
+    {{ charts.stat_tile(_("Active customers"), format_owner_number(summary.active_customers)) }}
     {% endif %}
     {% if can_view_subscriptions %}
-    <dt>{{ _("Active subscriptions") }}</dt><dd>{{ format_owner_number(summary.active_subscriptions) }}</dd>
-    <dt>{{ _("Subscriptions expiring in 7 days") }}</dt><dd>{{ format_owner_number(summary.expiring_7) }}</dd>
-    <dt>{{ _("Subscriptions expiring in 30 days") }}</dt><dd>{{ format_owner_number(summary.expiring_30) }}</dd>
+    {{ charts.stat_tile(_("Active subscriptions"), format_owner_number(summary.active_subscriptions), href=url_for('subscriptions.list_subscriptions')) }}
+    {{ charts.stat_tile(_("Expiring in 7 days"), format_owner_number(summary.expiring_7), tone='warning' if summary.expiring_7 else 'default') }}
+    {{ charts.stat_tile(_("Expiring in 30 days"), format_owner_number(summary.expiring_30)) }}
     {% endif %}
-  </dl>
+  </div>
 </div>
 {% endif %}
 
 {% if can_view_commercial_ops %}
 <div class="card">
   <h3>{{ _("Commercial operations") }}</h3>
-  <dl class="kv">
+  <div class="aura-stat-tile-row">
     {% if can_view_notifications %}
-    <dt>{{ _("Open notifications") }}</dt><dd><a href="{{ url_for('commercial_ops_ui.list_notifications') }}">{{ format_owner_number(summary.open_notifications) }}</a></dd>
-    <dt>{{ _("Renewals awaiting finance approval") }}</dt><dd><a href="{{ url_for('commercial_ops_ui.list_renewals', status='PAYMENT_RECORDED') }}">{{ format_owner_number(summary.renewals_awaiting_approval) }}</a></dd>
+    {{ charts.stat_tile(_("Open notifications"), format_owner_number(summary.open_notifications), href=url_for('commercial_ops_ui.list_notifications'), tone='warning' if summary.open_notifications else 'default') }}
+    {{ charts.stat_tile(_("Renewals awaiting finance approval"), format_owner_number(summary.renewals_awaiting_approval), href=url_for('commercial_ops_ui.list_renewals', status='PAYMENT_RECORDED')) }}
     {% endif %}
     {% if can_view_pilots %}
-    <dt>{{ _("Pilots needing action") }}</dt><dd><a href="{{ url_for('commercial_ops_ui.list_pilots') }}">{{ format_owner_number(summary.pilots_needing_action) }}</a></dd>
+    {{ charts.stat_tile(_("Pilots needing action"), format_owner_number(summary.pilots_needing_action), href=url_for('commercial_ops_ui.list_pilots')) }}
     {% endif %}
     {% if can_view_activations %}
-    <dt>{{ _("Activations pending manual review") }}</dt><dd><a href="{{ url_for('commercial_ops_ui.list_pending_activations') }}">{{ format_owner_number(summary.pending_activations) }}</a></dd>
+    {{ charts.stat_tile(_("Activations pending manual review"), format_owner_number(summary.pending_activations), href=url_for('commercial_ops_ui.list_pending_activations')) }}
     {% endif %}
     {% if can_view_emergency_ext %}
-    <dt>{{ _("Active emergency extensions") }}</dt><dd><a href="{{ url_for('commercial_ops_ui.list_emergency_extensions') }}">{{ format_owner_number(summary.active_emergency_extensions) }}</a></dd>
+    {{ charts.stat_tile(_("Active emergency extensions"), format_owner_number(summary.active_emergency_extensions), href=url_for('commercial_ops_ui.list_emergency_extensions')) }}
     {% endif %}
     {% if can_view_device_slots %}
-    <dt>{{ _("Active device-slot exceptions") }}</dt><dd>{{ format_owner_number(summary.active_device_slot_exceptions) }}</dd>
+    {{ charts.stat_tile(_("Active device-slot exceptions"), format_owner_number(summary.active_device_slot_exceptions)) }}
     {% endif %}
-  </dl>
+  </div>
 </div>
 {% endif %}
 
 {% if can_view_subscriptions %}
 <div class="card">
   <h3>{{ _("Subscriptions by product") }}</h3>
-  <table class="responsive-table">
-    <thead><tr><th>{{ _("Product") }}</th><th>{{ _("Count") }}</th></tr></thead>
-    <tbody>
-    {% for name, count in summary.subs_by_product.items() %}<tr><td><bdi dir="ltr">{{ name }}</bdi></td><td>{{ format_owner_number(count) }}</td></tr>
-    {% else %}<tr><td colspan="2" class="empty">{{ _("No subscriptions yet.") }}</td></tr>{% endfor %}
-    </tbody>
-  </table>
+  {{ charts.bar_chart(summary.subs_by_product) }}
 </div>
 {% endif %}
 
 {% if can_view_licenses %}
 <div class="card">
   <h3>{{ _("Licenses by status") }}</h3>
-  <table class="responsive-table">
-    <thead><tr><th>{{ _("Status") }}</th><th>{{ _("Count") }}</th></tr></thead>
-    <tbody>
-    {% for status, count in summary.licenses_by_status.items() %}<tr><td>{{ license_status_label(status) }}</td><td>{{ format_owner_number(count) }}</td></tr>
-    {% else %}<tr><td colspan="2" class="empty">{{ _("No licenses yet.") }}</td></tr>{% endfor %}
-    </tbody>
-  </table>
+  {% set licenses_status_links = {} %}
+  {% for status in summary.licenses_by_status.keys() %}
+    {% set _unused = licenses_status_links.update({status: license_status_drilldown_url(status)}) %}
+  {% endfor %}
+  {{ charts.donut_chart(summary.licenses_by_status, label_for=license_status_label, class_for=license_badge_class, links=licenses_status_links) }}
 </div>
 {% endif %}
 
 {% if can_view_installations %}
 <div class="card">
   <h3>{{ _("Active installations by product") }}</h3>
-  <table class="responsive-table">
-    <thead><tr><th>{{ _("Product") }}</th><th>{{ _("Count") }}</th></tr></thead>
-    <tbody>
-    {% for name, count in summary.active_installations_by_product.items() %}<tr><td><bdi dir="ltr">{{ name }}</bdi></td><td>{{ format_owner_number(count) }}</td></tr>
-    {% else %}<tr><td colspan="2" class="empty">{{ _("No active installations yet.") }}</td></tr>{% endfor %}
-    </tbody>
-  </table>
+  {{ charts.bar_chart(summary.active_installations_by_product) }}
 </div>
 {% endif %}
 

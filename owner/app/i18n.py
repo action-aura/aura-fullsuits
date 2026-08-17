@@ -169,6 +169,11 @@ def init_app(app) -> None:
     from app.installations.status_presentation import installation_badge_class
     from app.employees.status_presentation import employment_status_badge_class, presence_badge_class
 
+    def license_status_drilldown_url(status: str) -> str:
+        from flask import url_for
+
+        return url_for("licensing.list_licenses", status=status)
+
     # Domain-label and formatting helpers are Jinja globals (not filters) --
     # exposed once, here, reused by every template rather than each screen
     # importing/registering its own (Non-Negotiable Principle 1/10).
@@ -194,6 +199,7 @@ def init_app(app) -> None:
         format_owner_number=format_owner_number,
         subscription_status_label=subscription_status_label,
         license_status_label=license_status_label,
+        license_status_drilldown_url=license_status_drilldown_url,
         installation_status_label=installation_status_label,
         customer_status_label=customer_status_label,
         lead_status_label=lead_status_label,
