@@ -23,9 +23,14 @@ def test_shortcuts_script_and_cheatsheet_only_render_for_logged_in_staff(app, cl
 
 
 def test_shortcuts_cheatsheet_hides_a_destination_the_role_cannot_reach(app, client, seeded):
-    staff_id = make_staff(app, "shortcuts-sales@example.com", role_codes=["SALES"])
+    staff_id = make_staff(app, "shortcuts-support@example.com", role_codes=["SUPPORT"])
     force_login(client, app, staff_id)
 
     resp = client.get("/")
     html = resp.get_data(as_text=True)
-    assert "data-shortcut-goto=\"e\"" not in html or "operations_ui.list_expenses" not in html
+    # SUPPORT has customers.view and leads.view_own, but no quotes.*/expenses.* --
+    # the Sales(Quotes) and Expenses destinations must not render for it.
+    assert 'data-shortcut-goto="c"' in html
+    assert 'data-shortcut-goto="l"' in html
+    assert 'data-shortcut-goto="s"' not in html
+    assert 'data-shortcut-goto="e"' not in html
