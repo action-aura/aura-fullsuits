@@ -113,7 +113,7 @@
   gap: var(--aura-space-4);
   flex-wrap: wrap;
 }
-.aura-donut-chart__svg { inline-size: 96px; block-size: 96px; flex: 0 0 auto; transform: rotate(-90deg); }
+.aura-donut-chart__svg { inline-size: 96px; block-size: 96px; flex: 0 0 auto; }
 .aura-donut-chart__track { fill: none; stroke: var(--aura-color-surface-muted); stroke-width: 3; }
 .aura-donut-chart__segment { fill: none; stroke-width: 3; }
 .aura-donut-chart__segment--default { stroke: var(--aura-color-brand-primary); }

@@ -80,3 +80,18 @@ def test_donut_chart_renders_legend_with_localized_label_and_tone_class(app):
 def test_donut_chart_renders_empty_state_for_no_data(app):
     html = _render('{{ charts.donut_chart({}) }}', app)
     assert "No data yet." in html
+
+
+def test_donut_chart_svg_has_no_css_rotation_stacked_on_the_dashoffset_math():
+    # The stroke-dashoffset math in the donut macro already rotates the
+    # start point to 12 o'clock on its own (see _charts.html's "25 - ns.offset").
+    # A CSS transform: rotate() on .aura-donut-chart__svg would double-rotate
+    # it -- this guards against that regression reappearing.
+    import pathlib
+
+    css_path = pathlib.Path(__file__).resolve().parent.parent / "app" / "static" / "css" / "charts.css"
+    css = css_path.read_text(encoding="utf-8")
+    svg_rule_start = css.index(".aura-donut-chart__svg")
+    svg_rule_end = css.index("}", svg_rule_start)
+    svg_rule = css[svg_rule_start:svg_rule_end]
+    assert "rotate(" not in svg_rule
