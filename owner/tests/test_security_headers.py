@@ -11,7 +11,12 @@ def test_csp_and_baseline_headers_present_in_every_env(client):
     assert resp.headers["Content-Security-Policy"].startswith("default-src 'self'")
     assert resp.headers["X-Content-Type-Options"] == "nosniff"
     assert resp.headers["X-Frame-Options"] == "DENY"
-    assert resp.headers["Referrer-Policy"] == "no-referrer"
+    # 'same-origin', not 'no-referrer' -- see security/headers.py's own
+    # comment: 'no-referrer' meant this app's own same-origin form
+    # submissions never carried a Referer either, which silently broke
+    # every login (WTF_CSRF_SSL_STRICT requires one on HTTPS). Still zero
+    # Referer to any third-party origin either way.
+    assert resp.headers["Referrer-Policy"] == "same-origin"
 
 
 @pytest.mark.parametrize("env_value", ["production", "staging"])

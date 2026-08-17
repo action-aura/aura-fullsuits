@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from flask import Blueprint, current_app, redirect, render_template, request, session, url_for
+from flask import Blueprint, current_app, make_response, redirect, render_template, request, session, url_for
 from flask_babel import gettext as _
 from sqlalchemy import select
 
@@ -66,7 +66,18 @@ def login_form():
         return redirect(url_for("dashboard.index"))
     reason = request.args.get("reason")
     notice = _('Your session ended. Sign in again to continue.') if reason == "session_expired" else None
-    return render_template("auth/login.html", error=None, notice=notice)
+    response = make_response(render_template("auth/login.html", error=None, notice=notice))
+    # This page embeds a per-session CSRF token in the HTML -- a cached copy
+    # served on a later visit (browser back/forward, a bookmarked tab
+    # reopened, or just default heuristic caching, since this response had
+    # no cache directives at all before this) carries a STALE token that no
+    # longer matches whatever the session cookie currently holds, and every
+    # submission fails CSRF validation no matter how carefully the user
+    # retypes their password -- confirmed as the real, repeatable cause of
+    # a "session expired" loop tonight, not a browser-specific quirk.
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 @bp.route("/login", methods=["POST"])

@@ -20,7 +20,21 @@ def register_security_headers(app: Flask) -> None:
         response.headers["Content-Security-Policy"] = _CSP
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Referrer-Policy"] = "no-referrer"
+        # AUDIT-fix: 'no-referrer' meant the browser never sent a Referer
+        # header at all -- including on this app's OWN same-origin form
+        # submissions (login, every other CSRF-protected POST). Flask-WTF's
+        # WTF_CSRF_SSL_STRICT (correctly left at its default True in
+        # staging/production -- see DevelopmentConfig's own comment on why
+        # it's only relaxed there) requires a Referer matching Host on every
+        # HTTPS POST, so this was a real, silent, self-inflicted conflict:
+        # every login attempt failed CSRF validation with no way to
+        # succeed, regardless of browser, confirmed as the actual root
+        # cause of a "session expired" loop that looked like a client-side
+        # cookie/caching problem. 'same-origin' still sends zero Referer to
+        # any third-party origin (the actual privacy property 'no-referrer'
+        # was chosen for) while allowing this app's own same-origin
+        # requests to carry the header CSRF validation needs.
+        response.headers["Referrer-Policy"] = "same-origin"
         # Phase 9.5C -- geolocation is now a real, explicit-action feature
         # (Milestone 12: Lead/Customer location capture, one-shot
         # getCurrentPosition() from a button click, never on page load,

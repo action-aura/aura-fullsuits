@@ -29,6 +29,34 @@ def test_login_stale_csrf_token_redirects_to_fresh_login_not_dead_end(app, clien
     assert "reason=session_expired" in resp.headers["Location"]
 
 
+def test_login_succeeds_over_https_with_only_the_referer_a_real_browser_sends(app, client, seeded):
+    """AUDIT-fix regression test for the actual root cause of a real,
+    repeatable login failure: WTF_CSRF_SSL_STRICT (correctly left at
+    Flask-WTF's own default True in staging/production, only relaxed in
+    DevelopmentConfig for a self-signed-cert reason unrelated to this)
+    requires a Referer header matching Host on every HTTPS POST -- but this
+    app's OWN Referrer-Policy header used to be 'no-referrer', which
+    instructs every real browser to omit the Referer even on this app's own
+    same-origin form submission. Every login attempt failed CSRF validation
+    with no way to ever succeed, on every browser, every time -- invisible
+    to the rest of this test suite because Flask's test client defaults to
+    plain http:// (WTF_CSRF_SSL_STRICT only applies "over https"), so this
+    is the one test in the suite that simulates a real HTTPS request to
+    actually exercise it. Referrer-Policy is now 'same-origin', which is
+    exactly the Referer a real browser sends here."""
+    make_staff(app, "https-referer@example.com", password="Correct-Password-1!")
+    page = client.get("/auth/login", base_url="https://owner.example.com")
+    csrf = get_csrf(page.get_data(as_text=True))
+    resp = client.post(
+        "/auth/login",
+        base_url="https://owner.example.com",
+        headers={"Referer": "https://owner.example.com/auth/login"},
+        data={"csrf_token": csrf, "email": "https-referer@example.com", "password": "Correct-Password-1!"},
+    )
+    assert resp.status_code == 302
+    assert "session_expired" not in resp.headers.get("Location", "")
+
+
 def test_other_csrf_failures_still_show_the_dead_end_page(app, client, seeded):
     """The auto-recovery above is scoped to the bare login POST only -- a
     CSRF failure on an authenticated, stateful route (any other POST) must
