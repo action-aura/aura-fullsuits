@@ -1,0 +1,34 @@
+{#
+  Aura Owner -- keyboard shortcuts cheatsheet (Dashboard Interactive Kit).
+  Included only from layout/base.html, only when `staff` is set (same
+  trust boundary as _command_palette.html). Every destination link below
+  is gated on the exact real permission its own route already enforces --
+  grepped from the real routes.py, never guessed -- reusing the same
+  has_permission() Jinja global _sidebar.html already uses, so a hotkey
+  never points somewhere this employee lacks permission to see.
+#}
+<div class="aura-shortcuts-cheatsheet" id="aura-shortcuts-cheatsheet" hidden>
+  <div class="aura-shortcuts-cheatsheet__panel" role="dialog" aria-modal="true" aria-label="{{ _('Keyboard shortcuts') }}">
+    <button type="button" class="aura-shortcuts-cheatsheet__close" data-shortcuts-action="close" aria-label="{{ _('Close') }}">&times;</button>
+    <h2>{{ _("Keyboard shortcuts") }}</h2>
+    <ul class="aura-shortcuts-cheatsheet__list">
+      <li><kbd>Ctrl</kbd> + <kbd>K</kbd> -- {{ _("Open search / command palette") }}</li>
+      <li><kbd>?</kbd> -- {{ _("Show this cheatsheet") }}</li>
+      {% if has_permission('dashboard.view_own') or true %}
+      <li data-shortcut-goto="d"><kbd>g</kbd> <kbd>d</kbd> -- <a href="{{ url_for('dashboard.index') }}">{{ _("Go to Dashboard") }}</a></li>
+      {% endif %}
+      {% if has_permission('customers.view') %}
+      <li data-shortcut-goto="c"><kbd>g</kbd> <kbd>c</kbd> -- <a href="{{ url_for('customers.list_customers') }}">{{ _("Go to Customers") }}</a></li>
+      {% endif %}
+      {% if has_any_permission('leads.view_own', 'leads.view_all') %}
+      <li data-shortcut-goto="l"><kbd>g</kbd> <kbd>l</kbd> -- <a href="{{ url_for('leads.list_leads') }}">{{ _("Go to Leads") }}</a></li>
+      {% endif %}
+      {% if has_any_permission('quotes.create', 'quotes.approve') %}
+      <li data-shortcut-goto="s"><kbd>g</kbd> <kbd>s</kbd> -- <a href="{{ url_for('commercial_sales_web.list_quotes') }}">{{ _("Go to Sales (Quotes)") }}</a></li>
+      {% endif %}
+      {% if has_any_permission('expenses.view_own', 'expenses.view_all') %}
+      <li data-shortcut-goto="e"><kbd>g</kbd> <kbd>e</kbd> -- <a href="{{ url_for('operations_ui.list_expenses') }}">{{ _("Go to Expenses") }}</a></li>
+      {% endif %}
+    </ul>
+  </div>
+</div>

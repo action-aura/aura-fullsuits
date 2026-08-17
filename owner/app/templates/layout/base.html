@@ -134,6 +134,7 @@
   </div>
   {% if staff %}
   {% include "layout/_command_palette.html" %}
+  {% include "layout/_shortcuts_cheatsheet.html" %}
   {% endif %}
   <script src="{{ url_for('static', filename='js/confirm.js') }}"></script>
   <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
@@ -144,6 +145,7 @@
   <script src="{{ url_for('static', filename='js/product-tour.js') }}"></script>
   {% if staff %}
   <script src="{{ url_for('static', filename='js/command-palette.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/shortcuts.js') }}"></script>
   {% endif %}
 </body>
 </html>
