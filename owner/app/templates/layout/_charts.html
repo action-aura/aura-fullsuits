@@ -1,0 +1,84 @@
+{#
+  Aura Owner -- Dashboard Interactive Kit chart/stat-tile primitives.
+  See docs/owner/ui-modernization/dashboard-interactive-kit-contract.md.
+
+  Hand-rolled, zero external dependency, colors exclusively via var(--aura-*)
+  tokens (tokens.css) so dark mode / RTL need no separate code path, same
+  discipline as every other component in components.css/shell.css.
+
+  Tone vocabulary matches .badge's own: default/success/warning/danger/pending
+  (see components.css's .badge.* groupings) -- callers should not invent a
+  new tone name.
+#}
+
+{% macro stat_tile(label, value, href=none, tone='default') %}
+{% if href %}
+<a class="aura-stat-tile aura-stat-tile--{{ tone }}" href="{{ href }}">
+  <span class="aura-stat-tile__value">{{ value }}</span>
+  <span class="aura-stat-tile__label">{{ label }}</span>
+</a>
+{% else %}
+<div class="aura-stat-tile aura-stat-tile--{{ tone }} aura-stat-tile--static" role="group" aria-label="{{ label }}">
+  <span class="aura-stat-tile__value">{{ value }}</span>
+  <span class="aura-stat-tile__label">{{ label }}</span>
+</div>
+{% endif %}
+{% endmacro %}
+
+{% macro bar_chart(data, links={}) %}
+<div class="aura-bar-chart">
+  {% set max_value = (data.values() | list | max) if data else 0 %}
+  {% for label, value in data.items() %}
+  {% set pct = ((value / max_value) * 100) if max_value else 0 %}
+  {% set href = links.get(label) %}
+  <div class="aura-bar-chart__row">
+    <span class="aura-bar-chart__label"><bdi dir="ltr">{{ label }}</bdi></span>
+    {% if href %}
+    <a class="aura-bar-chart__track" href="{{ href }}" aria-label="{{ label }}: {{ format_owner_number(value) }}">
+      <span class="aura-bar-chart__fill" style="inline-size: {{ pct }}%"></span>
+    </a>
+    {% else %}
+    <span class="aura-bar-chart__track" aria-label="{{ label }}: {{ format_owner_number(value) }}">
+      <span class="aura-bar-chart__fill" style="inline-size: {{ pct }}%"></span>
+    </span>
+    {% endif %}
+    <span class="aura-bar-chart__value">{{ format_owner_number(value) }}</span>
+  </div>
+  {% else %}
+  <p class="empty">{{ _("No data yet.") }}</p>
+  {% endfor %}
+</div>
+{% endmacro %}
+
+{% macro donut_chart(data, label_for=none, class_for=none, links={}) %}
+<div class="aura-donut-chart">
+  {% set total = data.values() | sum %}
+  <svg viewBox="0 0 42 42" class="aura-donut-chart__svg" aria-hidden="true" focusable="false">
+    <circle cx="21" cy="21" r="15.9155" class="aura-donut-chart__track"></circle>
+    {% set ns = namespace(offset=0) %}
+    {% for status, value in data.items() %}
+    {% set pct = ((value / total) * 100) if total else 0 %}
+    {% set tone = class_for(status) if class_for else 'default' %}
+    <circle cx="21" cy="21" r="15.9155"
+            class="aura-donut-chart__segment aura-donut-chart__segment--{{ tone }}"
+            stroke-dasharray="{{ pct }} {{ 100 - pct }}"
+            stroke-dashoffset="{{ 25 - ns.offset }}"></circle>
+    {% set ns.offset = ns.offset + pct %}
+    {% endfor %}
+  </svg>
+  <ul class="aura-donut-chart__legend">
+    {% for status, value in data.items() %}
+    {% set href = links.get(status) %}
+    {% set tone = class_for(status) if class_for else 'default' %}
+    {% set display_label = label_for(status) if label_for else status %}
+    <li class="aura-donut-chart__legend-item">
+      <span class="aura-donut-chart__swatch aura-donut-chart__swatch--{{ tone }}" aria-hidden="true"></span>
+      {% if href %}<a href="{{ href }}">{{ display_label }}</a>{% else %}<span>{{ display_label }}</span>{% endif %}
+      <span class="aura-donut-chart__legend-value">{{ format_owner_number(value) }}</span>
+    </li>
+    {% else %}
+    <li class="empty">{{ _("No data yet.") }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endmacro %}
