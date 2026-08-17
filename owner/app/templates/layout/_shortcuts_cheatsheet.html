@@ -12,7 +12,7 @@
     <button type="button" class="aura-shortcuts-cheatsheet__close" data-shortcuts-action="close" aria-label="{{ _('Close') }}">&times;</button>
     <h2>{{ _("Keyboard shortcuts") }}</h2>
     <ul class="aura-shortcuts-cheatsheet__list">
-      <li><kbd>Ctrl</kbd> + <kbd>K</kbd> -- {{ _("Open search / command palette") }}</li>
+      <li><kbd>{{ _('Ctrl') }}</kbd> + <kbd>K</kbd> -- {{ _("Open search / command palette") }}</li>
       <li><kbd>?</kbd> -- {{ _("Show this cheatsheet") }}</li>
       {% if has_permission('dashboard.view_own') or true %}
       <li data-shortcut-goto="d"><kbd>g</kbd> <kbd>d</kbd> -- <a href="{{ url_for('dashboard.index') }}">{{ _("Go to Dashboard") }}</a></li>
