@@ -439,6 +439,7 @@ const SubsystemApp = {
     this._navigate(this.currentSection);
     LogoSystem.init();
     this._startSyncHealthPoll();
+    this._startLicenseCheckInPoll();
   },
 
   exit() {
@@ -1075,6 +1076,20 @@ const SubsystemApp = {
   //     half): the original full-width top banner, unchanged.
   SYNC_POLL_MS: 30000,
   SYNC_DEGRADED_THRESHOLD: 3,
+  // AUDIT-fix 2026-08-17: GET /api/licensing/status (checked once, at boot --
+  // see init() above) only ever reads the LOCAL persisted license state --
+  // it never contacts Owner. The only route that actually does (POST /api/
+  // licensing/check-in) was previously wired to a manual "Check In" button
+  // only (licensing.js). That meant a license Owner suspends/revokes mid-
+  // session stayed persisted as ACTIVE locally -- and every mutation route's
+  // require_license_capability() check reads exactly that stale persisted
+  // state -- until the user happened to click Check In or restart the app.
+  // Data sync already re-syncs every 10s (sync_service.py) regardless of
+  // whether anything changed; licensing deserves the same "don't wait for
+  // a restart" treatment, just on a much longer interval -- this is a
+  // real network call that does crypto verification and DB writes on
+  // Owner's side too, not a cheap local read like sync's own poll.
+  LICENSE_CHECKIN_POLL_MS: 5 * 60 * 1000,
 
   _startSyncHealthPoll() {
     if (this._syncHealthTimer || this._syncPollDisabled) return;
@@ -1085,6 +1100,40 @@ const SubsystemApp = {
   _stopSyncHealthPoll() {
     if (this._syncHealthTimer) { clearInterval(this._syncHealthTimer); this._syncHealthTimer = null; }
     this._renderSyncBanner(null);
+  },
+
+  _startLicenseCheckInPoll() {
+    if (this._licenseCheckInTimer || this._licenseCheckInDisabled) return;
+    // No immediate first call here (unlike sync health) -- init() already
+    // did a fresh GET /api/licensing/status at boot; this timer is only for
+    // catching a change Owner makes WHILE the app is already running.
+    this._licenseCheckInTimer = setInterval(() => this._pollLicenseCheckIn(), this.LICENSE_CHECKIN_POLL_MS);
+  },
+
+  _stopLicenseCheckInPoll() {
+    if (this._licenseCheckInTimer) { clearInterval(this._licenseCheckInTimer); this._licenseCheckInTimer = null; }
+  },
+
+  async _pollLicenseCheckIn() {
+    let body = null;
+    try {
+      const res = await fetch('/api/licensing/check-in', { method: 'POST', credentials: 'include', cache: 'no-store' });
+      if (!res.ok) return;                          // transient (network/Owner unreachable) -- retry next tick
+      body = await res.json();
+    } catch (e) { return; }                          // never let a background poll break the app
+    if (!body || body.current_state === 'NOT_CONFIGURED') {
+      // Licensing was never turned on for this install (no OWNER_LICENSING_
+      // BASE_URL) -- this can never flip true without a restart, same
+      // reasoning _pollSyncHealth uses for sync being off. Zero cost for
+      // installs that never opted in.
+      this._licenseCheckInDisabled = true;
+      this._stopLicenseCheckInPoll();
+    }
+    // Deliberately no UI update here beyond that -- every mutation route
+    // already independently re-reads this same persisted state via
+    // require_license_capability() on its own next request; this poll's
+    // whole job is making sure that persisted state doesn't go stale for
+    // a full session, not rendering a banner itself.
   },
 
   async _pollSyncHealth() {
