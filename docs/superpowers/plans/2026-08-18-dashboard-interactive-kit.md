@@ -743,9 +743,9 @@ Expected: FAIL -- current `dashboard/index.html` has no `aura-quick-actions`/`au
 
 `backup_status_label` and `generic_audit_action_label` in the snippet above are the real, already-confirmed Jinja global names -- copied directly from the current (pre-rewrite) `owner/app/templates/dashboard/index.html` at HEAD (its backup card and audit table rows), not guessed.
 
-Step 3's donut-chart call above uses `license_status_drilldown_url`, which does not exist yet -- add it now, in the same module that already registers `license_status_label`/`license_badge_class` as Jinja globals:
+- [ ] **Step 4: Add the `license_status_drilldown_url` Jinja global**
 
-In `owner/app/i18n.py`, add:
+Step 3's donut-chart call uses `license_status_drilldown_url`, which does not exist yet. In `owner/app/i18n.py`, add:
 
 ```python
 def license_status_drilldown_url(status: str) -> str:
@@ -754,9 +754,9 @@ def license_status_drilldown_url(status: str) -> str:
     return url_for("licensing.list_licenses", status=status)
 ```
 
-And add `license_status_drilldown_url=license_status_drilldown_url,` to the existing `app.jinja_env.globals.update(...)` block (the same block already listing `license_status_label=license_status_label,` at `owner/app/i18n.py:196`).
+Add `license_status_drilldown_url=license_status_drilldown_url,` to the existing `app.jinja_env.globals.update(...)` block (the same block already listing `license_status_label=license_status_label,` at `owner/app/i18n.py:196`). This step must land before Step 5's tests run, or `test_licenses_donut_drill_down_links_use_the_real_status_filter` fails with an `UndefinedError` on any request that reaches the licenses card.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 5: Run tests to verify they pass**
 
 Run: `cd owner && python -m pytest tests/test_owner_ui_dashboard_redesign.py -v`
 Expected: PASS -- all 4 new tests.
@@ -766,7 +766,7 @@ Also run the one pre-existing test that asserts translated dashboard text (must 
 Run: `cd owner && python -m pytest tests/test_phase9_5b_r2_owner_wide_template_rendering.py -k dashboard -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add owner/app/templates/dashboard/index.html owner/app/i18n.py owner/tests/test_owner_ui_dashboard_redesign.py
