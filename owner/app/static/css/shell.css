@@ -185,10 +185,17 @@ summary:focus-visible {
   color: var(--aura-color-text-secondary);
   text-decoration: none;
   font-size: var(--aura-font-size-sm);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.3;
+  /* AUDIT-fix: several real nav labels ("Operational Management
+     Dashboard", "Operational Finance Dashboard", "Activation Reviews")
+     are wider than the 260px expanded sidebar (--aura-sidebar-expanded)
+     minus padding -- nowrap+ellipsis was silently clipping them mid-word
+     ("Operational Manage..."). Collapsed mode is unaffected: .aura-nav-
+     link__text is display:none there, so wrapping never applies to the
+     icon-only rail. */
+  white-space: normal;
 }
+.aura-nav-link__text { overflow-wrap: break-word; }
 .aura-nav-link:hover { background: var(--aura-color-surface-muted); color: var(--aura-color-text-primary); }
 .aura-nav-link.is-active {
   background: var(--aura-color-brand-primary-soft);
