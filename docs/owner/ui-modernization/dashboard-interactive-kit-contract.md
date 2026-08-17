@@ -118,3 +118,17 @@ real historical trend sparklines (would read the existing
 zero new backend code, but deferred to keep this phase's surface area
 tight per the user's own "first things first, no schema/function changes"
 instruction).
+
+## Closure
+
+Implemented via `docs/superpowers/plans/2026-08-18-dashboard-interactive-kit.md`,
+Tasks 1-5. Full Owner regression: 1,063 -> 1,082 tests, 1,080 passed, 2 failed
+-- pre-existing, unrelated to this plan (documented date-rollover timing bugs
+in `test_phase9_5d_invoices.py::test_issue_invoice_sets_default_due_date` and
+`test_phase9_5d_quotes.py::test_expire_stale_quotes_only_affects_sent_not_accepted`;
+see `docs/owner/ui-modernization/final-test-report.md`). One real regression
+introduced by this plan's own Task 4 (a hardcoded `Ctrl` string in
+`_shortcuts_cheatsheet.html`) was found by this full-suite run and fixed
+before this closure (commit `2567331`).
+Manual browser verification (Task 4 Step 8) not yet performed -- see Task 4's
+ledger note.
