@@ -223,6 +223,150 @@ const SubsystemApp = {
     return roles.includes(this.clinicRole);
   },
 
+  // ── HTML escaping ─────────────────────────────────────────────────────────
+  // _setupKeyRetry() below renders a backend-supplied `reason` string into
+  // .innerHTML, and used to do it behind a `this._esc ? this._esc(reason) :
+  // reason` guard -- except SubsystemApp never defined _esc anywhere, so the
+  // ternary was decorative: it always took the else branch and the raw string
+  // always reached the sink. The sink is real (that string is the activation
+  // `detail` the Owner licensing service returned, not a literal from this
+  // build), so the helper is real now and the guard is gone -- a guard that
+  // silently no-ops is worse than no guard, because it reads as handled.
+  _esc(s) {
+    return String(s === null || s === undefined ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  },
+
+  // ── Device-activation predicate (single source of truth) ──────────────────
+  // /api/licensing/status's NOT_CONFIGURED shape is ambiguous on its own: the
+  // backend returns it both when licensing is genuinely unconfigured for this
+  // build AND when it IS configured but this device has simply never
+  // activated (no local state record yet) -- see routes.py::_not_configured_
+  // response() vs status_presenter.py::present_status(None). Only the first
+  // case attaches a `detail` field, so the ABSENCE of `detail` is what means
+  // "configured, just not activated yet". No backend change needed.
+  //
+  // This test used to be copy-pasted in THREE places: the boot gate in
+  // init(), showSetupModal() below, and licensing.js -- and the licensing.js
+  // copy had drifted, omitting 'ACTIVATING' entirely. That divergence was a
+  // real dead end, not a cosmetic one: a device left in ACTIVATING was
+  // bounced to licensing.html by the boot gate here (which does count
+  // ACTIVATING), and licensing.js then decided no activation was needed and
+  // rendered the read-only status card instead of the key form -- no way
+  // forward from either screen. One predicate now. licensing.js is a
+  // separate script scope on a separate page and cannot import from this
+  // file, so it mirrors this exact three-way test with a comment pointing
+  // back here; keep the two in step.
+  _needsActivation(lic) {
+    if (!lic) return false;
+    return lic.current_state === 'ACTIVATION_REQUIRED'
+      || lic.current_state === 'ACTIVATING'
+      || (lic.current_state === 'NOT_CONFIGURED' && !lic.detail);
+  },
+
+  // ── "A key was already submitted, Owner hasn't ruled on it yet" marker ────
+  // POST /api/licensing/activate can answer 202 PENDING -- Owner is holding
+  // this activation for a human to approve, which is neither success nor
+  // rejection. On that path the backend deliberately persists NO local state
+  // record (commercial_runtime/licensing_contracts/activation.py), so GET
+  // /api/licensing/status keeps answering a bare NOT_CONFIGURED, which
+  // _needsActivation() above correctly reads as "still needs activating".
+  //
+  // With no client-side memory of the submission that produced an endless
+  // loop: register -> 202 PENDING -> account created -> init() -> boot gate
+  // sees NOT_CONFIGURED -> redirect to licensing.html -> key form -> user
+  // re-enters the SAME key -> 202 PENDING -> key form -> forever. This
+  // marker is the memory that lets the UI say "we already have your key,
+  // we're waiting on approval" instead of asking a second time.
+  //
+  // localStorage rather than sessionStorage on purpose: the approval is a
+  // human on Owner's side and can easily outlive this browser/pywebview
+  // window. Every access is wrapped -- localStorage throws outright (not
+  // returns null) in some restricted webview and private-browsing contexts,
+  // and a licensing nicety must never be able to break boot.
+  PENDING_ACTIVATION_KEY: 'aura.licensing.pendingActivation',
+
+  // Mirrors licensing.js's PENDING_MAX_AGE_MS -- see there for why a pending
+  // marker has to be able to age out at all. Keep the two in step.
+  PENDING_ACTIVATION_MAX_AGE_MS: 7 * 24 * 60 * 60 * 1000,
+
+  // In-document fallback for the case the comment above says is real: when
+  // Storage throws, every write here silently no-ops, and a marker written
+  // one line earlier would be unreadable by the check a few lines later. It
+  // cannot survive a navigation (nothing client-side can, once Storage is
+  // gone), but it keeps same-document decisions -- notably showSetupModal()'s
+  // "has this user already given us a key?" -- correct instead of quietly
+  // wrong. A server-side record would be the real fix and does not exist yet:
+  // activation.py records an ACTIVATION_PENDING event that no route reads back.
+  _pendingActivationMemory: null,
+
+  // The submitted key, in memory and NOWHERE else -- not localStorage, not
+  // sessionStorage, not the URL. Same rule licensing.js states at its own
+  // `pendingKey`: this is credential material, and the backend goes out of
+  // its way to stop holding it (routes.py activate() nulls it in a `finally`),
+  // so a frontend that wrote it to disk would quietly undo that.
+  //
+  // It exists because re-POSTing /api/licensing/activate is the ONLY route
+  // that can resolve a held activation -- POST /api/licensing/check-in
+  // short-circuits to a canned ACTIVATION_REQUIRED for any device with no
+  // persisted state record, and a PENDING device is exactly that. Keeping the
+  // key here is what lets _setupAwaitingApproval() below finish the job in
+  // this same document instead of bouncing the user to licensing.html, which
+  // is a separate document that cannot see this value and would therefore
+  // have to ask for the key a second time.
+  _pendingActivationKey: '',
+
+  // `at` is ISO-8601, not epoch milliseconds. This record is written here and
+  // read by a DIFFERENT document (licensing.js), and it is exactly the kind of
+  // thing someone ends up eyeballing in devtools when an install is stuck on
+  // "waiting for approval": "2026-08-18T08:14:09.784Z" says what it is and
+  // when it happened, 1755504849784 does not. Both sides parse it back with
+  // Date.parse() and treat NaN as absent, so a hand-edited or truncated value
+  // degrades to "no marker" rather than to an un-ageable one.
+  //
+  // installation_id comes off the 202 body (routes.py attaches it) so the
+  // awaiting screens can still name the installation, which GET
+  // /api/licensing/status cannot supply for a pending device --
+  // present_status(None) omits it entirely, and a pending device is always
+  // that case. Never the license key: that lives in memory only.
+  _markActivationPending(installationId) {
+    const rec = { v: 1, at: new Date().toISOString(), installation_id: installationId || null };
+    this._pendingActivationMemory = rec;
+    try { localStorage.setItem(this.PENDING_ACTIVATION_KEY, JSON.stringify(rec)); } catch (e) {}
+  },
+
+  _clearActivationPending() {
+    this._pendingActivationMemory = null;
+    this._pendingActivationKey = '';
+    try { localStorage.removeItem(this.PENDING_ACTIVATION_KEY); } catch (e) {}
+  },
+
+  _isActivationPending() {
+    // Same record shape licensing.js reads (separate document, separate
+    // script scope, nothing to import -- keep the two in step). A value that
+    // is not that shape carries no timestamp, so it could never be aged out;
+    // an un-ageable marker is exactly the stale-marker failure the timestamp
+    // exists to bound, so it is discarded rather than trusted.
+    let rec = this._pendingActivationMemory;
+    if (!rec) {
+      let raw = null;
+      try { raw = localStorage.getItem(this.PENDING_ACTIVATION_KEY); } catch (e) { return false; }
+      if (!raw) return false;
+      // JSON.parse does NOT throw on a bare '1' left by an earlier build -- it
+      // returns the number 1 -- so the shape check below, not the catch, is
+      // what rejects it.
+      try { rec = JSON.parse(raw); } catch (e) { return false; }
+      if (!rec || typeof rec !== 'object') return false;
+    }
+    const at = Date.parse(rec.at);
+    if (isNaN(at)) return false;   // no usable timestamp => cannot age out => distrust
+    return (Date.now() - at) <= this.PENDING_ACTIVATION_MAX_AGE_MS;
+  },
+
   // Light/Dark theme toggle (#15). Persists to localStorage; the pre-paint script
   // in index.html applies the saved choice on load (default: light).
   toggleTheme() {
@@ -405,19 +549,10 @@ const SubsystemApp = {
         // genuinely-unconfigured branch (routes.py::_not_configured_
         // response) -- present_status(None) never sets it, so its presence
         // is the real disambiguating signal, no backend change needed.
-        try {
-          const lic = await fetch('/api/licensing/status', { cache: 'no-store' }).then(r => r.json());
-          const needsActivation = lic.current_state === 'ACTIVATION_REQUIRED'
-            || lic.current_state === 'ACTIVATING'
-            || (lic.current_state === 'NOT_CONFIGURED' && !lic.detail);
-          if (needsActivation) {
-            location.href = '/static/licensing.html?gate=1';
-            return;
-          }
-        } catch (e) {
-          // Network hiccup: fail open, same as every other best-effort
-          // check in this init() sequence.
-        }
+        // The three-way test itself now lives in _needsActivation() -- it was
+        // copy-pasted here, in showSetupModal(), and (divergently) in
+        // licensing.js. See that method for what the divergence actually cost.
+        if (await this._enforceActivationGate()) return;
       } catch(e) {
         // Can't reach server — proceed and let individual API calls handle 401s
       }
@@ -426,6 +561,39 @@ const SubsystemApp = {
     // Single-product build: there is only ever one system, so skip the
     // multi-subsystem chooser entirely and launch straight into it.
     this.launch('retail', 'dashboard');
+  },
+
+  // ── Device-activation gate ──────────────────────────────────────────────────
+  // Returns true when the caller must stop immediately: the browser is
+  // navigating away to the licensing page.
+  //
+  // Extracted from init() so it is not init()'s alone. The gate used to live
+  // ONLY inside init(), and _reloginSubmit() re-enters through _navigate()
+  // instead of init() whenever `this.active` is already set -- so a session
+  // that reached the shell without passing the gate (the fetch below fails
+  // open on a transient error, deliberately) and then expired could be signed
+  // back into for the rest of its life without the gate ever running again.
+  // That is the mirror image of the re-ask bug this whole area is about: the
+  // key asked ZERO times rather than once.
+  async _enforceActivationGate() {
+    if (window.isDemoMode || sessionStorage.getItem('demo_mode') === 'true') return false;
+    try {
+      const lic = await fetch('/api/licensing/status', { cache: 'no-store' }).then(r => r.json());
+      if (this._needsActivation(lic)) {
+        location.href = '/static/licensing.html?gate=1';
+        return true;
+      }
+      // Reached only when the server says this device does NOT need activating,
+      // which makes any surviving marker provably spent -- the submission it
+      // stood for has been decided. Retiring it here (the same thing
+      // licensing.js's render() does on its own side) is what stops a
+      // long-dead marker from suppressing showSetupModal()'s key field later.
+      this._clearActivationPending();
+    } catch (e) {
+      // Network hiccup: fail open, same as every other best-effort check in
+      // the init() sequence this was lifted out of.
+    }
+    return false;
   },
 
   launch(systemId, sectionId) {
@@ -541,10 +709,22 @@ const SubsystemApp = {
     let needsKey = false;
     try {
       const lic = await fetch('/api/licensing/status', { cache: 'no-store' }).then(r => r.json());
-      needsKey = lic.current_state === 'ACTIVATION_REQUIRED'
-        || lic.current_state === 'ACTIVATING'
-        || (lic.current_state === 'NOT_CONFIGURED' && !lic.detail);
+      // Same shared predicate the boot gate in init() uses -- this was the
+      // second of the three copies. Asking for a key here when the gate
+      // wouldn't have asked (or vice versa) is exactly how the two screens
+      // used to disagree about whether a device still needed activating.
+      needsKey = this._needsActivation(lic);
     } catch (e) { /* fail open: no key field, same as the old pre-login gate's own fail-open */ }
+    // A key already submitted and held by Owner for approval persists NO local
+    // state record, so _needsActivation() above stays true for as long as the
+    // approval is outstanding -- and this modal would render the key field a
+    // SECOND time for a user who has already given us the key. That is the
+    // exact re-ask the pending marker exists to prevent, and here it is worse
+    // than elsewhere: the field is mandatory (see _setupSubmit's
+    // `this._setupNeedsKey && !key` guard) and this overlay has no cancel and
+    // no close, so a user with a genuinely pending key and no key to hand
+    // would be stuck against a form they cannot satisfy or leave.
+    if (needsKey && this._isActivationPending()) needsKey = false;
     this._setupNeedsKey = needsKey;
 
     const overlay = document.createElement('div');
@@ -633,7 +813,21 @@ const SubsystemApp = {
       });
       const data = await res.json();
 
-      if (!data.success) return showErr(data.error || 'Could not create account. Please try again.');
+      if (!data.success) {
+        // 409 = "An admin account already exists. Please login." This modal
+        // has no cancel, no close and no login link, so showing that error in
+        // place is a dead end the user can only escape by reloading the page
+        // by hand -- and it is reachable without anything exotic: any DB-level
+        // exception inside /api/onboarding/status hits its bare `except` and
+        // fail-safes to needs_setup:true, which sends a fully-registered user
+        // straight back here via checkAuthAndSetup(). The server is telling us
+        // exactly which screen this user actually needs; hand them to it.
+        if (res.status === 409) {
+          this._authModalOpen = false;
+          return this.showReloginModal(data.error || 'An account already exists on this installation. Please sign in.');
+        }
+        return showErr(data.error || 'Could not create account. Please try again.');
+      }
 
       // Account exists and this session is already authenticated (create-
       // admin calls create_session() itself) from this point on -- a key
@@ -652,10 +846,28 @@ const SubsystemApp = {
         } catch (e) {
           activation = { result: 'NETWORK_ERROR' };
         }
-        if (activation.result !== 'SUCCESS' && activation.result !== 'PENDING') {
-          // Account created, key rejected -- ask for a valid one in place,
-          // never re-show the registration form (the account already exists).
-          return this._setupKeyRetry(name, activation.detail || 'That license key was not accepted.');
+        if (activation.result === 'SUCCESS') {
+          // Fully activated -- retire any marker left over from an earlier
+          // PENDING submission on this device.
+          this._clearActivationPending();
+        } else if (activation.result === 'PENDING') {
+          // 202: Owner is holding this key for manual approval and persists
+          // NO local state record, so /api/licensing/status will keep
+          // answering NOT_CONFIGURED and the boot gate would keep sending the
+          // user to licensing.html. Remember the submission so nothing asks
+          // for the very same key again -- that re-ask loop was the whole bug
+          // -- and finish the wait HERE, in this document, which is the only
+          // scope that still holds the key needed to resolve it.
+          this._markActivationPending(activation.installation_id);
+          this._pendingActivationKey = key;
+          await fetch('/api/onboarding/complete', { method: 'POST', credentials: 'include' }).catch(() => {});
+          return this._setupAwaitingApproval(name, activation.installation_id);
+        } else {
+          // Account created, key not activated -- ask for a valid one in
+          // place, never re-show the registration form (the account already
+          // exists). _activationFailureMessage() is what keeps this honest:
+          // a thrown fetch or a 503 is NOT a verdict on the key.
+          return this._setupKeyRetry(name, this._activationFailureMessage(activation));
         }
       }
 
@@ -692,6 +904,214 @@ const SubsystemApp = {
     }
   },
 
+  // ── Activation failure copy ───────────────────────────────────────────────
+  // "That license key was not accepted." used to be said for EVERY non-success
+  // outcome, including `{ result: 'NETWORK_ERROR' }` -- the object the catch
+  // block above fabricates when fetch itself threw and the request never
+  // completed. So a customer with a perfectly good key, registering while the
+  // local backend was still binding its port (or after a laptop sleep, or
+  // through an antivirus that blocked the loopback call), was told their key
+  // was bad and sent hunting for another one, inside an overlay with no back
+  // and no cancel. A key is only "not accepted" when Owner actually said so.
+  ACTIVATION_TRANSIENT_REASONS: {
+    NETWORK_UNAVAILABLE: 1,
+    REQUEST_TIMED_OUT: 1,
+    TLS_VERIFICATION_FAILED: 1,
+    SERVICE_TEMPORARILY_UNAVAILABLE: 1,
+    SIGNING_KEY_UNAVAILABLE: 1,
+    RATE_LIMITED: 1,
+    MALFORMED_RESPONSE: 1,
+    DEVICE_KEY_UNAVAILABLE: 1,
+  },
+
+  // Second bucket, same principle one step further along: these are produced
+  // entirely on THIS device, after Owner already answered SUCCESS -- our own
+  // verify_assertion() refusing the signed licence Owner sent. Mirrors
+  // LOCAL_VERIFICATION_REASON_CODES in licensing.js (separate document,
+  // separate script scope, nothing to import -- keep the two in step).
+  //
+  // The transport gives the frontend no other way to tell them from an Owner
+  // verdict: routes.py::activate() flattens every ActivationFailed into the
+  // same 400 {reason_code, detail}. Real, already-seen case: Owner rotates
+  // its signing key while this install still ships a stale trust_anchor.json
+  // (a condition this project has hit on the live droplet) -> Owner APPROVES,
+  // the installation goes ACTIVE and burns a paid device slot, and this
+  // device answers UNKNOWN_SIGNING_KEY. Without this bucket that reached the
+  // `a.detail` fallback below and told the customer their key was rejected,
+  // in Owner's raw internal wording ("Assertion signed by an untrusted
+  // key: ..."), with a fresh key the only offered escape.
+  ACTIVATION_LOCAL_VERIFICATION_REASONS: {
+    UNSIGNED_RESPONSE_REJECTED: 1,
+    UNKNOWN_SIGNING_KEY: 1,
+    ASSERTION_VERIFICATION_FAILED: 1,
+    ASSERTION_EXPIRED: 1,
+    ASSERTION_NOT_YET_VALID: 1,
+    ASSERTION_PRODUCT_MISMATCH: 1,
+    ASSERTION_PLATFORM_MISMATCH: 1,
+    ASSERTION_INSTALLATION_MISMATCH: 1,
+    ASSERTION_DEVICE_MISMATCH: 1,
+    ASSERTION_FORBIDDEN_FIELD: 1,
+    CLOCK_ROLLBACK_SUSPECTED: 1,
+    LOCAL_STATE_CORRUPT: 1,
+  },
+
+  _activationFailureMessage(activation) {
+    const a = activation || {};
+    if (a.result === 'NETWORK_ERROR') {
+      return 'Could not reach the licensing service, so this key has not been checked yet. '
+        + 'Your account is saved — check the connection and try again.';
+    }
+    if (this.ACTIVATION_TRANSIENT_REASONS[a.reason_code]) {
+      return 'The licensing service is temporarily unavailable, so this key has not been '
+        + 'checked yet. Your account is saved — please try again shortly.';
+    }
+    // Deliberately ahead of the `a.detail` fallback, and deliberately says
+    // nothing about the key: Owner said yes, so a new key cannot help and
+    // asking for one is actively harmful advice. The clock is called out
+    // because ASSERTION_EXPIRED / ASSERTION_NOT_YET_VALID /
+    // CLOCK_ROLLBACK_SUSPECTED are the only members of this set the customer
+    // can resolve without support.
+    if (this.ACTIVATION_LOCAL_VERIFICATION_REASONS[a.reason_code]) {
+      return 'Action Aura approved this activation, but this computer could not verify the signed '
+        + 'licence it received, so it has not been applied yet. Your license key is not the problem — '
+        + 'do not replace it. Check that this computer’s date and time are correct; if they are, contact support.';
+    }
+    // A real verdict from Owner. `detail` is Owner-supplied text; every caller
+    // renders it through _esc().
+    return a.detail || 'That license key was not accepted.';
+  },
+
+  // ── Awaiting-approval screen (registration flow) ──────────────────────────
+  // Owner answered 202 PENDING: the key is good enough to be queued for a
+  // human to approve, and holding it is neither success nor rejection.
+  //
+  // This screen lives HERE, in the registration document, rather than letting
+  // init()'s boot gate bounce the user to licensing.html, because this scope
+  // is the only one that still holds the key -- and the key is the only thing
+  // that can resolve a held activation. POST /api/licensing/check-in cannot:
+  // it short-circuits to a canned ACTIVATION_REQUIRED for any device with no
+  // persisted state record (routes.py), and a PENDING device is exactly that,
+  // because activation.py raises ActivationPending before state_repository.
+  // save() is ever reached. Only re-POSTing /api/licensing/activate resolves
+  // it. Bouncing to licensing.html would drop the key on the floor and that
+  // page would have to ask for it a second time -- the very loop being fixed.
+  _setupApprovalTimer: null,
+  _setupApprovalName: '',
+
+  _setupAwaitingApproval(name, installationId) {
+    const overlay = document.getElementById('aura-relogin-modal');
+    if (!overlay) return;
+    // Remembered for the rejection path below, which falls back to
+    // _setupKeyRetry() and needs the same name that screen was built with.
+    this._setupApprovalName = name || '';
+    overlay.querySelector('.auth-card').innerHTML = `
+      <div class="auth-head">
+        <div class="auth-icon">${AuraIcons.render('key-round', 32)}</div>
+        <h2 class="auth-title">${t('Waiting for approval')}</h2>
+        <p class="auth-sub">${t('Your account is ready and your license key was received. Action Aura needs to approve this activation before the app opens — you do not need to enter the key again.')}</p>
+      </div>
+      <p id="su-await-status" class="auth-foot">${t('Checking automatically every 30 seconds…')}</p>
+      ${installationId ? `<p class="auth-foot">${t('Installation')}: ${this._esc(installationId)}</p>` : ''}
+      <div id="su-await-error" class="auth-error"></div>
+      <button id="su-await-btn" class="auth-submit" onclick="SubsystemApp._pollSetupApproval(true)">${t('Check now')}</button>`;
+    // One timer only. Cleared by _stopSetupApprovalPoll() on every exit path,
+    // so a re-entry (Check now -> resolved -> another screen) can never leave
+    // an orphan interval hammering /activate in the background.
+    this._stopSetupApprovalPoll();
+    this._setupApprovalTimer = setInterval(() => this._pollSetupApproval(false), 30000);
+  },
+
+  _stopSetupApprovalPoll() {
+    if (this._setupApprovalTimer) {
+      clearInterval(this._setupApprovalTimer);
+      this._setupApprovalTimer = null;
+    }
+  },
+
+  async _pollSetupApproval(fromButton) {
+    const key = this._pendingActivationKey;
+    if (!key) {
+      // Should be unreachable -- _setupAwaitingApproval is only ever reached
+      // one line after the key is stored. If it happens anyway, the one
+      // unacceptable outcome is carrying on claiming to check with nothing to
+      // check with, so hand over to the licensing page's own honest screen.
+      this._stopSetupApprovalPoll();
+      location.href = '/static/licensing.html?gate=1';
+      return;
+    }
+    const statusEl = document.getElementById('su-await-status');
+    const errEl    = document.getElementById('su-await-error');
+    const showErr  = (msg) => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } };
+
+    let data = null;
+    try {
+      const res = await fetch('/api/licensing/activate', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ license_key: key }),
+      });
+      data = await res.json();
+      data._status = res.status;
+    } catch (e) {
+      // Automatic ticks stay silent about transient failures: a network blip
+      // every 30s must not paint this screen red, because nothing is wrong
+      // with the pending activation itself.
+      if (fromButton) showErr('Could not reach the licensing service. Will keep trying.');
+      return;
+    }
+    if (errEl) errEl.style.display = 'none';
+
+    if (data.result === 'PENDING') {
+      if (statusEl) {
+        statusEl.textContent = t('Still waiting for approval. Last checked at ')
+          + new Date().toLocaleTimeString() + '.';
+      }
+      return;
+    }
+
+    if (data.result === 'SUCCESS') {
+      this._stopSetupApprovalPoll();
+      this._clearActivationPending();
+      document.getElementById('aura-relogin-modal')?.remove();
+      this._authModalOpen = false;
+      await SubsystemApp.init();
+      return;
+    }
+
+    if (this.ACTIVATION_TRANSIENT_REASONS[data.reason_code]) {
+      if (fromButton) showErr(this._activationFailureMessage(data));
+      return;
+    }
+
+    // NOT a verdict: Owner answered SUCCESS and this device failed to verify
+    // that answer (see ACTIVATION_LOCAL_VERIFICATION_REASONS). The held
+    // activation really is resolved -- APPROVED -- on Owner's side, so the one
+    // thing that must not happen is what the rejection branch below does:
+    // wiping the pending marker and dropping the customer onto a "enter a
+    // valid license key" screen for a key Owner has already accepted. Stay
+    // put, keep the marker and the key, keep the timer running -- unlike a
+    // rejection this self-heals with no user action at all once the trust
+    // anchor or the clock is fixed, and the next tick is what notices. Shown
+    // on every tick, not just `fromButton`: it needs someone to act, and
+    // saying nothing would leave the screen promising a wait that is over.
+    if (this.ACTIVATION_LOCAL_VERIFICATION_REASONS[data.reason_code]) {
+      showErr(this._activationFailureMessage(data));
+      return;
+    }
+
+    // A verdict: Owner reviewed the held activation and declined it. Surfacing
+    // a rejection at all is the point -- without this the screen would sit on
+    // "waiting for approval" forever for an approval that is never coming.
+    // The marker goes with it, or the next screen would still believe a live
+    // submission exists. Also genuinely reachable for a REJECTION only as of
+    // owner activation.py's DEACTIVATED/REPLACED guard -- before that, Owner
+    // re-activated the installation its own staff had just rejected, so this
+    // 30s poll would have flipped the screen to "approved" instead.
+    this._stopSetupApprovalPoll();
+    this._clearActivationPending();
+    this._setupKeyRetry(this._setupApprovalName, this._activationFailureMessage(data));
+  },
+
   // The account from _setupSubmit() above is already created and this
   // session is already authenticated -- this is key-entry only, reusing
   // the same overlay/.auth-card in place (same pattern as _showForgotPasswordScreen).
@@ -709,7 +1129,7 @@ const SubsystemApp = {
         <input id="su-key-2" type="text" placeholder="AURA-RETAIL-XXXX-YYYY-ZZZZ" autocomplete="off"
           style="text-transform:uppercase" onkeydown="if(event.key==='Enter')SubsystemApp._setupKeyRetrySubmit()" />
       </div>
-      <div id="su-key-2-error" class="auth-error" style="display:block">${this._esc ? this._esc(reason) : reason}</div>
+      <div id="su-key-2-error" class="auth-error" style="display:block">${this._esc(reason)}</div>
       <button id="su-key-2-btn" class="auth-submit" onclick="SubsystemApp._setupKeyRetrySubmit()">${t('Activate')}</button>`;
     setTimeout(() => document.getElementById('su-key-2')?.focus(), 100);
   },
@@ -728,8 +1148,19 @@ const SubsystemApp = {
         body: JSON.stringify({ license_key: key }),
       });
       const data = await res.json();
-      if (data.result !== 'SUCCESS' && data.result !== 'PENDING') {
-        return showErr(data.detail || 'That license key was not accepted.');
+      // Same 202-PENDING contract as _setupSubmit() above: PENDING is neither
+      // success nor rejection, and it leaves no local state record behind, so
+      // the marker is the only thing that stops anything else asking for this
+      // exact key a second time. SUCCESS retires it.
+      if (data.result === 'SUCCESS') {
+        this._clearActivationPending();
+      } else if (data.result === 'PENDING') {
+        this._markActivationPending(data.installation_id);
+        this._pendingActivationKey = key;
+        await fetch('/api/onboarding/complete', { method: 'POST', credentials: 'include' }).catch(() => {});
+        return this._setupAwaitingApproval('', data.installation_id);
+      } else {
+        return showErr(this._activationFailureMessage(data));
       }
       await fetch('/api/onboarding/complete', { method: 'POST', credentials: 'include' }).catch(() => {});
       document.getElementById('aura-relogin-modal')?.remove();
@@ -801,7 +1232,15 @@ const SubsystemApp = {
         this._authModalOpen = false;
         this._authPrompted = false;   // re-arm the 401 guard for future expiries
         if (this.active) {
-          // Already inside a subsystem — reload current section
+          // Already inside a subsystem — reload current section. The gate has
+          // to be re-run explicitly first: this branch deliberately skips
+          // init(), which is where the gate used to live and ONLY live, so a
+          // session that reached the shell without ever passing it (the gate
+          // fails open on a transient error, by design) could be signed back
+          // into for the rest of its life without ever being asked for a key.
+          // That is the same bug from the opposite side -- asked zero times
+          // rather than once.
+          if (await this._enforceActivationGate()) return;
           this._navigate(this.currentSection || 'dashboard');
         } else {
           // At the menu level — re-init the full platform
