@@ -34,6 +34,12 @@ node_modules/
 # Windows PyInstaller build outputs (never commit built exes -- see docs/release/wave1b)
 products/*/packaging/dist/
 presentation_package/
+# Same shape as presentation_package/ -- a built demo bundle whose
+# owner_config.txt holds LIVE Meta WhatsApp + AI bearer credentials in
+# plaintext. It was untracked but NOT ignored, so a `git add -A` would have
+# staged real secrets. Ignored explicitly rather than relying on it staying
+# unstaged by luck.
+presentation_package_fresh/
 build_pyinstaller/
 build_launcher/
 dist2/
