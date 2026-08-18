@@ -24,6 +24,56 @@
 {% set can_view_device_slots = has_permission('device_slot_exceptions.view') %}
 {% set can_view_commercial_ops = can_view_notifications or can_view_pilots or can_view_activations or can_view_emergency_ext or can_view_device_slots %}
 
+{# ---------- Derived KPI values (stage 2) ----------
+   Every number below is arithmetic over values get_dashboard_summary()
+   ALREADY returns. dashboard/services.py and dashboard/routes.py are
+   untouched by this pass: no new query, no new context key, no new
+   permission code. A KPI that would have needed its own query was dropped
+   rather than invented (dashboard-interactive-kit-contract.md's own "drop
+   rather than invent" rule) -- that is why, for example, there is no
+   "customers added this month" tile and no total-count tile for recent
+   staff actions (summary.recent_staff_actions is a LIMIT 10 slice, not a
+   total; showing "10" as a KPI would be a number that means nothing).
+
+   Sums are exact, not approximations:
+   - subs_by_product counts every Subscription through a NOT NULL
+     product_id FK, so its sum is the real total subscription count;
+   - active_installations_by_product is already filtered to
+     Installation.status == 'ACTIVE', so its sum is the real active total;
+   - licenses_by_status groups every License row, so its sum is the real
+     total license count.
+#}
+{% set total_subscriptions = summary.subs_by_product.values() | sum %}
+{% set total_licenses = summary.licenses_by_status.values() | sum %}
+{% set active_licenses = summary.licenses_by_status.get('ACTIVE', 0) %}
+{% set active_installations = summary.active_installations_by_product.values() | sum %}
+{% set active_subscription_share = ((summary.active_subscriptions / total_subscriptions) * 100) if total_subscriptions else none %}
+
+{# ---------- Drill-down honesty gate ----------
+   A tile only becomes a link when the target list, FOR THIS EMPLOYEE,
+   shows exactly the records the tile counted.
+   /customers?status=X filters on the same Customer.lifecycle_status the
+   dashboard counted (archive_customer() sets lifecycle_status='ARCHIVED'
+   alongside archived_at, so an archived customer is never counted as
+   PILOT/ACTIVE on either side) -- but customers.list_customers additionally
+   applies record-ownership scoping for a customers.view_own-only role,
+   while the dashboard count is company-wide. So the status drill-downs are
+   offered only to a customers.view_all holder; every other role sees the
+   same tile unlinked rather than a link to a shorter list than the number
+   promised. #}
+{% set customer_status_drilldown = has_permission('customers.view_all') %}
+
+{# ---------- Commercial-operations workload roll-up ----------
+   Summed per-permission, never as one company-wide figure: a role holding
+   only pilots.view must not learn the open-notification count through an
+   aggregate. Deliberately excludes emergency extensions and device-slot
+   exceptions -- those are ACTIVE exceptional overrides being tracked, not
+   items sitting in a queue waiting for someone to decide something. #}
+{% set ops_queue = namespace(total=0) %}
+{% if can_view_notifications %}{% set ops_queue.total = ops_queue.total + summary.open_notifications + summary.renewals_awaiting_approval %}{% endif %}
+{% if can_view_pilots %}{% set ops_queue.total = ops_queue.total + summary.pilots_needing_action %}{% endif %}
+{% if can_view_activations %}{% set ops_queue.total = ops_queue.total + summary.pending_activations %}{% endif %}
+
 {# ---------- Quick actions (Overview) ----------
    Reuses command_palette_data.create (app/command_palette/service.py::
    get_static_commands(), already computed once per request by
@@ -57,12 +107,23 @@
   <h2>{{ _("Overview") }}</h2>
   <div class="aura-stat-tile-row">
     {% if can_view_customers %}
+    {# "Total customers" counts non-archived customers and /customers has no
+       archived filter, so it stays a plain "browse all customers" entry
+       point rather than claiming an exact-match drill-down. #}
     {{ charts.stat_tile(_("Total customers"), format_owner_number(summary.total_customers), href=url_for('customers.list_customers')) }}
-    {{ charts.stat_tile(_("Pilot customers"), format_owner_number(summary.pilot_customers)) }}
-    {{ charts.stat_tile(_("Active customers"), format_owner_number(summary.active_customers)) }}
+    {{ charts.stat_tile(_("Pilot customers"), format_owner_number(summary.pilot_customers), href=url_for('customers.list_customers', status='PILOT') if customer_status_drilldown else none) }}
+    {{ charts.stat_tile(_("Active customers"), format_owner_number(summary.active_customers), href=url_for('customers.list_customers', status='ACTIVE') if customer_status_drilldown else none) }}
     {% endif %}
     {% if can_view_subscriptions %}
-    {{ charts.stat_tile(_("Active subscriptions"), format_owner_number(summary.active_subscriptions), href=url_for('subscriptions.list_subscriptions')) }}
+    {{ charts.stat_tile(_("Total subscriptions"), format_owner_number(total_subscriptions), href=url_for('subscriptions.list_subscriptions')) }}
+    {# The ACTIVE-only count now links to the ACTIVE-filtered list. It used
+       to link to the unfiltered list, which showed a different (larger) set
+       than the number on the tile -- exactly what the "drill-down must
+       match" rule exists to prevent, and newly visible now that the
+       unfiltered list is what "Total subscriptions" above links to. #}
+    {{ charts.stat_tile(_("Active subscriptions"), format_owner_number(summary.active_subscriptions), href=url_for('subscriptions.list_subscriptions', status='ACTIVE'), hint=_("%(share)s%% of all subscriptions", share=format_owner_number(active_subscription_share | round(1))) if active_subscription_share is not none else none) }}
+    {# No end-date filter exists on the subscriptions list, so the two
+       expiry tiles stay unlinked (drop rather than invent). #}
     {{ charts.stat_tile(_("Expiring in 7 days"), format_owner_number(summary.expiring_7), tone='warning' if summary.expiring_7 else 'default') }}
     {{ charts.stat_tile(_("Expiring in 30 days"), format_owner_number(summary.expiring_30)) }}
     {% endif %}
@@ -74,6 +135,11 @@
 <div class="card">
   <h3>{{ _("Commercial operations") }}</h3>
   <div class="aura-stat-tile-row">
+    {# Roll-up first: it is the "how much is waiting on us" number. Unlinked
+       on purpose -- no single list shows this mixed set of notifications,
+       renewals, pilots and activations, and linking it to any one of them
+       would show a different number than the tile claims. #}
+    {{ charts.stat_tile(_("Open items awaiting action"), format_owner_number(ops_queue.total), tone='warning' if ops_queue.total else 'default') }}
     {% if can_view_notifications %}
     {{ charts.stat_tile(_("Open notifications"), format_owner_number(summary.open_notifications), href=url_for('commercial_ops_ui.list_notifications'), tone='warning' if summary.open_notifications else 'default') }}
     {{ charts.stat_tile(_("Renewals awaiting finance approval"), format_owner_number(summary.renewals_awaiting_approval), href=url_for('commercial_ops_ui.list_renewals', status='PAYMENT_RECORDED')) }}
@@ -97,25 +163,82 @@
 {% if can_view_subscriptions %}
 <div class="card">
   <h3>{{ _("Subscriptions by product") }}</h3>
-  {{ charts.bar_chart(summary.subs_by_product) }}
+  {# Product-named labels keep the default label_dir='ltr'. No product
+     filter exists on the subscriptions list, so no per-bar drill-down is
+     wired (dashboard-interactive-kit-contract.md, point (b)). #}
+  {{ charts.bar_chart(summary.subs_by_product,
+       empty_hint=_("Subscriptions appear here grouped by product as soon as the first one is created."),
+       empty_action_href=url_for('subscriptions.new_form') if has_permission('subscriptions.create') else none,
+       empty_action_label=_("New subscription")) }}
+</div>
+
+<div class="card">
+  <h3>{{ _("Renewal pipeline") }}</h3>
+  {#
+    Derived entirely from three numbers already in context, and the three
+    buckets are provably disjoint and non-negative: expiring_7 and
+    expiring_30 both count ACTIVE subscriptions with a real end_date inside
+    their window measured from the same `today`, so the 7-day window is a
+    strict subset of the 30-day window (expiring_30 - expiring_7 >= 0), and
+    both are subsets of active_subscriptions (active_subscriptions -
+    expiring_30 >= 0). The last bucket therefore also absorbs open-ended
+    ACTIVE subscriptions (end_date IS NULL), which is why it is named for
+    what it is rather than "expiring later".
+
+    Labels here are translated prose, not identifiers, so label_dir='auto'
+    -- forcing dir="ltr" would mis-order them in Arabic.
+  #}
+  {% set renewal_pipeline = {} %}
+  {% if summary.active_subscriptions %}
+  {% set _unused = renewal_pipeline.update({
+       _("Expiring in 7 days"): summary.expiring_7,
+       _("Expiring in 8-30 days"): summary.expiring_30 - summary.expiring_7,
+       _("Not expiring within 30 days"): summary.active_subscriptions - summary.expiring_30,
+     }) %}
+  {% endif %}
+  {{ charts.bar_chart(renewal_pipeline, label_dir='auto',
+       empty_hint=_("Active subscriptions appear here grouped by how close they are to renewal."),
+       empty_action_href=url_for('subscriptions.new_form') if has_permission('subscriptions.create') else none,
+       empty_action_label=_("New subscription")) }}
 </div>
 {% endif %}
 
 {% if can_view_licenses %}
 <div class="card">
   <h3>{{ _("Licenses by status") }}</h3>
+  <div class="aura-stat-tile-row">
+    {# /licenses unfiltered lists every license row, which is exactly what
+       the sum of licenses_by_status counts; ?status=ACTIVE lists exactly
+       the ACTIVE bucket. Both drill-downs are exact. #}
+    {{ charts.stat_tile(_("Total licenses"), format_owner_number(total_licenses), href=url_for('licensing.list_licenses')) }}
+    {{ charts.stat_tile(_("Active licenses"), format_owner_number(active_licenses), href=url_for('licensing.list_licenses', status='ACTIVE'), tone='success' if active_licenses else 'default') }}
+  </div>
   {% set licenses_status_links = {} %}
   {% for status in summary.licenses_by_status.keys() %}
     {% set _unused = licenses_status_links.update({status: license_status_drilldown_url(status)}) %}
   {% endfor %}
-  {{ charts.donut_chart(summary.licenses_by_status, label_for=license_status_label, class_for=license_badge_class, links=licenses_status_links) }}
+  {{ charts.donut_chart(summary.licenses_by_status, label_for=license_status_label, class_for=license_badge_class, links=licenses_status_links,
+       empty_hint=_("Licenses appear here grouped by status as soon as the first one is created."),
+       empty_action_href=url_for('licensing.new_form') if has_permission('licenses.create') else none,
+       empty_action_label=_("New license")) }}
 </div>
 {% endif %}
 
 {% if can_view_installations %}
 <div class="card">
   <h3>{{ _("Active installations by product") }}</h3>
-  {{ charts.bar_chart(summary.active_installations_by_product) }}
+  <div class="aura-stat-tile-row">
+    {# active_installations_by_product is already ACTIVE-only, so its sum
+       matches /installations?status=ACTIVE exactly. #}
+    {{ charts.stat_tile(_("Active installations"), format_owner_number(active_installations), href=url_for('installations.list_installations', status='ACTIVE')) }}
+    {# Distinct-product count: no list route filters "products that have at
+       least one active installation", so this one stays unlinked. #}
+    {{ charts.stat_tile(_("Products with active installations"), format_owner_number(summary.active_installations_by_product | length)) }}
+  </div>
+  {{ charts.bar_chart(summary.active_installations_by_product,
+       empty_hint=_("Active installations appear here grouped by product once devices start activating."),
+       empty_action_href=url_for('installations.new_form') if has_permission('installations.register') else none,
+       empty_action_label=_("Register installation")) }}
 </div>
 {% endif %}
 

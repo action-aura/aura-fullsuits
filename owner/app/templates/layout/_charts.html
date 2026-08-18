@@ -9,50 +9,140 @@
   Tone vocabulary matches .badge's own: default/success/warning/danger/pending
   (see components.css's .badge.* groupings) -- callers should not invent a
   new tone name.
+
+  -- Interactivity pass (Dashboard Interactive Kit, stage 2) --------------
+  Hover/focus highlighting, cross-highlighting between a donut segment and
+  its legend row, and the per-datapoint value readout below are implemented
+  in CSS ONLY (charts.css). No JS file is involved, on purpose: every effect
+  here is a pure projection of DOM state (:hover / :focus-within / :has()),
+  so there is nothing for a script to own, nothing to re-bind after a
+  re-render, and nothing that breaks when JS is unavailable. The markup
+  below only has to supply the two things CSS cannot derive on its own:
+
+    1. a real focus target for every data point (a drill-down <a> where one
+       genuinely exists, otherwise a tabindex="0" element) -- without it the
+       readout could only ever appear on mouse hover, and the keyboard
+       parity bar this branch's a11y stage set would not be met; and
+    2. a stable `data-slice` index shared by a donut segment and its legend
+       row, which is what lets a CSS :has() rule light up the one from the
+       other (see charts.css's "cross-highlight" block for the documented
+       8-slice ceiling that costs -- CSS has no loops, so each pairing is a
+       hand-written rule).
+
+  The readout element itself is aria-hidden: its text is character-for-
+  character the same string already exposed as the focus target's
+  accessible name (aria-label), so exposing both would make a screen reader
+  announce the same sentence twice on a single focus move. Sighted
+  hover/focus gets the visual bubble; assistive tech gets the accessible
+  name. One source string (`readout`), two presentations.
 #}
 
-{% macro stat_tile(label, value, href=none, tone='default') %}
+{% macro chart_empty_state(hint=none, action_href=none, action_label=none) %}
+{#
+  Real empty state, not a bare italic line. current-ui-audit.md's top
+  finding was that a zero-data chart told the employee nothing about what
+  the chart is FOR or how to make it non-empty. `hint` says what would
+  appear here; `action_href`/`action_label` are only ever passed by a
+  caller that has ALREADY checked the create-permission for that record
+  type -- this macro never decides who may create anything.
+
+  "No data yet." stays as the leading sentence: it is the string the kit
+  already shipped (and the string existing tests assert), so the hint is
+  strictly additive rather than a silent copy change.
+#}
+<div class="aura-chart-empty">
+  <p class="empty aura-chart-empty__message">{{ _("No data yet.") }}{% if hint %} <span class="aura-chart-empty__hint">{{ hint }}</span>{% endif %}</p>
+  {% if action_href and action_label %}
+  <a class="aura-chart-empty__action" href="{{ action_href }}">{{ action_label }}</a>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% macro stat_tile(label, value, href=none, tone='default', hint=none) %}
+{#
+  `hint` is an optional second line carrying a derived qualifier ("34% of
+  all subscriptions"). It must be derivable from numbers the caller ALREADY
+  has -- this kit never triggers a second lookup to fill a tile.
+#}
 {% if href %}
 <a class="aura-stat-tile aura-stat-tile--{{ tone }}" href="{{ href }}">
   <span class="aura-stat-tile__value">{{ value }}</span>
   <span class="aura-stat-tile__label">{{ label }}</span>
+  {% if hint %}<span class="aura-stat-tile__hint">{{ hint }}</span>{% endif %}
 </a>
 {% else %}
 <div class="aura-stat-tile aura-stat-tile--{{ tone }} aura-stat-tile--static" role="group" aria-label="{{ label }}">
   <span class="aura-stat-tile__value">{{ value }}</span>
   <span class="aura-stat-tile__label">{{ label }}</span>
+  {% if hint %}<span class="aura-stat-tile__hint">{{ hint }}</span>{% endif %}
 </div>
 {% endif %}
 {% endmacro %}
 
-{% macro bar_chart(data, links={}) %}
+{% macro bar_chart(data, links={}, label_dir='ltr', empty_hint=none, empty_action_href=none, empty_action_label=none) %}
+{#
+  `label_dir` defaults to 'ltr' because this macro's original callers pass
+  real product names (Latin identifiers that must not be re-ordered inside
+  an RTL paragraph -- the same <bdi dir="ltr"> discipline every identifier
+  in this app already gets). A caller whose labels are TRANSLATED prose
+  must pass label_dir='auto' instead, or Arabic labels would be force-
+  rendered LTR.
+#}
+{% if not data %}
+{{ chart_empty_state(empty_hint, empty_action_href, empty_action_label) }}
+{% else %}
+{% set max_value = data.values() | list | max %}
+{% set chart_total = data.values() | sum %}
 <div class="aura-bar-chart">
-  {% set max_value = (data.values() | list | max) if data else 0 %}
   {% for label, value in data.items() %}
+  {# Bar LENGTH stays relative to the largest bar (that is what makes the
+     chart readable at a glance); the readout's PERCENTAGE is share-of-
+     total, which is the number an employee actually reasons about. Two
+     different ratios, deliberately, never conflated into one. #}
   {% set pct = ((value / max_value) * 100) if max_value else 0 %}
+  {% set share = ((value / chart_total) * 100) if chart_total else 0 %}
+  {% set readout = _("%(label)s: %(value)s (%(share)s%% of total)", label=label, value=format_owner_number(value), share=format_owner_number(share | round(1))) %}
   {% set href = links.get(label) %}
   <div class="aura-bar-chart__row">
-    <span class="aura-bar-chart__label"><bdi dir="ltr">{{ label }}</bdi></span>
+    <span class="aura-bar-chart__label"><bdi dir="{{ label_dir }}">{{ label }}</bdi></span>
     {% if href %}
-    <a class="aura-bar-chart__track" href="{{ href }}" aria-label="{{ label }}: {{ format_owner_number(value) }}">
+    <a class="aura-bar-chart__track" href="{{ href }}" aria-label="{{ readout }}">
       <span class="aura-bar-chart__fill" style="inline-size: {{ pct }}%"></span>
     </a>
     {% else %}
-    <span class="aura-bar-chart__track" aria-label="{{ label }}: {{ format_owner_number(value) }}">
+    {# No drill-down exists for this label, but the data point must still be
+       reachable by keyboard or the readout would be mouse-only. role="img"
+       gives the (otherwise nameless) graphic a real accessible name --
+       aria-label on a bare <span> with no role is ignored by AT, which is
+       exactly what the pre-interactivity version of this macro did. #}
+    <span class="aura-bar-chart__track" role="img" tabindex="0" aria-label="{{ readout }}">
       <span class="aura-bar-chart__fill" style="inline-size: {{ pct }}%"></span>
     </span>
     {% endif %}
     <span class="aura-bar-chart__value">{{ format_owner_number(value) }}</span>
+    <span class="aura-bar-chart__readout" aria-hidden="true">{{ readout }}</span>
   </div>
-  {% else %}
-  <p class="empty">{{ _("No data yet.") }}</p>
   {% endfor %}
 </div>
+{% endif %}
 {% endmacro %}
 
-{% macro donut_chart(data, label_for=none, class_for=none, links={}) %}
+{% macro donut_chart(data, label_for=none, class_for=none, links={}, empty_hint=none, empty_action_href=none, empty_action_label=none) %}
+{#
+  The SVG stays aria-hidden="true", with the real text, values and links
+  living in a plain <ul> legend. That is a deliberate, documented decision
+  (dashboard-interactive-kit-contract.md, "Explicitly out of scope",
+  point (a)): screen-reader announcement of individual SVG elements varies
+  by browser/AT pair, a semantic list does not. The interactivity added
+  here does NOT move the accessible name back into the SVG -- the segments
+  gain a `data-slice` hook and nothing else, and every focusable element is
+  still in the legend.
+#}
+{% if not data %}
+{{ chart_empty_state(empty_hint, empty_action_href, empty_action_label) }}
+{% else %}
+{% set total = data.values() | sum %}
 <div class="aura-donut-chart">
-  {% set total = data.values() | sum %}
   <svg viewBox="0 0 42 42" class="aura-donut-chart__svg" aria-hidden="true" focusable="false">
     <circle cx="21" cy="21" r="15.9155" class="aura-donut-chart__track"></circle>
     {% set ns = namespace(offset=0) %}
@@ -61,6 +151,7 @@
     {% set tone = class_for(status) if class_for else 'default' %}
     <circle cx="21" cy="21" r="15.9155"
             class="aura-donut-chart__segment aura-donut-chart__segment--{{ tone }}"
+            data-slice="{{ loop.index }}"
             stroke-dasharray="{{ pct }} {{ 100 - pct }}"
             stroke-dashoffset="{{ 25 - ns.offset }}"></circle>
     {% set ns.offset = ns.offset + pct %}
@@ -71,14 +162,24 @@
     {% set href = links.get(status) %}
     {% set tone = class_for(status) if class_for else 'default' %}
     {% set display_label = label_for(status) if label_for else status %}
-    <li class="aura-donut-chart__legend-item">
+    {% set pct = ((value / total) * 100) if total else 0 %}
+    {% set readout = _("%(label)s: %(value)s (%(share)s%% of total)", label=display_label, value=format_owner_number(value), share=format_owner_number(pct | round(1))) %}
+    <li class="aura-donut-chart__legend-item" data-slice="{{ loop.index }}">
       <span class="aura-donut-chart__swatch aura-donut-chart__swatch--{{ tone }}" aria-hidden="true"></span>
-      {% if href %}<a href="{{ href }}">{{ display_label }}</a>{% else %}<span>{{ display_label }}</span>{% endif %}
+      {% if href %}
+      {# The visible text is still the status label, so an accessible name
+         that LEADS with that same label satisfies WCAG 2.5.3 (label in
+         name) while also carrying the value + share a sighted employee
+         reads off the rest of the row. #}
+      <a href="{{ href }}" aria-label="{{ readout }}">{{ display_label }}</a>
+      {% else %}
+      <span class="aura-donut-chart__legend-label" role="img" tabindex="0" aria-label="{{ readout }}">{{ display_label }}</span>
+      {% endif %}
       <span class="aura-donut-chart__legend-value">{{ format_owner_number(value) }}</span>
+      <span class="aura-donut-chart__readout" aria-hidden="true">{{ readout }}</span>
     </li>
-    {% else %}
-    <li class="empty">{{ _("No data yet.") }}</li>
     {% endfor %}
   </ul>
 </div>
+{% endif %}
 {% endmacro %}
