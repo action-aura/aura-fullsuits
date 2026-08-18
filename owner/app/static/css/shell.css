@@ -98,6 +98,12 @@
   text-overflow: ellipsis;
 }
 
+/* Rail (icon-width) mode hides the text of every nav affordance. This
+   rule also covers the department disclosure button now that
+   .aura-nav-group__title is a <button> -- deliberately: a control the
+   employee cannot read must not sit in the Tab order either, and
+   display:none takes it out of both. Higher specificity than the
+   .aura-nav-group__title base rule below, so source order is irrelevant. */
 :root[data-sidebar="collapsed"] .aura-sidebar__name,
 :root[data-sidebar="collapsed"] .aura-nav-group__title,
 :root[data-sidebar="collapsed"] .aura-nav-link__text {
@@ -152,14 +158,92 @@ summary:focus-visible {
   gap: var(--aura-space-4);
 }
 
+/* ---------- Department disclosures ----------
+   Each group heading is a real <button> that shows/hides its own link
+   list (layout/_sidebar.html). The typography below is carried over
+   unchanged from the inert <div> heading this replaced -- only the box
+   model and the interactive affordances are new, so collapsing the nav
+   did not silently also restyle it. */
+
 .aura-nav-group__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--aura-space-2);
+  inline-size: 100%;
+  /* Comfortable pointer/touch target for what is now the primary way to
+     reach anything in the product. */
+  min-block-size: var(--aura-target-compact);
+  padding-inline: var(--aura-space-2);
+  padding-block: var(--aura-space-1);
+  margin-block-end: var(--aura-space-1);
+  /* Button reset -- the UA's button chrome and centred text would
+     otherwise fight the nav's typographic scale. */
+  background: none;
+  border: none;
+  border-radius: var(--aura-radius-sm);
+  cursor: pointer;
+  text-align: start;
+  font-family: inherit;
+  /* Unchanged from the previous heading treatment. */
   font-size: var(--aura-font-size-xs);
   font-weight: var(--aura-font-weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--aura-color-text-muted);
-  padding: 0 var(--aura-space-2);
-  margin-block-end: var(--aura-space-1);
+}
+.aura-nav-group__title:hover {
+  background: var(--aura-color-surface-muted);
+  color: var(--aura-color-text-primary);
+}
+/* No :focus-visible rule here on purpose: the shared
+   `button:focus-visible` treatment above already paints the shell's one
+   canonical focus ring, and a second definition here would be a second
+   thing to keep in sync. The border-radius above is what makes that
+   shared outline hug this control's rounded box. */
+
+.aura-nav-group__title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Chevron: two logical borders forming a corner, rotated so it reads as
+   "v" when collapsed and "^" when expanded, driven purely off the
+   button's own aria-expanded so the visual and the accessibility state
+   can never disagree.
+
+   The rotation is restated for RTL because the *box* mirrors (the
+   inline-end border moves to the left) while the glyph's meaning must
+   not: "this section opens downward" is not a directional affordance,
+   unlike .aura-sidebar__toggle-icon above, which genuinely does point at
+   the sidebar's edge and so should mirror. Without the RTL rotation the
+   chevron would end up pointing sideways under dir="rtl". */
+.aura-nav-group__chevron {
+  flex: 0 0 auto;
+  inline-size: 7px;
+  block-size: 7px;
+  border-inline-end: var(--aura-border-width-md) solid currentColor;
+  border-block-end: var(--aura-border-width-md) solid currentColor;
+  transform: rotate(45deg);
+  transition: transform var(--aura-motion-fast) var(--aura-ease-standard);
+}
+.aura-nav-group__title[aria-expanded="true"] .aura-nav-group__chevron {
+  transform: rotate(225deg);
+}
+:root[dir="rtl"] .aura-nav-group__chevron { transform: rotate(-45deg); }
+:root[dir="rtl"] .aura-nav-group__title[aria-expanded="true"] .aura-nav-group__chevron {
+  transform: rotate(135deg);
+}
+
+/* tokens.css already collapses --aura-motion-* to 0ms under reduced
+   motion, so the transitions above are inert there. This states it
+   outright anyway: a nav that rotates on every click is exactly the
+   incidental motion the preference exists to switch off, and relying on
+   a token indirection to honour an accessibility preference is a
+   silent dependency. */
+@media (prefers-reduced-motion: reduce) {
+  .aura-nav-group__chevron { transition: none; }
 }
 
 .aura-nav-group__list {
@@ -170,6 +254,15 @@ summary:focus-visible {
   flex-direction: column;
   gap: 1px;
 }
+
+/* A collapsed department must be genuinely gone -- unreachable by Tab and
+   unannounced by screen readers -- not merely clipped, so what is heard
+   and what is focusable both match what is seen.
+   This restatement is load-bearing: author styles beat the UA stylesheet
+   regardless of specificity, so the `display: flex` directly above would
+   otherwise override the UA's `[hidden] { display: none }` and leave
+   every "hidden" link still visible and still Tab-reachable. */
+.aura-nav-group__list[hidden] { display: none; }
 
 .aura-nav-link {
   display: flex;
