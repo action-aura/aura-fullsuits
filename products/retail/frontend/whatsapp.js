@@ -482,13 +482,82 @@
     queueContent.appendChild(row);
   }
 
+  /**
+   * Turns the run-once response body's `data` into one honest sentence plus a
+   * severity, matching WhatsAppOutboxWorker.run_once()'s two payload shapes:
+   *   { ran: false, reason: 'disabled' }
+   *   { ran: true, claimed, reclaimed, outcomes: { sent, retry, failed_permanent } }
+   *
+   * WHY this is not just 'Queue processed.' (real shipped bug): the route
+   * returns HTTP 200 for EVERY one of those outcomes -- worker disabled,
+   * nothing due, all sent, all failed -- so keying the message off
+   * `status === 200`, which is what this did, cheerfully reported success
+   * while the worker was switched off and while every single send was failing
+   * with a Meta API error. The counts were in the response the whole time;
+   * only this UI was lying about them.
+   *
+   * Severity is 'error' rather than a softer 'warn' for the cases where
+   * something is genuinely wrong (worker switched off, sends failing):
+   * whatsapp.html only defines .message-info and .message-error, so a 'warn'
+   * kind would render as an unstyled box and read as *less* alarming than the
+   * plain-success case it is meant to replace. Benign outcomes -- everything
+   * sent, or nothing due -- stay 'info'; see the !claimed branch.
+   */
+  function describeRunOnce(data) {
+    const d = data || {};
+
+    if (d.ran !== true) {
+      // run_once() short-circuits on the disabled gate BEFORE claiming
+      // anything, so nothing was even attempted -- never call this processed.
+      if (d.reason === 'disabled') {
+        return { text: 'Nothing was sent — WhatsApp reports are switched off for this business. Enable them above first.', kind: 'error' };
+      }
+      return { text: 'The queue was not processed' + (d.reason ? ' (' + d.reason + ').' : '.'), kind: 'error' };
+    }
+
+    const outcomes = d.outcomes || {};
+    const sent = Number(outcomes.sent || 0);
+    const retry = Number(outcomes.retry || 0);
+    const failed = Number(outcomes.failed_permanent || 0);
+    const claimed = Number(d.claimed || 0);
+
+    if (!claimed) {
+      // 'info', NOT 'error': an empty queue is the healthy steady state on a
+      // working install -- the daemon timer (_schedule_next -> run_once)
+      // drains the outbox on its own, so an admin pressing this button after
+      // it has already run legitimately finds nothing due. Painting that red
+      // would train the operator to dismiss the red box on this screen, which
+      // is the very box the retry/failed_permanent branch below depends on
+      // being noticed. "Nothing to do" is not "something went wrong" -- that
+      // conflation is what this whole function exists to remove. The wording
+      // leads with the healthy state for the same reason: opening on "Nothing
+      // was sent" reads as a failure report even inside a blue box.
+      return { text: 'Queue is up to date — nothing was due to go out.', kind: 'info' };
+    }
+
+    const parts = [];
+    if (sent) parts.push(sent + ' sent');
+    if (retry) parts.push(retry + ' failed and will be retried');
+    if (failed) parts.push(failed + ' failed permanently');
+    if (!parts.length) parts.push('no messages completed');
+
+    let text = 'Processed ' + claimed + ' message(s): ' + parts.join(', ') + '.';
+    if (retry || failed) {
+      // The per-row Meta error code/message now lands in last_error and is
+      // rendered under the Status badge by renderQueue().
+      text += ' See the reason under Status below.';
+    }
+    return { text: text, kind: (retry || failed || !sent) ? 'error' : 'info' };
+  }
+
   async function onRunOnceClicked(btn) {
     clearMessage();
     btn.disabled = true;
     try {
       const { status, body } = await apiPost('/api/notifications/whatsapp/outbox/run-once', {});
       if (status === 200) {
-        showMessage('Queue processed.', 'info');
+        const outcome = describeRunOnce(body.data);
+        showMessage(outcome.text, outcome.kind);
       } else {
         showMessage(body.message || 'Could not process the queue.', 'error');
       }

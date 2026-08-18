@@ -131,7 +131,18 @@ def apply_notifications_schema(conn: sqlite3.Connection) -> None:
             attempt_count         INTEGER NOT NULL DEFAULT 0,
             next_attempt_at       TEXT,
             lease_expires_at      TEXT,
-            last_error            TEXT,                -- sanitized exception type name, never a raw API transcript
+            -- Written ONLY by whatsapp_worker._describe_send_failure(): the
+            -- HTTP status, Meta's numeric error code, and Meta's own message/
+            -- error_data.details text, collapsed to one line and capped at
+            -- _MAX_STORED_ERROR_CHARS. It used to hold nothing but the
+            -- exception class name; it now carries upstream text on purpose
+            -- (a failure was undiagnosable otherwise), so the contract this
+            -- comment pins is narrower than "sanitized": never credentials --
+            -- _redact_credentials() enforces that -- and never an unbounded
+            -- raw API transcript. Anything added here must keep both, because
+            -- GET /api/notifications/whatsapp/outbox serves this column behind
+            -- _require_session() only, not _require_admin().
+            last_error            TEXT,
             wamid                 TEXT,                 -- WhatsApp's own message id, once sent
             created_at            TEXT    NOT NULL,
             updated_at            TEXT    NOT NULL,
