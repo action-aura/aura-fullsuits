@@ -14,9 +14,7 @@
     <ul class="aura-shortcuts-cheatsheet__list">
       <li><kbd>{{ _('Ctrl') }}</kbd> + <kbd>K</kbd> -- {{ _("Open search / command palette") }}</li>
       <li><kbd>?</kbd> -- {{ _("Show this cheatsheet") }}</li>
-      {% if has_permission('dashboard.view_own') or true %}
       <li data-shortcut-goto="d"><kbd>g</kbd> <kbd>d</kbd> -- <a href="{{ url_for('dashboard.index') }}">{{ _("Go to Dashboard") }}</a></li>
-      {% endif %}
       {% if has_permission('customers.view') %}
       <li data-shortcut-goto="c"><kbd>g</kbd> <kbd>c</kbd> -- <a href="{{ url_for('customers.list_customers') }}">{{ _("Go to Customers") }}</a></li>
       {% endif %}

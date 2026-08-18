@@ -119,6 +119,27 @@ zero new backend code, but deferred to keep this phase's surface area
 tight per the user's own "first things first, no schema/function changes"
 instruction).
 
+Three implementation choices depart from what this contract originally
+described, each deliberate rather than an oversight: (a) the donut chart's
+SVG carries `aria-hidden="true"`, with its data instead exposed through a
+real, accessible `<ul>` legend (real text, real `<a>` drill-down links)
+rather than per-segment SVG `<title>`/`<desc>` elements as §1 described --
+a semantic HTML list is more robust for screen readers than relying on SVG
+element announcement support, which varies across browser/AT combinations;
+(b) `bar_chart`'s `links` parameter goes unused on the Dashboard -- both
+`subs_by_product` and `active_installations_by_product` render without
+drill-down links -- because neither `subscriptions.list_subscriptions` nor
+`installations.list_installations` accepts a product-filter query
+parameter, applying §2's own "drop rather than invent" rule rather than
+adding a route capability out of scope for this plan; and (c) the
+shortcuts cheatsheet's hotkey destinations (`_shortcuts_cheatsheet.html`)
+are a hardcoded permission -> route list matching `_sidebar.html`'s own
+codes, rather than derived from the rendered nav DOM as §3 described --
+the same accepted, hand-kept-in-sync duplication pattern
+`app/command_palette/service.py::get_static_commands()`'s own docstring
+already documents for itself, not previously acknowledged here for the
+cheatsheet.
+
 ## Closure
 
 Implemented via `docs/superpowers/plans/2026-08-18-dashboard-interactive-kit.md`,
