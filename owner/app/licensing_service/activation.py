@@ -273,6 +273,42 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
             license_row=locked_license, installation=installation, fingerprint=fingerprint,
         )
 
+    if installation.status in ("DEACTIVATED", "REPLACED"):
+        # TERMINAL statuses -- installations/services.py::VALID_TRANSITIONS
+        # maps both to an empty set, i.e. nothing may ever leave them. The
+        # raw assignment below deliberately bypasses transition_installation()
+        # (it is the protocol's own fast path for a reused installation), so
+        # it was walking straight back out of a terminal status with no state
+        # machine, no InstallationStatusHistory row, and no audit entry.
+        #
+        # The concrete way that shipped as a real hole, found reviewing the
+        # client's new awaiting-approval poll: staff REJECT a held activation.
+        # reject_pending_activation() (commercial_ops/activation_policy.py)
+        # moves the Installation to DEACTIVATED but leaves the DevicePublicKey
+        # row ACTIVE -- only the licensing_admin route ever revokes a key, and
+        # release_device_slot() does not either. The client mints a FRESH
+        # installation_id on every attempt by protocol design, so the
+        # installation_label lookup above misses and the device-fingerprint
+        # fallback matches instead, handing this code the very installation
+        # staff just rejected. Its status is no longer PENDING_ACTIVATION, so
+        # Part O's "no bypass via retry" guard above does not cover it either,
+        # and the assignment below re-ACTIVATED it and went on to sign a real
+        # assertion. The product now re-POSTs /activate every 30s while it
+        # waits for approval, so a rejection was silently reversed within half
+        # a minute of being made, with PendingActivation.status still reading
+        # REJECTED in the staff queue.
+        #
+        # Reject instead, with the public code that already exists for exactly
+        # this ("this installation is deactivated/replaced" -- check-in has
+        # returned it since Phase 6). Putting this device back onto this
+        # license is a deliberate staff action (revoke the device key, or
+        # replace_device_slot()), never an automatic side effect of the device
+        # asking again -- the same rule the DEVICE_ALREADY_REGISTERED branch
+        # above already enforces in the other direction.
+        raise ActivationRejected(
+            "INSTALLATION_DEACTIVATED" if installation.status == "DEACTIVATED" else "INSTALLATION_REPLACED"
+        )
+
     if installation.status not in ("ACTIVE",):
         installation.status = "ACTIVE"
 
