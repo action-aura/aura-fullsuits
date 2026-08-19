@@ -40,6 +40,7 @@ jobs:
   owner-tests:
     name: Owner tests (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     strategy:
       # One failing shard must not cancel the other three -- otherwise a single
       # failure destroys the coverage baseline and 3/4 of the test signal.
@@ -110,10 +111,26 @@ jobs:
       # wrapper) and is PGDG's own documented script for exactly this in CI:
       # detects the Ubuntu codename, adds the signed repo, refreshes the
       # package index.
+      #
+      # 2026-08-19 incident: two of the four owner-tests matrix shards (b and
+      # c) hung on this exact step for 35+ minutes, while sibling shards a and
+      # d cleared the identical step in ~5 minutes -- a transient network/apt
+      # hang against the PGDG mirror, not a real regression (a plain re-run
+      # cleared it). This workflow had no timeout-minutes anywhere, at any
+      # level, so GitHub's default 360-minute job limit applied -- a hang here
+      # silently burns up to 6 hours of runner time per stuck job and blocks
+      # the PR for the entire window. The step-level timeout-minutes below
+      # makes a repeat of that hang fail fast instead; the
+      # `-o Acquire::Retries=3` apt retry plus DEBIAN_FRONTEND=noninteractive
+      # give a genuinely transient hiccup a real chance to self-heal before
+      # that timeout is hit.
       - name: Install PostgreSQL 17 client (match postgres:17 service for pg_dump/pg_restore)
+        timeout-minutes: 6
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
           sudo sh /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y postgresql-client-17
+          sudo apt-get install -y -o Acquire::Retries=3 postgresql-client-17
 
       # aura_owner is a genuinely separate, non-superuser role -- see the
       # services.postgres comment above for why (the bootstrap role can never
@@ -166,6 +183,7 @@ jobs:
   owner-coverage:
     name: Owner coverage baseline
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     needs: [owner-tests]
     # Publish the baseline even if a shard failed -- partial coverage is still
     # more useful than none, and it keeps the number visible on red runs.
@@ -224,6 +242,7 @@ jobs:
   owner-migrations:
     name: Owner migrations (alembic upgrade head + check)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:17
@@ -261,6 +280,7 @@ jobs:
   product-tests:
     name: Retail / Clinic / commercial_runtime tests
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     # No postgres service on purpose: these suites are raw sqlite3 (CLAUDE.md,
     # "No ORM. No Alembic. No SQLAlchemy."). Only owner/ needs Postgres.
     steps:
@@ -288,6 +308,7 @@ jobs:
   security-scan:
     name: Security and supply-chain scans
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     # Split out of the old monolithic job so a bandit/detect-secrets/pip-audit
     # finding can no longer abort the run before the test results are known.
     steps:
@@ -353,6 +374,7 @@ jobs:
   staging-package:
     name: Staging deployment package config check
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       # docker-compose.staging.yml's own header comment documents this exact
