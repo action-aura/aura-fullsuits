@@ -88,3 +88,4 @@ Thumbs.db
 
 # Logs
 *.log
+/var/

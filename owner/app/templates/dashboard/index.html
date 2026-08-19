@@ -102,6 +102,52 @@
 </div>
 {% endif %}
 
+{# ---------- KPI hero band (dashboard UI redesign) ----------
+   Presentation-only re-render of numbers this template already derived
+   above and gates already declared above -- no new query, no new
+   permission, no new drill-down link. Every card below is the exact same
+   charts.stat_tile() call (same label, same href, same tone rule) as its
+   original tile further down this page; this block only curates a fixed
+   priority subset into a large, prominent "at a glance" band. There are
+   exactly 8 candidates below by design (dashboard UI redesign spec) --
+   when fewer than 8 permissions are held, fewer cards render; nothing is
+   invented or ungated to reach 8, and no trend/sparkline/"vs last month"
+   is shown anywhere here because summary has no historical data to
+   support one (drop rather than invent).
+   The detailed Overview/Commercial-operations/Licensing/Installations
+   sections further down this page are UNCHANGED and still carry the full
+   breakdown (Total/Pilot customers, Expiring in 7 days, per-product
+   charts, etc.) -- this hero band is an additional prominent summary,
+   not a replacement data source, so every existing tile/test keeps
+   working unchanged. #}
+{% set hero_visible = can_view_customers or can_view_subscriptions or can_view_commercial_ops or can_view_licenses or can_view_installations or can_view_notifications or can_view_activations %}
+{% if hero_visible %}
+<div class="aura-kpi-hero" role="group" aria-label="{{ _('Key metrics') }}">
+  {% if can_view_customers %}
+  {{ charts.stat_tile(_("Active customers"), format_owner_number(summary.active_customers), href=url_for('customers.list_customers', status='ACTIVE') if customer_status_drilldown else none) }}
+  {% endif %}
+  {% if can_view_subscriptions %}
+  {{ charts.stat_tile(_("Active subscriptions"), format_owner_number(summary.active_subscriptions), href=url_for('subscriptions.list_subscriptions', status='ACTIVE'), hint=_("%(share)s%% of all subscriptions", share=format_owner_number(active_subscription_share | round(1))) if active_subscription_share is not none else none) }}
+  {{ charts.stat_tile(_("Expiring in 30 days"), format_owner_number(summary.expiring_30), tone='warning' if summary.expiring_30 else 'default') }}
+  {% endif %}
+  {% if can_view_commercial_ops %}
+  {{ charts.stat_tile(_("Open items awaiting action"), format_owner_number(ops_queue.total), tone='warning' if ops_queue.total else 'default') }}
+  {% endif %}
+  {% if can_view_licenses %}
+  {{ charts.stat_tile(_("Active licenses"), format_owner_number(active_licenses), href=url_for('licensing.list_licenses', status='ACTIVE'), tone='success' if active_licenses else 'default') }}
+  {% endif %}
+  {% if can_view_installations %}
+  {{ charts.stat_tile(_("Active installations"), format_owner_number(active_installations), href=url_for('installations.list_installations', status='ACTIVE')) }}
+  {% endif %}
+  {% if can_view_notifications %}
+  {{ charts.stat_tile(_("Renewals awaiting finance approval"), format_owner_number(summary.renewals_awaiting_approval), href=url_for('commercial_ops_ui.list_renewals', status='PAYMENT_RECORDED')) }}
+  {% endif %}
+  {% if can_view_activations %}
+  {{ charts.stat_tile(_("Activations pending manual review"), format_owner_number(summary.pending_activations), href=url_for('commercial_ops_ui.list_pending_activations')) }}
+  {% endif %}
+</div>
+{% endif %}
+
 {% if can_view_customers or can_view_subscriptions %}
 <div class="card">
   <h2>{{ _("Overview") }}</h2>
@@ -157,6 +203,25 @@
     {{ charts.stat_tile(_("Active device-slot exceptions"), format_owner_number(summary.active_device_slot_exceptions)) }}
     {% endif %}
   </div>
+</div>
+{% endif %}
+
+{% set any_charts_visible = can_view_subscriptions or can_view_licenses or can_view_installations %}
+{% if any_charts_visible %}
+{# ---------- Chart palette switcher (dashboard UI redesign) ----------
+   Presentation-only preference control -- sets data-chart-palette on
+   <html> (static/js/chart-palette.js), which every --aura-chart-cat-*
+   consumer (charts.css, dashboard-redesign.css) reads. No data, no
+   permission, no context key of its own; gated on "does this employee
+   see any chart at all" so it never appears for a role with nothing
+   below it to recolor. #}
+<div class="aura-chart-palette-switch">
+  <span class="aura-chart-palette-switch__label" id="aura-chart-palette-label">{{ _("Chart colors") }}</span>
+  <span class="aura-chart-palette-switch__group" role="group" aria-labelledby="aura-chart-palette-label">
+    <button type="button" class="aura-chart-palette-switch__btn" data-chart-palette-option="brand" aria-pressed="true">{{ _("Brand") }}</button>
+    <button type="button" class="aura-chart-palette-switch__btn" data-chart-palette-option="vivid" aria-pressed="false">{{ _("Vivid") }}</button>
+    <button type="button" class="aura-chart-palette-switch__btn" data-chart-palette-option="cb-safe" aria-pressed="false">{{ _("Colorblind-safe") }}</button>
+  </span>
 </div>
 {% endif %}
 
@@ -241,6 +306,15 @@
        empty_action_label=_("Register installation")) }}
 </div>
 {% endif %}
+
+{# ---------- Department cards (dashboard UI redesign) ----------
+   Placed AFTER the KPI hero and the charts, per the requested reading
+   order: what the numbers say first, then where to go and act on them.
+   layout/_dept_cards.html renders from layout/_nav_model.html, the same
+   single source of truth the sidebar now consumes -- see that file's
+   header comment. Renders nothing (including no heading) when the
+   employee has zero visible departments. #}
+{% include "layout/_dept_cards.html" %}
 
 {% if can_view_backups %}
 <div class="card">

@@ -12,7 +12,15 @@
     <button type="button" class="aura-shortcuts-cheatsheet__close" data-shortcuts-action="close" aria-label="{{ _('Close') }}">&times;</button>
     <h2>{{ _("Keyboard shortcuts") }}</h2>
     <ul class="aura-shortcuts-cheatsheet__list">
-      <li><kbd>{{ _('Ctrl') }}</kbd> + <kbd>K</kbd> -- {{ _("Open search / command palette") }}</li>
+      {# "Ctrl" is a physical keycap legend, not prose: it is printed the same
+         on an Arabic keyboard as on a Latin one, and the sibling <kbd>K</kbd>
+         and <kbd>?</kbd> here were never translatable either. Marking it with
+         _() forced the Arabic catalog to carry an entry whose only honest
+         value is the Latin string "Ctrl", which trips
+         test_arabic_translations_are_real_arabic_not_placeholder_text --
+         a check that exists to catch untranslated placeholders. Leaving the
+         keycap untranslated keeps that check meaningful. #}
+      <li><kbd>Ctrl</kbd> + <kbd>K</kbd> -- {{ _("Open search / command palette") }}</li>
       <li><kbd>?</kbd> -- {{ _("Show this cheatsheet") }}</li>
       <li data-shortcut-goto="d"><kbd>g</kbd> <kbd>d</kbd> -- <a href="{{ url_for('dashboard.index') }}">{{ _("Go to Dashboard") }}</a></li>
       {% if has_permission('customers.view') %}

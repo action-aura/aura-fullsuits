@@ -1,0 +1,188 @@
+{#
+  Aura Owner -- single source of truth for the department -> permitted
+  function map.
+
+  WHY this file exists (dashboard UI redesign, department cards): the
+  sidebar (layout/_sidebar.html) and the new dashboard department cards
+  (layout/_dept_cards.html) both need to answer "which functions can THIS
+  employee reach, grouped by department" -- and they must never compute
+  that answer independently, or the two will drift out of sync over time
+  (exactly the failure mode nav_group()'s own docstring in
+  layout/_sidebar.html already flags for a different duplication --
+  layout/_shortcuts_cheatsheet.html's endpoint-to-group table -- and
+  explicitly says not to spread further). This file is the ONLY place the
+  department->link permission gates are evaluated. Every consumer imports
+  it and calls the one macro it exports, `populate(target)`, which
+  appends one dict per visible department -- {slug, label, links:
+  [{endpoint, label}, ...]} -- to `target`, a plain list the CALLER
+  creates and owns. (A macro is used, rather than relying on a top-level
+  `{% set %}` being visible through `{% import %}`, because a macro
+  argument's mutation is unambiguous, well-defined Jinja2 behavior --
+  no dependency on module-export semantics for plain variables.)
+
+  A department with an empty `links` list is precisely a department this
+  employee cannot see at all -- deriving visibility from "links is
+  non-empty" is not an approximation of layout/_sidebar.html's old
+  per-department `..._visible` booleans, it is the SAME condition: every
+  one of those booleans was already written as the OR of the exact same
+  per-link permission checks that build `links` below (verified against
+  git history of layout/_sidebar.html before this refactor), so a
+  department was already only ever "visible" when at least one of its
+  links would render.
+
+  Every permission code, every endpoint, and every label below is copied
+  verbatim from layout/_sidebar.html's pre-refactor department blocks --
+  this file introduces no new permission check and no new route
+  destination, only relocates the existing ones to one place.
+  has_permission / has_any_permission / can_view_attention_center are the
+  same Jinja globals every template already reads (the request-scoped
+  context processor in app/__init__.py); this file adds none of its own,
+  and dashboard/services.py, dashboard/routes.py and every permission
+  model are untouched by it.
+
+  Consumers MUST write:
+    {% import "layout/_nav_model.html" as navmodel with context %}
+    {% set nav_departments = [] %}
+    {% set _unused = navmodel.populate(nav_departments) %}
+  -- the `with context` is required (Jinja imports do not share the
+  caller's context by default), and without it has_permission()/_() would
+  be unresolvable inside this file.
+#}
+
+{% macro populate(target) %}
+{# ---------- OVERVIEW ---------- #}
+{% set overview_links = [] %}
+{% set _unused = overview_links.append({'endpoint': 'dashboard.index', 'label': _('Dashboard')}) %}
+{% if can_view_attention_center %}
+  {% set _unused = overview_links.append({'endpoint': 'attention.index', 'label': _('Attention Center')}) %}
+{% endif %}
+{% set _unused = target.append({'slug': 'overview', 'label': _('Overview'), 'links': overview_links}) %}
+
+{# ---------- CRM ---------- #}
+{% set crm_links = [] %}
+{% if has_any_permission('leads.view_own', 'leads.view_all') %}
+  {% set _unused = crm_links.append({'endpoint': 'leads.list_leads', 'label': _('Leads')}) %}
+  {% set _unused = crm_links.append({'endpoint': 'leads.crm_dashboard', 'label': _('CRM Dashboard')}) %}
+{% endif %}
+{% if has_permission('customers.view') %}
+  {% set _unused = crm_links.append({'endpoint': 'customers.list_customers', 'label': _('Customers')}) %}
+{% endif %}
+{% set _unused = target.append({'slug': 'crm', 'label': _('CRM'), 'links': crm_links}) %}
+
+{# ---------- SALES ---------- #}
+{% set sales_links = [] %}
+{% if has_any_permission('quotes.create', 'quotes.approve') %}
+  {% set _unused = sales_links.append({'endpoint': 'commercial_sales_web.list_quotes', 'label': _('Quotes')}) %}
+{% endif %}
+{% if has_any_permission('orders.create', 'orders.approve') %}
+  {% set _unused = sales_links.append({'endpoint': 'commercial_sales_web.list_orders', 'label': _('Sales Orders')}) %}
+{% endif %}
+{% if has_any_permission('invoices.create', 'invoices.issue') %}
+  {% set _unused = sales_links.append({'endpoint': 'commercial_sales_web.list_invoices', 'label': _('Invoices')}) %}
+{% endif %}
+{% if has_permission('payments.view') %}
+  {% set _unused = sales_links.append({'endpoint': 'commercial_sales_web.list_payments', 'label': _('Payments')}) %}
+{% endif %}
+{% if has_any_permission('refunds.create', 'refunds.approve') %}
+  {% set _unused = sales_links.append({'endpoint': 'commercial_sales_web.list_refunds', 'label': _('Refunds')}) %}
+{% endif %}
+{% if has_any_permission('commissions.view_own', 'commissions.view_all') %}
+  {% set _unused = sales_links.append({'endpoint': 'commercial_sales_web.list_commissions', 'label': _('Commissions')}) %}
+{% endif %}
+{% if has_permission('commissions.pay') %}
+  {% set _unused = sales_links.append({'endpoint': 'commercial_sales_web.list_payout_batches', 'label': _('Commission Payouts')}) %}
+{% endif %}
+{% if has_any_permission('quotes.create', 'orders.create', 'invoices.create') %}
+  {% set _unused = sales_links.append({'endpoint': 'commercial_sales_web.employee_dashboard_view', 'label': _('Commercial Dashboard')}) %}
+{% endif %}
+{% if has_permission('commissions.view_all') %}
+  {% set _unused = sales_links.append({'endpoint': 'commercial_sales_web.finance_dashboard_view', 'label': _('Finance Dashboard')}) %}
+{% endif %}
+{% set _unused = target.append({'slug': 'sales', 'label': _('Sales'), 'links': sales_links}) %}
+
+{# ---------- FINANCE / OPERATIONS ---------- #}
+{% set finance_ops_links = [] %}
+{% if has_any_permission('expenses.view_own', 'expenses.view_all') %}
+  {% set _unused = finance_ops_links.append({'endpoint': 'operations_ui.list_expenses', 'label': _('Expenses')}) %}
+{% endif %}
+{% if has_any_permission('expenses.create', 'expenses.manage_payees') %}
+  {% set _unused = finance_ops_links.append({'endpoint': 'operations_ui.list_payees', 'label': _('Expense Payees')}) %}
+{% endif %}
+{% if has_any_permission('cash_closing.view_own', 'cash_closing.view_all', 'cash_closing.prepare') %}
+  {% set _unused = finance_ops_links.append({'endpoint': 'operations_ui.list_closings', 'label': _('Cash Closing')}) %}
+{% endif %}
+{% if has_permission('report_snapshots.view') %}
+  {% set _unused = finance_ops_links.append({'endpoint': 'operations_ui.list_snapshots', 'label': _('Operational Reports')}) %}
+{% endif %}
+{% if has_permission('management_notes.view') %}
+  {% set _unused = finance_ops_links.append({'endpoint': 'operations_ui.list_notes', 'label': _('Management Notes')}) %}
+{% endif %}
+{% if has_permission('dashboard.view_own') %}
+  {% set _unused = finance_ops_links.append({'endpoint': 'operations_ui.employee_expense_dashboard_view', 'label': _('My Expense Dashboard')}) %}
+{% endif %}
+{% if has_permission('dashboard.view_all') %}
+  {% set _unused = finance_ops_links.append({'endpoint': 'operations_ui.management_operational_dashboard_view', 'label': _('Operational Management Dashboard')}) %}
+  {% set _unused = finance_ops_links.append({'endpoint': 'operations_ui.finance_operational_dashboard_view', 'label': _('Operational Finance Dashboard')}) %}
+{% endif %}
+{% set _unused = target.append({'slug': 'finance-ops', 'label': _('Finance / Operations'), 'links': finance_ops_links}) %}
+
+{# ---------- LICENSING ---------- #}
+{% set licensing_links = [] %}
+{% if has_permission('catalog.view') %}
+  {% set _unused = licensing_links.append({'endpoint': 'catalog.index', 'label': _('Catalog')}) %}
+{% endif %}
+{% if has_permission('subscriptions.view') %}
+  {% set _unused = licensing_links.append({'endpoint': 'subscriptions.list_subscriptions', 'label': _('Subscriptions')}) %}
+{% endif %}
+{% if has_permission('licenses.view') %}
+  {% set _unused = licensing_links.append({'endpoint': 'licensing.list_licenses', 'label': _('Licenses')}) %}
+{% endif %}
+{% if has_permission('installations.view') %}
+  {% set _unused = licensing_links.append({'endpoint': 'installations.list_installations', 'label': _('Installations')}) %}
+{% endif %}
+{% if has_permission('subscriptions.view') %}
+  {% set _unused = licensing_links.append({'endpoint': 'commercial_ops_ui.list_renewals', 'label': _('Renewals')}) %}
+{% endif %}
+{% if has_permission('pilots.view') %}
+  {% set _unused = licensing_links.append({'endpoint': 'commercial_ops_ui.list_pilots', 'label': _('Pilots')}) %}
+{% endif %}
+{% if has_permission('emergency_extensions.view') %}
+  {% set _unused = licensing_links.append({'endpoint': 'commercial_ops_ui.list_emergency_extensions', 'label': _('Emergency Ext.')}) %}
+{% endif %}
+{% if has_permission('pending_activations.view') %}
+  {% set _unused = licensing_links.append({'endpoint': 'commercial_ops_ui.list_pending_activations', 'label': _('Activation Reviews')}) %}
+{% endif %}
+{% if has_permission('subscriptions.view') %}
+  {% set _unused = licensing_links.append({'endpoint': 'commercial_ops_ui.list_notifications', 'label': _('Notifications')}) %}
+  {% set _unused = licensing_links.append({'endpoint': 'commercial_ops_ui.queue_view', 'label': _('My Queue')}) %}
+{% endif %}
+{% if has_permission('system.view') %}
+  {% set _unused = licensing_links.append({'endpoint': 'commercial_ops_ui.reconciliation_view', 'label': _('Reconciliation')}) %}
+{% endif %}
+{% if has_permission('activation_service.view') %}
+  {% set _unused = licensing_links.append({'endpoint': 'licensing_admin.status', 'label': _('Activation Service')}) %}
+{% endif %}
+{% set _unused = target.append({'slug': 'licensing', 'label': _('Licensing'), 'links': licensing_links}) %}
+
+{# ---------- MANAGEMENT ---------- #}
+{% set management_links = [] %}
+{% if has_permission('staff.view') %}
+  {% set _unused = management_links.append({'endpoint': 'staff.list_staff', 'label': _('Staff')}) %}
+{% endif %}
+{% if has_permission('employees.view_all') %}
+  {% set _unused = management_links.append({'endpoint': 'employees.list_view', 'label': _('Employees')}) %}
+  {% set _unused = management_links.append({'endpoint': 'employees.dashboard', 'label': _('Employee Dashboard')}) %}
+{% endif %}
+{% set _unused = target.append({'slug': 'management', 'label': _('Management'), 'links': management_links}) %}
+
+{# ---------- SYSTEM ---------- #}
+{% set system_links = [] %}
+{% if has_permission('audit.view') %}
+  {% set _unused = system_links.append({'endpoint': 'audit.list_audit', 'label': _('Audit Log')}) %}
+  {% set _unused = system_links.append({'endpoint': 'audit.security_events', 'label': _('Security Events')}) %}
+{% endif %}
+{% if has_permission('system.view') %}
+  {% set _unused = system_links.append({'endpoint': 'system.list_backups', 'label': _('Backups')}) %}
+{% endif %}
+{% set _unused = target.append({'slug': 'system', 'label': _('System'), 'links': system_links}) %}
+{% endmacro %}

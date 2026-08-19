@@ -46,13 +46,23 @@
   --aura-color-info: #0E7490;
   --aura-color-info-soft: #DCEEF3;
 
-  /* Chart */
+  /* Chart -- "Brand" categorical ramp (default; also applies when
+     data-chart-palette is unset or explicitly "brand"). cat-1..4 are
+     var()-references into already theme-aware brand/status tokens, so
+     they repaint correctly for dark theme with no extra rule needed;
+     cat-5..8 are new, dedicated hues (not aliases of a status color) so
+     an 8-series chart never reads as "grey = muted" or "red = error" the
+     way the old cat-5/cat-6 aliases did. See the palette-switcher block
+     below (search "chart palette switcher") for the Vivid and
+     Colorblind-safe alternatives and their dark-theme counterparts. */
   --aura-chart-cat-1: var(--aura-color-brand-primary);
   --aura-chart-cat-2: var(--aura-color-brand-secondary);
   --aura-chart-cat-3: var(--aura-color-info);
   --aura-chart-cat-4: var(--aura-color-brand-accent);
-  --aura-chart-cat-5: var(--aura-color-text-secondary);
-  --aura-chart-cat-6: var(--aura-color-danger);
+  --aura-chart-cat-5: #2E9E5B;
+  --aura-chart-cat-6: #D6488B;
+  --aura-chart-cat-7: #8FA82E;
+  --aura-chart-cat-8: #B8672E;
 
   /* Shadows -- light theme relies on real shadow depth */
   --aura-shadow-sm: 0 1px 2px rgba(16, 24, 38, 0.06);
@@ -226,6 +236,123 @@
     --aura-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
     --aura-shadow-md: 0 2px 8px rgba(0, 0, 0, 0.45);
     --aura-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.55);
+  }
+}
+
+/* =========================================================================
+   Chart palette switcher (dashboard UI redesign)
+   -------------------------------------------------------------------------
+   Three named, selectable 8-colour categorical ramps, switched via
+   [data-chart-palette="brand|vivid|cb-safe"] on <html>. Selection is
+   persisted in localStorage ("aura-owner-chart-palette") and restored
+   pre-paint by static/js/theme-preload.js -- same mechanism, same file,
+   as data-theme and data-sidebar. Consuming CSS (charts.css,
+   dashboard-redesign.css) reads only var(--aura-chart-cat-1..8) and never
+   the palette name itself, so no consumer needs to know which palette is
+   active.
+
+   Every block below is deliberately scoped by [data-chart-palette="..."]
+   rather than by [data-theme="dark"] alone: a bare `:root[data-theme=
+   "dark"]` rule would tie in specificity with `:root[data-chart-palette=
+   "cb-safe"]` (both are one pseudo-class + one attribute), making the
+   winner depend on source order instead of intent. Naming the palette
+   explicitly in every selector (three attributes deep for the dark
+   variants) keeps each palette's colours from ever leaking into another
+   palette's, regardless of where a rule sits in this file.
+
+     Brand    -- on-brand hues; also the default when no palette has been
+                 chosen yet (bare :root's cat-1..8, set above).
+     Vivid    -- bold/saturated alternative for a punchier look.
+     cb-safe  -- Okabe & Ito (2008), the standard colorblind-safe
+                 8-colour qualitative ramp (https://jfly.uni-koeln.de/color/).
+                 Values 1-7 are the published hues, unmodified, reused for
+                 both themes on purpose (fidelity to the named standard);
+                 only slot 8 ("black" in the original) is swapped per
+                 theme -- literal #000 is invisible against this app's
+                 near-black dark-theme surfaces, so dark theme gets a
+                 near-white anchor there instead. This is the one place a
+                 palette's hue differs between light and dark, and it
+                 exists specifically to satisfy "distinguishable in both
+                 themes" for that slot.
+   ========================================================================= */
+
+:root[data-chart-palette="vivid"] {
+  --aura-chart-cat-1: #0047FF;
+  --aura-chart-cat-2: #FF6B00;
+  --aura-chart-cat-3: #00B8A9;
+  --aura-chart-cat-4: #A100FF;
+  --aura-chart-cat-5: #00C853;
+  --aura-chart-cat-6: #FF2D78;
+  --aura-chart-cat-7: #D4B106;
+  --aura-chart-cat-8: #00B8D4;
+}
+
+:root[data-chart-palette="cb-safe"] {
+  --aura-chart-cat-1: #0072B2;
+  --aura-chart-cat-2: #E69F00;
+  --aura-chart-cat-3: #56B4E9;
+  --aura-chart-cat-4: #CC79A7;
+  --aura-chart-cat-5: #009E73;
+  --aura-chart-cat-6: #D55E00;
+  --aura-chart-cat-7: #F0E442;
+  --aura-chart-cat-8: #000000;
+}
+
+/* Dark-theme brand ramp -- also the default for dark theme when no
+   palette has been chosen yet. cat-1..4 need no override (they are
+   var() references into tokens that are already redefined above for
+   dark theme); only the four dedicated hex hues need brighter dark-theme
+   counterparts, same "lighten for dark" convention this file already
+   uses for --aura-color-success/warning/danger/info above. */
+:root[data-theme="dark"]:not([data-chart-palette]),
+:root[data-theme="dark"][data-chart-palette="brand"] {
+  --aura-chart-cat-5: #4BC98A;
+  --aura-chart-cat-6: #E86FA8;
+  --aura-chart-cat-7: #B4CE5C;
+  --aura-chart-cat-8: #D68A56;
+}
+
+:root[data-theme="dark"][data-chart-palette="vivid"] {
+  --aura-chart-cat-1: #4D7CFF;
+  --aura-chart-cat-2: #FF9142;
+  --aura-chart-cat-3: #33CFC0;
+  --aura-chart-cat-4: #C466FF;
+  --aura-chart-cat-5: #33E37E;
+  --aura-chart-cat-6: #FF6FA0;
+  --aura-chart-cat-7: #E8D24D;
+  --aura-chart-cat-8: #33D6EE;
+}
+
+:root[data-theme="dark"][data-chart-palette="cb-safe"] {
+  --aura-chart-cat-8: #F3F5F8;
+}
+
+/* Same three overrides again for the SYSTEM dark case (no explicit
+   data-theme attribute, prefers-color-scheme: dark) -- mirrors this
+   file's own existing duplication between its explicit
+   :root[data-theme="dark"] block and this same media query above. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="dark"]):not([data-chart-palette]),
+  :root:not([data-theme="light"]):not([data-theme="dark"])[data-chart-palette="brand"] {
+    --aura-chart-cat-5: #4BC98A;
+    --aura-chart-cat-6: #E86FA8;
+    --aura-chart-cat-7: #B4CE5C;
+    --aura-chart-cat-8: #D68A56;
+  }
+
+  :root:not([data-theme="light"]):not([data-theme="dark"])[data-chart-palette="vivid"] {
+    --aura-chart-cat-1: #4D7CFF;
+    --aura-chart-cat-2: #FF9142;
+    --aura-chart-cat-3: #33CFC0;
+    --aura-chart-cat-4: #C466FF;
+    --aura-chart-cat-5: #33E37E;
+    --aura-chart-cat-6: #FF6FA0;
+    --aura-chart-cat-7: #E8D24D;
+    --aura-chart-cat-8: #33D6EE;
+  }
+
+  :root:not([data-theme="light"]):not([data-theme="dark"])[data-chart-palette="cb-safe"] {
+    --aura-chart-cat-8: #F3F5F8;
   }
 }
 

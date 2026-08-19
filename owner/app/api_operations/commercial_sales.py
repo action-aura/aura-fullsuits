@@ -813,5 +813,8 @@ def finance_commercial_dashboard_route():
     from app.commercial_sales.dashboards import finance_commercial_dashboard
 
     data = finance_commercial_dashboard()
-    data["outstanding_invoice_total"] = str(data["outstanding_invoice_total"])
+    # AUDIT-owner-cross-screen: outstanding_invoice_total is now a
+    # per-currency dict (never a blended scalar) -- see
+    # commercial_sales/dashboards.py::finance_commercial_dashboard() for why.
+    data["outstanding_invoice_totals"] = {k: str(v) for k, v in data["outstanding_invoice_totals"].items()}
     return jsonify(data)

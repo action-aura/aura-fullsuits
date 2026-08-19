@@ -150,7 +150,9 @@ def test_finance_dashboard_aggregates_across_all_employees(app, seeded):
 
         assert dash["invoices_by_status"].get("PAID", 0) >= 2  # both invoices, cross-employee
         assert dash["commissions_pending_approval"] >= 2  # both EARNED entries, cross-employee
-        assert dash["outstanding_invoice_total"] >= Decimal("0.00")  # both fully paid, so nothing outstanding from these two
+        # Shape is now per-currency (never a blended scalar) -- see
+        # commercial_sales/dashboards.py::finance_commercial_dashboard().
+        assert dash["outstanding_invoice_totals"].get("USD", Decimal("0.00")) >= Decimal("0.00")  # both fully paid, so nothing outstanding from these two
 
 
 def test_employee_dashboard_pending_approval_request_count(app, seeded):

@@ -11,7 +11,17 @@ def test_csp_and_baseline_headers_present_in_every_env(client):
     assert resp.headers["Content-Security-Policy"].startswith("default-src 'self'")
     assert resp.headers["X-Content-Type-Options"] == "nosniff"
     assert resp.headers["X-Frame-Options"] == "DENY"
-    assert resp.headers["Referrer-Policy"] == "no-referrer"
+    # 'same-origin', NOT 'no-referrer'. 'no-referrer' suppressed the Referer
+    # header on this app's OWN same-origin form posts, which collides head-on
+    # with Flask-WTF's WTF_CSRF_SSL_STRICT: that check requires a Referer
+    # matching Host on every HTTPS POST, so under TLS every login and every
+    # other CSRF-protected POST failed with 400 and no way to succeed.
+    # Reproduced on a real HTTPS deployment 2026-08-19: identical request,
+    # 400 without a Referer, 302 with one. 'same-origin' still sends zero
+    # Referer to any third-party origin -- the privacy property 'no-referrer'
+    # was chosen for -- while letting same-origin requests carry what CSRF
+    # validation needs. See app/security/headers.py for the full rationale.
+    assert resp.headers["Referrer-Policy"] == "same-origin"
 
 
 @pytest.mark.parametrize("env_value", ["production", "staging"])

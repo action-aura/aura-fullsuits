@@ -107,11 +107,26 @@
 .aura-bar-chart__fill {
   display: block;
   block-size: 100%;
+  /* Fallback for the (theoretical) case data-cat is absent -- every real
+     caller sets it, see the loop in _charts.html's bar_chart macro. */
   background: var(--aura-color-brand-primary);
   border-radius: var(--aura-radius-full);
   transition: inline-size var(--aura-motion-base) var(--aura-ease-standard),
-              background var(--aura-motion-fast) var(--aura-ease-standard);
+              filter var(--aura-motion-fast) var(--aura-ease-standard);
 }
+/* Categorical colour per bar (dashboard UI redesign, "colourful charts").
+   One rule per data-cat value the macro can emit (1-8, wrapping); every
+   colour comes from --aura-chart-cat-* (tokens.css), never a literal hex,
+   so the active chart-palette selection (brand/vivid/cb-safe) repaints
+   every bar automatically with no change needed here. */
+.aura-bar-chart__fill[data-cat="1"] { background: var(--aura-chart-cat-1); }
+.aura-bar-chart__fill[data-cat="2"] { background: var(--aura-chart-cat-2); }
+.aura-bar-chart__fill[data-cat="3"] { background: var(--aura-chart-cat-3); }
+.aura-bar-chart__fill[data-cat="4"] { background: var(--aura-chart-cat-4); }
+.aura-bar-chart__fill[data-cat="5"] { background: var(--aura-chart-cat-5); }
+.aura-bar-chart__fill[data-cat="6"] { background: var(--aura-chart-cat-6); }
+.aura-bar-chart__fill[data-cat="7"] { background: var(--aura-chart-cat-7); }
+.aura-bar-chart__fill[data-cat="8"] { background: var(--aura-chart-cat-8); }
 .aura-bar-chart__value {
   font-size: var(--aura-font-size-sm);
   font-weight: var(--aura-font-weight-medium);
@@ -136,6 +151,18 @@
 .aura-donut-chart__segment--success { stroke: var(--aura-color-success); }
 .aura-donut-chart__segment--warning, .aura-donut-chart__segment--pending { stroke: var(--aura-color-warning); }
 .aura-donut-chart__segment--danger { stroke: var(--aura-color-danger); }
+/* Categorical fallback (donut_chart called with no class_for -- see the
+   macro's own comment on this). Same 8-colour ramp and tokens as the bar
+   chart above, so a chart-palette switch repaints both chart types the
+   same way. */
+.aura-donut-chart__segment--cat-1 { stroke: var(--aura-chart-cat-1); }
+.aura-donut-chart__segment--cat-2 { stroke: var(--aura-chart-cat-2); }
+.aura-donut-chart__segment--cat-3 { stroke: var(--aura-chart-cat-3); }
+.aura-donut-chart__segment--cat-4 { stroke: var(--aura-chart-cat-4); }
+.aura-donut-chart__segment--cat-5 { stroke: var(--aura-chart-cat-5); }
+.aura-donut-chart__segment--cat-6 { stroke: var(--aura-chart-cat-6); }
+.aura-donut-chart__segment--cat-7 { stroke: var(--aura-chart-cat-7); }
+.aura-donut-chart__segment--cat-8 { stroke: var(--aura-chart-cat-8); }
 .aura-donut-chart__legend { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--aura-space-1); }
 .aura-donut-chart__legend-item {
   display: flex;
@@ -156,6 +183,14 @@
 .aura-donut-chart__swatch--success { background: var(--aura-color-success); }
 .aura-donut-chart__swatch--warning, .aura-donut-chart__swatch--pending { background: var(--aura-color-warning); }
 .aura-donut-chart__swatch--danger { background: var(--aura-color-danger); }
+.aura-donut-chart__swatch--cat-1 { background: var(--aura-chart-cat-1); }
+.aura-donut-chart__swatch--cat-2 { background: var(--aura-chart-cat-2); }
+.aura-donut-chart__swatch--cat-3 { background: var(--aura-chart-cat-3); }
+.aura-donut-chart__swatch--cat-4 { background: var(--aura-chart-cat-4); }
+.aura-donut-chart__swatch--cat-5 { background: var(--aura-chart-cat-5); }
+.aura-donut-chart__swatch--cat-6 { background: var(--aura-chart-cat-6); }
+.aura-donut-chart__swatch--cat-7 { background: var(--aura-chart-cat-7); }
+.aura-donut-chart__swatch--cat-8 { background: var(--aura-chart-cat-8); }
 .aura-donut-chart__legend-value { margin-inline-start: auto; color: var(--aura-color-text-muted); }
 
 /* ======================================================================
@@ -241,7 +276,14 @@
 }
 .aura-bar-chart__row:hover .aura-bar-chart__fill,
 .aura-bar-chart__row:focus-within .aura-bar-chart__fill {
-  background: var(--aura-color-brand-primary-hover);
+  /* brightness(), not a background swap: each bar now carries its own
+     categorical colour (data-cat, see above), and a hard-coded hover
+     background would erase that colour and make every bar look the same
+     on hover -- exactly the "colourful charts" this pass adds, undone by
+     its own hover state. filter animates independently of `background`
+     and reads as "this bar is highlighted" regardless of which of the 8
+     categorical colours it started from. */
+  filter: brightness(1.12);
 }
 .aura-bar-chart__row:hover .aura-bar-chart__track,
 .aura-bar-chart__row:focus-within .aura-bar-chart__track {

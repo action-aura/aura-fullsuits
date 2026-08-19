@@ -86,10 +86,13 @@
   inline-size: 28px;
   block-size: 28px;
   border-radius: var(--aura-radius-md);
-  background: var(--aura-color-brand-primary);
-  color: #fff;
-  font-size: var(--aura-font-size-sm);
-  font-weight: var(--aura-font-weight-bold);
+  overflow: hidden;
+}
+.aura-sidebar__mark img {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: contain;
 }
 
 .aura-sidebar__name {
@@ -365,6 +368,32 @@ summary:focus-visible {
   align-items: center;
   gap: var(--aura-space-2);
   flex-wrap: nowrap;
+  min-inline-size: 0;
+}
+
+/* Phone/small-tablet: the end cluster (search, theme switch, language
+   switch, staff name + role badge) is intrinsically ~565px wide. With
+   flex-wrap:nowrap above it could not shrink or wrap, so on a 375px
+   viewport it forced the document to 593px and the whole page could be
+   panned 218px sideways -- measured on a real device-width run, on every
+   page, not just the dashboard. The sidebar was NOT the cause (verified by
+   removing it from the layout and re-measuring: still 593px).
+   Allowing both rows to wrap keeps every control reachable rather than
+   hiding any of them, which matters because the language switcher lives
+   here and this product ships Arabic. */
+@media (max-width: 900px) {
+  .aura-topbar {
+    flex-wrap: wrap;
+    row-gap: var(--aura-space-2);
+  }
+  .aura-topbar__end {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .aura-topbar__end > * {
+    flex: 0 1 auto;
+    min-inline-size: 0;
+  }
 }
 
 /* Visually-present, inert placeholders for two future milestones
