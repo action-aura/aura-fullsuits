@@ -12,6 +12,25 @@ class ConfigError(RuntimeError):
     """Raised when required configuration is missing or invalid."""
 
 
+# The owner/ package root, resolved from __file__ rather than the process cwd.
+#
+# TestingConfig's artifact directories used to default to os.getcwd()/var/*,
+# which silently depended on where pytest was launched from. Run from owner/
+# they landed in owner/var/* (gitignored). Run from the repo root -- which is
+# how the sharded CI jobs and most `pytest owner/tests/...` invocations start
+# -- they landed in <repo>/var/* instead, outside every owner/var/* ignore
+# rule, leaving 75 test-generated Ed25519 .pem keys and release-artifact
+# blobs as untracked repo-root clutter (see
+# docs/owner/phase9_5b_r3/final-residual-risk-register.md row 4).
+#
+# Deliberately NOT applied to BaseConfig/DevelopmentConfig: those resolve
+# live signing keys, backups and attachments. Staging sets
+# OWNER_SIGNING_KEY_DIRECTORY explicitly, but leaves OWNER_BACKUP_DIR and
+# friends on the cwd default, so moving them here would repoint directories
+# that already hold real data on a running deployment.
+_OWNER_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 REQUIRED_PRODUCTION_SECRETS = (
     "OWNER_SECRET_KEY",
     "OWNER_DATABASE_URL",
@@ -386,13 +405,13 @@ class TestingConfig(BaseConfig):
     LOGIN_MAX_ATTEMPTS = 5
     WTF_CSRF_ENABLED = True
     SIGNING_KEY_DIRECTORY = os.environ.get(
-        "OWNER_TEST_SIGNING_KEY_DIRECTORY", os.path.join(os.getcwd(), "var", "signing-keys-test")
+        "OWNER_TEST_SIGNING_KEY_DIRECTORY", os.path.join(_OWNER_ROOT, "var", "signing-keys-test")
     )
     EXPENSE_ATTACHMENT_DIRECTORY = os.environ.get(
-        "OWNER_TEST_EXPENSE_ATTACHMENT_DIR", os.path.join(os.getcwd(), "var", "expense-attachments-test")
+        "OWNER_TEST_EXPENSE_ATTACHMENT_DIR", os.path.join(_OWNER_ROOT, "var", "expense-attachments-test")
     )
     RELEASE_ARTIFACT_DIRECTORY = os.environ.get(
-        "OWNER_TEST_RELEASE_ARTIFACT_DIR", os.path.join(os.getcwd(), "var", "release-artifacts-test")
+        "OWNER_TEST_RELEASE_ARTIFACT_DIR", os.path.join(_OWNER_ROOT, "var", "release-artifacts-test")
     )
     REPLAY_PROTECTION_REQUIRED = True
     DISTRIBUTED_RATE_LIMIT_REQUIRED = True

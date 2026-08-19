@@ -72,6 +72,15 @@ owner/var/expense-attachments-test/
 # real deployment uses external object storage, never this directory.
 owner/var/release-artifacts/
 owner/var/release-artifacts-test/
+
+# Repo-root var/ -- safety net. Every owner/var/* rule above assumes the
+# process cwd is owner/. Anything in owner/app/config.py still defaulting to
+# os.getcwd()/var/* (BaseConfig's backup/attachment/release dirs) writes here
+# instead when launched from the repo root, escaping those rules entirely.
+# TestingConfig was pinned to the owner/ package root to stop generating this,
+# but the rule stays so a cwd-relative write can never become a committed
+# private key again.
+/var/
 owner/tools/activation_simulator/.device/
 owner/tools/activation_simulator/**/*.key
 
