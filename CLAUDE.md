@@ -129,9 +129,14 @@ Two people work in this repo. Git identity vs. GitHub login is *not*
   long-lived feature branches (`phase*`/`phase9.5/*`), and increasingly also
   the new sync engine and unified mobile app (`commercial_runtime/sync/`,
   `mobile/aura-retail-unified`).
-- `master` lags significantly behind these branches — hundreds of files'
-  worth in `owner/` alone. Don't assume `master` reflects current reality
-  for anything Owner-related.
+- `master` used to lag these branches by hundreds of files in `owner/`. As of
+  2026-08-19 that is no longer true — master carries 536 `owner/` files
+  against 543 on the UI lineage tip, and the remaining gap is small and
+  specific (the sync engine, the department-nav UI, the licensing P0 fixes).
+  **`docs/ops/branch-and-release-map.md` is the current, measured answer** to
+  "what is on master and what is the latest" — read it before assuming
+  anything about Owner branch state, and re-verify rather than trusting it,
+  since branches move.
 - `scripts/sync/aura-sync.ps1` / `.sh` — a two-clone auto git sync tool,
   built this project, `master`-only by default with an opt-in
   `SYNC_BRANCHES=current` / `-TrackCurrentBranch` mode to follow whatever
