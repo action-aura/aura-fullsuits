@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-08-09 13:45+0300\n"
+"POT-Creation-Date: 2026-08-19 16:07+0300\n"
 "PO-Revision-Date: 2026-08-01 11:16+0300\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -96,7 +96,7 @@ msgid "Super Administrator"
 msgstr "Super Administrator"
 
 #: app/command_palette/service.py:345 app/i18n_labels.py:45
-#: app/templates/layout/_sidebar.html:69
+#: app/templates/layout/_nav_model.html:101
 msgid "Sales"
 msgstr "Sales"
 
@@ -240,13 +240,14 @@ msgstr "Recovery code used"
 
 #: app/command_palette/service.py:429 app/i18n_labels.py:115
 #: app/templates/audit/security_events.html:7
-#: app/templates/layout/_sidebar.html:199 app/templates/staff/list.html:3
+#: app/templates/layout/_nav_model.html:170 app/templates/staff/list.html:3
 msgid "Staff"
 msgstr "Staff"
 
 #: app/command_palette/service.py:431 app/i18n_labels.py:116
 #: app/templates/employees/list.html:3 app/templates/employees/list.html:6
-#: app/templates/employees/list.html:90 app/templates/layout/_sidebar.html:202
+#: app/templates/employees/list.html:90
+#: app/templates/layout/_nav_model.html:173
 msgid "Employees"
 msgstr "Employees"
 
@@ -1837,86 +1838,86 @@ msgstr "This note was changed by someone else. Reload and try again."
 msgid "The author cannot be supplied by the client."
 msgstr "The author cannot be supplied by the client."
 
-#: app/attention/service.py:110
+#: app/attention/service.py:111
 #, python-format
 msgid "%(count)d day(s)"
 msgstr "%(count)d day(s)"
 
-#: app/attention/service.py:113
+#: app/attention/service.py:114
 #, python-format
 msgid "%(count)d hour(s)"
 msgstr "%(count)d hour(s)"
 
-#: app/attention/service.py:115
+#: app/attention/service.py:116
 #, python-format
 msgid "%(count)d minute(s)"
 msgstr "%(count)d minute(s)"
 
-#: app/attention/service.py:166 app/attention/service.py:200
+#: app/attention/service.py:167 app/attention/service.py:201
 #, python-format
 msgid "Follow-up overdue: %(name)s"
 msgstr "Follow-up overdue: %(name)s"
 
-#: app/attention/service.py:167 app/attention/service.py:201
+#: app/attention/service.py:168 app/attention/service.py:202
 #, python-format
 msgid "%(duration)s overdue"
 msgstr "%(duration)s overdue"
 
-#: app/attention/service.py:170 app/attention/service.py:173
-#: app/attention/service.py:204 app/attention/service.py:207
+#: app/attention/service.py:171 app/attention/service.py:174
+#: app/attention/service.py:205 app/attention/service.py:208
 msgid "Overdue Follow-ups"
 msgstr "Overdue Follow-ups"
 
-#: app/attention/service.py:172
+#: app/attention/service.py:173
 msgid "Open lead"
 msgstr "Open lead"
 
-#: app/attention/service.py:206
+#: app/attention/service.py:207
 msgid "Open customer"
 msgstr "Open customer"
 
-#: app/attention/service.py:234
+#: app/attention/service.py:235
 #, python-format
 msgid "Quote %(number)s awaiting approval"
 msgstr "Quote %(number)s awaiting approval"
 
-#: app/attention/service.py:235
+#: app/attention/service.py:236
 #, python-format
 msgid "Price override requested, pending %(duration)s"
 msgstr "Price override requested, pending %(duration)s"
 
-#: app/attention/service.py:238 app/attention/service.py:241
+#: app/attention/service.py:239 app/attention/service.py:242
 msgid "Quotes Waiting for Approval"
 msgstr "Quotes Waiting for Approval"
 
-#: app/attention/service.py:240
+#: app/attention/service.py:241
 msgid "Review quote"
 msgstr "Review quote"
 
-#: app/attention/service.py:270
+#: app/attention/service.py:283
 #, python-format
 msgid "Invoice %(number)s overdue"
 msgstr "Invoice %(number)s overdue"
 
-#: app/attention/service.py:272
+#: app/attention/service.py:285
 #, python-format
 msgid "%(days)d day(s) overdue, %(amount)s %(currency)s outstanding"
 msgstr "%(days)d day(s) overdue, %(amount)s %(currency)s outstanding"
 
-#: app/attention/service.py:277 app/attention/service.py:280
+#: app/attention/service.py:290 app/attention/service.py:293
 #: app/templates/operations_ui/dashboard_management.html:29
 msgid "Overdue Invoices"
 msgstr "Overdue Invoices"
 
-#: app/attention/service.py:279
+#: app/attention/service.py:292
 msgid "Open invoice"
 msgstr "Open invoice"
 
-#: app/attention/service.py:301
+#: app/attention/service.py:314
 msgid "Unallocated payment from customer"
 msgstr "Unallocated payment from customer"
 
-#: app/attention/service.py:303
+#: app/attention/service.py:316
 #, python-format
 msgid ""
 "%(balance)s %(currency)s of %(amount)s %(currency)s unallocated, "
@@ -1925,111 +1926,111 @@ msgstr ""
 "%(balance)s %(currency)s of %(amount)s %(currency)s unallocated, "
 "confirmed %(duration)s ago"
 
-#: app/attention/service.py:308 app/attention/service.py:311
+#: app/attention/service.py:321 app/attention/service.py:324
 #: app/templates/operations_ui/dashboard_finance.html:18
 msgid "Unallocated Payments"
 msgstr "Unallocated Payments"
 
-#: app/attention/service.py:310
+#: app/attention/service.py:323
 #: app/templates/commercial_sales/invoice_detail.html:94
 msgid "Allocate payment"
 msgstr "Allocate payment"
 
-#: app/attention/service.py:342
+#: app/attention/service.py:355
 #, python-format
 msgid "Expense %(number)s awaiting approval"
 msgstr "Expense %(number)s awaiting approval"
 
-#: app/attention/service.py:344
+#: app/attention/service.py:357
 #, python-format
 msgid "%(amount)s %(currency)s requested, pending %(duration)s"
 msgstr "%(amount)s %(currency)s requested, pending %(duration)s"
 
-#: app/attention/service.py:349 app/attention/service.py:352
+#: app/attention/service.py:362 app/attention/service.py:365
 msgid "Pending Expenses"
 msgstr "Pending Expenses"
 
-#: app/attention/service.py:351
+#: app/attention/service.py:364
 msgid "Review expense"
 msgstr "Review expense"
 
-#: app/attention/service.py:374
+#: app/attention/service.py:402
 #, python-format
 msgid "Commission for %(name)s awaiting approval"
 msgstr "Commission for %(name)s awaiting approval"
 
-#: app/attention/service.py:376
+#: app/attention/service.py:404
 #, python-format
 msgid "%(amount)s %(currency)s, earned %(duration)s ago"
 msgstr "%(amount)s %(currency)s, earned %(duration)s ago"
 
-#: app/attention/service.py:381 app/attention/service.py:384
+#: app/attention/service.py:409 app/attention/service.py:412
 msgid "Pending Commission Approvals"
 msgstr "Pending Commission Approvals"
 
-#: app/attention/service.py:383
+#: app/attention/service.py:411
 msgid "Review commissions"
 msgstr "Review commissions"
 
-#: app/attention/service.py:410
+#: app/attention/service.py:438
 #, python-format
 msgid "License expiring for %(name)s"
 msgstr "License expiring for %(name)s"
 
-#: app/attention/service.py:411
+#: app/attention/service.py:439
 #, python-format
 msgid "Expires in %(days)d day(s)"
 msgstr "Expires in %(days)d day(s)"
 
-#: app/attention/service.py:414 app/attention/service.py:417
+#: app/attention/service.py:442 app/attention/service.py:445
 msgid "Expiring Licenses"
 msgstr "Expiring Licenses"
 
-#: app/attention/service.py:416 app/attention/service.py:446
+#: app/attention/service.py:444 app/attention/service.py:474
 msgid "Open license"
 msgstr "Open license"
 
-#: app/attention/service.py:440
+#: app/attention/service.py:468
 #, python-format
 msgid "License suspended for %(name)s"
 msgstr "License suspended for %(name)s"
 
-#: app/attention/service.py:441
+#: app/attention/service.py:469
 #, python-format
 msgid "Suspended %(duration)s ago"
 msgstr "Suspended %(duration)s ago"
 
-#: app/attention/service.py:444 app/attention/service.py:447
+#: app/attention/service.py:472 app/attention/service.py:475
 msgid "Suspended Licenses"
 msgstr "Suspended Licenses"
 
-#: app/attention/service.py:475
+#: app/attention/service.py:503
 #, python-format
 msgid "Open %(duration)s -- %(message)s"
 msgstr "Open %(duration)s -- %(message)s"
 
-#: app/attention/service.py:478 app/attention/service.py:481
+#: app/attention/service.py:506 app/attention/service.py:509
 msgid "Device-Limit Events"
 msgstr "Device-Limit Events"
 
-#: app/attention/service.py:480 app/templates/dashboard/index.html:64
+#: app/attention/service.py:508 app/templates/dashboard/index.html:197
 msgid "Open notifications"
 msgstr "Open notifications"
 
-#: app/attention/service.py:497
+#: app/attention/service.py:525
 msgid "Most recent database backup failed"
 msgstr "Most recent database backup failed"
 
-#: app/attention/service.py:498
+#: app/attention/service.py:526
 #, python-format
 msgid "Failed %(duration)s ago -- no successful backup since"
 msgstr "Failed %(duration)s ago -- no successful backup since"
 
-#: app/attention/service.py:501 app/attention/service.py:504
+#: app/attention/service.py:529 app/attention/service.py:532
 msgid "Failed Backups"
 msgstr "Failed Backups"
 
-#: app/attention/service.py:503
+#: app/attention/service.py:531
 msgid "Open backups"
 msgstr "Open backups"
 
@@ -2105,54 +2106,57 @@ msgid "Quick Create"
 msgstr "Quick Create"
 
 #: app/command_palette/service.py:343 app/templates/customers/detail.html:109
-#: app/templates/dashboard/index.html:36 app/templates/dashboard/index.html:43
-#: app/templates/layout/_sidebar.html:31
+#: app/templates/dashboard/index.html:100
+#: app/templates/dashboard/index.html:160
+#: app/templates/layout/_nav_model.html:59
 msgid "Overview"
 msgstr "Overview"
 
-#: app/command_palette/service.py:344 app/templates/layout/_sidebar.html:44
+#: app/command_palette/service.py:344 app/templates/layout/_nav_model.html:70
 msgid "CRM"
 msgstr "CRM"
 
-#: app/command_palette/service.py:346 app/templates/layout/_sidebar.html:112
+#: app/command_palette/service.py:346 app/templates/layout/_nav_model.html:127
 msgid "Finance / Operations"
 msgstr "Finance / Operations"
 
-#: app/command_palette/service.py:347 app/templates/layout/_sidebar.html:152
+#: app/command_palette/service.py:347 app/templates/layout/_nav_model.html:165
 msgid "Licensing"
 msgstr "Licensing"
 
-#: app/command_palette/service.py:348 app/templates/layout/_sidebar.html:196
+#: app/command_palette/service.py:348 app/templates/layout/_nav_model.html:176
 msgid "Management"
 msgstr "Management"
 
-#: app/command_palette/service.py:349 app/templates/layout/_sidebar.html:213
-#: app/templates/layout/base.html:87
+#: app/command_palette/service.py:349 app/templates/layout/_nav_model.html:187
+#: app/templates/layout/base.html:102
 msgid "System"
 msgstr "System"
 
-#: app/command_palette/service.py:352 app/templates/dashboard/index.html:2
-#: app/templates/employees/list.html:112 app/templates/layout/_sidebar.html:33
+#: app/command_palette/service.py:352 app/templates/dashboard/index.html:3
+#: app/templates/employees/list.html:112
+#: app/templates/layout/_nav_model.html:55
 msgid "Dashboard"
 msgstr "Dashboard"
 
 #: app/command_palette/service.py:356 app/templates/attention/index.html:2
-#: app/templates/attention/index.html:26 app/templates/layout/_sidebar.html:35
+#: app/templates/attention/index.html:26 app/templates/dashboard/index.html:93
+#: app/templates/layout/_nav_model.html:57
 msgid "Attention Center"
 msgstr "Attention Center"
 
-#: app/command_palette/service.py:360 app/templates/layout/_sidebar.html:47
+#: app/command_palette/service.py:360 app/templates/layout/_nav_model.html:64
 #: app/templates/leads/list.html:3 app/templates/leads/list.html:6
 msgid "Leads"
 msgstr "Leads"
 
-#: app/command_palette/service.py:361 app/templates/layout/_sidebar.html:48
+#: app/command_palette/service.py:361 app/templates/layout/_nav_model.html:65
 #: app/templates/leads/dashboard.html:2 app/templates/leads/dashboard.html:5
 msgid "CRM Dashboard"
 msgstr "CRM Dashboard"
 
 #: app/command_palette/service.py:363 app/templates/customers/list.html:3
-#: app/templates/layout/_sidebar.html:51
+#: app/templates/layout/_nav_model.html:68
 msgid "Customers"
 msgstr "Customers"
 
@@ -2164,11 +2168,11 @@ msgstr "Customers"
 #: app/templates/commercial_sales/quotes_list.html:18
 #: app/templates/customers/detail.html:49
 #: app/templates/customers/detail.html:113
-#: app/templates/layout/_sidebar.html:72
+#: app/templates/layout/_nav_model.html:75
 msgid "Quotes"
 msgstr "Quotes"
 
-#: app/command_palette/service.py:369 app/templates/layout/_sidebar.html:75
+#: app/command_palette/service.py:369 app/templates/layout/_nav_model.html:78
 msgid "Sales Orders"
 msgstr "Sales Orders"
 
@@ -2179,7 +2183,7 @@ msgstr "Sales Orders"
 #: app/templates/commercial_sales/invoices_list.html:6
 #: app/templates/commercial_sales/invoices_list.html:18
 #: app/templates/customers/detail.html:115
-#: app/templates/layout/_sidebar.html:78
+#: app/templates/layout/_nav_model.html:81
 msgid "Invoices"
 msgstr "Invoices"
 
@@ -2188,7 +2192,7 @@ msgstr "Invoices"
 #: app/templates/commercial_sales/payments_list.html:6
 #: app/templates/commercial_sales/payments_list.html:18
 #: app/templates/customers/detail.html:116
-#: app/templates/layout/_sidebar.html:81
+#: app/templates/layout/_nav_model.html:84
 msgid "Payments"
 msgstr "Payments"
 
@@ -2197,7 +2201,7 @@ msgstr "Payments"
 #: app/templates/commercial_sales/refunds_list.html:3
 #: app/templates/commercial_sales/refunds_list.html:6
 #: app/templates/commercial_sales/refunds_list.html:18
-#: app/templates/layout/_sidebar.html:84
+#: app/templates/layout/_nav_model.html:87
 msgid "Refunds"
 msgstr "Refunds"
 
@@ -2205,76 +2209,76 @@ msgstr "Refunds"
 #: app/templates/commercial_sales/commissions_list.html:3
 #: app/templates/commercial_sales/commissions_list.html:6
 #: app/templates/commercial_sales/commissions_list.html:18
-#: app/templates/layout/_sidebar.html:87
+#: app/templates/layout/_nav_model.html:90
 msgid "Commissions"
 msgstr "Commissions"
 
-#: app/command_palette/service.py:379 app/templates/layout/_sidebar.html:90
+#: app/command_palette/service.py:379 app/templates/layout/_nav_model.html:93
 msgid "Commission Payouts"
 msgstr "Commission Payouts"
 
-#: app/command_palette/service.py:381 app/templates/layout/_sidebar.html:93
+#: app/command_palette/service.py:381 app/templates/layout/_nav_model.html:96
 msgid "Commercial Dashboard"
 msgstr "Commercial Dashboard"
 
-#: app/command_palette/service.py:383 app/templates/layout/_sidebar.html:96
+#: app/command_palette/service.py:383 app/templates/layout/_nav_model.html:99
 #: app/templates/operations_ui/dashboard_finance.html:2
 #: app/templates/operations_ui/dashboard_finance.html:5
 msgid "Finance Dashboard"
 msgstr "Finance Dashboard"
 
-#: app/command_palette/service.py:387 app/templates/layout/_sidebar.html:115
+#: app/command_palette/service.py:387 app/templates/layout/_nav_model.html:106
 #: app/templates/operations_ui/expenses_list.html:3
 #: app/templates/operations_ui/expenses_list.html:6
 #: app/templates/operations_ui/expenses_list.html:18
 msgid "Expenses"
 msgstr "Expenses"
 
-#: app/command_palette/service.py:389 app/templates/layout/_sidebar.html:118
+#: app/command_palette/service.py:389 app/templates/layout/_nav_model.html:109
 #: app/templates/operations_ui/payees_list.html:2
 #: app/templates/operations_ui/payees_list.html:5
 msgid "Expense Payees"
 msgstr "Expense Payees"
 
-#: app/command_palette/service.py:391 app/templates/layout/_sidebar.html:121
+#: app/command_palette/service.py:391 app/templates/layout/_nav_model.html:112
 #: app/templates/operations_ui/cash_closing_detail.html:3
 #: app/templates/operations_ui/cash_closings_list.html:3
 msgid "Cash Closing"
 msgstr "Cash Closing"
 
-#: app/command_palette/service.py:393 app/templates/layout/_sidebar.html:124
+#: app/command_palette/service.py:393 app/templates/layout/_nav_model.html:115
 #: app/templates/operations_ui/report_snapshots_list.html:2
 #: app/templates/operations_ui/report_snapshots_list.html:5
 msgid "Operational Reports"
 msgstr "Operational Reports"
 
-#: app/command_palette/service.py:395 app/templates/layout/_sidebar.html:127
+#: app/command_palette/service.py:395 app/templates/layout/_nav_model.html:118
 #: app/templates/operations_ui/management_notes_list.html:2
 #: app/templates/operations_ui/management_notes_list.html:6
 msgid "Management Notes"
 msgstr "Management Notes"
 
-#: app/command_palette/service.py:397 app/templates/layout/_sidebar.html:130
+#: app/command_palette/service.py:397 app/templates/layout/_nav_model.html:121
 #: app/templates/operations_ui/dashboard_employee.html:2
 #: app/templates/operations_ui/dashboard_employee.html:5
 msgid "My Expense Dashboard"
 msgstr "My Expense Dashboard"
 
-#: app/command_palette/service.py:399 app/templates/layout/_sidebar.html:133
+#: app/command_palette/service.py:399 app/templates/layout/_nav_model.html:124
 msgid "Operational Management Dashboard"
 msgstr "Operational Management Dashboard"
 
-#: app/command_palette/service.py:400 app/templates/layout/_sidebar.html:134
+#: app/command_palette/service.py:400 app/templates/layout/_nav_model.html:125
 msgid "Operational Finance Dashboard"
 msgstr "Operational Finance Dashboard"
 
 #: app/command_palette/service.py:404 app/templates/catalog/index.html:2
-#: app/templates/layout/_sidebar.html:155
+#: app/templates/layout/_nav_model.html:132
 msgid "Catalog"
 msgstr "Catalog"
 
 #: app/command_palette/service.py:406 app/templates/customers/detail.html:117
-#: app/templates/layout/_sidebar.html:158
+#: app/templates/layout/_nav_model.html:135
 #: app/templates/subscriptions/list.html:3
 #: app/templates/subscriptions/list.html:6
 #: app/templates/subscriptions/list.html:20
@@ -2282,7 +2286,7 @@ msgid "Subscriptions"
 msgstr "Subscriptions"
 
 #: app/command_palette/service.py:408 app/templates/customers/detail.html:118
-#: app/templates/layout/_sidebar.html:161 app/templates/licensing/list.html:3
+#: app/templates/layout/_nav_model.html:138 app/templates/licensing/list.html:3
 #: app/templates/licensing/list.html:6 app/templates/licensing/list.html:20
 msgid "Licenses"
 msgstr "Licenses"
@@ -2291,65 +2295,65 @@ msgstr "Licenses"
 #: app/templates/installations/list.html:3
 #: app/templates/installations/list.html:6
 #: app/templates/installations/list.html:20
-#: app/templates/layout/_sidebar.html:164
+#: app/templates/layout/_nav_model.html:141
 msgid "Installations"
 msgstr "Installations"
 
 #: app/command_palette/service.py:412
 #: app/templates/commercial_ops/renewals_list.html:2
-#: app/templates/layout/_sidebar.html:167
+#: app/templates/layout/_nav_model.html:144
 msgid "Renewals"
 msgstr "Renewals"
 
 #: app/command_palette/service.py:414
 #: app/templates/commercial_ops/pilots_list.html:2
 #: app/templates/commercial_ops/pilots_list.html:5
-#: app/templates/layout/_sidebar.html:170
+#: app/templates/layout/_nav_model.html:147
 msgid "Pilots"
 msgstr "Pilots"
 
-#: app/command_palette/service.py:416 app/templates/layout/_sidebar.html:173
+#: app/command_palette/service.py:416 app/templates/layout/_nav_model.html:150
 msgid "Emergency Ext."
 msgstr "Emergency Ext."
 
-#: app/command_palette/service.py:418 app/templates/layout/_sidebar.html:176
+#: app/command_palette/service.py:418 app/templates/layout/_nav_model.html:153
 msgid "Activation Reviews"
 msgstr "Activation Reviews"
 
 #: app/command_palette/service.py:420
 #: app/templates/commercial_ops/notifications_list.html:2
-#: app/templates/layout/_sidebar.html:179
+#: app/templates/layout/_nav_model.html:156
 msgid "Notifications"
 msgstr "Notifications"
 
-#: app/command_palette/service.py:421 app/templates/layout/_sidebar.html:180
+#: app/command_palette/service.py:421 app/templates/layout/_nav_model.html:157
 msgid "My Queue"
 msgstr "My Queue"
 
 #: app/command_palette/service.py:423
 #: app/templates/commercial_ops/reconciliation.html:2
 #: app/templates/commercial_ops/reconciliation.html:5
-#: app/templates/layout/_sidebar.html:183
+#: app/templates/layout/_nav_model.html:160
 msgid "Reconciliation"
 msgstr "Reconciliation"
 
-#: app/command_palette/service.py:425 app/templates/layout/_sidebar.html:186
+#: app/command_palette/service.py:425 app/templates/layout/_nav_model.html:163
 msgid "Activation Service"
 msgstr "Activation Service"
 
-#: app/command_palette/service.py:432 app/templates/layout/_sidebar.html:203
+#: app/command_palette/service.py:432 app/templates/layout/_nav_model.html:174
 msgid "Employee Dashboard"
 msgstr "Employee Dashboard"
 
-#: app/command_palette/service.py:436 app/templates/layout/_sidebar.html:216
+#: app/command_palette/service.py:436 app/templates/layout/_nav_model.html:181
 msgid "Audit Log"
 msgstr "Audit Log"
 
-#: app/command_palette/service.py:437 app/templates/layout/_sidebar.html:217
+#: app/command_palette/service.py:437 app/templates/layout/_nav_model.html:182
 msgid "Security Events"
 msgstr "Security Events"
 
-#: app/command_palette/service.py:439 app/templates/layout/_sidebar.html:220
+#: app/command_palette/service.py:439 app/templates/layout/_nav_model.html:185
 msgid "Backups"
 msgstr "Backups"
 
@@ -2372,6 +2376,18 @@ msgstr "New License"
 #: app/command_palette/service.py:451
 msgid "New Installation"
 msgstr "New Installation"
+
+#: app/command_palette/service.py:453
+msgid "New Payment"
+msgstr "New Payment"
+
+#: app/command_palette/service.py:455
+msgid "New Expense"
+msgstr "New Expense"
+
+#: app/command_palette/service.py:457
+msgid "New Cash Closing"
+msgstr "New Cash Closing"
 
 #: app/commercial_ops/timeline.py:49 app/commercial_ops/timeline.py:55
 #: app/commercial_ops/timeline.py:67 app/commercial_ops/timeline.py:73
@@ -2605,7 +2621,7 @@ msgstr "Export CSV"
 #: app/templates/commercial_ops/renewal_detail.html:68
 #: app/templates/commercial_ops/timeline.html:8
 #: app/templates/customers/detail.html:167
-#: app/templates/dashboard/index.html:135
+#: app/templates/dashboard/index.html:330
 #: app/templates/employees/detail.html:146
 #: app/templates/installations/detail.html:59
 #: app/templates/installations/detail.html:72
@@ -2621,14 +2637,14 @@ msgstr "When"
 msgid "Actor"
 msgstr "Actor"
 
-#: app/templates/audit/list.html:16 app/templates/dashboard/index.html:135
+#: app/templates/audit/list.html:16 app/templates/dashboard/index.html:330
 #: app/templates/employees/detail.html:146
 msgid "Action"
 msgstr "Action"
 
 #: app/templates/audit/list.html:16
 #: app/templates/commercial_ops/reconciliation.html:26
-#: app/templates/dashboard/index.html:135
+#: app/templates/dashboard/index.html:330
 msgid "Entity"
 msgstr "Entity"
 
@@ -2712,7 +2728,7 @@ msgstr "Accept invitation"
 #: app/templates/auth/accept_invitation.html:6 app/templates/auth/login.html:6
 #: app/templates/auth/mfa_enroll.html:6 app/templates/auth/mfa_verify.html:6
 #: app/templates/errors/security.html:7 app/templates/layout/base.html:5
-#: app/templates/layout/base.html:27
+#: app/templates/layout/base.html:42
 msgid "Aura Owner"
 msgstr "Aura Owner"
 
@@ -2995,7 +3011,6 @@ msgstr "Billing model"
 #: app/templates/customers/detail.html:382
 #: app/templates/customers/detail.html:402
 #: app/templates/customers/detail.html:421 app/templates/customers/list.html:17
-#: app/templates/dashboard/index.html:100
 #: app/templates/employees/detail.html:120
 #: app/templates/employees/invitations.html:9
 #: app/templates/employees/list.html:33 app/templates/employees/list.html:60
@@ -3090,7 +3105,6 @@ msgstr "Recently imported versions"
 #: app/templates/customers/detail.html:382
 #: app/templates/customers/detail.html:402
 #: app/templates/customers/detail.html:421
-#: app/templates/dashboard/index.html:87 app/templates/dashboard/index.html:113
 #: app/templates/installations/detail.html:9
 #: app/templates/installations/list.html:15
 #: app/templates/licensing/list.html:15
@@ -4460,7 +4474,7 @@ msgstr "Request refund"
 #: app/templates/commercial_sales/refunds_list.html:9
 #: app/templates/components/table.html:98 app/templates/customers/list.html:10
 #: app/templates/employees/list.html:24 app/templates/employees/list.html:70
-#: app/templates/installations/list.html:9 app/templates/layout/base.html:65
+#: app/templates/installations/list.html:9 app/templates/layout/base.html:80
 #: app/templates/leads/list.html:10 app/templates/licensing/list.html:9
 #: app/templates/operations_ui/expenses_list.html:9
 #: app/templates/staff/list.html:9 app/templates/subscriptions/list.html:9
@@ -4918,15 +4932,21 @@ msgstr "View source lead"
 msgid "Open invoices (%(count)s)"
 msgstr "Open invoices (%(count)s)"
 
-#: app/templates/customers/detail.html:58 app/templates/dashboard/index.html:51
+#: app/templates/customers/detail.html:58
+#: app/templates/dashboard/index.html:130
+#: app/templates/dashboard/index.html:177
 msgid "Active subscriptions"
 msgstr "Active subscriptions"
 
 #: app/templates/customers/detail.html:61
+#: app/templates/dashboard/index.html:137
+#: app/templates/dashboard/index.html:286
 msgid "Active licenses"
 msgstr "Active licenses"
 
 #: app/templates/customers/detail.html:64
+#: app/templates/dashboard/index.html:140
+#: app/templates/dashboard/index.html:305
 msgid "Active installations"
 msgstr "Active installations"
 
@@ -4939,6 +4959,8 @@ msgid "Archive"
 msgstr "Archive"
 
 #: app/templates/customers/detail.html:90
+#: app/templates/dashboard/index.html:244
+#: app/templates/dashboard/index.html:274
 #: app/templates/subscriptions/list.html:6
 #: app/templates/subscriptions/new.html:2
 #: app/templates/subscriptions/new.html:5
@@ -5032,7 +5054,7 @@ msgstr "No reassignments yet."
 msgid "Phone"
 msgstr "Phone"
 
-#: app/templates/customers/detail.html:186 app/templates/layout/base.html:23
+#: app/templates/customers/detail.html:186 app/templates/layout/base.html:31
 #: app/templates/leads/detail.html:53
 msgid "Primary"
 msgstr "Primary"
@@ -5288,7 +5310,7 @@ msgstr "Acquisition source"
 msgid "Create customer"
 msgstr "Create customer"
 
-#: app/templates/dashboard/index.html:37
+#: app/templates/dashboard/index.html:101
 msgid ""
 "Nothing to show here yet -- your role doesn't include a company-wide "
 "overview permission. Use the sidebar to reach the screens you're "
@@ -5298,93 +5320,169 @@ msgstr ""
 "overview permission. Use the sidebar to reach the screens you're "
 "permitted to work in."
 
-#: app/templates/dashboard/index.html:46
-msgid "Total customers"
-msgstr "Total customers"
+#: app/templates/dashboard/index.html:125
+msgid "Key metrics"
+msgstr "Key metrics"
 
-#: app/templates/dashboard/index.html:47
-msgid "Pilot customers"
-msgstr "Pilot customers"
-
-#: app/templates/dashboard/index.html:48
+#: app/templates/dashboard/index.html:127
+#: app/templates/dashboard/index.html:168
 msgid "Active customers"
 msgstr "Active customers"
 
-#: app/templates/dashboard/index.html:52
-msgid "Subscriptions expiring in 7 days"
-msgstr "Subscriptions expiring in 7 days"
+#: app/templates/dashboard/index.html:130
+#: app/templates/dashboard/index.html:177
+#, python-format
+msgid "%(share)s%% of all subscriptions"
+msgstr "%(share)s%% of all subscriptions"
 
-#: app/templates/dashboard/index.html:53
-msgid "Subscriptions expiring in 30 days"
-msgstr "Subscriptions expiring in 30 days"
+#: app/templates/dashboard/index.html:131
+#: app/templates/dashboard/index.html:181
+msgid "Expiring in 30 days"
+msgstr "Expiring in 30 days"
 
-#: app/templates/dashboard/index.html:61
-msgid "Commercial operations"
-msgstr "Commercial operations"
+#: app/templates/dashboard/index.html:134
+#: app/templates/dashboard/index.html:195
+msgid "Open items awaiting action"
+msgstr "Open items awaiting action"
 
-#: app/templates/dashboard/index.html:65
+#: app/templates/dashboard/index.html:143
+#: app/templates/dashboard/index.html:198
 msgid "Renewals awaiting finance approval"
 msgstr "Renewals awaiting finance approval"
 
-#: app/templates/dashboard/index.html:68
-msgid "Pilots needing action"
-msgstr "Pilots needing action"
-
-#: app/templates/dashboard/index.html:71
+#: app/templates/dashboard/index.html:146
+#: app/templates/dashboard/index.html:204
 msgid "Activations pending manual review"
 msgstr "Activations pending manual review"
 
-#: app/templates/dashboard/index.html:74
+#: app/templates/dashboard/index.html:166
+msgid "Total customers"
+msgstr "Total customers"
+
+#: app/templates/dashboard/index.html:167
+msgid "Pilot customers"
+msgstr "Pilot customers"
+
+#: app/templates/dashboard/index.html:171
+msgid "Total subscriptions"
+msgstr "Total subscriptions"
+
+#: app/templates/dashboard/index.html:180
+#: app/templates/dashboard/index.html:266
+msgid "Expiring in 7 days"
+msgstr "Expiring in 7 days"
+
+#: app/templates/dashboard/index.html:189
+msgid "Commercial operations"
+msgstr "Commercial operations"
+
+#: app/templates/dashboard/index.html:201
+msgid "Pilots needing action"
+msgstr "Pilots needing action"
+
+#: app/templates/dashboard/index.html:207
 msgid "Active emergency extensions"
 msgstr "Active emergency extensions"
 
-#: app/templates/dashboard/index.html:77
+#: app/templates/dashboard/index.html:210
 msgid "Active device-slot exceptions"
 msgstr "Active device-slot exceptions"
 
-#: app/templates/dashboard/index.html:85
+#: app/templates/dashboard/index.html:226
+msgid "Chart colors"
+msgstr "Chart colors"
+
+#: app/templates/dashboard/index.html:228
+msgid "Brand"
+msgstr "Brand"
+
+#: app/templates/dashboard/index.html:229
+msgid "Vivid"
+msgstr "Vivid"
+
+#: app/templates/dashboard/index.html:230
+msgid "Colorblind-safe"
+msgstr "Colorblind-safe"
+
+#: app/templates/dashboard/index.html:237
 msgid "Subscriptions by product"
 msgstr "Subscriptions by product"
 
-#: app/templates/dashboard/index.html:87 app/templates/dashboard/index.html:100
-#: app/templates/dashboard/index.html:113 app/templates/leads/dashboard.html:16
-msgid "Count"
-msgstr "Count"
+#: app/templates/dashboard/index.html:242
+msgid ""
+"Subscriptions appear here grouped by product as soon as the first one is "
+"created."
+msgstr "Subscriptions appear here grouped by product as soon as the first one is created."
 
-#: app/templates/dashboard/index.html:90
-#: app/templates/subscriptions/list.html:20
-msgid "No subscriptions yet."
-msgstr "No subscriptions yet."
+#: app/templates/dashboard/index.html:248
+msgid "Renewal pipeline"
+msgstr "Renewal pipeline"
 
-#: app/templates/dashboard/index.html:98
+#: app/templates/dashboard/index.html:267
+msgid "Expiring in 8-30 days"
+msgstr "Expiring in 8-30 days"
+
+#: app/templates/dashboard/index.html:268
+msgid "Not expiring within 30 days"
+msgstr "Not expiring within 30 days"
+
+#: app/templates/dashboard/index.html:272
+msgid "Active subscriptions appear here grouped by how close they are to renewal."
+msgstr "Active subscriptions appear here grouped by how close they are to renewal."
+
+#: app/templates/dashboard/index.html:280
 msgid "Licenses by status"
 msgstr "Licenses by status"
 
-#: app/templates/dashboard/index.html:103 app/templates/licensing/list.html:20
-msgid "No licenses yet."
-msgstr "No licenses yet."
+#: app/templates/dashboard/index.html:285
+msgid "Total licenses"
+msgstr "Total licenses"
 
-#: app/templates/dashboard/index.html:111
+#: app/templates/dashboard/index.html:293
+msgid ""
+"Licenses appear here grouped by status as soon as the first one is "
+"created."
+msgstr "Licenses appear here grouped by status as soon as the first one is created."
+
+#: app/templates/dashboard/index.html:295 app/templates/licensing/list.html:6
+#: app/templates/licensing/new.html:2 app/templates/licensing/new.html:5
+msgid "New license"
+msgstr "New license"
+
+#: app/templates/dashboard/index.html:301
 msgid "Active installations by product"
 msgstr "Active installations by product"
 
-#: app/templates/dashboard/index.html:116
-msgid "No active installations yet."
-msgstr "No active installations yet."
+#: app/templates/dashboard/index.html:308
+msgid "Products with active installations"
+msgstr "Products with active installations"
 
-#: app/templates/dashboard/index.html:124
+#: app/templates/dashboard/index.html:311
+msgid ""
+"Active installations appear here grouped by product once devices start "
+"activating."
+msgstr "Active installations appear here grouped by product once devices start activating."
+
+#: app/templates/dashboard/index.html:313
+#: app/templates/installations/list.html:6
+#: app/templates/installations/new.html:2
+#: app/templates/installations/new.html:5
+msgid "Register installation"
+msgstr "Register installation"
+
+#: app/templates/dashboard/index.html:319
 msgid "Latest Owner database backup"
 msgstr "Latest Owner database backup"
 
-#: app/templates/dashboard/index.html:127
+#: app/templates/dashboard/index.html:322
 msgid "No backup has been taken yet."
 msgstr "No backup has been taken yet."
 
-#: app/templates/dashboard/index.html:133
+#: app/templates/dashboard/index.html:328
 msgid "Recent staff actions"
 msgstr "Recent staff actions"
 
-#: app/templates/dashboard/index.html:139
+#: app/templates/dashboard/index.html:334
 msgid "No activity yet."
 msgstr "No activity yet."
 
@@ -5801,12 +5899,6 @@ msgstr "Activation events"
 msgid "No activation events yet."
 msgstr "No activation events yet."
 
-#: app/templates/installations/list.html:6
-#: app/templates/installations/new.html:2
-#: app/templates/installations/new.html:5
-msgid "Register installation"
-msgstr "Register installation"
-
 #: app/templates/installations/list.html:9
 msgid "Customer name, installation or device label"
 msgstr "Customer name, installation or device label"
@@ -5826,6 +5918,15 @@ msgstr "e.g. Front desk PC"
 #: app/templates/installations/new.html:20
 msgid "Register"
 msgstr "Register"
+
+#: app/templates/layout/_charts.html:54
+msgid "No data yet."
+msgstr "No data yet."
+
+#: app/templates/layout/_charts.html:104 app/templates/layout/_charts.html:185
+#, python-format
+msgid "%(label)s: %(value)s (%(share)s%% of total)"
+msgstr "%(label)s: %(value)s (%(share)s%% of total)"
 
 #: app/templates/layout/_command_palette.html:24
 msgid "Recent"
@@ -5849,6 +5950,7 @@ msgid "Search or jump to..."
 msgstr "Search or jump to..."
 
 #: app/templates/layout/_command_palette.html:39
+#: app/templates/layout/_shortcuts_cheatsheet.html:12
 #: app/templates/operations_ui/cash_closing_detail.html:60
 msgid "Close"
 msgstr "Close"
@@ -5877,7 +5979,50 @@ msgstr "Esc"
 msgid "to close"
 msgstr "to close"
 
-#: app/templates/layout/_tour.html:35 app/templates/layout/base.html:101
+#: app/templates/layout/_dept_cards.html:41
+msgid "Departments"
+msgstr "Departments"
+
+#: app/templates/layout/_dept_cards.html:54
+#, python-format
+msgid "%(count)d function(s)"
+msgstr "%(count)d function(s)"
+
+#: app/templates/layout/_shortcuts_cheatsheet.html:11
+#: app/templates/layout/_shortcuts_cheatsheet.html:13
+msgid "Keyboard shortcuts"
+msgstr "Keyboard shortcuts"
+
+
+#: app/templates/layout/_shortcuts_cheatsheet.html:15
+msgid "Open search / command palette"
+msgstr "Open search / command palette"
+
+#: app/templates/layout/_shortcuts_cheatsheet.html:16
+msgid "Show this cheatsheet"
+msgstr "Show this cheatsheet"
+
+#: app/templates/layout/_shortcuts_cheatsheet.html:17
+msgid "Go to Dashboard"
+msgstr "Go to Dashboard"
+
+#: app/templates/layout/_shortcuts_cheatsheet.html:19
+msgid "Go to Customers"
+msgstr "Go to Customers"
+
+#: app/templates/layout/_shortcuts_cheatsheet.html:22
+msgid "Go to Leads"
+msgstr "Go to Leads"
+
+#: app/templates/layout/_shortcuts_cheatsheet.html:25
+msgid "Go to Sales (Quotes)"
+msgstr "Go to Sales (Quotes)"
+
+#: app/templates/layout/_shortcuts_cheatsheet.html:28
+msgid "Go to Expenses"
+msgstr "Go to Expenses"
+
+#: app/templates/layout/_tour.html:35 app/templates/layout/base.html:116
 #: app/templates/staff/detail.html:9 app/templates/staff/list.html:17
 msgid "Super Admin"
 msgstr "Super Admin"
@@ -6018,76 +6163,76 @@ msgstr "Next"
 msgid "Go to dashboard"
 msgstr "Go to dashboard"
 
-#: app/templates/layout/base.html:5 app/templates/layout/base.html:49
+#: app/templates/layout/base.html:5 app/templates/layout/base.html:64
 msgid "Aura Owner Control Center"
 msgstr "Aura Owner Control Center"
 
-#: app/templates/layout/base.html:20
+#: app/templates/layout/base.html:28
 msgid "Skip to content"
 msgstr "Skip to content"
 
-#: app/templates/layout/base.html:31
+#: app/templates/layout/base.html:46
 msgid "Collapse sidebar"
 msgstr "Collapse sidebar"
 
-#: app/templates/layout/base.html:34
+#: app/templates/layout/base.html:49
 msgid "Sections"
 msgstr "Sections"
 
-#: app/templates/layout/base.html:45
+#: app/templates/layout/base.html:60
 msgid "Toggle navigation"
 msgstr "Toggle navigation"
 
-#: app/templates/layout/base.html:63
+#: app/templates/layout/base.html:78
 msgid "Search (Ctrl+K)"
 msgstr "Search (Ctrl+K)"
 
-#: app/templates/layout/base.html:66
+#: app/templates/layout/base.html:81
 msgid "Ctrl K"
 msgstr "Ctrl K"
 
-#: app/templates/layout/base.html:68
+#: app/templates/layout/base.html:83
 msgid "Quick create (coming soon)"
 msgstr "Quick create (coming soon)"
 
-#: app/templates/layout/base.html:79
+#: app/templates/layout/base.html:94
 #, python-format
 msgid "Attention Center: %(count)d item(s) need your attention"
 msgstr "Attention Center: %(count)d item(s) need your attention"
 
-#: app/templates/layout/base.html:84
+#: app/templates/layout/base.html:99
 msgid "Theme"
 msgstr "Theme"
 
-#: app/templates/layout/base.html:85
+#: app/templates/layout/base.html:100
 msgid "Light"
 msgstr "Light"
 
-#: app/templates/layout/base.html:86
+#: app/templates/layout/base.html:101
 msgid "Dark"
 msgstr "Dark"
 
-#: app/templates/layout/base.html:90
+#: app/templates/layout/base.html:105
 msgid "Language"
 msgstr "Language"
 
-#: app/templates/layout/base.html:107
+#: app/templates/layout/base.html:122
 msgid "My Profile"
 msgstr "My Profile"
 
-#: app/templates/layout/base.html:108
+#: app/templates/layout/base.html:123
 msgid "Account"
 msgstr "Account"
 
-#: app/templates/layout/base.html:109
+#: app/templates/layout/base.html:124
 msgid "Show welcome tour"
 msgstr "Show welcome tour"
 
-#: app/templates/layout/base.html:111
+#: app/templates/layout/base.html:126
 msgid "Log out of Aura Owner?"
 msgstr "Log out of Aura Owner?"
 
-#: app/templates/layout/base.html:113
+#: app/templates/layout/base.html:128
 msgid "Log out"
 msgstr "Log out"
 
@@ -6114,6 +6259,10 @@ msgstr "Follow-ups overdue"
 #: app/templates/leads/dashboard.html:14
 msgid "Leads by status"
 msgstr "Leads by status"
+
+#: app/templates/leads/dashboard.html:16
+msgid "Count"
+msgstr "Count"
 
 #: app/templates/leads/dashboard.html:25
 msgid "My active leads"
@@ -6278,14 +6427,13 @@ msgstr "Replace this license with a new one?"
 msgid "Replace"
 msgstr "Replace"
 
-#: app/templates/licensing/list.html:6 app/templates/licensing/new.html:2
-#: app/templates/licensing/new.html:5
-msgid "New license"
-msgstr "New license"
-
 #: app/templates/licensing/list.html:9
 msgid "Customer name or key prefix"
 msgstr "Customer name or key prefix"
+
+#: app/templates/licensing/list.html:20
+msgid "No licenses yet."
+msgstr "No licenses yet."
 
 #: app/templates/licensing/new.html:12
 msgid "Allowed platforms (comma-separated)"
@@ -7189,6 +7337,10 @@ msgstr "Record a payment"
 msgid "Customer name"
 msgstr "Customer name"
 
+#: app/templates/subscriptions/list.html:20
+msgid "No subscriptions yet."
+msgstr "No subscriptions yet."
+
 #: app/templates/subscriptions/new.html:16
 msgid "Billing cycle"
 msgstr "Billing cycle"
@@ -7295,4 +7447,7 @@ msgstr "No backups taken yet."
 
 #~ msgid "Send invitation"
 #~ msgstr "Send invitation"
+
+#~ msgid "No active installations yet."
+#~ msgstr "No active installations yet."
 

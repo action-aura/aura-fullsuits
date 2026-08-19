@@ -128,3 +128,7 @@ Thumbs.db
 # audit log, conflict reports -- never shared, never committed)
 /.autosync/
 .scratch/
+
+# Owner runtime artifact dirs (backups, expense attachments, release artifacts)
+# created relative to the process cwd -- machine-local, never committed.
+/var/

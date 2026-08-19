@@ -15,6 +15,14 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/tokens.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/shell.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/charts.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard-redesign.css') }}">
+  {# See app/static/img/brand/action-aura-mark.svg's own header comment --
+     a recreation of the documented Action Aura mark
+     (docs/owner/ui-modernization/logo-brand-audit.md §7), not the
+     official asset; swap the file in place once the real one is
+     supplied. #}
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/brand/action-aura-mark.svg') }}">
 </head>
 <body>
   <a class="aura-sr-only" href="#main-content">{{ _('Skip to content') }}</a>
@@ -23,7 +31,14 @@
     <aside class="aura-sidebar" id="aura-sidebar" aria-label="{{ _('Primary') }}">
       <div class="aura-sidebar__header">
         <a class="aura-sidebar__brand" href="{{ url_for('dashboard.index') }}">
-          <span class="aura-sidebar__mark" aria-hidden="true">A</span>
+          {# Decorative -- the adjacent "Aura Owner" text already names
+             this link, so the mark stays out of the accessible name
+             (empty alt + aria-hidden), same treatment the plain-text "A"
+             it replaces had. See the SVG's own header comment for what
+             it is and is not. #}
+          <span class="aura-sidebar__mark" aria-hidden="true">
+            <img src="{{ url_for('static', filename='img/brand/action-aura-mark.svg') }}" alt="" width="28" height="28">
+          </span>
           <span class="aura-sidebar__name">{{ _('Aura Owner') }}</span>
         </a>
         <button type="button" class="aura-sidebar__toggle" id="aura-sidebar-toggle" aria-expanded="true" aria-controls="aura-sidebar">
@@ -133,6 +148,7 @@
   </div>
   {% if staff %}
   {% include "layout/_command_palette.html" %}
+  {% include "layout/_shortcuts_cheatsheet.html" %}
   {% endif %}
   <script src="{{ url_for('static', filename='js/confirm.js') }}"></script>
   <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
@@ -143,6 +159,9 @@
   <script src="{{ url_for('static', filename='js/product-tour.js') }}"></script>
   {% if staff %}
   <script src="{{ url_for('static', filename='js/command-palette.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/shortcuts.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/chart-palette.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/dept-cards.js') }}"></script>
   {% endif %}
 </body>
 </html>

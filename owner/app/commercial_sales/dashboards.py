@@ -30,6 +30,7 @@ from app.models.commercial_sales import (
     SalesOrder,
 )
 from app.models.commissions import CommissionLedgerEntry, CommissionPayoutBatch
+from app.operational_reports.aggregation import outstanding_receivables_total
 
 
 def employee_commercial_dashboard(actor_employee_profile_id: uuid.UUID, actor_staff_user_id: uuid.UUID) -> dict:
@@ -102,11 +103,24 @@ def finance_commercial_dashboard() -> dict:
         select(func.count(CommissionPayoutBatch.id)).where(CommissionPayoutBatch.status == "DRAFT")
     ).scalar_one()
 
-    outstanding_invoice_total = db_session.execute(
-        select(func.coalesce(func.sum(CommercialInvoice.total), Decimal("0.00"))).where(
-            CommercialInvoice.status.in_(("ISSUED", "PARTIALLY_PAID"))
-        )
-    ).scalar_one()
+    # AUDIT: previously summed CommercialInvoice.total (the invoice's GROSS
+    # face value) for status in (ISSUED, PARTIALLY_PAID), never subtracting
+    # confirmed payment allocations already received against it, and with
+    # no currency filter at all -- silently blending every currency present
+    # into one meaningless figure. Reuses the existing, already-correct
+    # helper (operational_reports/aggregation.py::outstanding_receivables_total)
+    # instead of a second, divergent implementation: it nets out
+    # confirmed_allocated_amount(invoice) and is explicitly single-currency
+    # per its own docstring ("currency is never blended"). Returned
+    # per-currency (never summed across currencies) -- every currency that
+    # appears on at least one non-DRAFT/VOID invoice gets its own entry,
+    # including a real 0.00 when nothing of that currency is outstanding.
+    outstanding_currencies = db_session.execute(
+        select(CommercialInvoice.currency).where(CommercialInvoice.status.notin_(("DRAFT", "VOID"))).distinct()
+    ).scalars().all()
+    outstanding_invoice_totals = {
+        currency: outstanding_receivables_total(currency) for currency in outstanding_currencies
+    }
 
     return {
         "quotes_by_status": quotes_by_status,
@@ -117,5 +131,10 @@ def finance_commercial_dashboard() -> dict:
         "commissions_pending_approval": commissions_pending_approval,
         "commissions_approved_unpaid": commissions_approved_unpaid,
         "payout_batches_pending_approval": payout_batches_pending_approval,
-        "outstanding_invoice_total": outstanding_invoice_total,
+        # Shape change from a single blended scalar ("outstanding_invoice_total")
+        # to a per-currency dict -- see this block's own comment above for why.
+        # Template/JSON-API consumers of the old key must be updated to render
+        # per currency; see finance_dashboard.html:28 for the one remaining
+        # consumer that still expects the old scalar shape.
+        "outstanding_invoice_totals": outstanding_invoice_totals,
     }

@@ -36,6 +36,30 @@ from app.operational_reports.aggregation import (
 )
 
 
+# AUDIT: single shared definition of "overdue invoice", reused by both the
+# Attention Center (app/attention/service.py, own-scoped) and this module's
+# company-wide Management dashboard. Before this, the two screens used two
+# independently-drifted definitions: the Attention Center only checked
+# status.in_(("ISSUED", "PARTIALLY_PAID")) and never checked the remaining
+# balance, so it silently missed PARTIALLY_REFUNDED invoices (a real,
+# reachable INVOICE_STATUSES value, see app/models/commercial_sales.py)
+# that this module already counted correctly. Extracted here (this module
+# already owned the correct definition) so both screens read the same
+# predicate and cannot drift apart again -- not DRAFT/VOID/PAID/REFUNDED,
+# due date strictly in the past, and a strictly positive remaining balance
+# (invoice.total minus confirmed_allocated_amount).
+OVERDUE_INVOICE_EXCLUDED_STATUSES = ("DRAFT", "VOID", "PAID", "REFUNDED")
+
+
+def is_invoice_overdue(invoice: CommercialInvoice, *, as_of: date | None = None) -> bool:
+    as_of = as_of or date.today()
+    if invoice.status in OVERDUE_INVOICE_EXCLUDED_STATUSES:
+        return False
+    if invoice.due_date is None or invoice.due_date >= as_of:
+        return False
+    return (invoice.total - confirmed_allocated_amount(invoice)) > 0
+
+
 def employee_expense_dashboard(employee_profile_id: uuid.UUID) -> dict:
     """Own records only -- filtered by entered_by_employee_profile_id at the
     query itself, never fetched broader and filtered after."""
@@ -105,12 +129,15 @@ def management_operational_dashboard(currency: str) -> dict:
         select(func.count(CashClosing.id)).where(CashClosing.currency == currency, CashClosing.status == "REVIEW_REQUIRED")
     ).scalar_one()
 
-    overdue_invoices = 0
-    for invoice in db_session.execute(
-        select(CommercialInvoice).where(CommercialInvoice.currency == currency, CommercialInvoice.status.notin_(("DRAFT", "VOID", "PAID", "REFUNDED")))
-    ).scalars().all():
-        if invoice.due_date is not None and invoice.due_date < today and (invoice.total - confirmed_allocated_amount(invoice)) > 0:
-            overdue_invoices += 1
+    overdue_invoices = sum(
+        1
+        for invoice in db_session.execute(
+            select(CommercialInvoice).where(
+                CommercialInvoice.currency == currency, CommercialInvoice.status.notin_(OVERDUE_INVOICE_EXCLUDED_STATUSES)
+            )
+        ).scalars().all()
+        if is_invoice_overdue(invoice, as_of=today)
+    )
 
     # Fulfillment exceptions: a confirmed order whose invoice is fully paid
     # but no Subscription was ever created for it (Subscription.sales_order_id

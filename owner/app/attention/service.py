@@ -42,6 +42,7 @@ from app.extensions import db_session
 from app.leads.ownership import apply_ownership_filter
 from app.leads.engagement import list_own_lead_followups_overdue
 from app.models.audit import DatabaseBackupRecord
+from app.operational_reports.dashboards import OVERDUE_INVOICE_EXCLUDED_STATUSES, is_invoice_overdue
 from app.models.commercial_ops import InternalNotification
 from app.models.commercial_sales import CommercialApproval, CommercialInvoice, Quote, QuoteLine
 from app.models.commissions import CommissionLedgerEntry
@@ -249,16 +250,28 @@ def _quotes_pending_approval_items() -> list[AttentionItem]:
 def _overdue_invoice_items(profile, codes) -> list[AttentionItem]:
     today = date.today()
     all_held = "invoices.issue" in codes
+    # AUDIT: previously filtered on status.in_(("ISSUED", "PARTIALLY_PAID"))
+    # and never checked the remaining balance -- silently missing
+    # PARTIALLY_REFUNDED invoices (a real, reachable INVOICE_STATUSES value,
+    # see app/models/commercial_sales.py) that the Management dashboard
+    # (operational_reports/dashboards.py) already counted, so the two
+    # screens disagreed on "overdue invoices". is_invoice_overdue() /
+    # OVERDUE_INVOICE_EXCLUDED_STATUSES is now the one shared definition
+    # both screens use -- broadened here to the same status exclusion set
+    # so the query can't itself exclude a candidate the shared predicate
+    # would otherwise accept; the actual overdue/balance decision is made
+    # once, below, by that shared predicate.
     stmt = apply_ownership_filter(
         select(CommercialInvoice), CommercialInvoice, profile.id if profile else None, all_permission_held=all_held
     ).where(
-        CommercialInvoice.status.in_(("ISSUED", "PARTIALLY_PAID")),
+        CommercialInvoice.status.notin_(OVERDUE_INVOICE_EXCLUDED_STATUSES),
         CommercialInvoice.due_date.is_not(None),
         CommercialInvoice.due_date < today,
     )
     if not all_held and profile is None:
         return []
-    invoices = db_session.execute(stmt.order_by(CommercialInvoice.due_date).limit(100)).scalars().all()
+    candidates = db_session.execute(stmt.order_by(CommercialInvoice.due_date).limit(100)).scalars().all()
+    invoices = [inv for inv in candidates if is_invoice_overdue(inv, as_of=today)]
 
     items = []
     for invoice in invoices:
@@ -359,10 +372,25 @@ def _pending_expense_items(profile) -> list[AttentionItem]:
 
 def _pending_commission_items() -> list[AttentionItem]:
     now = utcnow()
+    # AUDIT: "PENDING" is a stale model-column default
+    # (CommissionLedgerEntry.status defaults to "PENDING" -- see
+    # app/models/commissions.py:120) that no real code path ever assigns.
+    # The real lifecycle is EARNED -> APPROVED -> PAID (or REVERSED):
+    # commissions/ledger.py::post_earning_for_allocation() always inserts
+    # status="EARNED" (ledger.py:80), and
+    # approve_commission_entry()/record_payout() only ever transition FROM
+    # "EARNED"/"APPROVED" (ledger.py:117-118, 282-283) -- "PENDING" is
+    # never reachable. Filtering on "PENDING" meant this section could
+    # never match a single real row: "Pending Commission Approvals" never
+    # rendered and the topbar attention badge silently under-counted for
+    # every FINANCE/SUPER_ADMIN actor. EARNED is the real awaiting-
+    # approval state -- matches commercial_sales/dashboards.py's own
+    # "commissions_pending_approval" metric, which already counts
+    # status == "EARNED" (finance_commercial_dashboard()).
     rows = db_session.execute(
         select(CommissionLedgerEntry, EmployeeProfile)
         .join(EmployeeProfile, EmployeeProfile.id == CommissionLedgerEntry.employee_profile_id)
-        .where(CommissionLedgerEntry.status == "PENDING")
+        .where(CommissionLedgerEntry.status == "EARNED")
         .order_by(CommissionLedgerEntry.created_at)
         .limit(100)
     ).all()

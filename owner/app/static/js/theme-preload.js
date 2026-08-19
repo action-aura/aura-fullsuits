@@ -12,12 +12,16 @@
  * inline script would have, at the cost of one extra same-origin
  * request for a file the browser will cache.
  *
- * Reads two presentation-only, non-security localStorage keys:
+ * Reads three presentation-only, non-security localStorage keys:
  * "aura-owner-theme" ("light"|"dark"|"system", default "system" --
  * leaving data-theme unset here falls through to tokens.css's
- * prefers-color-scheme media query) and "aura-owner-sidebar"
- * ("collapsed"|"expanded", default "expanded"). See theme.js and
- * sidebar.js for the interactive toggle controls that write these keys.
+ * prefers-color-scheme media query), "aura-owner-sidebar"
+ * ("collapsed"|"expanded", default "expanded"), and
+ * "aura-owner-chart-palette" ("brand"|"vivid"|"cb-safe", default "brand"
+ * -- leaving data-chart-palette unset falls through to tokens.css's bare
+ * :root chart-palette values, which ARE the brand ramp). See theme.js,
+ * sidebar.js and chart-palette.js for the interactive toggle controls
+ * that write these keys.
  */
 (function () {
   try {
@@ -27,6 +31,10 @@
     }
     if (window.localStorage.getItem("aura-owner-sidebar") === "collapsed") {
       document.documentElement.setAttribute("data-sidebar", "collapsed");
+    }
+    var chartPalette = window.localStorage.getItem("aura-owner-chart-palette");
+    if (chartPalette === "vivid" || chartPalette === "cb-safe") {
+      document.documentElement.setAttribute("data-chart-palette", chartPalette);
     }
   } catch (e) { /* localStorage unavailable (private mode, disabled storage) */ }
 })();

@@ -337,8 +337,8 @@ def get_static_commands(codes: set[str]) -> dict:
     def nav(endpoint: str, label: str, group: str) -> None:
         navigate.append({"label": label, "group": group, "url": url_for(endpoint)})
 
-    def quick_create(endpoint: str, label: str) -> None:
-        create.append({"label": label, "group": str(_("Quick Create")), "url": url_for(endpoint)})
+    def quick_create(endpoint: str, label: str, key: str) -> None:
+        create.append({"label": label, "group": str(_("Quick Create")), "url": url_for(endpoint), "key": key})
 
     overview = str(_("Overview"))
     crm = str(_("CRM"))
@@ -440,14 +440,20 @@ def get_static_commands(codes: set[str]) -> dict:
 
     # ---------- Quick create ----------
     if "leads.create" in codes:
-        quick_create("leads.new_form", str(_("New Lead")))
+        quick_create("leads.new_form", str(_("New Lead")), "new_lead")
     if "customers.create" in codes:
-        quick_create("customers.new_form", str(_("New Customer")))
+        quick_create("customers.new_form", str(_("New Customer")), "new_customer")
     if "quotes.create" in codes:
-        quick_create("commercial_sales_web.new_quote_form", str(_("New Quote")))
+        quick_create("commercial_sales_web.new_quote_form", str(_("New Quote")), "new_quote")
     if "licenses.create" in codes:
-        quick_create("licensing.new_form", str(_("New License")))
+        quick_create("licensing.new_form", str(_("New License")), "new_license")
     if "installations.register" in codes:
-        quick_create("installations.new_form", str(_("New Installation")))
+        quick_create("installations.new_form", str(_("New Installation")), "new_installation")
+    if "payments.create" in codes:
+        quick_create("commercial_sales_web.new_payment_form", str(_("New Payment")), "new_payment")
+    if "expenses.create" in codes:
+        quick_create("operations_ui.new_expense_form", str(_("New Expense")), "new_expense")
+    if "cash_closing.prepare" in codes:
+        quick_create("operations_ui.new_closing_form", str(_("New Cash Closing")), "new_cash_closing")
 
     return {"navigate": navigate, "create": create}

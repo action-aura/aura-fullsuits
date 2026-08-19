@@ -1,0 +1,69 @@
+{#
+  Aura Owner -- dashboard department cards (dashboard UI redesign).
+
+  Renders one card per department FROM layout/_nav_model.html, the same
+  single source of truth layout/_sidebar.html now consumes -- see that
+  file's header comment for the full rationale. A department with no
+  permitted links (dept.links empty) renders no card at all, exactly like
+  a department with no permitted links gets no sidebar group.
+
+  Interaction: each card is a native <details>/<summary> disclosure, so
+  its function list is reachable by click/Enter with ZERO JavaScript --
+  static/js/dept-cards.js only layers the View Transition + focus/Escape
+  polish described in dashboard-redesign.css's own header comment on top
+  of that native baseline. Icons are small, hand-drawn inline SVGs
+  (dept_icon() below) -- no icon font, no external asset.
+#}
+{% import "layout/_nav_model.html" as navmodel with context %}
+{% set nav_departments = [] %}
+{% set _unused = navmodel.populate(nav_departments) %}
+
+{% macro dept_icon(slug) %}
+{%- if slug == 'overview' -%}
+<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg>
+{%- elif slug == 'crm' -%}
+<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.25"/><path d="M5 20c0-3.5 3-6 7-6s7 2.5 7 6"/></svg>
+{%- elif slug == 'sales' -%}
+<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4h5l4 4v5l-8.5 8.5a1.5 1.5 0 0 1-2.1 0l-6.4-6.4a1.5 1.5 0 0 1 0-2.1L11 4Z"/><circle cx="15.5" cy="8.5" r="1.25"/></svg>
+{%- elif slug == 'finance-ops' -%}
+<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M4 20h16"/></svg>
+{%- elif slug == 'licensing' -%}
+<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 5 6v5.5c0 4.5 3 7.6 7 9 4-1.4 7-4.5 7-9V6l-7-2.5Z"/><circle cx="12" cy="10.5" r="1.6"/><path d="M12 12.1V14.5"/></svg>
+{%- elif slug == 'management' -%}
+<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="8" width="17" height="11" rx="1.5"/><path d="M8.5 8V6.5a1.5 1.5 0 0 1 1.5-1.5h4a1.5 1.5 0 0 1 1.5 1.5V8"/><path d="M3.5 13h17"/></svg>
+{%- elif slug == 'system' -%}
+<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3.5v2M12 18.5v2M20.5 12h-2M5.5 12h-2M17.7 6.3l-1.4 1.4M7.7 16.3l-1.4 1.4M17.7 17.7l-1.4-1.4M7.7 7.7 6.3 6.3"/></svg>
+{%- endif -%}
+{% endmacro %}
+
+{% set any_department_visible = nav_departments | selectattr('links') | list | length > 0 %}
+{% if any_department_visible %}
+<h2>{{ _("Departments") }}</h2>
+<div class="aura-dept-cards">
+  {% for dept in nav_departments %}
+    {% if dept.links %}
+    <details class="aura-dept-card aura-dept-card--{{ dept.slug }}">
+      <summary class="aura-dept-card__summary" aria-controls="aura-dept-panel-{{ dept.slug }}" aria-expanded="false">
+        <span class="aura-dept-card__icon" aria-hidden="true">{{ dept_icon(dept.slug) }}</span>
+        <span class="aura-dept-card__body">
+          <span class="aura-dept-card__name">{{ dept.label }}</span>
+          {# "%(count)d function(s)" dodges plural-form complexity the same
+             way base.html's own Attention Center count already does
+             ("item(s)") -- deliberate, established convention in this
+             codebase rather than reaching for ngettext(). #}
+          <span class="aura-dept-card__count">{{ _("%(count)d function(s)", count=dept.links | length) }}</span>
+        </span>
+        <span class="aura-dept-card__chevron" aria-hidden="true"></span>
+      </summary>
+      <div class="aura-dept-card__panel" id="aura-dept-panel-{{ dept.slug }}">
+        <ul class="aura-dept-card__list">
+          {% for link in dept.links %}
+          <li><a href="{{ url_for(link.endpoint) }}">{{ link.label }}</a></li>
+          {% endfor %}
+        </ul>
+      </div>
+    </details>
+    {% endif %}
+  {% endfor %}
+</div>
+{% endif %}

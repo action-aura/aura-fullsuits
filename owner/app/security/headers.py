@@ -30,10 +30,12 @@ def register_security_headers(app: Flask) -> None:
         # every login attempt failed CSRF validation with no way to
         # succeed, regardless of browser, confirmed as the actual root
         # cause of a "session expired" loop that looked like a client-side
-        # cookie/caching problem. 'same-origin' still sends zero Referer to
-        # any third-party origin (the actual privacy property 'no-referrer'
-        # was chosen for) while allowing this app's own same-origin
-        # requests to carry the header CSRF validation needs.
+        # cookie/caching problem. Reproduced 2026-08-19 on a fresh HTTPS
+        # deployment: POST /auth/login returns 400 with no Referer and 302
+        # with one, all else identical. 'same-origin' still sends zero
+        # Referer to any third-party origin (the actual privacy property
+        # 'no-referrer' was chosen for) while allowing this app's own
+        # same-origin requests to carry the header CSRF validation needs.
         response.headers["Referrer-Policy"] = "same-origin"
         # Phase 9.5C -- geolocation is now a real, explicit-action feature
         # (Milestone 12: Lead/Customer location capture, one-shot
