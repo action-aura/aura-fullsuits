@@ -24,10 +24,29 @@ built end to end except the last inch. — **IN PROGRESS**
 
 Two follow-ons: `AURA_AI_BEARER_TOKEN` defaults to `""` unless `-PaiBearerToken`
 is passed at build time, and no build script or doc passes it, so a rebuilt APK
-sends `Bearer ` and gets 401 → 503 even once the UI is wired (**OPEN**). And the
-AI upstream is a hardcoded droplet default at `config.py:193`
-(`https://104-248-35-215.sslip.io/api/generate`, phi3.5:3.8b) — if that droplet
-lapsed, AI is dead on desktop too (**OPEN**, one curl confirms).
+sends `Bearer ` and gets 401 → 503 even once the UI is wired (**OPEN** — this
+must be wired into the build, or every future APK ships with AI dead).
+
+**The AI infrastructure itself is alive** — verified 2026-08-20, not assumed.
+`POST https://104-248-35-215.sslip.io/api/generate` answers in ~1.5 s with
+**401**, i.e. reachable and demanding auth, not down. That host is the
+DigitalOcean droplet `aura-llm-demo` (8 GB / 4 vCPU, fra1), which runs
+`ollama.service` behind `caddy.service`; the Caddyfile gates the Ollama
+reverse-proxy (`127.0.0.1:11434`) on an `Authorization: Bearer …` match. The
+required token value is recoverable from `/etc/caddy/Caddyfile` on that droplet
+— it is deliberately not reproduced here.
+
+So once the Compose sheet is wired and the APK is rebuilt passing
+`-PaiBearerToken=<value from that Caddyfile>`, the assistant should work
+end to end. Nothing needs to be provisioned.
+
+Cost note, correcting an earlier recommendation: `aura-llm-demo` was previously
+flagged as the obvious droplet to downsize for savings. It is not — it is the
+LLM host. `phi3.5:3.8b` needs roughly 4 GB resident, so 8 GB is headroom rather
+than waste; downsizing to 2 GB would kill the assistant outright, and 4 GB would
+leave no margin. That droplet also, unexpectedly, runs a second
+`aura-owner-deptnav.service` instance — worth reconciling, since the review
+instance was believed to live only on the retail droplet.
 
 ### B. "The phone is not working properly as it should"
 
@@ -135,6 +154,37 @@ Verified **not** broken: INTERNET permission present; cleartext correctly scoped
 to loopback only; no main-thread I/O (suspend + `Dispatchers.IO` throughout);
 lists are `LazyColumn`; `!!` uses are null-guarded; every `navigate()` target
 exists; offline licensing degrades to a grace period rather than hard-blocking.
+
+## Licensing and first-run / login scenarios
+
+Verified **correct** first, so later work does not re-open them: the activation
+response signature *is* independently verified client-side
+(`assertion_verifier.py:173`, enforced at `activation.py:154-169` — "never
+activate on an unverifiable response"). No secrets are committed
+(`trust_anchor.json` holds only a public key; `secret.key` is per-install and
+gitignored; Owner refuses to boot without real env secrets). Offline grace
+degrades properly (WARNING → GRACE → RESTRICTED, data preserved). Desktop
+session expiry mid-use is clean — a global 401 guard raises a re-login modal.
+
+| Sev | Location | Defect |
+|---|---|---|
+| CRITICAL | `owner/app/licensing_service/signing.py:228-234` + `trust_store.py:82-83` | **Signing-key rotation can never propagate.** The keyset manifest is signed by the *currently active* key, but `admit_manifest()` only accepts manifests signed by an *already-trusted* key. After a rotation no fielded client trusts the new signer, so every activation and check-in fails `UNKNOWN_SIGNING_KEY` permanently — while Owner still marks the install ACTIVE and burns a paid slot. Only a new app build recovers it. A stale bundled `trust_anchor.json` has already been hit on the live droplet |
+| CRITICAL | `android/.../LicensingScreen.kt:158` | PENDING tells the user "We'll keep checking automatically — no action needed", but **nothing on Android polls**. Re-entering the key loops 202 forever |
+| HIGH | `android/.../LicensingScreen.kt:33-47,161` | `REASON_MESSAGES` omits `UNKNOWN_SIGNING_KEY`, `ASSERTION_*`, `INSTALLATION_DEACTIVATED`, `INSTALLATION_REPLACED`; all fall back to "Double-check the key and try again" — the exact wrong advice, and retyping reproduces it forever |
+| HIGH | `activation.py:240-242`, `deactivation.py:65-71`, `licensing_admin/routes.py:101-116` | A wiped or dead device's slot stays consumed, because self-deactivation requires the *old* device's private key. Reinstall-after-wipe hits `DEVICE_LIMIT_REACHED` and recovery **always** needs an admin |
+| HIGH | `checkin_scheduler.py:98-100`, `licensing.js:786` | A *rejected* check-in (suspended/revoked/expired) is indistinguishable from "no envelope", so a suspended customer is told "Could not reach the licensing service. Your current status is unchanged." The service *was* reached and said no |
+| MEDIUM | `licensing.js:116-118` | `TIMESTAMP_OUTSIDE_ALLOWED_WINDOW`, `NONCE_REUSED`, `DEVICE_ALREADY_REGISTERED`, `DEVICE_KEY_MISMATCH` and others are unmapped → generic "Double-check the key". A client clock more than 5 minutes off is told its key is wrong; nothing ever says "fix your clock" |
+| MEDIUM | `app-shell.js:981` | The **primary** first-run registration modal falls back to raw `a.detail`, which is always the fixed string "Owner rejected the activation request." — so first-run loses every reason-specific message `licensing.js` already has |
+| MEDIUM | `LicensingCoordinator.kt` / `AppRoot.kt` | No background check-in on Android (desktop polls every 5 min). Revocation never lands mid-use; weeks later one manual "Check Now" can drop the user straight to RESTRICTED with no warning phase |
+| MEDIUM | `reason_codes.py:102` | Deliberate anti-enumeration collapses `LICENSE_EXPIRED` / `SUSPENDED` / `NOT_ISSUED` into `ACTIVATION_REJECTED`, so a genuinely expired paying customer is told to check for a typo and has no way to learn that renewal is the fix. Security-motivated, but it costs a real customer a support call — worth an explicit product decision |
+| LOW | `licensing.js:750-759` | `CLOCK_REVIEW_REQUIRED` and `LOCAL_STATE_CORRUPT` get a badge but no guidance paragraph; fixing the clock does self-heal, but nothing tells the user that |
+
+**The three worst first-run experiences**, in order: (1) a stale or rotated
+signing key is unrecoverable without a new installer, while still consuming a
+paid slot; (2) the Android manual-approval loop promises automatic polling that
+does not exist; (3) at the single moment a new customer first fails — clock
+skew, an already-registered device, an expired licence — the product gives its
+least accurate advice.
 
 ## Release packaging (found by the lead, not an auditor)
 
