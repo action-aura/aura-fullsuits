@@ -254,6 +254,27 @@ sealed interface ActivationOutcome {
 }
 
 /**
+ * Did this tick actually get an answer out of the licensing service?
+ *
+ * The one thing the awaiting-approval screen must not get wrong. It shows
+ * "Still waiting for approval. Last checked at HH:MM" -- a claim that the
+ * service was CONTACTED at that time. Advancing that clock on a tick that
+ * never left the device tells the user their licence was verified minutes
+ * ago when in fact nothing has been verified since the last time they had
+ * signal, which is precisely the class of comfortable lie the rest of this
+ * screen was rewritten to remove.
+ *
+ * Every outcome except [ActivationOutcome.Transient] involved a real answer:
+ * [ActivationOutcome.LocalVerificationFailed] in particular DID reach Owner
+ * (Owner said yes; this device could not verify it), so it counts.
+ * [ActivationOutcome.Transient] is by definition "no answer was obtained".
+ *
+ * Also drives the poll's backoff -- see [ActivationPollSchedule].
+ */
+val ActivationOutcome.reachedOwner: Boolean
+    get() = this !is ActivationOutcome.Transient
+
+/**
  * Maps a raw [LicensingCoordinator.activate] result map onto the one action
  * the awaiting-approval screen should take.
  *

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 from .assertion_verifier import AssertionVerificationError, verify_assertion
 from .client import LicensingClient, LicensingClientError
@@ -84,12 +84,27 @@ class LicenseCheckInScheduler:
 
         return self.ingest_checkin_response(response)
 
-    def ingest_checkin_response(self, response: dict) -> LicenseState:
+    def ingest_checkin_response(
+        self, response: dict, *, trust_refresher: Optional[Callable[[], None]] = None
+    ) -> LicenseState:
         """Android path (Part U): the Kotlin layer already made the signed
         HTTP call to Owner and hands the RAW, UNTRUSTED response here over
         the localhost sync endpoint. Independently re-verified from scratch,
         exactly as run_once() verifies a response it fetched itself --
-        nothing about Kotlin's own opinion of the outcome is trusted."""
+        nothing about Kotlin's own opinion of the outcome is trusted.
+
+        trust_refresher: the same one-shot recovery
+        activation.ingest_activation_response() takes, and for the same
+        reason -- see make_trust_manifest_refresher(). Owner may have
+        rotated its signing key since this install last refreshed, in which
+        case a perfectly genuine assertion fails UNKNOWN_SIGNING_KEY here
+        and keeps failing forever. run_once() never needs this because it
+        refreshes the manifest before EVERY cycle (above), but Android
+        never calls run_once(): its Kotlin layer owns the device key and
+        makes the Owner call itself, so this method is the only place a
+        post-activation rotation can be noticed at all. Left None by the
+        Windows path, which is already covered by run_once()'s refresh.
+        """
         record = self._state_repository.load()
         if record is None or LicenseState(record.current_state) in _NOT_YET_ACTIVATED:
             return LicenseState(record.current_state) if record else LicenseState.NOT_CONFIGURED
@@ -99,8 +114,9 @@ class LicenseCheckInScheduler:
         if envelope is None:
             self._events.record("CHECK_IN_FAILED")
         else:
-            try:
-                verified = verify_assertion(
+
+            def _verify():
+                return verify_assertion(
                     envelope,
                     trust_store=self._trust_store,
                     expected_product_code=self._product_code,
@@ -109,7 +125,30 @@ class LicenseCheckInScheduler:
                     expected_device_key_fingerprint=self._device_fingerprint,
                     trusted_now=datetime.now(timezone.utc),
                 )
-            except AssertionVerificationError:
+
+            verified = None
+            try:
+                verified = _verify()
+            except AssertionVerificationError as exc:
+                # UNKNOWN_SIGNING_KEY is the one verification failure that can
+                # be a stale-trust-store problem rather than a bad assertion.
+                # Refresh the key-set manifest once and re-verify -- exactly
+                # what activation.ingest_activation_response() does, and the
+                # exact half of that fix this twin was originally missed by.
+                # Every other reason_code means the assertion itself is
+                # wrong, and refreshing trust could not possibly change that.
+                if exc.reason_code == "UNKNOWN_SIGNING_KEY" and trust_refresher is not None:
+                    trust_refresher()
+                    try:
+                        # Exactly one retry: the refresh either produced a
+                        # trusted signer or it did not, and re-running the
+                        # same deterministic check against the same store
+                        # would just repeat itself.
+                        verified = _verify()
+                    except AssertionVerificationError:
+                        verified = None
+
+            if verified is None:
                 # Retain the previous valid assertion (Part L) -- do not
                 # overwrite record with anything from this response.
                 self._events.record("ASSERTION_REJECTED")

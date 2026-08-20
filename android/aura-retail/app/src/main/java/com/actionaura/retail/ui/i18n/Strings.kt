@@ -157,6 +157,24 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Server error" to "خطأ في الخادم",
     "Unexpected error" to "خطأ غير متوقع",
 
+    // ── Licensing: the awaiting-approval screen (ui/screens/LicensingScreen.kt)
+    // The three lines that make a factual claim about what the app has just
+    // done -- "we are checking", "we last checked at X", "we have stopped
+    // checking". They are the ones a customer reads back to support over the
+    // phone, so an English fallback here is worse than anywhere else on the
+    // screen. (The rest of the licensing surface is still untranslated; see
+    // the note in LicensingScreen.kt.)
+    "Checking with the licensing service automatically every %s seconds…"
+        to "تتم المراجعة تلقائيًا مع خدمة التراخيص كل %s ثانية…",
+    "Still waiting for approval. Last checked at %s."
+        to "ما زال طلبك بانتظار الموافقة. آخر مراجعة في %s.",
+    "Could not reach the licensing service. Your key is still held for approval — " +
+        "press Check Now to try again when you are back online."
+        to "تعذّر الوصول إلى خدمة التراخيص. ما زال مفتاحك محفوظًا بانتظار الموافقة — " +
+            "اضغط \"تحقّق الآن\" للمحاولة مرة أخرى عند عودة الاتصال.",
+    "Check Now" to "تحقّق الآن",
+    "Use a different key" to "استخدام مفتاح آخر",
+
     // ── Products ──────────────────────────────────────────────────────────────
     "Add your first product to start selling." to "أضف أول منتج لك لبدء البيع.",
     "Add Product" to "إضافة منتج",

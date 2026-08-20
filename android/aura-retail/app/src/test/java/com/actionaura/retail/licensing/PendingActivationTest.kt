@@ -42,6 +42,31 @@ class PendingActivationTest {
     }
 
     @Test
+    fun a_marker_written_by_a_different_record_version_is_discarded() {
+        // `v` was parsed and required, but never COMPARED -- which made it look
+        // like a version check while accepting any integer. A marker from a
+        // build that gives these same keys different meanings would have been
+        // read as if it were this shape, which is the exact failure the field
+        // exists to prevent.
+        val future = """{"v":${PendingActivation.CURRENT_VERSION + 1},"at":$now,"installation_id":"inst-42"}"""
+        val past = """{"v":${PendingActivation.CURRENT_VERSION - 1},"at":$now,"installation_id":"inst-42"}"""
+        assertThat(PendingActivation.decode(future, now)).isNull()
+        assertThat(PendingActivation.decode(past, now)).isNull()
+        // ...and the version this build actually writes still round-trips.
+        val mine = """{"v":${PendingActivation.CURRENT_VERSION},"at":$now,"installation_id":"inst-42"}"""
+        assertThat(PendingActivation.decode(mine, now)).isNotNull()
+    }
+
+    @Test
+    fun the_marker_this_build_writes_carries_the_current_version() {
+        val encoded = PendingActivation.encode(
+            PendingActivationRecord(PendingActivation.CURRENT_VERSION, now, "inst-42")
+        )
+        assertThat(PendingActivation.decode(encoded, now)?.version)
+            .isEqualTo(PendingActivation.CURRENT_VERSION)
+    }
+
+    @Test
     fun anything_that_is_not_this_records_shape_is_discarded() {
         // Notably a bare "1" from an earlier build: it carries no timestamp,
         // so it could never age out, and an un-ageable marker is precisely

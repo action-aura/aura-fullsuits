@@ -13,14 +13,27 @@ sdk.dir=C\:\\Users\\YOURNAME\\AppData\\Local\\Android\\Sdk
 # command line, or as the environment variable named in brackets (the CI-secret
 # path). First non-empty source wins, in that order: -P, this file, env var.
 #
-# aiBearerToken is NOT optional for a release-shaped build. Leaving it unset
-# does not disable the AI assistant — the assistant still renders, and then
-# fails with 401 from the upstream on every question. `assembleRelease` /
-# `assembleStaging` therefore FAIL with instructions when it is missing;
-# `assembleDebug` prints a loud warning and continues.
-
-# aiBearerToken=...              [AURA_AI_BEARER_TOKEN]
+# ── REQUIRED for a release-shaped build (app/build.gradle::releaseRequiredConfig)
+# Leaving any of these unset does not produce a build that refuses to do the
+# thing — it produces one that SILENTLY does not do it, with nothing on screen
+# to say so. `assembleRelease` / `assembleStaging` / `bundle*` / `install*`
+# therefore FAIL with instructions when one is missing; `assembleDebug` prints a
+# loud warning and continues.
+#
 # ownerLicensingBaseUrl=...      [AURA_OWNER_LICENSING_URL]
+#     Blank means NO LICENSING AT ALL: AppRoot skips the activation gate and
+#     LicenseCheckInCoordinator never starts. The APK asks for no key, never
+#     contacts Owner, and can never be suspended, revoked or expired.
 # ownerSyncBaseUrl=...           [AURA_SYNC_RELAY_URL]
+#     Blank means SyncCoordinator never schedules a tick — the device silently
+#     never agrees with the customer's other devices, with no error anywhere.
+# aiBearerToken=...              [AURA_AI_BEARER_TOKEN]
+#     Blank does not hide the AI assistant — it still renders, then fails with
+#     401 from the upstream on every question.
+
+# ── Optional (blank is honest here, so it is only a warning) ─────────────────
+# Unset WhatsApp credentials are reported in plain words on the app's own
+# WhatsApp screen instead of silently pretending to send, which is why these
+# are not release-blocking.
 # whatsappPhoneNumberId=...      [AURA_WHATSAPP_PHONE_NUMBER_ID]
 # whatsappAccessToken=...        [AURA_WHATSAPP_ACCESS_TOKEN]

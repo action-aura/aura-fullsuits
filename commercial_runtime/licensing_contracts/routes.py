@@ -267,9 +267,12 @@ def _register_internal_sync_routes(
         if not isinstance(owner_response, dict):
             return jsonify({"reason_code": "INVALID_REQUEST", "detail": "Expected a JSON object."}), 400
 
-        state_repository, event_recorder, trust_store, signer, _client = build_context()
+        state_repository, event_recorder, trust_store, signer, client = build_context()
         scheduler = LicenseCheckInScheduler(
-            client=None,  # never used -- ingest_checkin_response() makes no Owner call itself
+            # Only ever used by the trust refresher below (a public key-set
+            # fetch). ingest_checkin_response() still makes no Owner call of
+            # its own -- Kotlin already made the check-in request.
+            client=client,
             signer=signer,
             trust_store=trust_store,
             state_repository=state_repository,
@@ -278,7 +281,18 @@ def _register_internal_sync_routes(
             platform=platform,
             device_public_key_fingerprint=_device_fingerprint(signer),
         )
-        new_state = scheduler.ingest_checkin_response(owner_response)
+        # The twin of /_internal/sync-activation's identical line, and it must
+        # stay that way. Kotlin made the Owner call, but this process still
+        # owns trust, and a signing-key rotation that happens AFTER activation
+        # is only ever seen here: Android never runs run_once(), which is what
+        # refreshes the manifest every cycle on Windows. Without this, such a
+        # rotation left Android permanently unable to accept another
+        # assertion. Kotlin never supplies trust material.
+        # test_internal_sync_routes.py pins BOTH routes against drifting apart.
+        scheduler.ingest_checkin_response(
+            owner_response,
+            trust_refresher=make_trust_manifest_refresher(client, trust_store),
+        )
         return jsonify(present_status(state_repository.load())), 200
 
     @bp.route("/_internal/reevaluate", methods=["POST"])

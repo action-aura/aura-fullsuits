@@ -8,9 +8,11 @@ from cryptography.hazmat.primitives import serialization
 from flask import Flask
 
 from commercial_runtime.licensing_contracts.canonical import canonicalize_bytes
+from commercial_runtime.licensing_contracts.client import LicensingClient
 from commercial_runtime.licensing_contracts.device_identity import WindowsDpapiDeviceIdentityProvider
 from commercial_runtime.licensing_contracts.routes import make_licensing_blueprint
 from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
+from commercial_runtime.licensing_contracts.trust_store import OwnerTrustStore
 
 pytestmark = pytest.mark.skipif(
     __import__("sys").platform != "win32", reason="Uses the real Windows DPAPI device identity provider as a stand-in signer."
@@ -244,6 +246,161 @@ def test_internal_reevaluate_advances_stuck_state_without_a_fresh_checkin(app_wi
     )
     assert resp.status_code == 200
     assert resp.get_json()["current_state"] == "RESTRICTED"
+
+
+# ── Signing-key rotation: the two twin ingestion routes must not drift ────
+# /_internal/sync-activation and /_internal/sync-checkin are the ONLY two
+# routes that take a raw Owner-signed assertion from the Kotlin layer and
+# verify it here. They therefore share one failure mode -- Owner rotated its
+# signing key and this install's trust store predates the rotation -- and
+# must share one recovery. The refresher was originally applied to
+# sync-activation only, which left Android able to recover from a rotation
+# that happened BEFORE activation but permanently stuck on one that happened
+# AFTER it. (Windows has never had that hole: run_once() refreshes the
+# manifest before every cycle, but Android's Kotlin layer makes its own
+# Owner call and never goes through run_once().) Parametrised over both
+# routes on purpose: the point is that neither can be fixed alone again.
+
+
+def _rotation_manifest(old_private, old_key_id, new_private, new_key_id):
+    """What Owner serves from /signing-keys after a rotation: the new key,
+    countersigned by the OUTGOING key this install still trusts (see
+    owner/app/licensing_service/signing.py::export_signed_keyset_manifest).
+    Nothing here is trusted on its own say-so -- admit_manifest() still
+    requires a signature from a key already in the store."""
+    body = {
+        "manifest_version": 1,
+        "issued_at": NOW.isoformat(),
+        "keys": [
+            {"key_id": old_key_id, "public_key": _b64_pub(old_private), "algorithm": "ed25519", "status": "RETIRED"},
+            {"key_id": new_key_id, "public_key": _b64_pub(new_private), "algorithm": "ed25519", "status": "ACTIVE"},
+        ],
+        "signed_by_key_id": new_key_id,
+    }
+    canonical = canonicalize_bytes(
+        {"manifest_version": body["manifest_version"], "issued_at": body["issued_at"], "keys": body["keys"]}
+    )
+
+    def _sig(private):
+        return base64.b64encode(private.sign(canonical)).decode("ascii")
+
+    return {
+        **body,
+        "signature": _sig(new_private),
+        "signatures": [
+            {"key_id": new_key_id, "algorithm": "ed25519", "signature": _sig(new_private)},
+            {"key_id": old_key_id, "algorithm": "ed25519", "signature": _sig(old_private)},
+        ],
+    }
+
+
+@pytest.mark.parametrize("route", ["sync-activation", "sync-checkin"])
+def test_both_internal_sync_routes_recover_from_a_signing_key_rotation(
+    route, app_with_secret, owner_key, tmp_path, monkeypatch
+):
+    provider, meta = _generate_device_key(app_with_secret, tmp_path)
+    rotated_key = Ed25519PrivateKey.generate()
+    monkeypatch.setattr(
+        LicensingClient,
+        "fetch_signing_keys",
+        lambda self: _rotation_manifest(owner_key, "owner-1", rotated_key, "owner-2"),
+    )
+    client = app_with_secret.test_client()
+    headers = {"X-Aura-Internal-Secret": SHARED_SECRET}
+
+    if route == "sync-activation":
+        # A rotation BEFORE this device ever activated -- the bundled anchor
+        # was cut before the current signing key existed.
+        envelope = _envelope(
+            rotated_key, "owner-2", _payload("inst-rot", meta.public_key_fingerprint, assertion_id="a-rotated")
+        )
+        resp = client.post(
+            "/api/licensing/_internal/sync-activation",
+            json={"result": "SUCCESS", "installation_id": "inst-rot", "signed_assertion": envelope},
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.get_json()
+        assert resp.get_json()["result"] == "SUCCESS"
+    else:
+        # A rotation AFTER activation. Activate first on the key the bundled
+        # anchor really trusts, so the failure under test is purely "the
+        # NEXT check-in is signed by a key this store has never seen."
+        first = _envelope(owner_key, "owner-1", _payload("inst-rot", meta.public_key_fingerprint))
+        activated = client.post(
+            "/api/licensing/_internal/sync-activation",
+            json={"result": "SUCCESS", "installation_id": "inst-rot", "signed_assertion": first},
+            headers=headers,
+        )
+        assert activated.status_code == 200, activated.get_json()
+
+        rotated_envelope = _envelope(
+            rotated_key,
+            "owner-2",
+            _payload(
+                "inst-rot",
+                meta.public_key_fingerprint,
+                assertion_id="a-rotated",
+                # Strictly newer than the activation assertion, or the
+                # monotonicity guard (_is_stale_assertion) would reject it
+                # for a reason that has nothing to do with the rotation.
+                issued_at=(NOW + timedelta(seconds=2)).isoformat(),
+            ),
+        )
+        resp = client.post(
+            "/api/licensing/_internal/sync-checkin",
+            json={"signed_assertion": rotated_envelope},
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.get_json()
+
+    # The assertion signed by the ROTATED key is what actually got stored --
+    # not merely "the request returned 200", which it does either way.
+    record = LicenseStateRepository(tmp_path / "appdata" / "database" / "subsystems" / "licensing.db").load()
+    assert record is not None
+    assert record.assertion_id == "a-rotated"
+    assert OwnerTrustStore(tmp_path / "appdata" / "licensing" / "trust_store.json").is_trusted("owner-2") is True
+
+
+@pytest.mark.parametrize("route", ["sync-activation", "sync-checkin"])
+def test_neither_internal_sync_route_admits_a_never_trusted_signer(
+    route, app_with_secret, owner_key, tmp_path, monkeypatch
+):
+    """The refresh is not an escape hatch on either route: a manifest whose
+    signers this install has never trusted leaves the trust store untouched
+    and the assertion is still refused."""
+    provider, meta = _generate_device_key(app_with_secret, tmp_path)
+    attacker_key = Ed25519PrivateKey.generate()
+    monkeypatch.setattr(
+        LicensingClient,
+        "fetch_signing_keys",
+        lambda self: _rotation_manifest(Ed25519PrivateKey.generate(), "unknown-0", attacker_key, "attacker-key"),
+    )
+    client = app_with_secret.test_client()
+    headers = {"X-Aura-Internal-Secret": SHARED_SECRET}
+    forged = _envelope(
+        attacker_key, "attacker-key", _payload("inst-rot", meta.public_key_fingerprint, assertion_id="a-forged")
+    )
+
+    if route == "sync-activation":
+        resp = client.post(
+            "/api/licensing/_internal/sync-activation",
+            json={"result": "SUCCESS", "installation_id": "inst-rot", "signed_assertion": forged},
+            headers=headers,
+        )
+        assert resp.status_code == 400
+        assert LicenseStateRepository(tmp_path / "appdata" / "database" / "subsystems" / "licensing.db").load() is None
+    else:
+        first = _envelope(owner_key, "owner-1", _payload("inst-rot", meta.public_key_fingerprint))
+        client.post(
+            "/api/licensing/_internal/sync-activation",
+            json={"result": "SUCCESS", "installation_id": "inst-rot", "signed_assertion": first},
+            headers=headers,
+        )
+        client.post("/api/licensing/_internal/sync-checkin", json={"signed_assertion": forged}, headers=headers)
+        record = LicenseStateRepository(tmp_path / "appdata" / "database" / "subsystems" / "licensing.db").load()
+        assert record.assertion_id == "a-1"  # the real one, untouched
+
+    assert OwnerTrustStore(tmp_path / "appdata" / "licensing" / "trust_store.json").is_trusted("attacker-key") is False
 
 
 def test_internal_sync_deactivation_succeeds(app_with_secret, owner_key, tmp_path):

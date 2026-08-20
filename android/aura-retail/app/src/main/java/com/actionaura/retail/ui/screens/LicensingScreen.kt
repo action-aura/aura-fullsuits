@@ -17,12 +17,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.actionaura.retail.licensing.ActivationOutcome
+import com.actionaura.retail.licensing.ActivationPollSchedule
 import com.actionaura.retail.licensing.LicensingCoordinator
 import com.actionaura.retail.licensing.LicensingMessages
-import com.actionaura.retail.licensing.PendingActivation
 import com.actionaura.retail.licensing.PendingActivationRecord
 import com.actionaura.retail.licensing.PendingActivationStore
 import com.actionaura.retail.licensing.classifyActivationResult
+import com.actionaura.retail.licensing.reachedOwner
 import com.actionaura.retail.ui.i18n.tr
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -42,6 +43,15 @@ import java.util.Date
  * live in this file -- see com.actionaura.retail.licensing.LicensingMessages.
  * They are the part of this screen that can actually be wrong, and a
  * @Composable is not unit-testable in this project's test environment.
+ *
+ * KNOWN GAP, stated rather than hidden: every string here goes through tr(),
+ * but most of this surface has no entry in ui/i18n/Strings.kt's Arabic map, so
+ * an Arabic user sees English here and RTL layout around it. The three lines
+ * that make a factual claim about what the app just did ("checking
+ * automatically", "last checked at X", "could not reach the service") ARE
+ * translated, because those are the ones a customer reads back to support.
+ * The remaining licensing copy -- including LicensingMessages' reason-code
+ * table -- still needs a real Arabic pass.
  */
 
 private fun stateLabel(state: String): Pair<String, Color> = when (state) {
@@ -107,6 +117,15 @@ fun LicensingScreen(onBack: () -> Unit, snackbar: SnackbarHostState, onActivated
     var pendingKey by remember { mutableStateOf("") }
     var lastCheckedLabel by remember { mutableStateOf<String?>(null) }
 
+    // The automatic poll has given up after ActivationPollSchedule
+    // .MAX_CONSECUTIVE_UNREACHED failures to reach the service, and the screen
+    // must now say so rather than keep claiming to be checking. Cleared by a
+    // manual "Check Now", which also restarts the loop (see pollAttempt).
+    var pollExhausted by remember { mutableStateOf(false) }
+    // Bumped by "Check Now" purely to re-key the polling LaunchedEffect, which
+    // is how a user press restarts a poll that had given up.
+    var pollAttempt by remember { mutableStateOf(0) }
+
     suspend fun refresh() {
         status = try { coordinator.status() } catch (e: Exception) { mapOf("current_state" to "NOT_CONFIGURED") }
     }
@@ -121,15 +140,25 @@ fun LicensingScreen(onBack: () -> Unit, snackbar: SnackbarHostState, onActivated
      * silent about TRANSIENT failures on purpose: a network blip every 30s
      * must not paint the screen red, because nothing is actually wrong with
      * the pending activation.
+     *
+     * Returns whether this attempt actually reached the licensing service,
+     * which is what the caller's backoff counts (see [ActivationPollSchedule]).
      */
-    suspend fun attemptActivation(key: String, fromUser: Boolean) {
+    suspend fun attemptActivation(key: String, fromUser: Boolean): Boolean {
         val wasAwaiting = pendingKey.isNotBlank()
         val result = try { coordinator.activate(key) } catch (e: Exception) {
             mapOf<String, Any?>("reason_code" to "NETWORK_UNAVAILABLE")
         }
-        lastCheckedLabel = nowTimeLabel()
+        val outcome = classifyActivationResult(result)
 
-        when (val outcome = classifyActivationResult(result)) {
+        // AFTER classification, and only when the service actually answered.
+        // Assigning this before the `when` (as this did) advanced the
+        // on-screen "Last checked at HH:MM" on a tick that never left the
+        // device -- telling the user their licence had just been checked when
+        // nothing had been checked since they last had signal.
+        if (outcome.reachedOwner) lastCheckedLabel = nowTimeLabel()
+
+        when (outcome) {
             is ActivationOutcome.Approved -> {
                 // The marker and the held key have both done their job; leaving
                 // them set would show the awaiting screen again the next time
@@ -191,6 +220,7 @@ fun LicensingScreen(onBack: () -> Unit, snackbar: SnackbarHostState, onActivated
                 refresh()
             }
         }
+        return outcome.reachedOwner
     }
 
     LaunchedEffect(Unit) {
@@ -257,10 +287,19 @@ fun LicensingScreen(onBack: () -> Unit, snackbar: SnackbarHostState, onActivated
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    lastCheckedLabel?.let {
-                        tr("Still waiting for approval. Last checked at %s.").format(it)
-                    } ?: tr("Checking with the licensing service automatically every %s seconds…")
-                        .format(PendingActivation.POLL_INTERVAL_MS / 1000),
+                    when {
+                        // The poll has stopped. Saying "checking automatically"
+                        // now would be the same false promise this whole screen
+                        // was built to remove, one layer deeper.
+                        pollExhausted -> tr(
+                            "Could not reach the licensing service. Your key is still held for approval — " +
+                                "press Check Now to try again when you are back online."
+                        )
+                        lastCheckedLabel != null ->
+                            tr("Still waiting for approval. Last checked at %s.").format(lastCheckedLabel)
+                        else -> tr("Checking with the licensing service automatically every %s seconds…")
+                            .format(ActivationPollSchedule.BASE_INTERVAL_MS / 1000)
+                    },
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
@@ -277,8 +316,16 @@ fun LicensingScreen(onBack: () -> Unit, snackbar: SnackbarHostState, onActivated
                         onClick = {
                             scope.launch {
                                 errorMessage = null; busy = true
-                                attemptActivation(pendingKey, fromUser = true)
-                                busy = false
+                                try {
+                                    attemptActivation(pendingKey, fromUser = true)
+                                } finally {
+                                    busy = false
+                                }
+                                // A press is also how a poll that gave up is
+                                // restarted: re-keying the effect below starts
+                                // a fresh streak from the base interval.
+                                pollExhausted = false
+                                pollAttempt++
                             }
                         },
                     ) { Text(tr("Check Now")) }
@@ -287,28 +334,54 @@ fun LicensingScreen(onBack: () -> Unit, snackbar: SnackbarHostState, onActivated
                     // a better-looking trap. A customer who mistyped the key,
                     // or was issued one Owner is never going to approve, has to
                     // be able to get back to the form under their own power.
+                    // Deliberately NOT disabled while busy: it does no I/O, and
+                    // now that an automatic tick holds `busy` for the length of
+                    // a real network round trip, gating it would put the escape
+                    // hatch out of reach exactly when the network is worst.
                     OutlinedButton(
-                        enabled = !busy,
                         onClick = {
                             pendingStore.clear(); pendingRecord = null; pendingKey = ""
                             errorMessage = null; infoMessage = null; lastCheckedLabel = null
+                            pollExhausted = false
                         },
                     ) { Text(tr("Use a different key")) }
                 }
 
                 // The poll that makes the "we keep checking automatically"
                 // sentence TRUE. Keyed on the held key so a different
-                // submission restarts it cleanly; Compose cancels this effect
-                // when the branch leaves composition, which is what stops ticks
-                // stacking (licensing.js needs an explicit stopAwaitingPoll()
-                // for the same reason). Cancellation also drops the answer to a
-                // question nobody is asking any more: the continuation after
-                // attemptActivation() simply never resumes.
-                LaunchedEffect(pendingKey) {
-                    while (true) {
-                        delay(PendingActivation.POLL_INTERVAL_MS)
-                        if (!busy) attemptActivation(pendingKey, fromUser = false)
+                // submission restarts it cleanly (and on pollAttempt, so a
+                // manual press revives a poll that has given up); Compose
+                // cancels this effect when the branch leaves composition, which
+                // is what stops ticks stacking (licensing.js needs an explicit
+                // stopAwaitingPoll() for the same reason). Cancellation also
+                // drops the answer to a question nobody is asking any more: the
+                // continuation after attemptActivation() simply never resumes.
+                LaunchedEffect(pendingKey, pollAttempt) {
+                    var unreachedStreak = 0
+                    while (ActivationPollSchedule.shouldKeepPolling(unreachedStreak)) {
+                        delay(ActivationPollSchedule.intervalMs(unreachedStreak))
+                        // The concurrency guard, now bidirectional. It only ever
+                        // READ `busy` before, so it stopped a tick starting
+                        // during a button press but did nothing to stop a press
+                        // landing mid-tick -- two overlapping /activate POSTs for
+                        // the same held key, with two racing writes to the same
+                        // marker and message state. `finally` matters: this
+                        // coroutine is cancelled the moment the user presses
+                        // "Use a different key", and a `busy` left stuck true
+                        // would disable Check Now for the rest of the session.
+                        if (busy) continue
+                        busy = true
+                        val reached = try {
+                            attemptActivation(pendingKey, fromUser = false)
+                        } finally {
+                            busy = false
+                        }
+                        unreachedStreak = if (reached) 0 else unreachedStreak + 1
                     }
+                    // Fell out of the loop: every one of the last
+                    // MAX_CONSECUTIVE_UNREACHED attempts failed to reach the
+                    // service. Stop, and let the screen say so honestly.
+                    pollExhausted = true
                 }
                 return@Column
             }

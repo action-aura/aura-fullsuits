@@ -49,6 +49,23 @@ object PendingActivation {
     const val MAX_AGE_MS: Long = 7L * 24 * 60 * 60 * 1000
 
     /**
+     * The record shape THIS build writes and understands. Stored as `v`, and
+     * -- the part that was missing -- actually compared on the way back in.
+     *
+     * `v` was already parsed and already mandatory, which made it look like a
+     * version check while being nothing of the kind: any integer passed. A
+     * marker written by a future build with different semantics for the same
+     * key would have been read as if it were this shape. That is exactly the
+     * failure the field exists to prevent, and exactly what [decode]'s own
+     * "not the record shape this build writes" promise claimed to cover.
+     *
+     * Bump this whenever the stored fields change meaning; an older or newer
+     * marker is then discarded and the screen falls back to the key form,
+     * which costs one extra ask and never a wrong screen.
+     */
+    const val CURRENT_VERSION: Int = 1
+
+    /**
      * How often the awaiting-approval screen re-submits the held activation
      * to find out whether Owner has ruled on it yet. Each tick is a real
      * Owner round trip that does signature verification and DB writes on
@@ -69,8 +86,9 @@ object PendingActivation {
     )
 
     /**
-     * Parses a stored marker, returning null when there is none, when it is
-     * not the record shape this build writes, or when it has aged out.
+     * Parses a stored marker, returning null when there is none, when its `v`
+     * is not [CURRENT_VERSION], when the record is malformed, or when it has
+     * aged out.
      *
      * Anything unparseable is discarded rather than trusted: it carries no
      * timestamp, so it could never be aged out, and an un-ageable marker is
@@ -90,6 +108,11 @@ object PendingActivation {
         val version = try {
             obj.get("v")?.takeUnless { it.isJsonNull }?.asInt
         } catch (_: Exception) { null } ?: return null
+        // Parsing `v` and requiring it to be present is not a version check --
+        // this is. Without the comparison any integer was accepted, so a
+        // marker from a build with different semantics for these same keys
+        // would have been read as if it were this shape.
+        if (version != CURRENT_VERSION) return null
         val installationId = try {
             obj.get("installation_id")?.takeUnless { it.isJsonNull }?.asString
         } catch (_: Exception) { null }
@@ -123,7 +146,9 @@ class PendingActivationStore(context: Context) {
     }
 
     fun mark(installationId: String?, nowMillis: Long = System.currentTimeMillis()) {
-        val record = PendingActivationRecord(version = 1, atMillis = nowMillis, installationId = installationId)
+        val record = PendingActivationRecord(
+            version = PendingActivation.CURRENT_VERSION, atMillis = nowMillis, installationId = installationId
+        )
         prefs.edit().putString(KEY, PendingActivation.encode(record)).apply()
     }
 

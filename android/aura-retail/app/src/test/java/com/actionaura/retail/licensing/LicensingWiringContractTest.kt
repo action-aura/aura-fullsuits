@@ -51,8 +51,54 @@ class LicensingWiringContractTest {
         // Either the promise is kept or the sentence goes; this pins the
         // former.
         val screen = source("src/main/java/com/actionaura/retail/ui/screens/LicensingScreen.kt")
-        assertThat(screen).contains("PendingActivation.POLL_INTERVAL_MS")
+        assertThat(screen).contains("ActivationPollSchedule.intervalMs(")
         assertThat(screen).contains("classifyActivationResult(")
+    }
+
+    @Test
+    fun the_last_checked_time_is_set_after_classification_not_before() {
+        // It used to be assigned unconditionally, immediately after the
+        // activate() call and BEFORE the outcome was classified. So a tick
+        // that never left the device still advanced the on-screen "Still
+        // waiting for approval. Last checked at HH:MM" -- telling the user
+        // their licence had just been verified when nothing had been verified
+        // since they last had signal.
+        val screen = source("src/main/java/com/actionaura/retail/ui/screens/LicensingScreen.kt")
+        val assignment = Regex("""lastCheckedLabel\s*=\s*nowTimeLabel\(\)""").find(screen)
+        assertThat(assignment).isNotNull()
+        val classification = screen.indexOf("classifyActivationResult(")
+        assertThat(classification).isGreaterThan(-1)
+        assertThat(assignment!!.range.first).isGreaterThan(classification)
+        // ...and it is guarded, not merely late.
+        assertThat(screen).contains("if (outcome.reachedOwner) lastCheckedLabel = nowTimeLabel()")
+    }
+
+    @Test
+    fun the_polls_concurrency_guard_both_reads_and_sets_the_busy_flag() {
+        // The guard was one-directional: it READ `busy` (so a tick could not
+        // start during a button press) but never SET it, so a press landing
+        // mid-tick produced two overlapping /activate POSTs for the same held
+        // key, racing to write the same marker and message state.
+        val screen = source("src/main/java/com/actionaura/retail/ui/screens/LicensingScreen.kt")
+        val pollBody = screen.substringAfter("LaunchedEffect(pendingKey, pollAttempt)")
+        assertThat(pollBody).contains("if (busy) continue")
+        assertThat(pollBody).contains("busy = true")
+        // A `busy` left true by a cancelled tick would disable Check Now for
+        // the rest of the session, so the reset must be in a finally.
+        assertThat(pollBody).contains("finally")
+    }
+
+    @Test
+    fun the_poll_backs_off_and_eventually_stops_claiming_to_check() {
+        // No backoff and no cap meant a device with no connectivity re-POSTed
+        // /activate every 30s forever, while the screen kept promising "we
+        // keep checking automatically" -- the same false promise the awaiting
+        // screen exists to remove.
+        val screen = source("src/main/java/com/actionaura/retail/ui/screens/LicensingScreen.kt")
+        assertThat(screen).contains("ActivationPollSchedule.shouldKeepPolling(")
+        assertThat(screen).contains("pollExhausted = true")
+        // And the screen has to actually SAY so when it gives up.
+        assertThat(screen).contains("Your key is still held for approval")
     }
 
     @Test

@@ -57,35 +57,100 @@ def aiBearerToken = resolveSecret('aiBearerToken', 'AURA_AI_BEARER_TOKEN')
 def whatsappPhoneNumberId = resolveSecret('whatsappPhoneNumberId', 'AURA_WHATSAPP_PHONE_NUMBER_ID')
 def whatsappAccessToken = resolveSecret('whatsappAccessToken', 'AURA_WHATSAPP_ACCESS_TOKEN')
 
+// ── Release-blocking build config ────────────────────────────────────────────
+// Every entry below is a value whose EMPTY state silently switches a whole
+// feature off in the shipped app, with nothing on screen to say so. That is
+// the one class of misconfiguration a release build must never carry: the APK
+// installs, launches, looks entirely correct, and quietly does less than it
+// claims -- which is exactly how the AI assistant shipped dead, and how an
+// APK that enforces no licensing at all could ship next.
+//
+// The bar for being on this list is "empty is INVISIBLE", not "empty is
+// inconvenient". The WhatsApp pair is deliberately NOT here: when it is unset
+// the app says so in plain words on its own screen instead of pretending to
+// send (products/retail/frontend/whatsapp.js's "AURA_WHATSAPP_* are not set on
+// this installation. Nothing can send until the installer sets them."), so an
+// unconfigured WhatsApp build is honest rather than silently broken. If that
+// ever stops being true, it belongs here.
+//
+// Adding a new empty-by-default buildConfigField that Kotlin then treats as a
+// kill switch (`if (BuildConfig.X.isBlank()) return`) WITHOUT adding it here
+// is itself a defect, and BuildGuardContractTest fails on it.
+//
 // Deliberately says how to fix it, not just that it is broken -- and names no
-// value anywhere, only the KEYS. Wrapping in a banner because a plain warn
-// line is invisible in Gradle's normal output volume, which is exactly how
-// this shipped broken in the first place.
-def AI_TOKEN_ADVICE = """
-  ===========================================================================
-   AURA_AI_BEARER_TOKEN is not set.
+// value anywhere, only the KEYS. Wrapped in a banner because a plain warn line
+// is invisible in Gradle's normal output volume, which is exactly how this
+// shipped broken in the first place.
+def supplyAdvice = { String gradleProperty, String envVar -> """
+   Supply it in ONE of these ways (never commit the value):
+     1.  ./gradlew <task> -P${gradleProperty}=<value>
+     2.  android/aura-retail/local.properties:  ${gradleProperty}=<value>
+         (git-ignored; see local.properties.template)
+     3.  export ${envVar}=<value>                       (CI secret)
+"""
+}
 
+def releaseRequiredConfig = [
+    [
+        gradleProperty: 'ownerLicensingBaseUrl',
+        envVar: 'AURA_OWNER_LICENSING_URL',
+        value: ownerLicensingBaseUrl,
+        headline: 'AURA_OWNER_LICENSING_URL is not set -- THIS BUILD ENFORCES NO LICENSING.',
+        consequence: """\
+   With this blank, licensing is not weakened, it is ABSENT. AppRoot's
+   activation gate is skipped outright (`licensingConfigured` is false, so
+   `needsActivation` can never become true) and LicenseCheckInCoordinator
+   returns immediately without ever starting its loop. The resulting APK
+   installs, asks for no licence key, never contacts Owner, and can never
+   be suspended, revoked or expired. It is the product, given away.""",
+    ],
+    [
+        gradleProperty: 'ownerSyncBaseUrl',
+        envVar: 'AURA_SYNC_RELAY_URL',
+        value: ownerSyncBaseUrl,
+        headline: 'AURA_SYNC_RELAY_URL is not set -- this build never syncs.',
+        consequence: """\
+   SyncCoordinator.start() returns before scheduling a single tick, so this
+   device never pushes or pulls anything. Nothing surfaces that: the app has
+   no sync UI at all (SyncCoordinator.health() exists precisely because no
+   screen consumes it), so a multi-device customer sees a device that simply
+   never agrees with their others, with no error anywhere to explain why.""",
+    ],
+    [
+        gradleProperty: 'aiBearerToken',
+        envVar: 'AURA_AI_BEARER_TOKEN',
+        value: aiBearerToken,
+        headline: 'AURA_AI_BEARER_TOKEN is not set.',
+        consequence: """\
    The Aura AI assistant proxies to an upstream that requires this bearer
    token. Without it the upstream answers 401 on every request and the in-app
    assistant is dead: it renders, accepts a question, and always fails with
-   "AI assistant is temporarily unavailable."
+   "AI assistant is temporarily unavailable.\"""",
+    ],
+]
 
-   Supply it in ONE of these ways (never commit the value):
-     1.  ./gradlew <task> -PaiBearerToken=<token>
-     2.  android/aura-retail/local.properties:  aiBearerToken=<token>
-         (git-ignored; see local.properties.template)
-     3.  export AURA_AI_BEARER_TOKEN=<token>              (CI secret)
+def missingConfigBanner = { entry -> """
+  ===========================================================================
+   ${entry.headline}
+
+${entry.consequence}
+
+${supplyAdvice(entry.gradleProperty, entry.envVar)}\
   ===========================================================================
 """
+}
 
 // A release-shaped build (release/staging -- non-debuggable, installed on real
 // devices) is the one that must never ship silently broken, so it FAILS rather
-// than warns. A debug build is allowed to proceed without a token (a developer
-// who is not working on the assistant should not be blocked by it), but says so
-// unmissably. Evaluated on the resolved task graph rather than at configuration
-// time so that plain `test`/`lint` invocations are neither failed nor spammed.
+// than warns. A debug build is allowed to proceed with any of these missing (a
+// developer who is not working on that feature should not be blocked by it),
+// but says so unmissably. Evaluated on the resolved task graph rather than at
+// configuration time so that plain `test`/`lint` invocations are neither
+// failed nor spammed.
 gradle.taskGraph.whenReady { graph ->
-    if (!aiBearerToken.isEmpty()) return
+    def missing = releaseRequiredConfig.findAll { it.value.isEmpty() }
+    if (missing.isEmpty()) return
+    def advice = missing.collect { missingConfigBanner(it) }.join("")
     def ours = graph.allTasks.findAll { it.project.path == project.path }
     // Exact names only: `packageReleaseResources` and friends are
     // intermediate steps of the same graph, and naming them in the
@@ -94,12 +159,13 @@ gradle.taskGraph.whenReady { graph ->
     def releaseShaped = ours.findAll { it.name ==~ /^(assemble|bundle|install|package)(Release|Staging)$/ }
     if (!releaseShaped.isEmpty()) {
         throw new GradleException(
-            "Refusing to produce a release-shaped build with a dead AI assistant " +
-            "(${releaseShaped*.name.join(', ')}).\n" + AI_TOKEN_ADVICE)
+            "Refusing to produce a release-shaped build (${releaseShaped*.name.join(', ')}) " +
+            "with ${missing.size()} silently-disabled feature(s): " +
+            "${missing*.gradleProperty.join(', ')}.\n" + advice)
     }
     if (!ours.findAll { it.name ==~ /^(assemble|bundle|install|package)Debug$/ }.isEmpty()) {
-        logger.warn("\nWARNING: building WITHOUT an AI bearer token -- the in-app assistant will 401.\n" +
-                    AI_TOKEN_ADVICE)
+        logger.warn("\nWARNING: building WITHOUT ${missing*.gradleProperty.join(', ')} -- " +
+                    "those features are silently OFF in this APK.\n" + advice)
     }
 }
 
@@ -132,6 +198,14 @@ android {
         // Overridden per real build via -PownerLicensingBaseUrl=... (gradle
         // property, local.properties, or the AURA_OWNER_LICENSING_URL env var
         // -- see resolveSecret above), never hardcoded here.
+        //
+        // Empty is fail-SAFE for the embedded backend but fail-OPEN for the
+        // app around it: AppRoot skips the activation gate and
+        // LicenseCheckInCoordinator never starts, so the APK enforces no
+        // licensing whatsoever. That is why this is release-blocking (see
+        // releaseRequiredConfig above) -- "unset == not enforced" is a
+        // reasonable convention for a dev build and an unshippable one for a
+        // release build.
         buildConfigField "String", "OWNER_LICENSING_BASE_URL", asJavaStringLiteral(ownerLicensingBaseUrl)
 
         // Multi-device sync foundation (2026-08-06), Task 9 wiring -- Owner's
@@ -144,7 +218,9 @@ android {
         // different path depths; see products/retail/backend/config.py).
         // Overridden per real build via -PownerSyncBaseUrl=..., never
         // hardcoded here. Empty means SyncCoordinator stays inert (no timer
-        // started), never a hidden default Owner instance.
+        // started), never a hidden default Owner instance -- and, because
+        // nothing on screen reports that, it is release-blocking too (see
+        // releaseRequiredConfig above).
         buildConfigField "String", "OWNER_SYNC_BASE_URL", asJavaStringLiteral(ownerSyncBaseUrl)
 
         // AI Assistant + WhatsApp reports -- same empty-by-default,
@@ -260,6 +336,21 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+    testOptions {
+        unitTests.all { test ->
+            // BuildGuardContractTest and LicensingWiringContractTest read this
+            // build script and the Kotlin sources at RUNTIME (there is no
+            // unit-testable seam for "is this timer started", "is this config
+            // release-blocking"). Gradle cannot infer a runtime File read, so
+            // without declaring these the test task stays UP-TO-DATE after the
+            // very edit it exists to catch -- the guard silently re-verifies a
+            // stale result. Found the hard way: editing the release guard left
+            // testDebugUnitTest up-to-date and reported BUILD SUCCESSFUL
+            // without running a single assertion against the new content.
+            test.inputs.file("build.gradle").withPathSensitivity(PathSensitivity.RELATIVE)
+            test.inputs.dir("src/main/java").withPathSensitivity(PathSensitivity.RELATIVE)
+        }
     }
     kotlinOptions {
         jvmTarget = '17'
