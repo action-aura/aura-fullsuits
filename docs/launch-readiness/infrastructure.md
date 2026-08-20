@@ -79,9 +79,37 @@ Note that the surviving review instance's database is on a **different Alembic
 graph** than production's, so it cannot be used to rehearse a production
 migration without being rebuilt first.
 
+## Deployments
+
+### 2026-08-20 — Wave 2 Owner CC fixes → production
+
+28 files (9 Python, 1 new static script, 13 templates, 5 translation artifacts).
+No new third-party dependencies: the one new module, `app/metrics_contracts.py`,
+imports only `dataclasses` and `decimal`.
+
+The headline reason to ship this promptly was not the metric fixes — it was that
+**"Void expense" had no confirmation dialog in production**. CSP had silently
+killed the inline `onsubmit`, so a destructive financial action had lost its
+only guard. That is now restored.
+
+Verified after restart, in this order:
+1. `py_compile` on every deployed Python module — clean.
+2. Service active, and `journalctl` free of tracebacks / ImportError / SyntaxError.
+3. HTTP smoke: the new `auto-submit.js` serves 200 (the restored filters are
+   dead without it), and health, login, the dashboard CSS, `confirm.js`, the
+   brand mark, the APK download and both licensing endpoints all still 200.
+4. All 15 changed templates compiled through the **live app's own Jinja
+   environment** — these pages sit behind login, so a missing include or a bad
+   `url_for` would otherwise surface only when a real user opened the page.
+
+Also compiled `.mo` catalogs were shipped, not just `.po` — the `.po` alone has
+no runtime effect, so a translation-only deploy that forgets the `.mo` silently
+does nothing.
+
 ## Rollback points
 
 | What | Where |
 |---|---|
 | Owner CC production, pre-UI-deploy | `/opt/aura-owner.bak-20260820` on 161.35.219.243 |
+| Owner CC production, pre-Wave-2-deploy | `/opt/aura-owner.bak-20260820b` on 161.35.219.243 |
 | Previous published APK | `/opt/downloads/AuraRetail-2026-08-17.apk` |
