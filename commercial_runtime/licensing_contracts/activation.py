@@ -11,7 +11,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 from .assertion_verifier import AssertionVerificationError, verify_assertion
 from .client import LicensingClient, LicensingClientError
@@ -54,6 +54,34 @@ class ActivationPending(Exception):
 class ActivationResult:
     state: LicenseState
     owner_installation_id: str
+
+
+def make_trust_manifest_refresher(client: LicensingClient, trust_store: OwnerTrustStore) -> Callable[[], None]:
+    """Best-effort "catch this install's trust store up with Owner" step, for
+    the one case activation could not previously survive: a BUNDLED anchor
+    that predates Owner's current signing key.
+
+    The check-in path has always done this (LicenseCheckInScheduler.run_once
+    refreshes the manifest before every cycle), but activation verified once
+    and gave up -- so a freshly-installed build whose trust_anchor.json was
+    cut before a rotation failed activation with UNKNOWN_SIGNING_KEY and had
+    no way forward at all. That exact stale-anchor situation has already been
+    hit on the live droplet.
+
+    This grants no new authority: it only fetches the public key-set manifest
+    and hands it to admit_manifest(), which still refuses anything not
+    vouched for by a key this install already trusts. Errors are swallowed --
+    a failed refresh must leave the original verification failure as the
+    reported outcome, never mask it with a transport error.
+    """
+
+    def _refresh() -> None:
+        try:
+            trust_store.admit_manifest(client.fetch_signing_keys())
+        except Exception:
+            return  # best effort only -- never let this become the failure the caller sees
+
+    return _refresh
 
 
 def perform_activation(
@@ -106,6 +134,7 @@ def perform_activation(
         product_code=product_code,
         platform=platform,
         device_public_key_fingerprint=device_public_key_fingerprint,
+        trust_refresher=make_trust_manifest_refresher(client, trust_store),
     )
 
 
@@ -118,6 +147,7 @@ def ingest_activation_response(
     product_code: str,
     platform: str,
     device_public_key_fingerprint: str,
+    trust_refresher: Optional[Callable[[], None]] = None,
 ) -> ActivationResult:
     """Android path (Part U): the Kotlin layer already made the signed HTTP
     call to Owner (it holds the AndroidKeystore-wrapped device key, this
@@ -151,8 +181,8 @@ def ingest_activation_response(
         event_recorder.record("ACTIVATION_FAILED", {"reason_code": "MALFORMED_RESPONSE"})
         raise ActivationFailed("MALFORMED_RESPONSE", "Owner response is missing installation_id or signed_assertion.")
 
-    try:
-        verified = verify_assertion(
+    def _verify():
+        return verify_assertion(
             envelope,
             trust_store=trust_store,
             expected_product_code=product_code,
@@ -161,12 +191,33 @@ def ingest_activation_response(
             expected_device_key_fingerprint=device_public_key_fingerprint,
             trusted_now=datetime.now(timezone.utc),
         )
+
+    try:
+        verified = _verify()
     except AssertionVerificationError as exc:
-        # A "successful" activation whose assertion doesn't verify is not
-        # trusted -- never activate on an unverifiable response, regardless
-        # of what result/reason_code the envelope claimed.
-        event_recorder.record("ACTIVATION_FAILED", {"reason_code": exc.reason_code})
-        raise ActivationFailed(exc.reason_code, str(exc)) from exc
+        # UNKNOWN_SIGNING_KEY is the one verification failure that can be a
+        # stale-trust-store problem rather than a bad assertion: Owner may
+        # have rotated its signing key since this build's trust_anchor.json
+        # was cut. Refresh the key-set manifest once and re-verify, exactly
+        # as the check-in path already does before every cycle. Every other
+        # reason_code means the assertion itself is wrong, and refreshing
+        # trust could not possibly change that -- fail immediately.
+        if exc.reason_code != "UNKNOWN_SIGNING_KEY" or trust_refresher is None:
+            # A "successful" activation whose assertion doesn't verify is
+            # not trusted -- never activate on an unverifiable response,
+            # regardless of what result/reason_code the envelope claimed.
+            event_recorder.record("ACTIVATION_FAILED", {"reason_code": exc.reason_code})
+            raise ActivationFailed(exc.reason_code, str(exc)) from exc
+
+        trust_refresher()
+        try:
+            # Exactly one retry. The refresh either produced a trusted
+            # signer or it did not; retrying further would just repeat the
+            # same deterministic verification against the same trust store.
+            verified = _verify()
+        except AssertionVerificationError as retry_exc:
+            event_recorder.record("ACTIVATION_FAILED", {"reason_code": retry_exc.reason_code})
+            raise ActivationFailed(retry_exc.reason_code, str(retry_exc)) from retry_exc
 
     payload = verified.payload
     record = LicenseStateRecord(

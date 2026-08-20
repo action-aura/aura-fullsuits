@@ -25,6 +25,45 @@ class TrustStoreError(ValueError):
     pass
 
 
+# Bounded so a hostile or garbled manifest can never turn admission into an
+# unbounded verification loop. Owner emits one entry per retained non-revoked
+# key; 64 is roughly five years of monthly rotation, far beyond any real
+# schedule, and the legacy single-signature slot is checked regardless of how
+# full this list is.
+MAX_MANIFEST_SIGNATURES = 64
+
+
+def _candidate_signatures(manifest: dict) -> list[tuple[str, str]]:
+    """(key_id, signature_b64) pairs offered by a manifest, most-preferred
+    first: the continuity `signatures` list Owner emits since the key-
+    continuity fix, then the legacy single `signed_by_key_id`/`signature`
+    pair that pre-continuity Owner builds emit on their own.
+
+    Purely structural -- this decides what is worth CHECKING, never what is
+    trusted. Every pair still has to name a key already in the store and
+    still has to verify against the public key the store already holds for
+    it.
+    """
+    candidates: list[tuple[str, str]] = []
+
+    entries = manifest.get("signatures")
+    if isinstance(entries, list):
+        for entry in entries[:MAX_MANIFEST_SIGNATURES]:
+            if not isinstance(entry, dict):
+                continue
+            key_id = entry.get("key_id")
+            signature = entry.get("signature")
+            if isinstance(key_id, str) and isinstance(signature, str):
+                candidates.append((key_id, signature))
+
+    legacy_key_id = manifest.get("signed_by_key_id")
+    legacy_signature = manifest.get("signature")
+    if isinstance(legacy_key_id, str) and isinstance(legacy_signature, str):
+        candidates.append((legacy_key_id, legacy_signature))
+
+    return candidates
+
+
 @dataclass(frozen=True)
 class TrustedKey:
     key_id: str
@@ -75,16 +114,36 @@ class OwnerTrustStore:
 
     def admit_manifest(self, manifest: dict) -> None:
         """Part D step 3: admit a signed key-set manifest only if it is
-        itself signed by a key already in this trust store. A manifest
-        signed by an unknown key is discarded silently -- it never partially
-        updates the trusted set."""
-        signed_by = manifest.get("signed_by_key_id")
-        if not signed_by or not self.is_trusted(signed_by):
-            return  # untrusted signer -- discard, do not raise (this is an
-            # expected, non-exceptional outcome on every routine check-in
-            # where nothing has changed).
+        itself signed by a key already in this trust store. A manifest whose
+        signers are all unknown is discarded silently -- it never partially
+        updates the trusted set.
 
-        signer_pub_b64 = self.get_public_key_b64(signed_by)
+        KEY CONTINUITY (launch-readiness CRITICAL fix). This used to look at
+        exactly one signature -- `signed_by_key_id`, which Owner always set
+        to the CURRENTLY ACTIVE key. That made rotation unpropagatable and
+        unrecoverable: right after a rotation the only manifest Owner could
+        produce was signed by a key no fielded install had ever trusted, so
+        it was discarded here, every subsequent assertion failed
+        UNKNOWN_SIGNING_KEY, and only a new installer with a fresh bundled
+        anchor could fix it.
+
+        Owner now countersigns the manifest with every retained non-revoked
+        key (see owner/app/licensing_service/signing.py::
+        export_signed_keyset_manifest), so the OUTGOING key -- which this
+        install still trusts -- vouches for the manifest introducing its
+        successor. All that changes here is WHICH already-trusted key is
+        allowed to be the one that vouches: it no longer has to be Owner's
+        current active key. The rule itself is untouched -- a signature is
+        still verified against the public key THIS STORE already holds for
+        that key_id, so a manifest signed only by keys that were never
+        trusted is still rejected, and a forged entry naming a trusted
+        key_id still fails verification. Nothing is ever admitted on a
+        manifest's own say-so.
+
+        The legacy single-signature shape is still accepted (checked last),
+        so an Owner instance that predates the countersigning change keeps
+        working unchanged.
+        """
         signable = {
             "manifest_version": manifest.get("manifest_version"),
             "issued_at": manifest.get("issued_at"),
@@ -92,15 +151,25 @@ class OwnerTrustStore:
         }
         try:
             canonical_bytes = canonicalize_bytes(signable)
-            signature = base64.b64decode(manifest["signature"])
-            signer_pub = base64.b64decode(signer_pub_b64)
         except Exception:
             return  # malformed manifest -- discard, not a hard error.
 
-        if not verify_signature(signer_pub, canonical_bytes, signature):
-            return  # bad signature -- discard.
+        for key_id, signature_b64 in _candidate_signatures(manifest):
+            if not self.is_trusted(key_id):
+                continue  # expected and non-exceptional -- Owner countersigns
+                # with keys this install may never have seen.
+            try:
+                signature = base64.b64decode(signature_b64)
+                signer_pub = base64.b64decode(self.get_public_key_b64(key_id))
+            except Exception:
+                continue  # malformed entry -- skip it, another may be sound.
+            if verify_signature(signer_pub, canonical_bytes, signature):
+                break
+        else:
+            return  # no trusted key vouched for this manifest -- discard.
 
-        # Signature verified -- now safe to admit/update/remove keys.
+        # A trusted key's signature verified -- now safe to admit/update/
+        # remove keys.
         incoming_ids = set()
         for entry in manifest.get("keys", []):
             key_id = entry["key_id"]

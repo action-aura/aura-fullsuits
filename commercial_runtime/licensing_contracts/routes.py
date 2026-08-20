@@ -23,7 +23,13 @@ from typing import Callable, Optional
 
 from flask import Blueprint, current_app, jsonify, request
 
-from .activation import ActivationFailed, ActivationPending, ingest_activation_response, perform_activation
+from .activation import (
+    ActivationFailed,
+    ActivationPending,
+    ingest_activation_response,
+    make_trust_manifest_refresher,
+    perform_activation,
+)
 from .checkin_scheduler import LicenseCheckInScheduler
 from .client import LicensingClient, LicensingClientConfig
 from .deactivation import DeactivationFailed, ingest_deactivation_response, perform_deactivation
@@ -227,7 +233,7 @@ def _register_internal_sync_routes(
         if not isinstance(owner_response, dict):
             return jsonify({"reason_code": "INVALID_REQUEST", "detail": "Expected a JSON object."}), 400
 
-        state_repository, event_recorder, trust_store, signer, _client = build_context()
+        state_repository, event_recorder, trust_store, signer, client = build_context()
         if not signer.has_key():
             return jsonify({"reason_code": "DEVICE_KEY_UNAVAILABLE", "detail": "No local device key registered."}), 400
 
@@ -240,6 +246,12 @@ def _register_internal_sync_routes(
                 product_code=product_code,
                 platform=platform,
                 device_public_key_fingerprint=_device_fingerprint(signer),
+                # Android's Kotlin layer made the Owner call, but this
+                # process still owns trust. It may fetch the public key-set
+                # manifest itself to recover from a stale bundled anchor --
+                # the same allowance the Windows path gets. Kotlin never
+                # supplies trust material.
+                trust_refresher=make_trust_manifest_refresher(client, trust_store),
             )
         except ActivationPending as exc:
             return jsonify({"result": "PENDING", "reason_code": exc.reason_code, "installation_id": exc.installation_id, "detail": str(exc)}), 202

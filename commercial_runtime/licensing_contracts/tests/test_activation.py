@@ -279,6 +279,87 @@ def test_pending_activation_raises_activation_pending_not_failed(trust_store, st
     assert "ACTIVATION_FAILED" not in [e.event_type for e in events.recent()]
 
 
+# ── Activation-time trust refresh (launch-readiness CRITICAL) ─────────────
+# A brand-new install whose BUNDLED anchor predates the current Owner signing
+# key would otherwise fail activation with UNKNOWN_SIGNING_KEY forever: unlike
+# the check-in path (LicenseCheckInScheduler.run_once refreshes the manifest
+# before every cycle), activation verified once and gave up.
+
+
+def _rotation_manifest_for(anchor_private, anchor_key_id, new_private, new_key_id):
+    body = {
+        "manifest_version": 1,
+        "issued_at": NOW.isoformat(),
+        "keys": [
+            {"key_id": anchor_key_id, "public_key": _b64_pub(anchor_private), "algorithm": "ed25519", "status": "RETIRED"},
+            {"key_id": new_key_id, "public_key": _b64_pub(new_private), "algorithm": "ed25519", "status": "ACTIVE"},
+        ],
+        "signed_by_key_id": new_key_id,
+    }
+    signable = {"manifest_version": body["manifest_version"], "issued_at": body["issued_at"], "keys": body["keys"]}
+    canonical = canonicalize_bytes(signable)
+
+    def _sig(private):
+        return base64.b64encode(private.sign(canonical)).decode("ascii")
+
+    return {
+        **body,
+        "signature": _sig(new_private),
+        "signatures": [
+            {"key_id": new_key_id, "algorithm": "ed25519", "signature": _sig(new_private)},
+            {"key_id": anchor_key_id, "algorithm": "ed25519", "signature": _sig(anchor_private)},
+        ],
+    }
+
+
+class RotatingFakeClient(FakeClient):
+    """Owner has rotated: the assertion is signed by the new key, and
+    /signing-keys serves a manifest countersigned by the outgoing key."""
+
+    def __init__(self, response, manifest):
+        super().__init__(response=response)
+        self._manifest = manifest
+        self.signing_key_fetches = 0
+
+    def fetch_signing_keys(self):
+        self.signing_key_fetches += 1
+        return self._manifest
+
+
+def test_activation_recovers_from_a_stale_bundled_anchor_after_rotation(owner_key, trust_store, state_repo, events):
+    rotated_key = Ed25519PrivateKey.generate()
+    envelope = _envelope(rotated_key, "owner-2", _payload("owner-assigned-inst-9"))
+    client = RotatingFakeClient(
+        response={"result": "SUCCESS", "installation_id": "owner-assigned-inst-9", "signed_assertion": envelope},
+        manifest=_rotation_manifest_for(owner_key, "owner-1", rotated_key, "owner-2"),
+    )
+
+    result = _activate(client, trust_store, state_repo, events)
+
+    assert result.state == LicenseState.ACTIVE_ONLINE
+    assert client.signing_key_fetches == 1
+    assert trust_store.is_trusted("owner-2") is True
+
+
+def test_activation_trust_refresh_never_admits_a_never_trusted_signer(owner_key, trust_store, state_repo, events):
+    """The refresh is not an escape hatch: a manifest whose signers this
+    install has never trusted leaves the trust store untouched and activation
+    still fails."""
+    attacker_key = Ed25519PrivateKey.generate()
+    envelope = _envelope(attacker_key, "attacker-key", _payload("owner-assigned-inst-9"))
+    client = RotatingFakeClient(
+        response={"result": "SUCCESS", "installation_id": "owner-assigned-inst-9", "signed_assertion": envelope},
+        manifest=_rotation_manifest_for(Ed25519PrivateKey.generate(), "unknown-0", attacker_key, "attacker-key"),
+    )
+
+    with pytest.raises(ActivationFailed) as exc:
+        _activate(client, trust_store, state_repo, events)
+
+    assert exc.value.reason_code == "UNKNOWN_SIGNING_KEY"
+    assert trust_store.is_trusted("attacker-key") is False
+    assert state_repo.load() is None
+
+
 def test_ingest_activation_response_pending_raises_and_persists_nothing(trust_store, state_repo, events):
     with pytest.raises(ActivationPending) as exc:
         ingest_activation_response(
