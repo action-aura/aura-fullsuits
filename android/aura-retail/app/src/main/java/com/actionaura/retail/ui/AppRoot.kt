@@ -9,7 +9,11 @@ package com.actionaura.retail.ui
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -26,7 +30,10 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.*
+import com.actionaura.retail.net.AiChatRequest
+import com.actionaura.retail.net.AiChatTurn
 import com.actionaura.retail.net.ApiClient
+import com.actionaura.retail.net.apiErrorMessage
 import com.actionaura.retail.server.ServerBootstrap
 import com.actionaura.retail.sync.SyncCoordinator
 import com.actionaura.retail.ui.components.NebulaBackground
@@ -36,7 +43,9 @@ import com.actionaura.retail.ui.i18n.AppLocale
 import com.actionaura.retail.ui.i18n.tr
 import com.actionaura.retail.ui.screens.*
 import com.actionaura.retail.ui.theme.AuroraTeal
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private enum class Phase { LOADING, LICENSE, SETUP, LOGIN, READY }
 
@@ -267,17 +276,67 @@ private fun MainShell(onLogout: () -> Unit) {
             }
         }
 
-        if (aiOpen) AiSheet(onDismiss = { aiOpen = false }, snackbar = snackbar)
+        if (aiOpen) AiSheet(onDismiss = { aiOpen = false })
     }
 }
 
+// One rendered chat turn. Deliberately plain sheet-local state (no ViewModel,
+// no persistence): the conversation only needs to outlive recomposition while
+// the sheet is open, matching HeldSales' "simple process-local state" habit
+// rather than inventing a chat store for a single bottom sheet. This also
+// matches the backend's own design -- ai_chat() stores nothing server-side;
+// `history` is client-supplied per request.
+private data class AiTurn(val role: String, val content: String)
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun AiSheet(onDismiss: () -> Unit, snackbar: SnackbarHostState) {
+private fun AiSheet(onDismiss: () -> Unit) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     var prompt by remember { mutableStateOf("") }
+    val turns = remember { mutableStateListOf<AiTurn>() }
+    var thinking by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val listState = rememberLazyListState()
     val suggestions = listOf(tr("Today's best sellers"), tr("Low stock items"), tr("Sales vs last week"), tr("Slow-moving products"))
+
+    fun send() {
+        val msg = prompt.trim()
+        if (msg.isEmpty() || thinking) return
+        // `history` = the turns BEFORE this message: ai_chat() appends the
+        // new `message` to the prompt itself, so including it in history too
+        // would feed the model the same question twice.
+        val history = turns.map { AiChatTurn(it.role, it.content) }
+        turns.add(AiTurn("user", msg))
+        prompt = ""; error = null; thinking = true
+        scope.launch {
+            try {
+                // withContext(IO) keeps the long (~17-36s real generation
+                // latency) wait explicitly off the main dispatcher, same as
+                // ServerBootstrap.start()'s convention for slow work.
+                val r = withContext(Dispatchers.IO) {
+                    ApiClient.get().aiChat(AiChatRequest(
+                        message = msg, history = history, lang = AppLocale.lang.tag))
+                }
+                val reply = r.data?.reply?.trim().orEmpty()
+                if (r.success && reply.isNotEmpty()) turns.add(AiTurn("assistant", reply))
+                // A 200 without a usable reply shouldn't happen (the route
+                // 503s instead), but if it ever does, show what the server
+                // said rather than pretending the network failed.
+                else error = tr(r.error ?: "AI assistant is temporarily unavailable.")
+            } catch (e: Exception) {
+                // Shared mapping (net/ApiErrors.kt): connectivity failures
+                // stay connectivity, a 401 (dead session -- also what an
+                // unauthenticated request hits) says "log in again", a
+                // licensing 403 names the subscription, and the route's own
+                // 503 text ("AI assistant is temporarily unavailable.",
+                // which is also how an unset/rejected upstream bearer token
+                // surfaces -- the proxy folds upstream 401s into that 503)
+                // is shown translated.
+                error = apiErrorMessage(e)
+            } finally { thinking = false }
+        }
+    }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
         Column(Modifier.padding(20.dp).padding(bottom = 24.dp)) {
@@ -291,11 +350,36 @@ private fun AiSheet(onDismiss: () -> Unit, snackbar: SnackbarHostState) {
                 }
             }
             Spacer(Modifier.height(18.dp))
-            Text(tr("SUGGESTED"), style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(10.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                suggestions.forEach { s -> SuggestionChip(onClick = { prompt = s }, label = { Text(s) }) }
+            if (turns.isEmpty()) {
+                Text(tr("SUGGESTED"), style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(10.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    suggestions.forEach { s -> SuggestionChip(onClick = { prompt = s }, label = { Text(s) }) }
+                }
+            } else {
+                // Keep the newest turn (or the typing row) in view as the
+                // conversation grows -- without this, replies land below the
+                // fold and the sheet looks stuck exactly when it succeeded.
+                LaunchedEffect(turns.size, thinking) {
+                    listState.animateScrollToItem(turns.size - if (thinking) 0 else 1)
+                }
+                LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
+                    items(turns) { t -> AiTurnBubble(t) }
+                    if (thinking) item {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(tr("Aura AI is thinking…"), style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+            error?.let {
+                Spacer(Modifier.height(10.dp))
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
             Spacer(Modifier.height(20.dp))
             OutlinedTextField(
@@ -303,11 +387,32 @@ private fun AiSheet(onDismiss: () -> Unit, snackbar: SnackbarHostState) {
                 placeholder = { Text(tr("Ask anything…")) },
                 modifier = Modifier.fillMaxWidth(),
                 trailingIcon = {
-                    IconButton(onClick = {
-                        scope.launch { onDismiss(); snackbar.showSnackbar(tr("Aura AI is coming soon ✨")) }
-                    }) { Icon(Icons.Default.Send, "Send", tint = MaterialTheme.colorScheme.primary) }
+                    // The spinner replaces the send button while a turn is in
+                    // flight -- send() also guards on `thinking`, so a racing
+                    // tap can never fire two overlapping requests.
+                    if (thinking) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                    else IconButton(onClick = { send() }) {
+                        Icon(Icons.Default.Send, tr("Send"), tint = MaterialTheme.colorScheme.primary)
+                    }
                 },
             )
+        }
+    }
+}
+
+@Composable
+private fun AiTurnBubble(t: AiTurn) {
+    val isUser = t.role == "user"
+    // Arrangement.End/Start (not absolute) so the bubbles mirror correctly
+    // when the whole app flips to RTL for Arabic.
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = if (isUser) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        ) {
+            Text(t.content, Modifier.padding(horizontal = 12.dp, vertical = 8.dp).widthIn(max = 300.dp),
+                style = MaterialTheme.typography.bodyMedium)
         }
     }
 }

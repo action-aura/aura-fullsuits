@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.dp
 import com.actionaura.retail.net.ApiClient
 import com.actionaura.retail.net.BackupEntry
 import com.actionaura.retail.net.RestoreBackupRequest
+import com.actionaura.retail.net.apiErrorMessage
 import com.actionaura.retail.ui.RetailSession
 import com.actionaura.retail.ui.components.EmptyState
 import com.actionaura.retail.ui.components.SkeletonList
@@ -90,7 +91,7 @@ fun BackupRestoreScreen(onBack: () -> Unit, snackbar: SnackbarHostState) {
                                 load()
                             } else snackbar.showSnackbar(r.message ?: tr("The backup could not be processed."))
                         } catch (e: Exception) {
-                            snackbar.showSnackbar(tr("Couldn't reach the server"))
+                            snackbar.showSnackbar(apiErrorMessage(e))
                         } finally { creating = false }
                     }
                 },
@@ -151,7 +152,7 @@ fun BackupRestoreScreen(onBack: () -> Unit, snackbar: SnackbarHostState) {
                                     restoreTarget = null
                                 } else snackbar.showSnackbar(r.message ?: tr("The backup could not be processed."))
                             } catch (e: Exception) {
-                                snackbar.showSnackbar(tr("Couldn't reach the server"))
+                                snackbar.showSnackbar(apiErrorMessage(e))
                             } finally { restoring = false }
                         }
                     },

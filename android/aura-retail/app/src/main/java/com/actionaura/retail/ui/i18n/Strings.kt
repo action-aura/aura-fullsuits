@@ -83,7 +83,9 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Ask about your business" to "اسأل عن نشاطك التجاري",
     "SUGGESTED" to "مقترحات",
     "Ask anything…" to "اسأل أي شيء…",
-    "Aura AI is coming soon ✨" to "Aura AI قريبًا ✨",
+    "Send" to "إرسال",
+    "Aura AI is thinking…" to "Aura AI يفكّر…",
+    "AI assistant is temporarily unavailable." to "مساعد الذكاء الاصطناعي غير متاح مؤقتًا.",
     "Today's best sellers" to "الأكثر مبيعًا اليوم",
     "Low stock items" to "أصناف المخزون المنخفض",
     "Sales vs last week" to "المبيعات مقابل الأسبوع الماضي",
@@ -144,6 +146,16 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "in stock" to "في المخزون",
     "Payment successful" to "تمت عملية الدفع بنجاح",
     "collected" to "تم تحصيله",
+
+    // ── Shared API error mapping (net/ApiErrors.kt) ──────────────────────────
+    // "This action is not available..." is flask_guard.py's fixed 403 message
+    // text, translated verbatim so the licensing block reads natively in
+    // Arabic instead of falling back to the English server string.
+    "Blocked by your subscription/license:" to "محظور بسبب اشتراكك/ترخيصك:",
+    "This action is not available in the current licensing state." to "هذا الإجراء غير متاح في حالة الترخيص الحالية.",
+    "Your session has expired. Please log in again." to "انتهت صلاحية جلستك. يرجى تسجيل الدخول مرة أخرى.",
+    "Server error" to "خطأ في الخادم",
+    "Unexpected error" to "خطأ غير متوقع",
 
     // ── Products ──────────────────────────────────────────────────────────────
     "Add your first product to start selling." to "أضف أول منتج لك لبدء البيع.",

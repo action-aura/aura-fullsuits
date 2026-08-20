@@ -195,6 +195,15 @@ interface AuraApi {
     @POST("api/sub/retail/returns")
     suspend fun createReturn(@Body body: CreateReturnRequest): CreateReturnResponse
 
+    // Aura AI assistant (retail_api.py::ai_chat, blueprint prefix
+    // /api/sub/retail). Non-streaming contract only -- see AiChatRequest's
+    // doc comment in Models.kt for why `stream` is never sent. This call
+    // legitimately takes ~17-36s (CPU-bound generation on the hosted
+    // droplet), which is why ApiClient raises the read timeout for exactly
+    // this path.
+    @POST("api/sub/retail/ai/chat")
+    suspend fun aiChat(@Body body: AiChatRequest): AiChatResponse
+
     // Reports (period stats)
     @GET("api/sub/retail/reports/summary")
     suspend fun reportSummary(@Query("days") days: Int = 30): ReportSummaryResponse

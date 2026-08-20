@@ -488,7 +488,7 @@ private fun ProcessReturnSheet(onDismiss: () -> Unit, onDone: () -> Unit) {
                                 val r = ApiClient.get().createReturn(
                                     CreateReturnRequest(s.id, reason, refund, items, UUID.randomUUID().toString()))
                                 if (r.status == "success") onDone() else { err = r.message ?: tr("Couldn't process"); saving = false }
-                            } catch (e: Exception) { err = tr("Couldn't reach the server"); saving = false }
+                            } catch (e: Exception) { err = apiErrorMessage(e); saving = false }
                         }
                     },
                     enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -587,7 +587,7 @@ private fun AddCustomerSheet(onDismiss: () -> Unit, onCreated: () -> Unit) {
                     try {
                         val r = ApiClient.get().createCustomer(CreateCustomerRequest(name.trim(), phone.trim(), email.trim()))
                         if (r.status == "success") onCreated() else { err = r.message ?: tr("Couldn't save"); saving = false }
-                    } catch (e: Exception) { err = tr("Couldn't reach the server"); saving = false }
+                    } catch (e: Exception) { err = apiErrorMessage(e); saving = false }
                 }
             }, enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 if (saving) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
@@ -763,7 +763,7 @@ private fun StatementSheet(customerId: String, onDismiss: () -> Unit, onPaid: ()
                                 try {
                                     val r = ApiClient.get().customerPayment(customerId, PaymentRequest(amt, "cash"))
                                     if (r.status == "success") onPaid() else { err = r.message ?: tr("Failed"); paying = false }
-                                } catch (e: Exception) { err = tr("Couldn't reach the server"); paying = false }
+                                } catch (e: Exception) { err = apiErrorMessage(e); paying = false }
                             }
                         }, enabled = !paying, modifier = Modifier.height(52.dp)) {
                             if (paying) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
@@ -868,7 +868,7 @@ private fun AddSupplierSheet(onDismiss: () -> Unit, onCreated: () -> Unit) {
                             val r = ApiClient.get().createSupplier(CreateSupplierRequest(
                                 name = name.trim(), phone = phone.trim(), email = email.trim(), address = address.trim()))
                             if (r.status == "success") onCreated() else error = r.message ?: tr("Couldn't save")
-                        } catch (e: Exception) { error = tr("Couldn't reach the server") } finally { saving = false }
+                        } catch (e: Exception) { error = apiErrorMessage(e) } finally { saving = false }
                     }
                 },
                 enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -994,7 +994,7 @@ private fun SupplierStatementSheet(supplierId: String, onDismiss: () -> Unit, on
                                 try {
                                     val r = ApiClient.get().supplierPayment(supplierId, PaymentRequest(amt, "cash"))
                                     if (r.status == "success") onPaid() else { err = r.message ?: tr("Failed"); paying = false }
-                                } catch (e: Exception) { err = tr("Couldn't reach the server"); paying = false }
+                                } catch (e: Exception) { err = apiErrorMessage(e); paying = false }
                             }
                         }, enabled = !paying, modifier = Modifier.height(52.dp)) {
                             if (paying) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
@@ -1567,7 +1567,7 @@ private fun CreatePoSheet(onDismiss: () -> Unit, onCreated: () -> Unit) {
                                 items = lines.map { PoItemReq(it.first.id, it.second, it.third) },
                                 amount_paid = parseNum(amountPaid) ?: 0.0))
                             if (r.status == "success") onCreated() else error = r.message ?: tr("Couldn't save")
-                        } catch (e: Exception) { error = tr("Couldn't reach the server") } finally { saving = false }
+                        } catch (e: Exception) { error = apiErrorMessage(e) } finally { saving = false }
                     }
                 },
                 enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp),

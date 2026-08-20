@@ -420,7 +420,10 @@ fun PosScreen(snackbar: SnackbarHostState) {
                                         r.data?.warning?.takeIf { it.isNotBlank() }?.let { snackbar.showSnackbar(it) }
                                         load(); loadCustomers()   // refresh stock + customer balances
                                     } else snackbar.showSnackbar(r.message ?: tr("Sale failed"))
-                                } catch (e: Exception) { snackbar.showSnackbar(tr("Couldn't reach the server")) }
+                                // apiErrorMessage (net/ApiErrors.kt): a licensing
+                                // 403 on checkout must say the subscription
+                                // blocked the sale, never "server unreachable".
+                                } catch (e: Exception) { snackbar.showSnackbar(apiErrorMessage(e)) }
                                 finally { charging = false }
                             }
                         }
@@ -783,7 +786,7 @@ private fun EditProductSheet(product: Product, onDismiss: () -> Unit, onSaved: (
                             }
                             if (r.status == "success") onSaved(tr("Product updated"))
                             else { error = r.message ?: tr("Couldn't save"); saving = false }
-                        } catch (e: Exception) { error = tr("Couldn't reach the server"); saving = false }
+                        } catch (e: Exception) { error = apiErrorMessage(e); saving = false }
                     }
                 },
                 enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -870,7 +873,7 @@ private fun AddProductSheet(onDismiss: () -> Unit, onCreated: () -> Unit) {
                             cost_price = parseNum(cost) ?: 0.0,
                             initial_stock = parseNum(stock) ?: 0.0, unit = unit))
                         if (r.status == "success") onCreated() else error = r.message ?: tr("Couldn't save")
-                    } catch (e: Exception) { error = tr("Couldn't reach the server") } finally { saving = false }
+                    } catch (e: Exception) { error = apiErrorMessage(e) } finally { saving = false }
                 }
             }, enabled = !saving, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 if (saving) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp,

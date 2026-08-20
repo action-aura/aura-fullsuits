@@ -414,6 +414,28 @@ data class CreateReturnRequest(
     val idempotency_key: String,
 )
 
+// ── Aura AI chat (retail_api.py::ai_chat) ────────────────────────────────────
+// Request matched to what the route actually reads: `message` (required;
+// server trims and caps at 4000 chars), `history` = the PRIOR [{role,
+// content}] turns (the server keeps only the last 10 and truncates each, so
+// the client just sends everything it has), and `lang` ('en'/'ar',
+// whitelisted server-side via _resolve_ai_language()). `stream` is
+// deliberately absent: the route only switches to NDJSON when `stream` is a
+// literal JSON true ("strict identity check, not truthiness" in the route),
+// and the one-shot JSON shape below is the only one this Gson model parses.
+data class AiChatTurn(val role: String, val content: String)
+data class AiChatRequest(
+    val message: String,
+    val history: List<AiChatTurn> = emptyList(),
+    val lang: String = "en",
+)
+// 200 response: {"success": true, "data": {"reply": "..."}}. The route's
+// 400/503 bodies ({"success": false, "error": "..."}) never reach this
+// model -- Retrofit raises HttpException for non-2xx, which ApiErrors.kt
+// decodes (surfacing that same "error" text).
+data class AiChatReply(val reply: String? = null)
+data class AiChatResponse(val success: Boolean = false, val error: String? = null, val data: AiChatReply? = null)
+
 // Server-computed, tax-inclusive refund breakdown -- mirrors
 // docs/architecture/financial-authority-contracts.md's Retail return
 // contract. The client must display refund_amount from here, never a

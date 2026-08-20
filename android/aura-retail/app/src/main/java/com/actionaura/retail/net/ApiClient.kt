@@ -90,6 +90,25 @@ object ApiClient {
                 .cookieJar(cookieJar)
                 .connectTimeout(15, TimeUnit.SECONDS)
                 .readTimeout(30, TimeUnit.SECONDS)
+                // AI chat is the one legitimately slow route: the embedded
+                // Flask proxy itself waits up to AURA_AI_TIMEOUT_SECONDS
+                // (45s, see products/retail/backend/config.py) on the hosted
+                // model, and a realistic reply takes ~17-36s of CPU-bound
+                // generation (measured on the real droplet, per retail_api.py's
+                // comments). With only the global 30s read timeout the app
+                // would hang up FIRST -- and that SocketTimeoutException is an
+                // IOException, so a reply still being generated would be
+                // misreported as "Couldn't reach the server". 60s > 45s
+                // guarantees the embedded server always gets to answer with
+                // its own JSON (a reply, or its honest 503) before we do.
+                // Scoped per-request so every other endpoint keeps the snappy
+                // 30s failure behavior.
+                .addInterceptor { chain ->
+                    val req = chain.request()
+                    if (req.url.encodedPath.endsWith("/ai/chat"))
+                        chain.withReadTimeout(60_000, TimeUnit.MILLISECONDS).proceed(req)
+                    else chain.proceed(req)
+                }
                 .build()
             val retrofit = Retrofit.Builder()
                 .baseUrl(ServerBootstrap.baseUrl())
