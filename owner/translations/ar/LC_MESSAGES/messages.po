@@ -4248,6 +4248,10 @@ msgstr "طلبات المبيعات"
 msgid "My commission earnings"
 msgstr "أرباح العمولات الخاصة بي"
 
+#: app/templates/commercial_sales/employee_dashboard.html:46
+msgid "My commission earnings by currency"
+msgstr "أرباح العمولات الخاصة بي حسب العملة"
+
 #: app/templates/commercial_sales/employee_dashboard.html:23
 msgid "Earned, awaiting approval"
 msgstr "مكتسبة، بانتظار الاعتماد"
@@ -4299,6 +4303,10 @@ msgstr "دفعات الصرف بانتظار الاعتماد"
 #: app/templates/commercial_sales/finance_dashboard.html:28
 msgid "Outstanding invoice total"
 msgstr "إجمالي الفواتير المستحقة"
+
+#: app/templates/commercial_sales/finance_dashboard.html:42
+msgid "No outstanding invoices."
+msgstr "لا توجد فواتير مستحقة."
 
 #: app/templates/commercial_sales/invoice_detail.html:13
 #: app/templates/commercial_sales/quote_detail.html:13

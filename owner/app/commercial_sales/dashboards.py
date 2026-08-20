@@ -22,6 +22,7 @@ from sqlalchemy import func, select
 
 from app.extensions import db_session
 from app.leads.ownership import apply_ownership_filter
+from app.metrics_contracts import EmployeeCommercialDashboard, FinanceCommercialDashboard
 from app.models.commercial_sales import (
     CommercialApproval,
     CommercialInvoice,
@@ -29,11 +30,33 @@ from app.models.commercial_sales import (
     Quote,
     SalesOrder,
 )
-from app.models.commissions import CommissionLedgerEntry, CommissionPayoutBatch
+from app.models.commissions import (
+    COMMISSION_AWAITING_APPROVAL_STATUS,
+    CommissionLedgerEntry,
+    CommissionPayoutBatch,
+)
 from app.operational_reports.aggregation import outstanding_receivables_total
 
+# The currency the employee dashboard's scalar commission figures are scoped
+# to when the caller names none -- the same default every other dashboard
+# route in this codebase already uses (request.args.get("currency", "USD"),
+# see operations_ui/routes.py and api_operations/expenses_and_operations.py).
+DEFAULT_DASHBOARD_CURRENCY = "USD"
 
-def employee_commercial_dashboard(actor_employee_profile_id: uuid.UUID, actor_staff_user_id: uuid.UUID) -> dict:
+_COMMISSION_STAGE_BY_STATUS = {
+    "EARNED": "earned_unapproved",
+    "APPROVED": "approved_unpaid",
+    "PAID": "paid_total",
+    "REVERSED": "reversed_total",
+}
+_ZERO_COMMISSION_STAGES = {stage: Decimal("0.00") for stage in _COMMISSION_STAGE_BY_STATUS.values()}
+
+
+def employee_commercial_dashboard(
+    actor_employee_profile_id: uuid.UUID,
+    actor_staff_user_id: uuid.UUID,
+    currency: str = DEFAULT_DASHBOARD_CURRENCY,
+) -> dict:
     quotes_by_status = dict(db_session.execute(
         apply_ownership_filter(select(Quote.status, func.count(Quote.id)), Quote, actor_employee_profile_id, all_permission_held=False)
         .group_by(Quote.status)
@@ -47,33 +70,68 @@ def employee_commercial_dashboard(actor_employee_profile_id: uuid.UUID, actor_st
         .group_by(CommercialInvoice.status)
     ).all())
 
-    def own_commission_sum(*extra_where):
-        stmt = select(func.coalesce(func.sum(CommissionLedgerEntry.commission_amount), Decimal("0.00"))).where(
-            CommissionLedgerEntry.employee_profile_id == actor_employee_profile_id
+    # AUDIT-owner-cross-screen: own_commission_sum() previously ran one SUM
+    # per lifecycle status with NO currency filter at all, so an employee
+    # holding a USD earning and a JOD earning saw the two added together --
+    # a number in no currency, on the one screen ("My commission earnings")
+    # the employee is most likely to check against their own payslip, while
+    # every finance screen beside it is strictly single-currency
+    # (aggregation.py's module docstring: "currency is never blended").
+    #
+    # One GROUP BY (currency, status) now replaces the four scalar sums.
+    # The per-currency breakdown is the real answer and is returned in
+    # full; the four scalars the HTML screen still binds to are DERIVED
+    # from that breakdown for the requested currency rather than re-queried,
+    # so the detailed view and the headline figures are the same numbers by
+    # construction and cannot drift.
+    commission_totals_by_currency: dict[str, dict[str, Decimal]] = {}
+    for entry_currency, status, total in db_session.execute(
+        select(
+            CommissionLedgerEntry.currency,
+            CommissionLedgerEntry.status,
+            func.coalesce(func.sum(CommissionLedgerEntry.commission_amount), Decimal("0.00")),
         )
-        for clause in extra_where:
-            stmt = stmt.where(clause)
-        return db_session.execute(stmt).scalar_one()
+        .where(CommissionLedgerEntry.employee_profile_id == actor_employee_profile_id)
+        .group_by(CommissionLedgerEntry.currency, CommissionLedgerEntry.status)
+    ).all():
+        stage = _COMMISSION_STAGE_BY_STATUS.get(status)
+        if stage is None:
+            # CANCELLED/DISPUTED (and the unassignable PENDING default) are
+            # not earnings stages this screen reports -- skipped rather than
+            # silently folded into one of the four it does report.
+            continue
+        commission_totals_by_currency.setdefault(entry_currency, dict(_ZERO_COMMISSION_STAGES))[stage] = total
 
-    return {
-        "quotes_by_status": quotes_by_status,
-        "orders_by_status": orders_by_status,
-        "invoices_by_status": invoices_by_status,
+    # Sorted so the screen's per-currency table and its JSON twin list
+    # currencies in the same, stable order on every request -- a GROUP BY's
+    # row order is not ordered (same reasoning as
+    # finance_commercial_dashboard()'s sorted(outstanding_currencies)).
+    commission_totals_by_currency = dict(sorted(commission_totals_by_currency.items()))
+
+    scoped = commission_totals_by_currency.get(currency, dict(_ZERO_COMMISSION_STAGES))
+
+    return EmployeeCommercialDashboard(
+        currency=currency,
+        quotes_by_status=quotes_by_status,
+        orders_by_status=orders_by_status,
+        invoices_by_status=invoices_by_status,
         # Approvals this employee is waiting on someone else to decide --
         # informational only; SALES never holds an approve permission
         # (Milestone 16), so this is never an actionable queue for them.
-        "own_pending_approval_requests": db_session.execute(
+        own_pending_approval_requests=db_session.execute(
             select(func.count(CommercialApproval.id)).where(
                 CommercialApproval.status == "PENDING", CommercialApproval.requested_by_staff_user_id == actor_staff_user_id
             )
         ).scalar_one(),
-        # Own commission earnings, split by lifecycle stage -- never a
-        # peer's (Non-Negotiable: beneficiary-scoped by design, commissions.view_own).
-        "commission_earned_unapproved": own_commission_sum(CommissionLedgerEntry.status == "EARNED"),
-        "commission_approved_unpaid": own_commission_sum(CommissionLedgerEntry.status == "APPROVED"),
-        "commission_paid_total": own_commission_sum(CommissionLedgerEntry.status == "PAID"),
-        "commission_reversed_total": own_commission_sum(CommissionLedgerEntry.status == "REVERSED"),
-    }
+        # Own commission earnings, split by lifecycle stage, scoped to one
+        # currency -- never a peer's (Non-Negotiable: beneficiary-scoped by
+        # design, commissions.view_own).
+        commission_earned_unapproved=scoped["earned_unapproved"],
+        commission_approved_unpaid=scoped["approved_unpaid"],
+        commission_paid_total=scoped["paid_total"],
+        commission_reversed_total=scoped["reversed_total"],
+        commission_totals_by_currency=commission_totals_by_currency,
+    ).to_payload()
 
 
 def finance_commercial_dashboard() -> dict:
@@ -93,8 +151,13 @@ def finance_commercial_dashboard() -> dict:
     refunds_pending_approval = db_session.execute(
         select(func.count(CommercialRefund.id)).where(CommercialRefund.status == "DRAFT")
     ).scalar_one()
+    # Reads the shared constant (models/commissions.py) rather than repeating
+    # the literal, so this figure, the Attention Center's badge count and the
+    # deep link that badge points at can never name three different statuses.
     commissions_pending_approval = db_session.execute(
-        select(func.count(CommissionLedgerEntry.id)).where(CommissionLedgerEntry.status == "EARNED")
+        select(func.count(CommissionLedgerEntry.id)).where(
+            CommissionLedgerEntry.status == COMMISSION_AWAITING_APPROVAL_STATUS
+        )
     ).scalar_one()
     commissions_approved_unpaid = db_session.execute(
         select(func.count(CommissionLedgerEntry.id)).where(CommissionLedgerEntry.status == "APPROVED")
@@ -118,23 +181,26 @@ def finance_commercial_dashboard() -> dict:
     outstanding_currencies = db_session.execute(
         select(CommercialInvoice.currency).where(CommercialInvoice.status.notin_(("DRAFT", "VOID"))).distinct()
     ).scalars().all()
+    # sorted() so the screen and the JSON twin list currencies in the same,
+    # stable order on every request (a DISTINCT's row order is not ordered).
     outstanding_invoice_totals = {
-        currency: outstanding_receivables_total(currency) for currency in outstanding_currencies
+        currency: outstanding_receivables_total(currency) for currency in sorted(outstanding_currencies)
     }
 
-    return {
-        "quotes_by_status": quotes_by_status,
-        "orders_by_status": orders_by_status,
-        "invoices_by_status": invoices_by_status,
-        "quote_approvals_pending": pending_approvals,
-        "refunds_pending_approval": refunds_pending_approval,
-        "commissions_pending_approval": commissions_pending_approval,
-        "commissions_approved_unpaid": commissions_approved_unpaid,
-        "payout_batches_pending_approval": payout_batches_pending_approval,
+    return FinanceCommercialDashboard(
+        quotes_by_status=quotes_by_status,
+        orders_by_status=orders_by_status,
+        invoices_by_status=invoices_by_status,
+        quote_approvals_pending=pending_approvals,
+        refunds_pending_approval=refunds_pending_approval,
+        commissions_pending_approval=commissions_pending_approval,
+        commissions_approved_unpaid=commissions_approved_unpaid,
+        payout_batches_pending_approval=payout_batches_pending_approval,
         # Shape change from a single blended scalar ("outstanding_invoice_total")
         # to a per-currency dict -- see this block's own comment above for why.
-        # Template/JSON-API consumers of the old key must be updated to render
-        # per currency; see finance_dashboard.html:28 for the one remaining
-        # consumer that still expects the old scalar shape.
-        "outstanding_invoice_totals": outstanding_invoice_totals,
-    }
+        # Both consumers now render per currency (finance_dashboard.html and
+        # api_operations/commercial_sales.py); the field set is pinned by
+        # metrics_contracts.FinanceCommercialDashboard so the next rename
+        # cannot leave one of them silently blank the way this one did.
+        outstanding_invoice_totals=outstanding_invoice_totals,
+    ).to_payload()

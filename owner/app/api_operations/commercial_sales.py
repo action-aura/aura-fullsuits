@@ -796,14 +796,23 @@ def record_payout_route(batch_id, entry_id):
 @bp.route("/commercial/dashboard/employee", methods=["GET"])
 @require_any_permission("quotes.create", "orders.create", "invoices.create")
 def employee_commercial_dashboard_route():
-    from app.commercial_sales.dashboards import employee_commercial_dashboard
+    from app.commercial_sales.dashboards import DEFAULT_DASHBOARD_CURRENCY, employee_commercial_dashboard
 
     staff, profile = _actor()
     if profile is None:
         return jsonify({"error": "EMPLOYEE_PROFILE_REQUIRED"}), 400
-    data = employee_commercial_dashboard(profile.id, staff.id)
+    # AUDIT-owner-cross-screen: the four scalar commission figures are scoped
+    # to one currency now (they blended every currency into one number
+    # before); commission_totals_by_currency carries the full breakdown so a
+    # JSON consumer never has to guess which currencies exist.
+    currency = request.args.get("currency") or DEFAULT_DASHBOARD_CURRENCY
+    data = employee_commercial_dashboard(profile.id, staff.id, currency)
     for key in ("commission_earned_unapproved", "commission_approved_unpaid", "commission_paid_total", "commission_reversed_total"):
         data[key] = str(data[key])
+    data["commission_totals_by_currency"] = {
+        entry_currency: {stage: str(amount) for stage, amount in stages.items()}
+        for entry_currency, stages in data["commission_totals_by_currency"].items()
+    }
     return jsonify(data)
 
 

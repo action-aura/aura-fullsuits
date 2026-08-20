@@ -19,7 +19,11 @@ from flask import Blueprint, current_app, redirect, render_template, request, ur
 from app.auth.session import load_current_staff
 from app.commercial_sales.allocation import allocate_payment, reverse_allocation, unallocated_payment_balance
 from app.commercial_sales.approvals import decide_approval
-from app.commercial_sales.dashboards import employee_commercial_dashboard, finance_commercial_dashboard
+from app.commercial_sales.dashboards import (
+    DEFAULT_DASHBOARD_CURRENCY,
+    employee_commercial_dashboard,
+    finance_commercial_dashboard,
+)
 from app.commercial_sales.errors import CommercialSalesError
 from app.commercial_sales.fulfillment import fulfill_order
 from app.commercial_sales.invoices import confirmed_allocated_amount, create_invoice_from_order, issue_invoice, void_invoice
@@ -855,7 +859,18 @@ def employee_dashboard_view():
     staff, profile = _actor()
     if profile is None:
         return render_template("commercial_sales/employee_dashboard.html", data=None)
-    data = employee_commercial_dashboard(profile.id, staff.id)
+    # AUDIT-owner-cross-screen: the commission figures are single-currency
+    # now (they used to add USD and JOD together). Same ?currency= contract
+    # and same default as every other dashboard route here. The screen names
+    # the currency and offers a selector for it -- an unlabelled figure that
+    # silently depends on this default would be worse than the blended one.
+    #
+    # Deliberately NOT passed as a second template variable: the template
+    # reads data.currency, the one value the service actually scoped its
+    # numbers to, so the label can never disagree with the numbers under it
+    # (and metrics_contracts pins that key).
+    currency = request.args.get("currency") or DEFAULT_DASHBOARD_CURRENCY
+    data = employee_commercial_dashboard(profile.id, staff.id, currency)
     return render_template("commercial_sales/employee_dashboard.html", data=data)
 
 

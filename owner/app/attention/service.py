@@ -45,7 +45,7 @@ from app.models.audit import DatabaseBackupRecord
 from app.operational_reports.dashboards import OVERDUE_INVOICE_EXCLUDED_STATUSES, is_invoice_overdue
 from app.models.commercial_ops import InternalNotification
 from app.models.commercial_sales import CommercialApproval, CommercialInvoice, Quote, QuoteLine
-from app.models.commissions import CommissionLedgerEntry
+from app.models.commissions import COMMISSION_AWAITING_APPROVAL_STATUS, CommissionLedgerEntry
 from app.models.customers import Customer
 from app.models.employees import EmployeeProfile
 from app.models.expenses import Expense, ExpenseApproval
@@ -387,10 +387,20 @@ def _pending_commission_items() -> list[AttentionItem]:
     # approval state -- matches commercial_sales/dashboards.py's own
     # "commissions_pending_approval" metric, which already counts
     # status == "EARNED" (finance_commercial_dashboard()).
+    #
+    # AUDIT-owner-cross-screen: the count above was fixed to "EARNED" but
+    # the action link below still deep-linked to
+    # list_commissions?status=PENDING -- the very value this comment
+    # documents as unassignable. So the badge said N, the user clicked it,
+    # and the commissions list came back empty every single time. Both the
+    # query and the link now read COMMISSION_AWAITING_APPROVAL_STATUS
+    # (models/commissions.py), the same constant
+    # finance_commercial_dashboard() counts on, so a count and the list it
+    # points at can no longer name two different statuses.
     rows = db_session.execute(
         select(CommissionLedgerEntry, EmployeeProfile)
         .join(EmployeeProfile, EmployeeProfile.id == CommissionLedgerEntry.employee_profile_id)
-        .where(CommissionLedgerEntry.status == "EARNED")
+        .where(CommissionLedgerEntry.status == COMMISSION_AWAITING_APPROVAL_STATUS)
         .order_by(CommissionLedgerEntry.created_at)
         .limit(100)
     ).all()
@@ -408,7 +418,8 @@ def _pending_commission_items() -> list[AttentionItem]:
             AttentionItem(
                 category="pending_commissions", category_label=_("Pending Commission Approvals"), priority=priority,
                 title=title, context=context, occurred_at=entry.created_at,
-                action_label=_("Review commissions"), action_url=url_for("commercial_sales_web.list_commissions", status="PENDING"),
+                action_label=_("Review commissions"),
+                action_url=url_for("commercial_sales_web.list_commissions", status=COMMISSION_AWAITING_APPROVAL_STATUS),
                 accessible_label=_accessible_label(_("Pending Commission Approvals"), title, context),
             )
         )

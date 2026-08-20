@@ -4181,6 +4181,10 @@ msgstr ""
 msgid "My commission earnings"
 msgstr ""
 
+#: app/templates/commercial_sales/employee_dashboard.html:46
+msgid "My commission earnings by currency"
+msgstr ""
+
 #: app/templates/commercial_sales/employee_dashboard.html:23
 msgid "Earned, awaiting approval"
 msgstr ""
@@ -4231,6 +4235,10 @@ msgstr ""
 
 #: app/templates/commercial_sales/finance_dashboard.html:28
 msgid "Outstanding invoice total"
+msgstr ""
+
+#: app/templates/commercial_sales/finance_dashboard.html:42
+msgid "No outstanding invoices."
 msgstr ""
 
 #: app/templates/commercial_sales/invoice_detail.html:13

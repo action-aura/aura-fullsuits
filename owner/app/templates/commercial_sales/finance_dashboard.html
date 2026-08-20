@@ -25,7 +25,22 @@
     <dt>{{ _("Commissions pending approval") }}</dt><dd>{{ data.commissions_pending_approval }}</dd>
     <dt>{{ _("Commissions approved, awaiting payout") }}</dt><dd>{{ data.commissions_approved_unpaid }}</dd>
     <dt>{{ _("Payout batches pending approval") }}</dt><dd>{{ data.payout_batches_pending_approval }}</dd>
-    <dt>{{ _("Outstanding invoice total") }}</dt><dd>{{ data.outstanding_invoice_total }}</dd>
+  </dl>
+</div>
+
+<div class="card">
+  {# One row per currency, never a blended total: the service returns
+     outstanding_invoice_totals keyed by currency (see
+     commercial_sales/dashboards.py). The currency code is wrapped in
+     <bdi dir="ltr"> so an ISO code keeps its own direction inside the
+     Arabic RTL layout, matching operations_ui/dashboard_management.html. #}
+  <h3>{{ _("Outstanding invoice total") }}</h3>
+  <dl class="kv">
+    {% for currency, total in data.outstanding_invoice_totals.items() %}
+    <dt><bdi dir="ltr">{{ currency }}</bdi></dt><dd>{{ format_owner_number(total) }}</dd>
+    {% else %}
+    <dt>{{ _("No outstanding invoices.") }}</dt><dd>-</dd>
+    {% endfor %}
   </dl>
 </div>
 {% endblock %}
