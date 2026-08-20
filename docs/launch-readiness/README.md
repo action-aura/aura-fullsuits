@@ -118,6 +118,49 @@ Ranked by *what actually blocks a launch*, not by how interesting the bug is.
     the suite stops shipping three unrelated brand identities. Highest single
     perception win is replacing the desktop neon/HUD identity.
 
+## Session log — 2026-08-20, paused 03:30 at the owner's request
+
+**Landed and pushed on `feat/launch-readiness`:**
+
+- Wave 1 discovery complete — six parallel audits, every finding carrying a
+  `file:line` citation and a CONFIRMED/SUSPECTED label (`findings.md`).
+- Measured test baseline: 99 files, 98 passed, 1 failed.
+- **Sync fixes** (`13c1c92`): outbox chunking so a device with >200 offline
+  edits can no longer wedge permanently; bulk import now enqueues sync events
+  so an imported catalogue actually reaches other devices; push ordering moved
+  off local wall-clock to insertion sequence so a clock step-back can no longer
+  invert parent→child and freeze the whole fleet's cursor. 9 new tests, each
+  seen RED before and GREEN after. Retail suite: 45 files, 45 passed.
+- **Android fixes** (`3b650c3`): the AI assistant is wired to its backend route
+  for the first time; licensing 403s no longer masquerade as network errors.
+  Compiles — a fresh `app-debug.apk` was produced.
+
+**Next session should start here**, in this order:
+
+1. Get a **keystore** from the owner and produce a release-signed APK. Nothing
+   about distribution is real until this exists.
+2. Fix **signing-key rotation** (`signing.py:228` + `trust_store.py:82`) — the
+   only finding that becomes unfixable after it happens.
+3. Finish the **CSP migration**, starting with the missing void-expense
+   confirmation.
+4. Wire `-PaiBearerToken` into the build, then verify the assistant on a real
+   handset end to end.
+5. Begin the **single metric service** — it is the one change that resolves
+   both "reports don't match" complaints, on Owner web and on desktop, and it
+   is a refactor rather than a patch.
+
+**Two decisions only the owner can make**, both already blocking work:
+
+- Reactivate the cancelled subscription, or every write stays 403-blocked and
+  the product looks broken to any tester.
+- Decide what multi-device means: sales, stock, purchase orders and cash
+  sessions are per-device *by design* today, so two devices are structurally
+  incapable of showing the same numbers.
+
+**Left deliberately untouched:** two worktrees still hold uncommitted work —
+`feat/pos-hold-resume-sale` and `feat/retail-ui-ux-polish`. They were skipped
+during disk cleanup rather than risk losing whatever is in them.
+
 ## Working agreement for agents on this programme
 
 - Production lineage is `feat/retail-mobile-build-baseline`. Never deploy
