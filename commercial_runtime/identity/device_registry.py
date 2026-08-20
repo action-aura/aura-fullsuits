@@ -172,16 +172,81 @@ def set_admin_device(conn: sqlite3.Connection, company_id: str, device_id: str) 
     return get_device(conn, device_id)
 
 
-def has_admin_device(conn: sqlite3.Connection, company_id: str) -> bool:
-    """True if some device already holds `is_admin_device` for this company.
-    Used by device_context.resolve_local_device() to auto-bootstrap the
-    first-ever device as the admin device -- see that call site's own
-    comment for why nothing else in this codebase ever did that."""
+def admin_device(conn: sqlite3.Connection, company_id: str) -> dict:
+    """The device row currently holding `is_admin_device` for `company_id`,
+    or None if this company has never claimed one (the fresh-install state).
+
+    Returns the whole row, not a bool, because every caller that cares
+    whether an admin device exists also wants to say WHICH device it is --
+    a 409 telling an admin "another device already holds this" is only
+    actionable if it names the holder (`device_label`/`platform`), otherwise
+    the user is told "no" with no way to find the machine they have to go
+    and use. `has_admin_device()` below is the bool-only shorthand.
+    """
     row = conn.execute(
-        "SELECT 1 FROM devices WHERE company_id=? AND is_admin_device=1 LIMIT 1",
+        "SELECT * FROM devices WHERE company_id=? AND is_admin_device=1 LIMIT 1",
         (company_id,),
     ).fetchone()
-    return row is not None
+    return dict(row) if row else None
+
+
+def has_admin_device(conn: sqlite3.Connection, company_id: str) -> bool:
+    """True if some device already holds `is_admin_device` for this company."""
+    return admin_device(conn, company_id) is not None
+
+
+def claim_admin_device(conn: sqlite3.Connection, company_id: str, device_id: str):
+    """FIRST claim only: make `device_id` this company's admin device, but
+    ONLY if no other device already holds the flag. Returns the updated row
+    on success, or None if another device is already the admin device.
+
+    The difference from `set_admin_device()` above is the whole point of
+    this function existing separately. `set_admin_device()` clears every
+    other holder first and then takes the flag -- it is a *transfer*, and
+    the caller must already have proven it is allowed to take the flag away
+    from whoever has it. This one is the *bootstrap*: it may only ever move
+    the flag from "nobody" to "this device", which is the only admin-device
+    decision a company with no admin device yet is in a position to make.
+
+    Atomicity comes from the database, not from a check-then-write here. A
+    plain `has_admin_device()` guard followed by an UPDATE would leave a
+    window where two devices both read "no admin yet" and both proceed, and
+    the second would silently steal the flag from the first. Instead the
+    UPDATE sets `is_admin_device=1` WITHOUT clearing anyone -- so if a
+    second holder exists, the partial unique index `idx_devices_one_admin`
+    (`ON devices(company_id) WHERE is_admin_device = 1`) rejects the write
+    itself, and SQLite raises IntegrityError. That is the same "the database
+    enforces the invariant, not application code" contract this module's
+    docstring already claims, actually used as an enforcement mechanism
+    rather than only as a safety net.
+
+    Re-claiming from the device that ALREADY holds the flag is a no-op
+    success, not a conflict: the UPDATE rewrites 1 -> 1 on the row that owns
+    the existing index entry, so there is nothing for the unique index to
+    collide with. That makes a retried/double-clicked claim idempotent
+    instead of confusingly 409-ing the very device that won.
+
+    Raises ValueError if `device_id` is not an active row for `company_id` --
+    a revoked or unknown device must not become the admin device, and
+    silently returning None there would be indistinguishable from "someone
+    else already holds it", which is a materially different situation.
+    """
+    try:
+        cur = conn.execute(
+            "UPDATE devices SET is_admin_device=1 "
+            "WHERE id=? AND company_id=? AND status='active'",
+            (device_id, company_id),
+        )
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return None
+    if cur.rowcount == 0:
+        conn.rollback()
+        raise ValueError(
+            f"device {device_id!r} is not an active device for company {company_id!r}"
+        )
+    conn.commit()
+    return get_device(conn, device_id)
 
 
 def revoke_device(conn: sqlite3.Connection, device_id: str) -> dict:

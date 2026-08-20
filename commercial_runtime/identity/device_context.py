@@ -138,6 +138,53 @@ def local_device_fingerprint() -> Optional[str]:
     return fingerprint
 
 
+def peek_local_device_uuid() -> Optional[str]:
+    """Read-only twin of `local_device_uuid()` below: returns this install's
+    persisted local device UUID, or None if it has never been generated --
+    and NEVER creates it.
+
+    Exists specifically for read-only callers such as
+    `local_device_is_admin()` below, which answer an authorization question
+    on a GET. `local_device_uuid()` writes local_device.json on first call;
+    an authorization check has no business creating identity state as a side
+    effect of being asked a question, and "this install has no local device
+    identity yet" is a perfectly answerable state for that question (the
+    answer is "no, not the admin device") without manufacturing one.
+
+    A corrupt file still raises LocalDeviceStateCorruptError rather than
+    returning None: None means "never created", which is a normal state, and
+    conflating it with "created but unreadable" would silently downgrade a
+    real corruption into a routine one. Fail-closed callers catch it and
+    treat it as "not admin" -- that is their decision to make explicitly,
+    not this function's to make for them by hiding the difference.
+    """
+    uuid_path = os.path.join(_resolve_app_data(), "device", "local_device.json")
+    if not os.path.exists(uuid_path):
+        return None
+    return _read_local_device_uuid(uuid_path)
+
+
+def _read_local_device_uuid(uuid_path: str) -> str:
+    """Shared body of peek_local_device_uuid()/local_device_uuid()'s "the
+    file already exists" branch, so the two can never drift on what counts
+    as a valid record or on the refusal below."""
+    try:
+        with open(uuid_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        value = raw["device_uuid"]
+        if not isinstance(value, str) or not value:
+            raise ValueError("device_uuid field is empty or not a string")
+        return value
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise LocalDeviceStateCorruptError(
+            f"{uuid_path} exists but could not be read as a valid local device UUID "
+            f"record ({exc!r}). Refusing to silently generate a replacement -- doing so "
+            "would create a duplicate local device identity for this install. If this "
+            "file is genuinely unrecoverable, it must be resolved deliberately, not "
+            "papered over automatically."
+        ) from exc
+
+
 def local_device_uuid() -> str:
     """Fallback local device identity for when licensing is unconfigured --
     a fully supported, permanent shipping state (see
@@ -162,21 +209,7 @@ def local_device_uuid() -> str:
     uuid_path = os.path.join(device_dir, "local_device.json")
 
     if os.path.exists(uuid_path):
-        try:
-            with open(uuid_path, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-            value = raw["device_uuid"]
-            if not isinstance(value, str) or not value:
-                raise ValueError("device_uuid field is empty or not a string")
-            return value
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            raise LocalDeviceStateCorruptError(
-                f"{uuid_path} exists but could not be read as a valid local device UUID "
-                f"record ({exc!r}). Refusing to silently generate a replacement -- doing so "
-                "would create a duplicate local device identity for this install. If this "
-                "file is genuinely unrecoverable, it must be resolved deliberately, not "
-                "papered over automatically."
-            ) from exc
+        return _read_local_device_uuid(uuid_path)
 
     os.makedirs(device_dir, exist_ok=True)
     new_uuid = str(uuid.uuid4())
@@ -219,6 +252,17 @@ def resolve_local_device(conn, company_id: str, device_label: str = None, platfo
     that update-not-duplicate behavior fall out naturally instead of
     needing special-case migration logic.
 
+    Admin flag: this function NEVER touches `is_admin_device`. It briefly
+    did (2026-08-17, "auto-promote the first device a company ever
+    resolves"), and that is precisely how the audit-log authorization hole
+    was created -- see `local_device_is_admin()` below for the full account.
+    Resolution is a check-in; becoming the admin device is a decision, and
+    the two must not be the same code path. The decision now lives in
+    device_routes.py's POST /api/devices/me/claim-admin, where an
+    admin-role user makes it explicitly. A device resolving for the first
+    time is always is_admin_device=0 (upsert_local_device's INSERT hardcodes
+    it), including on a completely fresh install.
+
     company_id drift (Phase 0 decision 0-a): if a device row already
     exists for this install's local UUID and its stored company_id differs
     from the `company_id` argument, this raises DeviceCompanyMismatchError
@@ -259,23 +303,75 @@ def resolve_local_device(conn, company_id: str, device_label: str = None, platfo
             platform=platform,
             device_fingerprint=fingerprint,
         )
-        # AUDIT-fix 2026-08-17: no code path anywhere in this codebase ever
-        # called device_registry.set_admin_device() outside of tests (the
-        # feature that gates the frontend's Settings/Admin Center/Audit Log
-        # nav items -- app-shell.js's adminOnly flag -- on "is this the
-        # company's single admin device"). That left is_admin_device=0 on
-        # every real device forever: a real admin account, on the only
-        # device the company has ever used, could never see Settings.
-        # Bootstrapping "the first device this company ever resolves
-        # becomes its admin device" here -- the one place every login path
-        # already funnels through -- means a fresh company/install always
-        # ends up with exactly one admin device with zero extra user
-        # action, matching the single-admin-device model's own invariant
-        # (idx_devices_one_admin) instead of leaving it permanently unset.
-        if not device_registry.has_admin_device(conn, company_id):
-            row = device_registry.set_admin_device(conn, company_id, device_id)
         _cached_device = row
         return row
+
+
+def invalidate_cache() -> None:
+    """Drop the process-level cached device row.
+
+    Required after ANY write that changes a field of this install's own
+    device row out from under the cache -- in practice, the admin-flag
+    routes in device_routes.py. Without it, a device that successfully
+    claims the admin flag keeps serving the pre-claim row (is_admin_device
+    = 0) from `_cached_device` for the rest of the process's life, so the
+    frontend that just performed the claim is told the claim did nothing.
+    The gate itself (`local_device_is_admin()` below) never reads this
+    cache, so this is a UI-freshness concern rather than a security one --
+    but a claim that reports failure after succeeding is its own bug.
+    """
+    global _cached_device
+    with _cache_lock:
+        _cached_device = None
+
+
+def local_device_is_admin(conn, company_id: str) -> bool:
+    """THE authorization predicate: is THIS install's device the admin
+    device for `company_id`? Pure read -- no INSERT, no UPDATE, no file
+    creation, no cache.
+
+    SECURITY (2026-08-20, the reason this function exists at all): callers
+    used to answer this question by calling `resolve_local_device()` and
+    reading `is_admin_device` off the returned row. That function WRITES --
+    it upserts the device row, and until this change it also auto-promoted
+    the first device a company ever resolved to admin. The result was that
+    the act of asking "am I the admin device?" is what MADE the asking
+    device the admin device: retail_api.py's `_is_admin_device()` guard on
+    GET /api/sub/retail/audit-log resolved, auto-promoted, and then
+    truthfully reported "yes" -- so the audit log (every user in the
+    company's refund/void/edit trail) opened to whichever device asked
+    first, which on a fresh install is any device at all. An authorization
+    check must never be able to grant the privilege it is checking for;
+    keeping this predicate a strict read is what structurally prevents a
+    repeat, not just the removal of that one auto-promotion.
+
+    Deliberately checks three things, not one:
+      - the local device UUID exists at all (a fresh install that has never
+        resolved a device has no admin device -- answer is no, and we do
+        NOT create one to find that out; see peek_local_device_uuid()),
+      - the stored row's company_id matches the caller's company_id (a row
+        bound to another tenant is not this tenant's admin device, even
+        though `revoke_device`/`set_admin_device` are company-scoped and
+        this should not normally be reachable),
+      - the row is still 'active' (a revoked device is not an admin device;
+        `revoke_device()` already clears the flag, so this is defence in
+        depth against a row that got there some other way).
+
+    Raises LocalDeviceStateCorruptError if local_device.json exists but is
+    unreadable -- callers gating a route on this must catch it and fail
+    closed, which is exactly what retail_api.py's `_is_admin_device()` does.
+    """
+    device_id = peek_local_device_uuid()
+    if not device_id:
+        return False
+    row = device_registry.get_device(conn, device_id)
+    if not row:
+        return False
+    if row.get("company_id") != company_id:
+        return False
+    if (row.get("status") or "").lower() != "active":
+        return False
+    return bool(row.get("is_admin_device"))
 
 
 def binding_enforced() -> bool:
