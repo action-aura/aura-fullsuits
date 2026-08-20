@@ -72,6 +72,15 @@ object SyncCoordinator {
     private const val BACKOFF_MAX_SECONDS = 300L
     private const val INTERVAL_SECONDS = 10L
 
+    /** Upper bound on how many events one signed push request may carry.
+     * Owner's relay hard-rejects any batch above its `_MAX_PUSH_BATCH = 200`
+     * (owner/app/sync/routes.py) with INVALID_BATCH, all-or-nothing -- so an
+     * unchunked push of a backlog that grew past the cap offline could never
+     * succeed, and the outbox never drained again (AUDIT 2026-08-19).
+     * Mirrors sync_service.py's `_PUSH_CHUNK_SIZE`; must stay at or below
+     * Owner's cap. */
+    private const val PUSH_CHUNK_SIZE = 200
+
     @Volatile private var identity: DeviceIdentity? = null
     @Volatile private var running = false
     @Volatile private var pushHealth = SyncHalfHealth()
@@ -243,14 +252,25 @@ object SyncCoordinator {
         val events = outbox.getAsJsonArray("events") ?: JsonArray()
         if (events.size() == 0) return
 
-        val canonicalEvents = events.map { jsonToCanonical(it) }
-        relayClient(installationId).push(canonicalEvents) // raises on failure -- ack below never runs
+        // Chunked to the relay's batch cap (see PUSH_CHUNK_SIZE), each chunk
+        // acked only after Owner genuinely stored it and BEFORE the next
+        // chunk goes out -- mirrors desktop push_once()'s per-chunk
+        // ack-and-commit exactly. A failure partway through propagates to
+        // runOnce()/nudge()'s catch with every un-acked chunk still queued
+        // locally, so the next tick resumes where this one stopped instead
+        // of losing or skipping events. The client is built once per attempt
+        // (not per chunk), matching desktop's per-attempt client_factory.
+        val client = relayClient(installationId)
+        for (chunk in events.chunked(PUSH_CHUNK_SIZE)) {
+            val canonicalEvents = chunk.map { jsonToCanonical(it) }
+            client.push(canonicalEvents) // raises on failure -- this chunk's ack below never runs
 
-        val ids = events.mapNotNull { it.asJsonObject.get("id")?.asString }
-        val ackBody = JsonObject().apply {
-            add("ids", JsonArray().apply { ids.forEach { add(it) } })
+            val ids = chunk.mapNotNull { it.asJsonObject.get("id")?.asString }
+            val ackBody = JsonObject().apply {
+                add("ids", JsonArray().apply { ids.forEach { add(it) } })
+            }
+            postLocal("/api/sync/_internal/outbox/ack", ackBody.toString())
         }
-        postLocal("/api/sync/_internal/outbox/ack", ackBody.toString())
     }
 
     private fun pullOnce() {

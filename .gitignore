@@ -48,6 +48,10 @@ dist_launcher/
 
 # Android (two independent projects: android/aura-retail, android/aura-clinic)
 android/*/.gradle/
+# Kotlin compiler session dir -- build scratch, same as .gradle/ above. Already
+# ignored for mobile/aura-retail-unified further down; the android/ projects
+# were missed, so a Gradle build there left .kotlin/ showing up as untracked.
+android/*/.kotlin/
 android/*/app/build/
 android/*/build/
 android/*/local.properties

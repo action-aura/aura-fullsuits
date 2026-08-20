@@ -18,6 +18,7 @@ import pytest
 
 from commercial_runtime.sync.relay_client import NetworkError, RelayRejected
 from commercial_runtime.sync.sync_service import (
+    _PUSH_CHUNK_SIZE,
     SyncService,
     get_active_health,
     nudge,
@@ -307,6 +308,111 @@ def test_push_once_only_deletes_rows_that_were_actually_pushed(get_conn):
     remaining = _outbox_rows(get_conn)
     assert len(remaining) == 1
     assert remaining[0]["entity_id"] == "concurrent-row"
+
+
+def _bulk_insert_outbox(get_conn, n):
+    """n category-create outbox rows on ONE connection/transaction --
+    _insert_outbox_row opens and commits a connection per row, which is the
+    right shape for the two-or-three-row tests above but needlessly slow for
+    the hundreds-of-rows chunking tests below."""
+    conn = get_conn()
+    for _ in range(n):
+        entity_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, payload, created_at) VALUES (?,?,?,?,?,?)",
+            (str(uuid.uuid4()), "category", entity_id, "create",
+             json.dumps({"id": entity_id, "name": "Bulk", "description": ""}),
+             "2026-08-06T00:00:00+00:00"),
+        )
+    conn.commit()
+    conn.close()
+
+
+def test_push_once_chunks_an_outbox_larger_than_the_server_cap_and_drains_it(get_conn):
+    """FAILED before the chunking fix: push_once() sent the ENTIRE outbox in
+    one request, so any outbox over Owner's 200-event `_MAX_PUSH_BATCH` cap
+    was rejected wholesale (INVALID_BATCH) on every attempt, forever -- the
+    device could never push again. Now it must go out as sequential chunks
+    of at most _PUSH_CHUNK_SIZE, and the outbox must fully drain."""
+    _bulk_insert_outbox(get_conn, _PUSH_CHUNK_SIZE * 2 + 50)
+    client = FakeRelayClient(push_responses=[
+        {"stored": _PUSH_CHUNK_SIZE, "received": _PUSH_CHUNK_SIZE},
+        {"stored": _PUSH_CHUNK_SIZE, "received": _PUSH_CHUNK_SIZE},
+        {"stored": 50, "received": 50},
+    ])
+    service = SyncService(lambda: client, get_conn)
+
+    service.push_once()
+
+    assert _outbox_rows(get_conn) == []
+    assert [len(c) for c in client.push_calls] == [_PUSH_CHUNK_SIZE, _PUSH_CHUNK_SIZE, 50]
+
+
+def test_push_once_midway_chunk_failure_keeps_every_unacked_event_queued(get_conn):
+    """A failure on chunk N must leave chunks >= N completely intact (never
+    acked, never skipped) while chunks < N -- which Owner genuinely stored --
+    stay acked, so the next attempt resumes exactly where this one stopped
+    instead of re-pushing accepted events or losing queued ones."""
+    _bulk_insert_outbox(get_conn, _PUSH_CHUNK_SIZE + 30)
+    client = FakeRelayClient(push_responses=[
+        {"stored": _PUSH_CHUNK_SIZE, "received": _PUSH_CHUNK_SIZE},
+        NetworkError("NETWORK_UNAVAILABLE", "offline"),
+    ])
+    service = SyncService(lambda: client, get_conn)
+
+    with pytest.raises(NetworkError):
+        service.push_once()
+
+    remaining = _outbox_rows(get_conn)
+    # Exactly the rows of the failed second chunk survive -- the acked first
+    # chunk is gone, and nothing from the failed chunk was skipped past.
+    assert {r["id"] for r in remaining} == {e["id"] for e in client.push_calls[1]}
+
+    # The next attempt (fresh client, as run_once() would build) drains them.
+    retry_client = FakeRelayClient(push_responses=[{"stored": 30, "received": 30}])
+    SyncService(lambda: retry_client, get_conn).push_once()
+    assert _outbox_rows(get_conn) == []
+    assert [len(c) for c in retry_client.push_calls] == [30]
+
+
+def test_read_outbox_orders_by_insertion_sequence_not_wall_clock(get_conn):
+    """FAILED before the rowid-ordering fix: read_outbox() ordered by
+    `created_at`, which is local-clock ISO text with no tiebreaker. A clock
+    step-back (NTP correction, manual change) between a parent write and its
+    child write makes the CHILD sort first -- and receivers apply with
+    PRAGMA foreign_keys=ON, so supplier-after-product / product-after-
+    reorder_request raises on apply and freezes every other device on the
+    same failing batch forever. The outbox must replay in true insertion
+    order regardless of what the wall clock claimed."""
+    supplier_id, product_id, product2_id, reorder_id = (str(uuid.uuid4()) for _ in range(4))
+    conn = get_conn()
+    rows = [
+        # (entity_type, entity_id, payload, created_at) in INSERTION order.
+        # The supplier (parent) carries the LATEST created_at -- the exact
+        # inversion a clock step-back between writes produces.
+        ("supplier", supplier_id, {"id": supplier_id, "name": "Parent Supplies"},
+         "2026-08-06T00:00:10+00:00"),
+        ("product", product_id, {"id": product_id, "sku": "P-1", "name": "Child", "supplier_id": supplier_id},
+         "2026-08-06T00:00:05+00:00"),
+        # And an exact created_at TIE between a parent and its child --
+        # two writes inside the same clock tick.
+        ("product", product2_id, {"id": product2_id, "sku": "P-2", "name": "Tied Parent"},
+         "2026-08-06T00:00:07+00:00"),
+        ("reorder_request", reorder_id, {"id": reorder_id, "product_id": product2_id, "status": "pending"},
+         "2026-08-06T00:00:07+00:00"),
+    ]
+    for entity_type, entity_id, payload, created_at in rows:
+        conn.execute(
+            "INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, payload, created_at) VALUES (?,?,?,?,?,?)",
+            (str(uuid.uuid4()), entity_type, entity_id, "create", json.dumps(payload), created_at),
+        )
+    conn.commit()
+
+    service = SyncService(lambda: None, get_conn)
+    events = service.read_outbox(conn)
+    conn.close()
+
+    assert [e["entity_id"] for e in events] == [supplier_id, product_id, product2_id, reorder_id]
 
 
 # ── pull_once() ──────────────────────────────────────────────────────────

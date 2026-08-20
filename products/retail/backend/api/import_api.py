@@ -38,10 +38,11 @@ import io
 import re
 import json as _json
 import uuid as _uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, session
 
 from commercial_runtime.identity.mt_auth import mt_login_required
+from commercial_runtime.sync.sync_service import nudge as _sync_nudge
 
 import_bp = Blueprint('import_api', __name__, url_prefix='/api/import')
 
@@ -1027,6 +1028,30 @@ def _uid():
     return session.get('mt_user_id') or session.get('user_id', 'system')
 
 
+# AUDIT fix (2026-08-19, CRITICAL): the handlers below inserted categories/
+# products/customers/suppliers with NO sync_outbox event at all, so a bulk
+# import never left the importing device -- other devices silently never saw
+# any of it. Same helper as retail_api.py's `_queue_sync_event` (duplicated
+# rather than imported: retail_api.py is a peer route module, and importing
+# a private helper across it would create exactly the route-module coupling
+# the sync module's own nudge() registration exists to avoid). Same contract
+# too: MUST be called with the same cur/conn as the row write it describes,
+# before that transaction's commit() -- the outbox row and the imported row
+# land or roll back together, so an import that fails mid-file leaves no
+# orphan sync events. Payload shapes mirror the equivalent single-record
+# routes in retail_api.py exactly (and, like them, never carry `company_id`
+# on the wire -- each device stamps its own on apply; see
+# commercial_runtime/sync/sync_service.py's module docstring). Events go
+# straight into the sync_outbox table row-by-row, never accumulated in a
+# Python list first, so a huge import file costs no extra memory here.
+def _queue_sync_event(cur, entity_type, entity_id, event_type, payload):
+    cur.execute(
+        "INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, payload, created_at) VALUES (?,?,?,?,?,?)",
+        (str(_uuid.uuid4()), entity_type, str(entity_id), event_type,
+         _json.dumps(payload), datetime.now(timezone.utc).isoformat()),
+    )
+
+
 def _handle_retail_products(records):
     from database.schema import get_retail_conn
     conn  = get_retail_conn()
@@ -1049,6 +1074,13 @@ def _handle_retail_products(records):
                 if not row:
                     new_cat_id = str(_uuid.uuid4())
                     cur.execute("INSERT INTO categories (id,company_id,name) VALUES (?,?,?)", (new_cat_id, cid, cat_name))
+                    # Queued BEFORE the product event that will reference it
+                    # (same cur, so same outbox insertion order the push
+                    # replays in) -- receivers apply parent before child.
+                    # Payload mirrors create_category's.
+                    _queue_sync_event(cur, 'category', new_cat_id, 'create', {
+                        'id': new_cat_id, 'name': cat_name, 'description': '',
+                    })
                     cat_cache[cat_name] = new_cat_id
                 else:
                     cat_cache[cat_name] = row['id']
@@ -1070,6 +1102,14 @@ def _handle_retail_products(records):
                   rec.get('reorder_level') or 5,
                   cid, sku))
             pid = existing['id']
+            # Same full-current-row 'update' payload update_product queues
+            # (re-SELECTed after the UPDATE, status included) -- an imported
+            # price/name change must reach other devices exactly like a
+            # PATCH would.
+            prow = conn.execute(
+                "SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,reorder_level,reorder_method,status "
+                "FROM products WHERE id=?", (pid,)).fetchone()
+            _queue_sync_event(cur, 'product', pid, 'update', dict(prow) | {'id': pid})
             dupes += 1
         else:
             pid = str(_uuid.uuid4())
@@ -1081,6 +1121,20 @@ def _handle_retail_products(records):
                   rec.get('cost_price') or 0, rec.get('sell_price') or 0,
                   rec.get('tax_rate') or 0, rec.get('unit','pcs') or 'pcs',
                   rec.get('reorder_level') or 5))
+            # Mirrors create_product's payload key-for-key. supplier_id is
+            # None (the import schema has no supplier column) and
+            # reorder_method is 'none' (the INSERT above never sets it, so
+            # the column default applies) -- both still on the wire so the
+            # receiving upsert sees the same shape a route-created product
+            # sends.
+            _queue_sync_event(cur, 'product', pid, 'create', {
+                'id': pid, 'sku': sku, 'barcode': rec.get('barcode', ''), 'name': rec.get('name', ''),
+                'category_id': cat_id, 'supplier_id': None,
+                'cost_price': rec.get('cost_price') or 0,
+                'sell_price': rec.get('sell_price') or 0, 'tax_rate': rec.get('tax_rate') or 0,
+                'unit': rec.get('unit', 'pcs') or 'pcs', 'reorder_level': rec.get('reorder_level') or 5,
+                'reorder_method': 'none',
+            })
             imported += 1
 
         init_stock = rec.get('initial_stock')
@@ -1095,6 +1149,7 @@ def _handle_retail_products(records):
             """, (float(init_stock), cid, pid, bid))
 
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return {'imported': imported, 'updated': dupes, 'skipped': skipped,
             'message': f'{imported} new products, {dupes} updated.'}
 
@@ -1119,13 +1174,25 @@ def _handle_retail_customers(records):
         if existing:
             cur.execute("UPDATE customers SET name=?,phone=?,address=?,loyalty_points=?,total_spent=? WHERE id=?",
                         (name, rec.get('phone',''), rec.get('address',''), lp, ts, existing['id']))
+            # Same re-SELECTed payload update_customer queues. loyalty_points/
+            # total_spent stay local-only (not in the normal route's payload
+            # either -- the apply side never writes them).
+            crow = conn.execute("SELECT name,phone,email,address FROM customers WHERE id=?", (existing['id'],)).fetchone()
+            _queue_sync_event(cur, 'customer', existing['id'], 'update', dict(crow) | {'id': existing['id']})
             updated += 1
         else:
             nid = str(_uuid.uuid4())
             cur.execute("INSERT INTO customers (id,company_id,name,phone,email,address,loyalty_points,total_spent) VALUES (?,?,?,?,?,?,?,?)",
                         (nid, cid, name, rec.get('phone',''), email, rec.get('address',''), lp, ts))
+            # Mirrors create_customer's payload key-for-key (see the
+            # loyalty_points/total_spent note on the update branch above).
+            _queue_sync_event(cur, 'customer', nid, 'create', {
+                'id': nid, 'name': name, 'phone': rec.get('phone', ''),
+                'email': email, 'address': rec.get('address', ''),
+            })
             imported += 1
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return {'imported': imported, 'updated': updated, 'message': f'{imported} new customers, {updated} updated.'}
 
 
@@ -1143,12 +1210,21 @@ def _handle_retail_suppliers(records):
         nid = str(_uuid.uuid4())
         cur.execute("INSERT INTO suppliers (id,company_id,name,phone,email,address) VALUES (?,?,?,?,?,?)",
                     (nid, cid, name, rec.get('phone',''), rec.get('email',''), rec.get('address','')))
+        # Mirrors create_supplier's payload key-for-key.
+        _queue_sync_event(cur, 'supplier', nid, 'create', {
+            'id': nid, 'name': name, 'phone': rec.get('phone', ''),
+            'email': rec.get('email', ''), 'address': rec.get('address', ''),
+        })
         imported += 1
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return {'imported': imported, 'message': f'{imported} suppliers imported.'}
 
 
 def _handle_retail_branches(records):
+    # Deliberately NO _queue_sync_event here: `branch` is not a sync entity
+    # type (see sync_service.py's _apply_event scope) -- the normal branch
+    # routes queue nothing either, so there is no parity to restore.
     from database.schema import get_retail_conn
     conn = get_retail_conn(); cur = conn.cursor(); cid = _cid()
     imported = 0
@@ -1174,10 +1250,16 @@ def _handle_retail_categories(records):
         if not name: continue
         if conn.execute("SELECT id FROM categories WHERE company_id=? AND name=?", (cid, name)).fetchone():
             continue
+        nid = str(_uuid.uuid4())
         cur.execute("INSERT INTO categories (id,company_id,name,description) VALUES (?,?,?,?)",
-                    (str(_uuid.uuid4()), cid, name, rec.get('description','')))
+                    (nid, cid, name, rec.get('description','')))
+        # Mirrors create_category's payload key-for-key.
+        _queue_sync_event(cur, 'category', nid, 'create', {
+            'id': nid, 'name': name, 'description': rec.get('description', ''),
+        })
         imported += 1
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return {'imported': imported, 'message': f'{imported} categories imported.'}
 
 

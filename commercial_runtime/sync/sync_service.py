@@ -59,6 +59,21 @@ _BACKOFF_MAX_SECONDS = 300.0
 _BACKOFF_JITTER_FRACTION = 0.2
 _BACKOFF_MAX_EXPONENT = 32
 
+# Upper bound on how many events a single push request may carry. Owner's
+# relay hard-rejects any batch above its own `_MAX_PUSH_BATCH = 200`
+# (owner/app/sync/routes.py) with INVALID_BATCH -- and that rejection is
+# all-or-nothing, not partial, so a device that accumulated MORE than the
+# cap offline could previously never push again: every attempt sent the
+# ENTIRE outbox in one request, every attempt was rejected, and the outbox
+# never drained (AUDIT 2026-08-19) -- every other device silently stopped
+# receiving this device's data, with only a log line and a health flag to
+# show for it. push_once() therefore drains in chunks of at most this many
+# events. A separate literal rather than an import of Owner's constant on
+# purpose: Owner is a separately deployed service this client can never
+# import at runtime. If Owner's cap ever changes, this must stay at or
+# below it (below is always safe; above wedges exactly as described).
+_PUSH_CHUNK_SIZE = 200
+
 
 def local_company_id_from_registry() -> Optional[str]:
     """Default `local_company_id_provider`: reads THIS device's own single,
@@ -145,26 +160,45 @@ class SyncService:
         }
 
     def push_once(self) -> None:
-        """Drains sync_outbox to Owner. Reads the current rows, pushes them,
-        and ONLY deletes exactly those rows on success -- a push failure
-        (network or a real Owner rejection) raises back to the caller with
-        the outbox left completely untouched (nothing read is deleted, and
-        nothing new that arrived concurrently is at risk, since only the
-        specific ids just pushed are ever deleted)."""
+        """Drains sync_outbox to Owner in sequential chunks of at most
+        _PUSH_CHUNK_SIZE events (see that constant's comment: Owner rejects
+        any larger batch outright, so an unchunked push of a big offline
+        backlog could never succeed and the outbox never drained). Each
+        chunk's rows are deleted and committed only after Owner acknowledged
+        exactly that chunk, and BEFORE the next chunk is attempted -- so a
+        failure partway through (network or a real Owner rejection) raises
+        back to the caller with every not-yet-acked event still queued, in
+        order, for the next attempt. Chunks Owner already accepted stay
+        acked (re-pushing them would only duplicate work); nothing new that
+        arrived concurrently is at risk, since only the specific ids just
+        pushed are ever deleted."""
         with self._lock:
             conn = self._get_conn()
             try:
                 events = self.read_outbox(conn)
                 if not events:
                     return
-                self._client_factory().push(events)  # raises on failure -- nothing below runs
-                self.ack_outbox(conn, [e["id"] for e in events])
-                conn.commit()
+                # Built once per attempt (not once per chunk) -- "rebuilt on
+                # every attempt" is the freshness guarantee __init__'s
+                # docstring establishes, and one attempt is one push_once().
+                client = self._client_factory()
+                for start in range(0, len(events), _PUSH_CHUNK_SIZE):
+                    chunk = events[start:start + _PUSH_CHUNK_SIZE]
+                    client.push(chunk)  # raises on failure -- this chunk's ack below never runs
+                    # Ack + COMMIT per chunk, not once at the end: the commit
+                    # is what makes a mid-way failure unable to lose or skip
+                    # anything -- everything before this point is durably
+                    # acked because Owner durably stored it, and everything
+                    # from the failing chunk onward is still in sync_outbox
+                    # untouched.
+                    self.ack_outbox(conn, [e["id"] for e in chunk])
+                    conn.commit()
             finally:
                 # conn.close() with no prior commit() discards any
                 # uncommitted work on this connection -- if push() raised,
-                # the DELETE above never ran, so there is nothing to lose;
-                # this only guarantees the connection itself is never leaked.
+                # the DELETE for that chunk never ran, so there is nothing
+                # to lose; this only guarantees the connection itself is
+                # never leaked.
                 conn.close()
 
     def pull_once(self) -> None:
@@ -192,8 +226,23 @@ class SyncService:
         Python never holds the signing key (see
         commercial_runtime/licensing_contracts/android_bridge_identity.py),
         so Kotlin makes the actual signed HTTP call and this method only
-        hands it the rows to sign and send."""
-        rows = conn.execute("SELECT * FROM sync_outbox ORDER BY created_at").fetchall()
+        hands it the rows to sign and send.
+
+        ORDER BY rowid -- sqlite's insertion sequence for this table -- and
+        deliberately NOT created_at (AUDIT 2026-08-19): created_at is
+        local-wall-clock ISO text with no tiebreaker, and wall clocks both
+        tie (two writes inside the same clock tick) and step backwards (NTP
+        correction, manual change, DST mishandling). Either inversion can
+        replay a child ahead of the parent it references (supplier before
+        the product pointing at it; product before the reorder_request whose
+        product_id is NOT NULL) -- and receivers apply with PRAGMA
+        foreign_keys=ON, so the child raises on apply, the receiving cursor
+        never advances, and EVERY other device re-pulls the same failing
+        batch forever. rowid is assigned monotonically at INSERT and, in
+        this table, is never disturbed afterwards: ack_outbox only ever
+        deletes already-pushed (oldest) rows, so a surviving row can never
+        be out-ranked by a later insert reusing a freed higher rowid."""
+        rows = conn.execute("SELECT * FROM sync_outbox ORDER BY rowid").fetchall()
         return [
             {
                 "id": r["id"],
