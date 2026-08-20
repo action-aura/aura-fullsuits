@@ -161,6 +161,36 @@ Ranked by *what actually blocks a launch*, not by how interesting the bug is.
 `feat/pos-hold-resume-sale` and `feat/retail-ui-ux-polish`. They were skipped
 during disk cleanup rather than risk losing whatever is in them.
 
+## Android release signing — set up 2026-08-20
+
+Release signing was configured in `build.gradle:131-170` but **inert**, because
+`keystore.properties` never existed, so `signingConfig` stayed null and no
+release-signed artifact could be produced. Every APK shipped so far has been a
+debug build. That is now resolved.
+
+| | |
+|---|---|
+| Keystore | `C:\Users\MSI\.aura-signing\aura-release.jks` — deliberately **outside** the repository |
+| Credentials | `C:\Users\MSI\.aura-signing\CREDENTIALS.txt` |
+| Alias | `aura` |
+| Key | RSA 4096, valid until 2054-01-05 |
+| SHA-256 | `6F:E5:64:A1:D6:4F:CD:B1:E6:4F:23:56:BF:DD:9B:9B:6B:78:C4:00:15:3A:BA:AE:10:9D:81:6B:AB:EB:66:9A` |
+
+The fingerprint above is public — it is what you register with Play and what you
+compare a shipped APK against. The password is not recorded here, was never
+passed on a command line, and exists only in `CREDENTIALS.txt`.
+`keystore.properties` was written into both checkouts that build the app; both
+it and `*.jks` are already covered by `.gitignore`.
+
+RSA 4096 rather than the template's 2048: this key has a ~27-year validity and
+signs a commercial product, and the extra cost is milliseconds per build.
+
+> **This must be backed up off this machine.** Android only permits an update
+> when it is signed with the same key. If the keystore or its password is lost,
+> the app cannot be updated — only republished as a new application, which
+> orphans every existing install's data and forces every user to reinstall by
+> hand. This is the single least recoverable asset in the project.
+
 ## Working agreement for agents on this programme
 
 - Production lineage is `feat/retail-mobile-build-baseline`. Never deploy
