@@ -191,6 +191,45 @@ signs a commercial product, and the extra cost is milliseconds per build.
 > orphans every existing install's data and forces every user to reinstall by
 > hand. This is the single least recoverable asset in the project.
 
+## Wave 2 — results
+
+Seven fixes, each reviewed by an independent skeptic instructed to refute rather
+than approve. **Four passed review and are committed. Three were rejected** and
+sent back. That ratio is the point of the exercise: every rejection was a real
+defect that would otherwise have shipped.
+
+### Committed
+
+| Area | Commit | What it fixes |
+|---|---|---|
+| Signing-key rotation | `5e2983f` | Rotation now propagates via outgoing-key countersigning. This was the only defect that becomes unfixable *after* it happens |
+| Owner CSP migration | `9735ee8` | 17 dead inline handlers removed; "Void expense" has its confirmation back; six status filters work again |
+| Android licensing | `0353912` | Real activation polling, honest reason-code messages, periodic check-in, and a build that refuses to ship a tokenless assistant |
+| Device identity | `8c82c51` | `is_admin_device` finally has a legitimate way to be set |
+
+### Rejected by review, remediation in progress
+
+| Area | Verdict | The objection |
+|---|---|---|
+| Stock import semantics | **BLOCKING** | The absolute-SET → delta change lets a downward re-import drive on-hand **negative** (reproduced end to end), and the column is still labelled "Current Stock Qty" to the operator while the backend now treats it as a cumulative opening declaration |
+| Desktop revenue | **major** | `top_products` subtracts a tax-**inclusive** refund from a tax-**exclusive** sales base. Worse, the test that supposedly proves agreement passes only because its fixture seeds `tax_rate=0` — a test that certifies the bug as fixed |
+| Owner metrics | **major** | Currency-scoping the duplicate-review queue silently **drops** cross-currency duplicate pairs — a fraud control failing invisibly. And the employee commission screen is now a single unlabelled number with a hidden currency, arguably worse than the visibly-wrong blended figure it replaced |
+
+The consolidation and contract work underneath the two "major" rejections was
+confirmed genuine — the seven duplicate SQL variants really are gone, and no
+test assertion was weakened. The rejections are about defects the rewrites
+*introduced*, not about the direction.
+
+### Two follow-ups on committed work, also being fixed
+
+- An Android **release build with an empty `ownerLicensingBaseUrl` enforces no
+  licensing at all** — the activation gate is skipped and check-in returns
+  immediately. The new build guard covers only the AI token, so this ships an
+  APK that gives the product away.
+- The rotation fix was applied to `/_internal/sync-activation` but not its twin
+  `/_internal/sync-checkin`, so Android still cannot recover from a rotation
+  that happens *after* activation.
+
 ## Working agreement for agents on this programme
 
 - Production lineage is `feat/retail-mobile-build-baseline`. Never deploy
