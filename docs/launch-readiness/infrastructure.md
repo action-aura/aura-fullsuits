@@ -62,10 +62,18 @@ extra money — they fit inside droplets already paid for — but each runs a
 Postgres and a gunicorn, and each is another internet-facing login surface for
 a product that has not launched yet.
 
-Not removed here: tearing down a running service is destructive and reversible
-only by redeploying, so it wants an explicit decision rather than a cleanup
-sweep. Recommendation: keep **one** review instance as a staging target for the
-UI redesign work, retire the other.
+**Decision, 2026-08-20 — owner's call: KEEP BOTH. Neither is to be retired.**
+
+Retiring the LLM-droplet instance was briefly considered and then explicitly
+reversed by the owner before anything was changed. Nothing was stopped,
+deleted, or reconfigured — the only commands run against it were read-only
+health probes. Recorded here so a later cleanup pass does not "helpfully"
+remove it: **`deptnav.104-248-35-215.sslip.io` stays.**
+
+Both instances cost no extra money — they fit inside droplets already paid
+for. The standing trade-off, for the record, is that each runs its own Postgres
+and gunicorn and is another internet-facing login surface for a product that
+has not launched yet; that is accepted.
 
 Note that the surviving review instance's database is on a **different Alembic
 graph** than production's, so it cannot be used to rehearse a production
