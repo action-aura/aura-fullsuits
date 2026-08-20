@@ -220,6 +220,44 @@ confirmed genuine — the seven duplicate SQL variants really are gone, and no
 test assertion was weakened. The rejections are about defects the rewrites
 *introduced*, not about the direction.
 
+### Remediation outcome — all four areas resolved
+
+Every rejected area came back **resolved on re-review**, and the re-reviewers
+verified by *mutation* rather than by reading reports: they reverted each fix
+and confirmed the suite went red with the expected failure signature before
+accepting it. That is the standard worth holding to, because the original
+defect in this very area was a test that passed only because its fixture
+dodged the case under test.
+
+What actually changed:
+
+- **Stock import.** The delta now **refuses** rather than writing a negative
+  balance, matching `adjust_stock`'s existing refuse-don't-clamp precedent. The
+  refusal is per-row, not a whole-request failure — deliberate, since failing
+  500 catalogue rows over 3 bad stock figures is worse — but `execute_import`
+  now forces `status='partial'` so a refused figure can never wear a green
+  tick. The column is relabelled **"Opening Stock Qty"** with help text
+  stating the cumulative-declaration semantics, in both catalogs. Blank now
+  means "no opinion" and a typed `0` means a real declaration. The
+  reconciliation GET is company-admin gated — it was readable by any cashier.
+- **Desktop revenue.** A single tax basis is now declared: `sales.total` and
+  `returns.refund_amount` are both tax-inclusive (the cash drawer reconciles on
+  them), so that is the canonical basis. `top_products` no longer reads
+  `sale_items.line_total` at all — it re-prices each line through the same
+  `pricing.calculate_line()` create_sale used, so per-product revenue sums to
+  `SUM(sales.total)` exactly. Deriving the tax in SQL was explicitly rejected:
+  it is wrong under TAX_BEFORE_DISCOUNT and would duplicate formulas that
+  `pricing.py` is meant to own. **Every other sales-minus-returns subtraction
+  was audited**, not just the one flagged. The fixture now seeds `tax_rate=15`
+  so the assertion actually discriminates.
+- **Owner metrics.** The duplicate-review queue no longer drops cross-currency
+  pairs, and the employee commission screen renders per currency instead of one
+  unlabelled number.
+- **Android + licensing.** A release build with a blank `ownerLicensingBaseUrl`
+  now fails at build time instead of shipping an APK that enforces no
+  licensing, and the rotation refresher is applied to both twin routes with a
+  test pinning them together.
+
 ### Two follow-ups on committed work, also being fixed
 
 - An Android **release build with an empty `ownerLicensingBaseUrl` enforces no
