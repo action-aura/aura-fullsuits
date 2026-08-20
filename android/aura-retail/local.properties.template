@@ -1,7 +1,26 @@
-# COPY this file to `local.properties` and set your machine's Android SDK path.
-# local.properties is git-ignored (machine-specific, never commit it).
-#
+# COPY this file to `local.properties`.
+# local.properties is git-ignored (root .gitignore: `android/*/local.properties`).
+# NEVER commit real values from it — the keys below are real secrets.
+
+# ── Android SDK location (machine-specific, required) ────────────────────────
 # Windows example:
 sdk.dir=C\:\\Users\\YOURNAME\\AppData\\Local\\Android\\Sdk
 # macOS/Linux example:
 # sdk.dir=/Users/yourname/Library/Android/sdk
+
+# ── Build-time secrets (app/build.gradle::resolveSecret) ─────────────────────
+# Each of these can equally be supplied as `-P<key>=<value>` on the Gradle
+# command line, or as the environment variable named in brackets (the CI-secret
+# path). First non-empty source wins, in that order: -P, this file, env var.
+#
+# aiBearerToken is NOT optional for a release-shaped build. Leaving it unset
+# does not disable the AI assistant — the assistant still renders, and then
+# fails with 401 from the upstream on every question. `assembleRelease` /
+# `assembleStaging` therefore FAIL with instructions when it is missing;
+# `assembleDebug` prints a loud warning and continues.
+
+# aiBearerToken=...              [AURA_AI_BEARER_TOKEN]
+# ownerLicensingBaseUrl=...      [AURA_OWNER_LICENSING_URL]
+# ownerSyncBaseUrl=...           [AURA_SYNC_RELAY_URL]
+# whatsappPhoneNumberId=...      [AURA_WHATSAPP_PHONE_NUMBER_ID]
+# whatsappAccessToken=...        [AURA_WHATSAPP_ACCESS_TOKEN]

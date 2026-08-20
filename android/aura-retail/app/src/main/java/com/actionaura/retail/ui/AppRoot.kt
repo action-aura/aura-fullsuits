@@ -6,6 +6,7 @@ package com.actionaura.retail.ui
 // docs/android/android-migration-plan.md. Navigation routes, screens, and
 // business logic for the retail path are otherwise unchanged.
 
+import android.util.Log
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
@@ -30,6 +31,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.*
+import com.actionaura.retail.licensing.LicenseCheckInCoordinator
 import com.actionaura.retail.net.AiChatRequest
 import com.actionaura.retail.net.AiChatTurn
 import com.actionaura.retail.net.ApiClient
@@ -47,17 +49,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private enum class Phase { LOADING, LICENSE, SETUP, LOGIN, READY }
+// ERROR is not a cosmetic addition. Every failure below -- Chaquopy failing
+// to start, the bundled assets failing to extract, the embedded Flask server
+// never answering /api/health -- used to be swallowed into Phase.LOGIN, which
+// stranded the user on a login screen that could never succeed (there is no
+// server behind it to authenticate against) with zero diagnostics anywhere:
+// no log line, no message, just a form that rejects every attempt.
+private enum class Phase { LOADING, LICENSE, SETUP, LOGIN, READY, ERROR }
 
-// States that mean "this device has never completed activation" -- /status
-// deliberately returns NOT_CONFIGURED for this case too, not just for a
-// truly unconfigured build (see commercial_runtime/licensing_contracts's
-// own test_status_before_activation_is_not_configured_shape, which pins
-// this on purpose), so BuildConfig.OWNER_LICENSING_BASE_URL is the real
-// signal for "is licensing even wired up on this build" -- the state
-// string alone can't distinguish "unconfigured" from "configured but never
-// activated."
-private val NEEDS_ACTIVATION_STATES = setOf("NOT_CONFIGURED", "ACTIVATION_REQUIRED", "ACTIVATING")
+private const val TAG = "AppRoot"
 
 // Everything after the activation gate: unchanged from before Phase.LICENSE
 // existed, just factored out so both the initial boot check and the
@@ -79,8 +79,10 @@ private suspend fun phaseAfterActivationGate(): Phase {
 fun AppRoot() {
     val ctx = LocalContext.current
     var phase by remember { mutableStateOf(Phase.LOADING) }
+    var startupDiagnostic by remember { mutableStateOf<String?>(null) }
+    var bootAttempt by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(bootAttempt) {
         phase = try {
             ServerBootstrap.start(ctx)
             // Multi-device sync foundation (Task 9 wiring): starts the
@@ -90,6 +92,18 @@ fun AppRoot() {
             // own doc comment) -- never blocks the phase transition below,
             // since it only schedules a timer and returns immediately.
             SyncCoordinator.start(ctx)
+
+            // Periodic licence check-in. Before this, checkIn() was reachable
+            // only from LicensingScreen's manual "Check Now" button, so
+            // nothing on Android ever contacted Owner after activation: a
+            // revocation or suspension never landed mid-use, and -- worse in
+            // practice -- the offline grace/warning progression never
+            // advanced, so a single manual press weeks later could drop the
+            // user straight to RESTRICTED with no warning phase at all. Inert
+            // on a build with no licensing URL, same as SyncCoordinator above,
+            // and it never blocks this phase transition (it only launches a
+            // loop whose first tick is one interval away).
+            LicenseCheckInCoordinator.start(ctx)
 
             // Device activation gate, checked first (before setup/login) so
             // an unactivated device on a real licensed build never reaches
@@ -109,7 +123,19 @@ fun AppRoot() {
             }
 
             if (needsActivation) Phase.LICENSE else phaseAfterActivationGate()
-        } catch (e: Exception) { Phase.LOGIN }
+        } catch (e: Exception) {
+            // A real diagnostic, in two places, because neither alone is
+            // enough: logcat is the only thing a developer with the device in
+            // hand can read, and the on-screen text is the only thing a
+            // customer on the phone can read back to support. The exception
+            // TYPE is included on screen deliberately -- "ServerStartupError"
+            // vs "PyException" is the entire difference between "the bundled
+            // Python failed to start" and "the server started but never became
+            // ready", and it costs the user nothing.
+            Log.e(TAG, "Embedded backend startup FAILED; the app cannot reach its own server.", e)
+            startupDiagnostic = "${e.javaClass.simpleName}: ${e.message ?: "no detail"}"
+            Phase.ERROR
+        }
     }
 
     // Flip the whole UI to right-to-left when Arabic is active. Reading AppLocale.lang
@@ -133,6 +159,10 @@ fun AppRoot() {
                     Phase.SETUP -> SetupScreen(onDone = { phase = Phase.READY })
                     Phase.LOGIN -> LoginScreen(onLoggedIn = { phase = Phase.READY })
                     Phase.READY -> MainShell(onLogout = { phase = Phase.LOGIN })
+                    Phase.ERROR -> StartupErrorScreen(
+                        diagnostic = startupDiagnostic,
+                        onRetry = { startupDiagnostic = null; phase = Phase.LOADING; bootAttempt++ },
+                    )
                 }
             }
         }
@@ -156,6 +186,47 @@ private fun LoadingScreen() {
         Text("Action Aura", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold)
         Spacer(Modifier.height(18.dp))
         Text(tr("Starting…"), color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/**
+ * Shown instead of a login screen that could never succeed. Names what
+ * actually failed, and offers the one action that can help -- a retry, since
+ * the two most common real causes (a slow first-run asset extraction on a
+ * cold device, a readiness timeout under load) genuinely do clear on a second
+ * attempt.
+ */
+@Composable
+private fun StartupErrorScreen(diagnostic: String?, onRetry: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().padding(28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(Icons.Default.ErrorOutline, null, tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(48.dp))
+        Spacer(Modifier.height(18.dp))
+        Text(tr("Aura could not start"), style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(10.dp))
+        Text(
+            tr("The app's built-in server did not start, so nothing can be loaded or saved. " +
+                "Your data is untouched. Please try again; if this keeps happening, restart the " +
+                "device and send the details below to support."),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        diagnostic?.let {
+            Spacer(Modifier.height(16.dp))
+            Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp)) {
+                // Not translated: this is the machine detail support needs
+                // verbatim, and translating an exception type would make it
+                // useless to whoever has to read it back.
+                Text(it, Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        Spacer(Modifier.height(22.dp))
+        Button(onClick = onRetry) { Text(tr("Try again")) }
     }
 }
 

@@ -20,6 +20,89 @@ if (keystorePropsFile.exists()) {
     keystoreProps.load(new FileInputStream(keystorePropsFile))
 }
 
+// ── Build-time secrets ───────────────────────────────────────────────────────
+// NEVER hardcoded here and never committed. Resolution order, first non-empty
+// wins:
+//   1. -PaiBearerToken=...  on the command line
+//   2. android/aura-retail/local.properties  ->  aiBearerToken=...
+//      (git-ignored by the root .gitignore's `android/*/local.properties`;
+//      see local.properties.template for the key names)
+//   3. environment variable AURA_AI_BEARER_TOKEN (the CI-secret path)
+// Same three sources for every secret below, so a machine can be configured
+// once in local.properties instead of re-typing -P flags on every build.
+def localPropsFile = rootProject.file("local.properties")
+def localProps = new Properties()
+if (localPropsFile.exists()) {
+    localPropsFile.withInputStream { localProps.load(it) }
+}
+
+def resolveSecret = { String gradleProperty, String envVar ->
+    def value = project.findProperty(gradleProperty)
+    if (value == null || value.toString().trim().isEmpty()) value = localProps.getProperty(gradleProperty)
+    if (value == null || value.toString().trim().isEmpty()) value = System.getenv(envVar)
+    return value == null ? "" : value.toString().trim()
+}
+
+// Escaped rather than interpolated straight into the field: a real bearer
+// token or access token can legitimately contain a backslash or a quote, and
+// an unescaped one produces a BuildConfig.java that does not compile (or,
+// worse, one that compiles with a silently truncated value).
+def asJavaStringLiteral = { String value ->
+    '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+}
+
+def ownerLicensingBaseUrl = resolveSecret('ownerLicensingBaseUrl', 'AURA_OWNER_LICENSING_URL')
+def ownerSyncBaseUrl = resolveSecret('ownerSyncBaseUrl', 'AURA_SYNC_RELAY_URL')
+def aiBearerToken = resolveSecret('aiBearerToken', 'AURA_AI_BEARER_TOKEN')
+def whatsappPhoneNumberId = resolveSecret('whatsappPhoneNumberId', 'AURA_WHATSAPP_PHONE_NUMBER_ID')
+def whatsappAccessToken = resolveSecret('whatsappAccessToken', 'AURA_WHATSAPP_ACCESS_TOKEN')
+
+// Deliberately says how to fix it, not just that it is broken -- and names no
+// value anywhere, only the KEYS. Wrapping in a banner because a plain warn
+// line is invisible in Gradle's normal output volume, which is exactly how
+// this shipped broken in the first place.
+def AI_TOKEN_ADVICE = """
+  ===========================================================================
+   AURA_AI_BEARER_TOKEN is not set.
+
+   The Aura AI assistant proxies to an upstream that requires this bearer
+   token. Without it the upstream answers 401 on every request and the in-app
+   assistant is dead: it renders, accepts a question, and always fails with
+   "AI assistant is temporarily unavailable."
+
+   Supply it in ONE of these ways (never commit the value):
+     1.  ./gradlew <task> -PaiBearerToken=<token>
+     2.  android/aura-retail/local.properties:  aiBearerToken=<token>
+         (git-ignored; see local.properties.template)
+     3.  export AURA_AI_BEARER_TOKEN=<token>              (CI secret)
+  ===========================================================================
+"""
+
+// A release-shaped build (release/staging -- non-debuggable, installed on real
+// devices) is the one that must never ship silently broken, so it FAILS rather
+// than warns. A debug build is allowed to proceed without a token (a developer
+// who is not working on the assistant should not be blocked by it), but says so
+// unmissably. Evaluated on the resolved task graph rather than at configuration
+// time so that plain `test`/`lint` invocations are neither failed nor spammed.
+gradle.taskGraph.whenReady { graph ->
+    if (!aiBearerToken.isEmpty()) return
+    def ours = graph.allTasks.findAll { it.project.path == project.path }
+    // Exact names only: `packageReleaseResources` and friends are
+    // intermediate steps of the same graph, and naming them in the
+    // failure message would bury the one task the developer actually
+    // asked for.
+    def releaseShaped = ours.findAll { it.name ==~ /^(assemble|bundle|install|package)(Release|Staging)$/ }
+    if (!releaseShaped.isEmpty()) {
+        throw new GradleException(
+            "Refusing to produce a release-shaped build with a dead AI assistant " +
+            "(${releaseShaped*.name.join(', ')}).\n" + AI_TOKEN_ADVICE)
+    }
+    if (!ours.findAll { it.name ==~ /^(assemble|bundle|install|package)Debug$/ }.isEmpty()) {
+        logger.warn("\nWARNING: building WITHOUT an AI bearer token -- the in-app assistant will 401.\n" +
+                    AI_TOKEN_ADVICE)
+    }
+}
+
 android {
     namespace 'com.actionaura.retail'
     compileSdk 34
@@ -47,10 +130,9 @@ android {
         // routes reporting NOT_CONFIGURED (never a hidden fallback URL --
         // see products/retail/backend/config.py's identical rationale).
         // Overridden per real build via -PownerLicensingBaseUrl=... (gradle
-        // property, e.g. from a CI secret or local.properties), never
-        // hardcoded here.
-        buildConfigField "String", "OWNER_LICENSING_BASE_URL",
-                "\"${project.findProperty('ownerLicensingBaseUrl') ?: ''}\""
+        // property, local.properties, or the AURA_OWNER_LICENSING_URL env var
+        // -- see resolveSecret above), never hardcoded here.
+        buildConfigField "String", "OWNER_LICENSING_BASE_URL", asJavaStringLiteral(ownerLicensingBaseUrl)
 
         // Multi-device sync foundation (2026-08-06), Task 9 wiring -- Owner's
         // sync relay root (Kotlin appends "/api/sync/v1/push|pull" itself,
@@ -63,8 +145,7 @@ android {
         // Overridden per real build via -PownerSyncBaseUrl=..., never
         // hardcoded here. Empty means SyncCoordinator stays inert (no timer
         // started), never a hidden default Owner instance.
-        buildConfigField "String", "OWNER_SYNC_BASE_URL",
-                "\"${project.findProperty('ownerSyncBaseUrl') ?: ''}\""
+        buildConfigField "String", "OWNER_SYNC_BASE_URL", asJavaStringLiteral(ownerSyncBaseUrl)
 
         // AI Assistant + WhatsApp reports -- same empty-by-default,
         // build-property-overridden pattern as the two fields above. Neither
@@ -72,14 +153,18 @@ android {
         // docstring); both features were silently off on every Android build
         // regardless of what Windows had configured. Overridden via
         // -PaiBearerToken=... / -PwhatsappPhoneNumberId=... /
-        // -PwhatsappAccessToken=..., never hardcoded here -- these are real
-        // secrets, must never be committed.
-        buildConfigField "String", "AURA_AI_BEARER_TOKEN",
-                "\"${project.findProperty('aiBearerToken') ?: ''}\""
-        buildConfigField "String", "AURA_WHATSAPP_PHONE_NUMBER_ID",
-                "\"${project.findProperty('whatsappPhoneNumberId') ?: ''}\""
-        buildConfigField "String", "AURA_WHATSAPP_ACCESS_TOKEN",
-                "\"${project.findProperty('whatsappAccessToken') ?: ''}\""
+        // -PwhatsappAccessToken=..., local.properties, or the matching env
+        // vars (see resolveSecret above) -- never hardcoded here; these are
+        // real secrets and must never be committed.
+        //
+        // "Empty by default" is a genuine fail-safe for WhatsApp (the feature
+        // simply stays off) but NOT for the AI assistant, which still renders
+        // a chat UI and then 401s on every question. Nothing in this build
+        // ever supplied the token, so every rebuilt APK shipped a dead
+        // assistant in silence -- hence the release-shaped build guard above.
+        buildConfigField "String", "AURA_AI_BEARER_TOKEN", asJavaStringLiteral(aiBearerToken)
+        buildConfigField "String", "AURA_WHATSAPP_PHONE_NUMBER_ID", asJavaStringLiteral(whatsappPhoneNumberId)
+        buildConfigField "String", "AURA_WHATSAPP_ACCESS_TOKEN", asJavaStringLiteral(whatsappAccessToken)
     }
 
     // ── Python (Chaquopy) ───────────────────────────────────────────────────────
