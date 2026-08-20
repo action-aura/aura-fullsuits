@@ -42,7 +42,15 @@
       <td>
         <form class="inline" method="post" action="{{ url_for('catalog.update_addon_availability', addon_id=a.id) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <select name="status" aria-label="{{ _('Change availability status') }}" onchange="this.form.submit()">
+          {# data-auto-submit (static/js/auto-submit.js), not the inline
+             onchange this used to carry: under script-src 'self' the browser
+             refused the attribute, and since this form has no submit button
+             either, changing an add-on's availability from the UI was simply
+             impossible. This is the legitimate auto-submit case -- the select
+             is the only field in its form, so nothing else can be lost by
+             submitting on change, and a per-row button on every add-on would
+             be far noisier than the one-field control it replaces. #}
+          <select name="status" aria-label="{{ _('Change availability status') }}" data-auto-submit>
             {% for s in ["DRAFT","PLANNED","PILOT","AVAILABLE","RETIRED"] %}
             <option value="{{ s }}" {% if s == a.availability_status %}selected{% endif %}>{{ addon_availability_status_label(s) }}</option>
             {% endfor %}

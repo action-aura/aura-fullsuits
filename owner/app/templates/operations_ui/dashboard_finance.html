@@ -3,9 +3,15 @@
 {% block content %}
 <div class="card">
   <h2>{{ _("Finance Dashboard") }} (<bdi dir="ltr">{{ currency }}</bdi>)</h2>
-  <form method="get">
+  {# Explicit Apply button, not the inline onchange this used to carry. Two
+     reasons: the attribute was CSP-blocked outright (script-src 'self'), so
+     the switch only ever worked if the user happened to press Enter; and even
+     unblocked, a text input's change event fires on blur, so merely tabbing
+     out of a half-typed currency code would have reloaded the dashboard. #}
+  <form method="get" class="filters">
     <label for="operations-ui-dashboard-finance-currency">{{ _("Currency") }}</label>
-    <input id="operations-ui-dashboard-finance-currency" name="currency" value="{{ currency }}" maxlength="3" onchange="this.form.submit()">
+    <input id="operations-ui-dashboard-finance-currency" name="currency" value="{{ currency }}" maxlength="3">
+    <button type="submit" class="secondary">{{ _("Apply") }}</button>
   </form>
   <table class="responsive-table">
     <tbody>

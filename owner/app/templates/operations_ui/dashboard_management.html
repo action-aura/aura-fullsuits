@@ -3,9 +3,13 @@
 {% block content %}
 <div class="card">
   <h2>{{ _("Management Dashboard") }} (<bdi dir="ltr">{{ currency }}</bdi>)</h2>
-  <form method="get">
+  {# Explicit Apply button, not the inline onchange this used to carry -- see
+     dashboard_finance.html's identical control for the full reasoning (the
+     attribute was CSP-blocked, and a text input's change fires on blur). #}
+  <form method="get" class="filters">
     <label for="operations-ui-dashboard-management-currency">{{ _("Currency") }}</label>
-    <input id="operations-ui-dashboard-management-currency" name="currency" value="{{ currency }}" maxlength="3" onchange="this.form.submit()">
+    <input id="operations-ui-dashboard-management-currency" name="currency" value="{{ currency }}" maxlength="3">
+    <button type="submit" class="secondary">{{ _("Apply") }}</button>
   </form>
 
   <h3>{{ _("Expense totals by Category") }}</h3>

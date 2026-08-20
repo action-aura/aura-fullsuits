@@ -1,19 +1,16 @@
 {% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
 {% block title %}{{ _("Pilots") }}{% endblock %}
 {% block content %}
 <div class="card">
   <h2>{{ _("Pilots") }}</h2>
-  <div class="filters">
-    <form method="get">
-      <label for="commercial-ops-pilots-list-status">{{ _("Status") }}</label>
-      <select id="commercial-ops-pilots-list-status" name="status" onchange="this.form.submit()">
-        <option value="">{{ _("All") }}</option>
-        {% for s in ["DRAFT","APPROVED","ACTIVE","EXTENDED","CONVERTED","COMPLETED","CANCELLED"] %}
-        <option value="{{ s }}" {{ "selected" if status_filter == s else "" }}>{{ pilot_status_label(s) }}</option>
-        {% endfor %}
-      </select>
-    </form>
-  </div>
+  {# See renewals_list.html for why this is the shared macro and not a
+     hand-rolled <form>: the old one's CSP-blocked onchange was its only
+     trigger, leaving the filter unusable. #}
+  {{ table.filter_bar(
+      status_options=["DRAFT","APPROVED","ACTIVE","EXTENDED","CONVERTED","COMPLETED","CANCELLED"],
+      status_value=status_filter, status_label_fn=pilot_status_label
+  ) }}
   <table class="responsive-table">
     <thead><tr><th>{{ _("Customer") }}</th><th>{{ _("Subscription") }}</th><th>{{ _("Status") }}</th><th>{{ _("Pilot window") }}</th><th>{{ _("Extensions") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>

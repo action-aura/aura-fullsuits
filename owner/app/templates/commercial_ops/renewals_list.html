@@ -1,19 +1,20 @@
 {% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
 {% block title %}{{ _("Renewals") }}{% endblock %}
 {% block content %}
 <div class="card">
   <h2>{{ _("Renewal requests") }}</h2>
-  <div class="filters">
-    <form method="get">
-      <label for="commercial-ops-renewals-list-status">{{ _("Status") }}</label>
-      <select id="commercial-ops-renewals-list-status" name="status" onchange="this.form.submit()">
-        <option value="">{{ _("All") }}</option>
-        {% for s in ["DRAFT","QUOTED","AWAITING_CONFIRMATION","AWAITING_PAYMENT","PAYMENT_RECORDED","APPROVED","APPLIED","REJECTED","CANCELLED","VOIDED"] %}
-        <option value="{{ s }}" {{ "selected" if status_filter == s else "" }}>{{ renewal_status_label(s) }}</option>
-        {% endfor %}
-      </select>
-    </form>
-  </div>
+  {# Shared filter_bar() instead of the hand-rolled status <form> this screen
+     used to carry: that form's only trigger was onchange="this.form.submit()",
+     which Owner's script-src 'self' CSP blocks, and it had no submit button --
+     so the filter was entirely dead. Fixing it here rather than re-hand-rolling
+     the markup means the macro's submit button (and any future fix) reaches
+     this queue and its three siblings automatically. The macro renders its own
+     "All" option, so the empty-string entry the old list carried is dropped. #}
+  {{ table.filter_bar(
+      status_options=["DRAFT","QUOTED","AWAITING_CONFIRMATION","AWAITING_PAYMENT","PAYMENT_RECORDED","APPROVED","APPLIED","REJECTED","CANCELLED","VOIDED"],
+      status_value=status_filter, status_label_fn=renewal_status_label
+  ) }}
   <table class="responsive-table">
     <thead><tr><th>{{ _("Customer") }}</th><th>{{ _("Subscription") }}</th><th>{{ _("Status") }}</th><th>{{ _("Proposed term") }}</th><th>{{ _("Created") }}</th><th><span class="aura-sr-only">{{ _("Actions") }}</span></th></tr></thead>
     <tbody>
