@@ -58,8 +58,66 @@ These were established at real cost and have to survive every future change:
 
 ## Findings
 
-Wave 1 audit findings are recorded in `findings.md` in this directory as they
-land, with the fix status of each.
+Wave 1 audit findings are recorded in `findings.md` in this directory, each with
+a `file:line` citation and a CONFIRMED/SUSPECTED label.
+
+## Wave 2 — the fix order, and why
+
+Ranked by *what actually blocks a launch*, not by how interesting the bug is.
+
+**Tier 0 — blocks launch outright**
+
+1. **Signing-key rotation is unrecoverable.** `signing.py:228` + `trust_store.py:82`.
+   Until this is fixed, rotating a key bricks every fielded client permanently
+   and there is no recovery except shipping a new installer. This outranks
+   everything else because it is unfixable *after* it happens.
+2. **Release-signed build.** The published APK is a debug build; release signing
+   is configured but inert because `keystore.properties` does not exist. Needs a
+   keystore from the owner — nothing else can proceed without it.
+3. **Audit log authorization hole.** A non-admin device reads the audit log
+   (`200` where the suite demands `403`). One unset `is_admin_device` flag.
+4. **Reactivate the Owner subscription.** Not code. Until it is done, every write
+   on every device is 403-blocked and the product looks broken to any tester.
+
+**Tier 1 — the owner's stated complaints**
+
+5. Wire the Android AI sheet to the existing backend route. *(in progress)*
+6. Stop disguising licensing 403s as network errors. *(in progress)*
+7. Outbox chunking, import sync-enqueue, deterministic push ordering. *(in progress)*
+8. **One revenue definition.** Replace ~7 hand-written SQL variants with a single
+   shared metric service that every screen calls, so a refund or a branch filter
+   cannot make two widgets on one page disagree. This is the fix for "reports
+   don't display each other's info" and it is a refactor, not a patch.
+9. **Reconcile `inventory_balances` against `inventory_movements`**, and close the
+   two paths that corrupt it: the unguarded purchase-order-receive race, and the
+   importer's absolute stock overwrite.
+
+**Tier 2 — product decisions, not just code**
+
+10. **Decide what multi-device actually means.** Today sales, stock, purchase
+    orders and cash sessions are per-device *by design*, so two devices can never
+    show the same numbers. Either that is the product (and the UI must say so
+    plainly, per device), or sync scope has to widen. The owner should decide;
+    the code follows.
+11. Conflict resolution and tombstones in the replication layer — currently there
+    is no rule at all, so concurrent edits diverge silently and deletes resurrect.
+12. Anti-enumeration vs. customer support: an expired paying customer is currently
+    told to check for a typo. Security-motivated, but it costs a support call.
+
+**Tier 3 — design**
+
+13. Adopt "Operational Calm" and extend `tokens.css` to desktop and Android, so
+    the suite stops shipping three unrelated brand identities. Highest single
+    perception win is replacing the desktop neon/HUD identity.
+
+## Working agreement for agents on this programme
+
+- Production lineage is `feat/retail-mobile-build-baseline`. Never deploy
+  `origin/master` — it has no `owner/app/sync/`.
+- Fixes land on `feat/launch-readiness`, are committed by the lead after review,
+  and every behavioural fix ships with a test that fails before and passes after.
+- A finding is not "fixed" until someone has watched the test go from red to
+  green. Do not weaken an assertion to make a suite pass.
 
 ## Current deployment state
 

@@ -197,6 +197,29 @@ A signed release build is a launch blocker. Version is `versionCode 6`,
 `versionName 1.0.0-rc.5`; ABIs are `arm64-v8a` and `x86_64`.
 — **OPEN**, needs a keystore from the owner.
 
+## Test baseline (measured, 2026-08-20)
+
+`python products/run_all_tests.py` on the production lineage — one process per
+test file: **99 files run, 98 passed, 1 failed.**
+
+The single failure is not flaky, it is a genuine authorization hole:
+
+```
+products/retail/tests/retail_audit_log_test.py::test_audit_log_403s_for_a_non_admin_device
+assert 200 == 403
+```
+
+A non-admin device can read the audit log; the route answers `200` with data
+where the test correctly demands `403`. This lines up with a known gap that
+nothing in the codebase ever sets `is_admin_device`, which also leaves the
+desktop Settings screen permanently hidden — one unset flag with two visible
+consequences, one of them a security problem. — **OPEN**
+
+For contrast, the Owner CC suite has a much worse standing baseline: 25 failures
+out of 1100 at last full run, the large majority pre-existing
+(`DetachedInstanceError` in fixtures, CSRF-in-test issues) rather than product
+defects. That suite takes over two hours, so it is not part of the fast loop.
+
 ## Design
 
 Three unrelated brand identities ship today:
