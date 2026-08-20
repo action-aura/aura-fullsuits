@@ -25,6 +25,15 @@ env:
   # owner/tests/conftest.py's own OWNER_TEST_DATABASE_URL default.
   OWNER_TEST_DATABASE_URL: postgresql+psycopg://aura_owner:aura_owner_dev@localhost:5432/aura_owner_test
   OWNER_ENV: testing
+  # Explicit "opposite" of the local-developer escape hatch documented in
+  # products/run_all_tests.py: that script already fails loudly by default
+  # when *_test.js files are discovered but `node` isn't on PATH, but this
+  # is set here explicitly (rather than relying on that default) so CI's
+  # intent -- JS tests are never allowed to silently vanish -- is visible
+  # directly in this workflow file, not just inferred from a script default
+  # that could change later without anyone noticing it changed CI's
+  # behavior.
+  AURA_ALLOW_MISSING_NODE: "0"
 
 jobs:
   test-and-scan:
@@ -50,13 +59,25 @@ jobs:
           python-version: "3.11"
       - run: pip install -r requirements/development.txt
 
+      # Node is required by products/run_all_tests.py: products/retail/tests
+      # (and, structurally, any other product's tests/) can contain
+      # standalone `*_test.js` files run one-per-`node`-subprocess. Without
+      # this step the runner now fails the job loudly (AURA_ALLOW_MISSING_NODE
+      # is "0" above) rather than silently reporting 0 JS files as green --
+      # provisioning Node explicitly, instead of hoping the runner image
+      # happens to have one, is what actually closes that gap.
+      - name: Node setup
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Owner tests
         run: python -m pytest owner/tests -q --no-header
 
       - name: commercial_runtime tests
         run: python -m pytest commercial_runtime -q --no-header
 
-      - name: Retail tests (canonical runner -- see retail-test-isolation-resolution.md)
+      - name: Retail tests (canonical runner -- see retail-test-isolation-resolution.md; now includes the *_test.js files under products/retail/tests, see run_all_tests.py)
         run: python products/run_all_tests.py retail
 
       - name: Clinic tests (canonical runner)

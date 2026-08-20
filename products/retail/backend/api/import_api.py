@@ -41,7 +41,21 @@ import uuid as _uuid
 from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, session
 
-from commercial_runtime.identity.mt_auth import mt_login_required
+from commercial_runtime.identity.mt_auth import mt_login_required, mt_require_capability
+# Every POST below is gated on retail.stock.adjust. `execute`/`smart-execute`
+# write products, customers, suppliers, branches and OPENING STOCK, which
+# makes this the sixth writer into inventory_balances (see
+# core/retail/stock_reconciliation.py's list) and by some distance the
+# highest-leverage one -- a single upload can restate the whole catalogue.
+# Until now these routes carried @mt_login_required alone: not even the
+# subsystem gate every route in retail_api.py has, so any signed-in account
+# in the company could rewrite the shop's stock from a spreadsheet.
+#
+# parse/detect/clean write nothing -- they preview the same upload -- but they
+# are gated too rather than carved out. A preview of an import the caller may
+# never run is not an authority worth keeping separate, and an exemption is
+# one more shape a future route could quietly take.
+from commercial_runtime.identity.user_accounts import CAP_STOCK_ADJUST
 from commercial_runtime.sync.sync_service import nudge as _sync_nudge
 
 # Every quantity comparison this importer makes uses the SAME tolerance the
@@ -525,6 +539,7 @@ def get_schemas():
 
 @import_bp.route('/parse', methods=['POST'])
 @mt_login_required
+@mt_require_capability(CAP_STOCK_ADJUST)
 def parse_file_endpoint():
     """Upload a file, return column names, sample values, row count, and auto-detected mapping."""
     blocked = _demo_blocked()
@@ -671,6 +686,7 @@ def _file_samples(headers, rows, keep=15):
 
 @import_bp.route('/detect', methods=['POST'])
 @mt_login_required
+@mt_require_capability(CAP_STOCK_ADJUST)
 def detect_entities():
     """Scan an uploaded file against every Retail entity and return the ones it
     covers -- powers the universal importer that splits a file across the right
@@ -753,6 +769,7 @@ def detect_entities():
 
 @import_bp.route('/smart-execute', methods=['POST'])
 @mt_login_required
+@mt_require_capability(CAP_STOCK_ADJUST)
 def smart_execute():
     """Import one (possibly combined) file into MULTIPLE Retail entities in one
     pass. Accepts the file + `targets` = [{system, entity, mapping}]. Runs each
@@ -952,6 +969,7 @@ def _clean_records(rows, mapping, schema_fields):
 
 @import_bp.route('/clean', methods=['POST'])
 @mt_login_required
+@mt_require_capability(CAP_STOCK_ADJUST)
 def clean_preview():
     """Parse + run the cleaning pipeline and return the audit report WITHOUT importing."""
     blocked = _demo_blocked()
@@ -987,6 +1005,7 @@ def clean_preview():
 
 @import_bp.route('/execute', methods=['POST'])
 @mt_login_required
+@mt_require_capability(CAP_STOCK_ADJUST)
 def execute_import():
     """Re-upload file + mapping → clean, validate, and import all clean rows."""
     blocked = _demo_blocked()

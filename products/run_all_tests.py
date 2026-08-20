@@ -32,11 +32,38 @@ Usage:
     python products/run_all_tests.py retail           # only products/retail/tests
     python products/run_all_tests.py clinic           # only products/clinic/tests
     python products/run_all_tests.py commercial_runtime  # only commercial_runtime/tests
+
+JavaScript tests (CI hardening, AUDIT-010 follow-up):
+    Each product's tests/ directory can also hold standalone `*_test.js`
+    files -- one Node script per file, no test framework configured (this is
+    a vanilla-JS, build-step-free frontend; see CLAUDE.md). Discovered and
+    run the same way as the `*_test.py` suites: one `node <file>` subprocess
+    per file, folded into the same PASS/FAIL summary and the same
+    "N file(s) run, N passed, N failed" total, so one number means
+    everything. Several of these are the ONLY coverage for real, previously
+    shipped XSS/injection-breakout bugs -- see each file's header comment.
+
+    Node availability is REQUIRED whenever JS test files are discovered.
+    If `node` is not on PATH, the run FAILS LOUDLY (non-zero exit, files
+    named) rather than silently reporting green having run zero JS files --
+    that silent-skip is exactly how these files went unrun in CI for as long
+    as they did. The only way to skip them is the explicit, opt-in
+    AURA_ALLOW_MISSING_NODE=1 environment variable, intended for local
+    developer machines without Node installed; CI must never set it (see
+    .github/workflows/ci.yml, which sets it to "0" explicitly rather than
+    relying on this default).
 """
+import os
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+# Local-developer-only escape hatch: set to '1' to explicitly skip JS tests
+# when `node` is unavailable, instead of failing the run. CI must not set
+# this to '1' -- see module docstring and ci.yml.
+ALLOW_MISSING_NODE_ENV = 'AURA_ALLOW_MISSING_NODE'
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -70,6 +97,21 @@ def discover(dirs):
     return files
 
 
+def discover_js(dirs):
+    """
+    Standalone Node test scripts: `*_test.js`. Same SUITES dirs as discover()
+    above, so any suite (retail, clinic, ...) that grows JS tests is picked
+    up automatically -- this does not structurally special-case retail.
+    Today only products/retail/tests has any; products/clinic/tests has
+    none yet (see run_all_tests.py callers / CI report).
+    """
+    files = []
+    for d in dirs:
+        if d.exists():
+            files.extend(sorted(d.glob('*_test.js')))
+    return files
+
+
 def run_one(path):
     start = time.time()
     proc = subprocess.run(
@@ -87,19 +129,81 @@ def run_one(path):
     }
 
 
+def run_one_js(path):
+    start = time.time()
+    proc = subprocess.run(
+        ['node', str(path)],
+        cwd=str(ROOT), capture_output=True, text=True,
+    )
+    duration = time.time() - start
+    ok = proc.returncode == 0
+    stdout_lines = proc.stdout.strip().splitlines()
+    stderr_lines = proc.stderr.strip().splitlines()
+    # Unlike pytest (whose PASS/FAIL summary line always lands on stdout),
+    # these scripts' own convention (see e.g. retail_customer_modal_xss_test.js)
+    # is console.log(...) for the "PASS: <file>" line but console.error(...)
+    # for the "FAIL: <file>" line + stack trace -- and some tests also
+    # legitimately console.error() as part of exercising an error-handling
+    # code path they're asserting on (e.g. retail_dashboard_error_propagation_
+    # _test.js), even though the run itself passes. So "last line overall" is
+    # not reliable: on a pass, the real verdict is on stdout even if stderr
+    # has trailing noise after it; on a fail, it's on stderr. Pick whichever
+    # stream actually carries this run's verdict, falling back to the other
+    # stream (and then a placeholder) so nothing is ever silently blank.
+    primary, secondary = (stdout_lines, stderr_lines) if ok else (stderr_lines, stdout_lines)
+    tail = primary[-1] if primary else (secondary[-1] if secondary else '(no output)')
+    combined_lines = stdout_lines + stderr_lines
+    return {
+        'path': str(path.relative_to(ROOT)),
+        'ok': ok,
+        'summary': tail,
+        'duration_s': round(duration, 2),
+        'stdout_tail': '\n'.join(combined_lines[-15:]),
+    }
+
+
 def main():
     args = sys.argv[1:]
     selected = args if args else list(SUITES.keys())
     dirs = [SUITES[a] for a in selected if a in SUITES]
-    files = discover(dirs)
+    py_files = discover(dirs)
+    js_files = discover_js(dirs)
+
+    if js_files and not shutil.which('node'):
+        allow_missing = os.environ.get(ALLOW_MISSING_NODE_ENV) == '1'
+        js_list = '\n  '.join(str(f.relative_to(ROOT)) for f in js_files)
+        if allow_missing:
+            # Explicit, opt-in, loud -- not a silent skip. This must never be
+            # what CI does; see module docstring and ci.yml.
+            print(
+                f"WARNING: node is not on PATH -- SKIPPING {len(js_files)} JS "
+                f"test file(s) because {ALLOW_MISSING_NODE_ENV}=1 was "
+                f"explicitly set (local-developer escape hatch only):\n  {js_list}"
+            )
+            js_files = []
+        else:
+            print(
+                f"FAIL: node is not on PATH -- cannot run {len(js_files)} JS "
+                f"test file(s):\n  {js_list}\n"
+                f"These carry the only regression coverage for real, "
+                f"previously shipped bugs (stored-XSS, onclick-attribute "
+                f"breakout, the owner-row Deactivate-control guard) and must "
+                f"not be silently skipped. If this is an intentional "
+                f"local-dev run on a machine without Node installed, set "
+                f"{ALLOW_MISSING_NODE_ENV}=1 to explicitly skip them. CI "
+                f"must never set this."
+            )
+            return 1
+
+    files = [(f, run_one) for f in py_files] + [(f, run_one_js) for f in js_files]
 
     if not files:
         print('No test files found for:', selected)
         return 1
 
     results = []
-    for f in files:
-        r = run_one(f)
+    for f, runner in files:
+        r = runner(f)
         results.append(r)
         status = 'PASS' if r['ok'] else 'FAIL'
         print(f"[{status}] {r['path']}  ({r['duration_s']}s)  {r['summary']}")

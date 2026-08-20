@@ -15,7 +15,14 @@ import uuid as _uuid
 import requests
 from decimal import Decimal, ROUND_HALF_UP
 from flask import Blueprint, request, jsonify, session, current_app, Response, stream_with_context
-from commercial_runtime.identity.mt_auth import mt_login_required, mt_require_subsystem
+from commercial_runtime.identity.mt_auth import (
+    mt_login_required, mt_require_subsystem, mt_require_capability, session_has_capability,
+    CAPABILITY_DENIED_MESSAGE,
+)
+from commercial_runtime.identity.user_accounts import (
+    CAP_SELL, CAP_REFUND, CAP_DISCOUNT, CAP_STOCK_ADJUST, CAP_REPORTS,
+    CAP_CASH_CLOSE, CAP_EMPLOYEES,
+)
 from commercial_runtime.identity import device_context
 from commercial_runtime.identity.registry_db import get_conn as _registry_conn
 from commercial_runtime.licensing_contracts.flask_guard import make_capability_guard
@@ -70,6 +77,95 @@ RETAIL_RESTRICTED_ALLOWLIST = frozenset({
     "retail.backup.restore",
     "retail.data.export",
 })
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CAPABILITY GATING (Phase 1, design §3 "Permissions")
+#
+#  Until this pass, every route below carried one literal
+#  @mt_require_subsystem('retail') and nothing finer. That decorator answers
+#  "may this account touch Retail at all?", so a shop that answered yes for a
+#  cashier answered yes for adjusting stock, reading the whole debtor book,
+#  changing the tax mode and wiping the company. @mt_require_capability now
+#  answers the second question -- "may THIS PERSON do THIS?" -- against the
+#  eight codes seeded into user_permissions
+#  (commercial_runtime/identity/user_accounts.py).
+#
+#  BOTH still run. mt_require_subsystem is the LICENCE/module check and stays
+#  exactly as it was; @require_license_capability is the licensing-STATE check
+#  and stays where it was too. @mt_require_capability is written LAST, closest
+#  to the view, so it runs last: an install whose licence is restricted should
+#  be told that, not told the user lacks permission, which would send them to
+#  their owner instead of to billing.
+#
+#  THE EIGHT CODES ARE AUTHORITIES, NOT ROUTE NAMES. There are eight of them
+#  and ~80 routes, so several are broader than their name suggests. That is
+#  deliberate: the design fixes the vocabulary at eight and every existing
+#  account has already been migrated with a row per code, so inventing a ninth
+#  would leave every account un-provisioned for it -- a code with no row is a
+#  code nobody holds. Where a route's code is wider than its literal name, the
+#  reason is stated at that route or in the section header above it.
+#
+#    retail.sell          ring a sale, park/recall a cart, and the customer
+#                         record the till needs to ring a NAMED sale
+#    retail.refund        reverse money already taken
+#    retail.discount      give value away with no matching payment. Has no
+#                         route of its own -- a discount is a FIELD on a sale
+#                         and credit terms are fields on a customer -- so it is
+#                         checked inside those two handlers with
+#                         session_has_capability()
+#    retail.stock.adjust  change what the shop's records say it has, and the
+#                         procurement that changes it. Also the gate on
+#                         master-data writes (products, categories, suppliers,
+#                         contacts): no code in the fixed eight names "edit
+#                         master data", and this is the one that governs
+#                         changing the shop's own records with no customer
+#                         transaction behind it -- and, more to the point, it
+#                         is the right TIER, which is the decision that
+#                         actually matters
+#    retail.reports       see, send or generate the shop's numbers
+#    retail.cash.close    operate THIS terminal's drawer: open, movements,
+#                         close
+#    retail.cash.approve  accept a cash variance. NO ROUTE TODAY, and none is
+#                         invented here: cash_sessions has only open/closed,
+#                         with no state for "closed, variance not yet
+#                         accepted" until retail v16 adds the ENDED/CLOSED
+#                         split (design §6). Requiring it to CLOSE would be
+#                         backwards -- a cashier who counted short could never
+#                         end their shift. It stays reserved, and is kept out
+#                         of the manager default so that no role can both
+#                         close a drawer and sign off its own shortfall
+#    retail.employees     owner-level administration of the shop itself:
+#                         settings, branches, payment methods, demo reset, and
+#                         money paid OUT to suppliers. Read it as "owner
+#                         authority" -- it is the code whose default grant is
+#                         owner-only. Putting supplier and PO payments here
+#                         also separates duties the way a shop should: the
+#                         person who receives the delivery
+#                         (retail.stock.adjust) is not the person who pays for
+#                         it
+#
+#  Reads are NOT uniformly gated, on purpose. A till has to be able to list
+#  products, find a customer and look up a sale, and none of the eight codes
+#  names "browse the catalogue"; those stay on the subsystem gate. The reads
+#  that disclose the shop's FINANCIAL POSITION -- every report, the debtor and
+#  creditor books, the audit log, the stock-drift dump -- carry
+#  retail.reports, because the gate has to match what an endpoint DISCLOSES,
+#  not how little it writes (the same reasoning inventory_reconciliation's own
+#  docstring already applies to itself).
+#
+#  The full route-to-code map is frozen as data in
+#  products/retail/tests/retail_route_capability_matrix_test.py, which also
+#  fails if any mutating route is added without one.
+# ══════════════════════════════════════════════════════════════════════════════
+
+#: Refusals for the two capability checks that are NOT a whole route (see
+#: retail.discount above). Fixed literals, and keys in BOTH
+#: products/retail/frontend/locales/en.json and ar.json -- this product ships
+#: Arabic and is RTL, so a message the catalog does not know renders as raw
+#: English inside an RTL layout. mt_auth.CAPABILITY_DENIED_MESSAGE is the
+#: third and covers every route-level refusal.
+DISCOUNT_DENIED_MESSAGE = 'You do not have permission to apply a discount.'
+CREDIT_TERMS_DENIED_MESSAGE = 'You do not have permission to change credit terms.'
 
 # ── Session helpers ────────────────────────────────────────────────────────────
 def _cid():
@@ -198,6 +294,16 @@ def _emit(event_type, payload):
 @retail_bp.route('/dashboard/stats', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
+# retail.reports, even though this is the app's landing screen. What it
+# returns is today's and this month's revenue, gross figures, the hourly
+# takings chart and the last eight sales -- the "Retail Overview" analytics
+# page, which is exactly the "reads reports" authority. A cashier who lands
+# here now gets a 403 and the tile shows an error until the shell learns to
+# hide what the user cannot fetch; that is a frontend follow-up (this pass
+# does not touch products/retail/frontend/), and it is the right way round.
+# The alternative is every cashier in every shop seeing the day's takings on
+# the till, which is precisely what an owner does not want on the shop floor.
+@mt_require_capability(CAP_REPORTS)
 def dashboard_stats():
     """Every money figure below comes from core/retail/metrics.py -- the KPI
     cards, the hourly chart and the payment-method doughnut are three views
@@ -333,6 +439,7 @@ def list_categories():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.product.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def create_category():
     data = request.json or {}
     if not data.get('name'):
@@ -358,6 +465,7 @@ def create_category():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.product.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def update_category(category_id):
     data = request.json or {}
     if not data.get('name'):
@@ -382,6 +490,7 @@ def update_category(category_id):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.product.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def delete_category(category_id):
     cid = _cid()
     conn = get_retail_conn()
@@ -443,6 +552,7 @@ def list_products():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.product.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def create_product():
     data = request.json or {}
     cid  = _cid()
@@ -518,6 +628,7 @@ def create_product():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.product.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def update_product(pid):
     data = request.json or {}
     cid  = _cid()
@@ -563,6 +674,7 @@ def update_product(pid):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.product.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def delete_product(pid):
     cid = _cid()
     conn = get_retail_conn()
@@ -591,6 +703,7 @@ def delete_product(pid):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.stock.adjust", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def adjust_stock(pid):
     """Manual stock adjustment, filed against ONE branch's balance row.
 
@@ -738,6 +851,13 @@ def list_customers():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.customer.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+# retail.sell, not a manager code: create_sale REFUSES a credit sale to a
+# walk-in ("Credit sales require a customer"), so a till that cannot name a
+# new customer is a till that cannot ring a credit sale at all. This handler
+# writes name/phone/email/address and nothing else -- it cannot grant credit,
+# which is why it is safe at the till while update_customer's credit fields
+# are not (see that route).
+@mt_require_capability(CAP_SELL)
 def create_customer():
     data = request.json or {}
     if not data.get('name'):
@@ -761,12 +881,27 @@ def create_customer():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.customer.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_SELL)
 def update_customer(cust_id):
     data = request.json or {}
     cid  = _cid()
     fields = {k: v for k, v in data.items() if k in ['name','phone','email','address','credit_mode','credit_limit']}
     if not fields:
         return jsonify({'status': 'error', 'message': 'No valid fields'}), 400
+
+    # ── retail.discount, on two of the six writable fields ───────────────────
+    # The route is gated on retail.sell because the till legitimately edits a
+    # customer: correcting a mistyped phone number is part of ringing a named
+    # sale. But two of the fields this same handler accepts are not contact
+    # details at all -- credit_mode and credit_limit decide whether this
+    # customer may walk out with goods they have not paid for, and how much.
+    # create_sale reads exactly these two to accept or refuse a credit sale,
+    # so a cashier who could set them could authorise their own unlimited
+    # credit sale in two requests. That is the same authority as a discount --
+    # value handed over with no matching payment, only spread over time -- so
+    # it takes the same code, and only that half of the payload is refused.
+    if ('credit_mode' in fields or 'credit_limit' in fields) and not session_has_capability(CAP_DISCOUNT):
+        return jsonify({'status': 'error', 'message': CREDIT_TERMS_DENIED_MESSAGE}), 403
     conn = get_retail_conn()
     cur = conn.cursor()
     sets = ', '.join(f'{k}=?' for k in fields)
@@ -786,6 +921,13 @@ def update_customer(cust_id):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.customer.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+# Deliberately NOT retail.sell, unlike its create/update siblings above. The
+# till writes customer rows as part of ringing a named sale; it has no reason
+# to retire one. Deactivating a customer takes them out of list_customers
+# (which filters status='active') while customers_receivables still counts
+# their balance, so a cashier could make a debtor invisible at the till
+# without clearing the debt -- master-data retirement, not selling.
+@mt_require_capability(CAP_STOCK_ADJUST)
 def delete_customer(cust_id):
     cid = _cid()
     conn = get_retail_conn()
@@ -848,6 +990,7 @@ def list_suppliers():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.supplier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def create_supplier():
     data = request.json or {}
     if not data.get('name'):
@@ -871,6 +1014,7 @@ def create_supplier():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.supplier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def update_supplier(sid):
     data = request.json or {}
     cid  = _cid()
@@ -910,6 +1054,7 @@ def update_supplier(sid):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.supplier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def delete_supplier(sid):
     cid = _cid()
     conn = get_retail_conn()
@@ -962,6 +1107,7 @@ def list_supplier_contacts(sid):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.supplier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def create_supplier_contact(sid):
     data = request.json or {}
     if not data.get('name'):
@@ -1004,6 +1150,7 @@ def create_supplier_contact(sid):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.supplier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def update_supplier_contact(sid, contact_id):
     data = request.json or {}
     cid = _cid()
@@ -1053,6 +1200,7 @@ def update_supplier_contact(sid, contact_id):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.supplier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def delete_supplier_contact(sid, contact_id):
     """Soft-delete: sets status='inactive', never removes the row -- matches
     delete_supplier's own soft-delete convention just above, and keeps the
@@ -1102,6 +1250,7 @@ def list_purchase_orders():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.purchase.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def create_purchase_order():
     data = request.json or {}
     cid  = _cid()
@@ -1163,6 +1312,7 @@ def get_purchase_order(po_id):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.purchase.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def receive_purchase_order(po_id):
     """Mark PO as received and add stock to inventory.
 
@@ -1243,6 +1393,12 @@ def receive_purchase_order(po_id):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.purchase.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+# Gated although it writes nothing. It is a POST that reads supplier terms
+# and unit costs to plan an order, so it is part of purchasing, and leaving
+# the one non-writing POST in the file ungated would mean the guard test has
+# to carry an exemption -- and an exemption is a shape the next new route can
+# quietly take.
+@mt_require_capability(CAP_STOCK_ADJUST)
 def preview_po_split():
     """Preview-only: groups a basket into per-supplier slices (Thursday demo,
     Stream B). Computes and returns a SplitResult -- never writes anything to
@@ -1389,6 +1545,7 @@ def list_reorder_requests():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.reorder.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def accept_reorder_request(rid):
     """Accepts a pending reorder request: creates a purchase_order LOCALLY
     ONLY -- deliberately never queued to sync_outbox. See
@@ -1477,6 +1634,7 @@ def accept_reorder_request(rid):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.reorder.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def decline_reorder_request(rid):
     """Declines a pending reorder request -- marks it declined and queues
     the sync event. Creates nothing else; unlike accept, there is no
@@ -1518,6 +1676,7 @@ def decline_reorder_request(rid):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.sale.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_SELL)
 def create_sale():
     """Server-authoritative sale creation (Wave 0 correction, AUDIT-002/AUDIT-003).
 
@@ -1559,6 +1718,29 @@ def create_sale():
         if not items_in:
             conn.close()
             return jsonify({'status': 'error', 'message': 'No items in sale.'}), 400
+
+        # ── retail.discount ─────────────────────────────────────────────────
+        # A discount is a FIELD on the sale, not an endpoint, so this is the
+        # only place the capability can be enforced. Gating the whole route on
+        # retail.discount would refuse the sale itself to a cashier who is
+        # allowed to sell; gating nothing would leave retail.discount a code
+        # no code path ever reads -- seeded, editable in the UI, and enforcing
+        # nothing, which is worse than not having it, because the owner would
+        # believe they had switched something off.
+        #
+        # Judged AFTER clamp_discount_pct, not on the raw field: the clamp
+        # already floors a negative at 0 and caps 250 at 100, so a payload
+        # carrying discount_pct=-5 or a stray "0" asks for no discount at all
+        # and must not be refused as if it did. Checked BEFORE BEGIN
+        # IMMEDIATE so a refusal never takes the write lock, and before any
+        # row is written so the refusal is total rather than partial.
+        wants_discount = any(
+            tax_engine.clamp_discount_pct(item.get('discount_pct', 0)) > 0
+            for item in items_in if isinstance(item, dict)
+        )
+        if wants_discount and not session_has_capability(CAP_DISCOUNT):
+            conn.close()
+            return jsonify({'status': 'error', 'message': DISCOUNT_DENIED_MESSAGE}), 403
 
         # BEGIN IMMEDIATE takes the write lock up front so a concurrent sale
         # can't read the same "stock is sufficient" snapshot before either
@@ -1944,6 +2126,7 @@ def list_held_sales():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.sale.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_SELL)
 def hold_sale():
     """Snapshot the current in-progress cart; the frontend clears its own
     `_cart` immediately after a successful hold so the till is free for the
@@ -2002,6 +2185,7 @@ def hold_sale():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.sale.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_SELL)
 def resume_held_sale(held_id):
     """Loads the snapshot back out and deletes the held row in the same
     transaction -- a resumed sale is either completed or re-held under a
@@ -2040,6 +2224,7 @@ def resume_held_sale(held_id):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.sale.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_SELL)
 def discard_held_sale(held_id):
     """Explicit delete only -- no silent/automatic expiry of stale held
     sales (see schema.py v3->v4 comment). A cashier who parked a sale by
@@ -2078,6 +2263,7 @@ def list_returns():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.return.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_REFUND)
 def create_return():
     """Server-authoritative return creation (Wave 0 correction, AUDIT-004).
 
@@ -2380,6 +2566,14 @@ _CASH_MOVEMENT_TYPES = frozenset({'float_in', 'float_out', 'paid_in', 'paid_out'
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.cash_session.open", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+# retail.cash.close covers the WHOLE drawer -- open, movements, close -- not
+# just the closing act its name describes. They are one authority: a person
+# who may not open a drawer cannot meaningfully close one, and float in/out
+# is the same till and the same cash. Splitting them would need codes the
+# design does not define. The authority that IS separate is accepting the
+# variance a close records (retail.cash.approve), which is why that one has
+# its own code and is withheld from every role that can close.
+@mt_require_capability(CAP_CASH_CLOSE)
 def open_cash_session():
     data = request.json or {}
     cid = _cid()
@@ -2475,6 +2669,7 @@ def get_cash_session(session_id):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.cash_session.movement.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_CASH_CLOSE)
 def create_cash_movement(session_id):
     data = request.json or {}
     cid = _cid()
@@ -2532,6 +2727,7 @@ def cash_session_x_report(session_id):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.cash_session.close", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_CASH_CLOSE)
 def close_cash_session(session_id):
     data = request.json or {}
     cid = _cid()
@@ -2624,6 +2820,7 @@ def close_cash_session(session_id):
 @retail_bp.route('/reports/sales-trend', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
 def report_sales_trend():
     """Day-by-day net revenue. Optional `?branch_id=` scopes to one branch.
 
@@ -2648,6 +2845,7 @@ def report_sales_trend():
 @retail_bp.route('/reports/top-products', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
 def report_top_products():
     """Best sellers WITHIN `?days=` (default 30), optionally scoped with
     `?branch_id=`.
@@ -2673,6 +2871,7 @@ def report_top_products():
 @retail_bp.route('/reports/payment-methods', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
 def report_payment_methods():
     """Net revenue per tender. Gained `?branch_id=` here: without it the
     Reports page's branch dropdown moved the trend/top-products charts and
@@ -2713,6 +2912,7 @@ def _compute_report_summary(conn, cid, days, branch_id=None):
 @retail_bp.route('/reports/summary', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
 def report_summary():
     """Gained `?branch_id=`: these ARE the KPI cards, and before this they
     ignored the page's branch dropdown entirely, so picking a branch moved
@@ -2755,6 +2955,7 @@ def _render_report_email_body(data):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.report.email", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_REPORTS)
 def report_summary_email():
     cid  = _cid()
     data_in = request.json or {}
@@ -2793,6 +2994,7 @@ def report_summary_email():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.report.email", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_REPORTS)
 def report_whatsapp():
     cid = _cid()
     data_in = request.json or {}
@@ -2864,6 +3066,7 @@ def report_whatsapp():
 @retail_bp.route('/reports/by-branch', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
 def report_by_branch():
     """Revenue/transactions per branch for the Reports page's
     branch-comparison chart.
@@ -2916,6 +3119,7 @@ def list_branches():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
 def create_branch():
     data = request.json or {}
     if not data.get('name'):
@@ -3078,6 +3282,7 @@ def credit_settings_get():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
 def credit_settings_set():
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
@@ -3110,6 +3315,7 @@ def tax_settings_get():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
 def tax_settings_set():
     cid = _cid(); data = request.json or {}
     if 'tax_calculation_mode' not in data:
@@ -3143,6 +3349,7 @@ def payment_methods_list():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
 def payment_methods_add():
     cid = _cid(); data = request.json or {}
     if not data.get('name'):
@@ -3157,6 +3364,7 @@ def payment_methods_add():
 @retail_bp.route('/customers/receivables', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
 def customers_receivables():
     cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn)
     rows = conn.execute("SELECT id,name,phone,credit_mode,credit_limit,credit_balance FROM customers "
@@ -3175,6 +3383,15 @@ def customers_receivables():
 @retail_bp.route('/customers/<string:cust_id>/statement', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
+# Deliberately UNGATED, and deliberately asymmetric with supplier_statement
+# below, which does carry retail.reports. This is ONE named customer's
+# ledger, and a cashier taking a payment at the till has to be able to see
+# what that customer owes -- customer_payment() right below is a till
+# operation. suppliers_payables / supplier_statement are the other direction:
+# procurement, money the shop owes, nothing a till ever needs. The whole
+# debtor BOOK (customers_receivables above) stays on retail.reports for the
+# same reason -- one customer's balance is a till fact, the list of everyone
+# who owes the shop money is a report.
 def customer_statement(cust_id):
     cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn)
     cust = conn.execute("SELECT id,name,phone,credit_mode,credit_limit,credit_balance FROM customers WHERE id=? AND company_id=?",
@@ -3202,6 +3419,7 @@ def customer_statement(cust_id):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.customer.payment.record", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_SELL)
 def customer_payment(cust_id):
     cid = _cid(); data = request.json or {}
     amt = _money(data.get('amount', 0))
@@ -3225,6 +3443,7 @@ def customer_payment(cust_id):
 @retail_bp.route('/suppliers/payables', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
 def suppliers_payables():
     cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn)
     rows = conn.execute("SELECT id,name,phone,payment_terms,credit_balance FROM suppliers "
@@ -3240,6 +3459,7 @@ def suppliers_payables():
 @retail_bp.route('/suppliers/<string:sid>/statement', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
 def supplier_statement(sid):
     cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn)
     sup = conn.execute("SELECT id,name,phone,payment_terms,credit_balance FROM suppliers WHERE id=? AND company_id=?",
@@ -3267,6 +3487,13 @@ def supplier_statement(sid):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.supplier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+# retail.employees (= owner authority), NOT retail.stock.adjust like the rest
+# of the supplier surface. Receiving a delivery and PAYING for it are two
+# different authorities on purpose: a manager who could do both could receive
+# a short delivery and settle it in full, and nobody else in the shop would
+# ever see the two facts side by side. The person who signs for the goods is
+# not the person who signs the cheque.
+@mt_require_capability(CAP_EMPLOYEES)
 def supplier_payment(sid):
     cid = _cid(); data = request.json or {}
     amt = _money(data.get('amount', 0))
@@ -3290,6 +3517,7 @@ def supplier_payment(sid):
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.purchase.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
 def pay_purchase_order(po_id):
     cid = _cid(); data = request.json or {}
     amt = _money(data.get('amount', 0))
@@ -3320,6 +3548,7 @@ def pay_purchase_order(po_id):
 @retail_bp.route('/reports/daily-cash', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
 def daily_cash():
     cid = _cid(); day = request.args.get('date') or datetime.now().strftime('%Y-%m-%d')
     conn = get_retail_conn(); _ensure_credit_schema(conn)
@@ -3337,6 +3566,7 @@ def daily_cash():
 @retail_bp.route('/reports/aging', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
 def aging_report():
     """Simplified aging: buckets each party's balance by the age of its oldest unpaid
     document. Structured so a richer FIFO allocation can replace it without API change."""
@@ -3369,6 +3599,12 @@ def aging_report():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+# retail.refund, not an owner code, because of what this route has already
+# been narrowed to: it REFUSES any receipt belonging to a sale (see the long
+# comment below) and only ever voids a customer-account, supplier-account or
+# PO payment. That is reversing money that was taken or paid in error, which
+# is the refund authority -- the same one create_return needs.
+@mt_require_capability(CAP_REFUND)
 def void_payment(pid):
     cid = _cid(); data = request.json or {}
     conn = get_retail_conn(); _ensure_credit_schema(conn)
@@ -3421,6 +3657,43 @@ def void_payment(pid):
         return jsonify({'status': 'error',
                          'message': 'This receipt belongs to a sale. Process a return against that sale '
                                     'instead -- a return reverses the stock and the money together.'}), 409
+
+    # AUDIT: the authority to reverse must equal the authority to create --
+    # the same principle retail.discount is enforced under in create_sale
+    # and update_customer above. The decorator above this handler is only
+    # the FLOOR (CAP_REFUND); by this point p['related_type'] != 'sale', so
+    # what is left is exactly the two shapes this route was already narrowed
+    # to -- a customer-account receipt or a supplier-account/PO payment --
+    # and those two do NOT share an authority upstream, so they must not
+    # share one here either:
+    #
+    #   * customer_payment (~3421) is gated CAP_SELL. Voiding a
+    #     party_type='customer' row is therefore a till-level correction --
+    #     the same tier as create_return, which is why CAP_REFUND (the
+    #     decorator floor) is already the right and sufficient check for it.
+    #   * supplier_payment (~3495) and pay_purchase_order's inline
+    #     down-payment (~3535, and create_purchase_order's own amount_paid
+    #     branch) are gated CAP_EMPLOYEES -- owner authority, on purpose:
+    #     receiving a delivery and paying for it are different authorities,
+    #     and separately, money paid OUT to a supplier is the shop's own
+    #     money leaving, not till cash. Both write party_type='supplier'
+    #     (related_type is NULL for the direct payment, 'po' for the PO
+    #     down-payment -- either way the party is the supplier), so a single
+    #     check on party_type covers both without caring which of the two
+    #     created the row. Without this, a cashier who could never CREATE a
+    #     supplier payment could still VOID one -- undoing money paid out
+    #     and silently reopening the payable -- using only the refund
+    #     authority a till legitimately needs for its own receipts. That is
+    #     the asymmetry this check exists to close.
+    #
+    # Checked BEFORE any UPDATE and before this handler's write ever takes
+    # place, so a refusal is total rather than partial -- same placement
+    # rule create_sale's discount check documents for BEGIN IMMEDIATE.
+    if p['party_type'] == 'supplier' and not session_has_capability(CAP_EMPLOYEES):
+        conn.close()
+        return jsonify({'status': 'error', 'error': CAPABILITY_DENIED_MESSAGE,
+                         'message': CAPABILITY_DENIED_MESSAGE}), 403
+
     try:
         conn.execute("UPDATE payments SET status='voided', voided_by=?, voided_at=?, notes=COALESCE(notes,'')||? WHERE id=?",
                      (_uid(), _now(), f" [VOID: {data.get('reason','')}]", pid))
@@ -3447,6 +3720,13 @@ def void_payment(pid):
 @retail_bp.route('/audit-log', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
+# retail.reports ON TOP OF the admin-device check inside the handler, not
+# instead of it. They are different axes and both are load-bearing: the
+# device check answers "is this the shop's admin terminal?", the capability
+# answers "is this person allowed to read the shop's records?". A manager on
+# the admin device still should not be handed every user's refund and void
+# trail just because of where they are standing.
+@mt_require_capability(CAP_REPORTS)
 def list_audit_log():
     cid = _cid()
     if not _is_admin_device(cid):
@@ -3585,6 +3865,7 @@ _WIPE_STATEMENTS = (
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
 def demo_wipe():
     for guard in (_require_retail_demo_mode(), _require_company_admin(), _require_confirmation('WIPE', _cid())):
         if guard is not None:
@@ -3614,6 +3895,7 @@ def demo_wipe():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
 def demo_seed():
     for guard in (_require_retail_demo_mode(), _require_company_admin(), _require_confirmation('SEED', _cid())):
         if guard is not None:
@@ -3679,6 +3961,7 @@ def demo_seed():
 @retail_bp.route('/inventory/reconciliation', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
 def inventory_reconciliation():
     """Report (never repair) every product/branch balance that disagrees
     with the inventory_movements ledger it is supposed to be a cache of.
@@ -3718,6 +4001,7 @@ def inventory_reconciliation():
 @mt_login_required
 @mt_require_subsystem('retail')
 @require_license_capability("retail.stock.adjust", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
 def repair_inventory_reconciliation():
     """Rewrite every drifted cached balance from the ledger, in one
     transaction, with one audit_log row per repaired balance.
@@ -4135,6 +4419,12 @@ def _ai_upstream_payload(prompt, stream):
 @retail_bp.route('/ai/chat', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
+# retail.reports, because of what _build_ai_context() puts in the prompt: a
+# company-scoped summary of this install's real business data. The assistant
+# can therefore be asked "what did we take today" and answer, which makes this
+# route a reporting surface wearing a chat box. Gating it on anything less
+# would leave a way to read the numbers that the reports themselves refuse.
+@mt_require_capability(CAP_REPORTS)
 def ai_chat():
     """Proxy one chat turn to the hosted AI assistant. Must never crash or
     hang the app: any network failure, timeout, non-200, or unparseable
