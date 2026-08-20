@@ -61,6 +61,16 @@ a = Analysis(
         'commercial_runtime.identity.auth_routes',
         'commercial_runtime.identity.onboarding_routes',
         'commercial_runtime.identity.registry_db',
+        # registry.db v3 (docs/launch-readiness/multi-device-design.md §6).
+        # account_schema is imported INSIDE registry_db._migrate_registry_schema
+        # rather than at module scope, and it runs during first-launch
+        # migration -- i.e. before the server starts, on the one code path
+        # where a missing module is not a degraded feature but a build that
+        # cannot boot at all. Listed explicitly for the reason this file
+        # already gives below: nothing in commercial_runtime.* is left to
+        # PyInstaller's static analysis.
+        'commercial_runtime.identity.account_schema',
+        'commercial_runtime.identity.user_accounts',
         'commercial_runtime.security.app_secret',
         'commercial_runtime.security.passwords',
         'commercial_runtime.security.audit',

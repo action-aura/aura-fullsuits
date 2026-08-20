@@ -62,8 +62,20 @@ def db_path(tmp_path):
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     # Minimal stand-in for registry_db.py's real `users` table -- only the
-    # column mt_login_required's session check actually reads.
-    conn.execute("CREATE TABLE users (id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'active')")
+    # columns mt_login_required's session check actually reads. That is two
+    # columns, not one, since the decorator started enforcing session_version
+    # (registry v3 / multi-device Phase 1): the real table has always had the
+    # column with DEFAULT 1, so mirroring it here keeps this fixture a
+    # faithful stand-in rather than a smaller world where the check cannot
+    # fire. `_session()` below stamps the matching mt_session_version, so a
+    # session built by `_login` below is current, exactly like a real one.
+    conn.execute(
+        "CREATE TABLE users ("
+        "  id TEXT PRIMARY KEY,"
+        "  status TEXT NOT NULL DEFAULT 'active',"
+        "  session_version INTEGER NOT NULL DEFAULT 1"
+        ")"
+    )
     apply_identity_device_schema(conn)
     conn.commit()
     conn.close()
@@ -100,11 +112,17 @@ def _insert_user(db_path, user_id, status="active"):
     conn.close()
 
 
-def _login(client, user_id, company_id, role="admin"):
+def _login(client, user_id, company_id, role="admin", session_version=1):
+    """Mirrors the fields `mt_auth.create_session` sets that these routes and
+    their decorator actually read. `mt_session_version` is stamped because a
+    real login stamps it -- a fake session that omitted it would be leaning on
+    the decorator's missing-value fallback instead of reproducing what the
+    product does."""
     with client.session_transaction() as s:
         s["mt_user_id"] = user_id
         s["company_id"] = company_id
         s["mt_role"] = role
+        s["mt_session_version"] = session_version
 
 
 # ── Auth gating ──────────────────────────────────────────────────────────

@@ -27,7 +27,8 @@ from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify, session
 
 from commercial_runtime.identity.registry_db import get_conn
-from commercial_runtime.identity.mt_auth import create_session
+from commercial_runtime.identity.mt_auth import create_session, mt_login_required
+from commercial_runtime.identity import user_accounts as _accounts
 from commercial_runtime.identity import verification as _verification
 from commercial_runtime.security.passwords import hash_password
 from commercial_runtime.security.audit import record as _security_audit, ADMIN_CREATED
@@ -133,17 +134,37 @@ def create_admin():
             return jsonify({'error': 'This email is already registered to another account.'}), 400
 
         if existing_admin:
+            # The pending admin's capability/permission grants go with it.
+            # There is no FK from user_permissions to users (see
+            # device_registry.py's schema comment for why), so without this
+            # the rows would survive as orphans keyed to a user id that no
+            # longer exists -- harmless to read, but they accumulate on every
+            # re-onboard and they make the permission table lie about who
+            # exists.
+            conn.execute("DELETE FROM user_permissions WHERE user_id=?", (existing_admin['id'],))
             conn.execute("DELETE FROM users WHERE role='admin'")
 
         company_id = cfg.get('company_id') or hashlib.md5(email.encode()).hexdigest()
         user_id    = str(uuid.uuid4())
         pwd_hash   = hash_password(password)
 
+        # `uid` is the WIRE identity (registry v3, design §6) -- the id above
+        # stays a private local detail. Set at creation rather than left for
+        # the migration to backfill, because the migration only ever runs
+        # once and every account minted afterwards would otherwise have no
+        # identity a second device could name it by.
         conn.execute("""
             INSERT INTO users
-              (id, company_id, employee_id, email, password_hash, role, status, require_password_change)
-            VALUES (?, ?, 'ADMIN-0001', ?, ?, 'admin', 'active', 0)
-        """, (user_id, company_id, email, pwd_hash))
+              (id, company_id, employee_id, email, password_hash, role, status, require_password_change,
+               uid, row_version, updated_at_utc)
+            VALUES (?, ?, 'ADMIN-0001', ?, ?, 'admin', 'active', 0, ?, 1, ?)
+        """, (user_id, company_id, email, pwd_hash, str(uuid.uuid4()), _accounts.now_utc_iso()))
+
+        # Admin still bypasses the permission lookup at mt_auth.py:287, so
+        # these rows change no decision today; they exist so the owner's own
+        # account shows up in the capability grid the employee screens read,
+        # instead of appearing as an account with no permissions at all.
+        _accounts.seed_capabilities_for_user(conn, user_id, _accounts.ROLE_ADMIN)
 
         # Kept inside the same transaction as the user insert -- either both
         # land or neither does, so a mid-onboarding failure can never leave
@@ -295,10 +316,15 @@ def reset_password():
         # Bumping session_version invalidates every session issued before
         # this reset -- same pattern update_clinic_role/update_perms use for
         # any other security-relevant change to a user row.
+        # row_version/updated_at_utc move with every write to a user row
+        # (registry v3, design §4): `users` is a shared, admin-device
+        # single-writer table, and a row that changed without moving its
+        # version looks unchanged to a peer that already holds an older copy.
         conn.execute(
             "UPDATE users SET password_hash=?, session_version=session_version+1, "
-            "failed_login_count=0, locked_until=NULL WHERE id=?",
-            (hash_password(password), user['id']),
+            "failed_login_count=0, locked_until=NULL, "
+            "row_version=COALESCE(row_version, 1)+1, updated_at_utc=? WHERE id=?",
+            (hash_password(password), _accounts.now_utc_iso(), user['id']),
         )
         try:
             conn.execute(
@@ -315,6 +341,7 @@ def reset_password():
 
 
 @onboarding_bp.route('/api/onboarding/complete', methods=['POST'])
+@mt_login_required
 def complete_onboarding():
     if session.get('mt_role') != 'admin':
         return jsonify({'error': 'Admin session required.'}), 403
@@ -322,22 +349,90 @@ def complete_onboarding():
     return jsonify({'success': True})
 
 
+def _capabilities_for_session(conn, user_id, role):
+    """The `capabilities` list `/api/auth/session` exposes -- RENDERING
+    ADVICE ONLY. The retail frontend fetches a subsystem-gated dashboard
+    route unconditionally on load; a cashier's first screen after login was
+    a 403 because nothing told the client what the signed-in user can
+    actually reach. This list lets the frontend hide what the server would
+    refuse anyway.
+
+    Every route keeps its own server-side gate regardless of what this
+    returns -- nothing may start trusting this list for authorization.
+
+    Derived from the user's ACTUAL `user_permissions` rows with
+    access_level='full', NOT from `capabilities_for_role()`: per-user
+    overrides exist and are the whole point of that table, so sending the
+    role default would make the UI disagree with the server the moment an
+    owner turns one code off for one person.
+
+    An admin is the one exception, and deliberately reads the ROLE rather
+    than the table: `mt_require_capability`/`mt_require_subsystem` both let
+    role='admin' bypass the permission table entirely everywhere they gate a
+    route, so a table row edited (or missing) for the admin's own account
+    changes nothing about what they can actually do -- reporting anything
+    other than all eight here would make this list lie about the one role
+    whose access this table was never authoritative for.
+
+    Restricted to the eight namespaced `CAPABILITY_CODES` -- the legacy
+    `subsystem='retail'`/`subsystem='clinic'` rows `mt_require_subsystem`
+    still reads on ~85 routes are a different vocabulary the frontend was
+    never meant to branch UI on, and must never leak into this list.
+    """
+    if _accounts.normalize_role(role) == _accounts.ROLE_ADMIN:
+        return sorted(_accounts.CAPABILITY_CODES)
+    placeholders = ','.join('?' * len(_accounts.CAPABILITY_CODES))
+    rows = conn.execute(
+        f"SELECT subsystem FROM user_permissions "
+        f"WHERE user_id=? AND subsystem IN ({placeholders}) AND access_level=?",
+        (user_id, *_accounts.CAPABILITY_CODES, _accounts.ACCESS_FULL),
+    ).fetchall()
+    return sorted(r['subsystem'] for r in rows)
+
+
 @onboarding_bp.route('/api/auth/session', methods=['GET'])
+@mt_login_required
 def get_session():
+    """Also the mechanism a fresh client uses to LEARN whether it is
+    authenticated at all -- both the web frontend (app-shell.js init()) and
+    the Android client (AppRoot.kt's phaseAfterActivationGate) call this
+    unconditionally before knowing whether a session exists, and both
+    already treat any non-2xx / thrown response identically to
+    `authenticated: false`. Gating it with `@mt_login_required` means an
+    anonymous call now gets a plain 401 instead of a 200 body carrying
+    `authenticated: false` -- a real but harmless contract change for both
+    callers -- and, in exchange, a DISABLED or REVOKED account's browser
+    stops being told it is still authenticated: previously this route read
+    every field straight from the cookie with no database re-check at all,
+    so a disabled admin's own tab would keep rendering as logged in even
+    though every real admin route now refuses it (see
+    test_admin_routes_require_login.py). Computing `capabilities` below also
+    needs a validated, live user row to read `user_permissions` against, which
+    this decorator now guarantees before the handler body ever runs.
+    """
     if 'mt_user_id' in session:
         lang = 'en'
+        capabilities = []
         try:
             conn = get_conn()
-            row = conn.execute("SELECT language FROM users WHERE id=?", (session['mt_user_id'],)).fetchone()
-            conn.close()
-            if row and row['language']:
-                lang = row['language']
+            try:
+                row = conn.execute(
+                    "SELECT language FROM users WHERE id=?", (session['mt_user_id'],)
+                ).fetchone()
+                if row and row['language']:
+                    lang = row['language']
+                capabilities = _capabilities_for_session(conn, session['mt_user_id'], session.get('mt_role'))
+            finally:
+                conn.close()
         except Exception:
             pass
         return jsonify({
             'authenticated': True,
             'is_mt': True,
             'language': lang,
+            # Rendering ADVICE ONLY -- see _capabilities_for_session's
+            # docstring. Every route still enforces its own server-side gate.
+            'capabilities': capabilities,
             'user': {
                 'id': session['mt_user_id'],
                 'employee_id': session.get('employee_id'),
@@ -352,21 +447,43 @@ def get_session():
 # ── Admin: employee management ──────────────────────────────────────────────
 
 @onboarding_bp.route('/api/admin/employees', methods=['GET'])
+@mt_login_required
 def get_employees():
     if session.get('mt_role') != 'admin':
         return jsonify({'error': 'Admin only'}), 403
     conn = get_conn()
     try:
+        # `pin_hash IS NOT NULL` -- the PRESENCE of a PIN, never the hash. The
+        # column is a PBKDF2 digest of a four-digit secret, so a keyspace of
+        # 10,000 is small enough that handing the hash to any client at all is
+        # handing them the PIN; only the boolean is anyone's business.
         emps = conn.execute(
-            "SELECT id, employee_id, email, role, clinic_role, status, created_at FROM users WHERE company_id=?",
+            "SELECT id, employee_id, email, role, clinic_role, status, created_at, "
+            "       (pin_hash IS NOT NULL) AS has_pin "
+            "FROM users WHERE company_id=?",
             (session['company_id'],)
         ).fetchall()
-        return jsonify({'success': True, 'employees': [dict(e) for e in emps]})
+        rows = []
+        for e in emps:
+            row = dict(e)
+            # ADDITIVE only. `role` keeps its stored value byte-for-byte
+            # because Clinic renders this same response and its rows still say
+            # 'employee'; rewriting it here would change a shipped product's
+            # UI from a route this phase is not allowed to alter for it.
+            # `effective_role` is the widened-domain reading (design §3) --
+            # the value every capability decision is actually made against, so
+            # a client that shows it is showing the truth rather than the
+            # legacy spelling.
+            row['effective_role'] = _accounts.normalize_role(row.get('role'))
+            row['has_pin'] = bool(row.get('has_pin'))
+            rows.append(row)
+        return jsonify({'success': True, 'employees': rows})
     finally:
         conn.close()
 
 
 @onboarding_bp.route('/api/admin/employees', methods=['POST'])
+@mt_login_required
 def create_employee():
     if session.get('mt_role') != 'admin':
         return jsonify({'error': 'Admin only'}), 403
@@ -379,6 +496,27 @@ def create_employee():
 
     if not email:
         return jsonify({'error': 'Email required'}), 400
+
+    # `role` is new (registry v3) and OPTIONAL, and its default is the
+    # pre-v3 value rather than one of the widened ones. That is deliberate:
+    # Clinic shares this route, keys its own RBAC off `clinic_role` rather
+    # than `role`, and selects its staff rows with `WHERE role='employee'`.
+    # Changing the default would break a product this phase is not allowed
+    # to touch, for no security gain -- `user_accounts.normalize_role()`
+    # reads 'employee' as 'cashier' everywhere a capability decision is
+    # made, so a row created without a role is a cashier in effect either
+    # way. An unrecognised value is refused rather than quietly downgraded:
+    # an admin who meant to create a manager must not silently get a cashier.
+    role = str(data.get('role') or _accounts.LEGACY_ROLE_EMPLOYEE).strip().lower()
+    if role not in _accounts.ASSIGNABLE_ROLES:
+        # A FIXED literal, not ', '.join(ASSIGNABLE_ROLES): this string is
+        # translated by matching the whole English sentence against the
+        # locale catalogs (products/retail/frontend/locales/{en,ar}.json --
+        # see i18n.js's t()), so a sentence assembled at runtime would have
+        # no key and would silently stay English on an Arabic till. It also
+        # deliberately does not name the legacy 'employee' value, which is
+        # accepted for API compatibility but is not a choice any UI offers.
+        return jsonify({'error': 'Role must be manager or cashier.'}), 400
 
     conn = get_conn()
     try:
@@ -393,14 +531,23 @@ def create_employee():
 
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO users (id, company_id, employee_id, email, password_hash, role, status, require_password_change, clinic_role)
-            VALUES (?, ?, ?, ?, ?, 'employee', 'pending_setup', 0, ?)
-        """, (user_id, company_id, emp_id, email, 'PENDING', clinic_role))
+            INSERT INTO users (id, company_id, employee_id, email, password_hash, role, status,
+                               require_password_change, clinic_role, uid, row_version, updated_at_utc)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending_setup', 0, ?, ?, 1, ?)
+        """, (user_id, company_id, emp_id, email, 'PENDING', role, clinic_role,
+              str(uuid.uuid4()), _accounts.now_utc_iso()))
 
         for sub, lvl in perms.items():
             if lvl != 'none':
                 cur.execute("INSERT INTO user_permissions (id, user_id, subsystem, access_level) VALUES (?, ?, ?, ?)",
                             (str(uuid.uuid4()), user_id, sub, lvl))
+
+        # AFTER the caller's explicit grants, never before: seeding is
+        # INSERT OR IGNORE against UNIQUE(user_id, subsystem), so running it
+        # second means an explicit grant for the same code wins and the seed
+        # only fills the gaps. Running it first would make the caller's own
+        # request collide with the defaults.
+        _accounts.seed_capabilities_for_user(conn, user_id, role)
 
         raw_token = uuid.uuid4().hex
         token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
@@ -428,14 +575,50 @@ def create_employee():
 
 
 @onboarding_bp.route('/api/admin/employees/<string:user_id>/status', methods=['PUT'])
+@mt_login_required
 def update_status(user_id):
+    """Enable/disable toggle -- had none of `update_role`'s guards: no 404 for
+    an unknown id, no validation of the status string (accepted and stored
+    `status='banana'` verbatim), and no owner bar.
+
+    Disabling the sole admin is UNRECOVERABLE: the disabled admin still has a
+    real `password_hash`, so `onboarding_status` keeps answering
+    `needs_setup=false` and `create-admin` keeps answering 409, while
+    `authenticate_registry_user` refuses the login -- and every route that
+    could undo it sits behind the admin session nobody can obtain any more.
+    """
     if session.get('mt_role') != 'admin':
         return jsonify({'error': 'Admin only'}), 403
+
+    status = (request.json or {}).get('status')
+    # The real domain this specific control writes: the frontend's own
+    # `_setStatus` (employees.js) only ever sends 'active' or 'disabled'.
+    # 'pending_setup' is a state an invited account starts in and leaves only
+    # through the invite/setup flow (`employee_setup` below) -- never a value
+    # this admin toggle is meant to assign.
+    if status not in ('active', 'disabled'):
+        return jsonify({'error': 'Status must be active or disabled.'}), 400
+
     conn = get_conn()
     try:
-        status = request.json.get('status')
-        conn.execute("UPDATE users SET status=?, session_version=session_version+1 WHERE id=? AND company_id=?",
-                     (status, user_id, session['company_id']))
+        row = conn.execute(
+            "SELECT id, role FROM users WHERE id=? AND company_id=?",
+            (user_id, session['company_id']),
+        ).fetchone()
+        if not row:
+            return jsonify({'error': 'User not found.'}), 404
+
+        # One admin per install (`create_admin` is gated on "no valid admin
+        # exists yet") and no way to mint a second -- refuse only the
+        # DISABLE direction; re-affirming an already-active owner as
+        # 'active' is a harmless no-op and stays allowed.
+        if status == 'disabled' and _accounts.normalize_role(row['role']) == _accounts.ROLE_ADMIN:
+            return jsonify({'error': 'You cannot disable the owner account.'}), 409
+
+        conn.execute("UPDATE users SET status=?, session_version=session_version+1, "
+                     "row_version=COALESCE(row_version, 1)+1, updated_at_utc=? "
+                     "WHERE id=? AND company_id=?",
+                     (status, _accounts.now_utc_iso(), user_id, session['company_id']))
         conn.execute(
             "INSERT INTO audit_logs (id, company_id, user_id, action, entity_type, entity_id, new_value_json) VALUES (?,?,?,?,?,?,?)",
             (str(uuid.uuid4()), session['company_id'], session['mt_user_id'], 'UPDATE_STATUS', 'USER', str(user_id), json.dumps({'status': status})))
@@ -445,7 +628,188 @@ def update_status(user_id):
         conn.close()
 
 
+@onboarding_bp.route('/api/admin/employees/<string:user_id>/role', methods=['PUT'])
+@mt_login_required
+def update_role(user_id):
+    """Move an existing employee between the widened roles (design §3).
+
+    WHY THIS EXISTS AT ALL: registry v3 widened `users.role` to
+    {admin, manager, cashier} and `create_employee` learned to accept a role,
+    but nothing could ever CHANGE one afterwards -- the only role-shaped route
+    in this file was `update_clinic_role`, which writes the unrelated
+    `clinic_role` column. So "promote this cashier to manager" was an
+    operation the data model supported and the API did not, and the only
+    workaround was delete-and-reinvite, which throws away the account's
+    identity (`uid`), its history, and its PIN.
+
+    Three things move together here, and all three are load-bearing:
+
+    1. `role` itself -- what `normalize_role()` reads for every capability
+       default, and what `sync_service.py` reads to find the admin's company.
+    2. `session_version` -- design §4 makes a bump the revocation channel for
+       `users`. A demotion that left the person's live session alone would
+       leave a manager holding manager access until they happened to log out;
+       `mt_auth._session_version_is_stale()` turns the bump into "their very
+       next request re-authenticates against the new role".
+    3. The capability rows -- see the reset below, which is the subtle part.
+    """
+    if session.get('mt_role') != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+
+    role = str((request.json or {}).get('role') or '').strip().lower()
+    # Same FIXED literal `create_employee` returns, for the same reason (it is
+    # translated by whole-sentence lookup against the locale catalogs, so a
+    # runtime-assembled sentence would have no key). Deliberately does NOT
+    # accept the legacy 'employee' value that `create_employee` still tolerates
+    # for API compatibility: this route is only ever reached from a UI that
+    # offers exactly two choices, and accepting a third would let an admin
+    # silently move somebody onto a value the widened domain does not contain.
+    if role not in (_accounts.ROLE_MANAGER, _accounts.ROLE_CASHIER):
+        return jsonify({'error': 'Role must be manager or cashier.'}), 400
+
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, role FROM users WHERE id=? AND company_id=?",
+            (user_id, session['company_id']),
+        ).fetchone()
+        # Scoped by company_id, so a row belonging to another tenant is
+        # indistinguishable from one that does not exist -- the same shape the
+        # sibling routes' UPDATE ... WHERE company_id=? already enforces.
+        if not row:
+            return jsonify({'error': 'User not found.'}), 404
+
+        # The owner account is not demotable, and nothing is promotable INTO
+        # it. `create_admin` is gated on "no valid admin exists yet", so this
+        # install has exactly one admin: demoting them would leave a shop with
+        # no account that can manage employees, approve cash variances, or
+        # reach the admin-device surface -- an irreversible self-lockout
+        # through a two-tap UI control. `ASSIGNABLE_ROLES` already excludes
+        # 'admin' for the mirror-image reason (no side door to a second owner).
+        #
+        # Not in the locale catalogs, matching `update_clinic_role`'s own
+        # backstop message directly below: the UI structurally never offers a
+        # role control on the owner row, so this sentence is an API-level
+        # refusal for a hand-made request rather than a screen a user reaches.
+        if _accounts.normalize_role(row['role']) == _accounts.ROLE_ADMIN:
+            return jsonify({'error': "The owner account's role cannot be changed."}), 409
+
+        conn.execute(
+            "UPDATE users SET role=?, session_version=session_version+1, "
+            "row_version=COALESCE(row_version, 1)+1, updated_at_utc=? "
+            "WHERE id=? AND company_id=?",
+            (role, _accounts.now_utc_iso(), user_id, session['company_id']),
+        )
+
+        # RESET the capability rows to the new role's defaults.
+        #
+        # A plain re-seed would be a NO-OP and therefore a bug:
+        # `seed_capabilities_for_user` is INSERT OR IGNORE against
+        # UNIQUE(user_id, subsystem), and every account already has all eight
+        # rows from creation -- so "promote to manager" would move the role
+        # string and grant nothing. Deleting first is what makes the promotion
+        # real.
+        #
+        # The cost is that a per-user grant the owner tuned earlier (say, a
+        # cashier they trusted with refunds) is discarded. That is the right
+        # trade and the UI says so before the tap: a role IS the permission
+        # preset, and silently carrying old exceptions across a role change
+        # would produce accounts whose access nobody can predict from their
+        # role -- exactly the state capability codes exist to eliminate.
+        #
+        # CRITICAL: bounded to the eight namespaced codes. The legacy
+        # `subsystem='retail'` row is what `mt_require_subsystem` reads on ~80
+        # routes TODAY; an unbounded `DELETE ... WHERE user_id=?` would delete
+        # it and lock the employee out of the entire retail app as a side
+        # effect of changing their job title.
+        placeholders = ','.join('?' * len(_accounts.CAPABILITY_CODES))
+        conn.execute(
+            f"DELETE FROM user_permissions WHERE user_id=? AND subsystem IN ({placeholders})",
+            (user_id, *_accounts.CAPABILITY_CODES),
+        )
+        _accounts.seed_capabilities_for_user(conn, user_id, role)
+
+        try:
+            conn.execute(
+                "INSERT INTO audit_logs (id, company_id, user_id, action, entity_type, entity_id, new_value_json) VALUES (?,?,?,?,?,?,?)",
+                (str(uuid.uuid4()), session['company_id'], session['mt_user_id'],
+                 'UPDATE_ROLE', 'USER', user_id,
+                 json.dumps({'from': row['role'], 'to': role})),
+            )
+        except Exception:
+            pass
+        conn.commit()
+        return jsonify({'success': True, 'role': role})
+    finally:
+        conn.close()
+
+
+@onboarding_bp.route('/api/admin/employees/<string:user_id>/pin', methods=['PUT', 'DELETE'])
+@mt_login_required
+def update_pin(user_id):
+    """Set (PUT) or clear (DELETE) an employee's till PIN.
+
+    The HTTP surface for `user_accounts.set_user_pin` / `clear_user_pin`,
+    which registry v3 added and which had no caller anywhere -- the hashing,
+    the Arabic-Indic digit folding and the "attribution, never authorization"
+    rule were all written and all unreachable. A PIN nobody can set is not a
+    feature, and the two locale catalogs already carry this route's only
+    user-facing refusal ("PIN must be exactly 4 digits.") in both languages.
+
+    DELIBERATELY DOES NOT BUMP `session_version`. Every other write in this
+    file does, because every other write changes what the person is ALLOWED to
+    do, and a live session holding the old answer is a security hole. A PIN
+    changes only which user id gets stamped on the rows a terminal writes
+    (design §3), so bumping here would log a cashier out of a till mid-sale to
+    propagate a change that alters none of their permissions. `set_user_pin`
+    still moves `row_version`/`updated_at_utc` via `_touch_user`, so the row
+    is correctly marked dirty for sync without revoking anything.
+
+    The PIN is never echoed back, never logged, and never written to the audit
+    row -- only the fact that it changed.
+    """
+    if session.get('mt_role') != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id FROM users WHERE id=? AND company_id=?",
+            (user_id, session['company_id']),
+        ).fetchone()
+        if not row:
+            return jsonify({'error': 'User not found.'}), 404
+
+        if request.method == 'DELETE':
+            _accounts.clear_user_pin(conn, user_id)
+            action, has_pin = 'CLEAR_PIN', False
+        else:
+            try:
+                _accounts.set_user_pin(conn, user_id, (request.json or {}).get('pin'))
+            except _accounts.PinPolicyError as exc:
+                # str(exc) is set_user_pin's own f-string, which renders
+                # exactly the catalog key "PIN must be exactly 4 digits." --
+                # kept as the raised text rather than re-spelled here so the
+                # policy and its message can never drift apart.
+                return jsonify({'error': str(exc)}), 400
+            action, has_pin = 'SET_PIN', True
+
+        try:
+            conn.execute(
+                "INSERT INTO audit_logs (id, company_id, user_id, action, entity_type, entity_id, new_value_json) VALUES (?,?,?,?,?,?,?)",
+                (str(uuid.uuid4()), session['company_id'], session['mt_user_id'],
+                 action, 'USER', user_id, json.dumps({'has_pin': has_pin})),
+            )
+        except Exception:
+            pass
+        conn.commit()
+        return jsonify({'success': True, 'has_pin': has_pin})
+    finally:
+        conn.close()
+
+
 @onboarding_bp.route('/api/admin/employees/<string:user_id>/clinic-role', methods=['PUT'])
+@mt_login_required
 def update_clinic_role(user_id):
     """Set or clear a staff member's clinic role (doctor / secretary / none).
     Bumps session_version so the change takes effect on their next request
@@ -459,8 +823,9 @@ def update_clinic_role(user_id):
     conn = get_conn()
     try:
         conn.execute(
-            "UPDATE users SET clinic_role=?, session_version=session_version+1 WHERE id=? AND company_id=?",
-            (clinic_role, user_id, session['company_id'])
+            "UPDATE users SET clinic_role=?, session_version=session_version+1, "
+            "row_version=COALESCE(row_version, 1)+1, updated_at_utc=? WHERE id=? AND company_id=?",
+            (clinic_role, _accounts.now_utc_iso(), user_id, session['company_id'])
         )
         try:
             conn.execute(
@@ -476,18 +841,76 @@ def update_clinic_role(user_id):
         conn.close()
 
 
+#: `mt_require_subsystem` still reads these two literal, un-namespaced values
+#: on ~85 routes total across both products (Retail's 'retail', Clinic's
+#: 'clinic') -- the ONLY legacy subsystem strings actually written or read
+#: anywhere in this codebase (confirmed by grepping every
+#: `mt_require_subsystem(...)` call site). `update_perms`'s new validation
+#: below must keep accepting exactly these two alongside the eight namespaced
+#: capability codes, or it would lock an admin out of ever granting the
+#: legacy gate those routes still check.
+_LEGACY_SUBSYSTEMS = ('retail', 'clinic')
+
+
 @onboarding_bp.route('/api/admin/employees/<string:user_id>/permissions', methods=['POST'])
+@mt_login_required
 def update_perms(user_id):
+    """Grant or revoke one capability/subsystem row for an employee.
+
+    Was NOT tenant-scoped: unlike `update_role`, `update_status` and
+    `update_clinic_role`, it deleted and re-inserted `user_permissions` with
+    a bare `WHERE user_id=?` and bumped the user with a bare `WHERE id=?` --
+    no `company_id` predicate anywhere. In the shared-registry design an
+    admin of company A could rewrite permissions for a user of company B
+    just by knowing (or guessing) their id.
+
+    It also wrote an arbitrary caller-supplied `subsystem` and `access_level`
+    with no validation at all.
+    """
     if session.get('mt_role') != 'admin':
         return jsonify({'error': 'Admin only'}), 403
+
+    data = request.json or {}
+    sub = data.get('subsystem')
+    lvl = data.get('access_level')
+
+    # `user_permissions.access_level`'s real domain -- the table's own
+    # DEFAULT is 'none', `mt_require_subsystem` already treats 'none' as a
+    # refusal, and 'full'/'none' are the only two values anything in this
+    # codebase ever writes or reads (user_accounts.ACCESS_FULL/ACCESS_NONE).
+    # This route has no screen yet (see user_accounts.py's ROLE_CAPABILITIES
+    # docstring), so this refusal is plain, un-catalogued English, the same
+    # way update_clinic_role's own format check just above is.
+    if lvl not in (_accounts.ACCESS_FULL, _accounts.ACCESS_NONE):
+        return jsonify({'error': 'access_level must be full or none.'}), 400
+
+    # `subsystem`'s real domain: the eight namespaced capability codes plus
+    # the two legacy values above. Rejecting anything else stops this route
+    # from writing a `user_permissions` row no reader will ever consult.
+    if sub not in _accounts.CAPABILITY_CODES and sub not in _LEGACY_SUBSYSTEMS:
+        return jsonify({'error': 'subsystem is not recognized.'}), 400
+
     conn = get_conn()
     try:
-        sub = request.json.get('subsystem')
-        lvl = request.json.get('access_level')
+        # Establishes tenant ownership BEFORE either write below touches
+        # anything -- `user_permissions` has no `company_id` column of its
+        # own (nothing in this schema does; see account_schema.py), so this
+        # lookup is the only thing making the DELETE/INSERT that follow
+        # tenant-safe, exactly the way update_role's own unscoped
+        # `user_permissions` DELETE is protected by its prior row lookup.
+        row = conn.execute(
+            "SELECT id FROM users WHERE id=? AND company_id=?",
+            (user_id, session['company_id']),
+        ).fetchone()
+        if not row:
+            return jsonify({'error': 'User not found.'}), 404
+
         conn.execute("DELETE FROM user_permissions WHERE user_id=? AND subsystem=?", (user_id, sub))
         conn.execute("INSERT INTO user_permissions (id, user_id, subsystem, access_level) VALUES (?, ?, ?, ?)",
                      (str(uuid.uuid4()), user_id, sub, lvl))
-        conn.execute("UPDATE users SET session_version=session_version+1 WHERE id=?", (user_id,))
+        conn.execute("UPDATE users SET session_version=session_version+1, "
+                     "row_version=COALESCE(row_version, 1)+1, updated_at_utc=? WHERE id=? AND company_id=?",
+                     (_accounts.now_utc_iso(), user_id, session['company_id']))
         conn.execute(
             "INSERT INTO audit_logs (id, company_id, user_id, action, entity_type, entity_id, new_value_json) VALUES (?,?,?,?,?,?,?)",
             (str(uuid.uuid4()), session['company_id'], session['mt_user_id'], 'UPDATE_PERM', 'USER_PERMISSION', str(user_id), json.dumps({sub: lvl})))
@@ -498,6 +921,7 @@ def update_perms(user_id):
 
 
 @onboarding_bp.route('/api/admin/audit', methods=['GET'])
+@mt_login_required
 def get_audit():
     if session.get('mt_role') != 'admin':
         return jsonify({'error': 'Admin only'}), 403
@@ -549,6 +973,7 @@ def get_audit():
 
 
 @onboarding_bp.route('/api/admin/stats', methods=['GET'])
+@mt_login_required
 def get_admin_stats():
     if session.get('mt_role') != 'admin':
         return jsonify({'error': 'Admin only'}), 403
@@ -595,6 +1020,7 @@ def get_admin_stats():
 
 
 @onboarding_bp.route('/api/admin/company/settings', methods=['GET', 'POST'])
+@mt_login_required
 def company_settings():
     if session.get('mt_role') != 'admin':
         return jsonify({'error': 'Admin only'}), 403
@@ -666,8 +1092,9 @@ def employee_setup():
         if not user:
             return jsonify({'error': 'User not found.'}), 404
 
-        conn.execute("UPDATE users SET password_hash=?, status='active', require_password_change=0 WHERE id=?",
-                     (hash_password(password), user['id']))
+        conn.execute("UPDATE users SET password_hash=?, status='active', require_password_change=0, "
+                     "row_version=COALESCE(row_version, 1)+1, updated_at_utc=? WHERE id=?",
+                     (hash_password(password), _accounts.now_utc_iso(), user['id']))
         conn.execute("UPDATE secure_links SET is_used=1 WHERE id=?", (link['id'],))
 
         try:

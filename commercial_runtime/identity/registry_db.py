@@ -37,7 +37,11 @@ DB_PATH = os.path.join(_db_dir, 'registry.db')
 # run against it via commercial_runtime.security.migration_safety.
 # v2: email verification + password reset (users.email_verified_at,
 # secure_links.purpose) -- see verification_schema.py.
-REGISTRY_SCHEMA_VERSION = 2
+# v3: multi-device account model (users.uid/pin_hash/row_version/
+# updated_at_utc/deleted_at_utc, widened role domain, seeded capability
+# rows) -- see account_schema.py and
+# docs/launch-readiness/multi-device-design.md §6.
+REGISTRY_SCHEMA_VERSION = 3
 
 
 def _migrate_registry_schema(conn):
@@ -46,11 +50,19 @@ def _migrate_registry_schema(conn):
     behind REGISTRY_SCHEMA_VERSION, same "run every step, each
     independently idempotent" shape as products/retail/backend/database/
     schema.py::_migrate_retail_schema. A v0 (pre-user_version) database
-    upgrading straight to v2 runs both steps in one pass."""
+    upgrading straight to v3 runs all three steps in one pass.
+
+    New steps are appended LAST and never reordered: a database that is
+    already at v2 still runs v1 and v2 on its way to v3 (there is one
+    version gate for the whole function, not one per step), so each step has
+    to be a no-op against a database that already has its changes -- which
+    is exactly what each of them is."""
     from commercial_runtime.identity.device_registry import apply_identity_device_schema
     from commercial_runtime.identity.verification_schema import apply_email_verification_schema
+    from commercial_runtime.identity.account_schema import apply_account_schema
     apply_identity_device_schema(conn)
     apply_email_verification_schema(conn)
+    apply_account_schema(conn)
 
 
 def get_conn():

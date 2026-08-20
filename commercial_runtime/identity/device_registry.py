@@ -299,7 +299,45 @@ def allowed_on_device(conn: sqlite3.Connection, user_id: str, device_id: str) ->
     Grant-existence only -- does not consult `devices.status`. Combining
     this with device-status/company checks at the point an actual login
     decision is made is device_context.py's job (Tuesday, out of scope
-    today)."""
+    today).
+
+    STILL NOT CALLED FROM THE LOGIN PATH, deliberately (2026-08-20, Phase 1
+    Part A3 of docs/launch-readiness/multi-device-design.md). The design's
+    §3 line "we finally call the dormant `user_device_is_authorized`" is
+    correct as an intent and cannot be executed yet, for three reasons that
+    are about missing machinery rather than about appetite:
+
+      1. NOTHING IN PRODUCTION WRITES A GRANT. `grant_user_device` above has
+         zero production callers -- no route, no login path, no UI. The
+         `user_devices` table is therefore empty on every install in
+         existence. A fail-closed check against an empty allowlist locks out
+         100% of users on upgrade day, which is not a security improvement,
+         it is an outage.
+
+      2. THE ONLY NON-LOCKOUT WIRING IS THE BUG WE JUST FIXED ELSEWHERE.
+         Grant-on-first-login ("trust on first use") would make the check
+         issue the very grant it is checking for -- an authorization check
+         that hands out the privilege it is testing. That is exactly the
+         shape of the audit-log hole recorded in
+         device_context.local_device_is_admin's docstring, where asking "am
+         I the admin device?" is what made you the admin device. Repeating
+         it in the login path would put it somewhere strictly worse.
+
+      3. THE MISSING PIECE IS AN ENROLMENT DECISION, NOT A CHECK. Somebody
+         has to answer "this new terminal wants in -- yes or no", and how
+         many terminals this shop's licence allows. That is an admin-facing
+         screen plus a licence-slot count that lives in
+         licensing_contracts, neither of which exists. Design §3 calls a
+         device a "licence slot"; until something can issue a slot, a slot
+         check has nothing to read.
+
+    `device_context.binding_enforced()` (default OFF) is the gate this
+    wiring will hang off when the enrolment surface lands. Wiring the check
+    behind an environment flag that is off in every shipped build would
+    satisfy the letter of "it has a caller" while executing in exactly zero
+    production requests -- a half-wire, and worse than an honest no, because
+    the next person to read this would believe device binding was solved.
+    """
     row = conn.execute(
         "SELECT 1 FROM user_devices WHERE user_id=? AND device_id=?",
         (user_id, device_id),
