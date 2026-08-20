@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.AssignmentReturn
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.LocalShipping
 import androidx.compose.material.icons.filled.Payments
@@ -81,6 +82,15 @@ fun MoreScreen(onNavigate: (String) -> Unit) {
         MoreItem(tr("Cash Summary"), tr("Daily cash in / out / net"), Icons.Default.AccountBalanceWallet) { onNavigate("cash_summary") }
         MoreItem(tr("Aging"), tr("Receivables & payables by age"), Icons.Default.Schedule) { onNavigate("aging") }
         MoreItem(tr("Settings"), tr("Credit, currency & payment methods"), Icons.Default.Settings) { onNavigate("retail_settings") }
+        // Owner-only entry (design §3: employee management is the admin's
+        // authority, and `retail.employees` is the one capability a manager
+        // never gets). Hidden rather than disabled for a non-admin, matching
+        // how RetailSettingsScreen gates Backup & restore -- and the screen
+        // itself repeats the check, because a hidden entry is not a control.
+        if (com.actionaura.retail.ui.RetailSession.isAdmin) {
+            SectionHeader(tr("Team"))
+            MoreItem(tr("Employees"), tr("Accounts, roles & till PINs"), Icons.Default.Groups) { onNavigate("employees") }
+        }
     }
 }
 

@@ -450,4 +450,108 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Create a backup above to see it listed here." to "أنشئ نسخة احتياطية أعلاه لتظهر هنا.",
     "The backup could not be processed." to "تعذّرت معالجة النسخة الاحتياطية.",
     "Cancel" to "إلغاء",
+
+    // ── Employees (Phase 1 — multi-device account model, design §3) ───────────
+    // Roles are translated as job titles, not transliterated: "أمين صندوق" is
+    // what the person's badge says in an Arabic-speaking shop, and a
+    // transliterated "كاشير" would read as software jargon to the owner who
+    // has to decide which of the two to assign somebody.
+    "Team" to "الفريق",
+    "Employees" to "الموظفون",
+    // "Role" and "Try again" were already used by shipped screens (the
+    // startup-error retry among them) with no entry here, so they rendered
+    // English on an Arabic device. Added once, here, rather than per screen.
+    "Role" to "الدور",
+    "Try again" to "حاول مرة أخرى",
+    "Accounts, roles & till PINs" to "الحسابات والأدوار وأرقام PIN للصندوق",
+    "Owner" to "المالك",
+    "Manager" to "مدير",
+    "Cashier" to "أمين صندوق",
+    "Active" to "نشط",
+    "Deactivated" to "معطّل",
+    "Invite pending" to "بانتظار قبول الدعوة",
+    "Owner access required" to "مطلوب حساب المالك",
+    "Only the owner account can create employees or change what they can do. " +
+        "Ask the owner to make the change on their account." to
+        "يمكن لحساب المالك فقط إنشاء الموظفين أو تغيير صلاحياتهم. اطلب من المالك إجراء التغيير من حسابه.",
+    "Couldn't load employees" to "تعذّر تحميل الموظفين",
+    "No employees yet" to "لا يوجد موظفون بعد",
+    "Create an account for each person who works a till. They sign in with " +
+        "their own email, so every sale is recorded against the person who rang it." to
+        "أنشئ حسابًا لكل شخص يعمل على الصندوق. يسجّل كل منهم الدخول ببريده الخاص، فتُسجَّل كل عملية بيع باسم من نفّذها.",
+    "Employee accounts live on this device until account sync is enabled." to
+        "تبقى حسابات الموظفين على هذا الجهاز حتى يتم تفعيل مزامنة الحسابات.",
+    "Add employee" to "إضافة موظف",
+    "Work email" to "بريد العمل",
+    "The account is identified by this email and an ID the app assigns " +
+        "(EMP-0001, EMP-0002…). There is no separate name field." to
+        "يُعرَّف الحساب بهذا البريد وبمعرّف يخصصه التطبيق (EMP-0001، EMP-0002…). لا يوجد حقل اسم منفصل.",
+    "Send invite" to "إرسال الدعوة",
+    // One fixed sentence covering both roles, not a per-role pair -- kept
+    // character-for-character identical (English key) to the desktop
+    // screen's copy of the same sentence (products/retail/frontend/
+    // employees.js) so the two apps can never state this differently. See
+    // EmployeesScreen.kt's roleExplainer() doc comment for why the previous
+    // per-role pair here was replaced.
+    "A cashier can sell, refund against a sale, and close their own drawer. A manager can also discount, adjust stock and read reports." to
+        "يمكن لأمين الصندوق البيع والاسترداد مقابل عملية بيع وإغلاق صندوقه الخاص. ويمكن للمدير أيضًا تطبيق الخصم وتعديل المخزون وقراءة التقارير.",
+    "The invite could not be created." to "تعذّر إنشاء الدعوة.",
+    "Invite created" to "تم إنشاء الدعوة",
+    "Give this code to the employee. They enter it once to choose their own password." to
+        "أعطِ هذا الرمز للموظف. يُدخله مرة واحدة ليختار كلمة المرور الخاصة به.",
+    "It works once, and it expires 7 days from now. After that, or after " +
+        "they use it, create another invite." to
+        "يعمل مرة واحدة، وتنتهي صلاحيته بعد 7 أيام من الآن. بعد ذلك، أو بعد استخدامه، أنشئ دعوة أخرى.",
+    "The employee redeems it on a till running Aura, on the sign-in screen's " +
+        "\"I have an invite code\" option." to
+        "يستخدمه الموظف على صندوق يعمل بنظام Aura، من خيار «لديّ رمز دعوة» في شاشة تسجيل الدخول.",
+    "Copy code" to "نسخ الرمز",
+    "Invite code copied" to "تم نسخ رمز الدعوة",
+    "Change role?" to "تغيير الدور؟",
+    "Change role" to "تغيير الدور",
+    "This resets their permissions to that role's defaults, including " +
+        "any exception you granted them before." to
+        "يعيد هذا ضبط صلاحياته إلى الإعدادات الافتراضية لذلك الدور، بما في ذلك أي استثناء منحته له سابقًا.",
+    "They are signed out and sign back in with the new role." to
+        "يتم تسجيل خروجه ثم يسجّل الدخول مجددًا بالدور الجديد.",
+    "Role updated" to "تم تحديث الدور",
+    "The change could not be saved." to "تعذّر حفظ التغيير.",
+    "Deactivate account" to "تعطيل الحساب",
+    "Reactivate account" to "إعادة تفعيل الحساب",
+    "Account deactivated" to "تم تعطيل الحساب",
+    "Account reactivated" to "تمت إعادة تفعيل الحساب",
+    "They are signed out everywhere and cannot sign in again. Their past " +
+        "sales stay on record. You can reactivate them later." to
+        "يتم تسجيل خروجه من كل الأجهزة ولا يمكنه تسجيل الدخول مجددًا. تبقى مبيعاته السابقة مسجّلة. يمكنك إعادة تفعيله لاحقًا.",
+    "Set till PIN" to "تعيين رمز PIN للصندوق",
+    "Reset till PIN" to "إعادة تعيين رمز PIN للصندوق",
+    "New 4-digit PIN" to "رمز PIN جديد من 4 أرقام",
+    "PIN set" to "تم تعيين رمز PIN",
+    "Save PIN" to "حفظ رمز PIN",
+    "PIN saved" to "تم حفظ رمز PIN",
+    "PIN removed" to "تمت إزالة رمز PIN",
+    "Remove this PIN" to "إزالة رمز PIN هذا",
+    // The four actions named here are `user_accounts.PASSWORD_ONLY_ACTIONS`,
+    // not a plausible-sounding list. Refunds are deliberately NOT among them
+    // (a cashier holds `retail.refund` by default and `create_return` is
+    // sale-bound), so claiming they need the password would overstate the
+    // protection to the one person deciding how much to trust a PIN.
+    "A PIN says who is acting at the till. It does not grant permission — " +
+        "voiding a closed sale, changing a price, managing employees and approving " +
+        "a cash difference still ask for the password." to
+        "يحدّد رمز PIN من يعمل على الصندوق. وهو لا يمنح أي صلاحية — فإلغاء فاتورة مقفلة وتغيير السعر وإدارة الموظفين واعتماد فروقات النقدية تطلب كلمة المرور دائمًا.",
+
+    // Server-sent refusals from the /api/admin/employees routes. They are
+    // rendered through apiErrorMessage(), which runs the server's own sentence
+    // through tr() -- so without these entries an Arabic phone would show the
+    // English original. Kept spelled EXACTLY as the backend raises them
+    // (onboarding_routes.py / user_accounts.PinPolicyError); a reworded key
+    // here silently stops matching and falls back to English.
+    "Role must be manager or cashier." to "يجب أن يكون الدور مديرًا أو أمين صندوق.",
+    "PIN must be exactly 4 digits." to "يجب أن يتكون رمز PIN من 4 أرقام بالضبط.",
+    "Email already registered." to "البريد الإلكتروني مسجّل بالفعل.",
+    "Email required" to "البريد الإلكتروني مطلوب",
+    "User not found." to "المستخدم غير موجود.",
+    "Admin only" to "للمالك فقط",
+    "The owner account's role cannot be changed." to "لا يمكن تغيير دور حساب المالك.",
 )

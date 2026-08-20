@@ -1,6 +1,7 @@
 package com.actionaura.retail.net
 
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.PATCH
 import retrofit2.http.POST
@@ -220,4 +221,30 @@ interface AuraApi {
 
     @POST("api/backup/restore")
     suspend fun restoreBackup(@Body body: RestoreBackupRequest): RestoreBackupResponse
+
+    // ── Employees (Phase 1 -- admin-only, see
+    //    commercial_runtime/identity/onboarding_routes.py) ────────────────────
+    // Shared with Clinic and with the desktop shell: the SAME blueprint the
+    // desktop talks to, reached here over the embedded 127.0.0.1 server. Every
+    // one of these re-checks `session['mt_role'] == 'admin'` server-side, so
+    // RetailSession.isAdmin gating in the UI is convenience, never the control.
+    @GET("api/admin/employees")
+    suspend fun employees(): EmployeesResponse
+
+    @POST("api/admin/employees")
+    suspend fun createEmployee(@Body body: CreateEmployeeRequest): CreateEmployeeResponse
+
+    @PUT("api/admin/employees/{id}/role")
+    suspend fun updateEmployeeRole(@Path("id") id: String, @Body body: UpdateEmployeeRoleRequest): AdminActionResponse
+
+    @PUT("api/admin/employees/{id}/status")
+    suspend fun updateEmployeeStatus(@Path("id") id: String, @Body body: UpdateEmployeeStatusRequest): AdminActionResponse
+
+    @PUT("api/admin/employees/{id}/pin")
+    suspend fun setEmployeePin(@Path("id") id: String, @Body body: SetEmployeePinRequest): AdminActionResponse
+
+    // Retrofit refuses a @DELETE with a @Body by default, and the route needs
+    // none -- clearing is expressed by the method, not by a payload.
+    @DELETE("api/admin/employees/{id}/pin")
+    suspend fun clearEmployeePin(@Path("id") id: String): AdminActionResponse
 }

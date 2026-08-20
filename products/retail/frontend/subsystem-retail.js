@@ -147,6 +147,12 @@ const RetailSystem = {
       case 'sales':     return this._renderSalesHistory(c);
       case 'reports':   return this._renderReports(c);
       case 'scanner':   return this._renderScannerSettings(c);
+      // Multi-device Phase 1: employee management lives in its own feature
+      // file (products/retail/frontend/employees.js), the same convention
+      // cash-drawer.js follows -- dispatched from here rather than
+      // monkey-patching this object from there, so the section list stays
+      // readable in one place.
+      case 'employees': return RetailEmployees.render(c);
       case 'admin-center': return this._renderAdminCenter(c);
       case 'audit-log':    return this._renderAuditLog(c);
       default:
@@ -268,6 +274,31 @@ const RetailSystem = {
   //      semantic tokens (--text/--surface-card/--border-soft) instead.
   async _renderDashboard(c) {
     this._injectStyles();
+
+    // Cashier landing (a cashier's first screen after login must not be a
+    // 403). GET /api/sub/retail/dashboard/stats is gated on `retail.reports`,
+    // which a cashier does not hold by default (user_accounts.
+    // ROLE_CAPABILITIES) -- and EVERY tile below (both KPI cards, both
+    // charts, the recent-transactions table) reads from that one endpoint's
+    // response, so there is no partial/per-tile fetch to fall back to: it is
+    // this whole screen or nothing. Rendering it anyway and eating the 403
+    // would be exactly the "screen that generated an error" this capability
+    // work exists to stop -- see employees.js's own render() for the
+    // established "degrade honestly, check before fetching" pattern this
+    // mirrors.
+    //
+    // `SubsystemApp.hasCapability` fails OPEN when `capabilities` is not an
+    // array (session not resolved yet, or /api/auth/session hasn't shipped
+    // the field yet -- see that method's own comment), so this branch is
+    // INERT until the backend lands `user.capabilities`, not a dashboard
+    // that blanks out for everyone the moment this file ships. The `window.
+    // SubsystemApp &&` guard additionally keeps this file loadable standalone
+    // (as every *_dashboard_*_test.js in products/retail/tests/ already does,
+    // with no SubsystemApp stub at all) without throwing.
+    if (window.SubsystemApp && !SubsystemApp.hasCapability('retail.reports')) {
+      return this._renderCashierLanding(c);
+    }
+
     c.innerHTML = `
       <style>
         .rdash .ret-title { color:var(--text);font-size:26px;letter-spacing:-0.4px; }
@@ -498,6 +529,33 @@ const RetailSystem = {
       // panel that every other section already gets on a render failure.
       throw e;
     }
+  },
+
+  // The till, not an empty dashboard with holes where the reports tiles
+  // were. A cashier's first screen after login has to be something they can
+  // actually act on, and "start a sale" is that action -- so this offers one
+  // primary next step (Open POS) instead of a second, cut-down dashboard
+  // this file would then have to keep in sync with the real one. Same visual
+  // language (.ret-hdr / .sub-chart-card) as every other screen here, so it
+  // reads as a real destination rather than an error/empty state. Makes NO
+  // network request at all -- there is nothing on this screen gated on a
+  // capability the caller might lack, which is the whole point.
+  _renderCashierLanding(c) {
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <div>
+          <h2 class="ret-title">${t('Retail Overview')}</h2>
+          <p class="rdash-date" style="color:var(--text-faint);font-size:13px;margin:4px 0 0">${new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</p>
+        </div>
+      </div>
+      <div class="sub-chart-card" style="text-align:center;padding:56px 32px">
+        <div style="font-size:40px;margin-bottom:14px">🛒</div>
+        <h3 style="color:var(--text);margin:0 0 10px;font-size:18px">${t('Ready to sell')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 24px;line-height:1.7;max-width:420px;margin-left:auto;margin-right:auto">
+          ${t('Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales.')}
+        </p>
+        <button class="sub-btn-primary" onclick="SubsystemApp._navigate('pos')">🛒 Open POS</button>
+      </div>`;
   },
 
   // ── POS ───────────────────────────────────────────────────────────────────

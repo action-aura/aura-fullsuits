@@ -32,6 +32,11 @@
   <script src="/static/subsystem-retail.js"></script>
   <script src="/static/sub-ai.js"></script>
   <script src="/static/cash-drawer.js"></script>
+  <!-- Employee management (multi-device Phase 1). After subsystem-retail.js
+       because it delegates its HTTP + escaping helpers to RetailSystem, and
+       before app-shell.js, which is what boots the shell and can navigate
+       straight into the section. -->
+  <script src="/static/employees.js"></script>
   <script src="/static/app-shell.js"></script>
   <script>
     AuraI18n.load().then(() => SubsystemApp.init());

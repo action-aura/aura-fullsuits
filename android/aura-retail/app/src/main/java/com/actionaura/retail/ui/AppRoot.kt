@@ -264,6 +264,7 @@ private fun MainShell(onLogout: () -> Unit) {
         "payables" -> "Payables"
         "cash_summary" -> "Cash Summary"
         "aging" -> "Aging"
+        "employees" -> "Employees"
         "retail_settings" -> "Settings"
         else -> tabs.firstOrNull { it.route == route }?.label ?: "Action Aura"
     }
@@ -504,6 +505,12 @@ private fun retailGraph(b: NavGraphBuilder, nav: androidx.navigation.NavControll
     b.composable("payables") { PayablesScreen(snackbar) }
     b.composable("cash_summary") { DailyCashScreen(snackbar) }
     b.composable("aging") { AgingScreen(snackbar) }
+    // Phase 1 employee management (design doc §3). Registered here and
+    // reachable from MoreScreen's "Team" section -- both halves are required:
+    // SettingsScreen.kt is a fully-written screen that has never been in this
+    // graph, so it has never rendered for a single user. EmployeesWiringContractTest
+    // pins the route string, the composable, and a navigate() call to it.
+    b.composable("employees") { EmployeesScreen(snackbar) }
     b.composable("retail_settings") {
         RetailSettingsScreen(snackbar, onOpenBackup = { nav.navigate("backup") }, onOpenLicensing = { nav.navigate("licensing") })
     }

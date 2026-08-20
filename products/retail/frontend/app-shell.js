@@ -213,6 +213,12 @@ const SubsystemApp = {
   currentUser: {},
   role: '',         // global role: 'admin' | 'employee'
   clinicRole: '',   // clinic overlay: '' | 'doctor' | 'secretary'
+  // `null` until /api/auth/session resolves, meaning "unknown, assume full
+  // access" -- see hasCapability() below for why that default is safe. Once
+  // resolved it is either `null` still (the field hasn't landed on the
+  // session response yet) or an array of the user's own granted
+  // `retail.*` codes (see hasCapability()).
+  capabilities: null,
 
   // True if the current user may access a clinic area restricted to the given
   // clinic roles. The clinic owner (global admin) always passes. Mirrors the
@@ -221,6 +227,29 @@ const SubsystemApp = {
     if (this.role === 'admin') return true;          // owner sees everything
     if (!roles || roles.length === 0) return true;   // unrestricted area
     return roles.includes(this.clinicRole);
+  },
+
+  // True if the current user's per-user capability grants include `code`.
+  // RENDERING ADVICE ONLY -- every route keeps its own server-side gate
+  // (mt_auth.mt_require_capability); this exists purely so the shell can
+  // choose not to fetch/render a tile the server would 403 anyway (see
+  // subsystem-retail.js's _renderDashboard, the cashier-dashboard-on-login
+  // fix this was built for). Nothing downstream of this method may itself
+  // become an authorization decision.
+  //
+  // `this.capabilities === null` covers two cases this method deliberately
+  // treats the same way -- "/api/auth/session hasn't resolved yet" and "the
+  // backend hasn't shipped the `capabilities` field yet" -- and answers
+  // `true` for both, i.e. fails OPEN. That is the opposite of every real
+  // authorization check in this codebase, and is only safe here because
+  // rendering advice failing open just means a tile renders and its own
+  // fetch 403s -- the status quo before this method existed, not a new hole.
+  // It is what makes this change INERT until the backend lands
+  // `user.capabilities` on the session response, instead of blanking every
+  // gated tile for every role the moment this file ships.
+  hasCapability(code) {
+    if (!Array.isArray(this.capabilities)) return true;
+    return this.capabilities.includes(code);
   },
 
   // ── HTML escaping ─────────────────────────────────────────────────────────
@@ -401,6 +430,18 @@ const SubsystemApp = {
         // below applies to every entry with this flag. Hidden entirely
         // (not just disabled) on any device that isn't this company's
         // single admin device, fail-closed if the check couldn't run.
+        // Multi-device Phase 1 (design §3). NOTE THE FLAG: `ownerOnly`, not
+        // `adminOnly`. They are different axes and picking the wrong one
+        // breaks the feature in both directions at once. `adminOnly` means
+        // `this.isAdminDevice` -- the DEVICE axis, which design §3 says in as
+        // many words is "not users.role='admin'". Every /api/admin/employees
+        // route gates on `session['mt_role'] == 'admin'` -- the USER axis. Had
+        // this entry reused `adminOnly`, the owner would lose the screen the
+        // moment they picked up their phone (a second terminal is by
+        // definition not the admin device), while a cashier standing at the
+        // admin terminal would be shown a screen every button on which
+        // answers 403.
+        { id: 'employees',    label: 'Employees',       icon: '👤', ownerOnly: true },
         { id: 'admin-center', label: 'Settings',        icon: '⚙️', adminOnly: true },
         // feat/audit-log-viewer: same adminOnly mechanism as Admin Center
         // above -- refund/void/product-change audit trail carries every
@@ -522,6 +563,16 @@ const SubsystemApp = {
         this.currentUser = sess.user || {};
         this.role        = (sess.user && sess.user.role) || '';
         this.clinicRole  = (sess.user && sess.user.clinic_role) || '';
+        // Rendering advice for hasCapability() above -- read strictly as "is
+        // this an array" rather than "is this truthy", so an intentionally
+        // EMPTY grant list (a user denied every capability) is not folded
+        // into the same `null` bucket as "the backend hasn't shipped this
+        // field yet". Those two states must not answer hasCapability() the
+        // same way: one means "deny nothing has been checked", the other
+        // means "deny everything this list doesn't name".
+        this.capabilities = (sess.user && Array.isArray(sess.user.capabilities))
+          ? sess.user.capabilities
+          : null;
         // feat/reorder-automation-foundation: resolved once, here, BEFORE
         // _renderShell ever builds the nav list -- mirrors the desktopOnly
         // gate's own mechanism (a plain boolean flag on `this`, read by the
@@ -1560,7 +1611,7 @@ const SubsystemApp = {
         </div>
 
         <nav class="sub-nav" id="sub-nav">
-          ${sys.nav.filter(item => (!item.roles || this.canClinic(...item.roles)) && (!item.desktopOnly || !/Android/i.test(navigator.userAgent || '')) && (!item.adminOnly || this.isAdminDevice)).map(item => `
+          ${sys.nav.filter(item => (!item.roles || this.canClinic(...item.roles)) && (!item.desktopOnly || !/Android/i.test(navigator.userAgent || '')) && (!item.adminOnly || this.isAdminDevice) && (!item.ownerOnly || this.role === 'admin')).map(item => `
             <a class="sub-nav-item ${item.id === 'dashboard' ? 'active' : ''}"
                data-section="${item.id}"
                onclick="SubsystemApp._navigate('${item.id}')">

@@ -48,6 +48,42 @@ fun money(v: Double): String = String.format(Locale.US, "$%.2f", v)
 /** Bare 2-decimal amount, locale independent. */
 fun amount(v: Double): String = String.format(Locale.US, "%.2f", v)
 
+/** Length of a till PIN. Mirrors user_accounts.PIN_LENGTH. */
+const val PIN_LENGTH = 4
+
+/**
+ * Fold a typed PIN onto ASCII digits, or return null when it is not exactly
+ * [PIN_LENGTH] decimal digits.
+ *
+ * A deliberate, exact mirror of `user_accounts._normalize_pin()` on the
+ * server, and it has to stay one: the server hashes the FOLDED form, so a
+ * client that folded differently (or not at all) would send a PIN that hashes
+ * to something the same person can never reproduce from another keypad. That
+ * is the whole failure this function exists to prevent -- an Arabic soft
+ * keyboard emits U+0660..U+0669, so "١٢٣٤" and "1234" are the same PIN to a
+ * human and two different secrets to a hash.
+ *
+ * [parseNum] above cannot be reused for this: it parses to a Double, and a
+ * Double has no leading zeros, so the perfectly valid PIN "0042" would come
+ * back as 42. A PIN is a fixed-width digit STRING, not a number.
+ *
+ * Category check first, exactly like the server: `Character.DECIMAL_DIGIT_NUMBER`
+ * is Unicode category Nd, so superscripts and other numeric-ish forms are
+ * refused rather than quietly folded to a digit.
+ */
+fun normalizePin(raw: String?): String? {
+    val text = raw?.trim() ?: return null
+    if (text.length != PIN_LENGTH) return null
+    val sb = StringBuilder(PIN_LENGTH)
+    for (ch in text) {
+        if (Character.getType(ch) != Character.DECIMAL_DIGIT_NUMBER.toInt()) return null
+        val d = Character.digit(ch, 10)
+        if (d < 0) return null
+        sb.append('0' + d)
+    }
+    return sb.toString()
+}
+
 /** Quantity for display: whole numbers print clean ("3"), fractions are trimmed
  *  ("2.5", "1.25") with no truncation. Rounds to 3 dp to absorb float noise. */
 fun fmtQty(v: Double): String {

@@ -486,3 +486,74 @@ data class RestoreBackupResponse(
     val status: String = "", val message: String? = null,
     val restored: List<String> = emptyList(), val rollback_dir: String? = null,
 )
+
+// ── Employees (Phase 1 -- multi-device account model, design doc §3) ─────────
+// Mirrors commercial_runtime/identity/onboarding_routes.py's /api/admin/*
+// employee surface. That blueprint answers {"success": ...} / {"error": ...},
+// NOT the {"status": ...} envelope most retail routes use and not the
+// {"status": "ok"} one the backup routes use -- three envelopes in one API,
+// which is why these types spell theirs out instead of reusing CreatedResponse.
+
+/**
+ * One registry account.
+ *
+ * `role` is the value as STORED, which on any install that predates registry
+ * v3 is still the legacy 'employee'. `effective_role` is the same row read
+ * through `user_accounts.normalize_role()` -- the value every capability
+ * decision is actually made against. The UI shows `effective_role` for that
+ * reason: a row labelled "employee" that behaves as a cashier everywhere is a
+ * label that lies, and the admin choosing whether to promote someone needs
+ * the behaviour, not the spelling.
+ *
+ * There is deliberately no `name`: `users` has no name column (registry_db.py
+ * :113-131). A person is identified by their email and the server-assigned
+ * `employee_id` (EMP-0001), and inventing a name field the server would drop
+ * on the floor would be a form that lies about what it saved.
+ */
+data class Employee(
+    val id: String = "",
+    val employee_id: String? = null,
+    val email: String? = null,
+    val role: String? = null,
+    val effective_role: String? = null,
+    val clinic_role: String? = null,
+    val status: String? = null,
+    val created_at: String? = null,
+    // Presence only -- the server never sends the PIN hash (see get_employees).
+    val has_pin: Boolean = false,
+)
+
+data class EmployeesResponse(
+    val success: Boolean = false,
+    val error: String? = null,
+    val employees: List<Employee> = emptyList(),
+)
+
+data class CreateEmployeeRequest(val email: String, val role: String)
+
+/**
+ * `setup_link` is built server-side as `{request.host_url}/#setup/{token}`.
+ * On Android `host_url` is the EMBEDDED server -- http://127.0.0.1:<ephemeral
+ * port> -- so the URL as returned is meaningless to anybody but this handset,
+ * and worse, the port changes between launches. The screen therefore surfaces
+ * the token itself (the segment after `#setup/`), which is the part that is
+ * actually the invite, and says where it gets redeemed. See
+ * EmployeesScreen.inviteTokenOf().
+ */
+data class CreateEmployeeResponse(
+    val success: Boolean = false,
+    val error: String? = null,
+    val setup_link: String? = null,
+)
+
+data class UpdateEmployeeRoleRequest(val role: String)
+data class UpdateEmployeeStatusRequest(val status: String)
+data class SetEmployeePinRequest(val pin: String)
+
+/** Shared reply shape for the role / status / PIN mutations. */
+data class AdminActionResponse(
+    val success: Boolean = false,
+    val error: String? = null,
+    val role: String? = null,
+    val has_pin: Boolean = false,
+)
