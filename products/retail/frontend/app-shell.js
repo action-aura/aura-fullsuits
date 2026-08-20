@@ -467,6 +467,11 @@ const SubsystemApp = {
     // below so any early return (setup/relogin modal) still leaves this
     // defined and hidden, never undefined.
     this.isAdminDevice = false;
+    // Same fail-closed default, same reason: an unreachable/failed
+    // /api/devices/me must never leave this undefined, or the claim prompt
+    // below would render off a `undefined === true` that happened to be
+    // falsy today and something else tomorrow.
+    this.canClaimAdminDevice = false;
 
     // Which optional modules (e.g. the AI Assistant) this installation is
     // licensed for. The standalone-shell trim (2026-08-06) removed the old
@@ -529,8 +534,20 @@ const SubsystemApp = {
           const dev = await fetch('/api/devices/me', { credentials: 'include', cache: 'no-store' })
             .then(r => r.ok ? r.json() : { success: false });
           this.isAdminDevice = !!(dev && dev.success && dev.device && dev.device.is_admin_device === true);
+          // 2026-08-20: the other half of the admin-device fix. Until now
+          // NOTHING could set is_admin_device outside of an auto-promotion
+          // hidden inside the backend's authorization check, so removing
+          // that (it was granting admin to whichever device asked first --
+          // see retail_api.py's _is_admin_device) would have left this flag
+          // permanently false and the Settings/Audit Log nav entries
+          // permanently hidden on every install. The server now tells us
+          // whether a claim is available (admin role + nobody has claimed
+          // yet); _maybeOfferAdminDeviceClaim() below turns that into the
+          // one visible action that gets a fresh install its admin device.
+          this.canClaimAdminDevice = !!(dev && dev.success && dev.can_claim_admin === true);
         } catch (e) {
           this.isAdminDevice = false;
+          this.canClaimAdminDevice = false;
         }
 
         // ── Device activation gate ───────────────────────────────────────
@@ -561,6 +578,106 @@ const SubsystemApp = {
     // Single-product build: there is only ever one system, so skip the
     // multi-subsystem chooser entirely and launch straight into it.
     this.launch('retail', 'dashboard');
+    this._maybeOfferAdminDeviceClaim();
+  },
+
+  // ── Admin-device claim prompt ───────────────────────────────────────────────
+  // Shown only when the server says a claim is genuinely available: an admin
+  // is logged in AND no device has claimed the role yet for this company.
+  // Deliberately NOT shown to a non-admin, and never shown once some device
+  // holds the flag -- a button that can only ever return 409 is worse than
+  // no button. The server re-derives every one of those conditions on the
+  // POST (and the `idx_devices_one_admin` partial unique index has the final
+  // say), so this prompt is convenience, never the enforcement.
+  //
+  // Persistent element on document.body, not inside #subsystem-shell, for
+  // the same reason as the sync banner below: _renderShell() replaces that
+  // element's entire innerHTML on every launch().
+  _maybeOfferAdminDeviceClaim() {
+    document.getElementById('aura-admin-device-claim')?.remove();
+    if (this.isAdminDevice || !this.canClaimAdminDevice) return;
+    if (sessionStorage.getItem('admin_device_claim_dismissed') === 'true') return;
+
+    const bar = document.createElement('div');
+    bar.id = 'aura-admin-device-claim';
+    bar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:24px;z-index:99998;display:flex;align-items:center;gap:14px;max-width:min(680px,92vw);padding:14px 18px;border-radius:14px;background:#1e1e2e;border:1px solid rgba(244,63,94,.45);box-shadow:0 10px 30px rgba(0,0,0,.45);color:#e8e8f0;font-size:13px;line-height:1.5;';
+    // textContent (not innerHTML) for the message, and every button built as
+    // a real element: nothing here interpolates a server-supplied string
+    // into markup.
+    const msg = document.createElement('span');
+    msg.style.cssText = 'flex:1;';
+    msg.textContent = 'This device is not yet your store\'s admin device. Settings and the Audit Log stay hidden until one device is chosen.';
+    const claim = document.createElement('button');
+    claim.className = 'btn btn-primary';
+    claim.style.cssText = 'white-space:nowrap;padding:8px 16px;border-radius:9px;border:none;background:#f43f5e;color:#fff;font-size:13px;font-weight:600;cursor:pointer;';
+    claim.textContent = 'Make this the admin device';
+    const later = document.createElement('button');
+    later.style.cssText = 'background:none;border:none;color:#9aa0b4;font-size:13px;cursor:pointer;padding:8px;';
+    later.textContent = 'Not now';
+
+    claim.addEventListener('click', () => this._claimAdminDevice(claim));
+    later.addEventListener('click', () => {
+      // Session-scoped, not localStorage: "not now" should mean this
+      // sitting, not "never ask again on this machine" -- an install left
+      // permanently without an admin device is the failure state this whole
+      // prompt exists to get out of.
+      sessionStorage.setItem('admin_device_claim_dismissed', 'true');
+      bar.remove();
+    });
+
+    bar.append(msg, claim, later);
+    document.body.appendChild(bar);
+    if (window.AuraI18n) AuraI18n.apply();   // translate before first paint settles
+  },
+
+  async _claimAdminDevice(button) {
+    button.disabled = true;
+    const original = button.textContent;
+    button.textContent = 'Working…';
+    let body = null, ok = false;
+    try {
+      const res = await fetch('/api/devices/me/claim-admin', {
+        method: 'POST', credentials: 'include', cache: 'no-store',
+      });
+      body = await res.json().catch(() => null);
+      ok = res.ok;
+    } catch (e) {
+      // Network failure -- leave the prompt in place so it can be retried.
+    }
+    if (!ok) {
+      button.disabled = false;
+      button.textContent = original;
+      // ADMIN_DEVICE_ALREADY_CLAIMED means another device won in the
+      // meantime; say which one, since the whole point of the server
+      // naming the holder is that the user knows where to go.
+      const holder = body && body.admin_device && (body.admin_device.device_label || body.admin_device.platform);
+      // AuraI18n.t() explicitly here, not the DOM sweep: the sweep only
+      // translates a text node whose FULL trimmed text matches a dictionary
+      // key (see i18n.js), so a sentence with a device name concatenated
+      // onto it would silently stay English in Arabic. Translating the fixed
+      // half and appending the (untranslatable) device name is the only
+      // shape that actually localizes.
+      const t = (s) => (window.AuraI18n ? AuraI18n.t(s) : s);
+      this.showToast(
+        holder ? t('Another device is already the admin device:') + ' ' + holder
+               : t('Could not make this the admin device.'),
+        'error'
+      );
+      if (body && body.code === 'ADMIN_DEVICE_ALREADY_CLAIMED') {
+        this.canClaimAdminDevice = false;
+        document.getElementById('aura-admin-device-claim')?.remove();
+      }
+      return;
+    }
+    this.isAdminDevice = true;
+    this.canClaimAdminDevice = false;
+    document.getElementById('aura-admin-device-claim')?.remove();
+    this.showToast('This device is now your store\'s admin device.', 'success');
+    // Re-render so the adminOnly nav entries (Settings, Audit Log) appear
+    // immediately -- _renderShell()'s nav filter reads this.isAdminDevice,
+    // so without this the user would have to restart the app to see the
+    // thing they just enabled.
+    this.launch(this.active || 'retail', this.currentSection || 'dashboard');
   },
 
   // ── Device-activation gate ──────────────────────────────────────────────────

@@ -13,6 +13,13 @@ const ImportWizard = {
   _onDone: null,
   _schemasCache: null,
 
+  // AuraI18n.t() explicitly, not the DOM sweep: i18n.js only translates a
+  // text node whose FULL trimmed text matches a dictionary key, so any
+  // sentence with a SKU or a quantity concatenated onto it would silently
+  // stay English in Arabic. Every string below that mixes prose with data
+  // translates the fixed half through this and appends the rest.
+  _t(s) { return window.AuraI18n ? AuraI18n.t(s) : s; },
+
   // Entry point from the subsystem header — goes straight to file upload.
   // The mapping step auto-detects which entity the file belongs to via
   // entity_suggestions, so no upfront category picker is needed.
@@ -188,9 +195,21 @@ const ImportWizard = {
       const data = await res.json();
       const el = document.getElementById('iw-sresult');
       if (data.success) {
-        const rowsHtml = data.results.map(r => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);font-size:13px">
-          <span style="color:#e2e8f0">${this._esc(r.label || r.entity)}</span>
-          <span style="color:${r.error ? '#fca5a5' : '#5eead4'}">${r.error ? this._esc(r.error) : ((r.imported || 0) + ' imported' + (r.updated ? ', ' + r.updated + ' updated' : '') + (r.skipped ? ', ' + r.skipped + ' skipped' : ''))}</span>
+        // Smart-import runs the SAME handlers as the single-entity path, so a
+        // refused opening-stock declaration has to be reported here too --
+        // otherwise this route becomes the silent-discard the other one just
+        // stopped being.
+        const rowsHtml = data.results.map(r => `<div style="padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.06);font-size:13px">
+          <div style="display:flex;justify-content:space-between">
+            <span style="color:#e2e8f0">${this._esc(r.label || r.entity)}</span>
+            <span style="color:${r.error ? '#fca5a5' : '#5eead4'}">${r.error ? this._esc(r.error) : ((r.imported || 0) + ' imported' + (r.updated ? ', ' + r.updated + ' updated' : '') + (r.skipped ? ', ' + r.skipped + ' skipped' : ''))}</span>
+          </div>
+          ${(r.stock_errors || []).length ? `<div style="margin-top:4px">
+            <div style="color:#fca5a5;font-size:12px;font-weight:600">${this._esc(this._t('Stock was left unchanged for these products:'))}</div>
+            ${r.stock_errors.map(e => `<div style="color:#fca5a5;font-size:12px;margin:2px 0">
+              <b>${this._esc(e.sku)}</b> — ${this._esc(this._t(e.reason))} (${this._esc(e.declared)}${e.would_be == null ? '' : ' → ' + this._esc(e.would_be)}, ${this._esc(this._t('currently on hand'))} ${this._esc(e.on_hand)})
+            </div>`).join('')}
+          </div>` : ''}
         </div>`).join('');
         el.innerHTML = `<div style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);border-radius:10px;padding:14px">
           <div style="color:#fff;font-weight:700;margin-bottom:8px">✅ Imported ${data.total_imported} records across ${data.results.length} function(s)</div>${rowsHtml}</div>`;
@@ -337,7 +356,7 @@ const ImportWizard = {
   // ── STEP 1: Upload ──────────────────────────────────────────────────────
   _renderStep1() {
     const fieldList = this._schema.fields.map(f =>
-      `<span style="display:inline-block;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:3px 9px;margin:3px;font-size:12px;color:${f.required?'#fff':'#94a3b8'}">${f.label}${f.required?' *':''}</span>`
+      `<span title="${this._esc(this._t(f.help || ''))}" style="display:inline-block;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:3px 9px;margin:3px;font-size:12px;color:${f.required?'#fff':'#94a3b8'}">${this._esc(this._t(f.label))}${f.required?' *':''}</span>`
     ).join('');
 
     this._shell(1, `
@@ -443,8 +462,9 @@ const ImportWizard = {
       return `
         <div class="iw-map-row">
           <div class="iw-map-field">
-            ${f.label}${f.required ? '<span class="req">*</span>' : ''}
+            ${this._esc(this._t(f.label))}${f.required ? '<span class="req">*</span>' : ''}
             <span class="hint">${f.type}${f.example ? ' · e.g. '+f.example : ''}</span>
+            ${f.help ? `<span class="hint" style="color:#94a3b8;white-space:normal;line-height:1.45;margin-top:4px;display:block">${this._esc(this._t(f.help))}</span>` : ''}
           </div>
           <div class="iw-map-arrow">→</div>
           <div>
@@ -725,6 +745,19 @@ const ImportWizard = {
         if (warnings.length) {
           resultEl.innerHTML += `<div style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.3);border-radius:10px;padding:12px;margin-top:10px">
             ${warnings.map(w => `<div style="color:#fcd34d;font-size:13px;margin:2px 0">⚠ ${this._esc(w)}</div>`).join('')}</div>`;
+        }
+        // Refused opening-stock declarations. The catalogue half of these
+        // rows DID land, so they never appear in row_errors or the skipped
+        // count -- without this block the operator would see a green tick
+        // and quietly not get the stock figure they typed.
+        const stockErrors = data.stock_errors || [];
+        if (stockErrors.length) {
+          resultEl.innerHTML += `<div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:10px;padding:12px;margin-top:10px">
+            <div style="color:#fca5a5;font-size:13px;font-weight:600;margin-bottom:6px">${this._esc(this._t('Stock was left unchanged for these products:'))}</div>
+            ${stockErrors.map(e => `<div style="color:#fca5a5;font-size:12px;margin:3px 0">
+              <b>${this._esc(e.sku)}</b> — ${this._esc(this._t(e.reason))} (${this._esc(e.declared)}${e.would_be == null ? '' : ' → ' + this._esc(e.would_be)}, ${this._esc(this._t('currently on hand'))} ${this._esc(e.on_hand)})
+            </div>`).join('')}
+          </div>`;
         }
         if (skipped) {
           resultEl.innerHTML += `<div style="color:#94a3b8;font-size:12px;margin-top:8px">${skipped} row(s) skipped in total.</div>`;

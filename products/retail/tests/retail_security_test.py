@@ -522,6 +522,72 @@ def test_cross_company_data_isolation():
         assert "ISO-B" not in skus
 
 
+def test_sale_idempotency_key_is_company_scoped():
+    """create_sale's idempotency lookup was `WHERE idempotency_key=?` with no
+    company_id -- the only such lookup in the file that wasn't scoped
+    (create_return's identical one already was, and says why in a comment).
+
+    Two failures fell out of that, and the second is the serious one:
+      1. Company B was handed company A's sale id and sale_number.
+      2. Company B's sale was never written -- no sales row, no stock
+         decrement, no payment -- while B's client was told 'success'.
+
+    Scoped, B's request is no longer mistaken for A's retry. (sales
+    .idempotency_key still carries a bare, non-company-scoped UNIQUE at the
+    schema level, so a genuine collision now surfaces as an honest error
+    instead of silently discarding the sale -- see the note in the sweep
+    report; changing that constraint means a full table rebuild.)"""
+    email_a = "idem-a-admin@test.local"
+    _uid_a, cid_a = _make_company_user(email_a, "IdemAPW1", role="admin")
+    email_b = "idem-b-admin@test.local"
+    _uid_b, cid_b = _make_company_user(email_b, "IdemBPW1", role="admin")
+
+    shared_key = str(uuid.uuid4())
+    pid_a, pid_b = str(uuid.uuid4()), str(uuid.uuid4())
+    rconn = get_retail_conn()
+    for cid, pid, sku in ((cid_a, pid_a, 'IDEM-A'), (cid_b, pid_b, 'IDEM-B')):
+        cur = rconn.execute("INSERT INTO branches (company_id,name) VALUES (?, 'Main')", (cid,))
+        branch_id = cur.lastrowid
+        rconn.execute("INSERT INTO products (id,company_id,sku,name,cost_price,sell_price) VALUES (?,?,?,?,1,10)",
+                       (pid, cid, sku, sku))
+        # create_sale refuses on insufficient stock before it ever reaches
+        # the idempotency branch this test is about, so both companies need
+        # real on-hand quantity.
+        rconn.execute("INSERT INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand) VALUES (?,?,?,50)",
+                       (cid, pid, branch_id))
+    rconn.commit()
+    rconn.close()
+
+    def _sell(email, password, pid):
+        with app.test_client() as c:
+            assert c.post("/api/auth/login", json={"email": email, "password": password}).status_code == 200
+            c.get('/api/sub/retail/settings/tax')   # materialize the lazy credit schema
+            return c.post('/api/sub/retail/sales', json={
+                'items': [{'product_id': pid, 'quantity': 1}],
+                'amount_paid': 999999, 'payment_method': 'cash',
+                'idempotency_key': shared_key,
+            })
+
+    r_a = _sell(email_a, "IdemAPW1", pid_a)
+    assert r_a.status_code == 200, r_a.get_json()
+    sale_a = r_a.get_json()['data']
+
+    r_b = _sell(email_b, "IdemBPW1", pid_b)
+
+    # Whatever B gets back, it must never be A's sale.
+    if r_b.status_code == 200:
+        assert r_b.get_json()['data']['id'] != sale_a['id'], \
+            "company B was handed company A's sale via an unscoped idempotency lookup"
+    rconn = get_retail_conn()
+    try:
+        rows = rconn.execute(
+            "SELECT company_id FROM sales WHERE idempotency_key=?", (shared_key,)
+        ).fetchall()
+    finally:
+        rconn.close()
+    assert [r['company_id'] for r in rows] == [cid_a], "A's sale must survive B's colliding key untouched"
+
+
 def test_missing_registry_fails_closed_for_provisioned_tenant():
     from commercial_runtime.identity.mt_auth import _is_module_enabled
 

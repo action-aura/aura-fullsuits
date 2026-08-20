@@ -62,6 +62,13 @@
   "Purchase Orders": "Purchase Orders",
   "Returns": "Returns",
   "Settings": "Settings",
+  "This device is not yet your store's admin device. Settings and the Audit Log stay hidden until one device is chosen.": "This device is not yet your store's admin device. Settings and the Audit Log stay hidden until one device is chosen.",
+  "Make this the admin device": "Make this the admin device",
+  "Not now": "Not now",
+  "Working…": "Working…",
+  "This device is now your store's admin device.": "This device is now your store's admin device.",
+  "Could not make this the admin device.": "Could not make this the admin device.",
+  "Another device is already the admin device:": "Another device is already the admin device:",
   "Patients": "Patients",
   "Appointments": "Appointments",
   "Consultations": "Consultations",
@@ -147,6 +154,13 @@
   "Import All Selected": "Import All Selected",
   "Upload one file — we route it to the right functions": "Upload one file — we route it to the right functions",
 
+  "Opening Stock Qty": "Opening Stock Qty",
+  "Total opening stock declared for this product, not a live shelf count. Re-importing the same number changes nothing; raising it adds only the difference. Sales, returns and manual adjustments are never overwritten. Leave the cell blank to leave stock untouched, or enter 0 to declare an opening of zero.": "Total opening stock declared for this product, not a live shelf count. Re-importing the same number changes nothing; raising it adds only the difference. Sales, returns and manual adjustments are never overwritten. Leave the cell blank to leave stock untouched, or enter 0 to declare an opening of zero.",
+  "Stock was left unchanged for these products:": "Stock was left unchanged for these products:",
+  "Declared less than has already been sold or moved": "Declared less than has already been sold or moved",
+  "Opening quantity cannot be negative": "Opening quantity cannot be negative",
+  "currently on hand": "currently on hand",
+
   "Add Category": "Add Category",
   "Edit Category": "Edit Category",
   "Category Name": "Category Name",
@@ -205,6 +219,8 @@
   "This device's recent changes haven't reached your other devices yet": "This device's recent changes haven't reached your other devices yet",
   "This device isn't receiving updates from your other devices right now": "This device isn't receiving updates from your other devices right now",
   "This device is still working normally. Everything will catch up automatically once the connection comes back.": "This device is still working normally. Everything will catch up automatically once the connection comes back.",
+
+  "Branch filter applies to every figure on this page except Revenue by Branch, which always compares all branches.": "Branch filter applies to every figure on this page except Revenue by Branch, which always compares all branches.",
 
   "Synced": "Synced",
   "Waiting for first sync": "Waiting for first sync",

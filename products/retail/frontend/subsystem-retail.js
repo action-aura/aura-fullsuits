@@ -13,6 +13,68 @@ const RETAIL_PAYMENT_METHOD_COLORS = {
   transfer: '#a855f7', credit: '#ef4444', voucher: '#06b6d4',
 };
 
+// Shared builder for BOTH payment-method charts (dashboard #r-dash-pay and
+// reports #rep-pay), because both now face the same problem and must answer
+// it the same way.
+//
+// THE PROBLEM: /dashboard/stats and /reports/payment-methods used to return
+// gross SUM(sales.total) per tender, which can never be negative. They are
+// now NET of refunds, keyed by the tender the refund was PAID BACK IN
+// (core/retail/metrics.py, decision #1), and that module says out loud that
+// a bucket which saw only refunds reports negative revenue -- deliberately,
+// because that is what makes the buckets sum back to the Revenue KPI. A
+// card sale yesterday refunded to card today, with no card sale today, is
+// exactly that: card = -57.50, and it is true.
+//
+// A doughnut cannot say that. Chart.js sizes an arc by |value|, so a
+// -57.50 slice renders as a perfectly ordinary 57.50-sized wedge: it would
+// read as "card took 57.50 today", the precise opposite of the truth, and
+// the slices would no longer sum to the whole. The alternatives considered:
+//
+//   * Clamp negatives to 0 -- rejected. It silently deletes real money from
+//     a financial screen and breaks the sum-to-KPI identity that the whole
+//     metrics consolidation exists to establish (the doughnut would total
+//     more than the Revenue card beside it, which is the ORIGINAL bug).
+//   * Drop negative buckets -- rejected for the same reason, plus the
+//     tender disappears from the legend entirely on the one day a manager
+//     most needs to see it.
+//   * Show |value| and mark it -- rejected: a chart whose geometry means
+//     one thing and whose label means another is worse than no chart.
+//
+// So: keep the doughnut when every bucket is >= 0 (overwhelmingly the
+// common case -- an ordinary trading day is unchanged, and it stays the
+// share-of-total view users know), and fall back to a horizontal bar chart
+// with a zero baseline when ANY bucket is negative. A bar chart is the
+// honest shape for a signed quantity: -57.50 draws left of zero, the axis
+// label reads -$57.50, and nothing is hidden, clamped or reordered.
+// Colors stay the same named lookup in both shapes, so a tender keeps its
+// identity across the switch.
+function retailPaymentChartConfig(labels, values, tickColor) {
+  const colors = labels.map(m => RETAIL_PAYMENT_METHOD_COLORS[m] || '#94a3b8');
+  const hasNegative = values.some(v => Number(v) < 0);
+  if (!hasNegative) {
+    return {
+      type: 'doughnut',
+      data: { labels, datasets: [{ data: values, backgroundColor: colors, borderWidth: 0 }] },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'right', labels: { color: tickColor, font: { size: 12 } } } } },
+    };
+  }
+  return {
+    type: 'bar',
+    data: { labels, datasets: [{ data: values, backgroundColor: colors, borderWidth: 0 }] },
+    options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        // beginAtZero keeps the zero line on the axis so a negative bar is
+        // visibly on the other side of it rather than merely shorter.
+        x: { beginAtZero: true, ticks: { color: tickColor, callback: v => '$' + v },
+             grid: { color: 'rgba(255,255,255,0.05)' } },
+        y: { ticks: { color: tickColor }, grid: { display: false } },
+      } },
+  };
+}
+
 const RetailSystem = {
   _cart: [],
   _products: [],
@@ -389,20 +451,14 @@ const RetailSystem = {
         const pmLabels = Object.keys(payMethods);
         const pmData   = pmLabels.map(k => payMethods[k].revenue);
         if (pCtx && pmLabels.length) {
-          new Chart(pCtx.getContext('2d'), {
-            type: 'doughnut',
-            data: { labels: pmLabels, datasets: [{ data: pmData,
-              // Keyed by method name, not array position -- the API orders
-              // payment methods by revenue, so a positional palette assigned
-              // a different color to the same method depending on which one
-              // happened to earn more that period (e.g. cash green on one
-              // page, blue on another). Named lookup keeps cash/card/etc.
-              // the same color everywhere this chart is rendered.
-              backgroundColor: pmLabels.map(m => RETAIL_PAYMENT_METHOD_COLORS[m] || '#94a3b8'),
-              borderWidth: 0 }] },
-            options: { responsive:true, maintainAspectRatio:false,
-              plugins:{ legend:{position:'right',labels:{color:tickClr,font:{size:12}}} } }
-          });
+          // Colors are keyed by method NAME, not array position -- the API
+          // orders payment methods by revenue, so a positional palette
+          // assigned a different color to the same method depending on which
+          // one happened to earn more that period (e.g. cash green on one
+          // page, blue on another). Named lookup, plus the doughnut/bar
+          // decision for net-negative tenders, both live in
+          // retailPaymentChartConfig() at the top of this file.
+          new Chart(pCtx.getContext('2d'), retailPaymentChartConfig(pmLabels, pmData, tickClr));
         } else if (pCtx) {
           pCtx.parentElement.innerHTML = '<div style="height:200px;display:flex;align-items:center;justify-content:center;color:var(--text-muted)">No transactions today</div>';
         }
@@ -3312,13 +3368,18 @@ const RetailSystem = {
         <div class="ret-kpi"><div class="ret-kpi-label">Gross Profit</div><div class="ret-kpi-value" id="rep-profit" style="color:#10b981">—</div></div>
         <div class="ret-kpi"><div class="ret-kpi-label">Avg Ticket</div><div class="ret-kpi-value" id="rep-avg">—</div></div>
       </div>
-      <!-- Only sales-trend/top-products are branch_id-filterable server-side today
-           (see report_sales_trend/report_top_products in retail_api.py) -- the KPI
-           tiles above and Payment Methods chart below stay company-wide on purpose,
-           so this note only appears once a specific branch is picked, instead of
-           silently showing numbers that look branch-scoped but aren't. -->
+      <!-- This note used to warn that the branch filter reached the two charts
+           but NOT the KPI tiles or Payment Methods -- a caveat for a real
+           inconsistency rather than a fix for it. Every widget on this page is
+           branch_id-filterable server-side now (see report_summary /
+           report_payment_methods in retail_api.py), so the note states the one
+           remaining, deliberate exception: Revenue by Branch is the
+           all-branches comparison and scoping it to one branch is a
+           contradiction. Plain English text, which IS the translation key for
+           this surface -- AuraI18n.t()/its DOM sweep look up the exact English
+           string in locales/ar.json (entry added there alongside this). -->
       <p id="rep-branch-note" style="display:none;color:var(--text-muted);font-size:12px;margin:0 0 16px">
-        Branch filter applies to Revenue Trend and Top Selling Products only — KPI totals and Payment Methods remain company-wide.
+        Branch filter applies to every figure on this page except Revenue by Branch, which always compares all branches.
       </p>
       <div style="display:grid;grid-template-columns:2fr 1fr;gap:20px;margin-bottom:20px">
         <div class="sub-chart-card">
@@ -3369,18 +3430,24 @@ const RetailSystem = {
     if (note) note.style.display = branchId ? 'block' : 'none';
 
     try {
-      // branchQS is appended only to the two routes that actually honor
-      // branch_id server-side (sales-trend, top-products). Sending it to
-      // payment-methods/summary would be silently ignored anyway (they
-      // don't read the param), so it's left off there rather than implying
-      // a filter that doesn't apply. by-branch never takes branch_id at all
-      // -- it IS the all-branches comparison, by design.
+      // branchQS now goes to EVERY widget that has a branch dimension.
+      // It used to reach only sales-trend and top-products, because those
+      // were the only two routes that read the param -- so picking a branch
+      // filtered the charts and left the KPI cards (summary) and the
+      // payment doughnut showing all branches, side by side, on one screen.
+      // Both routes accept branch_id now (see report_summary /
+      // report_payment_methods).
+      //
+      // by-branch is the deliberate exception: it IS the all-branches
+      // comparison, and "compare branches" scoped to one branch is a
+      // contradiction. `days` reaches every widget including top-products,
+      // which used to be an all-time query on a days-scoped page.
       const branchQS = branchId ? `&branch_id=${encodeURIComponent(branchId)}` : '';
       const [trend, top, pay, summary, byBranch] = await Promise.all([
         this._get(`/api/sub/retail/reports/sales-trend?days=${days}${branchQS}`),
-        this._get(`/api/sub/retail/reports/top-products?limit=8${branchQS}`),
-        this._get(`/api/sub/retail/reports/payment-methods?days=${days}`),
-        this._get(`/api/sub/retail/reports/summary?days=${days}`),
+        this._get(`/api/sub/retail/reports/top-products?days=${days}&limit=8${branchQS}`),
+        this._get(`/api/sub/retail/reports/payment-methods?days=${days}${branchQS}`),
+        this._get(`/api/sub/retail/reports/summary?days=${days}${branchQS}`),
         this._get(`/api/sub/retail/reports/by-branch?days=${days}`),
       ]);
 
@@ -3404,19 +3471,17 @@ const RetailSystem = {
                 y1:{position:'right',ticks:{color:'#a855f7'},grid:{display:false}},
                 x:{ticks:{color:'#94a3b8'},grid:{display:false}} } }
           }],
-          ['rep-pay', { type:'doughnut',
-            data:{ labels:(pay.data||[]).map(r=>r.payment_method), datasets:[{
-              data:(pay.data||[]).map(r=>r.revenue),
-              // Named lookup, not array position -- see the identical
-              // r-dash-pay chart above for why (this page's API also orders
-              // methods by revenue, which used to flip colors vs. the
-              // dashboard's own chart for the same data).
-              backgroundColor:(pay.data||[]).map(r => RETAIL_PAYMENT_METHOD_COLORS[r.payment_method] || '#94a3b8'),
-              borderWidth:0
-            }]},
-            opts:{ responsive:true, maintainAspectRatio:false,
-              plugins:{ legend:{position:'right',labels:{color:'#94a3b8'}} } }
-          }],
+          // Built by the same shared helper as the dashboard's r-dash-pay
+          // chart: identical named color lookup, and identical handling of a
+          // net-negative tender (doughnut normally, horizontal bar when any
+          // bucket is below zero). See retailPaymentChartConfig().
+          (() => {
+            const cfg = retailPaymentChartConfig(
+              (pay.data||[]).map(r=>r.payment_method),
+              (pay.data||[]).map(r=>r.revenue),
+              '#94a3b8');
+            return ['rep-pay', { type: cfg.type, data: cfg.data, opts: cfg.options }];
+          })(),
           ['rep-top', { type:'bar',
             data:{ labels:top.labels||[], datasets:[
               { label:'Units Sold', data:top.data||[], backgroundColor:'#8b5cf6' },

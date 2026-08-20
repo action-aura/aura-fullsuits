@@ -62,6 +62,13 @@
   "Purchase Orders": "أوامر الشراء",
   "Returns": "المرتجعات",
   "Settings": "الإعدادات",
+  "This device is not yet your store's admin device. Settings and the Audit Log stay hidden until one device is chosen.": "هذا الجهاز ليس بعد جهاز الإدارة لمتجرك. تبقى الإعدادات وسجل التدقيق مخفية حتى يتم اختيار جهاز واحد.",
+  "Make this the admin device": "اجعل هذا الجهاز جهاز الإدارة",
+  "Not now": "ليس الآن",
+  "Working…": "جارٍ التنفيذ…",
+  "This device is now your store's admin device.": "أصبح هذا الجهاز الآن جهاز الإدارة لمتجرك.",
+  "Could not make this the admin device.": "تعذّر جعل هذا الجهاز جهاز الإدارة.",
+  "Another device is already the admin device:": "يوجد جهاز آخر هو جهاز الإدارة بالفعل:",
   "Patients": "المرضى",
   "Appointments": "المواعيد",
   "Consultations": "الاستشارات",
@@ -147,6 +154,13 @@
   "Import All Selected": "استيراد كل المحدد",
   "Upload one file — we route it to the right functions": "ارفع ملفًا واحدًا — نوجّهه إلى الوظائف الصحيحة",
 
+  "Opening Stock Qty": "كمية المخزون الافتتاحي",
+  "Total opening stock declared for this product, not a live shelf count. Re-importing the same number changes nothing; raising it adds only the difference. Sales, returns and manual adjustments are never overwritten. Leave the cell blank to leave stock untouched, or enter 0 to declare an opening of zero.": "إجمالي المخزون الافتتاحي المُعلَن لهذا المنتج، وليس جردًا فعليًا للرف. إعادة استيراد الرقم نفسه لا تغيّر شيئًا؛ ورفعه يضيف الفارق فقط. لا يتم أبدًا استبدال المبيعات أو المرتجعات أو التسويات اليدوية. اترك الخانة فارغة لترك المخزون كما هو، أو أدخل 0 للإعلان عن مخزون افتتاحي صفري.",
+  "Stock was left unchanged for these products:": "تُرك المخزون دون تغيير لهذه المنتجات:",
+  "Declared less than has already been sold or moved": "الكمية المُعلَنة أقل مما تم بيعه أو تحريكه بالفعل",
+  "Opening quantity cannot be negative": "لا يمكن أن تكون الكمية الافتتاحية سالبة",
+  "currently on hand": "المتوفر حاليًا",
+
   "Add Category": "إضافة فئة",
   "Edit Category": "تعديل الفئة",
   "Category Name": "اسم الفئة",
@@ -205,6 +219,8 @@
   "This device's recent changes haven't reached your other devices yet": "التغييرات الأخيرة على هذا الجهاز لم تصل بعد إلى أجهزتك الأخرى",
   "This device isn't receiving updates from your other devices right now": "هذا الجهاز لا يستقبل التحديثات من أجهزتك الأخرى حاليًا",
   "This device is still working normally. Everything will catch up automatically once the connection comes back.": "هذا الجهاز يعمل بشكل طبيعي. سيتم تحديث كل شيء تلقائيًا فور عودة الاتصال.",
+
+  "Branch filter applies to every figure on this page except Revenue by Branch, which always compares all branches.": "يُطبَّق تصفية الفرع على كل رقم في هذه الصفحة باستثناء الإيرادات حسب الفرع، التي تقارن جميع الفروع دائمًا.",
 
   "Synced": "تمت المزامنة",
   "Waiting for first sync": "بانتظار أول مزامنة",

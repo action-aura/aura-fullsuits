@@ -28,6 +28,16 @@ from database.schema import get_retail_conn, sub_create
 from datetime import datetime, timedelta, timezone
 from core.retail import pricing as tax_engine
 from core.retail import po_split
+# The single definition of revenue / gross sales / returns / average ticket /
+# COGS, plus the period and branch predicates. Read that module's docstring
+# before adding any new sales figure to this file -- it exists because those
+# figures were previously hand-written about seven times here and disagreed
+# with each other on screen.
+from core.retail import metrics
+# The single definition of "what SHOULD this product's balance be?" --
+# recomputed from the inventory_movements ledger. See its module docstring:
+# inventory_balances is a cache, the ledger is the truth.
+from core.retail import stock_reconciliation
 from core.retail import whatsapp_hook as _whatsapp_hook
 from config import (
     DATABASE_DIR, AURA_AI_ENDPOINT_URL, AURA_AI_BEARER_TOKEN, AURA_AI_TIMEOUT_SECONDS,
@@ -138,18 +148,31 @@ def _audit(conn, action, entity, entity_id, details=''):
 # audit_log rows include refund/void trails with real user_id attribution
 # for every user in the company, which is a materially more sensitive
 # surface -- worth the extra real enforcement here rather than trusting
-# nav-hiding alone. Fail-closed by design: resolve_local_device() can raise
-# DeviceCompanyMismatchError/LocalDeviceStateCorruptError (see
-# device_context.py), and ANY failure to affirmatively resolve "this is
-# the admin device" is treated as NOT admin -- never fails open.
+# nav-hiding alone.
+#
+# SECURITY (2026-08-20): this used to call
+# device_context.resolve_local_device(), which is a WRITE -- it upserts the
+# device row, and it also auto-promoted the first device a company ever
+# resolved to admin. So this authorization check GRANTED the privilege it
+# was checking for: the first device to request GET /api/sub/retail/audit-log
+# on a fresh company was made that company's admin device by the act of
+# asking, and then correctly told "yes, you're the admin device" -- 200,
+# full audit trail, every user's refunds and voids. It now goes through
+# device_context.local_device_is_admin(), which is a strict read (no INSERT,
+# no UPDATE, no local_device.json creation) and additionally requires the
+# stored row to match this company and still be 'active'.
+#
+# Fail-closed by design: local_device_is_admin() can raise
+# LocalDeviceStateCorruptError (see device_context.py), and ANY failure to
+# affirmatively establish "this is the admin device" is treated as NOT
+# admin -- never fails open.
 def _is_admin_device(cid):
     try:
         conn = _registry_conn()
         try:
-            device = device_context.resolve_local_device(conn, cid)
+            return device_context.local_device_is_admin(conn, cid)
         finally:
             conn.close()
-        return bool(device and device.get('is_admin_device'))
     except Exception:
         return False
 
@@ -176,32 +199,51 @@ def _emit(event_type, payload):
 @mt_login_required
 @mt_require_subsystem('retail')
 def dashboard_stats():
+    """Every money figure below comes from core/retail/metrics.py -- the KPI
+    cards, the hourly chart and the payment-method doughnut are three views
+    of the SAME period and must not be allowed to disagree.
+
+    They used to. today_sales netted refunds out; the hourly and
+    payment-method queries right beside it were gross SUM(total). One refund
+    today and this single screen printed two different revenues. Now all
+    three are metrics.revenue()/revenue_by_hour()/revenue_by_payment_method()
+    over one Period, so `sum(hourly_data) == sum(payment_methods) ==
+    today_sales` holds by construction (see
+    products/retail/tests/retail_metrics_consistency_test.py).
+
+    `?branch_id=` is accepted here for the same reason the Reports page
+    accepts it -- no caller sends it today, but the metrics module applies
+    the branch predicate to sales AND returns uniformly, so supporting it is
+    a passthrough rather than a seventh hand-written variant waiting to
+    happen."""
     cid = _cid()
+    branch_id = request.args.get('branch_id')
     conn = get_retail_conn()
-    today = datetime.now().strftime('%Y-%m-%d')
-    yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-    month_start = datetime.now().replace(day=1).strftime('%Y-%m-%d')
 
     def q(sql, *params):
         return conn.execute(sql, params).fetchone()[0] or 0
 
-    today_sales    = q("SELECT COALESCE(SUM(total),0) FROM sales WHERE company_id=? AND date(created_at)=?", cid, today)
-    today_txns     = q("SELECT COUNT(*) FROM sales WHERE company_id=? AND date(created_at)=?", cid, today)
-    yest_sales     = q("SELECT COALESCE(SUM(total),0) FROM sales WHERE company_id=? AND date(created_at)=?", cid, yesterday)
-    month_sales    = q("SELECT COALESCE(SUM(total),0) FROM sales WHERE company_id=? AND date(created_at)>=?", cid, month_start)
-    month_txns     = q("SELECT COUNT(*) FROM sales WHERE company_id=? AND date(created_at)>=?", cid, month_start)
+    # ONE `now` for the whole response. Every period below plus `current_hour`
+    # further down derive from this single instant instead of each calling
+    # datetime.now() again: a request that happens to straddle midnight would
+    # otherwise mix two different "today"s into one payload (KPI card on
+    # yesterday, hourly chart on today). It also keeps this route's clock on
+    # THIS module's `datetime`, which is the seam tests freeze -- metrics has
+    # its own import, so a metrics function calling datetime.now() itself
+    # would silently ignore a frozen clock here.
+    now = datetime.now()
+    today_p = metrics.period_today(now)
+    yest_p  = metrics.period_yesterday(now)
+    month_p = metrics.period_month_to_date(now)
 
-    # Returns / refunds reduce revenue — net them out so the dashboard reflects
-    # real money taken in (a refund must lower today's revenue, not leave it flat).
-    try:
-        today_returns = q("SELECT COALESCE(SUM(refund_amount),0) FROM returns WHERE company_id=? AND date(created_at)=?", cid, today)
-        yest_returns  = q("SELECT COALESCE(SUM(refund_amount),0) FROM returns WHERE company_id=? AND date(created_at)=?", cid, yesterday)
-        month_returns = q("SELECT COALESCE(SUM(refund_amount),0) FROM returns WHERE company_id=? AND date(created_at)>=?", cid, month_start)
-    except Exception:
-        today_returns = yest_returns = month_returns = 0
-    today_sales = today_sales - today_returns
-    yest_sales  = yest_sales - yest_returns
-    month_sales = month_sales - month_returns
+    today_sales    = metrics.revenue(conn, cid, today_p, branch_id)
+    today_txns     = metrics.transactions(conn, cid, today_p, branch_id)
+    today_returns  = metrics.refunds(conn, cid, today_p, branch_id)
+    yest_sales     = metrics.revenue(conn, cid, yest_p, branch_id)
+    month_sales    = metrics.revenue(conn, cid, month_p, branch_id)
+    month_txns     = metrics.transactions(conn, cid, month_p, branch_id)
+    month_returns  = metrics.refunds(conn, cid, month_p, branch_id)
+
     total_customers = q("SELECT COUNT(*) FROM customers WHERE company_id=?", cid)
     total_products  = q("SELECT COUNT(*) FROM products WHERE company_id=? AND status='active'", cid)
 
@@ -218,27 +260,23 @@ def dashboard_stats():
     # again until 15:00 used to produce two ADJACENT array entries; Chart.js
     # renders a plain category axis (one bar per entry, subsystem-retail.js),
     # so the gap silently disappeared and the chart looked like a continuous
-    # business day instead of showing the real slow period.
-    hourly_rows = conn.execute("""
-        SELECT strftime('%H',created_at) as hr, COALESCE(SUM(total),0) as rev, COUNT(*) as cnt
-        FROM sales WHERE company_id=? AND date(created_at)=?
-        GROUP BY hr ORDER BY hr
-    """, (cid, today)).fetchall()
-    hourly_by_hr = {r['hr']: r['rev'] for r in hourly_rows}
-    current_hour = int(datetime.now().strftime('%H'))  # local time, matching `today`'s local-date boundary above
+    # business day instead of showing the real slow period. The zero-filling
+    # stays here (only the route knows how far into the day "now" is); the
+    # revenue per hour is metrics'.
+    hourly_by_hr = metrics.revenue_by_hour(conn, cid, today_p, branch_id)
+    current_hour = int(now.strftime('%H'))  # same instant as today_p above, so labels and data can't disagree
     hourly_labels = [f"{h:02d}:00" for h in range(current_hour + 1)]
-    hourly_data   = [round(hourly_by_hr.get(f"{h:02d}", 0.0), 2) for h in range(current_hour + 1)]
+    hourly_data   = [hourly_by_hr.get(f"{h:02d}", 0.0) for h in range(current_hour + 1)]
 
-    # Payment method breakdown today
-    pay_rows = conn.execute("""
-        SELECT payment_method, COUNT(*) as cnt, COALESCE(SUM(total),0) as rev
-        FROM sales WHERE company_id=? AND date(created_at)=?
-        GROUP BY payment_method
-    """, (cid, today)).fetchall()
-    pay_methods = {r['payment_method']: {'count': r['cnt'], 'revenue': round(r['rev'],2)} for r in pay_rows}
+    # Payment method breakdown today -- net of refunds, keyed by the tender
+    # the refund was paid back in (see metrics.revenue_by_payment_method).
+    pay_methods = {r['payment_method']: {'count': r['count'], 'revenue': r['revenue']}
+                   for r in metrics.revenue_by_payment_method(conn, cid, today_p, branch_id)}
 
-    # Recent sales
-    recent = conn.execute("""
+    # Recent sales -- a list of documents, not a revenue figure, so it is
+    # deliberately not period-scoped; it does honour branch_id so the whole
+    # response describes one branch when one is asked for.
+    recent_sql = """
         SELECT s.id, s.sale_number, s.total, s.payment_method, s.created_at,
                COALESCE(c.name,'Walk-in') as customer_name,
                COUNT(si.id) as item_count
@@ -246,9 +284,13 @@ def dashboard_stats():
         LEFT JOIN customers c ON s.customer_id=c.id
         LEFT JOIN sale_items si ON s.id=si.sale_id
         WHERE s.company_id=?
-        GROUP BY s.id
-        ORDER BY s.created_at DESC LIMIT 8
-    """, (cid,)).fetchall()
+    """
+    recent_params = [cid]
+    if branch_id:
+        recent_sql += " AND s.branch_id=?"
+        recent_params.append(branch_id)
+    recent_sql += " GROUP BY s.id ORDER BY s.created_at DESC LIMIT 8"
+    recent = conn.execute(recent_sql, recent_params).fetchall()
 
     conn.close()
     sales_change = round(((today_sales - yest_sales) / yest_sales * 100) if yest_sales > 0 else 0, 1)
@@ -550,36 +592,121 @@ def delete_product(pid):
 @mt_require_subsystem('retail')
 @require_license_capability("retail.stock.adjust", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def adjust_stock(pid):
+    """Manual stock adjustment, filed against ONE branch's balance row.
+
+    Stock-accuracy sweep -- three real defects fixed together here, because
+    they only ever bite the same install at the same time (a multi-branch
+    one), and each on its own would leave the "the stock is not accurate"
+    report only partly explained:
+
+    1. BRANCH. This route called _default_branch() unconditionally, so
+       every adjustment landed on the company's FIRST branch by id no
+       matter which branch the operator was actually looking at. In a
+       two-branch install, topping up branch 2 silently credited Main
+       while the POS on branch 2 kept refusing the sale with "Insufficient
+       stock" -- stock present in the totals column, unusable at the till.
+       branch_id is now accepted from the caller exactly the way
+       create_sale/create_return already accept it, validated to belong to
+       THIS company (an unknown or foreign branch is rejected, never
+       silently redirected to the default -- a redirect is how the bug
+       looked in the first place), and _default_branch is only the
+       fallback when the caller names no branch.
+    2. PRODUCT EXISTENCE. The balance row was upserted straight from the
+       URL's pid with no check that the product exists at all. A stale or
+       mistyped id created an orphan inventory_balances +
+       inventory_movements pair for a product that is not in this company
+       -- stock no screen ever shows, which the reconciliation maintenance
+       route below would then report as permanent, unexplainable drift.
+    3. NEGATIVE STOCK. Nothing floored the result, so -100 against a
+       balance of 5 wrote -95 on hand. create_sale refuses to oversell;
+       an adjustment that can drive the same balance negative behind its
+       back makes that guarantee worthless, and a negative balance then
+       poisons every valuation and reorder calculation downstream.
+
+    Wrapped in BEGIN IMMEDIATE for the same reason create_sale is: the
+    "is there enough on hand to remove?" read and the UPDATE that acts on
+    it must not straddle another writer's commit.
+    """
     data = request.json or {}
     cid  = _cid()
-    qty  = float(data.get('quantity', 0))
+    try:
+        qty = float(data.get('quantity', 0))
+    except (TypeError, ValueError):
+        return jsonify({'status': 'error', 'message': 'Invalid quantity'}), 400
     reason = data.get('reason', 'Manual adjustment')
     if qty == 0:
         return jsonify({'status': 'error', 'message': 'Quantity cannot be zero'}), 400
+
     conn = get_retail_conn()
-    bid = _default_branch(conn, cid)
-    conn.execute("""
-        INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
-        VALUES (?,?,?,0)
-    """, (cid, pid, bid))
-    conn.execute("""
-        UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?
-        WHERE company_id=? AND product_id=? AND branch_id=?
-    """, (qty, cid, pid, bid))
-    conn.execute("""
-        INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,notes,created_by)
-        VALUES (?,?,?,?,?,?,?,?)
-    """, (cid, pid, bid,
-          'stock_in' if qty > 0 else 'stock_out',
-          qty, 'ADJ', reason, _uid()))
-    _audit(conn, 'STOCK_ADJUSTED', 'product', pid, f'qty={qty}, reason={reason}')
-    conn.commit()
-    new_qty = conn.execute(
-        "SELECT quantity_on_hand FROM inventory_balances WHERE company_id=? AND product_id=? AND branch_id=?",
-        (cid, pid, bid)
-    ).fetchone()
-    conn.close()
-    return jsonify({'status': 'success', 'new_stock': new_qty['quantity_on_hand'] if new_qty else 0})
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        product = conn.execute(
+            "SELECT id, name FROM products WHERE id=? AND company_id=?", (pid, cid)
+        ).fetchone()
+        if not product:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Product not found'}), 404
+
+        requested_bid = data.get('branch_id')
+        if requested_bid in (None, ''):
+            bid = _default_branch(conn, cid)
+        else:
+            branch = conn.execute(
+                "SELECT id FROM branches WHERE id=? AND company_id=?", (requested_bid, cid)
+            ).fetchone()
+            if not branch:
+                conn.rollback()
+                return jsonify({'status': 'error', 'message': 'Branch not found'}), 404
+            bid = branch['id']
+
+        conn.execute("""
+            INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
+            VALUES (?,?,?,0)
+        """, (cid, pid, bid))
+        current = conn.execute(
+            "SELECT quantity_on_hand FROM inventory_balances WHERE company_id=? AND product_id=? AND branch_id=?",
+            (cid, pid, bid)
+        ).fetchone()
+        on_hand = float(current['quantity_on_hand'] or 0) if current else 0.0
+        # Epsilon, not a bare `< 0`: quantity_on_hand is REAL and is
+        # ACCUMULATED by repeated `quantity_on_hand + ?` UPDATEs, so a
+        # fractional-unit product legitimately sits at 0.7999999999999999
+        # after 0.7 + 0.1. An exact comparison rejects "remove the 0.8 that
+        # is there" as if it were an oversell. Same constant the reconciler
+        # and the bulk importer compare with (stock_reconciliation.py), so
+        # all three agree on what "zero" means.
+        if on_hand + qty < -stock_reconciliation.DEFAULT_TOLERANCE:
+            conn.rollback()
+            return jsonify({'status': 'error',
+                            'message': f'Cannot remove {abs(qty)} of "{product["name"]}" -- '
+                                       f'only {on_hand} on hand at this branch.'}), 400
+
+        conn.execute("""
+            UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?
+            WHERE company_id=? AND product_id=? AND branch_id=?
+        """, (qty, cid, pid, bid))
+        conn.execute("""
+            INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,notes,created_by)
+            VALUES (?,?,?,?,?,?,?,?)
+        """, (cid, pid, bid,
+              'stock_in' if qty > 0 else 'stock_out',
+              qty, 'ADJ', reason, _uid()))
+        # branch is now in the audit detail: without it, an audit row for a
+        # multi-branch company could never answer "which balance moved?".
+        _audit(conn, 'STOCK_ADJUSTED', 'product', pid, f'qty={qty}, branch={bid}, reason={reason}')
+        new_row = conn.execute(
+            "SELECT quantity_on_hand FROM inventory_balances WHERE company_id=? AND product_id=? AND branch_id=?",
+            (cid, pid, bid)
+        ).fetchone()
+        new_qty = float(new_row['quantity_on_hand']) if new_row else 0.0
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("adjust_stock(%s) failed: %s", pid, exc)
+        return jsonify({'status': 'error', 'message': 'Could not adjust stock.'}), 400
+    finally:
+        conn.close()
+    return jsonify({'status': 'success', 'new_stock': new_qty, 'branch_id': bid})
 
 # ── Customers ─────────────────────────────────────────────────────────────────
 
@@ -1037,37 +1164,78 @@ def get_purchase_order(po_id):
 @mt_require_subsystem('retail')
 @require_license_capability("retail.purchase.create", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 def receive_purchase_order(po_id):
-    """Mark PO as received and add stock to inventory."""
+    """Mark PO as received and add stock to inventory.
+
+    Stock-accuracy sweep -- this was a textbook check-then-act race, and
+    the single most damaging one in this file. The "already received?"
+    test read the PO on a connection holding no write lock, and the final
+    `UPDATE purchase_orders SET status='received'` carried no status guard
+    of its own. Two requests that both read 'pending' -- a double-clicked
+    Receive button, or two devices against the same shared database --
+    therefore BOTH walked the item loop and BOTH added the PO's
+    quantities. A 10-unit PO landed as 20 units on hand plus two
+    'purchase_in' ledger rows, and nothing anywhere reported it: the
+    ledger and the balance still agreed with each other, they just both
+    agreed on a number twice the size of the delivery.
+
+    Fixed with the pattern create_sale already proves out below rather
+    than a new one:
+
+      * BEGIN IMMEDIATE takes SQLite's write lock BEFORE the PO row is
+        read, so a second request blocks at the very top and only gets to
+        read the status once the first has committed -- by which point it
+        is 'received' and the second exits 409 having written nothing.
+      * The status UPDATE additionally carries `AND status<>'received'`
+        and its rowcount is checked. Belt and braces: even a future caller
+        that somehow reaches this code without the lock still cannot
+        double-apply, because the row it needs to flip is no longer there
+        to flip.
+    """
     cid  = _cid()
     conn = get_retail_conn()
-    po   = conn.execute("SELECT * FROM purchase_orders WHERE id=? AND company_id=?", (po_id, cid)).fetchone()
-    if not po:
-        conn.close(); return jsonify({'status': 'error', 'message': 'PO not found'}), 404
-    if po['status'] == 'received':
-        conn.close(); return jsonify({'status': 'error', 'message': 'PO already received'}), 409
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.cursor()
+        po  = cur.execute("SELECT * FROM purchase_orders WHERE id=? AND company_id=?", (po_id, cid)).fetchone()
+        if not po:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'PO not found'}), 404
+        if po['status'] == 'received':
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'PO already received'}), 409
 
-    items = conn.execute("SELECT * FROM purchase_order_items WHERE po_id=?", (po_id,)).fetchall()
-    bid   = po['branch_id'] or _default_branch(conn, cid)
-    for item in items:
-        qty = item['quantity']
-        conn.execute("""
-            INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
-            VALUES (?,?,?,0)
-        """, (cid, item['product_id'], bid))
-        conn.execute("""
-            UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?
-            WHERE company_id=? AND product_id=? AND branch_id=?
-        """, (qty, cid, item['product_id'], bid))
-        conn.execute("""
-            INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,created_by)
-            VALUES (?,?,?,'purchase_in',?,?,?,?)
-        """, (cid, item['product_id'], bid, qty, item['unit_cost'], po['po_number'], _uid()))
-        conn.execute("UPDATE purchase_order_items SET received_qty=? WHERE id=?", (qty, item['id']))
+        items = cur.execute("SELECT * FROM purchase_order_items WHERE po_id=?", (po_id,)).fetchall()
+        bid   = po['branch_id'] or _default_branch(conn, cid)
+        for item in items:
+            qty = item['quantity']
+            cur.execute("""
+                INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
+                VALUES (?,?,?,0)
+            """, (cid, item['product_id'], bid))
+            cur.execute("""
+                UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?
+                WHERE company_id=? AND product_id=? AND branch_id=?
+            """, (qty, cid, item['product_id'], bid))
+            cur.execute("""
+                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,created_by)
+                VALUES (?,?,?,'purchase_in',?,?,?,?)
+            """, (cid, item['product_id'], bid, qty, item['unit_cost'], po['po_number'], _uid()))
+            cur.execute("UPDATE purchase_order_items SET received_qty=? WHERE id=?", (qty, item['id']))
 
-    conn.execute("UPDATE purchase_orders SET status='received', received_at=? WHERE id=?",
-                 (datetime.now().strftime('%Y-%m-%d'), po_id))
-    _audit(conn, 'PO_RECEIVED', 'purchase_order', po_id, po['po_number'])
-    conn.commit(); conn.close()
+        cur.execute("UPDATE purchase_orders SET status='received', received_at=? "
+                    "WHERE id=? AND company_id=? AND status<>'received'",
+                    (datetime.now().strftime('%Y-%m-%d'), po_id, cid))
+        if cur.rowcount != 1:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'PO already received'}), 409
+        _audit(conn, 'PO_RECEIVED', 'purchase_order', po_id, po['po_number'])
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("receive_purchase_order(%s) failed: %s", po_id, exc)
+        return jsonify({'status': 'error', 'message': 'Could not receive this purchase order.'}), 400
+    finally:
+        conn.close()
     _emit('StockReceived', {'po_id': po_id, 'po_number': po['po_number']})
     return jsonify({'status': 'success'})
 
@@ -1370,7 +1538,19 @@ def create_sale():
     try:
         idem = data.get('idempotency_key')
         if idem:
-            ex = cur.execute("SELECT id,sale_number FROM sales WHERE idempotency_key=?", (idem,)).fetchone()
+            # company_id-scoped for the same reason create_return's identical
+            # lookup below already is (see its comment ~line 2081) -- this
+            # one was simply never given the same treatment. Unscoped it is
+            # worse here than a read leak: a caller whose idempotency_key
+            # collided with ANOTHER company's sale was handed that company's
+            # sale id and sale_number back inside a 'success' envelope, AND
+            # this company's sale was never written at all -- no sales row,
+            # no stock decrement, no payment. A real sale silently vanishing
+            # while the client is told it succeeded is the worst possible
+            # shape for this bug, so the scoping matters even though the
+            # keys are client-generated UUIDs.
+            ex = cur.execute("SELECT id,sale_number FROM sales WHERE idempotency_key=? AND company_id=?",
+                              (idem, cid)).fetchone()
             if ex:
                 conn.close()
                 return jsonify({'status': 'success', 'data': {'id': ex['id'], 'sale_number': ex['sale_number']}})
@@ -2089,6 +2269,19 @@ def create_return():
     except Exception as e:
         conn.rollback(); conn.close()
         return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        # Stock-accuracy sweep: the SUCCESS path above returned straight out
+        # of the `try` after conn.commit() and never closed its connection --
+        # only the two early-exit paths and the except branch ever did. Every
+        # successful return therefore leaked one open SQLite handle, left to
+        # be closed whenever CPython happened to collect it. On WAL that is a
+        # lingering reader that holds back checkpointing, and it is a prime
+        # suspect for the intermittent SQLITE_BUSY this app sees under a busy
+        # returns counter. sqlite3.Connection.close() is idempotent, so the
+        # pre-existing explicit close() calls on the other paths are left
+        # exactly as they were rather than restructured -- this adds the one
+        # guarantee that was missing without touching any working path.
+        conn.close()
 
 # ── Cash Drawer / Shift Management (feat/shift-cash-drawer, schema v10) ────────
 # Real cash-drawer management: opening float, mid-shift float in/out (and
@@ -2412,158 +2605,123 @@ def close_cash_session(session_id):
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 # ── Reports ───────────────────────────────────────────────────────────────────
+#
+# Every route below passes `datetime.now()` into metrics.period_days()
+# explicitly, exactly as dashboard_stats() does, and metrics REQUIRES it (the
+# period constructors have no default, and that module imports no datetime at
+# all -- only date/timedelta, for arithmetic on dates it was handed).
+#
+# This is not ceremony. core/retail/metrics.py used to be able to read the
+# clock itself, and a test that freezes `api.retail_api.datetime` -- which is
+# how every clock-sensitive test in this suite is written -- does not freeze a
+# `datetime` imported inside metrics. So a frozen-clock test against any of
+# these routes would have silently measured the real wall clock and passed for
+# the wrong reason. That is precisely the hazard that produced the
+# hourly-chart regression, and closing the seam on dashboard_stats alone left
+# five report routes still open. Asserted by
+# retail_metrics_consistency_test.py::test_every_report_route_honours_a_frozen_clock.
 
 @retail_bp.route('/reports/sales-trend', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
 def report_sales_trend():
-    """Optional `?branch_id=` scopes the trend to one branch; omitted (the
-    default, and everything every existing caller already sends) runs the
-    exact same query text/params as before this filter was added -- see
-    products/retail/tests/retail_report_branch_filter_test.py for the
-    byte-identical-output proof this default path was never changed."""
+    """Day-by-day net revenue. Optional `?branch_id=` scopes to one branch.
+
+    Was gross SUM(total) with AVG(total) as the average ticket, so its day
+    totals summed HIGHER than the Revenue KPI card rendered beside them on
+    the same page, and its "average ticket" was a different number from the
+    summary route's. Both figures now come from metrics.revenue_by_day(),
+    which nets refunds into the day they were processed and derives the
+    average ticket as net revenue / transactions."""
     cid       = _cid()
     days      = int(request.args.get('days', 14))
     branch_id = request.args.get('branch_id')
     conn = get_retail_conn()
-    query = """
-        SELECT date(created_at) as day,
-               COALESCE(SUM(total),0) as revenue,
-               COUNT(*) as transactions,
-               COALESCE(AVG(total),0) as avg_ticket
-        FROM sales WHERE company_id=?
-          AND date(created_at) >= date('now', 'localtime', ?)
-    """
-    params = [cid, f'-{days} days']
-    if branch_id:
-        query += " AND branch_id=?"
-        params.append(branch_id)
-    query += " GROUP BY day ORDER BY day"
-    rows = conn.execute(query, params).fetchall()
+    rows = metrics.revenue_by_day(conn, cid, metrics.period_days(days, datetime.now()), branch_id)
     conn.close()
     return jsonify({'success': True,
                     'labels': [r['day'] for r in rows],
-                    'data':   [round(r['revenue'], 2) for r in rows],
+                    'data':   [r['revenue'] for r in rows],
                     'transactions': [r['transactions'] for r in rows],
-                    'avg_ticket': [round(r['avg_ticket'], 2) for r in rows]})
+                    'avg_ticket': [r['avg_ticket'] for r in rows]})
 
 @retail_bp.route('/reports/top-products', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
 def report_top_products():
-    """Optional `?branch_id=` scopes to one branch's sale_items; omitted (the
-    default) runs the exact same query text/params as before this filter was
-    added -- see retail_report_branch_filter_test.py."""
+    """Best sellers WITHIN `?days=` (default 30), optionally scoped with
+    `?branch_id=`.
+
+    This route had no date filter at all: it was an all-time query sitting
+    on a days-scoped page, so its top product could report more revenue than
+    the page's own 30-day total -- the single most visible symptom of the
+    "no shared period" problem. It is now the same Period as every sibling
+    widget, and its units/revenue are net of return_items."""
     cid       = _cid()
+    days      = int(request.args.get('days', 30))
     limit     = int(request.args.get('limit', 10))
     branch_id = request.args.get('branch_id')
     conn  = get_retail_conn()
-    query = """
-        SELECT p.name, p.sku,
-               SUM(si.quantity) as units_sold,
-               SUM(si.line_total) as revenue,
-               SUM(si.quantity * p.cost_price) as cost,
-               SUM(si.line_total) - SUM(si.quantity * p.cost_price) as profit
-        FROM sale_items si
-        JOIN products p ON si.product_id=p.id
-        JOIN sales s ON si.sale_id=s.id
-        WHERE s.company_id=?
-    """
-    params = [cid]
-    if branch_id:
-        query += " AND s.branch_id=?"
-        params.append(branch_id)
-    query += " GROUP BY p.id ORDER BY units_sold DESC LIMIT ?"
-    params.append(limit)
-    rows  = conn.execute(query, params).fetchall()
+    rows = metrics.top_products(conn, cid, metrics.period_days(days, datetime.now()), branch_id, limit)
     conn.close()
     return jsonify({'success': True,
                     'labels': [r['name'] for r in rows],
-                    'data':   [round(r['units_sold'], 0) for r in rows],
-                    'revenue': [round(r['revenue'], 2) for r in rows],
-                    'profit':  [round(r['profit'], 2) for r in rows]})
+                    'data':   [r['units_sold'] for r in rows],
+                    'revenue': [r['revenue'] for r in rows],
+                    'profit':  [r['profit'] for r in rows]})
 
 @retail_bp.route('/reports/payment-methods', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
 def report_payment_methods():
-    cid  = _cid()
-    days = int(request.args.get('days', 30))
+    """Net revenue per tender. Gained `?branch_id=` here: without it the
+    Reports page's branch dropdown moved the trend/top-products charts and
+    left this doughnut showing every branch, on the same screen."""
+    cid       = _cid()
+    days      = int(request.args.get('days', 30))
+    branch_id = request.args.get('branch_id')
     conn = get_retail_conn()
-    rows = conn.execute("""
-        SELECT payment_method, COUNT(*) as count, COALESCE(SUM(total),0) as revenue
-        FROM sales WHERE company_id=? AND date(created_at) >= date('now', 'localtime', ?)
-        GROUP BY payment_method ORDER BY revenue DESC
-    """, (cid, f'-{days} days')).fetchall()
+    rows = metrics.revenue_by_payment_method(conn, cid, metrics.period_days(days, datetime.now()), branch_id)
     conn.close()
-    return jsonify({'success': True, 'data': [dict(r) for r in rows]})
+    return jsonify({'success': True, 'data': rows})
 
-def _compute_report_summary(conn, cid, days):
-    """Extracted from report_summary() (feat/email-outbox-foundation) so
-    the existing GET route and the new POST /reports/email route below
-    share ONE implementation of this query set -- never two copies to keep
-    in sync. Does not close `conn` -- same convention as every other
-    helper in this file that takes a connection instead of opening its
-    own (_settings, _record_payment, ...)."""
-    period_start = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-    prev_start   = (datetime.now() - timedelta(days=days*2)).strftime('%Y-%m-%d')
+def _compute_report_summary(conn, cid, days, branch_id=None):
+    """The Reports page's KPI cards, the emailed report body and the
+    WhatsApp daily summary all read this one dict -- kept as a named helper
+    (rather than folding metrics.summary() straight into the routes) because
+    three callers already depend on this signature. Does not close `conn` --
+    same convention as every other helper in this file that takes a
+    connection instead of opening its own (_settings, _record_payment, ...).
 
-    def q(sql, *p):
-        return conn.execute(sql, p).fetchone()[0] or 0
+    The whole query set that used to live here now lives in
+    core/retail/metrics.py, because the figures it produced were only ever
+    HALF the story: this helper netted returns out and the charts drawn
+    beside its numbers did not.
 
-    cur_rev   = q("SELECT COALESCE(SUM(total),0) FROM sales WHERE company_id=? AND date(created_at)>=?", cid, period_start)
-    prev_rev  = q("SELECT COALESCE(SUM(total),0) FROM sales WHERE company_id=? AND date(created_at)>=? AND date(created_at)<?", cid, prev_start, period_start)
-
-    # Returns/refunds reduce revenue -- net them out here too, same reasoning
-    # dashboard_stats() already applies ("a refund must lower today's revenue,
-    # not leave it flat"). revenue/gross_profit/margin_pct/avg_ticket below all
-    # derive from cur_rev/prev_rev, so netting returns out of just these two
-    # sums is enough to correct every figure this report/email route returns.
-    try:
-        cur_returns  = q("SELECT COALESCE(SUM(refund_amount),0) FROM returns WHERE company_id=? AND date(created_at)>=?", cid, period_start)
-        prev_returns = q("SELECT COALESCE(SUM(refund_amount),0) FROM returns WHERE company_id=? AND date(created_at)>=? AND date(created_at)<?", cid, prev_start, period_start)
-    except Exception:
-        cur_returns = prev_returns = 0
-    cur_rev  -= cur_returns
-    prev_rev -= prev_returns
-
-    cur_txns  = q("SELECT COUNT(*) FROM sales WHERE company_id=? AND date(created_at)>=?", cid, period_start)
-    cur_cost  = q("""
-        SELECT COALESCE(SUM(si.quantity * p.cost_price),0)
-        FROM sale_items si JOIN products p ON si.product_id=p.id
-        JOIN sales s ON si.sale_id=s.id WHERE s.company_id=? AND date(s.created_at)>=?
-    """, cid, period_start)
-    inv_value = q("""
-        SELECT COALESCE(SUM(b.quantity_on_hand * p.cost_price),0)
-        FROM inventory_balances b JOIN products p ON b.product_id=p.id
-        WHERE b.company_id=? AND p.status='active'
-    """, cid)
-
-    gross_profit = cur_rev - cur_cost
-    margin_pct   = round(gross_profit / cur_rev * 100, 1) if cur_rev > 0 else 0
-    rev_change   = round((cur_rev - prev_rev) / prev_rev * 100, 1) if prev_rev > 0 else 0
-
-    return {
-        'period_days':    days,
-        'revenue':        round(cur_rev, 2),
-        'prev_revenue':   round(prev_rev, 2),
-        'revenue_change': rev_change,
-        'transactions':   cur_txns,
-        'avg_ticket':     round(cur_rev / cur_txns, 2) if cur_txns > 0 else 0,
-        'cogs':           round(cur_cost, 2),
-        'gross_profit':   round(gross_profit, 2),
-        'margin_pct':     margin_pct,
-        'inventory_value': round(inv_value, 2),
-    }
+    TWO figures this helper returns deliberately change value with the move:
+      * `cogs` (and therefore gross_profit/margin_pct) is now NET of
+        returned units. It was gross, which -- against already-net revenue
+        -- understated gross profit by the full cost of every refund and
+        disagreed with top-products' own profit column. See metrics' #4.
+      * `revenue_change` compares against a prior window of the SAME LENGTH
+        as the current one (`preceding_period`). It used to be one day
+        shorter -- a `days=30` request weighed 31 days of current revenue
+        against 30 days of prior revenue -- biasing the figure upward on
+        every report ever sent."""
+    return metrics.summary(conn, cid, metrics.period_days(days, datetime.now()), branch_id)
 
 @retail_bp.route('/reports/summary', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
 def report_summary():
-    cid  = _cid()
-    days = int(request.args.get('days', 30))
+    """Gained `?branch_id=`: these ARE the KPI cards, and before this they
+    ignored the page's branch dropdown entirely, so picking a branch moved
+    the charts underneath and left the cards on all-branches."""
+    cid       = _cid()
+    days      = int(request.args.get('days', 30))
+    branch_id = request.args.get('branch_id')
     conn = get_retail_conn()
-    data = _compute_report_summary(conn, cid, days)
+    data = _compute_report_summary(conn, cid, days, branch_id)
     conn.close()
     return jsonify({'success': True, 'data': data})
 
@@ -2707,57 +2865,39 @@ def report_whatsapp():
 @mt_login_required
 @mt_require_subsystem('retail')
 def report_by_branch():
-    """Revenue/transactions per branch for the Reports page's branch-comparison
-    chart (new -- no branch-scoped report existed before this route; every
-    other report under /reports either has no branch dimension at all or, for
-    sales-trend/top-products, defaults to unfiltered/all-branches).
+    """Revenue/transactions per branch for the Reports page's
+    branch-comparison chart.
 
-    Branches are the base of the LEFT JOIN (not sales), so every active
-    branch appears -- including ones with zero sales in the window -- rather
-    than only branches that happened to sell something. This is what makes a
-    comparison chart meaningful (a branch with 0 revenue is a real, visible
-    bar, not a silently missing one).
+    Every active branch appears -- including ones with zero sales in the
+    window -- rather than only branches that happened to sell something.
+    This is what makes a comparison chart meaningful (a branch with 0
+    revenue is a real, visible bar, not a silently missing one).
 
     Deliberately NOT filtered by the page's own `?branch_id=` selector --
     "compare branches" and "scope to one branch" are contradictory asks for
     the same chart, so this route always returns every branch regardless of
     what the branch dropdown is set to; only `days` (the shared date-range
-    control) applies here.
+    control) applies here. metrics.revenue_by_branch() takes no branch_id at
+    all for exactly this reason -- it is the one documented exception to the
+    module's branch predicate.
 
-    Revenue nets returns/refunds out per branch -- same reasoning
-    dashboard_stats() already applies ("a refund must lower today's revenue,
-    not leave it flat"): a return is only ever recorded in the `returns`
-    table and never mutates sales.total (see create_return()), so a raw
-    SUM(sales.total) overstates exactly the branches that had refunds. The
-    refund subquery is pre-aggregated per branch_id and LEFT JOINed once
-    (rather than joined row-for-row alongside `sales`) so it can't fan out
-    the SUM(s.total)/COUNT(s.id) aggregates above it."""
+    The hand-rolled version this replaced carried a correlated refunds
+    subquery LEFT JOINed onto `branches` and grouped by `rt.refunds` to stop
+    it fanning out the aggregates -- correct, but the sort of SQL nobody
+    wants to re-derive. metrics does the same netting by merging two flat
+    GROUP BYs in Python, and its avg_ticket is net revenue / transactions
+    rather than the AVG(s.total) this route used to report (which was gross
+    AND disagreed with the summary card's average ticket)."""
     cid  = _cid()
     days = int(request.args.get('days', 30))
     conn = get_retail_conn()
-    rows = conn.execute("""
-        SELECT b.id as branch_id, b.name as branch_name,
-               COALESCE(SUM(s.total),0) - COALESCE(rt.refunds,0) as revenue,
-               COUNT(s.id) as transactions,
-               COALESCE(AVG(s.total),0) as avg_ticket
-        FROM branches b
-        LEFT JOIN sales s ON s.branch_id = b.id AND s.company_id = ?
-          AND date(s.created_at) >= date('now', 'localtime', ?)
-        LEFT JOIN (
-            SELECT branch_id, COALESCE(SUM(refund_amount),0) as refunds
-            FROM returns
-            WHERE company_id = ? AND date(created_at) >= date('now', 'localtime', ?)
-            GROUP BY branch_id
-        ) rt ON rt.branch_id = b.id
-        WHERE b.company_id=? AND b.status='active'
-        GROUP BY b.id, b.name, rt.refunds ORDER BY b.name
-    """, (cid, f'-{days} days', cid, f'-{days} days', cid)).fetchall()
+    rows = metrics.revenue_by_branch(conn, cid, metrics.period_days(days, datetime.now()))
     conn.close()
     return jsonify({'success': True,
                     'labels':        [r['branch_name'] for r in rows],
-                    'data':          [round(r['revenue'], 2) for r in rows],
+                    'data':          [r['revenue'] for r in rows],
                     'transactions':  [r['transactions'] for r in rows],
-                    'avg_ticket':    [round(r['avg_ticket'], 2) for r in rows],
+                    'avg_ticket':    [r['avg_ticket'] for r in rows],
                     'branch_ids':    [r['branch_id'] for r in rows]})
 
 # ── Branches ──────────────────────────────────────────────────────────────────
@@ -3237,6 +3377,50 @@ def void_payment(pid):
         conn.close(); return jsonify({'status': 'error', 'message': 'Payment not found'}), 404
     if (p['status'] or 'active') != 'active':
         conn.close(); return jsonify({'status': 'error', 'message': 'Payment is not active'}), 409
+    # Stock-accuracy sweep: voiding a SALE receipt through this route
+    # reversed nothing about the sale it belonged to -- not the sales row,
+    # not the sale_items, and above all not the stock those items had
+    # already decremented. BOTH halves are refused, walk-in and named
+    # customer alike, because both end somewhere incoherent:
+    #
+    #   * WALK-IN. create_sale passes party_type/party_id as None (see its
+    #     _record_payment call), so the _adjust_credit block below is
+    #     skipped entirely and the void did precisely one thing: delete the
+    #     money from the ledger. Goods gone, sale still 'completed' and
+    #     still recorded as paid, nobody owing anything. Daily-cash and the
+    #     X/Z drawer report lose the cash; inventory never hears about it.
+    #   * NAMED CUSTOMER. An earlier pass allowed this, on the reasoning
+    #     that _adjust_credit at least turns the paid sale back into a debt.
+    #     It does not hold up. `sales.amount_paid` is left at the full
+    #     amount, so customer_statement() -- which builds its charge list
+    #     from `sales WHERE (total - amount_paid) > 0.005` and its receipt
+    #     list from ACTIVE payments only -- now sees neither the charge nor
+    #     the receipt and computes a running balance of zero, while
+    #     `customers.credit_balance` says the customer owes the money. Two
+    #     screens, two different answers, and the stock is gone in both.
+    #     That is a worse end state than refusing, not a blunter one.
+    #
+    # This route is not the place to invent a sale reversal. The codebase
+    # already has the one operation that reverses a sale correctly and
+    # atomically -- POST /returns (create_return above), which restocks
+    # every line, writes the matching 'return_in' ledger rows, and refunds
+    # through the same money ledger in one transaction. So refuse the
+    # half-reversal and name the operation that does it properly, rather
+    # than silently performing the destructive half here.
+    #
+    # Deliberately NOT affected: customer- and supplier-ACCOUNT payments
+    # (customer_payment/supplier_payment above) and PO payments, which carry
+    # related_type NULL or 'po'. Those move money only -- no goods, no
+    # sales row to contradict -- so voiding one is complete on its own and
+    # stays available; the statement views already carry their payment_id
+    # for exactly that. Nothing in products/retail/frontend calls this route
+    # today, so the refusal takes no button away from anyone; it closes the
+    # API path before a screen is built on top of it.
+    if p['related_type'] == 'sale':
+        conn.close()
+        return jsonify({'status': 'error',
+                         'message': 'This receipt belongs to a sale. Process a return against that sale '
+                                    'instead -- a return reverses the stock and the money together.'}), 409
     try:
         conn.execute("UPDATE payments SET status='voided', voided_by=?, voided_at=?, notes=COALESCE(notes,'')||? WHERE id=?",
                      (_uid(), _now(), f" [VOID: {data.get('reason','')}]", pid))
@@ -3456,6 +3640,119 @@ def demo_seed():
     from commercial_runtime.security.audit import record as _sec_audit, DEMO_RESET_EXECUTED
     _sec_audit(cid, _uid(), DEMO_RESET_EXECUTED, context={'action': 'demo_seed'})
     return jsonify({'status': 'success', 'message': 'Retail seeded.'})
+
+
+# ── Inventory reconciliation (maintenance) ────────────────────────────────────
+# Stock-accuracy sweep. `inventory_balances.quantity_on_hand` is a mutable
+# STORED cache written by five independent paths (create_sale,
+# create_return, receive_purchase_order, adjust_stock, and import_api's
+# _handle_retail_products), each of which is also expected to append the
+# matching signed row to `inventory_movements` -- and nothing in this
+# codebase ever checked that the two still agreed. That is why every stock
+# bug here has been silent AND permanent: fixing a writer stops new drift,
+# but the drift already baked into a customer's database stays there
+# forever with no operation able to see it, let alone undo it.
+#
+# Exposed the same way this file's other maintenance operations are (see
+# demo_wipe/demo_seed above and commercial_runtime/backup/routes.py): plain
+# admin-gated HTTP routes on the existing blueprint, no new surface, no CLI.
+# Split deliberately in two:
+#
+#   GET  /inventory/reconciliation         read-only drift report, safe on a
+#                                          live till, safe to call any time;
+#                                          company admin, because what it
+#                                          RETURNS is the whole catalogue
+#                                          and stock position, not because
+#                                          of what it writes
+#   POST /inventory/reconciliation/repair  rewrites the cache from the
+#                                          ledger; company admin + an
+#                                          explicit company-specific
+#                                          confirmation token, exactly the
+#                                          shape demo_wipe uses
+#
+# The repair is NOT folded into the report and NOT run automatically:
+# drift is evidence that one of the five writers is broken, and a
+# self-healing read would erase that evidence and hide the next
+# regression. See core/retail/stock_reconciliation.py for why the repair
+# writes no correcting movement row.
+
+@retail_bp.route('/inventory/reconciliation', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def inventory_reconciliation():
+    """Report (never repair) every product/branch balance that disagrees
+    with the inventory_movements ledger it is supposed to be a cache of.
+
+    Company-admin gated, like its repair twin. Read-only does not mean
+    low-value: this response is a full dump of the company's catalogue and
+    stock position -- product name, SKU, branch and quantity for every
+    drifted (product, branch) -- with no pagination and no filtering. Login
+    plus a retail-subsystem permission is what a cashier has, and a cashier
+    has no business exporting the whole stock ledger. The gate matches what
+    the endpoint DISCLOSES, not how little it writes.
+    """
+    admin_guard = _require_company_admin()
+    if admin_guard is not None:
+        return admin_guard
+
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        rows = stock_reconciliation.compute_drift(conn, cid)
+    except sqlite3.DatabaseError as exc:
+        current_app.logger.exception("inventory_reconciliation failed: %s", exc)
+        return jsonify({'status': 'error', 'message': 'Could not reconcile inventory.'}), 400
+    finally:
+        conn.close()
+    return jsonify({'status': 'success', 'data': {
+        'drift_count': len(rows),
+        # Net, not absolute: a +10/-10 pair nets to zero and that is the
+        # honest headline number for "is the company's total stock figure
+        # overstated?". drift_count is what says how many rows are wrong.
+        'net_drift': round(sum(r['drift'] for r in rows), 4),
+        'rows': rows,
+    }})
+
+
+@retail_bp.route('/inventory/reconciliation/repair', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.stock.adjust", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+def repair_inventory_reconciliation():
+    """Rewrite every drifted cached balance from the ledger, in one
+    transaction, with one audit_log row per repaired balance.
+
+    BEGIN IMMEDIATE wraps the recompute AND the overwrite together: without
+    it a sale committing between the two would be counted in the ledger
+    total that was read and then overwritten away by the balance that was
+    written, i.e. the repair itself would create fresh drift.
+    """
+    cid = _cid()
+    for guard in (_require_company_admin(), _require_confirmation('RECONCILE', cid)):
+        if guard is not None:
+            return guard
+
+    conn = get_retail_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        result = stock_reconciliation.repair_drift(conn, cid)
+        for row in result['repaired']:
+            _audit(conn, 'STOCK_RECONCILED', 'product', row['product_id'],
+                   f"branch={row['branch_id']}, stored={row['stored_balance']} -> "
+                   f"ledger={row['ledger_balance']} (drift={row['drift']})")
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("repair_inventory_reconciliation failed: %s", exc)
+        return jsonify({'status': 'error', 'message': 'Could not repair inventory balances.'}), 400
+    finally:
+        conn.close()
+    return jsonify({'status': 'success', 'data': {
+        'repaired_count': len(result['repaired']),
+        'skipped_count': len(result['skipped']),
+        'repaired': result['repaired'],
+        'skipped': result['skipped'],
+    }})
 
 
 # ── Sync health ───────────────────────────────────────────────────────────────
@@ -3709,19 +4006,23 @@ def _ai_context_products(conn, cid):
 
 
 def _ai_context_sales(conn, cid):
-    today = datetime.now().strftime('%Y-%m-%d')
-    today_row = conn.execute(
-        "SELECT COALESCE(SUM(total),0) as rev, COUNT(*) as cnt FROM sales WHERE company_id=? AND date(created_at)=?",
-        (cid, today)
-    ).fetchone()
-    top = conn.execute("""
-        SELECT p.name, SUM(si.quantity) as units
-        FROM sale_items si JOIN products p ON si.product_id=p.id JOIN sales s ON si.sale_id=s.id
-        WHERE s.company_id=? GROUP BY p.id ORDER BY units DESC LIMIT 3
-    """, (cid,)).fetchall()
-    text = f"Today's sales: {today_row['rev']:.2f} total across {today_row['cnt']} transaction(s)."
+    """The assistant must quote the same revenue the dashboard prints, or it
+    contradicts the screen the user is looking at while asking -- so this
+    reads metrics.revenue()/transactions() rather than being the eighth
+    hand-written SUM(total) in this file. "Overall" for top products is
+    genuinely lifetime -- the sentence says so out loud -- hence
+    period_all_time() rather than a days window; it still goes through the
+    same Period machinery so the scoping is explicit instead of implied by
+    an absent date predicate."""
+    now = datetime.now()   # one instant for both periods -- see the Reports note
+    today_p = metrics.period_today(now)
+    revenue = metrics.revenue(conn, cid, today_p)
+    txns = metrics.transactions(conn, cid, today_p)
+    top = metrics.top_products(conn, cid, metrics.period_all_time(now), limit=3)
+    text = f"Today's sales: {revenue:.2f} total across {txns} transaction(s)."
     if top:
-        text += " Top-selling products overall: " + ', '.join(f"{r['name']} ({r['units']:.0f} sold)" for r in top) + "."
+        text += " Top-selling products overall: " + ', '.join(
+            f"{r['name']} ({r['units_sold']:.0f} sold)" for r in top) + "."
     return text
 
 

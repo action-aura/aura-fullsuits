@@ -44,6 +44,14 @@ from flask import Blueprint, request, jsonify, session
 from commercial_runtime.identity.mt_auth import mt_login_required
 from commercial_runtime.sync.sync_service import nudge as _sync_nudge
 
+# Every quantity comparison this importer makes uses the SAME tolerance the
+# reconciler grades it with (core/retail/stock_reconciliation.py), imported
+# rather than re-typed so the two can never drift apart. Quantities are REAL:
+# an exact `< 0` float comparison would refuse a perfectly legitimate
+# "declare exactly what is on hand" on a fractional-unit product purely
+# because of accumulated IEEE-754 residue.
+from core.retail.stock_reconciliation import DEFAULT_TOLERANCE as _QTY_TOLERANCE
+
 import_bp = Blueprint('import_api', __name__, url_prefix='/api/import')
 
 
@@ -55,6 +63,24 @@ def _demo_blocked():
             'error': 'Data import is not available in the demo. It is included in your downloaded system.'
         }), 403
     return None
+
+
+# Operator-facing contract for the products sheet's stock column. It is a
+# single fixed sentence (no interpolation) precisely so it can live in the
+# en/ar catalogs as a dictionary key -- see products/retail/frontend/locales/.
+STOCK_COLUMN_HELP = (
+    'Total opening stock declared for this product, not a live shelf count. '
+    'Re-importing the same number changes nothing; raising it adds only the difference. '
+    'Sales, returns and manual adjustments are never overwritten. '
+    'Leave the cell blank to leave stock untouched, or enter 0 to declare an opening of zero.'
+)
+
+# Refusal reasons the products handler can attach to a row whose declared
+# opening stock cannot be applied. Fixed sentences, in both catalogs, so the
+# wizard can translate them and append the (untranslatable) SKU and figures --
+# the same shape app-shell.js uses for its admin-device toast.
+STOCK_DECLARATION_BELOW_LEDGER = 'Declared less than has already been sold or moved'
+STOCK_DECLARATION_NEGATIVE = 'Opening quantity cannot be negative'
 
 
 # ── Retail entity schemas ─────────────────────────────────────────────────────
@@ -73,7 +99,16 @@ SCHEMAS = {
                 {'key': 'tax_rate',      'label': 'Tax Rate (%)',         'required': False, 'type': 'number',  'example': '15'},
                 {'key': 'unit',          'label': 'Unit (pcs/kg/box)',    'required': False, 'type': 'text',    'example': 'pcs'},
                 {'key': 'reorder_level', 'label': 'Reorder Level',        'required': False, 'type': 'integer', 'example': '10'},
-                {'key': 'initial_stock', 'label': 'Current Stock Qty',    'required': False, 'type': 'number',  'example': '50'},
+                # Renamed from "Current Stock Qty" when this column stopped
+                # being an absolute SET and became a cumulative opening
+                # DECLARATION applied as a delta (see the long comment at the
+                # stock block in _handle_retail_products). The old label
+                # promised a live count and delivered arithmetic the operator
+                # never asked for; label, example and `help` now say exactly
+                # what the backend does. Both strings are in the en/ar
+                # catalogs -- import-wizard.js renders them through t().
+                {'key': 'initial_stock', 'label': 'Opening Stock Qty',     'required': False, 'type': 'number',  'example': '50',
+                 'help': STOCK_COLUMN_HELP},
             ]
         },
         'customers': {
@@ -1004,7 +1039,11 @@ def execute_import():
     landed = result.get('imported', 0) + result.get('updated', 0)
     if landed == 0:
         result['status'] = 'none'
-    elif result['skipped'] > 0:
+    elif result['skipped'] > 0 or result.get('stock_errors'):
+        # A refused stock declaration is NOT a clean import, even when every
+        # catalogue row landed: the operator asked for a stock figure and did
+        # not get it. Reporting 'ok' here would put a green tick on exactly
+        # the silent-discard this branch exists to end.
         result['status'] = 'partial'
     else:
         result['status'] = 'ok'
@@ -1052,12 +1091,26 @@ def _queue_sync_event(cur, entity_type, entity_id, event_type, payload):
     )
 
 
+# inventory_movements.reference stamped on every stock correction this
+# importer posts for a product it did not create. It is the marker that lets
+# a later import tell its OWN previous declarations apart from real stock
+# events (sales, returns, receipts, manual 'ADJ' adjustments) -- see the long
+# comment at the stock block in _handle_retail_products below.
+_IMPORT_STOCK_REFERENCE = 'IMPORT'
+
+
 def _handle_retail_products(records):
     from database.schema import get_retail_conn
     conn  = get_retail_conn()
     cur   = conn.cursor()
     cid   = _cid()
     imported, skipped, dupes, cat_cache = 0, 0, 0, {}
+    # Products whose declared opening stock could NOT be applied. Structured,
+    # not prose: the wizard translates the fixed `reason` sentence out of the
+    # catalogs and appends the SKU/figures, because i18n.js only translates a
+    # text node whose FULL text is a dictionary key -- an f-string with a SKU
+    # baked in could never be localized.
+    stock_errors = []
 
     branch = conn.execute("SELECT id FROM branches WHERE company_id=? LIMIT 1", (cid,)).fetchone()
     bid = branch['id'] if branch else None
@@ -1137,20 +1190,145 @@ def _handle_retail_products(records):
             })
             imported += 1
 
+        # ── Stock: a DECLARED OPENING figure, applied as a FLOORED DELTA ──
+        # Never an absolute SET, and never below zero. See BLANK vs ZERO and
+        # FLOOR further down for the two rules that make this safe.
+        #
+        # Stock-accuracy sweep. This block used to
+        # `SET quantity_on_hand = <sheet value>` on every import, new
+        # product or not, and wrote NO inventory_movements row at all.
+        # Both halves of that were wrong, and together they produced the
+        # single most-reported "the stock is not accurate" symptom:
+        # import a sheet declaring 50, sell 10 (balance 40), re-import the
+        # SAME unchanged sheet -- and the balance snapped back to 50. Ten
+        # sold units resurrected out of nothing, and the ledger
+        # (opening +50, sale -10 = 40) no longer agreed with the balance
+        # it is supposed to be a cache of, permanently and invisibly.
+        #
+        # Semantics chosen, and why. The sheet's stock column is a
+        # DECLARATION of what the operator says this product started with
+        # -- not a live physical count. A physical count is a stock-take:
+        # a different operation, with a different audit trail, deliberately
+        # exposed as its own route (retail_api.py::adjust_stock). Nothing
+        # in an uploaded file can distinguish "here is my opening
+        # catalogue" from "here is what I just counted on the shelf", and
+        # guessing wrong in the stock-take direction is exactly what
+        # resurrects sold units. So this treats it as a declaration:
+        #
+        #   * NEW product      -> file the declared figure and write the
+        #                         matching 'opening_stock'/'OPENING'
+        #                         movement -- byte-identical to what
+        #                         create_product does for a product added
+        #                         through the UI.
+        #   * EXISTING product -> compare the declared figure against what
+        #                         has ALREADY been declared as opening
+        #                         stock for this product+branch, and post
+        #                         only the DIFFERENCE, as a real signed
+        #                         movement. Re-importing an unchanged sheet
+        #                         is therefore a delta of 0: it moves
+        #                         nothing and cannot resurrect anything.
+        #                         Editing the sheet from 50 to 60 posts a
+        #                         +10 correction that is visible in the
+        #                         ledger like any other stock event.
+        #
+        # "Already declared" counts opening_stock movements (from
+        # create_product or a first import) plus this route's own prior
+        # corrections, matched by reference. It deliberately does NOT count
+        # 'ADJ' manual adjustments, sales, returns or receipts: those are
+        # real stock events, not declarations, and netting them in here
+        # would make a re-import silently undo them.
+        #
+        # BLANK vs ZERO -- made explicit, because delta semantics changed
+        # what a 0 means. The old guard was `if init_stock and
+        # float(init_stock) > 0`, which collapsed "column not mapped",
+        # "empty cell" and "the operator typed 0" into one silent no-op.
+        # Under an absolute SET that was merely odd; under a delta it
+        # silently discards a legitimate instruction. They are now separated
+        # by exactly the thing that distinguishes them: _clean_records
+        # coerces an empty numeric cell (and an unmapped column) to None,
+        # while a typed 0 survives as 0.0.
+        #   * None -> NO OPINION. Stock is left exactly as it is.
+        #   * 0    -> A DECLARATION. "This product opened with nothing",
+        #             processed like any other figure, which can legitimately
+        #             post a negative correction against a prior declaration.
+        #
+        # FLOOR -- the delta is never applied blind. `quantity_on_hand +
+        # delta` is checked against zero FIRST, and a declaration that would
+        # drive the balance negative is REFUSED for that product, with the
+        # reason reported back to the operator; the catalogue half of the row
+        # (name/price/category) still lands. Refusing rather than flooring
+        # matches retail_api.py::adjust_stock, which already answers 400
+        # instead of clamping, and for the same reason: silently flooring
+        # would invent stock that the ledger cannot account for, re-opening
+        # the exact balance-vs-ledger divergence this whole sweep exists to
+        # close. It is also the honest answer -- "I only ever opened with 10"
+        # cannot be true of a product that has already sold 80.
+        #
+        # Net effect for the ledger: every stock change an import makes now
+        # has a movement row behind it, so inventory_movements stays the
+        # single source of truth that
+        # core/retail/stock_reconciliation.py can recompute from.
         init_stock = rec.get('initial_stock')
-        if init_stock and float(init_stock) > 0 and bid:
+        if init_stock is not None and bid:
+            declared = float(init_stock)
+            is_new = not existing
             cur.execute("""
                 INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
                 VALUES (?,?,?,0)
             """, (cid, pid, bid))
-            cur.execute("""
-                UPDATE inventory_balances SET quantity_on_hand=?
-                WHERE company_id=? AND product_id=? AND branch_id=?
-            """, (float(init_stock), cid, pid, bid))
+            already_declared = 0.0
+            if not is_new:
+                declared_row = conn.execute(
+                    "SELECT COALESCE(SUM(quantity),0) FROM inventory_movements "
+                    "WHERE company_id=? AND product_id=? AND branch_id=? "
+                    "AND (movement_type='opening_stock' OR reference=?)",
+                    (cid, pid, bid, _IMPORT_STOCK_REFERENCE)
+                ).fetchone()
+                already_declared = float(declared_row[0] or 0)
+            delta = declared - already_declared
+            on_hand_row = conn.execute(
+                "SELECT quantity_on_hand FROM inventory_balances "
+                "WHERE company_id=? AND product_id=? AND branch_id=?",
+                (cid, pid, bid)).fetchone()
+            on_hand = float(on_hand_row[0] or 0) if on_hand_row else 0.0
+
+            if declared < -_QTY_TOLERANCE:
+                stock_errors.append({
+                    # would_be is None, not on_hand: nothing was computed,
+                    # because a negative declaration is rejected before any
+                    # delta is meaningful. The wizard renders the arrow only
+                    # when there is a real "from -> to" to show.
+                    'sku': sku, 'reason': STOCK_DECLARATION_NEGATIVE,
+                    'declared': declared, 'on_hand': on_hand,
+                    'already_declared': already_declared, 'would_be': None,
+                })
+            elif on_hand + delta < -_QTY_TOLERANCE:
+                stock_errors.append({
+                    'sku': sku, 'reason': STOCK_DECLARATION_BELOW_LEDGER,
+                    'declared': declared, 'on_hand': on_hand,
+                    'already_declared': already_declared,
+                    'would_be': round(on_hand + delta, 4),
+                })
+            elif abs(delta) > _QTY_TOLERANCE:
+                cur.execute("""
+                    UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?
+                    WHERE company_id=? AND product_id=? AND branch_id=?
+                """, (delta, cid, pid, bid))
+                cur.execute("""
+                    INSERT INTO inventory_movements
+                        (company_id,product_id,branch_id,movement_type,quantity,reference,notes,created_by)
+                    VALUES (?,?,?,?,?,?,?,?)
+                """, (cid, pid, bid,
+                      'opening_stock' if is_new else ('stock_in' if delta > 0 else 'stock_out'),
+                      delta,
+                      'OPENING' if is_new else _IMPORT_STOCK_REFERENCE,
+                      '' if is_new else f'Declared stock changed by bulk import ({already_declared} -> {declared})',
+                      _uid()))
 
     conn.commit(); conn.close()
     _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return {'imported': imported, 'updated': dupes, 'skipped': skipped,
+            'stock_errors': stock_errors,
             'message': f'{imported} new products, {dupes} updated.'}
 
 
