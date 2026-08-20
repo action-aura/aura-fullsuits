@@ -106,6 +106,30 @@ Also compiled `.mo` catalogs were shipped, not just `.po` — the `.po` alone ha
 no runtime effect, so a translation-only deploy that forgets the `.mo` silently
 does nothing.
 
+## Development machine — leaked processes, measured 2026-08-20
+
+Not a droplet issue, but it belongs with the measured state because it is a
+standing drag on the machine every build and test run shares.
+
+| PID pair | Started | What | CPU burned |
+|---|---|---|---|
+| 29204 / 19544 | 2026-08-12 | Owner app, `app.run(port=5551)` | small |
+| 21676 / 24936 | 2026-08-18 | Owner app, `app.run(port=5551)` **again** | ~8 CPU-hours |
+| 25620 / 43424 | 2026-08-17 | `aura-retail-demo/scripts/watch_and_build_exe.py` | ~2.5 CPU-hours |
+| 9540 / 36152 | 2026-08-15 | `enhance_server.py` from an agent job tmp dir | small |
+
+Two Owner dev servers cannot both hold port 5551, so one of the pair has been
+failing to bind and retrying since 2026-08-18 — that is where the eight CPU-hours
+went. The exe watcher's 2.5 CPU-hours is the same shape of problem.
+
+Deliberately **not** killed: the watcher rebuilds executables, so a kill during a
+build leaves a corrupt artifact, and the dev servers belong to the operator's own
+session rather than to any agent. Flagged for the owner to clear. The VS Code
+jedi language server in the same process list is legitimate and should stay.
+
+Worth a `Stop`/`SessionEnd` hook that sweeps `app.run(port=5551)` strays, since
+this has now accumulated across at least three separate days.
+
 ## Rollback points
 
 | What | Where |

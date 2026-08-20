@@ -268,6 +268,86 @@ What actually changed:
   `/_internal/sync-checkin`, so Android still cannot recover from a rotation
   that happens *after* activation.
 
+## Phase 1 — security and identity surface (in progress, 2026-08-20/21)
+
+Phase 1 of `multi-device-design.md`: close the auth holes, add the account and
+capability model, wire employee management on desktop and Android. Eight agents;
+seven returned, one (`verify:android-ui`) died on `ECONNRESET` and never ran — the
+Android employee surface therefore has **no independent verification yet** and
+must not be treated as reviewed.
+
+Independent verification of the tree returned **clean** for one area and
+**blocking** for another, so a remediation wave is running on top.
+
+### Verified clean — capability enforcement on ~85 retail routes
+
+A verifier that mapped the routes with its own parser rather than trusting the
+implementer's test found zero ungated mutating routes across all 85 (79 in
+`retail_api.py`, 6 in `import_api.py`). Fail-closed behaviour is proven by a live
+monkeypatch, not asserted. Migration is additive-only against the right database.
+No PIN is used as authorization anywhere. Safe to commit.
+
+### The finding that mattered most
+
+`mt_login_required` appears **zero times** in `onboarding_routes.py`. All eleven
+`/api/admin/*` routes gate on a bare `session.get('mt_role') != 'admin'` read
+straight from the cookie, so they never re-read the users row.
+
+Confirmed by live probe, not by reading: with the admin account set to
+`status='disabled'`, and separately after a `session_version` bump —
+
+| Route | Result |
+|---|---|
+| `GET /api/admin/employees` | **200** |
+| `PUT /api/admin/employees/<id>/role` | **200** |
+| `PUT /api/admin/employees/<id>/pin` | **200** |
+| `POST /api/admin/employees/<id>/permissions` | **200** |
+| `/api/devices` (control) | 401 — correct |
+
+So a stolen admin cookie survives a password reset and can still change roles,
+set PINs and grant cash-variance approval. It is worse than a plain pre-existing
+wart because `update_role`'s own docstring justifies its design on the claim that
+a `session_version` bump means "their very next request re-authenticates" — the
+one thing that does not happen on this surface.
+
+### Remediation wave — four agents, strict file partition
+
+Partitioned by file because the previous wave lost work to concurrent edits: one
+agent had its RED run poisoned mid-task by another's writes. Cross-agent contracts
+(the `/api/auth/session` capabilities array, the two new catalog strings, the
+corrected role sentence) were fixed in advance by the lead rather than left to
+converge — last time that convergence was luck.
+
+| Agent | Owns | Closing |
+|---|---|---|
+| identity backend | `commercial_runtime/identity/**` | the 11 unauthenticated admin routes; `update_status` 404/validation/owner bar; `update_perms` tenant scoping; `mt_require_subsystem` fail-open; capabilities on `/api/auth/session` |
+| retail API | `products/retail/backend/api/**` | `void_payment` authority split; `create_purchase_order`'s `amount_paid` bypass; `import_api` missing subsystem gate |
+| retail frontend | `products/retail/frontend/**` | vacuous owner-row test; role copy vs the real matrix; cashier landing 403; onclick quote breakout |
+| CI + Android | `products/run_all_tests.py`, `.github/**`, `android/**` | 15 orphaned JS tests; Android role copy |
+
+### Open items not yet assigned
+
+- **A flaky authorization test.** `test_void_payment_authority_matches_the_creating_routes_authority`
+  failed 1 run in 5 with body `{'status': 'success'}` where 403 was expected — a
+  cashier or manager voiding a supplier payment through the gate the test guards.
+  Being root-caused. Not to be re-run until green: a check that works four times
+  in five survives review, which makes it worse than one that never works.
+- **`create_purchase_order` is a second, weaker path to a supplier payment.**
+  Gated `retail.stock.adjust` (a manager default) but accepts `amount_paid` and
+  calls `_record_payment(..., 'supplier', ..., 'out', ...)` — the same action both
+  dedicated routes require owner authority for.
+- **`import_api.py` has no `mt_require_subsystem` gate**, not even imported, so
+  the licence/module check never runs on the import surface. A restricted or
+  expired licence does not stop a spreadsheet rewriting the catalogue.
+- **`datetime.utcnow()`** at `onboarding_routes.py:483` (invite-token expiry) —
+  deprecated, 15 warnings per run.
+- **No UI for per-user capability overrides.** `user_accounts.py`'s docstring
+  justifies the permissive cashier default by pointing at the permissions route;
+  that route has no screen. Now that ~85 routes genuinely gate on those codes, a
+  per-user grid would no longer be "a screen that lies" and should be built.
+- **`retail.cash.approve` currently gates nothing** and no role but admin holds
+  it, pending the retail v16 ENDED/CLOSED split. Deliberate, documented.
+
 ## Working agreement for agents on this programme
 
 - Production lineage is `feat/retail-mobile-build-baseline`. Never deploy
