@@ -78,6 +78,14 @@ Ranked by *what actually blocks a launch*, not by how interesting the bug is.
    (`200` where the suite demands `403`). One unset `is_admin_device` flag.
 4. **Reactivate the Owner subscription.** Not code. Until it is done, every write
    on every device is 403-blocked and the product looks broken to any tester.
+5. **Finish the CSP migration in Owner CC.** Under `script-src 'self'` inline
+   handlers never run, and the leftovers fail *silently*: "Void expense" now
+   submits with **no confirmation dialog at all**, add-on availability cannot be
+   changed from the UI, and status filters on six list screens are dead. The
+   correct pattern (`data-confirm` + `static/js/confirm.js`) already exists in
+   this repo and is used by 10+ templates — this is finishing a job, not
+   inventing one. The missing confirmation is a data-loss risk, which is why it
+   sits in Tier 0 rather than with the other UI work.
 
 **Tier 1 — the owner's stated complaints**
 

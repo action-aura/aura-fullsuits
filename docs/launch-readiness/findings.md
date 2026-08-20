@@ -197,6 +197,61 @@ A signed release build is a launch blocker. Version is `versionCode 6`,
 `versionName 1.0.0-rc.5`; ABIs are `arm64-v8a` and `x86_64`.
 — **OPEN**, needs a keystore from the owner.
 
+## Owner Control Center
+
+Two distinct classes of problem, and the first is embarrassingly mechanical.
+
+### The half-finished CSP migration silently killed working controls
+
+Owner CC ships under `script-src 'self'`, so **inline handlers never execute**.
+The repo already has the correct pattern (`data-confirm` + `static/js/confirm.js`,
+used by 10+ templates) — the migration was simply never finished, and the
+leftovers fail *silently*:
+
+| Sev | Location | Consequence |
+|---|---|---|
+| CRITICAL | `templates/catalog/index.html:45` | Add-on availability form's only trigger is `onchange="this.form.submit()"` with no submit button. Changing availability from the UI is **impossible** — the select changes and nothing happens |
+| CRITICAL | `templates/operations_ui/expense_detail.html:117` | `onsubmit="return confirm(...)"` is blocked, so **"Void expense" submits instantly with no confirmation** — the guard silently vanished |
+| HIGH | `templates/components/table.html:72,83,91` and six list templates | Status filters are select-only forms relying on blocked `onchange`, and no submit button renders when `search_label` is unset. Filters on Commissions, Cash Closings, Renewals, Pilots, Activation Reviews and Emergency Extensions are **completely dead** |
+| LOW | `dashboard_finance.html:8`, `dashboard_management.html:8` | Currency switch looks broken unless the user happens to press Enter |
+
+### Cross-screen disagreement — same root cause as the desktop app
+
+| Sev | Location | Defect |
+|---|---|---|
+| CRITICAL | `templates/commercial_sales/finance_dashboard.html:28` | Reads `outstanding_invoice_total`, but the service renamed the key to a per-currency dict `outstanding_invoice_totals` (`dashboards.py:139`). Jinja's default Undefined renders empty, so the Finance dashboard's "Outstanding invoice total" is **permanently blank** while the JSON twin and the Management dashboard both show real money |
+| HIGH | `attention/service.py:411` vs `:393` | "Pending Commission Approvals" counts `status=="EARNED"` but links to `?status=PENDING` — a status no code path ever assigns. The badge says N; clicking through opens an **empty list** |
+| HIGH | `commercial_sales/dashboards.py:51-56` | `own_commission_sum` has no currency filter — it adds USD and JOD into one meaningless number, while every finance screen is per-currency |
+| HIGH | `operational_reports/dashboards.py:95,101` | Expense totals by category/employee exclude only VOID, so DRAFT, SUBMITTED, RETURNED and **REJECTED** expenses inflate Management's totals, which can then never reconcile with the same screen's paid-expenses figure |
+| MEDIUM | `operational_reports/dashboards.py:105-118` | Expense approval and duplicate queues have no currency filter while every adjacent figure does — row-to-row inconsistency on a single screen |
+| MEDIUM | `attention/service.py` (LIMIT 100/200) vs `leads/dashboard.py:98-102` (unbounded) | Badge counts capped items, dashboards count all rows — past 100 overdue follow-ups the topbar and the CRM dashboard disagree |
+| LOW | `attention/service.py:563` vs `commercial_sales/routes.py:166` | A `pricing.override`-only holder sees a quote-approval item, clicks it, gets 403 |
+| LOW | `aggregation.py:40,49,57` | Period bounds use server-local `date.today()` against UTC-cast timestamps — rows near midnight land in different periods if the server TZ is not UTC |
+
+### Performance — "everything is slow" has a specific cause
+
+`app/__init__.py:62` runs the attention-items context processor on **every page
+view**. Inside it: 200 payments each triggering an unallocated-balance query,
+100 approvals × 2 lookups, 100 invoices each re-querying allocations, plus one
+history query per suspended licence. For a finance user, every single page
+navigation fires hundreds of queries. Compounding it, `owner/app` contains
+**zero** `joinedload`/`selectinload`, and the renewals/pilots/notifications
+lists are unbounded `.all()` with per-row lazy loads.
+
+### Verified clean
+
+All 396 routes cross-checked for `url_for` BuildErrors (zero), every template
+global registered, nav-model permission gates match their route decorators, the
+overdue-invoice definition is genuinely shared, and empty-period division is
+guarded.
+
+**Structural cause, matching the desktop app's:** there is no metric layer with
+a stable contract. Every consumer — HTML template, JSON twin, attention badge,
+dashboard service — binds to service dicts by loose string keys and re-derives
+scope, currency and status filters locally. A key rename, a currency filter
+present in one place and missing in another, or a `LIMIT` in one consumer
+desynchronizes screens **with no error raised anywhere**.
+
 ## Test baseline (measured, 2026-08-20)
 
 `python products/run_all_tests.py` on the production lineage — one process per
