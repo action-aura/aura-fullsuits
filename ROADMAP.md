@@ -370,3 +370,66 @@ it) — misleading enough that it looked like a merge hadn't happened.
 `git rev-parse`, `git reflog`, and `git show --stat` were reliable and used
 for all verification in this entry instead. Worth a closer look before
 trusting `rtk git log` output around merge commits again.
+
+---
+
+## 2026-08-21 — schema-version reservation: launch-readiness Phases 1-7
+
+Reserved **before** dispatching any agent, not after, because this ledger's own
+2026-08-12 correction records what happens otherwise: two branches both claimed
+v9, and it did **not** fail loudly at merge time. `_migrate_retail_schema` gates
+on live schema shape rather than the version integer, so a double-claim produces
+a silently wrong `user_version` rather than a conflict git would surface.
+
+Programme: `docs/launch-readiness/multi-device-design.md`, branch
+`feat/launch-readiness`.
+
+### Claimed
+
+| Version | Database | Phase | What |
+|---|---|---|---|
+| registry **v3** | `registry.db` | 1 — **DONE**, commit `28150c8` | `users.uid`/`pin_hash`/`row_version`/`updated_at_utc`/`deleted_at_utc`; role widened to {admin, manager, cashier}; capability rows seeded |
+| retail **v13** | `retail.db` | 2 | `uid` + unique index on `branches`/`sales`/`sale_items`/`returns`/`return_items`/`inventory_movements`/`payments`; `actor_user_uid`/`terminal_id`/`created_at_utc` on the transactional tables; `row_version`/`updated_at_utc`/`deleted_at_utc` on the four catalogue tables and `reorder_requests` |
+| retail **v14** | `retail.db` | 2 | rebind `company_id` from `md5(admin_email)` to the Owner-issued value in the licence assertion, across all ~13 scoped tables in one transaction |
+| retail **v15** | `retail.db` | 3 | opening-count movement for every balance row with no ledger history; refuses to advance `user_version` if drift ≠ 0 |
+| retail **v16** | `retail.db` | 4 | terminal-bound drawer; `UNIQUE(company_id, terminal_id) WHERE status='open'`; `ended_at`/`ended_by` for the ENDED/CLOSED split |
+| retail **v17** | `retail.db` | 6 | drop dead `quantity_reserved`; create `sync_conflicts` and `stock_exceptions` |
+
+`RETAIL_SCHEMA_VERSION` is **12** at `schema.py:190` as of this entry.
+`REGISTRY_SCHEMA_VERSION` is **3** at `registry_db.py` (advanced by Phase 1).
+
+### Rules for anyone else touching schema.py before Phase 7 lands
+
+1. **Do not claim 13 through 17 on any other branch.** Take v18 and add a row
+   here first. The cost of asking is a minute; the cost of colliding is a
+   migration that runs against the wrong shape on a customer's live database.
+2. v13 through v17 are applied **strictly in order**, each as one idempotent
+   function appended last in `_migrate_retail_schema` — the convention that file
+   already documents at `schema.py:861-911`.
+3. **No table rebuild, no `id_map`, no `DROP`/`RENAME`** on any of them.
+   `_migrate_products_to_uuid`'s risk profile (`schema.py:528-660`) is
+   deliberately not repeated on live sales data. Additive only.
+4. v14 **must** precede any sync widening. Rebinding `company_id` after rows have
+   already been pushed means they arrive scoped to a tenant the receiver does not
+   recognise.
+5. v15 is a **gate, not just a migration**: it runs `compute_drift` before and
+   after and refuses to advance the version marker if drift is non-zero. Do not
+   "fix" a failing v15 by relaxing that check — a failure there means the
+   ledger genuinely cannot reproduce the cached balances, which is the whole
+   complaint the phase exists to answer.
+
+### Two things Phase 5 must not open the firehose without
+
+Recorded here because they are easy to defer and expensive to retrofit:
+
+- **Owner-side pruning of `owner_sync_events`** below the slowest device cursor.
+  Volume goes from tens to roughly 5,000 events/day/device of full-row JSONB into
+  a table with no TTL and no `DELETE` anywhere in `owner/app/sync/routes.py`.
+- **A quarantine path for poison events.** Apply is all-or-nothing today
+  (`routes.py:338-340` rolls the whole batch back on `INVALID_EVENT`), so one bad
+  row stops a shop syncing permanently. Quarantine + skip + surface must land
+  before Phase 5, and every quarantined event stays visible and replayable —
+  never silently dropped.
+
+Unchanged and not to be touched by any of this:
+`pg_advisory_xact_lock(hashtext(license_id))` in `owner/app/sync/routes.py`.
