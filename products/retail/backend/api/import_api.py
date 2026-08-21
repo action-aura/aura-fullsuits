@@ -35,28 +35,59 @@ extraction -- see docs/migration/retail-parity-matrix.md.
 """
 import csv
 import io
+import os
 import re
 import json as _json
 import uuid as _uuid
 from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, session
 
-from commercial_runtime.identity.mt_auth import mt_login_required, mt_require_capability
+from commercial_runtime.identity.mt_auth import mt_login_required, mt_require_subsystem, mt_require_capability
 # Every POST below is gated on retail.stock.adjust. `execute`/`smart-execute`
 # write products, customers, suppliers, branches and OPENING STOCK, which
 # makes this the sixth writer into inventory_balances (see
 # core/retail/stock_reconciliation.py's list) and by some distance the
 # highest-leverage one -- a single upload can restate the whole catalogue.
-# Until now these routes carried @mt_login_required alone: not even the
-# subsystem gate every route in retail_api.py has, so any signed-in account
-# in the company could rewrite the shop's stock from a spreadsheet.
+#
+# Two gates on every POST below, same as every mutating route in
+# retail_api.py: mt_require_subsystem is the LICENCE/module check ("is this
+# install actually licensed for Retail?"); mt_require_capability is the
+# PERMISSION check ("may THIS PERSON do this?"). Until this pass these five
+# routes carried @mt_login_required and mt_require_capability alone -- not
+# the subsystem gate every route in retail_api.py has, and not the
+# licensing-STATE gate (require_license_capability, below) those same
+# routes carry either. A restricted or expired licence therefore did not
+# stop a spreadsheet from rewriting the shop's whole catalogue and opening
+# stock -- the exact class of mutation a restricted licence exists to
+# block -- and any signed-in account whose company had never provisioned
+# the Retail module could reach these routes at all.
 #
 # parse/detect/clean write nothing -- they preview the same upload -- but they
 # are gated too rather than carved out. A preview of an import the caller may
 # never run is not an authority worth keeping separate, and an exemption is
 # one more shape a future route could quietly take.
 from commercial_runtime.identity.user_accounts import CAP_STOCK_ADJUST
+from commercial_runtime.licensing_contracts.flask_guard import make_capability_guard
 from commercial_runtime.sync.sync_service import nudge as _sync_nudge
+from config import DATABASE_DIR
+
+# Own instance rather than importing retail_api's -- retail_api.py is a peer
+# route module (see _queue_sync_event's comment below for the same
+# principle applied to sync events), and importing a name across it would
+# create exactly the route-module coupling this file otherwise avoids.
+# make_capability_guard(app_data_dir) is deterministic in that argument, so
+# this instance and retail_api.py's point at the SAME licensing.db and
+# agree on every decision; it is a second handle on one state machine, not
+# a second one.
+require_license_capability = make_capability_guard(os.path.dirname(DATABASE_DIR))
+
+# Every one of these five routes is squarely in RETAIL_RESTRICTED_ALLOWLIST's
+# own "everything else... is blocked" bucket (retail_api.py's comment on that
+# allowlist: "new products/suppliers/customers, stock adjustment... is
+# blocked") -- there is no read-only/export shape here worth exempting, so
+# this is deliberately empty rather than a second, driftable copy of
+# retail_api.py's allowlist.
+_IMPORT_RESTRICTED_ALLOWLIST = frozenset()
 
 # Every quantity comparison this importer makes uses the SAME tolerance the
 # reconciler grades it with (core/retail/stock_reconciliation.py), imported
@@ -539,6 +570,8 @@ def get_schemas():
 
 @import_bp.route('/parse', methods=['POST'])
 @mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.data.import", restricted_mode_allowlist=_IMPORT_RESTRICTED_ALLOWLIST)
 @mt_require_capability(CAP_STOCK_ADJUST)
 def parse_file_endpoint():
     """Upload a file, return column names, sample values, row count, and auto-detected mapping."""
@@ -686,6 +719,8 @@ def _file_samples(headers, rows, keep=15):
 
 @import_bp.route('/detect', methods=['POST'])
 @mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.data.import", restricted_mode_allowlist=_IMPORT_RESTRICTED_ALLOWLIST)
 @mt_require_capability(CAP_STOCK_ADJUST)
 def detect_entities():
     """Scan an uploaded file against every Retail entity and return the ones it
@@ -769,6 +804,8 @@ def detect_entities():
 
 @import_bp.route('/smart-execute', methods=['POST'])
 @mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.data.import", restricted_mode_allowlist=_IMPORT_RESTRICTED_ALLOWLIST)
 @mt_require_capability(CAP_STOCK_ADJUST)
 def smart_execute():
     """Import one (possibly combined) file into MULTIPLE Retail entities in one
@@ -969,6 +1006,8 @@ def _clean_records(rows, mapping, schema_fields):
 
 @import_bp.route('/clean', methods=['POST'])
 @mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.data.import", restricted_mode_allowlist=_IMPORT_RESTRICTED_ALLOWLIST)
 @mt_require_capability(CAP_STOCK_ADJUST)
 def clean_preview():
     """Parse + run the cleaning pipeline and return the audit report WITHOUT importing."""
@@ -1005,6 +1044,8 @@ def clean_preview():
 
 @import_bp.route('/execute', methods=['POST'])
 @mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.data.import", restricted_mode_allowlist=_IMPORT_RESTRICTED_ALLOWLIST)
 @mt_require_capability(CAP_STOCK_ADJUST)
 def execute_import():
     """Re-upload file + mapping → clean, validate, and import all clean rows."""

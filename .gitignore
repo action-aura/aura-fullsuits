@@ -136,3 +136,6 @@ Thumbs.db
 # Owner runtime artifact dirs (backups, expense attachments, release artifacts)
 # created relative to the process cwd -- machine-local, never committed.
 /var/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+graft/

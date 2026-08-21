@@ -240,6 +240,7 @@
   "You do not have permission for this action. Ask your store administrator.": "You do not have permission for this action. Ask your store administrator.",
   "You do not have permission to apply a discount.": "You do not have permission to apply a discount.",
   "You do not have permission to change credit terms.": "You do not have permission to change credit terms.",
+  "You do not have permission to record a payment to a supplier.": "You do not have permission to record a payment to a supplier.",
 
   "A PIN identifies who is acting. It does not grant permission.": "A PIN identifies who is acting. It does not grant permission.",
   "A cashier can sell, refund against a sale, and close their own drawer. A manager can also discount, adjust stock and read reports.": "A cashier can sell, refund against a sale, and close their own drawer. A manager can also discount, adjust stock and read reports.",

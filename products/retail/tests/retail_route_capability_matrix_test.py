@@ -1120,3 +1120,231 @@ def test_void_payment_authority_outcome_tracks_the_live_capability_verdict(shop,
         r = actor.post(f'/api/sub/retail/payments/{pid}/void', json={'reason': 'forced-deny probe'})
         assert r.status_code == 403, (role, 'forced False -- including admin: no hardcoded bypass at this '
                                        'call site is allowed to exist', r.get_json())
+
+
+# ── Fix 1: create_purchase_order's amount_paid is a weaker second path to a ──
+#     supplier payment (same class of bug as B1's void_payment split)
+#
+# supplier_payment (~3497) and pay_purchase_order (~3521) both require
+# CAP_EMPLOYEES to move money OUT to a supplier. create_purchase_order itself
+# is gated only CAP_STOCK_ADJUST -- correct for ORDERING stock, a manager-
+# level action -- but its own `amount_paid` field posts that exact same
+# money-out payment (~1284) under that weaker gate. A manager, refused by
+# both dedicated payment routes, could pay a supplier by typing a number
+# into a brand-new PO instead.
+
+def _po_count(company_id):
+    conn = get_retail_conn()
+    n = conn.execute("SELECT COUNT(*) FROM purchase_orders WHERE company_id=?", (company_id,)).fetchone()[0]
+    conn.close()
+    return n
+
+
+def _po_payload(product_id, supplier_id, amount_paid):
+    payload = {'supplier_id': supplier_id, 'items': [{'product_id': product_id, 'quantity': 1, 'unit_cost': 15}]}
+    if amount_paid is not None:
+        payload['amount_paid'] = amount_paid
+    return payload
+
+
+def test_create_purchase_order_payment_authority_matches_the_dedicated_payment_routes(shop):
+    """The headline of this fix: before it, every assertion below expecting
+    403 for a non-zero amount_paid returned 200 instead, with a real
+    payments row recorded -- a manager paid a supplier by embedding
+    amount_paid in a new PO. Expected outcomes are derived from
+    capabilities_for_role() (both CAP_STOCK_ADJUST, the route's own
+    decorator floor, and CAP_EMPLOYEES, the new in-handler gate) rather than
+    hardcoded, so this tracks the real seeded defaults; the existing guard
+    test (test_the_three_roles_used_by_the_void_split_actually_differ)
+    already pins that cashier/manager/admin do not collapse together."""
+    admin, company_id, product_id = shop
+
+    def _expected(caps, amount_paid):
+        if user_accounts.CAP_STOCK_ADJUST not in caps:
+            return 403
+        if (amount_paid or 0) > 0.005 and user_accounts.CAP_EMPLOYEES not in caps:
+            return 403
+        return 200
+
+    for role, caps in (
+        ('cashier', user_accounts.capabilities_for_role(user_accounts.ROLE_CASHIER)),
+        ('manager', user_accounts.capabilities_for_role(user_accounts.ROLE_MANAGER)),
+        ('admin', user_accounts.capabilities_for_role(user_accounts.ROLE_ADMIN)),
+    ):
+        for amount_paid in (0, 20):
+            actor = admin if role == 'admin' else _make_user(role, company_id=company_id)[0]
+            sup_id = _create_supplier(admin)
+            before = _po_count(company_id)
+            r = actor.post('/api/sub/retail/purchase-orders', json=_po_payload(product_id, sup_id, amount_paid))
+            expected = _expected(caps, amount_paid)
+            assert r.status_code == expected, (role, amount_paid, r.get_json())
+            after = _po_count(company_id)
+            if expected == 200:
+                assert after == before + 1, (role, amount_paid, "PO should have been created")
+                if amount_paid and amount_paid > 0.005:
+                    conn = get_retail_conn()
+                    row = conn.execute(
+                        "SELECT id FROM payments WHERE company_id=? AND party_id=? AND related_type='po' "
+                        "ORDER BY id DESC LIMIT 1", (company_id, sup_id)).fetchone()
+                    conn.close()
+                    assert row, (role, amount_paid, "the down-payment should have been recorded")
+            else:
+                assert after == before, (role, amount_paid, "a refused request must not create the PO at all -- "
+                                          "the PO and its payment component are refused TOGETHER, not partially")
+
+
+def test_create_purchase_order_payment_authority_resists_amount_paid_evasions(shop):
+    """The gate re-uses the SAME _money() coercion and SAME > 0.005
+    threshold the real payment write uses (one local variable, computed
+    once), so no numeric spelling of a real payment can reach
+    _record_payment without first passing through here."""
+    admin, company_id, product_id = shop
+    manager_can_pay = user_accounts.CAP_EMPLOYEES in user_accounts.capabilities_for_role(user_accounts.ROLE_MANAGER)
+
+    # absent amount_paid -> allowed regardless (nothing paid out)
+    manager, _, _ = _make_user('manager', company_id=company_id)
+    sup_id = _create_supplier(admin)
+    r = manager.post('/api/sub/retail/purchase-orders', json=_po_payload(product_id, sup_id, None))
+    assert r.status_code == 200, r.get_json()
+
+    # zero -> allowed
+    manager, _, _ = _make_user('manager', company_id=company_id)
+    sup_id = _create_supplier(admin)
+    r = manager.post('/api/sub/retail/purchase-orders', json=_po_payload(product_id, sup_id, 0))
+    assert r.status_code == 200, r.get_json()
+
+    # negative -> allowed. It never posted a payment before this fix either
+    # (the pre-existing `if amount_paid > 0.005:` guard already excludes
+    # it), so refusing it here would be refusing a case that pays nothing.
+    manager, _, _ = _make_user('manager', company_id=company_id)
+    sup_id = _create_supplier(admin)
+    r = manager.post('/api/sub/retail/purchase-orders', json=_po_payload(product_id, sup_id, -50))
+    assert r.status_code == 200, r.get_json()
+
+    # a numeric STRING that coerces to a real amount -> refused exactly like
+    # the float form (unless the role actually holds CAP_EMPLOYEES)
+    manager, _, _ = _make_user('manager', company_id=company_id)
+    sup_id = _create_supplier(admin)
+    before = _po_count(company_id)
+    r = manager.post('/api/sub/retail/purchase-orders', json=_po_payload(product_id, sup_id, '20'))
+    expected = 200 if manager_can_pay else 403
+    assert r.status_code == expected, r.get_json()
+    assert _po_count(company_id) == (before + 1 if expected == 200 else before)
+
+    # a float that rounds UP past the 0.005 threshold under _money()'s
+    # ROUND_HALF_UP quantize (0.006 -> 0.01) -> refused, not waved through
+    # as "basically zero"
+    manager, _, _ = _make_user('manager', company_id=company_id)
+    sup_id = _create_supplier(admin)
+    before = _po_count(company_id)
+    r = manager.post('/api/sub/retail/purchase-orders', json=_po_payload(product_id, sup_id, 0.006))
+    expected = 200 if manager_can_pay else 403
+    assert r.status_code == expected, r.get_json()
+    assert _po_count(company_id) == (before + 1 if expected == 200 else before)
+
+
+# ── Fix 2: import_api.py carries no mt_require_subsystem gate ────────────────
+#
+# Every route in retail_api.py carries BOTH mt_require_subsystem (the
+# licence/module check) and a capability gate (the permission check). The
+# five import_api.py POSTs carry only the capability gate -- confirmed by
+# grep returning zero matches for mt_require_subsystem in that file, not
+# even an import.
+
+IMPORT_POST_ROUTES = (
+    '/api/import/parse', '/api/import/detect', '/api/import/smart-execute',
+    '/api/import/clean', '/api/import/execute',
+)
+
+
+def _make_user_without_retail_module(role, *, company_id):
+    """Same shape as _make_user, but WITHOUT the legacy retail subsystem
+    grant every other _make_user call seeds -- the exact account shape
+    mt_require_subsystem('retail') exists to refuse. role='manager' (not
+    'admin', which bypasses this specific check; not 'cashier', which would
+    also be refused by the capability gate and so would not isolate which
+    gate actually fired)."""
+    email = f"cap-nosubsys-{uuid.uuid4().hex[:10]}@test.local"
+    password = "CapMatrixPW1"
+    user_id = str(uuid.uuid4())
+    conn = registry_conn()
+    conn.execute(
+        "INSERT INTO users (id, company_id, employee_id, email, password_hash, role, status, require_password_change) "
+        "VALUES (?,?,?,?,?,?,?,0)",
+        (user_id, company_id, f"EMP-{uuid.uuid4().hex[:6]}", email, hash_password(password), role, "active"),
+    )
+    user_accounts.seed_capabilities_for_user(conn, user_id, role)
+    conn.commit()
+    conn.close()
+
+    client = app.test_client()
+    r = client.post('/api/auth/login', json={'email': email, 'password': password})
+    assert r.status_code == 200, r.get_json()
+    return client
+
+
+def test_import_routes_now_carry_the_subsystem_gate(shop):
+    """A manager -- HAS retail.stock.adjust, so the capability gate alone
+    would let them through -- but built WITHOUT the legacy retail subsystem
+    row, must be refused on all five import POSTs. Before this fix these
+    five routes had no such gate at all, so this account shape sailed
+    through every one of them."""
+    _admin, company_id, _product_id = shop
+    denied = _make_user_without_retail_module('manager', company_id=company_id)
+    for path in IMPORT_POST_ROUTES:
+        r = denied.post(path)
+        assert r.status_code == 403, (path, r.get_json())
+
+
+def test_import_routes_unaffected_for_a_normal_session(shop):
+    """The new gate must not regress a session that DOES carry the
+    subsystem grant. Proven by reaching the HANDLER's own 400 ("No file
+    uploaded") rather than being stopped by either gate -- for admin
+    (bypasses both), a manager (has the subsystem row AND
+    retail.stock.adjust), and a cashier (has the subsystem row but lacks
+    retail.stock.adjust, so is correctly refused by the capability gate,
+    unaffected by this fix)."""
+    admin, company_id, _product_id = shop
+    manager, _, _ = _make_user('manager', company_id=company_id)
+    cashier, _, _ = _make_user('cashier', company_id=company_id)
+    for path in IMPORT_POST_ROUTES:
+        r = admin.post(path)
+        assert r.status_code == 400, (path, r.get_json())
+        r = manager.post(path)
+        assert r.status_code == 400, (path, r.get_json())
+        r = cashier.post(path)
+        assert r.status_code == 403, (path, r.get_json())
+
+
+def test_import_routes_are_blocked_under_a_restricted_license(shop, monkeypatch):
+    """RETAIL_RESTRICTED_ALLOWLIST's own reasoning (retail_api.py ~70-78):
+    'new products/suppliers/customers, stock adjustment... is blocked'
+    under a restricted licence. execute/smart-execute rewrite the whole
+    catalogue and opening stock -- squarely in that bucket -- yet had NO
+    licence-state gate at all before this fix. Monkeypatches
+    LicenseStateRepository.load (module-global, matching this file's
+    existing pattern for mt_auth's registry-read failure test) rather than
+    touching the real licensing.db this whole module's fixtures share, so
+    no other test's license state is disturbed."""
+    from commercial_runtime.licensing_contracts import flask_guard
+    from commercial_runtime.licensing_contracts.state_repository import LicenseStateRecord
+
+    admin, _company_id, _product_id = shop
+
+    def fake_load(self):
+        return LicenseStateRecord(
+            licensing_schema_version=1, product_code='AURA_RETAIL', platform='WINDOWS',
+            current_state='RESTRICTED',
+        )
+
+    monkeypatch.setattr(flask_guard.LicenseStateRepository, 'load', fake_load)
+    for path in IMPORT_POST_ROUTES:
+        r = admin.post(path)
+        body = r.get_json()
+        assert r.status_code == 403, (path, body)
+        assert body.get('message') == 'This action is not available in the current licensing state.', (path, body)
+    monkeypatch.undo()
+
+    # restored: the handler is reachable again
+    r = admin.post(IMPORT_POST_ROUTES[0])
+    assert r.status_code == 400, r.get_json()

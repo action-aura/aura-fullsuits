@@ -166,6 +166,11 @@ RETAIL_RESTRICTED_ALLOWLIST = frozenset({
 #: third and covers every route-level refusal.
 DISCOUNT_DENIED_MESSAGE = 'You do not have permission to apply a discount.'
 CREDIT_TERMS_DENIED_MESSAGE = 'You do not have permission to change credit terms.'
+#: create_purchase_order's own amount_paid field (~1283 below) -- a THIRD
+#: field-level check, same shape as the two above. Not yet a catalog key as
+#: of this pass; report the exact English to whoever owns
+#: products/retail/frontend/locales/{en,ar}.json before this ships.
+SUPPLIER_PAYMENT_DENIED_MESSAGE = 'You do not have permission to record a payment to a supplier.'
 
 # ── Session helpers ────────────────────────────────────────────────────────────
 def _cid():
@@ -1257,13 +1262,56 @@ def create_purchase_order():
     items = data.get('items', [])
     if not items:
         return jsonify({'status': 'error', 'message': 'At least one item required'}), 400
+
+    # AUDIT: same asymmetry class as void_payment's B1 fix above -- ordering
+    # a PO is retail.stock.adjust (a manager-level action, and this route's
+    # own decorator floor stays exactly that), but this route's OWN
+    # amount_paid field posts a real money-out payment to the supplier via
+    # _record_payment below (~1310ish; the identical action supplier_payment
+    # and pay_purchase_order both require CAP_EMPLOYEES for, with an
+    # explicit comment on supplier_payment that receiving a delivery and
+    # paying for it are different authorities). Without this check that
+    # CAP_EMPLOYEES gate was decoration only: a manager correctly refused
+    # by both dedicated payment routes could still pay a supplier by typing
+    # a number into amount_paid on a brand-new PO instead.
+    #
+    # Refuses the WHOLE request rather than creating the PO and silently
+    # dropping amount_paid, on purpose. This route has no partial-success
+    # shape in its response (unlike execute_import's `warnings` list) to
+    # hang a "payment not recorded" notice on, and silently dropping a
+    # figure someone typed into a money field is how a shop ends up
+    # believing a supplier was paid when they were not -- the PO would show
+    # payment_status='unpaid' with no error, which reads as this route
+    # working, not as it refusing part of the request. Refusing outright
+    # gives the caller nothing rather than a wrong thing; they can retry
+    # with amount_paid omitted and have an owner record the down-payment
+    # through pay_purchase_order once CAP_EMPLOYEES is available.
+    #
+    # amount_paid is computed HERE, ONCE, via the same _money() coercion and
+    # the same > 0.005 threshold the real payment write uses further down --
+    # that single local is reused rather than recomputed, so no numeric
+    # spelling (absent, 0, negative, a numeric string, a float that rounds
+    # up under ROUND_HALF_UP) can reach _record_payment without first
+    # passing through this exact check. Negative values fall out of scope
+    # for the same reason they already fell out of the pre-existing
+    # `if amount_paid > 0.005:` guard below: they were never going to post a
+    # payment either way.
+    #
+    # Checked BEFORE get_retail_conn()/_next_ref() -- this route holds no
+    # explicit BEGIN IMMEDIATE, but _next_ref() is the first statement that
+    # writes (it increments doc_sequences), so the refusal has to run even
+    # earlier than that to have no side effect at all, same rule
+    # void_payment's check documents relative to its own write.
+    amount_paid = _money(data.get('amount_paid', 0))
+    if amount_paid > 0.005 and not session_has_capability(CAP_EMPLOYEES):
+        return jsonify({'status': 'error', 'message': SUPPLIER_PAYMENT_DENIED_MESSAGE}), 403
+
     conn = get_retail_conn()
     _ensure_credit_schema(conn)
     cur  = conn.cursor()
     po_number = _next_ref(conn, cid, 'po')
     total = _money(sum(float(i.get('unit_cost', 0)) * float(i.get('quantity', 0)) for i in items))
     supplier_id = data.get('supplier_id')
-    amount_paid = _money(data.get('amount_paid', 0))
     payment_status = 'paid' if amount_paid >= total - 0.005 else ('partial' if amount_paid > 0.005 else 'unpaid')
     cur.execute("""
         INSERT INTO purchase_orders (company_id,po_number,supplier_id,branch_id,status,subtotal,total,notes,ordered_at,

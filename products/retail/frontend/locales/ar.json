@@ -240,6 +240,7 @@
   "You do not have permission for this action. Ask your store administrator.": "ليس لديك إذن لتنفيذ هذا الإجراء. اطلب ذلك من مسؤول المتجر.",
   "You do not have permission to apply a discount.": "ليس لديك إذن لتطبيق خصم.",
   "You do not have permission to change credit terms.": "ليس لديك إذن لتغيير شروط الائتمان.",
+  "You do not have permission to record a payment to a supplier.": "ليس لديك إذن لتسجيل دفعة لأحد المورّدين.",
 
   "A PIN identifies who is acting. It does not grant permission.": "رمز PIN يحدد من يقوم بالعملية، ولا يمنح أي صلاحية.",
   "A cashier can sell, refund against a sale, and close their own drawer. A manager can also discount, adjust stock and read reports.": "يمكن لأمين الصندوق البيع، وإرجاع المبلغ مقابل عملية بيع، وإغلاق درجه الخاص. أما المدير فيمكنه أيضًا تطبيق الخصم وتعديل المخزون وقراءة التقارير.",
