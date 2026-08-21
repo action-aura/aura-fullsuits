@@ -347,6 +347,24 @@ converge — last time that convergence was luck.
   per-user grid would no longer be "a screen that lies" and should be built.
 - **`retail.cash.approve` currently gates nothing** and no role but admin holds
   it, pending the retail v16 ENDED/CLOSED split. Deliberate, documented.
+- **The Reports nav entry has no capability gate.** Same class as the cashier
+  dashboard fix, and not covered by it: a cashier can still navigate to Reports
+  and collect 403s from every panel. The dashboard was fixed because it is the
+  landing screen; this one was out of that task's scope and is still open.
+- **The cashier-landing behaviour has no permanent test.** It was verified with
+  a throwaway four-scenario script (cashier renders the landing and makes zero
+  calls; manager gets the real dashboard; a missing `capabilities` key fails
+  open; no `SubsystemApp` stub at all does not throw) because a permanent file
+  would have sat outside that agent's file ownership. The behaviour is right;
+  the guard against it regressing does not exist yet.
+
+## Machine hygiene — done 2026-08-21
+
+The eight leaked processes recorded in `infrastructure.md` were killed at the
+owner's instruction: both duplicate Owner dev servers (one had been failing to
+bind port 5551 and retrying since 2026-08-18, which is where roughly eight
+CPU-hours went), the demo exe watcher, and an agent job's `enhance_server.py`.
+The two VS Code jedi language servers were deliberately left alone.
 
 ## Working agreement for agents on this programme
 
