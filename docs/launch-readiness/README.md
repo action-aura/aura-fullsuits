@@ -384,3 +384,82 @@ The two VS Code jedi language servers were deliberately left alone.
 | Rollback of last deploy | `/opt/aura-owner.bak-20260820` on the droplet | |
 | Android APK | https://owner.actionaura.me/downloads/AuraRetail.apk | |
 | Windows portable | https://owner.actionaura.me/downloads/AuraRetail-Windows-Portable.zip | portable ZIP, not an installer — Inno Setup is not installed on the build machine |
+
+## Phase 2 — attribution and tenancy (retail v13/v14), 2026-08-21/22
+
+Checkpointed as `1dd6b20`. Ten agents built it; four independent verifiers then
+found **all four surface areas unsound** while the suite was green at 75/75.
+That gap is the story of this phase and the reason the verification step exists.
+
+### What the migration got right
+
+`uuid.UUID()` **accepts** the 32-char string that `lower(hex(randomblob(16)))`
+produces. It only fails on `.version == 4` plus a canonical-form comparison. So a
+test that merely called `uuid.UUID(value)` would have passed the exact bug the
+instruction warned against. The test checks both.
+
+Scoped tables are **discovered at runtime**, not hardcoded — 30 found on a real
+install, where the design estimate of "~13" predated the einvoicing, email and
+WhatsApp tables. A hardcoded list is a thing that silently goes stale.
+
+`created_at_utc` is left **NULL on all history rather than fabricated**. The only
+offset available at migration time is the migrating machine's current one — wrong
+by an hour half the year, and wrong by whole hours for a row rung elsewhere.
+
+### The instruction the migration agent refused, correctly
+
+The brief said rebind `company_id` to the Owner-issued value. The agent proved
+that doing so on `retail.db` alone is a silent shop-wide outage:
+`session['company_id']` comes from `registry.db`, and `_cid()` filters
+essentially every retail query on it. Rebind one side and every
+`WHERE company_id=?` matches zero rows — **no exception, `integrity_check` still
+`ok`, the shop's entire history simply gone from the UI.**
+
+So v14 only converges retail onto a key identity has *already* adopted, which
+makes an interrupted rebind self-healing rather than fatal.
+
+**Scheduling consequence, load-bearing for Phase 5:** the identity-side rebind of
+`registry.db` does not exist and is not reserved to any version. Until it lands,
+v14 is a correct, tested, deliberate no-op on 100% of installs — and **Phase 5
+must not open sync before it does**, or rows arrive scoped to a tenant Owner does
+not recognise.
+
+The Owner-issued value is `license_public_id`, established by reading Owner
+rather than assuming. `installation_public_id` was deliberately rejected: it is
+per-device, so adopting it would give every till in one shop a different tenant
+key — the exact fragmentation this exists to end.
+
+### What the verifiers found that a green suite did not
+
+| # | Finding | Why the tests missed it |
+|---|---|---|
+| 1 | **`terminal_id` is NULL on every Android write, permanently.** The web shell recovers by fetching `/api/devices/me` at init; the Android client calls it nowhere, and only `/api/devices/*` ever creates the local device identity. | The test called the device-**creating** variant at module import, under a comment claiming that is what a real first launch does. It asserted equality against a value it manufactured itself. |
+| 2 | **`GET /reports/by-employee` was never registered.** The desktop panel shipped fetching a 404. | One test called the metrics function directly; another fed hand-written JSON. Neither asserted the route exists. |
+| 3 | **The two clients were built against different contracts** for that same non-existent route. | Nothing compared them. At most one could ever have worked. |
+| 4 | **`employee_name` is produced by no backend code anywhere**, so the Cashier cell and the by-employee table always render a truncated uuid. | JS tests asserted the name branch using fabricated `employee_name` values, so they could not detect that nothing supplies one. |
+| 5 | **The hourly chart and the KPI card now read different clocks.** Runtime-proved: shop at UTC+3, device on UTC — KPI 150.00, chart bars sum to 50.00. | The consistency test sums the raw dict and never applies the route's truncation. |
+| 6 | **The business-date settings have no writer anywhere in the repo**, so the feature is unreachable on every install. | Nothing tests reachability of a setting. |
+| 7 | **Design collision:** `docs/retail/unified_mobile/reporting-period-timezone-contract.md` already specifies an injected IANA zone with a passing DST proof. This used fixed integer minutes and actively *rejects* a zone name, degrading to device-local bucketing with only a log warning. | Two subsystems, one reserved resource, no shared ledger entry. |
+| 8 | **Android's capability gate can never fire** — `capabilities` is a top-level key and the client reads `user.capabilities`. Identical to the bug the desktop fixed one file over in the same wave. | The gate defaults permissive, so it looks like a working gate on a permissive account. |
+| 9 | **`get_session()` returns `capabilities: []` when the lookup fails**, indistinguishable from "denied everything". An owner loses Reports and the Audit Log while the API still serves them. | Nothing forced the failure path. |
+| 10 | **Two structural guards are decoration**, both mutation-proved: the UTC-stamp test stays green when `_stamp()` is replaced with a local clock, and the INSERT scanner is blind to an interpolated table name. | They asserted a source pattern that the codebase structurally cannot produce. |
+
+### Lead decisions taken on the remediation, not delegated
+
+1. **IANA timezones win over fixed offsets.** A fixed integer offset cannot
+   express DST, and the mobile contract already carries a passing DST proof.
+2. **The desktop's envelope wins** for `/reports/by-employee` — `{'status':
+   'success', 'data': ...}` is what every other route in `retail_api.py` returns.
+   Android adapts.
+3. **`capabilities` stays top-level** on the session response. A client reading
+   `user.capabilities` is the client that is wrong.
+4. **Android calls `/api/devices/me` at startup**, the way the web shell does.
+
+### The pattern worth keeping
+
+Three separate tests in two waves have now been green while the thing they
+guarded was broken. All three shared a shape: they asserted an **outcome** where
+they should have asserted that a **check ran**. The counter-measure that keeps
+working is forcing verifiers to mutation-prove — break the guard, watch it go
+red, restore — and to dump a live `url_map` or parse a real server body rather
+than trusting a fixture.
