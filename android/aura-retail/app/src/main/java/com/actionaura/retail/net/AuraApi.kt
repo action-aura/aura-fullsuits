@@ -22,6 +22,34 @@ interface AuraApi {
     @GET("api/auth/session")
     suspend fun session(): SessionResponse
 
+    /**
+     * THIS device's own row in the device registry -- and, as a documented and
+     * intended side effect of resolving it, the thing that CREATES this
+     * install's terminal identity.
+     *
+     * Not an optional nicety. `retail_api.py::_stamp()` writes
+     * `local_terminal_id()` onto every sale, return and stock movement, and
+     * that function deliberately PEEKS at `<AURA_APP_DATA>/device/
+     * local_device.json` rather than creating it ("stamping a row is a
+     * bookkeeping question, not a reason to manufacture an install identity as
+     * a side effect"). The only code in the product that creates that file is
+     * `device_context.local_device_uuid()`, reachable exclusively from the
+     * handlers under `/api/devices` (this one and the two admin-flag POSTs).
+     * So until this client calls one of them, every row it writes carries
+     * `terminal_id` NULL -- forever, on a device that is itself a till. See
+     * net/TerminalIdentity.kt for who calls this and when.
+     *
+     * (Written as a prefix rather than a glob on purpose: Kotlin block comments
+     * NEST, so a literal slash-star inside this KDoc opens a second comment and
+     * swallows the rest of the file -- the same trap RetailSession.kt's
+     * CAP_REPORTS comment records having already paid one compile for.)
+     *
+     * `@mt_login_required` + a session `company_id`, so it only answers after
+     * login; a 401/403 here is expected before then and must stay harmless.
+     */
+    @GET("api/devices/me")
+    suspend fun myDevice(): MyDeviceResponse
+
     @POST("api/auth/logout")
     suspend fun logout()
 

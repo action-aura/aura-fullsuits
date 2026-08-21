@@ -163,6 +163,10 @@ EXPECTED_MUTATION_CAPABILITIES = {
     'create_branch': CAP_EMPLOYEES,
     'credit_settings_set': CAP_EMPLOYEES,
     'tax_settings_set': CAP_EMPLOYEES,
+    # The shop's own clock -- which trading DAY every figure in the history is
+    # counted on. Same authority as its two settings siblings, and arguably
+    # the most consequential of the three.
+    'business_day_settings_set': CAP_EMPLOYEES,
     'payment_methods_add': CAP_EMPLOYEES,
     'supplier_payment': CAP_EMPLOYEES,
     'pay_purchase_order': CAP_EMPLOYEES,
@@ -193,6 +197,7 @@ EXPECTED_READ_CAPABILITIES = {
     'report_payment_methods': CAP_REPORTS,
     'report_summary': CAP_REPORTS,
     'report_by_branch': CAP_REPORTS,
+    'report_by_employee': CAP_REPORTS,
     'daily_cash': CAP_REPORTS,
     'aging_report': CAP_REPORTS,
     'customers_receivables': CAP_REPORTS,
@@ -200,6 +205,48 @@ EXPECTED_READ_CAPABILITIES = {
     'supplier_statement': CAP_REPORTS,
     'list_audit_log': CAP_REPORTS,
     'inventory_reconciliation': CAP_REPORTS,
+
+    # ── The drawer's own numbers: retail.cash.close, NOT retail.reports ──────
+    # An X report is the full money picture of one till shift: cash sales,
+    # cash refunds, every float/paid-in/paid-out movement, the expected cash
+    # and the running variance. It shipped with NO capability decorator at
+    # all -- the comment above the cash-session block asserted that its GET
+    # routes matched "every other read-only report route in this file
+    # (daily_cash, aging_report, report_sales_trend)", and by the time it was
+    # written all three of those had already been moved onto retail.reports.
+    # The claim aged into being false and nothing noticed, which is precisely
+    # what the live-url_map sweep at the bottom of this file now prevents.
+    #
+    # retail.cash.close and NOT retail.reports, deliberately. The person who
+    # counts the drawer is the person who closes it -- that is the stated
+    # reason cash.close is a cashier default -- and the desktop's close-out
+    # modal FETCHES this exact route to show expected-vs-counted before it
+    # will let anyone submit (frontend/cash-drawer.js). Putting it on
+    # retail.reports, a manager-and-above code, would have gated the reading
+    # behind an authority the person doing the counting does not have, and
+    # broken shift close for every cashier in the product. Matching
+    # close_cash_session's own authority keeps the report and the act it
+    # feeds on one permission.
+    'cash_session_x_report': CAP_CASH_CLOSE,
+}
+
+#: Read routes that DISCLOSE money and deliberately carry no capability, each
+#: with the reason. The sweep at the bottom of this file requires every
+#: money-disclosing route to be gated OR to be named here -- so the decision
+#: is always visible in a diff, and "nobody thought about it" stops being
+#: expressible. Entries are checked against the live url_map too: a stale one
+#: fails just as loudly as a missing one.
+DELIBERATELY_UNGATED_MONEY_READS = {
+    'customer_statement': (
+        "ONE named customer's ledger, and deliberately asymmetric with "
+        "supplier_statement, which does carry retail.reports. A cashier taking "
+        "a payment at the till has to be able to see what that customer owes -- "
+        "customer_payment is a till operation. The other direction (money the "
+        "shop owes) is procurement and nothing a till needs, and the whole "
+        "debtor BOOK stays on retail.reports: one customer's balance is a till "
+        "fact, the list of everyone who owes the shop money is a report. "
+        "Reasoned in full on the route itself."
+    ),
 }
 
 
@@ -1348,3 +1395,212 @@ def test_import_routes_are_blocked_under_a_restricted_license(shop, monkeypatch)
     # restored: the handler is reachable again
     r = admin.post(IMPORT_POST_ROUTES[0])
     assert r.status_code == 400, r.get_json()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 3. EXHAUSTIVE SWEEP OF THE LIVE url_map
+#
+# Everything above this line is either an AST scan of two source FILES or a
+# hand-written test naming a route. That is genuinely strong for mutations,
+# and blind in two directions at once:
+#
+#   * A route registered onto the retail blueprint from any module OTHER than
+#     the two the AST scan reads is invisible to it. It would inherit blanket
+#     subsystem access and not one assertion in this file would move.
+#   * A new READ route needs no entry anywhere. EXPECTED_READ_CAPABILITIES is
+#     an exact-match table, which catches a gate being REMOVED from a route
+#     already in it -- and a route that never had a gate simply is not in the
+#     table, so there is nothing for the equality to disagree with.
+#
+# The second hole was not hypothetical. `GET /cash-sessions/<id>/x-report`
+# shipped with no capability decorator at all: the drawer's cash sales, cash
+# refunds, every float and paid-out movement, the expected cash and the
+# variance, readable by anyone who could reach the product. Thirty-four tests
+# in this file, and none of them could see it, because none of them was
+# looking at the ROUTE TABLE -- they were looking at a list somebody
+# maintained by hand.
+#
+# So the sweep below starts from `app.url_map` -- what Flask will actually
+# serve -- and works backwards to the decorators, rather than the other way
+# round. Adding a route is now enough to be noticed; nobody has to remember
+# to add it to a list as well.
+# ═════════════════════════════════════════════════════════════════════════════
+
+#: Both blueprints this suite is responsible for. `/api/import` is retail's
+#: bulk writer and is already covered by the AST scan above; naming it here
+#: too means the sweep sees the whole surface either file registers.
+SWEPT_URL_PREFIXES = ('/api/sub/retail', '/api/import')
+
+#: Path vocabulary that means "this response discloses the shop's financial
+#: position". Matched per '/'-delimited SEGMENT, so it cannot be fooled by a
+#: substring, and deliberately written as data: a new route whose path uses
+#: any of these words has to be gated or excused, and both are a diff.
+MONEY_DISCLOSING_SEGMENTS = frozenset({
+    'report', 'reports', 'x-report', 'z-report', 'dashboard',
+    'receivables', 'payables', 'statement', 'aging', 'daily-cash',
+    'audit-log', 'reconciliation',
+})
+
+#: Endpoint -> capability, derived from the AST scan, so the sweep asks the
+#: same question the static half asks and cannot disagree with it.
+_CAPABILITY_BY_FUNC = {r.func: r.capability for r in ALL_ROUTES}
+
+
+def _live_swept_rules():
+    """Every rule Flask will actually serve under this suite's prefixes."""
+    for rule in app.url_map.iter_rules():
+        if str(rule.rule).startswith(SWEPT_URL_PREFIXES):
+            yield rule
+
+
+def _rule_facts(rule):
+    """(path, methods, view function name, declared capability)."""
+    func = rule.endpoint.rsplit('.', 1)[-1]
+    return (str(rule.rule),
+            frozenset(rule.methods) - {'HEAD', 'OPTIONS'},
+            func,
+            _CAPABILITY_BY_FUNC.get(func))
+
+
+def _discloses_money(path):
+    return bool({seg for seg in path.split('/') if seg} & MONEY_DISCLOSING_SEGMENTS)
+
+
+def test_the_live_sweep_actually_found_the_route_table():
+    """A discovery test that discovered nothing passes every assertion below
+    for the worst possible reason -- which is the entire failure mode this
+    section exists to end, so it gets its own guard first."""
+    rules = list(_live_swept_rules())
+    assert len(rules) >= 70, [str(r.rule) for r in rules]
+    money = [str(r.rule) for r in rules if _discloses_money(str(r.rule))]
+    assert len(money) >= 10, (
+        "the money-disclosure classifier matched almost nothing -- it is not "
+        f"reading the paths it thinks it is: {money}")
+    mutating = [r for r in rules if frozenset(r.methods) & MUTATING_METHODS]
+    assert len(mutating) >= 40, [str(r.rule) for r in mutating]
+
+
+def test_every_live_route_is_visible_to_the_static_scan():
+    """The first blind spot, closed. A route registered onto either blueprint
+    from a third module would carry whatever decorators that module wrote and
+    would be invisible to the AST scan of retail_api.py / import_api.py --
+    including invisible to `test_every_mutating_route_carries_an_explicit_
+    capability`, the guard this whole file is built around."""
+    unknown = sorted(
+        f"{path} -> {func} ({sorted(methods)})"
+        for path, methods, func, _cap in map(_rule_facts, _live_swept_rules())
+        if func not in _CAPABILITY_BY_FUNC
+    )
+    assert not unknown, (
+        "these live routes are served under this suite's prefixes but are not "
+        "defined in api/retail_api.py or api/import_api.py, so nothing above "
+        "audits their decorators:\n  " + "\n  ".join(unknown))
+
+
+def test_every_live_mutating_route_carries_a_capability():
+    """The same claim the AST scan makes, re-derived from the ROUTE TABLE.
+    Two independent paths to one answer: if a future refactor moves a handler
+    somewhere the scan cannot parse, this one still sees the rule."""
+    ungated = sorted(
+        f"{path} -> {func} ({sorted(methods)})"
+        for path, methods, func, cap in map(_rule_facts, _live_swept_rules())
+        if (methods & MUTATING_METHODS) and cap is None
+    )
+    assert not ungated, (
+        "these live mutating routes carry no @mt_require_capability:\n  "
+        + "\n  ".join(ungated))
+
+
+def test_every_live_route_that_discloses_the_shops_money_is_gated_or_excused():
+    """THE structural fix, and the one that would have caught x-report on the
+    day it was written.
+
+    A route whose path says report / dashboard / statement / receivables /
+    payables / aging / audit-log / reconciliation is telling somebody how the
+    business is doing. It must carry a capability, or be named in
+    DELIBERATELY_UNGATED_MONEY_READS with the reason -- and either way the
+    decision is in a diff rather than in nobody's head."""
+    unaccounted = sorted(
+        f"{path} -> {func}"
+        for path, _methods, func, cap in map(_rule_facts, _live_swept_rules())
+        if _discloses_money(path) and cap is None and func not in DELIBERATELY_UNGATED_MONEY_READS
+    )
+    assert not unaccounted, (
+        "these live routes disclose the shop's financial position and carry no "
+        "capability gate. Give each one a capability, or add it to "
+        "DELIBERATELY_UNGATED_MONEY_READS with the reason:\n  "
+        + "\n  ".join(unaccounted))
+
+
+def test_the_deliberate_exemptions_are_still_real_and_still_ungated():
+    """An exemption list is a rug unless it is checked from both ends. A stale
+    entry (route renamed or deleted) silently keeps excusing nothing; an entry
+    for a route that has since BEEN gated belongs in
+    EXPECTED_READ_CAPABILITIES instead, where its capability is pinned."""
+    live = {func: cap for _p, _m, func, cap in map(_rule_facts, _live_swept_rules())}
+    for func, reason in DELIBERATELY_UNGATED_MONEY_READS.items():
+        assert func in live, (
+            f"{func!r} is excused from the money-disclosure sweep but is not a live "
+            f"route any more -- delete the entry")
+        assert live[func] is None, (
+            f"{func!r} now carries {live[func]!r}. Move it to "
+            f"EXPECTED_READ_CAPABILITIES so the capability itself is pinned.")
+        assert reason and len(reason) > 40, (
+            f"{func!r} is excused without a real reason -- an exemption list "
+            f"without reasons is just an ungated route with extra steps")
+
+
+def test_the_money_classifier_matches_the_routes_it_is_supposed_to():
+    """Ground truth on the classifier itself, so a typo in
+    MONEY_DISCLOSING_SEGMENTS that made it match nothing cannot quietly turn
+    the sweep above into a no-op."""
+    paths = {path for path, _m, _f, _c in map(_rule_facts, _live_swept_rules())}
+    for expected in ('/api/sub/retail/reports/summary',
+                     '/api/sub/retail/dashboard/stats',
+                     '/api/sub/retail/customers/receivables',
+                     '/api/sub/retail/suppliers/payables',
+                     '/api/sub/retail/audit-log',
+                     '/api/sub/retail/inventory/reconciliation'):
+        assert expected in paths, expected
+        assert _discloses_money(expected), expected
+    # ...and it does NOT sweep in the ordinary catalogue reads a till needs.
+    for ordinary in ('/api/sub/retail/products',
+                     '/api/sub/retail/categories',
+                     '/api/sub/retail/customers'):
+        assert not _discloses_money(ordinary), ordinary
+
+
+def test_the_x_report_gate_is_real_and_a_cashier_can_still_close_a_drawer(shop):
+    """The behavioural half of the x-report fix, asserted as a PAIR.
+
+    "not 403 for a cashier" alone would also hold with no decorator at all --
+    which is exactly the state this fixes -- so only the contrast shows the
+    gate exists AND that it was put on the right capability. A cashier holding
+    retail.cash.close reads the X report of the drawer they are working; a
+    cashier whose grant is switched off does not. Had this been gated on
+    retail.reports instead, the first half would fail and shift close would be
+    broken for every cashier in the product."""
+    _admin, company_id, _product_id = shop
+    allowed, _, _ = _make_user('cashier', company_id=company_id)
+    opened = allowed.post('/api/sub/retail/cash-sessions/open', json={'opening_float': 50})
+    assert opened.status_code in (200, 409), opened.get_json()
+
+    current = allowed.get('/api/sub/retail/cash-sessions/current')
+    assert current.status_code == 200, current.get_json()
+    session_id = (current.get_json().get('data') or {}).get('id')
+    assert session_id, current.get_json()
+
+    ok = allowed.get(f'/api/sub/retail/cash-sessions/{session_id}/x-report')
+    assert ok.status_code == 200, (
+        'the cashier working this drawer cannot read its X report -- the close-out '
+        'modal fetches exactly this before it will let anyone submit', ok.get_json())
+
+    denied, _, _ = _make_user('cashier', company_id=company_id,
+                              capabilities={'retail.cash.close': 'none'})
+    refused = denied.get(f'/api/sub/retail/cash-sessions/{session_id}/x-report')
+    assert refused.status_code == 403, refused.get_json()
+
+
+def test_an_anonymous_x_report_request_is_401_not_403(shop):
+    anon = app.test_client()
+    assert anon.get('/api/sub/retail/cash-sessions/whatever/x-report').status_code == 401

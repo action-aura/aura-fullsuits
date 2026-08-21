@@ -35,6 +35,7 @@ extraction -- see docs/migration/retail-parity-matrix.md.
 """
 import csv
 import io
+import logging
 import os
 import re
 import json as _json
@@ -99,6 +100,11 @@ _IMPORT_RESTRICTED_ALLOWLIST = frozenset()
 from core.retail.stock_reconciliation import DEFAULT_TOLERANCE as _QTY_TOLERANCE
 
 import_bp = Blueprint('import_api', __name__, url_prefix='/api/import')
+
+#: Module logger. This file had none at all, which is part of why the
+#: swallowed attribution failure below could stay silent for as long as it
+#: did: there was nowhere to say it.
+_log = logging.getLogger(__name__)
 
 
 def _demo_blocked():
@@ -1145,6 +1151,43 @@ def _uid():
 # (see the CAP_STOCK_ADJUST comment at the top of this file) and the one
 # furthest from anybody watching it happen.
 
+#: The same counter retail_api.py keeps, kept SEPARATELY for the same reason
+#: `_cid`/`_uid`/`_actor_user_uid` themselves are duplicated rather than
+#: imported: retail_api.py is a PEER ROUTE MODULE and importing across it
+#: would create the coupling this file otherwise avoids. The reason keys carry
+#: an `import_` prefix so a reader of either counter can tell which module
+#: reported, and so the two can be summed without colliding.
+#:
+#: WHY THIS FILE NEEDS IT MORE THAN retail_api.py DOES. `_stamp()` below
+#: resolves ONCE PER RUN -- correct, and stated in its own docstring -- which
+#: means ONE swallowed exception here does not unattribute one row, it
+#: unattributes an ENTIRE UPLOAD: every product, customer, supplier, branch
+#: and opening-stock movement in a spreadsheet that can restate a whole
+#: catalogue. It was a bare `except Exception: return None`, so that outcome
+#: left no trace anywhere at all. The NULLs are still the right answer; going
+#: quiet about them was not.
+ACTOR_LOOKUP_FAILURES = {
+    'import_lookup_error': 0,
+    'import_no_user_row': 0,
+    'import_blank_uid': 0,
+}
+
+
+def _note_actor_lookup_failure(reason, detail, exc=None):
+    """Count it, then say so. Never raises -- an import must not die because
+    logging did."""
+    try:
+        ACTOR_LOOKUP_FAILURES[reason] = ACTOR_LOOKUP_FAILURES.get(reason, 0) + 1
+        _log.error(
+            "retail import attribution: %s (%s). THE WHOLE UPLOAD will be written with "
+            "NO actor identity -- this resolves once per run, not per row -- so every "
+            "product, customer, supplier and stock movement it writes is unattributed. "
+            "Occurrence #%d for this reason since process start.",
+            reason, detail, ACTOR_LOOKUP_FAILURES[reason], exc_info=exc is not None)
+    except Exception:  # pragma: no cover - a logger that throws must not fail an import
+        pass
+
+
 def _actor_user_uid():
     """Registry `users.uid` for the signed-in user, or None. Never `_uid()`."""
     local_user_id = session.get('mt_user_id')
@@ -1156,12 +1199,21 @@ def _actor_user_uid():
             row = conn.execute("SELECT uid FROM users WHERE id=?", (local_user_id,)).fetchone()
         finally:
             conn.close()
-    except Exception:
+    except Exception as exc:
+        _note_actor_lookup_failure(
+            'import_lookup_error',
+            f"registry read for mt_user_id={local_user_id!r} failed: {exc}", exc=exc)
         return None
     if not row:
+        _note_actor_lookup_failure(
+            'import_no_user_row', f"no registry users row for mt_user_id={local_user_id!r}")
         return None
     value = row['uid']
-    return value if value and str(value).strip() else None
+    if value and str(value).strip():
+        return value
+    _note_actor_lookup_failure(
+        'import_blank_uid', f"registry users row {local_user_id!r} has no uid yet")
+    return None
 
 
 def _stamp():

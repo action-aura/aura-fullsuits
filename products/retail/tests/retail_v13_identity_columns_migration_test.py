@@ -20,8 +20,20 @@ tests pin all three properties that make that safe:
      first one.
 
 Plus a source-level guard (test_v13_and_v14_contain_no_destructive_ddl)
-that fails if anyone later adds a DROP/RENAME/table-rebuild to either of
-the two functions this phase owns.
+that fails if anyone later adds a DROP/RENAME/table-rebuild to the functions
+this phase owns.
+
+READ THIS BEFORE TRUSTING THAT GUARD. It is a cheap tripwire, NOT the
+additive-only guarantee, and it was mistaken for the guarantee once already:
+four destructive mutations (two DELETEs, a DROP TABLE assembled from a
+variable, and a silent rewrite of every sales total) were injected into
+these migrations and this file stayed green through all four. A regex over
+source text cannot see DML data destruction, cannot see a statement built
+from a variable, and only looks where it is told to look. The real guarantee
+is behavioural and lives in
+`retail_v13_additive_only_behavioural_test.py`, which snapshots every row of
+every table -- values, not counts -- and asserts nothing outside the intended
+additive change differs afterwards.
 
 Run:
     pytest products/retail/tests/retail_v13_identity_columns_migration_test.py -v

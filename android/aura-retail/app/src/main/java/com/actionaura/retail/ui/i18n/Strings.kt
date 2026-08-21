@@ -309,6 +309,12 @@ private val AR_STRINGS: Map<String, String> = mapOf(
         "تُحتسب هنا كل عمليات البيع في الفترة، بما فيها ما تعذّر على التطبيق نسبته إلى موظف.",
     "This install's server doesn't provide takings by employee yet." to
         "لا يوفّر خادم هذا التثبيت الإيرادات حسب الموظف بعد.",
+    // The last-resort wording for a 200 whose envelope refuses without naming a
+    // reason. The server's own sentence is preferred whenever it sends one --
+    // see byEmployeeRefusalOrNull -- so this only shows when there is genuinely
+    // nothing to quote, and it must still not read as "the report is empty".
+    "The server wouldn't send this report." to
+        "رفض الخادم إرسال هذا التقرير.",
     "Rung by" to "نفّذها",
     "Rung by an account that no longer exists" to "نفّذها حساب لم يعد موجودًا",
     "Who rang this sale was not recorded — it predates employee attribution." to

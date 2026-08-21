@@ -50,8 +50,10 @@ Run:
 import os
 import shutil
 import sqlite3
+import struct
 import sys
 import tempfile
+import zoneinfo
 from pathlib import Path
 
 import pytest
@@ -71,6 +73,37 @@ DATA = Path(tempfile.mkdtemp(prefix="aura_retail_byemp_"))
 (DATA / "database" / "subsystems").mkdir(parents=True, exist_ok=True)
 os.environ.update(AURA_STANDALONE="1", AURA_BUNDLE_DIR=str(BACKEND_DIR), AURA_APP_DATA=str(DATA))
 os.environ.pop("AURA_DEV", None)
+
+# ── the fixture tz zone ───────────────────────────────────────────────────────
+#
+# `business_timezone` holds an IANA zone NAME, and `zoneinfo` resolves those
+# out of a tz database that is NOT bundled with CPython -- on Windows,
+# on the Android build and inside the packaged .exe there is currently none
+# (see retail_metrics_business_date_test.py's module docstring, which carries
+# the full reasoning and the measurement). So the one zone this file needs is
+# written here as a TZif blob and put on TZPATH, which makes the test
+# identical on a machine with a full tz database and on one with none.
+#
+# Only a fixed +03:00 is needed here -- this file is about ATTRIBUTION, and
+# the daylight-saving proofs live next door in the file that owns the
+# business-date contract.
+TZDIR = DATA / 'zoneinfo'
+SHOP_TZ = 'Aura_Test/Amman'
+
+
+def _install_shop_zone():
+    blob = (b'TZif' + b'\x00' + b'\x00' * 15
+            + struct.pack('>6i', 0, 0, 0, 0, 1, 4)
+            + struct.pack('>iBB', 3 * 3600, 0, 0) + b'+03\x00')
+    path = TZDIR.joinpath(*SHOP_TZ.split('/'))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(blob)
+    here = str(TZDIR)
+    zoneinfo.reset_tzpath([here] + [p for p in zoneinfo.TZPATH if p != here])
+    zoneinfo.ZoneInfo.clear_cache()
+
+
+_install_shop_zone()
 
 from core.retail import metrics  # noqa: E402
 from database import schema  # noqa: E402
@@ -322,8 +355,8 @@ def test_the_employee_breakdown_uses_the_shop_business_date_too(ledger):
     conn = _new_db('crossing')
     _sale(conn, 'S1', 1, 100.0, '2026-04-01 09:00:00', EMP_A, '2026-04-01T06:00:00+00:00')
     _sale(conn, 'S2', 1, 80.0, '2026-03-31 22:00:00', EMP_B, '2026-03-31T22:00:00+00:00')
-    conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,'180')",
-                 (CID, 'business_utc_offset_minutes'))
+    conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?)",
+                 (CID, metrics.BUSINESS_TIMEZONE_SETTING, SHOP_TZ))
     conn.commit()
 
     rows = _by_uid(metrics.revenue_by_employee(conn, CID, DAY))
@@ -331,3 +364,38 @@ def test_the_employee_breakdown_uses_the_shop_business_date_too(ledger):
     assert rows[EMP_A]['revenue'] == 100.0
     assert round(sum(r['revenue'] for r in rows.values()), 2) == metrics.revenue(conn, CID, DAY)
     conn.close()
+
+
+def test_the_unattributed_bucket_is_exactly_one_row(ledger):
+    """A hard contract term for whatever route serves this, not a nicety.
+
+    The Android reporting screen's LazyColumn deliberately does NOT key on
+    `actor_user_uid` (EmployeeSalesScreen.kt) because two null-uid rows
+    would throw "Key was already used" and take the whole screen down. The
+    GROUP BY guarantees a single NULL bucket; this pins it so a future
+    change that splits unattributed rows by anything else -- terminal,
+    branch, the free-text `cashier` -- fails here rather than in a crash
+    report from a shop."""
+    rows = metrics.revenue_by_employee(ledger, CID, DAY)
+    assert [r['actor_user_uid'] for r in rows].count(None) == 1
+
+
+def test_the_employee_breakdown_never_falls_back_to_the_free_text_cashier(ledger):
+    """metrics.py decision 8. `sales.cashier` is whatever string the client
+    posted, defaulting to the literal 'POS', and money grouped by free text
+    looks authoritative and is worthless. Asserted at the SQL level because
+    the behavioural symptom -- a bucket keyed 'POS' instead of None -- only
+    appears on a database whose cashier column happens to be populated."""
+
+    class _RecordingConn:
+        def __init__(self, real):
+            self._real, self.statements = real, []
+
+        def execute(self, sql, params=()):
+            self.statements.append(sql)
+            return self._real.execute(sql, params)
+
+    rec = _RecordingConn(ledger)
+    metrics.revenue_by_employee(rec, CID, DAY)
+    offenders = [' '.join(s.split()) for s in rec.statements if 'cashier' in s]
+    assert not offenders, 'the per-employee breakdown read the free-text cashier column'

@@ -35,6 +35,8 @@ import com.actionaura.retail.licensing.LicenseCheckInCoordinator
 import com.actionaura.retail.net.AiChatRequest
 import com.actionaura.retail.net.AiChatTurn
 import com.actionaura.retail.net.ApiClient
+import com.actionaura.retail.net.SessionResponse
+import com.actionaura.retail.net.TerminalIdentity
 import com.actionaura.retail.net.apiErrorMessage
 import com.actionaura.retail.server.ServerBootstrap
 import com.actionaura.retail.sync.SyncCoordinator
@@ -59,6 +61,42 @@ private enum class Phase { LOADING, LICENSE, SETUP, LOGIN, READY, ERROR }
 
 private const val TAG = "AppRoot"
 
+/**
+ * Everything this client must learn about the signed-in session before it is a
+ * usable till, in ONE place that every route to [Phase.READY] goes through.
+ *
+ * Two things happen here, and both used to be missing or wrong:
+ *
+ *  1. CAPABILITIES. `/api/auth/session` returns `capabilities` as a TOP-LEVEL
+ *     key, a sibling of `user`. This used to call `RetailSession.update(
+ *     session.user)`, which read them off the user object, where they have
+ *     never been -- so every capability gate in the app answered TRUE for
+ *     every account. `RetailSession.adopt` reads the body, not the user; see
+ *     `sessionCapabilities` for the full post-mortem, and note that the
+ *     resolution deliberately does NOT get re-implemented inline here, because
+ *     inlining it is how the desktop's version stayed wrong through a shipped
+ *     fix.
+ *
+ *  2. TERMINAL IDENTITY. `GET /api/devices/me` is the only thing that creates
+ *     this install's device identity, and `retail_api.py::_stamp()` PEEKS at
+ *     that identity for every `terminal_id` it writes. This client called it
+ *     nowhere, so every sale rung on a handset carried `terminal_id` NULL
+ *     forever. One idempotent GET fixes it; see net/TerminalIdentity.kt.
+ *
+ * Both are best-effort and neither can fail the boot: a failed session fetch
+ * leaves whatever was already known (rather than resetting an admin to
+ * non-admin over a dropped packet), and the device check-in swallows
+ * everything but cancellation.
+ */
+private suspend fun adoptSession(): SessionResponse? {
+    val session = try { ApiClient.get().session() } catch (e: Exception) { null }
+    if (session != null) RetailSession.adopt(session)
+    if (session?.authenticated == true) {
+        TerminalIdentity.establish { ApiClient.get().myDevice() }
+    }
+    return session
+}
+
 // Everything after the activation gate: unchanged from before Phase.LICENSE
 // existed, just factored out so both the initial boot check and the
 // post-activation callback (LicensingScreen's onActivated) can reach the
@@ -66,13 +104,8 @@ private const val TAG = "AppRoot"
 private suspend fun phaseAfterActivationGate(): Phase {
     val needsSetup = try { ApiClient.get().onboardingStatus().needs_setup } catch (e: Exception) { false }
     if (needsSetup) return Phase.SETUP
-    val session = try { ApiClient.get().session() } catch (e: Exception) { null }
-    return if (session?.authenticated == true) {
-        // Admin-gating state (Wave 1A, Part G), derived from the same
-        // session check that already gates navigation.
-        RetailSession.update(session.user)
-        Phase.READY
-    } else Phase.LOGIN
+    val session = adoptSession()
+    return if (session?.authenticated == true) Phase.READY else Phase.LOGIN
 }
 
 @Composable
@@ -156,8 +189,19 @@ fun AppRoot() {
                         onBack = {}, snackbar = remember { SnackbarHostState() },
                         onActivated = { scope.launch { phase = phaseAfterActivationGate() } },
                     )
-                    Phase.SETUP -> SetupScreen(onDone = { phase = Phase.READY })
-                    Phase.LOGIN -> LoginScreen(onLoggedIn = { phase = Phase.READY })
+                    // Both of these used to jump straight to Phase.READY, so a
+                    // brand-new install that completed SETUP, or an account
+                    // that LOGged IN, reached the till without ever resolving a
+                    // session -- no capabilities, and (the expensive half) no
+                    // terminal identity, on precisely the two occasions a till
+                    // is about to start ringing its first sales. They now go
+                    // through the same funnel the cold-start path does; it is
+                    // one round trip to 127.0.0.1 against the embedded server,
+                    // and awaiting it is what the desktop shell does too (its
+                    // login modal's success handler re-runs init() rather than
+                    // rendering first and catching up afterwards).
+                    Phase.SETUP -> SetupScreen(onDone = { scope.launch { adoptSession(); phase = Phase.READY } })
+                    Phase.LOGIN -> LoginScreen(onLoggedIn = { scope.launch { adoptSession(); phase = Phase.READY } })
                     Phase.READY -> MainShell(onLogout = { phase = Phase.LOGIN })
                     Phase.ERROR -> StartupErrorScreen(
                         diagnostic = startupDiagnostic,

@@ -3,6 +3,7 @@ package com.actionaura.retail.ui
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.actionaura.retail.net.SessionResponse
 import com.actionaura.retail.net.User
 
 /**
@@ -56,6 +57,51 @@ const val CAP_REPORTS = "retail.reports"
 fun holdsCapability(capabilities: List<String>?, code: String): Boolean =
     capabilities?.contains(code) ?: true
 
+/**
+ * The grant list carried by a `GET /api/auth/session` body, or null when the
+ * body carries none.
+ *
+ * Extracted into its own named function -- not inlined at the call site -- for
+ * exactly the reason app-shell.js gives for having done the same thing after
+ * paying for this bug on the desktop: it is the one line in the client whose
+ * correctness cannot be established by reading it, because the question is
+ * about a different file in a different language, and the answer was NO for
+ * the entire life of the capability feature.
+ *
+ * THE BUG: this client declared `capabilities` on the [User] model only.
+ * `commercial_runtime/identity/onboarding_routes.py::get_session` returns it as
+ * a TOP-LEVEL key, a SIBLING of `user`, never a member of it. A real cashier's
+ * response body is:
+ *
+ *     {"authenticated": true,
+ *      "capabilities": ["retail.cash.close", "retail.refund", "retail.sell"],
+ *      "is_mt": true, "language": "en",
+ *      "user": {"id": "...", "role": "cashier", "email": "...", ...}}
+ *
+ * So `user.capabilities` was permanently null, [holdsCapability] fell open on
+ * null (correctly, and by design), and `hasCapability(CAP_REPORTS)` answered
+ * TRUE for an account granted none of it. EmployeeSalesScreen's gate and
+ * ReportsScreen's By-Employee entry were both written, both shipped, and
+ * neither ever refused anybody -- and nothing was red, because a gate that
+ * never engages is indistinguishable from a gate on a permissive account.
+ *
+ * BOTH locations are accepted, top-level first, for the same reason the desktop
+ * accepts both: the clinic product shares this identity stack on a separate
+ * code path, and `user` is the obvious place for a future contributor to add
+ * the key. It costs one null check and removes a failure mode whose whole
+ * character is that it is silent.
+ *
+ * The distinction [holdsCapability] rests on is preserved end to end: an absent
+ * key and an explicit JSON null both yield null ("not known", fail open), while
+ * an EMPTY list is passed through untouched as the resolved answer "this
+ * account holds nothing". `?:` is the operator that gets this right --
+ * `emptyList()` is not null, so it is never folded into the unknown bucket.
+ * (The desktop's twin has to write `Array.isArray` for the same reason: `[]` is
+ * truthy in JavaScript, and `if (!caps)` is precisely how that trap gets set.)
+ */
+fun sessionCapabilities(session: SessionResponse?): List<String>? =
+    session?.capabilities ?: session?.user?.capabilities
+
 object RetailSession {
     var isAdmin by mutableStateOf(false)
         private set
@@ -69,9 +115,28 @@ object RetailSession {
     var capabilities by mutableStateOf<List<String>?>(null)
         private set
 
+    /**
+     * Adopt everything a `/api/auth/session` body tells us about the signed-in
+     * account. THE entry point -- [update] below is the login-response-only
+     * partial, and cannot resolve capabilities because
+     * `commercial_runtime/identity/auth_routes.py`'s login handler does not
+     * send them (grep it: the word does not appear in that file).
+     */
+    fun adopt(session: SessionResponse?) {
+        isAdmin = isAdminUser(session?.user)
+        capabilities = sessionCapabilities(session)
+    }
+
+    /**
+     * Admin state from a LOGIN response, which carries `user` and nothing else.
+     * Deliberately leaves [capabilities] alone rather than clearing it: the
+     * login body has no opinion on grants, and writing null here would be that
+     * absence of an opinion masquerading as "not known" -- harmless today
+     * (it fails open) but the exact shape of the bug this file just fixed.
+     * The caller follows this with [adopt] over a real session fetch.
+     */
     fun update(user: User?) {
         isAdmin = isAdminUser(user)
-        capabilities = user?.capabilities
     }
 
     fun hasCapability(code: String): Boolean = holdsCapability(capabilities, code)

@@ -29,14 +29,21 @@ data class User(
     val clinic_role: String? = null,
     val employee_id: String? = null,
     /**
-     * This account's own `retail.*` capability grants.
+     * This account's own `retail.*` capability grants -- as a FALLBACK ONLY.
      *
-     * Nullable ON PURPOSE, and null is the meaningful default: the session
-     * route does not send this key yet (the desktop shell's app-shell.js says
-     * so in as many words), so "absent" has to stay distinguishable from
-     * "granted nothing". `ui.holdsCapability` documents why that distinction
-     * decides between an inert change and one that blanks a screen for every
-     * role the day it ships.
+     * The live contract puts them at the TOP LEVEL of the session body, beside
+     * `user` and never inside it (see [SessionResponse.capabilities]). This
+     * field stays because the clinic product shares this identity stack on a
+     * separate code path, and because `user` is the obvious place for a future
+     * contributor to add the key -- reading both costs one null check and
+     * removes a failure mode whose whole character is that it is silent. It is
+     * NOT where the retail session's grants arrive; `ui.sessionCapabilities`
+     * owns the resolution and prefers the top-level key.
+     *
+     * Nullable ON PURPOSE, and null is the meaningful default: "absent" has to
+     * stay distinguishable from "granted nothing". `ui.holdsCapability`
+     * documents why that distinction decides between an inert change and one
+     * that blanks a screen for every role the day it ships.
      *
      * The Gson explicit-null hazard that crashed EmployeesScreen does not bite
      * here for the same reason: the field is declared nullable, so a server
@@ -59,6 +66,69 @@ data class SessionResponse(
     val authenticated: Boolean = false,
     val language: String? = null,
     val user: User? = null,
+    /**
+     * Where `/api/auth/session` ACTUALLY puts this account's `retail.*` grants:
+     * a TOP-LEVEL key, a sibling of `user`, never a member of it. Read
+     * commercial_runtime/identity/onboarding_routes.py::get_session -- the
+     * jsonify literal emits `'capabilities': capabilities` and then opens
+     * `'user': {...}` as a separate dict.
+     *
+     * This field is new, and its absence was the entire bug. The client
+     * declared `capabilities` on [User] only, so parsing a real cashier body
+     * left the list null, and `hasCapability` -- which fails open on null,
+     * correctly and by design -- answered TRUE for an account granted only
+     * sell, refund and cash.close. Every capability gate on this client was
+     * therefore inert from the day it shipped, and nothing was red, because
+     * "a gate that never engages is indistinguishable from a gate on a
+     * permissive account" (app-shell.js:272, the desktop shell's dated
+     * post-mortem for the identical bug in the identical place).
+     *
+     * Nullable for the same reason [User.capabilities] is: an absent key and
+     * an explicit JSON null both mean "not known", and an empty list means
+     * "this account holds nothing". Those are three different answers and
+     * SessionCapabilityContractTest keeps them apart.
+     */
+    val capabilities: List<String>? = null,
+)
+
+// ── This device's own identity in the device registry ────────────────────────
+/**
+ * One row of `device_registry.devices`, as
+ * `commercial_runtime/identity/device_routes.py::_serialize_device` returns it.
+ *
+ * Only `id` is load-bearing here, and it is the value the backend stamps into
+ * `sales.terminal_id` / `returns.terminal_id` / `inventory_movements.terminal_id`
+ * for every write this device makes -- `database/schema.py::local_terminal_id()`
+ * returns the same install UUID this row is keyed by, on purpose, so that
+ * "which till rang this?" can be answered by joining the two. The rest of the
+ * columns are carried because the route sends them and dropping fields from a
+ * model is how the next reader concludes the server never sent them.
+ */
+data class DeviceRow(
+    val id: String? = null,
+    val company_id: String? = null,
+    val device_label: String? = null,
+    val platform: String? = null,
+    val device_fingerprint: String? = null,
+    val is_admin_device: Boolean = false,
+    val status: String? = null,
+    val first_seen_at: String? = null,
+    val last_seen_at: String? = null,
+    val owner_installation_id: String? = null,
+)
+
+/**
+ * `GET /api/devices/me`. `device` is nullable for the same Gson reason
+ * [ByEmployeeResponse.data] is: an explicit JSON null is written straight into
+ * a non-primitive field whatever the Kotlin type claims, so the type has to
+ * admit it or the NullPointerException lands later and outside the try/catch.
+ */
+data class MyDeviceResponse(
+    val success: Boolean = false,
+    val device: DeviceRow? = null,
+    val can_claim_admin: Boolean = false,
+    val error: String? = null,
+    val code: String? = null,
 )
 
 // Clinic dashboard stats: { status, data: {...} }
@@ -471,8 +541,33 @@ data class EmployeeSales(
  * other failure instead of being rendered as "nobody sold anything".
  */
 data class ByEmployeeResponse(
+    /**
+     * The DESKTOP discriminator, and the one that wins when both are present.
+     *
+     * `/reports/by-employee` answers with both spellings on purpose: the five
+     * sibling chart/KPI report routes (`sales-trend`, `top-products`,
+     * `payment-methods`, `summary`, `by-branch`) return `{"success": true}`
+     * and carry no `status` at all, while the rest of retail_api.py -- and
+     * subsystem-retail.js's hard gate on this very panel -- uses
+     * `{"status": "success"}`. Carrying both is what lets the desktop and this
+     * client read the same body unchanged.
+     *
+     * Nullable, not `""`: a blank or absent `status` is not a verdict, and
+     * treating it as "not success" would refuse every reply from a server that
+     * settled on the sibling spelling.
+     */
+    val status: String? = null,
     val success: Boolean = false,
     val data: List<EmployeeSales>? = null,
+    /**
+     * The two error spellings this backend uses --
+     * `{"status":"error","message":...}` and `{"success":false,"error":...}`.
+     * net/ApiErrors.kt already decodes both for HTTP failures; a 200 that
+     * carries a refusal has to be decodable through the same two, or the
+     * reason reaches the user as a blank line.
+     */
+    val message: String? = null,
+    val error: String? = null,
 )
 
 // ── Retail: returns / refunds ────────────────────────────────────────────────

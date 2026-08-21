@@ -168,6 +168,9 @@ function loadRetail({ capabilities, fetchImpl }) {
     console,
     t: (s) => s,
     setTimeout, clearTimeout,
+    // WHATWG global, not an ECMAScript one -- a bare vm context does not carry
+    // it and _loadAuditLog builds its query string with it.
+    URLSearchParams,
     fetch: fetchImpl,
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
     document: {
@@ -232,6 +235,44 @@ function testShellReadsTopLevelCapabilities() {
   );
 }
 
+// ── The three wire states, parsed from wire bytes ───────────────────────────
+//
+// `capabilities` arrives over HTTP as JSON, and JSON has three distinguishable
+// answers here that the shell treats three different ways:
+//
+//   absent key   -> UNKNOWN, fail OPEN  (render; let the server refuse)
+//   null         -> UNKNOWN, fail OPEN  (same state, different bytes)
+//   []           -> genuinely DENIED, fail CLOSED
+//   [codes...]   -> use them
+//
+// The middle one had no test on either fixture axis: the cases below used to
+// pass hand-built JS object literals, which can express "absent" and "[]" but
+// which nobody had written a `null` for. That gap matters because `null` is
+// the state a JS author is most likely to fold into `[]` -- both are "falsy-
+// ish, no codes in it" to the eye, and `Array.isArray` is the only thing that
+// tells them apart. Collapse null into [] and every account on a build that
+// sends an explicit null is denied every gated screen at once.
+//
+// Parsed with JSON.parse from raw response text rather than written as
+// literals, for the same reason Android's SessionCapabilityContractTest runs
+// its three through a real Gson parse: a literal is the test author's opinion
+// of the wire, and the whole capability bug was a case of everyone checking
+// the client against the client. `_wire()` also asserts the parsed shape is
+// the one the case claims -- absent-vs-null is a one-character difference in
+// the fixture and an invisible one in a debugger, so a case meant to pin
+// `null` that silently degraded into the absent-key case would still pass and
+// would still be testing nothing new.
+function _wire(text, expectKeyPresent) {
+  const body = JSON.parse(text);
+  assert.strictEqual(
+    Object.prototype.hasOwnProperty.call(body, 'capabilities'), expectKeyPresent,
+    'Fixture check: this case is about a `capabilities` key that is ' +
+    (expectKeyPresent ? 'PRESENT' : 'ABSENT') + ', and the parsed body disagrees. ' +
+    'Parsed: ' + text
+  );
+  return body;
+}
+
 // Empty-array and absent-field are different states and must stay different:
 // one means "this user was granted nothing", the other means "the server did
 // not tell us". Folding them together would either blank the UI for a user
@@ -240,7 +281,8 @@ function testEmptyGrantListIsNotTreatedAsUnknown() {
   const shell = loadShell();
   const App = shell.SubsystemApp;
 
-  App._adoptSessionCapabilities({ authenticated: true, capabilities: [], user: { id: 'u', role: 'cashier' } });
+  App._adoptSessionCapabilities(_wire(
+    '{"authenticated": true, "capabilities": [], "user": {"id": "u", "role": "cashier"}}', true));
   assert.deepStrictEqual(App.capabilities, [], 'An explicitly empty grant list must be stored as an empty array, not collapsed to null.');
   assert.strictEqual(
     App.hasCapability('retail.sell'), false,
@@ -258,12 +300,64 @@ function testMissingCapabilityFieldStillFailsOpen() {
   const shell = loadShell();
   const App = shell.SubsystemApp;
 
-  App._adoptSessionCapabilities({ authenticated: true, user: { id: 'u', role: 'admin' } });
+  App._adoptSessionCapabilities(_wire(
+    '{"authenticated": true, "user": {"id": "u", "role": "admin"}}', false));
   assert.strictEqual(App.capabilities, null, 'A session response with no capability information must leave `capabilities` null.');
   assert.strictEqual(
     App.hasCapability('retail.reports'), true,
     'With no capability information available the shell must fail OPEN, so a ' +
     'server build that predates this field does not hide every gated screen.'
+  );
+}
+
+// The third state, and the one that had no fixture. `{"capabilities": null}`
+// is a key the server DID send carrying no answer -- a serializer that emits
+// nulls, a session not resolved yet, a route that computed the list and got
+// None. It means exactly what an absent key means (nothing has been
+// established) and must land in the same fail-OPEN bucket, NOT in `[]`'s
+// fail-closed one.
+//
+// The failure this pins is not hypothetical arithmetic: `null` and `[]` are
+// the two shapes a reader glances past as "empty", and the natural-looking
+// normalisation `this.capabilities = sess.capabilities || []` produces exactly
+// the collapse. On a build whose session route ever answered null, that one
+// line denies the Reports screen, the Audit Log and the cashier dashboard to
+// every role in the shop including the owner -- an outage produced by a line
+// that reads like tidying up. Android pins the same three states through Gson
+// (SessionCapabilityContractTest::an_absent_capabilities_key_stays_unknown_
+// and_keeps_failing_open); this is the desktop twin of that case.
+function testExplicitNullCapabilitiesIsUnknownNotDenied() {
+  const shell = loadShell();
+  const App = shell.SubsystemApp;
+
+  App._adoptSessionCapabilities(_wire(
+    '{"authenticated": true, "capabilities": null, "user": {"id": "u", "role": "admin"}}', true));
+
+  assert.strictEqual(
+    App.capabilities, null,
+    'An explicit JSON `null` must resolve to the UNKNOWN state. Storing `[]` ' +
+    'here would turn "the server told us nothing" into "the server granted ' +
+    'nothing" and deny every gated screen to every role.'
+  );
+  assert.strictEqual(
+    App.hasCapability('retail.reports'), true,
+    'With `capabilities: null` on the wire the shell must fail OPEN, exactly ' +
+    'as it does for an absent key. Failing closed here is an outage, not a ' +
+    'tightening: the server-side gate on every route is what actually enforces ' +
+    'this, and the client list is rendering advice.'
+  );
+
+  // The other half, in the same case: proving `null` fails open is only worth
+  // something if `[]` still fails closed on the same shell. A shell that
+  // simply answered true for everything would satisfy the two assertions
+  // above and would be the original dead-gate bug restored.
+  App._adoptSessionCapabilities(_wire(
+    '{"authenticated": true, "capabilities": [], "user": {"id": "u", "role": "admin"}}', true));
+  assert.strictEqual(
+    App.hasCapability('retail.reports'), false,
+    'Control: `[]` must still DENY on the same shell that let `null` through. ' +
+    'Without this, "null fails open" is satisfied by a gate that never refuses ' +
+    'anyone -- which is the bug this whole file was written for.'
   );
 }
 
@@ -376,6 +470,75 @@ async function testRenderReportsStillLoadsForOwner() {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// DEFECT 2c — the SECOND retail.reports-gated screen, which got half the fix
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Audit Log carries `capability: 'retail.reports'` in the same nav list, and
+// GET /api/sub/retail/audit-log is gated on that capability server-side (see
+// list_audit_log's decorator stack and its docstring: the device check answers
+// "is this the shop's admin terminal", the capability answers "is this person
+// allowed to read the shop's records"). Its nav entry was gated in the same
+// change that gated Reports -- and that change's own comment says, of Reports,
+// "Hiding the entry is half the fix. The other half is in
+// subsystem-retail.js's `_renderReports`". Audit Log never got the other half.
+//
+// The reachability argument is identical and is not hypothetical: AuraRouter
+// persists the last section into the URL hash and _navigate() replays it on
+// the next launch, and `audit-log` is a live case in that switch. An owner who
+// last looked at the audit trail on the shop's admin terminal leaves the next
+// cashier on that screen with no nav click involved.
+//
+// One extra wrinkle that makes the render guard MORE necessary here rather
+// than less: _loadAuditLog's error branch already renders the server's refusal
+// message. So today this path does not even look broken -- it fetches, takes
+// the 403, and prints "permission denied" in the table. The request still
+// happened, and the guard exists so it doesn't.
+async function testRenderAuditLogMakesNoRequestForCashier() {
+  const calls = [];
+  const loudFetch = (url) => {
+    calls.push(url);
+    throw new Error('Audit Log fetched ' + url + ' for a user without retail.reports');
+  };
+  const sandbox = loadRetail({ capabilities: CASHIER_CAPS, fetchImpl: loudFetch });
+  const content = makeElementStub();
+
+  await sandbox.RetailSystem._renderAuditLog(content);
+
+  assert.deepStrictEqual(
+    calls, [],
+    'RetailSystem._renderAuditLog() issued ' + calls.length + ' request(s) for a ' +
+    'cashier: ' + JSON.stringify(calls) + '. The nav entry is hidden, which is ' +
+    'half the fix; the hash router reaches this render function without it.'
+  );
+  assert.ok(
+    content.innerHTML.length > 0,
+    'The Audit Log screen rendered nothing at all for a cashier. Degrading has ' +
+    'to mean an honest explanation, not a blank panel that reads like a crash.'
+  );
+}
+
+async function testRenderAuditLogStillLoadsForOwner() {
+  const calls = [];
+  const okFetch = (url) => {
+    calls.push(url);
+    return Promise.resolve({
+      ok: true, status: 200,
+      json: () => Promise.resolve({ status: 'success', data: [], meta: { total: 0, page: 1, limit: 50, actions: [], entities: [] } }),
+    });
+  };
+  const sandbox = loadRetail({ capabilities: ADMIN_CAPS, fetchImpl: okFetch });
+  const content = makeElementStub();
+
+  await sandbox.RetailSystem._renderAuditLog(content);
+
+  assert.ok(
+    calls.some(u => /\/audit-log/.test(u)),
+    'An owner holding retail.reports must still get the real Audit Log. ' +
+    'Requests seen: ' + JSON.stringify(calls)
+  );
+}
+
 // Every case is run even after one fails, and each failure is printed with
 // its own name. Aborting on the first would hide how much of the surface is
 // broken, which is precisely the signal wanted from a first (red) run.
@@ -383,11 +546,14 @@ const CASES = [
   testShellReadsTopLevelCapabilities,
   testEmptyGrantListIsNotTreatedAsUnknown,
   testMissingCapabilityFieldStillFailsOpen,
+  testExplicitNullCapabilitiesIsUnknownNotDenied,
   testReportsNavHiddenForCashier,
   testReportsNavVisibleForOwner,
   testReportsNavVisibleWhenCapabilitiesUnknown,
   testRenderReportsMakesNoRequestForCashier,
   testRenderReportsStillLoadsForOwner,
+  testRenderAuditLogMakesNoRequestForCashier,
+  testRenderAuditLogStillLoadsForOwner,
 ];
 
 async function main() {

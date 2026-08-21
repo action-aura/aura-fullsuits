@@ -20,9 +20,10 @@ or `employee_setup` (gated on a time-limited, single-use invite token).
 """
 import hashlib
 import json
+import logging
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, request, jsonify, session
 
@@ -34,6 +35,12 @@ from commercial_runtime.security.passwords import hash_password
 from commercial_runtime.security.audit import record as _security_audit, ADMIN_CREATED
 
 onboarding_bp = Blueprint('onboarding', __name__)
+
+#: Deliberately the SAME logger mt_auth.py uses (mt_auth.py:31), not a new
+#: per-module one: a failure in here that silently downgrades what a client is
+#: allowed to render is an identity-layer security event, and an operator
+#: grepping their logs for one should find both halves under one name.
+log = logging.getLogger('aura.security.identity')
 
 
 # ── Config helpers ─────────────────────────────────────────────────────────────
@@ -409,29 +416,134 @@ def get_session():
     test_admin_routes_require_login.py). Computing `capabilities` below also
     needs a validated, live user row to read `user_permissions` against, which
     this decorator now guarantees before the handler body ever runs.
+
+    `capabilities` is TRI-STATE and every consumer depends on that: a list of
+    codes, `[]` for "computed, holds nothing", and JSON `null` for "could not
+    compute". See the block comment on its initialisation below -- collapsing
+    the last two is what shipped an owner-locked-out-of-their-own-shop bug.
+    Covered by
+    commercial_runtime/identity/tests/test_session_capabilities_unknown_vs_denied.py.
     """
     if 'mt_user_id' in session:
         lang = 'en'
-        capabilities = []
+        # `None`, NOT `[]`. These are two different answers and conflating them
+        # locked an owner out of their own shop.
+        #
+        # `[]` is a REAL, legitimate result: "computed successfully, and this
+        # user holds nothing." `None` means "could not compute." Initialising
+        # to `[]` and swallowing every failure below in a bare `except` made a
+        # locked database, a half-migrated registry missing `user_permissions`,
+        # or a connection that could not be opened at all return HTTP 200
+        # carrying the single most restrictive answer this route can give.
+        #
+        # That was inert for exactly as long as nothing read the value. It
+        # stopped being inert once app-shell.js's `_adoptSessionCapabilities`
+        # was fixed to read this key: `hasCapability()` fails OPEN on a
+        # non-array and CLOSED on a list, so a transient registry error handed
+        # an admin the cashier UI -- no Reports nav entry, no Audit Log, the
+        # cashier refusal copy, the cashier landing panel -- while
+        # `mt_require_capability` kept serving those very routes 200 to that
+        # same admin, because it bypasses on the session role and never reads
+        # this table. Silent, transient, and indistinguishable in review from
+        # a correctly denied account.
+        #
+        # Emitted as JSON `null` rather than omitted so the response SHAPE is
+        # stable for every caller; both clients already read it that way and
+        # treat it as "unknown -> render as before":
+        #   - app-shell.js `_adoptSessionCapabilities` tests `Array.isArray`,
+        #     not truthiness, precisely so `[]` and "nothing told us" cannot
+        #     collapse into each other.
+        #   - android/.../net/Models.kt declares `capabilities: List<String>?`
+        #     and its comment names `"capabilities": null` as the value that
+        #     type exists for.
+        capabilities = None
+        # ACCEPTED TRADE, recorded deliberately -- do not "fix" this without
+        # reading what it reopens. `null` here makes both clients fail OPEN:
+        # a non-admin whose capability read failed sees the Reports and
+        # Employees nav and does not get the cashier landing panel, i.e. a
+        # cashier can transiently be shown UI they are not entitled to.
+        #
+        # That is the lesser of the two harms and it was chosen knowingly:
+        #   - Nothing is actually granted. Every one of those routes still
+        #     runs its own server-side gate and still refuses the request --
+        #     this value is rendering advice, never authorisation (see
+        #     _capabilities_for_session's docstring). The worst outcome is a
+        #     nav entry that 403s.
+        #   - Failing CLOSED on unknown means a transient registry hiccup
+        #     locks an owner out of their own shop. This programme has already
+        #     shipped that exact bug once; see this route's docstring and
+        #     tests/test_session_capabilities_unknown_vs_denied.py.
+        # Fail-open on UNKNOWN costs a wrong-looking menu; fail-closed on
+        # UNKNOWN costs the customer their business for the duration.
+        #
+        # NOTE: `[]` still fails CLOSED, and must -- that is a real, computed
+        # answer. Only "we could not compute" fails open.
+        conn = None
         try:
             conn = get_conn()
-            try:
-                row = conn.execute(
-                    "SELECT language FROM users WHERE id=?", (session['mt_user_id'],)
-                ).fetchone()
-                if row and row['language']:
-                    lang = row['language']
-                capabilities = _capabilities_for_session(conn, session['mt_user_id'], session.get('mt_role'))
-            finally:
-                conn.close()
+            row = conn.execute(
+                "SELECT language FROM users WHERE id=?", (session['mt_user_id'],)
+            ).fetchone()
+            if row and row['language']:
+                lang = row['language']
+            capabilities = _capabilities_for_session(conn, session['mt_user_id'], session.get('mt_role'))
         except Exception:
-            pass
+            # Logged, never swallowed. The failure downgrades what the client
+            # renders, so it has to leave a trace -- `except Exception: pass`
+            # is why the version of this bug that shipped was invisible. Still
+            # non-fatal: a session route that 500s logs everyone out of a
+            # working shop, which is strictly worse than one that answers
+            # "authenticated, capabilities unknown".
+            #
+            # `exc_info=True` is not decoration and is pinned by
+            # test_the_failure_log_carries_the_traceback: without it the
+            # operator gets this sentence and nothing else -- no exception
+            # type, no file, no line, no cause. For the one failure whose
+            # entire purpose is to be debuggable after the fact, the traceback
+            # is most of the value; the sentence alone only restates what they
+            # already knew from the missing Reports tab.
+            log.warning(
+                "session: could not compute capabilities for user %s (role=%r); "
+                "reporting them as UNKNOWN (null) rather than as an empty grant "
+                "list, so the client falls back to rendering unrestricted "
+                "instead of showing this user the most locked-down UI there is",
+                session.get('mt_user_id'), session.get('mt_role'), exc_info=True,
+            )
+        finally:
+            # OUTSIDE the guarded block, in its own handler. When this close
+            # lived inside that `try`, a close failure -- which by definition
+            # happens AFTER the answer is already computed and assigned -- fell
+            # into the `except` arm above and logged "could not compute
+            # capabilities ... reporting them as UNKNOWN (null)" while the
+            # response body went out carrying all eight codes. The log was
+            # simply false, and false in the expensive direction: it sends the
+            # next operator hunting a capability-read outage that never
+            # happened, straight past the real fault, which is a connection
+            # that would not close. Covered by
+            # test_a_close_failure_after_a_successful_computation_is_not_logged_as_unknown.
+            #
+            # Still logged rather than passed: relocating the close must not
+            # turn it into the silent swallow this whole route was fixed for.
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    log.warning(
+                        "session: failed to close the registry connection for user %s; "
+                        "the capability computation itself was unaffected and the "
+                        "reported value stands",
+                        session.get('mt_user_id'), exc_info=True,
+                    )
         return jsonify({
             'authenticated': True,
             'is_mt': True,
             'language': lang,
             # Rendering ADVICE ONLY -- see _capabilities_for_session's
             # docstring. Every route still enforces its own server-side gate.
+            # TOP-LEVEL and a sibling of `user`: that is the contract both
+            # clients read (see app-shell.js's _adoptSessionCapabilities
+            # comment for what moving it costs). `null` here means "could not
+            # compute", never "denied everything".
             'capabilities': capabilities,
             'user': {
                 'id': session['mt_user_id'],
@@ -551,7 +663,23 @@ def create_employee():
 
         raw_token = uuid.uuid4().hex
         token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-        expires_at = (datetime.utcnow() + timedelta(days=7)).isoformat()
+        # Timezone-AWARE UTC ('...+00:00'), matching `_accounts.now_utc_iso()`
+        # and `verification.py`'s `_now()` -- which already writes this exact
+        # column, in this exact format, for password-reset and verification
+        # links. `datetime.utcnow()` is deprecated and scheduled for removal,
+        # and its naive output was the odd one out in a table two other
+        # writers already stamped as aware.
+        #
+        # Read back by `employee_setup()` as TEXT, against
+        # `_accounts.now_utc_iso()` -- the same format, so the pair is
+        # symmetric. Rows written by the previous naive code are still read
+        # correctly: both forms start with the full 'YYYY-MM-DDTHH:MM:SS'
+        # prefix, so the lexicographic compare is decided by the timestamp
+        # itself and only ever reaches the '+00:00' suffix on a sub-second
+        # tie, which for a seven-day link is not a distinction that exists.
+        # Pinned by tests/test_employee_setup_link_expiry.py, which asserts
+        # the expiry gate against BOTH stored formats.
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
         cur.execute(
             "INSERT INTO secure_links (id, company_id, token_hash, email_target, expires_at) VALUES (?,?,?,?,?)",
             (str(uuid.uuid4()), company_id, token_hash, email, expires_at)
@@ -980,7 +1108,10 @@ def get_admin_stats():
     company_id = session['company_id']
     conn = get_conn()
     try:
-        today = datetime.utcnow().strftime('%Y-%m-%d')
+        # Aware UTC purely to retire the deprecated `datetime.utcnow()`; the
+        # rendered value is byte-identical because '%Y-%m-%d' never formats an
+        # offset, so this cannot move the audit_today boundary.
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
         rows = conn.execute(
             'SELECT status, COUNT(*) as cnt FROM users WHERE company_id=? GROUP BY status', (company_id,)
         ).fetchall()
@@ -1085,7 +1216,11 @@ def employee_setup():
 
         if not link or link['is_used']:
             return jsonify({'error': 'Invalid or expired setup token.'}), 400
-        if datetime.utcnow().isoformat() > link['expires_at']:
+        # The read half of the pair written by `create_employee()` above, in
+        # the same aware-UTC format and through the same canonical helper the
+        # rest of this file already stamps `users.updated_at_utc` with. See
+        # that write site for why legacy naive rows still compare correctly.
+        if _accounts.now_utc_iso() > link['expires_at']:
             return jsonify({'error': 'This setup link has expired. Request a new one from your admin.'}), 400
 
         user = conn.execute("SELECT id FROM users WHERE email=?", (link['email_target'],)).fetchone()

@@ -336,22 +336,23 @@ const RetailSystem = {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v || ''));
   },
 
-  // Renders "who" / "which till" for one row, honestly.
+  // Renders ONE RECORDED IDENTIFIER honestly: the value the row carries, or
+  // the words "Not recorded" when it carries none. That last branch is the one
+  // that matters. A blank cell and an em dash both read as "the page failed" to
+  // the manager who opened this view because a till came up short; only words
+  // distinguish "nobody wrote this down" from "something broke", and that
+  // distinction is the whole point of showing attribution at all.
   //
-  // Order is best-evidence-first: a name the server resolved, else the raw
-  // recorded identifier, else the words "Not recorded". The last branch is
-  // the one that matters. A blank cell and an em dash both read as "the page
-  // failed" to the manager who opened this view because a till came up short;
-  // only words distinguish "nobody wrote this down" from "something broke",
-  // and that distinction is the whole point of showing attribution at all.
-  _attribution(value, resolvedName) {
-    const name = (resolvedName == null ? '' : String(resolvedName)).trim();
-    if (name) {
-      // A resolved employee name is human text that may itself be Arabic --
-      // isolating it would fight the page direction rather than help it. It
-      // is escaped (users is a shared, cross-device table) but not wrapped.
-      return this._esc(name);
-    }
+  // This used to take a second `resolvedName` argument and print it when
+  // present. That branch is gone, not merely unused: resolving an id to a
+  // PERSON is a different question with a different answer set (see
+  // _attributionState below), and keeping a name branch here meant this
+  // function and _attributionCell held two independent opinions about how to
+  // render an employee -- including opposite opinions on bidi isolation, which
+  // is exactly the drift that produces two screens naming the same row two
+  // ways. What is left is the till case and the identifier case, which is all
+  // any caller now asks it for.
+  _attribution(value) {
     const raw = (value == null ? '' : String(value)).trim();
     if (!raw) {
       return `<span style="color:var(--text-faint)">${t('Not recorded')}</span>`;
@@ -365,6 +366,179 @@ const RetailSystem = {
     // <bdi> was designed for.
     const shown = this._looksLikeUuid(raw) ? raw.slice(0, 8) + '…' : raw;
     return this._bdi(shown, raw, 'auto');
+  },
+
+  // ── WHO a row belongs to: one classifier, two screens ─────────────────────
+  //
+  // `_attribution()` above answers "what identifier does this row carry", which
+  // is the whole question for a till. A PERSON is a harder question, because
+  // the answer depends on something the row does not carry: whether the server
+  // looked the uid up and what it found. The by-employee report and the sale
+  // detail were each answering it separately and were about to answer it
+  // differently, so it is answered once, here.
+  //
+  // The settled route contract (see this wave's contract document, §2.5-2.6)
+  // gives every by-employee row four identity fields, all four null together
+  // for the unattributed bucket:
+  //
+  //   actor_user_uid | employee_id | email | employee_name
+  //
+  // `employee_name` is the SERVER's pre-formatted display string, derived from
+  // the same `email`/`employee_id` columns Android receives and in the same
+  // order -- which is the point: two clients reading one value cannot disagree
+  // about who a row is. This file reads `employee_name` first and falls back to
+  // the raw columns, so it renders the same name whichever of the two a given
+  // build sends.
+
+  // The name to print, or null when there is nothing truthful to print.
+  // Blank is NOT an identity: the contract names `"email": ""` explicitly as a
+  // server bug to defend against, and a nameless name is worse than an honest
+  // absence -- it looks resolved, points at nobody, and is indistinguishable
+  // from a rendering fault. Mirrors attributedName() in
+  // android/.../ui/screens/EmployeeSalesScreen.kt, email before employee_id,
+  // because EmployeesScreen shows staff that way round and a report that
+  // ordered them the other way reads as being about different people.
+  _identityOf(row) {
+    const r = row || {};
+    const pick = (v) => {
+      const s = (v == null ? '' : String(v)).trim();
+      return s || null;
+    };
+    return pick(r.employee_name) || pick(r.email) || pick(r.employee_id);
+  },
+
+  // Did the SERVER try to resolve this row's uid to a person?
+  //
+  // KEY PRESENCE, deliberately, not value truthiness. "The route sent
+  // `employee_name: null`" and "the route has no such field" are different
+  // facts, and only the first licenses the inference "this uid could not be
+  // resolved, therefore the account is gone".
+  //
+  // Both cases are live, not hypothetical. GET /sales/<id> is
+  // `SELECT s.*, COALESCE(c.name,'Walk-in') AS customer_name` and has never
+  // carried an identity column at all -- so on the sale detail nobody has
+  // looked, and saying "Account removed" there would be a confident claim
+  // derived from an absence, which is the exact move v13 refused to make when
+  // it left old rows NULL rather than stamping them with this machine's
+  // identity. The same applies across version skew: the Android build ships
+  // its own embedded Python server, so a newer frontend regularly talks to an
+  // older backend whose by-employee route returns metrics.py's raw rows with
+  // no identity fields on them.
+  _resolutionAttempted(row) {
+    const r = row || {};
+    if (typeof r !== 'object') return false;
+    return ('employee_name' in r) || ('email' in r) || ('employee_id' in r);
+  },
+
+  //   'named'        a person, by name
+  //   'account_gone' a recorded actor the server looked up and did not find
+  //   'recorded_id'  a recorded actor nobody looked up
+  //   'unattributed' no actor was ever recorded (every row written before v13)
+  //
+  // Three of these are the states the contract names; 'recorded_id' is the one
+  // that keeps 'account_gone' honest, and dropping it is how the three become
+  // a lie on any surface that does not resolve names.
+  //
+  // ── The uid is checked FIRST, and that ordering is the whole function ─────
+  //
+  // This used to test the name first and return 'named' without ever
+  // consulting `actor_user_uid`, so `{actor_user_uid: null, employee_name:
+  // "Sara Haddad"}` resolved 'named' here while Android's attributionOf()
+  // (EmployeeSalesScreen.kt, uid checked first) resolved NOT_RECORDED for the
+  // identical row. Two clients reading one response and naming two different
+  // people is the exact drift the shared contract was settled to prevent, and
+  // it is the desktop that was wrong.
+  //
+  // Untidy on the sale detail; dangerous on the by-employee report, because
+  // there the null-uid row is not one sale -- it is the AGGREGATE of every
+  // sale rung before v13 added the column. A name landing on it hands the
+  // shop's entire pre-v13 history to one employee, which is the fabrication
+  // v13 refused when it left old rows NULL rather than backfilling them from
+  // the free-text `cashier` column ("a wrong name on a sale is worse than no
+  // name"), arriving at the last step instead of the first. A name does not
+  // need a malicious server to get there: a joined-in default, a "POS"
+  // placeholder, or a display string computed before the uid was consulted all
+  // produce it.
+  //
+  // So: a name is only ever shown when a NON-BLANK ACTOR UID resolved to it.
+  // Both halves are required, and blank-is-absent applies to the uid for the
+  // same reason it already applies to the name in _identityOf() -- Android
+  // uses isNullOrBlank() on this field and a uid made of spaces is not a
+  // recorded actor.
+  //
+  // The three attributed states stay genuinely three below the uid check: a
+  // recorded uid with no resolvable name is 'account_gone' (or 'recorded_id'
+  // where nobody looked), and folding either into 'unattributed' would make a
+  // departed employee's takings vanish from the audit somebody is running
+  // specifically to find them.
+  _attributionState(row) {
+    const r = row || {};
+    const uid = (r.actor_user_uid == null ? '' : String(r.actor_user_uid)).trim();
+    if (!uid) return 'unattributed';
+    if (this._identityOf(r)) return 'named';
+    return this._resolutionAttempted(r) ? 'account_gone' : 'recorded_id';
+  },
+
+  // GET /sales/<id> resolves the same identity through the same helper the
+  // by-employee route uses, but names two of the three fields differently:
+  // `actor_employee_id` / `actor_email` (Android reads those two directly)
+  // alongside the shared `employee_name`. This maps them onto the row shape
+  // above WITHOUT inventing keys -- key presence is what tells
+  // _resolutionAttempted() that the server looked, so a field an older
+  // backend did not send must not appear here carrying `undefined`. Get that
+  // wrong and every sale on a pre-resolution build reports its cashier's
+  // account as deleted.
+  _saleIdentityRow(sale) {
+    const s = sale || {};
+    const row = { actor_user_uid: s.actor_user_uid };
+    if ('employee_name' in s)     row.employee_name = s.employee_name;
+    if ('actor_email' in s)       row.email = s.actor_email;
+    if ('actor_employee_id' in s) row.employee_id = s.actor_employee_id;
+    return row;
+  },
+
+  // The identity cell for one row. `legacyValue` is an optional free-text
+  // value that is evidence but NOT an identity -- see the sale detail's
+  // `cashier` column, kept reachable in the tooltip and kept out of the
+  // rendered answer.
+  _attributionCell(row, legacyValue) {
+    const state = this._attributionState(row);
+
+    if (state === 'named') {
+      // Wrapped now, where the earlier version returned a bare escaped string.
+      // The contract's display value is an EMAIL or an `EMP-000n` -- strongly
+      // Latin text with neutral characters in it (@ . -) sitting in a table
+      // cell that is right-to-left in Arabic, which is precisely where the
+      // bidi algorithm resolves those neutrals against the wrong run and moves
+      // them to the wrong side of the name. dir="auto" isolates WITHOUT
+      // asserting a direction, so an Arabic name still renders right-to-left
+      // inside the same wrapper -- the same choice Android made with FSI/PDI
+      // (bidiIsolate(), EmployeeSalesScreen.kt), for the same reason.
+      return this._bdi(this._identityOf(row), null, 'auto');
+    }
+
+    if (state === 'unattributed') {
+      const legacy = (legacyValue == null ? '' : String(legacyValue)).trim();
+      // Free text is not promoted into the visible answer, but it is not
+      // destroyed either: v13 kept the column because it is the only surviving
+      // evidence of who the shop BELIEVED rang a transaction. Tooltip, under
+      // its own column name, so what is being looked at is never in doubt.
+      const title = legacy ? ` title="${this._esc(t('Cashier') + ': ' + legacy)}"` : '';
+      return `<span style="color:var(--text-faint)"${title}>${t('Not recorded')}</span>`;
+    }
+
+    const uid = String((row || {}).actor_user_uid).trim();
+    const identifier = this._attribution(uid);
+    if (state === 'recorded_id') return identifier;
+
+    // 'account_gone'. The words and the uid are separate nodes on purpose:
+    // i18n.js's catalog sweep matches a text node's FULL trimmed text, so a
+    // label concatenated with an id can never be translated, and its leading
+    // Latin character would drag the whole cell left-to-right under dir="rtl"
+    // anyway. Same wording Android prints for this state, so the two clients
+    // cannot describe the same row differently. The uid stays as evidence --
+    // it is what makes the row traceable at all once the account is gone.
+    return `<span style="color:var(--text-faint)">${t('Account removed')}</span> ${identifier}`;
   },
 
   // ── DASHBOARD ─────────────────────────────────────────────────────────────
@@ -3015,6 +3189,26 @@ const RetailSystem = {
   // the way Admin Center's reorder-requests page does.
   async _renderAuditLog(c) {
     this._injectStyles();
+    // The other half of the nav gate, exactly as _renderReports has. The nav
+    // entry for this screen carries `capability: 'retail.reports'` and the
+    // route behind it is gated on the same code, but `_navigate('audit-log')`
+    // does not go through the sidebar: AuraRouter persists the last section
+    // into the URL hash and replays it on the next launch, so an owner who
+    // last read the audit trail on the shop's admin terminal leaves the next
+    // cashier standing on this screen.
+    //
+    // Worth being explicit about why this is a fix and not decoration, because
+    // this path was the least visibly broken of the set: _loadAuditLog's error
+    // branch already renders the server's own refusal message, so a cashier
+    // landing here saw a sentence rather than a blank table. The request still
+    // went out and still 403'd. "It looks handled" is what kept it unfixed.
+    if (window.SubsystemApp && !SubsystemApp.hasCapability('retail.reports')) {
+      return this._renderCapabilityRestricted(c, {
+        icon: '📜',
+        title: t('Audit Log'),
+        message: t('The activity log is limited to managers and the store owner.'),
+      });
+    }
     // Local UI state, not persisted -- a fresh page visit always starts on
     // page 1 with no filters, same as every other list page in this file.
     this._auditLog = { page: 1, limit: 50, date_from: '', date_to: '', action: '', entity: '', totalPages: 1 };
@@ -3440,11 +3634,30 @@ const RetailSystem = {
   // reads.
   //
   // The `Cashier` label is kept rather than renamed to `Employee`: it is the
-  // POS domain word, it is already in both catalogs, and it names the column
-  // the value comes from. What changed is the value -- it used to render
-  // `sale.cashier` raw, which is `session['mt_user_id']` (a bare UUID) on
-  // every sale this product has ever written, presented under a label that
-  // implies a person's name. See _attribution().
+  // POS domain word and it is already in both catalogs. What changed is the
+  // value under it, twice.
+  //
+  // First it stopped being `sale.cashier` raw -- `session['mt_user_id']`, a
+  // bare UUID on every sale this product has ever written, presented under a
+  // label that implies a person's name.
+  //
+  // Then it stopped falling back to `sale.cashier` AT ALL when
+  // `actor_user_uid` is absent, which is the change this wave made and the
+  // less obvious of the two. Those two columns are different identity spaces:
+  // `cashier` holds registry `users.ID`, `actor_user_uid` holds `users.UID`,
+  // and both are uuid4 strings. Rendering either one in this cell, in the same
+  // shape, under the same label, sent a manager who copied the shown fragment
+  // to look someone up straight at the wrong column, where they found nobody
+  // while the screen looked entirely correct -- the same wrong-column trap the
+  // by-employee route's own comment warns about. It also made the two screens
+  // contradict each other: revenue_by_employee() groups on `actor_user_uid`
+  // and refuses to read `cashier` (metrics.py rule 8, "money grouped by free
+  // text would look authoritative and be worthless"), so a sale the report
+  // counts in its unattributed bucket used to read as attributed here.
+  //
+  // The free text is not destroyed -- it is v13's only surviving evidence of
+  // who the shop BELIEVED rang the sale -- it is demoted to the cell's tooltip,
+  // under its own column name. See _attributionCell().
   async _viewSale(saleId) {
     try {
       const resp  = (await this._get(`/api/sub/retail/sales/${saleId}`)).data || {};
@@ -3468,14 +3681,14 @@ const RetailSystem = {
             <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()">✕ Close</button>
           </div>
           <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px">
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Customer</div><div style="color:#fff;font-weight:600">${this._esc(sale.customer_name||'Walk-in')}</div></div>
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Cashier</div><div style="color:#fff;font-weight:600">${this._attribution(sale.actor_user_uid || sale.cashier, sale.employee_name)}</div></div>
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Till')}</div><div style="color:#fff;font-weight:600">${this._attribution(sale.terminal_id, null)}</div></div>
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Payment</div><div>${this._badge(sale.payment_method||'cash','blue')}</div></div>
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Status</div><div>${this._badge(sale.status||'completed', statusColor[sale.status]||'green')}</div></div>
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Total</div><div style="color:#10b981;font-weight:700">${this._fmt(sale.total)}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Customer')}</div><div style="color:#fff;font-weight:600">${this._esc(sale.customer_name||'Walk-in')}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Cashier')}</div><div style="color:#fff;font-weight:600">${this._attributionCell(this._saleIdentityRow(sale), sale.cashier)}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Till')}</div><div style="color:#fff;font-weight:600">${this._attribution(sale.terminal_id)}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Payment')}</div><div>${this._badge(sale.payment_method||'cash','blue')}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Status')}</div><div>${this._badge(sale.status||'completed', statusColor[sale.status]||'green')}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Total')}</div><div style="color:#10b981;font-weight:700">${this._fmt(sale.total)}</div></div>
           </div>
-          ${(!sale.actor_user_uid && !sale.cashier && !sale.terminal_id)
+          ${(!sale.actor_user_uid && !sale.terminal_id)
             ? `<p style="color:var(--text-faint);font-size:12px;margin:-8px 0 16px">${t('Sales recorded before this release show no employee or till.')}</p>`
             : ''}
           <table class="ret-table">
@@ -3668,15 +3881,28 @@ const RetailSystem = {
   // apart. Sends the user somewhere useful rather than leaving them staring
   // at a refusal.
   _renderReportsRestricted(c) {
+    this._renderCapabilityRestricted(c, {
+      icon: '📊',
+      title: t('Reports'),
+      message: t('Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales.'),
+    });
+  },
+
+  // The same panel for the OTHER retail.reports screen -- see
+  // _renderAuditLog's guard. One function rather than two near-identical
+  // markup blocks, because the pair drifting apart is how a product ends up
+  // refusing the same person in two different tones of voice.
+  _renderCapabilityRestricted(c, opts) {
+    const o = opts || {};
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title">${t('Reports')}</h2>
+        <h2 class="ret-title">${o.title}</h2>
       </div>
       <div class="sub-chart-card" style="text-align:center;padding:56px 32px">
-        <div style="font-size:40px;margin-bottom:14px">📊</div>
-        <h3 style="color:var(--text);margin:0 0 10px;font-size:18px">${t('Reports')}</h3>
+        <div style="font-size:40px;margin-bottom:14px">${o.icon || '🔒'}</div>
+        <h3 style="color:var(--text);margin:0 0 10px;font-size:18px">${o.title}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 24px;line-height:1.7;max-width:420px;margin-left:auto;margin-right:auto">
-          ${t('Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales.')}
+          ${o.message}
         </p>
         <button class="sub-btn-primary" onclick="SubsystemApp._navigate('pos')">🛒 ${t('Point of Sale')}</button>
       </div>`;
@@ -3689,26 +3915,43 @@ const RetailSystem = {
   // added precisely so this question has an answer that is not a free-text
   // guess.
   //
-  // THE ROUTE THIS PANEL NEEDS DOES NOT EXIST YET. The figures behind it do:
-  // core/retail/revenue_by_employee() (backend/core/retail/metrics.py) landed
-  // this wave and is tested by retail_metrics_by_employee_test.py, but nothing
-  // in retail_api.py exposes it over HTTP, and retail_api.py is another
-  // agent's file this wave. Flagged in this change's report rather than
-  // reached into. Until it lands, this panel says so in the 404 branch below
-  // and nothing else on the Reports page is affected.
+  // ── The route contract, settled BEFORE either side was written ────────────
   //
   //   GET /api/sub/retail/reports/by-employee?days=<int>[&branch_id=<id>]
   //   @mt_require_capability(CAP_REPORTS)          <- same gate as every other
   //                                                   /reports/* route
-  //   -> {"status": "success", "data": [ ...revenue_by_employee() rows,
-  //        each with `employee_name` joined on... ]}
+  //   -> {"status": "success", "success": true, "data": [ <row>, ... ]}
+  //   -> {"status": "error", "message": "..."} + a real HTTP status
   //
-  // The row shape below is metrics.py's, copied not invented -- and the two
-  // fields this file reads most carefully are the ones whose obvious-looking
-  // reading is wrong:
+  // The envelope carries BOTH discriminators deliberately. `{"status":
+  // "success"}` is what 74 of retail_api.py's handlers answer and what this
+  // file reads; `{"success": true}` is what the five sibling /reports/* routes
+  // this panel sits beside actually answer (sales-trend, top-products,
+  // payment-methods, summary, by-branch all emit it and carry no `status` key
+  // at all) and what Android's ByEmployeeResponse deserializes. One extra key
+  // let both clients read the same response with no change to either. This
+  // file accepts either marker for the same reason: a build that shipped only
+  // the family's shape is still unambiguously reporting success, and an error
+  // envelope carries neither.
   //
-  //   {"actor_user_uid": "<uuid>|null", "transactions": <int>,
-  //    "gross_sales": <n>, "refunds": <n>, "revenue": <n>, "avg_ticket": <n>}
+  // Row shape, all four identity fields null TOGETHER for the unattributed
+  // bucket, and `null` rather than `""` because both clients treat blank as
+  // absent:
+  //
+  //   {"actor_user_uid": "<uuid>|null",   "employee_id": "<EMP-000n>|null",
+  //    "email": "<users.email>|null",     "employee_name": "<display>|null",
+  //    "transactions": <int>, "gross_sales": <n>, "refunds": <n>,
+  //    "revenue": <n>, "avg_ticket": <n>}
+  //
+  // `employee_name` is the server's single pre-formatted display string,
+  // computed from the SAME two columns Android reads and in the same order
+  // (email, then employee_id), so the two clients cannot disagree about who a
+  // row is. `gross_sales`/`refunds` are not drawn by either client today and
+  // are kept anyway: they are the audit trail that makes `revenue` checkable,
+  // and without them the API cannot answer "why is this one negative?".
+  //
+  // The figures are metrics.py's, copied not invented -- and the two this file
+  // reads most carefully are the ones whose obvious-looking reading is wrong:
   //
   //   * `revenue` is NET of refunds; `transactions` is NOT netted; a refund is
   //     charged to whoever processed it. So a returns-desk shift legitimately
@@ -3725,14 +3968,25 @@ const RetailSystem = {
   //     drops it would omit most of a real shop's money from a report whose
   //     columns still added up. It is every row written before v13 plus
   //     everything written before the write side began stamping the column.
-  //   * `employee_name` is the route's job, not the metrics module's: it
-  //     resolves through registry.db's `users` table on **uid**, not `id` --
-  //     `_actor_user_uid()` in retail_api.py stores `users.uid` (the wire
+  //   * There is EXACTLY ONE such row. metrics.py's GROUP BY guarantees a
+  //     single NULL key, and this is a hard contract term rather than a
+  //     nicety: Android's LazyColumn deliberately does not key on
+  //     `actor_user_uid` because two null-uid rows would crash the reporting
+  //     screen outright ("Key was already used").
+  //   * The identity fields are the route's job, not the metrics module's:
+  //     they resolve through registry.db's `users` table on **uid**, not `id`
+  //     -- `_actor_user_uid()` in retail_api.py stores `users.uid` (the wire
   //     identity a peer device names a user by), and both columns are uuid4
   //     strings, so joining the wrong one returns nobody while looking
   //     entirely correct. NULL when it cannot be resolved is right and is
   //     handled here; the free-text `cashier` column dressed up as a name is
-  //     not (v13's rule: a wrong name is worse than no name).
+  //     not (v13's rule: a wrong name is worse than no name), and metrics.py
+  //     rule 8 refuses to read that column for exactly this reason.
+  //
+  // What this file does with all of that is in _attributionCell() above: a
+  // resolved person, an actor the route looked up and could not find, and the
+  // unattributed bucket are three visibly different answers, and none of them
+  // is a guess.
   async _loadEmployeeSales(days, branchQS) {
     const tbody = document.querySelector('#rep-emp-table tbody');
     if (!tbody) return;
@@ -3767,7 +4021,10 @@ const RetailSystem = {
       const res = await this._fetch(`/api/sub/retail/reports/by-employee?days=${days}${branchQS}`);
       if (res.status === 404) return fail(t('Sales by employee are not available on this version.'));
       const body = await res.json().catch(() => ({}));
-      if (!res.ok || body.status !== 'success') {
+      // Either discriminator counts -- see the envelope note above. An error
+      // envelope carries neither, so this cannot read a failure as a success.
+      const succeeded = body.status === 'success' || body.success === true;
+      if (!res.ok || !succeeded) {
         return fail(body.message || t('Could not load sales by employee.'));
       }
 
@@ -3805,12 +4062,16 @@ const RetailSystem = {
         // as "not recorded" rather than $0.00: printing a zero would state an
         // average nobody computed, next to two figures that were.
         const hasAvg = typeof r.avg_ticket === 'number' && isFinite(r.avg_ticket);
-        if (!r.actor_user_uid && !r.employee_name) sawUnattributed = true;
+        // The footnote below explains the pre-v13 bucket specifically, so it
+        // is driven by that state alone. An 'account_gone' row is NOT that
+        // bucket -- it has a recorded actor, it just no longer has an account
+        // -- and it carries its own words in the cell.
+        if (this._attributionState(r) === 'unattributed') sawUnattributed = true;
         return `<tr>
-          <td>${this._attribution(r.actor_user_uid, r.employee_name)}</td>
+          <td>${this._attributionCell(r)}</td>
           <td style="text-align:right;color:var(--text-muted)">${this._fmtNum(txns)}</td>
           <td style="text-align:right;font-weight:700">${this._fmt(revenue)}</td>
-          <td style="text-align:right;color:var(--text-muted)">${hasAvg ? this._fmt(r.avg_ticket) : this._attribution(null, null)}</td>
+          <td style="text-align:right;color:var(--text-muted)">${hasAvg ? this._fmt(r.avg_ticket) : this._attribution(null)}</td>
         </tr>`;
       }).join('');
 

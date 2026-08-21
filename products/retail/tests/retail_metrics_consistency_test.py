@@ -27,6 +27,7 @@ onto only some of the copies. Concretely, every test below FAILED:
 Run:
     pytest products/retail/tests/retail_metrics_consistency_test.py -v
 """
+import ast
 import logging
 import os
 import shutil
@@ -61,6 +62,7 @@ app = _app_module.init_app()
 app.config["TESTING"] = True
 
 from commercial_runtime.identity.registry_db import get_conn as registry_conn  # noqa: E402
+from database import schema as schema_module  # noqa: E402
 from database.schema import get_retail_conn  # noqa: E402
 from commercial_runtime.security.passwords import hash_password  # noqa: E402
 from core.retail import metrics  # noqa: E402
@@ -569,39 +571,217 @@ def test_period_constructors_refuse_to_read_the_clock_themselves():
         with pytest.raises(TypeError):
             ctor()
 
-    assert not hasattr(metrics, 'datetime'), (
-        'core/retail/metrics.py must not import `datetime` at all -- importing it '
-        'is what makes reading the clock in here possible in the first place.')
+
+def test_metrics_never_reads_a_clock_of_its_own__source():
+    """THE RULE, GREPPED FOR DIRECTLY.
+
+    This assertion used to be `not hasattr(metrics, 'datetime')`, on the
+    reasoning that "importing it is what makes reading the clock in here
+    possible in the first place". metrics.py now DOES import `datetime`,
+    because converting an instant into an IANA zone requires a datetime
+    object and there is no way to do it with `date`/`timedelta` alone.
+
+    That is a real weakening of the old check and it is replaced here with
+    two stronger ones rather than dropped. The old check only ever caught
+    the module-level import: a function-local `from datetime import
+    datetime` followed by `datetime.now()` would have sailed straight past
+    it, which is the same shape of green-guard-over-a-broken-thing this
+    whole wave exists to clear out.
+
+    This half walks metrics.py's SYNTAX TREE, so no clock read anywhere in
+    the file -- module level, function local, inside a comprehension --
+    escapes, and prose in the docstrings that merely MENTIONS
+    `datetime.now(timezone.utc)` is not mistaken for one."""
+    tree = ast.parse(Path(metrics.__file__).read_text(encoding='utf-8'))
+    clock_names = {'now', 'today', 'utcnow', 'utctoday', 'fromtimestamp', 'monotonic'}
+    reads = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        called = (func.attr if isinstance(func, ast.Attribute)
+                  else func.id if isinstance(func, ast.Name) else None)
+        if called in clock_names or called == 'time':
+            reads.append(f'line {node.lineno}: {ast.unparse(node)}')
+    assert not reads, (
+        'core/retail/metrics.py read a clock. Every period constructor takes '
+        '`now` from the caller so one response cannot straddle midnight and so '
+        'a test that freezes api.retail_api.datetime actually freezes what the '
+        'report measures:\n  ' + '\n  '.join(reads))
 
 
-def test_every_report_route_honours_a_frozen_clock():
-    """The seam, end to end. With api.retail_api.datetime frozen to a date
-    the fixture's sales are nowhere near, EVERY period-taking report route
-    must return an empty window. Any route that still let metrics read the
-    real clock would report today's sales here and give itself away."""
+def test_metrics_never_reads_a_clock_of_its_own__behavioural():
+    """The other half: the rule enforced at RUNTIME, over the real module.
+
+    `metrics.datetime` is replaced with a class whose now()/today()/utcnow()
+    raise, and every public entry point is then run for real. A source scan
+    can be argued with; this cannot -- if any figure in this module needs
+    the clock to produce a number, it fails here."""
+    client, cid, pid, main_id, _ = _setup_company()
+    _sell(client, pid, main_id, 1)
+
+    class _NoClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            raise AssertionError('core/retail/metrics.py called datetime.now()')
+
+        @classmethod
+        def today(cls):
+            raise AssertionError('core/retail/metrics.py called datetime.today()')
+
+        @classmethod
+        def utcnow(cls):
+            raise AssertionError('core/retail/metrics.py called datetime.utcnow()')
+
+    period = metrics.period_days(30, datetime.now())
+    conn = get_retail_conn()
+    original = metrics.datetime
+    metrics.datetime = _NoClock
+    try:
+        metrics.summary(conn, cid, period)
+        metrics.revenue_by_day(conn, cid, period)
+        metrics.revenue_by_hour(conn, cid, period)
+        metrics.revenue_by_payment_method(conn, cid, period)
+        metrics.revenue_by_employee(conn, cid, period)
+        metrics.revenue_by_branch(conn, cid, period)
+        metrics.top_products(conn, cid, period)
+        metrics.inventory_value(conn, cid)
+        metrics.business_day(conn, cid)
+        metrics.business_now(conn, cid, datetime(2026, 3, 10, 9, 0))
+    finally:
+        metrics.datetime = original
+        conn.close()
+
+
+def test_daily_cash_cannot_join_the_shop_business_date_yet():
+    """A TRIPWIRE OVER A KNOWN, DELIBERATE GAP -- so it closes on purpose.
+
+    Every report route now buckets on the shop's business date, derived from
+    `created_at_utc` (schema v13). `/reports/daily-cash` cannot follow them:
+    it reads the `payments` table, and `payments` is not in
+    `RETAIL_ACTOR_TABLES`, so v13 never gave it `created_at_utc` at all. Its
+    only timestamp is `created_at` -- the local wall clock of whichever
+    device took the money -- so it is still `date(created_at)` and still on
+    device local time.
+
+    That is not something to paper over with a COALESCE that has nothing to
+    coalesce to, and it is not something to fix in this wave:
+    RETAIL_SCHEMA_VERSION is frozen at 14 and v15-v17 are reserved in
+    ROADMAP.md. What it needs is written down in this project's report, and
+    this test fails the day the column arrives so that daily-cash is moved
+    deliberately rather than left as the one financial screen on a different
+    clock from every other."""
+    conn = get_retail_conn()
+    try:
+        columns = {row['name'] for row in conn.execute('PRAGMA table_info(payments)')}
+    finally:
+        conn.close()
+
+    assert columns, 'the payments table has gone missing'
+    assert 'payments' not in schema_module.RETAIL_ACTOR_TABLES
+    assert 'created_at_utc' not in columns, (
+        'payments now carries created_at_utc, so /reports/daily-cash can and MUST '
+        'move onto metrics.py\'s business date like every other report route. '
+        'Leaving it on date(created_at) makes the cash screen the only financial '
+        'figure in the product on the reporting device\'s clock.')
+
+
+def _report_revenues(client, days):
+    """Every period-taking report route, reduced to the one figure they all
+    claim to be reporting: net revenue over the same window."""
+    def body(path):
+        r = client.get(f'/api/sub/retail/reports/{path}&days={days}'
+                       if '?' in path else
+                       f'/api/sub/retail/reports/{path}?days={days}')
+        assert r.status_code == 200, (path, r.get_data(as_text=True))
+        return r.get_json()
+    return {
+        'summary':        body('summary')['data']['revenue'],
+        'sales-trend':    round(sum(body('sales-trend')['data']), 2),
+        'payment-methods': round(sum(row['revenue'] for row in body('payment-methods')['data']), 2),
+        'top-products':   round(sum(body('top-products?limit=8')['revenue']), 2),
+        'by-branch':      round(sum(body('by-branch')['data']), 2),
+        'by-employee':    round(sum(row['revenue'] for row in body('by-employee')['data']), 2),
+    }
+
+
+def test_every_report_route_moves_its_window_with_the_frozen_clock():
+    """The seam, end to end -- asserted in BOTH directions, which is the whole
+    point of this test and the reason its predecessor was worthless.
+
+    THE TEST THIS REPLACES froze `api.retail_api.datetime` to 2019 and
+    asserted every report route returned EMPTY. "Empty" is the SIGNATURE OF
+    THE DEFECT, not evidence against it: a route whose window is built on the
+    wrong clock returns nothing, and so does a route that is simply broken, and
+    so does a route whose fixture never sold anything. The assertion could only
+    fail if a route returned MORE data than expected, never less -- so it sat
+    green through the entire period in which five report routes were building
+    their windows from the reporting device's clock while metrics bucketed
+    every row onto the shop's.
+
+    Three freezes here, and no single wrong implementation survives all three:
+
+      1. FROZEN TO THE DAY THE SALE WAS RUNG, 30-day window -> the money must
+         be THERE. A route stuck on empty (the failure the old test could not
+         see) dies here.
+      2. FROZEN 40 DAYS ON, 30-day window -> the window is [+10 .. +40] and the
+         money must be GONE. A route that ignored the frozen clock and read the
+         real one still reports the sale, and dies here.
+      3. FROZEN 40 DAYS ON, 60-day window -> the window reaches back over the
+         sale again and the money must RETURN. This is what makes (2) mean
+         "the window moved with the clock" rather than merely "the number went
+         to zero"; nothing that hard-codes emptiness or ignores `days` passes
+         all three.
+
+    NOTE ON WHAT THIS FILE CAN AND CANNOT SEE. Every shop `_setup_company()`
+    builds is UNCONFIGURED -- it never writes `business_timezone` -- so
+    `metrics.business_day()` returns `zone=None` and `business_now()` passes a
+    naive clock straight through. Device clock and shop clock are therefore
+    EQUAL BY CONSTRUCTION here, which is correct for this file (it tests
+    cross-screen agreement on a default install, which is what nearly every
+    install in the field is) but means it CANNOT detect a route on the wrong
+    one of the two. That dimension is owned by
+    retail_report_clock_agreement_test.py, which declares a real shop zone and
+    puts the device on a different one. Do not add a shop clock to this
+    fixture instead -- the two files are asserting different invariants."""
     client, cid, pid, main_id, _ = _setup_company()
     _sell(client, pid, main_id, 2)
+    expected = round(2 * UNIT_TOTAL, 2)      # 115.00
 
     import api.retail_api as retail_api_module
 
-    class _FrozenDateTime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return datetime(2019, 6, 15, 12, 0, 0)
+    real_now = datetime.now()
+    far_future = real_now + timedelta(days=40)
 
-    original = retail_api_module.datetime
-    retail_api_module.datetime = _FrozenDateTime
-    try:
-        summary = client.get('/api/sub/retail/reports/summary?days=30').get_json()['data']
-        trend = client.get('/api/sub/retail/reports/sales-trend?days=30').get_json()
-        pay = client.get('/api/sub/retail/reports/payment-methods?days=30').get_json()
-        top = client.get('/api/sub/retail/reports/top-products?days=30&limit=8').get_json()
-        by_branch = client.get('/api/sub/retail/reports/by-branch?days=30').get_json()
-    finally:
-        retail_api_module.datetime = original
+    def _frozen_at(instant, days):
+        class _FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return instant.astimezone(tz) if tz is not None else instant
 
-    assert summary['revenue'] == 0, 'report_summary ignored the frozen clock'
-    assert trend['data'] == [], 'report_sales_trend ignored the frozen clock'
-    assert pay['data'] == [], 'report_payment_methods ignored the frozen clock'
-    assert top['revenue'] == [], 'report_top_products ignored the frozen clock'
-    assert sum(by_branch['data']) == 0, 'report_by_branch ignored the frozen clock'
+        original = retail_api_module.datetime
+        retail_api_module.datetime = _FrozenDateTime
+        try:
+            return _report_revenues(client, days)
+        finally:
+            retail_api_module.datetime = original
+
+    on_the_day = _frozen_at(real_now, days=30)
+    assert set(on_the_day.values()) == {expected}, (
+        f"frozen to the day the sale was rung, a 30-day window must contain it. "
+        f"A route reporting 0 here is not 'respecting the clock', it is broken -- "
+        f"which is exactly what the superseded version of this test asserted was "
+        f"correct:\n  {on_the_day}")
+
+    past_the_window = _frozen_at(far_future, days=30)
+    assert set(past_the_window.values()) == {0}, (
+        f"frozen 40 days on, a 30-day window is [+10 .. +40] and cannot reach back "
+        f"to the sale. A route reporting {expected} here read the REAL wall clock "
+        f"instead of the frozen one:\n  {past_the_window}")
+
+    reaching_back = _frozen_at(far_future, days=60)
+    assert set(reaching_back.values()) == {expected}, (
+        f"frozen 40 days on, a 60-day window reaches back over the sale again, so "
+        f"the money must return. A route that is 0 in BOTH this case and the one "
+        f"above is not tracking the window at all -- it is just empty:\n  "
+        f"{reaching_back}")

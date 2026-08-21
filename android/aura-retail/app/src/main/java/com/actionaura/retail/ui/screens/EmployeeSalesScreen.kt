@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.actionaura.retail.net.ApiClient
+import com.actionaura.retail.net.ByEmployeeResponse
 import com.actionaura.retail.net.EmployeeSales
 import com.actionaura.retail.net.Sale
 import com.actionaura.retail.net.apiErrorMessage
@@ -101,11 +102,33 @@ internal fun attributedName(employeeId: String?, email: String?): String? =
     email?.trim()?.takeIf { it.isNotEmpty() }
         ?: employeeId?.trim()?.takeIf { it.isNotEmpty() }
 
-/** Shared classifier for both the report rows and a single sale. */
+/**
+ * Shared classifier for both the report rows and a single sale.
+ *
+ * The uid is checked FIRST, and that ordering is the whole content of this
+ * function. It used to test the name first and never consult `uid` on the
+ * [Attribution.NAMED] branch at all, so `(actor_user_uid = null, email =
+ * "sam@shop.test")` resolved NAMED. A null uid IS the unattributed aggregate
+ * bucket -- every sale rung before v13 added the column, summed into one row --
+ * so the moment the route populates an identity field on that row (a "POS"
+ * placeholder, a joined-in default, a well-meaning display string), this screen
+ * prints a real person's name over sales nobody was recorded for.
+ *
+ * That is exactly the fabrication the v13 migration refused to commit when it
+ * left `actor_user_uid` NULL rather than backfilling it from the free-text
+ * `cashier` column -- "a wrong name on a sale is worse than no name" -- arriving
+ * at the last step instead of the first. NAMED now requires BOTH: a uid that
+ * was actually recorded, AND a name that actually resolved.
+ *
+ * The three states stay genuinely three: a recorded uid with no resolvable name
+ * is [Attribution.ACCOUNT_GONE] (attributed, account since removed), which
+ * must not be folded into [Attribution.NOT_RECORDED] or a leaver's takings
+ * vanish from the audit somebody is running specifically to find them.
+ */
 internal fun attributionOf(uid: String?, employeeId: String?, email: String?): Attribution = when {
+    uid.isNullOrBlank() -> Attribution.NOT_RECORDED
     attributedName(employeeId, email) != null -> Attribution.NAMED
-    !uid.isNullOrBlank() -> Attribution.ACCOUNT_GONE
-    else -> Attribution.NOT_RECORDED
+    else -> Attribution.ACCOUNT_GONE
 }
 
 internal fun rowAttribution(row: EmployeeSales): Attribution =
@@ -153,6 +176,47 @@ internal const val BY_EMPLOYEE_UNAVAILABLE =
 
 internal fun missingEndpointKeyOrNull(e: Throwable): String? =
     if (e is HttpException && e.code() == 404) BY_EMPLOYEE_UNAVAILABLE else null
+
+/**
+ * What to say when the server refused, worded for a refusal that named no
+ * reason. A translated catalogue key, not a bare sentence, because a blank
+ * error line is indistinguishable from a screen that failed to render.
+ */
+internal const val BY_EMPLOYEE_REFUSED = "The server wouldn't send this report."
+
+/**
+ * The refusal sentence carried by a 200 whose envelope does not say success, or
+ * null when it does.
+ *
+ * THE BUG: the load path read `reportByEmployee(days).data` and never once
+ * consulted the verdict beside it, so a 200 carrying `{"success": false,
+ * "error": ..., "data": []}` took the happy path and drew "No sales in this
+ * period" -- a refusal rendered as an empty shop, which is the single most
+ * misleading thing a takings report can say. Four other screens in this module
+ * already check the discriminator; this one deviated from its own module's
+ * convention.
+ *
+ * BOTH spellings are honoured because the route answers with both. `status` is
+ * the desktop's discriminator (subsystem-retail.js hard-gates on `body.status
+ * !== 'success'`) and wins when present; `success` is what the five sibling
+ * chart/KPI report routes emit and what this client's model was built against.
+ * Reading only one would turn whichever spelling the backend settled on into a
+ * permanent refusal screen. A blank or absent `status` is not a verdict and
+ * falls through rather than being read as "not success".
+ *
+ * The reason is taken from the server verbatim where it sent one -- `message`
+ * first, then `error`, the same order and the same two spellings net/
+ * ApiErrors.kt already decodes for HTTP failures -- so a capability refusal
+ * reads as a capability refusal instead of a generic apology.
+ */
+internal fun byEmployeeRefusalOrNull(body: ByEmployeeResponse): String? {
+    val accepted =
+        if (!body.status.isNullOrBlank()) body.status == "success" else body.success
+    if (accepted) return null
+    return body.message?.trim()?.takeIf { it.isNotEmpty() }
+        ?: body.error?.trim()?.takeIf { it.isNotEmpty() }
+        ?: BY_EMPLOYEE_REFUSED
+}
 
 /**
  * True when a row's takings are NEGATIVE.
@@ -206,15 +270,20 @@ fun EmployeeSalesScreen(snackbar: SnackbarHostState) {
 
     suspend fun load() {
         try {
+            val envelope = ApiClient.get().reportByEmployee(days)
+            // The VERDICT before the PAYLOAD. A 200 whose envelope says no is a
+            // refusal, and rendering it as an empty period would tell an owner
+            // their shop took nothing today because their session lapsed.
+            val refusal = byEmployeeRefusalOrNull(envelope)
+            if (refusal != null) { loadError = tr(refusal); rows = emptyList(); return }
             // `?: throw` rather than `?: emptyList()`. Gson writes an explicit
             // JSON null straight into the field regardless of what the Kotlin
             // type claims (ByEmployeeResponse's doc comment carries the full
             // post-mortem); defaulting it here would trade the crash for a
             // screen that reports a malformed 200 as "nobody sold anything".
             // Throwing puts it on the same path as every other failure.
-            val body = ApiClient.get().reportByEmployee(days).data
+            rows = envelope.data
                 ?: throw IllegalStateException("Malformed response: by-employee data was null")
-            rows = body
             loadError = null
         } catch (e: Exception) {
             loadError = missingEndpointKeyOrNull(e)?.let { tr(it) } ?: apiErrorMessage(e)

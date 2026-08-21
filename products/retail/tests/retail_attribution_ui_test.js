@@ -126,7 +126,12 @@ function loadRetail(opts) {
 
   const sandbox = {
     console,
-    t: (s) => s,
+    // Identity by default. Pass `t: markingT` to prove a label is actually
+    // wrapped in t() at the point it is rendered -- an unwrapped literal
+    // reaches innerHTML as bare English and is then invisible to i18n.js's
+    // catalog sweep only when it is NOT also a catalog key, which is exactly
+    // the failure a source grep cannot tell apart from a translated one.
+    t: options.t || ((s) => s),
     setTimeout, clearTimeout,
     // WHATWG globals, not ECMAScript ones -- a bare vm context does not carry
     // them, but every browser this ships to does.
@@ -154,14 +159,18 @@ function loadRetail(opts) {
   return { RetailSystem: sandbox.RetailSystem, calls, appended };
 }
 
-async function viewSale(sale, items) {
-  const env = loadRetail({
+async function viewSale(sale, items, extra) {
+  const env = loadRetail(Object.assign({
     responses: { '/sales/': { status: 'success', data: { sale: sale, items: items || [] } } },
-  });
+  }, extra || {}));
   await env.RetailSystem._viewSale(1);
   assert.strictEqual(env.appended.length, 1, 'Expected the sale-detail modal to be appended to the document body.');
   return env.appended[0].innerHTML;
 }
+
+// A t() that proves it ran. Any label rendered through t() comes back
+// wrapped; a hardcoded English literal in the template does not.
+const markingT = (s) => '‹' + s + '›';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Sale detail — the one place a "who rang this, at which till" dispute lands
@@ -311,6 +320,162 @@ async function testEmployeeNameIsEscaped() {
     html.includes('&lt;img') || html.includes('&quot;'),
     'Expected the injected name to survive as escaped entities, proving it was ' +
     'rendered rather than silently dropped. Got: ' + html.slice(0, 900)
+  );
+}
+
+// ── The sale detail names a person the same way the report does ────────────
+//
+// GET /sales/<id> resolves `actor_user_uid` through the same helper the
+// by-employee route uses, and ships three fields: `employee_name` (the shared
+// display string this file reads) plus `actor_employee_id` / `actor_email`
+// (the raw pair Android reads). Prefixed on this route, unprefixed on the
+// report -- the same values under two spellings, which is precisely the kind
+// of detail that silently renders `undefined` if a client assumes one shape.
+async function testSaleDetailShowsTheResolvedNameFromItsOwnFieldSpelling() {
+  const html = await viewSale({
+    id: 7, sale_number: 'SALE-000021-ab12cd34', created_at: '2026-08-19T14:30:00',
+    total: 20, status: 'completed', payment_method: 'cash',
+    cashier: ACTOR_UUID, actor_user_uid: ACTOR_UUID, terminal_id: TILL_UUID,
+    employee_name: 'sam@shop.test', actor_email: 'sam@shop.test', actor_employee_id: 'EMP-0002',
+  });
+
+  assert.ok(
+    html.includes('sam@shop.test'),
+    'The sale detail must show the resolved identity GET /sales/<id> now sends. ' +
+    'Got: ' + html.slice(0, 900)
+  );
+  assert.ok(
+    !/Account removed|Not recorded/.test(html.split('Till')[0]),
+    'A resolved cashier must not also carry an unresolved marker. Got: ' +
+    html.slice(0, 900)
+  );
+}
+
+// The version-skew direction that actually happens: the Android app ships its
+// own embedded Python server, so a newer frontend regularly talks to an older
+// backend. Such a build answers with `s.*` and nothing else -- no identity
+// fields at all. "The route sent employee_name: null" and "the route has no
+// such field" are different facts, and only the first licenses "the account
+// was deleted". Inferring deletion from a field nobody sent would be a fresh
+// lie of exactly the shape v13 refused when it left old rows NULL rather than
+// stamping them with this machine's identity.
+async function testSaleDetailDoesNotInferDeletionFromAFieldNobodySent() {
+  const html = await viewSale({
+    id: 10, sale_number: 'SALE-000022-ab12cd34', created_at: '2026-08-19T14:30:00',
+    total: 20, status: 'completed', payment_method: 'cash',
+    cashier: ACTOR_UUID, actor_user_uid: ACTOR_UUID, terminal_id: TILL_UUID,
+  });
+
+  assert.ok(
+    !/Account removed/i.test(html),
+    'A backend that never carried identity fields was reported as having ' +
+    'deleted the cashier\'s account. Nothing here established that anyone was ' +
+    'ever looked up. Got: ' + html.slice(0, 900)
+  );
+  assert.ok(
+    !/undefined/.test(html),
+    'A field the older backend never sent leaked into the markup as ' +
+    '"undefined". Got: ' + html.slice(0, 900)
+  );
+  assert.ok(
+    html.includes(ACTOR_UUID),
+    'Sanity: the recorded actor uid must still be shown. Got: ' + html.slice(0, 900)
+  );
+}
+
+// The state that IS available on this route now: it looked, and found nobody.
+// All three identity fields present and null together is the route's own
+// documented signal for that, and it means something specific and useful --
+// the account that rang this sale has been deleted since.
+async function testSaleDetailReportsADeletedAccountWhenTheRouteLookedAndFoundNobody() {
+  const html = await viewSale({
+    id: 11, sale_number: 'SALE-000023-ab12cd34', created_at: '2026-08-19T14:30:00',
+    total: 20, status: 'completed', payment_method: 'cash',
+    cashier: ACTOR_UUID, actor_user_uid: ACTOR_UUID, terminal_id: TILL_UUID,
+    employee_name: null, actor_email: null, actor_employee_id: null,
+  });
+
+  assert.ok(
+    /Account removed/.test(html),
+    'The route resolved this uid and found nobody -- that is a real fact about ' +
+    'the shop (an employee record is gone) and the same words Android prints ' +
+    'for it. Got: ' + html.slice(0, 900)
+  );
+  assert.ok(
+    !/Not recorded/.test(html.split('Till')[0]),
+    'A recorded-but-unresolvable actor is not the pre-v13 bucket. Got: ' +
+    html.slice(0, 900)
+  );
+}
+
+// `sales.cashier` is free text -- `data.get('cashier', _uid())` in
+// create_sale, i.e. session['mt_user_id'], which is registry `users.ID`.
+// `actor_user_uid` is `users.UID`. Both are uuid4 strings, they are different
+// identity spaces, and metrics.py's rule 8 refuses to read `cashier` at all
+// ("money grouped by free text would look authoritative and be worthless").
+// Rendering it in the same cell, in the same shape, under the same label meant
+// a manager copying the shown fragment to look someone up searched the wrong
+// column and found nobody -- while the screen looked entirely correct. The two
+// screens must also agree: the by-employee report never reads this column, so
+// a sale that report calls unattributed must not read as attributed here.
+async function testLegacyCashierFreeTextIsNotPresentedAsTheActor() {
+  const html = await viewSale({
+    id: 8, sale_number: 'SALE-000004-ab12cd34', created_at: '2025-11-02T09:05:00',
+    total: 12, status: 'completed', payment_method: 'cash',
+    cashier: ACTOR_UUID, actor_user_uid: null, terminal_id: null,
+  });
+
+  const beforeTill = html.split('Till')[0];
+  assert.ok(
+    /Not recorded/.test(beforeTill),
+    'A sale with no `actor_user_uid` is unattributed -- that is exactly the ' +
+    'bucket revenue_by_employee() reports under a NULL key -- and this cell ' +
+    'must say so. Falling back to the free-text `cashier` column makes an ' +
+    'unattributed sale read as attributed, on the one screen a dispute lands ' +
+    'on. Got: ' + beforeTill.slice(0, 900)
+  );
+  assert.ok(
+    !new RegExp(ACTOR_UUID.slice(0, 8) + '\\s*…?\\s*</bdi>').test(beforeTill),
+    'The legacy free-text `cashier` value was rendered as the actor identity. ' +
+    'It is a users.ID, not the users.UID this label now means. Got: ' +
+    beforeTill.slice(0, 900)
+  );
+  assert.ok(
+    html.includes(ACTOR_UUID),
+    'The recorded free-text value must not be DESTROYED either -- v13 kept the ' +
+    'column because it is the only surviving evidence of who the shop believed ' +
+    'rang the sale. Keep it reachable (a title/tooltip), just not presented as ' +
+    'a resolved identity. Got: ' + html.slice(0, 900)
+  );
+}
+
+// Consistency nit with real consequences in Arabic. Five of the six labels in
+// the sale-detail grid were hardcoded English while `Till` alone went through
+// t(). Both render identically in English, so review sees nothing; on an
+// Arabic page the row reads as five English words and one Arabic one.
+//
+// i18n.js's DOM sweep would in fact catch a bare `Status`/`Total`/`Cashier`
+// (they are catalog keys), which is precisely why a source grep is the wrong
+// instrument here -- it cannot tell a label that is wrapped from one that is
+// merely lucky, and `Customer`/`Payment` were in NEITHER catalog, so they were
+// not lucky. This drives the real render with a t() that marks what passed
+// through it.
+async function testSaleDetailGridLabelsAllGoThroughT() {
+  const html = await viewSale(
+    { id: 9, sale_number: 'SALE-000031-ab12cd34', created_at: '2026-08-19T14:30:00',
+      total: 42.5, status: 'completed', payment_method: 'cash',
+      actor_user_uid: ACTOR_UUID, terminal_id: TILL_UUID },
+    [], { t: markingT }
+  );
+
+  const missing = ['Customer', 'Cashier', 'Till', 'Payment', 'Status', 'Total']
+    .filter(label => html.indexOf('‹' + label + '›') === -1);
+  assert.deepStrictEqual(
+    missing, [],
+    'These sale-detail grid labels never went through t(): ' + JSON.stringify(missing) +
+    '. They are siblings in one six-cell grid; wrapping some and not others is ' +
+    'how a row ends up half-Arabic. (They must also exist in BOTH catalogs -- ' +
+    'retail_attribution_i18n_test.py asserts that half.)'
   );
 }
 
@@ -514,6 +679,304 @@ async function testAbsentAvgTicketIsNotPrintedAsZero() {
   );
 }
 
+// ── The three identity states of a by-employee row ─────────────────────────
+//
+// The route contract (settled before implementation; see the wave's contract
+// document, §2.5-2.6) gives every row four identity fields, all four null
+// together for the unattributed bucket:
+//
+//   {"actor_user_uid": "<uuid>|null", "employee_id": "<EMP-000n>|null",
+//    "email": "<users.email>|null",   "employee_name": "<display>|null",
+//    "transactions", "gross_sales", "refunds", "revenue", "avg_ticket"}
+//
+// `employee_name` is the server's single pre-formatted display string, derived
+// from the SAME two columns Android receives, so the two clients cannot
+// disagree about who a row is. These cases pin the three states the pair of
+// clients must render identically, and the fourth field set (blank strings)
+// that neither may accept as an identity.
+
+// Android's order, and it is not arbitrary: EmployeesScreen shows the email in
+// bold with the assigned id underneath, so a report that ordered them the other
+// way reads as being about different people. The desktop follows rather than
+// invents, and it reads `employee_name` first so that when the server sends its
+// pre-formatted string the two clients are literally reading the same value.
+async function testResolvedNameUsesEmailBeforeEmployeeId() {
+  const { env, tbody } = employeePanelEnv({
+    status: 'success', success: true,
+    data: [{ actor_user_uid: ACTOR_UUID, employee_id: 'EMP-0002', email: 'sam@shop.test',
+             employee_name: null, transactions: 4, gross_sales: 60, refunds: 0,
+             revenue: 60, avg_ticket: 15 }],
+  });
+  await env.RetailSystem._loadEmployeeSales();
+
+  assert.ok(
+    tbody.innerHTML.includes('sam@shop.test'),
+    'With both an email and an employee id available the email is the identity ' +
+    'shown, matching EmployeesScreen and the Android report. Got: ' + tbody.innerHTML
+  );
+  assert.ok(
+    !/Account removed|Not recorded/.test(tbody.innerHTML),
+    'A row that resolved to a person must not also carry an unresolved marker. ' +
+    'Got: ' + tbody.innerHTML
+  );
+}
+
+// The contract names this case explicitly as a server bug to defend against:
+// `"email": ""` for a row that could not be resolved. A blank string is not an
+// identity, and treating one as a name produces a nameless name -- a row that
+// looks resolved, points at nobody, and cannot be told apart from a rendering
+// fault.
+async function testBlankIdentityStringsAreNotIdentities() {
+  const { env, tbody } = employeePanelEnv({
+    status: 'success', success: true,
+    data: [{ actor_user_uid: ACTOR_UUID, employee_id: '   ', email: '',
+             employee_name: '', transactions: 2, gross_sales: 30, refunds: 0,
+             revenue: 30, avg_ticket: 15 }],
+  });
+  await env.RetailSystem._loadEmployeeSales();
+
+  assert.ok(
+    /Account removed/.test(tbody.innerHTML),
+    'Blank identity strings must be treated as absent, leaving this row in the ' +
+    'unresolved-uid state rather than rendering an empty employee cell. Got: ' +
+    tbody.innerHTML
+  );
+}
+
+// State 2 of 3, and the one with no desktop precedent. The route DID try to
+// resolve this uid (it sent the identity keys) and came back with nothing, so
+// the account that rang these sales is gone. That is a real, specific fact and
+// the row must say it in words -- it is neither a person (there is no name to
+// print) nor the unattributed bucket (there IS a recorded actor, and calling it
+// "not recorded" would erase the only evidence the sale carries).
+async function testUnresolvableActorIsNamedAsSuchNotAsAPersonNorAsUnrecorded() {
+  const { env, tbody } = employeePanelEnv({
+    status: 'success', success: true,
+    data: [{ actor_user_uid: ACTOR_UUID, employee_id: null, email: null,
+             employee_name: null, transactions: 9, gross_sales: 300, refunds: 0,
+             revenue: 300, avg_ticket: 33.33 }],
+  });
+  await env.RetailSystem._loadEmployeeSales();
+
+  assert.ok(
+    /Account removed/.test(tbody.innerHTML),
+    'A uid the route tried and failed to resolve must be labelled in words. ' +
+    'Android calls this state ACCOUNT_GONE and prints "Account removed"; the ' +
+    'two clients naming the same row differently is the drift this contract ' +
+    'was settled to prevent. Got: ' + tbody.innerHTML
+  );
+  assert.ok(
+    !/Not recorded/.test(tbody.innerHTML),
+    'An unresolvable actor was reported as "Not recorded". There IS a recorded ' +
+    'actor on these sales -- that is a different fact from the pre-v13 bucket, ' +
+    'and collapsing the two hides that the shop lost an employee record. Got: ' +
+    tbody.innerHTML
+  );
+  assert.ok(
+    tbody.innerHTML.includes(ACTOR_UUID),
+    'The uid itself must survive as evidence (a fragment on screen, the whole ' +
+    'value one hover away) -- it is what makes the row traceable at all. Got: ' +
+    tbody.innerHTML
+  );
+}
+
+// State 3 of 3. This bucket holds most of a real shop's money on the day the
+// feature ships (every row written before v13), it sorts by revenue like every
+// other row so it usually lands FIRST, and there is exactly one of it. Nothing
+// about it may read as a person.
+//
+// ── Why the fixture carries a NAME on the null-uid row ─────────────────────
+//
+// This case used to feed `{actor_user_uid: null, employee_id: null, email:
+// null, employee_name: null}` -- all four fields null together, the shape the
+// route contract documents. Every assertion below passed on it, and every one
+// of them would have passed on a classifier that never looked at
+// `actor_user_uid` at all, because with no name on the row there is no name to
+// wrongly print. The test named for this exact concern was never asking the
+// classifier the question it exists to answer.
+//
+// It was not answering it correctly either. `_attributionState` tested the
+// NAME first and returned 'named' without ever consulting the uid, so
+// `{actor_user_uid: null, employee_name: "Sara Haddad"}` resolved 'named' on
+// the desktop while Android's `attributionOf` -- which checks the uid FIRST
+// (EmployeeSalesScreen.kt) -- resolved NOT_RECORDED for the same row. Two
+// clients, one row, two different people named.
+//
+// The desktop's answer is the dangerous one, and specifically here rather than
+// anywhere else: on THIS report the null-uid row is not one sale, it is the
+// aggregate of every sale rung before v13 added the column. A name landing on
+// it attributes the shop's entire pre-v13 history -- 120 transactions and
+// 5,400 of takings in this fixture -- to one person, which is precisely the
+// fabrication v13 refused to commit when it left `actor_user_uid` NULL rather
+// than backfilling it from the free-text `cashier` column.
+//
+// The name does not have to be malice or a server bug to arrive: a joined-in
+// default, a "POS" placeholder, or a well-meaning display string computed
+// before the uid was checked all produce it. So the settled rule is the one
+// Android already implements -- a name is only ever shown when a NON-BLANK
+// ACTOR UID resolved to it -- and the fixture below is the one that can tell
+// the difference. The second row is not padding: it is the control that keeps
+// this case honest in the other direction, since a classifier that answered
+// 'unattributed' for everything would satisfy the first row's assertions
+// perfectly.
+async function testUnattributedBucketNeverLooksLikeAPerson() {
+  const { env, tbody, note } = employeePanelEnv({
+    status: 'success', success: true,
+    data: [
+      // The pre-v13 aggregate, arriving with a name attached to it.
+      { actor_user_uid: null, employee_id: 'EMP-0001', email: 'sara@shop.test',
+        employee_name: 'Sara Haddad', transactions: 120, gross_sales: 5400,
+        refunds: 0, revenue: 5400, avg_ticket: 45 },
+      // A genuinely attributed row, in the same response.
+      { actor_user_uid: ACTOR_UUID, employee_id: 'EMP-0002', email: 'sam@shop.test',
+        employee_name: 'sam@shop.test', transactions: 4, gross_sales: 60,
+        refunds: 0, revenue: 60, avg_ticket: 15 },
+    ],
+  });
+  await env.RetailSystem._loadEmployeeSales();
+
+  // The classifier, asked directly. The rendered assertions below are the
+  // consequence; this one is the decision, and it is the decision that has to
+  // match Android's. Asserting only the markup would let a future refactor
+  // reach the right cell text for the wrong reason.
+  assert.strictEqual(
+    env.RetailSystem._attributionState({ actor_user_uid: null, employee_name: 'Sara Haddad' }),
+    'unattributed',
+    'A row with NO recorded actor uid was classified as a named person purely ' +
+    'because a name field happened to be populated. Android\'s attributionOf() ' +
+    'checks the uid first and calls this NOT_RECORDED; the two clients must not ' +
+    'name the same row differently, and on this report that row is every ' +
+    'pre-v13 sale in the shop.'
+  );
+  assert.strictEqual(
+    env.RetailSystem._attributionState({ actor_user_uid: '   ', employee_name: 'Sara Haddad' }),
+    'unattributed',
+    'A whitespace-only uid is not a recorded actor. Blank is treated as absent ' +
+    'everywhere else in this classifier (_identityOf) and Android uses ' +
+    'isNullOrBlank(); a name must not ride in on a uid made of spaces.'
+  );
+  assert.strictEqual(
+    env.RetailSystem._attributionState({ actor_user_uid: ACTOR_UUID, employee_name: 'Sara Haddad' }),
+    'named',
+    'A uid that WAS recorded and DID resolve to a name must still be named. ' +
+    'Without this the case above is satisfied by a classifier that simply ' +
+    'never names anyone.'
+  );
+
+  assert.ok(
+    !/Sara Haddad/.test(tbody.innerHTML),
+    'The unattributed bucket rendered a person\'s name. There is no actor on ' +
+    'these rows -- naming one puts every sale the shop rang before v13 on a ' +
+    'single employee, which is the fabrication v13 was written to refuse. ' +
+    'Got: ' + tbody.innerHTML
+  );
+  assert.ok(
+    /Not recorded/.test(tbody.innerHTML),
+    'The unattributed bucket must be labelled in words. Got: ' + tbody.innerHTML
+  );
+  assert.ok(
+    !/Account removed/.test(tbody.innerHTML),
+    'The unattributed bucket was reported as a deleted account. Nothing was ' +
+    'ever recorded for these sales; no account was removed. Got: ' + tbody.innerHTML
+  );
+  assert.ok(
+    !/<bdi/.test(tbody.innerHTML.split('</td>')[0]),
+    'The unattributed employee cell rendered an identifier. There is no ' +
+    'identity on these rows -- an isolate around nothing is an empty box where ' +
+    'a name should be. Got: ' + tbody.innerHTML
+  );
+  assert.strictEqual(
+    note.style.display, 'block',
+    'The footnote explaining the unattributed bucket must be shown when such a ' +
+    'row is actually on screen.'
+  );
+  assert.ok(
+    /5,?400/.test(tbody.innerHTML),
+    'Sanity: the bucket\'s money must still be reported. Dropping it would omit ' +
+    'most of a real shop\'s takings from a report whose columns still added up. ' +
+    'Got: ' + tbody.innerHTML
+  );
+  assert.ok(
+    /sam@shop\.test/.test(tbody.innerHTML),
+    'Control row: an actor that WAS recorded and DID resolve must still be ' +
+    'named. Suppressing every name would satisfy the assertions above and ' +
+    'break the report instead of fixing it. Got: ' + tbody.innerHTML
+  );
+}
+
+// Both attribution words sit in a table cell beside a uuid fragment and beside
+// three number columns, on a page that flips to dir="rtl" in Arabic. i18n.js's
+// sweep matches a text node's FULL trimmed text against the catalog, so a word
+// concatenated into the same text node as an id can never be translated -- and
+// its leading Latin character would drag the cell left-to-right anyway. The
+// word gets its own element; the id gets its own <bdi>.
+async function testAttributionWordsAreTheirOwnTextNode() {
+  const { env, tbody } = employeePanelEnv({
+    status: 'success', success: true,
+    data: [{ actor_user_uid: ACTOR_UUID, employee_id: null, email: null,
+             employee_name: null, transactions: 1, gross_sales: 5, refunds: 0,
+             revenue: 5, avg_ticket: 5 }],
+  });
+  await env.RetailSystem._loadEmployeeSales();
+
+  assert.ok(
+    />\s*Account removed\s*</.test(tbody.innerHTML),
+    'The words "Account removed" must be the entire trimmed text of their own ' +
+    'node, or i18n.js cannot match them against the catalog and the label stays ' +
+    'English on an Arabic page forever. Got: ' + tbody.innerHTML
+  );
+  assert.ok(
+    !/Account removed[^<]*[0-9a-f]{8}/.test(tbody.innerHTML),
+    'The label and the uid share one text node. Got: ' + tbody.innerHTML
+  );
+}
+
+// The settled envelope carries BOTH discriminators -- `status` for this client,
+// `success` for Android and for the five sibling /reports/* routes, which all
+// answer {"success": true, ...} and carry no `status` key at all. Reading one
+// must not be disturbed by the presence of the other.
+async function testDualDiscriminatorEnvelopeIsAccepted() {
+  const { env, tbody } = employeePanelEnv({
+    status: 'success', success: true,
+    data: [{ actor_user_uid: ACTOR_UUID, employee_id: 'EMP-0002', email: 'sam@shop.test',
+             employee_name: 'sam@shop.test', transactions: 4, gross_sales: 60,
+             refunds: 0, revenue: 60, avg_ticket: 15 }],
+  });
+  await env.RetailSystem._loadEmployeeSales();
+  assert.ok(
+    tbody.innerHTML.includes('sam@shop.test'),
+    'The panel rejected the settled {"status":"success","success":true,...} ' +
+    'envelope. Got: ' + tbody.innerHTML
+  );
+}
+
+// Version skew, in the direction that actually happens: a desktop build newer
+// than the embedded backend it is talking to (the Android app ships its own
+// Python server; a shop updates one and not the other). Such a route answers
+// with metrics.py's raw rows and NO identity fields whatsoever. Not one key
+// present is different from "present and null", and only the second licenses
+// the "the account was deleted" inference.
+async function testRouteThatResolvedNothingIsNotReportedAsDeletedAccounts() {
+  const { env, tbody } = employeePanelEnv({
+    status: 'success',
+    data: [{ actor_user_uid: ACTOR_UUID, transactions: 9, gross_sales: 300,
+             refunds: 0, revenue: 300, avg_ticket: 33.33 }],
+  });
+  await env.RetailSystem._loadEmployeeSales();
+
+  assert.ok(
+    !/Account removed/.test(tbody.innerHTML),
+    'A backend that never carried identity fields was reported as having ' +
+    'deleted every employee. Nothing here established that anyone was ever ' +
+    'looked up. Got: ' + tbody.innerHTML
+  );
+  assert.ok(
+    tbody.innerHTML.includes(ACTOR_UUID.slice(0, 8)),
+    'The recorded uid must still be shown as the identifier it is. Got: ' +
+    tbody.innerHTML
+  );
+}
+
 async function testEmployeeNameInReportIsEscaped() {
   const { env, tbody } = employeePanelEnv({
     status: 'success',
@@ -581,6 +1044,11 @@ const CASES = [
   testIdentifiersAreBidiIsolated,
   testInvoiceHeadingDoesNotConcatenateWordAndNumber,
   testEmployeeNameIsEscaped,
+  testSaleDetailShowsTheResolvedNameFromItsOwnFieldSpelling,
+  testSaleDetailDoesNotInferDeletionFromAFieldNobodySent,
+  testSaleDetailReportsADeletedAccountWhenTheRouteLookedAndFoundNobody,
+  testLegacyCashierFreeTextIsNotPresentedAsTheActor,
+  testSaleDetailGridLabelsAllGoThroughT,
   testEmployeePanelRendersTakingsAndCount,
   testMissingRouteSaysUnavailableNotZeroSales,
   testNetworkFailureIsNotReportedAsZeroSales,
@@ -588,6 +1056,13 @@ const CASES = [
   testAvgTicketIsTheServersFigureNotARecomputedOne,
   testRefundOnlyEmployeeRendersNegativeTakings,
   testAbsentAvgTicketIsNotPrintedAsZero,
+  testResolvedNameUsesEmailBeforeEmployeeId,
+  testBlankIdentityStringsAreNotIdentities,
+  testUnresolvableActorIsNamedAsSuchNotAsAPersonNorAsUnrecorded,
+  testUnattributedBucketNeverLooksLikeAPerson,
+  testAttributionWordsAreTheirOwnTextNode,
+  testDualDiscriminatorEnvelopeIsAccepted,
+  testRouteThatResolvedNothingIsNotReportedAsDeletedAccounts,
   testEmployeeNameInReportIsEscaped,
   testReportsPageWiresTheEmployeePanel,
   testAuditLogUserIdIsBidiIsolated,

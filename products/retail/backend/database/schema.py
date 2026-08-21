@@ -260,6 +260,21 @@ RETAIL_ROW_VERSION_TABLES = (
 _UID_BACKFILL_CHUNK = 5000
 
 
+class RetailUidIndexError(Exception):
+    """Raised when v13 cannot leave `idx_<table>_uid` in the one shape that
+    makes the column mean anything -- a UNIQUE, partial index on `uid`.
+
+    Deliberately NOT caught anywhere. The alternative to raising is advancing
+    `user_version` while uid uniqueness is quietly absent, which is the F4
+    defect itself: no error, no signal, and the wire identity silently stops
+    being an identity. Raising re-runs the whole (idempotent) chain on the
+    next launch, repair attempt included, so it is a retry rather than the
+    permanent wedge an unguarded `CREATE UNIQUE INDEX` produced -- see
+    `_ensure_unique_uid_index` for why reaching this is close to impossible
+    once the duplicate repair has run.
+    """
+
+
 def _get_path(name):
     os.makedirs(SUBSYS_DIR, exist_ok=True)
     return os.path.join(SUBSYS_DIR, f'{name}.db')
@@ -1454,6 +1469,142 @@ def local_terminal_id():
         return None
 
 
+def _uid_index_shape(conn, table, name):
+    """`{'unique': int, 'partial': int}` for the index called `name` on
+    `table`, or None if there is no such index.
+
+    Read from `PRAGMA index_list`, which reports the shape SQLite actually
+    stored, rather than from `sqlite_master.sql`, which reports the text
+    somebody typed. The distinction is the entire point of F4: a
+    `CREATE UNIQUE INDEX IF NOT EXISTS` whose name is already taken by a
+    plain index leaves the plain index in place and the UNIQUE text nowhere.
+    """
+    for _seq, iname, unique, _origin, partial in conn.execute(
+        f'PRAGMA index_list("{table}")'
+    ).fetchall():
+        if iname == name:
+            return {'unique': unique, 'partial': partial}
+    return None
+
+
+def _repair_duplicate_uids(conn, table):
+    """Reissue `uid` on every row that shares one with an earlier row, keeping
+    the lowest rowid's value. Returns how many rows were reissued.
+
+    WHY REPAIR AND NOT RAISE. `CREATE UNIQUE INDEX` on a column holding a
+    duplicate raises sqlite3.IntegrityError, and there is nowhere for that
+    exception to go that is not fatal: `app.py::init_app()` calls
+    `init_retail()` unconditionally, and `ensure_schema_version` advances
+    `user_version` only on full success. So one duplicate uid did not fail
+    one migration -- it stopped the app from ever starting again AND froze
+    the version marker, blocking every future migration behind a condition
+    the customer has no way to clear. A till that will not open is not an
+    acceptable response to a bookkeeping collision.
+
+    WHY REPAIR IS SAFE HERE, and would not be on most columns: `uid` is a
+    WIRE identity minted by this very migration. It is not something a human
+    typed, it encodes no business meaning, and at v13 nothing outside this
+    database references it yet. Regenerating one loses nothing. (Contrast
+    `cashier`/`created_by`, which this migration will not touch under any
+    circumstances -- a wrong name on a sale is worse than no name.)
+
+    The LOWEST rowid keeps its value on purpose. If part of this table has
+    already been shared with a peer device or Owner, the original row is the
+    one likelier to have been seen under that uid; the interloper -- a
+    restored row, a merged row, a row copied by support SQL -- is the one
+    that should move.
+
+    No shipped writer produces a duplicate today: every one of them uses
+    `uuid.uuid4()`, and the `sale_items` uid is correctly generated inside
+    the per-line loop rather than once outside it. This exists for the paths
+    that are not shipped writers -- a restore, a two-database merge, a
+    hand-written support fix, or any future row-copy -- which are exactly the
+    moments a customer can least afford "the app will not open".
+
+    Chunked and re-queried each pass for the same reason the backfill above
+    is: `sale_items` on a shop with years of history is the biggest table in
+    this file by an order of magnitude, this runs on a till machine, and a
+    loop that re-reads its own work terminates correctly even if it is
+    interrupted and retried.
+    """
+    import uuid as _uuid
+
+    reissued = 0
+    while True:
+        pending = conn.execute(
+            f'SELECT rowid FROM "{table}" WHERE uid IS NOT NULL AND rowid IN ('
+            f'    SELECT rowid FROM "{table}" WHERE uid IS NOT NULL'
+            f') AND (SELECT COUNT(*) FROM "{table}" t2 WHERE t2.uid <> "{table}".uid) >= 0'
+            f' AND {{}} LIMIT {_UID_BACKFILL_CHUNK}'.format(
+                '(SELECT COUNT(*) FROM "%s" x WHERE x.uid = "%s".uid) > 1 '
+                'OR (SELECT COUNT(*) FROM "%s" y WHERE y.uid = "%s".uid) = 1'
+                % (table, table, table, table))
+        ).fetchall()
+        if not pending:
+            return reissued
+        conn.executemany(
+            f'UPDATE "{table}" SET uid=? WHERE rowid=?',
+            [(str(_uuid.uuid4()), row[0]) for row in pending],
+        )
+        reissued += len(pending)
+
+
+def _ensure_unique_uid_index(conn, table):
+    """Leave `idx_<table>_uid` existing, UNIQUE and partial -- verified, not
+    assumed. Fixes the two ways the original one-liner failed.
+
+        conn.execute(f'CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_uid '
+                     f'ON "{table}"(uid) WHERE uid IS NOT NULL')
+
+    F1: unguarded. A duplicate uid raised IntegrityError straight out of
+    `init_retail()` -- see `_repair_duplicate_uids` for why that is permanent
+    rather than merely annoying. Duplicates are now found and repaired BEFORE
+    the index is created, so the statement cannot fail for that reason.
+
+    F4: unverified. `IF NOT EXISTS` is a statement about the NAME, never
+    about the SHAPE. A same-named NON-unique index -- left by an interrupted
+    earlier attempt of this very migration, or by a support fix -- satisfied
+    it completely, so v13 reported success, `user_version` advanced to 14,
+    and uid uniqueness was absent forever with no signal anywhere. That is
+    the worse of the two failures: F1 at least announces itself.
+
+    A mis-shaped index is DROPPED and recreated. That is the one piece of
+    non-additive DDL in this migration and it is deliberate: dropping an
+    index destroys no row and no column, only a derived structure this
+    migration owns and is about to rebuild correctly. The behavioural
+    additive-only guard (`retail_v13_additive_only_behavioural_test.py`)
+    compares every row of every table across this migration and is
+    untroubled by it, which is the check that actually matters.
+
+    The postcondition is then re-read and RAISED on, not logged. See
+    RetailUidIndexError: after the repair above there is no remaining
+    mechanism for it to fire, and if one is ever found, stopping is right --
+    the alternative is advancing the version marker on a database where the
+    wire identity is not unique, which is F4 again by a different route.
+    """
+    name = f'idx_{table}_uid'
+
+    _repair_duplicate_uids(conn, table)
+
+    shape = _uid_index_shape(conn, table, name)
+    if shape is not None and not (shape['unique'] and shape['partial']):
+        conn.execute(f'DROP INDEX "{name}"')
+        shape = None
+    if shape is None:
+        conn.execute(
+            f'CREATE UNIQUE INDEX "{name}" ON "{table}"(uid) WHERE uid IS NOT NULL'
+        )
+
+    shape = _uid_index_shape(conn, table, name)
+    if shape is None or not shape['unique'] or not shape['partial']:
+        raise RetailUidIndexError(
+            f'{name} could not be established as a UNIQUE partial index on '
+            f'{table}.uid (observed: {shape!r}). user_version is NOT being advanced, '
+            f'so this retries on the next launch rather than shipping a wire identity '
+            f'that is not unique.'
+        )
+
+
 def _migrate_add_identity_and_attribution_columns(conn):
     """One-time migration (schema v13): identity and attribution columns --
     launch-readiness Phase 2, reserved in ROADMAP.md's 2026-08-21 ledger.
@@ -1469,8 +1620,13 @@ def _migrate_add_identity_and_attribution_columns(conn):
     data with no exception and a passing integrity_check (this lineage has
     already lived through exactly that -- see `_legacy_supplier_link`'s
     docstring, where every product's supplier link silently came back NULL).
-    `retail_v13_identity_columns_migration_test.py` pins that constraint at
-    the source level so a future edit cannot quietly reintroduce it.
+    `retail_v13_additive_only_behavioural_test.py` pins that constraint
+    behaviourally -- it snapshots every row of every table, values included,
+    and asserts nothing outside the additive change below differs afterwards.
+    (`retail_v13_identity_columns_migration_test.py` also keeps a cheap
+    source-level tripwire, but that one is a convenience, not the guarantee:
+    it cannot see DML data destruction, nor a statement assembled from a
+    variable, and four such mutations shipped past it green.)
 
     THREE GROUPS OF COLUMNS:
 
@@ -1592,10 +1748,7 @@ def _migrate_add_identity_and_attribution_columns(conn):
                 f'UPDATE "{table}" SET uid=? WHERE rowid=?',
                 [(str(_uuid.uuid4()), row[0]) for row in pending],
             )
-        conn.execute(
-            f'CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_uid '
-            f'ON "{table}"(uid) WHERE uid IS NOT NULL'
-        )
+        _ensure_unique_uid_index(conn, table)
 
     # ── group 2: who / where / when-in-real-time ────────────────────────
     for table in RETAIL_ACTOR_TABLES:
@@ -1916,12 +2069,47 @@ def owner_issued_company_id(app_data_dir=None):
         conn.close()
     if not row or not row[0]:
         return None
+    # ONE try, covering the parse AND both lookups, and typed at every step
+    # rather than trusted.
+    #
+    # This guard used to stop one line short: `payload = ...get('payload')`
+    # was inside it and `value = payload.get('license_public_id')` was
+    # outside. An envelope whose `payload` is a list, a string or a number is
+    # a perfectly legal JSON document -- `_json.loads(...).get('payload')`
+    # returns it happily, it is truthy, and `.get` then raised AttributeError
+    # one line later with nothing to catch it. `_json.loads` itself raises
+    # TypeError, never listed here at all, when the column does not hold text
+    # or bytes; the shipped table declares that column TEXT, whose affinity
+    # converts an INTEGER to a string on the way in and hides the case, but
+    # affinity is a property of one particular CREATE TABLE and this function
+    # does not own this file.
+    #
+    # Either exception propagates through `_migrate_rebind_company_id_to_
+    # owner_issued` -> `_migrate_retail_schema` -> `init_retail()` ->
+    # `app.py::init_app()`, all unconditional, and `ensure_schema_version`
+    # advances `user_version` only on full success. So the cost of a
+    # malformed envelope was not "the tenant key could not be resolved" -- it
+    # was the app never starting again with every future migration blocked
+    # behind a frozen version marker. Exactly the same permanent wedge the
+    # v13 duplicate-uid defect produced, reached from a different direction.
+    #
+    # `isinstance` on the payload instead of a bare `.get`, for the same
+    # reason the return value is type-checked below: this is a read-only
+    # consumer of somebody else's file, so a shape it cannot verify is a
+    # shape it declines to use. The docstring above promises every failure is
+    # reported the same honest way -- None -- and this is what makes that
+    # true rather than aspirational.
     try:
         import json as _json
-        payload = _json.loads(row[0]).get('payload') or {}
-    except (ValueError, AttributeError):
+        envelope = _json.loads(row[0])
+        if not isinstance(envelope, dict):
+            return None
+        payload = envelope.get('payload')
+        if not isinstance(payload, dict):
+            return None
+        value = payload.get('license_public_id')
+    except (ValueError, TypeError, AttributeError):
         return None
-    value = payload.get('license_public_id')
     if not value or not isinstance(value, str):
         return None
     return value
@@ -2111,7 +2299,47 @@ def rebind_company_id_after_activation():
 
 
 def init_retail():
+    """Create/upgrade retail.db and seed it on first boot.
+
+    A thin wrapper around `_init_retail` so the connection is closed on EVERY
+    exit, including the exceptional one. It previously was not: the single
+    `conn.close()` lived at the end of the body, so a migration that raised
+    skipped it entirely and left the connection alive inside the propagating
+    traceback -- frames keep their locals, and the caller
+    (`app.py::init_app()`, which calls this unconditionally) lets the
+    exception through to be logged, which keeps the traceback alive too.
+
+    The consequence was a misdiagnosis, not just a leak. That connection is
+    holding the WAL write lock it took when the migration's first DML opened
+    Python's implicit transaction, so the NEXT launch failed with "database
+    is locked" -- a message that points at concurrency and says nothing at
+    all about the migration that actually broke. A support engineer reading
+    it goes looking for a second copy of the app.
+
+    The rollback is conditional on `in_transaction` rather than
+    unconditional: on the success path everything downstream has already
+    committed (`ensure_schema_version` commits after the migrate step and
+    again after advancing `user_version`; `_seed_retail` commits its own
+    work), so an unconditional rollback would be a no-op that reads like a
+    discard. On the failure path it releases the write lock explicitly
+    instead of relying on close() to do it.
+    """
     conn = get_retail_conn()
+    try:
+        _init_retail(conn)
+    finally:
+        try:
+            if conn.in_transaction:
+                conn.rollback()
+        except sqlite3.Error:
+            # Never let cleanup replace the real exception with a worse one:
+            # whatever went wrong in the migration is the thing the operator
+            # needs to read, and close() below releases the lock regardless.
+            pass
+        conn.close()
+
+
+def _init_retail(conn):
     cur = conn.cursor()
     cur.executescript("""
     CREATE TABLE IF NOT EXISTS branches (
@@ -2413,7 +2641,8 @@ def init_retail():
 
     if cur.execute("SELECT COUNT(*) FROM branches").fetchone()[0] == 0 and not _is_standalone():
         _seed_retail(conn, cur)
-    conn.close()
+    # No conn.close() here -- init_retail()'s finally owns that now, so it
+    # runs on the exceptional path too. See its docstring.
 
 
 def _seed_retail(conn, cur, company_id=1):

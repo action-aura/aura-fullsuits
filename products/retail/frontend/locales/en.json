@@ -308,5 +308,10 @@
   "No sales in this period.": "No sales in this period.",
   "Sales by employee are not available on this version.": "Sales by employee are not available on this version.",
   "Could not load sales by employee.": "Could not load sales by employee.",
-  "Sales recorded before this release show no employee or till.": "Sales recorded before this release show no employee or till."
+  "Sales recorded before this release show no employee or till.": "Sales recorded before this release show no employee or till.",
+  "Account removed": "Account removed",
+  "Customer": "Customer",
+  "Payment": "Payment",
+  "The activity log is limited to managers and the store owner.": "The activity log is limited to managers and the store owner.",
+  "Audit Log": "Audit Log"
 }

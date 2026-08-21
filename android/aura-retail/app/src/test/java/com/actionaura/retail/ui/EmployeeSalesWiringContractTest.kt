@@ -7,7 +7,9 @@ import com.actionaura.retail.net.ByEmployeeResponse
 import com.actionaura.retail.net.Sale
 import com.actionaura.retail.ui.screens.Attribution
 import com.actionaura.retail.ui.screens.attributedName
+import com.actionaura.retail.ui.screens.attributionOf
 import com.actionaura.retail.ui.screens.bidiIsolate
+import com.actionaura.retail.ui.screens.byEmployeeRefusalOrNull
 import com.actionaura.retail.ui.screens.isMoneyOut
 import com.actionaura.retail.ui.screens.missingEndpointKeyOrNull
 import com.actionaura.retail.ui.screens.rowAttribution
@@ -200,6 +202,88 @@ class EmployeeSalesWiringContractTest {
         assertThat(ok.data!![0].email).isEqualTo("sam@shop.test")
     }
 
+    // ── The envelope discriminator ───────────────────────────────────────────
+
+    @Test
+    fun a_two_hundred_that_says_no_is_not_rendered_as_an_empty_shop() {
+        // `reportByEmployee(days).data ?: throw` consulted the body's PAYLOAD
+        // and never its VERDICT, so a 200 carrying {"success": false, "data":
+        // []} took the happy path and drew "No sales in this period" -- a
+        // refusal shown as an empty shop, which is the single worst thing a
+        // takings report can say. Four other screens in this module already
+        // check the discriminator; this one deviated from its own module.
+        assertThat(byEmployeeRefusalOrNull(
+            ByEmployeeResponse(success = false, error = "Reports access required", data = emptyList()),
+        )).isEqualTo("Reports access required")
+
+        // The desktop envelope, which is the shape this route now answers with
+        // (see the route's pinned contract): `status` is the discriminator the
+        // desktop hard-gates on, and it wins when present.
+        assertThat(byEmployeeRefusalOrNull(
+            ByEmployeeResponse(status = "error", message = "Tenant context missing."),
+        )).isEqualTo("Tenant context missing.")
+
+        // A refusal that names no reason still has to say SOMETHING, and that
+        // something must be translatable -- an empty error string rendering as
+        // a blank line reads as the screen failing, not as the server refusing.
+        val silent = byEmployeeRefusalOrNull(ByEmployeeResponse(status = "error"))
+        assertThat(silent).isNotNull()
+        assertThat(catalog).contains(silent)
+        assertThat(byEmployeeRefusalOrNull(ByEmployeeResponse(success = false, error = "   ")))
+            .isEqualTo(silent)
+    }
+
+    @Test
+    fun both_envelope_spellings_are_accepted_so_neither_client_reads_a_success_as_a_refusal() {
+        // The route's contract carries BOTH discriminators -- `status` for the
+        // desktop, which hard-gates on it, and `success` for the five sibling
+        // report routes and this client. Reading only one of them would turn
+        // whichever spelling the backend settles on into a permanent refusal
+        // screen, so both are honoured, with `status` taking precedence
+        // because the desktop shape is the one that won.
+        assertThat(byEmployeeRefusalOrNull(
+            ByEmployeeResponse(status = "success", success = true, data = emptyList()),
+        )).isNull()
+        assertThat(byEmployeeRefusalOrNull(
+            ByEmployeeResponse(status = "success", data = emptyList()),
+        )).isNull()
+        assertThat(byEmployeeRefusalOrNull(
+            ByEmployeeResponse(success = true, data = emptyList()),
+        )).isNull()
+
+        // A blank/absent `status` is not a verdict -- fall through to `success`
+        // rather than treating "" as "not success" and refusing every reply.
+        assertThat(byEmployeeRefusalOrNull(
+            ByEmployeeResponse(status = "", success = true, data = emptyList()),
+        )).isNull()
+    }
+
+    @Test
+    fun the_load_path_actually_consults_the_verdict_before_the_payload() {
+        val code = codeOnly(screen)
+        assertThat(code).contains("byEmployeeRefusalOrNull(")
+        // Order matters: a refusal must be reported as a refusal, not as a
+        // malformed body, so the verdict is read before `data` is unwrapped.
+        assertThat(code.indexOf("byEmployeeRefusalOrNull("))
+            .isLessThan(code.indexOf("?: throw"))
+    }
+
+    @Test
+    fun the_response_model_carries_both_discriminators_and_both_error_spellings() {
+        // The server's two error envelopes in this codebase are
+        // {"status":"error","message":...} and {"success":false,"error":...}
+        // (net/ApiErrors.kt decodes both for HTTP failures). A 200-with-a-
+        // refusal has to be decodable through the same two spellings, or the
+        // reason reaches the user as a blank.
+        val parsed = gson.fromJson(
+            """{"status":"success","success":true,"data":[],"message":null,"error":null}""",
+            ByEmployeeResponse::class.java,
+        )
+        assertThat(parsed.status).isEqualTo("success")
+        assertThat(parsed.success).isTrue()
+        assertThat(byEmployeeRefusalOrNull(parsed)).isNull()
+    }
+
     @Test
     fun a_null_body_is_refused_rather_than_rendered_as_no_sales() {
         // Avoiding the crash is not enough on its own: turning a malformed 200
@@ -289,6 +373,106 @@ class EmployeeSalesWiringContractTest {
         // A uid that is present but blank is not a uid.
         assertThat(rowAttribution(EmployeeSales(actor_user_uid = "   ")))
             .isEqualTo(Attribution.NOT_RECORDED)
+    }
+
+    @Test
+    fun a_name_arriving_without_a_uid_is_never_printed_as_a_person() {
+        // attributionOf() never consulted `uid` on its NAMED branch, so a row
+        // carrying (actor_user_uid = null, email = "sam@shop.test") resolved
+        // NAMED. The null-uid row IS the unattributed aggregate bucket -- every
+        // sale rung before v13 existed, summed -- so if the route ever
+        // populates an identity field on it, this screen prints a real person's
+        // name over sales nobody was recorded for. That is precisely the
+        // fabrication the v13 migration refused to commit, arriving at the last
+        // step instead of the first.
+        //
+        // NAMED now requires BOTH: a uid that was actually recorded, AND a name
+        // that actually resolved.
+        assertThat(attributionOf(null, null, "sam@shop.test")).isEqualTo(Attribution.NOT_RECORDED)
+        assertThat(attributionOf(null, "EMP-0002", null)).isEqualTo(Attribution.NOT_RECORDED)
+        assertThat(attributionOf("   ", "EMP-0002", "sam@shop.test")).isEqualTo(Attribution.NOT_RECORDED)
+
+        // Same rule through both call sites, so a single sale cannot disagree
+        // with the report row it appears in.
+        assertThat(rowAttribution(EmployeeSales(email = "sam@shop.test", revenue = 900.0)))
+            .isEqualTo(Attribution.NOT_RECORDED)
+        assertThat(saleAttribution(Sale(id = 1, actor_email = "sam@shop.test")))
+            .isEqualTo(Attribution.NOT_RECORDED)
+    }
+
+    @Test
+    fun a_wire_row_that_really_carries_a_name_on_a_null_uid_is_still_unattributed() {
+        // A body off the wire, not a hand-built model, and the null-uid row
+        // deliberately carries EVERY identity field this route can emit:
+        // `employee_name` (the pre-formatted display string retail_api.py's
+        // _resolve_actor_identities builds for the desktop) plus the two raw
+        // columns this client reads. That is what makes it the hard question --
+        // an all-null fixture resolves NOT_RECORDED for the trivial reason that
+        // there is nothing to print, and would pass against the broken
+        // name-first ordering too.
+        val body = """
+            {"status": "success", "success": true,
+             "data": [{"actor_user_uid": "1f5d0e2c-…", "employee_id": "EMP-0002",
+                       "email": "sam@shop.test", "employee_name": "sam@shop.test",
+                       "revenue": 120.5, "transactions": 3, "avg_ticket": 40.17},
+                      {"actor_user_uid": null, "employee_id": "EMP-0007",
+                       "email": "sara@shop.test", "employee_name": "Sara Haddad",
+                       "revenue": 900.0, "transactions": 9, "avg_ticket": 100.0}]}
+        """.trimIndent()
+
+        val rows = gson.fromJson(body, ByEmployeeResponse::class.java).data
+        assertThat(rows).isNotNull()
+        assertThat(rows!!).hasSize(2)
+
+        // Guards the fixture. If the model ever stopped carrying `email`, the
+        // verdict below would go green for the WRONG reason -- unattributed
+        // because nothing arrived, rather than because no uid was recorded --
+        // and this test would quietly stop asking anything.
+        assertThat(rows[1].actor_user_uid).isNull()
+        assertThat(attributedName(rows[1].employee_id, rows[1].email)).isEqualTo("sara@shop.test")
+
+        // The verdict: a name with no uid behind it is never a person. That
+        // null-uid row is not one sale -- it is the AGGREGATE of every sale
+        // rung before v13 added the column, so a name landing on it hands the
+        // shop's whole pre-attribution history to one employee.
+        assertThat(rowAttribution(rows[1])).isEqualTo(Attribution.NOT_RECORDED)
+
+        // ...and the rule is "no uid, no name", not "no names": the row that
+        // did record one is still named.
+        assertThat(rowAttribution(rows[0])).isEqualTo(Attribution.NAMED)
+    }
+
+    @Test
+    fun the_desktop_classifier_consults_the_uid_before_the_name_exactly_as_this_one_does() {
+        // Read out of the OTHER client, because "the two agree" is not a fact
+        // about this file and cannot be established by reading it. The row
+        // {actor_user_uid: null, employee_name: "Sara Haddad"} used to resolve
+        // 'named' on the desktop and NOT_RECORDED here: two clients reading one
+        // response and naming two different people. The lead settled it in this
+        // client's favour -- a name is only ever shown when a NON-BLANK actor
+        // uid resolved to it -- which makes the desktop's ordering part of this
+        // client's contract, so a revert over there has to be red over here.
+        val js = File(suiteRoot, "products/retail/frontend/subsystem-retail.js")
+        assumeTrue("subsystem-retail.js not reachable from this run context", js.exists())
+        val state = js.readText().substringAfter("_attributionState(row) {").substringBefore("},")
+
+        // Stated as the ORDERING rather than as an exact line, so rewording the
+        // desktop does not break this while reversing it still does: the
+        // unattributed verdict is reached before the named one...
+        assertThat(state).contains("'unattributed'")
+        assertThat(state).contains("'named'")
+        assertThat(state.indexOf("'unattributed'")).isLessThan(state.indexOf("'named'"))
+
+        // ...it is the UID that decides it, and no name lookup happens above
+        // that decision.
+        val beforeTheVerdict = state.substringBefore("'unattributed'")
+        assertThat(beforeTheVerdict).contains("actor_user_uid")
+        assertThat(beforeTheVerdict).doesNotContain("_identityOf")
+
+        // Blank-is-absent on the uid too, the same rule isNullOrBlank() applies
+        // here -- a uid made of spaces is not a recorded actor on either
+        // client, and `attributionOf("   ", …)` above pins this side of it.
+        assertThat(beforeTheVerdict).contains(".trim()")
     }
 
     @Test

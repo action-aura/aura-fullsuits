@@ -350,6 +350,13 @@ android {
             // without running a single assertion against the new content.
             test.inputs.file("build.gradle").withPathSensitivity(PathSensitivity.RELATIVE)
             test.inputs.dir("src/main/java").withPathSensitivity(PathSensitivity.RELATIVE)
+            // CompiledTestSuiteRollCallTest reads the TEST tree at runtime for
+            // the same reason, and needs it declared for a subtler one: its
+            // whole job is to notice a test file that stopped being code. The
+            // edit that does that is comment-only in every other respect, and
+            // an undeclared input is how a comment-only edit gets to report
+            // UP-TO-DATE on the guard written to catch it.
+            test.inputs.dir("src/test/java").withPathSensitivity(PathSensitivity.RELATIVE)
         }
     }
     kotlinOptions {

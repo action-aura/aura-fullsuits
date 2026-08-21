@@ -308,5 +308,10 @@
   "No sales in this period.": "لا توجد مبيعات في هذه الفترة.",
   "Sales by employee are not available on this version.": "المبيعات حسب الموظف غير متاحة في هذا الإصدار.",
   "Could not load sales by employee.": "تعذّر تحميل المبيعات حسب الموظف.",
-  "Sales recorded before this release show no employee or till.": "المبيعات المسجَّلة قبل هذا الإصدار لا تُظهر الموظف أو جهاز البيع."
+  "Sales recorded before this release show no employee or till.": "المبيعات المسجَّلة قبل هذا الإصدار لا تُظهر الموظف أو جهاز البيع.",
+  "Account removed": "حساب محذوف",
+  "Customer": "العميل",
+  "Payment": "الدفع",
+  "The activity log is limited to managers and the store owner.": "سجل النشاط مقصور على المديرين ومالك المتجر.",
+  "Audit Log": "سجل النشاط"
 }

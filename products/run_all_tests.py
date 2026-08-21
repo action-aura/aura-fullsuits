@@ -32,6 +32,14 @@ Usage:
     python products/run_all_tests.py retail           # only products/retail/tests
     python products/run_all_tests.py clinic           # only products/clinic/tests
     python products/run_all_tests.py commercial_runtime  # only commercial_runtime/tests
+    python products/run_all_tests.py identity notifications  # any subset, space-separated
+
+`commercial_runtime` means `commercial_runtime/tests` and NOTHING ELSE. Each
+domain package under commercial_runtime keeps its own `<package>/tests`
+directory and needs its own key in SUITES below -- identity, licensing_contracts,
+notifications, sync, einvoicing. A package whose key is missing is not
+discovered by ANY invocation of this script, including the no-argument
+"everything" one; see the SUITES comments for the two that were missing.
 
 JavaScript tests (CI hardening, AUDIT-010 follow-up):
     Each product's tests/ directory can also hold standalone `*_test.js`
@@ -86,6 +94,33 @@ SUITES = {
     # Same rationale as licensing_contracts above: its own key, own
     # fast-growing test surface, mirrors the existing split.
     'einvoicing': ROOT / 'commercial_runtime' / 'einvoicing' / 'tests',
+    # ── Suites this runner used to miss entirely ──────────────────────────
+    #
+    # `commercial_runtime` above points at `commercial_runtime/tests` ONLY.
+    # Every domain package under commercial_runtime keeps its tests in its own
+    # `<package>/tests` directory, and each one has to be listed here by hand
+    # or it is simply not discovered. licensing_contracts, sync and einvoicing
+    # were each added as they appeared; identity and notifications never were,
+    # so `python products/run_all_tests.py` -- the command this file's
+    # docstring calls "the one supported command" -- silently ran neither.
+    #
+    # identity is the sharper of the two: it is the SERVER-SIDE half of the
+    # capability seam whose CLIENT-side half
+    # (products/retail/tests/retail_reports_capability_gate_test.js) already
+    # runs here under 'retail'. The client half of that contract was being
+    # checked on every run while the server half -- the route that decides
+    # what the client is told, and the tri-state `capabilities` value the whole
+    # gate is built on -- was not checked at all.
+    #
+    # Note this was never a total blind spot: .github/workflows/ci.yml also
+    # runs a separate `python -m pytest commercial_runtime` step, which DOES
+    # collect both directories. But that step is one pytest process over every
+    # suite at once, which is precisely the cross-file import-caching hazard
+    # this whole runner exists to avoid (see the module docstring) -- so the
+    # only isolation-correct path to these tests skipped them, and the path
+    # that reached them is the fragile one.
+    'identity': ROOT / 'commercial_runtime' / 'identity' / 'tests',
+    'notifications': ROOT / 'commercial_runtime' / 'notifications' / 'tests',
 }
 
 

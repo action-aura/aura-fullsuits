@@ -10,6 +10,7 @@ import os
 import re
 import time
 import json
+import logging
 import sqlite3
 import uuid as _uuid
 import requests
@@ -60,6 +61,13 @@ from config import (
 )
 
 retail_bp = Blueprint('retail_api', __name__, url_prefix='/api/sub/retail')
+
+#: Module logger. Deliberately at module scope rather than the `import
+#: logging` inside a handler this file used to do in one place: a swallowed
+#: failure that is only reported when somebody remembers to import logging at
+#: the call site is a failure nobody hears about. See ACTOR_LOOKUP_FAILURES
+#: below for the specific silence this closes.
+log = logging.getLogger(__name__)
 
 # Phase 7 Part T -- the one enforcement choke point every mutation route
 # below is guarded with. See docs/licensing/phase7/
@@ -221,6 +229,58 @@ def _uid():
 #  event and should carry one instant.
 # ══════════════════════════════════════════════════════════════════════════════
 
+#: Every way an actor-identity lookup can decline to answer, counted.
+#:
+#: WHY A COUNTER AND NOT JUST A LOG LINE. The policy below -- write NULL
+#: rather than a fallback identity -- is right and is not changing: a local
+#: `users.id` parked in a wire column is undetectable and unrepairable,
+#: whereas a NULL is honest and `account_schema._backfill_uids` can still fix
+#: the row it came from. But the policy was implemented as a BARE
+#: `except Exception: return None`, and that combination is the problem: a
+#: transient `database is locked` on registry.db writes permanently NULL
+#: `actor_user_uid` onto real financial rows -- sales, returns, cash
+#: movements, stock adjustments -- and NOTHING anywhere records that it
+#: happened. The rows look exactly like legitimate pre-v13 history. Nobody
+#: can tell afterwards whether a shop's unattributed bucket is old data or a
+#: five-minute outage last Tuesday.
+#:
+#: So: still NULL, still never raises, but now loud (ERROR, with the
+#: exception) and countable. A caller that wants to expose this (a health
+#: endpoint, a support bundle) reads this mapping; a test asserts the number
+#: moved, which a log line alone cannot support.
+#:
+#: NOT an audit row. `record()` would have to write to a database on the
+#: request path of a sale, and the overwhelmingly likely reason this lookup
+#: failed in the first place is that a database was unavailable -- so the
+#: audit write would fail too, at best, and compound a lock storm at worst.
+#: The counter costs nothing and cannot fail.
+ACTOR_LOOKUP_FAILURES = {
+    # The registry read itself raised -- lock, missing file, corrupt page.
+    'write_lookup_error': 0,
+    # The read succeeded and there is no `users` row for this session's id.
+    'write_no_user_row': 0,
+    # The row exists but carries no uid yet (pre-v3 account, not yet
+    # backfilled). Transient by design, but still a row written unattributed.
+    'write_blank_uid': 0,
+    # The REPORT-side bulk lookup failed; the figures still render, nameless.
+    'read_lookup_error': 0,
+}
+
+
+def _note_actor_lookup_failure(reason, detail, exc=None):
+    """Count it, then say so. Never raises -- see ACTOR_LOOKUP_FAILURES."""
+    try:
+        ACTOR_LOOKUP_FAILURES[reason] = ACTOR_LOOKUP_FAILURES.get(reason, 0) + 1
+        log.error(
+            "retail attribution: %s (%s). A financial row is being written or "
+            "read with NO actor identity; this is the honest answer but it is "
+            "NOT normal -- occurrence #%d for this reason since process start.",
+            reason, detail, ACTOR_LOOKUP_FAILURES[reason], exc_info=exc is not None,
+        )
+    except Exception:  # pragma: no cover - a logger that throws must not lose a sale
+        pass
+
+
 def _actor_user_uid():
     """The signed-in user's WIRE identity -- registry `users.uid` -- or None.
 
@@ -264,15 +324,26 @@ def _actor_user_uid():
             ).fetchone()
         finally:
             conn.close()
-    except Exception:
+    except Exception as exc:
+        # Still None -- the policy is unchanged and deliberate. What changed is
+        # that this no longer happens in silence; see ACTOR_LOOKUP_FAILURES.
+        _note_actor_lookup_failure(
+            'write_lookup_error', f"registry read for mt_user_id={local_user_id!r} failed: {exc}",
+            exc=exc)
         return None
     if not row:
+        _note_actor_lookup_failure(
+            'write_no_user_row', f"no registry users row for mt_user_id={local_user_id!r}")
         return None
     value = row['uid']
     # TRIM-equivalent: account_schema treats '' and NULL identically when it
     # decides which rows still need a uid, so this must too, or a blank string
     # would be stamped as though it were an identity.
-    return value if value and str(value).strip() else None
+    if value and str(value).strip():
+        return value
+    _note_actor_lookup_failure(
+        'write_blank_uid', f"registry users row {local_user_id!r} has no uid yet")
+    return None
 
 
 def _stamp():
@@ -283,6 +354,126 @@ def _stamp():
     but not WHO is barely better than a row that knows nothing.
     """
     return _actor_user_uid(), local_terminal_id(), now_utc_iso()
+
+
+# ── The READ side of the v13 stamp: a uid back into a person ─────────────────
+#
+# `_actor_user_uid()` above turns a session into a wire identity at WRITE
+# time. What follows is the inverse at READ time, and it is a genuinely
+# awkward lookup rather than a SQL join: `sales.actor_user_uid` holds
+# registry.db's `users.uid`, and registry.db is a DIFFERENT SQLITE FILE from
+# retail.db. No `JOIN` can span them on the connection a report holds, which
+# is exactly why core/retail/metrics.py returns bare uids and says so:
+# "NO NAMES -- actor_user_uid resolves through registry.db's users table, a
+# different database on a connection this module does not hold. The route
+# joins it."
+#
+# Until this existed, NO backend code anywhere produced an employee name, so
+# the desktop's `sale.employee_name` and Android's `sale.actor_email` /
+# `actor_employee_id` were fields both clients read and nobody wrote. Both
+# fell through to their "no resolved name" branch and printed a truncated
+# uuid4 to a manager who asked who rang a sale.
+#
+# THREE RULES, each with a concrete failure behind it:
+#
+#   * ONE query per request, never one per row -- the same rule `_stamp()`
+#     states for the write side ("resolve once per request, not per row"). A
+#     shop with forty staff would otherwise open a second SQLite file forty
+#     times inside one report.
+#   * FAIL SOFT, LOUDLY. Any failure yields identity-less rows and a logged,
+#     counted incident -- never a 500. A report of raw uids is degraded; a
+#     report that is not there is absent.
+#   * NEVER INVENT A NAME. A uid that does not resolve -- deleted account,
+#     another company's user, or a lookup that just failed -- gets JSON null
+#     in every identity field. And the bucket with no uid at all stays
+#     something no client can render as a person.
+
+#: registry `users` has NO `full_name`/`name` column at all (registry_db.py's
+#: CREATE TABLE plus account_schema's v3 ALTERs). The only human-readable
+#: identifiers a user row carries are `email` and `employee_id` ('ADMIN-0001').
+#: Any design that assumes a person's name exists is designing against a
+#: schema that is not there.
+_ACTOR_IDENTITY_SELECT = "SELECT uid, employee_id, email FROM users WHERE company_id=? AND uid IN ({})"
+
+#: Comfortably under SQLite's default SQLITE_MAX_VARIABLE_NUMBER (999), with
+#: room for the company_id bind. Chunked rather than assumed safe: an
+#: all-time report on a shop with staff turnover really can exceed it, and
+#: the failure mode would be a hard OperationalError on the biggest report.
+_ACTOR_UID_CHUNK = 900
+
+
+def _identity_or_none(value):
+    """'' and '   ' are not identities.
+
+    Load-bearing on BOTH clients and in opposite directions if we get it
+    wrong: Android's `attributedName` does `takeIf { it.isNotEmpty() }` (its
+    docstring names `"email": ""` as a server bug it defends against) and the
+    desktop's `_attribution()` treats a blank as absent too. Sending '' would
+    read as "no identity" on one path and as a name on another.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _resolve_actor_identities(cid, uids):
+    """`{users.uid: {'employee_id', 'email', 'employee_name'}}` for `uids`.
+
+    ONE batched query (chunked only for the parameter limit), scoped to this
+    company. The scoping is free defence-in-depth rather than a correctness
+    requirement -- `schema._rebind_to_owner_issued` guarantees retail.db only
+    ever converges ONTO a tenant key the identity layer already adopted, so
+    the retail cid and registry `users.company_id` are the same value by
+    construction -- but a multi-company install should not be able to name
+    another tenant's staff in this one's payroll report.
+
+    `employee_name` is the ONE pre-formatted display string the desktop
+    renders, derived HERE from the same two raw columns Android receives, so
+    the two clients cannot disagree about who a row is. Email first,
+    employee_id second: that is Android's already-shipped, already-reasoned
+    `attributedName` ordering, and the desktop has no established preference,
+    so Android's wins by default.
+
+    Never raises.
+    """
+    wanted = sorted({u for u in uids if _identity_or_none(u)})
+    if not wanted:
+        return {}
+    resolved = {}
+    try:
+        conn = _registry_conn()
+        try:
+            for i in range(0, len(wanted), _ACTOR_UID_CHUNK):
+                chunk = wanted[i:i + _ACTOR_UID_CHUNK]
+                sql = _ACTOR_IDENTITY_SELECT.format(','.join('?' * len(chunk)))
+                for row in conn.execute(sql, [cid, *chunk]).fetchall():
+                    employee_id = _identity_or_none(row['employee_id'])
+                    email = _identity_or_none(row['email'])
+                    resolved[row['uid']] = {
+                        'employee_id': employee_id,
+                        'email': email,
+                        'employee_name': email or employee_id,
+                    }
+        finally:
+            conn.close()
+    except Exception as exc:
+        # Degrade to "nobody resolved" rather than 500 the whole report, and
+        # count it -- a page of raw uids with no trace of WHY is how a
+        # permanent registry problem gets mistaken for old unattributed data.
+        _note_actor_lookup_failure(
+            'read_lookup_error',
+            f"bulk identity lookup for {len(wanted)} uid(s) in company {cid!r} failed: {exc}",
+            exc=exc)
+        return {}
+    return resolved
+
+
+#: What a row that resolved to nobody carries. All four identity fields are
+#: null TOGETHER and from ONE expression, so a client cannot receive a
+#: half-identity, and no fourth signal exists that could disagree with the
+#: other three.
+_UNRESOLVED_IDENTITY = {'employee_id': None, 'email': None, 'employee_name': None}
 
 
 def _new_uid():
@@ -472,9 +663,30 @@ def dashboard_stats():
     # its own import, so a metrics function calling datetime.now() itself
     # would silently ignore a frozen clock here.
     now = datetime.now()
-    today_p = metrics.period_today(now)
-    yest_p  = metrics.period_yesterday(now)
-    month_p = metrics.period_month_to_date(now)
+    # ...and then ONTO THE SHOP'S CLOCK, once, before anything derives a
+    # window from it.
+    #
+    # `datetime.now()` is the REPORTING DEVICE's wall clock. metrics buckets
+    # every row on the SHOP's -- `revenue_by_hour` keys on
+    # strftime('%H', <the instant converted through the shop's zone>) -- so
+    # the moment those two clocks differ, a window built from the device's
+    # reading asks about a different day, and an axis cut at the device's hour
+    # cuts off shop-hours that have already happened. That is not
+    # hypothetical: shop on +03:00, device left on UTC, and this screen
+    # printed a Revenue KPI of 150.00 above a chart whose bars summed to
+    # 50.00, with the missing 100.00 reported nowhere. Before business dates
+    # existed both sides read this one naive clock and COULD NOT disagree;
+    # the bucketing fix opened the seam and this closes it.
+    #
+    # `business_now` is the whole conversion, applied once here rather than
+    # inside the period constructors -- they take `now` and only `now` on
+    # purpose, so that one response cannot straddle midnight and so a test
+    # that freezes THIS module's `datetime` still governs the answer.
+    boundary = metrics.business_day(conn, cid)
+    shop_now = metrics.business_now(conn, cid, now)
+    today_p = metrics.period_today(shop_now)
+    yest_p  = metrics.period_yesterday(shop_now)
+    month_p = metrics.period_month_to_date(shop_now)
 
     today_sales    = metrics.revenue(conn, cid, today_p, branch_id)
     today_txns     = metrics.transactions(conn, cid, today_p, branch_id)
@@ -503,10 +715,56 @@ def dashboard_stats():
     # business day instead of showing the real slow period. The zero-filling
     # stays here (only the route knows how far into the day "now" is); the
     # revenue per hour is metrics'.
+    # TWO THINGS THE AXIS HAS TO GET RIGHT, and it used to get both wrong:
+    #
+    #   * WHICH CLOCK. `int(now.strftime('%H'))` was the reporting device's
+    #     hour against keys on the shop's -- see the `shop_now` comment above
+    #     for the 100.00 that vanished. `shop_now` is already on the shop's
+    #     business clock, so the two cannot drift apart again.
+    #   * WHICH HOURS. "Midnight through now" is only the trading day when
+    #     the trading day starts at midnight. A shop opening at 04:00 and
+    #     currently at 01:00 has been trading for twenty-one hours, and its
+    #     22:00 sales are INSIDE this period (business date is the day it
+    #     opened) but were outside a 00:00-01:00 axis -- the same money-off-
+    #     the-chart failure by a different route. `shop_now` is the shop's
+    #     clock MINUS the day-start shift, so `shop_now.hour` is exactly
+    #     "hours elapsed in the current trading day", and walking that many
+    #     hours forward from the opening hour gives the trading day in the
+    #     wall-clock labels a shopkeeper recognises (`_hour_key` deliberately
+    #     applies no day-start shift, so the keys are wall-clock hours too).
+    #
+    # Unconfigured shops -- the overwhelming majority, since nothing wrote
+    # these settings until this release -- have zone None and day_start 0, so
+    # this collapses to the identical `range(device_hour + 1)` list as before.
     hourly_by_hr = metrics.revenue_by_hour(conn, cid, today_p, branch_id)
-    current_hour = int(now.strftime('%H'))  # same instant as today_p above, so labels and data can't disagree
-    hourly_labels = [f"{h:02d}:00" for h in range(current_hour + 1)]
-    hourly_data   = [hourly_by_hr.get(f"{h:02d}", 0.0) for h in range(current_hour + 1)]
+
+    def _trading_position(hour_key):
+        """Where a wall-clock hour sits in THIS shop's trading day: 0 is the
+        hour it opened. Returns None for a key SQLite could not produce an
+        hour for (a malformed timestamp makes strftime yield NULL rather than
+        raise), so one bad row cannot take the whole chart down with it."""
+        try:
+            return (int(hour_key) - boundary.day_start_hour) % 24
+        except (TypeError, ValueError):
+            return None
+
+    # The axis spans the trading day so far -- and never stops short of an
+    # hour that actually holds money.
+    #
+    # "So far" alone is the honest length, but it assumes no row is stamped
+    # ahead of the shop's own clock, and two terminals with a few minutes of
+    # skew between them break that assumption for a few minutes at a time.
+    # When it breaks, the failure mode is the exact one this whole change is
+    # about: the KPI counts the sale (it is inside the period) and the chart
+    # silently has nowhere to draw it. Extending the axis to reach any hour
+    # metrics produced a bucket for makes `sum(hourly_data) == today_sales` a
+    # PROPERTY rather than a hope, and on the overwhelmingly normal day it
+    # adds nothing at all, because every bucket is already behind us.
+    positions = [p for p in (_trading_position(k) for k in hourly_by_hr) if p is not None]
+    span = min(max([shop_now.hour] + positions), 23)
+    trading_hours = [(boundary.day_start_hour + i) % 24 for i in range(span + 1)]
+    hourly_labels = [f"{h:02d}:00" for h in trading_hours]
+    hourly_data   = [hourly_by_hr.get(f"{h:02d}", 0.0) for h in trading_hours]
 
     # Payment method breakdown today -- net of refunds, keyed by the tender
     # the refund was paid back in (see metrics.revenue_by_payment_method).
@@ -2299,6 +2557,18 @@ def recent_sales():
 @mt_login_required
 @mt_require_subsystem('retail')
 def get_sale(sale_id):
+    """One sale, its lines, and WHO RANG IT.
+
+    The customer side of this payload has always been resolved (`COALESCE(
+    c.name,'Walk-in')`); the employee side never was. `s.*` carries
+    `actor_user_uid`, which is a registry `users.uid` -- another database --
+    so the Cashier cell on the desktop sale detail and Android's
+    `actor_employee_id`/`actor_email` were reading three fields no backend
+    code produced, and both rendered a truncated uuid4 instead of a person.
+
+    Resolved through the SAME helper the by-employee report uses, so the two
+    surfaces can never name the same uid differently.
+    """
     cid  = _cid()
     conn = get_retail_conn()
     sale = conn.execute("""
@@ -2314,7 +2584,19 @@ def get_sale(sale_id):
         WHERE si.sale_id=?
     """, (sale_id,)).fetchall()
     conn.close()
-    return jsonify({'status': 'success', 'data': {'sale': dict(sale), 'items': [dict(i) for i in items]}})
+
+    payload = dict(sale)
+    actor_uid = payload.get('actor_user_uid')
+    identity = _resolve_actor_identities(cid, [actor_uid]).get(actor_uid, _UNRESOLVED_IDENTITY)
+    # Android reads the two raw columns (it distinguishes "account deleted
+    # since" from "never recorded" by uid-present/names-absent); the desktop
+    # reads the one display string. Both come from the same lookup, and all
+    # three are JSON null together when the uid resolved to nobody -- never
+    # '', never the free-text `cashier` column sitting right beside them.
+    payload['actor_employee_id'] = identity['employee_id']
+    payload['actor_email'] = identity['email']
+    payload['employee_name'] = identity['employee_name']
+    return jsonify({'status': 'success', 'data': {'sale': payload, 'items': [dict(i) for i in items]}})
 
 # ── Held Sales (park / resume) ─────────────────────────────────────────────────
 # "I had two transactions -- one was mid-payment, I forgot something, wanted
@@ -2747,9 +3029,20 @@ def create_return():
 # ALLOWLIST -- a restricted/expired license blocks opening a shift, recording
 # a movement, or closing a shift, same default-blocked treatment as every
 # other mutation not explicitly carved out (see that allowlist's own comment
-# above). The GET routes (current/x-report/list/get-one) carry NO capability
-# guard at all, matching every other read-only report route in this file
-# (daily_cash, aging_report, report_sales_trend) -- always allowed.
+# above).
+#
+# THE GET ROUTES. This comment used to say all four of them (current /
+# x-report / list / get-one) carried no capability guard, "matching every
+# other read-only report route in this file (daily_cash, aging_report,
+# report_sales_trend)". That claim was false by the time it was written --
+# all three of those routes had already been moved onto retail.reports -- and
+# it aged into cover for a real hole: `x-report` is the drawer's entire money
+# picture and it was readable by anyone who could reach the product at all.
+# It now carries retail.cash.close (see the route). The other three return
+# session STATE rather than a money report, and `current` in particular is
+# till plumbing the POS reads before it can sell, so they stay open; both
+# facts are now pinned from the live url_map rather than from a comment, by
+# retail_route_capability_matrix_test.py's exhaustive sweep.
 def _cash_session_report(conn, cid, sess):
     """Live X/Z math for one cash_sessions row -- a pure read, safe to call
     from both GET .../x-report (mid-shift, non-destructive, callable any
@@ -2999,7 +3292,25 @@ def create_cash_movement(session_id):
 @retail_bp.route('/cash-sessions/<session_id>/x-report', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@mt_require_capability(CAP_CASH_CLOSE)
 def cash_session_x_report(session_id):
+    """The drawer's live money picture: cash sales, cash refunds, every
+    float/paid-in/paid-out movement, expected cash and the running variance.
+
+    GATED ON retail.cash.close, and it shipped gated on NOTHING -- see the
+    block comment above, which claimed this matched the other read-only report
+    routes at a point when all three of those had already moved onto a
+    capability. Anyone who could reach the product could read any till's
+    takings.
+
+    retail.cash.close rather than retail.reports, deliberately. The person who
+    counts the drawer is the person who closes it -- the stated reason
+    cash.close is a cashier default -- and the close-out modal fetches THIS
+    route to show expected-vs-counted before it will let anyone submit
+    (frontend/cash-drawer.js). Putting a shift's own numbers behind a
+    manager-and-above code would have gated the reading behind an authority
+    the person doing the counting does not have. Matching close_cash_session's
+    authority keeps the report and the act it feeds on one permission."""
     cid = _cid()
     conn = get_retail_conn()
     sess = conn.execute("SELECT * FROM cash_sessions WHERE id=? AND company_id=?", (session_id, cid)).fetchone()
@@ -3088,20 +3399,48 @@ def close_cash_session(session_id):
 
 # ── Reports ───────────────────────────────────────────────────────────────────
 #
-# Every route below passes `datetime.now()` into metrics.period_days()
-# explicitly, exactly as dashboard_stats() does, and metrics REQUIRES it (the
-# period constructors have no default, and that module imports no datetime at
-# all -- only date/timedelta, for arithmetic on dates it was handed).
+# TWO RULES APPLY TO EVERY WINDOW BUILT BELOW, and they were introduced one
+# wave apart, which is exactly how the second one came to be missed.
 #
-# This is not ceremony. core/retail/metrics.py used to be able to read the
-# clock itself, and a test that freezes `api.retail_api.datetime` -- which is
-# how every clock-sensitive test in this suite is written -- does not freeze a
-# `datetime` imported inside metrics. So a frozen-clock test against any of
-# these routes would have silently measured the real wall clock and passed for
-# the wrong reason. That is precisely the hazard that produced the
-# hourly-chart regression, and closing the seam on dashboard_stats alone left
-# five report routes still open. Asserted by
-# retail_metrics_consistency_test.py::test_every_report_route_honours_a_frozen_clock.
+# 1. THE CLOCK IS READ HERE, NEVER IN metrics. Every route passes an explicit
+#    `now` into metrics.period_*(), and metrics REQUIRES it -- the period
+#    constructors have no default. core/retail/metrics.py used to be able to
+#    read the clock itself, and a test that freezes `api.retail_api.datetime`
+#    -- which is how every clock-sensitive test in this suite is written --
+#    does not freeze a `datetime` imported inside metrics. A frozen-clock test
+#    against such a route silently measures the real wall clock and passes for
+#    the wrong reason. That is the hazard that produced the hourly-chart
+#    regression.
+#
+# 2. THAT CLOCK IS THE SHOP'S, NOT THE DEVICE'S. `datetime.now()` is the
+#    REPORTING DEVICE's wall clock. metrics buckets every row it returns onto
+#    the SHOP's business date (schema v13's `created_at_utc`, converted through
+#    the shop's declared IANA zone and rolled back by the trading day's start
+#    hour). Feeding a device clock into a window whose rows are bucketed on the
+#    shop clock puts the two one day apart whenever the shop has rolled over
+#    and the device has not -- and because `period_days(n, now)` ENDS on
+#    `now.date()`, a business date one day past that end falls out of the whole
+#    window, however many days wide it is. Concretely: a shop three hours east
+#    of the device reading it, at device-local 22:30, returned today_sales=
+#    100.00 on /dashboard/stats and revenue 0.00 from /reports/summary with an
+#    empty sales-trend beside it.
+#
+#    So the conversion -- `metrics.business_now(conn, cid, datetime.now())` --
+#    is applied at EVERY window built here, not only on the dashboard. Rule 1
+#    was enforced from the day it was written and rule 2 was applied to
+#    dashboard_stats alone, which left five report routes plus the AI sales
+#    context building their windows from the device clock against rows bucketed
+#    on the shop's.
+#
+#    A route needing more than one period reads the clock ONCE into a local and
+#    feeds that local to each constructor (see dashboard_stats) -- separate
+#    reads could straddle midnight and put two figures in one response on
+#    different days.
+#
+# Both rules are asserted by products/retail/tests/
+# retail_report_clock_agreement_test.py: behaviourally, against a shop whose
+# declared zone differs from the device's, and structurally, by an AST scan of
+# this file that fails on the next window built from a bare `datetime.now()`.
 
 @retail_bp.route('/reports/sales-trend', methods=['GET'])
 @mt_login_required
@@ -3120,7 +3459,7 @@ def report_sales_trend():
     days      = int(request.args.get('days', 14))
     branch_id = request.args.get('branch_id')
     conn = get_retail_conn()
-    rows = metrics.revenue_by_day(conn, cid, metrics.period_days(days, datetime.now()), branch_id)
+    rows = metrics.revenue_by_day(conn, cid, metrics.period_days(days, metrics.business_now(conn, cid, datetime.now())), branch_id)
     conn.close()
     return jsonify({'success': True,
                     'labels': [r['day'] for r in rows],
@@ -3146,7 +3485,10 @@ def report_top_products():
     limit     = int(request.args.get('limit', 10))
     branch_id = request.args.get('branch_id')
     conn  = get_retail_conn()
-    rows = metrics.top_products(conn, cid, metrics.period_days(days, datetime.now()), branch_id, limit)
+    rows = metrics.top_products(
+        conn, cid,
+        metrics.period_days(days, metrics.business_now(conn, cid, datetime.now())),
+        branch_id, limit)
     conn.close()
     return jsonify({'success': True,
                     'labels': [r['name'] for r in rows],
@@ -3166,9 +3508,85 @@ def report_payment_methods():
     days      = int(request.args.get('days', 30))
     branch_id = request.args.get('branch_id')
     conn = get_retail_conn()
-    rows = metrics.revenue_by_payment_method(conn, cid, metrics.period_days(days, datetime.now()), branch_id)
+    rows = metrics.revenue_by_payment_method(
+        conn, cid,
+        metrics.period_days(days, metrics.business_now(conn, cid, datetime.now())),
+        branch_id)
     conn.close()
     return jsonify({'success': True, 'data': rows})
+
+@retail_bp.route('/reports/by-employee', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
+def report_by_employee():
+    """Takings per employee over `?days=` (default 30), optional `?branch_id=`.
+
+    THIS ROUTE SHIPPED AS A 404. Both clients were written against it -- the
+    desktop Reports panel and the Android EmployeeSalesScreen -- and both had
+    been fetching a path the url_map never carried.
+
+    ENVELOPE: `{'status': 'success', 'success': true, 'data': [...]}`, and the
+    two discriminators are deliberate rather than sloppy. Its five nearest
+    neighbours (sales-trend / top-products / payment-methods / summary /
+    by-branch -- the exact widgets that sit on the same Reports page) all
+    return `{'success': True, ...}` with no `status` key; the other ~74
+    jsonify sites in this file return `{'status': 'success', ...}`. The
+    desktop hard-gates on `body.status !== 'success'` and Android
+    deserializes `success`, so ONE of the two shapes would have forced an
+    already-shipped client to change. Emitting both costs a key that Gson
+    ignores and the desktop never looks at, and lets neither client move.
+    Do not "tidy" one of them away.
+
+    THE ROWS are metrics.revenue_by_employee()'s figures verbatim -- this
+    route computes no money of its own -- plus the identity fields resolved
+    from registry.db in one batched lookup (see _resolve_actor_identities).
+    NO `limit`: metrics deliberately has none, because a payroll-shaped
+    number that silently stops at ten people is worse than no number.
+
+    THE UNATTRIBUTED BUCKET (actor_user_uid IS NULL -- all pre-v13 history)
+    is returned as an ordinary row with all four identity fields null. Not
+    filtered, not hoisted to a separate key, and above all not named: a
+    server-side "Unknown"/"POS" would be an English word rendered inside an
+    RTL Arabic layout AND would defeat both clients' own three-state
+    classifiers. The words are the client's job. There is exactly one such
+    row -- a GROUP BY guarantees it, and that is a hard contract term rather
+    than a nicety, because Android's LazyColumn crashes ("Key was already
+    used") on a second one.
+    """
+    cid = _cid()
+    raw_days = request.args.get('days', 30)
+    try:
+        days = int(raw_days)
+    except (TypeError, ValueError):
+        # `{'status': 'error', 'message': ...}` and NOT a mirrored
+        # `'success': False`. The dual discriminator is a success-path
+        # concession to two already-shipped clients; on the error path every
+        # route in this file agrees on one shape, and the desktop's own reader
+        # reasons explicitly from "the error envelope carries neither
+        # discriminator, so this cannot read a failure as a success".
+        return jsonify({'status': 'error',
+                        'message': 'days must be a whole number of days.'}), 400
+    branch_id = request.args.get('branch_id')
+
+    conn = get_retail_conn()
+    # `datetime.now()` INLINE, exactly as every sibling above -- see this
+    # section's header comment. metrics imports no `datetime` at all, so a
+    # frozen-clock test freezes THIS name or it proves nothing. And it is
+    # converted onto the shop's business day before it becomes a window,
+    # because revenue_by_employee buckets its rows there (rule 2): a takings-
+    # per-employee figure that silently omitted the shift currently on the
+    # floor is a payroll number, not a rounding difference.
+    rows = metrics.revenue_by_employee(
+        conn, cid,
+        metrics.period_days(days, metrics.business_now(conn, cid, datetime.now())),
+        branch_id)
+    conn.close()
+
+    identities = _resolve_actor_identities(cid, [r['actor_user_uid'] for r in rows])
+    data = [dict(row, **identities.get(row['actor_user_uid'], _UNRESOLVED_IDENTITY))
+            for row in rows]
+    return jsonify({'status': 'success', 'success': True, 'data': data})
 
 def _compute_report_summary(conn, cid, days, branch_id=None):
     """The Reports page's KPI cards, the emailed report body and the
@@ -3192,8 +3610,21 @@ def _compute_report_summary(conn, cid, days, branch_id=None):
         as the current one (`preceding_period`). It used to be one day
         shorter -- a `days=30` request weighed 31 days of current revenue
         against 30 days of prior revenue -- biasing the figure upward on
-        every report ever sent."""
-    return metrics.summary(conn, cid, metrics.period_days(days, datetime.now()), branch_id)
+        every report ever sent.
+
+    THE WINDOW IS ON THE SHOP'S CLOCK (rule 2 in this section's header), and
+    this helper is where that matters most, because two of its three callers
+    are not a screen anybody is looking at: the emailed summary and the
+    WhatsApp daily summary. A wrong figure on the Reports page is at least
+    visible beside the KPI card contradicting it; the same figure sent to an
+    owner's phone arrives with nothing to contradict it. Note also that the
+    daily summary calls this with `days=1` -- a one-day window, where being
+    off by a day reports the wrong day outright rather than merely trimming
+    an end off a fortnight."""
+    return metrics.summary(
+        conn, cid,
+        metrics.period_days(days, metrics.business_now(conn, cid, datetime.now())),
+        branch_id)
 
 @retail_bp.route('/reports/summary', methods=['GET'])
 @mt_login_required
@@ -3380,7 +3811,9 @@ def report_by_branch():
     cid  = _cid()
     days = int(request.args.get('days', 30))
     conn = get_retail_conn()
-    rows = metrics.revenue_by_branch(conn, cid, metrics.period_days(days, datetime.now()))
+    rows = metrics.revenue_by_branch(
+        conn, cid,
+        metrics.period_days(days, metrics.business_now(conn, cid, datetime.now())))
     conn.close()
     return jsonify({'success': True,
                     'labels':        [r['branch_name'] for r in rows],
@@ -3631,6 +4064,181 @@ def tax_settings_set():
     except Exception:
         pass
     return jsonify({'status': 'success', 'data': {'tax_calculation_mode': mode}})
+
+# ── Settings (the shop's own clock) ───────────────────────────────────────────
+#
+# WHY THIS ROUTE EXISTS. `core/retail/metrics.py` decides which trading DAY
+# every sale in the shop's history belongs to by reading two keys out of
+# `retail_settings`: `business_timezone` and `business_day_start_hour`.
+# Nothing in this repository has ever WRITTEN either of them. They are not in
+# `/settings/credit`'s allowlist and not in `/settings/tax`'s, so the only way
+# to set them was to edit retail.db by hand -- which means that on every
+# install in the field the shop clock is permanently undeclared and the whole
+# business-date feature is unreachable code. A read path with no write path is
+# a feature nobody has.
+#
+# MODELLED ON tax_settings_set, NOT credit_settings_set. The credit route
+# writes `str(data[k])` straight through with no validation at all; the tax
+# route validates through the module that will later READ the value
+# (`tax_engine.normalize_mode`) and records a security-audit row. This setting
+# is the more consequential of the two -- changing it re-files revenue between
+# days -- so it follows the stricter sibling.
+#
+# VALIDATION LIVES IN metrics, NOT HERE. `metrics.parse_business_zone` is
+# public and its docstring says outright that this route must use it. The
+# reader is deliberately TOLERANT (an unparseable value logs a warning and
+# leaves the shop unconfigured, because a report is still worth drawing); the
+# writer must be STRICT, because silently degrading a value an owner just
+# typed into a settings screen leaves them believing the shop is on Amman time
+# when it is not. Tolerant read + strict write is only safe while both consult
+# ONE definition of "valid" -- a private zone check here would be a second one,
+# and read-side tolerance drifting from write-side rejection is exactly how a
+# settings screen ends up accepting a value no report can use.
+
+def _timezone_database_available():
+    """Whether this install can resolve ANY IANA zone.
+
+    Probed through `parse_business_zone` itself rather than through
+    `zoneinfo.available_timezones()` so there is still only one definition of
+    "resolvable" -- and 'UTC' is the probe because it exists in every real tz
+    database, so failing on it means the DATABASE is missing, not the key.
+
+    THIS IS NOT PARANOIA. `zoneinfo` is stdlib and always imports, but the
+    data it reads is not bundled with CPython: Windows ships no
+    /usr/share/zoneinfo, `tzdata` is in none of requirements/*.txt, it is not
+    in the Chaquopy pip block for the Android build, and the PyInstaller spec
+    does not collect it. On all three of those targets, TODAY, every zone name
+    fails. Answering that with "Asia/Amman is not a valid timezone" reads like
+    a typo in the settings screen and sends whoever is debugging it to
+    entirely the wrong place, so the two failures get different status codes
+    and different words.
+    """
+    return metrics.parse_business_zone('UTC') is not None
+
+
+@retail_bp.route('/settings/business-day', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def business_day_settings_get():
+    """What the REPORTS are actually using -- not merely what is stored.
+
+    A value that is in the table but cannot be resolved is reported as
+    undeclared, because that is the honest answer about the shop's clock; the
+    `timezone_database_available` flag is what tells a settings screen whether
+    the cause is the value or the install, so it can say so instead of
+    offering a field that silently cannot be saved."""
+    cid = _cid()
+    conn = get_retail_conn(); _ensure_credit_schema(conn)
+    boundary = metrics.business_day(conn, cid)
+    conn.close()
+    return jsonify({'status': 'success', 'data': {
+        'business_timezone': getattr(boundary.zone, 'key', None),
+        'business_day_start_hour': boundary.day_start_hour,
+        'timezone_database_available': _timezone_database_available(),
+    }})
+
+
+@retail_bp.route('/settings/business-day', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def business_day_settings_set():
+    """Declare (or clear) the shop's timezone and the hour its day begins.
+
+    Explicit `null` CLEARS a key rather than storing an empty string, and
+    clearing means "not declared" -- which is NOT the same as UTC, and not the
+    same as midnight-anchored-by-accident. `ZoneInfo('UTC')` is a real zone; a
+    settings screen that had to write it to mean "unset" would silently
+    re-file the trading history of every shop that merely stopped declaring.
+    """
+    cid = _cid(); data = request.json or {}
+    known = ('business_timezone', 'business_day_start_hour')
+    present = [k for k in known if k in data]
+    if not present:
+        return jsonify({'status': 'error',
+                        'message': f'one of {", ".join(known)} is required'}), 400
+
+    writes = []   # (skey, svalue-or-None-to-clear)
+
+    if 'business_timezone' in data:
+        raw = data['business_timezone']
+        if raw is None or not str(raw).strip():
+            writes.append((metrics.BUSINESS_TIMEZONE_SETTING, None))
+        else:
+            zone = metrics.parse_business_zone(raw)
+            if zone is None:
+                if not _timezone_database_available():
+                    # 503, not 400: nothing is wrong with what they typed, and
+                    # telling them it is would send them to fix the wrong
+                    # thing. The install is missing a package.
+                    return jsonify({'status': 'error', 'message': (
+                        'This installation has no timezone database, so no timezone can be '
+                        'validated or saved. Install the `tzdata` package on the server '
+                        '(it is not bundled with Python on Windows or Android). This is an '
+                        'environment problem, not a problem with the value entered.')}), 503
+                return jsonify({'status': 'error', 'message': (
+                    f'{raw!r} is not an IANA timezone name. Expected something like '
+                    f'"Asia/Amman" -- a fixed offset ("+02:00"), an abbreviation ("EET") '
+                    f'or a number is not a timezone.')}), 400
+            # The zone's OWN canonical key, never the raw text: it round-trips
+            # through parse_business_zone by construction, so what is stored
+            # is exactly what the reader will resolve.
+            writes.append((metrics.BUSINESS_TIMEZONE_SETTING,
+                           getattr(zone, 'key', None) or str(raw).strip()))
+
+    if 'business_day_start_hour' in data:
+        raw = data['business_day_start_hour']
+        if raw is None or not str(raw).strip():
+            writes.append((metrics.BUSINESS_DAY_START_SETTING, None))
+        else:
+            try:
+                hour = int(str(raw).strip())
+            except ValueError:
+                hour = None
+            if hour is None or not 0 <= hour <= 23:
+                return jsonify({'status': 'error', 'message': (
+                    f'{raw!r} is not an hour of the day. Expected a whole number 0-23.')}), 400
+            # Cross-check against the READER before storing. metrics'
+            # `_day_start_hour` is deliberately tolerant (it falls back to
+            # midnight rather than refusing to draw a report), so it cannot be
+            # used AS the validator the way parse_business_zone can -- but it
+            # can be used to prove the strict check above still agrees with it.
+            # If metrics ever narrows its range, this fails loudly here rather
+            # than accepting a value the reader will quietly discard.
+            if metrics._day_start_hour(str(hour)) != hour:
+                log.error("retail settings: the business-day writer accepted hour %r but "
+                          "metrics reads it back as %r -- the two definitions have drifted",
+                          hour, metrics._day_start_hour(str(hour)))
+                return jsonify({'status': 'error', 'message': (
+                    f'{raw!r} is not an hour of the day. Expected a whole number 0-23.')}), 400
+            writes.append((metrics.BUSINESS_DAY_START_SETTING, str(hour)))
+
+    conn = get_retail_conn(); _ensure_credit_schema(conn)
+    for skey, svalue in writes:
+        if svalue is None:
+            conn.execute("DELETE FROM retail_settings WHERE company_id=? AND skey=?", (cid, skey))
+        else:
+            conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
+                         "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",
+                         (cid, skey, svalue))
+    conn.commit()
+    boundary = metrics.business_day(conn, cid)
+    conn.close()
+
+    effective = {'business_timezone': getattr(boundary.zone, 'key', None),
+                 'business_day_start_hour': boundary.day_start_hour}
+    try:
+        from commercial_runtime.security.audit import record as _sec_audit
+        # Audited for the same reason the tax mode is, only more so: this
+        # decides which trading day every figure in the shop's history is
+        # counted on, so "the numbers changed and nobody touched a sale" has
+        # to have an answer.
+        _sec_audit(cid, _uid(), 'RETAIL_BUSINESS_DAY_CHANGED', entity_type='SETTINGS',
+                   context=dict(effective))
+    except Exception:
+        pass
+    return jsonify({'status': 'success', 'data': effective})
 
 # ── Configurable payment methods ──────────────────────────────────────────────
 @retail_bp.route('/payment-methods', methods=['GET'])
@@ -4595,8 +5203,20 @@ def _ai_context_sales(conn, cid):
     genuinely lifetime -- the sentence says so out loud -- hence
     period_all_time() rather than a days window; it still goes through the
     same Period machinery so the scoping is explicit instead of implied by
-    an absent date predicate."""
-    now = datetime.now()   # one instant for both periods -- see the Reports note
+    an absent date predicate.
+
+    ON THE SHOP'S CLOCK, for the same reason as every report route (rule 2 in
+    the Reports section header) and with one extra edge of its own: this
+    sentence says "TODAY'S sales" in words, to a user who is asking a question
+    in a chat box. A number that disagrees with the dashboard card three
+    inches away is bad; a SENTENCE asserting it, which the user will believe
+    over a chart, is worse. `period_all_time`'s end is also a date, so it takes
+    the converted clock too -- a shop already past midnight would otherwise
+    have its newest sales fall outside "everything ever recorded"."""
+    # ONE converted instant for both periods -- see the Reports note. Two
+    # separate reads could straddle midnight and put the two figures in one
+    # sentence on different days.
+    now = metrics.business_now(conn, cid, datetime.now())
     today_p = metrics.period_today(now)
     revenue = metrics.revenue(conn, cid, today_p)
     txns = metrics.transactions(conn, cid, today_p)

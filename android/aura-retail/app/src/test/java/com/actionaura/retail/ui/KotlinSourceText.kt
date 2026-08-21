@@ -26,19 +26,109 @@ package com.actionaura.retail.ui
  * so scanning raw source confuses the explanation with the offence in both
  * directions.
  *
- * Deliberately naive (it does not track string literals). That is safe here
- * because a false strip can only ever make an assertion HARDER to satisfy,
- * never easier -- the failure mode is a test that complains, not a test that
- * passes when it should not.
+ * ── A note on how this docstring is written ──────────────────────────────────
+ * It never spells the two block-comment delimiters literally, and says OPENER
+ * and TERMINATOR instead. Kotlin block comments NEST: an opener written inside
+ * this comment starts a SECOND level, and the first terminator then only takes
+ * the file back down to the first -- so the comment ends somewhere other than
+ * where it looks like it ends and the lines after that point become top-level
+ * garbage. The previous revision of this very file spelled them out while
+ * explaining the hazard, terminated at what read as its own line 45, and cost
+ * the whole module its compile: 261 errors, zero Android tests run. The main
+ * sources learned the same lesson one file over (RetailSession.kt's
+ * CAP_REPORTS, TerminalIdentity.kt's header).
+ *
+ * ── One left-to-right pass, not two regex sweeps ─────────────────────────────
+ * This used to strip BLOCK comments first and LINE comments second, which gave
+ * an OPENER that only ever appeared INSIDE a `//` comment the power to open a
+ * phantom block running to the next TERMINATOR anywhere in the file. Measured
+ * on AppRoot.kt, whose line 90 is a `//` comment naming the route prefix
+ * `/_internal/sync/` followed by a glob star -- a slash and a star, adjacent,
+ * which is an OPENER -- the phantom ran from there to the KDoc terminator on
+ * line 198 and silently deleted 5,949 characters, 108 lines, of live code,
+ * including the `tr("Starting…")` call site on line 188. Every "does this
+ * screen have an Arabic entry for each key" assertion that runs on this output
+ * was therefore reporting green about text it had never seen. Models.kt:576
+ * carries the same shape and is harmless only because no TERMINATOR happens to
+ * follow it.
+ *
+ * Reversing the two sweeps fixes that case and creates its mirror image: line-
+ * stripping first eats the TERMINATOR closing a one-line block comment that
+ * itself contains a `//`, after which the block runs on and deletes code again.
+ * Zero instances of that shape exist in this module today, which is exactly the
+ * sort of luck the AppRoot.kt case already spent.
+ *
+ * So the rule is now the one the Kotlin compiler itself uses: whichever
+ * delimiter appears FIRST opens a comment, and the other is inert until that
+ * comment closes.
+ *
+ * ── And block comments NEST, because Kotlin's do ─────────────────────────────
+ * This function used to stop a block comment at its FIRST terminator and
+ * documented that as safe, on the grounds that retaining text is the harder
+ * direction to be wrong in. That reasoning is sound for the text it retains and
+ * says nothing about the DECLARATIONS it retains, which is where the damage
+ * was. Given a KDoc containing a nested opener, the compiler ends the comment
+ * one terminator LATER than this did -- so a class, its `@Test` methods, and
+ * every assertion in them can be comment to the compiler and live code here.
+ *
+ * That is not hypothetical. TerminalIdentityContractTest.kt opened two nested
+ * comments in prose (`/api/devices` followed by a glob star, twice) and closed
+ * one, so the entire file -- eleven assertions -- was a single unterminated
+ * comment. The non-nesting reading of it reported `class
+ * TerminalIdentityContractTest` and `@Test` as live source: a structural guard
+ * that stays green while the thing it guards is not compiled at all. Across all
+ * 70 `.kt` files in this module the two readings differ on exactly the 3 files
+ * that wave touched, which is the whole argument for matching the compiler
+ * rather than approximating it.
+ *
+ * Still deliberately naive about STRING LITERALS -- a `//` inside a URL does
+ * truncate the line. That naivety keeps the character the old docstring
+ * claimed for the whole function and could not actually deliver: a false strip
+ * here can only ever make an assertion HARDER to satisfy, because it removes a
+ * BOUNDED region (to end of line, or to the matching TERMINATOR) from both the
+ * code and the prose being compared. What it can no longer do is open an
+ * unbounded one, or hand back a declaration the compiler never saw.
  *
  * Whitespace is collapsed too, otherwise a stripped comment leaves behind its
  * own height in blank lines and a "within N characters" window ends up
  * measuring indentation instead of code.
  */
-internal fun codeOnly(src: String): String = src
-    .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), " ")
-    .lines().joinToString("\n") { it.substringBefore("//") }
-    .replace(Regex("""\s+"""), " ")
+internal fun codeOnly(src: String): String {
+    val out = StringBuilder(src.length)
+    var i = 0
+    while (i < src.length) {
+        when {
+            src.startsWith("//", i) -> {
+                // To end of line. The newline itself is left for the collapse
+                // below so line-adjacent tokens do not fuse together.
+                val nl = src.indexOf('\n', i)
+                i = if (nl < 0) src.length else nl
+                out.append(' ')
+            }
+            src.startsWith("/*", i) -> {
+                // Counts levels, because Kotlin's block comments nest. An
+                // unterminated one runs to end of file, which is also what the
+                // compiler does (it then reports "Unclosed comment").
+                //
+                // `//` is deliberately NOT special inside here: to the Kotlin
+                // lexer a line comment opener sitting inside a block comment is
+                // just two more characters of prose.
+                var depth = 1
+                i += 2
+                while (i < src.length && depth > 0) {
+                    when {
+                        src.startsWith("/*", i) -> { depth++; i += 2 }
+                        src.startsWith("*/", i) -> { depth--; i += 2 }
+                        else -> i++
+                    }
+                }
+                out.append(' ')
+            }
+            else -> out.append(src[i++])
+        }
+    }
+    return out.toString().replace(Regex("""\s+"""), " ")
+}
 
 /**
  * Every string literal in [src], with runs joined: `"a " + "b"` yields one
