@@ -467,15 +467,33 @@ def _hand_built_db(path, with_refund_amount=True):
     """A tiny hand-built retail database with one sale and (optionally) a
     well-formed `returns` table. Plain sqlite3: these tests are about
     metrics' own error handling, not about the Flask app, so they create
-    only the two tables the functions under test read."""
+    only the two tables the functions under test read.
+
+    `created_at_utc` is on both tables because metrics.py's period predicate
+    now names it (schema v13; see that module's decision 5 -- reports bucket
+    on the shop's business date, derived from the true instant, and fall
+    back to `created_at` only through a COALESCE). This fixture previously
+    modelled a PRE-v13 schema, which metrics.py deliberately does not
+    support: a database whose migration has not completed must fail loudly
+    rather than quietly report on whichever clock happened to be available.
+    Sniffing for the column at query time would be production code bent to
+    suit a fixture, and would reintroduce exactly the silent
+    wrong-clock reporting v13 exists to end.
+
+    The column is left NULL on both rows on purpose -- that is what a real
+    pre-v13 row looks like after the migration, and it keeps these tests
+    exercising the COALESCE fallback while they exercise the error
+    handling they are actually about."""
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     refund_col = 'refund_amount REAL,' if with_refund_amount else ''
     conn.executescript(f"""
         CREATE TABLE sales (id INTEGER PRIMARY KEY, company_id TEXT, branch_id INTEGER,
-                            total REAL, payment_method TEXT, created_at TIMESTAMP);
+                            total REAL, payment_method TEXT, created_at TIMESTAMP,
+                            created_at_utc TEXT);
         CREATE TABLE returns (id INTEGER PRIMARY KEY, company_id TEXT, branch_id INTEGER,
-                              {refund_col} refund_method TEXT, created_at TIMESTAMP);
+                              {refund_col} refund_method TEXT, created_at TIMESTAMP,
+                              created_at_utc TEXT);
     """)
     today = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     conn.execute("INSERT INTO sales (id,company_id,branch_id,total,payment_method,created_at) "

@@ -130,7 +130,7 @@ def _index():
 from commercial_runtime.identity.auth_routes import auth_bp
 from commercial_runtime.identity.onboarding_routes import onboarding_bp
 from commercial_runtime.identity.registry_db import init_registry_db
-from database.schema import get_retail_conn, init_retail
+from database.schema import get_retail_conn, init_retail, rebind_company_id_after_activation
 from api.retail_api import retail_bp
 from api.import_api import import_bp
 from commercial_runtime.backup.routes import make_backup_blueprint
@@ -264,6 +264,17 @@ app.register_blueprint(make_licensing_blueprint(
     trust_anchor_path=Path(LICENSING_TRUST_ANCHOR_PATH),
     device_identity_factory=_licensing_device_identity_factory,
     internal_shared_secret=LICENSING_INTERNAL_SHARED_SECRET,
+    # Launch-readiness Phase 2 (retail schema v14): activation is the exact
+    # moment this install first learns its Owner-issued tenant key
+    # (`license_public_id`, the same value owner/app/sync/routes.py scopes
+    # every relayed event by). retail.db's `company_id` -- derived locally at
+    # onboarding as md5(admin_email) and therefore meaningless to Owner --
+    # has to converge onto it, and the v14 migration alone cannot do that:
+    # licensing is OFF by default here, so the common install migrates long
+    # before it ever activates, and a rebind that only ran at migration time
+    # would silently never happen. Idempotent and fail-safe -- see
+    # database/schema.py::rebind_company_id_after_activation.
+    on_activation_success=rebind_company_id_after_activation,
 ))
 
 # Multi-device sync foundation (2026-08-06), Task 5: the background push/pull

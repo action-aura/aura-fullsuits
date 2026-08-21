@@ -187,7 +187,77 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # WhatsApp report routing. Pure additive CREATE TABLE IF NOT EXISTS, same
 # shape as every notifications-owned table before it; no existing table is
 # touched. See _migrate_add_whatsapp_recipients below.
-RETAIL_SCHEMA_VERSION = 12
+# v12 -> v13 (launch-readiness Phase 2, ROADMAP.md 2026-08-21 reservation):
+# identity and attribution columns. THE FIRST MIGRATION IN THIS FILE THAT
+# ALTERS THE TABLES HOLDING A REAL SHOP'S SALES HISTORY -- every step before
+# it either created new tables (v6-v12) or rebuilt catalogue/party tables
+# (v1-v5). It is consequently additive ONLY: ALTER TABLE ADD COLUMN,
+# CREATE [UNIQUE] INDEX IF NOT EXISTS and guarded UPDATEs, never the
+# DROP+RENAME rebuild _migrate_products_to_uuid uses. That rebuild's risk
+# profile is deliberately not repeated here: it copies every row through a
+# fresh table with PRAGMA foreign_keys temporarily OFF, and a mistake in the
+# column list silently drops real data with no error and a passing
+# integrity_check -- see _legacy_supplier_link's docstring for a case where
+# exactly that happened on this very lineage. Three groups of columns:
+#   - `uid` + a partial UNIQUE index on branches/sales/sale_items/returns/
+#     return_items/inventory_movements/payments. The WIRE identity, exactly
+#     as registry v3 gave `users` one (commercial_runtime/identity/
+#     account_schema.py). The local autoincrement `id` stays the primary key
+#     and stays a private detail of this install.
+#   - `actor_user_uid`/`terminal_id`/`created_at_utc` on sales/returns/
+#     inventory_movements/cash_sessions/cash_movements -- WHO, WHERE and
+#     WHEN-in-real-time, as three structured columns beside (never instead
+#     of) the existing free-text cashier/created_by/opened_by.
+#   - `row_version`/`updated_at_utc`/`deleted_at_utc` on the four catalogue
+#     tables (categories/products/customers/suppliers) and reorder_requests
+#     -- the reject-stale marker plus a soft tombstone, matching registry
+#     v3's identical triple on `users`.
+# v13 -> v14 (same reservation): the company_id rebind. `company_id` is
+# derived once, locally, at onboarding as md5(admin_email)
+# (commercial_runtime/identity/onboarding_routes.py::create_admin), which is
+# a pure function of an email address and therefore means nothing to Owner.
+# Owner's relay scopes every sync event by `license_id`
+# (owner/app/sync/routes.py: `SyncEvent.license_id == license_id`, resolved
+# server-side from the VERIFIED installation, never from body input), and
+# that same value is what Owner signs into every assertion as
+# `license_public_id` (owner/app/licensing_service/assertions.py:
+# `"license_public_id": str(license_row.id)`). So the Owner-issued tenant key
+# this database has to converge on is `license_public_id`, and v14 is the
+# ability to move onto it. Nothing about v14 requires a licence to exist:
+# licensing is OFF by default in this product (config.py -- with
+# OWNER_LICENSING_BASE_URL unset the app runs fully unlocked), so the common
+# case is an install that reaches v14 long before it ever activates. v14
+# therefore advances unconditionally and the rebind is a no-op when there is
+# nothing to rebind to. See _migrate_rebind_company_id_to_owner_issued and
+# rebind_company_id below.
+RETAIL_SCHEMA_VERSION = 14
+
+# ── v13: which table gets which group of columns ────────────────────────────
+# Kept as module constants rather than inlined into the migration so the
+# report/query code that lands on top of these columns can import the same
+# lists instead of re-deriving them (and drifting from them).
+
+#: Tables that gain the wire identity `uid` + a partial UNIQUE index.
+RETAIL_UID_TABLES = (
+    'branches', 'sales', 'sale_items', 'returns', 'return_items',
+    'inventory_movements', 'payments',
+)
+
+#: Tables that gain actor_user_uid / terminal_id / created_at_utc.
+RETAIL_ACTOR_TABLES = (
+    'sales', 'returns', 'inventory_movements', 'cash_sessions', 'cash_movements',
+)
+
+#: Tables that gain row_version / updated_at_utc / deleted_at_utc.
+RETAIL_ROW_VERSION_TABLES = (
+    'categories', 'products', 'customers', 'suppliers', 'reorder_requests',
+)
+
+#: How many rows the v13 uid backfill materialises in Python at a time. See
+#: _migrate_add_identity_and_attribution_columns -- `sale_items` on a shop
+#: with years of history is far and away the biggest table here, and this
+#: migration runs on a till machine, not a server.
+_UID_BACKFILL_CHUNK = 5000
 
 
 def _get_path(name):
@@ -909,6 +979,17 @@ def _migrate_retail_schema(conn):
     # v11 -> v12 (whatsapp-recipients): appended LAST, same reasoning again --
     # see the RETAIL_SCHEMA_VERSION v12 comment above.
     _migrate_add_whatsapp_recipients(conn)
+    # v12 -> v13 (launch-readiness Phase 2): appended LAST, same reasoning
+    # again -- see the RETAIL_SCHEMA_VERSION v13 comment above. The first
+    # step in this chain that ALTERs the sales-history tables; additive only.
+    _migrate_add_identity_and_attribution_columns(conn)
+    # v13 -> v14 (launch-readiness Phase 2): appended LAST, and it must stay
+    # after v13 specifically -- not merely by the "new steps go last"
+    # convention. The rebind rewrites `company_id` on every scoped table,
+    # and running it BEFORE v13 would mean the rows it touches do not yet
+    # carry the `uid` that identifies them on the wire, so an interrupted
+    # rebind could not be reconciled against anything afterwards.
+    _migrate_rebind_company_id_to_owner_issued(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -1337,6 +1418,696 @@ def _migrate_add_whatsapp_recipients(conn):
     """
     from commercial_runtime.notifications.schema import apply_whatsapp_recipients_schema
     apply_whatsapp_recipients_schema(conn)
+
+
+def local_terminal_id():
+    """This device's terminal id, or None when it has never been established.
+
+    Deliberately NOT a new notion of device identity. It returns
+    `commercial_runtime.identity.device_context.peek_local_device_uuid()` --
+    the install-stable UUID persisted in
+    <AURA_APP_DATA>/device/local_device.json, which `device_registry.devices`
+    is already keyed by. Inventing a second "which terminal is this" value
+    here would guarantee that `sales.terminal_id` and `devices.id` disagree
+    the first time anyone tried to join them.
+
+    `peek_*` rather than `local_device_uuid()` on purpose: the peek variant
+    never CREATES the identity file. Stamping a row is a bookkeeping question,
+    not a reason to manufacture an install identity as a side effect -- the
+    same reasoning `local_device_is_admin()` uses for choosing the peek
+    variant (see that function's docstring).
+
+    Returns None instead of raising on LocalDeviceStateCorruptError: a
+    corrupt local-device record is a real problem, but the correct place to
+    surface it is device resolution, not the middle of a sale. An
+    unattributed row is recoverable; a refused sale is not.
+    """
+    try:
+        from commercial_runtime.identity.device_context import (
+            LocalDeviceStateCorruptError,
+            peek_local_device_uuid,
+        )
+        return peek_local_device_uuid()
+    except Exception:
+        # Includes LocalDeviceStateCorruptError and, on a stripped Android
+        # build, an ImportError. Both mean "no trustworthy terminal id".
+        return None
+
+
+def _migrate_add_identity_and_attribution_columns(conn):
+    """One-time migration (schema v13): identity and attribution columns --
+    launch-readiness Phase 2, reserved in ROADMAP.md's 2026-08-21 ledger.
+
+    This is the first migration in this file to ALTER the tables that hold a
+    real shop's entire sales history, so it is additive ONLY -- every
+    statement below is `ALTER TABLE ... ADD COLUMN`,
+    `CREATE [UNIQUE] INDEX IF NOT EXISTS`, or an `UPDATE` guarded on the rows
+    that still need it. There is no table rebuild here, and there must never
+    be one: the rebuild technique `_migrate_products_to_uuid` uses copies
+    every row through a replacement table with `PRAGMA foreign_keys`
+    temporarily OFF, and a mistake in one column list loses real financial
+    data with no exception and a passing integrity_check (this lineage has
+    already lived through exactly that -- see `_legacy_supplier_link`'s
+    docstring, where every product's supplier link silently came back NULL).
+    `retail_v13_identity_columns_migration_test.py` pins that constraint at
+    the source level so a future edit cannot quietly reintroduce it.
+
+    THREE GROUPS OF COLUMNS:
+
+    1. `uid` on RETAIL_UID_TABLES -- the WIRE identity, exactly what registry
+       v3 gave `users` (commercial_runtime/identity/account_schema.py). The
+       existing autoincrement `id` stays the primary key and stays a private
+       detail of THIS install; `uid` is what a peer device, or Owner's relay,
+       names the row by. Backfilled with one fresh `uuid.uuid4()` PER ROW,
+       generated in Python.
+
+       Generated in Python, and never as `lower(hex(randomblob(16)))`: that
+       SQL trick produces a 32-character string which is NOT RFC-4122, and
+       Owner's sync ingest gates on `uuid.UUID(entity_id)`. A value that
+       merely looks random passes every local eye test and is then rejected
+       on the wire, at the point where it is most expensive to discover.
+       The registry v3 migration hit precisely this and documents it; the
+       same decision is repeated here rather than re-learned.
+
+       `ALTER TABLE ADD COLUMN` cannot carry a UNIQUE constraint (and adding
+       one the "proper" way means the table rebuild this migration exists to
+       avoid), so uniqueness is a separate partial unique index. The
+       `WHERE uid IS NOT NULL` predicate is not decoration: between this
+       ALTER and the backfill -- and for any row an older code path inserts
+       before the writers learn about the column -- "no uid yet" is a legal
+       state, while two rows sharing a uid never is.
+
+    2. `actor_user_uid` / `terminal_id` / `created_at_utc` on
+       RETAIL_ACTOR_TABLES. The existing free-text `cashier` / `created_by` /
+       `opened_by` columns are KEPT and never read, rewritten, or used to
+       guess at `actor_user_uid`. A wrong name on a sale is worse than no
+       name: the free text is the only surviving evidence of who the shop
+       believed rang a transaction, and a fuzzy name match that guessed wrong
+       would destroy that evidence while looking like an improvement.
+
+       `created_at_utc` is the one that matters most and looks least
+       important. Today's reports bucket on `date(created_at)` and
+       `strftime(...)` over a value that is NOT consistently UTC: `create_sale`
+       and `create_return` (api/retail_api.py) write LOCAL wall clock
+       deliberately -- there is a comment there explaining that the dashboard
+       nets returns out of today's revenue by local date -- while
+       `inventory_movements` takes SQLite's DEFAULT CURRENT_TIMESTAMP, which
+       IS UTC. So the same column name already means two different things in
+       two tables, and two devices in two timezones (or one device with a
+       wrong clock) file rows on the wrong day, quietly, with every daily
+       total wrong and nothing to show for it.
+
+       Existing rows are left NULL rather than converted. The only offset
+       available at migration time is THIS machine's CURRENT one, which is
+       wrong by an hour for half of every year and wrong by whole hours for a
+       row rung on a device somewhere else -- a fabricated instant, which is
+       the same category of mistake as a fabricated cashier name. THE
+       CONSEQUENCE IS LOAD-BEARING for whoever moves the report predicates
+       onto this column: they must read `COALESCE(created_at_utc, created_at)`,
+       never `created_at_utc` alone, or every historical row silently drops
+       out of every report. `terminal_id` and `actor_user_uid` are left NULL
+       on history for the identical reason -- this device cannot prove it is
+       the terminal that rang a sale from before the column existed.
+       `local_terminal_id()` above is the source write-time code should use.
+
+    3. `row_version` / `updated_at_utc` / `deleted_at_utc` on
+       RETAIL_ROW_VERSION_TABLES -- the reject-stale marker and soft
+       tombstone, matching the identical triple registry v3 put on `users`.
+       `row_version INTEGER NOT NULL DEFAULT 1` is only legal on ADD COLUMN
+       because the non-null DEFAULT is supplied, which SQLite writes into
+       every existing row in place. `deleted_at_utc` stays NULL everywhere:
+       nobody has been deleted yet, and a tombstone stamped by a migration
+       would be a lie about when.
+
+    Idempotent: every ADD COLUMN is preceded by a `PRAGMA table_info` check,
+    every index uses IF NOT EXISTS, and the uid backfill only touches rows
+    that have no uid -- so a retried run (the normal case, since
+    `ensure_schema_version` leaves `user_version` un-advanced on any failure
+    and the whole chain re-runs on the next launch) is a clean no-op.
+
+    Every table is existence-guarded first. Some test fixtures hand-build a
+    MINIMAL schema and call `_migrate_retail_schema` against it directly
+    (retail_category_delete_fk_sync_test.py builds only categories/products/
+    inventory_movements), and an unconditional `ALTER TABLE sales` would
+    crash them with "no such table: sales" -- the same hazard
+    `_migrate_add_shift_cash_drawer` already guards for.
+    """
+    import uuid as _uuid
+
+    live_tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+
+    def _columns(table):
+        return {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
+
+    # ── group 1: the wire identity ──────────────────────────────────────
+    for table in RETAIL_UID_TABLES:
+        if table not in live_tables:
+            continue
+        if 'uid' not in _columns(table):
+            conn.execute(f'ALTER TABLE "{table}" ADD COLUMN uid TEXT')
+        # Backfilled by rowid, not by `id`: rowid exists on every one of
+        # these tables regardless of what their primary key is declared as,
+        # so this keeps working if one of them is ever given a TEXT id the
+        # way products/customers/suppliers already were.
+        #
+        # Chunked, not one giant executemany. `sale_items` on a shop with a
+        # few years of history is the largest table in this database by an
+        # order of magnitude, and materialising every rowid AND every
+        # generated uuid as Python objects at once is hundreds of megabytes
+        # on a machine that is also running the app. The chunk loop re-runs
+        # the same "still needs a uid" query each pass, so it terminates on
+        # its own and stays correct if it is interrupted and retried.
+        while True:
+            pending = conn.execute(
+                f'SELECT rowid FROM "{table}" '
+                f"WHERE uid IS NULL OR TRIM(uid) = '' LIMIT {_UID_BACKFILL_CHUNK}"
+            ).fetchall()
+            if not pending:
+                break
+            conn.executemany(
+                f'UPDATE "{table}" SET uid=? WHERE rowid=?',
+                [(str(_uuid.uuid4()), row[0]) for row in pending],
+            )
+        conn.execute(
+            f'CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_uid '
+            f'ON "{table}"(uid) WHERE uid IS NOT NULL'
+        )
+
+    # ── group 2: who / where / when-in-real-time ────────────────────────
+    for table in RETAIL_ACTOR_TABLES:
+        if table not in live_tables:
+            continue
+        cols = _columns(table)
+        for column, decl in (
+            ('actor_user_uid', 'TEXT'),
+            ('terminal_id', 'TEXT'),
+            ('created_at_utc', 'TEXT'),
+        ):
+            if column not in cols:
+                conn.execute(f'ALTER TABLE "{table}" ADD COLUMN {column} {decl}')
+        # Reporting reads these by (company_id, day) far more than by row,
+        # and a full scan of a year of sales on a shop laptop is the
+        # difference between a report that opens and one that appears to
+        # hang. Created outside the ADD COLUMN guard, IF NOT EXISTS, for the
+        # same reason idx_products_supplier is (see
+        # _migrate_products_add_supplier_fk): an index lives and dies with
+        # its table, so an early-return on "column already exists" would
+        # leave a rebuilt table indexless.
+        conn.execute(
+            f'CREATE INDEX IF NOT EXISTS idx_{table}_created_at_utc '
+            f'ON "{table}"(created_at_utc)'
+        )
+
+    # ── group 3: reject-stale marker + soft tombstone ───────────────────
+    for table in RETAIL_ROW_VERSION_TABLES:
+        if table not in live_tables:
+            continue
+        cols = _columns(table)
+        for column, decl in (
+            ('row_version', 'INTEGER NOT NULL DEFAULT 1'),
+            ('updated_at_utc', 'TEXT'),
+            ('deleted_at_utc', 'TEXT'),
+        ):
+            if column not in cols:
+                conn.execute(f'ALTER TABLE "{table}" ADD COLUMN {column} {decl}')
+        # Partial index: the overwhelmingly common query is "the live rows",
+        # and a tombstoned row should cost nothing to skip. Guarded on
+        # company_id the same way the whole loop is guarded on the table
+        # existing -- a hand-built minimal test fixture is under no
+        # obligation to carry the tenant key, and an index is not worth
+        # crashing a migration over.
+        if 'company_id' in _columns(table):
+            conn.execute(
+                f'CREATE INDEX IF NOT EXISTS idx_{table}_live '
+                f'ON "{table}"(company_id) WHERE deleted_at_utc IS NULL'
+            )
+
+
+# ── v14: rebinding the tenant key onto the Owner-issued value ───────────────
+
+class CompanyRebindError(Exception):
+    """Raised when `rebind_company_id` cannot identify, unambiguously, which
+    tenant's rows it has been asked to move. Deliberately a refusal rather
+    than a best guess -- see that function's docstring."""
+
+
+def company_scoped_tables(conn):
+    """Every real table in this database that carries a `company_id` column.
+
+    DISCOVERED from the live schema rather than hardcoded. A hardcoded list
+    is a second place to remember, and the failure mode of forgetting is
+    silent: the forgotten table keeps the old tenant key, its rows stop
+    matching `retail_api._cid()`, and they simply stop appearing. Discovery
+    also means every table a later migration adds is covered on the day it
+    is added, with no edit here.
+
+    Line tables are correctly absent: `sale_items`, `return_items` and
+    `purchase_order_items` carry no `company_id` of their own and scope
+    entirely through their parent row -- the same shape `cash_movements`
+    uses via `session_id`. If one of them ever shows up in this list, it
+    means somebody added a redundant second copy of the tenant key.
+    """
+    scoped = []
+    for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+    ).fetchall():
+        name = row[0]
+        cols = {c[1] for c in conn.execute(f'PRAGMA table_info("{name}")').fetchall()}
+        if 'company_id' in cols:
+            scoped.append(name)
+    return tuple(scoped)
+
+
+def rebind_company_id(conn, new_company_id, old_company_id=None):
+    """Move every tenant-scoped row in retail.db from one `company_id` to
+    another, in ONE transaction, with the row counts verified on both sides.
+
+    Reusable and idempotent by design, NOT inline migration code, because it
+    has two callers that fire at completely different moments: the v14
+    migration step (for an install that is already licensed when it upgrades)
+    and `rebind_company_id_after_activation()` (for the far more common
+    install that activates months later -- licensing is OFF by default in
+    this product, so most installs migrate long before Owner has issued them
+    anything).
+
+    Returns a status dict, never a bare bool: `{'status': ..., 'rows': ...,
+    'old_company_id': ..., 'new_company_id': ..., 'tables': (...)}`, where
+    status is one of:
+      - 'skipped'       -- no `new_company_id` supplied. A no-op, NOT an
+                           error: the unlicensed install is the normal case.
+      - 'already_bound' -- every scoped row is already on `new_company_id`.
+      - 'rebound'       -- rows moved; `rows` says how many.
+
+    IDENTIFYING THE OLD ID. When `old_company_id` is not supplied it is
+    derived from the rows themselves -- the distinct set of `company_id`
+    values actually present. Deriving it from the rows (rather than from the
+    registry, or from config) is what makes an interrupted rebind
+    self-healing: a crash that moved `sales` but nothing else leaves the set
+    as {old, new}, and the next call finishes the job instead of concluding
+    that everything is already done.
+
+    Exactly three cases are safe to act on without being told:
+      {}            -> nothing to move.
+      {new}         -> already bound.
+      {new?, old}   -> one other value; that is the tenant to move.
+    Anything else RAISES CompanyRebindError and changes nothing. This is the
+    multi-tenant guard, and it is not theoretical: CLAUDE.md states plainly
+    that one install can host more than one company. Blanket-moving every row
+    onto one licence's id would merge two companies' books into a single
+    tenant -- unrecoverable, and it would look exactly like a successful
+    migration. A caller that genuinely knows which tenant to move passes
+    `old_company_id` explicitly.
+
+    ONE TRANSACTION, NOT THIRTEEN. A database with six tables moved and seven
+    not is precisely the silent-invisibility state this whole exercise exists
+    to prevent, and it produces no error anywhere -- `_cid()` just stops
+    matching. The rewrite therefore runs inside an explicit
+    `BEGIN IMMEDIATE`, verifies afterwards (still inside the transaction)
+    that every scoped table has zero rows left on the old id and that the
+    new id gained exactly the rows the old id lost, and rolls the whole thing
+    back on any mismatch or exception. IMMEDIATE rather than a deferred
+    BEGIN so the write lock is taken up front: this rewrites every business
+    row in the file, and discovering a competing writer halfway through is
+    strictly worse than failing before the first UPDATE.
+
+    Any in-flight implicit transaction is committed before that BEGIN --
+    Python's sqlite3 opens one automatically on DML, so the v13 step running
+    just before this in `_migrate_retail_schema` leaves one open, and
+    `BEGIN` inside a transaction is an error. Committing it is safe and
+    matches what the rebuild migrations earlier in this file already do:
+    `ensure_schema_version` does not hold a transaction across the chain, and
+    it advances `user_version` only on full success, so a failure here still
+    re-runs every (idempotent) step on the next launch.
+    """
+    if new_company_id is None or (isinstance(new_company_id, str) and not new_company_id.strip()):
+        return {
+            'status': 'skipped',
+            'reason': 'no Owner-issued company_id available',
+            'rows': 0,
+            'old_company_id': old_company_id,
+            'new_company_id': new_company_id,
+            'tables': (),
+        }
+
+    tables = company_scoped_tables(conn)
+    if not tables:
+        return {
+            'status': 'skipped',
+            'reason': 'no company-scoped tables in this database',
+            'rows': 0,
+            'old_company_id': old_company_id,
+            'new_company_id': new_company_id,
+            'tables': (),
+        }
+
+    present = set()
+    for table in tables:
+        for row in conn.execute(
+            f'SELECT DISTINCT company_id FROM "{table}" WHERE company_id IS NOT NULL'
+        ).fetchall():
+            present.add(row[0])
+
+    if old_company_id is None:
+        others = {value for value in present if value != new_company_id}
+        if not others:
+            return {
+                'status': 'already_bound',
+                'rows': 0,
+                'old_company_id': None,
+                'new_company_id': new_company_id,
+                'tables': tables,
+            }
+        if len(others) > 1:
+            raise CompanyRebindError(
+                f'Refusing to rebind company_id: this database holds rows under '
+                f'{len(others)} different tenant keys ({sorted(map(repr, others))}). '
+                f'Guessing which one the licence belongs to would merge two companies '
+                f'books into one, irreversibly. Pass old_company_id explicitly.'
+            )
+        old_company_id = next(iter(others))
+
+    before_old = {
+        table: conn.execute(
+            f'SELECT COUNT(*) FROM "{table}" WHERE company_id=?', (old_company_id,)
+        ).fetchone()[0]
+        for table in tables
+    }
+    before_new = {
+        table: conn.execute(
+            f'SELECT COUNT(*) FROM "{table}" WHERE company_id=?', (new_company_id,)
+        ).fetchone()[0]
+        for table in tables
+    }
+    before_total = {
+        table: conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+        for table in tables
+    }
+    if sum(before_old.values()) == 0:
+        return {
+            'status': 'already_bound',
+            'rows': 0,
+            'old_company_id': old_company_id,
+            'new_company_id': new_company_id,
+            'tables': tables,
+        }
+
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute('BEGIN IMMEDIATE')
+    try:
+        moved = 0
+        for table in tables:
+            cur = conn.execute(
+                f'UPDATE "{table}" SET company_id=? WHERE company_id=?',
+                (new_company_id, old_company_id),
+            )
+            moved += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+        for table in tables:
+            stranded = conn.execute(
+                f'SELECT COUNT(*) FROM "{table}" WHERE company_id=?', (old_company_id,)
+            ).fetchone()[0]
+            landed = conn.execute(
+                f'SELECT COUNT(*) FROM "{table}" WHERE company_id=?', (new_company_id,)
+            ).fetchone()[0]
+            total = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+            if stranded or landed != before_old[table] + before_new[table] or total != before_total[table]:
+                raise CompanyRebindError(
+                    f'company_id rebind failed its own count check on {table!r}: '
+                    f'{stranded} row(s) left on the old key, {landed} on the new '
+                    f'(expected {before_old[table] + before_new[table]}), '
+                    f'{total} rows total (expected {before_total[table]}). '
+                    f'Rolled back -- the tenant key is unchanged.'
+                )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    return {
+        'status': 'rebound',
+        'rows': moved,
+        'old_company_id': old_company_id,
+        'new_company_id': new_company_id,
+        'tables': tables,
+    }
+
+
+def owner_issued_company_id(app_data_dir=None):
+    """The Owner-issued tenant key for this install, or None.
+
+    That value is `license_public_id` from the last assertion this install
+    verified and persisted. Established by reading Owner, not by assumption:
+    `owner/app/sync/routes.py` scopes the entire event stream by
+    `SyncEvent.license_id`, resolved server-side from the VERIFIED
+    installation and never from body input, and
+    `owner/app/licensing_service/assertions.py` signs that same value into
+    every assertion as `"license_public_id": str(license_row.id)`. So the
+    licence -- not the installation -- is Owner's tenant.
+
+    `installation_public_id` is deliberately NOT used even though it is also
+    Owner-issued and sits in the same payload: it identifies one DEVICE's
+    installation, so adopting it as `company_id` would give every terminal in
+    a shop a different tenant key. That is the tenant-fragmentation failure
+    this rebind exists to end, not a way to implement it.
+
+    Read with plain sqlite3 + json, with NO import of
+    `commercial_runtime.licensing_contracts`. That package imports
+    `cryptography` at module scope, and an eager import of it crashed the
+    whole Android backend with ModuleNotFoundError -- the same reason
+    `device_context.local_device_fingerprint()` reads the licensing system's
+    `device_key_meta.json` as plain JSON rather than importing the module
+    that writes it. This function is a read-only consumer of somebody else's
+    file, never its authority, so every failure (missing file, unreadable
+    file, no assertion yet, malformed JSON) is reported the same honest way:
+    None.
+
+    The persisted state's `current_state` is deliberately NOT consulted. A
+    lapsed subscription or an expired assertion does not make a shop's rows
+    belong to a different tenant, and refusing to name the tenant while the
+    licence is in a warning state would mean the rebind could never converge
+    for exactly the installs most likely to need support.
+    """
+    if app_data_dir:
+        path = os.path.join(app_data_dir, 'database', 'subsystems', 'licensing.db')
+    else:
+        path = os.path.join(SUBSYS_DIR, 'licensing.db')
+    # Existence-checked before connecting: sqlite3.connect CREATES the file,
+    # and an empty licensing.db conjured up by a read is exactly the kind of
+    # side effect that makes "is this install licensed?" ambiguous later.
+    if not os.path.exists(path):
+        return None
+    try:
+        conn = sqlite3.connect(path, timeout=5)
+    except sqlite3.Error:
+        return None
+    try:
+        row = conn.execute(
+            'SELECT assertion_envelope_json FROM licensing_state WHERE id=1'
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+    if not row or not row[0]:
+        return None
+    try:
+        import json as _json
+        payload = _json.loads(row[0]).get('payload') or {}
+    except (ValueError, AttributeError):
+        return None
+    value = payload.get('license_public_id')
+    if not value or not isinstance(value, str):
+        return None
+    return value
+
+
+def local_authoritative_company_id():
+    """The `company_id` this install's IDENTITY layer currently considers
+    authoritative -- the value `mt_auth.create_session` puts into
+    `session['company_id']` and therefore the one every
+    `retail_api._cid()`-filtered query in the product compares against.
+
+    Same source and same precedence order `sync_service.
+    local_company_id_from_registry()` already uses (company_settings first,
+    the admin `users` row as a fallback, None rather than a fabricated
+    default), re-implemented here as a small read instead of imported,
+    for two reasons: `commercial_runtime/sync/` is out of scope this phase
+    and must not gain a new dependant, and `registry_db` caches its DB_PATH
+    at import time -- fine for a real process, which imports it once, but
+    wrong for anything that has to resolve AURA_APP_DATA freshly (the
+    anti-pattern `device_context._resolve_app_data()` documents and
+    products/run_all_tests.py's docstring explains at length).
+    """
+    app_data = os.environ.get('AURA_APP_DATA')
+    path = (
+        os.path.join(app_data, 'database', 'registry.db') if app_data
+        else os.path.join(BASE_DIR, 'registry.db')
+    )
+    if not os.path.exists(path):
+        return None
+    try:
+        conn = sqlite3.connect(path, timeout=5)
+    except sqlite3.Error:
+        return None
+    try:
+        for sql in (
+            'SELECT company_id FROM company_settings LIMIT 1',
+            "SELECT company_id FROM users WHERE role='admin' LIMIT 1",
+        ):
+            try:
+                row = conn.execute(sql).fetchone()
+            except sqlite3.Error:
+                continue
+            if row and row[0]:
+                return row[0]
+        return None
+    finally:
+        conn.close()
+
+
+def _rebind_to_owner_issued(conn, new_company_id):
+    """Shared body of the v14 migration step and the activation-time hook.
+
+    THE GUARD THIS FUNCTION EXISTS FOR, and the reason neither caller is a
+    bare `rebind_company_id(conn, owner_issued_company_id())`:
+
+    `session['company_id']` is populated from registry.db's `users` row
+    (`commercial_runtime/identity/mt_auth.py::create_session`), and
+    `retail_api._cid()` filters essentially every query in the product on it.
+    Moving retail.db's rows onto the Owner-issued key while the identity
+    layer still says `md5(admin_email)` therefore makes every
+    `WHERE company_id=?` match zero rows: a real shop's entire history
+    disappears from the UI, with no exception, no failed integrity_check and
+    no log line. That is strictly worse than not rebinding at all.
+
+    So the retail side only ever CONVERGES onto a tenant key the identity
+    layer has ALREADY adopted. This is the same direction of travel
+    `sync_service._apply_event` already takes when it ignores a pulled
+    payload's `company_id` and stamps the RECEIVING device's own value
+    instead -- and it is what makes an interrupted two-database rebind
+    self-healing rather than fatal: if identity moved and retail did not,
+    the next call (next launch, or the next activation) finishes the job,
+    because `rebind_company_id` derives the old id from retail's own rows.
+
+    Until the identity-side rebind exists, this returns 'deferred' and
+    changes nothing. That is an honest no rather than a half-applied yes.
+    """
+    authoritative = local_authoritative_company_id()
+    if authoritative is None or str(authoritative) != str(new_company_id):
+        return {
+            'status': 'deferred',
+            'reason': (
+                'the identity layer still reports company_id='
+                f'{authoritative!r}, not the Owner-issued {new_company_id!r}; '
+                'rebinding retail.db first would hide every row from _cid()'
+            ),
+            'rows': 0,
+            'old_company_id': authoritative,
+            'new_company_id': new_company_id,
+            'tables': (),
+        }
+    return rebind_company_id(conn, new_company_id)
+
+
+def _migrate_rebind_company_id_to_owner_issued(conn):
+    """One-time migration (schema v14): rebind `company_id` onto the
+    Owner-issued tenant key -- launch-readiness Phase 2, reserved in
+    ROADMAP.md's 2026-08-21 ledger.
+
+    v14 is about being ABLE to rebind, not about having done it. Licensing is
+    OFF by default in this product (config.py: with OWNER_LICENSING_BASE_URL
+    unset the app runs fully unlocked and there IS no Owner-issued id), so
+    the overwhelmingly common install reaches this step with nothing to
+    rebind to. That is a no-op, not an error, and `user_version` still
+    advances -- otherwise every later migration would sit behind a version
+    marker that never moves on the majority of installs.
+
+    An install that activates a licence LATER does not get missed, because
+    the same work is reachable from `rebind_company_id_after_activation()`
+    (wired into the activation route via
+    `make_licensing_blueprint(on_activation_success=...)`).
+
+    `CompanyRebindError` is caught HERE and only here. Raising it out of a
+    migration would leave a multi-tenant install unable to advance its schema
+    version ever again -- every future migration blocked by a refusal that is
+    itself correct. The direct `rebind_company_id()` API still raises, so a
+    caller that asked for the rebind explicitly still hears about it.
+    """
+    new_company_id = owner_issued_company_id()
+    if not new_company_id:
+        return {
+            'status': 'skipped',
+            'reason': 'this install has no Owner-issued licence assertion',
+            'rows': 0,
+            'old_company_id': None,
+            'new_company_id': None,
+            'tables': (),
+        }
+    try:
+        return _rebind_to_owner_issued(conn, new_company_id)
+    except CompanyRebindError as exc:
+        return {
+            'status': 'deferred',
+            'reason': str(exc),
+            'rows': 0,
+            'old_company_id': None,
+            'new_company_id': new_company_id,
+            'tables': (),
+        }
+
+
+def rebind_company_id_after_activation():
+    """Activation-time entry point: called after a licence activation
+    succeeds, so an install that activates months after it migrated gets
+    rebound at that moment instead of waiting for a next migration that may
+    never come.
+
+    Opens its own connection -- the activation request has none, and it is
+    handled by `commercial_runtime/licensing_contracts/routes.py`, which
+    never imports anything product-specific. Retail's `app.py` passes this
+    function in as `make_licensing_blueprint(on_activation_success=...)`,
+    which keeps that package's product-agnostic boundary intact.
+
+    NEVER RAISES. A licence activation that genuinely succeeded at Owner must
+    not be reported back to the customer as a failure because a local
+    bookkeeping rewrite hit a locked database -- the customer would retry the
+    activation, which is the one action that cannot fix it. Every outcome is
+    a status dict; the work is idempotent and reachable again from the next
+    activation, check-in-triggered call, or migration.
+    """
+    try:
+        new_company_id = owner_issued_company_id()
+        if not new_company_id:
+            return {
+                'status': 'skipped',
+                'reason': 'activation left no assertion carrying a license_public_id',
+                'rows': 0,
+                'old_company_id': None,
+                'new_company_id': None,
+                'tables': (),
+            }
+        conn = get_retail_conn()
+        try:
+            result = _rebind_to_owner_issued(conn, new_company_id)
+            conn.commit()
+            return result
+        finally:
+            conn.close()
+    except Exception as exc:
+        return {
+            'status': 'failed',
+            'reason': f'{type(exc).__name__}: {exc}',
+            'rows': 0,
+            'old_company_id': None,
+            'new_company_id': None,
+            'tables': (),
+        }
 
 
 def init_retail():

@@ -261,6 +261,112 @@ const RetailSystem = {
     ));
   },
 
+  // ── ATTRIBUTION RENDERING (schema v13) ────────────────────────────────────
+  //
+  // v13 (_migrate_add_identity_and_attribution_columns, backend/database/
+  // schema.py) put `actor_user_uid` / `terminal_id` / `created_at_utc` on
+  // sales, returns, inventory_movements, cash_sessions and cash_movements.
+  // Two of that migration's decisions dictate everything these three helpers
+  // do, and both are deliberate rather than incidental:
+  //
+  //   1. Existing rows were left NULL. The migration would only have been
+  //      able to stamp them with THIS machine's identity and THIS machine's
+  //      current UTC offset, neither of which is evidence of anything about a
+  //      sale rung last year on another terminal. So a permanent slice of
+  //      every real install's history carries no attribution at all -- not a
+  //      transient gap that backfills later, a fact about the data.
+  //
+  //   2. The pre-existing free-text `cashier` column was KEPT, and is never
+  //      rewritten or mined to derive `actor_user_uid`, because "a wrong name
+  //      on a sale is worse than no name". It is the only surviving evidence
+  //      of who the shop believed rang a transaction.
+  //
+  // The display rule that falls out: show the best-resolved thing the row
+  // actually carries, say "not recorded" in words when it carries nothing,
+  // and never manufacture the difference. Specifically, do NOT try to detect
+  // whether the free text "looks like a person's name" and substitute
+  // something friendlier when it doesn't -- today it is almost always a raw
+  // UUID (`create_sale` defaults it to `_uid()`, i.e. session['mt_user_id'],
+  // and the POS has never sent a name), and dressing that up is the exact
+  // guess v13 refused to make at the database layer.
+
+  // An id/number-bearing value, isolated from the bidirectional algorithm.
+  //
+  // This product renders `dir="rtl"` on <html> in Arabic (i18n.js apply()),
+  // and attribution values are ASCII identifiers sitting beside Arabic labels,
+  // currency and dates -- the exact position where the Unicode bidi algorithm
+  // misbehaves. An unisolated run of neutral/Latin characters takes its
+  // direction from the surrounding paragraph, so a hyphenated UUID gets
+  // visually reordered around its own hyphens and a receipt number lands on
+  // the wrong side of its label. <bdi> is the element the HTML spec added for
+  // exactly this case (it isolates a span of unknown-directionality text), it
+  // needs no library, and this frontend has no build step to add one.
+  //
+  // `full` is kept whole in the title attribute even when the visible text is
+  // shortened: a truncated-only id cannot be matched against
+  // device_registry.devices when someone actually needs to identify a
+  // terminal, and "which till" questions are asked precisely when something
+  // has gone wrong.
+  // `dir` defaults to "ltr" because every current caller passes a value that
+  // is definitionally Latin/numeric -- a receipt number, a timestamp, a uuid.
+  // For those, "ltr" is strictly better than <bdi>'s own dir="auto" default:
+  // auto picks its direction from the first STRONG character, and a value
+  // like "2026-08-19 14:30" contains none at all, so auto falls back to the
+  // paragraph (RTL in Arabic) and the two number runs swap places -- the
+  // timestamp renders as "14:30 2026-08-19". Isolation alone does not fix
+  // that; the direction has to be stated.
+  //
+  // Callers with genuinely unknown content pass 'auto' instead. See
+  // _attribution(), where the value may be an opaque id today and an
+  // Arabic-script name tomorrow, and forcing ltr would be the mirror image
+  // of the bug this helper exists to prevent.
+  _bdi(text, full, dir) {
+    const shown = this._esc(text);
+    const title = (full != null && full !== text) ? ` title="${this._esc(full)}"` : '';
+    return `<bdi dir="${dir || 'ltr'}"${title}>${shown}</bdi>`;
+  },
+
+  // Canonical uuid4 shape. Used ONLY to decide how many characters of a value
+  // to show -- never what value to show, and never to reclassify a row as
+  // attributed or unattributed. Shortening a 36-character uuid to a stable
+  // leading fragment keeps the invoice header on one line on a till screen
+  // while the full string stays one hover (or one DOM inspection) away; a
+  // human-entered name, which does not match this, is never truncated.
+  _looksLikeUuid(v) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v || ''));
+  },
+
+  // Renders "who" / "which till" for one row, honestly.
+  //
+  // Order is best-evidence-first: a name the server resolved, else the raw
+  // recorded identifier, else the words "Not recorded". The last branch is
+  // the one that matters. A blank cell and an em dash both read as "the page
+  // failed" to the manager who opened this view because a till came up short;
+  // only words distinguish "nobody wrote this down" from "something broke",
+  // and that distinction is the whole point of showing attribution at all.
+  _attribution(value, resolvedName) {
+    const name = (resolvedName == null ? '' : String(resolvedName)).trim();
+    if (name) {
+      // A resolved employee name is human text that may itself be Arabic --
+      // isolating it would fight the page direction rather than help it. It
+      // is escaped (users is a shared, cross-device table) but not wrapped.
+      return this._esc(name);
+    }
+    const raw = (value == null ? '' : String(value)).trim();
+    if (!raw) {
+      return `<span style="color:var(--text-faint)">${t('Not recorded')}</span>`;
+    }
+    // 'auto', not the 'ltr' default. This branch renders whatever the row
+    // recorded, and that is an opaque identifier today only because
+    // create_sale happens to default `cashier` to session['mt_user_id'] --
+    // the column is free text and an install that ever writes a real name
+    // into it may write an Arabic one. dir="auto" isolates it either way and
+    // lets the content choose its own direction, which is exactly the case
+    // <bdi> was designed for.
+    const shown = this._looksLikeUuid(raw) ? raw.slice(0, 8) + '…' : raw;
+    return this._bdi(shown, raw, 'auto');
+  },
+
   // ── DASHBOARD ─────────────────────────────────────────────────────────────
   // UI/UX polish (feat/retail-ui-ux-polish): all dashboard-only styling is
   // scoped under .rdash in this render's own <style> block (same pattern the
@@ -2979,7 +3085,14 @@ const RetailSystem = {
       } else {
         tbody.innerHTML = data.map(r => `<tr>
           <td style="color:var(--text-muted);white-space:nowrap">${this._auditTimestamp(r.timestamp)}</td>
-          <td style="font-family:monospace;font-size:12px">${this._esc(r.user_id || 'system')}</td>
+          <!-- Bidi-isolated for the same reason the sale detail's till id is.
+               inventory_movements has no viewer anywhere in this frontend
+               (its created_by is written on every stock movement and read
+               back nowhere), so this column is the nearest live "who did it"
+               surface the product has -- and it is a raw audit_log.user_id
+               UUID, in a monospace cell, in a table that flips to RTL in
+               Arabic. Left unisolated it reorders around its own hyphens. -->
+          <td style="font-family:monospace;font-size:12px">${r.user_id ? this._bdi(r.user_id) : this._esc('system')}</td>
           <td>${this._badge(this._esc(r.action || ''), this._auditActionColor(r.action))}</td>
           <td style="color:var(--text-muted)">${this._esc(r.entity || '—')}${r.entity_id != null ? ' #' + this._esc(r.entity_id) : ''}</td>
           <td style="color:var(--text-muted);max-width:360px;white-space:normal">${this._esc(r.details || '')}</td>
@@ -3307,6 +3420,31 @@ const RetailSystem = {
   // GET /sales/<id> -- its `items` already carry a resolved product_name/sku
   // (via that route's JOIN), unlike POST /sales's own response `lines`,
   // which only ever resolves product_id (see _reprintSale's comment below).
+  //
+  // ── Why v13 attribution surfaces HERE and not on the list screens ────────
+  //
+  // This is the view a discrepancy lands in. Somebody is looking at one
+  // specific transaction and asking who rang it and at which terminal --
+  // a short till, a disputed refund, a customer complaint about a price. The
+  // row already carries `terminal_id` and `actor_user_uid` (GET /sales/<id>
+  // selects `s.*`, so both arrive with no backend change), so answering the
+  // question here costs one grid column and one request that was already
+  // being made.
+  //
+  // The Sales History table and the dashboard's recent-transactions list were
+  // deliberately left alone. Both are scan-many-rows surfaces already inside
+  // an `overflow-x:auto` wrapper on a till screen; two more columns push the
+  // totals that ARE the point of those tables off the visible area, on every
+  // row, to answer a question that is asked about one row at a time and is
+  // one click away here. Attribution that is everywhere is attribution nobody
+  // reads.
+  //
+  // The `Cashier` label is kept rather than renamed to `Employee`: it is the
+  // POS domain word, it is already in both catalogs, and it names the column
+  // the value comes from. What changed is the value -- it used to render
+  // `sale.cashier` raw, which is `session['mt_user_id']` (a bare UUID) on
+  // every sale this product has ever written, presented under a label that
+  // implies a person's name. See _attribution().
   async _viewSale(saleId) {
     try {
       const resp  = (await this._get(`/api/sub/retail/sales/${saleId}`)).data || {};
@@ -3324,18 +3462,22 @@ const RetailSystem = {
         <div class="ret-modal ret-modal-wide">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
             <div>
-              <h3 style="margin:0">Invoice ${sale.sale_number||''}</h3>
-              <p style="color:var(--text-muted);margin:4px 0 0;font-size:13px">${(sale.created_at||'').slice(0,16)}</p>
+              <h3 style="margin:0">${t('Invoice')} ${this._bdi(sale.sale_number||'')}</h3>
+              <p style="color:var(--text-muted);margin:4px 0 0;font-size:13px">${this._bdi((sale.created_at||'').slice(0,16))}</p>
             </div>
             <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()">✕ Close</button>
           </div>
-          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:20px">
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Customer</div><div style="color:#fff;font-weight:600">${sale.customer_name||'Walk-in'}</div></div>
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Cashier</div><div style="color:#fff;font-weight:600">${sale.cashier||'—'}</div></div>
+          <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px">
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Customer</div><div style="color:#fff;font-weight:600">${this._esc(sale.customer_name||'Walk-in')}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Cashier</div><div style="color:#fff;font-weight:600">${this._attribution(sale.actor_user_uid || sale.cashier, sale.employee_name)}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Till')}</div><div style="color:#fff;font-weight:600">${this._attribution(sale.terminal_id, null)}</div></div>
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Payment</div><div>${this._badge(sale.payment_method||'cash','blue')}</div></div>
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Status</div><div>${this._badge(sale.status||'completed', statusColor[sale.status]||'green')}</div></div>
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Total</div><div style="color:#10b981;font-weight:700">${this._fmt(sale.total)}</div></div>
           </div>
+          ${(!sale.actor_user_uid && !sale.cashier && !sale.terminal_id)
+            ? `<p style="color:var(--text-faint);font-size:12px;margin:-8px 0 16px">${t('Sales recorded before this release show no employee or till.')}</p>`
+            : ''}
           <table class="ret-table">
             <thead><tr><th>Product</th><th>SKU</th><th>Qty</th><th>Unit Price</th><th>Discount</th><th>Tax</th><th>Line Total</th></tr></thead>
             <tbody>${items.map(i=>`<tr>
@@ -3403,6 +3545,42 @@ const RetailSystem = {
   // ── REPORTS ───────────────────────────────────────────────────────────────
   async _renderReports(c) {
     this._injectStyles();
+
+    // Capability gate, mirroring _renderDashboard's cashier landing above --
+    // read that comment first; the reasoning is identical and the mechanism
+    // is deliberately the same one.
+    //
+    // Every widget on this page reads a route decorated
+    // @mt_require_capability(CAP_REPORTS): report_sales_trend,
+    // report_top_products, report_payment_methods, report_summary,
+    // report_by_branch. ROLE_CAPABILITIES gives a cashier {sell, refund,
+    // cash.close} and nothing else, so for a cashier this screen was six
+    // requests (the branch list plus five gated report routes) and five 403s,
+    // on every visit. Measured, not assumed -- see
+    // retail_reports_capability_gate_test.js, whose red run listed all six by
+    // URL.
+    //
+    // Hiding the nav entry (app-shell.js, added alongside this) is NOT the
+    // enforcement, which is why this guard exists as well. AuraRouter
+    // persists the last-viewed section into the URL hash and _navigate()
+    // replays it on the next launch, so a shared till where a manager last
+    // opened Reports drops the next cashier onto this screen with no nav
+    // click in between. The render function is the one choke point every
+    // route into this screen passes through.
+    //
+    // Returning before the fetches, not after them, is the whole point: a
+    // screen that fetches, collects a 403 and only then hides has already
+    // generated the error it was supposed to prevent.
+    //
+    // `window.SubsystemApp &&` keeps this file loadable standalone (every
+    // *_test.js in products/retail/tests/ that has no SubsystemApp stub), and
+    // hasCapability() itself fails open when the session carried no
+    // capability list -- so this is inert, not restrictive, on any build that
+    // cannot answer the question.
+    if (window.SubsystemApp && !SubsystemApp.hasCapability('retail.reports')) {
+      return this._renderReportsRestricted(c);
+    }
+
     c.innerHTML = `
       <div class="ret-hdr">
         <h2 class="ret-title">Analytics & Reports</h2>
@@ -3439,6 +3617,23 @@ const RetailSystem = {
       <p id="rep-branch-note" style="display:none;color:var(--text-muted);font-size:12px;margin:0 0 16px">
         Branch filter applies to every figure on this page except Revenue by Branch, which always compares all branches.
       </p>
+      <div class="sub-chart-card" style="margin-bottom:20px">
+        <div class="sub-chart-title" style="margin-bottom:14px">${t('Sales by Employee')}</div>
+        <div style="overflow-x:auto">
+          <table class="ret-table" id="rep-emp-table">
+            <thead><tr>
+              <th>${t('Employee')}</th>
+              <th style="text-align:right">${t('Transactions')}</th>
+              <th style="text-align:right">${t('Revenue')}</th>
+              <th style="text-align:right">${t('Avg Ticket')}</th>
+            </tr></thead>
+            <tbody><tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:24px">${t('Loading…')}</td></tr></tbody>
+          </table>
+        </div>
+        <p id="rep-emp-note" style="display:none;color:var(--text-faint);font-size:12px;margin:12px 0 0">
+          ${t('Sales recorded before this release show no employee or till.')}
+        </p>
+      </div>
       <div style="display:grid;grid-template-columns:2fr 1fr;gap:20px;margin-bottom:20px">
         <div class="sub-chart-card">
           <div class="sub-chart-title" style="margin-bottom:14px">Daily Revenue Trend</div>
@@ -3462,6 +3657,171 @@ const RetailSystem = {
 
     await this._loadBranchFilterOptions();
     await this._loadReports();
+  },
+
+  // What a user without `retail.reports` gets instead of six requests and
+  // five 403s. Same shape and same wording as _renderCashierLanding above --
+  // deliberately the same catalog key too ("Sales totals and reports are
+  // limited to managers and the store owner."), because it is the same
+  // sentence about the same policy and a second near-identical string would
+  // be two things to keep translated and one more chance for them to drift
+  // apart. Sends the user somewhere useful rather than leaving them staring
+  // at a refusal.
+  _renderReportsRestricted(c) {
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <h2 class="ret-title">${t('Reports')}</h2>
+      </div>
+      <div class="sub-chart-card" style="text-align:center;padding:56px 32px">
+        <div style="font-size:40px;margin-bottom:14px">📊</div>
+        <h3 style="color:var(--text);margin:0 0 10px;font-size:18px">${t('Reports')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 24px;line-height:1.7;max-width:420px;margin-left:auto;margin-right:auto">
+          ${t('Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales.')}
+        </p>
+        <button class="sub-btn-primary" onclick="SubsystemApp._navigate('pos')">🛒 ${t('Point of Sale')}</button>
+      </div>`;
+  },
+
+  // ── SALES BY EMPLOYEE ─────────────────────────────────────────────────────
+  //
+  // Takings and transaction count per person for the period the Reports page
+  // is showing. Reads v13's `sales.actor_user_uid` -- the column the migration
+  // added precisely so this question has an answer that is not a free-text
+  // guess.
+  //
+  // THE ROUTE THIS PANEL NEEDS DOES NOT EXIST YET. The figures behind it do:
+  // core/retail/revenue_by_employee() (backend/core/retail/metrics.py) landed
+  // this wave and is tested by retail_metrics_by_employee_test.py, but nothing
+  // in retail_api.py exposes it over HTTP, and retail_api.py is another
+  // agent's file this wave. Flagged in this change's report rather than
+  // reached into. Until it lands, this panel says so in the 404 branch below
+  // and nothing else on the Reports page is affected.
+  //
+  //   GET /api/sub/retail/reports/by-employee?days=<int>[&branch_id=<id>]
+  //   @mt_require_capability(CAP_REPORTS)          <- same gate as every other
+  //                                                   /reports/* route
+  //   -> {"status": "success", "data": [ ...revenue_by_employee() rows,
+  //        each with `employee_name` joined on... ]}
+  //
+  // The row shape below is metrics.py's, copied not invented -- and the two
+  // fields this file reads most carefully are the ones whose obvious-looking
+  // reading is wrong:
+  //
+  //   {"actor_user_uid": "<uuid>|null", "transactions": <int>,
+  //    "gross_sales": <n>, "refunds": <n>, "revenue": <n>, "avg_ticket": <n>}
+  //
+  //   * `revenue` is NET of refunds; `transactions` is NOT netted; a refund is
+  //     charged to whoever processed it. So a returns-desk shift legitimately
+  //     reports NEGATIVE revenue against ZERO transactions, and that is what
+  //     makes the buckets sum back to the Revenue KPI at the top of this page.
+  //     Neither figure may be clamped or absolutised here.
+  //   * `avg_ticket` is read, never recomputed -- see the render loop.
+  //
+  // Two more things the route itself has to get right, both consequences of
+  // how v13 left the data:
+  //
+  //   * The unattributed bucket (`actor_user_uid: null`) must be passed
+  //     through, not filtered. metrics.py already returns it; a route that
+  //     drops it would omit most of a real shop's money from a report whose
+  //     columns still added up. It is every row written before v13 plus
+  //     everything written before the write side began stamping the column.
+  //   * `employee_name` is the route's job, not the metrics module's: it
+  //     resolves through registry.db's `users` table on **uid**, not `id` --
+  //     `_actor_user_uid()` in retail_api.py stores `users.uid` (the wire
+  //     identity a peer device names a user by), and both columns are uuid4
+  //     strings, so joining the wrong one returns nobody while looking
+  //     entirely correct. NULL when it cannot be resolved is right and is
+  //     handled here; the free-text `cashier` column dressed up as a name is
+  //     not (v13's rule: a wrong name is worse than no name).
+  async _loadEmployeeSales(days, branchQS) {
+    const tbody = document.querySelector('#rep-emp-table tbody');
+    if (!tbody) return;
+    const note = document.getElementById('rep-emp-note');
+    if (note) note.style.display = 'none';
+
+    // Arguments when called from _loadReports (which has already resolved
+    // both), DOM otherwise -- so this stays independently callable without
+    // duplicating the period/branch resolution in two places that could
+    // disagree about which period the page is showing.
+    if (days == null) {
+      const daysEl = document.getElementById('rep-days');
+      days = daysEl ? +daysEl.value : 14;
+    }
+    if (branchQS == null) {
+      const branchEl = document.getElementById('rep-branch');
+      const branchId = branchEl ? branchEl.value : '';
+      branchQS = branchId ? `&branch_id=${encodeURIComponent(branchId)}` : '';
+    }
+
+    const fail = (message) => {
+      tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:24px">${this._esc(message)}</td></tr>`;
+    };
+
+    try {
+      // _fetch rather than _get, because the HTTP status is load-bearing
+      // here in a way it is nowhere else in this file. "This build has no
+      // such route" (404) and "the request did not succeed" are different
+      // facts and a manager acts differently on each; collapsing them into
+      // one message would be the same category of dishonesty as showing an
+      // empty table. (_fetch still handles the 401 re-auth path for us.)
+      const res = await this._fetch(`/api/sub/retail/reports/by-employee?days=${days}${branchQS}`);
+      if (res.status === 404) return fail(t('Sales by employee are not available on this version.'));
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || body.status !== 'success') {
+        return fail(body.message || t('Could not load sales by employee.'));
+      }
+
+      const rows = body.data || [];
+      if (!rows.length) {
+        // A successful response with no rows is a real answer about the shop:
+        // nobody sold anything in this period. It must NOT share wording with
+        // the failure branches above, which establish nothing about the shop
+        // at all -- an empty table shown for a failed request tells an owner
+        // their staff sold nothing, which is a worse lie than an error.
+        return fail(t('No sales in this period.'));
+      }
+
+      let sawUnattributed = false;
+      tbody.innerHTML = rows.map(r => {
+        const txns = +(r.transactions || 0);
+        const revenue = +(r.revenue || 0);
+        // avg_ticket is READ, never recomputed here. An earlier draft of this
+        // panel divided revenue by transactions, which looked harmless and was
+        // not: core/retail/metrics.py exists specifically so that "revenue" is
+        // spelled out once (its docstring records that the last time it was
+        // spelled twice, this product shipped screens that contradicted each
+        // other), and it carries a test whose only job is to stop a second
+        // definition of this figure appearing. A division written up here is
+        // that second definition, out of that test's reach.
+        //
+        // It also would not survive contact with the module's actual rules:
+        // revenue is NET of refunds while transactions are NOT netted, and a
+        // refund is charged to whoever processed it -- so a returns-desk shift
+        // legitimately reports negative revenue against zero transactions.
+        // revenue/txns is not a definition a frontend would rediscover, and
+        // getting it wrong puts a wrong number beside two right ones.
+        //
+        // Absent (an older build, or a route that omitted the field) is shown
+        // as "not recorded" rather than $0.00: printing a zero would state an
+        // average nobody computed, next to two figures that were.
+        const hasAvg = typeof r.avg_ticket === 'number' && isFinite(r.avg_ticket);
+        if (!r.actor_user_uid && !r.employee_name) sawUnattributed = true;
+        return `<tr>
+          <td>${this._attribution(r.actor_user_uid, r.employee_name)}</td>
+          <td style="text-align:right;color:var(--text-muted)">${this._fmtNum(txns)}</td>
+          <td style="text-align:right;font-weight:700">${this._fmt(revenue)}</td>
+          <td style="text-align:right;color:var(--text-muted)">${hasAvg ? this._fmt(r.avg_ticket) : this._attribution(null, null)}</td>
+        </tr>`;
+      }).join('');
+
+      // Only when a "Not recorded" row is actually on screen. A permanent
+      // footnote would be noise on an install with no pre-v13 history, and
+      // the note exists to explain a specific row the reader is looking at.
+      if (note) note.style.display = sawUnattributed ? 'block' : 'none';
+    } catch (e) {
+      console.error('Sales-by-employee load failed', e);
+      fail(t('Could not load sales by employee.'));
+    }
   },
 
   // Populates the #rep-branch dropdown from GET /branches (already used
@@ -3501,6 +3861,16 @@ const RetailSystem = {
       // contradiction. `days` reaches every widget including top-products,
       // which used to be an all-time query on a days-scoped page.
       const branchQS = branchId ? `&branch_id=${encodeURIComponent(branchId)}` : '';
+
+      // Awaited on its own rather than folded into the Promise.all below, and
+      // deliberately so: _loadEmployeeSales swallows its own failures into an
+      // honest in-table message, whereas anything inside that Promise.all
+      // takes the whole chart block down with it via the outer catch. The
+      // per-employee route is the newest thing on this page and the only one
+      // that may legitimately be absent from a given backend build -- it must
+      // not be able to blank the four charts that have always worked.
+      await this._loadEmployeeSales(days, branchQS);
+
       const [trend, top, pay, summary, byBranch] = await Promise.all([
         this._get(`/api/sub/retail/reports/sales-trend?days=${days}${branchQS}`),
         this._get(`/api/sub/retail/reports/top-products?days=${days}&limit=8${branchQS}`),

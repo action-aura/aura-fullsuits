@@ -28,6 +28,23 @@ data class User(
     val role: String? = null,
     val clinic_role: String? = null,
     val employee_id: String? = null,
+    /**
+     * This account's own `retail.*` capability grants.
+     *
+     * Nullable ON PURPOSE, and null is the meaningful default: the session
+     * route does not send this key yet (the desktop shell's app-shell.js says
+     * so in as many words), so "absent" has to stay distinguishable from
+     * "granted nothing". `ui.holdsCapability` documents why that distinction
+     * decides between an inert change and one that blanks a screen for every
+     * role the day it ships.
+     *
+     * The Gson explicit-null hazard that crashed EmployeesScreen does not bite
+     * here for the same reason: the field is declared nullable, so a server
+     * that sends `"capabilities": null` produces exactly the value the type
+     * already admits, and the null is handled instead of being assigned into
+     * a field Kotlin promised could not hold one.
+     */
+    val capabilities: List<String>? = null,
 )
 
 data class LoginResponse(
@@ -297,6 +314,26 @@ data class Sale(
     val payment_method: String? = null, val status: String? = null,
     val customer_name: String? = null, val item_count: Int = 0,
     val created_at: String? = null,
+    // ── Who rang it (retail schema v13) ──────────────────────────────────────
+    // `actor_user_uid` is the column v13 added to `sales`, and it is NULL on
+    // every row that predates the migration -- deliberately, because "this
+    // device cannot prove it is the terminal that rang a sale from before the
+    // column existed" (see _migrate_add_identity_and_attribution_columns).
+    // `actor_employee_id` / `actor_email` are that uid RESOLVED against the
+    // registry server-side; they are absent when the account has since been
+    // removed, which is a different fact from never having been recorded --
+    // ui/screens/EmployeeSalesScreen.kt::saleAttribution keeps the two apart.
+    //
+    // There is deliberately NO `cashier` field, even though `sales.cashier`
+    // exists and v13 keeps it. That column's schema default is the literal
+    // 'POS' and create_sale writes `session['mt_user_id']` into it, so it
+    // holds a placeholder or an opaque account id -- never a name. v13 keeps
+    // it because it is the only surviving evidence of who the shop BELIEVED
+    // rang a transaction, and refuses to read it to guess an actor; a field
+    // here would be a standing invitation to print it next to "Rung by".
+    val actor_user_uid: String? = null,
+    val actor_employee_id: String? = null,
+    val actor_email: String? = null,
 )
 data class SalesResponse(val status: String = "", val data: List<Sale> = emptyList())
 
@@ -389,6 +426,54 @@ data class ReportSummaryResponse(val success: Boolean = false, val data: ReportS
 
 data class PaymentMethodStat(val payment_method: String? = null, val count: Int = 0, val revenue: Double = 0.0)
 data class PaymentMethodsResponse(val success: Boolean = false, val data: List<PaymentMethodStat> = emptyList())
+
+/**
+ * One row of GET /api/sub/retail/reports/by-employee -- takings and
+ * transaction count for one person over the chosen period.
+ *
+ * `actor_user_uid` is `sales.actor_user_uid` (retail schema v13). Rows where
+ * it is null are the UNATTRIBUTED bucket: every sale rung before the column
+ * existed, aggregated together so the rows still sum to what
+ * /reports/summary reports for the same period. Dropping that bucket would
+ * make the report quietly disagree with every other number in the app; naming
+ * anybody for it would be the fabrication v13 refused to commit.
+ *
+ * `employee_id` / `email` are the uid resolved against the registry
+ * server-side. Both absent while `actor_user_uid` is present means the account
+ * has been removed since -- attributed, but no longer resolvable. See
+ * ui/screens/EmployeeSalesScreen.kt::rowAttribution.
+ */
+data class EmployeeSales(
+    val actor_user_uid: String? = null,
+    val employee_id: String? = null,
+    val email: String? = null,
+    val revenue: Double = 0.0,
+    val transactions: Int = 0,
+    val avg_ticket: Double = 0.0,
+)
+
+/**
+ * `data` is NULLABLE and that is the entire point.
+ *
+ * Gson (converter-gson 2.11.0) builds a Kotlin data class whose parameters all
+ * carry defaults through the synthetic no-arg constructor -- so a field
+ * declared `= emptyList()` really does start as an empty list -- and then
+ * ReflectiveTypeAdapterFactory writes an explicit JSON null straight into it,
+ * because the field is not primitive. Kotlin's non-null type is a compile-time
+ * claim that nothing enforces at the field level, so the assignment succeeds
+ * silently and the NullPointerException lands LATER, at the first `.isEmpty()`
+ * or iteration, OUTSIDE whatever try/catch wrapped the call. That is an
+ * uncaught crash rather than an error state, and this module has already paid
+ * for it once (EmployeesScreen.kt::load carries the post-mortem).
+ *
+ * Declaring it nullable puts the truth back in the type: the load path cannot
+ * walk past it, and the malformed 200 takes the same error route as every
+ * other failure instead of being rendered as "nobody sold anything".
+ */
+data class ByEmployeeResponse(
+    val success: Boolean = false,
+    val data: List<EmployeeSales>? = null,
+)
 
 // ── Retail: returns / refunds ────────────────────────────────────────────────
 data class Return(

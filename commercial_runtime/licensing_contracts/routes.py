@@ -55,8 +55,30 @@ def make_licensing_blueprint(
     device_identity_factory: DeviceIdentityFactory,
     release_channel: Optional[str] = "rc",
     internal_shared_secret: Optional[str] = None,
+    on_activation_success: Optional[Callable[[], object]] = None,
 ) -> Blueprint:
-    """internal_shared_secret: only set on Android. Enables the
+    """on_activation_success: an optional, product-supplied callback invoked
+    once immediately after an activation is verified and persisted, on both
+    the Windows (/activate) and Android (/_internal/sync-activation) paths.
+
+    A callback parameter rather than an import, because this module is the
+    seam between the generic licensing domain and each concrete product and
+    it never imports anything product-specific (see the module docstring).
+    Retail passes `database.schema.rebind_company_id_after_activation` here:
+    activation is the exact moment an install first learns its Owner-issued
+    tenant key, and retail.db's `company_id` has to converge onto it. An
+    install that activates months after it migrated would otherwise wait for
+    a next migration that may never come.
+
+    Deliberately fire-and-forget: the return value is discarded and any
+    exception is swallowed (see `_run_activation_hook`). An activation that
+    genuinely succeeded at Owner must never be reported to the customer as a
+    failure because a product-local bookkeeping step went wrong -- the
+    customer's only recourse would be to retry the activation, which is the
+    one action that cannot help. Left None (the default) by Clinic and by
+    every existing test, for which this changes nothing at all.
+
+    internal_shared_secret: only set on Android. Enables the
     /_internal/sync-* routes (Part U) that the Kotlin layer -- which holds
     the AndroidKeystore-wrapped device key and makes the actual signed
     Owner HTTP calls itself -- uses to hand this embedded backend a raw,
@@ -153,6 +175,7 @@ def make_licensing_blueprint(
             if "license_key" in body:
                 body["license_key"] = None
 
+        _run_activation_hook(on_activation_success)
         return jsonify({"result": "SUCCESS", "state": result.state.value, "installation_id": result.owner_installation_id}), 200
 
     @bp.route("/check-in", methods=["POST"])
@@ -208,13 +231,35 @@ def make_licensing_blueprint(
         return jsonify({"result": "SUCCESS", "state": new_state.value}), 200
 
     if internal_shared_secret:
-        _register_internal_sync_routes(bp, internal_shared_secret, _build_context, product_code, platform)
+        _register_internal_sync_routes(
+            bp, internal_shared_secret, _build_context, product_code, platform,
+            on_activation_success,
+        )
 
     return bp
 
 
+def _run_activation_hook(hook: Optional[Callable[[], object]]) -> None:
+    """Invoke a product's post-activation callback, swallowing everything.
+
+    The activation itself has already been verified and persisted by the time
+    this runs; the hook is bookkeeping layered on top of a result the
+    customer is entitled to. Letting a hook exception escape would turn a
+    successful activation into a 500 and leave the customer retrying the one
+    operation that cannot fix it -- and, worse, retrying an activation that
+    already consumed a device slot at Owner.
+    """
+    if hook is None:
+        return
+    try:
+        hook()
+    except Exception:  # noqa: BLE001 -- deliberately total; see docstring
+        current_app.logger.exception("post-activation hook failed; activation itself stands")
+
+
 def _register_internal_sync_routes(
-    bp: Blueprint, shared_secret: str, build_context, product_code: str, platform: str
+    bp: Blueprint, shared_secret: str, build_context, product_code: str, platform: str,
+    on_activation_success: Optional[Callable[[], object]] = None,
 ) -> None:
     def _authorized() -> bool:
         provided = request.headers.get("X-Aura-Internal-Secret", "")
@@ -257,6 +302,10 @@ def _register_internal_sync_routes(
             return jsonify({"result": "PENDING", "reason_code": exc.reason_code, "installation_id": exc.installation_id, "detail": str(exc)}), 202
         except ActivationFailed as exc:
             return jsonify({"reason_code": exc.reason_code, "detail": str(exc)}), 400
+        # Same hook, same point in the flow as the Windows /activate route
+        # above -- Android reaches activation only through here, so omitting
+        # it would leave every Android install permanently un-rebound.
+        _run_activation_hook(on_activation_success)
         return jsonify({"result": "SUCCESS", "state": result.state.value, "installation_id": result.owner_installation_id}), 200
 
     @bp.route("/_internal/sync-checkin", methods=["POST"])

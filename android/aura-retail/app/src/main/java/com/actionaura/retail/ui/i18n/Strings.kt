@@ -65,6 +65,16 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Log out" to "تسجيل الخروج",
     "Back" to "رجوع",
     "Menu" to "القائمة",
+    // The startup-failure screen. The single worst place in the app to fall
+    // back to English: it is what an Arabic-speaking owner sees when nothing
+    // else in the app will load, and it is the screen that has to convince
+    // them their data is intact.
+    "Aura could not start" to "تعذّر تشغيل Aura",
+    "The app's built-in server did not start, so nothing can be loaded or saved. " +
+        "Your data is untouched. Please try again; if this keeps happening, restart the " +
+        "device and send the details below to support." to
+        "لم يبدأ الخادم المدمج في التطبيق، لذا لا يمكن تحميل أي بيانات أو حفظها. بياناتك سليمة ولم تتأثر. " +
+        "يرجى المحاولة مرة أخرى؛ وإذا تكرر ذلك، أعد تشغيل الجهاز وأرسل التفاصيل أدناه إلى الدعم.",
     "Reports" to "التقارير",
     "Transactions" to "المعاملات",
     "Returns" to "المرتجعات",
@@ -230,6 +240,13 @@ private val AR_STRINGS: Map<String, String> = mapOf(
 
     // ── More hub ──────────────────────────────────────────────────────────────
     "Records" to "السجلات",
+    // "Categories" and its subtitle were shipped on the More hub with no entry
+    // here, so the very first row of the Records section rendered English on
+    // an Arabic till. Exactly the silent tr() fallback the per-screen coverage
+    // tests exist to surface; found by adding RetailExtraScreens.kt to that
+    // scan, not by anybody noticing.
+    "Categories" to "الفئات",
+    "Group products for filtering" to "تجميع المنتجات لتسهيل التصفية",
     "Sales stats by time period" to "إحصاءات المبيعات حسب الفترة",
     "Past sales & invoices" to "المبيعات والفواتير السابقة",
     "Refund items from a sale" to "استرجاع أصناف من عملية بيع",
@@ -244,6 +261,9 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Daily cash in / out / net" to "النقد اليومي الداخل / الخارج / الصافي",
     "Receivables & payables by age" to "الذمم المدينة والدائنة حسب العمر",
     "Credit, currency & payment methods" to "الائتمان والعملة وطرق الدفع",
+    // Shipped untranslated on both the Settings hub and the licensing screen's
+    // own top bar. Same silent-fallback class as "Categories" above.
+    "Licensing" to "الترخيص",
 
     // ── Reports ───────────────────────────────────────────────────────────────
     "7 days" to "7 أيام",
@@ -260,6 +280,39 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Inventory Value (at cost)" to "قيمة المخزون (بالتكلفة)",
     "current stock on hand" to "المخزون الحالي المتوفر",
     "Payment methods" to "طرق الدفع",
+
+    // ── Reports → By employee (retail schema v13 attribution) ─────────────────
+    // "غير منسوبة" ("not attributed") rather than "غير معروف" ("unknown"):
+    // the shop DOES know these sales happened and what they were worth; what
+    // is missing is only the link to a person. Translating it as "unknown"
+    // would suggest the takings themselves are in doubt, which is a stronger
+    // and false claim.
+    "By Employee" to "حسب الموظف",
+    "Takings and transactions per employee" to "الإيرادات وعدد العمليات لكل موظف",
+    "Reports access required" to "مطلوب صلاحية التقارير",
+    "Only accounts with reports access can see takings by employee. " +
+        "Ask the owner to grant it." to
+        "يمكن فقط للحسابات التي تملك صلاحية التقارير الاطّلاع على الإيرادات حسب الموظف. اطلب من المالك منحك هذه الصلاحية.",
+    "Couldn't load takings by employee" to "تعذّر تحميل الإيرادات حسب الموظف",
+    "No sales in this period" to "لا توجد مبيعات في هذه الفترة",
+    "Nothing was rung up in the selected period. " +
+        "Choose a longer period to see more." to
+        "لم تُسجَّل أي عملية بيع في الفترة المحددة. اختر فترة أطول لعرض المزيد.",
+    "Not attributed" to "غير منسوبة",
+    "Sales rung before this app recorded who served them." to
+        "مبيعات نُفِّذت قبل أن يبدأ التطبيق بتسجيل من قام بها.",
+    "Account removed" to "حساب محذوف",
+    "The account that rang these sales no longer exists." to
+        "الحساب الذي نفّذ هذه المبيعات لم يعد موجودًا.",
+    "Every sale in the period is counted here, including any the " +
+        "app could not attribute." to
+        "تُحتسب هنا كل عمليات البيع في الفترة، بما فيها ما تعذّر على التطبيق نسبته إلى موظف.",
+    "This install's server doesn't provide takings by employee yet." to
+        "لا يوفّر خادم هذا التثبيت الإيرادات حسب الموظف بعد.",
+    "Rung by" to "نفّذها",
+    "Rung by an account that no longer exists" to "نفّذها حساب لم يعد موجودًا",
+    "Who rang this sale was not recorded — it predates employee attribution." to
+        "لم يُسجَّل من نفّذ عملية البيع هذه — فهي أقدم من ميزة نسب المبيعات إلى الموظفين.",
 
     // ── Transactions / receipt ────────────────────────────────────────────────
     "No transactions yet" to "لا توجد معاملات بعد",

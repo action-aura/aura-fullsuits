@@ -255,6 +255,7 @@ private fun MainShell(onLogout: () -> Unit) {
 
     val title = when (route) {
         "reports" -> "Reports"
+        "employee_sales" -> "By Employee"
         "transactions" -> "Transactions"
         "returns" -> "Returns"
         "customers" -> "Customers"
@@ -495,7 +496,15 @@ private fun retailGraph(b: NavGraphBuilder, nav: androidx.navigation.NavControll
     b.composable("products") { ProductsScreen(snackbar) }
     b.composable("categories") { CategoriesScreen(snackbar) }
     b.composable("more") { MoreScreen(onNavigate = { r -> nav.navigate(r) }) }
-    b.composable("reports") { ReportsScreen(snackbar) }
+    b.composable("reports") { ReportsScreen(snackbar, onNavigate = { r -> nav.navigate(r) }) }
+    // Takings per employee (retail schema v13 attribution). Registered here
+    // AND reached from ReportsScreen's own entry -- both halves are required,
+    // for the same reason the employees route below spells out:
+    // SettingsScreen.kt is a complete screen that has never been in this
+    // graph, so it has never rendered for a single user.
+    // EmployeeSalesWiringContractTest pins the route string, the composable,
+    // the navigate() call and this title-map entry.
+    b.composable("employee_sales") { EmployeeSalesScreen(snackbar) }
     b.composable("transactions") { TransactionsScreen(snackbar) }
     b.composable("returns") { ReturnsScreen(snackbar) }
     b.composable("customers") { CustomersScreen(snackbar) }

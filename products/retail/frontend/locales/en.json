@@ -300,5 +300,13 @@
   "User not found.": "User not found.",
   "You are signed in with an employee account. Ask the store owner to add or change staff accounts.": "You are signed in with an employee account. Ask the store owner to add or change staff accounts.",
   "You cannot disable the owner account.": "You cannot disable the owner account.",
-  "Your account has been disabled. Contact your administrator.": "Your account has been disabled. Contact your administrator."
+  "Your account has been disabled. Contact your administrator.": "Your account has been disabled. Contact your administrator.",
+  "Invoice": "Invoice",
+  "Till": "Till",
+  "Not recorded": "Not recorded",
+  "Sales by Employee": "Sales by Employee",
+  "No sales in this period.": "No sales in this period.",
+  "Sales by employee are not available on this version.": "Sales by employee are not available on this version.",
+  "Could not load sales by employee.": "Could not load sales by employee.",
+  "Sales recorded before this release show no employee or till.": "Sales recorded before this release show no employee or till."
 }

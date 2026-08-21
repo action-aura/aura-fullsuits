@@ -106,12 +106,18 @@ def test_schema_version_is_v6_and_products_fk_declares_on_delete_set_null():
     # whatsapp-recipients feature (database/schema.py's
     # _migrate_add_whatsapp_recipients) bumped it once more to v12 -- see
     # RETAIL_SCHEMA_VERSION's own comment for why that bump is load-bearing,
-    # not cosmetic. The FK-on-delete-set-null assertion this test exists for
-    # is unaffected by any of these later changes.
-    assert retail_schema.RETAIL_SCHEMA_VERSION == 12
+    # not cosmetic. Launch-readiness Phase 2 then bumped it twice more, to
+    # v13 (identity/attribution columns, database/schema.py's
+    # _migrate_add_identity_and_attribution_columns) and v14 (the company_id
+    # rebind, _migrate_rebind_company_id_to_owner_issued) -- both reserved
+    # ahead of time in ROADMAP.md's 2026-08-21 ledger, precisely so this
+    # number could not be claimed twice the way v9 once was. The
+    # FK-on-delete-set-null assertion this test exists for is unaffected by
+    # any of these later changes.
+    assert retail_schema.RETAIL_SCHEMA_VERSION == 14
     conn = retail_schema.get_retail_conn()
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
         assert retail_schema._products_category_fk_is_set_null(conn) is True
     finally:
         conn.close()

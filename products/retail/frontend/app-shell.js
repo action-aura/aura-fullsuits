@@ -244,12 +244,76 @@ const SubsystemApp = {
   // authorization check in this codebase, and is only safe here because
   // rendering advice failing open just means a tile renders and its own
   // fetch 403s -- the status quo before this method existed, not a new hole.
-  // It is what makes this change INERT until the backend lands
-  // `user.capabilities` on the session response, instead of blanking every
-  // gated tile for every role the moment this file ships.
+  // It is what keeps a server build that predates the field from blanking
+  // every gated tile for every role.
+  //
+  // 2026-08-21: that fail-open default has a sharp edge, and it drew blood.
+  // See _adoptSessionCapabilities() below -- this method answered `true` for
+  // every code, for every role, on every install, for as long as the list was
+  // being read out of the wrong key. Failing open means a wiring mistake in
+  // the line that FILLS `this.capabilities` cannot announce itself here: it
+  // looks exactly like "no capability information available", which is a
+  // legitimate state. Anything that resolves this list needs its own test;
+  // this method cannot be the place a mistake surfaces.
   hasCapability(code) {
     if (!Array.isArray(this.capabilities)) return true;
     return this.capabilities.includes(code);
+  },
+
+  // Resolve `this.capabilities` from a GET /api/auth/session body.
+  //
+  // Extracted from init() into its own named method for one reason: it is the
+  // single line in this file whose correctness cannot be established by
+  // reading it. Everything else here is "does this code do what it says";
+  // this is "does the server put the value where this code looks", which is a
+  // question about a different file in a different language, and the answer
+  // was NO for the entire life of the capability feature.
+  //
+  // The bug: this used to read `sess.user.capabilities`. get_session() in
+  // commercial_runtime/identity/onboarding_routes.py returns `capabilities`
+  // as a TOP-LEVEL key, a sibling of `user`, never a member of it. Confirmed
+  // by booting the app and logging in as each role, not by re-reading the
+  // handler -- a cashier's real response body is:
+  //
+  //   {"authenticated": true,
+  //    "capabilities": ["retail.cash.close", "retail.refund", "retail.sell"],
+  //    "is_mt": true, "language": "en",
+  //    "user": {"id": "...", "role": "cashier", "email": "...", ...}}
+  //
+  // So the old read was permanently `undefined`, `this.capabilities` was
+  // permanently `null`, and hasCapability() therefore answered `true` for
+  // everything (it fails open on null, correctly and by design). The visible
+  // consequence: subsystem-retail.js's `_renderDashboard` cashier-landing
+  // panel -- built specifically so a cashier's first screen after login is
+  // not a 403 -- never fired once. The fix shipped, the bug it fixed kept
+  // happening, and nothing was red, because a gate that never engages is
+  // indistinguishable from a gate on a permissive account.
+  //
+  // Both locations are accepted, top-level first. Not defensive padding: the
+  // clinic product shares this identity stack and its own session route is a
+  // separate code path, and `user` is the more obvious place for a future
+  // contributor to add it. Reading both costs one `Array.isArray` and removes
+  // the entire failure mode, whose whole character is that it is silent.
+  // retail_attribution_i18n_test.py asserts the server keeps sending the
+  // top-level key AND that this file still reads it -- the seam itself, which
+  // is the only place this class of bug is visible.
+  _adoptSessionCapabilities(session) {
+    const sess = session || {};
+    // `Array.isArray`, not truthiness. An intentionally EMPTY grant list (a
+    // user denied every capability) must NOT be folded into the same `null`
+    // bucket as "the server told us nothing": one means "deny everything this
+    // list doesn't name", the other means "nothing has been checked, render
+    // as before". Truthiness cannot tell them apart -- `[]` is truthy in JS,
+    // but `[] || fallback` is not the trap; `if (!caps)` is, and this is the
+    // shape that avoids ever writing it.
+    if (Array.isArray(sess.capabilities)) {
+      this.capabilities = sess.capabilities;
+    } else if (sess.user && Array.isArray(sess.user.capabilities)) {
+      this.capabilities = sess.user.capabilities;
+    } else {
+      this.capabilities = null;
+    }
+    return this.capabilities;
   },
 
   // ── HTML escaping ─────────────────────────────────────────────────────────
@@ -422,7 +486,30 @@ const SubsystemApp = {
         { id: 'suppliers',  label: 'Suppliers',         icon: '🏭' },
         { id: 'purchases',  label: 'Purchase Orders',   icon: '📋' },
         { id: 'returns',    label: 'Returns',           icon: '↩️' },
-        { id: 'reports',    label: 'Reports',           icon: '📊' },
+        // `capability` is a THIRD axis, alongside `adminOnly` (this device)
+        // and `ownerOnly` (this user's role) -- see the note on `employees`
+        // below for why conflating those two breaks a feature in both
+        // directions at once. This one is per-USER GRANT: the actual
+        // user_permissions rows, which an owner can turn off for one person
+        // without changing their role, so neither of the other two axes can
+        // express it.
+        //
+        // Every panel on the Reports screen reads a route decorated
+        // @mt_require_capability(CAP_REPORTS) -- report_summary,
+        // report_sales_trend, report_top_products, report_payment_methods,
+        // report_by_branch -- and ROLE_CAPABILITIES grants a cashier only
+        // {sell, refund, cash.close}. Unconditional, this entry invited a
+        // cashier to click through to five 403s in one page load: the same
+        // bug class as the cashier-dashboard-on-login fix, and NOT covered by
+        // it (that one guards `_renderDashboard`; nothing guarded this).
+        //
+        // Hiding the entry is half the fix. The other half is in
+        // subsystem-retail.js's `_renderReports`, because `_navigate`
+        // ('reports') is reachable without this link at all -- AuraRouter
+        // persists the last section to the URL hash and replays it on the
+        // next launch, so a shared till where a manager last opened Reports
+        // drops the next cashier straight onto that screen.
+        { id: 'reports',    label: 'Reports',           icon: '📊', capability: 'retail.reports' },
         { id: 'scanner',    label: 'Barcode Scanner',   icon: '🔦', desktopOnly: true },
         // feat/reorder-automation-foundation: gated on this.isAdminDevice
         // (resolved once at init() via GET /api/devices/me -- see that
@@ -450,7 +537,14 @@ const SubsystemApp = {
         // route (GET /api/sub/retail/audit-log) also enforces this itself
         // (see retail_api.py's _is_admin_device) -- unlike Admin Center's
         // reorder-requests route, this one does NOT rely on nav-hiding alone.
-        { id: 'audit-log',   label: 'Audit Log',        icon: '📜', adminOnly: true },
+        //
+        // Both axes, because list_audit_log gates on both and its docstring
+        // says why in as many words: the device check answers "is this the
+        // shop's admin terminal", the capability answers "is this person
+        // allowed to read the shop's records". `adminOnly` alone leaves a
+        // cashier standing AT the admin terminal looking at an entry that
+        // 403s -- the identical bug the Reports entry above just had.
+        { id: 'audit-log',   label: 'Audit Log',        icon: '📜', adminOnly: true, capability: 'retail.reports' },
       ]
     },
   },
@@ -563,16 +657,12 @@ const SubsystemApp = {
         this.currentUser = sess.user || {};
         this.role        = (sess.user && sess.user.role) || '';
         this.clinicRole  = (sess.user && sess.user.clinic_role) || '';
-        // Rendering advice for hasCapability() above -- read strictly as "is
-        // this an array" rather than "is this truthy", so an intentionally
-        // EMPTY grant list (a user denied every capability) is not folded
-        // into the same `null` bucket as "the backend hasn't shipped this
-        // field yet". Those two states must not answer hasCapability() the
-        // same way: one means "deny nothing has been checked", the other
-        // means "deny everything this list doesn't name".
-        this.capabilities = (sess.user && Array.isArray(sess.user.capabilities))
-          ? sess.user.capabilities
-          : null;
+        // Rendering advice for hasCapability() above. The resolution rule
+        // lives in _adoptSessionCapabilities() rather than inline here --
+        // read that method's comment before touching this line; the version
+        // that WAS inline here looked correct and silently disabled every
+        // capability gate in the product.
+        this._adoptSessionCapabilities(sess);
         // feat/reorder-automation-foundation: resolved once, here, BEFORE
         // _renderShell ever builds the nav list -- mirrors the desktopOnly
         // gate's own mechanism (a plain boolean flag on `this`, read by the
@@ -1611,7 +1701,7 @@ const SubsystemApp = {
         </div>
 
         <nav class="sub-nav" id="sub-nav">
-          ${sys.nav.filter(item => (!item.roles || this.canClinic(...item.roles)) && (!item.desktopOnly || !/Android/i.test(navigator.userAgent || '')) && (!item.adminOnly || this.isAdminDevice) && (!item.ownerOnly || this.role === 'admin')).map(item => `
+          ${sys.nav.filter(item => (!item.roles || this.canClinic(...item.roles)) && (!item.desktopOnly || !/Android/i.test(navigator.userAgent || '')) && (!item.adminOnly || this.isAdminDevice) && (!item.ownerOnly || this.role === 'admin') && (!item.capability || this.hasCapability(item.capability))).map(item => `
             <a class="sub-nav-item ${item.id === 'dashboard' ? 'active' : ''}"
                data-section="${item.id}"
                onclick="SubsystemApp._navigate('${item.id}')">

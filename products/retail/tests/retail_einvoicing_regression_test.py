@@ -91,11 +91,26 @@ SALES_TABLE_COLUMNS = [
     # calls _ensure_credit_schema() -- see that function's own addcol('sales',
     # 'due_date', ...) call. SQLite's PRAGMA table_info always reflects
     # physical ALTER TABLE order, not declaration/logical order.
-    'session_id', 'due_date',
+    'session_id',
+    # launch-readiness Phase 2 (schema v13, database/schema.py's
+    # _migrate_add_identity_and_attribution_columns): the wire identity plus
+    # the actor/terminal/UTC-clock triple. Same "real, expected additive
+    # shape change" category as session_id above, and it lands in the same
+    # position in the list for the same reason -- it is applied by the
+    # boot-time versioned migration, so physically before due_date's lazy
+    # _ensure_credit_schema addcol. v13 is the first migration to ALTER
+    # `sales` at all; the claim this test makes -- that the E-INVOICING
+    # migration (v7) added only new tables -- is untouched by it.
+    'uid', 'actor_user_uid', 'terminal_id', 'created_at_utc',
+    'due_date',
 ]
 SALE_ITEMS_TABLE_COLUMNS = [
     'id', 'sale_id', 'product_id', 'quantity', 'unit_price', 'discount_pct',
     'tax_rate', 'line_total',
+    # schema v13: sale_items is one of the seven tables given a wire
+    # identity, so a relayed line item can be named by something other than
+    # this install's private autoincrement id.
+    'uid',
 ]
 CUSTOMERS_TABLE_COLUMNS = [
     # 'status' and the created_at reorder are a real, expected shape change
@@ -108,6 +123,12 @@ CUSTOMERS_TABLE_COLUMNS = [
     'id', 'company_id', 'name', 'phone', 'email', 'address', 'loyalty_points',
     'total_spent', 'status', 'credit_mode', 'credit_limit', 'credit_balance',
     'created_at',
+    # launch-readiness Phase 2 (schema v13): customers is one of the four
+    # catalogue tables given the reject-stale marker and soft tombstone --
+    # the same triple registry v3 put on `users`. No uid here: catalogue
+    # tables already carry a client-generated UUID primary key (see
+    # _migrate_customers_to_uuid), so their `id` IS already wire-safe.
+    'row_version', 'updated_at_utc', 'deleted_at_utc',
 ]
 RETURNS_TABLE_COLUMNS = [
     'id', 'company_id', 'return_number', 'sale_id', 'branch_id', 'cashier',
@@ -115,7 +136,11 @@ RETURNS_TABLE_COLUMNS = [
     # feat/shift-cash-drawer (schema v10): returns.session_id, same boot-time-
     # migration-vs-lazy-addcol ordering reasoning as SALES_TABLE_COLUMNS
     # above -- idempotency_key is also a lazy _ensure_credit_schema addcol.
-    'session_id', 'idempotency_key',
+    'session_id',
+    # schema v13, same four columns and same ordering reasoning as
+    # SALES_TABLE_COLUMNS above.
+    'uid', 'actor_user_uid', 'terminal_id', 'created_at_utc',
+    'idempotency_key',
 ]
 BASELINE_THREAD_NAMES = {'MainThread'}
 

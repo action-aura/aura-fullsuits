@@ -66,7 +66,8 @@ from commercial_runtime.identity.mt_auth import mt_login_required, mt_require_su
 # are gated too rather than carved out. A preview of an import the caller may
 # never run is not an authority worth keeping separate, and an exemption is
 # one more shape a future route could quietly take.
-from commercial_runtime.identity.user_accounts import CAP_STOCK_ADJUST
+from commercial_runtime.identity.user_accounts import CAP_STOCK_ADJUST, now_utc_iso
+from commercial_runtime.identity.registry_db import get_conn as _registry_conn
 from commercial_runtime.licensing_contracts.flask_guard import make_capability_guard
 from commercial_runtime.sync.sync_service import nudge as _sync_nudge
 from config import DATABASE_DIR
@@ -1127,6 +1128,62 @@ def _uid():
     return session.get('mt_user_id') or session.get('user_id', 'system')
 
 
+# ── The v13 attribution stamp ────────────────────────────────────────────────
+# Duplicated from api/retail_api.py rather than imported, for exactly the
+# reason `_cid`/`_uid`/`_queue_sync_event` above are already duplicated and
+# which the comment on `require_license_capability` at the top of this file
+# states outright: retail_api.py is a PEER ROUTE MODULE, and importing a
+# private helper across it would create the route-module coupling this file
+# otherwise avoids. Read retail_api.py's own block for the full reasoning
+# behind each column -- especially why `actor_user_uid` must be the registry's
+# `users.uid` and never `_uid()`'s local `users.id`. Kept deliberately short
+# here so the two copies are trivially diffable.
+#
+# Why this file matters at least as much as retail_api.py: ONE upload can
+# restate the opening stock of an entire catalogue in a single transaction.
+# It is the highest-leverage writer into inventory_movements in the product
+# (see the CAP_STOCK_ADJUST comment at the top of this file) and the one
+# furthest from anybody watching it happen.
+
+def _actor_user_uid():
+    """Registry `users.uid` for the signed-in user, or None. Never `_uid()`."""
+    local_user_id = session.get('mt_user_id')
+    if not local_user_id:
+        return None
+    try:
+        conn = _registry_conn()
+        try:
+            row = conn.execute("SELECT uid FROM users WHERE id=?", (local_user_id,)).fetchone()
+        finally:
+            conn.close()
+    except Exception:
+        return None
+    if not row:
+        return None
+    value = row['uid']
+    return value if value and str(value).strip() else None
+
+
+def _stamp():
+    """`(actor_user_uid, terminal_id, created_at_utc)`.
+
+    Resolved ONCE per import run, not per record: a 5,000-row spreadsheet
+    would otherwise do 5,000 registry reads and 5,000 local_device.json reads
+    to re-answer a question whose answer cannot change mid-upload. It also
+    makes the whole upload carry one instant, which is the truth -- the
+    operator pressed the button once.
+    """
+    from database.schema import local_terminal_id
+    return _actor_user_uid(), local_terminal_id(), now_utc_iso()
+
+
+def _new_uid():
+    """A fresh RFC-4122 uuid4 wire identity. Never hex(randomblob(16)) -- see
+    retail_api.py::_new_uid for why that shape passes `uuid.UUID()` and is
+    still rejected on the wire."""
+    return str(_uuid.uuid4())
+
+
 # AUDIT fix (2026-08-19, CRITICAL): the handlers below inserted categories/
 # products/customers/suppliers with NO sync_outbox event at all, so a bulk
 # import never left the importing device -- other devices silently never saw
@@ -1172,10 +1229,19 @@ def _handle_retail_products(records):
     # baked in could never be localized.
     stock_errors = []
 
+    # Resolved once, before the record loop -- see _stamp()'s docstring.
+    actor, terminal, utc_now = _stamp()
+
     branch = conn.execute("SELECT id FROM branches WHERE company_id=? LIMIT 1", (cid,)).fetchone()
     bid = branch['id'] if branch else None
     if not bid:
-        cur.execute("INSERT INTO branches (company_id,name) VALUES (?,'Main Store')", (cid,))
+        # v13 `uid`. This is the importer's OWN self-healing branch insert --
+        # a second copy of the same easily-overlooked write retail_api.py's
+        # _default_branch does, and it has to agree with it: a branch invented
+        # by an upload is as real as one created through /branches, and the
+        # stock this import is about to file lands against it.
+        cur.execute("INSERT INTO branches (company_id,name,uid) VALUES (?,'Main Store',?)",
+                    (cid, _new_uid()))
         bid = cur.lastrowid
 
     for rec in records:
@@ -1374,16 +1440,22 @@ def _handle_retail_products(records):
                     UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?
                     WHERE company_id=? AND product_id=? AND branch_id=?
                 """, (delta, cid, pid, bid))
+                # v13 stamp on every correction this importer posts. `uid` is
+                # per-ROW (inside the loop, one fresh uuid4 each) while the
+                # actor triple is per-RUN (hoisted above the loop): the rows
+                # are distinct records of one act by one person at one moment.
                 cur.execute("""
                     INSERT INTO inventory_movements
-                        (company_id,product_id,branch_id,movement_type,quantity,reference,notes,created_by)
-                    VALUES (?,?,?,?,?,?,?,?)
+                        (company_id,product_id,branch_id,movement_type,quantity,reference,notes,created_by,
+                         uid,actor_user_uid,terminal_id,created_at_utc)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (cid, pid, bid,
                       'opening_stock' if is_new else ('stock_in' if delta > 0 else 'stock_out'),
                       delta,
                       'OPENING' if is_new else _IMPORT_STOCK_REFERENCE,
                       '' if is_new else f'Declared stock changed by bulk import ({already_declared} -> {declared})',
-                      _uid()))
+                      _uid(),
+                      _new_uid(), actor, terminal, utc_now))
 
     conn.commit(); conn.close()
     _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -1472,8 +1544,13 @@ def _handle_retail_branches(records):
         if conn.execute("SELECT id FROM branches WHERE company_id=? AND name=?", (cid, name)).fetchone():
             continue
         status = (rec.get('status') or 'active').strip().lower()
-        cur.execute("INSERT INTO branches (company_id,name,address,phone,status) VALUES (?,?,?,?,?)",
-                    (cid, name, rec.get('address',''), rec.get('phone',''), status))
+        # v13 `uid`, one per branch. Note this handler deliberately queues no
+        # sync event (see the comment at the top of this function) -- that is
+        # about the OUTBOX, not about identity. A row still needs a stable
+        # wire name whether or not today's sync engine ships it, since the row
+        # long outlives the decision about which entity types travel.
+        cur.execute("INSERT INTO branches (company_id,name,address,phone,status,uid) VALUES (?,?,?,?,?,?)",
+                    (cid, name, rec.get('address',''), rec.get('phone',''), status, _new_uid()))
         imported += 1
     conn.commit(); conn.close()
     return {'imported': imported, 'message': f'{imported} branches imported.'}

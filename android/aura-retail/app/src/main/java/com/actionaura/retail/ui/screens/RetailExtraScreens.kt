@@ -48,6 +48,8 @@ import com.actionaura.retail.ui.i18n.AppLocale
 import com.actionaura.retail.ui.i18n.fmtQty
 import com.actionaura.retail.ui.i18n.parseNum
 import com.actionaura.retail.ui.i18n.tr
+import com.actionaura.retail.ui.CAP_REPORTS
+import com.actionaura.retail.ui.RetailSession
 import com.actionaura.retail.ui.theme.Info
 import com.actionaura.retail.ui.theme.Success
 import com.actionaura.retail.ui.theme.Warning
@@ -113,14 +115,17 @@ private fun MoreItem(title: String, subtitle: String, icon: ImageVector, onClick
 // ══════════════════════════════════════════════════════════════════════════════
 //  REPORTS — period-selectable stats (Today / 7d / 30d / 90d / 1y)
 // ══════════════════════════════════════════════════════════════════════════════
-private data class ReportPeriod(val label: String, val days: Int)
-private val reportPeriods = listOf(
+// `internal`, not `private`: EmployeeSalesScreen.kt offers the same period
+// chips over the same window, and two hand-maintained copies of this list is
+// how "30 days" on one screen quietly stops meaning "30 days" on the other.
+internal data class ReportPeriod(val label: String, val days: Int)
+internal val reportPeriods = listOf(
     ReportPeriod("Today", 0), ReportPeriod("7 days", 7), ReportPeriod("30 days", 30),
     ReportPeriod("90 days", 90), ReportPeriod("1 year", 365),
 )
 
 @Composable
-fun ReportsScreen(snackbar: SnackbarHostState) {
+fun ReportsScreen(snackbar: SnackbarHostState, onNavigate: (String) -> Unit) {
     var days by remember { mutableStateOf(30) }
     var summary by remember { mutableStateOf<ReportSummary?>(null) }
     var payments by remember { mutableStateOf<List<PaymentMethodStat>>(emptyList()) }
@@ -167,6 +172,22 @@ fun ReportsScreen(snackbar: SnackbarHostState) {
             }
             StatCard(tr("Inventory Value (at cost)"), money(s.inventory_value), tr("current stock on hand"),
                 Info, Modifier.fillMaxWidth())
+
+            // Takings per person. The entry is hidden without `retail.reports`
+            // rather than disabled -- the same choice MoreScreen makes for the
+            // owner-only Employees entry, and the same gate the desktop shell
+            // applies to its own reports surfaces. Usability only: the screen
+            // behind it re-checks, and the route re-checks server-side.
+            //
+            // `hasCapability` fails open until /api/auth/session actually
+            // carries `capabilities` (see holdsCapability), so today this
+            // renders for everyone and the server keeps doing the enforcing --
+            // the change is inert, not a screen that blanks for every role the
+            // day it ships.
+            if (RetailSession.hasCapability(CAP_REPORTS)) {
+                MoreItem(tr("By Employee"), tr("Takings and transactions per employee"),
+                    Icons.Default.Groups) { onNavigate("employee_sales") }
+            }
 
             if (payments.isNotEmpty()) {
                 SectionHeader(tr("Payment methods"))
@@ -267,6 +288,32 @@ private fun SaleDetailSheet(saleId: Int, onDismiss: () -> Unit) {
             Text(s?.sale_number ?: tr("Receipt"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text("${s?.customer_name ?: tr("Walk-in")} · ${shortDate(s?.created_at)}",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            // Who rang it (retail schema v13). Rendered for every sale,
+            // including the ones with no attribution -- an absent line is
+            // indistinguishable from a screen that forgot to show it, and the
+            // one thing an owner has to be able to establish is the date from
+            // which this shop actually has attribution.
+            //
+            // Never guessed. `sales.cashier` is deliberately not on the client
+            // model (see Sale's doc comment): it defaults to the literal 'POS'
+            // and otherwise holds an opaque account id, so printing it here
+            // would put a placeholder where a person's name goes -- the
+            // fabrication the v13 migration went out of its way not to commit
+            // when it refused to backfill actor_user_uid from it.
+            if (!loading && detail != null) {
+                Text(
+                    when (saleAttribution(s)) {
+                        Attribution.NAMED -> tr("Rung by") + " " +
+                            bidiIsolate(attributedName(s?.actor_employee_id, s?.actor_email).orEmpty())
+                        Attribution.ACCOUNT_GONE -> tr("Rung by an account that no longer exists")
+                        Attribution.NOT_RECORDED ->
+                            tr("Who rang this sale was not recorded — it predates employee attribution.")
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Spacer(Modifier.height(16.dp))
             when {
                 loading -> CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)

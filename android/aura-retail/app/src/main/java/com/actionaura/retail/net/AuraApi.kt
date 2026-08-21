@@ -212,6 +212,19 @@ interface AuraApi {
     @GET("api/sub/retail/reports/payment-methods")
     suspend fun reportPaymentMethods(@Query("days") days: Int = 30): PaymentMethodsResponse
 
+    // Takings and transaction count per employee, from `sales.actor_user_uid`
+    // (retail schema v13). Same gate as its siblings above -- server-side
+    // @mt_require_capability('retail.reports') -- and the same
+    // {"success": true, "data": ...} envelope the reports family uses rather
+    // than the {"status": ...} one most of this API answers with.
+    //
+    // An embedded server that predates this route answers 404. That is a real,
+    // expected state on a handset whose APK has been updated ahead of its
+    // bundled backend, and EmployeeSalesScreen says so in words instead of
+    // letting it read as a generic server fault.
+    @GET("api/sub/retail/reports/by-employee")
+    suspend fun reportByEmployee(@Query("days") days: Int = 30): ByEmployeeResponse
+
     // Backup / restore (Wave 1A -- admin-only, see commercial_runtime/backup/routes.py)
     @POST("api/backup/create")
     suspend fun createBackup(): CreateBackupResponse

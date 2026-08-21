@@ -300,5 +300,13 @@
   "User not found.": "المستخدم غير موجود.",
   "You are signed in with an employee account. Ask the store owner to add or change staff accounts.": "أنت مسجل الدخول بحساب موظف. اطلب من مالك المتجر إضافة حسابات الموظفين أو تعديلها.",
   "You cannot disable the owner account.": "لا يمكنك تعطيل حساب المالك.",
-  "Your account has been disabled. Contact your administrator.": "تم تعطيل حسابك. تواصل مع مسؤول المتجر."
+  "Your account has been disabled. Contact your administrator.": "تم تعطيل حسابك. تواصل مع مسؤول المتجر.",
+  "Invoice": "فاتورة",
+  "Till": "جهاز البيع",
+  "Not recorded": "غير مسجّل",
+  "Sales by Employee": "المبيعات حسب الموظف",
+  "No sales in this period.": "لا توجد مبيعات في هذه الفترة.",
+  "Sales by employee are not available on this version.": "المبيعات حسب الموظف غير متاحة في هذا الإصدار.",
+  "Could not load sales by employee.": "تعذّر تحميل المبيعات حسب الموظف.",
+  "Sales recorded before this release show no employee or till.": "المبيعات المسجَّلة قبل هذا الإصدار لا تُظهر الموظف أو جهاز البيع."
 }

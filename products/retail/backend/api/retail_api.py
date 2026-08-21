@@ -22,6 +22,14 @@ from commercial_runtime.identity.mt_auth import (
 from commercial_runtime.identity.user_accounts import (
     CAP_SELL, CAP_REFUND, CAP_DISCOUNT, CAP_STOCK_ADJUST, CAP_REPORTS,
     CAP_CASH_CLOSE, CAP_EMPLOYEES,
+    # The ONE format every *_at_utc column in this suite is written in --
+    # timezone-aware '...+00:00', never `datetime.utcnow()`'s naive string.
+    # Imported rather than re-spelled inline so retail's `created_at_utc` and
+    # registry's `users.updated_at_utc` can never drift into two forms that
+    # sort wrong against each other; see that function's docstring for the
+    # concrete failure ('2026-08-20T10:00:00' compares as LATER than
+    # '2026-08-20T09:00:00+00:00' as text).
+    now_utc_iso,
 )
 from commercial_runtime.identity import device_context
 from commercial_runtime.identity.registry_db import get_conn as _registry_conn
@@ -31,7 +39,7 @@ from commercial_runtime.sync.sync_service import get_active_health as _sync_get_
 from commercial_runtime.notifications import settings as _notification_settings
 from commercial_runtime.notifications.outbox import EmailOutboxRepository as _EmailOutboxRepository
 from commercial_runtime.notifications import whatsapp_settings as _whatsapp_settings
-from database.schema import get_retail_conn, sub_create
+from database.schema import get_retail_conn, sub_create, local_terminal_id
 from datetime import datetime, timedelta, timezone
 from core.retail import pricing as tax_engine
 from core.retail import po_split
@@ -180,6 +188,119 @@ def _uid():
     return session.get('mt_user_id') or session.get('user_id', 'system')
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  THE v13 ATTRIBUTION STAMP  (WHO / WHERE / WHEN-in-real-time / WIRE IDENTITY)
+#
+#  Schema v13 (database/schema.py::_migrate_add_identity_and_attribution_
+#  columns) added the columns; these three helpers are what actually puts a
+#  value in them. Read that migration's docstring first -- it explains why each
+#  column exists and, just as importantly, why it deliberately left every
+#  HISTORICAL row NULL rather than guessing. That decision is only defensible
+#  if every write from here on fills them in, which is what this block is for.
+#
+#  WHY THIS IS WORTH THIS MUCH COMMENT. An INSERT that omits these columns
+#  does not fail. There is no NOT NULL, no constraint, no error; the sale
+#  completes, the receipt prints, the totals are right, and integrity_check
+#  says 'ok'. The damage is only visible much later, when someone asks who
+#  authorised a refund and the honest answer is that the database cannot say
+#  and can never be made to say -- exactly the state v13 refused to fabricate
+#  its way out of for pre-v13 rows. Silent, deferred and irreversible is the
+#  worst combination a defect can have, so both halves of the guard against it
+#  are structural: `retail_attribution_stamp_structural_test.py` reads THIS
+#  FILE'S SOURCE and fails on any INSERT into a v13 table that does not name
+#  these columns, driven off schema.RETAIL_UID_TABLES/RETAIL_ACTOR_TABLES
+#  rather than a list anyone has to maintain, and
+#  `retail_attribution_stamp_test.py` drives the real routes and reads the
+#  rows back.
+#
+#  RESOLVE ONCE PER REQUEST, NOT PER ROW. `_stamp()` costs one small registry
+#  read plus one small file read, and a sale with twelve lines writes thirteen
+#  stamped rows. Calling it per row would multiply that by twelve for no gain
+#  AND would let the rows of one transaction disagree about when they happened,
+#  which is worse than the cost: a sale and its own stock movements are one
+#  event and should carry one instant.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _actor_user_uid():
+    """The signed-in user's WIRE identity -- registry `users.uid` -- or None.
+
+    NOT `_uid()`. This is the single most likely wrong answer in this whole
+    change, so it is worth being explicit about: `_uid()` returns
+    `session['mt_user_id']`, which `mt_auth.create_session` sets to
+    `user['id']` -- the LOCAL primary key, which registry v3's account_schema
+    docstring describes as "a private detail of THIS install". `users.uid` is
+    the separate value "a peer device names a user by". BOTH ARE uuid4
+    STRINGS. Putting the id in this column would pass every local check, every
+    `uuid.UUID()` gate, and every eye test, and would only surface when a
+    second device tried to resolve the actor of a row and found nobody -- by
+    which point months of rows carry it.
+
+    Returns None rather than falling back to `_uid()` when the row has no uid.
+    A NULL is honest and repairable (account_schema's `_backfill_uids` stamps
+    any uid-less row on the next launch, and both account-creation routes
+    write one inline, so in production this is transient at worst); a local id
+    silently parked in a wire column is neither, because nothing downstream
+    can tell it apart from a real one. Nothing is lost by declining: the
+    pre-existing free-text `cashier`/`created_by`/`opened_by` columns still
+    carry `_uid()` exactly as they always have, which is the evidence trail
+    v13 was careful never to disturb.
+
+    Never raises. Attribution is bookkeeping and a sale is the business --
+    same posture as `_open_cash_session_id` above and `local_terminal_id`
+    below, both of which document the same choice.
+    """
+    local_user_id = session.get('mt_user_id')
+    if not local_user_id:
+        # An unauthenticated write should not be reachable (every mutating
+        # route carries @mt_login_required), but `_uid()`'s 'system' fallback
+        # proves this file has seen sessionless calls. 'system' is a label,
+        # not an identity, and has no uid to resolve.
+        return None
+    try:
+        conn = _registry_conn()
+        try:
+            row = conn.execute(
+                "SELECT uid FROM users WHERE id=?", (local_user_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception:
+        return None
+    if not row:
+        return None
+    value = row['uid']
+    # TRIM-equivalent: account_schema treats '' and NULL identically when it
+    # decides which rows still need a uid, so this must too, or a blank string
+    # would be stamped as though it were an identity.
+    return value if value and str(value).strip() else None
+
+
+def _stamp():
+    """`(actor_user_uid, terminal_id, created_at_utc)` for one write.
+
+    Bound as a tuple so a write site cannot accidentally supply two of the
+    three -- the columns are only useful together, and a row that knows WHEN
+    but not WHO is barely better than a row that knows nothing.
+    """
+    return _actor_user_uid(), local_terminal_id(), now_utc_iso()
+
+
+def _new_uid():
+    """A fresh wire identity for one row of a RETAIL_UID_TABLES table.
+
+    `uuid.uuid4()`, in Python, and never SQLite's `lower(hex(randomblob(16)))`
+    -- that trick yields a 32-character string which is NOT RFC-4122, and
+    Owner's sync ingest gates on `uuid.UUID(entity_id)`. The trap is that
+    `uuid.UUID()` ACCEPTS the 32-char form, so a value that merely looks random
+    survives every local check and is rejected only on the wire, where it is
+    most expensive to discover. The registry v3 migration and the v13 backfill
+    both hit this and both wrote it down; this is the third place that has to
+    know it, hence a named helper rather than a bare `str(_uuid.uuid4())`
+    repeated at fourteen call sites.
+    """
+    return str(_uuid.uuid4())
+
+
 # Multi-device sync foundation (2026-08-06): queues a row into sync_outbox
 # (Task 3) so the push loop (Task 5) can relay it to the Owner. Must be
 # called with the SAME cur/conn as the row write it describes, before that
@@ -202,8 +323,16 @@ def _default_branch(conn, cid):
     if row:
         return row['id']
     cur = conn.cursor()
-    cur.execute("INSERT INTO branches (company_id,name,address,phone) VALUES (?,?,?,?)",
-                (cid, 'Main Branch', '', ''))
+    # v13 `uid`: a branch invented HERE is a real branch -- sales, stock and
+    # cash sessions all key off it -- so it needs the same wire identity a
+    # branch created through /branches gets. Easy to miss precisely because
+    # this is a four-line helper and nothing about the calling route mentions
+    # branches; pinned by retail_attribution_stamp_test.py's self-heal case.
+    # No actor stamp: `branches` is in RETAIL_UID_TABLES only. It is a place,
+    # not an event, and v13 gave the actor triple to the five tables that
+    # record events.
+    cur.execute("INSERT INTO branches (company_id,name,address,phone,uid) VALUES (?,?,?,?,?)",
+                (cid, 'Main Branch', '', '', _new_uid()))
     return cur.lastrowid
 
 def _open_cash_session_id(conn, cid, bid):
@@ -605,10 +734,16 @@ def create_product():
             VALUES (?,?,?,?)
         """, (cid, pid, bid, data.get('initial_stock', 0)))
         if data.get('initial_stock', 0) > 0:
+            # v13 stamp. `created_by` keeps the local id it has always held;
+            # actor_user_uid/terminal_id/created_at_utc are the second,
+            # structured channel beside it, never a replacement for it.
+            actor, terminal, utc_now = _stamp()
             conn.execute("""
-                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,created_by)
-                VALUES (?,?,?,'opening_stock',?,?,?)
-            """, (cid, pid, bid, data.get('initial_stock', 0), 'OPENING', _uid()))
+                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,created_by,
+                                                 uid,actor_user_uid,terminal_id,created_at_utc)
+                VALUES (?,?,?,'opening_stock',?,?,?,?,?,?,?)
+            """, (cid, pid, bid, data.get('initial_stock', 0), 'OPENING', _uid(),
+                  _new_uid(), actor, terminal, utc_now))
         _audit(conn, 'PRODUCT_CREATED', 'product', pid, data['name'])
         _queue_sync_event(cur, 'product', pid, 'create', {
             'id': pid, 'sku': data['sku'], 'barcode': data.get('barcode', ''), 'name': data['name'],
@@ -803,12 +938,20 @@ def adjust_stock(pid):
             UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?
             WHERE company_id=? AND product_id=? AND branch_id=?
         """, (qty, cid, pid, bid))
+        # v13 stamp. Of every movement type this file writes, THIS is the one
+        # that most needs it: an 'ADJ' row has no sale, no return and no PO
+        # behind it -- somebody simply declared that the shop has a different
+        # amount of something than it thought. "Who?" is the entire question,
+        # and until v13 the only answer was a free-text `created_by`.
+        actor, terminal, utc_now = _stamp()
         conn.execute("""
-            INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,notes,created_by)
-            VALUES (?,?,?,?,?,?,?,?)
+            INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,notes,created_by,
+                                             uid,actor_user_uid,terminal_id,created_at_utc)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         """, (cid, pid, bid,
               'stock_in' if qty > 0 else 'stock_out',
-              qty, 'ADJ', reason, _uid()))
+              qty, 'ADJ', reason, _uid(),
+              _new_uid(), actor, terminal, utc_now))
         # branch is now in the audit detail: without it, an audit row for a
         # multi-branch company could never answer "which balance moved?".
         _audit(conn, 'STOCK_ADJUSTED', 'product', pid, f'qty={qty}, branch={bid}, reason={reason}')
@@ -1404,6 +1547,10 @@ def receive_purchase_order(po_id):
 
         items = cur.execute("SELECT * FROM purchase_order_items WHERE po_id=?", (po_id,)).fetchall()
         bid   = po['branch_id'] or _default_branch(conn, cid)
+        # v13 stamp, resolved once for the whole receipt: every line of one
+        # delivery was received by one person at one terminal at one moment,
+        # and re-resolving per line would let them claim otherwise.
+        actor, terminal, utc_now = _stamp()
         for item in items:
             qty = item['quantity']
             cur.execute("""
@@ -1415,9 +1562,11 @@ def receive_purchase_order(po_id):
                 WHERE company_id=? AND product_id=? AND branch_id=?
             """, (qty, cid, item['product_id'], bid))
             cur.execute("""
-                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,created_by)
-                VALUES (?,?,?,'purchase_in',?,?,?,?)
-            """, (cid, item['product_id'], bid, qty, item['unit_cost'], po['po_number'], _uid()))
+                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,created_by,
+                                                 uid,actor_user_uid,terminal_id,created_at_utc)
+                VALUES (?,?,?,'purchase_in',?,?,?,?,?,?,?,?)
+            """, (cid, item['product_id'], bid, qty, item['unit_cost'], po['po_number'], _uid(),
+                  _new_uid(), actor, terminal, utc_now))
             cur.execute("UPDATE purchase_order_items SET received_qty=? WHERE id=?", (qty, item['id']))
 
         cur.execute("UPDATE purchase_orders SET status='received', received_at=? "
@@ -1790,6 +1939,38 @@ def create_sale():
             conn.close()
             return jsonify({'status': 'error', 'message': DISCOUNT_DENIED_MESSAGE}), 403
 
+        # ── v13 attribution stamp ────────────────────────────────────────────
+        # Resolved ONCE per sale, then shared by the `sales` row and every
+        # `inventory_movements` row this sale writes. They are one event: a
+        # sale and the stock it moved happened at the same instant, on the same
+        # terminal, under the same cashier, and re-resolving inside the line
+        # loop would produce rows that disagree on all three for no reason.
+        #
+        # Resolved BEFORE `BEGIN IMMEDIATE`, deliberately. `_stamp()` opens the
+        # REGISTRY database and reads local_device.json -- a few milliseconds of
+        # I/O against files this transaction has nothing to do with. Doing that
+        # while holding retail.db's write lock would lengthen every sale's hold
+        # on the lock that AUDIT-009 put there to serialise oversell checks, on
+        # a product that has already been bitten by lock-holding it did not
+        # need (see create_return's `finally: conn.close()` and the leaked-WAL-
+        # reader comment on it).
+        #
+        # The consequence, stated rather than hidden: under lock contention
+        # `created_at_utc` marks when this till accepted the sale and
+        # `created_at` marks when it won the lock, so they can differ by the
+        # wait. Both are legitimate readings of "when", they differ by
+        # milliseconds, and neither is off by HOURS -- which is the failure
+        # this column exists to prevent and the only one at the scale that
+        # matters.
+        #
+        # `utc_now` is NOT `now_local` below. That one is deliberately local
+        # wall clock (there is a comment on it explaining that the dashboard
+        # buckets by local date), and reusing it here would file local time in
+        # a column whose entire purpose is to be the value two devices in two
+        # timezones can compare -- the exact defect v13 added the column to
+        # end, reintroduced at the very first write.
+        actor, terminal, utc_now = _stamp()
+
         # BEGIN IMMEDIATE takes the write lock up front so a concurrent sale
         # can't read the same "stock is sufficient" snapshot before either
         # has committed -- the second request blocks here until the first
@@ -1922,27 +2103,43 @@ def create_sale():
         # format for other doc types.
         sale_number = f"{_next_ref(conn, cid, 'sale')}-{str(cid)[:8]}"
 
+        # `cashier` still takes data.get('cashier', _uid()) -- a caller-supplied
+        # display name where one is given, the local user id otherwise. That is
+        # untouched on purpose: it is the only surviving record of who the shop
+        # BELIEVED rang this, and v13's whole design principle is that the
+        # structured columns sit beside the free text rather than overwrite it.
+        # `actor_user_uid` is never derived from it, because a name is not an
+        # identity and matching one to the other would be a guess.
         cur.execute("""
             INSERT INTO sales (company_id,sale_number,branch_id,customer_id,cashier,
                                subtotal,discount_amount,tax_amount,total,amount_paid,
                                change_amount,payment_method,status,idempotency_key,notes,created_at,due_date,
-                               session_id)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?,?)
+                               session_id,uid,actor_user_uid,terminal_id,created_at_utc)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'completed',?,?,?,?,?,?,?,?,?)
         """, (cid, sale_number, bid, customer_id, data.get('cashier', _uid()),
               subtotal, discount, tax, total, paid, change,
-              pm, idem, data.get('notes',''), now_local, due_date, cash_session_id))
+              pm, idem, data.get('notes',''), now_local, due_date, cash_session_id,
+              _new_uid(), actor, terminal, utc_now))
         sale_id = cur.lastrowid
 
         for line in resolved_lines:
             pid, qty = line['product_id'], line['quantity']
+            # A FRESH `_new_uid()` per line, inside the loop. `sale_items` has
+            # its own partial UNIQUE index on uid, so hoisting one uid out of
+            # the loop would make every multi-line sale fail on its second
+            # line -- and, before v13's index existed, would have silently
+            # given a peer device several rows it could not tell apart.
             cur.execute("""
-                INSERT INTO sale_items (sale_id,product_id,quantity,unit_price,discount_pct,tax_rate,line_total)
-                VALUES (?,?,?,?,?,?,?)
-            """, (sale_id, pid, qty, line['unit_price'], line['discount_pct'], line['tax_rate'], line['line_total']))
+                INSERT INTO sale_items (sale_id,product_id,quantity,unit_price,discount_pct,tax_rate,line_total,uid)
+                VALUES (?,?,?,?,?,?,?,?)
+            """, (sale_id, pid, qty, line['unit_price'], line['discount_pct'], line['tax_rate'],
+                  line['line_total'], _new_uid()))
             cur.execute("""
-                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,created_by)
-                VALUES (?,?,?,'sale_out',?,?,?)
-            """, (cid, pid, bid, -qty, sale_number, _uid()))
+                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,created_by,
+                                                 uid,actor_user_uid,terminal_id,created_at_utc)
+                VALUES (?,?,?,'sale_out',?,?,?,?,?,?,?)
+            """, (cid, pid, bid, -qty, sale_number, _uid(),
+                  _new_uid(), actor, terminal, utc_now))
             cur.execute("""
                 UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand - ?
                 WHERE company_id=? AND product_id=? AND branch_id=?
@@ -2357,6 +2554,16 @@ def create_return():
             conn.close()
             return jsonify({'status': 'error', 'message': 'Original sale not found.'}), 404
 
+        # v13 attribution stamp, resolved once for the return and every row it
+        # writes. Hoisted above BEGIN IMMEDIATE for the same reason create_sale
+        # hoists its own -- no cross-database I/O while holding retail.db's
+        # write lock; see the long note there.
+        #
+        # A refund is the single most-audited action a shop performs: money
+        # leaves the till against no sale of its own. It is the write where
+        # "the database cannot say who" costs the most.
+        actor, terminal, utc_now = _stamp()
+
         # BEGIN IMMEDIATE: two returns against the same sale+product racing each
         # other must not both read the same "remaining returnable" snapshot.
         conn.execute("BEGIN IMMEDIATE")
@@ -2438,21 +2645,27 @@ def create_return():
         # returns out of today's revenue by local date(created_at), so a UTC timestamp
         # would file a late-evening return under the wrong day and leave the KPI stale.
         now_local = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # `actor`/`terminal`/`utc_now` come from the _stamp() hoisted above
+        # BEGIN IMMEDIATE. Same warning as create_sale: `utc_now` is a genuinely
+        # UTC instant and is NOT `now_local`, which is local wall clock on
+        # purpose (see the comment three lines up).
         cur.execute("""
             INSERT INTO returns (company_id,return_number,sale_id,branch_id,cashier,
                                  reason,refund_method,refund_amount,status,idempotency_key,created_at,
-                                 session_id)
-            VALUES (?,?,?,?,?,?,?,?,'completed',?,?,?)
+                                 session_id,uid,actor_user_uid,terminal_id,created_at_utc)
+            VALUES (?,?,?,?,?,?,?,?,'completed',?,?,?,?,?,?,?)
         """, (cid, ret_num, sale_id, bid, _uid(),
               data.get('reason','Customer return'), data.get('refund_method','cash'), refund, idem, now_local,
-              cash_session_id))
+              cash_session_id, _new_uid(), actor, terminal, utc_now))
         ret_id = cur.lastrowid
         for line in resolved_items:
             pid, qty = line['product_id'], line['quantity']
+            # Fresh uid per line -- see the identical note in create_sale's
+            # sale_items write about the partial UNIQUE index on uid.
             cur.execute("""
-                INSERT INTO return_items (return_id,product_id,quantity,unit_price,line_total)
-                VALUES (?,?,?,?,?)
-            """, (ret_id, pid, qty, line['unit_price'], line['line_total']))
+                INSERT INTO return_items (return_id,product_id,quantity,unit_price,line_total,uid)
+                VALUES (?,?,?,?,?,?)
+            """, (ret_id, pid, qty, line['unit_price'], line['line_total'], _new_uid()))
             cur.execute("""
                 INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
                 VALUES (?,?,?,0)
@@ -2462,9 +2675,11 @@ def create_return():
                 WHERE company_id=? AND product_id=? AND branch_id=?
             """, (qty, cid, pid, bid))
             cur.execute("""
-                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,created_by)
-                VALUES (?,?,?,'return_in',?,?,?)
-            """, (cid, pid, bid, qty, ret_num, _uid()))
+                INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,created_by,
+                                                 uid,actor_user_uid,terminal_id,created_at_utc)
+                VALUES (?,?,?,'return_in',?,?,?,?,?,?,?)
+            """, (cid, pid, bid, qty, ret_num, _uid(),
+                  _new_uid(), actor, terminal, utc_now))
 
         # Real bug fixed here: a return against a sale that was never fully
         # paid (credit sale, or a partial-payment cash sale) never touched
@@ -2648,11 +2863,24 @@ def open_cash_session():
 
         session_id = str(_uuid.uuid4())
         now_local = _now()
+        # v13 stamp. cash_sessions is in RETAIL_ACTOR_TABLES but NOT in
+        # RETAIL_UID_TABLES, and correctly so: its `id` is already a
+        # client-generated uuid4 (schema v10, same convention as
+        # reorder_requests), so it needs no second wire identity -- adding one
+        # would give the row two globally-unique names and force every consumer
+        # to decide which one is canonical.
+        #
+        # `opened_by` keeps the local user id, untouched. `created_at_utc` sits
+        # beside `opened_at`, which is _now() -- local, like every other clock
+        # in this ledger.
+        actor, terminal, utc_now = _stamp()
         try:
             conn.execute("""
-                INSERT INTO cash_sessions (id,company_id,branch_id,opened_by,opened_at,opening_float,status)
-                VALUES (?,?,?,?,?,?,'open')
-            """, (session_id, cid, bid, _uid(), now_local, opening_float))
+                INSERT INTO cash_sessions (id,company_id,branch_id,opened_by,opened_at,opening_float,status,
+                                           actor_user_uid,terminal_id,created_at_utc)
+                VALUES (?,?,?,?,?,?,'open',?,?,?)
+            """, (session_id, cid, bid, _uid(), now_local, opening_float,
+                  actor, terminal, utc_now))
         except sqlite3.IntegrityError:
             # idx_cash_sessions_one_open_per_branch backstop -- a concurrent
             # open() for the same branch won the race between the SELECT
@@ -2745,10 +2973,20 @@ def create_cash_movement(session_id):
 
         movement_id = str(_uuid.uuid4())
         now_local = _now()
+        # v13 stamp. Actor triple only -- `id` is already a client-generated
+        # uuid4, exactly as on cash_sessions above.
+        #
+        # Cash moving in or out of a drawer against no transaction is, along
+        # with the 'ADJ' stock adjustment, one of the two writes in this file
+        # with no document behind it at all. `created_by` alone has never been
+        # able to say WHICH till the money left.
+        actor, terminal, utc_now = _stamp()
         conn.execute("""
-            INSERT INTO cash_movements (id,session_id,type,amount,reason,created_by,created_at)
-            VALUES (?,?,?,?,?,?,?)
-        """, (movement_id, session_id, mtype, amount, data.get('reason', ''), _uid(), now_local))
+            INSERT INTO cash_movements (id,session_id,type,amount,reason,created_by,created_at,
+                                        actor_user_uid,terminal_id,created_at_utc)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+        """, (movement_id, session_id, mtype, amount, data.get('reason', ''), _uid(), now_local,
+              actor, terminal, utc_now))
         _audit(conn, 'CASH_MOVEMENT_RECORDED', 'cash_session', session_id, f'{mtype} amount={amount}')
         conn.commit()
         movement = conn.execute("SELECT * FROM cash_movements WHERE id=?", (movement_id,)).fetchone()
@@ -3175,8 +3413,11 @@ def create_branch():
     cid = _cid()
     conn = get_retail_conn()
     cur  = conn.cursor()
-    cur.execute("INSERT INTO branches (company_id,name,address,phone) VALUES (?,?,?,?)",
-                (cid, data['name'], data.get('address',''), data.get('phone','')))
+    # v13 `uid` -- the same wire identity _default_branch's self-healed branch
+    # gets, so a branch is named identically on the wire however it came into
+    # existence.
+    cur.execute("INSERT INTO branches (company_id,name,address,phone,uid) VALUES (?,?,?,?,?)",
+                (cid, data['name'], data.get('address',''), data.get('phone',''), _new_uid()))
     nid = cur.lastrowid
     conn.commit(); conn.close()
     return jsonify({'status': 'success', 'data': {'id': nid}})
@@ -3300,13 +3541,22 @@ def _record_payment(conn, cid, party_type, party_id, direction, amount, method='
         return None
     cur = _settings(conn, cid)['base_currency']
     ref = _next_ref(conn, cid, doc_type)
+    # v13 `uid` only. `payments` is in RETAIL_UID_TABLES but NOT in
+    # RETAIL_ACTOR_TABLES -- it already carries `created_by` AND `device` of
+    # its own (the AR/AP ledger shipped with both), so v13 had no missing
+    # who/where to add here; what it lacked was a name a peer device could use.
+    #
+    # One helper, every money movement: a sale's retained cash, a customer
+    # payment, a supplier payment, a PO down-payment and a void's reversal all
+    # funnel through this single INSERT, so stamping it once covers the whole
+    # ledger and no route can write an unnamed payment by going around it.
     conn.execute("""INSERT INTO payments
         (company_id,reference,party_type,party_id,direction,amount,currency,fx_rate,method,
-         related_type,related_id,sale_id,notes,status,created_by,device,created_at)
-        VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?, 'active', ?, ?, ?)""",
+         related_type,related_id,sale_id,notes,status,created_by,device,created_at,uid)
+        VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?, 'active', ?, ?, ?, ?)""",
         (cid, ref, party_type, party_id, direction, amt, cur, method,
          related_type, related_id, (related_id if related_type == 'sale' else None),
-         notes, _uid(), device, _now()))
+         notes, _uid(), device, _now(), _new_uid()))
     return ref
 
 def _adjust_credit(conn, table, pid, cid, delta):
