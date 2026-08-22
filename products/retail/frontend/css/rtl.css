@@ -65,3 +65,30 @@ body.rtl .num, body.rtl .money, body.rtl .iw-num { direction: ltr; display: inli
    16px/4px radii themselves are untouched, only which corner gets the 4px. */
 body.rtl .ai-msg-bubble { border-top-left-radius: 16px; border-top-right-radius: 4px; }
 body.rtl .ai-msg.user .ai-msg-bubble { border-top-right-radius: 16px; border-top-left-radius: 4px; }
+
+/* --- "You are here" / severity accent bars (2026-08-22) --------------------
+   The sidebar nav item, toast, notification, anomaly and risk rows each mark
+   state with a 3-4px coloured bar drawn via `border-left` in main.css. LEFT is
+   physical, so under body.rtl the layout mirrored but the bar stayed pinned to
+   the left edge -- away from the text it belongs to, and on the trailing side
+   of the row rather than the leading one.
+
+   main.css's Operational Calm behaviour layer now draws these bars with
+   `border-inline-start`, which is the leading edge in either direction and
+   needs no mirror rule. What DOES need a mirror rule is the leftover physical
+   colour those legacy declarations still apply: in RTL the logical rule paints
+   the right edge while the legacy `border-left-color` paints the left, so the
+   marker would appear on BOTH sides. These rules blank the physical leftover
+   in RTL only; LTR is untouched, where physical-left and logical-start are the
+   same edge and the legacy declaration is simply redundant.
+
+   Kept here rather than in main.css deliberately: main.css's new layers are
+   held free of physical direction properties by retail_design_rtl_test.js, and
+   undoing a physical assumption is precisely this stylesheet's job. */
+body.rtl .nav-item,
+body.rtl .sub-nav-item,
+body.rtl .notif-item,
+body.rtl .anomaly-item,
+body.rtl .risk-line,
+body.rtl .crm-note-item,
+body.rtl .toast { border-left-color: transparent; }

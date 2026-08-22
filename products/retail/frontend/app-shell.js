@@ -229,6 +229,61 @@ const SubsystemApp = {
     return roles.includes(this.clinicRole);
   },
 
+  // ── Accent: let the stylesheet win ────────────────────────────────────────
+  //
+  // `systems.retail.accent` is a hex literal sitting in JavaScript, and five
+  // separate call sites used to push it straight onto the root element with
+  // setProperty(). Two problems with that, one cosmetic and one structural:
+  //
+  //   * STRUCTURAL: an inline style on documentElement beats every stylesheet
+  //     rule short of !important, so the token layer in css/ physically cannot
+  //     restyle the accent while these lines exist. The accent was the one
+  //     colour in this product that no stylesheet could own.
+  //
+  //   * COSMETIC, but it matters at a till: the value is #f43f5e, a rose that
+  //     sits close enough to the danger red that "accent" and "refusal" stop
+  //     being distinguishable at a glance. On a screen where colour is meant
+  //     to carry meaning -- money in, money out, a warning, a refusal -- an
+  //     accent occupying the refusal hue quietly spends the one signal you
+  //     most need to keep unambiguous.
+  //
+  // This does NOT pick a colour here; choosing it is the token layer's job,
+  // not JavaScript's. It asks one question instead: DOES A TOKEN LAYER EXIST?
+  // If css/main.css defines --accent-action, that stylesheet already sets
+  // --sub-accent / --sub-accent-rgb from it at :root, and the correct action
+  // is to write nothing at all -- because an inline property on
+  // documentElement outranks every :root rule and would pin the accent to the
+  // JS hex forever, on every install, invisibly.
+  //
+  // --accent-action is used as the sentinel precisely because JavaScript never
+  // writes it. Probing --sub-accent instead would be useless: after the first
+  // call this method's own inline value is what getComputedStyle returns, so
+  // the check would pass on boot and fail on every subsequent navigation.
+  //
+  // If no token layer is present (an older cached stylesheet), the previous
+  // behaviour is preserved exactly.
+  _tokenLayerOwnsAccent() {
+    try {
+      return !!(getComputedStyle(document.documentElement)
+        .getPropertyValue('--accent-action') || '').trim();
+    } catch (e) {
+      return false;   // no computed style (tests / very early boot)
+    }
+  },
+
+  _applyAccent(sys) {
+    if (this._tokenLayerOwnsAccent()) return;
+    const accent = sys && sys.accent;
+    const rgb    = sys && sys.accentRgb;
+    // Both or neither: a colour with no rgb triplet would break every
+    // rgba(var(--sub-accent-rgb), a) in the product.
+    if (!accent || !rgb) return;
+    try {
+      document.documentElement.style.setProperty('--sub-accent', accent);
+      document.documentElement.style.setProperty('--sub-accent-rgb', rgb);
+    } catch (e) { /* non-DOM host */ }
+  },
+
   // True if the current user's per-user capability grants include `code`.
   // RENDERING ADVICE ONLY -- every route keeps its own server-side gate
   // (mt_auth.mt_require_capability); this exists purely so the shell can
@@ -460,15 +515,31 @@ const SubsystemApp = {
     return (Date.now() - at) <= this.PENDING_ACTIVATION_MAX_AGE_MS;
   },
 
-  // Light/Dark theme toggle (#15). Persists to localStorage; the pre-paint script
-  // in index.html applies the saved choice on load (default: light).
+  // OPERATIONAL CALM: there is one theme, and this is deliberately a no-op that
+  // repairs rather than a toggle that switches.
+  //
+  // It used to flip data-theme and persist the choice. Under the token layer
+  // that is no longer a preference, it is a way to break the app: :root and
+  // html[data-theme="light"] now resolve to the SAME light palette, while the
+  // compatibility layer in main.css is still scoped to [data-theme="light"].
+  // A document set to "dark" therefore gets light surfaces WITHOUT that layer,
+  // and the dark theme's white literals injected by subsystem-retail.js render
+  // white-on-white -- measured at 1.00:1 on .ret-table, which takes the
+  // products, customers, sales-history and dashboard grids with it.
+  //
+  // Kept as a function rather than deleted because it was a documented public
+  // entry point (#15) and something outside this file may still call it. A
+  // missing method would throw; this one puts the document back into the only
+  // state that renders correctly, which is the useful thing for a stale caller
+  // to do.
+  //
+  // Restoring a dark theme is real work, not a flag flip: it needs its own
+  // palette solved to the same AA/AAA contrast bar as the light one, and the
+  // compatibility layer either duplicated or made theme-agnostic. Worth doing
+  // deliberately, if ever; not worth half-doing, which is what caused this.
   toggleTheme() {
-    const cur = document.documentElement.getAttribute('data-theme') || 'light';
-    const next = cur === 'light' ? 'dark' : 'light';
-    document.documentElement.setAttribute('data-theme', next);
-    try { localStorage.setItem('aura_theme', next); } catch (e) {}
-    const btn = document.getElementById('aura-theme-toggle');
-    if (btn) btn.textContent = next === 'dark' ? '☀️' : '🌙';
+    document.documentElement.setAttribute('data-theme', 'light');
+    try { localStorage.removeItem('aura_theme'); } catch (e) {}
   },
 
   systems: {
@@ -875,8 +946,7 @@ const SubsystemApp = {
     }
 
     // Set accent color CSS variable
-    document.documentElement.style.setProperty('--sub-accent', sys.accent);
-    document.documentElement.style.setProperty('--sub-accent-rgb', sys.accentRgb);
+    this._applyAccent(sys);
 
     // Show subsystem page, hide others
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -954,8 +1024,7 @@ const SubsystemApp = {
   async showSetupModal() {
     document.getElementById('aura-relogin-modal')?.remove();
     this._authModalOpen = true;
-    document.documentElement.style.setProperty('--sub-accent', this.systems.retail.accent);
-    document.documentElement.style.setProperty('--sub-accent-rgb', this.systems.retail.accentRgb);
+    this._applyAccent(this.systems.retail);
 
     // AUDIT-fix 2026-08-17: registration now collects the license key
     // itself instead of the old separate pre-login "enter your key" screen
@@ -1436,8 +1505,7 @@ const SubsystemApp = {
   showReloginModal(msg = 'Your session has expired. Please log in again.') {
     document.getElementById('aura-relogin-modal')?.remove();
     this._authModalOpen = true;
-    document.documentElement.style.setProperty('--sub-accent', this.systems.retail.accent);
-    document.documentElement.style.setProperty('--sub-accent-rgb', this.systems.retail.accentRgb);
+    this._applyAccent(this.systems.retail);
     const overlay = document.createElement('div');
     overlay.id = 'aura-relogin-modal';
     overlay.className = 'auth-overlay';
@@ -1575,8 +1643,7 @@ const SubsystemApp = {
 
   // ── VERIFY EMAIL LANDING SCREEN (from #verify-email/<token>) ──────────────
   _showVerifyEmailScreen(token) {
-    document.documentElement.style.setProperty('--sub-accent', this.systems.retail.accent);
-    document.documentElement.style.setProperty('--sub-accent-rgb', this.systems.retail.accentRgb);
+    this._applyAccent(this.systems.retail);
     const overlay = document.createElement('div');
     overlay.id = 'aura-verify-email-screen';
     overlay.className = 'auth-overlay';
@@ -1620,8 +1687,7 @@ const SubsystemApp = {
 
   // ── RESET PASSWORD LANDING SCREEN (from #reset-password/<token>) ──────────
   _showResetPasswordScreen(token) {
-    document.documentElement.style.setProperty('--sub-accent', this.systems.retail.accent);
-    document.documentElement.style.setProperty('--sub-accent-rgb', this.systems.retail.accentRgb);
+    this._applyAccent(this.systems.retail);
     const overlay = document.createElement('div');
     overlay.id = 'aura-reset-password-screen';
     overlay.className = 'auth-overlay';
@@ -1736,7 +1802,13 @@ const SubsystemApp = {
           </div>
           <div class="sub-header-right">
             <button class="sub-header-btn" id="aura-lang-toggle" onclick="AuraI18n.toggle()" title="Language / اللغة" style="font-size:13px;font-weight:700;">${window.AuraI18n && AuraI18n.current === 'ar' ? 'EN' : 'ع'}</button>
-            <button class="sub-header-btn" id="aura-theme-toggle" onclick="SubsystemApp.toggleTheme()" title="Light / Dark mode" style="font-size:15px;">${(document.documentElement.getAttribute('data-theme')==='dark')?'☀️':'🌙'}</button>
+            <!-- The light/dark toggle lived here. Removed with the dark theme:
+                 selecting dark produced light surfaces without the
+                 [data-theme="light"] compatibility layer, rendering .ret-table
+                 white-on-white at 1.00:1. See SubsystemApp.toggleTheme's comment
+                 for what restoring a dark theme would actually require. The
+                 palette picker beside this (ThemeEngine) still works -- it
+                 chooses an ACCENT, which is a different thing. -->
             <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="Change UI theme" style="font-size:15px;">🎨</button>
             <div class="sub-header-badge" style="background:rgba(${sys.accentRgb},0.15);border-color:${sys.accent};color:${sys.accent}">
               ${window.AuraIcons ? AuraIcons.render(sys.icon, 14) : sys.icon} ${t(sys.name)}

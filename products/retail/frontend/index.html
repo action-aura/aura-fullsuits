@@ -6,8 +6,30 @@
   <title>Aura Retail</title>
   <link rel="icon" href="data:,">
   <script>
-    // Apply the saved theme before first paint to avoid a flash (default: light).
-    try { document.documentElement.setAttribute('data-theme', localStorage.getItem('aura_theme') || 'light'); } catch(e) {}
+    // OPERATIONAL CALM: light is the only theme, and this line FORCES it rather
+    // than reading a saved preference.
+    //
+    // It used to read localStorage('aura_theme'). That is now a live hazard, not
+    // a preference: the token layer points :root and html[data-theme="light"] at
+    // the SAME light palette, while the large compatibility layer in main.css is
+    // still scoped to [data-theme="light"]. So a document carrying
+    // data-theme="dark" gets light surfaces WITHOUT that layer, and the dark
+    // theme's white literals that subsystem-retail.js injects then render
+    // white-on-white -- measured at 1.00:1 on .ret-table, taking the products,
+    // customers, sales-history and dashboard grids with it.
+    //
+    // Because the old value is PERSISTED, any terminal where anyone ever tapped
+    // the toggle would boot straight into that on upgrade day, having touched
+    // nothing. Forcing the attribute is what makes those installs self-heal.
+    //
+    // The stale key is removed too. Not required for correctness -- nothing
+    // reads it any more -- but leaving a key named "aura_theme" lying in every
+    // shop's browser storage invites someone to wire it back up without finding
+    // this comment first.
+    try {
+      document.documentElement.setAttribute('data-theme', 'light');
+      localStorage.removeItem('aura_theme');
+    } catch(e) {}
     // This build only ever serves Retail — the shell skips the multi-subsystem
     // chooser entirely and launches straight into it (see app-shell.js).
     window.IS_STANDALONE = true;
@@ -15,7 +37,20 @@
   <link rel="stylesheet" href="/static/css/main.css">
   <link rel="stylesheet" href="/static/css/rtl.css">
   <style>
-    body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #020617; color: white; }
+    /* OPERATIONAL CALM: this rule used to set a hardcoded near-black page
+       background with plain white body text, under a document that defaults to
+       data-theme="light" (see the boot script above). Two things were wrong
+       with it, and both were visible on every install:
+         * it is a LITERAL, so the theme tokens could not reach the page's own
+           background at all — main.css themes .sub-content and the panels, but
+           the root surface behind them stayed near-black regardless of theme,
+           which is what produced the dark seam around a light UI;
+         * white body text on a light theme is the worst possible default for
+           any text that inherits from body rather than from a themed class.
+       Both now come from the same tokens every panel uses, so the working
+       surface follows the theme instead of fighting it. */
+    html, body { margin: 0; padding: 0; inline-size: 100%; block-size: 100%; }
+    body { background: var(--app-bg); color: var(--text); }
   </style>
 </head>
 <body>

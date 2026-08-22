@@ -250,6 +250,149 @@ const RetailSystem = {
     return (v < 0 ? '-$' : '$') + Math.abs(v).toFixed(2);
   },
   _fmtNum(n) { return (+(n||0)).toLocaleString(); },
+
+  // Read a design token's resolved value for the one consumer that cannot use
+  // var() at all: Chart.js, which takes plain colour strings. Everything else
+  // on these screens references tokens directly in CSS; this exists so the
+  // charts follow the same palette instead of carrying a private copy of it.
+  // The fallback is only reached when the token is genuinely absent (an older
+  // cached main.css), never as a styling choice.
+  _cssToken(name, fallback) {
+    try {
+      const v = (getComputedStyle(document.documentElement).getPropertyValue(name) || '').trim();
+      return v || fallback;
+    } catch (e) {
+      return fallback;   // no computed style (tests / non-DOM host)
+    }
+  },
+
+  // ── Money as MARKUP (presentational; _fmt above stays the plain-text form) ──
+  //
+  // _fmt() is consumed by receipt printing, toasts and several tests, so its
+  // return value is deliberately untouched. This is the on-screen form, and it
+  // exists to satisfy one rule the plain string cannot:
+  //
+  //   A NEGATIVE AMOUNT MUST BE DISTINGUISHABLE WITHOUT COLOUR.
+  //
+  // _fmt() renders -120 as "-$120.00" and every previous screen then coloured
+  // it red and called that done. A red minus sign is invisible to a
+  // colourblind cashier, and on the washed-out 6-bit panel most shops actually
+  // own it is invisible to everyone. So a negative gets THREE independent
+  // signals here, only one of which is colour:
+  //   * accounting parentheses -- the convention every finance professional
+  //     already reads, and the one that survives greyscale and photocopying;
+  //   * a real U+2212 MINUS SIGN rather than U+002D hyphen, which is wider,
+  //     sits on the digit midline, and cannot be mistaken for a hyphenated
+  //     product name;
+  //   * .money--negative, which css/main.css colours from
+  //     --text-money-negative AND sets bold.
+  // Strip the colour entirely and the amount is still unambiguous. That is the
+  // test.
+  //
+  // The class names below are the token layer's (css/main.css), not invented
+  // here: `.money` supplies tabular-nums + slashed-zero + nowrap, and
+  // `.money--negative` supplies the --text-money-negative colour AND a bold
+  // weight. `.money--accounting` is that stylesheet's opt-in parenthesis pair,
+  // rendered via ::before/::after -- which is why this function emits the
+  // MINUS SIGN ONLY and never a literal bracket: doing both would render
+  // "((−$65.44))". Opting every negative on the till and the dashboard into
+  // the accounting form is deliberate; those are exactly the screens read on
+  // washed-out shop monitors and printed in black and white.
+  //
+  // Net effect: three independent signals for a negative, of which only one is
+  // colour -- bold weight, accounting parentheses, and the U+2212 glyph.
+  //
+  // rtl.css already forces .money to direction:ltr, so the mirrored Arabic
+  // layout renders the figure itself correctly too.
+  _money(n, extraClass) {
+    const v = +(n || 0);
+    const neg = v < 0;
+    // U+2212 MINUS SIGN, not U+002D HYPHEN: it is wider, sits on the digit
+    // midline, and cannot be misread as a hyphen in a product name.
+    const digits = (neg ? '−' : '') + '$' + Math.abs(v).toFixed(2);
+    const cls = 'money' + (neg ? ' money--negative money--accounting' : '') +
+                (extraClass ? ' ' + extraClass : '');
+    return `<span class="${cls}"${neg ? ' data-sign="negative"' : ''}>${digits}</span>`;
+  },
+
+  // The Charge button's label, in one place. _recalc() and both of _checkout()'s
+  // failure paths used to build this string independently, which is how the
+  // three of them would have drifted the moment any of them was translated.
+  _checkoutLabel(total) { return `${t('Charge')} — ${this._fmt(total)}`; },
+
+  // Today's date, in the language the operator is actually using.
+  //
+  // Both the dashboard header and the cashier landing hardcoded 'en-US' here,
+  // so an Arabic page rendered every other word in Arabic and then printed
+  // "Saturday, August 22, 2026" underneath the heading. A date is not a
+  // catalog string -- there is no sane way to enumerate every weekday/month
+  // combination in a JSON file -- so the fix is to let Intl do the job it
+  // exists for, keyed off the language the user already chose.
+  //
+  // Falls back to 'en-US' when AuraI18n has not loaded (standalone renders and
+  // every test in products/retail/tests/ run this file without it), which is
+  // the previous behaviour exactly.
+  _localeDate(d) {
+    const when = d || new Date();
+    const lang = (window.AuraI18n && AuraI18n.current === 'ar') ? 'ar' : 'en-US';
+    const opts = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+    try { return when.toLocaleDateString(lang, opts); }
+    catch (e) { return when.toLocaleDateString('en-US', opts); }
+  },
+
+  // ── Scan focus retention ───────────────────────────────────────────────────
+  //
+  // Scanning is the till's primary input, and a HID scanner types into
+  // whatever currently holds focus. _onScannerKey() below deliberately REFUSES
+  // to auto-detect a burst while focus sits in a text field that is not one of
+  // the search boxes -- otherwise a fast typist would lose characters. The
+  // consequence nobody had wired up: any stray tap that moved focus (a product
+  // tile, the pane background, a quantity button) left the till silently
+  // unable to scan, with no visible symptom, until the cashier thought to
+  // click back into the search box. In a queue, that reads as "the scanner
+  // broke".
+  //
+  // These ids are the fields where a caret is there ON PURPOSE. Reclaiming
+  // focus from them would be a worse bug than the one this fixes: it would
+  // make the discount and cash-tendered boxes literally untypeable, because
+  // every keystroke fires an oninput -> _recalc()/_calcChange() -> re-render
+  // path that would yank the caret away mid-number.
+  _POS_FOCUS_KEEPERS: ['pos-search', 'pos-disc', 'pos-tendered', 'pos-customer'],
+
+  // Returns true only if focus was actually moved, so callers (and the tests)
+  // can tell "the guard ran and declined" from "the guard never ran".
+  _refocusScan(force) {
+    const doc = typeof document !== 'undefined' ? document : null;
+    if (!doc) return false;
+    const scan = doc.getElementById('pos-search');
+    // Guarded rather than assumed: this runs from _renderCart(), which several
+    // existing tests drive against element stubs that have no focus().
+    if (!scan || typeof scan.focus !== 'function') return false;
+    if (!force) {
+      const el = doc.activeElement;
+      if (el && el.id && this._POS_FOCUS_KEEPERS.indexOf(el.id) !== -1) return false;
+    }
+    try { scan.focus(); } catch (e) { return false; }
+    return true;
+  },
+
+  // Bound to mousedown (NOT click) on every non-input region of the POS.
+  // The browser moves focus to the pressed element before any click handler
+  // runs, so preventDefault() here is the only thing that stops the blur from
+  // happening at all; refocusing after the fact would still blur-then-refocus,
+  // which on a touchscreen dismisses the on-screen keyboard and visibly
+  // flickers the caret. Text controls are exempted so they can still be
+  // focused by tapping them, and <select> especially -- swallowing its
+  // mousedown would stop the dropdown from opening.
+  _keepScanFocus(e) {
+    const el = e && e.target ? e.target : null;
+    const tag = el && el.tagName ? String(el.tagName).toUpperCase() : '';
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || (el && el.isContentEditable)) return true;
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    this._refocusScan();
+    return false;
+  },
+
   _badge(text, color) { return `<span class="ret-badge ret-badge-${color||'blue'}">${text}</span>`; },
   // Held-sale labels are free text a cashier types on the spot (unlike
   // product/customer names, which come from admin-entered catalog data) --
@@ -579,111 +722,217 @@ const RetailSystem = {
       return this._renderCashierLanding(c);
     }
 
+    // OPERATIONAL CALM — dashboard. What changed and why.
+    //
+    // This screen was five equally-weighted KPI cards in a row, plus two
+    // charts, plus a table, every one of them in its own bordered panel.
+    // Uniform emphasis is the same as no emphasis: there was no answer to
+    // "what do I look at first", so the eye landed wherever it happened to.
+    //
+    // The question this screen now answers is a specific one -- WHAT DOES AN
+    // OWNER OPENING THIS AT 9AM NEED TO KNOW? -- and that changes the ranking
+    // materially, because at 9am today's revenue is close to zero. The old
+    // design made that near-zero the hero: the loudest, largest, accent-washed
+    // element on the page was "$0.00", every single morning. A hero tile that
+    // is only meaningful after lunch is a hero tile designed for a screenshot,
+    // not for the person who opens the shop.
+    //
+    // So, in order:
+    //
+    //   1. TODAY SO FAR — still first, because it is the live pulse, but
+    //      LABELLED so that $0.00 at 9am reads as "we have not opened yet"
+    //      rather than as a catastrophe. The figure carries the day's
+    //      transaction count and average ticket with it, since a revenue
+    //      number with no volume beside it cannot be interpreted.
+    //
+    //   2. NEEDS ATTENTION — promoted from the smallest tile on the screen to
+    //      a band of its own directly under the headline, because low stock is
+    //      the ONLY thing on this entire screen an owner can act on at 9am,
+    //      and acting on it before the day starts is the whole point. It is
+    //      also the one place colour genuinely carries meaning here, so it is
+    //      one of the only places colour appears. When nothing needs doing it
+    //      collapses to a quiet single line rather than a red zero — a
+    //      dashboard that shouts on a good morning teaches people to ignore it.
+    //
+    //   3. CONTEXT (month-to-date, customers, catalogue size) — demoted to a
+    //      small type strip with no card chrome at all. These are reference
+    //      figures, not decisions. They are separated from the above by
+    //      rhythm and a single rule, not by five more boxes.
+    //
+    //   4. RETROSPECTIVE (charts, recent transactions) — last, quieter
+    //      headings. Useful, never urgent.
+    //
+    // Every element id the previous layout exposed is preserved verbatim
+    // (r-k-rev, r-k-txn, r-k-mtd, r-k-low, r-k-cust, r-k-prod, r-k-rev-chg,
+    // r-k-rev-breakdown, r-k-txn-sub, r-k-mtd-sub, r-dash-hourly, r-dash-pay,
+    // r-dash-recent) — the binding block below and four existing regression
+    // tests address them by id, and a visual rework is not a licence to
+    // invalidate them.
     c.innerHTML = `
       <style>
-        .rdash .ret-title { color:var(--text);font-size:26px;letter-spacing:-0.4px; }
-        .rdash-date { color:var(--text-faint);font-size:13px;margin:4px 0 0; }
-        /* KPI grid: the hero card gets more track than the four supporting
-           cards; below 1300px it spans a full row of its own. */
-        .rdash .ret-kpi-grid { grid-template-columns:minmax(230px,1.4fr) repeat(4,minmax(0,1fr)); }
-        @media(max-width:1300px){
-          .rdash .ret-kpi-grid { grid-template-columns:repeat(2,1fr); }
-          .rdash .ret-kpi-hero { grid-column:1/-1; }
-        }
-        .rdash .ret-kpi {
-          background:var(--surface-card);border-color:var(--border-soft);
-          transition:transform .22s cubic-bezier(.2,.8,.2,1), box-shadow .22s ease, border-color .22s ease;
-          will-change:transform;
-          animation:rdashRise .4s cubic-bezier(.22,1,.36,1) both;
-        }
-        .rdash .ret-kpi:nth-child(2){animation-delay:.05s} .rdash .ret-kpi:nth-child(3){animation-delay:.1s}
-        .rdash .ret-kpi:nth-child(4){animation-delay:.15s} .rdash .ret-kpi:nth-child(5){animation-delay:.2s}
-        @keyframes rdashRise { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:none} }
-        .rdash .ret-kpi::before { opacity:.06; }
-        .rdash .ret-kpi:hover {
-          transform:translateY(-3px);
-          border-color:rgba(var(--sub-accent-rgb),0.35);
-          box-shadow:0 12px 28px rgba(0,0,0,0.22);
-        }
-        .rdash .ret-kpi-value { color:var(--text);font-variant-numeric:tabular-nums; }
-        .rdash .ret-kpi-value.is-danger { color:#ef4444; }
-        .rdash .ret-kpi-sub { color:var(--text-faint); }
-        .rdash .ret-kpi-label { color:var(--text-faint); }
-        .rdash .ret-kpi-breakdown { border-top-color:var(--border-soft); }
-        .rdash .ret-kpi-breakdown-item { color:var(--text-faint); }
-        /* Hero (Revenue Net): the single accent-loud element on the screen. */
-        .rdash .ret-kpi-hero {
-          border-color:rgba(var(--sub-accent-rgb),0.35);
-          background:linear-gradient(135deg, rgba(var(--sub-accent-rgb),0.10), var(--surface-card) 60%);
-        }
-        .rdash .ret-kpi-hero::before { opacity:.14; }
-        .rdash .ret-kpi-hero .ret-kpi-label { color:var(--sub-accent);font-weight:700; }
-        .rdash .ret-kpi-hero .ret-kpi-value { font-size:34px;letter-spacing:-1px; }
-        /* Day-over-day delta as a designed chip, not raw colored text. */
-        .rdash-delta {
-          display:inline-flex;align-items:center;gap:4px;padding:2px 9px;margin-top:2px;
-          border-radius:20px;font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;
-        }
-        .rdash-delta.up   { background:rgba(16,185,129,0.14);color:#10b981; }
-        .rdash-delta.down { background:rgba(239,68,68,0.14);color:#ef4444; }
-        /* Recent-transactions table: theme-correct + a visible row affordance
-           (rows are clickable — cursor alone wasn't signalling that). */
+        .rdash { max-inline-size:1400px; }
+        .rdash .ret-title { color:var(--text);font-size:24px;letter-spacing:-0.02em;font-weight:700; }
+        .rdash-date { color:var(--text-dim);font-size:13px;margin-block:4px 0; }
+
+        /* ── 1. The answer ───────────────────────────────────────────────── */
+        .rdash-answer { padding-block:6px 22px; }
+        .rdash-answer-label { color:var(--text-dim);font-size:12px;font-weight:700;
+          letter-spacing:.1em;text-transform:uppercase; }
+        .rdash-answer-figure { display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-block:6px 8px; }
+        /* The largest thing on the dashboard, by the same logic that makes the
+           sale total the largest thing on the POS. */
+        .rdash-answer-value { font-size:clamp(var(--text-size-total, 40px),4.6vw,58px);line-height:1;font-weight:800;
+          letter-spacing:-0.025em;color:var(--text); }
+        .rdash-answer-sub { color:var(--text-dim);font-size:14px;display:flex;gap:8px;
+          align-items:baseline;flex-wrap:wrap; }
+        .rdash-answer-sub b { color:var(--text);font-weight:700; }
+        /* Day-over-day delta: a chip, and one that says ▲/▼ as well as
+           colouring itself, so the direction survives greyscale. */
+        .rdash-delta { display:inline-flex;align-items:center;gap:5px;padding-block:3px;padding-inline:10px;
+          border-radius:20px;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap; }
+        .rdash-delta.up   { color:var(--text-money-positive, var(--text));background:var(--state-success-surface, var(--surface-soft)); }
+        .rdash-delta.down { color:var(--text-money-negative, var(--text));background:var(--state-danger-surface, var(--surface-soft)); }
+        .rdash-breakdown { display:flex;gap:22px;flex-wrap:wrap;margin-block-start:12px; }
+        .rdash-bd-item { display:flex;flex-direction:column;gap:2px; }
+        .rdash-bd-label { color:var(--text-dim);font-size:12px; }
+        .rdash-bd-value { font-size:15px;font-weight:700;color:var(--text); }
+        .rdash-bd-value.is-in  { color:var(--text-money-positive, var(--text)); }
+        .rdash-bd-value.is-out { color:var(--text-money-negative, var(--text)); }
+
+        /* ── 2. Needs attention ──────────────────────────────────────────── */
+        .rdash-attention { display:flex;align-items:center;justify-content:space-between;gap:16px;
+          flex-wrap:wrap;padding-block:14px;padding-inline:18px;border-radius:12px;
+          border:1px solid var(--state-warning-border, var(--border-mid));
+          background:var(--state-warning-surface, var(--surface-soft));margin-block-end:22px; }
+        .rdash-attention-main { display:flex;align-items:center;gap:12px;flex-wrap:wrap; }
+        .rdash-attention-dot { inline-size:10px;block-size:10px;border-radius:50%;flex-shrink:0;
+          background:var(--state-warning-text, var(--text-dim));transform:scale(1.2); }
+        .rdash-attention-headline { font-size:15px;font-weight:700;color:var(--text); }
+        .rdash-attention-count { font-size:22px;font-weight:800;color:var(--text);
+          font-variant-numeric:tabular-nums; }
+        .rdash-attention-calm { display:none;color:var(--text-dim);font-size:14px; }
+        /* Calm state. The difference is carried by the WORDS first ("Nothing
+           needs attention"), by the border/background dropping back to neutral
+           tokens second, and by the dot shrinking third — three signals, only
+           one of them colour. */
+        .rdash-attention.is-calm { border-color:var(--border-soft);background:transparent;padding-inline:0; }
+        .rdash-attention.is-calm .rdash-attention-dot { background:var(--border-mid);transform:scale(0.8); }
+        .rdash-attention.is-calm .rdash-attention-alert,
+        .rdash-attention.is-calm .rdash-attention-action { display:none; }
+        .rdash-attention.is-calm .rdash-attention-calm { display:inline; }
+        .rdash-attention-alert { display:flex;align-items:baseline;gap:8px;flex-wrap:wrap; }
+
+        /* ── 3. Context strip: no cards, hierarchy by scale alone ─────────── */
+        .rdash-context { display:flex;gap:40px;flex-wrap:wrap;padding-block:16px 20px;
+          border-block-start:1px solid var(--border-soft);margin-block-end:24px; }
+        .rdash-context-item { display:flex;flex-direction:column;gap:3px;min-inline-size:0; }
+        .rdash-context-label { color:var(--text-dim);font-size:11px;font-weight:700;
+          letter-spacing:.09em;text-transform:uppercase; }
+        .rdash-context-value { font-size:20px;font-weight:700;color:var(--text);
+          font-variant-numeric:tabular-nums; }
+        .rdash-context-note { color:var(--text-dim);font-size:12px;font-variant-numeric:tabular-nums; }
+
+        /* ── 4. Retrospective ────────────────────────────────────────────── */
+        .rdash-panels { display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:18px;margin-block-end:18px; }
+        @media(max-width:1000px){ .rdash-panels { grid-template-columns:minmax(0,1fr); } }
+        .rdash .sub-chart-title { color:var(--text);font-size:14px;font-weight:700; }
+        .rdash-panel-hdr { display:flex;justify-content:space-between;align-items:center;gap:12px;
+          flex-wrap:wrap;margin-block-end:14px; }
         .rdash .ret-table { color:var(--text); }
-        .rdash .ret-table th { color:var(--text-faint);border-bottom-color:var(--border-mid); }
+        .rdash .ret-table th { color:var(--text-dim);border-bottom-color:var(--border-mid);
+          font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase; }
         .rdash .ret-table td { border-bottom-color:var(--border-soft); }
         .rdash .ret-table tbody tr { transition:background .15s ease; }
-        .rdash .ret-table tbody tr:hover { background:rgba(var(--sub-accent-rgb),0.06); }
-        .rdash .ret-btn-ghost {
-          background:var(--surface-soft);color:var(--text-dim);border-color:var(--border-mid);
-          transition:background .15s ease, color .15s ease, transform .15s ease;
-        }
-        .rdash .ret-btn-ghost:hover { background:var(--surface-hover);color:var(--text);transform:translateY(-1px); }
-        .rdash .ret-btn-ghost:focus-visible { outline:2px solid var(--sub-accent);outline-offset:2px; }
-        @media (prefers-reduced-motion: reduce) {
-          .rdash .ret-kpi { animation:none;transition:none; }
-        }
+        .rdash .ret-table tbody tr:hover { background:var(--surface-hover); }
+        /* Money column: tabular + end-aligned so the amounts form a real
+           column that can be scanned and summed by eye. text-align:end, not
+           right, so it stays correct mirrored. */
+        .rdash .ret-table .col-money { text-align:end; }
+        /* .money / .money--negative / .money--accounting themselves are owned
+           by css/main.css -- colour, bold weight, tabular figures and the
+           accounting parentheses all live there. Nothing is restated here. */
+        .rdash .money { font-variant-numeric:tabular-nums;white-space:nowrap; }
+        .rdash .ret-btn-ghost { background:var(--surface-soft);color:var(--text-dim);border-color:var(--border-mid);
+          min-block-size:40px;transition:background .15s ease, color .15s ease; }
+        .rdash .ret-btn-ghost:hover { background:var(--surface-hover);color:var(--text); }
+        .rdash :focus-visible { outline:var(--focus-ring-width, 3px) solid var(--focus-ring-color, var(--sub-accent));outline-offset:var(--focus-ring-offset, 2px); }
+        @media (prefers-reduced-motion: reduce) { .rdash * { transition:none; } }
       </style>
       <div class="rdash">
       <div class="ret-hdr">
         <div>
           <h2 class="ret-title">${t('Retail Overview')}</h2>
-          <p class="rdash-date">${new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</p>
+          <p class="rdash-date" data-intl-date="true">${this._localeDate()}</p>
         </div>
         <div style="display:flex;gap:10px">
-          <button class="sub-btn-primary" onclick="SubsystemApp._navigate('pos')">🛒 Open POS</button>
+          <button class="sub-btn-primary" onclick="SubsystemApp._navigate('pos')"><span aria-hidden="true">🛒</span> <span>${t('Open the till')}</span></button>
         </div>
       </div>
-      <div class="ret-kpi-grid">
-        <div class="ret-kpi ret-kpi-hero"><div class="ret-kpi-label">Revenue (Net)</div><div class="ret-kpi-value" id="r-k-rev">—</div><div class="ret-kpi-sub" id="r-k-rev-chg"></div><div class="ret-kpi-breakdown" id="r-k-rev-breakdown"></div></div>
-        <div class="ret-kpi"><div class="ret-kpi-label">Transactions</div><div class="ret-kpi-value" id="r-k-txn">—</div><div class="ret-kpi-sub" id="r-k-txn-sub"></div></div>
-        <div class="ret-kpi"><div class="ret-kpi-label">Month-to-Date</div><div class="ret-kpi-value" id="r-k-mtd">—</div><div class="ret-kpi-sub" id="r-k-mtd-sub"></div></div>
-        <div class="ret-kpi"><div class="ret-kpi-label">Low Stock</div><div class="ret-kpi-value is-danger" id="r-k-low">—</div><div class="ret-kpi-sub">items need reorder</div></div>
-        <div class="ret-kpi"><div class="ret-kpi-label">Customers</div><div class="ret-kpi-value" id="r-k-cust">—</div><div class="ret-kpi-sub" id="r-k-prod"></div></div>
+
+      <section class="rdash-answer">
+        <div class="rdash-answer-label">${t('Today so far')}</div>
+        <div class="rdash-answer-figure">
+          <span class="rdash-answer-value money" id="r-k-rev">—</span>
+          <span id="r-k-rev-chg"></span>
+        </div>
+        <div class="rdash-answer-sub">
+          <span><b id="r-k-txn">—</b> ${t('transactions')}</span>
+          <span aria-hidden="true">·</span>
+          <span>${t('avg ticket')} <b class="money" id="r-k-txn-sub">—</b></span>
+        </div>
+        <div class="rdash-breakdown" id="r-k-rev-breakdown"></div>
+      </section>
+
+      <section class="rdash-attention" id="r-dash-attention">
+        <div class="rdash-attention-main">
+          <span class="rdash-attention-dot" aria-hidden="true"></span>
+          <span class="rdash-attention-headline">${t('Needs attention')}</span>
+          <span class="rdash-attention-alert">
+            <span class="rdash-attention-count" id="r-k-low">—</span>
+            <span>${t('items need reorder')}</span>
+          </span>
+          <span class="rdash-attention-calm">${t('Nothing needs attention')}</span>
+        </div>
+        <button class="ret-btn ret-btn-ghost rdash-attention-action" onclick="SubsystemApp._navigate('products')">${t('Review stock')}</button>
+      </section>
+
+      <div class="rdash-context">
+        <div class="rdash-context-item">
+          <span class="rdash-context-label">${t('Month-to-Date')}</span>
+          <span class="rdash-context-value money" id="r-k-mtd">—</span>
+          <span class="rdash-context-note"><span id="r-k-mtd-sub">—</span> ${t('transactions')}</span>
+        </div>
+        <div class="rdash-context-item">
+          <span class="rdash-context-label">${t('Customers')}</span>
+          <span class="rdash-context-value" id="r-k-cust">—</span>
+          <span class="rdash-context-note"><span id="r-k-prod">—</span> ${t('active products')}</span>
+        </div>
       </div>
-      <div style="display:grid;grid-template-columns:2fr 1fr;gap:20px;margin-bottom:20px">
+
+      <div class="rdash-panels">
         <div class="sub-chart-card">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-            <div class="sub-chart-title">Revenue Today (by Hour)</div>
+          <div class="rdash-panel-hdr">
+            <div class="sub-chart-title">${t('Revenue Today (by Hour)')}</div>
           </div>
           <div style="height:200px"><canvas id="r-dash-hourly"></canvas></div>
         </div>
         <div class="sub-chart-card">
-          <div class="sub-chart-title" style="margin-bottom:14px">Payment Methods</div>
+          <div class="rdash-panel-hdr"><div class="sub-chart-title">${t('Payment Methods')}</div></div>
           <div style="height:200px"><canvas id="r-dash-pay"></canvas></div>
         </div>
       </div>
       <div class="sub-chart-card">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-          <div class="sub-chart-title">Recent Transactions</div>
+        <div class="rdash-panel-hdr">
+          <div class="sub-chart-title">${t('Recent Transactions')}</div>
           <div style="display:flex;gap:8px">
-            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="SubsystemApp._navigate('sales')">🧾 Sales History</button>
-            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="SubsystemApp._navigate('reports')">Full Report →</button>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="SubsystemApp._navigate('sales')"><span aria-hidden="true">🧾</span> <span>${t('Sales History')}</span></button>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="SubsystemApp._navigate('reports')">${t('Full Report')}</button>
           </div>
         </div>
         <div style="overflow-x:auto">
           <table class="ret-table" id="r-dash-recent">
-            <thead><tr><th>Receipt #</th><th>Customer</th><th>Items</th><th>Payment</th><th>Total</th><th>Date</th></tr></thead>
-            <tbody><tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:30px">Loading…</td></tr></tbody>
+            <thead><tr><th>${t('Receipt #')}</th><th>${t('Customer')}</th><th>${t('Items')}</th><th>${t('Payment')}</th><th class="col-money">${t('Total')}</th><th>${t('Date')}</th></tr></thead>
+            <tbody><tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:30px">${t('Loading…')}</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -696,21 +945,43 @@ const RetailSystem = {
       document.getElementById('r-k-mtd').textContent   = this._fmt(d.month_sales);
       document.getElementById('r-k-low').textContent   = d.low_stock_alerts || 0;
       document.getElementById('r-k-cust').textContent  = this._fmtNum(d.total_customers);
-      document.getElementById('r-k-prod').textContent  = `${d.total_products||0} active products`;
+      // These three used to be built as interpolated sentences
+      // ("312 active products", "avg $68.58 ticket", "210 transactions").
+      // That put the number and the translatable words in ONE text node, which
+      // i18n.js's DOM sweep can never match -- it only rescues a node whose
+      // FULL trimmed text is a catalog key. So all three were permanently
+      // English on an Arabic page, silently, exactly like the "🛒 Open POS"
+      // button documented on _renderCashierLanding below. The words now live
+      // in their own t()-rendered spans in the template above and only the
+      // figure is injected here.
+      document.getElementById('r-k-prod').textContent  = this._fmtNum(d.total_products || 0);
       // Avg ticket = average sale size, so use GROSS (net + returns) ÷ transactions —
       // returns shouldn't distort the average sale value.
       const grossToday = (d.today_sales || 0) + (d.today_returns || 0);
-      document.getElementById('r-k-txn-sub').textContent = `avg ${this._fmt(grossToday / (d.today_transactions || 1))} ticket`;
-      document.getElementById('r-k-mtd-sub').textContent = `${d.month_transactions||0} transactions`;
+      document.getElementById('r-k-txn-sub').textContent = this._fmt(grossToday / (d.today_transactions || 1));
+      document.getElementById('r-k-mtd-sub').textContent = this._fmtNum(d.month_transactions || 0);
+
+      // Needs-attention band. Nothing to reorder is the GOOD case and is
+      // presented as one calm line, not as a red zero — see the block comment
+      // at the top of this method for why a dashboard that shouts on a good
+      // morning stops being read at all.
+      const attentionEl = document.getElementById('r-dash-attention');
+      if (attentionEl && attentionEl.classList) {
+        attentionEl.classList.toggle('is-calm', !(d.low_stock_alerts > 0));
+      }
 
       const chg = d.sales_change_pct || 0;
       const chgEl = document.getElementById('r-k-rev-chg');
       // Same data, presented as a designed chip (.rdash-delta) instead of a
       // raw colored text run — the old ret-kpi-change-* spans still exist in
       // _injectStyles for any other consumer.
+      // ▲/▼ carries the direction on its own, so the chip still reads correctly
+      // with no colour at all. The percentage and the words are separate nodes
+      // so 'vs yesterday' is actually translatable (as one interpolated string
+      // it never could be).
       chgEl.innerHTML = chg >= 0
-        ? `<span class="rdash-delta up">▲ ${Math.abs(chg)}% vs yesterday</span>`
-        : `<span class="rdash-delta down">▼ ${Math.abs(chg)}% vs yesterday</span>`;
+        ? `<span class="rdash-delta up"><span aria-hidden="true">▲</span> ${Math.abs(chg)}% <span>${t('vs yesterday')}</span></span>`
+        : `<span class="rdash-delta down"><span aria-hidden="true">▼</span> ${Math.abs(chg)}% <span>${t('vs yesterday')}</span></span>`;
 
       // Revenue (Net) = Sales − Returns. Accounting logic is unchanged (the
       // backend already nets returns out of `today_sales`) — this is purely
@@ -722,22 +993,34 @@ const RetailSystem = {
       const grossSales = (d.today_sales || 0) + retToday;
       const breakdownEl = document.getElementById('r-k-rev-breakdown');
       if (breakdownEl) {
+        // Returns are passed to _money() as a NEGATIVE, so they render as
+        // "(−$65.44)" — parentheses plus a real minus sign. That is what makes
+        // "returns exceeded sales today" legible to a colourblind cashier and
+        // on a washed-out monitor, where the old red hex was simply invisible.
+        // The colour is now a token on the class, not an inline literal.
         breakdownEl.innerHTML = `
-          <div class="ret-kpi-breakdown-item">Sales<b style="color:#10b981">${this._fmt(grossSales)}</b></div>
-          <div class="ret-kpi-breakdown-item">Returns<b style="color:${retToday > 0 ? '#ef4444' : 'var(--text-muted)'}">${retToday > 0 ? '-' : ''}${this._fmt(retToday)}</b></div>
+          <div class="rdash-bd-item"><span class="rdash-bd-label">${t('Sales')}</span><span class="rdash-bd-value is-in">${this._money(grossSales)}</span></div>
+          <div class="rdash-bd-item"><span class="rdash-bd-label">${t('Returns')}</span><span class="rdash-bd-value${retToday > 0 ? ' is-out' : ''}">${this._money(retToday > 0 ? -retToday : 0)}</span></div>
         `;
       }
 
       if (window.Chart) {
-        // Presentational only: Chart.js can't consume CSS var() strings, so
-        // resolve the live token values once per render. The dashboard
+        // Presentational only: Chart.js cannot consume CSS var() strings, so
+        // the live token values are resolved once per render. The dashboard
         // re-renders every 60 s (auto-refresh in app-shell), so a theme
         // toggle is picked up on the next refresh/navigation.
-        const isLight  = document.documentElement.getAttribute('data-theme') === 'light';
-        const accentRgb = (getComputedStyle(document.documentElement)
-          .getPropertyValue('--sub-accent-rgb') || '244,63,94').trim();
-        const tickClr = isLight ? '#51607a' : '#94a3b8';
-        const gridClr = isLight ? 'rgba(20,32,60,0.08)' : 'rgba(255,255,255,0.05)';
+        //
+        // The axis and grid colours used to be a `isLight ? '#51607a' :
+        // '#94a3b8'` ternary -- a second, private copy of the palette living
+        // in JavaScript, which is precisely how a chart ends up in a colour
+        // the rest of the screen abandoned two redesigns ago. They are read
+        // from the same tokens the surrounding markup uses now, exactly as the
+        // accent already was. `_cssToken` falls back to the previous literal
+        // only if the token is genuinely absent (an older cached stylesheet),
+        // so a chart can never render with no axis labels at all.
+        const tickClr = this._cssToken('--text-secondary', '#51607a');
+        const gridClr = this._cssToken('--border-hairline', '#e3e8ef');
+        const accentRgb = this._cssToken('--sub-accent-rgb', '23,69,169');
 
         // Hourly chart
         const hCtx = document.getElementById('r-dash-hourly');
@@ -753,7 +1036,7 @@ const RetailSystem = {
                        x:{grid:{display:false},ticks:{color:tickClr}} } }
           });
         } else if (hCtx) {
-          hCtx.parentElement.innerHTML = '<div style="height:200px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:14px">No sales today yet</div>';
+          hCtx.parentElement.innerHTML = `<div style="height:200px;display:flex;align-items:center;justify-content:center;color:var(--text-dim);font-size:14px">${t('No sales today yet')}</div>`;
         }
 
         // Payment method donut
@@ -771,7 +1054,7 @@ const RetailSystem = {
           // retailPaymentChartConfig() at the top of this file.
           new Chart(pCtx.getContext('2d'), retailPaymentChartConfig(pmLabels, pmData, tickClr));
         } else if (pCtx) {
-          pCtx.parentElement.innerHTML = '<div style="height:200px;display:flex;align-items:center;justify-content:center;color:var(--text-muted)">No transactions today</div>';
+          pCtx.parentElement.innerHTML = `<div style="height:200px;display:flex;align-items:center;justify-content:center;color:var(--text-dim);font-size:14px">${t('No transactions today')}</div>`;
         }
       }
 
@@ -779,14 +1062,14 @@ const RetailSystem = {
       const tbody = document.querySelector('#r-dash-recent tbody');
       const recent = d.recent_sales || [];
       if (recent.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:30px">No transactions yet today</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:30px">${t('No transactions yet today')}</td></tr>`;
       } else {
-        tbody.innerHTML = recent.map(s => `<tr style="cursor:pointer" onclick="RetailSystem._viewSale(${s.id})" title="View invoice">
-          <td style="font-family:monospace;color:var(--sub-accent)">${s.sale_number}</td>
-          <td>${s.customer_name||'Walk-in'}</td>
-          <td style="color:var(--text-dim)">${s.item_count||0} items</td>
-          <td>${this._badge(s.payment_method||'cash', s.payment_method==='cash'?'green':'blue')}</td>
-          <td style="font-weight:700">${this._fmt(s.total)}</td>
+        tbody.innerHTML = recent.map(s => `<tr style="cursor:pointer" onclick="RetailSystem._viewSale(${s.id})" title="${this._esc(t('View invoice'))}">
+          <td style="font-family:monospace;color:var(--sub-accent)">${this._esc(s.sale_number)}</td>
+          <td>${this._esc(s.customer_name || t('Walk-in'))}</td>
+          <td style="color:var(--text-dim)">${s.item_count||0} <span>${t('items')}</span></td>
+          <td>${this._badge(this._esc(s.payment_method||'cash'), s.payment_method==='cash'?'green':'blue')}</td>
+          <td class="col-money" style="font-weight:700">${this._money(s.total)}</td>
           <!-- AUDIT: the recent-sales query (retail_api.py) has no date filter,
                just ORDER BY created_at DESC LIMIT 8, so on a day with fewer than
                8 sales so far, rows here can be from earlier days. HH:MM-only used
@@ -825,13 +1108,22 @@ const RetailSystem = {
       <div class="ret-hdr">
         <div>
           <h2 class="ret-title">${t('Retail Overview')}</h2>
-          <p class="rdash-date" style="color:var(--text-faint);font-size:13px;margin:4px 0 0">${new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</p>
+          <p class="rdash-date" data-intl-date="true" style="color:var(--text-faint);font-size:13px;margin:4px 0 0">${this._localeDate()}</p>
         </div>
       </div>
-      <div class="sub-chart-card" style="text-align:center;padding:56px 32px">
-        <div style="font-size:40px;margin-bottom:14px">🛒</div>
-        <h3 style="color:var(--text);margin:0 0 10px;font-size:18px">${t('Ready to sell')}</h3>
-        <p style="color:var(--text-muted);font-size:13px;margin:0 0 24px;line-height:1.7;max-width:420px;margin-left:auto;margin-right:auto">
+      <div class="sub-chart-card" style="text-align:center;padding-block:56px;padding-inline:32px">
+        <div style="font-size:40px;margin-block-end:14px" aria-hidden="true">🛒</div>
+        <h3 style="color:var(--text);margin-block:0 10px;font-size:20px;font-weight:700">${t('Ready to sell')}</h3>
+        <!-- 2026-08-22: this paragraph used var(--text-muted), the legacy
+             un-themed token that is defined once at :root (#9aa0a6) and never
+             redefined for the light theme -- which is the default for a fresh
+             install. That is ~2.64:1 grey-on-white, well under the 4.5:1 WCAG
+             AA floor, on the FIRST screen a cashier sees after logging in.
+             retail_dashboard_transaction_contrast_test.js documents this exact
+             token trap for the Recent Transactions table; the same trap was
+             still live here. --text-dim is theme-aware (#51607a light, ~6.4:1
+             on a white card) and readable in both themes. -->
+        <p style="color:var(--text-dim);font-size:14px;margin-block:0 24px;line-height:1.7;max-inline-size:440px;margin-inline:auto">
           ${t('Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales.')}
         </p>
         <!-- 2026-08-22: this button read "🛒 Open POS", a bare literal, and had
@@ -850,163 +1142,352 @@ const RetailSystem = {
              _renderCapabilityRestricted below -- a DIFFERENT method, correct all
              along, which this panel merely resembles.
              Same key as that method's button on purpose: same button, same
-             destination, one sentence to keep translated. -->
-        <button class="sub-btn-primary" onclick="SubsystemApp._navigate('pos')">🛒 ${t('Point of Sale')}</button>
+             destination, one sentence to keep translated.
+             2026-08-22: the emoji is now in its own aria-hidden span as well.
+             t() already resolves this label, so the DOM sweep is not the load-
+             bearing path here -- but splitting the node is what makes the
+             sweep a working SAFETY NET rather than a decorative one, and this
+             file has now shipped the shared-text-node bug twice. -->
+        <button class="sub-btn-primary" style="min-block-size:48px;padding-inline:24px;font-size:15px"
+          onclick="SubsystemApp._navigate('pos')"><span aria-hidden="true">🛒</span> <span>${t('Point of Sale')}</span></button>
       </div>`;
   },
 
   // ── POS ───────────────────────────────────────────────────────────────────
-  // UI/UX polish (feat/retail-ui-ux-polish). Design intents, in order:
-  //   1. Selected ≠ hovered — category pills and payment buttons previously
-  //      used the SAME visual for :hover and .active, so a cashier scanning
-  //      the bar couldn't tell what was selected. Hover is now a tinted
-  //      outline; selected is a solid/inset accent fill.
-  //   2. The grand total is the most important number in the whole app —
-  //      it gets the largest type on the screen (26px tabular numerals).
-  //   3. Press feedback everywhere a finger lands (product card, qty, pay,
-  //      charge) via transform-only :active states — compositor-friendly,
-  //      matches this repo's animation performance rules.
-  //   4. All hardcoded dark values (#0f172a, #fff, rgba(255,255,255,…))
-  //      replaced with the semantic tokens so light mode renders correctly.
+  // OPERATIONAL CALM. This is a till: a cashier looks at it for eight hours,
+  // under fluorescent light, often on a cheap monitor or a touchscreen, with
+  // a queue watching. Money passes through it all day. The rules encoded
+  // below, in priority order, and the reason each one is a rule:
+  //
+  //   1. THE TOTAL IS THE LARGEST THING ON THE SCREEN. It was 26px, smaller
+  //      than several headings elsewhere in the shell and barely larger than
+  //      a product price. It is now clamp(38px,4.2vw,56px) -- decisively,
+  //      not marginally, the biggest element in the POS. A cashier reads it
+  //      to a customer without leaning in; a customer checks it from the
+  //      other side of the counter. retail_surface_pos_test.js asserts this
+  //      ordering against every other money element on the screen, so it
+  //      cannot silently regress the way it did before.
+  //
+  //   2. SCANNING IS THE PRIMARY INPUT. The scan field was a 280px search box
+  //      tucked in a pane header, indistinguishable from any other input, and
+  //      nothing ever returned focus to it. It is now the largest control on
+  //      the screen (56px tall, 19px text), carries a 4px focus ring plus a
+  //      lit status lamp readable across a room, and _refocusScan() below
+  //      returns focus after every interaction that had no business taking
+  //      it. This is not polish: _onScannerKey() REFUSES to auto-detect a
+  //      scan while focus sits in a non-search text field, so a stray tap
+  //      used to kill scanning outright until the cashier noticed.
+  //
+  //   3. MONEY IS UNAMBIGUOUS. Every figure is tabular-nums so a column of
+  //      amounts actually aligns and a 1 is as wide as a 7; every figure is
+  //      nowrap so the currency mark can never break away from its digits;
+  //      and a negative is marked with accounting parentheses AND a real
+  //      U+2212 minus (see _money()), never by colour alone -- a red minus
+  //      sign is invisible to a colourblind cashier and on a washed-out
+  //      monitor, which is most monitors in most shops.
+  //
+  //   4. BUILT FOR FINGERS. Every control a finger lands on is >=44px in
+  //      both axes, and nothing is discoverable only on :hover -- a
+  //      touchscreen has no hover, so a hover-only affordance is invisible
+  //      to half the installs. The remove-line button in particular used to
+  //      be a 26px glyph that only turned red on hover.
+  //
+  //   5. DESTRUCTIVE ACTIONS ARE NOT ADJACENT TO FREQUENT ONES. "Clear" sat
+  //      immediately beside "Hold" in the cart header, and the per-line "✕"
+  //      sat immediately beside the "+" quantity button -- the two highest-
+  //      frequency controls on the screen, each one finger-width from an
+  //      action that destroys work. Mis-tapping either during a queue costs
+  //      a real re-ring in front of a real customer. Void now lives in its
+  //      own footer bar, and each cart line puts its remove control in a
+  //      separate container behind a spacer, so no destructive control is a
+  //      DOM sibling of a high-frequency one. Asserted structurally.
+  //
+  //   6. HIERARCHY FROM SCALE AND WEIGHT, NOT BOXES. The old screen gave
+  //      every element its own panel/border, which is uniform emphasis,
+  //      which is no emphasis. Borders now separate the two ZONES (catalog
+  //      vs money) and nothing else; within a zone, rank is carried by size
+  //      and weight.
+  //
+  // COLOUR comes from the token layer only -- no literal ever appears here.
+  // Where a semantic token may not have landed yet, the fallback is ANOTHER
+  // TOKEN (`var(--text-money-positive, var(--sub-accent))`), never a hex, so a missing
+  // token degrades to legible body text rather than to an invalid declaration
+  // that inherits from nothing. The tokens this screen asks for and does not
+  // yet define anywhere are reported upstream, not invented here.
+  //
+  // RTL is by construction, not by chase: padding-inline / border-block /
+  // border-inline-start / text-align:end / inset-inline throughout, so the
+  // mirrored Arabic layout is correct without a single rule in rtl.css.
   _renderPOS(c) {
     this._injectStyles();
     c.innerHTML = `
       <style>
-        .pos-wrap { display:grid;grid-template-columns:2fr 1fr;gap:20px;height:calc(100vh - 120px); }
-        .pos-left { background:var(--surface-card);border:1px solid var(--border-soft);border-radius:16px;display:flex;flex-direction:column;overflow:hidden; }
-        .pos-right { background:var(--surface);border:1px solid rgba(var(--sub-accent-rgb),0.4);border-radius:16px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 0 44px rgba(var(--sub-accent-rgb),0.10); }
-        .pos-pane-hdr { padding:14px 20px;border-bottom:1px solid var(--border-soft);display:flex;justify-content:space-between;align-items:center;flex-shrink:0; }
-        .pos-pane-title { margin:0;color:var(--text);font-size:16px;font-weight:700; }
-        /* Cart header carries a faint accent wash so the "money side" of the
-           screen reads as one zone at a glance. */
-        .pos-cart-hdr { background:linear-gradient(180deg, rgba(var(--sub-accent-rgb),0.10), transparent); }
-        .pos-search { background:var(--input-bg);border:1px solid var(--border-mid);padding:9px 14px;border-radius:9px;color:var(--text);width:280px;outline:none;transition:border-color .18s ease, box-shadow .18s ease; }
-        .pos-search::placeholder { color:var(--text-faint); }
-        .pos-search:focus { border-color:var(--sub-accent);box-shadow:0 0 0 3px rgba(var(--sub-accent-rgb),0.15); }
-        .pos-cat-bar { display:flex;gap:8px;padding:12px 16px;border-bottom:1px solid var(--border-soft);overflow-x:auto;flex-shrink:0; }
-        .pos-cat-btn { padding:6px 14px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--border-mid);background:transparent;color:var(--text-dim);white-space:nowrap;transition:background .15s ease, color .15s ease, border-color .15s ease, transform .12s ease; }
-        .pos-cat-btn:hover { border-color:rgba(var(--sub-accent-rgb),0.5);color:var(--text);background:rgba(var(--sub-accent-rgb),0.08); }
-        .pos-cat-btn.active { background:var(--sub-accent);border-color:var(--sub-accent);color:#fff;box-shadow:0 4px 14px rgba(var(--sub-accent-rgb),0.35); }
-        .pos-cat-btn:active { transform:scale(0.96); }
-        .pos-product-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px;padding:16px;overflow-y:auto;flex:1; }
-        .pos-card { background:var(--surface-soft);border:1px solid var(--border-soft);border-radius:12px;padding:14px 10px;text-align:center;cursor:pointer;user-select:none;position:relative;will-change:transform;transition:transform .16s cubic-bezier(.2,.8,.2,1), border-color .16s ease, box-shadow .16s ease; }
-        .pos-card:hover { transform:translateY(-3px);border-color:rgba(var(--sub-accent-rgb),0.55);box-shadow:0 10px 22px rgba(0,0,0,0.22); }
-        .pos-card:active { transform:translateY(-1px) scale(0.97); }
-        .pos-card-outofstock { opacity:.35;cursor:not-allowed; }
-        .pos-card-outofstock:hover, .pos-card-outofstock:active { transform:none;border-color:var(--border-soft);box-shadow:none; }
-        .pos-card-icon { font-size:28px;margin-bottom:8px; }
-        .pos-card-name { color:var(--text);font-size:12px;font-weight:600;margin-bottom:4px;line-height:1.3;height:30px;overflow:hidden; }
-        .pos-card-price { color:var(--sub-accent);font-weight:800;font-size:15px;font-variant-numeric:tabular-nums; }
-        .pos-card-stock { font-size:10px;color:var(--text-faint);margin-top:3px; }
-        .pos-cart-items { flex:1;overflow-y:auto;padding:12px 14px; }
-        .pos-cart-row { display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-soft);border:1px solid var(--border-soft);margin-bottom:6px;border-radius:10px; }
-        /* Only the row just added animates (see _renderCart) — re-animating
-           the whole list on every qty change would read as flicker. */
-        .pos-row-new { animation:posRowIn .28s cubic-bezier(.22,1,.36,1) both; }
-        @keyframes posRowIn { from{opacity:0;transform:translateY(-6px) scale(0.98)} to{opacity:1;transform:none} }
-        .pos-item-name { color:var(--text);font-size:13px;font-weight:600; }
-        .pos-item-meta { color:var(--text-faint);font-size:11px;font-variant-numeric:tabular-nums; }
-        .pos-qty-wrap { display:flex;align-items:center;gap:3px;background:var(--input-bg);border:1px solid var(--border-soft);padding:2px;border-radius:8px; }
-        .pos-qty-btn { background:transparent;border:none;color:var(--text);width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;line-height:1;transition:background .12s ease, color .12s ease, transform .12s ease; }
-        .pos-qty-btn:hover { background:var(--sub-accent);color:#fff; }
-        .pos-qty-btn:active { transform:scale(0.88); }
-        .pos-qty-val { color:var(--text);font-size:13px;font-weight:700;min-width:22px;text-align:center;font-variant-numeric:tabular-nums; }
-        .pos-line-total { color:var(--text);font-weight:700;width:64px;text-align:right;font-variant-numeric:tabular-nums; }
-        .pos-remove-btn { background:none;border:none;color:var(--text-faint);cursor:pointer;font-size:14px;width:26px;height:26px;border-radius:6px;transition:background .12s ease, color .12s ease; }
-        .pos-remove-btn:hover { color:#ef4444;background:rgba(239,68,68,0.12); }
-        .pos-empty { display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;color:var(--text-faint);padding-top:44px;font-size:13px; }
-        .pos-empty-icon { font-size:34px;opacity:.5; }
-        .pos-summary { padding:16px;background:var(--surface-soft);border-top:1px solid var(--border-soft); }
-        .pos-sum-row { display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;color:var(--text-dim);font-size:13px;font-variant-numeric:tabular-nums; }
-        .pos-mini-input { background:var(--input-bg);border:1px solid var(--border-mid);border-radius:6px;color:var(--text);text-align:right;outline:none;transition:border-color .15s ease, box-shadow .15s ease; }
-        .pos-mini-input:focus { border-color:var(--sub-accent);box-shadow:0 0 0 2px rgba(var(--sub-accent-rgb),0.15); }
-        .pos-grand { display:flex;justify-content:space-between;align-items:baseline;padding-top:12px;border-top:1px dashed var(--border-mid);margin-bottom:12px; }
-        .pos-grand-label { font-size:12px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px; }
-        .pos-grand-value { font-size:26px;font-weight:800;letter-spacing:-0.5px;color:var(--text);font-variant-numeric:tabular-nums; }
-        .pos-pay-btns { display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:12px; }
-        .pos-pay-btn { padding:9px 4px;border-radius:9px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--border-mid);background:transparent;color:var(--text-dim);transition:background .15s ease, color .15s ease, border-color .15s ease, transform .12s ease; }
-        .pos-pay-btn:hover { border-color:rgba(var(--sub-accent-rgb),0.5);color:var(--text);background:rgba(var(--sub-accent-rgb),0.07); }
-        .pos-pay-btn.active { background:rgba(var(--sub-accent-rgb),0.15);border-color:var(--sub-accent);color:var(--sub-accent);box-shadow:inset 0 0 0 1px var(--sub-accent); }
-        .pos-pay-btn:active { transform:scale(0.96); }
-        .pos-clear-btn { background:none;border:none;color:#ef4444;cursor:pointer;font-size:12px;font-weight:600;padding:4px 8px;border-radius:6px;transition:background .12s ease; }
-        .pos-clear-btn:hover { background:rgba(239,68,68,0.10); }
-        .pos-hold-btn { background:none;border:none;color:#fbbf24;cursor:pointer;font-size:12px;font-weight:600;padding:4px 8px;border-radius:6px;transition:background .12s ease; }
-        .pos-hold-btn:hover { background:rgba(251,191,36,0.10); }
-        .pos-cust-select { background:var(--input-bg);border:1px solid var(--border-mid);border-radius:7px;color:var(--text-dim);padding:6px 10px;font-size:12px;outline:none;transition:border-color .15s ease; }
-        .pos-cust-select:focus { border-color:var(--sub-accent); }
-        .pos-checkout-btn { width:100%;padding:15px;background:linear-gradient(135deg,#10b981,#059669);border:none;border-radius:12px;color:#fff;font-weight:800;font-size:17px;letter-spacing:.2px;cursor:pointer;font-variant-numeric:tabular-nums;box-shadow:0 6px 20px rgba(16,185,129,0.30);transition:transform .16s ease, box-shadow .16s ease, opacity .16s ease; }
-        .pos-checkout-btn:hover { transform:translateY(-2px);box-shadow:0 12px 28px rgba(16,185,129,0.40); }
-        .pos-checkout-btn:active { transform:translateY(0) scale(0.98); }
-        .pos-checkout-btn:disabled { opacity:.45;cursor:not-allowed;transform:none;box-shadow:none; }
-        .pos-cat-btn:focus-visible,.pos-pay-btn:focus-visible,.pos-qty-btn:focus-visible,
-        .pos-remove-btn:focus-visible,.pos-clear-btn:focus-visible,.pos-hold-btn:focus-visible,.pos-checkout-btn:focus-visible,
-        .pos-search:focus-visible,.pos-cust-select:focus-visible { outline:2px solid var(--sub-accent);outline-offset:2px; }
+        .pos-wrap { display:grid;grid-template-columns:minmax(0,1.5fr) minmax(360px,0.95fr);gap:18px;block-size:calc(100vh - 120px); }
+        @media(max-width:1100px){ .pos-wrap { grid-template-columns:minmax(0,1fr);block-size:auto; } }
+        .pos-left { background:var(--surface-card);border:1px solid var(--border-soft);border-radius:14px;display:flex;flex-direction:column;overflow:hidden;min-block-size:0; }
+        .pos-right { background:var(--surface);border:1px solid var(--border-mid);border-radius:14px;display:flex;flex-direction:column;overflow:hidden;min-block-size:0; }
+        .pos-pane-hdr { padding-block:12px;padding-inline:16px;border-block-end:1px solid var(--border-soft);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-shrink:0;flex-wrap:wrap; }
+        .pos-pane-title { margin:0;color:var(--text);font-size:15px;font-weight:700;letter-spacing:-0.01em; }
+
+        /* ── Scan bar: the primary input, sized like it ───────────────────── */
+        .pos-scanbar { display:flex;align-items:center;gap:14px;padding-block:14px;padding-inline:16px;border-block-end:1px solid var(--border-soft);flex-shrink:0; }
+        .pos-scan-field { position:relative;flex:1;min-inline-size:0;display:flex;align-items:center; }
+        .pos-scan-icon { position:absolute;inset-inline-start:16px;font-size:20px;line-height:1;pointer-events:none; }
+        .pos-search { inline-size:100%;min-block-size:56px;padding-block:0;padding-inline:52px 16px;
+          font-size:19px;font-weight:600;font-family:inherit;
+          background:var(--input-bg);color:var(--text);border:2px solid var(--border-mid);
+          border-radius:12px;outline:none;box-sizing:border-box;
+          transition:border-color .15s ease, box-shadow .15s ease, background .15s ease; }
+        .pos-search::placeholder { color:var(--text-faint);font-weight:500; }
+        /* Focus has to be legible from across the shop, not a 1px hairline:
+           a 4px ring plus a background change on the field itself. */
+        .pos-search:focus, .pos-search:focus-visible {
+          border-color:var(--focus-ring-color, var(--sub-accent));
+          box-shadow:0 0 0 4px rgba(var(--sub-accent-rgb),0.28);
+          background:var(--surface-card); }
+        /* Status lamp. Signals "this till is listening" without relying on
+           colour alone -- the dot changes SIZE as well as token colour, so it
+           still reads on a monochrome/washed-out panel. */
+        .pos-scan-lamp { display:inline-flex;align-items:center;gap:8px;font-size:11px;font-weight:700;
+          letter-spacing:.08em;text-transform:uppercase;color:var(--text-faint);white-space:nowrap; }
+        .pos-scan-lamp::before { content:'';inline-size:9px;block-size:9px;border-radius:50%;
+          background:var(--border-mid);transition:transform .15s ease, background .15s ease; }
+        .pos-scan-field:focus-within + .pos-scan-lamp { color:var(--text-money-positive, var(--text)); }
+        .pos-scan-field:focus-within + .pos-scan-lamp::before {
+          background:var(--text-money-positive, currentColor);transform:scale(1.5); }
+
+        /* ── Category rail ───────────────────────────────────────────────── */
+        .pos-cat-bar { display:flex;gap:8px;padding-block:10px;padding-inline:16px;border-block-end:1px solid var(--border-soft);overflow-x:auto;flex-shrink:0; }
+        .pos-cat-btn { min-block-size:var(--touch-target-min, 44px);padding-inline:18px;border-radius:var(--radius-pill, 22px);font-size:14px;font-weight:600;
+          cursor:pointer;border:1px solid var(--border-mid);background:transparent;color:var(--text-dim);
+          white-space:nowrap;font-family:inherit;transition:background .15s ease, color .15s ease, border-color .15s ease; }
+        .pos-cat-btn:hover { color:var(--text);background:var(--surface-hover); }
+        /* Selected is a solid fill; hovered is a tint. They must never look
+           the same -- a cashier scanning the rail has to see what is ON. */
+        .pos-cat-btn.active { background:var(--sub-accent);border-color:var(--sub-accent);color:var(--text-on-accent, var(--text-inverse));font-weight:700; }
+
+        /* ── Product grid ────────────────────────────────────────────────── */
+        .pos-product-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;
+          padding-block:16px;padding-inline:16px;overflow-y:auto;flex:1;align-content:start; }
+        .pos-card { min-block-size:118px;background:var(--surface-soft);border:1px solid var(--border-soft);
+          border-radius:12px;padding-block:14px;padding-inline:12px;text-align:center;cursor:pointer;user-select:none;
+          display:flex;flex-direction:column;justify-content:center;gap:4px;
+          transition:background .14s ease, border-color .14s ease, transform .12s ease; }
+        .pos-card:hover { border-color:var(--border-mid);background:var(--surface-hover); }
+        .pos-card:active { transform:scale(0.98); }
+        .pos-card-outofstock { opacity:.45;cursor:not-allowed; }
+        .pos-card-outofstock:hover, .pos-card-outofstock:active { transform:none;border-color:var(--border-soft);background:var(--surface-soft); }
+        .pos-card-icon { font-size:26px;line-height:1; }
+        .pos-card-name { color:var(--text);font-size:13px;font-weight:600;line-height:1.3;
+          display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden; }
+        .pos-card-price { color:var(--text);font-weight:700;font-size:15px; }
+        .pos-card-stock { font-size:11px;color:var(--text-dim); }
+        .pos-card-stock.is-low { color:var(--state-warning-text, var(--text-dim));font-weight:600; }
+        .pos-card-stock.is-out { color:var(--state-danger-text, var(--text-dim));font-weight:700; }
+
+        /* ── Cart lines ──────────────────────────────────────────────────── */
+        .pos-cart-items { flex:1;overflow-y:auto;padding-block:4px;padding-inline:14px;min-block-size:0; }
+        .pos-cart-row { display:flex;align-items:center;gap:10px;padding-block:10px;padding-inline:2px;
+          border-block-end:1px solid var(--border-soft); }
+        .pos-cart-row:last-child { border-block-end:none; }
+        /* Only the row just touched animates (see _renderCart) -- re-animating
+           the whole list on every qty change reads as flicker at till speed. */
+        .pos-row-new { animation:posRowIn .24s cubic-bezier(.22,1,.36,1) both; }
+        @keyframes posRowIn { from{opacity:0;transform:translateY(-5px)} to{opacity:1;transform:none} }
+        .pos-line-main { flex:1;min-inline-size:0; }
+        .pos-item-name { color:var(--text);font-size:14px;font-weight:600;line-height:1.35;overflow:hidden;text-overflow:ellipsis; }
+        .pos-item-meta { color:var(--text-dim);font-size:12px;margin-block-start:2px; }
+        /* High-frequency zone: quantity stepper + the line's money. */
+        .pos-line-freq { display:flex;align-items:center;gap:12px;flex-shrink:0; }
+        .pos-qty-wrap { display:flex;align-items:center;background:var(--input-bg);border:1px solid var(--border-mid);border-radius:10px;overflow:hidden; }
+        .pos-qty-btn { min-inline-size:var(--touch-target-min, 44px);min-block-size:var(--touch-target-min, 44px);background:transparent;border:none;color:var(--text);
+          cursor:pointer;font-size:18px;font-weight:700;line-height:1;font-family:inherit;transition:background .12s ease; }
+        .pos-qty-btn:hover { background:var(--surface-hover); }
+        .pos-qty-val { min-inline-size:34px;text-align:center;color:var(--text);font-size:15px;font-weight:700; }
+        .pos-line-total { min-inline-size:84px;text-align:end;color:var(--text);font-size:15px;font-weight:700; }
+        /* Physical separation between the frequent controls above and the
+           destructive one below. This spacer is the reason the remove button
+           is not a DOM sibling of the "+" button -- see rule 5 in the block
+           comment above, and retail_surface_pos_test.js which asserts it. */
+        .pos-line-sep { flex:0 0 16px;inline-size:16px;align-self:stretch; }
+        .pos-line-danger { flex-shrink:0;border-inline-start:1px solid var(--border-soft);padding-inline-start:10px; }
+        /* Visible at rest, not only on hover: a touchscreen never hovers. */
+        .pos-remove-btn { min-inline-size:var(--touch-target-min, 44px);min-block-size:var(--touch-target-min, 44px);background:transparent;
+          border:1px solid var(--border-soft);border-radius:10px;color:var(--text-dim);
+          cursor:pointer;font-size:15px;font-family:inherit;transition:background .12s ease, color .12s ease, border-color .12s ease; }
+        .pos-remove-btn:hover, .pos-remove-btn:focus-visible {
+          color:var(--state-danger-text, var(--text));border-color:var(--state-danger-border, var(--border-mid));
+          background:var(--state-danger-surface, var(--surface-hover)); }
+        .pos-empty { display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;
+          color:var(--text-dim);padding-block-start:56px;font-size:14px; }
+        .pos-empty-icon { font-size:32px;opacity:.6; }
+        .pos-empty-hint { color:var(--text-faint);font-size:13px; }
+
+        /* Void lives here -- its own bar, below the list, deliberately far
+           from Hold (pane header) and from Charge (foot of the summary). */
+        .pos-cart-tools { display:flex;justify-content:flex-end;padding-block:8px 10px;padding-inline:14px;
+          border-block-start:1px solid var(--border-soft);flex-shrink:0; }
+        .pos-clear-btn { min-block-size:var(--touch-target-min, 44px);padding-inline:16px;border-radius:10px;border:1px solid var(--border-soft);
+          background:transparent;color:var(--text-dim);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;
+          transition:background .12s ease, color .12s ease, border-color .12s ease; }
+        .pos-clear-btn:hover, .pos-clear-btn:focus-visible {
+          color:var(--state-danger-text, var(--text));border-color:var(--state-danger-border, var(--border-mid));
+          background:var(--state-danger-surface, var(--surface-hover)); }
+        .pos-hold-btn { min-block-size:var(--touch-target-min, 44px);padding-inline:16px;border-radius:10px;border:1px solid var(--border-mid);
+          background:var(--surface-soft);color:var(--text-dim);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;
+          transition:background .12s ease, color .12s ease; }
+        .pos-hold-btn:hover { color:var(--text);background:var(--surface-hover); }
+        .pos-cust-select { min-block-size:var(--touch-target-min, 44px);background:var(--input-bg);border:1px solid var(--border-mid);
+          border-radius:10px;color:var(--text);padding-inline:12px;font-size:13px;font-family:inherit;outline:none;
+          max-inline-size:190px;transition:border-color .15s ease; }
+        .pos-cust-select:focus { border-color:var(--focus-ring-color, var(--sub-accent)); }
+
+        /* ── Summary + the total ─────────────────────────────────────────── */
+        .pos-summary { padding-block:14px 16px;padding-inline:16px;background:var(--surface-card);
+          border-block-start:1px solid var(--border-mid);flex-shrink:0; }
+        .pos-sum-row { display:flex;justify-content:space-between;align-items:center;gap:12px;
+          margin-block-end:8px;color:var(--text-dim);font-size:14px; }
+        .pos-sum-val { color:var(--text);font-weight:600; }
+        .pos-mini-input { min-block-size:var(--touch-target-min, 44px);background:var(--input-bg);border:1px solid var(--border-mid);
+          border-radius:10px;color:var(--text);text-align:end;outline:none;font-family:inherit;
+          font-variant-numeric:tabular-nums;transition:border-color .15s ease, box-shadow .15s ease; }
+        .pos-mini-input:focus { border-color:var(--focus-ring-color, var(--sub-accent));box-shadow:0 0 0 3px rgba(var(--sub-accent-rgb),0.18); }
+        /* THE number. Largest element on the screen by a wide margin, and the
+           only place on the POS that gets this weight of type. */
+        .pos-total-band { display:flex;align-items:baseline;justify-content:space-between;gap:14px;
+          padding-block:14px 16px;margin-block:10px;border-block:1px solid var(--border-mid); }
+        .pos-grand-label { font-size:13px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--text-dim); }
+        .pos-grand-value { font-size:clamp(var(--text-size-total, 40px),4.2vw,56px);line-height:1;font-weight:800;
+          letter-spacing:-0.022em;color:var(--text); }
+        .pos-change-row { color:var(--text-money-positive, var(--text));font-weight:700; }
+        .pos-change-row .pos-sum-val { color:inherit; }
+
+        /* ── Tender + charge ─────────────────────────────────────────────── */
+        .pos-pay-btns { display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-block-end:12px; }
+        .pos-pay-btn { min-block-size:var(--touch-target-comfortable, 48px);padding-block:6px;padding-inline:4px;border-radius:10px;font-size:13px;font-weight:600;
+          cursor:pointer;border:1px solid var(--border-mid);background:var(--surface-soft);color:var(--text-dim);
+          display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-family:inherit;
+          transition:background .15s ease, color .15s ease, border-color .15s ease; }
+        .pos-pay-btn:hover { color:var(--text);background:var(--surface-hover); }
+        .pos-pay-btn.active { background:var(--sub-accent);border-color:var(--sub-accent);
+          color:var(--text-on-accent, var(--text-inverse));font-weight:700; }
+        .pos-pay-icon { font-size:15px;line-height:1; }
+        /* Charge is money coming IN, so it carries the money-in token rather
+           than a decorative gradient -- colour that means something. */
+        .pos-checkout-btn { inline-size:100%;min-block-size:var(--touch-target-comfortable, 52px);padding-block:14px;padding-inline:18px;
+          background:var(--text-money-positive, var(--sub-accent));border:1px solid transparent;border-radius:12px;
+          color:var(--text-on-accent, var(--text-inverse));font-weight:800;font-size:18px;cursor:pointer;
+          font-family:inherit;font-variant-numeric:tabular-nums;white-space:nowrap;
+          transition:opacity .15s ease, transform .12s ease; }
+        .pos-checkout-btn:hover { opacity:.92; }
+        .pos-checkout-btn:active { transform:scale(0.99); }
+        .pos-checkout-btn:disabled { opacity:.45;cursor:not-allowed;transform:none; }
+
+        /* ── Money typography (see rule 3) ───────────────────────────────── */
+        /* The .money family (colour, bold weight, accounting parentheses,
+           slashed zero) is owned by css/main.css and is not restated here.
+           This rule only extends tabular figures + nowrap to the few POS
+           elements that are numeric but are NOT tagged .money -- the quantity
+           readout and the card price -- so the whole screen's digits share one
+           metric and a column of them lines up. */
+        .pos-wrap .money, .pos-grand-value, .pos-line-total, .pos-qty-val, .pos-card-price {
+          font-variant-numeric:tabular-nums;white-space:nowrap; }
+
+        /* A till is driven by keyboard and barcode scanner as much as by
+           finger. An invisible focus ring makes that unusable, so this is
+           deliberately heavier than a browser default. */
+        .pos-wrap :focus-visible { outline:var(--focus-ring-width, 3px) solid var(--focus-ring-color, var(--sub-accent));outline-offset:var(--focus-ring-offset, 2px); }
         @media (prefers-reduced-motion: reduce) {
           .pos-row-new { animation:none; }
-          .pos-card,.pos-checkout-btn,.pos-cat-btn,.pos-pay-btn,.pos-qty-btn { transition:none; }
+          .pos-wrap * { transition:none; }
         }
       </style>
       <div class="pos-wrap">
         <div class="pos-left">
-          <div class="pos-pane-hdr">
-            <h3 class="pos-pane-title">Products</h3>
-            <div style="display:flex;gap:10px;align-items:center">
-              <button class="ret-btn ret-btn-ghost ret-btn-sm" id="pos-held-btn" onclick="RetailSystem._openHeldSalesModal()"
-                title="Browse and resume sales you've held">📋 Held (<span id="pos-held-count">0</span>)</button>
-              <input class="pos-search" id="pos-search" placeholder="Search or scan barcode…" oninput="RetailSystem._filterPOS()" />
+          <!-- mousedown, not click: the browser moves focus to the pressed
+               element BEFORE any click handler runs, so preventing the
+               default here is the only thing that stops a tap on a product
+               tile from blurring the scan field in the first place.
+               Refocusing afterwards would still blur-then-refocus, which on
+               a touchscreen closes the on-screen keyboard and flickers the
+               caret. See _keepScanFocus(). -->
+          <div class="pos-scanbar" onmousedown="RetailSystem._keepScanFocus(event)">
+            <div class="pos-scan-field">
+              <span class="pos-scan-icon" aria-hidden="true">⌗</span>
+              <input class="pos-search" id="pos-search" type="text" autocomplete="off"
+                     inputmode="search" aria-label="${this._esc(t('Scan a barcode or search'))}"
+                     placeholder="${this._esc(t('Scan a barcode or search'))}"
+                     oninput="RetailSystem._filterPOS()" />
             </div>
+            <span class="pos-scan-lamp">${t('Ready to scan')}</span>
           </div>
-          <div class="pos-cat-bar" id="pos-cats">
-            <button class="pos-cat-btn active" onclick="RetailSystem._setCat(null,this)">All</button>
+          <div class="pos-pane-hdr" onmousedown="RetailSystem._keepScanFocus(event)">
+            <h3 class="pos-pane-title">${t('Products')}</h3>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" id="pos-held-btn" onclick="RetailSystem._openHeldSalesModal()"
+              title="${this._esc(t("Browse and resume sales you've held"))}"><span aria-hidden="true">📋</span> <span>${t('Held')}</span> (<span id="pos-held-count">0</span>)</button>
           </div>
-          <div class="pos-product-grid" id="pos-product-grid">
-            <div style="grid-column:1/-1;text-align:center;padding:50px;color:var(--text-muted)">Loading…</div>
+          <div class="pos-cat-bar" id="pos-cats" onmousedown="RetailSystem._keepScanFocus(event)">
+            <button class="pos-cat-btn active" onclick="RetailSystem._setCat(null,this)">${t('All')}</button>
+          </div>
+          <div class="pos-product-grid" id="pos-product-grid" onmousedown="RetailSystem._keepScanFocus(event)">
+            <div style="grid-column:1/-1;text-align:center;padding:50px;color:var(--text-dim)">${t('Loading…')}</div>
           </div>
         </div>
         <div class="pos-right">
-          <div class="pos-pane-hdr pos-cart-hdr">
-            <h3 class="pos-pane-title">Current Sale</h3>
+          <div class="pos-pane-hdr">
+            <h3 class="pos-pane-title">${t('Current Sale')}</h3>
             <div style="display:flex;gap:8px;align-items:center">
               <select id="pos-customer" class="pos-cust-select">
-                <option value="">Walk-in</option>
+                <option value="">${this._esc(t('Walk-in'))}</option>
               </select>
-              <button class="pos-hold-btn" onclick="RetailSystem._holdSale()" title="Park this sale and start a new one">⏸ Hold</button>
-              <button class="pos-clear-btn" onclick="RetailSystem._clearCart()">Clear</button>
+              <button class="pos-hold-btn" onclick="RetailSystem._holdSale()"
+                title="${this._esc(t('Park this sale and start a new one'))}"><span aria-hidden="true">⏸</span> <span>${t('Hold')}</span></button>
             </div>
           </div>
-          <div class="pos-cart-items" id="pos-cart">
-            <div class="pos-empty"><span class="pos-empty-icon">🛒</span><span>Cart is empty — tap a product to add</span></div>
+          <div class="pos-cart-items" id="pos-cart" onmousedown="RetailSystem._keepScanFocus(event)">
+            <div class="pos-empty"><span class="pos-empty-icon" aria-hidden="true">🛒</span><span>${t('Cart is empty')}</span><span class="pos-empty-hint">${t('Scan or tap a product to begin')}</span></div>
+          </div>
+          <!-- Void: a destructive control, given its own bar so it is neither
+               a sibling nor a neighbour of Hold (above) or Charge (below). -->
+          <div class="pos-cart-tools">
+            <button class="pos-clear-btn" onclick="RetailSystem._clearCart()"
+              title="${this._esc(t('Void the whole sale'))}">${t('Void Sale')}</button>
           </div>
           <div class="pos-summary">
-            <div class="pos-sum-row"><span>Subtotal</span><span id="pos-sub">$0.00</span></div>
+            <div class="pos-sum-row"><span>${t('Subtotal')}</span><span class="pos-sum-val money" id="pos-sub">$0.00</span></div>
             <div class="pos-sum-row">
-              <span>Discount</span>
+              <span>${t('Discount')}</span>
               <span style="display:flex;gap:6px;align-items:center">
                 <input type="number" id="pos-disc" value="0" min="0" max="100" step="0.5"
-                  class="pos-mini-input" style="width:55px;padding:3px 7px;font-size:12px"
+                  class="pos-mini-input" style="inline-size:76px;padding-inline:10px;font-size:14px"
+                  aria-label="${this._esc(t('Discount'))}"
                   oninput="RetailSystem._recalc()" /> %
               </span>
             </div>
-            <div class="pos-sum-row"><span>Tax</span><span id="pos-tax">$0.00</span></div>
-            <div class="pos-grand"><span class="pos-grand-label">Total</span><span class="pos-grand-value" id="pos-total">$0.00</span></div>
+            <div class="pos-sum-row"><span>${t('Tax')}</span><span class="pos-sum-val money" id="pos-tax">$0.00</span></div>
+            <div class="pos-total-band">
+              <span class="pos-grand-label">${t('Total')}</span>
+              <span class="pos-grand-value money" id="pos-total">$0.00</span>
+            </div>
             <div class="pos-sum-row">
-              <span>Cash Tendered</span>
+              <span>${t('Cash Tendered')}</span>
               <input type="number" id="pos-tendered" placeholder="0.00" min="0" step="0.01"
-                class="pos-mini-input" style="width:90px;padding:4px 8px;font-size:14px"
+                class="pos-mini-input" style="inline-size:112px;padding-inline:12px;font-size:15px"
+                aria-label="${this._esc(t('Cash Tendered'))}"
                 oninput="RetailSystem._calcChange()" />
             </div>
-            <div class="pos-sum-row" id="pos-change-row" style="color:#10b981;font-weight:700;display:none">
-              <span>Change Due</span><span id="pos-change">$0.00</span>
+            <div class="pos-sum-row pos-change-row" id="pos-change-row" style="display:none">
+              <span>${t('Change Due')}</span><span class="pos-sum-val money" id="pos-change">$0.00</span>
             </div>
             <div class="pos-pay-btns" id="pos-pay-btns">
-              <button class="pos-pay-btn active" data-method="cash"     onclick="RetailSystem._setPayment('cash',this)">💵 Cash</button>
-              <button class="pos-pay-btn"         data-method="card"     onclick="RetailSystem._setPayment('card',this)">💳 Card</button>
-              <button class="pos-pay-btn"         data-method="mobile"   onclick="RetailSystem._setPayment('mobile',this)">📱 Mobile</button>
-              <button class="pos-pay-btn"         data-method="transfer" onclick="RetailSystem._setPayment('transfer',this)">🏦 Transfer</button>
-              <button class="pos-pay-btn"         data-method="credit"   onclick="RetailSystem._setPayment('credit',this)">📋 Credit</button>
-              <button class="pos-pay-btn"         data-method="voucher"  onclick="RetailSystem._setPayment('voucher',this)">🎟 Voucher</button>
+              <button class="pos-pay-btn active" data-method="cash"     onclick="RetailSystem._setPayment('cash',this)"><span class="pos-pay-icon" aria-hidden="true">💵</span><span>${t('Cash')}</span></button>
+              <button class="pos-pay-btn"         data-method="card"     onclick="RetailSystem._setPayment('card',this)"><span class="pos-pay-icon" aria-hidden="true">💳</span><span>${t('Card')}</span></button>
+              <button class="pos-pay-btn"         data-method="mobile"   onclick="RetailSystem._setPayment('mobile',this)"><span class="pos-pay-icon" aria-hidden="true">📱</span><span>${t('Mobile')}</span></button>
+              <button class="pos-pay-btn"         data-method="transfer" onclick="RetailSystem._setPayment('transfer',this)"><span class="pos-pay-icon" aria-hidden="true">🏦</span><span>${t('Transfer')}</span></button>
+              <button class="pos-pay-btn"         data-method="credit"   onclick="RetailSystem._setPayment('credit',this)"><span class="pos-pay-icon" aria-hidden="true">📋</span><span>${t('Credit')}</span></button>
+              <button class="pos-pay-btn"         data-method="voucher"  onclick="RetailSystem._setPayment('voucher',this)"><span class="pos-pay-icon" aria-hidden="true">🎟</span><span>${t('Voucher')}</span></button>
             </div>
-            <button class="pos-checkout-btn" id="pos-checkout-btn" onclick="RetailSystem._checkout()">Charge — $0.00</button>
+            <button class="pos-checkout-btn" id="pos-checkout-btn" onclick="RetailSystem._checkout()">${this._esc(this._checkoutLabel(0))}</button>
           </div>
         </div>
       </div>`;
@@ -1016,6 +1497,9 @@ const RetailSystem = {
     this._activeCat = null;
     this._loadPOSData();
     // The barcode scanner engine is initialised globally in render(); nothing to do here.
+    // Put the caret where the next barcode is going to land, so the very first
+    // scan of a shift works without the cashier clicking anything first.
+    this._refocusScan(true);
 
     // feat/shift-cash-drawer: mounts a status bar just below the POS header
     // showing whether a cash session is open for this branch (soft warning
@@ -1068,7 +1552,7 @@ const RetailSystem = {
       this._renderPOSGrid();
     } catch(e) {
       const grid = document.getElementById('pos-product-grid');
-      if (grid) grid.innerHTML = '<div style="grid-column:1/-1;color:#ef4444;padding:20px">Failed to load products.</div>';
+      if (grid) grid.innerHTML = `<div class="pos-card-stock is-out" style="grid-column:1/-1;padding:20px;font-size:14px">${t('Failed to load products.')}</div>`;
     }
   },
 
@@ -1077,6 +1561,7 @@ const RetailSystem = {
     document.querySelectorAll('.pos-cat-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     this._renderPOSGrid();
+    this._refocusScan();
   },
 
   // Stored-XSS fix: p.name (and item.name / i.name at the cart, sale-complete
@@ -1107,20 +1592,25 @@ const RetailSystem = {
       return true;
     });
     if (!visible.length) {
-      grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:40px">No products found.</div>';
+      grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;color:var(--text-dim);padding:40px">${t('No products found.')}</div>`;
       return;
     }
     grid.innerHTML = visible.map(p => {
       const outOfStock = p.total_stock <= 0;
       const icon = _ICONS[p.category_name] || _ICONS.Default;
-      const stockClr = p.total_stock <= (p.reorder_level||0) ? '#ef4444' : 'var(--text-muted)';
+      // Stock state is carried by a CLASS, not an inline colour: the class
+      // picks up --warn / --danger from the token layer, and the state is
+      // still legible as a word ("Out of stock") when colour is unavailable.
+      // The old inline `style="color:#ef4444"` both hardcoded a hex and made
+      // low-stock indistinguishable from out-of-stock without colour vision.
+      const stockCls = outOfStock ? ' is-out' : (p.total_stock <= (p.reorder_level || 0) ? ' is-low' : '');
       return `<div class="pos-card${outOfStock?' pos-card-outofstock':''}"
-          onclick="${outOfStock ? "SubsystemApp.showToast('Out of stock','error')" : `RetailSystem._addToCart('${this._esc(p.id)}')`}">
-        <div class="pos-card-icon">${icon}</div>
+          onclick="${outOfStock ? `SubsystemApp.showToast('${this._esc(t('Out of stock'))}','error')` : `RetailSystem._addToCart('${this._esc(p.id)}')`}">
+        <div class="pos-card-icon" aria-hidden="true">${icon}</div>
         <div class="pos-card-name" title="${this._esc(p.name)}">${this._esc(p.name)}</div>
-        <div class="pos-card-price">${this._fmt(p.sell_price)}</div>
-        <div class="pos-card-stock" style="color:${stockClr}">
-          ${outOfStock ? 'Out of stock' : `Stock: ${p.total_stock} ${p.unit||''}`}
+        <div class="pos-card-price">${this._money(p.sell_price)}</div>
+        <div class="pos-card-stock${stockCls}">
+          ${outOfStock ? t('Out of stock') : `${t('Stock')}: ${p.total_stock} ${this._esc(p.unit||'')}`}
         </div>
       </div>`;
     }).join('');
@@ -1165,9 +1655,14 @@ const RetailSystem = {
     this._renderCart();
   },
 
+  // Void, and also the reset step of a completed sale (_checkout calls this on
+  // success). Forced refocus, not the guarded kind: whatever the cashier was
+  // typing belonged to the sale that just ended or was just voided, so the
+  // caret genuinely does belong back at the scan field for the next customer.
   _clearCart() {
     this._cart = [];
     this._renderCart();
+    this._refocusScan(true);
   },
 
   // ── Hold / Resume sale (park a cart, come back to it later) ────────────────
@@ -1347,12 +1842,30 @@ const RetailSystem = {
     } catch (e) { /* _fetch already surfaces auth errors via toast/redirect */ }
   },
 
+  // Cart line layout, and why the DOM is shaped the way it is.
+  //
+  // A line is scannable left-to-right (start-to-end, mirrored under RTL) as
+  // NAME -> QUANTITY -> LINE TOTAL, with the amounts in a fixed-width tabular
+  // column (.pos-line-total, min-inline-size + text-align:end) so the figures
+  // in a ten-line cart actually form a column a cashier can add up by eye.
+  //
+  // The remove control is deliberately NOT a sibling of the quantity buttons.
+  // It used to sit directly after the "+" button in the same flex container:
+  // two of the highest-frequency taps on the whole screen, one finger-width
+  // from an action that destroys a line. During a queue that misfire costs a
+  // re-ring in front of the customer. It now lives in its own
+  // .pos-line-danger container, behind a .pos-line-sep spacer and a rule,
+  // so the frequent controls and the destructive one share no parent and are
+  // not adjacent. retail_surface_pos_test.js asserts that separation against
+  // the real rendered markup, because "we moved it" is exactly the kind of
+  // claim that quietly reverts.
   _renderCart() {
     const container = document.getElementById('pos-cart');
     if (!container) return;
     if (!this._cart.length) {
-      container.innerHTML = '<div class="pos-empty"><span class="pos-empty-icon">🛒</span><span>Cart is empty — tap a product to add</span></div>';
+      container.innerHTML = `<div class="pos-empty"><span class="pos-empty-icon" aria-hidden="true">🛒</span><span>${t('Cart is empty')}</span><span class="pos-empty-hint">${t('Scan or tap a product to begin')}</span></div>`;
       this._recalc();
+      this._refocusScan();
       return;
     }
     // pos-row-new: entrance animation for the row the cashier just touched
@@ -1360,23 +1873,42 @@ const RetailSystem = {
     // removals don't re-trigger it.
     const newId = this._lastAddedId;
     this._lastAddedId = null;
+    const decLabel = this._esc(t('Decrease quantity'));
+    const incLabel = this._esc(t('Increase quantity'));
+    const remLabel = this._esc(t('Remove line'));
     container.innerHTML = this._cart.map((item, i) => `
       <div class="pos-cart-row${item.product_id === newId ? ' pos-row-new' : ''}">
-        <div style="flex:1">
-          <div class="pos-item-name">${this._esc(item.name)}</div>
-          <div class="pos-item-meta">${this._fmt(item.unit_price)} × ${item.quantity}</div>
+        <div class="pos-line-main">
+          <div class="pos-item-name" title="${this._esc(item.name)}">${this._esc(item.name)}</div>
+          <div class="pos-item-meta">${this._money(item.unit_price)} × ${item.quantity}</div>
         </div>
-        <div style="display:flex;align-items:center;gap:8px">
+        <div class="pos-line-freq">
           <div class="pos-qty-wrap">
-            <button class="pos-qty-btn" onclick="RetailSystem._updateQty(${i},-1)" title="Decrease">−</button>
+            <button class="pos-qty-btn" onclick="RetailSystem._updateQty(${i},-1)" title="${decLabel}" aria-label="${decLabel}">−</button>
             <span class="pos-qty-val">${item.quantity}</span>
-            <button class="pos-qty-btn" onclick="RetailSystem._updateQty(${i},1)" title="Increase">+</button>
+            <button class="pos-qty-btn" onclick="RetailSystem._updateQty(${i},1)" title="${incLabel}" aria-label="${incLabel}">+</button>
           </div>
-          <span class="pos-line-total">${this._fmt(item.line_total)}</span>
-          <button class="pos-remove-btn" onclick="RetailSystem._cart.splice(${i},1);RetailSystem._renderCart()" title="Remove">✕</button>
+          <span class="pos-line-total">${this._money(item.line_total)}</span>
+        </div>
+        <span class="pos-line-sep" aria-hidden="true"></span>
+        <div class="pos-line-danger">
+          <button class="pos-remove-btn" onclick="RetailSystem._removeLine(${i})" title="${remLabel}" aria-label="${remLabel}">✕</button>
         </div>
       </div>`).join('');
     this._recalc();
+    // A tap on a cart control is exactly the "interaction that should not
+    // steal focus" case: the next thing that happens is almost always another
+    // scan. Declines if the cashier is mid-edit in a money field.
+    this._refocusScan();
+  },
+
+  // Was an inline `RetailSystem._cart.splice(i,1);RetailSystem._renderCart()`
+  // in the onclick attribute. Named, so the destructive path is one greppable
+  // thing rather than a statement pair hidden in markup.
+  _removeLine(idx) {
+    if (idx < 0 || idx >= this._cart.length) return;
+    this._cart.splice(idx, 1);
+    this._renderCart();
   },
 
   // Mirrors core/retail/pricing.py's calculate_line() EXACTLY, mode for
@@ -1416,7 +1948,7 @@ const RetailSystem = {
     if (document.getElementById('pos-total')) document.getElementById('pos-total').textContent = this._fmt(total);
     const checkoutBtn = document.getElementById('pos-checkout-btn');
     if (checkoutBtn) {
-      checkoutBtn.textContent = `Charge — ${this._fmt(total)}`;
+      checkoutBtn.textContent = this._checkoutLabel(total);
       checkoutBtn.disabled = false;   // re-enable after a sale so the next receipt can be charged
     }
     this._calcChange();
@@ -1440,12 +1972,14 @@ const RetailSystem = {
     this._paymentMethod = method;
     document.querySelectorAll('.pos-pay-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    const tenderedRow = document.getElementById('pos-tendered')?.parentElement?.parentElement;
     const changeRow = document.getElementById('pos-change-row');
     if (method !== 'cash') {
       if (document.getElementById('pos-tendered')) document.getElementById('pos-tendered').value = '';
       if (changeRow) changeRow.style.display = 'none';
     }
+    // Picking a tender is a button press, not a typing target — hand the
+    // keyboard back to the scanner.
+    this._refocusScan();
   },
 
   // ══ BARCODE SCANNER ENGINE ════════════════════════════════════════════════
@@ -1694,7 +2228,7 @@ const RetailSystem = {
       SubsystemApp.showToast('Credit sales require a customer (walk-in not allowed)', 'error'); return;
     }
     const btn = document.getElementById('pos-checkout-btn');
-    if (btn) { btn.textContent = 'Processing…'; btn.disabled = true; }
+    if (btn) { btn.textContent = t('Processing…'); btn.disabled = true; }
     // Real bug fixed here: create_sale() (retail_api.py) is server-
     // authoritative on price by design (AUDIT-002/AUDIT-003) -- it computes
     // subtotal/discount_amount/tax_amount/total itself and IGNORES those
@@ -1733,7 +2267,7 @@ const RetailSystem = {
         this._showReceipt(data.data);
       } else {
         SubsystemApp.showToast(data.message || 'Checkout failed', 'error');
-        if (btn) { btn.textContent = `Charge — ${this._fmt(total)}`; btn.disabled = false; }
+        if (btn) { btn.textContent = this._checkoutLabel(total); btn.disabled = false; }
       }
     } catch(e) {
       // AUDIT: this used to reset the button with zero visible feedback on
@@ -1747,7 +2281,7 @@ const RetailSystem = {
       // on the single most consequential action on this screen.
       console.error('Checkout failed:', e);
       SubsystemApp.showToast('Checkout failed — check the connection and try again', 'error');
-      if (btn) { btn.textContent = `Charge — ${this._fmt(total)}`; btn.disabled = false; }
+      if (btn) { btn.textContent = this._checkoutLabel(total); btn.disabled = false; }
     }
   },
 
