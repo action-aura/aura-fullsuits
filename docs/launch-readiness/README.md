@@ -463,3 +463,39 @@ they should have asserted that a **check ran**. The counter-measure that keeps
 working is forcing verifiers to mutation-prove — break the guard, watch it go
 red, restore — and to dump a live `url_map` or parse a real server body rather
 than trusting a fixture.
+
+## Session state — 2026-08-23
+
+Commits on `feat/launch-readiness`, newest last:
+
+| | |
+|---|---|
+| `28150c8` | Phase 1 — eleven unauthenticated admin routes, two fail-open handlers, registry v3 |
+| `da469e5` | money-reversal authority made symmetric; 15 JS tests into CI |
+| `291d2bc` | employee management on desktop and phone |
+| `b1a4f0c` | the two remaining ways round an owner-only money gate |
+| `1dd6b20` | Phase 2 checkpoint — retail v13/v14 attribution |
+| `562b27e` | runtime money sweep replaces the static one; `?limit=-1`; tzdata |
+| `3832af6` | Operational Calm UI; dark theme removed |
+| `dc6c216` / `d63b84d` | Phase 5 prerequisites and Phase 3 designed ahead |
+
+**Owed before merge:** the cross-suite gate has not run on the final tree. Every
+changed file passes individually and every fix is mutation-proved, but their
+interaction is unverified. The build machine is capped at **7% of rated
+processor clock** by its power scheme (200 MHz of 2304), so an 85-file run takes
+hours and two attempts were killed mid-run. Run `phase1_gate.sh` first thing
+when the cap is lifted.
+
+**Machine note.** The 200 MHz clamp is a power-scheme setting
+(`PROCTHROTTLEMAX` AC=7%, DC=5%), **not** thermal throttling — an earlier
+session in this programme attributed it to heat, which was wrong. It is
+liftable with `powercfg`; the owner keeps it capped deliberately while mains
+power is unreliable. JS suites cost ~0.1s each and stay usable at this clock;
+anything that boots Flask does not, which is why the UI work was scheduled here
+and the Python-heavy phases were not.
+
+**Next:** Phase 3 (design committed), then 4, then the three Phase 5
+prerequisites, then Phase 5 itself. The parallel tracks that do not touch the
+schema chain — ship-readiness (AI bearer token, release-signed APK, PyInstaller
+collecting tzdata) and Owner CC performance — are still unstarted and can run
+alongside the chain once the clock allows.
