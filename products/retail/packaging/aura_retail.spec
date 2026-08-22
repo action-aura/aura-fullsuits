@@ -48,13 +48,30 @@ if os.path.exists(_trust_anchor):
 from PyInstaller.utils.hooks import collect_data_files
 _certifi_datas = collect_data_files('certifi')
 
+# tzdata is DATA, not a module, so hiddenimports cannot carry it and a bare
+# `import tzdata` in the spec would not help either -- `zoneinfo` reads the
+# package's .tzif files off disk.
+#
+# Without this the packaged .exe has no timezone database at all: Windows ships
+# none, so `zoneinfo.ZoneInfo('Asia/Amman')` raises and every shop that has
+# configured a business timezone silently falls back to bucketing reports on
+# whatever clock the device happens to hold. That is precisely the defect the
+# business-date feature exists to fix, and it would announce itself only in a
+# log line nobody reads.
+#
+# Measured on the build machine before adding it: `zoneinfo.TZPATH` is `()`.
+# Same failure shape as the `cryptography` omission on the Android side --
+# present in requirements, absent from the bundle, and only reproducible on a
+# real install rather than in a source checkout.
+_tzdata_datas = collect_data_files('tzdata')
+
 a = Analysis(
     [os.path.join(DESKTOP, 'launcher_retail.py')],
     pathex=[ROOT, BACKEND],
     binaries=[],
     datas=[
         (FRONTEND, os.path.join('products', 'retail', 'frontend')),
-    ] + _licensing_datas + _certifi_datas,
+    ] + _licensing_datas + _certifi_datas + _tzdata_datas,
     hiddenimports=[
         'flask', 'flask_cors', 'werkzeug', 'waitress',
         'commercial_runtime.identity.mt_auth',
