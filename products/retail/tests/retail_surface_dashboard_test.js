@@ -14,6 +14,10 @@
  *      to do" by WORDS and STATE, not by colour alone.
  *   4. The recent-transactions money column is tabular and end-aligned, so it
  *      is a column a human can add up, and stays correct mirrored under RTL.
+ *   4b. A clickable row can be reached and operated WITHOUT A POINTER — and it
+ *      is still a row, not a <tr> retrofitted into a button.
+ *   4c. A negative headline revenue is marked on the VALUE, with cues that
+ *      survive greyscale; a positive one is not marked at all.
  *   5. No dashboard surface reaches for the un-themed --text-muted token.
  *
  * All claims are mutation-proven; the specific mutation is named on each test.
@@ -33,6 +37,13 @@ const FRONTEND_DIR = path.join(__dirname, '..', 'frontend');
 const FRONTEND_FILE = path.join(FRONTEND_DIR, 'subsystem-retail.js');
 const CSS_FILE = path.join(FRONTEND_DIR, 'css', 'main.css');
 
+// `created_at` is the SPACE form the server actually writes
+// (retail_api.py::create_sale stores `%Y-%m-%d %H:%M:%S`), not an ISO 'T'. The
+// difference is not cosmetic: a 'T' is a strong LTR character that anchors the
+// whole run, so the ISO form this fixture used to carry made the Date column's
+// bidi hazard unreproducible in test while it was live on every Arabic install.
+// retail_surface_i18n_test.js is where that claim is asserted; the fixture is
+// kept honest in both files so neither can drift back.
 const STATS = {
   today_sales: 1284.5, today_transactions: 18, month_sales: 21450.75,
   month_transactions: 310, low_stock_alerts: 7, total_customers: 84,
@@ -40,7 +51,7 @@ const STATS = {
   hourly_labels: [], hourly_data: [], payment_methods: {},
   recent_sales: [
     { id: 1, sale_number: 'S-1041', customer_name: 'Walk-in', item_count: 3,
-      payment_method: 'cash', total: 42.5, created_at: '2026-08-21T18:42:00' },
+      payment_method: 'cash', total: 42.5, created_at: '2026-08-21 18:42:00' },
   ],
 };
 
@@ -49,10 +60,23 @@ const STATS = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function makeElementStub(overrides) {
-  return Object.assign({
+  // classList RECORDS rather than swallowing. A no-op classList is fine while
+  // nothing under test manipulates classes, and worthless the moment something
+  // does: RetailSystem._setMoney() marks a negative amount by toggling
+  // .money--negative on the value element, and a swallowing stub makes that
+  // marking — the only cue that survives greyscale — permanently invisible to
+  // every assertion in this file. `classes` is the observable.
+  const classes = [];
+  const el = Object.assign({
     innerHTML: '', textContent: '', value: '', id: '', disabled: false,
     style: {},
-    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    classes,
+    classList: {
+      add(c) { if (!classes.includes(c)) classes.push(c); },
+      remove(c) { const i = classes.indexOf(c); if (i !== -1) classes.splice(i, 1); },
+      toggle(c, on) { if (on) this.add(c); else this.remove(c); },
+      contains(c) { return classes.includes(c); },
+    },
     appendChild() {}, getAttribute() { return null; }, setAttribute() {},
     querySelectorAll() { return []; }, addEventListener() {}, focus() {},
     // Canvas-shaped, so the chart branches are reachable. Without getContext
@@ -63,6 +87,7 @@ function makeElementStub(overrides) {
     // of this harness.
     getContext() { return {}; },
   }, overrides);
+  return el;
 }
 
 /**
@@ -541,6 +566,196 @@ async function testRecentTransactionsMoneyColumnIsTabularAndLogical() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// CLAIM 4b — a clickable row has a keyboard path, and the row stays a row
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Every Recent Transactions row opens a sale on click. It shipped as
+// `<tr style="cursor:pointer" onclick="..._viewSale(id)">` and nothing else, so
+// the only way to open a sale from this table was a mouse: a <tr> is not
+// focusable, Tab never reached it, Enter and Space could not activate it, and a
+// screen reader was read six cells and no control. On a touchscreen there is no
+// hover either, so `cursor:pointer` plus a hover background announced nothing.
+//
+// The fix is NOT to make the <tr> a button. A row that becomes a button stops
+// being a row: the columns lose their association with their headers, and an AT
+// user loses the grid navigation that makes a six-column table readable at all.
+// The row CONTAINS a button instead.
+//
+// Mutation-proven, each one run and confirmed red:
+//   * remove the button, leave the bare onclick <tr>  -> "no keyboard path"
+//   * give the <tr> role="button"/tabindex instead    -> "the row stopped being a row"
+//   * drop event.stopPropagation() from the button    -> "would open twice"
+//
+// NOT claimed: blanking the aria-label alone does not fail here, and should
+// not. An accessible name legitimately falls back to the control's contents
+// (accname step 2F), and the button's contents are the receipt number — a
+// weaker name than "View invoice S-1041", but a real one. What fails is a
+// control with neither, which is what the name check below actually tests.
+
+const NATIVELY_FOCUSABLE = new Set(['button', 'a', 'input', 'select', 'textarea', 'summary']);
+
+async function testClickableRowsHaveAKeyboardPath() {
+  const ctx = loadRetailSystem({ capabilities: ['retail.reports'] });
+  await ctx.RetailSystem._renderDashboard(makeElementStub());
+  const rowRoot = dom.parseFragment(ctx.tbody.innerHTML);
+
+  // Derived from the render: any element carrying a click handler. Never a
+  // hand-written list of rows, which would keep passing after someone added a
+  // seventh column with a handler of its own.
+  const clickable = dom.allElements(rowRoot).filter((el) => el.attrs.onclick);
+  const rows = clickable.filter((el) => el.tag === 'tr');
+
+  // ANTI-VACUITY: everything below is a loop over `rows`. An empty table, a
+  // failed fetch, or a render that dropped the handler would make this test
+  // green while checking nothing.
+  assert.ok(
+    rows.length >= 1,
+    'No clickable transaction row rendered at all, so this test proves nothing. ' +
+    'tbody was: ' + ctx.tbody.innerHTML.slice(0, 300)
+  );
+
+  const problems = [];
+  for (const row of rows) {
+    const what = dom.describe(row);
+
+    // The row must remain a row. role="button" on a <tr> removes it from the
+    // table's grid for an AT user — the exact thing the columns exist for.
+    if (row.attrs.role || row.attrs.tabindex !== undefined) {
+      problems.push(
+        `${what} carries role=${JSON.stringify(row.attrs.role)} / ` +
+        `tabindex=${JSON.stringify(row.attrs.tabindex)}. A <tr> retrofitted into a ` +
+        'control stops being a row: the cells lose their header association and the ' +
+        'table stops being navigable as a table.'
+      );
+    }
+
+    // What the row's own handler does — the action a keyboard user must be able
+    // to reach by some other route.
+    const rowAction = /_viewSale\(\s*(\d+)\s*\)/.exec(row.attrs.onclick || '');
+    if (!rowAction) {
+      problems.push(`${what} has an onclick this test does not recognise: ${row.attrs.onclick}`);
+      continue;
+    }
+
+    const openers = dom.allElements(row).filter(
+      (el) => NATIVELY_FOCUSABLE.has(el.tag) &&
+              new RegExp(`_viewSale\\(\\s*${rowAction[1]}\\s*\\)`).test(el.attrs.onclick || '')
+    );
+    if (!openers.length) {
+      problems.push(
+        `${what} opens sale ${rowAction[1]} on click, but contains no natively ` +
+        'focusable element that does the same. There is therefore NO keyboard, ' +
+        'scanner or screen-reader path to that sale — the row is mouse-only.'
+      );
+      continue;
+    }
+
+    for (const opener of openers) {
+      const which = dom.describe(opener);
+      if (opener.tag === 'button' && opener.attrs.type !== 'button') {
+        problems.push(`${which} has no type="button"; the HTML default is submit.`);
+      }
+      // The row ALSO handles the click, so without stopPropagation one press
+      // runs _viewSale twice and opens the sale detail on top of itself.
+      if (!/stopPropagation/.test(opener.attrs.onclick || '')) {
+        problems.push(
+          `${which} does not stop propagation, but its ancestor row handles the ` +
+          'same click. One activation would run _viewSale twice — once for the ' +
+          'button, once for the row it bubbled to.'
+        );
+      }
+      // An accessible name, and one that identifies WHICH sale. "button" alone
+      // is a landing spot with no information attached to it.
+      const label = (opener.attrs['aria-label'] || '').trim() || dom.textOf(opener);
+      if (!label) {
+        problems.push(`${which} has no accessible name at all.`);
+      } else if (!/\d/.test(label)) {
+        problems.push(
+          `${which} is named ${JSON.stringify(label)}, which does not identify a ` +
+          'sale. Eight rows that all announce the same verb are eight identical ' +
+          'controls.'
+        );
+      }
+    }
+  }
+
+  assert.deepStrictEqual(
+    problems, [],
+    'Clickable dashboard rows are not operable without a pointer:\n  ' +
+    problems.join('\n  ') +
+    '\n\nA till is driven by a barcode scanner — which is a keyboard — and by a ' +
+    'finger on a screen that has no hover state at all.'
+  );
+
+  console.log(`PASS: all ${rows.length} clickable transaction row(s) carry a real in-row control`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLAIM 4c — the negative cue lands on the VALUE, not on its container
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// #r-k-rev is net revenue and is deliberately shown UNCLAMPED, so on a day when
+// refunds exceed sales it goes negative — that is the whole reason the figure
+// exists in that form. It was filled in with `textContent = _fmt(n)`, which can
+// emit a hyphen and nothing else: no class, so css/main.css's .money--negative
+// (bold + the negative token) and .money--accounting (parentheses) could never
+// reach it. One ASCII hyphen, on a washed-out shop panel, is not a distinction.
+//
+// Mutation-proven:
+//   * revert to `textContent = this._fmt(...)`   -> no class toggled, no U+2212
+//   * make _setMoney mark EVERY amount negative  -> the positive case fails
+
+async function testNegativeHeadlineRevenueIsMarkedOnTheValueItself() {
+  // The real shape: today's refunds exceeded today's sales.
+  const negCtx = loadRetailSystem({ capabilities: ['retail.reports'] });
+  negCtx.RetailSystem._get = () => Promise.resolve({
+    data: Object.assign({}, STATS, { today_sales: -120.5, today_returns: 300 }),
+  });
+  await negCtx.RetailSystem._renderDashboard(makeElementStub());
+  const negRev = negCtx.els['r-k-rev'];
+
+  assert.ok(negRev, 'The harness never saw #r-k-rev, so nothing below is checkable.');
+  assert.ok(
+    /−/.test(negRev.textContent),
+    'A NEGATIVE net revenue does not carry a U+2212 MINUS SIGN in its own text. ' +
+    'Strip every colour from this screen — which a sun-lit or badly calibrated ' +
+    'panel does for free — and the figure must still read as negative. Got: ' +
+    JSON.stringify(negRev.textContent)
+  );
+  assert.ok(
+    negRev.classList.contains('money--negative'),
+    'A negative #r-k-rev never received .money--negative, so css/main.css cannot ' +
+    'give it either of its non-colour cues (bold weight, accounting parentheses). ' +
+    'The marking has to land on the VALUE — putting it on the KPI card would mark ' +
+    'the card, not the number. Classes seen: ' + JSON.stringify(negRev.classes)
+  );
+  assert.ok(
+    negRev.classList.contains('money--accounting'),
+    'A negative #r-k-rev did not opt into .money--accounting. Parentheses are the ' +
+    'convention that survives greyscale and a photocopier. Classes seen: ' +
+    JSON.stringify(negRev.classes)
+  );
+
+  // CONDITIONALITY. Without this the claim above is satisfiable by marking every
+  // amount negative, which would make the marking carry no information at all —
+  // the guard's pass condition would then be the bug signature.
+  const posCtx = loadRetailSystem({ capabilities: ['retail.reports'] });
+  await posCtx.RetailSystem._renderDashboard(makeElementStub());
+  const posRev = posCtx.els['r-k-rev'];
+  assert.ok(
+    /\d/.test(posRev.textContent),
+    'The positive control case rendered no figure at all: ' + JSON.stringify(posRev.textContent)
+  );
+  assert.ok(
+    !posRev.classList.contains('money--negative') && !/−/.test(posRev.textContent),
+    'A POSITIVE net revenue is also being marked negative, so the marking says ' +
+    'nothing. Got: ' + JSON.stringify(posRev.textContent) + ' ' + JSON.stringify(posRev.classes)
+  );
+
+  console.log('PASS: a negative headline revenue is marked on the value; a positive one is not');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // CLAIM 5 — no dashboard surface reaches for the un-themed --text-muted
 // ─────────────────────────────────────────────────────────────────────────────
 //
@@ -636,6 +851,8 @@ async function main() {
   await testAttentionBandSwitchesStateOnRealData();
   testAttentionStatesDifferByMoreThanColour();
   await testRecentTransactionsMoneyColumnIsTabularAndLogical();
+  await testClickableRowsHaveAKeyboardPath();
+  await testNegativeHeadlineRevenueIsMarkedOnTheValueItself();
   await testNoDashboardSurfaceUsesTheUnthemedMutedToken();
   await testDashboardLayoutIsMirrorSafeByConstruction();
   console.log('PASS: retail_surface_dashboard_test.js');

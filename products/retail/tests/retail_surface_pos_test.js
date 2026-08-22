@@ -11,6 +11,9 @@
  *   2. The scan input regains focus after an interaction that should not steal
  *      it — AND keeps its hands off a field the cashier deliberately focused.
  *   3. Destructive controls are not adjacent to high-frequency ones.
+ *   4. Every product tile is reachable and operable WITHOUT A POINTER, in both
+ *      of its states, and every :hover affordance on this screen has a
+ *      :focus-visible counterpart that can actually match.
  *
  * EACH CLAIM IS MUTATION-PROVEN. A layout test that still passes when you
  * delete the layout is worth nothing, so every claim below was verified to
@@ -129,6 +132,12 @@ const SAMPLE_PRODUCTS = [
     tax_rate: 16, total_stock: 40, reorder_level: 5, unit: 'bag', category_name: 'Beverages' },
   { id: 'p2', name: 'Paper Cups (50)', sku: 'PC50', barcode: '222', sell_price: 4.25,
     tax_rate: 16, total_stock: 3, reorder_level: 10, unit: 'pack', category_name: 'Groceries' },
+  // A SOLD-OUT product, so the grid renders its second tile state for real.
+  // Without one, _renderPOSGrid's out-of-stock branch never executes and the
+  // keyboard/AT claims below would only ever be checked against the happy
+  // tile — which is the branch least likely to be wrong.
+  { id: 'p3', name: 'Oat Milk 1L', sku: 'OM1', barcode: '333', sell_price: 2.75,
+    tax_rate: 16, total_stock: 0, reorder_level: 6, unit: 'carton', category_name: 'Beverages' },
 ];
 
 /** Render the POS shell and return its markup + parsed tree + parsed stylesheet. */
@@ -534,6 +543,214 @@ function testEveryFingerTargetMeetsTheTouchMinimum() {
   console.log(`PASS: all ${controls.length} POS finger targets are >= 44px`);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CLAIM 4 — the product tile is reachable and operable without a mouse
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The tile is the most-used control in the product, and it shipped as
+// `<div class="pos-card" onclick="...">`. A <div> is not focusable, so there
+// was NO keyboard route to it: Tab never landed on it, Enter and Space could
+// never activate it, and an AT user was read a group of text with no control
+// in it. Its :hover rule was the only affordance it had — and a touchscreen,
+// which is what a large share of these installs are, has no hover. Between the
+// two, adding a product to a sale was a mouse-only operation on a machine
+// usually driven by a scanner, a keyboard, or a finger.
+//
+// This asserts the STRUCTURE that makes it operable, not a list of tiles:
+// every tile the real _renderPOSGrid emits, in both of its states.
+//
+// Mutation-proven:
+//   * turn the tile back into a <div>                     -> "not a <button>"
+//   * add tabindex="0" role="button" to that <div> instead -> still fails, and
+//     deliberately: the brief asks for the native element, which brings BOTH
+//     activation keys and cannot drift out of sync with its own semantics
+//   * mark the sold-out tile `disabled` instead of aria-disabled -> fails, it
+//     leaves the tab order and stops announcing why it cannot be sold
+//   * empty the tile's contents                           -> "no accessible name"
+
+/** The accessible name a <button> computes from its own contents (accname 2F). */
+function nameFromContents(el) {
+  let out = '';
+  const visit = (n) => {
+    if (n.type === 'text') { out += n.text; return; }
+    if (n.attrs && n.attrs['aria-hidden'] === 'true') return;   // decorative, contributes nothing
+    for (const c of n.children || []) visit(c);
+  };
+  for (const c of el.children || []) visit(c);
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+function testProductTilesAreKeyboardOperableAndAnnounced() {
+  const { gridRoot } = renderPopulatedCart();
+
+  // Derived from the render, never from a fixture list: a tile is anything
+  // carrying the .pos-card class the grid actually emitted.
+  const tiles = dom.allElements(gridRoot).filter((el) => el.classes.includes('pos-card'));
+  const sellable = tiles.filter((el) => !el.classes.includes('pos-card-outofstock'));
+  const soldOut = tiles.filter((el) => el.classes.includes('pos-card-outofstock'));
+
+  // ANTI-VACUITY, both branches. Every assertion below is a loop over these
+  // arrays; if the grid stopped rendering, or the fixture lost its sold-out
+  // product, the loops would iterate zero times and report success having
+  // examined nothing.
+  assert.ok(
+    sellable.length >= 2,
+    'Only ' + sellable.length + ' in-stock product tile(s) rendered, so the checks ' +
+    'below are near-vacuous. Grid: ' + gridRoot.children.length + ' top-level node(s).'
+  );
+  assert.ok(
+    soldOut.length >= 1,
+    'No OUT-OF-STOCK tile rendered, so the branch that decides whether an ' +
+    'unavailable product is still announced was never executed. That branch is ' +
+    'the one most likely to be wrong — a `disabled` there silently removes the ' +
+    'tile from the tab order.'
+  );
+
+  const problems = [];
+  for (const tile of tiles) {
+    const what = dom.describe(tile);
+
+    // (a) A real button. Not a div, and not a div wearing role/tabindex: the
+    //     native element is what supplies focusability, BOTH activation keys
+    //     (Space fires on keyup, Enter on keydown) and the button role at once.
+    if (tile.tag !== 'button') {
+      problems.push(
+        `${what} is a <${tile.tag}>, not a <button>. A <${tile.tag}> with a click ` +
+        'handler is unfocusable, so there is no keyboard or scanner path to it at all.'
+      );
+      continue;
+    }
+    // (b) type="button". Harmless today, load-bearing the moment any of these
+    //     screens grows a <form> around the grid — the default is `submit`.
+    if (tile.attrs.type !== 'button') {
+      problems.push(`${what} has no type="button"; the HTML default is submit.`);
+    }
+    // (c) An accessible name. A focusable control with no name is announced as
+    //     just "button", which is worse than not reaching it: the operator now
+    //     has somewhere to land and nothing telling them what it is.
+    const name = nameFromContents(tile);
+    if (!name) {
+      problems.push(`${what} has no accessible name — its contents are empty or entirely aria-hidden.`);
+    }
+    // (d) ...and the name has to identify the PRODUCT, not just say "$4.25".
+    //     The title attribute already carries the untruncated product name.
+    const productName = (tile.attrs.title || '') ||
+      (dom.allElements(tile).find((e) => e.classes.includes('pos-card-name')) || { attrs: {} }).attrs.title || '';
+    if (productName && name && !name.includes(productName)) {
+      problems.push(
+        `${what} names itself ${JSON.stringify(name)}, which does not contain the ` +
+        `product ${JSON.stringify(productName)}. A grid of tiles that all announce ` +
+        'their price and none their identity is not navigable.'
+      );
+    }
+    // (e) Sold out must stay reachable. `disabled` would take it out of the tab
+    //     order and silence the one thing the cashier needs to know.
+    const isSoldOut = tile.classes.includes('pos-card-outofstock');
+    if (isSoldOut) {
+      if (tile.attrs.disabled !== undefined) {
+        problems.push(
+          `${what} is HTML-disabled. That removes it from the tab order and from ` +
+          'the accessibility tree, so a keyboard operator can neither reach it nor ' +
+          'hear why it cannot be sold. Use aria-disabled and keep the toast.'
+        );
+      }
+      if (tile.attrs['aria-disabled'] !== 'true') {
+        problems.push(
+          `${what} is visually washed out (45% opacity) but carries no ` +
+          'aria-disabled, so nothing but the colour says it is unavailable.'
+        );
+      }
+    } else if (tile.attrs['aria-disabled'] === 'true') {
+      // Conditionality: if every tile were aria-disabled the marking would
+      // carry no information, and (e) above would be trivially satisfiable.
+      problems.push(`${what} is in stock but marked aria-disabled="true".`);
+    }
+  }
+
+  assert.deepStrictEqual(
+    problems, [],
+    'Product tiles are not fully operable without a pointer:\n  ' + problems.join('\n  ') +
+    '\n\nA till is driven by a barcode scanner (which is a keyboard) and by a finger ' +
+    'on a screen with no hover state. A tile reachable only by mouse-hover is a tile ' +
+    'half these installs cannot use.'
+  );
+
+  console.log(
+    `PASS: all ${tiles.length} product tiles (${sellable.length} sellable, ` +
+    `${soldOut.length} sold out) are focusable buttons with an accessible name`
+  );
+}
+
+// Every :hover rule on this screen must have a :focus-visible counterpart that
+// CAN actually match — the property retail_design_focus_test.js enforces over
+// css/main.css, applied here to the stylesheet this file injects at render
+// time, which that test cannot see at all.
+//
+// Mutation-proven: deleting `:focus-visible` from the `.pos-card` rule fails
+// here and nowhere else in the suite.
+function testEveryPosHoverAffordanceHasAFocusCounterpart() {
+  const { root } = renderPosShell();
+  const styleEl = dom.allElements(root).find((el) => el.tag === 'style');
+  const css = dom.textOf(styleEl).replace(/\/\*[\s\S]*?\*\//g, '');
+
+  const hover = new Set();
+  const focusVisible = new Set();
+  for (const m of css.matchAll(/([^{}]+)\{/g)) {
+    for (const raw of m[1].split(',')) {
+      const s = raw.trim();
+      if (!s || s.startsWith('@')) continue;
+      if (/:hover\b/.test(s)) hover.add(s.replace(/:hover\b/g, '').trim());
+      if (/:focus-visible\b/.test(s)) focusVisible.add(s.replace(/:focus-visible\b/g, '').trim());
+    }
+  }
+
+  assert.ok(
+    hover.size >= 5,
+    `Parsed only ${hover.size} :hover selector(s) out of the POS <style> block. ` +
+    'The parse is broken, so a green result here would mean nothing.'
+  );
+
+  // The tiles and the category chips are CONTROLS: things a cashier operates.
+  // The rest of the hover rules on this screen sit on ghost buttons that already
+  // pair the two states, and this stays a property rather than a list by
+  // deriving the control set from the rendered markup — anything the grid or the
+  // rail emits as a <button> and also styles on :hover.
+  const controlClasses = new Set();
+  const { gridRoot } = renderPopulatedCart();
+  for (const r of [root, gridRoot]) {
+    for (const el of dom.allElements(r)) {
+      if (el.tag !== 'button') continue;
+      for (const c of el.classes) controlClasses.add(c);
+    }
+  }
+  assert.ok(
+    controlClasses.size >= 4,
+    'Found only ' + controlClasses.size + ' button class(es) on the POS; the ' +
+    'pairing check below would be near-vacuous.'
+  );
+
+  const missing = [...hover].filter((sel) => {
+    const last = sel.split(/[\s>+~]+/).filter(Boolean).pop() || sel;
+    const bare = last.replace(/^\./, '').replace(/[:[].*$/, '');
+    if (!controlClasses.has(bare)) return false;         // not a control this screen renders
+    return !focusVisible.has(sel);
+  });
+
+  assert.deepStrictEqual(
+    missing, [],
+    'These POS controls style :hover but not :focus-visible:\n  ' + missing.join('\n  ') +
+    '\n\nOn a touchscreen they have NO discoverable state, and a keyboard or ' +
+    'barcode-scanner operator cannot see where focus is. This stylesheet is ' +
+    'injected from subsystem-retail.js, so retail_design_focus_test.js — which ' +
+    'reads css/main.css only — never sees these rules.'
+  );
+
+  console.log(
+    `PASS: every :hover rule on a rendered POS control (${controlClasses.size} control ` +
+    `classes, ${hover.size} hover selectors) has a :focus-visible counterpart`
+  );
+}
+
 function testNegativeAmountsAreNotColourAlone() {
   const ctx = loadRetailSystem();
   const negative = ctx.RetailSystem._money(-65.44);
@@ -628,6 +845,8 @@ function main() {
   testScanFieldDoesNotStealFocusFromADeliberateEdit();
   testStrayPointerPressDoesNotBlurTheScanField();
   testDestructiveControlsAreNotAdjacentToFrequentOnes();
+  testProductTilesAreKeyboardOperableAndAnnounced();
+  testEveryPosHoverAffordanceHasAFocusCounterpart();
   testEveryFingerTargetMeetsTheTouchMinimum();
   testNegativeAmountsAreNotColourAlone();
   testPosLayoutIsMirrorSafeByConstruction();

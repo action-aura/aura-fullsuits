@@ -1,5 +1,6 @@
 /**
- * OPERATIONAL CALM — WCAG contrast proof for the retail till palette.
+ * OPERATIONAL CALM — WCAG contrast, at BOTH the level the palette declares and
+ * the level the cashier actually sees.
  *
  * WHY THIS TEST EXISTS
  * The retail frontend previously shipped a near-black "HUD" palette
@@ -12,38 +13,68 @@
  * looking -- especially on the developer's calibrated monitor rather than
  * the cheap fluorescent-lit shop monitor the till actually runs on.
  *
- * So this test does not eyeball anything. It parses the token block out of
- * css/main.css, converts each token to sRGB luminance, and COMPUTES the
- * WCAG 2.x contrast ratio for every text-on-surface pairing the palette can
- * produce. It is the one assertion in this redesign that cannot be argued
- * with.
+ * WHY IT WAS NOT ENOUGH, WHICH IS THE MORE IMPORTANT HALF
+ * The first version of this file computed contrast over the TOKEN BLOCK: every
+ * --text-* against every --surface-*. That property is true and is still
+ * asserted below. It was also worth nothing to the two worst pairings in the
+ * product, because neither of them is made of tokens:
  *
- * WHAT IT ASSERTS, AND WHY THAT SHAPE
- * Not "these N pairings I happened to pick are fine" -- that would let a new
- * token be added tomorrow and never checked. Instead it asserts a PROPERTY
- * over the whole cross product:
+ *     POS "Held" button                     1.48:1
+ *     Recent Transactions payment badges    1.91 - 2.20:1
  *
- *   every --text-* colour token  x  every solid --surface-* token  >= 4.5:1 (AA)
- *   every --text-money* token    x  every solid --surface-* token  >= 7.0:1 (AAA)
- *   --text-on-accent             x  every --accent-action* fill    >= 4.5:1 (AA)
+ * Both are WORSE than the 2.64:1 trap the pass that wrote this test was
+ * celebrated for fixing, on the same two screens, and this file went green.
+ * They come from `RetailSystem._injectStyles()` in subsystem-retail.js -- a
+ * stylesheet injected into <head> at runtime, invisible to a token scan, and
+ * because it is injected AFTER main.css it beats the token layer at equal
+ * specificity. So the headline claim "every pairing clears AA" was true of the
+ * token block and false of the screen.
  *
- * Money gets the stricter AAA floor because a misread total is a till's
- * worst failure mode, and because money is read at a glance, at an angle,
- * over a customer's shoulder, all day.
+ * That is not a missing assertion. It is a test whose SCOPE manufactured the
+ * state that hid the bug -- and a token block is a scope that can never see an
+ * injected literal, no matter how many tokens get added to it.
  *
- * Because the groups are derived from the token NAMES rather than a hand
- * list, adding a new --text-* or --surface-* token automatically brings it
- * under test. That is the point: the palette cannot quietly grow a failing
- * member.
+ * WHAT IT ASSERTS NOW — FIVE PROPERTIES, DELIBERATELY DIFFERENT ONES
+ *
+ *  1. THE PALETTE (unchanged, still a cross product over the token names):
+ *       every --text-* x every solid --surface-*  >= 4.5:1 (AA)
+ *       every --text-money* x every solid --surface-*  >= 7.0:1 (AAA)
+ *       --text-on-accent x every --accent-action* fill >= 4.5:1 (AA)
+ *     Money gets the stricter floor because a misread total is a till's worst
+ *     failure mode. Derived from token NAMES, so the palette cannot quietly
+ *     grow a failing member.
+ *
+ *  2. THE SCREEN. Every element that paints text on a RENDERED till screen,
+ *     resting and hovered, with its colour and its surface resolved through the
+ *     real cascade and the real ancestor chain -- alpha fills composited down
+ *     to the opaque surface underneath. This is the tier that catches an
+ *     injected literal, because it never asks where a colour came from.
+ *     See retail_design_render_test.js for the corpus and the cascade engine.
+ *
+ *  3. NOTHING RESOLVES TO "UNKNOWN" IN SILENCE. A pairing whose colour or
+ *     surface cannot be determined statically is COUNTED and NAMED, never
+ *     skipped. A quietly growing population of unresolvable pairings is
+ *     precisely how the two bugs above survived a green suite.
+ *
+ *  4. A MONEY SEMANTIC CANNOT BE SILENTLY OVERRIDDEN. `_money()` returns a
+ *     nested <span class="money">, so a container that has already declared a
+ *     money colour holds no text of its own and `.money` re-declares colour on
+ *     the child. `.rdash-bd-value.is-in` was dead from the day it was written
+ *     and the dashboard's Sales figure rendered neutral instead of money-in
+ *     green. The selector matched; there was simply nothing to paint.
+ *
+ *  5. THE BADGE FAMILY IS SELF-CONTAINED. Badges appear on white cards, on
+ *     hovered rows AND inside the dark .ret-modal, and the corpus can only ever
+ *     render the two payment variants. So every variant the injected sheet
+ *     declares must carry an opaque token pair, checked here by derivation from
+ *     that sheet rather than from a list somebody has to remember to extend.
  *
  * ANTI-VACUITY
- * A cross-product test that matches zero tokens passes trivially and tells
- * you nothing. If the token block is renamed, reformatted, or the parser
- * breaks, every loop below iterates zero times and the suite would go green
- * while asserting nothing at all. So the test first asserts it actually
- * FOUND a realistic number of text tokens, surface tokens and pairings, and
- * fails loudly if the parse came back thin. The check running is asserted
- * separately from the check passing.
+ * Every assertion here is a loop. A loop over nothing passes. So the palette
+ * tier asserts it parsed a realistic number of tokens before asserting they
+ * pass, and the rendered tiers lean on retail_design_render_test.js, which
+ * asserts the corpus reaches the specific elements the defects were measured
+ * on. The check RUNNING is asserted separately from the check PASSING.
  *
  * No test framework is configured for this vanilla-JS, build-step-free
  * frontend (see CLAUDE.md), so this runs standalone on Node built-ins:
@@ -56,10 +87,62 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
+const render = require('./retail_design_render_test.js');
+
 const CSS_FILE = path.join(__dirname, '..', 'frontend', 'css', 'main.css');
 
 const AA = 4.5;   // WCAG 2.2 §1.4.3 -- normal-size body text
 const AAA = 7.0;  // WCAG 2.2 §1.4.6 -- enhanced; required here for money
+
+/* The states a pairing is evaluated in. Resting is the obvious one; :hover is
+   included because a hover rule that changes only the BACKGROUND (which is what
+   `.ret-btn-ghost:hover` does) moves the ratio without touching the colour, and
+   that is a pairing nobody ever looks at. The other state pseudo-classes are
+   deliberately out: :focus-visible draws a ring rather than repainting text,
+   and :disabled is a documented, intentional de-emphasis with its own rule.
+
+   The hover pass treats EVERY element as hovered at once, which is not a state
+   the DOM can be in -- but it is sound for this question. :hover applies to the
+   element under the pointer AND to all of its ancestors, so every element's own
+   chain (which is all a contrast resolution reads) is genuinely reachable. The
+   over-approximation is limited to siblings, and a sibling's background has no
+   bearing on this element's text. */
+const EVALUATED_STATES = [['resting', new Set()], ['hovered', new Set(['hover'])]];
+
+/* How many colour-declaring rules in the shared retail chrome the RENDERED tier
+   does not exercise. These belong to screens this corpus does not build --
+   modals, the KPI cards, the PO split preview, the supplier tabs, the list
+   search boxes -- so tier 2 proves nothing about them, and they are printed by
+   name with the ratio each would measure, every single run. (The .ret-badge-*
+   entries among them are additionally covered by the self-contained-badge
+   assertion further down; nothing else in the list is covered anywhere.)
+
+   RAISING THIS NUMBER IS A REVIEWABLE ACT. It means the corpus's blind spot
+   grew, which is the exact drift that let a 1.48:1 button ship under a green
+   suite. Lowering it by rendering another screen is always the better move.
+
+   25 -> 26, reviewed 2026-08-23. The modal moved off its dark-island palette
+   (#0f172a with #fff children) onto the shared tokens, which added ONE colour
+   declaration -- `.ret-field select option` -- and the guard correctly refused
+   the run until someone looked. Reviewed and accepted: that rule computes
+   17.46:1 self-contained.
+
+   Worth reading the printed list rather than only this number, because the
+   same change moved four entries from dangerous to safe without removing them
+   from it: `.ret-modal h3` now computes 14.46:1, `.ret-field label` 5.26:1,
+   and the inputs 15.95:1 -- they used to be #fff on a dark island, correct
+   only so long as nothing else on the screen was light.
+
+   The entries that are still genuinely wrong, and are the reason this list is
+   printed by name every run rather than hidden behind a count:
+       .ret-search        #fff on a 5% white tint   1.00:1   (invisible)
+       .ret-badge-yellow  #fbbf24 on a 15% tint     1.31:1
+       .ret-badge-red / .ret-badge-purple           2.60 / 2.77:1
+       .ret-btn-danger                              2.70:1
+   None is reachable from the corpus today. Rendering the products, customers
+   and PO screens would surface them as failures instead of notes, which is the
+   right next move and is why the comment above says lowering beats raising. */
+const UNEXERCISED_CHROME_BUDGET = 26;
 
 /* ── Token parsing ─────────────────────────────────────────────────────────
    Only the block between the [design-tokens:begin]/[design-tokens:end]
@@ -282,7 +365,326 @@ function testMoneyNegativeIsNotColourAlone() {
   console.log(`PASS: .money--negative carries ${found.length} non-colour cue(s) alongside its colour`);
 }
 
-function main() {
+/* ── TIER 2 — the pairings the app actually renders ────────────────────────── */
+
+/**
+ * Every text-painting element on every corpus screen, in every evaluated state,
+ * with colour and surface resolved through the real cascade and the real
+ * ancestor chain. Returns {pairings, unresolved}.
+ */
+function resolveRenderedPairings(h) {
+  const pairings = [];
+  const unresolved = [];
+  for (const screen of h.screens) {
+    for (const [stateName, states] of EVALUATED_STATES) {
+      for (const el of h.textPaintingElements(screen.root)) {
+        const where = `${screen.name}/${stateName} ${h.describe(el).slice(0, 70)}`;
+        const fg = h.effectiveColour(h.ruleTable, el, h.tokens, states);
+        const bg = h.effectiveBackground(h.ruleTable, el, h.tokens, states);
+        if (fg.unresolved || bg.unresolved) {
+          unresolved.push(`${where}\n      ${fg.unresolved || bg.unresolved}`);
+          continue;
+        }
+        // A translucent text colour is painted over its own surface before it
+        // is measured -- exactly what the compositor does, and the difference
+        // between "rgba(...,0.5) is fine" and the ratio a person sees.
+        const painted = fg.colour.a < 1 ? h.composite(fg.colour, bg.colour) : fg.colour;
+        pairings.push({
+          where, ratio: h.contrastRatio(painted, bg.colour),
+          colourFrom: fg.from,
+          surfaceFrom: bg.layers.map((l) => l.from).join('  over  '),
+        });
+      }
+    }
+  }
+  return { pairings, unresolved };
+}
+
+function testEveryRenderedPairingReachesAA(h) {
+  const { pairings, unresolved } = resolveRenderedPairings(h);
+
+  // ANTI-VACUITY. This is a filter over `pairings`; an empty corpus would pass
+  // it while comparing nothing. retail_design_render_test.js asserts the corpus
+  // reaches the specific elements the defects were measured on; this asserts
+  // the resolution step itself produced a realistic population.
+  assert.ok(
+    pairings.length >= 200,
+    `Only ${pairings.length} rendered pairings were resolved (was 258 when written). ` +
+    'Either the corpus shrank or the cascade stopped matching -- a green result ' +
+    'here would be meaningless.'
+  );
+
+  const failures = pairings.filter((p) => p.ratio < AA).sort((a, b) => a.ratio - b.ratio);
+  assert.deepStrictEqual(
+    failures.map((f) => `${f.ratio.toFixed(2)}:1  ${f.where}\n      colour  <- ${f.colourFrom}\n      surface <- ${f.surfaceFrom}`),
+    [],
+    `${failures.length} pairing(s) the till actually RENDERS fall below WCAG AA (${AA}:1):\n  ` +
+    failures.map((f) => `${f.ratio.toFixed(2)}:1  ${f.where}\n      colour  <- ${f.colourFrom}\n      surface <- ${f.surfaceFrom}`).join('\n  ') +
+    '\n\nThis tier does not care where a colour came from -- a token, a literal ' +
+    'in an injected stylesheet, or an inline style attribute all land on the ' +
+    'same screen. Fix the colour, not the scope of the test.'
+  );
+
+  const worst = pairings.reduce((a, b) => (b.ratio < a.ratio ? b : a));
+  console.log(
+    `PASS: all ${pairings.length} RENDERED pairings across ${h.screens.length} screens ` +
+    `x ${EVALUATED_STATES.length} states reach AA (${AA}:1) — tightest is ` +
+    `${worst.ratio.toFixed(2)}:1 at ${worst.where.split(' ')[0]}`
+  );
+  return unresolved;
+}
+
+function testNothingResolvesToUnknownInSilence(h, unresolved) {
+  // The mandate this file failed once already: a pairing that cannot be
+  // resolved statically must be SAID OUT LOUD and counted, never skipped. A
+  // skipped pairing is indistinguishable from a passing one, and a population
+  // of them that grows quietly is how a 1.48:1 button ships under a green suite.
+  const media = h.ruleTable.mediaColour;
+  if (media.length) {
+    console.log(`      note: ${media.length} colour rule(s) live inside @media blocks and are conditional, not unresolved:`);
+    for (const m of media.slice(0, 6)) console.log(`        ${m.at} { ${m.selectors.join(', ').slice(0, 60)} }  [${m.source}]`);
+  }
+  assert.deepStrictEqual(
+    unresolved, [],
+    `${unresolved.length} rendered pairing(s) could not be resolved statically:\n  ` +
+    unresolved.join('\n  ') +
+    '\n\nEach one is a place where this suite proves nothing. Either make the ' +
+    'value resolvable (a token instead of a gradient under text, an opaque ' +
+    'surface instead of alpha over an unknown) or teach the resolver the case. ' +
+    'Do not let the population grow.'
+  );
+  console.log(`PASS: 0 rendered pairings unresolved (${media.length} @media colour rules counted separately as conditional)`);
+}
+
+/* ── TIER 4 — a money semantic cannot be silently overridden ───────────────── */
+
+/**
+ * A colour declaration is DEAD AND CONTRADICTED when it wins the cascade on an
+ * element that contains text, yet none of that text is painted in the colour it
+ * asked for, because a nearer declaration on a descendant resolves to something
+ * else.
+ *
+ * The "contradicted" half is what keeps this from becoming noise. Several
+ * containers on the POS declare `color: var(--text)` around a nested
+ * `<span class="money">` that resolves to the SAME colour -- redundant, but
+ * nothing is lost and flagging it would train people to write exemptions. What
+ * matters is the case where the two disagree: `.rdash-bd-value.is-in` asked for
+ * money-in green and the Sales figure rendered neutral, silently, for the
+ * lifetime of the feature.
+ *
+ * `color: inherit` is excluded: it is not a paint declaration, it is the
+ * mechanism by which a container's decision reaches the amount.
+ */
+function findContradictedColourDeclarations(h) {
+  const painted = new Map();            // declaration tag -> Set of rendered hex
+  const winsOnTextBearing = new Map();  // declaration tag -> {value, examples[]}
+
+  const subtreeText = (node) => {
+    let out = '';
+    for (const c of node.children || []) {
+      if (c.type === 'text') out += c.text;
+      else if (c.type === 'element' && c.tag !== 'style' && c.tag !== 'script') out += subtreeText(c);
+    }
+    return out.trim();
+  };
+  const key = (c) => `${Math.round(c.r)},${Math.round(c.g)},${Math.round(c.b)}`;
+
+  for (const screen of h.screens) {
+    for (const [, states] of EVALUATED_STATES) {
+      for (const el of h.textPaintingElements(screen.root)) {
+        const fg = h.effectiveColour(h.ruleTable, el, h.tokens, states);
+        if (!fg.colour) continue;
+        // Credit the colour to EVERY declaration on the chain that could have
+        // asked for it, so a container whose value happens to match the child's
+        // is not reported as contradicted.
+        for (let n = el; n && n.type === 'element'; n = n.parent) {
+          const d = h.winningDeclaration(h.ruleTable, n, 'color', states);
+          if (!d) continue;
+          if (!painted.has(d.from)) painted.set(d.from, new Set());
+          painted.get(d.from).add(key(fg.colour));
+        }
+      }
+      for (const el of h.allElements(screen.root)) {
+        if (el.tag === 'style' || el.tag === 'script') continue;
+        if (!subtreeText(el)) continue;
+        const d = h.winningDeclaration(h.ruleTable, el, 'color', states);
+        if (!d) continue;
+        if (/^(inherit|currentcolor|unset|initial|revert)$/i.test(String(d.value).trim())) continue;
+        const asked = h.parseColour(d.value, h.tokens);
+        if (!asked) continue;
+        if (!winsOnTextBearing.has(d.from)) winsOnTextBearing.set(d.from, { asked, examples: [] });
+        winsOnTextBearing.get(d.from).examples.push(`${screen.name} ${h.describe(el).slice(0, 60)}`);
+      }
+    }
+  }
+
+  const contradicted = [];
+  for (const [tag, info] of winsOnTextBearing) {
+    const rendered = painted.get(tag);
+    if (!rendered || rendered.size === 0) continue;         // paints no text at all
+    if (rendered.has(key(info.asked))) continue;            // its colour does reach the glass
+    contradicted.push(
+      `${tag}\n      asks for rgb(${key(info.asked)}) but every character under it renders as ` +
+      `${[...rendered].map((k) => `rgb(${k})`).join(' / ')}\n      e.g. ${info.examples[0]}`
+    );
+  }
+  return { contradicted, checked: winsOnTextBearing.size };
+}
+
+function testNoColourSemanticIsSilentlyOverridden(h) {
+  const { contradicted, checked } = findContradictedColourDeclarations(h);
+  assert.ok(
+    checked >= 30,
+    `Only ${checked} colour declarations were found winning on a text-bearing ` +
+    'element. The cascade walk is broken, so a green result here proves nothing.'
+  );
+  assert.deepStrictEqual(
+    contradicted, [],
+    `${contradicted.length} colour declaration(s) win the cascade on an element ` +
+    'that contains text, and paint none of it:\n  ' + contradicted.join('\n  ') +
+    '\n\nThis is the shape `.rdash-bd-value.is-in` had: the selector matched, the ' +
+    'element simply had no text of its own, because _money() puts every ' +
+    'character inside a nested <span class="money"> that re-declares colour. ' +
+    'A money-semantic colour that silently does not apply is exactly what the ' +
+    'token layer exists to prevent. Let the container decide and the amount ' +
+    'inherit -- do not restate the colour in a third place.'
+  );
+  console.log(`PASS: none of the ${checked} winning colour declarations is silently overridden`);
+}
+
+/* ── TIER 5 — the shared retail chrome ─────────────────────────────────────── */
+
+const CHROME_SHEET = 'subsystem-retail.js _injectStyles()';
+
+function testBadgeVariantsAreSelfContained(h) {
+  /* A badge is rendered on a white card, on a hovered row, and inside the dark
+     `.ret-modal` (see _viewPO / _viewSale) -- three surfaces, one class. The
+     originals were a hue over a 15% tint OF THAT SAME HUE, which pins the ratio
+     near 1:1 by construction AND has no fixed luminance, so no single fix to
+     the text colour could be right on all three. The property asserted is
+     therefore stronger than "clears AA": each variant must be SELF-CONTAINED --
+     its own opaque fill plus its own colour -- so its ratio does not depend on
+     what is behind it at all.
+
+     The variant list is derived from the injected sheet, not written here, so a
+     sixth badge colour added tomorrow is under test the moment it exists. */
+  const variants = new Set();
+  for (const rule of h.ruleTable.rules) {
+    if (rule.source !== CHROME_SHEET) continue;
+    const m = /^\.ret-badge-([a-z]+)$/.exec(rule.selector.trim());
+    if (m) variants.add(m[1]);
+  }
+  assert.ok(
+    variants.size >= 5,
+    `Expected at least 5 .ret-badge-* variants in ${CHROME_SHEET}, found ${variants.size}. ` +
+    'The parse is broken, so this check would pass while examining nothing.'
+  );
+
+  const failures = [];
+  for (const variant of variants) {
+    // The markup helper _badge() always emits `ret-badge ret-badge-<v>`, so the
+    // override is looked for at that exact shape -- the one specificity that
+    // actually beats the injected sheet.
+    const override = h.ruleTable.rules.filter((r) =>
+      r.source === 'css/main.css' &&
+      new RegExp(`^\\.ret-badge\\.ret-badge-${variant}$`).test(r.selector.trim()));
+    if (!override.length) {
+      failures.push(`.ret-badge-${variant}: no css/main.css override at .ret-badge.ret-badge-${variant}`);
+      continue;
+    }
+    const decls = Object.assign({}, ...override.map((r) => r.decls));
+    const fg = h.parseColour(decls.color, h.tokens);
+    const bgRaw = decls['background-color'] !== undefined ? decls['background-color'] : decls.background;
+    const bg = bgRaw === undefined ? null : h.backgroundColourOf(bgRaw, h.tokens);
+    if (!fg) { failures.push(`.ret-badge-${variant}: override colour "${decls.color}" does not resolve`); continue; }
+    if (!bg || bg.gradient || bg.a < 1) {
+      failures.push(`.ret-badge-${variant}: override background "${bgRaw}" is not an opaque colour, so the ` +
+        'chip\'s ratio still depends on whatever is behind it');
+      continue;
+    }
+    const ratio = h.contrastRatio(fg, bg);
+    if (ratio < AA) failures.push(`.ret-badge-${variant}: ${ratio.toFixed(2)}:1 — below AA even self-contained`);
+  }
+  assert.deepStrictEqual(
+    failures, [],
+    `${failures.length} badge variant(s) are not self-contained:\n  ` + failures.join('\n  ') +
+    '\n\nThe injected sheet gives every badge an alpha tint of its own text ' +
+    'colour, which is unreadable on any surface and unmeasurable on an unknown ' +
+    'one. Pair an opaque --state-*-surface with its --state-*-text.'
+  );
+  console.log(`PASS: all ${variants.size} .ret-badge-* variants carry a self-contained, opaque, AA-clearing override`);
+}
+
+function testUnexercisedChromeIsCountedNotAssumedFine(h) {
+  /* The shared chrome styles every retail screen, and this corpus renders three
+     of them. Every colour rule in that sheet which no corpus element matches is
+     a rule this suite proves NOTHING about -- so it is named, measured against
+     the till's own surfaces, and counted. Passing silently over them is the
+     precise failure that let the two reported bugs ship. */
+  const elements = [];
+  for (const s of h.screens) elements.push(...h.allElements(s.root));
+  const anyState = new Set(['hover', 'focus-visible', 'focus', 'active', 'disabled']);
+
+  const surfaces = Object.entries(h.tokens)
+    .filter(([name]) => /^--surface-/.test(name))
+    .map(([name, value]) => [name, h.parseColour(value, h.tokens)])
+    .filter(([, c]) => c && c.a === 1);
+  assert.ok(surfaces.length >= 5, `Expected >=5 solid --surface-* tokens to measure against, found ${surfaces.length}`);
+
+  const unexercised = [];
+  let colourRules = 0;
+  for (const rule of h.ruleTable.rules) {
+    if (rule.source !== CHROME_SHEET || !('color' in rule.decls)) continue;
+    colourRules++;
+    if (elements.some((el) => h.matchesSelectorParts(rule.parts, el, new Set())
+      || h.matchesSelectorParts(rule.parts, el, anyState))) continue;
+
+    const fg = h.parseColour(rule.decls.color, h.tokens);
+    const bgRaw = rule.decls['background-color'] !== undefined ? rule.decls['background-color'] : rule.decls.background;
+    const bg = bgRaw === undefined ? null : h.backgroundColourOf(bgRaw, h.tokens);
+    let note;
+    if (!fg) note = `colour "${rule.decls.color}" does not resolve`;
+    else if (bg && !bg.gradient && bg.a >= 1) note = `self-contained ${h.contrastRatio(fg, bg).toFixed(2)}:1`;
+    else if (bg && !bg.gradient && bg.a > 0) {
+      let worst = Infinity; let on = '';
+      for (const [name, surface] of surfaces) {
+        const under = h.composite(bg, surface);
+        const r = h.contrastRatio(fg.a < 1 ? h.composite(fg, under) : fg, under);
+        if (r < worst) { worst = r; on = name; }
+      }
+      note = `alpha fill ${bgRaw} over an unknown surface — would be ${worst.toFixed(2)}:1 on ${on}`;
+    } else {
+      let worst = Infinity; let on = '';
+      for (const [name, surface] of surfaces) {
+        const r = h.contrastRatio(fg.a < 1 ? h.composite(fg, surface) : fg, surface);
+        if (r < worst) { worst = r; on = name; }
+      }
+      note = `inherits its surface — would be ${worst.toFixed(2)}:1 on ${on}`;
+    }
+    unexercised.push(`${rule.selector.padEnd(32)} color:${String(rule.decls.color).padEnd(22)} ${note}`);
+  }
+
+  assert.ok(colourRules >= 25, `Expected >=25 colour rules in the shared chrome, parsed ${colourRules}.`);
+
+  console.log(`      ${unexercised.length} chrome colour rule(s) NOT exercised by the corpus — the rendered tier proves nothing about these:`);
+  for (const line of unexercised) console.log('        ' + line);
+
+  assert.ok(
+    unexercised.length <= UNEXERCISED_CHROME_BUDGET,
+    `${unexercised.length} colour rules in the shared retail chrome are not exercised by the ` +
+    `corpus; the recorded budget is ${UNEXERCISED_CHROME_BUDGET}:\n        ` + unexercised.join('\n        ') +
+    '\n\nThe blind spot grew. Render the screen that would exercise these ' +
+    '(retail_design_render_test.js: buildCorpus) rather than raising the ' +
+    'budget -- a number that only ever goes up is how a 1.48:1 button ships ' +
+    'under a green suite.'
+  );
+  console.log(
+    `PASS: ${colourRules - unexercised.length}/${colourRules} shared-chrome colour rules are exercised by the ` +
+    `corpus; the other ${unexercised.length} are named above and within the recorded budget of ${UNEXERCISED_CHROME_BUDGET}`
+  );
+}
+
+async function main() {
   const tokens = parseTokens(readTokenBlock());
   const groups = groupTokens(tokens);
 
@@ -292,13 +694,18 @@ function main() {
   testTextOnAccentReachesAA(tokens, groups);
   testMoneyNegativeIsNotColourAlone();
 
+  const h = await render.harness();
+  const unresolved = testEveryRenderedPairingReachesAA(h);
+  testNothingResolvesToUnknownInSilence(h, unresolved);
+  testNoColourSemanticIsSilentlyOverridden(h);
+  testBadgeVariantsAreSelfContained(h);
+  testUnexercisedChromeIsCountedNotAssumedFine(h);
+
   console.log('PASS: retail_design_contrast_test.js');
 }
 
-try {
-  main();
-} catch (err) {
+main().catch((err) => {
   console.error('FAIL: retail_design_contrast_test.js');
   console.error(err.message || err);
   process.exitCode = 1;
-}
+});

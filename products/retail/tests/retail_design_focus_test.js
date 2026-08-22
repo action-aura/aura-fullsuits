@@ -46,6 +46,8 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
+const render = require('./retail_design_render_test.js');
+
 const CSS_FILE = path.join(__dirname, '..', 'frontend', 'css', 'main.css');
 
 /* Whole-segment vocabularies. A control is named for what it does. */
@@ -184,36 +186,155 @@ function testFocusRingIsTokenisedSoItCanAdaptToDarkBrandSurfaces() {
   console.log('PASS: the focus ring is tokenised and re-pointed on the dark pre-login surfaces');
 }
 
-function testPrimaryActionsMeetTouchTargetMinimum() {
+function testTouchTargetTokenExists() {
   /* 44px is the WCAG 2.5.5 / platform-HIG floor for a finger. A till with
      28px desktop-mouse buttons is unusable on the touchscreens a large share
-     of these installs run on. */
+     of these installs run on. The token has to exist before anything can
+     consume it; whether anything DOES is asserted on the rendered controls
+     below, not by counting occurrences in the file. */
   const css = fs.readFileSync(CSS_FILE, 'utf8');
   assert.ok(
     /--touch-target-min\s*:\s*44px/.test(css),
     'Expected --touch-target-min: 44px in the token block.'
   );
-  const users = (css.match(/min-height\s*:\s*var\(--touch-target-min\)/g) || []).length;
-  assert.ok(
-    users >= 2,
-    `--touch-target-min is defined but applied in only ${users} place(s). ` +
-    'Primary actions and nav rows both need a real finger target.'
-  );
-  console.log(`PASS: --touch-target-min is 44px and applied to ${users} control groups`);
+  console.log('PASS: --touch-target-min is declared as 44px');
 }
 
-function main() {
+/* ── TOUCH TARGETS, ON BOTH AXES ───────────────────────────────────────────────
+ *
+ * A 44px-TALL CONTROL THAT IS 20px WIDE IS NOT A TOUCH TARGET.
+ *
+ * The previous version of this assertion counted occurrences of
+ * `min-height: var(--touch-target-min)` in main.css and passed when it found at
+ * least two. That is one axis, in one file, on rules nobody proved were ever
+ * used. Measured against what the app actually renders, it was hiding two real
+ * defects at once: the dashboard's ghost buttons carried a hardcoded 40px --
+ * BELOW the floor, and on the block axis only -- and the POS category pills,
+ * tender buttons and cart tools declared a block minimum and NO INLINE MINIMUM
+ * AT ALL, so a one-character category name ("A", or a single Arabic/CJK glyph)
+ * collapses to roughly its padding under a thumb.
+ *
+ * So this now walks every interactive control the corpus renders and resolves
+ * BOTH axes through the real cascade. `100%` counts for the inline axis: a
+ * control stretched to its container is wider than a finger in any layout this
+ * product has.
+ *
+ * THE ONE EXEMPTION IS DERIVED, NOT LISTED. WCAG 2.5.5's "Equivalent" exception
+ * allows a small target when the same action is available on a larger one. The
+ * dashboard's receipt-number button is exactly that: an inline text control
+ * inside a table row whose own onclick fires the same call. So a control is
+ * exempt when an ANCESTOR carries an onclick that resolves to the same function
+ * call -- checked by comparing the two handlers, not by recognising a class
+ * name. An inline control with no equivalent larger target still fails.
+ */
+const CONTROL_TAGS = new Set(['button', 'a', 'input', 'select', 'textarea', 'summary']);
+const INLINE_AXIS = ['min-inline-size', 'min-width', 'inline-size', 'width'];
+const BLOCK_AXIS = ['min-block-size', 'min-height', 'block-size', 'height'];
+const TOUCH_FLOOR = 44;
+
+function isControl(el) {
+  if (CONTROL_TAGS.has(el.tag)) {
+    if (el.tag === 'input' && /^hidden$/i.test(el.attrs.type || '')) return false;
+    return true;
+  }
+  return el.attrs.role === 'button' || el.attrs.tabindex !== undefined;
+}
+
+/** `event.stopPropagation();RetailSystem._viewSale(7)` -> `RetailSystem._viewSale(7)` */
+function normalisedHandler(value) {
+  return String(value || '')
+    .replace(/event\.stopPropagation\(\)\s*;?/g, '')
+    .replace(/\s+/g, '')
+    .replace(/;$/, '');
+}
+
+function hasEquivalentLargerTarget(el) {
+  const own = normalisedHandler(el.attrs.onclick);
+  if (!own) return false;
+  for (let p = el.parent; p && p.type === 'element'; p = p.parent) {
+    if (normalisedHandler(p.attrs.onclick) === own) return true;
+  }
+  return false;
+}
+
+function declaredMinimum(h, el, props) {
+  for (const prop of props) {
+    const decl = h.winningDeclaration(h.ruleTable, el, prop, new Set());
+    if (!decl) continue;
+    const value = String(decl.value).trim();
+    // A control stretched to its container's inline size is wider than a finger
+    // in every layout in this product; treating it as unknown would demand a
+    // redundant min-inline-size on the Charge button and the scan field.
+    if (/^100%$/.test(value)) return { px: Infinity, from: `${prop}: ${value}   <- ${decl.from}` };
+    const range = h.lengthRange(value, h.tokens);
+    if (range) return { px: range.min, from: `${prop}: ${value}   <- ${decl.from}` };
+  }
+  return null;
+}
+
+function testEveryRenderedControlMeetsTheTouchFloorOnBothAxes(h) {
+  const failures = [];
+  const exempt = [];
+  let checked = 0;
+
+  for (const screen of h.screens) {
+    for (const el of h.allElements(screen.root)) {
+      if (!isControl(el)) continue;
+      if (hasEquivalentLargerTarget(el)) { exempt.push(`${screen.name} ${h.describe(el).slice(0, 55)}`); continue; }
+      checked++;
+      const inline = declaredMinimum(h, el, INLINE_AXIS);
+      const block = declaredMinimum(h, el, BLOCK_AXIS);
+      const bad = [];
+      if (!inline) bad.push('inline axis: NO minimum declared at all');
+      else if (inline.px < TOUCH_FLOOR) bad.push(`inline axis: ${inline.px}px < ${TOUCH_FLOOR}px   (${inline.from})`);
+      if (!block) bad.push('block axis: NO minimum declared at all');
+      else if (block.px < TOUCH_FLOOR) bad.push(`block axis: ${block.px}px < ${TOUCH_FLOOR}px   (${block.from})`);
+      if (bad.length) {
+        failures.push(`${screen.name} ${h.describe(el).slice(0, 60)}\n      ` + bad.join('\n      '));
+      }
+    }
+  }
+
+  // ANTI-VACUITY: the assertion is a filter over rendered controls. If the
+  // corpus or the control classifier stopped matching, the filter would be
+  // empty and this would pass while measuring nothing.
+  assert.ok(
+    checked >= 20,
+    `Only ${checked} interactive controls were found across the whole corpus ` +
+    '(there were 26 when this was written). The render or the classifier is ' +
+    'broken, so a green result here would be meaningless.'
+  );
+
+  assert.deepStrictEqual(
+    failures, [],
+    `${failures.length} rendered control(s) are below the ${TOUCH_FLOOR}px touch floor ` +
+    'on at least one axis:\n  ' + failures.join('\n  ') +
+    '\n\nBoth axes, or it is not a target. Half of these installs are ' +
+    'touchscreens with no pointer at all, so a control that is only tall ' +
+    'enough is a control a cashier misses in a queue. Declare the floor from ' +
+    'var(--touch-target-min) rather than a literal, so one edit moves every ' +
+    'control if the floor ever changes.'
+  );
+  console.log(
+    `PASS: all ${checked} rendered interactive controls clear ${TOUCH_FLOOR}px on BOTH axes ` +
+    `(${exempt.length} inline control(s) exempt via an equivalent larger target)`
+  );
+}
+
+async function main() {
   testEveryHoverableControlHasAFocusRing();
   testFocusRingIsActuallyVisible();
   testFocusRingIsTokenisedSoItCanAdaptToDarkBrandSurfaces();
-  testPrimaryActionsMeetTouchTargetMinimum();
+  testTouchTargetTokenExists();
+
+  const h = await render.harness();
+  testEveryRenderedControlMeetsTheTouchFloorOnBothAxes(h);
+
   console.log('PASS: retail_design_focus_test.js');
 }
 
-try {
-  main();
-} catch (err) {
+main().catch((err) => {
   console.error('FAIL: retail_design_focus_test.js');
   console.error(err.message || err);
   process.exitCode = 1;
-}
+});

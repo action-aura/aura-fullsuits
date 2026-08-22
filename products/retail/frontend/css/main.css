@@ -3966,6 +3966,144 @@ html[data-theme="light"] .cl-tab:not(.active):focus-visible {
   min-height: var(--touch-target-min);
 }
 
+/* ── TOUCH, SECOND AXIS ───────────────────────────────────────────────────────
+   A 44px-TALL CONTROL THAT IS 20px WIDE IS NOT A TOUCH TARGET.
+   The shell's primary actions above set both axes (the nav rows set only the
+   block axis, correctly -- they are full-width targets). The till's OWN
+   controls, declared in subsystem-retail.js's per-screen <style> blocks, are
+   not full-width and set only the block axis anyway.
+   Measured on the rendered screens: the POS category pills, the tender buttons
+   and the cart tools carried `min-block-size: var(--touch-target-min)` and NO
+   inline minimum at all, so a one-character category ("A", or a CJK/Arabic
+   single-glyph name) collapses to roughly its padding -- about 36px wide, under
+   a thumb, on the exact machines that have no pointer to fall back on. The
+   dashboard's ghost buttons were worse: a hardcoded 40px, one axis, below the
+   floor on both.
+
+   These live here rather than in that file for the reason the whole
+   [operational-calm] block exists: touch is a PRODUCT-WIDE property, not a
+   per-screen styling choice, and a floor that each screen re-declares is a
+   floor that each screen can forget. retail_design_focus_test.js asserts both
+   axes on every control the corpus actually renders, so a new control cannot
+   opt out by simply not mentioning the inline axis.
+
+   SPECIFICITY IS DELIBERATE. `#ret-styles` is appended to <head> at runtime and
+   each screen's <style> is emitted into <body>, so both land AFTER this file
+   and beat it at equal specificity. Qualifying with the element name buys the
+   one extra point (0,2,1) needed to win without an !important, which would
+   remove the screens' ability to override anything at all. */
+button.pos-cat-btn, button.pos-pay-btn, button.pos-clear-btn, button.pos-hold-btn,
+input.pos-mini-input, select.pos-cust-select {
+  min-inline-size: var(--touch-target-min);
+  min-block-size: var(--touch-target-min);
+}
+
+/* ── THE SHARED RETAIL CHROME ─────────────────────────────────────────────────
+   `RetailSystem._injectStyles()` (subsystem-retail.js) builds a stylesheet at
+   runtime and appends it to <head>. It predates the token layer by two
+   redesigns, it was authored for the near-black HUD, and because it is injected
+   AFTER css/main.css it wins every equal-specificity tie against the tokens.
+   The token layer therefore could not reach it at all, and an adversarial
+   verifier measured the result on the two busiest screens in the product:
+
+       POS "Held" button          #cbd5e1 on white              1.48:1
+       payment badge (card)       #38bdf8 on a 15% self-tint    1.91:1
+       payment badge (cash)       #10b981 on a 15% self-tint    2.20:1
+
+   All three are WORSE than the 2.64:1 grey-on-white trap the previous pass
+   fixed, on the same screens, and the contrast test passed anyway because it
+   compared TOKENS TO TOKENS and these are neither.
+
+   THE FIX IS OPAQUE FILLS, NOT DARKER TEXT, and that is the load-bearing
+   decision. The originals are a colour laid over a 12-15% tint OF ITSELF: the
+   text and its background are the same hue at different alphas, so the ratio is
+   pinned near 1:1 by construction and no amount of darkening the text rescues
+   it while the fill tracks it. Worse, an alpha fill has no fixed luminance --
+   the same badge reads differently on a white card, a hovered row and the dark
+   `.ret-modal` these badges also appear on (see _viewPO / _viewSale). Pairing
+   an opaque --state-*-surface with its matching --state-*-text makes each chip
+   SELF-CONTAINED: 7.3-7.6:1 regardless of what is behind it, which is the only
+   way one badge class can be correct on all three surfaces at once.
+
+   Only the paint is restated. Geometry, radius, font and padding stay in
+   subsystem-retail.js so this cannot silently become a second, competing
+   definition of what a badge IS. */
+.ret-badge.ret-badge-green  { background: var(--state-success-surface); color: var(--state-success-text); border: 1px solid var(--state-success-border); }
+.ret-badge.ret-badge-blue   { background: var(--state-info-surface);    color: var(--state-info-text);    border: 1px solid var(--state-info-border); }
+.ret-badge.ret-badge-red    { background: var(--state-danger-surface);  color: var(--state-danger-text);  border: 1px solid var(--state-danger-border); }
+.ret-badge.ret-badge-yellow { background: var(--state-warning-surface); color: var(--state-warning-text); border: 1px solid var(--state-warning-border); }
+/* Purple carried no meaning. The palette has four semantic states and this was
+   a fifth colour used to say "a different category of thing" -- exactly the
+   decorative use the direction rules out ("a colour that means nothing does not
+   belong"). Its one live caller labels a supplier's primary contact, and the
+   label is words; the chip only has to be a DISTINCT, quiet chip. So it becomes
+   the neutral one, which is both accessible and honest about carrying no state. */
+.ret-badge.ret-badge-purple { background: var(--surface-active);        color: var(--text-primary);       border: 1px solid var(--border-strong); }
+
+/* The ghost button: the POS "Held" control, every modal's Cancel, and every
+   table's row actions. `button.ret-btn.ret-btn-ghost` is (0,2,1), which is what
+   it takes to beat BOTH `.ret-btn-ghost` in the injected sheet (0,1,0) and
+   `.rdash .ret-btn-ghost` in the dashboard's own <style> (0,2,0) -- the latter
+   being where the hardcoded 40px block size lives. One rule, so the two cannot
+   drift apart again. */
+button.ret-btn.ret-btn-ghost {
+  background: var(--surface-sunken);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-default);
+  min-block-size: var(--touch-target-min);
+  min-inline-size: var(--touch-target-min);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-tight);
+}
+button.ret-btn.ret-btn-ghost:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+/* A till is driven by a barcode scanner, and a scanner is a keyboard. The
+   injected sheet gave this control a :hover and nothing else, so on a
+   touchscreen it had no discoverable state and from the keyboard no visible
+   focus at all. */
+button.ret-btn.ret-btn-ghost:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+  border-radius: inherit;
+}
+
+/* ── MONEY SEMANTICS SURVIVE THE WRAPPER ──────────────────────────────────────
+   `_money()` returns a NESTED `<span class="money">`, so a container that has
+   already decided the money semantic -- the dashboard's Sales and Returns
+   figures are `<span class="rdash-bd-value is-in">` / `is-out` -- holds no text
+   of its own. Every character is inside the child, and `.money` above
+   re-declares `color`, so the container's declaration painted nothing: the
+   Sales figure rendered neutral, and `.rdash-bd-value.is-in` was dead CSS from
+   the day it was written.
+
+   Dead in the only sense that matters. The selector DOES match its element; the
+   element simply has no text to paint. That is the failure mode a token layer
+   exists to prevent -- a money-semantic colour that silently does not apply --
+   and it is invisible to review precisely because both halves look right.
+
+   `color: inherit` is the fix rather than restating the two colours here,
+   because restating them would create a THIRD place the money palette is
+   written down. The container decides; the amount obeys. Scoped to the
+   containers that actually declare a semantic, so an ordinary `.money` with no
+   opinionated ancestor keeps --text-money. A genuine negative inside `.is-out`
+   inherits rather than taking `.money--negative`'s own colour -- these rules are
+   (0,2,0) and that is (0,1,0) -- but `.is-out` resolves to
+   --text-money-negative, the same token, so the two cannot disagree. Outside
+   these containers `.money--negative` is untouched and still wins on its own.
+
+   Descendant rather than child, deliberately. _money() puts the span directly
+   inside today; a wrapper added later must not silently reinstate the exact bug
+   this rule exists to close. retail_design_contrast_test.js would catch that
+   regression either way -- this just means there is nothing to catch. */
+.rdash-bd-value.is-in .money,
+.rdash-bd-value.is-out .money {
+  color: inherit;
+}
+
 /* ── DISABLED ─────────────────────────────────────────────────────────────────
    Distinct from every other state, and NOT communicated by opacity alone --
    a 50%-opacity control on a light surface still reads as enabled to many

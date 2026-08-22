@@ -168,11 +168,42 @@ const RetailSystem = {
     s.textContent = `
       .ret-hdr { display:flex;justify-content:space-between;align-items:center;margin-bottom:22px; }
       .ret-title { color:var(--text);margin:0;font-size:24px;font-weight:700; }
-      .ret-table { width:100%;border-collapse:collapse;color:#fff;font-size:13px; }
-      .ret-table th { color:var(--text-muted);font-weight:500;padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.08);text-align:left; }
-      .ret-table td { padding:11px 12px;border-bottom:1px solid rgba(255,255,255,0.04);vertical-align:middle; }
+      /* AUDIT -- this rule used to say color:#fff, a leftover from the dark HUD.
+         With Operational Calm the panels behind it are WHITE, and .rdash was
+         the only place anything overrode it. So on Sales History, Returns,
+         Products, Customers and Suppliers every uncoloured cell -- customer
+         name, status, reference -- rendered white on white at 1.00:1. Not
+         faint: literally invisible, on five screens, in a shipped build.
+
+         It hid from the contrast sweep because that sweep counted a rule as
+         "exercised" when a corpus element MATCHED it, not when the rule WON.
+         The dashboard matches .ret-table and then overrides it, which was
+         enough to launder a live defect into the "already checked" bucket.
+         The token is the fix; the sweep's accounting is fixed separately. */
+      .ret-table { width:100%;border-collapse:collapse;color:var(--text);font-size:13px; }
+      .ret-table th { color:var(--text-muted);font-weight:500;padding:10px 12px;border-bottom:1px solid var(--border-soft);text-align:left; }
+      .ret-table td { padding:11px 12px;border-bottom:1px solid var(--border-subtle, var(--border-soft));vertical-align:middle; }
       .ret-table tr:last-child td { border:none; }
-      .ret-table tbody tr:hover { background:rgba(255,255,255,0.03); }
+      /* :focus-within, not only :hover. A clickable row is now a row CONTAINING
+         a button (see _saleOpenerButton), and a keyboard or barcode-scanner
+         operator tabbing onto that button has to see which row they are on --
+         the same thing a pointer user gets from hover. Without the second
+         selector this highlight is unreachable on a touchscreen and unreachable
+         from the keyboard, i.e. reachable only by the one input method a till
+         is least often driven with. */
+      .ret-table tbody tr:hover,
+      .ret-table tbody tr:focus-within { background:rgba(255,255,255,0.03); }
+      /* The in-row control. Styled to be visually indistinguishable from the
+         cell text it replaced -- the row already reads as clickable -- so this
+         adds a keyboard/AT path WITHOUT changing the layout. The underline is
+         drawn in a transparent colour at rest and given a colour on hover/focus,
+         so the text metrics never change and the row cannot reflow when focus
+         lands on it. */
+      .ret-rowbtn { appearance:none;-webkit-appearance:none;background:none;border:0;padding:0;margin:0;
+        font:inherit;color:inherit;text-align:inherit;cursor:pointer;
+        text-decoration:underline;text-decoration-color:transparent;text-underline-offset:3px; }
+      .ret-rowbtn:hover,
+      .ret-rowbtn:focus-visible { text-decoration-color:currentColor; }
       .ret-badge { display:inline-block;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600; }
       .ret-badge-green { background:rgba(16,185,129,0.15);color:#10b981; }
       .ret-badge-red   { background:rgba(239,68,68,0.15);color:#ef4444; }
@@ -180,17 +211,33 @@ const RetailSystem = {
       .ret-badge-blue  { background:rgba(56,189,248,0.15);color:#38bdf8; }
       .ret-badge-purple{ background:rgba(168,85,247,0.15);color:#a855f7; }
       .ret-modal-overlay { position:fixed;inset:0;background:rgba(0,0,0,0.75);display:flex;align-items:center;justify-content:center;z-index:9999;backdrop-filter:blur(5px); }
-      .ret-modal { background:#0f172a;border:1px solid rgba(255,255,255,0.1);border-radius:18px;padding:32px;width:520px;max-height:88vh;overflow-y:auto;box-shadow:0 30px 80px rgba(0,0,0,0.7); }
+      /* AUDIT -- the modal was a DARK ISLAND (#0f172a with #fff children) left
+         over from the HUD, floating inside a now-light app. It was internally
+         consistent, which is exactly why it survived the redesign: nothing
+         inside it looked wrong.
+
+         It could not stay. The moment .ret-table stopped forcing white text
+         (see above), every table rendered inside a modal -- the customer
+         Purchase History, the PO detail, the sale detail -- became dark on
+         dark. And a money value converted to <span class="money"> in here
+         rendered at 1.02:1, because .money sets its colour DIRECTLY and so
+         beat the white the cell used to inherit. Both are the same root cause:
+         a surface whose palette disagrees with the app's means every rule must
+         know which of the two it is on, and eventually one of them forgets.
+
+         Now light, on the same tokens as every other panel, so a rule written
+         anywhere is correct here too. */
+      .ret-modal { background:var(--surface-panel);border:1px solid var(--border-soft);border-radius:18px;padding:32px;width:520px;max-height:88vh;overflow-y:auto;box-shadow:0 30px 80px rgba(0,0,0,0.28); }
       .ret-modal-wide { width:680px; }
-      .ret-modal h3 { color:#fff;margin:0 0 24px;font-size:20px;font-weight:700; }
+      .ret-modal h3 { color:var(--text);margin:0 0 24px;font-size:20px;font-weight:700; }
       .ret-field { margin-bottom:15px; }
       .ret-field label { display:block;color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px; }
       .ret-field input,.ret-field select,.ret-field textarea {
-        width:100%;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);
-        border-radius:8px;color:#fff;padding:10px 14px;font-size:14px;outline:none;
-        box-sizing:border-box;font-family:inherit;transition:.2s; }
+        width:100%;background:var(--surface-sunken, #f2f5f8);border:1px solid var(--border-soft);
+        border-radius:8px;color:var(--text);padding:10px 14px;font-size:14px;outline:none;
+        min-block-size:44px;box-sizing:border-box;font-family:inherit;transition:.2s; }
       .ret-field input:focus,.ret-field select:focus,.ret-field textarea:focus { border-color:var(--sub-accent);box-shadow:0 0 0 3px rgba(244,63,94,0.12); }
-      .ret-field select option { background:#0f172a; }
+      .ret-field select option { background:var(--surface-panel); color:var(--text); }
       .ret-field-row { display:grid;grid-template-columns:1fr 1fr;gap:12px; }
       .ret-field-row3 { display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px; }
       .ret-modal-footer { display:flex;gap:10px;justify-content:flex-end;margin-top:22px; }
@@ -242,6 +289,21 @@ const RetailSystem = {
     document.head.appendChild(s);
   },
 
+  // ── Money: one number, three sinks ─────────────────────────────────────────
+  //
+  // Which helper a call site needs is decided by its SINK, not by taste. The
+  // three are listed here together because the whole hazard is picking the
+  // wrong one:
+  //
+  //   _fmt(n)          PLAIN STRING, ASCII hyphen. For a sink that cannot take
+  //                    markup and is not itself a money element: showToast()
+  //                    (which assigns textContent), the Charge button's label,
+  //                    and _printReceipt()'s separate print document.
+  //   _money(n, cls)   A <span class="money">. For an amount COMPOSED INTO
+  //                    larger markup — a table cell, a sentence, a card.
+  //   _setMoney(el,n)  For an element that IS the value (its template already
+  //                    gives it `.money`) and is filled in after a fetch.
+  //
   // Negative amounts read as "-$120.00", not "$-120.00" — matters now that a
   // net-negative revenue figure (returns exceeding sales) is displayed as-is
   // rather than hidden/clamped.
@@ -250,6 +312,21 @@ const RetailSystem = {
     return (v < 0 ? '-$' : '$') + Math.abs(v).toFixed(2);
   },
   _fmtNum(n) { return (+(n||0)).toLocaleString(); },
+
+  // The digits, in ONE place, so _money() and _setMoney() can never disagree
+  // about the glyph. U+2212 MINUS SIGN, not U+002D HYPHEN: it is wider, sits on
+  // the digit midline, and cannot be misread as a hyphen in a product name.
+  //
+  // _fmt() above deliberately does NOT delegate here. It feeds a toast, a
+  // button label and a print document — sinks where the ASCII hyphen is the
+  // safe character and where none of the .money styling exists to pair with a
+  // typographic minus. Two spellings, each stated once, is the honest shape;
+  // one spelling forced on both would be a silent change to what a receipt
+  // prints.
+  _moneyDigits(n) {
+    const v = +(n || 0);
+    return (v < 0 ? '−' : '') + '$' + Math.abs(v).toFixed(2);
+  },
 
   // Read a design token's resolved value for the one consumer that cannot use
   // var() at all: Chart.js, which takes plain colour strings. Everything else
@@ -307,12 +384,49 @@ const RetailSystem = {
   _money(n, extraClass) {
     const v = +(n || 0);
     const neg = v < 0;
-    // U+2212 MINUS SIGN, not U+002D HYPHEN: it is wider, sits on the digit
-    // midline, and cannot be misread as a hyphen in a product name.
-    const digits = (neg ? '−' : '') + '$' + Math.abs(v).toFixed(2);
+    const digits = this._moneyDigits(v);
     const cls = 'money' + (neg ? ' money--negative money--accounting' : '') +
                 (extraClass ? ' ' + extraClass : '');
     return `<span class="${cls}"${neg ? ' data-sign="negative"' : ''}>${digits}</span>`;
+  },
+
+  // Fill in an element that IS the amount — #pos-total, #r-k-rev and their
+  // siblings, each of which already carries `.money` in its own template.
+  //
+  // WHY THIS EXISTS, AND WHY IT IS NOT `_money()` INTO innerHTML
+  //
+  // Those elements were written with `el.textContent = this._fmt(n)`, and that
+  // one line is why the negative cue was INHERITED rather than exact. _fmt()
+  // emits a bare ASCII hyphen and cannot touch a class, so:
+  //   * `.money--negative` (bold + --text-money-negative) and
+  //     `.money--accounting`'s parentheses had no way of reaching the value —
+  //     nothing ever put those classes on the element;
+  //   * a net-negative Revenue Today, which is the whole reason that figure is
+  //     shown unclamped, was distinguishable from a positive one by a single
+  //     hyphen and nothing else. On the washed-out 6-bit panels these installs
+  //     run on, that is not a distinction.
+  // The classes are toggled HERE, on the element the template already declared
+  // as `.money`. Nesting a second `<span class="money">` inside a `.money`
+  // element would double the rule and, worse, turn a textContent sink into an
+  // innerHTML one for no gain — this writes TEXT, because an amount is text.
+  //
+  // classList is feature-tested rather than assumed: several harnesses in
+  // products/retail/tests/ hand this file element stubs, and a helper that
+  // throws on a stub would take the whole render down with it.
+  _setMoney(el, n, extraClass) {
+    if (!el) return el;
+    const neg = +(n || 0) < 0;
+    el.textContent = this._moneyDigits(n);
+    const cl = el.classList;
+    if (cl && typeof cl.toggle === 'function') {
+      cl.toggle('money--negative', neg);
+      // Paired with money--negative, never alone: css/main.css renders the
+      // parentheses off `.money--accounting.money--negative`, so the two have
+      // to move together or a positive amount grows brackets.
+      cl.toggle('money--accounting', neg);
+      if (extraClass) cl.add(extraClass);
+    }
+    return el;
   },
 
   // The Charge button's label, in one place. _recalc() and both of _checkout()'s
@@ -467,6 +581,52 @@ const RetailSystem = {
     const shown = this._esc(text);
     const title = (full != null && full !== text) ? ` title="${this._esc(full)}"` : '';
     return `<bdi dir="${dir || 'ltr'}"${title}>${shown}</bdi>`;
+  },
+
+  // ── The keyboard path into a clickable table row ───────────────────────────
+  //
+  // Three tables in this file list sales and open one on click: the dashboard's
+  // Recent Transactions, Sales History, and a customer's Purchase History. All
+  // three shipped as `<tr style="cursor:pointer" onclick="..._viewSale(id)">`
+  // and NOTHING ELSE, which means:
+  //
+  //   * a <tr> is not focusable, so there was no keyboard route to the sale
+  //     detail at all — not a poor one, none. A till is driven by a scanner and
+  //     a keyboard more than by a mouse, and a scanner IS a keyboard;
+  //   * `cursor:pointer` plus a `:hover` background is a POINTER-ONLY
+  //     affordance. On the touchscreens a large share of these installs run,
+  //     there is no hover, so the row never announced itself as clickable at
+  //     all;
+  //   * a screen reader read six table cells and no control, because a click
+  //     handler on a <tr> confers no role.
+  //
+  // The row stays a row. Turning a <tr> into a button would break the table
+  // semantics that make the columns readable in the first place (and a
+  // `role="button"` on a <tr> would strip the row from the table's grid for an
+  // AT user). What the row CONTAINS is a real <button>: native focusability,
+  // native Enter AND Space activation, native `button` role, and a focus ring
+  // it cannot drift out of sync with — none of which a `tabindex`/`role`/
+  // `keydown` retrofit gives for free, and all of which that retrofit would
+  // have to keep re-earning on every edit.
+  //
+  // The row keeps its own click handler, because a full-row pointer target is
+  // genuinely better with a finger or a mouse. That is why the button stops
+  // propagation: without it, one click on the button would run _viewSale twice
+  // — once for the button, once for the row it bubbled to — and open the sale
+  // detail on top of itself.
+  //
+  // The accessible name is the verb plus the receipt number, so an AT user
+  // hears "View invoice SALE-000012, button" rather than a bare id. Both halves
+  // are needed: the number alone does not say what the control does, and the
+  // verb alone does not say WHICH sale, which is the only question a list of
+  // eight rows raises.
+  _saleOpenerButton(saleId, saleNumber) {
+    const id = Number(saleId);
+    const num = saleNumber == null ? '' : String(saleNumber);
+    return `<button type="button" class="ret-rowbtn"` +
+      ` onclick="event.stopPropagation();RetailSystem._viewSale(${Number.isFinite(id) ? id : 0})"` +
+      ` aria-label="${this._esc(t('View invoice'))} ${this._esc(num)}"` +
+      `>${this._bdi(num)}</button>`;
   },
 
   // Canonical uuid4 shape. Used ONLY to decide how many characters of a value
@@ -940,9 +1100,15 @@ const RetailSystem = {
 
     try {
       const d = (await this._get('/api/sub/retail/dashboard/stats')).data || {};
-      document.getElementById('r-k-rev').textContent   = this._fmt(d.today_sales);
+      // _setMoney, not `textContent = _fmt(...)`: all three of these spans are
+      // declared `.money` in the template above, so the negative marking now
+      // lands on the VALUE. #r-k-rev is the one that makes this matter — it is
+      // net revenue and is deliberately shown unclamped, so on a day when
+      // refunds exceed sales it goes negative, and under the old assignment the
+      // only cue was a hyphen the token layer could not reach.
+      this._setMoney(document.getElementById('r-k-rev'), d.today_sales);
       document.getElementById('r-k-txn').textContent   = d.today_transactions || 0;
-      document.getElementById('r-k-mtd').textContent   = this._fmt(d.month_sales);
+      this._setMoney(document.getElementById('r-k-mtd'), d.month_sales);
       document.getElementById('r-k-low').textContent   = d.low_stock_alerts || 0;
       document.getElementById('r-k-cust').textContent  = this._fmtNum(d.total_customers);
       // These three used to be built as interpolated sentences
@@ -958,7 +1124,7 @@ const RetailSystem = {
       // Avg ticket = average sale size, so use GROSS (net + returns) ÷ transactions —
       // returns shouldn't distort the average sale value.
       const grossToday = (d.today_sales || 0) + (d.today_returns || 0);
-      document.getElementById('r-k-txn-sub').textContent = this._fmt(grossToday / (d.today_transactions || 1));
+      this._setMoney(document.getElementById('r-k-txn-sub'), grossToday / (d.today_transactions || 1));
       document.getElementById('r-k-mtd-sub').textContent = this._fmtNum(d.month_transactions || 0);
 
       // Needs-attention band. Nothing to reorder is the GOOD case and is
@@ -1065,7 +1231,7 @@ const RetailSystem = {
         tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:30px">${t('No transactions yet today')}</td></tr>`;
       } else {
         tbody.innerHTML = recent.map(s => `<tr style="cursor:pointer" onclick="RetailSystem._viewSale(${s.id})" title="${this._esc(t('View invoice'))}">
-          <td style="font-family:monospace;color:var(--sub-accent)">${this._esc(s.sale_number)}</td>
+          <td style="font-family:monospace;color:var(--sub-accent)">${this._saleOpenerButton(s.id, s.sale_number)}</td>
           <td>${this._esc(s.customer_name || t('Walk-in'))}</td>
           <td style="color:var(--text-dim)">${s.item_count||0} <span>${t('items')}</span></td>
           <td>${this._badge(this._esc(s.payment_method||'cash'), s.payment_method==='cash'?'green':'blue')}</td>
@@ -1075,8 +1241,21 @@ const RetailSystem = {
                8 sales so far, rows here can be from earlier days. HH:MM-only used
                to make those indistinguishable from today's sales; show the full
                date+time here (matches the Date column convention used by the
-               Sales History and Purchase History tables elsewhere in this file). -->
-          <td style="color:var(--text-dim);font-family:monospace">${(s.created_at||'').slice(0,16)}</td>
+               Sales History and Purchase History tables elsewhere in this file).
+
+               _bdi(), and this is the exact case its docstring describes. The
+               value create_sale writes is '%Y-%m-%d %H:%M:%S' (retail_api.py),
+               so sliced to 16 it is "2026-08-21 18:42" -- TWO number runs with a
+               space between them and NOT ONE STRONG DIRECTIONAL CHARACTER in the
+               whole string. Unisolated, the bidi algorithm resolves that space
+               against the paragraph, and on an Arabic page the two runs swap:
+               the cell renders "18:42 2026-08-21", i.e. a date that is wrong
+               rather than merely mirrored. dir="ltr" (the helper's default) is
+               required as well as the isolation -- <bdi>'s own dir="auto" picks
+               its direction from the first STRONG character, and there is not
+               one here, so auto falls straight back to the paragraph and
+               reproduces the bug inside the isolate. -->
+          <td style="color:var(--text-dim);font-family:monospace">${this._bdi((s.created_at||'').slice(0,16))}</td>
         </tr>`).join('');
       }
     } catch(e) {
@@ -1261,7 +1440,14 @@ const RetailSystem = {
         .pos-cat-btn { min-block-size:var(--touch-target-min, 44px);padding-inline:18px;border-radius:var(--radius-pill, 22px);font-size:14px;font-weight:600;
           cursor:pointer;border:1px solid var(--border-mid);background:transparent;color:var(--text-dim);
           white-space:nowrap;font-family:inherit;transition:background .15s ease, color .15s ease, border-color .15s ease; }
-        .pos-cat-btn:hover { color:var(--text);background:var(--surface-hover); }
+        /* Paired :hover/:focus-visible, here and on every other control in
+           this block. The pairing is not cosmetic and it is not covered by
+           retail_design_focus_test.js -- that ratchet reads css/main.css,
+           and this stylesheet is injected from JS at render time, so it was
+           entirely outside its reach. retail_surface_pos_test.js::
+           testEveryPosHoverAffordanceHasAFocusCounterpart closes that gap;
+           it is what found these four rules hover-only. */
+        .pos-cat-btn:hover, .pos-cat-btn:focus-visible { color:var(--text);background:var(--surface-hover); }
         /* Selected is a solid fill; hovered is a tint. They must never look
            the same -- a cashier scanning the rail has to see what is ON. */
         .pos-cat-btn.active { background:var(--sub-accent);border-color:var(--sub-accent);color:var(--text-on-accent, var(--text-inverse));font-weight:700; }
@@ -1269,14 +1455,29 @@ const RetailSystem = {
         /* ── Product grid ────────────────────────────────────────────────── */
         .pos-product-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;
           padding-block:16px;padding-inline:16px;overflow-y:auto;flex:1;align-content:start; }
-        .pos-card { min-block-size:118px;background:var(--surface-soft);border:1px solid var(--border-soft);
+        /* The tile is a <button> (see _renderPOSGrid). The first line is the
+           button reset that makes it look exactly like the <div> it replaced:
+           a UA-styled button would otherwise arrive with its own font, its own
+           centred colour and a shrink-to-fit width, and the grid would reflow. */
+        .pos-card { appearance:none;-webkit-appearance:none;font:inherit;color:inherit;inline-size:100%;
+          min-block-size:118px;background:var(--surface-soft);border:1px solid var(--border-soft);
           border-radius:12px;padding-block:14px;padding-inline:12px;text-align:center;cursor:pointer;user-select:none;
           display:flex;flex-direction:column;justify-content:center;gap:4px;
           transition:background .14s ease, border-color .14s ease, transform .12s ease; }
-        .pos-card:hover { border-color:var(--border-mid);background:var(--surface-hover); }
+        /* :focus-visible alongside :hover, and this is the pairing that could
+           never have existed before: as a <div> the tile was unfocusable, so a
+           :focus-visible rule on it would have been dead CSS. Now it is the
+           keyboard and scanner operator's only sight of where they are, and it
+           is the ONLY state feedback a touchscreen operator gets at all. */
+        .pos-card:hover, .pos-card:focus-visible { border-color:var(--border-mid);background:var(--surface-hover); }
         .pos-card:active { transform:scale(0.98); }
         .pos-card-outofstock { opacity:.45;cursor:not-allowed; }
-        .pos-card-outofstock:hover, .pos-card-outofstock:active { transform:none;border-color:var(--border-soft);background:var(--surface-soft); }
+        /* The unavailable tile stays FOCUSABLE (aria-disabled, not disabled), so
+           it still takes the outline from .pos-wrap :focus-visible below -- what
+           is suppressed here is only the "this will do something" surface lift,
+           which would be a lie on a tile that cannot be sold. */
+        .pos-card-outofstock:hover, .pos-card-outofstock:focus-visible, .pos-card-outofstock:active {
+          transform:none;border-color:var(--border-soft);background:var(--surface-soft); }
         .pos-card-icon { font-size:26px;line-height:1; }
         .pos-card-name { color:var(--text);font-size:13px;font-weight:600;line-height:1.3;
           display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden; }
@@ -1336,7 +1537,7 @@ const RetailSystem = {
         .pos-hold-btn { min-block-size:var(--touch-target-min, 44px);padding-inline:16px;border-radius:10px;border:1px solid var(--border-mid);
           background:var(--surface-soft);color:var(--text-dim);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;
           transition:background .12s ease, color .12s ease; }
-        .pos-hold-btn:hover { color:var(--text);background:var(--surface-hover); }
+        .pos-hold-btn:hover, .pos-hold-btn:focus-visible { color:var(--text);background:var(--surface-hover); }
         .pos-cust-select { min-block-size:var(--touch-target-min, 44px);background:var(--input-bg);border:1px solid var(--border-mid);
           border-radius:10px;color:var(--text);padding-inline:12px;font-size:13px;font-family:inherit;outline:none;
           max-inline-size:190px;transition:border-color .15s ease; }
@@ -1368,7 +1569,7 @@ const RetailSystem = {
           cursor:pointer;border:1px solid var(--border-mid);background:var(--surface-soft);color:var(--text-dim);
           display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-family:inherit;
           transition:background .15s ease, color .15s ease, border-color .15s ease; }
-        .pos-pay-btn:hover { color:var(--text);background:var(--surface-hover); }
+        .pos-pay-btn:hover, .pos-pay-btn:focus-visible { color:var(--text);background:var(--surface-hover); }
         .pos-pay-btn.active { background:var(--sub-accent);border-color:var(--sub-accent);
           color:var(--text-on-accent, var(--text-inverse));font-weight:700; }
         .pos-pay-icon { font-size:15px;line-height:1; }
@@ -1379,7 +1580,7 @@ const RetailSystem = {
           color:var(--text-on-accent, var(--text-inverse));font-weight:800;font-size:18px;cursor:pointer;
           font-family:inherit;font-variant-numeric:tabular-nums;white-space:nowrap;
           transition:opacity .15s ease, transform .12s ease; }
-        .pos-checkout-btn:hover { opacity:.92; }
+        .pos-checkout-btn:hover, .pos-checkout-btn:focus-visible { opacity:.92; }
         .pos-checkout-btn:active { transform:scale(0.99); }
         .pos-checkout-btn:disabled { opacity:.45;cursor:not-allowed;transform:none; }
 
@@ -1604,15 +1805,46 @@ const RetailSystem = {
       // The old inline `style="color:#ef4444"` both hardcoded a hex and made
       // low-stock indistinguishable from out-of-stock without colour vision.
       const stockCls = outOfStock ? ' is-out' : (p.total_stock <= (p.reorder_level || 0) ? ' is-low' : '');
-      return `<div class="pos-card${outOfStock?' pos-card-outofstock':''}"
+      // A REAL <button>, not a <div> with a click handler.
+      //
+      // This tile is the single most-used control on the whole product, and as
+      // a <div onclick> it had no keyboard route at all: not focusable, so Tab
+      // never reached it, so Enter and Space could never activate it, and a
+      // screen reader announced a group of text with no control in it. Its
+      // `:hover` rule was therefore the only affordance it had -- and hover
+      // does not exist on a touchscreen, which is what a large share of these
+      // installs are. Between the two, the tile was operable by mouse only.
+      //
+      // <button> is chosen over tabindex="0" + role="button" + a keydown
+      // handler deliberately: the native element brings focusability, BOTH
+      // activation keys (Space fires on keyup, Enter on keydown -- a hand-
+      // rolled handler almost always ships one of the two), the role, and the
+      // form-control focus ring, and none of those can drift away from the
+      // markup later. The button resets in .pos-card (font, colour, width,
+      // appearance) are what keep the tile looking exactly as it did.
+      //
+      // The accessible name comes from the tile's own contents -- product name,
+      // price, stock -- rather than an aria-label, on purpose: an aria-label
+      // REPLACES the contents for an AT user, so a label here would silently
+      // withhold the price and the stock line from the one person who cannot
+      // see them. The icon is already aria-hidden, so it contributes nothing.
+      //
+      // Out of stock is aria-disabled, NOT disabled. `disabled` removes the
+      // control from the tab order and silences it, which would hide the one
+      // piece of information the cashier actually needs ("this is out of
+      // stock") from exactly the operator least able to infer it from a 45%
+      // opacity wash. aria-disabled announces "unavailable" while keeping the
+      // tile focusable and keeping its existing explain-why toast.
+      return `<button type="button" class="pos-card${outOfStock?' pos-card-outofstock':''}"
+          ${outOfStock ? 'aria-disabled="true"' : ''}
           onclick="${outOfStock ? `SubsystemApp.showToast('${this._esc(t('Out of stock'))}','error')` : `RetailSystem._addToCart('${this._esc(p.id)}')`}">
-        <div class="pos-card-icon" aria-hidden="true">${icon}</div>
-        <div class="pos-card-name" title="${this._esc(p.name)}">${this._esc(p.name)}</div>
-        <div class="pos-card-price">${this._money(p.sell_price)}</div>
-        <div class="pos-card-stock${stockCls}">
+        <span class="pos-card-icon" aria-hidden="true">${icon}</span>
+        <span class="pos-card-name" title="${this._esc(p.name)}">${this._esc(p.name)}</span>
+        <span class="pos-card-price">${this._money(p.sell_price)}</span>
+        <span class="pos-card-stock${stockCls}">
           ${outOfStock ? t('Out of stock') : `${t('Stock')}: ${p.total_stock} ${this._esc(p.unit||'')}`}
-        </div>
-      </div>`;
+        </span>
+      </button>`;
     }).join('');
   },
 
@@ -1784,12 +2016,17 @@ const RetailSystem = {
         return;
       }
       box.innerHTML = rows.map(r => {
-        const when = new Date((r.created_at || '').replace(' ', 'T')).toLocaleString();
+        // Both isolated: the hold number is an identifier and `when` is a
+        // formatted date+time, i.e. two neutral runs that swap places under an
+        // RTL paragraph. This line already sits in a middot-separated sentence,
+        // which is exactly the surrounding text that supplies the wrong
+        // direction when the run itself carries none.
+        const when = this._bdi(new Date((r.created_at || '').replace(' ', 'T')).toLocaleString());
         const noteHtml = r.label ? ` — ${this._esc(r.label)}` : '';
         return `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 4px;border-bottom:1px solid rgba(255,255,255,0.06)">
           <div>
-            <div style="color:#fff;font-weight:600;font-size:13px">${this._esc(r.hold_number)}${noteHtml}</div>
+            <div style="color:#fff;font-weight:600;font-size:13px">${this._bdi(r.hold_number||'')}${noteHtml}</div>
             <div style="color:var(--text-muted);font-size:11px">${r.item_count} item${r.item_count===1?'':'s'} · ${this._esc(r.customer_name)} · ${when}</div>
           </div>
           <div style="display:flex;align-items:center;gap:10px">
@@ -1943,9 +2180,12 @@ const RetailSystem = {
     const discAmt = subtotal * discFrac;
     const total   = subtotal - discAmt + tax;
     this._currentTotals = { subtotal, discount: discAmt, tax, total };
-    if (document.getElementById('pos-sub'))   document.getElementById('pos-sub').textContent   = this._fmt(subtotal);
-    if (document.getElementById('pos-tax'))   document.getElementById('pos-tax').textContent   = this._fmt(tax);
-    if (document.getElementById('pos-total')) document.getElementById('pos-total').textContent = this._fmt(total);
+    // All three spans already carry `.money` in the POS template, so the amount
+    // IS the money element -- _setMoney fills it in and marks a negative on
+    // that same element rather than leaving the cue to whatever wraps it.
+    this._setMoney(document.getElementById('pos-sub'),   subtotal);
+    this._setMoney(document.getElementById('pos-tax'),   tax);
+    this._setMoney(document.getElementById('pos-total'), total);
     const checkoutBtn = document.getElementById('pos-checkout-btn');
     if (checkoutBtn) {
       checkoutBtn.textContent = this._checkoutLabel(total);
@@ -1962,7 +2202,7 @@ const RetailSystem = {
     if (this._paymentMethod === 'cash' && tendered > 0 && tendered >= total) {
       const change = tendered - total;
       if (changeRow) changeRow.style.display = '';
-      if (changeEl)  changeEl.textContent = this._fmt(change);
+      if (changeEl)  this._setMoney(changeEl, change);
     } else {
       if (changeRow) changeRow.style.display = 'none';
     }
@@ -2957,12 +3197,14 @@ const RetailSystem = {
       if (!hist.length) { el.textContent = 'No purchases yet.'; return; }
       el.outerHTML = `<table class="ret-table">
         <thead><tr><th>Receipt #</th><th>Items</th><th>Method</th><th>Total</th><th>Date</th></tr></thead>
-        <tbody>${hist.map(s=>`<tr style="cursor:pointer" onclick="RetailSystem._viewSale(${s.id})" title="View invoice">
-          <td style="font-family:monospace;color:var(--sub-accent)">${s.sale_number}</td>
+        <tbody>${hist.map(s=>`<tr style="cursor:pointer" onclick="RetailSystem._viewSale(${s.id})" title="${this._esc(t('View invoice'))}">
+          <td style="font-family:monospace;color:var(--sub-accent)">${this._saleOpenerButton(s.id, s.sale_number)}</td>
           <td>${s.items||0}</td>
           <td>${this._badge(s.payment_method,'blue')}</td>
-          <td style="font-weight:700">${this._fmt(s.total)}</td>
-          <td style="color:var(--text-muted)">${(s.created_at||'').slice(0,16)}</td>
+          <td style="font-weight:700">${this._money(s.total)}</td>
+          <!-- Same unisolated two-number run as the dashboard's Date column;
+               see the long note there. -->
+          <td style="color:var(--text-muted)">${this._bdi((s.created_at||'').slice(0,16))}</td>
         </tr>`).join('')}</tbody>
       </table>`;
     } catch(e) {}
@@ -3304,7 +3546,7 @@ const RetailSystem = {
       }
       const statusColor = { pending:'yellow', received:'green', cancelled:'red', partial:'blue' };
       tbody.innerHTML = data.map(po => `<tr>
-        <td style="font-family:monospace;color:var(--sub-accent)">${po.po_number}</td>
+        <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi(po.po_number||'')}</td>
         <td style="font-weight:600">${po.supplier_name||'—'}</td>
         <td>${this._badge(po.status, statusColor[po.status]||'blue')}</td>
         <td style="font-weight:600">${this._fmt(po.total)}</td>
@@ -3688,7 +3930,7 @@ const RetailSystem = {
         <td style="font-weight:600">${this._esc(r.product_name)}<div style="font-size:11px;color:var(--text-muted)">${this._esc(r.sku||'')}</div></td>
         <td>${r.branch_name ? this._esc(r.branch_name) : '—'}</td>
         <td style="color:var(--text-muted);max-width:320px">${this._esc(r.draft_message||'')}</td>
-        <td style="color:var(--text-muted)">${r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</td>
+        <td style="color:var(--text-muted)">${r.created_at ? this._bdi(new Date(r.created_at).toLocaleString()) : '—'}</td>
         <td>
           <button class="ret-btn ret-btn-primary ret-btn-sm" onclick="RetailSystem._acceptReorderRequest('${this._esc(r.id)}')">${t('Accept')}</button>
           <button class="ret-btn ret-btn-ghost ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._declineReorderRequest('${this._esc(r.id)}')">${t('Decline')}</button>
@@ -3958,13 +4200,17 @@ const RetailSystem = {
         tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">No returns yet.</td></tr>';
         return;
       }
+      // Three isolated runs per row: two document identifiers and a timestamp.
+      // The timestamp is the one that reorders outright (see the Date-column
+      // note in _renderDashboard); the identifiers keep their neutral
+      // characters (`-`) on the correct side of their digits.
       tbody.innerHTML = data.map(r => `<tr>
-        <td style="font-family:monospace;color:var(--sub-accent)">${r.return_number}</td>
-        <td style="color:var(--text-muted)">${r.sale_number||'—'}</td>
+        <td style="font-family:monospace;color:var(--sub-accent)">${this._bdi(r.return_number||'')}</td>
+        <td style="color:var(--text-muted)">${r.sale_number ? this._bdi(r.sale_number) : '—'}</td>
         <td>${r.customer_name||'Walk-in'}</td>
         <td>${this._badge(r.refund_method||'cash','blue')}</td>
         <td style="font-weight:600;color:#ef4444">${this._fmt(r.refund_amount)}</td>
-        <td style="color:var(--text-muted)">${(r.created_at||'').slice(0,16)}</td>
+        <td style="color:var(--text-muted)">${this._bdi((r.created_at||'').slice(0,16))}</td>
       </tr>`).join('');
     } catch(e) { console.error(e); }
   },
@@ -4270,12 +4516,14 @@ const RetailSystem = {
       }
       const statusColor = { completed:'green', pending:'yellow', cancelled:'red', voided:'red' };
       tbody.innerHTML = data.map(s => `<tr style="cursor:pointer" onclick="RetailSystem._viewSale(${s.id})" title="${t('View invoice')}">
-        <td style="font-family:monospace;color:var(--sub-accent)">${s.sale_number}</td>
-        <td style="color:var(--text-muted)">${(s.created_at||'').slice(0,16)}</td>
+        <td style="font-family:monospace;color:var(--sub-accent)">${this._saleOpenerButton(s.id, s.sale_number)}</td>
+        <!-- Same unisolated two-number run as the dashboard's Date column;
+             see the long note there. -->
+        <td style="color:var(--text-muted)">${this._bdi((s.created_at||'').slice(0,16))}</td>
         <td>${s.customer_name||t('Walk-in')}</td>
         <td style="color:var(--text-muted)">${s.item_count||0}</td>
         <td>${this._badge(s.payment_method||'cash', s.payment_method==='cash'?'green':'blue')}</td>
-        <td style="font-weight:700">${this._fmt(s.total)}</td>
+        <td style="font-weight:700">${this._money(s.total)}</td>
         <td>${this._badge(s.status||'completed', statusColor[s.status]||'green')}</td>
       </tr>`).join('');
     } catch(e) {

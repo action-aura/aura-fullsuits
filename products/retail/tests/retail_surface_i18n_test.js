@@ -32,8 +32,15 @@
  * and ask of each text node: could this ever be translated? That is what this
  * file does.
  *
+ * It also covers the OTHER half of shipping Arabic, which is not translation at
+ * all: a run of digits with no strong directional character in it takes its
+ * direction from the surrounding paragraph, so an unisolated "2026-08-21 18:42"
+ * renders as "18:42 2026-08-21" on an Arabic page — a wrong date, not a mirrored
+ * one. See testNeutralNumberRunsAreDirectionIsolated below.
+ *
  * Mutation-proven: reintroducing a bare literal, merging a number back into a
- * translatable sentence, or re-hardcoding the date locale all fail here.
+ * translatable sentence, re-hardcoding the date locale, or dropping the <bdi>
+ * from a date cell all fail here.
  *
  * Run: node products/retail/tests/retail_surface_i18n_test.js
  */
@@ -170,6 +177,19 @@ function makeElementStub(overrides) {
   }, overrides);
 }
 
+// `created_at` is deliberately the SPACE form, not an ISO 'T'.
+//
+// This is what the server actually writes: retail_api.py's create_sale stores
+// `datetime.now().strftime('%Y-%m-%d %H:%M:%S')`, so what the Date column
+// slices to 16 characters is "2026-08-21 18:42" — two number runs, a space
+// between them, and NOT ONE STRONG DIRECTIONAL CHARACTER in the string.
+//
+// The fixture used to say '2026-08-21T18:42:00'. That 'T' is a strong LTR
+// character, and it silently anchored the whole run left-to-right — so the
+// bidi hazard this file now checks for could not occur in the test data even
+// while it was occurring on every Arabic install. A fixture that manufactures
+// the state which hides the bug is worse than no fixture, because it reports
+// the bug as absent.
 const STATS = {
   today_sales: 1284.5, today_transactions: 18, month_sales: 21450.75,
   month_transactions: 310, low_stock_alerts: 7, total_customers: 84,
@@ -177,7 +197,7 @@ const STATS = {
   hourly_labels: [], hourly_data: [], payment_methods: {},
   recent_sales: [
     { id: 1, sale_number: 'S-1041', customer_name: 'Walk-in', item_count: 3,
-      payment_method: 'cash', total: 42.5, created_at: '2026-08-21T18:42:00' },
+      payment_method: 'cash', total: 42.5, created_at: '2026-08-21 18:42:00' },
   ],
 };
 
@@ -477,6 +497,130 @@ function testNoTranslatableStringSharesANodeWithAnEmoji() {
   });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// BIDI — a run with no strong character must be isolated AND given a direction
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The failure this catches is not "the text mirrors". It is that the text
+// renders a DIFFERENT VALUE.
+//
+// "2026-08-21 18:42" is a date and a time with a space between them. Under the
+// Unicode bidi algorithm every character in it is neutral or weak: the digits
+// are EN, `-` is ES and `:` is CS (both of which merge into the number they sit
+// between, so each half stays one run), and the separating space is WS with no
+// strong character anywhere to resolve against. Rule N2 therefore resolves that
+// space to the PARAGRAPH direction. On an Arabic page that is RTL, so the two
+// number runs are laid out right-to-left as blocks and the cell reads
+// "18:42 2026-08-21" — the reader sees a time where the date belongs and a date
+// where the time belongs. Not a cosmetic mirror: a wrong date.
+//
+// <bdi> alone does not fix it. <bdi>'s default is dir="auto", which picks its
+// direction from the first STRONG character — and this string has none, so auto
+// falls back to the paragraph and reproduces the bug inside the isolate. The
+// direction has to be STATED, which is why RetailSystem._bdi() defaults to
+// dir="ltr" and why this test requires a dir attribute rather than just a <bdi>.
+//
+// Mutation-proven, three ways:
+//   * drop `this._bdi(...)` from the Date column          -> fails (not isolated)
+//   * change _bdi's default from 'ltr' to 'auto'          -> fails (no direction)
+//   * put the ISO 'T' back in the STATS fixture           -> fails the anti-vacuity
+//     assertion, because the strong 'T' means no hazard run is rendered at all
+//     and the sweep would be checking nothing.
+
+/** Any character that gives a run its own direction — Latin, Arabic, anything. */
+const STRONG_DIRECTIONAL = /\p{L}/u;
+
+/**
+ * Two digit runs separated by whitespace: "2026-08-21 18:42", "12 34".
+ *
+ * Deliberately NOT "contains a digit". A single run cannot reorder — there is
+ * nothing for it to swap with — so "$1,284.50", "3", "12%" and "40" are not
+ * hazards and flagging them would be noise that teaches people to add
+ * exemptions. `.`/`,`/`:`/`-`/`/` are allowed INSIDE a run because the bidi
+ * algorithm merges them into the adjacent number; whitespace is the separator
+ * that does not merge, and is therefore the one that reorders.
+ */
+const TWO_NEUTRAL_NUMBER_RUNS = /\d[\d.,:\-/]*\s+[\d.,:\-/]*\d/;
+
+/** The nearest ancestor <bdi>, or null. */
+function bdiAncestor(node) {
+  let n = node.parent;
+  while (n && n.type === 'element') {
+    if (n.tag === 'bdi') return n;
+    n = n.parent;
+  }
+  return null;
+}
+
+function testNeutralNumberRunsAreDirectionIsolated() {
+  return renderAllSurfaces().then((fragments) => {
+    const hazards = [];
+    const unisolated = [];
+
+    for (const [surface, html] of fragments) {
+      const root = dom.parseFragment(html);
+      for (const el of dom.allElements(root)) {
+        if (el.tag === 'style' || el.tag === 'script') continue;
+        for (const child of el.children || []) {
+          if (child.type !== 'text') continue;
+          const text = asRendered(decodeEntities(child.text)).replace(/\s+/g, ' ').trim();
+          if (!text) continue;
+          if (STRONG_DIRECTIONAL.test(text)) continue;
+          if (!TWO_NEUTRAL_NUMBER_RUNS.test(text)) continue;
+
+          const where = `[${surface}] ${JSON.stringify(text)} in ${dom.describe(el)}`;
+          hazards.push(where);
+
+          const bdi = bdiAncestor(child);
+          if (!bdi) {
+            unisolated.push(`${where} — no <bdi> ancestor at all`);
+          } else if (!bdi.attrs.dir) {
+            unisolated.push(`${where} — inside <bdi> but with no dir attribute`);
+          } else if (bdi.attrs.dir === 'auto') {
+            unisolated.push(
+              `${where} — inside <bdi dir="auto">, which resolves against the ` +
+              'paragraph when the run has no strong character (i.e. here)'
+            );
+          }
+        }
+      }
+    }
+
+    // ANTI-VACUITY, and the reason this is stated before the real assertion:
+    // every check below is a filter over `hazards`. If the fixtures stopped
+    // producing a bare number run — an ISO 'T' creeping back into a created_at,
+    // a render that silently stopped emitting rows — the filter would return
+    // an empty list and this test would report a clean bill of health having
+    // examined nothing. "I found nothing to check" must never read as a pass.
+    assert.ok(
+      hazards.length >= 1,
+      'No unisolated-run CANDIDATE was rendered at all across ' + fragments.length +
+      ' surfaces, so this sweep checked nothing.\n\nThe likeliest cause is a ' +
+      'fixture whose created_at carries an ISO "T": that T is a strong LTR ' +
+      'character, it anchors the whole run, and it makes the hazard impossible ' +
+      'to reproduce in the test while leaving it live in production — the server ' +
+      'writes "%Y-%m-%d %H:%M:%S" with a SPACE (retail_api.py::create_sale).'
+    );
+
+    assert.deepStrictEqual(
+      unisolated, [],
+      'These rendered runs have NO strong directional character and are not ' +
+      'direction-isolated:\n  ' + unisolated.join('\n  ') +
+      '\n\nIn Arabic the paragraph direction resolves the whitespace between the ' +
+      'two number runs, so they swap: a "2026-08-21 18:42" cell renders as ' +
+      '"18:42 2026-08-21" and states the wrong date. Wrap the value in ' +
+      'RetailSystem._bdi(), which emits <bdi dir="ltr"> — the isolation AND the ' +
+      'stated direction are both required, because <bdi>\'s own dir="auto" picks ' +
+      'its direction from the first strong character and there is not one here.'
+    );
+
+    console.log(
+      `PASS: all ${hazards.length} rendered run(s) with no strong directional ` +
+      'character are isolated with an explicit direction'
+    );
+  });
+}
+
 function testDatesFollowTheActiveLanguage() {
   const src = fs.readFileSync(FRONTEND_FILE, 'utf8');
 
@@ -548,6 +692,7 @@ async function main() {
   await testEveryKeyPassedToTranslateExistsInBothCatalogs();
   await testNoUntranslatedLiteralReachesTheOperator();
   await testNoTranslatableStringSharesANodeWithAnEmoji();
+  await testNeutralNumberRunsAreDirectionIsolated();
   console.log('PASS: retail_surface_i18n_test.js');
 }
 
