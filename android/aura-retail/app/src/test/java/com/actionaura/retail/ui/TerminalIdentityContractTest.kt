@@ -64,7 +64,6 @@ import java.io.IOException
  * makes it, that it makes it on every path that reaches the till, and that
  * failing to make it can never take the app down with it.
  */
-/*
 class TerminalIdentityContractTest {
 
     private val moduleRoot = File(".")
@@ -314,4 +313,3 @@ class TerminalIdentityContractTest {
         assertThat(cancelled).isTrue()
     }
 }
-*/

@@ -162,8 +162,17 @@ function loadShell() {
 // `fetchImpl` records every call. The gated cases pass one that THROWS, so a
 // suppressed-fetch assertion cannot pass by accident on a stub that quietly
 // returns something plausible.
-function loadRetail({ capabilities, fetchImpl }) {
+//
+// `elements` maps an id or a querySelector string to a specific stub. Default-
+// stubbing every lookup is fine for the screens that only READ their own
+// markup back, but it is actively dangerous for the Sales History cases below:
+// a fresh stub carries `value: ''`, so a date-filter test run against default
+// stubs would find both date inputs empty and observe a request with no date
+// params -- on a build with no gate at all. That is the fixture manufacturing
+// the state that hides the bug. Those cases pass real stubs holding real dates.
+function loadRetail({ capabilities, fetchImpl, elements }) {
   const code = fs.readFileSync(RETAIL_FILE, 'utf8');
+  const els = elements || {};
   const sandbox = {
     console,
     t: (s) => s,
@@ -174,9 +183,9 @@ function loadRetail({ capabilities, fetchImpl }) {
     fetch: fetchImpl,
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
     document: {
-      getElementById() { return makeElementStub(); },
+      getElementById(id) { return els[id] || makeElementStub(); },
       createElement() { return makeElementStub(); },
-      querySelector() { return makeElementStub(); },
+      querySelector(sel) { return els[sel] || makeElementStub(); },
       head: { appendChild() {} },
       body: makeElementStub(),
       documentElement: { getAttribute() { return null; } },
@@ -539,6 +548,364 @@ async function testRenderAuditLogStillLoadsForOwner() {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// DEFECT 3 — Sales History, the reports-consuming screen with NO gate at all
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// GET /sales/recent is deliberately NOT route-gated on retail.reports: the
+// returns counter needs it (`_findSaleForReturn` resolves a receipt number
+// before a refund, and retail.refund is a cashier default), so refusing the
+// whole route would refuse a cashier a lookup the product grants them. The
+// route splits instead (see recent_sales' docstring):
+//
+//   * `q` and a plain recent page  -> served at any capability. TILL HALF.
+//   * `date_from` / `date_to`      -> 403 without retail.reports, each bound
+//                                     refused on its own. REPORTS HALF.
+//   * `limit`                      -> clamped to TILL_SALES_LOOKUP_MAX_LIMIT
+//                                     (200) without it, SALES_HISTORY_MAX_LIMIT
+//                                     (500) with it.
+//
+// The client knew none of that. `_loadSalesHistory` asked for `limit=300`
+// unconditionally and put whatever was in the two date inputs on the wire.
+//
+// ── What the refused caller actually saw, which is worse than a console line ──
+//
+// `_fetch` only throws on 401. A 403 comes back as a resolved Response, so
+// `(await this._get(url)).data || []` reads `undefined` off the error envelope,
+// falls through to `[]`, and the screen renders "No sales found." with a count
+// of 0. Not an error, not an empty screen, not a console line: a cashier who
+// picks a date range is TOLD THE SHOP HAS NO SALES IN IT. A false statement
+// about the books, rendered as if it were an answer. The `catch (e) {
+// console.error(e) }` arm is real but is not the path a 403 takes -- it is
+// reached only on 401 or a transport failure, and it too shows the user
+// nothing.
+//
+// Both halves are fixed and both are pinned below: the screen no longer OFFERS
+// the reports-gated control to a caller who cannot use it, `_loadSalesHistory`
+// refuses to put a date bound on the wire regardless of what is in the DOM, and
+// an error envelope is no longer rendered as an empty shop.
+
+// A stub that behaves like a filled-in <input>. `_loadSalesHistory` reads
+// `.value` off these, so this is where the bug's own input state comes from.
+function inputStub(value) {
+  const el = makeElementStub();
+  el.value = value;
+  return el;
+}
+
+// The DOM a cashier's Sales History screen is asked to load from when both
+// date inputs are populated -- the exact state the old code turned into a 403.
+function salesHistoryDom(from, to, q) {
+  return {
+    'sh-search': inputStub(q || ''),
+    'sh-date-from': inputStub(from || ''),
+    'sh-date-to': inputStub(to || ''),
+    'sh-count': makeElementStub(),
+    '#sh-table tbody': makeElementStub(),
+  };
+}
+
+function paramsOf(url) {
+  return new URLSearchParams(String(url).split('?')[1] || '');
+}
+
+// The count line AS READ, not as marked up. The count is wrapped in <bdi> (an
+// integer beside Arabic words in an RTL line reorders without it), and a naive
+// `innerHTML` assertion sees `<bdi>1</bdi> sales shown` -- where "1" and "sales"
+// are not adjacent, so a plural-form check written against the raw HTML matches
+// nothing and passes on the bug. Measured: the singular-form mutation stayed
+// GREEN until this stripped the tags.
+function countLine(dom) {
+  const el = dom['sh-count'];
+  return String(el.innerHTML + el.textContent).replace(/<[^>]*>/g, '');
+}
+
+function okSales(rows) {
+  return () => Promise.resolve({
+    ok: true, status: 200,
+    json: () => Promise.resolve({ status: 'success', data: rows }),
+  });
+}
+
+// The real refusal body, copied from recent_sales' own `jsonify` call rather
+// than invented. retail_attribution_i18n_test.py asserts the live server still
+// answers exactly this, so this fixture cannot drift away from the wire.
+const REFUSAL_403 = {
+  status: 'error',
+  error: 'You do not have permission for this action. Ask your store administrator.',
+  message: 'You do not have permission for this action. Ask your store administrator.',
+  code: 403,
+};
+
+// The load path, not the render path. A cashier reaches this with dates in the
+// DOM by a route the render guard cannot cover: `_renderSalesHistory` runs
+// once, and `onchange`/`oninput`/`_clearSalesFilters` all call
+// `_loadSalesHistory` directly afterwards. Populating both inputs here is the
+// point of the case -- run it against default stubs and it passes on a build
+// with no gate whatsoever, because empty inputs contribute no params.
+async function testSalesHistoryNeverPutsARefusedDateBoundOnTheWire() {
+  const calls = [];
+  const sandbox = loadRetail({
+    capabilities: CASHIER_CAPS,
+    fetchImpl: (url) => { calls.push(url); return okSales([])(); },
+    elements: salesHistoryDom('2019-01-01', '2026-12-31'),
+  });
+
+  await sandbox.RetailSystem._renderSalesHistory(makeElementStub());
+  calls.length = 0;                       // isolate the reload the filters trigger
+  await sandbox.RetailSystem._loadSalesHistory();
+
+  assert.ok(calls.length > 0, 'Sanity: _loadSalesHistory issued no request at all.');
+  const offenders = calls.filter(u => paramsOf(u).has('date_from') || paramsOf(u).has('date_to'));
+  assert.deepStrictEqual(
+    offenders, [],
+    'Sales History sent a date bound for a user without retail.reports: ' +
+    JSON.stringify(offenders) + '. recent_sales refuses date_from and date_to ' +
+    'individually for that caller, and the refusal comes back as a resolved 403 ' +
+    'whose envelope has no `data` -- which this screen renders as "No sales ' +
+    'found.". The user is told the shop has no sales in the range they asked ' +
+    'for. The guard has to be in _loadSalesHistory, not only in the markup: ' +
+    'the date inputs are read on every reload, from a DOM this function does ' +
+    'not own.'
+  );
+}
+
+// The till half. The whole reason /sales/recent is not route-gated is that
+// looking a receipt up to take a return is a cashier's job, so "gated" must not
+// degrade into "blank".
+async function testSalesHistoryStillServesTheTillForACashier() {
+  const calls = [];
+  const sandbox = loadRetail({
+    capabilities: CASHIER_CAPS,
+    fetchImpl: (url) => { calls.push(url); return okSales([{ id: 1, sale_number: 'S-1', total: 5 }])(); },
+    elements: salesHistoryDom('', '', 'S-1'),
+  });
+  const content = makeElementStub();
+
+  await sandbox.RetailSystem._renderSalesHistory(content);
+
+  assert.ok(
+    calls.some(u => /\/sales\/recent/.test(u)),
+    'A cashier got no recent-sales request at all. Requests seen: ' +
+    JSON.stringify(calls) + '. Gating the date filters must not gate the ' +
+    'lookup: retail.refund is a cashier default and the returns flow starts by ' +
+    'finding the receipt.'
+  );
+  assert.ok(
+    /S-1/.test(content.innerHTML) || calls.length > 0,
+    'The till half of Sales History rendered nothing.'
+  );
+  assert.ok(
+    paramsOf(calls.find(u => /\/sales\/recent/.test(u))).get('q') === 'S-1',
+    'The receipt search must still reach the server for a cashier -- `q` stays ' +
+    'open at any capability precisely because a receipt number is a single-sale ' +
+    'question.'
+  );
+}
+
+// The honest explanation. Not "renders something": the specific control that
+// was taken away has to be accounted for in words, or the screen reads as a
+// build that forgot the feature.
+async function testSalesHistoryExplainsTheMissingDateFiltersToACashier() {
+  const sandbox = loadRetail({
+    capabilities: CASHIER_CAPS,
+    fetchImpl: okSales([]),
+    elements: salesHistoryDom(),
+  });
+  const content = makeElementStub();
+
+  await sandbox.RetailSystem._renderSalesHistory(content);
+
+  assert.ok(
+    !/id="sh-date-from"/.test(content.innerHTML) && !/id="sh-date-to"/.test(content.innerHTML),
+    'The date inputs are still offered to a cashier. Every use of them is a 403 ' +
+    'the user cannot act on.'
+  );
+  assert.ok(
+    /limited to managers and the store owner/.test(content.innerHTML),
+    'No explanation of the missing date filters. Got: ' + content.innerHTML.slice(0, 600)
+  );
+  assert.ok(
+    /id="sh-search"/.test(content.innerHTML),
+    'Sanity: the receipt search box must survive -- otherwise this case would ' +
+    'pass on a screen that renders no controls at all.'
+  );
+}
+
+async function testSalesHistoryKeepsTheDateFiltersForAnOwner() {
+  const calls = [];
+  const sandbox = loadRetail({
+    capabilities: ADMIN_CAPS,
+    fetchImpl: (url) => { calls.push(url); return okSales([])(); },
+    elements: salesHistoryDom('2026-01-01', '2026-02-01'),
+  });
+  const content = makeElementStub();
+
+  await sandbox.RetailSystem._renderSalesHistory(content);
+
+  assert.ok(
+    /id="sh-date-from"/.test(content.innerHTML) && /id="sh-date-to"/.test(content.innerHTML),
+    'The date filters disappeared for an owner holding retail.reports. The gate ' +
+    'is meant to hide a control the server would refuse, not the feature.'
+  );
+  const p = paramsOf(calls.find(u => /\/sales\/recent/.test(u)));
+  assert.strictEqual(p.get('date_from'), '2026-01-01', 'An owner\'s date_from must reach the server.');
+  assert.strictEqual(p.get('date_to'), '2026-02-01', 'An owner\'s date_to must reach the server.');
+}
+
+// "Do not ask for more than you show." The server clamps /sales/recent at both
+// ends (clamp_page_limit, ceiling SALES_HISTORY_MAX_LIMIT=500) and applies a
+// tighter TILL_SALES_LOOKUP_MAX_LIMIT=200 to a caller without retail.reports.
+// A client that asks for 300 anyway is served 200 and then reports the 200 rows
+// it received as if they were all the shop had -- the same class of false
+// statement as "No sales found.", one page deeper. The fix is to ask for what
+// the server will actually give, so the truncation notice fires correctly.
+//
+// Asserted against the constants the file itself publishes, and those are in
+// turn pinned to the backend's own numbers by
+// retail_attribution_i18n_test.py::test_the_client_page_sizes_match_the_server_caps.
+// Hardcoding 200 here would make this test agree with the client no matter what
+// the server does, which is the whole failure being defended against.
+async function testSalesHistoryAsksForNoMoreRowsThanTheServerWillServe() {
+  const calls = [];
+  const cashier = loadRetail({
+    capabilities: CASHIER_CAPS,
+    fetchImpl: (url) => { calls.push(url); return okSales([])(); },
+    elements: salesHistoryDom(),
+  });
+  await cashier.RetailSystem._renderSalesHistory(makeElementStub());
+
+  const tillLimit = cashier.RetailSystem._SH_TILL_LIMIT;
+  assert.ok(
+    Number.isInteger(tillLimit),
+    'RetailSystem._SH_TILL_LIMIT is not published as a number, so neither this ' +
+    'test nor the cross-language pin can check the client against the server cap.'
+  );
+  assert.strictEqual(
+    paramsOf(calls.find(u => /\/sales\/recent/.test(u))).get('limit'), String(tillLimit),
+    'A caller without retail.reports asked for a page the server will silently ' +
+    'shrink. Requests seen: ' + JSON.stringify(calls)
+  );
+
+  const ownerCalls = [];
+  const owner = loadRetail({
+    capabilities: ADMIN_CAPS,
+    fetchImpl: (url) => { ownerCalls.push(url); return okSales([])(); },
+    elements: salesHistoryDom(),
+  });
+  await owner.RetailSystem._renderSalesHistory(makeElementStub());
+  assert.strictEqual(
+    paramsOf(ownerCalls.find(u => /\/sales\/recent/.test(u))).get('limit'),
+    String(owner.RetailSystem._SH_PAGE_LIMIT),
+    'A reports-holding caller must ask for the full viewer page size.'
+  );
+}
+
+// The truncation notice has to key off the page size actually requested, not a
+// literal. The old code asked for 300 and compared `data.length === 300` in a
+// second, independent literal -- so a cashier served the till's 200 rows was
+// told "200 sales", full stop, as though that were the whole book.
+async function testATruncatedPageSaysSoRatherThanReportingItselfAsTheWholeBook() {
+  const cashierRows = [];
+  const cashier = loadRetail({ capabilities: CASHIER_CAPS, fetchImpl: () => okSales(cashierRows)(), elements: salesHistoryDom() });
+  const tillLimit = cashier.RetailSystem._SH_TILL_LIMIT;
+  for (let i = 0; i < tillLimit; i += 1) cashierRows.push({ id: i, sale_number: 'S' + i, total: 1 });
+
+  const dom = salesHistoryDom();
+  const full = loadRetail({ capabilities: CASHIER_CAPS, fetchImpl: () => okSales(cashierRows)(), elements: dom });
+  await full.RetailSystem._renderSalesHistory(makeElementStub());
+  const truncated = countLine(dom);
+  assert.ok(
+    /most recent/.test(truncated),
+    'A page filled exactly to the requested limit must say it is the most ' +
+    'recent slice, not present itself as the shop\'s whole history. Count line: ' +
+    JSON.stringify(truncated)
+  );
+  // Told to search rather than to pick a date range, because a date range is
+  // the one thing this caller is refused.
+  assert.ok(
+    !/date range/.test(truncated),
+    'A caller without retail.reports was advised to narrow with a date range -- ' +
+    'the exact control the server refuses them. Count line: ' + JSON.stringify(truncated)
+  );
+
+  const shortDom = salesHistoryDom();
+  const short = loadRetail({
+    capabilities: CASHIER_CAPS,
+    fetchImpl: () => okSales([{ id: 1, sale_number: 'S1', total: 1 }])(),
+    elements: shortDom,
+  });
+  await short.RetailSystem._renderSalesHistory(makeElementStub());
+  const partial = countLine(shortDom);
+  assert.ok(
+    !/most recent/.test(partial),
+    'A page the server did NOT fill must not claim to be truncated. Count line: ' +
+    JSON.stringify(partial)
+  );
+  // The count line used to read `sale${n===1?'':'s'}` -- English pluralisation
+  // welded into the render, which cannot survive translation. Replacing it with
+  // one plural key made "1 sales shown", so both forms are keys now and this
+  // pins the singular. Cheap to assert and exactly the kind of detail a
+  // translation refactor drops on the floor.
+  assert.ok(
+    !/\b1 sales\b/.test(partial),
+    'One row was counted with the plural form. Count line: ' + JSON.stringify(partial)
+  );
+}
+
+// The live regression, asserted on the body the server really sends. `_fetch`
+// resolves a 403, so this never reaches the catch arm; the old code read
+// `.data` off the error envelope, got undefined, and rendered the empty state.
+async function testARefusalIsNotRenderedAsAnEmptyShop() {
+  const dom = salesHistoryDom();
+  const sandbox = loadRetail({
+    capabilities: ADMIN_CAPS,          // owner: the gate is NOT what is under test here
+    fetchImpl: () => Promise.resolve({ ok: false, status: 403, json: () => Promise.resolve(REFUSAL_403) }),
+    elements: dom,
+  });
+
+  await sandbox.RetailSystem._renderSalesHistory(makeElementStub());
+
+  const body = dom['#sh-table tbody'].innerHTML;
+  assert.ok(
+    !/No sales found/.test(body),
+    'A refused (or failed) request was rendered as "No sales found." -- a ' +
+    'statement about the shop\'s books that the client has no evidence for. ' +
+    'Table body: ' + JSON.stringify(body)
+  );
+  assert.ok(
+    /permission/i.test(body) || /Could not load/i.test(body),
+    'A failed load must say so. Table body: ' + JSON.stringify(body)
+  );
+}
+
+// The other failure arm: a transport error, which DOES reach the catch. It used
+// to be `console.error(e)` and nothing else, leaving the "Loading…" placeholder
+// on screen forever.
+async function testATransportFailureIsNotSwallowedIntoTheConsole() {
+  const dom = salesHistoryDom();
+  const sandbox = loadRetail({
+    capabilities: ADMIN_CAPS,
+    fetchImpl: () => Promise.reject(new Error('ECONNRESET')),
+    elements: dom,
+  });
+
+  await sandbox.RetailSystem._renderSalesHistory(makeElementStub());
+
+  const body = dom['#sh-table tbody'].innerHTML;
+  assert.ok(
+    body.length > 0 && !/Loading/.test(body),
+    'A failed request wrote nothing into the table body, so the "Loading…" ' +
+    'placeholder the render put there stays on screen forever on a screen that ' +
+    'has already given up -- the only trace is a console.error nobody reads. ' +
+    'Table body: ' + JSON.stringify(body)
+  );
+  assert.ok(
+    !/No sales found/.test(body),
+    'A transport failure was reported as an empty shop. Table body: ' + JSON.stringify(body)
+  );
+}
+
 // Every case is run even after one fails, and each failure is printed with
 // its own name. Aborting on the first would hide how much of the surface is
 // broken, which is precisely the signal wanted from a first (red) run.
@@ -554,6 +921,14 @@ const CASES = [
   testRenderReportsStillLoadsForOwner,
   testRenderAuditLogMakesNoRequestForCashier,
   testRenderAuditLogStillLoadsForOwner,
+  testSalesHistoryNeverPutsARefusedDateBoundOnTheWire,
+  testSalesHistoryStillServesTheTillForACashier,
+  testSalesHistoryExplainsTheMissingDateFiltersToACashier,
+  testSalesHistoryKeepsTheDateFiltersForAnOwner,
+  testSalesHistoryAsksForNoMoreRowsThanTheServerWillServe,
+  testATruncatedPageSaysSoRatherThanReportingItselfAsTheWholeBook,
+  testARefusalIsNotRenderedAsAnEmptyShop,
+  testATransportFailureIsNotSwallowedIntoTheConsole,
 ];
 
 async function main() {

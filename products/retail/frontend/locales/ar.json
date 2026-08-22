@@ -313,5 +313,22 @@
   "Customer": "العميل",
   "Payment": "الدفع",
   "The activity log is limited to managers and the store owner.": "سجل النشاط مقصور على المديرين ومالك المتجر.",
-  "Audit Log": "سجل النشاط"
+  "Audit Log": "سجل النشاط",
+
+  "Sales History": "سجل المبيعات",
+  "Search receipt # or customer…": "ابحث برقم الفاتورة أو باسم العميل…",
+  "From date": "من تاريخ",
+  "To date": "إلى تاريخ",
+  "Clear": "مسح",
+  "Receipt #": "رقم الفاتورة",
+  "Items": "الأصناف",
+  "View invoice": "عرض الفاتورة",
+  "Walk-in": "عميل نقدي",
+  "No sales found.": "لا توجد مبيعات مطابقة.",
+  "Could not load sales history.": "تعذر تحميل سجل المبيعات.",
+  "sale shown": "عملية بيع واحدة معروضة",
+  "sales shown": "عملية بيع معروضة",
+  "most recent sales shown. Narrow with search or a date range to reach older sales.": "من أحدث المبيعات معروضة. ضيّق البحث أو حدّد نطاقًا زمنيًا للوصول إلى مبيعات أقدم.",
+  "most recent sales shown. Search by receipt number or customer name to reach older sales.": "من أحدث المبيعات معروضة. ابحث برقم الفاتورة أو باسم العميل للوصول إلى مبيعات أقدم.",
+  "Browsing sales by date is limited to managers and the store owner. Search by receipt number or customer name to find a sale.": "تصفّح المبيعات حسب التاريخ مقصور على المديرين ومالك المتجر. ابحث برقم الفاتورة أو باسم العميل للعثور على عملية بيع."
 }

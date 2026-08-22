@@ -268,6 +268,23 @@ android {
                 // resolves this to whichever version it has a real
                 // pre-built wheel for (42.0.8 as of this build).
                 install "cryptography"
+                // Business-date reporting (core/retail/metrics.py). Android
+                // ships no system tz database either, so without this
+                // `zoneinfo.ZoneInfo('Asia/Amman')` raises
+                // ZoneInfoNotFoundError and every shop with a configured
+                // business timezone silently degrades to device-local
+                // bucketing -- the exact defect the feature exists to fix,
+                // announced by a log line nobody reads.
+                //
+                // Measured on the build machine: `zoneinfo.TZPATH` is `()`.
+                // Same failure shape as the `cryptography` omission above:
+                // present in the desktop requirements, absent here, and only
+                // reproducible on a real device.
+                //
+                // Pure data, no compiled extension, universal wheel -- so it
+                // needs no pre-built ABI wheel and cannot hit the Rust
+                // cross-compiler problem described above.
+                install "tzdata==2026.1"
             }
         }
     }
@@ -466,7 +483,94 @@ tasks.register('stageAuraAssets', Copy) {
 tasks.matching { it.name.startsWith('merge') && it.name.endsWith('PythonSources') }
         .configureEach { dependsOn 'stageAuraPython' }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  "0 SKIPPED" as an assertion, not as something a human reads off the console
+// ─────────────────────────────────────────────────────────────────────────────
+// A skipped test and a passing test are indistinguishable in an exit code, and
+// this module skips BY DESIGN: nineteen `assumeTrue(..., file.exists())` calls
+// across nine test classes turn "I cannot reach the file I check" into a SKIP
+// instead of a failure. That is right individually -- those guards read Python
+// and JavaScript out of sibling products and must not fail a build run from a
+// context with no repository around it -- and it is catastrophic collectively,
+// because one moved directory or one changed working directory silences all of
+// them at once.
+//
+// It has already happened here. A stale path took all four
+// BuildGuardContractTest tests to SKIPPED together -- including
+// a_release_build_with_no_licensing_url_is_refused, the one thing standing
+// between this repo and an APK that enforces no licensing whatsoever -- while
+// Gradle printed BUILD SUCCESSFUL and a sibling guard reported PASS. The only
+// reason anybody noticed was a person reading the console.
+//
+// No test inside the module can close this: a test cannot read the report of
+// the run it is part of. So the runner's own JUnit XML is parsed here, after
+// the fact, and any skip fails the build.
+//
+// Wired as a FINALIZER rather than a dependent task, so it still reports when
+// the test task itself fails -- which is the normal state on a machine whose
+// loopback address reverse-resolves to a public hostname (SyncRelayClientTest).
+def registerSkipVerifier = { Test unitTest ->
+    def taskName = unitTest.name
+    def resultsDir = unitTest.reports.junitXml.outputLocation
+    def verifier = tasks.register("assertNoSkipped${taskName.capitalize()}") {
+        group 'verification'
+        description "Fails the build if ${taskName} skipped any test, or ran none at all."
+        // Deliberately declares no inputs and is never up to date. An
+        // up-to-date check on the skip checker would be the same silence one
+        // level further out.
+        outputs.upToDateWhen { false }
+        doLast {
+            def dir = resultsDir.get().asFile
+            def reports = dir.isDirectory()
+                ? (dir.listFiles({ File f -> f.name.endsWith('.xml') } as java.io.FileFilter) as List).sort { it.name }
+                : []
+            // "No results" is exactly what a suite that never ran looks like,
+            // so it is a failure rather than a quiet pass -- the same mistake
+            // this whole check exists to stop being possible.
+            if (reports.isEmpty()) {
+                throw new GradleException(
+                    "${taskName} left no JUnit XML in ${dir}, so nothing here can tell whether a single " +
+                    "assertion ran. Refusing to report success on an unread suite.")
+            }
+            def slurper = new groovy.xml.XmlSlurper()
+            def asCount = { String raw -> raw.isInteger() ? raw.toInteger() : 0 }
+            int total = 0
+            int declaredSkips = 0
+            def named = []
+            reports.each { report ->
+                def suite = slurper.parse(report)
+                total += asCount(suite.@tests.toString())
+                declaredSkips += asCount(suite.@skipped.toString())
+                suite.testcase.each { testcase ->
+                    if (!testcase.skipped.isEmpty()) {
+                        named << "${testcase.@classname}#${testcase.@name}".toString()
+                    }
+                }
+            }
+            if (total == 0) {
+                throw new GradleException(
+                    "${taskName} reported ${reports.size()} result file(s) holding 0 tests. " +
+                    "A suite that runs nothing is not a suite that passed.")
+            }
+            if (declaredSkips > 0 || !named.isEmpty()) {
+                def detail = named.isEmpty() ? "(the XML counted them but named none)" : "\n  " + named.join("\n  ")
+                throw new GradleException(
+                    "${taskName} SKIPPED ${Math.max(declaredSkips, named.size())} of ${total} tests. " +
+                    "In this module a skip means a guard could not reach the file it checks, so its " +
+                    "assertions did not run -- which is the failure, not a lesser form of passing. " +
+                    "Skipped: ${detail}")
+            }
+            logger.lifecycle("${taskName}: ${total} tests, 0 skipped.")
+        }
+    }
+    unitTest.finalizedBy(verifier)
+}
+
 afterEvaluate {
+    // toList() first: the verifiers are registered while iterating the result,
+    // not while iterating the live task container.
+    tasks.withType(Test).toList().each { unitTest -> registerSkipVerifier(unitTest) }
+
     tasks.named('preBuild').configure { dependsOn 'stageAuraPython', 'stageAuraAssets' }
     android.applicationVariants.all { variant ->
         tasks.named("merge${variant.name.capitalize()}Assets").configure {

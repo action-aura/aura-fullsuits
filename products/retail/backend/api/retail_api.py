@@ -188,6 +188,63 @@ CREDIT_TERMS_DENIED_MESSAGE = 'You do not have permission to change credit terms
 #: products/retail/frontend/locales/{en,ar}.json before this ships.
 SUPPLIER_PAYMENT_DENIED_MESSAGE = 'You do not have permission to record a payment to a supplier.'
 
+#: Largest page GET /sales/recent will serve a caller who does NOT hold
+#: retail.reports. 200 is not arbitrary: it is exactly what the returns flow
+#: asks for (frontend/subsystem-retail.js::_findSaleForReturn fetches
+#: `?limit=200` and matches the receipt client-side), so the till's own
+#: request is unaffected while `?limit=100000` -- which used to return the
+#: company's entire sales history in one response -- no longer is.
+TILL_SALES_LOOKUP_MAX_LIMIT = 200
+
+#: Absolute ceiling on GET /sales/recent for EVERY caller, including one that
+#: holds retail.reports. TILL_SALES_LOOKUP_MAX_LIMIT above is the tighter
+#: additional cap applied to callers who do not.
+#:
+#: This exists because the till cap was the ONLY cap: a reports-holding caller
+#: had no upper bound at all, and -- worse -- `min(limit, N)` is not a ceiling
+#: in the first place, since SQLite reads a negative LIMIT as unbounded. Both
+#: halves are now clamped at parse time, before any branch reads the value.
+#:
+#: 500 rather than 200: the Sales History screen is a genuine reporting surface
+#: and paging it at the till cap would be a regression for the people entitled
+#: to use it. It is a viewer either way, not a bulk export.
+SALES_HISTORY_MAX_LIMIT = 500
+
+
+def clamp_page_limit(raw, default, ceiling):
+    """Turn an untrusted `?limit=` query value into a safe page size.
+
+    Exists as a named function, rather than inline at each call site, because
+    the property is what needs testing and an inline expression can only be
+    tested one input at a time. Three tests sat green over the bug this
+    replaces, each asserting an outcome for the single input `limit=100000`.
+
+    Two failure modes, both real and both shipped:
+
+    * `min(raw, ceiling)` IS NOT A CEILING. SQLite reads a negative LIMIT as
+      UNBOUNDED, so `?limit=-1` returned a shop's entire sales book -- every
+      row, every total -- to a cashier holding no reports capability, through
+      a route meant to answer a narrow till question.
+    * `int(...)` straight off the query string turns `?limit=abc` into a 500.
+
+    Anything unparseable falls back to `default` rather than raising: a
+    malformed page size is a caller mistake, not a server error, and a 500
+    tells an operator something is broken when nothing is.
+    """
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = default
+    return max(1, min(value, ceiling))
+
+#: Columns `SELECT s.*` drags into the till's payload that name a PERSON
+#: rather than a sale. `actor_user_uid` is a registry `users.uid` (another
+#: database entirely) and `uid` is the sync identity; the desktop history
+#: table renders neither, and Android resolves actors through the
+#: retail.reports-gated by-employee report. Dropped for callers without that
+#: capability rather than left lying in a response a cashier can read.
+SALES_ROW_IDENTITY_COLUMNS = ('actor_user_uid', 'uid')
+
 # ── Session helpers ────────────────────────────────────────────────────────────
 def _cid():
     return session.get('company_id') or session.get('mt_company_id', 1)
@@ -2520,12 +2577,64 @@ def recent_sales():
     filtering (which scales to a company's full sales history without an
     unbounded row fetch) matches existing precedent better than introducing
     a new pagination pattern this file doesn't otherwise have.
+
+    ── A TILL MAY LOOK A SALE UP; THE SALES BOOK IS A REPORT ────────────────
+    This route used to serve every caller the same thing, and what it serves
+    is `SELECT s.*` over `sales`: total, amount_paid, and (since v13)
+    `actor_user_uid`. A cashier holds retail.sell / retail.refund /
+    retail.cash.close and NOT retail.reports, so the product was answering
+
+        GET /dashboard/stats  -> 403
+        GET /reports/summary  -> 403
+        GET /sales/recent?limit=100000&date_from=...&date_to=...
+                              -> 200, the whole ledger those two are computed FROM
+
+    Refusing the aggregate while serving the rows behind it is not a policy,
+    it is an oversight -- anyone refused the summary could sum the book.
+
+    The gate is NOT `@mt_require_capability(CAP_REPORTS)` on the route,
+    because the returns counter depends on this exact route: frontend
+    `_findSaleForReturn` fetches `?limit=200` to resolve a receipt number
+    before a refund, and retail.refund is a CASHIER DEFAULT. Gating the whole
+    route would refuse a cashier the lookup for a refund the product grants
+    them -- a real regression in exchange for a real fix.
+
+    So the split follows the one already made for `customer_statement` ("one
+    customer's balance is a till fact, the list of everyone who owes the shop
+    money is a report"). Without retail.reports:
+
+      * `date_from` / `date_to` are REFUSED. An arbitrary historical range is
+        the only way to reach sales older than the current page, and that is
+        precisely what makes this the ledger rather than a lookup. Each bound
+        is refused ON ITS OWN -- `date_from` alone reaches the whole book
+        forwards, `date_to` alone reaches all of it backwards.
+      * `limit` is capped at the till's own page size, so one request can no
+        longer pull the entire history.
+      * the identity columns are dropped (see SALES_ROW_IDENTITY_COLUMNS).
+
+    `q` stays open at any capability: a receipt number is a single-sale
+    question, which is the till fact this route exists to answer.
+
+    A caller WITH retail.reports is unchanged in every respect -- the Sales
+    History screen's date filters and the desktop's reporting still work.
     """
     cid   = _cid()
-    limit = int(request.args.get('limit', 50))
+    # Clamped BOTH ends before anything else reads it -- see clamp_page_limit's
+    # docstring for why `min(limit, N)` was not a ceiling and `?limit=-1`
+    # returned the whole book to a cashier.
+    limit = clamp_page_limit(request.args.get('limit', 50), 50, SALES_HISTORY_MAX_LIMIT)
     q         = request.args.get('q', '').strip()
     date_from = request.args.get('date_from', '').strip()
     date_to   = request.args.get('date_to', '').strip()
+
+    # Read ONCE: two calls could straddle a permission change mid-request and
+    # decide the range and the redaction on different answers.
+    may_read_the_book = session_has_capability(CAP_REPORTS)
+    if not may_read_the_book:
+        if date_from or date_to:
+            return jsonify({'status': 'error', 'error': CAPABILITY_DENIED_MESSAGE,
+                            'message': CAPABILITY_DENIED_MESSAGE, 'code': 403}), 403
+        limit = min(limit, TILL_SALES_LOOKUP_MAX_LIMIT)
 
     conditions = ["s.company_id=?"]
     params = [cid]
@@ -2551,7 +2660,16 @@ def recent_sales():
         GROUP BY s.id ORDER BY s.created_at DESC LIMIT ?
     """, params).fetchall()
     conn.close()
-    return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
+    payload = [dict(r) for r in rows]
+    if not may_read_the_book:
+        # Dropped AFTER the query rather than by narrowing the SELECT list:
+        # `s.*` is what keeps this route working as `sales` gains columns, and
+        # an explicit column list here would have to be revisited by every
+        # future migration. The redaction is the thing that must be explicit.
+        for row in payload:
+            for column in SALES_ROW_IDENTITY_COLUMNS:
+                row.pop(column, None)
+    return jsonify({'status': 'success', 'data': payload})
 
 @retail_bp.route('/sales/<int:sale_id>', methods=['GET'])
 @mt_login_required
@@ -4646,11 +4764,11 @@ def list_audit_log():
         except (TypeError, ValueError):
             page = 1
         page = max(1, page)
-        try:
-            limit = int(request.args.get('limit', 50))
-        except (TypeError, ValueError):
-            limit = 50
-        limit = max(1, min(limit, 200))  # hard ceiling -- this is a viewer, not a bulk export
+        # Same helper as /sales/recent. This site was already correct -- it is
+        # where the right shape was copied FROM -- but routing both through one
+        # function means a future third caller cannot get half of it, which is
+        # exactly how /sales/recent ended up with the ceiling and not the floor.
+        limit = clamp_page_limit(request.args.get('limit', 50), 50, 200)  # a viewer, not a bulk export
         offset = (page - 1) * limit
 
         where = ['company_id=?']

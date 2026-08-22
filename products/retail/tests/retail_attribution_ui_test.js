@@ -1034,6 +1034,170 @@ async function testAuditLogUserIdIsBidiIsolated() {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Every capability-refusal panel, rendered in Arabic through the real catalog
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// retail_attribution_i18n_test.py already checks these panels two ways, and
+// both are source-level: no literal text outside an interpolation, and every
+// t() literal present in both catalogs with real Arabic. Together they are a
+// strong argument. They are not the screen.
+//
+// What they cannot answer is whether the strings that pass those checks are the
+// strings the panel actually renders — the scrape reads the METHOD, and a panel
+// is assembled from a method body plus whatever its caller passes in plus a
+// dictionary loaded at runtime from a different file by a third one. This case
+// closes that by running the whole chain and reading the result: the real
+// i18n.js, the real locales/ar.json fetched through i18n.js's own loader, the
+// real subsystem-retail.js, the real capability guards, and then a single
+// question asked of the rendered HTML — is there an English word left in it.
+//
+// That question is worth asking directly because "half-Arabic" is not a
+// property of any one string; it is a property of the panel. The defect this
+// found (`🛒 Open POS`, hardcoded in _renderCashierLanding's own markup, in
+// neither catalog, on the FIRST screen a cashier sees after login) had been
+// reported, declared fixed, and re-confirmed by a verifier — because the fix
+// and the checks that cleared it were both aimed at _renderCapabilityRestricted,
+// which is a different method that was never the one at fault.
+
+const I18N_FILE = path.join(__dirname, '..', 'frontend', 'i18n.js');
+const AR_FILE = path.join(__dirname, '..', 'frontend', 'locales', 'ar.json');
+const EN_FILE = path.join(__dirname, '..', 'frontend', 'locales', 'en.json');
+
+// A sandbox holding the real i18n.js with the real catalogs loaded through its
+// own `load()`, and the real subsystem-retail.js on top of it — so
+// subsystem-retail's bare `t(...)` calls resolve to i18n.js's `window.t`, which
+// is the thing under test.
+//
+// `document.body` is deliberately null while i18n.js loads: apply() and
+// _startObserver() both skip the DOM sweep and the MutationObserver when there
+// is no body, and neither is under test here. t() is.
+async function loadArabicRetail(capabilities, lang) {
+  const sandbox = {
+    console,
+    setTimeout, clearTimeout, URLSearchParams,
+    __AURA_LANG: lang || 'ar',
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    fetch: (url) => {
+      const file = /ar\.json/.test(url) ? AR_FILE : (/en\.json/.test(url) ? EN_FILE : null);
+      if (file) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(JSON.parse(fs.readFileSync(file, 'utf8'))) });
+      }
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ status: 'success', data: [] }) });
+    },
+    document: {
+      readyState: 'complete',
+      body: null,
+      head: { appendChild() {} },
+      documentElement: { getAttribute() { return null; }, setAttribute() {} },
+      getElementById() { return makeElementStub(); },
+      createElement() { return makeElementStub(); },
+      querySelector() { return makeElementStub(); },
+      querySelectorAll() { return []; },
+      addEventListener() {},
+    },
+    SubsystemApp: {
+      capabilities: capabilities,
+      hasCapability(code) {
+        if (!Array.isArray(this.capabilities)) return true;
+        return this.capabilities.includes(code);
+      },
+      showToast() {},
+    },
+  };
+  sandbox.window = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(I18N_FILE, 'utf8'), sandbox, { filename: I18N_FILE });
+  await sandbox.AuraI18n.load();
+
+  // Guard on the instrument BEFORE it is trusted. A catalog that failed to load
+  // leaves t() returning its English argument for everything, and this whole
+  // case would then report a fully-English panel as a translation failure —
+  // or, with the assertion written the other way, report nothing at all.
+  assert.strictEqual(sandbox.AuraI18n.current, lang || 'ar', 'i18n.js did not activate the requested language');
+  assert.ok(
+    Object.keys(sandbox.AuraI18n.dicts.ar || {}).length > 100,
+    'i18n.js loaded no Arabic catalog, so t() would fall back to English for ' +
+    'every key and this case would be measuring nothing.'
+  );
+
+  sandbox.document.body = makeElementStub();
+  vm.runInContext(fs.readFileSync(FRONTEND_FILE, 'utf8'), sandbox, { filename: FRONTEND_FILE });
+  assert.ok(sandbox.RetailSystem, 'subsystem-retail.js did not expose window.RetailSystem');
+  return sandbox;
+}
+
+// Text a HUMAN reads off the panel: tags (and therefore every attribute, class
+// name, inline style and onclick handler) removed, leaving text nodes only.
+function visibleWords(html) {
+  const text = String(html).replace(/<[^>]*>/g, ' ');
+  // The one non-phrase this family of panels renders: _renderCashierLanding
+  // prints today's date. A formatted date is DATA, not a dictionary key — the
+  // same category as an employee name or a receipt number, which i18n.js's own
+  // sweep deliberately never touches. Removed by exact value, computed here the
+  // way the panel computes it, so this is an exemption for one known runtime
+  // value and not for a pattern: if that line ever stops rendering, this
+  // removal quietly becomes a no-op instead of a hole somebody can grow text in.
+  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  return text.split(today).join(' ').match(/[A-Za-z]{2,}/g) || [];
+}
+
+async function testEveryCapabilityDegradedScreenRendersFullyInArabic() {
+  const ar = JSON.parse(fs.readFileSync(AR_FILE, 'utf8'));
+  const sandbox = await loadArabicRetail(CASHIER_CAPS_UI);
+  const panels = {
+    // Reached the way a cashier reaches them: through the real guards, from
+    // the real render entry points, not by calling the panel helper directly.
+    'dashboard (cashier landing)': '_renderDashboard',
+    'reports': '_renderReports',
+    'audit log': '_renderAuditLog',
+    'sales history': '_renderSalesHistory',
+  };
+
+  const failures = [];
+  for (const label of Object.keys(panels)) {
+    const c = makeElementStub();
+    await sandbox.RetailSystem[panels[label]](c);
+    const left = visibleWords(c.innerHTML);
+    if (left.length) failures.push(label + ': ' + JSON.stringify(left));
+  }
+  assert.deepStrictEqual(
+    failures, [],
+    'English words survive on a capability-refusal panel rendered in Arabic:\n  ' +
+    failures.join('\n  ') + '\nEach is a string that never reached t(), or ' +
+    'reached it and found no catalog entry — t() returns its argument unchanged ' +
+    'for an unknown key, so both failures look identical in the source and ' +
+    'identical on screen: one English word among Arabic ones, inside an RTL layout.'
+  );
+
+  // Positive control, in the same case: prove the harness renders words at all.
+  // Without it, "no English words found" is satisfied by a panel that rendered
+  // nothing, a stub that swallowed innerHTML, or a catalog sweep that ate the
+  // page — the exact shape of test this programme keeps mistaking for a pass.
+  const english = await loadArabicRetail(CASHIER_CAPS_UI, 'en');
+  const ec = makeElementStub();
+  await english.RetailSystem._renderDashboard(ec);
+  assert.ok(
+    visibleWords(ec.innerHTML).length > 3,
+    'Control failed: the same panel rendered in ENGLISH produced no English ' +
+    'words either, so the Arabic assertion above proves nothing. Got: ' +
+    JSON.stringify(visibleWords(ec.innerHTML))
+  );
+
+  // And prove the Arabic actually came from the catalog rather than from an
+  // empty panel: a sentence only ar.json can supply must be on the screen.
+  const c2 = makeElementStub();
+  await sandbox.RetailSystem._renderAuditLog(c2);
+  assert.ok(
+    c2.innerHTML.indexOf(ar['The activity log is limited to managers and the store owner.']) !== -1,
+    'The Audit Log refusal did not render its Arabic explanation. Got: ' + c2.innerHTML.slice(0, 400)
+  );
+}
+
+// The grant set a cashier really holds, same source as the gate suite's copy.
+const CASHIER_CAPS_UI = ['retail.cash.close', 'retail.refund', 'retail.sell'];
+
 // See the note in retail_reports_capability_gate_test.js: every case runs
 // even after one fails, so a red run shows the whole surface rather than only
 // its first casualty.
@@ -1066,6 +1230,7 @@ const CASES = [
   testEmployeeNameInReportIsEscaped,
   testReportsPageWiresTheEmployeePanel,
   testAuditLogUserIdIsBidiIsolated,
+  testEveryCapabilityDegradedScreenRendersFullyInArabic,
 ];
 
 async function main() {

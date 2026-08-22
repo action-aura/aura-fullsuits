@@ -106,7 +106,18 @@ def create_admin():
     password = data.get('password', '').strip()
     company  = data.get('company_name', '').strip() or cfg.get('company_id', 'Enterprise')
     country       = data.get('country', 'US').strip()
-    timezone      = data.get('timezone', 'UTC').strip()
+    # `timezone_name`, NOT `timezone`: this is the customer's IANA zone string
+    # ('Asia/Amman'), and the bare name is taken at module scope by
+    # `datetime.timezone` -- which this file's only timestamp idiom,
+    # `datetime.now(timezone.utc)`, depends on (see create_employee). Binding
+    # the string to `timezone` shadowed that class for this whole function, so
+    # adding the house idiom here -- copied verbatim from the two existing call
+    # sites, and looking entirely correct -- raised
+    # `AttributeError: 'str' object has no attribute 'utc'`, which the broad
+    # `except Exception as e` below turns into a 500. This is the one route
+    # that runs with no admin session, so that lands on first-run onboarding.
+    # Pinned by tests/test_onboarding_timezone_symbol_is_not_shadowed.py.
+    timezone_name = data.get('timezone', 'UTC').strip()
     currency      = data.get('currency', 'USD').strip()
     business_type = data.get('business_type', '').strip()
     language      = data.get('language', 'en').strip()
@@ -180,7 +191,7 @@ def create_admin():
             INSERT OR REPLACE INTO company_settings
               (id, company_id, country, timezone, currency, business_type, language)
             VALUES (?,?,?,?,?,?,?)
-        """, (str(uuid.uuid4()), company_id, country, timezone, currency, business_type, language))
+        """, (str(uuid.uuid4()), company_id, country, timezone_name, currency, business_type, language))
 
         conn.commit()
 
@@ -194,7 +205,7 @@ def create_admin():
             'admin_email':         email,
             'admin_name':          name,
             'country':             country,
-            'timezone':            timezone,
+            'timezone':            timezone_name,
             'currency':            currency,
             'business_type':       business_type,
             'language':            language,

@@ -563,13 +563,21 @@ def parse_business_zone(raw):
         settings problem, fixed by an edit.
       * NO TZ DATABASE AT ALL is an environment problem, fixed by a PACKAGE.
         `zoneinfo` is stdlib and always imports, but the DATA it reads is
-        not bundled with CPython: Windows ships no /usr/share/zoneinfo, and
-        `tzdata` is currently in none of requirements/*.txt, none of the
-        Chaquopy pip block for the Android build, and not collected by the
-        PyInstaller spec. On those three targets EVERY zone name fails
-        today. Reporting that as "no time zone found with key Asia/Amman"
-        reads like a typo in the settings screen and sends whoever is
-        debugging it to the wrong place entirely."""
+        not bundled with CPython: Windows ships no /usr/share/zoneinfo, so
+        without the `tzdata` package EVERY zone name fails. Reporting that as
+        "no time zone found with key Asia/Amman" reads like a typo in the
+        settings screen and sends whoever is debugging it to the wrong place
+        entirely.
+
+        `tzdata` is now a declared dependency in requirements/retail.txt and in
+        the Chaquopy pip block (android/aura-retail/app/build.gradle), so the
+        no-database branch below should not fire on a correctly installed
+        build. It is kept, and tested, because it still fires on the one that
+        is NOT correctly installed -- and that is exactly the install whose
+        operator most needs to be told which of the two problems they have.
+
+        Still outstanding: the PyInstaller spec does not collect it. A packaged
+        .exe therefore remains a no-database target until it does."""
     if raw is None or not str(raw).strip():
         return None
     key = str(raw).strip()

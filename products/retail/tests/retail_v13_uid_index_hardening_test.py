@@ -152,7 +152,9 @@ def _seed_returns_and_payments(conn):
     conn.commit()
 
 
-def _half_applied_v13(conn, table, *, duplicate=False, stale_plain_index=False):
+def _half_applied_v13(conn, table, *, duplicate=False, stale_plain_index=False,
+                      wrong_column_index=False, full_unique_index=False,
+                      partial_but_not_unique_index=False):
     """Reproduce the two states a HALF-FINISHED v13 leaves behind.
 
     This is the honest starting point for both defects, and it is reachable
@@ -165,6 +167,18 @@ def _half_applied_v13(conn, table, *, duplicate=False, stale_plain_index=False):
 
     `duplicate=True`  -- two rows share one uid (a restored/merged row).
     `stale_plain_index=True` -- a same-named index exists but is NOT unique.
+    `wrong_column_index=True` -- a same-named index exists and IS unique and
+        partial, but indexes the wrong COLUMN. CLAUDE.md warns in as many words
+        that this repo's databases get touched by more than one branch's schema
+        version during testing, and `_uid_index_shape` reads `PRAGMA
+        index_list`, which reports uniqueness and partiality and says nothing
+        whatsoever about which column is indexed.
+    `full_unique_index=True` -- a same-named index exists, is unique, is on
+        `uid`, but lost the `WHERE uid IS NOT NULL` predicate.
+    `partial_but_not_unique_index=True` -- a same-named index exists, is on
+        `uid`, carries the right predicate, and is simply not UNIQUE. The
+        likeliest divergence of the four: it is the migration's own statement
+        with one word missing.
     """
     conn.execute(f'ALTER TABLE "{table}" ADD COLUMN uid TEXT')
     rowids = [r[0] for r in conn.execute(f'SELECT rowid FROM "{table}" ORDER BY rowid')]
@@ -178,6 +192,16 @@ def _half_applied_v13(conn, table, *, duplicate=False, stale_plain_index=False):
         conn.execute(f'UPDATE "{table}" SET uid=? WHERE rowid=?', (shared, rowids[-1]))
     if stale_plain_index:
         conn.execute(f'CREATE INDEX idx_{table}_uid ON "{table}"(uid)')
+    if wrong_column_index:
+        conn.execute(
+            f'CREATE UNIQUE INDEX idx_{table}_uid ON "{table}"(id) WHERE id IS NOT NULL'
+        )
+    if full_unique_index:
+        conn.execute(f'CREATE UNIQUE INDEX idx_{table}_uid ON "{table}"(uid)')
+    if partial_but_not_unique_index:
+        conn.execute(
+            f'CREATE INDEX idx_{table}_uid ON "{table}"(uid) WHERE uid IS NOT NULL'
+        )
     conn.commit()
 
 
@@ -352,12 +376,179 @@ def test_the_uid_index_actually_rejects_a_duplicate_on_every_uid_table(table):
     assert shape is not None, f'missing idx_{table}_uid'
     assert shape['unique'] == 1, f'idx_{table}_uid is not a UNIQUE index'
     assert shape['partial'] == 1, (
-        f'idx_{table}_uid lost its "WHERE uid IS NOT NULL" predicate; a full index would '
-        'make every NULL-uid row collide on a database where the backfill has not run yet'
+        f'idx_{table}_uid lost its "WHERE uid IS NOT NULL" predicate, so it is not the '
+        'index this migration declares'
     )
+    # Deliberately NOT justified as "otherwise the NULL-uid rows would
+    # collide". They would not: SQLite considers every NULL distinct from
+    # every other NULL inside a unique index, so any number of un-backfilled
+    # rows coexist under a full index too (verified, not assumed -- see
+    # test_multiple_null_uids_are_legal_under_either_index_shape below). The
+    # predicate is asserted because it is the declared shape, and an index
+    # that diverges from what v13 declares was created by something other
+    # than v13.
 
     rowids = [r[0] for r in conn.execute(f'SELECT rowid FROM "{table}" ORDER BY rowid')]
     assert len(rowids) >= 2, f'{table} has too few rows for this assertion to mean anything'
+    taken = conn.execute(f'SELECT uid FROM "{table}" WHERE rowid=?', (rowids[0],)).fetchone()[0]
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(f'UPDATE "{table}" SET uid=? WHERE rowid=?', (taken, rowids[-1]))
+    conn.rollback()
+    conn.close()
+
+
+def test_multiple_null_uids_are_legal_under_either_index_shape():
+    """Pins the fact the two assertions above are careful NOT to lean on.
+
+    The intuitive reading of `WHERE uid IS NOT NULL` is that it exists to stop
+    the un-backfilled rows colliding with each other. It does not, and a
+    comment asserting otherwise would be a false rationale sitting next to a
+    correct check -- which survives review precisely because the check passes.
+    SQLite treats every NULL as distinct from every other NULL for unique-index
+    purposes, so a FULL unique index accepts as many NULL uids as you like.
+
+    Kept as an executable statement rather than a comment citing the manual,
+    because the whole subject of this file is the difference between what
+    somebody typed and what the database actually stored.
+    """
+    probe = sqlite3.connect(':memory:')
+    probe.execute('CREATE TABLE t (id INTEGER PRIMARY KEY, uid TEXT)')
+    probe.execute('CREATE UNIQUE INDEX idx_t_uid ON t(uid)')      # no WHERE clause
+    probe.executemany('INSERT INTO t (uid) VALUES (?)', [(None,), (None,), (None,)])
+    assert probe.execute('SELECT COUNT(*) FROM t').fetchone()[0] == 3, \
+        'a full unique index rejected a second NULL uid'
+    with pytest.raises(sqlite3.IntegrityError):
+        probe.executemany('INSERT INTO t (uid) VALUES (?)', [('x',), ('x',)])
+    probe.close()
+
+
+@pytest.mark.parametrize('table', UID_TABLES)
+def test_v13_rebuilds_a_same_named_unique_index_that_lost_its_partial_predicate(table):
+    """The third divergence: UNIQUE, on the right column, but NOT partial --
+    an earlier attempt that wrote the CREATE without its `WHERE` clause.
+
+    This one is not a correctness hole (see
+    `test_multiple_null_uids_are_legal_under_either_index_shape` -- uniqueness
+    is enforced identically either way), and it is tested anyway, because the
+    `partial` clause in the production check is otherwise unfalsifiable: no
+    other fixture in this file plants an index that is unique on `uid` but
+    full, so deleting that clause from `_uid_index_is_correct` would break
+    nothing and the check would quietly become decoration.
+    """
+    _tmp, sch, db_path = _build_v12_install()
+    conn = sqlite3.connect(db_path)
+    conn.execute('PRAGMA foreign_keys=ON')
+    _seed_returns_and_payments(conn)
+    _half_applied_v13(conn, table, full_unique_index=True)
+
+    planted = _index_row(conn, table, f'idx_{table}_uid')
+    assert planted['unique'] == 1 and planted['partial'] == 0, \
+        'fixture did not plant a UNIQUE, NON-partial index'
+
+    sch._migrate_add_identity_and_attribution_columns(conn)
+    conn.commit()
+
+    shape = _index_row(conn, table, f'idx_{table}_uid')
+    assert shape['unique'] == 1 and shape['partial'] == 1, (
+        f'idx_{table}_uid was left full rather than rebuilt as the partial index v13 '
+        f'declares (observed: {shape!r})'
+    )
+    conn.close()
+
+
+@pytest.mark.parametrize('table', UID_TABLES)
+def test_v13_replaces_a_same_named_partial_index_that_is_simply_not_unique(table):
+    """UNIQUE is the clause this whole file is named after, and until this test
+    existed it was the one clause of the production check that no fixture could
+    falsify.
+
+    `stale_plain_index` plants an index that is neither unique NOR partial, so
+    the partiality clause rejected it first and the uniqueness clause never
+    had to do any work: deleting `and shape['unique']` from
+    `_uid_index_is_correct` left the entire file green. Proven by mutation,
+    not assumed -- which is the only way a redundant-looking clause is ever
+    distinguishable from a load-bearing one.
+
+    This plants the shape that isolates it: right column, right predicate,
+    UNIQUE missing. It is also the likeliest divergence of the four in
+    practice, being v13's own CREATE statement with one word dropped.
+    """
+    _tmp, sch, db_path = _build_v12_install()
+    conn = sqlite3.connect(db_path)
+    conn.execute('PRAGMA foreign_keys=ON')
+    _seed_returns_and_payments(conn)
+    _half_applied_v13(conn, table, partial_but_not_unique_index=True)
+
+    planted = _index_row(conn, table, f'idx_{table}_uid')
+    assert planted['unique'] == 0 and planted['partial'] == 1, (
+        f'fixture planted {planted!r}; this test only isolates the uniqueness clause if '
+        'the planted index is partial and on the right column already'
+    )
+
+    sch._migrate_add_identity_and_attribution_columns(conn)
+    conn.commit()
+
+    shape = _index_row(conn, table, f'idx_{table}_uid')
+    assert shape['unique'] == 1 and shape['partial'] == 1, (
+        f'idx_{table}_uid was adopted as-is (observed: {shape!r}); v13 advanced the schema '
+        'version with uid uniqueness never enforced'
+    )
+    rowids = [r[0] for r in conn.execute(f'SELECT rowid FROM "{table}" ORDER BY rowid')]
+    taken = conn.execute(f'SELECT uid FROM "{table}" WHERE rowid=?', (rowids[0],)).fetchone()[0]
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(f'UPDATE "{table}" SET uid=? WHERE rowid=?', (taken, rowids[-1]))
+    conn.rollback()
+    conn.close()
+
+
+@pytest.mark.parametrize('table', UID_TABLES)
+def test_v13_replaces_a_same_named_index_that_is_unique_but_on_the_wrong_column(table):
+    """The third shape of the same defect, and the one a unique/partial check
+    still cannot see.
+
+    F4's own statement of principle is that `IF NOT EXISTS` speaks about the
+    NAME and never about the SHAPE -- and the COLUMN is part of the shape.
+    `PRAGMA index_list` reports `unique` and `partial` and stops there, so an
+    index named `idx_<t>_uid` that is genuinely UNIQUE and genuinely partial
+    but indexes `id` satisfies a unique-and-partial check completely, while
+    `uid` uniqueness stays absent forever and `user_version` advances anyway.
+    That is F4's exact consequence -- silent, signal-free non-enforcement --
+    reached past F4's exact fix.
+
+    Not a contrived state. CLAUDE.md warns explicitly that databases in this
+    project get touched by more than one branch's schema version during
+    testing, and this migration re-runs from the top after any failure, so
+    "an index of this name already exists, put there by something else"
+    is the normal hazard here rather than an exotic one.
+
+    The duplicate write at the end is what makes this test unfalsifiable by
+    catalogue-reading alone: it asks the database to reject a real collision.
+    """
+    _tmp, sch, db_path = _build_v12_install()
+    conn = sqlite3.connect(db_path)
+    conn.execute('PRAGMA foreign_keys=ON')
+    _seed_returns_and_payments(conn)
+    _half_applied_v13(conn, table, wrong_column_index=True)
+
+    planted = _index_row(conn, table, f'idx_{table}_uid')
+    assert planted is not None and planted['unique'] == 1 and planted['partial'] == 1, (
+        'fixture did not plant a UNIQUE PARTIAL index -- a plain index would be caught by '
+        'the shape check already and this test would prove nothing new'
+    )
+    indexed = [r[2] for r in conn.execute(f'PRAGMA index_info("idx_{table}_uid")').fetchall()]
+    assert indexed == ['id'], f'fixture indexed {indexed}, not the wrong column'
+
+    sch._migrate_add_identity_and_attribution_columns(conn)
+    conn.commit()
+
+    indexed = [r[2] for r in conn.execute(f'PRAGMA index_info("idx_{table}_uid")').fetchall()]
+    assert indexed == ['uid'], (
+        f'idx_{table}_uid still indexes {indexed}. v13 reported success and user_version '
+        'advanced while uid uniqueness was never enforced at all -- F4 exactly, reached '
+        'past a check that only reads uniqueness and partiality.'
+    )
+
+    rowids = [r[0] for r in conn.execute(f'SELECT rowid FROM "{table}" ORDER BY rowid')]
     taken = conn.execute(f'SELECT uid FROM "{table}" WHERE rowid=?', (rowids[0],)).fetchone()[0]
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(f'UPDATE "{table}" SET uid=? WHERE rowid=?', (taken, rowids[-1]))

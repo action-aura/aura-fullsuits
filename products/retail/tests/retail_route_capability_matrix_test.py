@@ -1538,6 +1538,14 @@ def test_the_deliberate_exemptions_are_still_real_and_still_ungated():
     for a route that has since BEEN gated belongs in
     EXPECTED_READ_CAPABILITIES instead, where its capability is pinned."""
     live = {func: cap for _p, _m, func, cap in map(_rule_facts, _live_swept_rules())}
+    # An empty exemption dict makes every assertion in the loop below run zero
+    # times and this test pass having checked nothing -- the same shape as the
+    # sweeps' own "did the scan find anything" first guards, and worth pinning
+    # here because the failure would be silent in exactly the direction that
+    # matters: nobody notices a rug that has been rolled up.
+    assert DELIBERATELY_UNGATED_MONEY_READS, (
+        "the exemption list is empty, so this test checks nothing. If the last "
+        "exemption was genuinely removed, delete this test with it.")
     for func, reason in DELIBERATELY_UNGATED_MONEY_READS.items():
         assert func in live, (
             f"{func!r} is excused from the money-disclosure sweep but is not a live "

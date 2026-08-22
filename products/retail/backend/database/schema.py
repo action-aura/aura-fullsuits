@@ -1470,21 +1470,58 @@ def local_terminal_id():
 
 
 def _uid_index_shape(conn, table, name):
-    """`{'unique': int, 'partial': int}` for the index called `name` on
-    `table`, or None if there is no such index.
+    """`{'unique': int, 'partial': int, 'columns': [...]}` for the index called
+    `name` on `table`, or None if there is no such index.
 
     Read from `PRAGMA index_list`, which reports the shape SQLite actually
     stored, rather than from `sqlite_master.sql`, which reports the text
     somebody typed. The distinction is the entire point of F4: a
     `CREATE UNIQUE INDEX IF NOT EXISTS` whose name is already taken by a
     plain index leaves the plain index in place and the UNIQUE text nowhere.
+
+    `columns` comes from a second pragma because `index_list` does not carry
+    it, and the COLUMN is part of the shape every bit as much as uniqueness
+    is. An index named `idx_<t>_uid` that is genuinely UNIQUE and genuinely
+    partial but built over `id` satisfies a unique-and-partial check
+    completely, while `uid` uniqueness stays absent and `user_version`
+    advances anyway -- F4's own consequence, reached past F4's own fix. Not
+    hypothetical here: CLAUDE.md warns that databases in this project get
+    touched by more than one branch's schema version during testing, and this
+    migration re-runs from the top after any failure.
     """
     for _seq, iname, unique, _origin, partial in conn.execute(
         f'PRAGMA index_list("{table}")'
     ).fetchall():
         if iname == name:
-            return {'unique': unique, 'partial': partial}
+            return {
+                'unique': unique,
+                'partial': partial,
+                'columns': [row[2] for row in conn.execute(
+                    f'PRAGMA index_info("{name}")'
+                ).fetchall()],
+            }
     return None
+
+
+def _uid_index_is_correct(shape):
+    """True when `shape` (from `_uid_index_shape`) is the ONE shape that makes
+    `uid` mean anything: a UNIQUE, partial index over exactly `uid`.
+
+    A single predicate rather than the condition written out twice, because
+    `_ensure_unique_uid_index` asks the question twice -- once to decide
+    whether to rebuild, once to verify the postcondition -- and the two must
+    not be able to drift apart. If the rebuild test were ever stricter than
+    the verify test, the migration would drop and recreate an index on every
+    launch forever; if the verify test were stricter, it would rebuild and
+    then raise on its own work. Both failures are launch-path failures, and
+    neither is visible in a diff that only touches one of the two lines.
+    """
+    return bool(
+        shape is not None
+        and shape['unique']
+        and shape['partial']
+        and shape['columns'] == ['uid']
+    )
 
 
 def _repair_duplicate_uids(conn, table):
@@ -1526,19 +1563,51 @@ def _repair_duplicate_uids(conn, table):
     this file by an order of magnitude, this runs on a till machine, and a
     loop that re-reads its own work terminates correctly even if it is
     interrupted and retried.
+
+    THE PREDICATE HAS TO SHRINK ITS OWN WORK QUEUE, and that is the entire
+    correctness argument for a loop shaped like this one. A row is selected
+    only when a row with a LOWER rowid already holds its uid; the fresh uuid4
+    written into it therefore makes it the lowest -- and only -- holder of a
+    value nothing else has, so it cannot be selected again. Each pass strictly
+    reduces the number of matching rows, and the loop ends.
+
+    That is not a theoretical concern. The first version of this function
+    matched on `... > 1 OR (SELECT COUNT(*) ...) = 1`, and SQL's `AND` binding
+    tighter than `OR` made that second disjunct a whole-table predicate: every
+    row with a distinct uid matched it, was reissued, and matched it again on
+    the next pass. The loop never emptied. That is worse than the F1 defect
+    this function was written to fix -- F1 raised IntegrityError, which is
+    fatal but names its own cause, whereas a spinning repair makes
+    `init_retail()` never return at all: a till stuck on a splash screen with
+    no error, no log line and no traceback, rewriting every uid in the database
+    several times a second, reached again on every subsequent launch because
+    the ADD COLUMN above it has already committed.
+    `retail_v13_uid_repair_termination_test.py` pins termination and bounded
+    work directly, by counting write statements, because a non-terminating loop
+    does not fail a test suite -- it hangs one, and `products/run_all_tests.py`
+    runs each file with no subprocess timeout at all.
+
+    The `uid IN (SELECT ... HAVING COUNT(*) > 1)` pre-filter is not redundant
+    with the `rowid >` test that follows it; it is what keeps this affordable.
+    That subquery is uncorrelated, so SQLite evaluates it once per pass into a
+    set that is EMPTY on every shipped install, and the correlated MIN(rowid)
+    lookup then runs for no rows at all. Without it, the correlated subquery
+    would run once per row against a `uid` column that has no index yet (this
+    function runs precisely to make creating that index possible), which is a
+    full table scan per row -- quadratic on the largest table in the schema, on
+    a shop laptop, during boot.
     """
     import uuid as _uuid
 
     reissued = 0
     while True:
         pending = conn.execute(
-            f'SELECT rowid FROM "{table}" WHERE uid IS NOT NULL AND rowid IN ('
-            f'    SELECT rowid FROM "{table}" WHERE uid IS NOT NULL'
-            f') AND (SELECT COUNT(*) FROM "{table}" t2 WHERE t2.uid <> "{table}".uid) >= 0'
-            f' AND {{}} LIMIT {_UID_BACKFILL_CHUNK}'.format(
-                '(SELECT COUNT(*) FROM "%s" x WHERE x.uid = "%s".uid) > 1 '
-                'OR (SELECT COUNT(*) FROM "%s" y WHERE y.uid = "%s".uid) = 1'
-                % (table, table, table, table))
+            f'SELECT rowid FROM "{table}" AS t'
+            f' WHERE t.uid IS NOT NULL'
+            f'   AND t.uid IN (SELECT uid FROM "{table}" WHERE uid IS NOT NULL'
+            f'                 GROUP BY uid HAVING COUNT(*) > 1)'
+            f'   AND t.rowid > (SELECT MIN(x.rowid) FROM "{table}" x WHERE x.uid = t.uid)'
+            f' LIMIT {_UID_BACKFILL_CHUNK}'
         ).fetchall()
         if not pending:
             return reissued
@@ -1568,6 +1637,27 @@ def _ensure_unique_uid_index(conn, table):
     and uid uniqueness was absent forever with no signal anywhere. That is
     the worse of the two failures: F1 at least announces itself.
 
+    ALL THREE PARTS OF THE SHAPE ARE CHECKED, not just uniqueness, and they
+    are not all load-bearing for the same reason:
+
+      - COLUMN is the one that silently defeats the whole migration. An index
+        of this name that is UNIQUE and partial but built over `id` passes a
+        uniqueness check completely and enforces nothing whatsoever about
+        `uid`. That is F4's own consequence -- success reported, version
+        advanced, constraint absent -- reached past F4's own fix.
+      - UNIQUE is F4 as originally found.
+      - PARTIAL is NOT a correctness requirement, and it is worth being
+        precise about that rather than repeating a plausible-sounding reason.
+        A full UNIQUE index over `uid` would NOT reject the un-backfilled
+        rows: SQLite considers every NULL distinct from every other NULL for
+        the purposes of a unique index, so any number of NULL uids coexist
+        under either shape. What the predicate buys is that the index carries
+        no entry at all for rows that have no wire identity yet. It is checked
+        here because it is the shape this migration DECLARES, and an index
+        that does not match what this migration declares was put there by
+        something else -- which is precisely the situation worth rebuilding
+        out of, whatever the divergence happens to be.
+
     A mis-shaped index is DROPPED and recreated. That is the one piece of
     non-additive DDL in this migration and it is deliberate: dropping an
     index destroys no row and no column, only a derived structure this
@@ -1587,7 +1677,7 @@ def _ensure_unique_uid_index(conn, table):
     _repair_duplicate_uids(conn, table)
 
     shape = _uid_index_shape(conn, table, name)
-    if shape is not None and not (shape['unique'] and shape['partial']):
+    if shape is not None and not _uid_index_is_correct(shape):
         conn.execute(f'DROP INDEX "{name}"')
         shape = None
     if shape is None:
@@ -1596,7 +1686,7 @@ def _ensure_unique_uid_index(conn, table):
         )
 
     shape = _uid_index_shape(conn, table, name)
-    if shape is None or not shape['unique'] or not shape['partial']:
+    if not _uid_index_is_correct(shape):
         raise RetailUidIndexError(
             f'{name} could not be established as a UNIQUE partial index on '
             f'{table}.uid (observed: {shape!r}). user_version is NOT being advanced, '
@@ -1648,10 +1738,14 @@ def _migrate_add_identity_and_attribution_columns(conn):
        `ALTER TABLE ADD COLUMN` cannot carry a UNIQUE constraint (and adding
        one the "proper" way means the table rebuild this migration exists to
        avoid), so uniqueness is a separate partial unique index. The
-       `WHERE uid IS NOT NULL` predicate is not decoration: between this
-       ALTER and the backfill -- and for any row an older code path inserts
-       before the writers learn about the column -- "no uid yet" is a legal
-       state, while two rows sharing a uid never is.
+       `WHERE uid IS NOT NULL` predicate keeps the index from carrying an
+       entry for rows that have no wire identity yet -- between this ALTER
+       and the backfill, and for any row an older code path inserts before
+       the writers learn about the column, "no uid yet" is a legal state.
+       It is NOT what makes those rows legal, and the difference is worth
+       stating because the opposite is the intuitive guess: SQLite treats
+       every NULL as distinct from every other NULL inside a unique index, so
+       un-backfilled rows would coexist happily under a full index too.
 
     2. `actor_user_uid` / `terminal_id` / `created_at_utc` on
        RETAIL_ACTOR_TABLES. The existing free-text `cashier` / `created_by` /

@@ -834,7 +834,24 @@ const RetailSystem = {
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 24px;line-height:1.7;max-width:420px;margin-left:auto;margin-right:auto">
           ${t('Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales.')}
         </p>
-        <button class="sub-btn-primary" onclick="SubsystemApp._navigate('pos')">🛒 Open POS</button>
+        <!-- 2026-08-22: this button read "🛒 Open POS", a bare literal, and had
+             done since the panel shipped. Three defects in one string, all of
+             them silent:
+               * it never reached t(), so no catalog could ever be consulted;
+               * 'Open POS' is in neither locales/en.json nor ar.json, so even
+                 i18n.js's DOM sweep (which rescues an untagged text node whose
+                 FULL trimmed text is a catalog key) had nothing to look up;
+               * the emoji shares the text node, so the sweep could not have
+                 matched even if the key existed.
+             Result: on an Arabic page a cashier's FIRST screen after login read
+             three Arabic sentences under an English button. The reported
+             "half-Arabic refusal panel" was declared fixed twice, because both
+             the fix and the check that cleared it were aimed at
+             _renderCapabilityRestricted below -- a DIFFERENT method, correct all
+             along, which this panel merely resembles.
+             Same key as that method's button on purpose: same button, same
+             destination, one sentence to keep translated. -->
+        <button class="sub-btn-primary" onclick="SubsystemApp._navigate('pos')">🛒 ${t('Point of Sale')}</button>
       </div>`;
   },
 
@@ -3530,27 +3547,99 @@ const RetailSystem = {
   // offered here -- financial records like this should not be silently
   // mutable; a correction should go through the existing Returns flow (a
   // server-authoritative reversal, AUDIT-004), not an in-place edit.
+  // ── The capability split this screen has to respect ───────────────────────
+  //
+  // GET /sales/recent is the one route a reports screen reads that is NOT
+  // decorated @mt_require_capability(CAP_REPORTS), and deliberately so: the
+  // returns counter resolves a receipt number through it before every refund
+  // (_findSaleForReturn, `?limit=200`), and retail.refund is a CASHIER DEFAULT.
+  // Gating the route would refuse a cashier a lookup the product grants them.
+  //
+  // So recent_sales splits instead (read its docstring, it is the contract):
+  //
+  //   TILL HALF, open at any capability
+  //     a plain recent page, and `q` -- a receipt number is a single-sale
+  //     question, and looking one up to take a return is the till's job.
+  //   BOOK HALF, retail.reports only
+  //     `date_from` / `date_to`, refused INDIVIDUALLY (either bound alone
+  //     reaches the whole history), and a tighter `limit` cap.
+  //
+  // A split only works if both sides know about it, and this side did not.
+  //
+  // ── What the refused caller saw, which was not an error message ───────────
+  //
+  // `_fetch` re-throws only on 401. A 403 comes back as a RESOLVED response, so
+  // the old `(await this._get(url)).data || []` read `undefined` off the refusal
+  // envelope, substituted `[]`, and rendered "No sales found." with a count of
+  // zero. A cashier who touched a date input was not shown an error and was not
+  // shown a blank screen: they were told the shop had sold nothing in the range
+  // they asked about. A false statement about the books, presented as an answer.
+  // (The `catch` arm existed too and was `console.error(e)` alone -- that path
+  // is 401s and transport failures, and it showed the user nothing at all.)
+  //
+  // Both halves are fixed here, and the gate is in _loadSalesHistory as well as
+  // in the markup on purpose. Hiding the inputs is not enough: they are re-read
+  // on every reload (`onchange`, the debounced search, _clearSalesFilters) from
+  // a DOM this function does not own, and _mayBrowseTheSalesBook() is the one
+  // place the question is asked.
+
+  // Rows this screen asks for, per half of the split above.
+  //:
+  // Both mirror a backend constant -- _SH_TILL_LIMIT is
+  // TILL_SALES_LOOKUP_MAX_LIMIT, and _SH_PAGE_LIMIT must stay at or under
+  // SALES_HISTORY_MAX_LIMIT (500). Named properties rather than literals
+  // because the number appears twice (the request, and the "is this page
+  // truncated" test) and the two literals had already drifted from what the
+  // server would actually serve: the client asked for 300, a cashier was
+  // served 200 by the till cap, and the count line -- comparing against its own
+  // 300 -- reported those 200 rows as the shop's entire history.
+  // retail_attribution_i18n_test.py::test_the_client_page_sizes_match_the_server_caps
+  // reads these two off the running object and asserts them against the
+  // backend's own constants, which is the only place that agreement is visible.
+  _SH_PAGE_LIMIT: 300,
+  _SH_TILL_LIMIT: 200,
+
+  // Asked, never cached. A stored flag would be one more thing that can be
+  // stale when a reload arrives from a control the render did not create.
+  // Fails OPEN when the shell cannot answer (standalone load, or a session that
+  // carried no capability list) -- the same contract as every other capability
+  // check in this file; see SubsystemApp.hasCapability's own comment.
+  _mayBrowseTheSalesBook() {
+    return !window.SubsystemApp || SubsystemApp.hasCapability('retail.reports');
+  },
+
   async _renderSalesHistory(c) {
     this._injectStyles();
+    const mayBrowse = this._mayBrowseTheSalesBook();
+    const dateInputStyle = 'background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;padding:9px 12px;outline:none';
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title">🧾 Sales History</h2>
+        <h2 class="ret-title">🧾 ${t('Sales History')}</h2>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
-          <input class="ret-search" id="sh-search" placeholder="Search receipt # or customer…" oninput="RetailSystem._debounceSalesSearch()" />
-          <input type="date" id="sh-date-from" title="From date"
-            style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;padding:9px 12px;outline:none"
-            onchange="RetailSystem._loadSalesHistory()" />
-          <input type="date" id="sh-date-to" title="To date"
-            style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;padding:9px 12px;outline:none"
-            onchange="RetailSystem._loadSalesHistory()" />
-          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._clearSalesFilters()">Clear</button>
+          <input class="ret-search" id="sh-search" placeholder="${t('Search receipt # or customer…')}" oninput="RetailSystem._debounceSalesSearch()" />
+          ${mayBrowse ? `
+          <input type="date" id="sh-date-from" title="${t('From date')}"
+            style="${dateInputStyle}" onchange="RetailSystem._loadSalesHistory()" />
+          <input type="date" id="sh-date-to" title="${t('To date')}"
+            style="${dateInputStyle}" onchange="RetailSystem._loadSalesHistory()" />` : ''}
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._clearSalesFilters()">${t('Clear')}</button>
         </div>
       </div>
+      ${mayBrowse ? '' : `
+      <!-- Not a blank space where two inputs used to be. A control that
+           silently disappears reads as a build that forgot the feature, and
+           the honest thing -- the thing the rest of this capability work
+           exists to do -- is to say who may use it and what this user can do
+           instead. What they can do instead is the point: finding a receipt to
+           take a return is precisely the job this screen keeps doing for them. -->
+      <p style="color:var(--text-muted);font-size:12px;margin:0 0 14px;line-height:1.7">
+        ${t('Browsing sales by date is limited to managers and the store owner. Search by receipt number or customer name to find a sale.')}
+      </p>`}
       <div class="sub-chart-card">
         <div style="overflow-x:auto">
           <table class="ret-table" id="sh-table">
-            <thead><tr><th>Receipt #</th><th>Date</th><th>Customer</th><th>Items</th><th>Payment</th><th>Total</th><th>Status</th></tr></thead>
-            <tbody><tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:30px">Loading…</td></tr></tbody>
+            <thead><tr><th>${t('Receipt #')}</th><th>${t('Date')}</th><th>${t('Customer')}</th><th>${t('Items')}</th><th>${t('Payment')}</th><th>${t('Total')}</th><th>${t('Status')}</th></tr></thead>
+            <tbody><tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
           </table>
         </div>
         <div id="sh-count" style="color:var(--text-muted);font-size:12px;margin-top:10px"></div>
@@ -3569,45 +3658,101 @@ const RetailSystem = {
   },
 
   _clearSalesFilters() {
-    const s = document.getElementById('sh-search');    if (s) s.value = '';
-    const f = document.getElementById('sh-date-from'); if (f) f.value = '';
-    const t = document.getElementById('sh-date-to');   if (t) t.value = '';
+    // `dateTo`, not `t`. The old local was named `t`, which SHADOWED the global
+    // translation function for the whole body of this method -- harmless while
+    // nothing here was translated, and a trap the moment anything is: a
+    // translation call would have become a call on an <input> element.
+    const search = document.getElementById('sh-search');    if (search) search.value = '';
+    // Both may be absent: without retail.reports this screen does not render
+    // them at all (see _renderSalesHistory).
+    const dateFrom = document.getElementById('sh-date-from'); if (dateFrom) dateFrom.value = '';
+    const dateTo   = document.getElementById('sh-date-to');   if (dateTo) dateTo.value = '';
     this._loadSalesHistory();
+  },
+
+  _salesHistoryMessage(tbody, text, isError) {
+    const color = isError ? '#ef4444' : 'var(--text-muted)';
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:${color};padding:30px">${this._esc(text)}</td></tr>`;
   },
 
   async _loadSalesHistory() {
     const tbody = document.querySelector('#sh-table tbody');
     if (!tbody) return;
-    const q    = document.getElementById('sh-search')?.value.trim() || '';
-    const from = document.getElementById('sh-date-from')?.value || '';
-    const to   = document.getElementById('sh-date-to')?.value || '';
-    const params = new URLSearchParams({ limit: '300' });
-    if (q)    params.set('q', q);
-    if (from) params.set('date_from', from);
-    if (to)   params.set('date_to', to);
+    const countEl = document.getElementById('sh-count');
+    const mayBrowse = this._mayBrowseTheSalesBook();
+    const limit = mayBrowse ? this._SH_PAGE_LIMIT : this._SH_TILL_LIMIT;
+    const q = document.getElementById('sh-search')?.value.trim() || '';
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (q) params.set('q', q);
+    if (mayBrowse) {
+      // Read INSIDE the branch. Reading them unconditionally and filtering
+      // later is the same bug with an extra step -- a stale input left in the
+      // DOM by a previous render would still reach the query string.
+      const from = document.getElementById('sh-date-from')?.value || '';
+      const to   = document.getElementById('sh-date-to')?.value || '';
+      if (from) params.set('date_from', from);
+      if (to)   params.set('date_to', to);
+    }
     try {
-      const data = (await this._get(`/api/sub/retail/sales/recent?${params}`)).data || [];
-      const countEl = document.getElementById('sh-count');
+      const res = await this._get(`/api/sub/retail/sales/recent?${params}`);
+      if (!res || res.status !== 'success') {
+        // An error envelope is NOT an empty result set, and the difference is
+        // the whole defect: this branch used to not exist, `res.data` was
+        // undefined, and a refusal rendered as "No sales found." The server's
+        // own message goes through t() -- it is a fixed English sentence from
+        // mt_auth (CAPABILITY_DENIED_MESSAGE), which is a catalog key here, so
+        // an Arabic page reads an Arabic refusal rather than one English
+        // sentence in the middle of an RTL table.
+        this._salesHistoryMessage(tbody, t((res && res.message) || 'Could not load sales history.'), true);
+        if (countEl) countEl.textContent = '';
+        return;
+      }
+      const data = res.data || [];
       if (countEl) {
-        countEl.textContent = data.length === 300
-          ? '300 sales shown (most recent) — narrow with search or a date range to reach older sales'
-          : `${data.length} sale${data.length===1?'':'s'}`;
+        // Compared against the limit ACTUALLY requested, not a second literal.
+        // A page the server filled to the brim is a page with more behind it,
+        // and saying so is the difference between "200 sales" (false) and "200
+        // most recent sales shown" (true).
+        const truncated = data.length >= limit;
+        // Two keys rather than `sale${n===1?'':'s'}`. Suffixing an 's' onto a
+        // translated word is English grammar hardcoded into the render, and the
+        // old line did exactly that -- correct in English and meaningless in
+        // Arabic, which does not form plurals that way. Two keys let each
+        // catalog answer for itself. (Arabic distinguishes more cases than two;
+        // one plural form for "many" is a deliberate simplification, not an
+        // oversight -- it reads correctly, which "1 sales" did not.)
+        const note = !truncated
+          ? (data.length === 1 ? t('sale shown') : t('sales shown'))
+          : (mayBrowse
+              ? t('most recent sales shown. Narrow with search or a date range to reach older sales.')
+              // Not "or a date range": that is the one control this caller is
+              // refused, and advice to use it would be advice to collect a 403.
+              : t('most recent sales shown. Search by receipt number or customer name to reach older sales.'));
+        countEl.innerHTML = `<bdi>${data.length}</bdi> ${note}`;
       }
       if (!data.length) {
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:30px">No sales found.</td></tr>';
+        this._salesHistoryMessage(tbody, t('No sales found.'), false);
         return;
       }
       const statusColor = { completed:'green', pending:'yellow', cancelled:'red', voided:'red' };
-      tbody.innerHTML = data.map(s => `<tr style="cursor:pointer" onclick="RetailSystem._viewSale(${s.id})" title="View invoice">
+      tbody.innerHTML = data.map(s => `<tr style="cursor:pointer" onclick="RetailSystem._viewSale(${s.id})" title="${t('View invoice')}">
         <td style="font-family:monospace;color:var(--sub-accent)">${s.sale_number}</td>
         <td style="color:var(--text-muted)">${(s.created_at||'').slice(0,16)}</td>
-        <td>${s.customer_name||'Walk-in'}</td>
+        <td>${s.customer_name||t('Walk-in')}</td>
         <td style="color:var(--text-muted)">${s.item_count||0}</td>
         <td>${this._badge(s.payment_method||'cash', s.payment_method==='cash'?'green':'blue')}</td>
         <td style="font-weight:700">${this._fmt(s.total)}</td>
         <td>${this._badge(s.status||'completed', statusColor[s.status]||'green')}</td>
       </tr>`).join('');
-    } catch(e) { console.error(e); }
+    } catch(e) {
+      // 401 (re-thrown by _fetch) or a transport failure. This used to be
+      // `console.error(e)` and nothing else, so the "Loading…" placeholder the
+      // render put in the table stayed there forever: the screen had given up
+      // and the only trace was in a console the shopkeeper does not have open.
+      console.error('Sales history load failed', e);
+      this._salesHistoryMessage(tbody, t('Could not load sales history.'), true);
+      if (countEl) countEl.textContent = '';
+    }
   },
 
   // Sale detail / receipt view. Reads the full line-item breakdown from

@@ -313,5 +313,22 @@
   "Customer": "Customer",
   "Payment": "Payment",
   "The activity log is limited to managers and the store owner.": "The activity log is limited to managers and the store owner.",
-  "Audit Log": "Audit Log"
+  "Audit Log": "Audit Log",
+
+  "Sales History": "Sales History",
+  "Search receipt # or customer…": "Search receipt # or customer…",
+  "From date": "From date",
+  "To date": "To date",
+  "Clear": "Clear",
+  "Receipt #": "Receipt #",
+  "Items": "Items",
+  "View invoice": "View invoice",
+  "Walk-in": "Walk-in",
+  "No sales found.": "No sales found.",
+  "Could not load sales history.": "Could not load sales history.",
+  "sale shown": "sale shown",
+  "sales shown": "sales shown",
+  "most recent sales shown. Narrow with search or a date range to reach older sales.": "most recent sales shown. Narrow with search or a date range to reach older sales.",
+  "most recent sales shown. Search by receipt number or customer name to reach older sales.": "most recent sales shown. Search by receipt number or customer name to reach older sales.",
+  "Browsing sales by date is limited to managers and the store owner. Search by receipt number or customer name to find a sale.": "Browsing sales by date is limited to managers and the store owner. Search by receipt number or customer name to find a sale."
 }

@@ -832,8 +832,14 @@ def test_business_day_reads_the_two_settings_keys(ledger):
     'Mars/Olympus',   # a well-formed key for a zone that does not exist
     '+02:00',         # an offset, which is what the retired key held
     '180',            # the retired key's exact value format
-    'EET',            # an abbreviation, which is not a zone identifier
     'Asia/Amman/../../etc/passwd',   # a key zoneinfo refuses as malformed
+    # 'EET' WAS here, described as "an abbreviation, which is not a zone
+    # identifier". That was false, and it only passed because the machine
+    # running the suite had NO TZ DATABASE AT ALL -- every key failed to
+    # resolve, so a list of supposedly-bad keys could not tell a bad key from
+    # a good one. See test_EET_is_a_real_zone_and_is_accepted below, which now
+    # pins the truth. `tzdata` is a dependency as of requirements/retail.txt;
+    # before it, this whole parametrisation was vacuous.
 ])
 def test_a_value_that_is_not_a_zone_falls_back_to_unconfigured_not_to_utc(ledger, caplog, bad):
     """Rejecting toward "unconfigured" rather than toward UTC is the whole
@@ -859,6 +865,37 @@ def test_a_value_that_is_not_a_zone_falls_back_to_unconfigured_not_to_utc(ledger
     assert bad in caplog.text
     # ...and the report still draws, on the behaviour the install had before.
     assert metrics.revenue(ledger, CID, MAR10) == 190.0
+
+
+def test_EET_is_a_real_zone_and_is_accepted(ledger):
+    """The anti-vacuity partner to the rejection list above, and the reason it
+    exists is worth keeping.
+
+    `EET` was previously listed as a value to REJECT, on the reasoning that an
+    abbreviation is not a zone identifier. It is one: tzdata ships `EET` as a
+    generic European zone carrying real DST rules (UTC+2 in winter, UTC+3 in
+    summer). Measured, not assumed -- the assertion below is the measurement.
+
+    The old expectation passed for a reason that had nothing to do with the
+    product: this machine had no tz database, so `ZoneInfo` raised for EVERY
+    key and a list of "bad" keys could not distinguish a bad one from a good
+    one. The rejection test was therefore vacuous in both directions until
+    `tzdata` became a dependency.
+
+    Keeping this as a POSITIVE test matters: without it, someone could satisfy
+    the rejection list again by making `parse_business_zone` refuse everything,
+    and every assertion in this file would still pass."""
+    zone = zoneinfo.ZoneInfo('EET')
+    summer = datetime(2026, 6, 15, 12, 0, tzinfo=zone).utcoffset()
+    winter = datetime(2026, 1, 15, 12, 0, tzinfo=zone).utcoffset()
+    assert summer != winter, (
+        'EET is only worth accepting because it carries real DST rules; if this '
+        'ever fails the reasoning above is stale')
+
+    _configure(ledger, zone='EET', day_start_hour=0)
+    boundary = metrics.business_day(ledger, CID)
+    assert boundary.zone is not None, 'a real zone must not be refused'
+    assert boundary.zone.key == 'EET'
 
 
 def test_the_retired_offset_key_is_warned_about_not_silently_ignored(ledger, caplog):
@@ -903,19 +940,43 @@ def test_a_machine_with_no_tz_database_degrades_loudly_not_silently(ledger, capl
 
     TZPATH is emptied for the duration so this is deterministic on a machine
     that DOES have a tz database, instead of only proving something on the
-    one that does not."""
+    one that does not.
+
+    EMPTYING TZPATH IS NOT ENOUGH ON ITS OWN, and this test failed the moment
+    `tzdata` became a real dependency (requirements/retail.txt, and the
+    Chaquopy pip block for Android). `zoneinfo` has TWO resolution paths: the
+    filesystem search list, and the `tzdata` PACKAGE. Blanking the first
+    leaves the second, so zones still resolved, `_tz_database_present()`
+    correctly answered True, and the code correctly emitted the "not an IANA
+    name" message -- which this test then read as a failure.
+
+    The product behaviour was right in both states; the simulation was
+    incomplete. Both paths are closed below. `sys.modules['tzdata'] = None` is
+    the documented way to make a subsequent `import tzdata` raise ImportError
+    without touching the filesystem."""
     _configure(ledger, zone=SHOP_TZ)
     saved = list(zoneinfo.TZPATH)
     empty = DATA / 'no_zoneinfo_at_all'
     empty.mkdir(exist_ok=True)
+    saved_modules = {name: mod for name, mod in sys.modules.items()
+                     if name == 'tzdata' or name.startswith('tzdata.')}
+    for name in saved_modules:
+        del sys.modules[name]
+    sys.modules['tzdata'] = None          # a subsequent `import tzdata` raises
     zoneinfo.reset_tzpath([str(empty)])
     zoneinfo.ZoneInfo.clear_cache()
     try:
+        # Guard the guard: if this ever resolves, the simulation has stopped
+        # simulating and every assertion below is vacuous.
+        with pytest.raises(Exception):
+            zoneinfo.ZoneInfo('Asia/Amman')
         with caplog.at_level('WARNING'):
             boundary = metrics.business_day(ledger, CID)
             # Not a 500: the shop reports exactly what an unconfigured one does.
             assert metrics.revenue(ledger, CID, MAR10) == 190.0
     finally:
+        sys.modules.pop('tzdata', None)
+        sys.modules.update(saved_modules)
         zoneinfo.reset_tzpath(saved)
         zoneinfo.ZoneInfo.clear_cache()
 
