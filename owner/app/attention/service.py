@@ -30,21 +30,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 
 from flask import url_for
 from flask_babel import gettext as _
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from app.commercial_sales.allocation import unallocated_payment_balance
-from app.commercial_sales.invoices import confirmed_allocated_amount
 from app.employees.queries import find_own_profile
 from app.extensions import db_session
 from app.leads.ownership import apply_ownership_filter
 from app.leads.engagement import list_own_lead_followups_overdue
 from app.models.audit import DatabaseBackupRecord
-from app.operational_reports.dashboards import OVERDUE_INVOICE_EXCLUDED_STATUSES, is_invoice_overdue
+from app.operational_reports.dashboards import OVERDUE_INVOICE_EXCLUDED_STATUSES
 from app.models.commercial_ops import InternalNotification
-from app.models.commercial_sales import CommercialApproval, CommercialInvoice, Quote, QuoteLine
+from app.models.commercial_sales import CommercialApproval, CommercialInvoice, PaymentAllocation, Quote, QuoteLine
 from app.models.commissions import COMMISSION_AWAITING_APPROVAL_STATUS, CommissionLedgerEntry
 from app.models.customers import Customer
 from app.models.employees import EmployeeProfile
@@ -222,12 +221,30 @@ def _quotes_pending_approval_items() -> list[AttentionItem]:
         .limit(100)
     ).scalars().all()
 
+    # AUDIT-perf: was two db_session.get() calls per approval below (one for
+    # its QuoteLine, one for that line's Quote) -- up to 200 extra queries
+    # for 100 pending approvals, on top of the 1 above, every time this ran.
+    # Batched into two IN-queries total regardless of how many approvals are
+    # pending; the per-approval skip-if-missing behaviour is unchanged.
+    line_ids = [approval.target_id for approval in approvals]
+    lines_by_id = {}
+    if line_ids:
+        lines_by_id = {
+            line.id: line for line in db_session.execute(select(QuoteLine).where(QuoteLine.id.in_(line_ids))).scalars().all()
+        }
+    quote_ids = {line.quote_id for line in lines_by_id.values()}
+    quotes_by_id = {}
+    if quote_ids:
+        quotes_by_id = {
+            quote.id: quote for quote in db_session.execute(select(Quote).where(Quote.id.in_(quote_ids))).scalars().all()
+        }
+
     items = []
     for approval in approvals:
-        line = db_session.get(QuoteLine, approval.target_id)
+        line = lines_by_id.get(approval.target_id)
         if line is None:
             continue  # target no longer exists -- stale, nothing to act on (see approvals.py's own handling)
-        quote = db_session.get(Quote, line.quote_id)
+        quote = quotes_by_id.get(line.quote_id)
         if quote is None:
             continue
         age = now - approval.requested_at
@@ -255,12 +272,13 @@ def _overdue_invoice_items(profile, codes) -> list[AttentionItem]:
     # PARTIALLY_REFUNDED invoices (a real, reachable INVOICE_STATUSES value,
     # see app/models/commercial_sales.py) that the Management dashboard
     # (operational_reports/dashboards.py) already counted, so the two
-    # screens disagreed on "overdue invoices". is_invoice_overdue() /
-    # OVERDUE_INVOICE_EXCLUDED_STATUSES is now the one shared definition
-    # both screens use -- broadened here to the same status exclusion set
-    # so the query can't itself exclude a candidate the shared predicate
-    # would otherwise accept; the actual overdue/balance decision is made
-    # once, below, by that shared predicate.
+    # screens disagreed on "overdue invoices". OVERDUE_INVOICE_EXCLUDED_STATUSES
+    # is the one shared status-exclusion set both screens use -- broadened
+    # here to that same set so the query can't itself exclude a candidate
+    # is_invoice_overdue() would otherwise accept. (See the AUDIT-perf note
+    # below the candidates query for why this no longer calls
+    # is_invoice_overdue() itself -- the balance check it does is
+    # reproduced there from a batched query instead, to the same effect.)
     stmt = apply_ownership_filter(
         select(CommercialInvoice), CommercialInvoice, profile.id if profile else None, all_permission_held=all_held
     ).where(
@@ -271,15 +289,38 @@ def _overdue_invoice_items(profile, codes) -> list[AttentionItem]:
     if not all_held and profile is None:
         return []
     candidates = db_session.execute(stmt.order_by(CommercialInvoice.due_date).limit(100)).scalars().all()
-    invoices = [inv for inv in candidates if is_invoice_overdue(inv, as_of=today)]
+
+    # AUDIT-perf: is_invoice_overdue() calls confirmed_allocated_amount(),
+    # which issues one query per invoice -- and this loop used to call it a
+    # second time for `outstanding` below, so this was up to 2 extra queries
+    # per candidate (200 for 100 candidates) on every request. The status/
+    # due_date checks inside is_invoice_overdue() are already guaranteed by
+    # the WHERE clause above (status.notin_(OVERDUE_INVOICE_EXCLUDED_STATUSES),
+    # due_date < today == as_of), so for these candidates its only remaining
+    # condition is the balance check -- reproduced below from one batched
+    # SUM query so the two call sites can't drift and neither pays a
+    # per-invoice query. If is_invoice_overdue() ever grows a new condition,
+    # update this to match.
+    candidate_ids = [invoice.id for invoice in candidates]
+    allocated_by_invoice: dict = {}
+    if candidate_ids:
+        allocated_by_invoice = dict(
+            db_session.execute(
+                select(PaymentAllocation.commercial_invoice_id, func.sum(PaymentAllocation.allocated_amount))
+                .where(PaymentAllocation.commercial_invoice_id.in_(candidate_ids), PaymentAllocation.reversed_at.is_(None))
+                .group_by(PaymentAllocation.commercial_invoice_id)
+            ).all()
+        )
 
     items = []
-    for invoice in invoices:
+    for invoice in candidates:
+        outstanding = invoice.total - allocated_by_invoice.get(invoice.id, Decimal("0.00"))
+        if outstanding <= 0:
+            continue
         days_overdue = (today - invoice.due_date).days
         priority = (
             PRIORITY_URGENT if days_overdue >= 14 else PRIORITY_NORMAL if days_overdue >= 3 else PRIORITY_LOW
         )
-        outstanding = invoice.total - confirmed_allocated_amount(invoice)
         title = _("Invoice %(number)s overdue", number=invoice.invoice_number)
         context = _(
             "%(days)d day(s) overdue, %(amount)s %(currency)s outstanding",
@@ -304,9 +345,23 @@ def _unallocated_payment_items() -> list[AttentionItem]:
         select(PaymentRecord).where(PaymentRecord.status == "CONFIRMED").order_by(PaymentRecord.created_at.desc()).limit(200)
     ).scalars().all()
 
+    # AUDIT-perf: was one unallocated_payment_balance() query per payment --
+    # up to 200 extra queries for 200 confirmed payments on every request.
+    # Same formula, computed from one batched SUM query instead.
+    payment_ids = [payment.id for payment in payments]
+    allocated_by_payment: dict = {}
+    if payment_ids:
+        allocated_by_payment = dict(
+            db_session.execute(
+                select(PaymentAllocation.payment_record_id, func.sum(PaymentAllocation.allocated_amount))
+                .where(PaymentAllocation.payment_record_id.in_(payment_ids), PaymentAllocation.reversed_at.is_(None))
+                .group_by(PaymentAllocation.payment_record_id)
+            ).all()
+        )
+
     items = []
     for payment in payments:
-        balance = unallocated_payment_balance(payment)
+        balance = Decimal(payment.amount) - allocated_by_payment.get(payment.id, Decimal("0.00"))
         if balance <= 0:
             continue
         age = now - payment.created_at
@@ -465,14 +520,25 @@ def _suspended_license_items() -> list[AttentionItem]:
         select(License, Customer).join(Customer, Customer.id == License.customer_id).where(License.status == "SUSPENDED").limit(100)
     ).all()
 
+    # AUDIT-perf: was one LicenseStatusHistory query per suspended license --
+    # up to 100 extra queries for 100 suspended licenses on every request.
+    # Batched into one query, ordered so the first row seen per license_id
+    # below is the latest SUSPENDED transition -- same row the per-license
+    # `.order_by(created_at.desc()).limit(1)` used to pick.
+    license_ids = [license_row.id for license_row, _customer in rows]
+    latest_suspension_by_license = {}
+    if license_ids:
+        history_rows = db_session.execute(
+            select(LicenseStatusHistory)
+            .where(LicenseStatusHistory.license_id.in_(license_ids), LicenseStatusHistory.to_status == "SUSPENDED")
+            .order_by(LicenseStatusHistory.license_id, LicenseStatusHistory.created_at.desc())
+        ).scalars().all()
+        for history_row in history_rows:
+            latest_suspension_by_license.setdefault(history_row.license_id, history_row)
+
     items = []
     for license_row, customer in rows:
-        history = db_session.execute(
-            select(LicenseStatusHistory)
-            .where(LicenseStatusHistory.license_id == license_row.id, LicenseStatusHistory.to_status == "SUSPENDED")
-            .order_by(LicenseStatusHistory.created_at.desc())
-            .limit(1)
-        ).scalars().first()
+        history = latest_suspension_by_license.get(license_row.id)
         suspended_at = history.created_at if history is not None else license_row.updated_at
         age = now - suspended_at
         priority = _age_priority(age, urgent_after=timedelta(days=30), normal_after=timedelta(days=7))
