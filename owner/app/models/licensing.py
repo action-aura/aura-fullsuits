@@ -65,7 +65,14 @@ class License(Base, UUIDPKMixin, TimestampMixin):
 class LicenseStatusHistory(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_license_status_history"
 
-    license_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_licenses.id"), nullable=False)
+    # AUDIT-perf: looked up per suspended license by
+    # app/attention/service.py::_suspended_license_items() (one batched
+    # `IN (...)` query per render, not one per license) -- indexed to match
+    # PaymentAllocation's FK columns; see migration
+    # 24d38372230e_license_status_history_missing_index.py.
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_licenses.id"), nullable=False, index=True
+    )
     from_status: Mapped[str | None] = mapped_column(String(32))
     to_status: Mapped[str] = mapped_column(String(32), nullable=False)
     changed_by_staff_user_id: Mapped[uuid.UUID | None] = mapped_column(

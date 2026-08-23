@@ -23,7 +23,7 @@ from app.expenses.payments import outstanding_amount
 from app.extensions import db_session
 from app.metrics_contracts import FinanceOperationalDashboard, ManagementOperationalDashboard
 from app.models.cash_closing import CashClosing
-from app.models.commercial_sales import CommercialInvoice, CommercialRefund
+from app.models.commercial_sales import CommercialInvoice, CommercialRefund, PaymentAllocation
 from app.models.commissions import CommissionLedgerEntry
 from app.models.expenses import Expense, ExpenseApproval, ExpenseCategory
 from app.models.management_notes import SharedManagementNote
@@ -104,6 +104,51 @@ def is_invoice_overdue(invoice: CommercialInvoice, *, as_of: date | None = None)
     if invoice.due_date is None or invoice.due_date >= as_of:
         return False
     return (invoice.total - confirmed_allocated_amount(invoice)) > 0
+
+
+def _overdue_invoice_count(currency: str, *, as_of: date) -> int:
+    """Batched replacement for a per-invoice is_invoice_overdue() loop --
+    same shape, and same fix, as
+    app/attention/service.py::_overdue_invoice_items() (see its AUDIT-perf
+    comment and tests/test_attention_query_counts.py). is_invoice_overdue()
+    itself is left untouched as the canonical definition; its status and
+    due_date conditions are reproduced here as SQL WHERE clauses (this
+    currency, not-excluded status, a due date strictly in the past) so the
+    only condition left to check in Python is the balance -- answered by
+    one batched GROUP BY SUM(PaymentAllocation.allocated_amount) instead of
+    one confirmed_allocated_amount() query per candidate invoice. If
+    is_invoice_overdue() ever grows a new condition, update this to match.
+
+    Deliberately NO LIMIT, unlike the Attention Center's version: this is a
+    COUNT for a finance dashboard, not a capped list of items to render --
+    undercounting a long-history customer's overdue invoices would be a
+    silent correctness regression, not an acceptable trade-off. The prior
+    per-row version had no LIMIT either; this fix does not introduce one,
+    it only removes the per-row query."""
+    candidates = db_session.execute(
+        select(CommercialInvoice.id, CommercialInvoice.total).where(
+            CommercialInvoice.currency == currency,
+            CommercialInvoice.status.notin_(OVERDUE_INVOICE_EXCLUDED_STATUSES),
+            CommercialInvoice.due_date.is_not(None),
+            CommercialInvoice.due_date < as_of,
+        )
+    ).all()
+    if not candidates:
+        return 0
+
+    candidate_ids = [invoice_id for invoice_id, _total in candidates]
+    allocated_by_invoice = dict(
+        db_session.execute(
+            select(PaymentAllocation.commercial_invoice_id, func.sum(PaymentAllocation.allocated_amount))
+            .where(PaymentAllocation.commercial_invoice_id.in_(candidate_ids), PaymentAllocation.reversed_at.is_(None))
+            .group_by(PaymentAllocation.commercial_invoice_id)
+        ).all()
+    )
+    return sum(
+        1
+        for invoice_id, total in candidates
+        if (total - allocated_by_invoice.get(invoice_id, Decimal("0.00"))) > 0
+    )
 
 
 def _pending_expense_approval_count(currency: str) -> int:
@@ -219,15 +264,14 @@ def management_operational_dashboard(currency: str) -> dict:
         select(func.count(CashClosing.id)).where(CashClosing.currency == currency, CashClosing.status == "REVIEW_REQUIRED")
     ).scalar_one()
 
-    overdue_invoices = sum(
-        1
-        for invoice in db_session.execute(
-            select(CommercialInvoice).where(
-                CommercialInvoice.currency == currency, CommercialInvoice.status.notin_(OVERDUE_INVOICE_EXCLUDED_STATUSES)
-            )
-        ).scalars().all()
-        if is_invoice_overdue(invoice, as_of=today)
-    )
+    # AUDIT-perf: was one is_invoice_overdue() call (and, for any invoice
+    # with a past due_date, one confirmed_allocated_amount() query inside
+    # it) per non-excluded-status invoice in this currency, with no LIMIT --
+    # unlike the Attention Center's capped version of this same N+1, this
+    # walked every non-excluded invoice a customer had ever been issued, so
+    # its cost grew without bound as a customer's invoice history grew.
+    # Batched into _overdue_invoice_count() -- see its docstring.
+    overdue_invoices = _overdue_invoice_count(currency, as_of=today)
 
     # Fulfillment exceptions: a confirmed order whose invoice is fully paid
     # but no Subscription was ever created for it (Subscription.sales_order_id
