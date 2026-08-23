@@ -969,26 +969,51 @@ function testPosLayoutIsMirrorSafeByConstruction() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+/* PER-TEST ISOLATION -- see retail_design_money_test.js for the reasoning and
+   the measurement. Twelve checks behind one abort is the worst ratio in this
+   family: a failure in the first of them made the other eleven unobservable,
+   and this file's checks span focus behaviour, touch floors, money marking and
+   mirror-safety -- four unrelated concerns that have no reason to fail
+   together, and every reason to be reported together when they do. */
+const CHECKS = [
+  ['the total is the largest money element', testTotalIsLargestMoneyElement],
+  ['the total is tabular and unbreakable', testTotalIsTabularAndUnbreakable],
+  ['the scan field regains focus after a product tap', testScanFieldRegainsFocusAfterProductTap],
+  ['the scan field does not steal focus from a deliberate edit', testScanFieldDoesNotStealFocusFromADeliberateEdit],
+  ['a stray pointer press does not blur the scan field', testStrayPointerPressDoesNotBlurTheScanField],
+  ['destructive controls are not adjacent to frequent ones', testDestructiveControlsAreNotAdjacentToFrequentOnes],
+  ['product tiles are keyboard-operable and announced', testProductTilesAreKeyboardOperableAndAnnounced],
+  ['every POS hover affordance has a focus counterpart', testEveryPosHoverAffordanceHasAFocusCounterpart],
+  ['every finger target meets the touch minimum', testEveryFingerTargetMeetsTheTouchMinimum],
+  ['negative amounts are not colour alone', testNegativeAmountsAreNotColourAlone],
+  ['every POS money sink goes through the marking path', testEveryPosMoneySinkGoesThroughTheMarkingPath],
+  ['the POS layout is mirror-safe by construction', testPosLayoutIsMirrorSafeByConstruction],
+];
+
 function main() {
-  testTotalIsLargestMoneyElement();
-  testTotalIsTabularAndUnbreakable();
-  testScanFieldRegainsFocusAfterProductTap();
-  testScanFieldDoesNotStealFocusFromADeliberateEdit();
-  testStrayPointerPressDoesNotBlurTheScanField();
-  testDestructiveControlsAreNotAdjacentToFrequentOnes();
-  testProductTilesAreKeyboardOperableAndAnnounced();
-  testEveryPosHoverAffordanceHasAFocusCounterpart();
-  testEveryFingerTargetMeetsTheTouchMinimum();
-  testNegativeAmountsAreNotColourAlone();
-  testEveryPosMoneySinkGoesThroughTheMarkingPath();
-  testPosLayoutIsMirrorSafeByConstruction();
-  console.log('PASS: retail_surface_pos_test.js');
+  const failures = [];
+  for (const [name, fn] of CHECKS) {
+    try {
+      fn();
+    } catch (err) {
+      failures.push(name);
+      console.error(`FAIL: ${name}`);
+      console.error('      ' + String((err && err.message) || err).replace(/\n/g, '\n      '));
+    }
+  }
+  if (failures.length) {
+    console.error(`\nFAIL: retail_surface_pos_test.js — ${failures.length} of ${CHECKS.length} checks failed:`);
+    for (const name of failures) console.error(`  - ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`PASS: retail_surface_pos_test.js — ${CHECKS.length} checks`);
 }
 
 try {
   main();
 } catch (err) {
-  console.error('FAIL: retail_surface_pos_test.js');
+  console.error('FAIL: retail_surface_pos_test.js (runner)');
   console.error(err && err.message ? err.message : err);
   process.exitCode = 1;
 }

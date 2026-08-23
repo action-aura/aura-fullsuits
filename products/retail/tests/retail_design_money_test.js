@@ -210,18 +210,47 @@ function testRtlKeepsFiguresLtr() {
   console.log(`PASS: the ${numeric.length} numeric classes rtl.css forces LTR are all styled in main.css`);
 }
 
+/* PER-TEST ISOLATION. A flat `main()` reports the FIRST failure and no others,
+   and every check after the thrower is not "passing" but NOT RUN -- which reads
+   identically in the output. Measured on retail_design_render_test.js, which had
+   the same shape: three checks deliberately broken, exactly one reported.
+
+   The list is a static literal, so it cannot be built empty by accident the way
+   a conditionally assembled one can (see the EXPECTED_CHECKS floors in
+   retail_design_contrast_test.js, where the corpus can fail to build). */
+const CHECKS = [
+  ['every money surface has tabular figures', testEveryMoneySurfaceHasTabularFigures],
+  ['currency never wraps away from its amount', testCurrencyNeverWrapsAwayFromItsAmount],
+  ['negative amounts survive greyscale', testNegativeAmountsSurviveGreyscale],
+  ['RTL keeps figures LTR', testRtlKeepsFiguresLtr],
+];
+
 function main() {
-  testEveryMoneySurfaceHasTabularFigures();
-  testCurrencyNeverWrapsAwayFromItsAmount();
-  testNegativeAmountsSurviveGreyscale();
-  testRtlKeepsFiguresLtr();
-  console.log('PASS: retail_design_money_test.js');
+  const failures = [];
+  for (const [name, fn] of CHECKS) {
+    try {
+      fn();
+    } catch (err) {
+      failures.push(name);
+      console.error(`FAIL: ${name}`);
+      console.error('      ' + String((err && err.message) || err).replace(/\n/g, '\n      '));
+    }
+  }
+  if (failures.length) {
+    console.error(`\nFAIL: retail_design_money_test.js — ${failures.length} of ${CHECKS.length} checks failed:`);
+    for (const name of failures) console.error(`  - ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`PASS: retail_design_money_test.js — ${CHECKS.length} checks`);
 }
 
 try {
   main();
 } catch (err) {
-  console.error('FAIL: retail_design_money_test.js');
+  // Only reachable if the runner ITSELF breaks; every check-level throw is
+  // caught and collected above.
+  console.error('FAIL: retail_design_money_test.js (runner)');
   console.error(err.message || err);
   process.exitCode = 1;
 }

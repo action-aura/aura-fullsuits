@@ -906,24 +906,71 @@ async function testDashboardLayoutIsMirrorSafeByConstruction() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+/* PER-TEST ISOLATION -- see retail_design_money_test.js for the reasoning and
+   the measurement. Twelve checks behind one abort, and the harness call used to
+   sit INLINE in the middle of the sequence (`await test...(await
+   render.harness())`), so a corpus that failed to build took the four checks
+   after it down with it and reported neither fact. The floor below exists
+   because this list is assembled conditionally. */
+const EXPECTED_CHECKS = 12;
+
 async function main() {
-  testCashierLandingRendersWithZeroApiCalls();
-  testManagerOnTheSamePathStillFetches();
-  testLandingIsInertWhenCapabilitiesAreUnknown();
-  testCashierLandingAvoidsTheUnthemedMutedToken();
-  await testTodaysRevenueIsTheLargestMoneyElement();
-  await testAttentionBandSwitchesStateOnRealData();
-  testAttentionStatesDifferByMoreThanColour();
-  await testRecentTransactionsMoneyColumnIsTabularAndLogical();
-  await testEveryClickableRowHasAKeyboardPath(await render.harness());
-  await testNegativeHeadlineRevenueIsMarkedOnTheValueItself();
-  await testNoDashboardSurfaceUsesTheUnthemedMutedToken();
-  await testDashboardLayoutIsMirrorSafeByConstruction();
-  console.log('PASS: retail_surface_dashboard_test.js');
+  const checks = [
+    ['the cashier landing renders with zero API calls', testCashierLandingRendersWithZeroApiCalls],
+    ['a manager on the same path still fetches', testManagerOnTheSamePathStillFetches],
+    ['the landing is inert when capabilities are unknown', testLandingIsInertWhenCapabilitiesAreUnknown],
+    ['the cashier landing avoids the unthemed muted token', testCashierLandingAvoidsTheUnthemedMutedToken],
+    ["today's revenue is the largest money element", testTodaysRevenueIsTheLargestMoneyElement],
+    ['the attention band switches state on real data', testAttentionBandSwitchesStateOnRealData],
+    ['attention states differ by more than colour', testAttentionStatesDifferByMoreThanColour],
+    ['the Recent Transactions money column is tabular and logical', testRecentTransactionsMoneyColumnIsTabularAndLogical],
+    ['negative headline revenue is marked on the value itself', testNegativeHeadlineRevenueIsMarkedOnTheValueItself],
+    ['no dashboard surface uses the unthemed muted token', testNoDashboardSurfaceUsesTheUnthemedMutedToken],
+    ['the dashboard layout is mirror-safe by construction', testDashboardLayoutIsMirrorSafeByConstruction],
+  ];
+
+  const failures = [];
+  const record = (name, err) => {
+    failures.push(name);
+    console.error(`FAIL: ${name}`);
+    console.error('      ' + String((err && err.message) || err).replace(/\n/g, '\n      '));
+  };
+
+  let h = null;
+  try {
+    h = await render.harness();
+  } catch (err) {
+    record('render.harness() (the keyboard-path check could not run)', err);
+  }
+  if (h) checks.push(['every clickable row has a keyboard path', () => testEveryClickableRowHasAKeyboardPath(h)]);
+  const attempted = checks.length + (h ? 0 : 1);
+
+  for (const [name, fn] of checks) {
+    try {
+      await fn();
+    } catch (err) {
+      record(name, err);
+    }
+  }
+
+  if (attempted < EXPECTED_CHECKS) {
+    console.error(
+      `FAIL: retail_surface_dashboard_test.js ran only ${attempted} of ${EXPECTED_CHECKS} known checks.`
+    );
+    process.exitCode = 1;
+    return;
+  }
+  if (failures.length) {
+    console.error(`\nFAIL: retail_surface_dashboard_test.js — ${failures.length} of ${attempted} checks failed:`);
+    for (const name of failures) console.error(`  - ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`PASS: retail_surface_dashboard_test.js — ${attempted} checks`);
 }
 
 main().catch((err) => {
-  console.error('FAIL: retail_surface_dashboard_test.js');
+  console.error('FAIL: retail_surface_dashboard_test.js (runner)');
   console.error(err && err.message ? err.message : err);
   process.exitCode = 1;
 });

@@ -39,6 +39,15 @@
  * exactly the failure this whole file exists to make impossible, so the
  * corpus's own size and its known landmarks are asserted here, once, loudly.
  *
+ * And that the corpus is CLOSED AGAINST THE PRODUCT. Everything above checks
+ * that the declared screens really rendered; none of it could notice that the
+ * router had a section nobody had declared. It had five, and the Reports page
+ * shipped white-on-white through the round whose stated purpose was widening
+ * this corpus, because `reports` was a live `case` in RetailSystem.render() the
+ * whole time and no test compared the two lists. It does now — see
+ * testTheCorpusIsClosedAgainstTheRouter, SCREEN_ROUTES and ROUTE_EXCLUSIONS.
+ * A route is BUILT or it is EXCLUDED IN WRITING; silence is not an option.
+ *
  * WHAT IT DELIBERATELY DOES NOT MODEL, so no caller mistakes silence for proof:
  *
  *   * ::before / ::after generated content. It is real text (the accounting
@@ -49,12 +58,15 @@
  *     into the unconditional cascade would report a colour the wide till never
  *     shows. They are collected into `ruleTable.mediaColour` for callers to
  *     COUNT rather than to swallow.
- *   * Screens the corpus still does not render (Reports, the Admin Centre, the
- *     scanner settings panel, the edit/create form modals). Nothing here
- *     pretends otherwise: retail_design_contrast_test.js enumerates every
- *     shared-chrome colour rule this corpus fails to exercise, prints each one
- *     with the ratio it would measure, and caps the total, so the blind spot is
- *     a published number rather than a silence.
+ *   * Screens the corpus still does not render: the employee screen and the
+ *     Admin Centre (both named in ROUTE_EXCLUSIONS with the reason, and both
+ *     recoverable), plus the edit/create form modals. Nothing here pretends
+ *     otherwise: retail_design_contrast_test.js enumerates every shared-chrome
+ *     colour rule this corpus fails to exercise, prints each one with the ratio
+ *     it would measure, MEASURES that ratio against AA, and caps the total — so
+ *     the blind spot is a published number with a floor under it rather than a
+ *     silence. Reports, Categories and the scanner settings panel used to be on
+ *     this list and are now in the corpus.
  *
  * WHAT IT MODELS THAT A NAIVE CASCADE DOES NOT: `opacity`.
  *
@@ -778,6 +790,33 @@ const TABLE_DATA = {
     customer_name: 'Walk-in', total: 31.40, created_at: '2026-08-22 10:15:00' }],
   auditLog: [{ id: 1, timestamp: '2026-08-22 11:00:00', user_id: '6f1c2d34-aa11-4b22-9c33-7d44e55f6677',
     action: 'create', entity: 'sale', entity_id: 1, details: 'Sale S-1041 created' }],
+
+  /* Sales-by-employee, for the Reports screen. TWO rows, and the second one is
+     not padding: `_attributionCell()` renders three visibly different answers
+     and they do not share a colour. A resolved person is ordinary body text; the
+     unattributed bucket is an inline `color:var(--text-faint)` span. One row
+     would put exactly one of those in the corpus, and the faint one is the one
+     worth measuring — a pre-v13 sale reports "Not recorded" on every install
+     that has any history at all.
+
+     Field NAMES matter here more than values: _resolutionAttempted() keys off
+     key PRESENCE, so a row carrying `employee_name: undefined` claims the server
+     looked and found nothing (state 'account_gone'), which is a different cell
+     from a row that simply omits the key. Both spellings below are deliberate. */
+  employeeSales: [
+    { actor_user_uid: '6f1c2d34-aa11-4b22-9c33-7d44e55f6677', employee_name: 'Layla H',
+      employee_id: 'EMP-0007', transactions: 12, revenue: 618.40, avg_ticket: 51.53 },
+    { actor_user_uid: null, transactions: 6, revenue: 141.10, avg_ticket: 23.52 },
+  ],
+};
+
+/* The Reports KPI tiles. Read off `summary.data` by _loadReports(); without it
+   all four render the "—" em-dash placeholder the frame ships with, which is a
+   screen that looks populated and carries no money at all. `margin_pct` is
+   included because the Gross Profit tile interpolates it into the same cell. */
+const REPORT_SUMMARY = {
+  revenue: 20100.00, transactions: 210, gross_profit: 7412.55,
+  margin_pct: 36.9, avg_ticket: 95.71,
 };
 
 /**
@@ -789,6 +828,15 @@ const TABLE_DATA = {
 function apiResponseFor(url) {
   const u = String(url);
   const ok = (data, meta) => ({ status: 'success', data, meta });
+  // The /reports/* family first: `top-products` would otherwise be swallowed by
+  // the /products rule below and answer with the product LIST, and
+  // `by-employee` would fall through to the catch-all and hand _loadEmployeeSales
+  // an object where it expects an array -- which it correctly renders as
+  // "No sales in this period.", i.e. the empty state, i.e. a Reports screen in
+  // the corpus with no rows in it. That is the exact shape of miss
+  // testCorpusRendersRealScreens exists to refuse.
+  if (/\/reports\/by-employee/.test(u)) return ok(TABLE_DATA.employeeSales);
+  if (/\/reports\/summary/.test(u)) return ok(REPORT_SUMMARY);
   if (/\/customers\/[^/?]+\/sales/.test(u)) return ok(SALES_ROWS);
   if (/\/sales\/recent/.test(u)) return ok(SALES_ROWS);
   if (/\/sales\/\d+/.test(u)) return ok(SALE_DETAIL);
@@ -1061,6 +1109,14 @@ async function buildCorpus() {
     ['customers', (rs, c) => rs._renderCustomers(c)],
     ['suppliers', (rs, c) => rs._renderSuppliers(c)],
     ['audit-log', (rs, c) => rs._renderAuditLog(c)],
+    // Added when the corpus was closed against the router (see
+    // testTheCorpusIsClosedAgainstTheRouter). Reports is the one that matters
+    // most: it shipped white-on-white through a round whose stated purpose was
+    // widening this corpus, precisely because nothing compared this list
+    // against RetailSystem.render()'s switch.
+    ['reports', (rs, c) => rs._renderReports(c)],
+    ['categories', (rs, c) => rs._renderCategories(c)],
+    ['scanner', (rs, c) => rs._renderScannerSettings(c)],
   ];
   for (const [name, render] of listScreens) {
     const ctx = loadRetailSystem(['retail.reports']);
@@ -1215,9 +1271,163 @@ function testTokensResolve(h) {
 const DECLARED_SCREENS = [
   'dashboard', 'cashier-landing', 'pos',
   'sales-history', 'returns', 'purchase-orders', 'products', 'customers',
-  'suppliers', 'audit-log',
+  'suppliers', 'audit-log', 'reports', 'categories', 'scanner',
   'customer-modal', 'sale-modal', 'held-sales-modal',
 ];
+
+/* ── THE CORPUS MUST BE CLOSED AGAINST THE ROUTER ───────────────────────────
+ *
+ * DECLARED_SCREENS above is a list somebody maintains by hand, and a hand-kept
+ * list of screens has exactly one failure mode: the product grows a screen and
+ * the list does not. Nothing noticed. That is not hypothetical — it is how the
+ * Reports page shipped white-on-white THROUGH a round whose stated purpose was
+ * widening this corpus: `reports` was a live section of
+ * `RetailSystem.render()`'s switch the whole time, no test compared the two,
+ * and its absence was silence rather than a failure.
+ *
+ * So the authority is the router, read out of the product at run time. Every
+ * `case '<id>':` in `RetailSystem.render()` must be either
+ *
+ *   * BUILT — some corpus screen renders it (SCREEN_ROUTES), or
+ *   * EXCLUDED IN WRITING — named in ROUTE_EXCLUSIONS with the reason it
+ *     cannot be rendered headlessly.
+ *
+ * Silence is no longer one of the options. The chain is complete in both
+ * directions: router -> SCREEN_ROUTES -> DECLARED_SCREENS ->
+ * testCorpusRendersRealScreens, which asserts the screens actually built.
+ */
+const SCREEN_ROUTES = {
+  dashboard: 'dashboard',
+  // The same entry point with no `retail.reports` capability. One route, two
+  // genuinely different surfaces; both are in the corpus.
+  'cashier-landing': 'dashboard',
+  pos: 'pos',
+  'sales-history': 'sales',
+  returns: 'returns',
+  'purchase-orders': 'purchases',
+  products: 'products',
+  customers: 'customers',
+  suppliers: 'suppliers',
+  'audit-log': 'audit-log',
+  reports: 'reports',
+  categories: 'categories',
+  scanner: 'scanner',
+};
+
+/* The two router sections this corpus does NOT build, each with the reason.
+   Written down rather than omitted, because an omission looks exactly like an
+   oversight and a reason can be argued with. Both are recoverable: fix the
+   stated cause and the exclusion goes away. */
+const ROUTE_EXCLUSIONS = {
+  employees:
+    'render() dispatches this one to RetailEmployees.render(), which lives in a ' +
+    'DIFFERENT file (frontend/employees.js). loadRetailSystem() evaluates ' +
+    'subsystem-retail.js alone, so `RetailEmployees` is not defined in the vm ' +
+    'context and the call throws before any markup exists. Rendering it here ' +
+    'would mean loading a second file into the same sandbox — a real change to ' +
+    'the harness, not a one-line corpus addition. Its own suite is ' +
+    'retail_employees_screen_test.js; note that suite is structural and does ' +
+    'NOT measure contrast, so this screen is genuinely unmeasured here.',
+  'admin-center':
+    '_renderAdminCenter() is a settings page whose only table is filled by a ' +
+    'reorder-request endpoint the corpus fixture does not serve, so it captures ' +
+    'the "Loading…" single-cell placeholder — the empty state ' +
+    'testCorpusRendersRealScreens explicitly refuses to accept as a rendered ' +
+    'list. Adding it needs a fixture route, not just a render call.',
+};
+
+/** Every `case '<id>':` in RetailSystem.render(), read out of the product. */
+function routerSections() {
+  const src = fs.readFileSync(RETAIL_JS, 'utf8');
+  const start = src.indexOf('  render(sectionId) {');
+  assert.ok(start !== -1, 'Could not find RetailSystem.render(sectionId) in subsystem-retail.js.');
+  const end = src.indexOf('\n  },', start);
+  assert.ok(end > start, 'Could not find the end of RetailSystem.render().');
+  const body = src.slice(start, end);
+  const ids = [];
+  const re = /case\s+'([^']+)'\s*:/g;
+  let m;
+  while ((m = re.exec(body)) !== null) ids.push(m[1]);
+  return ids;
+}
+
+function testTheCorpusIsClosedAgainstTheRouter() {
+  const sections = routerSections();
+
+  // ANTI-VACUITY. Every comparison below is a filter over this list. If the
+  // scrape broke — render() renamed, reformatted, or the `case` syntax changed
+  // — an empty list would make all three comparisons pass while proving that
+  // the corpus is closed against nothing at all.
+  assert.ok(
+    sections.length >= 12,
+    `Only ${sections.length} case labels were read out of RetailSystem.render(). ` +
+    'The scrape is broken, so "the corpus covers every route" would be a claim ' +
+    'about an empty list.'
+  );
+  assert.deepStrictEqual(
+    sections.filter((id, i) => sections.indexOf(id) !== i), [],
+    'RetailSystem.render() has duplicate case labels; the second is dead code.'
+  );
+
+  const built = new Set(Object.values(SCREEN_ROUTES));
+  const excluded = new Set(Object.keys(ROUTE_EXCLUSIONS));
+
+  /* All three mismatches are collected and reported TOGETHER. They are three
+     symptoms of one edit -- renaming a route produces a stale entry AND an
+     unaccounted section -- and reporting the first and stopping is the same
+     one-defect-per-run blindness the file-level runner was rewritten to fix,
+     just at a finer grain. */
+  const problems = [];
+
+  for (const id of sections.filter((s) => !built.has(s) && !excluded.has(s))) {
+    problems.push(
+      `UNACCOUNTED: render() routes to '${id}', which this corpus neither builds nor excludes in writing.\n` +
+      '      Every downstream contrast, opacity and touch-target assertion is a loop over the\n' +
+      '      corpus, so a route outside it is a whole screen the suite goes green without\n' +
+      '      looking at — which is exactly how the Reports page shipped white-on-white through\n' +
+      '      the round that was widening this corpus. Either add it to buildCorpus() +\n' +
+      '      DECLARED_SCREENS + SCREEN_ROUTES, or add it to ROUTE_EXCLUSIONS with the reason it\n' +
+      '      cannot be rendered headlessly. Do not just leave it out.'
+    );
+  }
+
+  for (const id of [...built, ...excluded].filter((s) => !sections.includes(s))) {
+    problems.push(
+      `STALE: SCREEN_ROUTES/ROUTE_EXCLUSIONS names '${id}', which the router no longer has.\n` +
+      '      A stale entry silently re-opens the hole it was written to close: it keeps\n' +
+      '      "covered" ticking over for a route that has been renamed, while the NEW name\n' +
+      '      falls through as unaccounted.'
+    );
+  }
+
+  for (const id of [...excluded].filter((s) => built.has(s))) {
+    problems.push(
+      `SUPERSEDED: '${id}' is listed in ROUTE_EXCLUSIONS and the corpus now builds it.\n` +
+      '      Delete the exclusion. A written reason that is no longer true is worse than no\n' +
+      '      reason: it is the one entry a reader will trust without re-checking, and it goes\n' +
+      '      on excusing the next screen that lands under the same name.'
+    );
+  }
+
+  for (const name of Object.keys(SCREEN_ROUTES).filter((n) => !DECLARED_SCREENS.includes(n))) {
+    problems.push(
+      `UNDECLARED: SCREEN_ROUTES claims screen '${name}', which DECLARED_SCREENS does not list.\n` +
+      '      "This route is covered" is only worth anything if the screen it names is one the\n' +
+      '      corpus actually builds.'
+    );
+  }
+
+  assert.deepStrictEqual(
+    problems, [],
+    `${problems.length} corpus/router mismatch(es):\n  ` + problems.join('\n  ')
+  );
+
+  console.log(
+    `PASS: the corpus is closed against RetailSystem.render() — ${sections.length} router ` +
+    `section(s), ${built.size} built by ${Object.keys(SCREEN_ROUTES).length} screen(s), ` +
+    `${excluded.size} excluded in writing (${[...excluded].join(', ')})`
+  );
+}
 
 /* The placeholder a list screen shows INSTEAD of its rows: while loading, when
    the fetch is refused, and when the result set is empty. Every one of them is
@@ -1308,6 +1518,14 @@ function testCorpusContainsTheKnownHazards(h) {
     ['sale-modal', (el) => el.classes.includes('ret-modal'), 'the sale-detail modal panel'],
     ['audit-log', (el) => el.tag === 'bdi', 'the audit log\'s bidi-isolated actor id'],
     ['held-sales-modal', (el) => el.classes.includes('ret-btn-danger'), 'the held-sale Discard button'],
+    // The three screens added when the corpus was closed against the router.
+    // Named individually for the usual reason: "reports is in DECLARED_SCREENS"
+    // is satisfied by a Reports screen that rendered its capability-restricted
+    // stub, and that stub contains none of the four things below.
+    ['reports', (el) => el.classes.includes('ret-kpi-value'), 'a Reports KPI tile value (.ret-kpi-value — one of the chrome rules the ledger listed as reaching no rendered element at all)'],
+    ['reports', (el) => el.tag === 'bdi', 'the Reports by-employee identity cell (_attributionCell\'s dir="auto" isolation)'],
+    ['categories', (el) => el.classes.includes('ret-btn-danger'), 'the Categories Delete button — a fifth home for the destructive-button pairing, and the reason :active is now an evaluated state'],
+    ['scanner', (el) => el.classes.includes('ret-input'), 'the scanner test readout (.ret-input)'],
   ];
   const missing = [];
   for (const [screenName, pred, what] of wanted) {
@@ -1498,24 +1716,90 @@ function testOpacityIsResolvedOverTheWholeCorpus(h) {
   for (const line of inGroup.slice(0, 12)) console.log('      ' + line);
 }
 
+/* ── PER-TEST ISOLATION ─────────────────────────────────────────────────────
+ * Same runner, same reasoning, as retail_design_contrast_test.js: a flat
+ * sequence reports the FIRST failure and no others, and every check after it is
+ * not "passing" but NOT RUN — which reads identically. Measured on this exact
+ * file: with three checks deliberately broken (the CSS-size floor, a missing
+ * required token, and the text-painting floor), the old shape reported one and
+ * exited; the shape below reports all three.
+ */
+async function runAll(checks) {
+  const failures = [];
+  for (const [name, fn] of checks) {
+    try {
+      await fn();
+    } catch (err) {
+      failures.push([name, err]);
+      console.error(`FAIL: ${name}`);
+      console.error('      ' + String((err && err.message) || err).replace(/\n/g, '\n      '));
+    }
+  }
+  return failures;
+}
+
+/* Anti-vacuity for the runner itself: the list below is built conditionally, a
+   conditionally built list can be built empty, and a loop over nothing reports
+   no failures. */
+const EXPECTED_CHECKS = 9;
+
 async function main() {
-  const h = await harness();
-  testStylesheetSourcesAreAllPresent(h);
-  testRuleTableParsed(h);
-  testTokensResolve(h);
-  testCorpusRendersRealScreens(h);
-  testCorpusContainsTheKnownHazards(h);
-  testTextPaintingElementsAreFound(h);
-  testOpacityArithmeticIsGroupCompositing();
-  testOpacityIsResolvedOverTheWholeCorpus(h);
-  console.log('PASS: retail_design_render_test.js');
+  const checks = [
+    // Reads the product source only, so it stands even when the corpus will
+    // not build — and "the corpus does not cover the router" is exactly the
+    // kind of finding a corpus failure would otherwise bury.
+    ['the corpus is closed against the router', testTheCorpusIsClosedAgainstTheRouter],
+    ['opacity arithmetic is group compositing', testOpacityArithmeticIsGroupCompositing],
+  ];
+
+  const setupFailures = [];
+  let h = null;
+  try {
+    h = await harness();
+  } catch (err) {
+    setupFailures.push(['harness() (7 corpus checks could not run)', err]);
+    console.error('FAIL: harness() (7 corpus checks could not run)');
+    console.error('      ' + String((err && err.message) || err).replace(/\n/g, '\n      '));
+  }
+  if (h) {
+    checks.push(
+      ['stylesheet sources are all present', () => testStylesheetSourcesAreAllPresent(h)],
+      ['the rule table parsed', () => testRuleTableParsed(h)],
+      ['tokens resolve', () => testTokensResolve(h)],
+      ['the corpus renders real screens', () => testCorpusRendersRealScreens(h)],
+      ['the corpus contains the known hazards', () => testCorpusContainsTheKnownHazards(h)],
+      ['text-painting elements are found', () => testTextPaintingElementsAreFound(h)],
+      ['opacity is resolved over the whole corpus', () => testOpacityIsResolvedOverTheWholeCorpus(h)],
+    );
+  }
+
+  const failures = setupFailures.concat(await runAll(checks));
+  const attempted = checks.length + setupFailures.length;
+
+  if (attempted < EXPECTED_CHECKS) {
+    console.error(
+      `FAIL: retail_design_render_test.js ran only ${attempted} of ${EXPECTED_CHECKS} known checks. ` +
+      'A runner that quietly loses a check reports a clean bill of health on work it never did.'
+    );
+    process.exitCode = 1;
+    return;
+  }
+  if (failures.length) {
+    console.error(`\nFAIL: retail_design_render_test.js — ${failures.length} of ${attempted} checks failed:`);
+    for (const [name] of failures) console.error(`  - ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`PASS: retail_design_render_test.js — ${attempted} checks`);
 }
 
 module.exports = { harness, AA: 4.5, AAA: 7.0 };
 
 if (require.main === module) {
   main().catch((err) => {
-    console.error('FAIL: retail_design_render_test.js');
+    // Only reachable if the runner ITSELF breaks; every check-level throw is
+    // caught and collected above.
+    console.error('FAIL: retail_design_render_test.js (runner)');
     console.error(err.message || err);
     process.exitCode = 1;
   });

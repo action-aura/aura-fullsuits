@@ -380,5 +380,14 @@
   "item": "item",
   "Resume": "Resume",
   "Discard": "Discard",
-  "Failed to load held sales.": "Failed to load held sales."
+  "Failed to load held sales.": "Failed to load held sales.",
+  "All branches": "All branches",
+  "Last 7 days": "Last 7 days",
+  "Last 14 days": "Last 14 days",
+  "Last 30 days": "Last 30 days",
+  "Last 90 days": "Last 90 days",
+  "Top Products": "Top Products",
+  "Revenue by Branch": "Revenue by Branch",
+  "Start Test": "Start Test",
+  "Captured value will appear here…": "Captured value will appear here…"
 }

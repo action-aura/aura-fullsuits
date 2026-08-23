@@ -4070,10 +4070,22 @@ input.pos-mini-input, select.pos-cust-select {
    injected sheet, which is what it takes to win without an !important.
    The two inputs are the same story: `.ret-search` sets its own inline width
    and no block minimum at all, and `.ret-date` (the Sales History bounds) had
-   neither until it stopped being an inline style. */
+   neither until it stopped being an inline style.
+
+   `.ret-input` is the third member of that family (Reports' branch and period
+   dropdowns, the scanner test readout). It arrives here by the identical route:
+   the paint was an inline copy of the same recipe, so the floor was whatever
+   each call site had remembered to type -- a block minimum and no inline one on
+   the two dropdowns, and neither axis at all on the readout. An inline style
+   also beats every stylesheet, so no rule written here could have corrected
+   them while the copy existed. Both element-qualified spellings are listed for
+   the same reason the others are: `select` and `input` are the two tags this
+   class lands on, and the extra point is what wins without an `!important`. */
 button.ret-btn,
 input.ret-search,
-input.ret-date {
+input.ret-date,
+input.ret-input,
+select.ret-input {
   min-block-size: var(--touch-target-min);
   min-inline-size: var(--touch-target-min);
 }
@@ -4107,6 +4119,48 @@ button.ret-btn.ret-btn-ghost:focus-visible {
   outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: var(--focus-ring-offset);
   border-radius: inherit;
+}
+
+/* THE WHOLE BUTTON FAMILY, KEYED ON THE BASE CLASS — NOT THE ONE VARIANT A
+   RENDERED SCREEN HAPPENED TO CONTAIN.
+
+   This is the same defect the `.ret-rowbtn` entry in the focus block above
+   records, one level up. The ring for the till's buttons was written as
+   `button.ret-btn.ret-btn-ghost:focus-visible` because GHOST was the variant on
+   the two screens anybody had rendered; primary and danger were never mentioned
+   and therefore fell through to the browser default. Resolved against the real
+   cascade on the corpus, nine rendered controls had NO authored focus indicator
+   at all:
+
+       Delete            Products, Customers, Suppliers, customer modal
+       Receive           Purchase Orders
+       + PO              Suppliers
+       Reprint Receipt   sale-detail modal
+       Resume / Discard  held-sales modal
+
+   The destructive control in the product is four of those nine, six lines below
+   a comment arguing the ring must be deliberately heavier than a UA default
+   because a till is driven by a scanner, which is a keyboard.
+
+   Every call site emits `ret-btn ret-btn-<variant>` (see _renderProducts,
+   _viewSale, _openHeldSalesModal and the rest), so keying on `.ret-btn` covers
+   primary, ghost, danger and `-sm` on every screen — including a sixth variant
+   added tomorrow, which is the property an enumeration cannot have.
+
+   `.ret-tab` is the supplier modal's Details/Contacts tabs. Its own sheet gives
+   it a :hover colour and an .active underline, i.e. a pointer affordance and a
+   position marker, and nothing a keyboard operator can see. No corpus screen
+   opens that modal, so this ring is NOT under test today — it is here because
+   the control exists, not because a test caught it.
+
+   `border-radius: inherit` is deliberately NOT restated from the focus block
+   above. An outline already follows the element's own border-radius; inheriting
+   the PARENT's squares a rounded control off at the moment it takes focus,
+   which is a change to the shape rather than an addition of a ring. */
+.ret-btn:focus-visible,
+.ret-tab:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
 }
 
 /* ── MONEY SEMANTICS SURVIVE THE WRAPPER ──────────────────────────────────────

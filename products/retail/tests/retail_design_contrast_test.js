@@ -34,7 +34,7 @@
  * state that hid the bug -- and a token block is a scope that can never see an
  * injected literal, no matter how many tokens get added to it.
  *
- * WHAT IT ASSERTS NOW — FIVE PROPERTIES, DELIBERATELY DIFFERENT ONES
+ * WHAT IT ASSERTS NOW — SIX PROPERTIES, DELIBERATELY DIFFERENT ONES
  *
  *  1. THE PALETTE (unchanged, still a cross product over the token names):
  *       every --text-* x every solid --surface-*  >= 4.5:1 (AA)
@@ -44,12 +44,20 @@
  *     failure mode. Derived from token NAMES, so the palette cannot quietly
  *     grow a failing member.
  *
- *  2. THE SCREEN. Every element that paints text on a RENDERED till screen,
- *     resting and hovered, with its colour and its surface resolved through the
- *     real cascade and the real ancestor chain -- alpha fills composited down
- *     to the opaque surface underneath. This is the tier that catches an
- *     injected literal, because it never asks where a colour came from.
+ *  2. THE SCREEN. Every element that paints text on a RENDERED till screen, in
+ *     EVERY state the stylesheets can paint in -- resting, hovered, focused
+ *     (:focus/:focus-visible/:focus-within), active, checked and disabled --
+ *     with its colour and its surface resolved through the real cascade and the
+ *     real ancestor chain, alpha fills composited down to the opaque surface
+ *     underneath. This is the tier that catches an injected literal, because it
+ *     never asks where a colour came from.
  *     See retail_design_render_test.js for the corpus and the cascade engine.
+ *
+ *     The state list used to be {resting, hovered} while the chrome ledger's
+ *     notion of "exercised" spanned five states, so a rule that won only in
+ *     `:active` counted as measured by a tier that never entered `:active`.
+ *     One list now, derived, and checked against the stylesheets themselves.
+ *     See EVALUATED_STATES and testEveryStateTheCascadeUsesIsEvaluated.
  *
  *  3. NOTHING RESOLVES TO "UNKNOWN" IN SILENCE. A pairing whose colour or
  *     surface cannot be determined statically is COUNTED and NAMED, never
@@ -69,12 +77,22 @@
  *     declares must carry an opaque token pair, checked here by derivation from
  *     that sheet rather than from a list somebody has to remember to extend.
  *
+ *  6. AND THE CHROME RULES THE CORPUS NEVER REACHES ARE MEASURED ANYWAY. The
+ *     unexercised ledger used to compute each rule's real contrast ratio, PRINT
+ *     it -- "would be 1.00:1 on --surface-till", in those words -- and then
+ *     assert only that the list was no longer than a budget. Six chrome fixes
+ *     therefore had no guard at all, and reverting any of them was silent on a
+ *     green tree. The ratio is now the assertion; the count stays alongside it,
+ *     because "the blind spot grew" is a different fact from any one ratio.
+ *
  * ANTI-VACUITY
  * Every assertion here is a loop. A loop over nothing passes. So the palette
  * tier asserts it parsed a realistic number of tokens before asserting they
  * pass, and the rendered tiers lean on retail_design_render_test.js, which
  * asserts the corpus reaches the specific elements the defects were measured
- * on. The check RUNNING is asserted separately from the check PASSING.
+ * on. The check RUNNING is asserted separately from the check PASSING -- down
+ * to the runner itself, which asserts it attempted every check it knows about
+ * before reporting that none of them failed.
  *
  * No test framework is configured for this vanilla-JS, build-step-free
  * frontend (see CLAUDE.md), so this runs standalone on Node built-ins:
@@ -94,20 +112,88 @@ const CSS_FILE = path.join(__dirname, '..', 'frontend', 'css', 'main.css');
 const AA = 4.5;   // WCAG 2.2 §1.4.3 -- normal-size body text
 const AAA = 7.0;  // WCAG 2.2 §1.4.6 -- enhanced; required here for money
 
-/* The states a pairing is evaluated in. Resting is the obvious one; :hover is
-   included because a hover rule that changes only the BACKGROUND (which is what
-   `.ret-btn-ghost:hover` does) moves the ratio without touching the colour, and
-   that is a pairing nobody ever looks at. The other state pseudo-classes are
-   deliberately out: :focus-visible draws a ring rather than repainting text,
-   and :disabled is a documented, intentional de-emphasis with its own rule.
+/* ── THE STATES A PAIRING IS EVALUATED IN ───────────────────────────────────
+ *
+ * ONE list. It used to be two, and they disagreed.
+ *
+ * The measuring tier ran {resting, hovered}. The chrome ledger's notion of
+ * "exercised" ran {resting, hover, focus/focus-visible, active, disabled}. A
+ * rule that won the cascade ONLY in `:active` therefore counted as exercised --
+ * and the comment on that ledger said, in as many words, that exercised means
+ * "the rendered tier has measured this" -- while the rendered tier never
+ * entered `:active` at all. Adding
+ *
+ *     .ret-btn-danger:active { color:#ffffff; background:#fefefe }
+ *
+ * renders the Delete/Discard button at 1.01:1 and was SILENT on a fully green
+ * suite, BECAUSE it counted as exercised. That is the same matched-but-not-won
+ * laundering the ledger was rewritten to remove, relocated one level up into the
+ * state dimension. Re-measured against this list: it now fails on SEVEN screens
+ * (products, customers, suppliers, categories, the customer modal, the
+ * held-sales modal, and the sale modal) -- and re-measured against the old
+ * two-state tier with everything else here unchanged, it goes green again at
+ * "all 1056 RENDERED pairings ... reach AA" while the ledger reports it as one
+ * MORE rule exercised. Both directions were run; that is what the number 1056
+ * is doing in this comment.
+ *
+ * `:focus-within` was in NEITHER set, so a focus band at 1.02:1 was reachable by
+ * neither tier and surfaced only as a +1 on a budget -- the kind of finding a
+ * one-line budget raise disposes of.
+ *
+ * So CHROME_STATES is now DERIVED from this list (see below) and cannot drift
+ * from it, and testEveryStateTheCascadeUsesIsEvaluated() asserts this list
+ * covers every state pseudo-class any colour, background or opacity rule in the
+ * cascade actually uses. Adding `:visited { color: ... }` to a stylesheet fails
+ * that check by name rather than quietly opening a state nothing looks at. That
+ * second check is what makes the mismatch impossible to EXPRESS rather than
+ * merely fixed once: shrinking this list back to {resting, hovered} does not
+ * restore the old silence, it fails, naming all six states it just abandoned.
+ *
+ * ON THE OVER-APPROXIMATION. Each pass treats EVERY element as being in the
+ * state at once, which is not a configuration the DOM can hold. It is sound for
+ * this question: a contrast resolution reads only the element's own ancestor
+ * chain, and :hover / :focus-within genuinely do apply to an element AND all of
+ * its ancestors simultaneously. The over-approximation is therefore confined to
+ * siblings, whose backgrounds have no bearing on this element's text.
+ *
+ * ON THE DISABLED FLOOR, which is the one exception and is stated rather than
+ * hidden. WCAG 2.2 §1.4.3 exempts "text ... that is part of an inactive user
+ * interface component" from the contrast minimum, so the product's disabled
+ * buttons (measured 1.84:1 and 2.00:1, all of them a documented `opacity` wash
+ * over an AA-clearing resting pair) are conformant, not defects. Those pairings
+ * are still RESOLVED -- an unresolvable one still fails -- still counted, and
+ * their tightest ratio is printed every run, so a regression is visible. They
+ * are simply not held to a floor that does not apply to them. `floor: null`
+ * means "measured and reported, deliberately not asserted"; it never means
+ * "skipped".
+ */
+const EVALUATED_STATES = [
+  { name: 'resting', states: new Set(), floor: AA },
+  { name: 'hovered', states: new Set(['hover']), floor: AA },
+  // :focus and :focus-visible travel together because a keyboard-focused
+  // element is both; :focus-within is added to the same pass because the
+  // element that HAS focus is also within itself, and its ancestors are the
+  // only other elements the rule can reach.
+  { name: 'focused', states: new Set(['focus', 'focus-visible', 'focus-within']), floor: AA },
+  { name: 'active', states: new Set(['active']), floor: AA },
+  { name: 'checked', states: new Set(['checked']), floor: AA },
+  { name: 'disabled', states: new Set(['disabled']), floor: null },
+];
 
-   The hover pass treats EVERY element as hovered at once, which is not a state
-   the DOM can be in -- but it is sound for this question. :hover applies to the
-   element under the pointer AND to all of its ancestors, so every element's own
-   chain (which is all a contrast resolution reads) is genuinely reachable. The
-   over-approximation is limited to siblings, and a sibling's background has no
-   bearing on this element's text. */
-const EVALUATED_STATES = [['resting', new Set()], ['hovered', new Set(['hover'])]];
+/* The states a chrome rule can legitimately win in -- DERIVED, never restated.
+   Evaluated separately and never unioned: a single set containing both `hover`
+   and `disabled` would let a rule that only ever applies to a disabled control
+   count as exercised by a hovered one, which is not a state any element is ever
+   in. The point of deriving it is that "exercised" can no longer name a state
+   the measuring tier does not enter. */
+const CHROME_STATES = EVALUATED_STATES.map((s) => s.states);
+
+/* State names whose pairings carry no asserted floor (see the WCAG note above).
+   Used by the chrome ledger too, so a `:disabled` colour rule that the corpus
+   never exercises is not held to a floor WCAG does not impose on it. */
+const UNFLOORED_STATE_NAMES = new Set(
+  EVALUATED_STATES.filter((s) => s.floor === null).flatMap((s) => [...s.states])
+);
 
 /* How many colour-declaring rules in the shared retail chrome the RENDERED tier
    does not exercise -- i.e. how many never WIN the cascade on a rendered
@@ -143,12 +229,27 @@ const EVALUATED_STATES = [['resting', new Set()], ['hovered', new Set(['hover'])
    changed, and an edit to that main.css rule hands the 1.48:1 version straight
    back. The old accounting called that "exercised".
 
-   The rest of the list is genuinely unreachable: the KPI card family, the PO
-   split preview, the supplier tabs, and the `.ret-field`/`.ret-search` inputs
-   -- whose value is real text an operator reads, but lives in an attribute, so
-   this DOM model has no character to hang a pairing on. `.ret-search`'s
-   #fff-on-a-5%-white-tint (1.00:1) is in that group and is still wrong. */
-const UNEXERCISED_CHROME_BUDGET = 25;
+   25 -> 23, reviewed 2026-08-23, and this one is a plain LOWERING with no
+   offsetting change hidden inside it: closing the corpus against the router
+   added the Reports, Categories and Scanner screens, and Reports is the only
+   place in the product that renders the `.ret-kpi` family. `.ret-kpi-label` and
+   `.ret-kpi-value` moved from "no rendered element matches it" to exercised.
+   Nothing left the exercised set.
+
+   The rest of the list is genuinely unreachable from this corpus: the remaining
+   KPI members (`-sub`, `-breakdown-item`, `-change-up/-down`, which the
+   dashboard's own KPI markup does not use), the PO split preview, the supplier
+   tabs, and the `.ret-field`/`.ret-search`/`.ret-input` inputs -- whose value is
+   real text an operator reads, but lives in an attribute, so this DOM model has
+   no character to hang a pairing on.
+
+   AND EVERY ONE OF THEM IS NOW MEASURED. The count below is no longer the only
+   claim this ledger makes: each unexercised rule's real contrast ratio is
+   computed against the till's own surfaces and held to AA. See
+   testUnexercisedChromeIsCountedNotAssumedFine -- for two rounds the ratios
+   were computed, printed, and asserted on by nothing, which is why six chrome
+   fixes could be reverted in silence. */
+const UNEXERCISED_CHROME_BUDGET = 23;
 
 /* ── Token parsing ─────────────────────────────────────────────────────────
    Only the block between the [design-tokens:begin]/[design-tokens:end]
@@ -382,7 +483,7 @@ function resolveRenderedPairings(h) {
   const pairings = [];
   const unresolved = [];
   for (const screen of h.screens) {
-    for (const [stateName, states] of EVALUATED_STATES) {
+    for (const { name: stateName, states, floor } of EVALUATED_STATES) {
       for (const el of h.textPaintingElements(screen.root)) {
         const where = `${screen.name}/${stateName} ${h.describe(el).slice(0, 70)}`;
         const fg = h.effectiveColour(h.ruleTable, el, h.tokens, states);
@@ -408,7 +509,8 @@ function resolveRenderedPairings(h) {
           continue;
         }
         pairings.push({
-          where, ratio: h.contrastRatio(through.colour, through.surface),
+          where, stateName, floor,
+          ratio: h.contrastRatio(through.colour, through.surface),
           colourFrom: fg.from,
           surfaceFrom: bg.layers.map((l) => l.from).join('  over  '),
           alpha: through.alpha,
@@ -425,12 +527,12 @@ function describePairing(p) {
     (p.alpha < 1 ? `\n      washed to ${(p.alpha * 100).toFixed(0)}% by ${p.opacityFrom}` : '');
 }
 
-function testEveryRenderedPairingReachesAA(h) {
-  const { pairings, unresolved } = resolveRenderedPairings(h);
+function testEveryRenderedPairingReachesAA(h, rendered) {
+  const { pairings } = rendered;
 
   // ANTI-VACUITY, and it is PER SCREEN on purpose. A corpus-wide floor of 200
-  // was satisfied by three screens and would still be satisfied if nine of the
-  // thirteen silently stopped resolving, because the four largest carry more
+  // was satisfied by three screens and would still be satisfied if most of the
+  // sixteen silently stopped resolving, because the four largest carry more
   // than 200 pairings between them. Every screen the corpus declares must
   // contribute, or the number below is an average hiding a hole.
   const perScreen = new Map();
@@ -439,6 +541,20 @@ function testEveryRenderedPairingReachesAA(h) {
     perScreen.set(screen, (perScreen.get(screen) || 0) + 1);
   }
   const silent = h.screens.map((s) => s.name).filter((name) => (perScreen.get(name) || 0) < EVALUATED_STATES.length * 4);
+  // ...and per STATE, for the same reason. Six states whose pairings all come
+  // from `resting` is a state list that reads as covering :active while
+  // resolving nothing in it -- indistinguishable, in the output, from six
+  // states that all worked.
+  const perState = new Map();
+  for (const p of pairings) perState.set(p.stateName, (perState.get(p.stateName) || 0) + 1);
+  const silentStates = EVALUATED_STATES.map((s) => s.name).filter((n) => (perState.get(n) || 0) < h.screens.length * 4);
+  assert.deepStrictEqual(
+    silentStates, [],
+    'Evaluated state(s) resolved almost no pairings:\n  ' +
+    silentStates.map((n) => `${n}: ${perState.get(n) || 0}`).join('\n  ') +
+    '\n\nA state the resolver enters and returns nothing from proves nothing, ' +
+    'and reads in the summary line exactly like a state that passed.'
+  );
   assert.deepStrictEqual(
     silent, [],
     'Screen(s) contributed almost no resolved pairings:\n  ' +
@@ -447,7 +563,8 @@ function testEveryRenderedPairingReachesAA(h) {
     'about, and it is indistinguishable from a screen that passes.'
   );
 
-  const failures = pairings.filter((p) => p.ratio < AA).sort((a, b) => a.ratio - b.ratio);
+  const floored = pairings.filter((p) => p.floor !== null);
+  const failures = floored.filter((p) => p.ratio < p.floor).sort((a, b) => a.ratio - b.ratio);
   assert.deepStrictEqual(
     failures.map(describePairing), [],
     `${failures.length} pairing(s) the till actually RENDERS fall below WCAG AA (${AA}:1):\n  ` +
@@ -458,15 +575,27 @@ function testEveryRenderedPairingReachesAA(h) {
     'colour, not the scope of the test.'
   );
 
-  const worst = pairings.reduce((a, b) => (b.ratio < a.ratio ? b : a));
+  const worst = floored.reduce((a, b) => (b.ratio < a.ratio ? b : a));
   const washed = pairings.filter((p) => p.alpha < 1).length;
   console.log(
-    `PASS: all ${pairings.length} RENDERED pairings across ${h.screens.length} screens ` +
-    `x ${EVALUATED_STATES.length} states reach AA (${AA}:1) — tightest is ` +
+    `PASS: all ${floored.length} RENDERED pairings across ${h.screens.length} screens ` +
+    `x ${EVALUATED_STATES.filter((s) => s.floor !== null).length} floored states reach AA (${AA}:1) — tightest is ` +
     `${worst.ratio.toFixed(2)}:1 at ${worst.where.split(' ')[0]}; ${washed} of them ` +
     'measured through an opacity group'
   );
-  return unresolved;
+
+  // The unfloored states are REPORTED, never skipped -- see the WCAG 2.2 §1.4.3
+  // "inactive user interface component" note on EVALUATED_STATES. They were
+  // resolved on the same code path, so an unresolvable one still failed above.
+  for (const s of EVALUATED_STATES.filter((st) => st.floor === null)) {
+    const inState = pairings.filter((p) => p.stateName === s.name);
+    const tightest = inState.reduce((a, b) => (b.ratio < a.ratio ? b : a));
+    console.log(
+      `      note: ${inState.length} pairing(s) measured in the "${s.name}" state carry no asserted ` +
+      `floor (WCAG 2.2 §1.4.3 exempts inactive components) — tightest is ` +
+      `${tightest.ratio.toFixed(2)}:1 at ${tightest.where}`
+    );
+  }
 }
 
 function testNothingResolvesToUnknownInSilence(h, unresolved) {
@@ -489,6 +618,71 @@ function testNothingResolvesToUnknownInSilence(h, unresolved) {
     'Do not let the population grow.'
   );
   console.log(`PASS: 0 rendered pairings unresolved (${media.length} @media colour rules counted separately as conditional)`);
+}
+
+/**
+ * EVERY STATE THE CASCADE CAN PAINT IN IS A STATE THIS FILE EVALUATES.
+ *
+ * Deriving CHROME_STATES from EVALUATED_STATES stops the two lists disagreeing
+ * with each other. It does nothing about the third list, which is not written
+ * down anywhere: the states the STYLESHEETS actually use. `:focus-within` was in
+ * that third list and in neither of the other two for the whole life of both --
+ * `.ret-table tbody tr:focus-within` recolours a row in the injected chrome
+ * sheet, and no tier here had ever entered the state, so a focus band at 1.02:1
+ * would have shown up as a +1 on a budget rather than as a failure.
+ *
+ * So the state list is checked against the product, the same way the badge
+ * variants and the bidi floor are: a state pseudo-class that any colour,
+ * background or opacity rule uses and this file does not evaluate is a blind
+ * state, and it fails by name. Adding one to a stylesheet cannot silently
+ * create a sixth dimension nothing looks at.
+ */
+function testEveryStateTheCascadeUsesIsEvaluated(h) {
+  const evaluated = new Set(EVALUATED_STATES.flatMap((s) => [...s.states]));
+  const PAINTS = ['color', 'background', 'background-color', 'opacity'];
+
+  const used = new Map();   // state name -> an example rule that uses it
+  for (const rule of h.ruleTable.rules) {
+    if (!PAINTS.some((p) => p in rule.decls)) continue;
+    for (const part of rule.parts) {
+      for (const raw of part.compound.states) {
+        const name = /^:([-\w]+)/.exec(raw)[1];
+        if (!used.has(name)) used.set(name, `${rule.selector}  [${rule.source}]`);
+      }
+    }
+  }
+
+  // ANTI-VACUITY. The comparison below is a filter over `used`. A selector
+  // parser that stopped classifying state pseudo-classes would leave it empty,
+  // and an empty list has no uncovered members -- so this check would pass
+  // loudest exactly when it had stopped working.
+  assert.ok(
+    used.size >= 5,
+    `Only ${used.size} distinct state pseudo-class(es) were found on colour/background/` +
+    'opacity rules across the whole cascade. parseCompound() has stopped classifying ' +
+    'them, so "every state is evaluated" is a claim about an empty list.'
+  );
+
+  const blind = [...used]
+    .filter(([name]) => !evaluated.has(name))
+    .map(([name, example]) => `:${name}   e.g. ${example}`);
+  assert.deepStrictEqual(
+    blind, [],
+    `${blind.length} state pseudo-class(es) repaint text or its surface and are ` +
+    'evaluated by no tier in this file:\n  ' + blind.join('\n  ') +
+    '\n\nEvery contrast measurement here is taken in one of the EVALUATED_STATES ' +
+    'sets. A state outside them is a state the product can render and this suite ' +
+    'can only see as a +1 on the unexercised-chrome budget -- which is how a rule ' +
+    'that wins only in `:active` came to count as "the rendered tier has measured ' +
+    'this" while the rendered tier never entered `:active`.\n\n' +
+    'Add the state to EVALUATED_STATES (CHROME_STATES derives from it) rather ' +
+    'than leaving the dimension unmodelled.'
+  );
+
+  console.log(
+    `PASS: all ${used.size} state pseudo-class(es) the cascade paints in are evaluated ` +
+    `(${[...used.keys()].sort().join(', ')})`
+  );
 }
 
 /* ── TIER 4 — a money semantic cannot be silently overridden ───────────────── */
@@ -525,7 +719,7 @@ function findContradictedColourDeclarations(h) {
   const key = (c) => `${Math.round(c.r)},${Math.round(c.g)},${Math.round(c.b)}`;
 
   for (const screen of h.screens) {
-    for (const [, states] of EVALUATED_STATES) {
+    for (const { states } of EVALUATED_STATES) {
       for (const el of h.textPaintingElements(screen.root)) {
         const fg = h.effectiveColour(h.ruleTable, el, h.tokens, states);
         if (!fg.colour) continue;
@@ -650,18 +844,6 @@ function testBadgeVariantsAreSelfContained(h) {
   console.log(`PASS: all ${variants.size} .ret-badge-* variants carry a self-contained, opaque, AA-clearing override`);
 }
 
-/* The states a chrome rule can legitimately win in. Evaluated SEPARATELY, never
-   unioned: a single set containing both `hover` and `disabled` would let a rule
-   that only ever applies to a disabled control count as exercised by a hovered
-   one, which is not a state any element is ever in. */
-const CHROME_STATES = [
-  new Set(),
-  new Set(['hover']),
-  new Set(['focus', 'focus-visible']),
-  new Set(['active']),
-  new Set(['disabled']),
-];
-
 /**
  * Every colour declaration that actually PAINTS A CHARACTER somewhere in the
  * corpus, keyed the way `winningDeclaration` reports it.
@@ -769,19 +951,46 @@ function testUnexercisedChromeIsCountedNotAssumedFine(h) {
       : `OUTRANKED on every rendered element it matches (e.g. ${matchedBy})`;
     if (matchedBy && !winsSomewhere) outrankedButRendered.push(`${rule.selector}   (e.g. ${matchedBy})`);
 
+    /* ── THE RATIO IS THE ASSERTION, NOT THE FOOTNOTE ────────────────────────
+       This block already computed every one of these numbers and PRINTED them
+       -- "would be 1.00:1 on --surface-till", in those words, every run -- and
+       then asserted only that the LIST was not longer than a budget. So six
+       chrome fixes had no guard at all: reverting `.ret-search` and `.ret-date`
+       to #fff on a 5% white tint, `.ret-tab:hover` to #fff, `.ret-tab.active`
+       to #fff, and `.ret-kpi-change-up` to #10b981 each changed a printed line
+       and moved no count, and every one of them was silent on a green tree.
+
+       A rule the rendered tier cannot measure is still a rule THIS block can
+       measure, against the till's own surfaces, in the worst case. The count
+       budget stays -- it is the thing that says "the corpus's blind spot grew"
+       -- but it is no longer the only claim. */
     const fg = h.parseColour(rule.decls.color, h.tokens);
     const bgRaw = rule.decls['background-color'] !== undefined ? rule.decls['background-color'] : rule.decls.background;
     const bg = bgRaw === undefined ? null : h.backgroundColourOf(bgRaw, h.tokens);
+    // A rule whose selector only ever applies to an inactive component carries
+    // no floor, for the same WCAG 2.2 §1.4.3 reason the `disabled` render pass
+    // carries none. Derived from EVALUATED_STATES so the two cannot disagree.
+    const stateNames = rule.parts.flatMap((p) => p.compound.states.map((s) => /^:([-\w]+)/.exec(s)[1]));
+    const unfloored = stateNames.some((n) => UNFLOORED_STATE_NAMES.has(n));
+
     let note;
-    if (!fg) note = `colour "${rule.decls.color}" does not resolve`;
-    else if (bg && !bg.gradient && bg.a >= 1) note = `self-contained ${h.contrastRatio(fg, bg).toFixed(2)}:1`;
-    else if (bg && !bg.gradient && bg.a > 0) {
+    let ratio = null;
+    let basis = null;
+    if (!fg) {
+      note = `colour "${rule.decls.color}" does not resolve — UNMEASURABLE`;
+    } else if (bg && !bg.gradient && bg.a >= 1) {
+      ratio = h.contrastRatio(fg, bg);
+      basis = 'self-contained';
+      note = `self-contained ${ratio.toFixed(2)}:1`;
+    } else if (bg && !bg.gradient && bg.a > 0) {
       let worst = Infinity; let on = '';
       for (const [name, surface] of surfaces) {
         const under = h.composite(bg, surface);
         const r = h.contrastRatio(fg.a < 1 ? h.composite(fg, under) : fg, under);
         if (r < worst) { worst = r; on = name; }
       }
+      ratio = worst;
+      basis = `alpha fill ${bgRaw} on ${on}`;
       note = `alpha fill ${bgRaw} over an unknown surface — would be ${worst.toFixed(2)}:1 on ${on}`;
     } else {
       let worst = Infinity; let on = '';
@@ -789,15 +998,21 @@ function testUnexercisedChromeIsCountedNotAssumedFine(h) {
         const r = h.contrastRatio(fg.a < 1 ? h.composite(fg, surface) : fg, surface);
         if (r < worst) { worst = r; on = name; }
       }
+      ratio = worst;
+      basis = `inherited surface ${on}`;
       note = `inherits its surface — would be ${worst.toFixed(2)}:1 on ${on}`;
     }
-    unexercised.push(`${rule.selector.padEnd(32)} color:${String(rule.decls.color).padEnd(22)} ${note}\n            ${why}`);
+    unexercised.push({
+      selector: rule.selector, colour: String(rule.decls.color), why, ratio, basis, unfloored,
+      line: `${rule.selector.padEnd(32)} color:${String(rule.decls.color).padEnd(22)} ${note}` +
+        (unfloored ? '  [no floor: inactive component]' : '') + `\n            ${why}`,
+    });
   }
 
   assert.ok(colourRules >= 25, `Expected >=25 colour rules in the shared chrome, parsed ${colourRules}.`);
 
   console.log(`      ${unexercised.length}/${colourRules} chrome colour rule(s) NOT exercised — the rendered tier proves nothing about these:`);
-  for (const line of unexercised) console.log('        ' + line);
+  for (const entry of unexercised) console.log('        ' + entry.line);
   if (inheritOnly.length) {
     console.log(`      (${inheritOnly.length} further rule(s) declare color:inherit — a reset, not a colour claim: ${inheritOnly.join(', ')})`);
   }
@@ -809,43 +1024,191 @@ function testUnexercisedChromeIsCountedNotAssumedFine(h) {
     for (const line of outrankedButRendered) console.log('        ' + line);
   }
 
+  // (a) NOTHING IN THE LEDGER MAY BE UNMEASURABLE. A colour that will not
+  //     resolve is the one way onto this list that dodges the floor below, and
+  //     "the resolver could not read it" must never be the reason a rule is
+  //     unchecked -- that is the same silence tier 3 exists to refuse. It is
+  //     also the obvious way to launder a failing rule past the floor.
+  const unmeasurable = unexercised.filter((e) => e.ratio === null)
+    .map((e) => `${e.selector}   color:${e.colour}`);
+  assert.deepStrictEqual(
+    unmeasurable, [],
+    `${unmeasurable.length} unexercised chrome rule(s) declare a colour that does not ` +
+    'resolve:\n  ' + unmeasurable.join('\n  ') +
+    '\n\nThe rendered tier cannot measure these (that is what puts them on this ' +
+    'list) and now neither can this one, so nothing in the suite has an opinion ' +
+    'about them at all. Make the value resolvable -- a token, or a literal -- ' +
+    'rather than leaving a colour no tier can read.'
+  );
+
+  // (b) THE FLOOR. This is the assertion the ledger was missing: it computed
+  //     each ratio, printed it, and then only counted rows.
+  const floored = unexercised.filter((e) => !e.unfloored);
+  const below = floored.filter((e) => e.ratio < AA)
+    .sort((a, b) => a.ratio - b.ratio)
+    .map((e) => `${e.ratio.toFixed(2)}:1  ${e.selector}   color:${e.colour}   (${e.basis})\n      ${e.why}`);
+  assert.deepStrictEqual(
+    below, [],
+    `${below.length} colour rule(s) in the shared retail chrome measure below WCAG AA ` +
+    `(${AA}:1):\n  ` + below.join('\n  ') +
+    '\n\nThese are the rules the CORPUS never exercises, so no rendered pairing ' +
+    'will ever fail on them -- but the ratio is computable from the sheet and ' +
+    'the till\'s own surfaces, and it is computed above. The number is measured ' +
+    'against the WORST solid --surface-* the shell can put behind the rule, ' +
+    'because an unexercised rule is by definition one whose real surface this ' +
+    'suite cannot know.\n\n' +
+    'This is what `.ret-search { color:#fff }` on a 5% white tint looks like: ' +
+    '1.00:1, printed in this very list every run for two rounds, asserted on by ' +
+    'nothing. Fix the colour. Do not move it off the list by making it ' +
+    'unexercised in a different way.'
+  );
+
+  // ANTI-VACUITY for (b): the floor is a filter over `floored`, and an empty
+  // ledger satisfies it without comparing anything. The budget assertion below
+  // does not cover this -- a budget is an upper bound, and zero is under it.
+  assert.ok(
+    floored.length >= 12,
+    `Only ${floored.length} unexercised chrome rule(s) carried a measurable, floored ratio. ` +
+    'Either the chrome-rule scan broke, or `unfloored` is swallowing the list -- ' +
+    'either way the AA floor above compared almost nothing.'
+  );
+
+  // (c) THE COUNT. Unchanged in meaning: this is the one that says the corpus's
+  //     BLIND SPOT grew, which is a different fact from any single ratio.
   assert.ok(
     unexercised.length <= UNEXERCISED_CHROME_BUDGET,
     `${unexercised.length} colour rules in the shared retail chrome are not exercised by the ` +
-    `corpus; the recorded budget is ${UNEXERCISED_CHROME_BUDGET}:\n        ` + unexercised.join('\n        ') +
+    `corpus; the recorded budget is ${UNEXERCISED_CHROME_BUDGET}:\n        ` +
+    unexercised.map((e) => e.line).join('\n        ') +
     '\n\nThe blind spot grew. Render the screen that would exercise these ' +
     '(retail_design_render_test.js: buildCorpus) rather than raising the ' +
     'budget -- a number that only ever goes up is how a 1.48:1 button ships ' +
     'under a green suite.'
   );
+
+  const tightest = floored.reduce((a, b) => (b.ratio < a.ratio ? b : a));
   console.log(
     `PASS: ${colourRules - unexercised.length}/${colourRules} shared-chrome colour rules are exercised by the ` +
-    `corpus; the other ${unexercised.length} are named above and within the recorded budget of ${UNEXERCISED_CHROME_BUDGET}`
+    `corpus; the other ${unexercised.length} are named above, all measurable, all within the recorded ` +
+    `budget of ${UNEXERCISED_CHROME_BUDGET} — and all ${floored.length} floored ones clear AA, tightest ` +
+    `${tightest.ratio.toFixed(2)}:1 at ${tightest.selector}`
   );
 }
 
+/* ── PER-TEST ISOLATION ─────────────────────────────────────────────────────
+ *
+ * main() used to be a flat sequence. The first assertion that threw ended the
+ * process, so a run reported exactly ONE problem however many existed — and
+ * every check after the thrower was not "passing", it was NOT RUN, which reads
+ * identically in the output.
+ *
+ * That cost this file its own headline work. At 725d94b, seven of the round's
+ * new guards never executed once — the whole unexercised-chrome ledger below
+ * among them — because an earlier assertion threw first. It is also why fixing
+ * these files took several passes: each run showed one defect, so the remaining
+ * work was invisible and the job looked shallower than it was.
+ *
+ * Every check now runs, every failure is collected and printed, and the process
+ * exits non-zero if any failed.
+ */
+async function runAll(checks) {
+  const failures = [];
+  for (const [name, fn] of checks) {
+    try {
+      await fn();
+    } catch (err) {
+      failures.push([name, err]);
+      console.error(`FAIL: ${name}`);
+      console.error('      ' + String((err && err.message) || err).replace(/\n/g, '\n      '));
+    }
+  }
+  return failures;
+}
+
+/* How many checks this file is known to contain. The list below is built
+   conditionally — a token block that will not parse, or a corpus that will not
+   build, removes the checks that consume it — and a conditionally built list can
+   be built EMPTY, at which point runAll() loops over nothing, collects no
+   failures and the file exits 0 having compared not one colour. Every other
+   guard in this file has an anti-vacuity floor; so does the runner. */
+const EXPECTED_CHECKS = 11;
+
 async function main() {
-  const tokens = parseTokens(readTokenBlock());
-  const groups = groupTokens(tokens);
+  const checks = [];
+  const setupFailures = [];
+  const setupFailed = (name, err) => {
+    setupFailures.push([name, err]);
+    console.error(`FAIL: ${name}`);
+    console.error('      ' + String((err && err.message) || err).replace(/\n/g, '\n      '));
+  };
 
-  testParseFoundARealPalette(groups);
-  testEveryTextOnSurfaceReachesAA(groups);
-  testMoneyReachesAAA(groups);
-  testTextOnAccentReachesAA(tokens, groups);
-  testMoneyNegativeIsNotColourAlone();
+  // TIER 1 setup. If the token block will not parse, the five palette checks
+  // cannot run — but the rendered tiers still can, and used to be lost with it.
+  let tokens = null;
+  let groups = null;
+  try {
+    tokens = parseTokens(readTokenBlock());
+    groups = groupTokens(tokens);
+  } catch (err) {
+    setupFailed('token block parse (5 palette checks could not run)', err);
+  }
+  if (groups) {
+    checks.push(
+      ['the parse found a real palette', () => testParseFoundARealPalette(groups)],
+      ['every text-on-surface pairing reaches AA', () => testEveryTextOnSurfaceReachesAA(groups)],
+      ['money reaches AAA', () => testMoneyReachesAAA(groups)],
+      ['--text-on-accent reaches AA on the accent fills', () => testTextOnAccentReachesAA(tokens, groups)],
+      ['.money--negative is not colour alone', testMoneyNegativeIsNotColourAlone],
+    );
+  }
 
-  const h = await render.harness();
-  const unresolved = testEveryRenderedPairingReachesAA(h);
-  testNothingResolvesToUnknownInSilence(h, unresolved);
-  testNoColourSemanticIsSilentlyOverridden(h);
-  testBadgeVariantsAreSelfContained(h);
-  testUnexercisedChromeIsCountedNotAssumedFine(h);
+  // TIER 2-5 setup: the rendered corpus.
+  let h = null;
+  try {
+    h = await render.harness();
+  } catch (err) {
+    setupFailed('render.harness() (6 rendered-tier checks could not run)', err);
+  }
+  if (h) {
+    // Resolved once and shared, so the two checks that read it are ordinary
+    // peers rather than one feeding the other — a dependency that made the
+    // second unreachable whenever the first threw.
+    let renderedCache = null;
+    const rendered = () => (renderedCache || (renderedCache = resolveRenderedPairings(h)));
+    checks.push(
+      ['every RENDERED pairing reaches AA', () => testEveryRenderedPairingReachesAA(h, rendered())],
+      ['nothing resolves to unknown in silence', () => testNothingResolvesToUnknownInSilence(h, rendered().unresolved)],
+      ['every state the cascade paints in is evaluated', () => testEveryStateTheCascadeUsesIsEvaluated(h)],
+      ['no colour semantic is silently overridden', () => testNoColourSemanticIsSilentlyOverridden(h)],
+      ['badge variants are self-contained', () => testBadgeVariantsAreSelfContained(h)],
+      ['unexercised chrome is measured, not assumed fine', () => testUnexercisedChromeIsCountedNotAssumedFine(h)],
+    );
+  }
 
-  console.log('PASS: retail_design_contrast_test.js');
+  const failures = setupFailures.concat(await runAll(checks));
+  const attempted = checks.length + setupFailures.length;
+
+  if (attempted < EXPECTED_CHECKS) {
+    console.error(
+      `FAIL: retail_design_contrast_test.js ran only ${attempted} of ${EXPECTED_CHECKS} known checks. ` +
+      'A runner that quietly loses a check reports a clean bill of health on work it never did.'
+    );
+    process.exitCode = 1;
+    return;
+  }
+  if (failures.length) {
+    console.error(`\nFAIL: retail_design_contrast_test.js — ${failures.length} of ${attempted} checks failed:`);
+    for (const [name] of failures) console.error(`  - ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`PASS: retail_design_contrast_test.js — ${attempted} checks`);
 }
 
 main().catch((err) => {
-  console.error('FAIL: retail_design_contrast_test.js');
+  // Only reachable if the runner ITSELF breaks; every check-level throw is
+  // caught and collected above.
+  console.error('FAIL: retail_design_contrast_test.js (runner)');
   console.error(err.message || err);
   process.exitCode = 1;
 });

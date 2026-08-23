@@ -380,5 +380,14 @@
   "item": "عنصر",
   "Resume": "استئناف",
   "Discard": "تجاهل",
-  "Failed to load held sales.": "تعذّر تحميل المبيعات المعلّقة."
+  "Failed to load held sales.": "تعذّر تحميل المبيعات المعلّقة.",
+  "All branches": "كل الفروع",
+  "Last 7 days": "آخر 7 أيام",
+  "Last 14 days": "آخر 14 يومًا",
+  "Last 30 days": "آخر 30 يومًا",
+  "Last 90 days": "آخر 90 يومًا",
+  "Top Products": "المنتجات الأكثر مبيعًا",
+  "Revenue by Branch": "الإيرادات حسب الفرع",
+  "Start Test": "ابدأ الاختبار",
+  "Captured value will appear here…": "ستظهر القيمة الملتقطة هنا…"
 }

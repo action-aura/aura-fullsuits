@@ -323,12 +323,49 @@ const RetailSystem = {
          date bounds). It exists as a class because those two inputs were
          carrying this exact recipe as an INLINE style string -- a second copy
          of the paint that no stylesheet could correct, which is the hazard
-         that put #10b981 on the Products table. One declaration, two consumers. */
+         that put #10b981 on the Products table.
+
+         .ret-input is the third consumer, and it is here because that hazard
+         was still live on two screens nobody had ever rendered: the Reports
+         branch/period dropdowns and the scanner test readout each carried this
+         same recipe inline, outline:none included. An inline style CANNOT
+         express a :focus state, so those three controls deleted the browser's
+         focus ring and had no way to put anything back -- the Reports screen's
+         only two controls, with no visible focus at all, on a machine driven by
+         a scanner that is a keyboard. They also declared no inline-axis minimum
+         (and the readout no minimum on either axis), which is the touch defect
+         the same inline copy hid. Moving the paint here is what lets both be
+         fixed in one place instead of three. One declaration, three consumers. */
       .ret-search,
-      .ret-date { background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:8px;color:var(--text-primary);padding:9px 14px;font-size:14px;outline:none; }
+      .ret-date,
+      .ret-input { background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:8px;color:var(--text-primary);padding:9px 14px;font-size:14px;outline:none; }
       .ret-search { width:240px; }
+      /* AUDIT -- the base rule above sets outline:none, which DELETES the
+         browser's own focus ring, and the only thing put back in its place was a
+         1px border tint. retail_design_focus_test.js has a name for that shape:
+         "strictly worse than no rule -- it deletes the browser default and puts
+         nothing in its place". It is invisible to that test twice over, though:
+         the outline:none lives on the BASE rule rather than on a :focus one, and
+         this whole stylesheet is injected from JS at render time, which that
+         test (which reads css/main.css only) never sees at all.
+
+         The control it happens to is the list search box on Products, Customers
+         and Sales History -- the field a cashier tabs into first, on the screens
+         they spend the day in, on machines driven by a scanner that IS a
+         keyboard.
+
+         The answer was already four rules up: .ret-field's inputs take the same
+         border colour PLUS a 3px accent halo built from --sub-accent-rgb. The
+         note on .ret-search above says these two are "a real sunken input on the
+         same tokens as .ret-field's inputs, which is what it always was" -- that
+         was true of the resting paint and false of the focus state. Same tokens,
+         same treatment, so the two input families cannot drift apart again.
+
+         (No backtick anywhere in this comment on purpose -- the whole sheet is
+         a JS template literal, so one would end the string mid-stylesheet.) */
       .ret-search:focus,
-      .ret-date:focus { border-color:var(--sub-accent); }
+      .ret-date:focus,
+      .ret-input:focus { border-color:var(--sub-accent);box-shadow:0 0 0 3px rgba(var(--sub-accent-rgb),0.18); }
       .ret-kpi-grid { display:grid;grid-template-columns:repeat(5,1fr);gap:16px;margin-bottom:22px; }
       @media(max-width:1300px){ .ret-kpi-grid{grid-template-columns:repeat(3,1fr);} }
       .ret-kpi { background:var(--surface-card);border:1px solid var(--border-soft);border-radius:14px;padding:20px;position:relative;overflow:hidden; }
@@ -1696,7 +1733,17 @@ const RetailSystem = {
         .pos-qty-wrap { display:flex;align-items:center;background:var(--input-bg);border:1px solid var(--border-mid);border-radius:10px;overflow:hidden; }
         .pos-qty-btn { min-inline-size:var(--touch-target-min, 44px);min-block-size:var(--touch-target-min, 44px);background:transparent;border:none;color:var(--text);
           cursor:pointer;font-size:18px;font-weight:700;line-height:1;font-family:inherit;transition:background .12s ease; }
-        .pos-qty-btn:hover { background:var(--surface-hover); }
+        /* The one control on this screen that was still hover-only. The pairing
+           rule stated on .pos-cat-btn above applies here for the same reason,
+           and testEveryPosHoverAffordanceHasAFocusCounterpart did not catch it
+           because that check derives its control set from the shell and the
+           product GRID, and the quantity stepper lives in the CART -- a third
+           root it never reads. The stepper is the most-touched control on the
+           till after the tiles, and on a touchscreen :hover never fires at all,
+           so without this the only state feedback it had was for the one input
+           method a till is least often driven with. */
+        .pos-qty-btn:hover,
+        .pos-qty-btn:focus-visible { background:var(--surface-hover); }
         .pos-qty-val { min-inline-size:34px;text-align:center;color:var(--text);font-size:15px;font-weight:700; }
         .pos-line-total { min-inline-size:84px;text-align:end;color:var(--text);font-size:15px;font-weight:700; }
         /* Physical separation between the frequent controls above and the
@@ -4987,16 +5034,22 @@ const RetailSystem = {
       <div class="ret-hdr">
         <h2 class="ret-title">Analytics & Reports</h2>
         <div style="display:flex;gap:8px;align-items:center">
-          <select id="rep-branch" onchange="RetailSystem._loadReports()"
-            style="background:var(--surface-sunken,#f2f5f8);border:1px solid var(--border-soft);border-radius:8px;color:var(--text);padding:8px 12px;min-block-size:44px;outline:none">
-            <option value="">All branches</option>
+          <!-- class, not an inline style copy of .ret-search's recipe. The
+               inline version carried outline:none, and an inline style cannot
+               express :focus, so these two -- the only controls on this screen
+               -- deleted the browser's focus ring with no way to replace it.
+               It also declared a block minimum and no inline one, which is the
+               touch floor half of the same defect. See .ret-input in
+               _injectStyles(); css/main.css sets both axes from
+               --touch-target-min for every consumer of it. -->
+          <select id="rep-branch" class="ret-input" onchange="RetailSystem._loadReports()">
+            <option value="">${t('All branches')}</option>
           </select>
-          <select id="rep-days" onchange="RetailSystem._loadReports()"
-            style="background:var(--surface-sunken,#f2f5f8);border:1px solid var(--border-soft);border-radius:8px;color:var(--text);padding:8px 12px;min-block-size:44px;outline:none">
-            <option value="7">Last 7 days</option>
-            <option value="14" selected>Last 14 days</option>
-            <option value="30">Last 30 days</option>
-            <option value="90">Last 90 days</option>
+          <select id="rep-days" class="ret-input" onchange="RetailSystem._loadReports()">
+            <option value="7">${t('Last 7 days')}</option>
+            <option value="14" selected>${t('Last 14 days')}</option>
+            <option value="30">${t('Last 30 days')}</option>
+            <option value="90">${t('Last 90 days')}</option>
           </select>
         </div>
       </div>
@@ -5427,8 +5480,14 @@ const RetailSystem = {
           <div class="sub-chart-title" style="margin:0 0 10px">Test Scanner</div>
           <p style="color:var(--text-muted);font-size:12px;margin:0 0 10px">Click below, then scan any barcode — the captured value appears instantly.</p>
           <div style="display:flex;gap:8px;align-items:center">
-            <input id="sc-test-value" readonly placeholder="Captured value will appear here…"
-              style="flex:1;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:8px;color:var(--text-primary);padding:10px 14px;font-size:14px;font-family:monospace;outline:none" />
+            <!-- Same story as the Reports dropdowns: the paint was an inline
+                 copy of .ret-search's recipe, outline:none included, on a
+                 readonly input that is still focusable and is the one thing a
+                 shopkeeper tabs to when testing a scanner. Only the LAYOUT
+                 stays inline; the paint, the focus ring and both touch axes
+                 come from .ret-input. -->
+            <input id="sc-test-value" class="ret-input" readonly placeholder="Captured value will appear here…"
+              style="flex:1;font-family:monospace" />
             <button class="ret-btn ret-btn-primary" id="sc-test-btn" onclick="RetailSystem._armTestScan()">Start Test</button>
           </div>
 

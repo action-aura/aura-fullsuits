@@ -642,8 +642,8 @@ function visibleStrings(fragments) {
   return found;
 }
 
-function testEveryKeyPassedToTranslateExistsInBothCatalogs() {
-  return renderAllSurfaces().then((fragments) => {
+function testEveryKeyPassedToTranslateExistsInBothCatalogs(fragments) {
+  return Promise.resolve().then(() => {
     // Every value the render actually handed to t(). If one of these is not in
     // both catalogs, t() silently returns the English key and the string is
     // English on an Arabic page — the failure mode the brief calls out.
@@ -722,8 +722,8 @@ function unreachableLiterals(strings) {
   return offenders;
 }
 
-function testNoUntranslatedLiteralReachesTheOperator() {
-  return renderAllSurfaces().then((fragments) => {
+function testNoUntranslatedLiteralReachesTheOperator(fragments) {
+  return Promise.resolve().then(() => {
     const strings = visibleStrings(fragments);
     assert.ok(
       strings.length >= 30,
@@ -772,8 +772,8 @@ function testNoUntranslatedLiteralReachesTheOperator() {
   });
 }
 
-function testNoTranslatableStringSharesANodeWithAnEmoji() {
-  return renderAllSurfaces().then((fragments) => {
+function testNoTranslatableStringSharesANodeWithAnEmoji(fragments) {
+  return Promise.resolve().then(() => {
     // The specific defect that made "🛒 Open POS" unreachable by the DOM sweep,
     // and that this file has now shipped twice.
     const offenders = [];
@@ -897,8 +897,8 @@ function expectedTimestampCells() {
   return sites.length;
 }
 
-function testNeutralNumberRunsAreDirectionIsolated() {
-  return renderAllSurfaces().then((fragments) => {
+function testNeutralNumberRunsAreDirectionIsolated(fragments) {
+  return Promise.resolve().then(() => {
     const hazards = [];
     const unisolated = [];
 
@@ -1039,19 +1039,100 @@ function testCatalogsRemainInParity() {
   console.log(`PASS: ${enKeys.length} catalog keys are in parity with real Arabic values`);
 }
 
+/* ── PER-TEST ISOLATION ─────────────────────────────────────────────────────
+ *
+ * main() used to be a flat `await` sequence. One assertion that threw ended the
+ * process, so a run reported exactly ONE problem no matter how many existed —
+ * and every check after the thrower was not "passing", it was NOT RUN, which is
+ * indistinguishable from passing in the output.
+ *
+ * That is not a cosmetic complaint. At 725d94b it meant seven of this round's
+ * own new guards never executed once: the bidi sweep here and the entire
+ * unexercised-chrome ledger in retail_design_contrast_test.js — i.e. the
+ * headline structural work of the round that wrote them — sat behind an earlier
+ * failure and were never observed to run at all. It is also why these files took
+ * several passes to fix: each run surfaced one defect, so the remaining work was
+ * invisible and the job looked smaller than it was.
+ *
+ * So: every check runs, every failure is collected and printed, the process
+ * exits non-zero if any failed. A failure no longer hides its successors.
+ */
+async function runAll(checks) {
+  const failures = [];
+  for (const [name, fn] of checks) {
+    try {
+      await fn();
+    } catch (err) {
+      failures.push([name, err]);
+      console.error(`FAIL: ${name}`);
+      console.error('      ' + String((err && err.message) || err).replace(/\n/g, '\n      '));
+    }
+  }
+  return failures;
+}
+
+/* How many checks this file is known to contain. The list below is built
+   conditionally (a surface render that throws removes the checks that consume
+   it), and a list built conditionally can be built EMPTY — at which point
+   runAll() loops over nothing, reports no failures, and the file exits 0 having
+   verified nothing at all. That is the exact vacuity every other guard in this
+   file is written against, so the runner gets one too. */
+const EXPECTED_CHECKS = 7;
+
 async function main() {
-  testCatalogsRemainInParity();
-  testDatesFollowTheActiveLanguage();
-  testTheCorpusIsTheCorpusItDeclares(await renderAllSurfaces());
-  await testEveryKeyPassedToTranslateExistsInBothCatalogs();
-  await testNoUntranslatedLiteralReachesTheOperator();
-  await testNoTranslatableStringSharesANodeWithAnEmoji();
-  await testNeutralNumberRunsAreDirectionIsolated();
-  console.log('PASS: retail_surface_i18n_test.js');
+  const checks = [
+    ['catalogs remain in parity', testCatalogsRemainInParity],
+    ['rendered dates follow the active language', testDatesFollowTheActiveLanguage],
+  ];
+
+  // The corpus is rendered ONCE here rather than inside each check, so that a
+  // render that blows up is reported as its own named failure instead of being
+  // re-thrown identically by four consumers — and so the four checks that
+  // depend on it are visibly SKIPPED rather than silently absent.
+  let fragments = null;
+  const setupFailures = [];
+  try {
+    fragments = await renderAllSurfaces();
+  } catch (err) {
+    setupFailures.push(['renderAllSurfaces()', err]);
+    console.error('FAIL: renderAllSurfaces()');
+    console.error('      ' + String((err && err.message) || err).replace(/\n/g, '\n      '));
+    console.error('      4 checks that sweep the rendered corpus could not run.');
+  }
+  if (fragments) {
+    checks.push(
+      ['the corpus is the corpus it declares', () => testTheCorpusIsTheCorpusItDeclares(fragments)],
+      ['every key passed to t() exists in both catalogs', () => testEveryKeyPassedToTranslateExistsInBothCatalogs(fragments)],
+      ['no untranslated literal reaches the operator', () => testNoUntranslatedLiteralReachesTheOperator(fragments)],
+      ['no translatable string shares a node with an emoji', () => testNoTranslatableStringSharesANodeWithAnEmoji(fragments)],
+      ['neutral number runs are direction-isolated', () => testNeutralNumberRunsAreDirectionIsolated(fragments)],
+    );
+  }
+
+  const failures = setupFailures.concat(await runAll(checks));
+  const attempted = checks.length + setupFailures.length;
+
+  if (attempted < EXPECTED_CHECKS) {
+    console.error(
+      `FAIL: retail_surface_i18n_test.js ran only ${attempted} of ${EXPECTED_CHECKS} known checks. ` +
+      'A runner that quietly loses a check reports a clean bill of health on work it never did.'
+    );
+    process.exitCode = 1;
+    return;
+  }
+  if (failures.length) {
+    console.error(`\nFAIL: retail_surface_i18n_test.js — ${failures.length} of ${attempted} checks failed:`);
+    for (const [name] of failures) console.error(`  - ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`PASS: retail_surface_i18n_test.js — ${attempted} checks`);
 }
 
 main().catch((err) => {
-  console.error('FAIL: retail_surface_i18n_test.js');
+  // Only reachable if the runner ITSELF breaks; every check-level throw is
+  // caught and collected above.
+  console.error('FAIL: retail_surface_i18n_test.js (runner)');
   console.error(err && err.message ? err.message : err);
   process.exitCode = 1;
 });

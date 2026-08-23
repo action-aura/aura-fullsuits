@@ -321,20 +321,63 @@ function testEveryRenderedControlMeetsTheTouchFloorOnBothAxes(h) {
   );
 }
 
+/* PER-TEST ISOLATION -- see retail_design_money_test.js for the reasoning and
+   the measurement. The list is assembled conditionally here (a corpus that will
+   not build removes the check that consumes it), so it carries a floor: a
+   conditionally built list can be built EMPTY, and a loop over nothing collects
+   no failures and exits 0. */
+const EXPECTED_CHECKS = 5;
+
 async function main() {
-  testEveryHoverableControlHasAFocusRing();
-  testFocusRingIsActuallyVisible();
-  testFocusRingIsTokenisedSoItCanAdaptToDarkBrandSurfaces();
-  testTouchTargetTokenExists();
+  const checks = [
+    ['every hoverable control has a focus ring', testEveryHoverableControlHasAFocusRing],
+    ['the focus ring is actually visible', testFocusRingIsActuallyVisible],
+    ['the focus ring is tokenised', testFocusRingIsTokenisedSoItCanAdaptToDarkBrandSurfaces],
+    ['the touch-target token exists', testTouchTargetTokenExists],
+  ];
 
-  const h = await render.harness();
-  testEveryRenderedControlMeetsTheTouchFloorOnBothAxes(h);
+  const failures = [];
+  const record = (name, err) => {
+    failures.push(name);
+    console.error(`FAIL: ${name}`);
+    console.error('      ' + String((err && err.message) || err).replace(/\n/g, '\n      '));
+  };
 
-  console.log('PASS: retail_design_focus_test.js');
+  let h = null;
+  try {
+    h = await render.harness();
+  } catch (err) {
+    record('render.harness() (the rendered touch-floor check could not run)', err);
+  }
+  if (h) checks.push(['every rendered control meets the touch floor on both axes', () => testEveryRenderedControlMeetsTheTouchFloorOnBothAxes(h)]);
+  const attempted = checks.length + (h ? 0 : 1);
+
+  for (const [name, fn] of checks) {
+    try {
+      await fn();
+    } catch (err) {
+      record(name, err);
+    }
+  }
+
+  if (attempted < EXPECTED_CHECKS) {
+    console.error(
+      `FAIL: retail_design_focus_test.js ran only ${attempted} of ${EXPECTED_CHECKS} known checks.`
+    );
+    process.exitCode = 1;
+    return;
+  }
+  if (failures.length) {
+    console.error(`\nFAIL: retail_design_focus_test.js — ${failures.length} of ${attempted} checks failed:`);
+    for (const name of failures) console.error(`  - ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`PASS: retail_design_focus_test.js — ${attempted} checks`);
 }
 
 main().catch((err) => {
-  console.error('FAIL: retail_design_focus_test.js');
+  console.error('FAIL: retail_design_focus_test.js (runner)');
   console.error(err.message || err);
   process.exitCode = 1;
 });

@@ -262,18 +262,39 @@ function testOnlyOneFontFamilyIsDeclared() {
   console.log('PASS: exactly one font family is declared, with no orphaned Inter/Outfit references');
 }
 
+/* PER-TEST ISOLATION -- see retail_design_money_test.js for the reasoning and
+   the measurement. */
+const CHECKS = [
+  ['every exemption carries a reason', testEveryExemptionCarriesAReason],
+  ['tokens are named for purpose, not appearance', testTokensAreNamedForPurposeNotAppearance],
+  ['only one font family is declared', testOnlyOneFontFamilyIsDeclared],
+  ['no stray literals in the operational surfaces', testNoStrayLiteralsInOperationalSurfaces],
+];
+
 function main() {
-  testEveryExemptionCarriesAReason();
-  testTokensAreNamedForPurposeNotAppearance();
-  testOnlyOneFontFamilyIsDeclared();
-  testNoStrayLiteralsInOperationalSurfaces();
-  console.log('PASS: retail_design_tokens_test.js');
+  const failures = [];
+  for (const [name, fn] of CHECKS) {
+    try {
+      fn();
+    } catch (err) {
+      failures.push(name);
+      console.error(`FAIL: ${name}`);
+      console.error('      ' + String((err && err.message) || err).replace(/\n/g, '\n      '));
+    }
+  }
+  if (failures.length) {
+    console.error(`\nFAIL: retail_design_tokens_test.js — ${failures.length} of ${CHECKS.length} checks failed:`);
+    for (const name of failures) console.error(`  - ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`PASS: retail_design_tokens_test.js — ${CHECKS.length} checks`);
 }
 
 try {
   main();
 } catch (err) {
-  console.error('FAIL: retail_design_tokens_test.js');
+  console.error('FAIL: retail_design_tokens_test.js (runner)');
   console.error(err.message || err);
   process.exitCode = 1;
 }

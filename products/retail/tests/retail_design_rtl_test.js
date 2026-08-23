@@ -185,18 +185,41 @@ function testRtlStylesheetStillCoversTheChartExceptions() {
   console.log('PASS: rtl.css still forces charts/canvases back to LTR');
 }
 
+/* PER-TEST ISOLATION -- see retail_design_money_test.js for the reasoning and
+   the measurement. A flat sequence reports one failure per run however many
+   exist, and hides the rest as "not run", which is indistinguishable from
+   "passed". */
+const CHECKS = [
+  ['new code uses logical properties', testNewCodeUsesLogicalProperties],
+  ['the legacy physical-property count does not grow', testLegacyPhysicalPropertyCountDoesNotGrow],
+  ['logical properties are actually used', testLogicalPropertiesAreActuallyUsed],
+  ['rtl.css still covers the chart exceptions', testRtlStylesheetStillCoversTheChartExceptions],
+];
+
 function main() {
-  testNewCodeUsesLogicalProperties();
-  testLegacyPhysicalPropertyCountDoesNotGrow();
-  testLogicalPropertiesAreActuallyUsed();
-  testRtlStylesheetStillCoversTheChartExceptions();
-  console.log('PASS: retail_design_rtl_test.js');
+  const failures = [];
+  for (const [name, fn] of CHECKS) {
+    try {
+      fn();
+    } catch (err) {
+      failures.push(name);
+      console.error(`FAIL: ${name}`);
+      console.error('      ' + String((err && err.message) || err).replace(/\n/g, '\n      '));
+    }
+  }
+  if (failures.length) {
+    console.error(`\nFAIL: retail_design_rtl_test.js — ${failures.length} of ${CHECKS.length} checks failed:`);
+    for (const name of failures) console.error(`  - ${name}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`PASS: retail_design_rtl_test.js — ${CHECKS.length} checks`);
 }
 
 try {
   main();
 } catch (err) {
-  console.error('FAIL: retail_design_rtl_test.js');
+  console.error('FAIL: retail_design_rtl_test.js (runner)');
   console.error(err.message || err);
   process.exitCode = 1;
 }
