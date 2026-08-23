@@ -32,6 +32,11 @@ const path = require('path');
 const vm = require('vm');
 
 const dom = require('./retail_surface_domlite.js');
+// The 13-screen rendered corpus. Required here rather than re-stubbed, because
+// the keyboard-path claim below is about EVERY clickable row in the product,
+// not the dashboard's — and the dashboard's was the only one this file could
+// see for two rounds.
+const render = require('./retail_design_render_test.js');
 
 const FRONTEND_DIR = path.join(__dirname, '..', 'frontend');
 const FRONTEND_FILE = path.join(FRONTEND_DIR, 'subsystem-retail.js');
@@ -594,29 +599,74 @@ async function testRecentTransactionsMoneyColumnIsTabularAndLogical() {
 
 const NATIVELY_FOCUSABLE = new Set(['button', 'a', 'input', 'select', 'textarea', 'summary']);
 
-async function testClickableRowsHaveAKeyboardPath() {
-  const ctx = loadRetailSystem({ capabilities: ['retail.reports'] });
-  await ctx.RetailSystem._renderDashboard(makeElementStub());
-  const rowRoot = dom.parseFragment(ctx.tbody.innerHTML);
+/** `event.stopPropagation();RetailSystem._viewSale(7)` -> `RetailSystem._viewSale(7)` */
+function normalisedHandler(value) {
+  return String(value || '')
+    .replace(/event\.stopPropagation\(\)\s*;?/g, '')
+    .replace(/\s+/g, '')
+    .replace(/;$/, '');
+}
 
-  // Derived from the render: any element carrying a click handler. Never a
-  // hand-written list of rows, which would keep passing after someone added a
-  // seventh column with a handler of its own.
-  const clickable = dom.allElements(rowRoot).filter((el) => el.attrs.onclick);
-  const rows = clickable.filter((el) => el.tag === 'tr');
-
-  // ANTI-VACUITY: everything below is a loop over `rows`. An empty table, a
-  // failed fetch, or a render that dropped the handler would make this test
-  // green while checking nothing.
+/**
+ * How many places subsystem-retail.js renders a CLICKABLE TABLE ROW.
+ *
+ * The floor for the sweep below, derived from the product rather than written
+ * here. `rows.length >= 1` was not a floor: the dashboard's own table satisfied
+ * it, so the receipt-opener button could be replaced with a bare escaped string
+ * at BOTH of its non-dashboard call sites and this file stayed green — which is
+ * exactly what an adversarial verifier did.
+ *
+ * What is counted is the HAZARD — a <tr> that carries a click handler — not the
+ * remedy, so deleting an in-row button does not lower the bar it is measured
+ * against. Deleting a SCREEN from the corpus drops the found count below it.
+ *
+ * Comment lines are excluded, and that is not fussiness: the long note above
+ * quotes `<tr style="cursor:pointer" onclick="..._viewSale(id)">` verbatim, so
+ * a naive scan of this very file's subject counts the prose as a render site.
+ */
+function clickableRowRenderSites() {
+  const src = fs.readFileSync(FRONTEND_FILE, 'utf8');
+  let n = 0;
+  for (const line of src.split('\n')) {
+    if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;
+    for (const _hit of line.matchAll(/<tr[^>]*\bonclick=/g)) n++;
+  }
   assert.ok(
-    rows.length >= 1,
-    'No clickable transaction row rendered at all, so this test proves nothing. ' +
-    'tbody was: ' + ctx.tbody.innerHTML.slice(0, 300)
+    n >= 3,
+    `Found only ${n} clickable-row render site(s) in subsystem-retail.js. Either the ` +
+    'product stopped building rows that way (rewrite this derivation, do not delete ' +
+    'it) or the scan is broken — and a broken scan sets this sweep\'s floor to zero.'
+  );
+  return n;
+}
+
+async function testEveryClickableRowHasAKeyboardPath(h) {
+  const expectedSites = clickableRowRenderSites();
+
+  // Derived from the render: every <tr> carrying a click handler, on every
+  // screen the shared corpus builds. Never a hand-written list of rows, and —
+  // this is the part that was wrong — never one screen.
+  const rows = [];
+  for (const screen of h.screens) {
+    for (const el of h.allElements(screen.root)) {
+      if (el.tag === 'tr' && el.attrs.onclick) rows.push({ screen: screen.name, el });
+    }
+  }
+
+  // ANTI-VACUITY, DERIVED. Everything below is a loop over `rows`; a failed
+  // fetch or a dropped handler on ONE screen must not be absorbed by the others.
+  const screensWithRows = new Set(rows.map((r) => r.screen));
+  assert.ok(
+    screensWithRows.size >= expectedSites,
+    `Clickable rows were found on only ${screensWithRows.size} screen(s) ` +
+    `(${[...screensWithRows].join(', ') || 'none'}), but subsystem-retail.js renders a ` +
+    `<tr ... onclick=> in ${expectedSites} places. At least one screen that makes a whole ` +
+    'row clickable is not in the corpus, so this sweep proves nothing about it.'
   );
 
   const problems = [];
-  for (const row of rows) {
-    const what = dom.describe(row);
+  for (const { screen, el: row } of rows) {
+    const what = `${screen} ${dom.describe(row)}`;
 
     // The row must remain a row. role="button" on a <tr> removes it from the
     // table's grid for an AT user — the exact thing the columns exist for.
@@ -631,49 +681,59 @@ async function testClickableRowsHaveAKeyboardPath() {
 
     // What the row's own handler does — the action a keyboard user must be able
     // to reach by some other route.
-    const rowAction = /_viewSale\(\s*(\d+)\s*\)/.exec(row.attrs.onclick || '');
-    if (!rowAction) {
-      problems.push(`${what} has an onclick this test does not recognise: ${row.attrs.onclick}`);
-      continue;
-    }
-
+    //
+    // Compared as a NORMALISED CALL, not matched against a known function name.
+    // The previous version recognised `_viewSale(<digits>)` and nothing else,
+    // and reported anything else as "an onclick this test does not recognise" —
+    // which on the one screen it rendered never happened, and on the screens it
+    // did not render would have been the only thing it ever said. A row that
+    // opens a CUSTOMER is the same defect as a row that opens a sale.
+    const rowAction = normalisedHandler(row.attrs.onclick);
     const openers = dom.allElements(row).filter(
-      (el) => NATIVELY_FOCUSABLE.has(el.tag) &&
-              new RegExp(`_viewSale\\(\\s*${rowAction[1]}\\s*\\)`).test(el.attrs.onclick || '')
+      (el) => NATIVELY_FOCUSABLE.has(el.tag) && normalisedHandler(el.attrs.onclick) === rowAction
     );
     if (!openers.length) {
       problems.push(
-        `${what} opens sale ${rowAction[1]} on click, but contains no natively ` +
+        `${what} runs ${JSON.stringify(rowAction)} on click, but contains no natively ` +
         'focusable element that does the same. There is therefore NO keyboard, ' +
-        'scanner or screen-reader path to that sale — the row is mouse-only.'
+        'scanner or screen-reader path to it — the row is mouse-only.'
       );
       continue;
     }
 
     for (const opener of openers) {
-      const which = dom.describe(opener);
+      const which = `${screen} ${dom.describe(opener)}`;
       if (opener.tag === 'button' && opener.attrs.type !== 'button') {
         problems.push(`${which} has no type="button"; the HTML default is submit.`);
       }
       // The row ALSO handles the click, so without stopPropagation one press
-      // runs _viewSale twice and opens the sale detail on top of itself.
+      // runs the action twice and opens the detail view on top of itself.
       if (!/stopPropagation/.test(opener.attrs.onclick || '')) {
         problems.push(
           `${which} does not stop propagation, but its ancestor row handles the ` +
-          'same click. One activation would run _viewSale twice — once for the ' +
+          'same click. One activation would run the action twice — once for the ' +
           'button, once for the row it bubbled to.'
         );
       }
-      // An accessible name, and one that identifies WHICH sale. "button" alone
-      // is a landing spot with no information attached to it.
-      const label = (opener.attrs['aria-label'] || '').trim() || dom.textOf(opener);
-      if (!label) {
+      // An accessible name, and one that identifies WHICH record.
+      //
+      // The rule is about IDENTITY, not about digits. It used to require a
+      // digit in the name, which is true of a receipt number and false of a
+      // customer — and on a corpus of one screen, all of whose rows opened a
+      // sale, the difference never came up. What actually matters is that an
+      // aria-label does not REPLACE the row's identifier with a bare verb:
+      // aria-label overrides the contents entirely (accname step 2C beats 2F),
+      // so "View invoice" on a button reading "S-1041" announces eight
+      // identical controls where the screen shows eight different ones.
+      const shown = dom.textOf(opener).replace(/\s+/g, ' ').trim();
+      const aria = (opener.attrs['aria-label'] || '').replace(/\s+/g, ' ').trim();
+      if (!aria && !shown) {
         problems.push(`${which} has no accessible name at all.`);
-      } else if (!/\d/.test(label)) {
+      } else if (aria && shown && !aria.includes(shown)) {
         problems.push(
-          `${which} is named ${JSON.stringify(label)}, which does not identify a ` +
-          'sale. Eight rows that all announce the same verb are eight identical ' +
-          'controls.'
+          `${which} shows ${JSON.stringify(shown)} but is announced as ${JSON.stringify(aria)}, ` +
+          'which does not contain it. The aria-label REPLACES the contents for an AT user, ' +
+          'so this withholds the one thing that tells the rows apart.'
         );
       }
     }
@@ -681,13 +741,17 @@ async function testClickableRowsHaveAKeyboardPath() {
 
   assert.deepStrictEqual(
     problems, [],
-    'Clickable dashboard rows are not operable without a pointer:\n  ' +
+    'Clickable rows are not operable without a pointer:\n  ' +
     problems.join('\n  ') +
     '\n\nA till is driven by a barcode scanner — which is a keyboard — and by a ' +
     'finger on a screen that has no hover state at all.'
   );
 
-  console.log(`PASS: all ${rows.length} clickable transaction row(s) carry a real in-row control`);
+  console.log(
+    `PASS: all ${rows.length} clickable row(s) across ${screensWithRows.size} screen(s) ` +
+    `(${[...screensWithRows].join(', ')}) carry a real in-row control — floor of ` +
+    `${expectedSites}, derived from the <tr onclick> render sites in subsystem-retail.js`
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -851,7 +915,7 @@ async function main() {
   await testAttentionBandSwitchesStateOnRealData();
   testAttentionStatesDifferByMoreThanColour();
   await testRecentTransactionsMoneyColumnIsTabularAndLogical();
-  await testClickableRowsHaveAKeyboardPath();
+  await testEveryClickableRowHasAKeyboardPath(await render.harness());
   await testNegativeHeadlineRevenueIsMarkedOnTheValueItself();
   await testNoDashboardSurfaceUsesTheUnthemedMutedToken();
   await testDashboardLayoutIsMirrorSafeByConstruction();

@@ -190,9 +190,22 @@ const RetailSystem = {
          the same thing a pointer user gets from hover. Without the second
          selector this highlight is unreachable on a touchscreen and unreachable
          from the keyboard, i.e. reachable only by the one input method a till
-         is least often driven with. */
+         is least often driven with.
+
+         AUDIT -- and the band itself was rgba(255,255,255,0.03), one more HUD
+         leftover: white at 3% alpha is visible over #080808 and is EXACTLY
+         NOTHING over a white panel. 1.00:1. So the selector pair above was
+         correct and the paint it applied was invisible, which is the worst of
+         the two failure modes -- the code reads as if the keyboard operator is
+         served, and reviewing it confirms that reading.
+
+         --surface-active is the token for this: its own comment names it "the
+         row under the cursor", and it is the DARKEST text-bearing surface, so
+         every text and money token in the palette is already solved against it.
+         A band drawn in it cannot push any cell it contains below its floor,
+         whatever that cell turns out to hold. */
       .ret-table tbody tr:hover,
-      .ret-table tbody tr:focus-within { background:rgba(255,255,255,0.03); }
+      .ret-table tbody tr:focus-within { background:var(--surface-active); }
       /* The in-row control. Styled to be visually indistinguishable from the
          cell text it replaced -- the row already reads as clickable -- so this
          adds a keyboard/AT path WITHOUT changing the layout. The underline is
@@ -205,12 +218,34 @@ const RetailSystem = {
       .ret-rowbtn:hover,
       .ret-rowbtn:focus-visible { text-decoration-color:currentColor; }
       .ret-badge { display:inline-block;padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600; }
-      .ret-badge-green { background:rgba(16,185,129,0.15);color:#10b981; }
-      .ret-badge-red   { background:rgba(239,68,68,0.15);color:#ef4444; }
-      .ret-badge-yellow{ background:rgba(251,191,36,0.15);color:#fbbf24; }
-      .ret-badge-blue  { background:rgba(56,189,248,0.15);color:#38bdf8; }
-      .ret-badge-purple{ background:rgba(168,85,247,0.15);color:#a855f7; }
-      .ret-modal-overlay { position:fixed;inset:0;background:rgba(0,0,0,0.75);display:flex;align-items:center;justify-content:center;z-index:9999;backdrop-filter:blur(5px); }
+      /* AUDIT -- each of these was a hue laid over a 12-15% tint OF ITSELF
+         (#fbbf24 on rgba(251,191,36,0.15) = 1.31:1, #ef4444 on its own 15% =
+         2.60:1). Text and fill being the same hue at two alphas pins the ratio
+         near 1:1 BY CONSTRUCTION, so darkening the text rescues nothing while
+         the fill tracks it -- and an alpha fill has no fixed luminance at all,
+         so one badge class could not be right on the white card, the hovered
+         row and the .ret-modal it all appears on simultaneously.
+
+         css/main.css already restates these at .ret-badge.ret-badge-* (0,2,0),
+         which is what makes the SCREEN correct today and what
+         retail_design_contrast_test.js's self-contained-badge check reads. This
+         restates the same token pairs at SOURCE, so the wrong values are gone
+         from the codebase rather than merely outranked: _badge() emitting one
+         class instead of two, or any ".ret-modal .ret-badge-red" added later,
+         would have handed the 2.60:1 version straight back.
+
+         (No backtick anywhere in this comment on purpose -- the whole sheet is
+         a JS template literal, so one would end the string mid-stylesheet.)
+
+         Same tokens, so the two declarations cannot disagree -- and if they
+         ever do, the main.css copy is the one that wins and the one under test. */
+      .ret-badge-green { background:var(--state-success-surface);color:var(--state-success-text); }
+      .ret-badge-red   { background:var(--state-danger-surface);color:var(--state-danger-text); }
+      .ret-badge-yellow{ background:var(--state-warning-surface);color:var(--state-warning-text); }
+      .ret-badge-blue  { background:var(--state-info-surface);color:var(--state-info-text); }
+      /* Purple carries no state -- see the note on the main.css override. */
+      .ret-badge-purple{ background:var(--surface-active);color:var(--text-primary); }
+      .ret-modal-overlay { position:fixed;inset:0;background:var(--surface-scrim);display:flex;align-items:center;justify-content:center;z-index:9999;backdrop-filter:blur(5px); }
       /* AUDIT -- the modal was a DARK ISLAND (#0f172a with #fff children) left
          over from the HUD, floating inside a now-light app. It was internally
          consistent, which is exactly why it survived the redesign: nothing
@@ -227,7 +262,7 @@ const RetailSystem = {
 
          Now light, on the same tokens as every other panel, so a rule written
          anywhere is correct here too. */
-      .ret-modal { background:var(--surface-panel);border:1px solid var(--border-soft);border-radius:18px;padding:32px;width:520px;max-height:88vh;overflow-y:auto;box-shadow:0 30px 80px rgba(0,0,0,0.28); }
+      .ret-modal { background:var(--surface-panel);border:1px solid var(--border-soft);border-radius:18px;padding:32px;width:520px;max-height:88vh;overflow-y:auto;box-shadow:var(--elevation-modal); }
       .ret-modal-wide { width:680px; }
       .ret-modal h3 { color:var(--text);margin:0 0 24px;font-size:20px;font-weight:700; }
       .ret-field { margin-bottom:15px; }
@@ -236,22 +271,64 @@ const RetailSystem = {
         width:100%;background:var(--surface-sunken, #f2f5f8);border:1px solid var(--border-soft);
         border-radius:8px;color:var(--text);padding:10px 14px;font-size:14px;outline:none;
         min-block-size:44px;box-sizing:border-box;font-family:inherit;transition:.2s; }
-      .ret-field input:focus,.ret-field select:focus,.ret-field textarea:focus { border-color:var(--sub-accent);box-shadow:0 0 0 3px rgba(244,63,94,0.12); }
+      /* The focus halo was rgba(244,63,94,...) -- a ROSE tint, hardcoded, that
+         stopped matching --sub-accent two redesigns ago, so a focused field
+         glowed pink inside a blue-accented app. Built from --sub-accent-rgb,
+         which exists precisely so a tint tracks the accent instead of dating
+         from whenever it was typed. */
+      .ret-field input:focus,.ret-field select:focus,.ret-field textarea:focus { border-color:var(--sub-accent);box-shadow:0 0 0 3px rgba(var(--sub-accent-rgb),0.18); }
       .ret-field select option { background:var(--surface-panel); color:var(--text); }
       .ret-field-row { display:grid;grid-template-columns:1fr 1fr;gap:12px; }
       .ret-field-row3 { display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px; }
       .ret-modal-footer { display:flex;gap:10px;justify-content:flex-end;margin-top:22px; }
       .ret-btn { padding:10px 20px;border-radius:8px;font-weight:600;font-size:14px;cursor:pointer;border:none;transition:all .2s; }
-      .ret-btn-primary { background:var(--sub-accent);color:#fff; }
+      .ret-btn-primary { background:var(--sub-accent);color:var(--text-on-accent); }
       .ret-btn-primary:hover { opacity:.88;transform:translateY(-1px); }
       .ret-btn-primary:disabled { opacity:.5;cursor:not-allowed;transform:none; }
-      .ret-btn-ghost { background:rgba(255,255,255,0.05);color:#cbd5e1;border:1px solid rgba(255,255,255,0.1); }
-      .ret-btn-ghost:hover { background:rgba(255,255,255,0.1); }
-      .ret-btn-danger { background:rgba(239,68,68,0.12);color:#ef4444;border:1px solid rgba(239,68,68,0.25); }
-      .ret-btn-danger:hover { background:rgba(239,68,68,0.22); }
+      /* css/main.css owns this control at button.ret-btn.ret-btn-ghost (0,2,1),
+         which is what fixed the 1.48:1 POS "Held" button. The literals it was
+         outranking are corrected here too, so a .ret-btn-ghost that is not a
+         <button> -- the one shape that selector does not reach -- is not still
+         served #cbd5e1 on a 5% white tint. */
+      .ret-btn-ghost { background:var(--surface-sunken);color:var(--text-secondary);border:1px solid var(--border-default); }
+      .ret-btn-ghost:hover { background:var(--surface-hover); }
+      /* AUDIT -- #ef4444 on a 12% tint of itself: 2.70:1 on the Delete/Discard/
+         Process Refund buttons. Same self-tint construction as the badges above
+         and the same fix: an opaque --state-danger-surface under
+         --state-danger-text is 7.45:1 and does not care what is behind it.
+
+         :hover DARKENS WITHIN THE FAMILY rather than inverting to a solid red
+         fill, deliberately. An inverted fill would have to restate "color" as
+         well, and the base rule's --state-danger-text is what makes this button
+         legible; two colours that must be kept in step is how the base rule and
+         its override drifted apart everywhere else in this file.
+         --state-danger-border is the darkest step the danger family already
+         has, so the hover is a real state change (5.45:1, still comfortably AA
+         for the same text) with one declaration and no second colour to keep in
+         sync. retail_btn_danger_hover_test.js guards that this rule exists at
+         all -- it was missing entirely for a while, leaving the one destructive
+         control in the product with no hover feedback. */
+      .ret-btn-danger { background:var(--state-danger-surface);color:var(--state-danger-text);border:1px solid var(--state-danger-border); }
+      .ret-btn-danger:hover { background:var(--state-danger-border); }
       .ret-btn-sm { padding:4px 12px;font-size:12px; }
-      .ret-search { background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;padding:9px 14px;font-size:14px;outline:none;width:240px; }
-      .ret-search:focus { border-color:var(--sub-accent); }
+      /* AUDIT -- #fff on rgba(255,255,255,0.05): 1.00:1. Not faint, INVISIBLE,
+         and it is the search box on Products, Customers and Sales History, so a
+         cashier filtering a product list could not see what they had typed. The
+         white-on-white-alpha pair is the same shape as the .ret-table bug above
+         and dates from the same dark HUD; it survived only because no rendered
+         screen in the corpus builds a list header. Now a real sunken input on
+         the same tokens as .ret-field's inputs, which is what it always was.
+
+         .ret-date is the same control with a different job (the Sales History
+         date bounds). It exists as a class because those two inputs were
+         carrying this exact recipe as an INLINE style string -- a second copy
+         of the paint that no stylesheet could correct, which is the hazard
+         that put #10b981 on the Products table. One declaration, two consumers. */
+      .ret-search,
+      .ret-date { background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:8px;color:var(--text-primary);padding:9px 14px;font-size:14px;outline:none; }
+      .ret-search { width:240px; }
+      .ret-search:focus,
+      .ret-date:focus { border-color:var(--sub-accent); }
       .ret-kpi-grid { display:grid;grid-template-columns:repeat(5,1fr);gap:16px;margin-bottom:22px; }
       @media(max-width:1300px){ .ret-kpi-grid{grid-template-columns:repeat(3,1fr);} }
       .ret-kpi { background:var(--surface-card);border:1px solid var(--border-soft);border-radius:14px;padding:20px;position:relative;overflow:hidden; }
@@ -262,29 +339,56 @@ const RetailSystem = {
       .ret-kpi-breakdown { display:flex;gap:14px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border-soft); }
       .ret-kpi-breakdown-item { font-size:11px;color:var(--text-faint); }
       .ret-kpi-breakdown-item b { display:block;font-size:14px;font-weight:700;margin-top:1px; }
-      .ret-kpi-change-up   { color:#10b981;font-size:12px; }
-      .ret-kpi-change-down { color:#ef4444;font-size:12px; }
-      .ret-po-item { display:grid;grid-template-columns:2fr 1fr 1fr 1fr auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.05); }
+      /* AUDIT -- the neon HUD greens/reds: #10b981 was 2.10:1 and #ef4444
+         3.12:1 on a light KPI card. A period-over-period delta on a sales
+         figure IS money moving, so these take the money tokens rather than the
+         state ones -- money carries the palette's stricter AAA floor and is
+         already solved against every surface a card can sit on. */
+      .ret-kpi-change-up   { color:var(--text-money-positive);font-size:12px; }
+      .ret-kpi-change-down { color:var(--text-money-negative);font-size:12px; }
+      .ret-po-item { display:grid;grid-template-columns:2fr 1fr 1fr 1fr auto;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border-hairline); }
       /* Supplier modal tabs (Details / Contacts) -- no prior tab pattern existed
          in this file, so this is the new baseline; kept visually consistent
          with .ret-btn-ghost's muted/active language rather than inventing a
          new color language. */
-      .ret-tabs { display:flex;gap:18px;margin-bottom:18px;border-bottom:1px solid rgba(255,255,255,0.08); }
+      .ret-tabs { display:flex;gap:18px;margin-bottom:18px;border-bottom:1px solid var(--border-hairline); }
       .ret-tab { background:none;border:none;color:var(--text-muted);padding:10px 2px;font-size:13px;font-weight:600;cursor:pointer;border-bottom:2px solid transparent; }
-      .ret-tab:hover { color:#fff; }
-      .ret-tab.active { color:#fff;border-bottom-color:var(--sub-accent); }
+      /* AUDIT -- both of these were #fff, i.e. 1.00:1 on the white modal these
+         tabs live in: the resting tab was the only READABLE one, and pointing
+         at a tab or selecting it erased its label. The muted->primary step is
+         the emphasis the rest of the file uses for the same transition; the
+         active tab additionally takes the accent, which is the one place the
+         direction allows it -- "this is where you are" is semantic, and the
+         underline beneath it already carries the same accent. */
+      .ret-tab:hover { color:var(--text-primary); }
+      .ret-tab.active { color:var(--accent-action);border-bottom-color:var(--sub-accent); }
       /* PO split-preview cards (Thursday demo, Stream B) -- one per supplier
          group, plus the Unassigned bucket which reuses the same card shape
          with an amber border to flag it needs operator action. */
-      .ret-po-split-card { background:rgba(0,0,0,0.2);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:16px;margin-bottom:14px; }
+      /* AUDIT -- the whole card was HUD-native: a 20%-BLACK wash for a surface
+         (a dark-grey box floating in a white app, and an alpha fill with no
+         fixed luminance, so nothing drawn on it had a measurable ratio), a
+         white-alpha border that vanishes on white, a #fff supplier name at
+         1.00:1, a #10b981 total at 2.10:1 and a #fbbf24-on-its-own-12%-tint
+         warning at 1.32:1 -- the warning being the line whose entire job is to
+         be noticed. Every one of the four is the same story as the badges.
+
+         The total takes --text-money-positive, not a state green: it is an
+         amount of money, so it belongs to the money palette and its AAA floor.
+         The warning strip becomes an opaque --state-warning-* pair, so it reads
+         the same whether the card is on the panel or nested in a modal. */
+      .ret-po-split-card { background:var(--surface-raised);border:1px solid var(--border-default);border-radius:12px;padding:16px;margin-bottom:14px; }
       .ret-po-split-card-hdr { display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;gap:12px; }
-      .ret-po-split-supplier { color:#fff;font-weight:700;font-size:15px; }
+      .ret-po-split-supplier { color:var(--text-primary);font-weight:700;font-size:15px; }
       .ret-po-split-meta { color:var(--text-muted);font-size:12px;margin-top:2px; }
-      .ret-po-split-total { color:#10b981;font-weight:700;font-size:16px;white-space:nowrap; }
-      .ret-po-split-warning { background:rgba(251,191,36,0.12);color:#fbbf24;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:600;margin-bottom:10px; }
+      .ret-po-split-total { color:var(--text-money-positive);font-weight:700;font-size:16px;white-space:nowrap; }
+      .ret-po-split-warning { background:var(--state-warning-surface);color:var(--state-warning-text);border-radius:8px;padding:8px 12px;font-size:12px;font-weight:600;margin-bottom:10px; }
       .ret-po-split-contact { display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap; }
       .ret-po-split-contact-detail { color:var(--text-muted);font-size:12px; }
-      .ret-po-split-unassigned { border-color:rgba(251,191,36,0.35); }
+      /* The Unassigned bucket's border is a FLAG -- "this one needs you" -- so
+         it takes the warning family's text weight rather than its hairline
+         border tint, which at 1px on a raised surface reads as no flag at all. */
+      .ret-po-split-unassigned { border-color:var(--state-warning-text); }
     `;
     document.head.appendChild(s);
   },
@@ -627,6 +731,45 @@ const RetailSystem = {
       ` onclick="event.stopPropagation();RetailSystem._viewSale(${Number.isFinite(id) ? id : 0})"` +
       ` aria-label="${this._esc(t('View invoice'))} ${this._esc(num)}"` +
       `>${this._bdi(num)}</button>`;
+  },
+
+  // The same control, for the Customers list -- which had the identical defect
+  // and was simply not in the render corpus when the three sale tables were
+  // fixed. `<tr onclick="..._viewCustomer(id)">` with nothing focusable inside
+  // it is mouse-only: no Tab route, no Enter/Space, and a screen reader reads
+  // six cells and no control.
+  //
+  // The NAME is the cell that becomes the button, for the same reason the
+  // receipt number is on the sale rows: it is the value that identifies which
+  // record the row is. Wrapping a different cell (the spend, say) would name
+  // the control after a number that changes.
+  //
+  // THE PHONE JOINS THE ACCESSIBLE NAME, and that is the one real difference
+  // from _saleOpenerButton. A receipt number is unique by construction; a
+  // PERSON'S NAME IS NOT. Shops routinely carry two "Ahmad"s, and the phone is
+  // the de-facto customer key here -- it is the column immediately after the
+  // name and it is what the search box above the table offers to match on
+  // ("Search name, phone, e…"). So an operator tabbing the list hears
+  // "View customer Ahmad 0791111111" and can tell two same-named rows apart,
+  // which is the entire question a list of eight rows raises. The visible text
+  // stays the name alone: the phone is already its own column, and repeating it
+  // on screen would be noise for everyone who can see it.
+  //
+  // A customer with no phone on file falls back to the name alone. That is a
+  // correct, if less specific, label -- the same position a sale with no
+  // receipt number is in.
+  //
+  // The id is interpolated exactly as the row's own handler already does it --
+  // one escaping rule for both, so they cannot disagree about what a customer
+  // id is allowed to contain.
+  _customerOpenerButton(customerId, customerName, customerPhone) {
+    const name = customerName == null ? '' : String(customerName);
+    const phone = customerPhone == null ? '' : String(customerPhone).trim();
+    const label = `${t('View customer')} ${name}${phone ? ' ' + phone : ''}`;
+    return `<button type="button" class="ret-rowbtn"` +
+      ` onclick="event.stopPropagation();RetailSystem._viewCustomer('${this._esc(customerId)}')"` +
+      ` aria-label="${this._esc(label)}"` +
+      `>${this._esc(name)}</button>`;
   },
 
   // Canonical uuid4 shape. Used ONLY to decide how many characters of a value
@@ -1003,7 +1146,15 @@ const RetailSystem = {
           font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase; }
         .rdash .ret-table td { border-bottom-color:var(--border-soft); }
         .rdash .ret-table tbody tr { transition:background .15s ease; }
-        .rdash .ret-table tbody tr:hover { background:var(--surface-hover); }
+        /* :focus-within alongside :hover, and this override is the reason the
+           shared rule's invisible band went unnoticed for so long: the dashboard
+           re-declared :hover with a REAL token, so on the one screen anybody
+           looked at, the pointer user saw a band -- while the keyboard user, who
+           matches only the shared rule's :focus-within, saw nothing here either.
+           A half-fixed screen reads as a working screen. Both states, one
+           declaration, so they cannot come apart again. */
+        .rdash .ret-table tbody tr:hover,
+        .rdash .ret-table tbody tr:focus-within { background:var(--surface-hover); }
         /* Money column: tabular + end-aligned so the amounts form a real
            column that can be scanned and summed by eye. text-align:end, not
            right, so it stays correct mirrored. */
@@ -1471,13 +1622,55 @@ const RetailSystem = {
            is the ONLY state feedback a touchscreen operator gets at all. */
         .pos-card:hover, .pos-card:focus-visible { border-color:var(--border-mid);background:var(--surface-hover); }
         .pos-card:active { transform:scale(0.98); }
-        .pos-card-outofstock { opacity:.45;cursor:not-allowed; }
+        /* AUDIT -- this rule was "opacity:.45", and opacity is a GROUP
+           operation: it renders the tile, its text, its border AND its focus
+           outline into one buffer and composites the whole buffer at 45%. It
+           does not tint the text, it drags foreground and background toward
+           each other at the same time, so the ratio between them collapses far
+           faster than 45% suggests. Measured: the product name 2.78:1, the
+           words "Out of stock" 2.37:1 -- WORSE than the 2.64:1 grey-on-white
+           defect an earlier round fixed, on this very screen -- and the focus
+           ring 2.20-2.29:1 against a 3:1 floor, where the same ring is 8.53:1
+           one tile to the left.
+
+           That is the whole defect in one line: the tile is deliberately
+           aria-disabled rather than disabled so it STAYS focusable and can
+           explain itself, and then a group wash withheld the explanation from
+           the low-vision and keyboard operators while still announcing it to a
+           screen reader. The reasoning was right; the paint contradicted it.
+
+           So "unavailable" is now carried by four cues, none of them a wash:
+             * a flattened, recessed surface (the same language main.css's
+               :disabled rule uses -- not-allowed plus a dead surface),
+             * the words "Out of stock", already in the tile, in the danger
+               token at its full AAA weight, because the explanation should be
+               the MOST legible thing here and not the least,
+             * a struck-through price, which is a non-colour cue and survives a
+               monochrome monitor and a colourblind cashier,
+             * a de-emphasised (not erased) product name -- --text-tertiary is
+               the faintest step the palette has that still clears AA on this
+               surface, and there is deliberately no fainter one.
+           The focus ring is left entirely alone, so it is now the same ring at
+           the same contrast as on any sellable tile.
+
+           THE PRICE KEEPS ITS MONEY COLOUR, and that is not an oversight. An
+           amount carries the palette's stricter AAA floor wherever it appears,
+           and de-emphasising it here would have meant writing the money palette
+           down in a third place. It would also have been DEAD: _money() returns
+           a nested span.money that re-declares colour, so a rule aimed at this
+           container matches an element holding no characters of its own -- the
+           same shape as the .rdash-bd-value.is-in bug. The strikethrough is the
+           right tool because text-decoration propagates INTO that nested span
+           and cannot be cancelled by it. */
+        .pos-card-outofstock { cursor:not-allowed;background:var(--surface-active);border-color:var(--border-default); }
+        .pos-card-outofstock .pos-card-name { color:var(--text-tertiary); }
+        .pos-card-outofstock .pos-card-price { text-decoration:line-through; }
         /* The unavailable tile stays FOCUSABLE (aria-disabled, not disabled), so
            it still takes the outline from .pos-wrap :focus-visible below -- what
            is suppressed here is only the "this will do something" surface lift,
            which would be a lie on a tile that cannot be sold. */
         .pos-card-outofstock:hover, .pos-card-outofstock:focus-visible, .pos-card-outofstock:active {
-          transform:none;border-color:var(--border-soft);background:var(--surface-soft); }
+          transform:none;border-color:var(--border-default);background:var(--surface-active); }
         .pos-card-icon { font-size:26px;line-height:1; }
         .pos-card-name { color:var(--text);font-size:13px;font-weight:600;line-height:1.3;
           display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden; }
@@ -1521,7 +1714,14 @@ const RetailSystem = {
           background:var(--state-danger-surface, var(--surface-hover)); }
         .pos-empty { display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;
           color:var(--text-dim);padding-block-start:56px;font-size:14px; }
-        .pos-empty-icon { font-size:32px;opacity:.6; }
+        /* AUDIT -- this carried opacity:.6, which washes the glyph AND its
+           backdrop together and left the empty-cart icon at 3.17:1. It is a
+           decorative 🛒 next to text that already says the cart is empty, so
+           the honest fix is to mark it decorative and stop painting it faintly:
+           aria-hidden keeps it out of the accessible name (see _renderCart) and
+           --text-tertiary is the palette's designed de-emphasis step, which
+           unlike an opacity wash is still AA on every surface it can land on. */
+        .pos-empty-icon { font-size:32px;color:var(--text-tertiary); }
         .pos-empty-hint { color:var(--text-faint);font-size:13px; }
 
         /* Void lives here -- its own bar, below the list, deliberately far
@@ -2024,20 +2224,20 @@ const RetailSystem = {
         const when = this._bdi(new Date((r.created_at || '').replace(' ', 'T')).toLocaleString());
         const noteHtml = r.label ? ` — ${this._esc(r.label)}` : '';
         return `
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 4px;border-bottom:1px solid rgba(255,255,255,0.06)">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 4px;border-bottom:1px solid var(--border-hairline)">
           <div>
-            <div style="color:#fff;font-weight:600;font-size:13px">${this._bdi(r.hold_number||'')}${noteHtml}</div>
+            <div style="color:var(--text-primary);font-weight:600;font-size:13px">${this._bdi(r.hold_number||'')}${noteHtml}</div>
             <div style="color:var(--text-muted);font-size:11px">${r.item_count} item${r.item_count===1?'':'s'} · ${this._esc(r.customer_name)} · ${when}</div>
           </div>
           <div style="display:flex;align-items:center;gap:10px">
-            <span style="color:#fff;font-weight:700">${this._fmt(r.total)}</span>
+            <span style="color:var(--text-money);font-weight:700">${this._fmt(r.total)}</span>
             <button class="ret-btn ret-btn-primary ret-btn-sm" onclick="RetailSystem._resumeHeldSale(${r.id})">Resume</button>
             <button class="ret-btn ret-btn-danger ret-btn-sm" onclick="RetailSystem._discardHeldSale(${r.id})">Discard</button>
           </div>
         </div>`;
       }).join('');
     } catch (e) {
-      box.innerHTML = '<div style="text-align:center;color:#ef4444;padding:20px">Failed to load held sales.</div>';
+      box.innerHTML = '<div style="text-align:center;color:var(--state-danger-text);padding:20px">Failed to load held sales.</div>';
     }
   },
 
@@ -2412,7 +2612,7 @@ const RetailSystem = {
         <div style="font-size:46px;margin-bottom:10px">🔍</div>
         <h3 style="margin:0 0 6px">Product not found</h3>
         <p style="color:var(--text-muted);margin:0 0 22px">No item matches barcode
-          <span style="font-family:monospace;color:#fff">${code}</span></p>
+          <span style="font-family:monospace;color:var(--text-primary)">${code}</span></p>
         <div style="display:flex;flex-direction:column;gap:10px">
           <button class="ret-btn ret-btn-primary" onclick="RetailSystem._addProductFromScan('${String(code).replace(/'/g,"\\'")}')">➕ Add New Product</button>
           <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-scan-nf').remove()">🔁 Scan Again</button>
@@ -2549,17 +2749,17 @@ const RetailSystem = {
         <div style="font-size:52px;margin-bottom:12px">✅</div>
         <h3 style="margin:0 0 6px">Sale Complete!</h3>
         <p style="color:var(--text-muted);margin:0 0 20px">Receipt #${saleData.sale_number}</p>
-        <div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:16px;text-align:left;margin-bottom:20px">
+        <div style="background:var(--surface-sunken);border-radius:10px;padding:16px;text-align:left;margin-bottom:20px">
           ${(saleData.lines||[]).map(i=>`<div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px">
-            <span style="color:#94a3b8">${this._esc(i.name || ('#'+i.product_id))} ×${i.quantity}</span>
-            <span style="color:#fff">${this._fmt(i.line_total)}</span>
+            <span style="color:var(--text-secondary)">${this._esc(i.name || ('#'+i.product_id))} ×${i.quantity}</span>
+            <span style="color:var(--text-money)">${this._fmt(i.line_total)}</span>
           </div>`).join('')}
-          <div style="border-top:1px dashed rgba(255,255,255,0.1);margin:10px 0;padding-top:10px">
+          <div style="border-top:1px dashed var(--border-default);margin:10px 0;padding-top:10px">
             <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
-              <span style="color:#94a3b8">Total</span><span style="color:#fff;font-weight:700">${this._fmt(saleData.total)}</span>
+              <span style="color:var(--text-secondary)">Total</span><span style="color:var(--text-money);font-weight:700">${this._fmt(saleData.total)}</span>
             </div>
             ${saleData.change > 0 ? `<div style="display:flex;justify-content:space-between;font-size:13px">
-              <span style="color:#94a3b8">Change</span><span style="color:#10b981;font-weight:700">${this._fmt(saleData.change)}</span>
+              <span style="color:var(--text-secondary)">Change</span><span style="color:var(--text-money-positive);font-weight:700">${this._fmt(saleData.change)}</span>
             </div>` : ''}
           </div>
         </div>
@@ -2729,8 +2929,26 @@ const RetailSystem = {
         <td style="font-weight:600">${this._esc(p.name)}${p.barcode?`<div style="font-size:10px;color:var(--text-muted);font-family:monospace">${this._esc(p.barcode)}</div>`:''}</td>
         <td style="color:var(--text-muted)">${p.category_name?this._esc(p.category_name):'—'}</td>
         <td>${this._fmt(p.cost_price)}</td>
-        <td style="font-weight:600;color:#10b981">${this._fmt(p.sell_price)}</td>
-        <td style="font-weight:700;color:${lowStock?'#ef4444':'#10b981'}">${lowStock?'⚠ ':''}${p.total_stock} ${p.unit||''}</td>
+        <!-- AUDIT -- these two cells carried style="color:#10b981" / "#ef4444"
+             INLINE, which beats every stylesheet in the product: no token, no
+             override and no :hover rule can reach an inline declaration, so
+             they were the one class of colour bug fixable only at the emitting
+             call site. Measured 2.1-3.1:1 on the white Products table.
+
+             They are also the reason the literals survived: the token sweep
+             reads css/main.css and the chrome sweep reads _injectStyles(), and
+             an inline style is in neither.
+
+             Sell price is MONEY, so it takes the neutral money token rather
+             than a decorative green -- a green that means "this is a price"
+             means nothing, and the direction rules out colour that carries no
+             meaning. Stock level is a STATE, and it reuses the vocabulary the
+             POS tiles already established one screen over: at-or-below reorder
+             level is a WARNING (reorder now), not a danger (stockout), and it
+             keeps its ⚠ prefix so the severity is not colour-only. Above the
+             threshold is unremarkable, so it is simply ordinary text. -->
+        <td style="font-weight:600;color:var(--text-money)">${this._fmt(p.sell_price)}</td>
+        <td style="font-weight:700;color:${lowStock?'var(--state-warning-text)':'var(--text-primary)'}">${lowStock?'⚠ ':''}${p.total_stock} ${p.unit||''}</td>
         <td style="color:var(--text-muted)">${p.reorder_level||0}</td>
         <td>${this._badge('Active','green')}</td>
         <td onclick="event.stopPropagation()" style="display:flex;gap:6px">
@@ -2844,7 +3062,7 @@ const RetailSystem = {
     overlay.innerHTML = `
       <div class="ret-modal" style="width:380px">
         <h3>📦 Adjust Stock — ${this._esc(name)}</h3>
-        <p style="color:var(--text-muted);margin:0 0 20px">Current stock: <strong style="color:#fff">${currentStock}</strong></p>
+        <p style="color:var(--text-muted);margin:0 0 20px">Current stock: <strong style="color:var(--text-primary)">${currentStock}</strong></p>
         <div class="ret-field"><label>Adjustment Quantity (+ to add, − to deduct)</label>
           <input type="number" id="sa-qty" placeholder="+10 or -5" step="1" /></div>
         <div class="ret-field"><label>Reason</label>
@@ -3057,10 +3275,10 @@ const RetailSystem = {
       // sync relay, which is a genuinely new trust boundary, mirroring
       // Category's Fix 7.
       tbody.innerHTML = data.map(cu => `<tr onclick="RetailSystem._viewCustomer('${this._esc(cu.id)}')">
-        <td style="font-weight:600">${this._esc(cu.name)}</td>
+        <td style="font-weight:600">${this._customerOpenerButton(cu.id, cu.name, cu.phone)}</td>
         <td style="color:var(--text-muted)">${cu.phone?this._esc(cu.phone):'—'}</td>
         <td style="color:var(--text-muted)">${cu.email?this._esc(cu.email):'—'}</td>
-        <td><span style="color:#fbbf24;font-weight:700">${this._esc(cu.loyalty_points||0)} pts</span></td>
+        <td><span style="color:var(--text-primary);font-weight:700">${this._esc(cu.loyalty_points||0)} pts</span></td>
         <td style="font-weight:600;color:#10b981">${this._fmt(cu.total_spent)}</td>
         <td style="color:var(--text-muted)">${this._esc(cu.order_count||0)}</td>
         <td onclick="event.stopPropagation()">
@@ -3170,19 +3388,19 @@ const RetailSystem = {
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:14px;margin-bottom:20px">
           <div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:14px;text-align:center">
             <div style="color:var(--text-muted);font-size:11px;text-transform:uppercase;margin-bottom:6px">Total Spent</div>
-            <div style="color:#10b981;font-size:22px;font-weight:700">${this._fmt(cu.total_spent)}</div>
+            <div style="color:var(--text-money);font-size:22px;font-weight:700">${this._fmt(cu.total_spent)}</div>
           </div>
           <div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:14px;text-align:center">
             <div style="color:var(--text-muted);font-size:11px;text-transform:uppercase;margin-bottom:6px">Orders</div>
-            <div style="color:#fff;font-size:22px;font-weight:700">${cu.order_count||0}</div>
+            <div style="color:var(--text-primary);font-size:22px;font-weight:700">${cu.order_count||0}</div>
           </div>
           <div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:14px;text-align:center">
             <div style="color:var(--text-muted);font-size:11px;text-transform:uppercase;margin-bottom:6px">Loyalty Points</div>
-            <div style="color:#fbbf24;font-size:22px;font-weight:700">${cu.loyalty_points||0}</div>
+            <div style="color:var(--text-primary);font-size:22px;font-weight:700">${cu.loyalty_points||0}</div>
           </div>
           <div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:14px;text-align:center">
             <div style="color:var(--text-muted);font-size:11px;text-transform:uppercase;margin-bottom:6px">Phone</div>
-            <div style="color:#fff;font-size:16px;font-weight:600">${cu.phone?this._esc(cu.phone):'—'}</div>
+            <div style="color:var(--text-primary);font-size:16px;font-weight:600">${cu.phone?this._esc(cu.phone):'—'}</div>
           </div>
         </div>
         <div class="sub-chart-title" style="margin-bottom:12px">Purchase History</div>
@@ -3387,8 +3605,8 @@ const RetailSystem = {
     if (!formEl) return;
     formEl.style.display = 'block';
     formEl.innerHTML = `
-      <div style="margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,0.08)">
-        <div style="color:#fff;font-weight:600;margin-bottom:10px">${isEdit ? t('Edit Contact') : t('Add Contact')}</div>
+      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border-hairline)">
+        <div style="color:var(--text-primary);font-weight:600;margin-bottom:10px">${isEdit ? t('Edit Contact') : t('Add Contact')}</div>
         <div class="ret-field-row">
           <div class="ret-field"><label>${t('Name')} *</label><input id="scf-name" value="${this._esc(c.name||'')}" /></div>
           <div class="ret-field"><label>${t('Role')}</label>
@@ -3415,7 +3633,7 @@ const RetailSystem = {
         </div>
         <div class="ret-field" style="display:flex;align-items:center;gap:8px">
           <input type="checkbox" id="scf-primary" ${c.is_primary?'checked':''} style="width:auto" />
-          <label style="margin:0;text-transform:none;font-size:13px;color:#fff" for="scf-primary">${t('Primary contact for this role')}</label>
+          <label style="margin:0;text-transform:none;font-size:13px;color:var(--text-primary)" for="scf-primary">${t('Primary contact for this role')}</label>
         </div>
         <div class="ret-modal-footer" style="margin-top:10px">
           <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._closeSupplierContactForm()">${t('Cancel')}</button>
@@ -3598,7 +3816,7 @@ const RetailSystem = {
         <h3>📋 New Purchase Order${supplierName?' — '+supplierName:''}</h3>
 
         <div id="po-step-basket">
-          <div style="margin:0 0 8px;color:#fff;font-weight:600">Order Items</div>
+          <div style="margin:0 0 8px;color:var(--text-primary);font-weight:600">Order Items</div>
           <div id="po-items"></div>
           <div style="margin:12px 0">
             <div class="ret-field-row" style="grid-template-columns:3fr 1fr 1fr auto;gap:8px;align-items:end">
@@ -3611,7 +3829,7 @@ const RetailSystem = {
               <button class="ret-btn ret-btn-ghost" style="margin-bottom:1px" onclick="RetailSystem._addPOItem()">+ Add</button>
             </div>
           </div>
-          <div style="text-align:right;color:#fff;font-size:16px;font-weight:700;margin-bottom:16px">
+          <div style="text-align:right;color:var(--text-money);font-size:16px;font-weight:700;margin-bottom:16px">
             Total: <span id="po-total-display">$0.00</span>
           </div>
           <div class="ret-modal-footer">
@@ -3663,7 +3881,7 @@ const RetailSystem = {
         total += lineTotal;
         return `<tr>
           <td>${item.product_name}</td>
-          <td><input type="number" value="${item.quantity}" min="1" style="width:60px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:5px;color:#fff;padding:4px 8px;text-align:center;outline:none"
+          <td><input type="number" value="${item.quantity}" min="1" style="width:60px;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:5px;color:var(--text-primary);padding:4px 8px;text-align:center;outline:none"
             oninput="RetailSystem._poItems[${i}].quantity=+this.value;RetailSystem._poItems[${i}].line_total=RetailSystem._poItems[${i}].quantity*RetailSystem._poItems[${i}].unit_cost;RetailSystem._renderPOItems()" /></td>
           <td>${this._fmt(item.unit_cost)}</td>
           <td style="font-weight:600">${this._fmt(lineTotal)}</td>
@@ -3855,9 +4073,9 @@ const RetailSystem = {
             <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()">✕</button>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:18px">
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Supplier</div><div style="color:#fff;font-weight:600">${po.supplier_name||'—'}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Supplier</div><div style="color:var(--text-primary);font-weight:600">${po.supplier_name||'—'}</div></div>
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Status</div><div>${this._badge(po.status,'green')}</div></div>
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Total</div><div style="color:#10b981;font-weight:700">${this._fmt(po.total)}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">Total</div><div style="color:var(--text-money);font-weight:700">${this._fmt(po.total)}</div></div>
           </div>
           <table class="ret-table">
             <thead><tr><th>Product</th><th>SKU</th><th>Qty Ordered</th><th>Qty Received</th><th>Unit Cost</th><th>Total</th></tr></thead>
@@ -3865,7 +4083,7 @@ const RetailSystem = {
               <td>${i.product_name||'—'}</td>
               <td style="font-family:monospace;color:var(--text-muted)">${i.sku||'—'}</td>
               <td>${i.quantity}</td>
-              <td style="color:${i.received_qty>=i.quantity?'#10b981':'#fbbf24'}">${i.received_qty||0}</td>
+              <td style="color:${i.received_qty>=i.quantity?'var(--state-success-text)':'var(--state-warning-text)'}">${i.received_qty||0}</td>
               <td>${this._fmt(i.unit_cost)}</td>
               <td style="font-weight:600">${this._fmt(i.total)}</td>
             </tr>`).join('')}</tbody>
@@ -3892,7 +4110,7 @@ const RetailSystem = {
         <h2 class="ret-title">${t('Settings')}</h2>
       </div>
       <div class="sub-chart-card">
-        <h3 style="color:#fff;margin:0 0 14px;font-size:15px">${t('Low-Stock Reorder Requests')}</h3>
+        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Low-Stock Reorder Requests')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
           ${t('Automatically drafted when a sale drops a product at or below its reorder level. Accept drafts a local purchase order for this device; Decline dismisses it.')}
         </p>
@@ -3904,7 +4122,7 @@ const RetailSystem = {
         </div>
       </div>
       <div class="sub-chart-card">
-        <h3 style="color:#fff;margin:0 0 14px;font-size:15px">${t('WhatsApp Reports')}</h3>
+        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('WhatsApp Reports')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
           ${t('Send daily sales, shift-close, low-stock, and overdue-balance reports to multiple phone numbers by role or branch. Off by default.')}
         </p>
@@ -4058,7 +4276,7 @@ const RetailSystem = {
         // the server's own _is_admin_device check (list_audit_log) is what
         // actually enforces this, so show its real message rather than a
         // generic "no results" that would misrepresent a permission denial.
-        if (tbody) tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#ef4444;padding:30px">${this._esc(res.message || t('Could not load the audit log.'))}</td></tr>`;
+        if (tbody) tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--state-danger-text);padding:30px">${this._esc(res.message || t('Could not load the audit log.'))}</td></tr>`;
         if (summary) summary.textContent = '';
         return;
       }
@@ -4097,7 +4315,7 @@ const RetailSystem = {
       if (nextBtn) nextBtn.disabled = page >= s.totalPages;
     } catch (e) {
       console.error('Audit log load failed', e);
-      if (tbody) tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#ef4444;padding:30px">${t('Could not load the audit log.')}</td></tr>`;
+      if (tbody) tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--state-danger-text);padding:30px">${t('Could not load the audit log.')}</td></tr>`;
     }
   },
 
@@ -4209,7 +4427,7 @@ const RetailSystem = {
         <td style="color:var(--text-muted)">${r.sale_number ? this._bdi(r.sale_number) : '—'}</td>
         <td>${r.customer_name||'Walk-in'}</td>
         <td>${this._badge(r.refund_method||'cash','blue')}</td>
-        <td style="font-weight:600;color:#ef4444">${this._fmt(r.refund_amount)}</td>
+        <td style="font-weight:600;color:var(--text-money-negative)">${this._fmt(r.refund_amount)}</td>
         <td style="color:var(--text-muted)">${this._bdi((r.created_at||'').slice(0,16))}</td>
       </tr>`).join('');
     } catch(e) { console.error(e); }
@@ -4225,7 +4443,7 @@ const RetailSystem = {
         <div class="ret-field-row">
           <div class="ret-field"><label>Sale / Receipt Number *</label>
             <div style="display:flex;gap:8px">
-              <input id="ret-sale-search" placeholder="e.g. S-1234567890" style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;padding:10px 14px;font-size:14px;outline:none" />
+              <input id="ret-sale-search" placeholder="e.g. S-1234567890" style="flex:1;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:8px;color:var(--text-primary);padding:10px 14px;font-size:14px;outline:none" />
               <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._findSaleForReturn()">Lookup</button>
             </div>
           </div>
@@ -4271,14 +4489,14 @@ const RetailSystem = {
       const container = document.getElementById('ret-sale-items');
       if (!container) return;
       container.innerHTML = `
-        <div style="color:#fff;font-weight:600;margin-bottom:10px">Items from ${saleNum}</div>
+        <div style="color:var(--text-primary);font-weight:600;margin-bottom:10px">Items from ${saleNum}</div>
         <table class="ret-table">
           <thead><tr><th><input type="checkbox" id="ret-check-all" onchange="document.querySelectorAll('.ret-item-cb').forEach(cb=>cb.checked=this.checked)" /></th><th>Product</th><th>Sold Qty</th><th>Return Qty</th><th>Unit Price</th></tr></thead>
           <tbody>${items.map((item,i)=>`<tr>
             <td><input type="checkbox" class="ret-item-cb" data-idx="${i}" data-pid="${item.product_id}" data-price="${item.unit_price}" data-max="${item.quantity}" /></td>
             <td>${item.product_name}</td>
             <td>${item.quantity}</td>
-            <td><input type="number" class="ret-item-qty" data-idx="${i}" value="${item.quantity}" min="1" max="${item.quantity}" style="width:60px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:5px;color:#fff;padding:4px 8px;text-align:center;outline:none" /></td>
+            <td><input type="number" class="ret-item-qty" data-idx="${i}" value="${item.quantity}" min="1" max="${item.quantity}" style="width:60px;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:5px;color:var(--text-primary);padding:4px 8px;text-align:center;outline:none" /></td>
             <td>${this._fmt(item.unit_price)}</td>
           </tr>`).join('')}</tbody>
         </table>`;
@@ -4391,17 +4609,16 @@ const RetailSystem = {
   async _renderSalesHistory(c) {
     this._injectStyles();
     const mayBrowse = this._mayBrowseTheSalesBook();
-    const dateInputStyle = 'background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;padding:9px 12px;outline:none';
     c.innerHTML = `
       <div class="ret-hdr">
         <h2 class="ret-title">🧾 ${t('Sales History')}</h2>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <input class="ret-search" id="sh-search" placeholder="${t('Search receipt # or customer…')}" oninput="RetailSystem._debounceSalesSearch()" />
           ${mayBrowse ? `
-          <input type="date" id="sh-date-from" title="${t('From date')}"
-            style="${dateInputStyle}" onchange="RetailSystem._loadSalesHistory()" />
-          <input type="date" id="sh-date-to" title="${t('To date')}"
-            style="${dateInputStyle}" onchange="RetailSystem._loadSalesHistory()" />` : ''}
+          <input type="date" class="ret-date" id="sh-date-from" title="${this._esc(t('From date'))}"
+            onchange="RetailSystem._loadSalesHistory()" />
+          <input type="date" class="ret-date" id="sh-date-to" title="${this._esc(t('To date'))}"
+            onchange="RetailSystem._loadSalesHistory()" />` : ''}
           <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._clearSalesFilters()">${t('Clear')}</button>
         </div>
       </div>
@@ -4451,7 +4668,7 @@ const RetailSystem = {
   },
 
   _salesHistoryMessage(tbody, text, isError) {
-    const color = isError ? '#ef4444' : 'var(--text-muted)';
+    const color = isError ? 'var(--state-danger-text)' : 'var(--text-muted)';
     tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:${color};padding:30px">${this._esc(text)}</td></tr>`;
   },
 
@@ -4515,7 +4732,13 @@ const RetailSystem = {
         return;
       }
       const statusColor = { completed:'green', pending:'yellow', cancelled:'red', voided:'red' };
-      tbody.innerHTML = data.map(s => `<tr style="cursor:pointer" onclick="RetailSystem._viewSale(${s.id})" title="${t('View invoice')}">
+      // `this._esc(t(...))`, matching the identical title on the dashboard's and
+      // the customer modal's sale rows. This one site had the raw t() -- and a
+      // translation string is not a constant: it comes from a locale JSON, so
+      // an apostrophe in the Arabic or French rendering ("Voir l'facture") ends
+      // the attribute early and everything after it becomes markup. Escaping
+      // here costs nothing and removes the difference between the three.
+      tbody.innerHTML = data.map(s => `<tr style="cursor:pointer" onclick="RetailSystem._viewSale(${s.id})" title="${this._esc(t('View invoice'))}">
         <td style="font-family:monospace;color:var(--sub-accent)">${this._saleOpenerButton(s.id, s.sale_number)}</td>
         <!-- Same unisolated two-number run as the dashboard's Date column;
              see the long note there. -->
@@ -4608,12 +4831,12 @@ const RetailSystem = {
             <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()">✕ Close</button>
           </div>
           <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:20px">
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Customer')}</div><div style="color:#fff;font-weight:600">${this._esc(sale.customer_name||'Walk-in')}</div></div>
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Cashier')}</div><div style="color:#fff;font-weight:600">${this._attributionCell(this._saleIdentityRow(sale), sale.cashier)}</div></div>
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Till')}</div><div style="color:#fff;font-weight:600">${this._attribution(sale.terminal_id)}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Customer')}</div><div style="color:var(--text-primary);font-weight:600">${this._esc(sale.customer_name||'Walk-in')}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Cashier')}</div><div style="color:var(--text-primary);font-weight:600">${this._attributionCell(this._saleIdentityRow(sale), sale.cashier)}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Till')}</div><div style="color:var(--text-primary);font-weight:600">${this._attribution(sale.terminal_id)}</div></div>
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Payment')}</div><div>${this._badge(sale.payment_method||'cash','blue')}</div></div>
             <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Status')}</div><div>${this._badge(sale.status||'completed', statusColor[sale.status]||'green')}</div></div>
-            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Total')}</div><div style="color:#10b981;font-weight:700">${this._fmt(sale.total)}</div></div>
+            <div><div style="color:var(--text-muted);font-size:11px;text-transform:uppercase">${t('Total')}</div><div style="color:var(--text-money);font-weight:700">${this._fmt(sale.total)}</div></div>
           </div>
           ${(!sale.actor_user_uid && !sale.terminal_id)
             ? `<p style="color:var(--text-faint);font-size:12px;margin:-8px 0 16px">${t('Sales recorded before this release show no employee or till.')}</p>`
@@ -4632,13 +4855,13 @@ const RetailSystem = {
           </table>
           <div style="display:flex;justify-content:flex-end;margin-top:16px">
             <div style="width:260px">
-              <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span style="color:var(--text-muted)">Subtotal</span><span style="color:#fff">${this._fmt(sale.subtotal)}</span></div>
-              ${sale.discount_amount>0?`<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span style="color:var(--text-muted)">Discount</span><span style="color:#ef4444">-${this._fmt(sale.discount_amount)}</span></div>`:''}
-              ${sale.tax_amount>0?`<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span style="color:var(--text-muted)">Tax</span><span style="color:#fff">${this._fmt(sale.tax_amount)}</span></div>`:''}
-              <div style="display:flex;justify-content:space-between;font-size:15px;font-weight:700;border-top:1px dashed rgba(255,255,255,0.1);padding-top:8px;margin-top:4px"><span style="color:#fff">Total</span><span style="color:#fff">${this._fmt(sale.total)}</span></div>
-              <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:6px"><span style="color:var(--text-muted)">Paid</span><span style="color:#fff">${this._fmt(sale.amount_paid)}</span></div>
-              ${sale.change_amount>0?`<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-muted)">Change</span><span style="color:#10b981">${this._fmt(sale.change_amount)}</span></div>`:''}
-              ${sale.due_date?`<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-muted)">Due date</span><span style="color:#fbbf24">${sale.due_date}</span></div>`:''}
+              <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span style="color:var(--text-muted)">Subtotal</span><span style="color:var(--text-money)">${this._fmt(sale.subtotal)}</span></div>
+              ${sale.discount_amount>0?`<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span style="color:var(--text-muted)">Discount</span><span style="color:var(--text-money-negative)">-${this._fmt(sale.discount_amount)}</span></div>`:''}
+              ${sale.tax_amount>0?`<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span style="color:var(--text-muted)">Tax</span><span style="color:var(--text-money)">${this._fmt(sale.tax_amount)}</span></div>`:''}
+              <div style="display:flex;justify-content:space-between;font-size:15px;font-weight:700;border-top:1px dashed var(--border-default);padding-top:8px;margin-top:4px"><span style="color:var(--text-primary)">Total</span><span style="color:var(--text-money)">${this._fmt(sale.total)}</span></div>
+              <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:6px"><span style="color:var(--text-muted)">Paid</span><span style="color:var(--text-money)">${this._fmt(sale.amount_paid)}</span></div>
+              ${sale.change_amount>0?`<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-muted)">Change</span><span style="color:var(--text-money-positive)">${this._fmt(sale.change_amount)}</span></div>`:''}
+              ${sale.due_date?`<div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-muted)">Due date</span><span style="color:var(--state-warning-text)">${sale.due_date}</span></div>`:''}
             </div>
           </div>
           ${sale.notes?`<p style="color:var(--text-muted);margin-top:14px;font-size:13px">Notes: ${sale.notes}</p>`:''}
@@ -4741,7 +4964,7 @@ const RetailSystem = {
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:16px;margin-bottom:8px" id="rep-kpis">
         <div class="ret-kpi"><div class="ret-kpi-label">Revenue</div><div class="ret-kpi-value" id="rep-rev">—</div></div>
         <div class="ret-kpi"><div class="ret-kpi-label">Transactions</div><div class="ret-kpi-value" id="rep-txn">—</div></div>
-        <div class="ret-kpi"><div class="ret-kpi-label">Gross Profit</div><div class="ret-kpi-value" id="rep-profit" style="color:#10b981">—</div></div>
+        <div class="ret-kpi"><div class="ret-kpi-label">Gross Profit</div><div class="ret-kpi-value" id="rep-profit" style="color:var(--text-money-positive)">—</div></div>
         <div class="ret-kpi"><div class="ret-kpi-label">Avg Ticket</div><div class="ret-kpi-value" id="rep-avg">—</div></div>
       </div>
       <!-- This note used to warn that the branch filter reached the two charts
@@ -5148,8 +5371,8 @@ const RetailSystem = {
         </div>
       </div>
 
-      ${!desktop ? `<div class="sub-chart-card" style="margin-bottom:18px;border-color:#fbbf24">
-        <div style="color:#fbbf24">⚠️ Hardware barcode scanning is available on the Windows desktop app only. Manual barcode entry still works here.</div>
+      ${!desktop ? `<div class="sub-chart-card" style="margin-bottom:18px;border-color:var(--state-warning-text)">
+        <div style="color:var(--state-warning-text)">⚠️ Hardware barcode scanning is available on the Windows desktop app only. Manual barcode entry still works here.</div>
       </div>` : ''}
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start">
@@ -5157,8 +5380,8 @@ const RetailSystem = {
         <div class="sub-chart-card">
           <div class="sub-chart-title" style="margin-bottom:14px">Scanner Status</div>
           <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
-            <span id="sc-status-dot" style="width:12px;height:12px;border-radius:50%;background:#10b981;display:inline-block"></span>
-            <span id="sc-status-text" style="color:#fff;font-size:16px;font-weight:600">Ready</span>
+            <span id="sc-status-dot" style="width:12px;height:12px;border-radius:50%;background:var(--state-success-text);display:inline-block"></span>
+            <span id="sc-status-text" style="color:var(--text-primary);font-size:16px;font-weight:600">Ready</span>
           </div>
           <div id="sc-last-scan" style="color:var(--text-muted);font-size:13px;margin-bottom:18px">No scans yet this session</div>
 
@@ -5166,12 +5389,12 @@ const RetailSystem = {
           <p style="color:var(--text-muted);font-size:12px;margin:0 0 10px">Click below, then scan any barcode — the captured value appears instantly.</p>
           <div style="display:flex;gap:8px;align-items:center">
             <input id="sc-test-value" readonly placeholder="Captured value will appear here…"
-              style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;padding:10px 14px;font-size:14px;font-family:monospace;outline:none" />
+              style="flex:1;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:8px;color:var(--text-primary);padding:10px 14px;font-size:14px;font-family:monospace;outline:none" />
             <button class="ret-btn ret-btn-primary" id="sc-test-btn" onclick="RetailSystem._armTestScan()">Start Test</button>
           </div>
 
-          <div style="margin-top:18px;background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.2);border-radius:10px;padding:12px 14px;color:#94a3b8;font-size:12px;line-height:1.5">
-            ℹ️ <strong style="color:#cbd5e1">Note:</strong> USB &amp; Bluetooth HID scanners behave exactly like a keyboard,
+          <div style="margin-top:18px;background:var(--state-info-surface);border:1px solid var(--state-info-border);border-radius:10px;padding:12px 14px;color:var(--text-secondary);font-size:12px;line-height:1.5">
+            ℹ️ <strong style="color:var(--text-primary)">Note:</strong> USB &amp; Bluetooth HID scanners behave exactly like a keyboard,
             so the app cannot reliably tell whether one is physically plugged in. Status is based on recent scan activity,
             not a hardware connection. A true connection status will be possible once Serial/COM support is added.
           </div>
@@ -5263,7 +5486,7 @@ const RetailSystem = {
     const st  = this._scan;
     if (!cfg.enabled) {
       text.textContent = 'Disabled';
-      if (dot) dot.style.background = '#64748b';
+      if (dot) dot.style.background = 'var(--text-tertiary)';
       if (last) last.textContent = 'Scanner listening is turned off';
       return;
     }
@@ -5272,11 +5495,11 @@ const RetailSystem = {
       const ago  = secs < 60 ? `${secs}s ago` : `${Math.round(secs / 60)}m ago`;
       // "Ready" within the last 10s of a scan, otherwise idle-but-waiting.
       text.textContent = secs < 10 ? 'Ready' : 'Waiting for Scanner';
-      if (dot) dot.style.background = secs < 10 ? '#10b981' : '#fbbf24';
-      if (last) last.innerHTML = `Last Scan: <span style="color:#fff">${ago}</span> · <span style="font-family:monospace">${st.lastScanCode || ''}</span>`;
+      if (dot) dot.style.background = secs < 10 ? 'var(--state-success-text)' : 'var(--state-warning-text)';
+      if (last) last.innerHTML = `Last Scan: <span style="color:var(--text-primary)">${ago}</span> · <span style="font-family:monospace">${st.lastScanCode || ''}</span>`;
     } else {
       text.textContent = 'Waiting for Scanner';
-      if (dot) dot.style.background = '#fbbf24';
+      if (dot) dot.style.background = 'var(--state-warning-text)';
       if (last) last.textContent = 'No scans yet this session';
     }
   },

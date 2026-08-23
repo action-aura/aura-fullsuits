@@ -51,6 +51,20 @@ const CSS_FILE = path.join(FRONTEND_DIR, 'css', 'main.css');
 // ─────────────────────────────────────────────────────────────────────────────
 
 function makeElementStub(overrides) {
+  // classList RECORDS rather than swallowing, and `classToggles` keeps the
+  // DECISIONS as well as the result.
+  //
+  // A no-op classList is fine while nothing under test manipulates classes, and
+  // worthless the moment something does. RetailSystem._setMoney() fills every
+  // POS money sink and marks a negative by toggling .money--negative /
+  // .money--accounting on that same element; against a swallowing stub, the
+  // marking — the only cue that survives greyscale — is invisible, and so is
+  // its ABSENCE. That is why reverting all four POS `_setMoney` calls to
+  // `textContent = _fmt()` left this file green: the fixture could not tell the
+  // two apart. Recording the toggle, including `toggle(x, false)`, is what
+  // makes "the marking decision was taken on this element" observable.
+  const classes = [];
+  const classToggles = [];
   const el = Object.assign({
     innerHTML: '',
     textContent: '',
@@ -58,7 +72,14 @@ function makeElementStub(overrides) {
     id: '',
     disabled: false,
     style: {},
-    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    classes,
+    classToggles,
+    classList: {
+      add(c) { classToggles.push([c, true]); if (!classes.includes(c)) classes.push(c); },
+      remove(c) { classToggles.push([c, false]); const i = classes.indexOf(c); if (i !== -1) classes.splice(i, 1); },
+      toggle(c, on) { if (on) this.add(c); else this.remove(c); },
+      contains(c) { return classes.includes(c); },
+    },
     appendChild() {},
     getAttribute() { return null; },
     setAttribute() {},
@@ -791,6 +812,116 @@ function testNegativeAmountsAreNotColourAlone() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// CLAIM 5 — every POS money sink is filled through the marking path
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// #pos-sub, #pos-tax, #pos-total and #pos-change are the four elements on this
+// screen that ARE an amount: each already carries `.money` in the POS template,
+// and _recalc()/_calcChange() fill them. They shipped as
+// `el.textContent = this._fmt(n)`, which emits an ASCII hyphen and cannot touch
+// a class, so `.money--negative` (bold + the negative token) and
+// `.money--accounting`'s parentheses had no way of reaching the value.
+//
+// Reverting all four to that line left EVERY suite green, including the one
+// named for negative-amount signalling — because that test looks at #r-k-rev on
+// the dashboard, and because this file's own element stub swallowed classList.
+//
+// WHY THIS ASSERTS THE DECISION AND NOT THE OUTCOME. None of the four can be
+// negative on the happy path: _recalc() clamps the discount to 0-100 (so total
+// >= 0), and _calcChange() only fills #pos-change when `tendered >= total`. An
+// outcome-only assertion ("a negative POS total is marked") would therefore be
+// unreachable, and a test that cannot reach its own subject is the vacuity this
+// programme keeps shipping. What IS observable, on every render, is whether the
+// marking DECISION was taken on each sink — `_setMoney` toggles both classes on
+// every call, including to false. `textContent = _fmt()` toggles nothing.
+//
+// Conditionality is proven separately and directly against the helper, so
+// "the decision was taken" cannot be satisfied by a helper that always answers
+// the same way.
+//
+// Mutation-proven:
+//   * revert any one of the four sinks to `textContent = this._fmt(...)`
+//                                              -> that sink is named here
+//   * make _setMoney toggle the classes unconditionally on
+//                                              -> the positive control fails
+//   * make _setMoney never toggle them         -> the negative control fails
+
+const POS_MONEY_SINKS = ['pos-sub', 'pos-tax', 'pos-total', 'pos-change'];
+
+function testEveryPosMoneySinkGoesThroughTheMarkingPath() {
+  const ctx = loadRetailSystem();
+  const content = makeElementStub();
+  ctx.RetailSystem._renderPOS(content);
+  ctx.RetailSystem._products = SAMPLE_PRODUCTS;
+  ctx.RetailSystem._cart = [];
+  ctx.RetailSystem._addToCart('p1');
+  ctx.RetailSystem._addToCart('p2');
+
+  // Cash, over-tendered: the only configuration in which _calcChange() fills
+  // #pos-change at all. Without it that sink is never written and this sweep
+  // would silently check three of four.
+  ctx.RetailSystem._paymentMethod = 'cash';
+  ctx.els['pos-tendered'].value = '500';
+  ctx.RetailSystem._recalc();
+
+  const unmarked = [];
+  for (const id of POS_MONEY_SINKS) {
+    const el = ctx.els[id];
+    assert.ok(el, `The POS never addressed #${id}; this sweep cannot see it.`);
+    if (!/\d/.test(String(el.textContent))) {
+      unmarked.push(`#${id} was never given a figure at all (textContent: ${JSON.stringify(el.textContent)})`);
+      continue;
+    }
+    const decided = (el.classToggles || []).some(([c]) => c === 'money--negative');
+    if (!decided) {
+      unmarked.push(
+        `#${id} received "${el.textContent}" without any .money--negative decision being ` +
+        'taken on it, so it was filled by a plain textContent write rather than through ' +
+        'RetailSystem._setMoney(). A negative value there would carry an ASCII hyphen and ' +
+        'no class, so css/main.css could give it neither of its non-colour cues.'
+      );
+    }
+  }
+  assert.deepStrictEqual(
+    unmarked, [],
+    `${unmarked.length} of the ${POS_MONEY_SINKS.length} POS money sinks bypass the marking ` +
+    'path:\n  ' + unmarked.join('\n  ') +
+    '\n\nFill them with RetailSystem._setMoney(el, n), which writes the digits AND ' +
+    'decides the marking on the element that IS the amount.'
+  );
+
+  // CONDITIONALITY, against the helper the sinks delegate to. Without this,
+  // "a decision was taken" is satisfiable by a helper that always says no —
+  // and a marking that never fires carries exactly as much information as one
+  // that always does.
+  const neg = makeElementStub({ id: 'probe-neg' });
+  ctx.RetailSystem._setMoney(neg, -65.44);
+  assert.ok(
+    neg.classList.contains('money--negative') && neg.classList.contains('money--accounting'),
+    'RetailSystem._setMoney() did not mark a NEGATIVE amount. Classes: ' + JSON.stringify(neg.classes)
+  );
+  assert.ok(
+    /−/.test(neg.textContent),
+    'A negative amount written by _setMoney() carries no U+2212 MINUS SIGN. Strip every ' +
+    'colour from this screen — a washed-out shop panel does exactly that — and the figure ' +
+    'must still read as negative. Got: ' + JSON.stringify(neg.textContent)
+  );
+  const pos = makeElementStub({ id: 'probe-pos' });
+  ctx.RetailSystem._setMoney(pos, 65.44);
+  assert.ok(
+    !pos.classList.contains('money--negative') && !pos.classList.contains('money--accounting') &&
+    !/−/.test(pos.textContent),
+    'A POSITIVE amount is also being marked negative, so the marking says nothing. Got: ' +
+    JSON.stringify(pos.textContent) + ' ' + JSON.stringify(pos.classes)
+  );
+
+  console.log(
+    `PASS: all ${POS_MONEY_SINKS.length} POS money sinks (${POS_MONEY_SINKS.map((i) => '#' + i).join(', ')}) ` +
+    'are filled through _setMoney, and the marking is conditional'
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // RTL by construction
 // ─────────────────────────────────────────────────────────────────────────────
 //
@@ -849,6 +980,7 @@ function main() {
   testEveryPosHoverAffordanceHasAFocusCounterpart();
   testEveryFingerTargetMeetsTheTouchMinimum();
   testNegativeAmountsAreNotColourAlone();
+  testEveryPosMoneySinkGoesThroughTheMarkingPath();
   testPosLayoutIsMirrorSafeByConstruction();
   console.log('PASS: retail_surface_pos_test.js');
 }

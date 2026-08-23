@@ -49,11 +49,30 @@
  *     into the unconditional cascade would report a colour the wide till never
  *     shows. They are collected into `ruleTable.mediaColour` for callers to
  *     COUNT rather than to swallow.
- *   * Screens the corpus does not render (modals, products, suppliers,
- *     reports). Nothing here pretends otherwise: retail_design_contrast_test.js
- *     enumerates every shared-chrome colour rule this corpus fails to exercise,
- *     prints each one with the ratio it would measure, and caps the total, so
- *     the blind spot is a published number rather than a silence.
+ *   * Screens the corpus still does not render (Reports, the Admin Centre, the
+ *     scanner settings panel, the edit/create form modals). Nothing here
+ *     pretends otherwise: retail_design_contrast_test.js enumerates every
+ *     shared-chrome colour rule this corpus fails to exercise, prints each one
+ *     with the ratio it would measure, and caps the total, so the blind spot is
+ *     a published number rather than a silence.
+ *
+ * WHAT IT MODELS THAT A NAIVE CASCADE DOES NOT: `opacity`.
+ *
+ * `opacity` is not a colour property and never appears in a colour declaration,
+ * so a resolver that only reads `color` and `background` cannot see it at all —
+ * and this file could not, for two rounds. The consequence is not academic:
+ * `.pos-card-outofstock { opacity:.45 }` washes the whole sold-out tile, so the
+ * product name this harness used to report at 15.95:1 is composited by the
+ * browser at 2.78:1 and its "Out of stock" line at 2.37:1 — WORSE than the
+ * 2.64:1 grey-on-white defect an earlier round was celebrated for fixing, on a
+ * screen that IS in the corpus, under a green suite. Setting that same rule to
+ * `opacity:.06` — a tile you cannot read at all — passed every suite.
+ *
+ * So opacity is modelled the way the compositor implements it: as a GROUP.
+ * An element with opacity < 1 is rendered into its own buffer WITH its
+ * descendants, its background and its outline, and that buffer is then
+ * composited over whatever is behind the group. See `opacityGroups()` and
+ * `paintThroughOpacity()` for the arithmetic and for what stays approximate.
  *
  * No test framework is configured for this vanilla-JS, build-step-free
  * frontend (see CLAUDE.md), so this runs standalone on Node built-ins:
@@ -581,6 +600,113 @@ function effectiveColour(ruleTable, el, tokens, activeStates) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 3b. OPACITY — GROUP COMPOSITING
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// `opacity: .45` does NOT tint an element's text. It renders the element and
+// its entire subtree — background, text, borders, outline — into an offscreen
+// buffer, and composites that buffer over the backdrop at 45%. Two consequences
+// decide how this has to be modelled, and both are why treating opacity as "a
+// nearly-transparent text colour" would report the wrong number:
+//
+//   1. It moves the FOREGROUND *and* the BACKGROUND toward the same backdrop.
+//      A white-on-dark tile at 45% is not white on a lighter dark; it is a
+//      washed foreground on a washed background, and the ratio between them
+//      collapses far faster than either one alone suggests.
+//   2. It is INHERITED-BY-CONTAINMENT, not by the cascade. `opacity` is not an
+//      inherited property, so `winningDeclaration(child,'opacity')` correctly
+//      returns nothing for the tile's <span>s — and yet every one of them is
+//      painted at 45%, because they are inside the group. Walking ancestors is
+//      not an approximation here, it is the actual mechanism.
+//
+// WHAT STAYS APPROXIMATE, so no caller reads silence as proof:
+//   * Nested groups are collapsed to the PRODUCT of their alphas over the
+//     outermost group's backdrop. That is exact whenever the backgrounds
+//     involved lie inside the outermost group (the case in this product) and a
+//     close bound otherwise — and when a group paints no background of its own,
+//     the backdrop and the element's own resolved surface are the same colour,
+//     so the arithmetic reduces to an identity rather than to a guess.
+//   * Values that do not resolve to a number (a var() with no definition, a
+//     calc()) are returned as UNRESOLVED rather than defaulted to 1. Defaulting
+//     to 1 is precisely the silence this file exists to remove.
+//   * `opacity: 0` is a real, visible-to-nobody state, but it is also how this
+//     codebase writes the START of a CSS animation (`opacity:0; animation:...
+//     forwards`). A zero that is paired with an animation on the same element
+//     is therefore reported as ANIMATED rather than measured, because measuring
+//     the first frame of a reveal would report a 1.00:1 failure on text that is
+//     fully opaque a third of a second later.
+
+function opacityValue(ruleTable, el, tokens, activeStates) {
+  const decl = winningDeclaration(ruleTable, el, 'opacity', activeStates);
+  if (!decl) return null;
+  const raw = resolveVar(decl.value, tokens);
+  if (raw === null) return { unresolved: `opacity "${decl.value}" (${decl.from}) does not resolve`, from: decl.from };
+  const text = String(raw).trim();
+  const m = /^(\d*\.?\d+)(%?)$/.exec(text);
+  if (!m) return { unresolved: `opacity "${text}" (${decl.from}) is not a plain number`, from: decl.from };
+  const value = m[2] === '%' ? parseFloat(m[1]) / 100 : parseFloat(m[1]);
+  if (!isFinite(value)) return { unresolved: `opacity "${text}" (${decl.from}) is not finite`, from: decl.from };
+  const animated = !!winningDeclaration(ruleTable, el, 'animation', activeStates);
+  return { value: Math.max(0, Math.min(1, value)), from: decl.from, animated };
+}
+
+/**
+ * Every opacity group `el` is painted inside, innermost first. An element that
+ * declares its own opacity is the innermost group of its own subtree, so the
+ * walk starts AT `el`, not at its parent.
+ */
+function opacityGroups(ruleTable, el, tokens, activeStates) {
+  const groups = [];
+  for (let node = el; node && node.type === 'element'; node = node.parent) {
+    const op = opacityValue(ruleTable, node, tokens, activeStates);
+    if (!op) continue;
+    if (op.unresolved) return { unresolved: op.unresolved };
+    if (op.value >= 1) continue;                  // fully opaque group: no effect
+    if (op.value === 0 && op.animated) continue;  // animation start frame — see the note above
+    groups.push({ el: node, alpha: op.value, from: op.from });
+  }
+  return { groups };
+}
+
+/**
+ * Push a resolved (colour, surface) pair through every opacity group that
+ * contains the element, and return what the compositor actually puts on the
+ * glass. Returns {colour, surface, alpha, groups} or {unresolved}.
+ *
+ * `colour` must already be the PAINTED foreground — i.e. a translucent text
+ * colour composited over its own surface by the caller — because alpha on the
+ * colour channel and alpha on the group are two different operations applied in
+ * that order.
+ */
+function paintThroughOpacity(ruleTable, el, tokens, activeStates, colour, surface) {
+  const found = opacityGroups(ruleTable, el, tokens, activeStates);
+  if (found.unresolved) return { unresolved: found.unresolved };
+  const groups = found.groups;
+  if (!groups.length) return { colour, surface, alpha: 1, groups };
+
+  const alpha = groups.reduce((a, g) => a * g.alpha, 1);
+  const outermost = groups[groups.length - 1].el;
+  // What the group is composited ONTO: the surface behind the outermost group,
+  // which is its parent's resolved background. A group at the document root has
+  // nothing behind it, and that is a corpus failure, not a colour to invent.
+  if (!outermost.parent || outermost.parent.type !== 'element') {
+    return { unresolved: `opacity group ${groups[groups.length - 1].from} has no ancestor to composite onto` };
+  }
+  const behind = effectiveBackground(ruleTable, outermost.parent, tokens, activeStates);
+  if (behind.unresolved) {
+    return { unresolved: `opacity group ${groups[groups.length - 1].from}: ${behind.unresolved}` };
+  }
+  const over = (c) => composite({ r: c.r, g: c.g, b: c.b, a: alpha }, behind.colour);
+  return {
+    colour: over(colour),
+    surface: over(surface),
+    alpha,
+    groups,
+    backdrop: behind.colour,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 4. THE CORPUS
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -602,9 +728,86 @@ const PRODUCTS = [
   { id: 'p3', name: 'Sold out item', price: 9.90, total_stock: 0, reorder_level: 5, category_id: 'c1' },
 ];
 
+/* ── The table screens' server data ─────────────────────────────────────────
+   One row per list, because one row is enough to render every cell type and a
+   second would only multiply the same pairings. Every value is the SHAPE the
+   backend actually writes, not a convenient one:
+
+     * `created_at` is the SPACE form (`retail_api.py::create_sale` stores
+       `%Y-%m-%d %H:%M:%S`), never an ISO 'T'. The 'T' is a strong LTR
+       character; a fixture carrying one silently anchors the whole run and
+       makes the Date column's bidi hazard unreproducible in test while it is
+       live on every Arabic install. Same reasoning, same fixture shape, as
+       retail_surface_i18n_test.js — kept honest in both files so neither drifts.
+     * A supplier/customer/product id is a client-generated UUID string, not an
+       autoincrement int, because that is what the sync migration made them.
+     * `total_stock: 0` on one product, so the out-of-stock row renders. */
+const SALES_ROWS = [
+  { id: 1, sale_number: 'S-1041', customer_name: 'Walk-in', item_count: 3, items: 3,
+    payment_method: 'cash', total: 42.50, status: 'completed', created_at: '2026-08-21 18:42:00' },
+  { id: 2, sale_number: 'S-1042', customer_name: 'Ann Q', item_count: 1, items: 1,
+    payment_method: 'card', total: -12.00, status: 'voided', created_at: '2026-08-21 19:02:00' },
+];
+
+const SALE_DETAIL = {
+  sale: Object.assign({}, SALES_ROWS[0], {
+    subtotal: 38.00, tax_amount: 4.50, discount_amount: 0, amount_paid: 50, change_amount: 7.50,
+    cashier: null, actor_user_uid: null, terminal_id: null, notes: '',
+  }),
+  items: [{ product_id: 'p1', product_name: 'Coffee beans 250g', sku: 'CB250', quantity: 2,
+    unit_price: 12.50, discount_pct: 0, tax_rate: 16, line_total: 29.00 }],
+};
+
+const TABLE_DATA = {
+  returns: [{ id: 9, return_number: 'R-0007', sale_number: 'S-1041', customer_name: 'Walk-in',
+    refund_method: 'cash', refund_amount: 12.25, created_at: '2026-08-22 09:05:00' }],
+  purchaseOrders: [{ id: 4, po_number: 'PO-0031', supplier_name: 'Acme Trading', status: 'pending',
+    total: 430.75, ordered_at: '2026-08-18', received_at: null }],
+  products: [
+    { id: 'p1', name: 'Coffee beans 250g', sku: 'CB250', barcode: '1110001', cost_price: 8.00,
+      sell_price: 12.50, total_stock: 20, reorder_level: 5, unit: 'bag', category_name: 'Beverages' },
+    { id: 'p3', name: 'Sold out item', sku: 'SO1', barcode: '1110003', cost_price: 6.00,
+      sell_price: 9.90, total_stock: 0, reorder_level: 5, unit: 'pack', category_name: 'Beverages' },
+  ],
+  categories: [{ id: 'c1', name: 'Beverages' }],
+  suppliers: [{ id: 's1', name: 'Acme Trading', phone: '0790000000', email: 'ops@acme.example',
+    address: 'Amman', order_count: 4 }],
+  customers: [{ id: 'cu1', name: 'Ann Q', phone: '0791111111', email: 'ann@example.co',
+    loyalty_points: 120, total_spent: 512.25, order_count: 7 }],
+  heldSales: [{ id: 3, hold_number: 'H-0003', label: 'blue jacket', item_count: 2,
+    customer_name: 'Walk-in', total: 31.40, created_at: '2026-08-22 10:15:00' }],
+  auditLog: [{ id: 1, timestamp: '2026-08-22 11:00:00', user_id: '6f1c2d34-aa11-4b22-9c33-7d44e55f6677',
+    action: 'create', entity: 'sale', entity_id: 1, details: 'Sale S-1041 created' }],
+};
+
+/**
+ * The response for a URL. Routed, because the screens below fan out across nine
+ * endpoints and a single blanket payload would render every table as its EMPTY
+ * state — which is the one state with no badges, no money and no dates in it,
+ * i.e. exactly the rows this corpus exists to look at.
+ */
+function apiResponseFor(url) {
+  const u = String(url);
+  const ok = (data, meta) => ({ status: 'success', data, meta });
+  if (/\/customers\/[^/?]+\/sales/.test(u)) return ok(SALES_ROWS);
+  if (/\/sales\/recent/.test(u)) return ok(SALES_ROWS);
+  if (/\/sales\/\d+/.test(u)) return ok(SALE_DETAIL);
+  if (/\/audit-log/.test(u)) return ok(TABLE_DATA.auditLog, { total: 1, page: 1, limit: 50, actions: ['create'], entities: ['sale'] });
+  if (/\/held-sales/.test(u)) return ok(TABLE_DATA.heldSales);
+  if (/\/purchase-orders/.test(u)) return ok(TABLE_DATA.purchaseOrders);
+  if (/\/returns/.test(u)) return ok(TABLE_DATA.returns);
+  if (/\/products/.test(u)) return ok(TABLE_DATA.products);
+  if (/\/categories/.test(u)) return ok(TABLE_DATA.categories);
+  if (/\/suppliers/.test(u)) return ok(TABLE_DATA.suppliers);
+  if (/\/customers/.test(u)) return ok(TABLE_DATA.customers);
+  if (/dashboard\/stats/.test(u)) return ok(STATS);
+  return ok(STATS);
+}
+
 function makeStub(over) {
   const el = Object.assign({
-    innerHTML: '', textContent: '', value: '', id: '', disabled: false, style: {},
+    innerHTML: '', outerHTML: '', textContent: '', value: '', id: '', disabled: false, style: {},
+    dataset: {},
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     appendChild() {}, getAttribute() { return null; }, setAttribute() {},
     querySelectorAll() { return []; }, addEventListener() {}, removeEventListener() {},
@@ -621,6 +824,7 @@ function loadRetailSystem(capabilities) {
   const chartHosts = Object.create(null);
   const injected = { css: '' };
   const namedQueries = Object.create(null);
+  const overlays = [];
 
   const getEl = (id) => {
     if (!els[id]) {
@@ -639,12 +843,18 @@ function loadRetailSystem(capabilities) {
     t: (s) => s,
     fetch: (url) => Promise.resolve({
       ok: true, status: 200,
-      json: () => Promise.resolve({ data: /held-sales/.test(String(url)) ? [] : STATS }),
+      json: () => Promise.resolve(apiResponseFor(url)),
     }),
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
     navigator: { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
     localStorage: { getItem: () => null, setItem() {} },
+    // URLSearchParams is a HOST global, not a JS intrinsic, so a fresh vm
+    // context does not have one — and _loadSalesHistory / _loadAuditLog both
+    // build their query strings with it. Without this the two screens throw
+    // inside their own try/catch and render as their error state, which is a
+    // corpus that looks full and contains no rows.
     setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
+    URLSearchParams,
     document: {
       activeElement: null,
       getElementById(id) { if (id === 'ret-styles') return null; return getEl(id); },
@@ -655,7 +865,11 @@ function loadRetailSystem(capabilities) {
       },
       querySelectorAll() { return []; },
       head: { appendChild(node) { if (node && node.textContent) injected.css += '\n' + node.textContent; } },
-      body: { appendChild() {} },
+      // Modals are appended to <body>, not into #sub-content. Recording them is
+      // what lets a modal be rendered as its own corpus screen rather than
+      // vanishing — and the dark `.ret-modal` island was, for two rounds, the
+      // single largest population of colour rules nothing exercised.
+      body: { appendChild(node) { if (node) overlays.push(node); } },
       documentElement: { getAttribute: () => 'light', style: { setProperty() {} } },
       addEventListener() {},
     },
@@ -671,7 +885,7 @@ function loadRetailSystem(capabilities) {
   vm.createContext(sandbox);
   vm.runInContext(code, sandbox, { filename: RETAIL_JS });
   assert.ok(sandbox.RetailSystem, 'subsystem-retail.js did not expose window.RetailSystem');
-  return { RetailSystem: sandbox.RetailSystem, els, chartHosts, injected, namedQueries };
+  return { RetailSystem: sandbox.RetailSystem, els, chartHosts, injected, namedQueries, overlays };
 }
 
 /**
@@ -682,7 +896,8 @@ function loadRetailSystem(capabilities) {
  * decoration -- omitting it would make every transparent element unresolvable.
  */
 const SHELL_OPEN = '<body><div class="sub-shell"><div class="sub-main"><main class="sub-content" id="sub-content">';
-const SHELL_CLOSE = '</main></div></div></body>';
+const SHELL_CLOSE_INNER = '</main></div></div>';
+const BODY_CLOSE = '</body>';
 
 function spliceDeferredWrites(root, ctx) {
   // Screens render their frame synchronously and then fill regions by id
@@ -702,9 +917,27 @@ function spliceDeferredWrites(root, ctx) {
     return true;
   };
 
+  // `el.outerHTML = ...` REPLACES the placeholder rather than filling it. The
+  // customer modal's purchase-history table arrives this way and only this way
+  // (_viewCustomer swaps out #cu-hist-loading), so treating outerHTML as if it
+  // were innerHTML would nest a <table> inside the "Loading…" div and give
+  // every cell in it a surface the browser never puts there.
+  const replace = (host, html) => {
+    if (!host || !html || !host.parent) return false;
+    const frag = dom.parseFragment(html);
+    const siblings = host.parent.children || [];
+    const at = siblings.indexOf(host);
+    if (at === -1) return false;
+    for (const child of frag.children) { child.parent = host.parent; }
+    siblings.splice(at, 1, ...frag.children);
+    spliced++;
+    return true;
+  };
+
   for (const [id, stub] of Object.entries(ctx.els)) {
     const host = byId.get(id);
     if (!host) continue;
+    if (stub.outerHTML) { replace(host, stub.outerHTML); continue; }
     if (stub.innerHTML) attach(host, stub.innerHTML);
     else if (stub.textContent) {
       host.children = [{ type: 'text', text: stub.textContent, parent: host }];
@@ -733,12 +966,52 @@ function spliceDeferredWrites(root, ctx) {
   return spliced;
 }
 
-function screenFrom(name, ctx, contentHtml) {
-  const root = dom.parseFragment(SHELL_OPEN + contentHtml + SHELL_CLOSE);
+/**
+ * A modal is appended to <body>, NOT into #sub-content — it is a sibling of the
+ * shell, over a scrim, and its own overlay is what supplies the surface its
+ * contents sit on. Reconstructing it inside the shell would hand every cell in
+ * it the till's white card as a background and report ratios the operator never
+ * sees, which is the same class of wrong answer as omitting the shell entirely.
+ */
+function overlayMarkup(node) {
+  const cls = node.className ? ` class="${node.className}"` : '';
+  const id = node.id ? ` id="${node.id}"` : '';
+  return `<div${cls}${id}>${node.innerHTML || ''}</div>`;
+}
+
+function screenFrom(name, ctx, contentHtml, overlayHtml) {
+  const root = dom.parseFragment(
+    SHELL_OPEN + (contentHtml || '') + SHELL_CLOSE_INNER + (overlayHtml || '') + BODY_CLOSE
+  );
   const spliced = spliceDeferredWrites(root, ctx);
   return { name, root, spliced, injectedCss: ctx.injected.css };
 }
 
+/** Drain the microtask queue so a render that fires an un-awaited load finishes. */
+async function settle() {
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
+ * ── WHY THE TABLE SCREENS ARE IN HERE ──────────────────────────────────────
+ *
+ * They were not, for two rounds, and an adversarial verifier showed exactly
+ * what that bought: with only the POS, the cashier landing and the dashboard
+ * rendered, `this._bdi(...)` could be deleted from FIVE call sites, the
+ * receipt-opener <button> could be replaced with a bare escaped string at BOTH
+ * of its non-dashboard call sites, and every suite stayed green — because each
+ * of those guards had exactly one element in the corpus to look at, and that
+ * element was on the one screen that was rendered.
+ *
+ * The blind spot was published rather than hidden (see
+ * retail_design_contrast_test.js's unexercised-chrome ledger, which named
+ * `.ret-search` at 1.00:1 and `.ret-badge-yellow` at 1.31:1 every single run)
+ * and its own comment said "rendering the products, customers and PO screens
+ * would surface them as failures instead of notes, which is the right next
+ * move". This is that move. Expect the pairing count and the unexercised count
+ * both to change; that is the point of it.
+ */
 async function buildCorpus() {
   const screens = [];
 
@@ -777,6 +1050,64 @@ async function buildCorpus() {
     screens.push(screenFrom('pos', ctx, content.innerHTML));
   }
 
+  // ── The list screens. Every one of them is a `.ret-table` on a
+  //    `.sub-chart-card`, i.e. the shared chrome this suite could previously
+  //    only measure on the single dashboard table that overrides it.
+  const listScreens = [
+    ['sales-history', (rs, c) => rs._renderSalesHistory(c)],
+    ['returns', (rs, c) => rs._renderReturns(c)],
+    ['purchase-orders', (rs, c) => rs._renderPurchases(c)],
+    ['products', (rs, c) => rs._renderProducts(c)],
+    ['customers', (rs, c) => rs._renderCustomers(c)],
+    ['suppliers', (rs, c) => rs._renderSuppliers(c)],
+    ['audit-log', (rs, c) => rs._renderAuditLog(c)],
+  ];
+  for (const [name, render] of listScreens) {
+    const ctx = loadRetailSystem(['retail.reports']);
+    const content = makeStub();
+    await render(ctx.RetailSystem, content);
+    await settle();
+    screens.push(screenFrom(name, ctx, content.innerHTML));
+  }
+
+  // ── The three modals. The dark `.ret-modal` island and everything inside it
+  //    (its fields, its <option>s, its wide invoice table) is a large family of
+  //    colour rules that NO amount of list-screen rendering reaches, and the
+  //    customer modal is one of the two non-dashboard homes of the receipt
+  //    opener button.
+  {
+    const ctx = loadRetailSystem(['retail.reports']);
+    const content = makeStub();
+    await ctx.RetailSystem._renderCustomers(content);
+    await settle();
+    await ctx.RetailSystem._viewCustomer('cu1');
+    await settle();
+    const overlay = ctx.overlays[ctx.overlays.length - 1];
+    assert.ok(overlay, 'The customer modal never reached document.body.');
+    screens.push(screenFrom('customer-modal', ctx, content.innerHTML, overlayMarkup(overlay)));
+  }
+  {
+    const ctx = loadRetailSystem(['retail.reports']);
+    const content = makeStub();
+    await ctx.RetailSystem._renderSalesHistory(content);
+    await settle();
+    await ctx.RetailSystem._viewSale(1);
+    await settle();
+    const overlay = ctx.overlays[ctx.overlays.length - 1];
+    assert.ok(overlay, 'The sale-detail modal never reached document.body.');
+    screens.push(screenFrom('sale-modal', ctx, content.innerHTML, overlayMarkup(overlay)));
+  }
+  {
+    const ctx = loadRetailSystem(['retail.reports']);
+    const content = makeStub();
+    ctx.RetailSystem._renderPOS(content);
+    ctx.RetailSystem._openHeldSalesModal();
+    await settle();
+    const overlay = ctx.overlays[ctx.overlays.length - 1];
+    assert.ok(overlay, 'The held-sales modal never reached document.body.');
+    screens.push(screenFrom('held-sales-modal', ctx, content.innerHTML, overlayMarkup(overlay)));
+  }
+
   return screens;
 }
 
@@ -812,6 +1143,7 @@ async function harness() {
     textPaintingElements, effectiveColour, effectiveBackground,
     winningDeclaration, contrastRatio, parseColour, composite,
     resolveVar, backgroundColourOf, matchesSelectorParts, parseSelector, specificityOf,
+    opacityValue, opacityGroups, paintThroughOpacity,
     describe: dom.describe, allElements: dom.allElements, ownText: dom.ownText,
     lengthRange: dom.lengthRange,
   };
@@ -873,32 +1205,83 @@ function testTokensResolve(h) {
   console.log(`PASS: ${Object.keys(h.tokens).length} tokens resolved; --app-bg = ${JSON.stringify(appBg)}`);
 }
 
+/* Every screen buildCorpus() sets out to render, in order.
+   The assertion below compares this against what came back, EXACTLY — not
+   `>= 3`, and not a total element count. A floor on the total is the shape of
+   guard that let this corpus sit at three screens: one screen can silently
+   render its error state, or throw inside its own try/catch and produce four
+   elements, while twelve others keep the total comfortably above any number
+   written here. A screen that does not appear must fail by name. */
+const DECLARED_SCREENS = [
+  'dashboard', 'cashier-landing', 'pos',
+  'sales-history', 'returns', 'purchase-orders', 'products', 'customers',
+  'suppliers', 'audit-log',
+  'customer-modal', 'sale-modal', 'held-sales-modal',
+];
+
+/* The placeholder a list screen shows INSTEAD of its rows: while loading, when
+   the fetch is refused, and when the result set is empty. Every one of them is
+   a single full-width cell, and a corpus that captured one of these instead of
+   real rows would look populated and contain none of the badges, money, dates
+   or row controls this whole file exists to measure. */
+function dataRowsOf(root) {
+  const rows = [];
+  dom.walkElements(root, (el) => {
+    if (el.tag !== 'tr') return;
+    const cells = (el.children || []).filter((n) => n.type === 'element' && n.tag === 'td');
+    if (cells.length >= 3 && !cells.some((c) => c.attrs.colspan)) rows.push(el);
+  });
+  return rows;
+}
+
 function testCorpusRendersRealScreens(h) {
-  assert.strictEqual(h.screens.length, 3, `Expected 3 rendered screens, got ${h.screens.length}`);
+  assert.deepStrictEqual(
+    h.screens.map((s) => s.name), DECLARED_SCREENS,
+    'The corpus did not render the screens it declares. Every downstream ' +
+    'assertion is a loop over these screens, so one that quietly failed to ' +
+    'build is a whole surface this suite silently stops checking — which is ' +
+    'precisely how the receipt-opener button and five <bdi> isolations could be ' +
+    'deleted with the suite still green.'
+  );
+
+  const perScreen = [];
+  const thin = [];
+  const emptyStates = [];
   let total = 0;
   for (const s of h.screens) {
     const els = h.allElements(s.root);
+    const text = textPaintingElements(s.root).length;
     total += els.length;
-    // The cashier landing is genuinely small (one card, one primary action);
-    // the floor is per-screen "it rendered at all", with the real size guard on
-    // the corpus total below.
-    assert.ok(els.length >= 10, `Screen "${s.name}" produced only ${els.length} elements — the render or the splice broke.`);
-    // The landing makes no fetch and defers nothing, by design, so a zero here
-    // is only a defect on the screens that DO fill regions after a fetch.
-    if (s.name !== 'cashier-landing') {
-      assert.ok(s.spliced >= 4, `Screen "${s.name}" spliced back only ${s.spliced} deferred writes; ` +
-        'the badges, the money breakdown and the cart all arrive that way, so a low count means ' +
-        'the corpus is missing most of what it exists to look at.');
+    perScreen.push(`${s.name}=${els.length}el/${text}text/${s.spliced}spliced`);
+
+    // PER-SCREEN, not per-corpus. The whole point: thirteen screens cannot
+    // cover for one that emptied.
+    if (els.length < 10 || text < 4) thin.push(`${s.name}: ${els.length} elements, ${text} text-painting`);
+
+    // A screen that OWNS a table must have rendered ROWS, not the "Loading…" /
+    // "No sales found." single-cell placeholder. This is the check that makes
+    // the fixture wiring load-bearing: mis-route one endpoint and the screen
+    // still renders, still anchors, still has a hundred elements, and contains
+    // not one badge, amount or date.
+    const hasTable = els.some((el) => el.tag === 'tbody');
+    if (hasTable && dataRowsOf(s.root).length === 0) {
+      emptyStates.push(`${s.name}: has a <tbody> but rendered no multi-cell data row — ` +
+        'it captured a loading/empty/refused placeholder, not the list.');
     }
+
     // Every screen must actually be INSIDE the shell chain, or its background
     // walk would terminate on nothing and every pairing would read unresolved.
-    const anchored = h.allElements(s.root).some((el) => el.attrs.id === 'sub-content');
-    assert.ok(anchored, `Screen "${s.name}" is not anchored in the .sub-content shell chain.`);
+    assert.ok(
+      els.some((el) => el.attrs.id === 'sub-content'),
+      `Screen "${s.name}" is not anchored in the .sub-content shell chain.`
+    );
   }
-  assert.ok(total >= 200, `The whole corpus is only ${total} elements. It was 249 when written; ` +
-    'a corpus that shrinks is a suite that quietly stops checking.');
-  const counts = h.screens.map((s) => `${s.name}=${h.allElements(s.root).length}el/${s.spliced}spliced`);
-  console.log(`PASS: corpus renders 3 real screens, ${total} elements — ${counts.join(', ')}`);
+
+  assert.deepStrictEqual(thin, [], 'Screen(s) rendered almost nothing:\n  ' + thin.join('\n  '));
+  assert.deepStrictEqual(emptyStates, [], 'Screen(s) captured an empty state:\n  ' + emptyStates.join('\n  '));
+
+  console.log(`PASS: corpus renders all ${DECLARED_SCREENS.length} declared screens, ${total} elements`);
+  console.log(`      ${perScreen.join(', ')}`);
 }
 
 function testCorpusContainsTheKnownHazards(h) {
@@ -912,6 +1295,19 @@ function testCorpusContainsTheKnownHazards(h) {
     ['dashboard', (el) => el.classes.includes('ret-btn-ghost'), 'a dashboard ghost button (hardcoded 40px block size)'],
     ['pos', (el) => el.classes.includes('pos-cat-btn'), 'a POS category pill'],
     ['pos', (el) => el.classes.includes('money'), 'a POS money amount'],
+    // The sold-out tile. Invisible to this file until opacity was modelled: its
+    // name reported 15.95:1 and composited at 2.78:1, and `opacity:.06` passed.
+    ['pos', (el) => el.classes.includes('pos-card-outofstock'), 'the sold-out product tile (opacity:.45 group)'],
+    // The chrome that five list screens are made of, and that the corpus could
+    // previously only reach through the one dashboard table that overrides it.
+    ['sales-history', (el) => el.classes.includes('ret-search'), 'the shared list search box (measured 1.00:1 — white on a 5% white tint)'],
+    ['sales-history', (el) => el.classes.includes('ret-rowbtn'), 'the receipt-opener button OFF the dashboard (_saleOpenerButton)'],
+    ['customer-modal', (el) => el.classes.includes('ret-rowbtn'), 'the receipt-opener button in the customer Purchase-History modal'],
+    ['products', (el) => el.classes.includes('ret-btn-danger'), 'a destructive list-row button (measured 2.70:1)'],
+    ['purchase-orders', (el) => el.classes.includes('ret-badge-yellow'), 'a yellow status badge (measured 1.31:1)'],
+    ['sale-modal', (el) => el.classes.includes('ret-modal'), 'the sale-detail modal panel'],
+    ['audit-log', (el) => el.tag === 'bdi', 'the audit log\'s bidi-isolated actor id'],
+    ['held-sales-modal', (el) => el.classes.includes('ret-btn-danger'), 'the held-sale Discard button'],
   ];
   const missing = [];
   for (const [screenName, pred, what] of wanted) {
@@ -932,8 +1328,174 @@ function testCorpusContainsTheKnownHazards(h) {
 function testTextPaintingElementsAreFound(h) {
   let total = 0;
   for (const s of h.screens) total += h.textPaintingElements(s.root).length;
-  assert.ok(total >= 60, `Only ${total} text-painting elements across the whole corpus — the text walk is broken.`);
-  console.log(`PASS: ${total} text-painting elements across the corpus`);
+  // The per-screen floor lives in testCorpusRendersRealScreens, where it
+  // belongs: a corpus-wide minimum is satisfiable by twelve healthy screens and
+  // one empty one, which is the shape of guard this round exists to remove.
+  assert.ok(total >= DECLARED_SCREENS.length * 4,
+    `Only ${total} text-painting elements across ${DECLARED_SCREENS.length} screens — the text walk is broken.`);
+  console.log(`PASS: ${total} text-painting elements across ${h.screens.length} screens`);
+}
+
+/* ── OPACITY — the dimension that did not exist ─────────────────────────────
+ *
+ * Two tests, and the split is deliberate.
+ *
+ * The ARITHMETIC is asserted against a synthetic stylesheet with hand-computed
+ * answers, NOT against whatever the product happens to declare today. That is
+ * the only shape that survives the product being fixed: the first version of
+ * this check asserted "the corpus contains at least one opacity group", which
+ * is a guard whose pass condition is the presence of the defect — the moment
+ * `.pos-card-outofstock { opacity:.45 }` was removed (which is the correct
+ * fix), the harness's own model became untested and would have been quietly
+ * deletable. A dimension has to be provable when the product is CLEAN.
+ *
+ * The CORPUS SWEEP then asserts the model actually runs over what is rendered,
+ * in every state the contrast tier evaluates, and never guesses: no element's
+ * opacity may fail to resolve, and no element outside a group may be touched.
+ */
+const OPACITY_STATES = [
+  ['resting', new Set()],
+  ['hovered', new Set(['hover'])],
+  ['focused', new Set(['focus', 'focus-visible'])],
+  ['disabled', new Set(['disabled'])],
+];
+
+function testOpacityArithmeticIsGroupCompositing() {
+  // Deliberately extreme, deliberately hand-computable. backdrop black, group
+  // fill white, text mid-grey — so foreground and background move by different
+  // amounts and a resolver that fudged either one cannot land on both answers.
+  const sources = [{
+    label: 'synthetic',
+    css: `body { background:#000000 }
+          .group { background:#ffffff; opacity:0.5 }
+          .inner { opacity:0.5 }
+          .plain { }
+          .full  { opacity:1 }
+          .reveal { opacity:0; animation:wsReveal 0.5s forwards }
+          .t { color:#808080 }`,
+  }];
+  const rt = buildRuleTable(sources);
+  const tokens = Object.create(null);
+  const root = dom.parseFragment(
+    '<body>' +
+    '<div class="group"><span class="t one">a</span>' +
+      '<div class="inner"><span class="t two">b</span></div></div>' +
+    '<div class="plain"><span class="t three">c</span></div>' +
+    '<div class="full"><span class="t four">d</span></div>' +
+    '<div class="reveal"><span class="t five">e</span></div>' +
+    '</body>'
+  );
+  const find = (cls) => {
+    let out = null;
+    dom.walkElements(root, (el) => { if (!out && el.classes.includes(cls)) out = el; });
+    assert.ok(out, `synthetic fixture lost .${cls}`);
+    return out;
+  };
+  const run = (cls) => {
+    const el = find(cls);
+    const fg = effectiveColour(rt, el, tokens, new Set());
+    const bg = effectiveBackground(rt, el, tokens, new Set());
+    assert.ok(!fg.unresolved, `synthetic .${cls} colour: ${fg.unresolved}`);
+    assert.ok(!bg.unresolved, `synthetic .${cls} surface: ${bg.unresolved}`);
+    return paintThroughOpacity(rt, el, tokens, new Set(), fg.colour, bg.colour);
+  };
+  const near = (a, b) => Math.abs(a - b) < 1e-6;
+
+  // One group at 50%: mid-grey text (128) and a white fill (255) each fall
+  // halfway to the black backdrop.
+  const one = run('one');
+  assert.ok(near(one.alpha, 0.5), `one group: alpha ${one.alpha}, expected 0.5`);
+  assert.ok(near(one.colour.r, 64), `one group: foreground ${one.colour.r}, expected 64 (0.5*128 + 0.5*0)`);
+  assert.ok(near(one.surface.r, 127.5), `one group: surface ${one.surface.r}, expected 127.5 (0.5*255 + 0.5*0)`);
+
+  // Nested groups MULTIPLY, and both layers composite onto the OUTERMOST
+  // group's backdrop — not onto each other's surfaces.
+  const two = run('two');
+  assert.ok(near(two.alpha, 0.25), `nested groups: alpha ${two.alpha}, expected 0.25`);
+  assert.ok(near(two.colour.r, 32), `nested groups: foreground ${two.colour.r}, expected 32`);
+  assert.ok(near(two.surface.r, 63.75), `nested groups: surface ${two.surface.r}, expected 63.75`);
+
+  // No group, and an explicit opacity:1, must both be exact identities. Without
+  // this the model would be satisfiable by washing the entire screen, which
+  // would make every downstream ratio wrong in the other direction.
+  for (const cls of ['three', 'four']) {
+    const r = run(cls);
+    assert.strictEqual(r.alpha, 1, `.${cls} should be untouched by the opacity model`);
+    assert.strictEqual(r.groups.length, 0, `.${cls} should be inside no opacity group`);
+    assert.ok(near(r.colour.r, 128) && near(r.surface.r, 0), `.${cls} colour/surface were altered`);
+  }
+
+  // `opacity:0` that is the first frame of a `forwards` animation is a reveal,
+  // not a permanently invisible element. Measuring it would report a 1.00:1
+  // failure on text that is fully opaque a third of a second later.
+  const five = run('five');
+  assert.strictEqual(five.alpha, 1, 'an animated opacity:0 reveal must not be measured as invisible');
+
+  // ...and an opacity that cannot be read must SAY SO rather than default to 1.
+  const bad = buildRuleTable([{ label: 'synthetic', css: 'body{background:#000} .group{opacity:var(--nope)} .t{color:#808080}' }]);
+  const badRoot = dom.parseFragment('<body><div class="group"><span class="t">a</span></div></body>');
+  let target = null;
+  dom.walkElements(badRoot, (el) => { if (!target && el.classes.includes('t')) target = el; });
+  const unresolvable = opacityGroups(bad, target, Object.create(null), new Set());
+  assert.ok(
+    unresolvable.unresolved,
+    'An opacity whose value does not resolve was silently treated as 1. Defaulting ' +
+    'to opaque is exactly the silence that let a 45% wash go unmeasured for two rounds.'
+  );
+
+  console.log('PASS: opacity arithmetic is group compositing — 1 group, nested groups, identity, reveal, and unresolvable all check out');
+}
+
+function testOpacityIsResolvedOverTheWholeCorpus(h) {
+  const inGroup = [];
+  let outside = 0;
+  const spurious = [];
+
+  for (const screen of h.screens) {
+    for (const [stateName, states] of OPACITY_STATES) {
+      for (const el of h.textPaintingElements(screen.root)) {
+        const found = h.opacityGroups(h.ruleTable, el, h.tokens, states);
+        assert.ok(!found.unresolved,
+          `Opacity did not resolve on ${screen.name}/${stateName} ${h.describe(el).slice(0, 60)}: ` +
+          `${found.unresolved}\nAn unresolvable opacity must not silently default to 1.`);
+
+        const fg = h.effectiveColour(h.ruleTable, el, h.tokens, states);
+        const bg = h.effectiveBackground(h.ruleTable, el, h.tokens, states);
+        if (fg.unresolved || bg.unresolved) continue;
+        const painted = h.paintThroughOpacity(h.ruleTable, el, h.tokens, states, fg.colour, bg.colour);
+        if (painted.unresolved) {
+          spurious.push(`${screen.name}/${stateName} ${h.describe(el).slice(0, 55)} — ${painted.unresolved}`);
+          continue;
+        }
+        if (!found.groups.length) {
+          outside++;
+          if (painted.alpha !== 1 || painted.colour !== fg.colour || painted.surface !== bg.colour) {
+            spurious.push(`${screen.name}/${stateName} ${h.describe(el).slice(0, 55)} — composited despite being in no opacity group`);
+          }
+          continue;
+        }
+        const alpha = found.groups.reduce((a, g) => a * g.alpha, 1);
+        assert.ok(Math.abs(painted.alpha - alpha) < 1e-9,
+          `Group alpha on ${screen.name}/${stateName} is ${painted.alpha}, expected the product ${alpha}.`);
+        inGroup.push(`${screen.name}/${stateName} ${h.describe(el).slice(0, 45)} @${alpha.toFixed(2)} ` +
+          `${h.contrastRatio(fg.colour, bg.colour).toFixed(2)}:1 -> ${h.contrastRatio(painted.colour, painted.surface).toFixed(2)}:1`);
+      }
+    }
+  }
+
+  assert.deepStrictEqual(spurious, [], 'The opacity model misfired on:\n  ' + spurious.join('\n  '));
+  assert.ok(outside >= 100, `Only ${outside} corpus pairings resolved outside an opacity group — the sweep is broken.`);
+
+  // NOT asserted: that the corpus still contains an opacity group. It did when
+  // this dimension was written (.pos-card-outofstock, .pos-empty-icon) and both
+  // were removed as the fix, which is the right outcome — a guard that required
+  // them to stay would have been a guard whose pass condition is the bug. The
+  // arithmetic is proven above, on a fixture that cannot be fixed away.
+  console.log(
+    `PASS: opacity resolved on every corpus pairing in ${OPACITY_STATES.length} states — ` +
+    `${outside} outside any group, ${inGroup.length} inside one`
+  );
+  for (const line of inGroup.slice(0, 12)) console.log('      ' + line);
 }
 
 async function main() {
@@ -944,6 +1506,8 @@ async function main() {
   testCorpusRendersRealScreens(h);
   testCorpusContainsTheKnownHazards(h);
   testTextPaintingElementsAreFound(h);
+  testOpacityArithmeticIsGroupCompositing();
+  testOpacityIsResolvedOverTheWholeCorpus(h);
   console.log('PASS: retail_design_render_test.js');
 }
 

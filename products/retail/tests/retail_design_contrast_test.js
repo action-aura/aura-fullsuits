@@ -110,39 +110,45 @@ const AAA = 7.0;  // WCAG 2.2 §1.4.6 -- enhanced; required here for money
 const EVALUATED_STATES = [['resting', new Set()], ['hovered', new Set(['hover'])]];
 
 /* How many colour-declaring rules in the shared retail chrome the RENDERED tier
-   does not exercise. These belong to screens this corpus does not build --
-   modals, the KPI cards, the PO split preview, the supplier tabs, the list
-   search boxes -- so tier 2 proves nothing about them, and they are printed by
-   name with the ratio each would measure, every single run. (The .ret-badge-*
-   entries among them are additionally covered by the self-contained-badge
-   assertion further down; nothing else in the list is covered anywhere.)
+   does not exercise -- i.e. how many never WIN the cascade on a rendered
+   character. Each is printed by name, with the ratio it would measure and the
+   reason it is not exercised, every single run.
 
    RAISING THIS NUMBER IS A REVIEWABLE ACT. It means the corpus's blind spot
    grew, which is the exact drift that let a 1.48:1 button ship under a green
    suite. Lowering it by rendering another screen is always the better move.
 
-   25 -> 26, reviewed 2026-08-23. The modal moved off its dark-island palette
-   (#0f172a with #fff children) onto the shared tokens, which added ONE colour
-   declaration -- `.ret-field select option` -- and the guard correctly refused
-   the run until someone looked. Reviewed and accepted: that rule computes
-   17.46:1 self-contained.
+   26 -> 25, reviewed 2026-08-23, and the arithmetic behind that one-line move
+   is worth reading because two large changes landed at once and nearly
+   cancelled out:
 
-   Worth reading the printed list rather than only this number, because the
-   same change moved four entries from dangerous to safe without removing them
-   from it: `.ret-modal h3` now computes 14.46:1, `.ret-field label` 5.26:1,
-   and the inputs 15.95:1 -- they used to be #fff on a dark island, correct
-   only so long as nothing else on the screen was light.
+     * THE CORPUS GREW from 3 screens to 13 -- Sales History, Returns, Purchase
+       Orders, Products, Customers, Suppliers, the audit log, and the customer /
+       sale-detail / held-sales modals. On its own that took the old
+       "did anything match it" count from 26 to 16.
+     * THE ACCOUNTING WAS FIXED. "Exercised" used to mean MATCHED, and matching
+       is not painting. `.ret-table { color:#fff }` matched the dashboard's
+       table, so it was filed as covered -- while on that one screen
+       `.rdash .ret-table` outranked it and the white never reached the glass.
+       The rendered tier proved nothing about it, the ledger said it needed no
+       attention, and five list screens shipped white text on white cards.
+       Counting only rules that WIN put 9 rules back on the list: 16 -> 25.
 
-   The entries that are still genuinely wrong, and are the reason this list is
-   printed by name every run rather than hidden behind a count:
-       .ret-search        #fff on a 5% white tint   1.00:1   (invisible)
-       .ret-badge-yellow  #fbbf24 on a 15% tint     1.31:1
-       .ret-badge-red / .ret-badge-purple           2.60 / 2.77:1
-       .ret-btn-danger                              2.70:1
-   None is reachable from the corpus today. Rendering the products, customers
-   and PO screens would surface them as failures instead of notes, which is the
-   right next move and is why the comment above says lowering beats raising. */
-const UNEXERCISED_CHROME_BUDGET = 26;
+   The nine that entered are named in the printed output as
+   "OUTRANKED on every rendered element it matches", and they are the dangerous
+   half of the list, not the harmless half. `.ret-btn-ghost { color:#cbd5e1 }`
+   is among them -- the exact literal behind the reported 1.48:1 "Held" button.
+   It is off the glass today only because `button.ret-btn.ret-btn-ghost` in
+   css/main.css outranks it at (0,2,1); nothing about the chrome sheet itself
+   changed, and an edit to that main.css rule hands the 1.48:1 version straight
+   back. The old accounting called that "exercised".
+
+   The rest of the list is genuinely unreachable: the KPI card family, the PO
+   split preview, the supplier tabs, and the `.ret-field`/`.ret-search` inputs
+   -- whose value is real text an operator reads, but lives in an attribute, so
+   this DOM model has no character to hang a pairing on. `.ret-search`'s
+   #fff-on-a-5%-white-tint (1.00:1) is in that group and is still wrong. */
+const UNEXERCISED_CHROME_BUDGET = 25;
 
 /* ── Token parsing ─────────────────────────────────────────────────────────
    Only the block between the [design-tokens:begin]/[design-tokens:end]
@@ -389,10 +395,24 @@ function resolveRenderedPairings(h) {
         // is measured -- exactly what the compositor does, and the difference
         // between "rgba(...,0.5) is fine" and the ratio a person sees.
         const painted = fg.colour.a < 1 ? h.composite(fg.colour, bg.colour) : fg.colour;
+        // ...and THEN through every `opacity` group the element sits inside.
+        // These are two different operations in a fixed order: alpha on the
+        // colour channel tints the glyph against its own surface, group opacity
+        // fades the glyph AND that surface together toward whatever is behind
+        // the group. Skipping the second is how `.pos-card-outofstock`'s
+        // "Out of stock" line was reported at 7.79:1 while the browser
+        // composites it at 2.37:1.
+        const through = h.paintThroughOpacity(h.ruleTable, el, h.tokens, states, painted, bg.colour);
+        if (through.unresolved) {
+          unresolved.push(`${where}\n      ${through.unresolved}`);
+          continue;
+        }
         pairings.push({
-          where, ratio: h.contrastRatio(painted, bg.colour),
+          where, ratio: h.contrastRatio(through.colour, through.surface),
           colourFrom: fg.from,
           surfaceFrom: bg.layers.map((l) => l.from).join('  over  '),
+          alpha: through.alpha,
+          opacityFrom: through.groups.map((g) => `opacity:${g.alpha} <- ${g.from}`).join('  in  '),
         });
       }
     }
@@ -400,36 +420,51 @@ function resolveRenderedPairings(h) {
   return { pairings, unresolved };
 }
 
+function describePairing(p) {
+  return `${p.ratio.toFixed(2)}:1  ${p.where}\n      colour  <- ${p.colourFrom}\n      surface <- ${p.surfaceFrom}` +
+    (p.alpha < 1 ? `\n      washed to ${(p.alpha * 100).toFixed(0)}% by ${p.opacityFrom}` : '');
+}
+
 function testEveryRenderedPairingReachesAA(h) {
   const { pairings, unresolved } = resolveRenderedPairings(h);
 
-  // ANTI-VACUITY. This is a filter over `pairings`; an empty corpus would pass
-  // it while comparing nothing. retail_design_render_test.js asserts the corpus
-  // reaches the specific elements the defects were measured on; this asserts
-  // the resolution step itself produced a realistic population.
-  assert.ok(
-    pairings.length >= 200,
-    `Only ${pairings.length} rendered pairings were resolved (was 258 when written). ` +
-    'Either the corpus shrank or the cascade stopped matching -- a green result ' +
-    'here would be meaningless.'
+  // ANTI-VACUITY, and it is PER SCREEN on purpose. A corpus-wide floor of 200
+  // was satisfied by three screens and would still be satisfied if nine of the
+  // thirteen silently stopped resolving, because the four largest carry more
+  // than 200 pairings between them. Every screen the corpus declares must
+  // contribute, or the number below is an average hiding a hole.
+  const perScreen = new Map();
+  for (const p of pairings) {
+    const screen = p.where.split('/')[0];
+    perScreen.set(screen, (perScreen.get(screen) || 0) + 1);
+  }
+  const silent = h.screens.map((s) => s.name).filter((name) => (perScreen.get(name) || 0) < EVALUATED_STATES.length * 4);
+  assert.deepStrictEqual(
+    silent, [],
+    'Screen(s) contributed almost no resolved pairings:\n  ' +
+    silent.map((n) => `${n}: ${perScreen.get(n) || 0}`).join('\n  ') +
+    '\n\nA screen that resolves nothing is a screen this tier proves nothing ' +
+    'about, and it is indistinguishable from a screen that passes.'
   );
 
   const failures = pairings.filter((p) => p.ratio < AA).sort((a, b) => a.ratio - b.ratio);
   assert.deepStrictEqual(
-    failures.map((f) => `${f.ratio.toFixed(2)}:1  ${f.where}\n      colour  <- ${f.colourFrom}\n      surface <- ${f.surfaceFrom}`),
-    [],
+    failures.map(describePairing), [],
     `${failures.length} pairing(s) the till actually RENDERS fall below WCAG AA (${AA}:1):\n  ` +
-    failures.map((f) => `${f.ratio.toFixed(2)}:1  ${f.where}\n      colour  <- ${f.colourFrom}\n      surface <- ${f.surfaceFrom}`).join('\n  ') +
+    failures.map(describePairing).join('\n  ') +
     '\n\nThis tier does not care where a colour came from -- a token, a literal ' +
-    'in an injected stylesheet, or an inline style attribute all land on the ' +
-    'same screen. Fix the colour, not the scope of the test.'
+    'in an injected stylesheet, an inline style attribute, or a perfectly legible ' +
+    'pair inside an `opacity` group -- they all land on the same screen. Fix the ' +
+    'colour, not the scope of the test.'
   );
 
   const worst = pairings.reduce((a, b) => (b.ratio < a.ratio ? b : a));
+  const washed = pairings.filter((p) => p.alpha < 1).length;
   console.log(
     `PASS: all ${pairings.length} RENDERED pairings across ${h.screens.length} screens ` +
     `x ${EVALUATED_STATES.length} states reach AA (${AA}:1) — tightest is ` +
-    `${worst.ratio.toFixed(2)}:1 at ${worst.where.split(' ')[0]}`
+    `${worst.ratio.toFixed(2)}:1 at ${worst.where.split(' ')[0]}; ${washed} of them ` +
+    'measured through an opacity group'
   );
   return unresolved;
 }
@@ -615,15 +650,69 @@ function testBadgeVariantsAreSelfContained(h) {
   console.log(`PASS: all ${variants.size} .ret-badge-* variants carry a self-contained, opaque, AA-clearing override`);
 }
 
+/* The states a chrome rule can legitimately win in. Evaluated SEPARATELY, never
+   unioned: a single set containing both `hover` and `disabled` would let a rule
+   that only ever applies to a disabled control count as exercised by a hovered
+   one, which is not a state any element is ever in. */
+const CHROME_STATES = [
+  new Set(),
+  new Set(['hover']),
+  new Set(['focus', 'focus-visible']),
+  new Set(['active']),
+  new Set(['disabled']),
+];
+
+/**
+ * Every colour declaration that actually PAINTS A CHARACTER somewhere in the
+ * corpus, keyed the way `winningDeclaration` reports it.
+ *
+ * ── WHY "MATCHED" WAS THE WRONG TEST, AND WHAT IT COST ────────────────────
+ *
+ * The ledger used to count a rule as exercised if ANY corpus element matched
+ * its selector. Matching is not painting. `.ret-table { color:#fff }` matched
+ * the dashboard's transactions table, so it was filed under "exercised, so the
+ * rendered tier covers it" — while on that one screen `.rdash .ret-table` (a
+ * higher-specificity rule) beat it, and the white it asked for never reached
+ * the glass. The rendered tier therefore proved nothing about it, the ledger
+ * said it needed no attention, and the same declaration went on rendering white
+ * text on white cards on the five list screens that had no such override.
+ *
+ * So a rule is exercised where it WINS: where some rendered element's own text
+ * is painted in the colour this declaration asked for. That is the only form of
+ * the question whose answer is "the rendered tier has measured this".
+ */
+function paintingDeclarations(h) {
+  const winners = new Set();
+  for (const screen of h.screens) {
+    for (const el of h.textPaintingElements(screen.root)) {
+      for (const states of CHROME_STATES) {
+        const fg = h.effectiveColour(h.ruleTable, el, h.tokens, states);
+        if (fg && fg.from) winners.add(fg.from);
+      }
+    }
+  }
+  return winners;
+}
+
 function testUnexercisedChromeIsCountedNotAssumedFine(h) {
-  /* The shared chrome styles every retail screen, and this corpus renders three
-     of them. Every colour rule in that sheet which no corpus element matches is
-     a rule this suite proves NOTHING about -- so it is named, measured against
-     the till's own surfaces, and counted. Passing silently over them is the
-     precise failure that let the two reported bugs ship. */
-  const elements = [];
-  for (const s of h.screens) elements.push(...h.allElements(s.root));
-  const anyState = new Set(['hover', 'focus-visible', 'focus', 'active', 'disabled']);
+  /* The shared chrome styles every retail screen. Every colour rule in that
+     sheet which never wins the cascade on a rendered character is a rule this
+     suite proves NOTHING about -- so it is named, measured against the till's
+     own surfaces, and counted. Passing silently over them is the precise
+     failure that let the two reported bugs ship. */
+  const winners = paintingDeclarations(h);
+
+  // ANTI-VACUITY for the accounting itself. If effectiveColour() stopped
+  // resolving, `winners` would be empty, EVERY chrome rule would be reported
+  // unexercised, and the budget assertion below would fail loudly rather than
+  // quietly -- but the reverse mistake (a resolver that returns a `from` for
+  // everything) would silently empty the ledger, so the floor is stated.
+  assert.ok(
+    winners.size >= 40,
+    `Only ${winners.size} distinct colour declarations paint any character across ` +
+    `${h.screens.length} rendered screens. The cascade resolution is broken, so an ` +
+    'empty unexercised list would mean "nothing resolved", not "everything is covered".'
+  );
 
   const surfaces = Object.entries(h.tokens)
     .filter(([name]) => /^--surface-/.test(name))
@@ -632,12 +721,53 @@ function testUnexercisedChromeIsCountedNotAssumedFine(h) {
   assert.ok(surfaces.length >= 5, `Expected >=5 solid --surface-* tokens to measure against, found ${surfaces.length}`);
 
   const unexercised = [];
+  const outrankedButRendered = [];
+  const inheritOnly = [];
   let colourRules = 0;
   for (const rule of h.ruleTable.rules) {
     if (rule.source !== CHROME_SHEET || !('color' in rule.decls)) continue;
+
+    // `color: inherit` is not a colour claim, it is a RESET -- the mechanism by
+    // which a control stops overriding whatever the row already decided
+    // (.ret-rowbtn's whole job). It can never be "the colour a character was
+    // painted in", so counting it as an unexercised colour rule is a category
+    // error, not a finding. Tier 4 excludes it for exactly the same reason.
+    if (/^(inherit|currentcolor|unset|initial|revert)$/i.test(String(rule.decls.color).trim())) {
+      inheritOnly.push(rule.selector);
+      continue;
+    }
     colourRules++;
-    if (elements.some((el) => h.matchesSelectorParts(rule.parts, el, new Set())
-      || h.matchesSelectorParts(rule.parts, el, anyState))) continue;
+    if (winners.has(`${rule.selector}  [${rule.source}]`)) continue;
+
+    // Why it is not exercised is the interesting part, and the two answers are
+    // very different sizes of problem:
+    //
+    //   OUTRANKED — some rendered element matches it and a nearer rule wins on
+    //     every one of them. This is the `.ret-table { color:#fff }` state, and
+    //     the state the old "did anything match it" accounting laundered into
+    //     the fine bucket. The literal is still in the sheet, and the only
+    //     thing keeping it off the glass is a rule somewhere else that a future
+    //     edit can remove without touching it.
+    //   NO TEXT — it wins on an element that paints no text node of its own.
+    //     An <input>'s value is real text a cashier reads, but it lives in an
+    //     attribute, so this DOM model has no character to hang a pairing on
+    //     and the rendered tier genuinely cannot measure it.
+    let matchedBy = null;
+    let winsSomewhere = false;
+    for (const s of h.screens) {
+      for (const el of h.allElements(s.root)) {
+        if (!CHROME_STATES.some((states) => h.matchesSelectorParts(rule.parts, el, states))) continue;
+        if (!matchedBy) matchedBy = `${s.name} ${h.describe(el).slice(0, 44)}`;
+        if (CHROME_STATES.some((states) => {
+          const d = h.winningDeclaration(h.ruleTable, el, 'color', states);
+          return d && d.from === `${rule.selector}  [${rule.source}]`;
+        })) winsSomewhere = true;
+      }
+    }
+    const why = !matchedBy ? 'no rendered element matches it'
+      : winsSomewhere ? `wins on ${matchedBy}, which paints no text of its own`
+      : `OUTRANKED on every rendered element it matches (e.g. ${matchedBy})`;
+    if (matchedBy && !winsSomewhere) outrankedButRendered.push(`${rule.selector}   (e.g. ${matchedBy})`);
 
     const fg = h.parseColour(rule.decls.color, h.tokens);
     const bgRaw = rule.decls['background-color'] !== undefined ? rule.decls['background-color'] : rule.decls.background;
@@ -661,13 +791,23 @@ function testUnexercisedChromeIsCountedNotAssumedFine(h) {
       }
       note = `inherits its surface — would be ${worst.toFixed(2)}:1 on ${on}`;
     }
-    unexercised.push(`${rule.selector.padEnd(32)} color:${String(rule.decls.color).padEnd(22)} ${note}`);
+    unexercised.push(`${rule.selector.padEnd(32)} color:${String(rule.decls.color).padEnd(22)} ${note}\n            ${why}`);
   }
 
   assert.ok(colourRules >= 25, `Expected >=25 colour rules in the shared chrome, parsed ${colourRules}.`);
 
-  console.log(`      ${unexercised.length} chrome colour rule(s) NOT exercised by the corpus — the rendered tier proves nothing about these:`);
+  console.log(`      ${unexercised.length}/${colourRules} chrome colour rule(s) NOT exercised — the rendered tier proves nothing about these:`);
   for (const line of unexercised) console.log('        ' + line);
+  if (inheritOnly.length) {
+    console.log(`      (${inheritOnly.length} further rule(s) declare color:inherit — a reset, not a colour claim: ${inheritOnly.join(', ')})`);
+  }
+  if (outrankedButRendered.length) {
+    console.log(
+      `      ${outrankedButRendered.length} of the unexercised rules DO match a rendered element and lose the cascade ` +
+      'on every one of them — the exact shape `.ret-table { color:#fff }` was in when five screens shipped white on white:'
+    );
+    for (const line of outrankedButRendered) console.log('        ' + line);
+  }
 
   assert.ok(
     unexercised.length <= UNEXERCISED_CHROME_BUDGET,

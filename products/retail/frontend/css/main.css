@@ -3928,6 +3928,17 @@ html[data-theme="light"] .auth-card { box-shadow: 0 30px 70px rgba(20,32,60,0.18
 .lp-theme-opt:focus-visible,
 .auth-field input:focus-visible,
 .auth-foot a:focus-visible,
+/* The in-row receipt-number control (subsystem-retail.js `_saleOpenerButton`).
+   Its own sheet gives it a :focus-visible rule, but that rule only colours in
+   an underline; the RING came from `.rdash :focus-visible` / `.pos-wrap
+   :focus-visible`, both of which are scoped descendant selectors. So the same
+   button had a designed 3px ring on the dashboard and nothing but the browser
+   default on Sales History and inside the customer Purchase History modal --
+   six lines below a comment arguing the ring must be deliberately heavier than
+   a UA default precisely because a till is driven by a scanner, which is a
+   keyboard. Listing it here is what makes the ring a property of the control
+   rather than of whichever screen happens to contain it. */
+.ret-rowbtn:focus-visible,
 html[data-theme="light"] .sub-nav-item:focus-visible,
 html[data-theme="light"] .sub-exit-btn:focus-visible,
 html[data-theme="light"] .sub-header-btn:focus-visible,
@@ -4039,6 +4050,33 @@ input.pos-mini-input, select.pos-cust-select {
    label is words; the chip only has to be a DISTINCT, quiet chip. So it becomes
    the neutral one, which is both accessible and honest about carrying no state. */
 .ret-badge.ret-badge-purple { background: var(--surface-active);        color: var(--text-primary);       border: 1px solid var(--border-strong); }
+
+/* THE TILL'S OWN CONTROLS CLEAR THE TOUCH FLOOR, WHATEVER VARIANT THEY ARE.
+   The floor used to be attached to the ghost variant alone, because the ghost
+   variant was the one a rendered screen happened to contain. That is scope
+   deciding correctness: the moment the corpus reached the list and modal
+   screens it found `.ret-btn-primary` ("Resume", "+ PO", "Reprint Receipt")
+   and `.ret-btn-danger` ("Delete", "Discard") with NO minimum on either axis --
+   the Delete button on every row of Products, Customers and Suppliers, roughly
+   30x28px under a thumb, on installs with no pointer to fall back on.
+
+   `.ret-btn-sm` shrinks the padding and is deliberately NOT exempted: 44px is
+   the floor, not the target, and a "small" button is a visual weight, not a
+   licence to be unhittable. Ghost buttons at `-sm` have already been rendering
+   at 44px since the earlier pass, so this makes the other two variants match
+   what shipped rather than changing the established look.
+
+   `button.ret-btn` is (0,1,1), one point above `.ret-btn` (0,1,0) in the
+   injected sheet, which is what it takes to win without an !important.
+   The two inputs are the same story: `.ret-search` sets its own inline width
+   and no block minimum at all, and `.ret-date` (the Sales History bounds) had
+   neither until it stopped being an inline style. */
+button.ret-btn,
+input.ret-search,
+input.ret-date {
+  min-block-size: var(--touch-target-min);
+  min-inline-size: var(--touch-target-min);
+}
 
 /* The ghost button: the POS "Held" control, every modal's Cancel, and every
    table's row actions. `button.ret-btn.ret-btn-ghost` is (0,2,1), which is what

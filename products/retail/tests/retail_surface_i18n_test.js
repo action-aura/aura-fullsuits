@@ -38,9 +38,32 @@
  * renders as "18:42 2026-08-21" on an Arabic page — a wrong date, not a mirrored
  * one. See testNeutralNumberRunsAreDirectionIsolated below.
  *
+ * WHAT CHANGED, AND WHY IT MATTERED MORE THAN ANY OF THE ABOVE
+ *
+ * This file used to render five surfaces: the POS shell, the cart, the product
+ * grid, the cashier landing and the dashboard. Every sweep in it is a loop over
+ * those fragments, so every claim it made was, in practice, a claim about one
+ * site. An adversarial verifier deleted `this._bdi(...)` from FIVE call sites —
+ * the Sales History date, the Returns date and return number, the customer
+ * Purchase-History date, the PO number — and all six design/surface suites
+ * stayed green, because the only date column in the corpus was the dashboard's
+ * and the anti-vacuity floor was `hazards.length >= 1`, which that one cell
+ * satisfied on its own.
+ *
+ * It now renders thirty: the list screens, their rows, and the three modals.
+ * The bidi floor is derived from the product — the number of places
+ * subsystem-retail.js renders a truncated `created_at` — so deleting a <bdi>
+ * cannot lower the bar it is measured against, and dropping a screen from the
+ * corpus fails by name. See expectedTimestampCells().
+ *
+ * The catalog-coverage claim is scoped, deliberately and out loud: see
+ * LOCALIZED_SURFACES. Screens this programme never localized are rendered,
+ * swept with the same rule, and their offenders counted and named rather than
+ * asserted away or passed over in silence.
+ *
  * Mutation-proven: reintroducing a bare literal, merging a number back into a
- * translatable sentence, re-hardcoding the date locale, or dropping the <bdi>
- * from a date cell all fail here.
+ * translatable sentence, re-hardcoding the date locale, dropping the <bdi> from
+ * ANY of the five date cells, or dropping a screen from the corpus all fail here.
  *
  * Run: node products/retail/tests/retail_surface_i18n_test.js
  */
@@ -69,8 +92,13 @@ const AR = JSON.parse(fs.readFileSync(path.join(FRONTEND_DIR, 'locales', 'ar.jso
 //     a dictionary entry per word and report every real key as missing.
 //   * PLAIN HYPHEN, so "Walk-in" stays one token rather than becoming
 //     "Walk" + "in".
+//   * `#` IS in here. It is the number sign, and this product uses it exactly
+//     that way -- `'#' + entity_id` in the audit log, `'#'+i.product_id` in the
+//     sale detail. Leaving it out made "sale #1" segment as "sale #", which is
+//     not the database value "sale" and not copy either, so a real data column
+//     reported as an untranslated literal that no catalog could ever fix.
 const NON_LINGUISTIC_CHARS =
-  '\\u00a0\\d.,:;%$()\\[\\]{}+|/\\\\\'"' +
+  '\\u00a0\\d.,:;%$()\\[\\]{}+|/#\\\\\'"' +
   '\\u2013\\u2014\\u2212\\u2011' +          // en/em dash, minus sign, non-breaking hyphen
   '\\u00b7\\u2022\\u00d7\\u2715' +          // middot, bullet, multiplication sign, cross
   '\\u2317\\u25b2\\u25bc\\u2192\\u2190';    // viewfinder, up/down triangle, arrows
@@ -168,11 +196,11 @@ function languageSegments(text) {
 
 function makeElementStub(overrides) {
   return Object.assign({
-    innerHTML: '', textContent: '', value: '', id: '', disabled: false,
-    style: {},
+    innerHTML: '', outerHTML: '', textContent: '', value: '', id: '', disabled: false,
+    style: {}, dataset: {},
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
-    appendChild() {}, getAttribute() { return null; }, setAttribute() {},
-    querySelectorAll() { return []; }, addEventListener() {}, focus() {},
+    appendChild() {}, getAttribute() { return null; }, setAttribute() {}, remove() {},
+    querySelectorAll() { return []; }, addEventListener() {}, focus() {}, closest() { return null; },
     getContext() { return {}; },
   }, overrides);
 }
@@ -208,6 +236,54 @@ const PRODUCTS = [
     tax_rate: 16, total_stock: 0, reorder_level: 10, unit: 'pack', category_name: 'Groceries' },
 ];
 
+/* ── The list screens' server data ─────────────────────────────────────────
+   Same `created_at` discipline as STATS above, for the same reason, on every
+   record type that renders a date: the SPACE form, never an ISO 'T'. */
+const SALES_ROWS = [
+  { id: 1, sale_number: 'S-1041', customer_name: 'Walk-in', item_count: 3, items: 3,
+    payment_method: 'cash', total: 42.5, status: 'completed', created_at: '2026-08-21 18:42:00' },
+];
+const SALE_DETAIL = {
+  sale: Object.assign({}, SALES_ROWS[0], {
+    subtotal: 38.0, tax_amount: 4.5, discount_amount: 0, amount_paid: 50, change_amount: 7.5,
+    cashier: null, actor_user_uid: null, terminal_id: null, notes: '',
+  }),
+  items: [{ product_id: 'p1', product_name: 'Espresso Beans 1kg', sku: 'EB1', quantity: 2,
+    unit_price: 18.5, discount_pct: 0, tax_rate: 16, line_total: 42.92 }],
+};
+const LIST_DATA = {
+  returns: [{ id: 9, return_number: 'R-0007', sale_number: 'S-1041', customer_name: 'Walk-in',
+    refund_method: 'cash', refund_amount: 12.25, created_at: '2026-08-22 09:05:00' }],
+  purchaseOrders: [{ id: 4, po_number: 'PO-0031', supplier_name: 'Acme Trading', status: 'pending',
+    total: 430.75, ordered_at: '2026-08-18', received_at: null }],
+  categories: [{ id: 'c1', name: 'Beverages' }],
+  suppliers: [{ id: 's1', name: 'Acme Trading', phone: '0790000000', email: 'ops@acme.example',
+    address: 'Amman', order_count: 4 }],
+  customers: [{ id: 'cu1', name: 'Ann Q', phone: '0791111111', email: 'ann@example.co',
+    loyalty_points: 120, total_spent: 512.25, order_count: 7 }],
+  heldSales: [{ id: 3, hold_number: 'H-0003', label: 'blue jacket', item_count: 2,
+    customer_name: 'Walk-in', total: 31.4, created_at: '2026-08-22 10:15:00' }],
+  auditLog: [{ id: 1, timestamp: '2026-08-22 11:00:00', user_id: '6f1c2d34-aa11-4b22-9c33-7d44e55f6677',
+    action: 'create', entity: 'sale', entity_id: 1, details: 'Sale S-1041 created' }],
+};
+
+function apiResponseFor(url) {
+  const u = String(url);
+  const ok = (data, meta) => ({ status: 'success', data, meta });
+  if (/\/customers\/[^/?]+\/sales/.test(u)) return ok(SALES_ROWS);
+  if (/\/sales\/recent/.test(u)) return ok(SALES_ROWS);
+  if (/\/sales\/\d+/.test(u)) return ok(SALE_DETAIL);
+  if (/\/audit-log/.test(u)) return ok(LIST_DATA.auditLog, { total: 1, page: 1, limit: 50, actions: ['create'], entities: ['sale'] });
+  if (/\/held-sales/.test(u)) return ok(LIST_DATA.heldSales);
+  if (/\/purchase-orders/.test(u)) return ok(LIST_DATA.purchaseOrders);
+  if (/\/returns/.test(u)) return ok(LIST_DATA.returns);
+  if (/\/products/.test(u)) return ok(PRODUCTS);
+  if (/\/categories/.test(u)) return ok(LIST_DATA.categories);
+  if (/\/suppliers/.test(u)) return ok(LIST_DATA.suppliers);
+  if (/\/customers/.test(u)) return ok(LIST_DATA.customers);
+  return ok(STATS);
+}
+
 /**
  * Values that come from the DATABASE, not from this build: product names,
  * units, category names, customer names, receipt numbers. They are user DATA
@@ -220,13 +296,29 @@ const RENDERED_DATA_VALUES = new Set([
   'Espresso Beans', 'Espresso Beans 1kg', 'Paper Cups', 'kg',
   'bag', 'pack', 'Beverages', 'Groceries',
   'Walk-in', 'cash', 'S-1041', 'PC', 'EB1',
+  // From the list-screen fixtures. Each is a COLUMN VALUE the server wrote,
+  // named with the field it comes from so nobody has to guess later:
+  'completed',                       // sales.status
+  'create',                          // audit_log.action
+  'sale',                            // audit_log.entity
+  'Sale S', 'created',               // audit_log.details, free text from the backend
 ]);
+
+/** A canonical uuid4, i.e. a database identifier rather than copy.
+ *  Mirrors RetailSystem._looksLikeUuid. Derived rather than listed, because a
+ *  uuid's hex groups produce accidental two-letter "words" ("aa", "de", "ff")
+ *  that the language segmenter cannot distinguish from real ones — and pinning
+ *  the fixture to a uuid that happens not to contain any would be a fixture
+ *  chosen to avoid the check rather than to survive it. */
+const UUID4 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function loadRetailSystem() {
   const code = fs.readFileSync(FRONTEND_FILE, 'utf8');
   const els = Object.create(null);
   const tbody = makeElementStub();
   const chartHosts = {};
+  const namedQueries = Object.create(null);
+  const overlays = [];
 
   const getEl = (id) => {
     if (!els[id]) {
@@ -257,17 +349,30 @@ function loadRetailSystem() {
     // control characters, so _esc() passes them through untouched and they
     // cannot collide with real copy.
     t: (s) => MARK_OPEN + s + MARK_CLOSE,
-    fetch: () => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ data: STATS }) }),
+    fetch: (url) => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(apiResponseFor(url)) }),
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
     navigator: { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
     localStorage: { getItem: () => null, setItem: () => {} },
+    setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
+    // A host global, not a JS intrinsic: without it _loadSalesHistory and
+    // _loadAuditLog throw inside their own try/catch and render their error
+    // state, i.e. a screen with no rows on it for this sweep to read.
+    URLSearchParams,
     document: {
       activeElement: null,
       getElementById(id) { return id === 'ret-styles' ? makeElementStub() : getEl(id); },
-      createElement() { return makeElementStub(); },
-      querySelector(sel) { return sel === '#r-dash-recent tbody' ? tbody : makeElementStub(); },
+      createElement() { const el = makeElementStub(); return el; },
+      querySelector(sel) {
+        if (sel === '#r-dash-recent tbody') return tbody;
+        if (!namedQueries[sel]) namedQueries[sel] = makeElementStub({ id: '::query::' + sel });
+        return namedQueries[sel];
+      },
       querySelectorAll() { return []; },
       head: { appendChild() {} },
+      // Modals never touch #sub-content — they are appended to <body>. A stub
+      // that swallowed this made every modal in the product invisible to this
+      // file, which is where the customer Purchase-History table lives.
+      body: { appendChild(node) { if (node) overlays.push(node); } },
       documentElement: { getAttribute: () => 'light', style: { setProperty() {} } },
       addEventListener() {},
     },
@@ -280,8 +385,63 @@ function loadRetailSystem() {
   vm.createContext(sandbox);
   vm.runInContext(code, sandbox, { filename: FRONTEND_FILE });
   assert.ok(sandbox.RetailSystem, 'subsystem-retail.js did not expose window.RetailSystem');
-  return { RetailSystem: sandbox.RetailSystem, els, tbody, chartHosts };
+  return { RetailSystem: sandbox.RetailSystem, els, tbody, chartHosts, namedQueries, overlays };
 }
+
+/** Drain the microtask queue so a render that fires an un-awaited load finishes. */
+async function settle() {
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+/* ── SCOPE, STATED RATHER THAN IMPLIED ──────────────────────────────────────
+ *
+ * Two different questions are asked of the surfaces below, and conflating them
+ * is what would make this file either useless or permanently red.
+ *
+ *   STRUCTURAL claims — bidi isolation, an emoji sharing a node with words, a
+ *   key handed to t() that no catalog answers — are properties of the RENDER.
+ *   They hold, or fail, on every screen in the product. They are swept over
+ *   ALL of it, with no exemption anywhere.
+ *
+ *   The CATALOG-COVERAGE claim — "no literal reaches the operator without
+ *   passing through t()" — is a property of what has been LOCALIZED. This
+ *   programme localized the till and the dashboard (see this file's header);
+ *   Products, Customers, Suppliers, Returns, Purchase Orders and the modals
+ *   were never in it and are, today, English-only by construction.
+ *
+ * Rendering the second group and asserting the first claim over it would
+ * produce a permanently failing suite that says nothing new. Rendering it and
+ * saying NOTHING would be the silence this whole programme exists to remove.
+ * So it is rendered, swept with the same rule, and its offenders are COUNTED,
+ * NAMED and CAPPED — the same treatment retail_design_contrast_test.js gives
+ * chrome rules its corpus cannot reach. The cap is a ratchet: it may fall when
+ * a screen is localized, and raising it is a reviewable act.
+ */
+const LOCALIZED_SURFACES = new Set([
+  'POS shell', 'cart lines', 'product grid', 'empty cart',
+  'cashier landing', 'dashboard', 'recent transactions',
+  'hourly chart empty state', 'payment chart empty state',
+  'dashboard bound values', 'POS bound values',
+  'sales history', 'sales history rows', 'audit log', 'audit log rows',
+]);
+
+/* Offenders on the surfaces this programme never localized, at the time of
+   writing. Printed by name every run — read the list, not the number.
+   Lowering it by localizing a screen is always the better move; raising it
+   means a NEW English literal was added to a screen that was already behind,
+   which is the drift this ratchet exists to make visible.
+
+   Three of the emoji-node entries are a PARSER artefact rather than a product
+   defect, and are counted anyway rather than filtered: the "⬆ Import" buttons
+   carry an onclick containing nested single quotes
+   (`ImportWizard.open('retail','products',()=>...)`), which
+   retail_surface_domlite.js's attribute reader terminates early, so part of the
+   handler leaks into the button's text node. Filtering them here would mean
+   this file quietly deciding which of a shared parser's outputs to believe;
+   counting them keeps the artefact visible to whoever owns that parser. */
+const UNLOCALIZED_LITERAL_BUDGET = 59;
+const UNLOCALIZED_EMOJI_NODE_BUDGET = 6;
 
 /** Render every surface this agent reworked, as named fragments. */
 async function renderAllSurfaces() {
@@ -324,7 +484,100 @@ async function renderAllSurfaces() {
   fragments.push(['dashboard bound values', boundValuesAsMarkup(dash.els)]);
   fragments.push(['POS bound values', boundValuesAsMarkup(pos.els)]);
 
+  // ── THE LIST SCREENS AND THE MODALS ─────────────────────────────────────
+  //
+  // Absent from this corpus for two rounds, and an adversarial verifier proved
+  // what that bought: `this._bdi(...)` could be deleted from the Sales History
+  // date cell, the Returns date cell, the Returns return_number, the customer
+  // Purchase-History date and the PO number — FIVE sites — and every one of the
+  // six design/surface suites stayed green, because the only date column any of
+  // them rendered was the dashboard's.
+  const listScreens = [
+    ['sales history', '#sh-table tbody', 'sales history rows', (rs, c) => rs._renderSalesHistory(c)],
+    ['returns', '#ret-table tbody', 'returns rows', (rs, c) => rs._renderReturns(c)],
+    ['purchase orders', '#po-table tbody', 'purchase order rows', (rs, c) => rs._renderPurchases(c)],
+    ['products', '#prod-table tbody', 'product rows', (rs, c) => rs._renderProducts(c)],
+    ['customers', '#cust-table tbody', 'customer rows', (rs, c) => rs._renderCustomers(c)],
+    ['suppliers', '#sup-table tbody', 'supplier rows', (rs, c) => rs._renderSuppliers(c)],
+    ['audit log', '#aud-table tbody', 'audit log rows', (rs, c) => rs._renderAuditLog(c)],
+  ];
+  for (const [name, rowSelector, rowName, render] of listScreens) {
+    const ctx = loadRetailSystem();
+    const host = makeElementStub();
+    await render(ctx.RetailSystem, host);
+    await settle();
+    fragments.push([name, host.innerHTML]);
+    const rows = ctx.namedQueries[rowSelector];
+    fragments.push([rowName, rows ? rows.innerHTML : '']);
+  }
+
+  {
+    const ctx = loadRetailSystem();
+    const host = makeElementStub();
+    await ctx.RetailSystem._renderCustomers(host);
+    await settle();
+    await ctx.RetailSystem._viewCustomer('cu1');
+    await settle();
+    const overlay = ctx.overlays[ctx.overlays.length - 1];
+    fragments.push(['customer modal', overlay ? overlay.innerHTML : '']);
+    // The Purchase-History table replaces its placeholder via `outerHTML`, so
+    // it exists in NO innerHTML anywhere and a sweep over markup alone cannot
+    // see it — the same class of gap as the textContent-bound KPI values above.
+    const hist = ctx.els['cu-hist-loading'];
+    fragments.push(['customer purchase history', hist ? (hist.outerHTML || '') : '']);
+  }
+  {
+    const ctx = loadRetailSystem();
+    const host = makeElementStub();
+    await ctx.RetailSystem._renderSalesHistory(host);
+    await settle();
+    await ctx.RetailSystem._viewSale(1);
+    await settle();
+    const overlay = ctx.overlays[ctx.overlays.length - 1];
+    fragments.push(['sale detail modal', overlay ? overlay.innerHTML : '']);
+  }
+  {
+    const ctx = loadRetailSystem();
+    ctx.RetailSystem._renderPOS(makeElementStub());
+    ctx.RetailSystem._openHeldSalesModal();
+    await settle();
+    const overlay = ctx.overlays[ctx.overlays.length - 1];
+    fragments.push(['held sales modal', overlay ? overlay.innerHTML : '']);
+    fragments.push(['held sales list', ctx.els['held-list'] ? ctx.els['held-list'].innerHTML : '']);
+  }
+
   return fragments;
+}
+
+/* Every surface renderAllSurfaces() sets out to build. Compared EXACTLY, so a
+   screen whose fetch was mis-routed, whose render threw inside its own
+   try/catch, or that was quietly dropped fails BY NAME rather than being
+   absorbed into a corpus-wide total. */
+const DECLARED_SURFACES = [
+  'POS shell', 'cart lines', 'product grid', 'empty cart', 'cashier landing',
+  'dashboard', 'recent transactions', 'hourly chart empty state',
+  'payment chart empty state', 'dashboard bound values', 'POS bound values',
+  'sales history', 'sales history rows', 'returns', 'returns rows',
+  'purchase orders', 'purchase order rows', 'products', 'product rows',
+  'customers', 'customer rows', 'suppliers', 'supplier rows',
+  'audit log', 'audit log rows',
+  'customer modal', 'customer purchase history', 'sale detail modal',
+  'held sales modal', 'held sales list',
+];
+
+function testTheCorpusIsTheCorpusItDeclares(fragments) {
+  assert.deepStrictEqual(
+    fragments.map(([name]) => name), DECLARED_SURFACES,
+    'renderAllSurfaces() did not produce the surfaces it declares.'
+  );
+  const empty = fragments.filter(([, html]) => !html || html.length < 40).map(([name]) => name);
+  assert.deepStrictEqual(
+    empty, [],
+    'Surface(s) rendered (almost) nothing:\n  ' + empty.join('\n  ') +
+    '\n\nEvery sweep in this file is a loop over these fragments. An empty one is ' +
+    'a screen the file reports a clean bill of health on having read no markup.'
+  );
+  console.log(`PASS: all ${DECLARED_SURFACES.length} declared surfaces rendered`);
 }
 
 /** Wrap every textContent an element received into inspectable markup. */
@@ -426,6 +679,49 @@ function testEveryKeyPassedToTranslateExistsInBothCatalogs() {
   });
 }
 
+/** Every string that reaches the operator without ever passing through t(). */
+function unreachableLiterals(strings) {
+  // Anything OUTSIDE a t() region is a raw literal from this build. It is
+  // acceptable only if it carries no language (an amount, a separator), if it
+  // is user data from the database, or — for TEXT NODES ONLY — if the node's
+  // full rendered text happens to be a catalog key, because i18n.js's DOM
+  // sweep rescues exactly that case. Attributes get no such rescue: the sweep
+  // never looks at them.
+  const offenders = [];
+  for (const s of strings) {
+    const rendered = asRendered(s.raw);
+    if (UUID4.test(rendered)) continue;
+    const literalPart = outsideTranslation(s.raw);
+    const segments = languageSegments(literalPart)
+      .filter((seg) => !RENDERED_DATA_VALUES.has(seg));
+    if (!segments.length) continue;
+    if (s.sweepCanRescue && rendered in EN && rendered in AR) continue;
+    // A host-locale date is a DIFFERENT defect wearing the same clothes, and
+    // "wrap it in t()" is the wrong advice for it: no catalog can enumerate
+    // every weekday/month/meridiem combination. `toLocaleString()` with no
+    // argument formats against the BROWSER's locale, not the language the
+    // operator picked in this app -- so an Arabic-reading shopkeeper on an
+    // English Windows gets an English timestamp under an Arabic heading. That
+    // is the same bug as the hardcoded toLocaleDateString('en-US') this file
+    // was written for; the fix is RetailSystem._localeDate, not a catalog key.
+    const hostLocaleDate = /\b(AM|PM)\b/.test(rendered) || /\d{1,2}\/\d{1,2}\/\d{2,4}/.test(rendered);
+    offenders.push({
+      surface: s.surface,
+      line: `[${s.surface}] ${s.kind} ${JSON.stringify(rendered)} in ${s.where} — ` +
+        `untranslated literal(s): ${JSON.stringify(segments)}` +
+        (s.sweepCanRescue
+          ? ' (and the full node text is not a catalog key, so the DOM sweep cannot rescue it)'
+          : ' (an attribute — i18n.js only sweeps text nodes, so there is no rescue)') +
+        (hostLocaleDate
+          ? '\n      ^ this is a DATE formatted against the host locale (a bare '
+            + 'toLocaleString()/toLocaleDateString()), not a missing catalog key. Route it '
+            + 'through RetailSystem._localeDate(), which keys off the active language.'
+          : ''),
+    });
+  }
+  return offenders;
+}
+
 function testNoUntranslatedLiteralReachesTheOperator() {
   return renderAllSurfaces().then((fragments) => {
     const strings = visibleStrings(fragments);
@@ -434,42 +730,44 @@ function testNoUntranslatedLiteralReachesTheOperator() {
       'Only ' + strings.length + ' operator-visible strings were found; harness failure.'
     );
 
-    // Anything OUTSIDE a t() region is a raw literal from this build. It is
-    // acceptable only if it carries no language (an amount, a separator), if it
-    // is user data from the database, or — for TEXT NODES ONLY — if the node's
-    // full rendered text happens to be a catalog key, because i18n.js's DOM
-    // sweep rescues exactly that case. Attributes get no such rescue: the sweep
-    // never looks at them.
-    const offenders = [];
-    for (const s of strings) {
-      const rendered = asRendered(s.raw);
-      const literalPart = outsideTranslation(s.raw);
-      const segments = languageSegments(literalPart)
-        .filter((seg) => !RENDERED_DATA_VALUES.has(seg));
-      if (!segments.length) continue;
-      if (s.sweepCanRescue && rendered in EN && rendered in AR) continue;
-      offenders.push(
-        `[${s.surface}] ${s.kind} ${JSON.stringify(rendered)} in ${s.where} — ` +
-        `untranslated literal(s): ${JSON.stringify(segments)}` +
-        (s.sweepCanRescue
-          ? ' (and the full node text is not a catalog key, so the DOM sweep cannot rescue it)'
-          : ' (an attribute — i18n.js only sweeps text nodes, so there is no rescue)')
-      );
-    }
+    const all = unreachableLiterals(strings);
+    const localized = all.filter((o) => LOCALIZED_SURFACES.has(o.surface));
+    const unlocalized = all.filter((o) => !LOCALIZED_SURFACES.has(o.surface));
 
     assert.deepStrictEqual(
-      offenders, [],
+      localized.map((o) => o.line), [],
       'These strings reach the operator without ever passing through t(), and cannot ' +
-      'be rescued by i18n.js:\n  ' + offenders.join('\n  ') +
+      'be rescued by i18n.js:\n  ' + localized.map((o) => o.line).join('\n  ') +
       '\n\nWrap the string in t() and add it to BOTH catalogs. If a number is glued to ' +
       'words, split them into separate nodes — the sweep only matches a node whose ' +
       'FULL trimmed text is a catalog key, so "312 active products" is unreachable ' +
       'while "312" + "active products" is fine.'
     );
 
+    // The ledger. Every one of these is an English string a shopkeeper reading
+    // Arabic will see; none is a defect THIS programme introduced, and every
+    // one of them was invisible to this file until the corpus was widened.
+    const bySurface = new Map();
+    for (const o of unlocalized) bySurface.set(o.surface, (bySurface.get(o.surface) || 0) + 1);
     console.log(
-      `PASS: none of the ${strings.length} operator-visible strings across ` +
-      `${fragments.length} surfaces is an unreachable literal`
+      `      ${unlocalized.length} untranslated literal(s) on the ${bySurface.size} surface(s) this ` +
+      'programme never localized — rendered and swept, NOT under the catalog requirement:'
+    );
+    for (const [surface, n] of [...bySurface].sort((a, b) => b[1] - a[1])) {
+      console.log(`        ${String(n).padStart(3)}  ${surface}`);
+    }
+    assert.ok(
+      unlocalized.length <= UNLOCALIZED_LITERAL_BUDGET,
+      `${unlocalized.length} untranslated literals on the un-localized screens; the recorded ` +
+      `budget is ${UNLOCALIZED_LITERAL_BUDGET}. A NEW English literal was added to a screen ` +
+      'that is already English-only:\n  ' + unlocalized.map((o) => o.line).join('\n  ') +
+      '\n\nWrap it in t() and add it to both catalogs rather than raising the budget.'
+    );
+
+    console.log(
+      `PASS: none of the ${strings.length} operator-visible strings on the ` +
+      `${LOCALIZED_SURFACES.size} localized surfaces is an unreachable literal ` +
+      `(${unlocalized.length} on un-localized screens, within the recorded budget of ${UNLOCALIZED_LITERAL_BUDGET})`
     );
   });
 }
@@ -479,12 +777,13 @@ function testNoTranslatableStringSharesANodeWithAnEmoji() {
     // The specific defect that made "🛒 Open POS" unreachable by the DOM sweep,
     // and that this file has now shipped twice.
     const offenders = [];
+    const unlocalized = [];
     for (const n of visibleStrings(fragments)) {
       if (n.kind !== 'text') continue;   // only the DOM sweep is defeated this way
       const rendered = asRendered(n.raw);
-      if (/\p{Extended_Pictographic}/u.test(rendered)) {
-        offenders.push(`[${n.surface}] ${JSON.stringify(rendered)} in ${n.where}`);
-      }
+      if (!/\p{Extended_Pictographic}/u.test(rendered)) continue;
+      const line = `[${n.surface}] ${JSON.stringify(rendered)} in ${n.where}`;
+      (LOCALIZED_SURFACES.has(n.surface) ? offenders : unlocalized).push(line);
     }
     assert.deepStrictEqual(
       offenders, [],
@@ -493,7 +792,21 @@ function testNoTranslatableStringSharesANodeWithAnEmoji() {
       'an emoji sharing the node makes the string unreachable by the sweep even when ' +
       'the key exists. Put the emoji in its own aria-hidden span.'
     );
-    console.log('PASS: no translatable string shares a text node with an emoji');
+    // Same ledger treatment, same reason: on a screen with no catalog entries at
+    // all, an emoji sharing the node is not what is keeping the string English.
+    if (unlocalized.length) {
+      console.log(`      ${unlocalized.length} emoji-sharing node(s) on un-localized surfaces:`);
+      for (const line of unlocalized) console.log('        ' + line);
+    }
+    assert.ok(
+      unlocalized.length <= UNLOCALIZED_EMOJI_NODE_BUDGET,
+      `${unlocalized.length} emoji-sharing text nodes on un-localized screens; the recorded ` +
+      `budget is ${UNLOCALIZED_EMOJI_NODE_BUDGET}:\n  ` + unlocalized.join('\n  ')
+    );
+    console.log(
+      'PASS: no translatable string on a localized surface shares a text node with an emoji ' +
+      `(${unlocalized.length} on un-localized screens, within the recorded budget of ${UNLOCALIZED_EMOJI_NODE_BUDGET})`
+    );
   });
 }
 
@@ -552,6 +865,38 @@ function bdiAncestor(node) {
   return null;
 }
 
+/**
+ * How many TRUNCATED-TIMESTAMP CELLS the product renders, counted in
+ * subsystem-retail.js itself.
+ *
+ * This is the corpus's floor, and the derivation is the whole point of it.
+ * `hazards.length >= 1` was not a floor: the dashboard's Date column satisfied
+ * it on its own, so `this._bdi(...)` could be deleted from the four OTHER
+ * timestamp cells in the product and this sweep still reported a clean bill of
+ * health — which is exactly what an adversarial verifier did.
+ *
+ * What is counted is the HAZARD SITE, not the fix: `(x.created_at||'').slice(0,16)`
+ * renders "2026-08-21 18:42" — two neutral runs, no strong character — whether
+ * or not anybody wrapped it in _bdi(). So deleting a `_bdi` leaves the expected
+ * count unchanged, the run still appears in the DOM, and it fails the real
+ * assertion below instead of quietly lowering the bar it is measured against.
+ * Deleting a SCREEN from the corpus, on the other hand, drops the found count
+ * below the expected one and fails here.
+ */
+function expectedTimestampCells() {
+  const src = fs.readFileSync(FRONTEND_FILE, 'utf8');
+  const sites = src.match(/created_at\s*\|\|\s*''\s*\)\s*\.slice\(\s*0\s*,\s*16\s*\)/g) || [];
+  assert.ok(
+    sites.length >= 4,
+    `Found only ${sites.length} truncated-timestamp render site(s) in subsystem-retail.js. ` +
+    'Either the product stopped rendering dates that way (in which case this ' +
+    'derivation needs rewriting, not deleting) or the scan is broken — and a ' +
+    'broken scan would set this sweep\'s floor to nearly zero, which is the ' +
+    'failure it exists to prevent.'
+  );
+  return sites.length;
+}
+
 function testNeutralNumberRunsAreDirectionIsolated() {
   return renderAllSurfaces().then((fragments) => {
     const hazards = [];
@@ -586,20 +931,26 @@ function testNeutralNumberRunsAreDirectionIsolated() {
       }
     }
 
-    // ANTI-VACUITY, and the reason this is stated before the real assertion:
-    // every check below is a filter over `hazards`. If the fixtures stopped
-    // producing a bare number run — an ISO 'T' creeping back into a created_at,
-    // a render that silently stopped emitting rows — the filter would return
-    // an empty list and this test would report a clean bill of health having
-    // examined nothing. "I found nothing to check" must never read as a pass.
+    // ANTI-VACUITY, DERIVED. Every check below is a filter over `hazards`; if
+    // the fixtures stopped producing a bare number run — an ISO 'T' creeping
+    // back into a created_at, a render that silently stopped emitting rows, a
+    // screen dropped from the corpus — the filter would return a short list and
+    // this test would report a clean bill of health having examined a fraction
+    // of the product. "I found nothing to check" must never read as a pass, and
+    // neither must "I found one".
+    const expected = expectedTimestampCells();
     assert.ok(
-      hazards.length >= 1,
-      'No unisolated-run CANDIDATE was rendered at all across ' + fragments.length +
-      ' surfaces, so this sweep checked nothing.\n\nThe likeliest cause is a ' +
-      'fixture whose created_at carries an ISO "T": that T is a strong LTR ' +
-      'character, it anchors the whole run, and it makes the hazard impossible ' +
-      'to reproduce in the test while leaving it live in production — the server ' +
-      'writes "%Y-%m-%d %H:%M:%S" with a SPACE (retail_api.py::create_sale).'
+      hazards.length >= expected,
+      `Only ${hazards.length} unisolated-run CANDIDATE(s) were rendered across ${fragments.length} ` +
+      `surfaces, but subsystem-retail.js renders a truncated "YYYY-MM-DD HH:MM" into ${expected} ` +
+      'cells. So at least one screen that puts a bare two-run timestamp in front of an ' +
+      'operator is NOT in this corpus, and the sweep below proves nothing about it.\n\n' +
+      'Found:\n  ' + (hazards.join('\n  ') || '(none)') +
+      '\n\nThe two likely causes: a screen was dropped from renderAllSurfaces(), or a ' +
+      'fixture\'s created_at carries an ISO "T" — that T is a strong LTR character, it ' +
+      'anchors the whole run, and it makes the hazard impossible to reproduce in the test ' +
+      'while leaving it live in production. The server writes "%Y-%m-%d %H:%M:%S" with a ' +
+      'SPACE (retail_api.py::create_sale).'
     );
 
     assert.deepStrictEqual(
@@ -615,9 +966,11 @@ function testNeutralNumberRunsAreDirectionIsolated() {
     );
 
     console.log(
-      `PASS: all ${hazards.length} rendered run(s) with no strong directional ` +
-      'character are isolated with an explicit direction'
+      `PASS: all ${hazards.length} rendered run(s) with no strong directional character are ` +
+      `isolated with an explicit direction (floor: ${expected}, derived from the truncated-` +
+      'timestamp render sites in subsystem-retail.js)'
     );
+    for (const line of hazards) console.log('      ' + line.slice(0, 110));
   });
 }
 
@@ -689,6 +1042,7 @@ function testCatalogsRemainInParity() {
 async function main() {
   testCatalogsRemainInParity();
   testDatesFollowTheActiveLanguage();
+  testTheCorpusIsTheCorpusItDeclares(await renderAllSurfaces());
   await testEveryKeyPassedToTranslateExistsInBothCatalogs();
   await testNoUntranslatedLiteralReachesTheOperator();
   await testNoTranslatableStringSharesANodeWithAnEmoji();
