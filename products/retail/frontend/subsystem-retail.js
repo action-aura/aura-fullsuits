@@ -2221,18 +2221,30 @@ const RetailSystem = {
         // RTL paragraph. This line already sits in a middot-separated sentence,
         // which is exactly the surrounding text that supplies the wrong
         // direction when the run itself carries none.
-        const when = this._bdi(new Date((r.created_at || '').replace(' ', 'T')).toLocaleString());
+        // `_auditTimestamp` rather than a bare toLocaleString(): that formats
+        // against the OPERATING SYSTEM's locale, not the language the operator
+        // chose here, so an Arabic till on an English Windows showed
+        // "8/22/2026, 10:15:00 AM" -- with an "AM" no catalog can reach,
+        // because it never passes through t(). Same locale-neutral
+        // YYYY-MM-DD HH:MM:SS the audit log uses, and for the same reason: a
+        // held sale is compared against other held sales, not read as prose.
+        const when = this._bdi(this._auditTimestamp(r.created_at));
         const noteHtml = r.label ? ` — ${this._esc(r.label)}` : '';
+        // Pluralised through two whole catalog keys rather than "item" + "s":
+        // Arabic does not pluralise by suffix, so a glued 's' is untranslatable
+        // by construction. The count is a separate node so the sweep can see
+        // the words on their own.
+        const itemsLabel = r.item_count === 1 ? t('item') : t('items');
         return `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 4px;border-bottom:1px solid var(--border-hairline)">
           <div>
             <div style="color:var(--text-primary);font-weight:600;font-size:13px">${this._bdi(r.hold_number||'')}${noteHtml}</div>
-            <div style="color:var(--text-muted);font-size:11px">${r.item_count} item${r.item_count===1?'':'s'} · ${this._esc(r.customer_name)} · ${when}</div>
+            <div style="color:var(--text-muted);font-size:11px">${this._bdi(String(r.item_count))} <span>${itemsLabel}</span> · ${this._esc(r.customer_name)} · ${when}</div>
           </div>
           <div style="display:flex;align-items:center;gap:10px">
             <span style="color:var(--text-money);font-weight:700">${this._fmt(r.total)}</span>
-            <button class="ret-btn ret-btn-primary ret-btn-sm" onclick="RetailSystem._resumeHeldSale(${r.id})">Resume</button>
-            <button class="ret-btn ret-btn-danger ret-btn-sm" onclick="RetailSystem._discardHeldSale(${r.id})">Discard</button>
+            <button class="ret-btn ret-btn-primary ret-btn-sm" onclick="RetailSystem._resumeHeldSale(${r.id})">${t('Resume')}</button>
+            <button class="ret-btn ret-btn-danger ret-btn-sm" onclick="RetailSystem._discardHeldSale(${r.id})">${t('Discard')}</button>
           </div>
         </div>`;
       }).join('');
@@ -3279,7 +3291,7 @@ const RetailSystem = {
         <td style="color:var(--text-muted)">${cu.phone?this._esc(cu.phone):'—'}</td>
         <td style="color:var(--text-muted)">${cu.email?this._esc(cu.email):'—'}</td>
         <td><span style="color:var(--text-primary);font-weight:700">${this._esc(cu.loyalty_points||0)} pts</span></td>
-        <td style="font-weight:600;color:#10b981">${this._fmt(cu.total_spent)}</td>
+        <td style="font-weight:600;color:var(--text-money-positive)">${this._fmt(cu.total_spent)}</td>
         <td style="color:var(--text-muted)">${this._esc(cu.order_count||0)}</td>
         <td onclick="event.stopPropagation()">
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditCustomer('${this._esc(cu.id)}')">Edit</button>
@@ -4289,7 +4301,7 @@ const RetailSystem = {
         tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:30px">${t('No audit entries match these filters.')}</td></tr>`;
       } else {
         tbody.innerHTML = data.map(r => `<tr>
-          <td style="color:var(--text-muted);white-space:nowrap">${this._auditTimestamp(r.timestamp)}</td>
+          <td style="color:var(--text-muted);white-space:nowrap">${this._bdi(this._auditTimestamp(r.timestamp))}</td>
           <!-- Bidi-isolated for the same reason the sale detail's till id is.
                inventory_movements has no viewer anywhere in this frontend
                (its created_by is written on every stock movement and read
@@ -4384,10 +4396,37 @@ const RetailSystem = {
   // case: that route writes local time deliberately; this table stores UTC
   // deliberately (it's an append-only audit trail, never netted by local
   // calendar day), so the fix here is on the READ side, not the write side.
+  //
+  // LOCALE-NEUTRAL on purpose, and this is the one date in the product that
+  // should be.
+  //
+  // It used to call a bare `toLocaleString()`, which formats against the
+  // OPERATING SYSTEM's locale rather than the language the operator chose in
+  // this app -- so an Arabic shop on an English Windows read
+  // "8/22/2026, 2:00:00 PM" in the middle of an otherwise-Arabic audit log,
+  // including the literal "PM", which no catalog can rescue because it never
+  // passes through t().
+  //
+  // The obvious fix is to follow the active language, the way _localeDate()
+  // does for the dashboard heading. That is right for a heading and wrong for
+  // an audit trail. An audit row is EVIDENCE: it gets read next to other rows,
+  // compared across devices, quoted in a support conversation, and sorted. A
+  // format that changes shape with the reader's language makes two people
+  // describing the same event disagree about when it happened, and "2:00 PM"
+  // versus "14:00" versus an Arabic-numeral rendering is exactly the ambiguity
+  // an audit log exists to remove.
+  //
+  // So: fixed `YYYY-MM-DD HH:MM:SS`, in the browser's local zone (the stored
+  // value is UTC -- see the comment above about the 'Z' suffix). Unambiguous,
+  // sortable as text, identical for every operator, and containing no word any
+  // catalog would need to translate.
   _auditTimestamp(ts) {
     if (!ts) return '—';
     const d = new Date(String(ts).replace(' ', 'T') + 'Z');
-    return isNaN(d.getTime()) ? this._esc(ts) : d.toLocaleString();
+    if (isNaN(d.getTime())) return this._esc(ts);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+           `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
   },
 
   // ── RETURNS ───────────────────────────────────────────────────────────────
@@ -4611,7 +4650,7 @@ const RetailSystem = {
     const mayBrowse = this._mayBrowseTheSalesBook();
     c.innerHTML = `
       <div class="ret-hdr">
-        <h2 class="ret-title">🧾 ${t('Sales History')}</h2>
+        <h2 class="ret-title"><span aria-hidden="true">🧾</span> <span>${t('Sales History')}</span></h2>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <input class="ret-search" id="sh-search" placeholder="${t('Search receipt # or customer…')}" oninput="RetailSystem._debounceSalesSearch()" />
           ${mayBrowse ? `
@@ -4949,11 +4988,11 @@ const RetailSystem = {
         <h2 class="ret-title">Analytics & Reports</h2>
         <div style="display:flex;gap:8px;align-items:center">
           <select id="rep-branch" onchange="RetailSystem._loadReports()"
-            style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;padding:8px 12px;outline:none">
+            style="background:var(--surface-sunken,#f2f5f8);border:1px solid var(--border-soft);border-radius:8px;color:var(--text);padding:8px 12px;min-block-size:44px;outline:none">
             <option value="">All branches</option>
           </select>
           <select id="rep-days" onchange="RetailSystem._loadReports()"
-            style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#fff;padding:8px 12px;outline:none">
+            style="background:var(--surface-sunken,#f2f5f8);border:1px solid var(--border-soft);border-radius:8px;color:var(--text);padding:8px 12px;min-block-size:44px;outline:none">
             <option value="7">Last 7 days</option>
             <option value="14" selected>Last 14 days</option>
             <option value="30">Last 30 days</option>

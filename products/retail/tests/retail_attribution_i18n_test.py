@@ -1125,11 +1125,13 @@ def test_refusal_panel_callers_pass_title_and_message_through_t():
 #: grow. A new untranslated string fails immediately, at the wave that adds
 #: it, instead of being discovered by an Arabic-speaking user.
 KNOWN_UNTRANSLATED_BASELINE = frozenset({
+    # Ten entries were removed here on 2026-08-23 -- the audit log's From/To/
+    # Action/Entity/Timestamp/User labels, its two 'All ...' options and its
+    # two pager buttons. They were found by widening the render corpus to
+    # screens no test had ever built, and are now in both catalogs with real
+    # Arabic. This list is a RATCHET: an entry may leave it, never rejoin it.
     'Accept',
     'Accept this request and draft a local purchase order?',
-    'Action',
-    'All actions',
-    'All entities',
     # 'Audit Log' was here and is deliberately gone. It is the TITLE of the
     # capability-refusal panel (rendered twice, <h2> and <h3>) whose message
     # and button were translated in the previous pass, so leaving it exempt
@@ -1155,11 +1157,8 @@ KNOWN_UNTRANSLATED_BASELINE = frozenset({
     'Customer deleted',
     'Decline',
     'Decline this reorder request?',
-    'Entity',
-    'From',
     'Low-Stock Reorder Requests',
     'Manage WhatsApp Reports',
-    'Next ›',
     'No audit entries match these filters.',
     'No pending reorder requests.',
     'Note',
@@ -1171,13 +1170,9 @@ KNOWN_UNTRANSLATED_BASELINE = frozenset({
     'Send daily sales, shift-close, low-stock, and overdue-balance reports to multiple '
     'phone numbers by role or branch. Off by default.',
     'Supplier deleted',
-    'Timestamp',
-    'To',
-    'User',
     'WhatsApp Reports',
     'of',
     'total entries',
-    '‹ Prev',
 })
 
 #: t('...') with a single-quoted literal. Template-literal and variable

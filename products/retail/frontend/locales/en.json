@@ -13,7 +13,6 @@
   "Create your administrator account to get started.": "Create your administrator account to get started.",
   "Your session has expired. Please log in again.": "Your session has expired. Please log in again.",
   "Sign in to your store": "Sign in to your store",
-
   "Accounting System": "Accounting System",
   "HR System": "HR System",
   "Inventory System": "Inventory System",
@@ -23,7 +22,6 @@
   "Retail & POS": "Retail & POS",
   "Clinic Management": "Clinic Management",
   "Business Activity": "Business Activity",
-
   "Transactions": "Transactions",
   "Invoices": "Invoices",
   "Expenses": "Expenses",
@@ -75,13 +73,11 @@
   "Billing": "Billing",
   "Prescriptions": "Prescriptions",
   "Doctors": "Doctors",
-
   "Active Employees": "Active Employees",
   "Present Today": "Present Today",
   "Late Today": "Late Today",
   "Pending Leaves": "Pending Leaves",
   "No employee data yet": "No employee data yet",
-
   "HR Intelligence": "HR Intelligence",
   "Employee lifecycle and organizational health": "Employee lifecycle and organizational health",
   "Log Attendance": "Log Attendance",
@@ -97,7 +93,6 @@
   "View Payroll Status": "View Payroll Status",
   "Today's Attendance": "Today's Attendance",
   "No pending leaves": "No pending leaves",
-
   "CRM Dashboard": "CRM Dashboard",
   "Live sales pipeline & customer intelligence": "Live sales pipeline & customer intelligence",
   "Financial Dashboard": "Financial Dashboard",
@@ -112,7 +107,6 @@
   "Retail Overview": "Retail Overview",
   "Ready to sell": "Ready to sell",
   "Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales.": "Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales.",
-
   "Choose a System": "Choose a System",
   "Analytics & Reports": "Analytics & Reports",
   "Revenue": "Revenue",
@@ -155,14 +149,12 @@
   "Smart Import": "Smart Import",
   "Import All Selected": "Import All Selected",
   "Upload one file — we route it to the right functions": "Upload one file — we route it to the right functions",
-
   "Opening Stock Qty": "Opening Stock Qty",
   "Total opening stock declared for this product, not a live shelf count. Re-importing the same number changes nothing; raising it adds only the difference. Sales, returns and manual adjustments are never overwritten. Leave the cell blank to leave stock untouched, or enter 0 to declare an opening of zero.": "Total opening stock declared for this product, not a live shelf count. Re-importing the same number changes nothing; raising it adds only the difference. Sales, returns and manual adjustments are never overwritten. Leave the cell blank to leave stock untouched, or enter 0 to declare an opening of zero.",
   "Stock was left unchanged for these products:": "Stock was left unchanged for these products:",
   "Declared less than has already been sold or moved": "Declared less than has already been sold or moved",
   "Opening quantity cannot be negative": "Opening quantity cannot be negative",
   "currently on hand": "currently on hand",
-
   "Add Category": "Add Category",
   "Edit Category": "Edit Category",
   "Category Name": "Category Name",
@@ -171,9 +163,7 @@
   "Category updated": "Category updated",
   "Category added": "Category added",
   "Name required": "Name required",
-
   "Supplier": "Supplier",
-
   "Preview split": "Preview split",
   "Add at least one item": "Add at least one item",
   "Error": "Error",
@@ -199,7 +189,6 @@
   "Primary contact": "Primary contact",
   "Supplier fallback": "Supplier fallback",
   "No contact": "No contact",
-
   "Details": "Details",
   "Add Contact": "Add Contact",
   "Edit Contact": "Edit Contact",
@@ -216,14 +205,11 @@
   "Contact updated": "Contact updated",
   "Contact added": "Contact added",
   "Contact deactivated": "Contact deactivated",
-
   "Not syncing with your other devices right now": "Not syncing with your other devices right now",
   "This device's recent changes haven't reached your other devices yet": "This device's recent changes haven't reached your other devices yet",
   "This device isn't receiving updates from your other devices right now": "This device isn't receiving updates from your other devices right now",
   "This device is still working normally. Everything will catch up automatically once the connection comes back.": "This device is still working normally. Everything will catch up automatically once the connection comes back.",
-
   "Branch filter applies to every figure on this page except Revenue by Branch, which always compares all branches.": "Branch filter applies to every figure on this page except Revenue by Branch, which always compares all branches.",
-
   "Synced": "Synced",
   "Waiting for first sync": "Waiting for first sync",
   "pending": "pending",
@@ -232,7 +218,6 @@
   "m ago": "m ago",
   "h ago": "h ago",
   "d ago": "d ago",
-
   "Authentication required": "Authentication required",
   "Session expired or revoked. Please log in again.": "Session expired or revoked. Please log in again.",
   "Role must be manager or cashier.": "Role must be manager or cashier.",
@@ -241,7 +226,6 @@
   "You do not have permission to apply a discount.": "You do not have permission to apply a discount.",
   "You do not have permission to change credit terms.": "You do not have permission to change credit terms.",
   "You do not have permission to record a payment to a supplier.": "You do not have permission to record a payment to a supplier.",
-
   "A PIN identifies who is acting. It does not grant permission.": "A PIN identifies who is acting. It does not grant permission.",
   "A cashier can sell, refund against a sale, and close their own drawer. A manager can also discount, adjust stock and read reports.": "A cashier can sell, refund against a sale, and close their own drawer. A manager can also discount, adjust stock and read reports.",
   "Account deactivated": "Account deactivated",
@@ -314,7 +298,6 @@
   "Payment": "Payment",
   "The activity log is limited to managers and the store owner.": "The activity log is limited to managers and the store owner.",
   "Audit Log": "Audit Log",
-
   "Sales History": "Sales History",
   "Search receipt # or customer…": "Search receipt # or customer…",
   "From date": "From date",
@@ -331,7 +314,6 @@
   "most recent sales shown. Narrow with search or a date range to reach older sales.": "most recent sales shown. Narrow with search or a date range to reach older sales.",
   "most recent sales shown. Search by receipt number or customer name to reach older sales.": "most recent sales shown. Search by receipt number or customer name to reach older sales.",
   "Browsing sales by date is limited to managers and the store owner. Search by receipt number or customer name to find a sale.": "Browsing sales by date is limited to managers and the store owner. Search by receipt number or customer name to find a sale.",
-
   "Scan a barcode or search": "Scan a barcode or search",
   "Ready to scan": "Ready to scan",
   "Current Sale": "Current Sale",
@@ -364,7 +346,6 @@
   "Park this sale and start a new one": "Park this sale and start a new one",
   "Browse and resume sales you've held": "Browse and resume sales you've held",
   "Sale total": "Sale total",
-
   "Today so far": "Today so far",
   "Needs attention": "Needs attention",
   "Nothing needs attention": "Nothing needs attention",
@@ -384,5 +365,20 @@
   "No transactions yet today": "No transactions yet today",
   "No sales today yet": "No sales today yet",
   "No transactions today": "No transactions today",
-  "Open the till": "Open the till"
+  "Open the till": "Open the till",
+  "View customer": "View customer",
+  "From": "From",
+  "To": "To",
+  "Action": "Action",
+  "All actions": "All actions",
+  "Entity": "Entity",
+  "All entities": "All entities",
+  "Timestamp": "Timestamp",
+  "User": "User",
+  "‹ Prev": "‹ Prev",
+  "Next ›": "Next ›",
+  "item": "item",
+  "Resume": "Resume",
+  "Discard": "Discard",
+  "Failed to load held sales.": "Failed to load held sales."
 }

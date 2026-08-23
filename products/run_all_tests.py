@@ -68,6 +68,32 @@ import sys
 import time
 from pathlib import Path
 
+# This runner must survive non-ASCII in test output, in BOTH directions.
+#
+# It ships an Arabic product, so test names, fixtures and failure messages
+# legitimately contain Arabic -- and the JS suites print it. On Windows the
+# default console encoding is cp1252, which produced two separate crashes:
+#
+#   reading   the subprocess reader thread died with UnicodeDecodeError, left
+#             proc.stdout as None, and the runner crashed on .strip()
+#   writing   printing a decoded character the console cannot represent died
+#             with UnicodeEncodeError
+#
+# Both are worse than a failing test. Every test PASSED in each case; the
+# harness fell over handling the results, which in CI reads as a failed build
+# containing no failing test -- a red mark with nothing to fix.
+#
+# `errors='replace'` rather than 'strict' on purpose: a character the console
+# cannot draw should degrade to a placeholder, never abort a test run. The
+# subprocess side is set at each call site.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, ValueError):
+        # Not a real TTY (piped, or a harness that replaced the stream). The
+        # decode side still holds, which is the half that crashed the runner.
+        pass
+
 # Local-developer-only escape hatch: set to '1' to explicitly skip JS tests
 # when `node` is unavailable, instead of failing the run. CI must not set
 # this to '1' -- see module docstring and ci.yml.
@@ -152,6 +178,14 @@ def run_one(path):
     proc = subprocess.run(
         [sys.executable, '-m', 'pytest', str(path), '-q', '--no-header'],
         cwd=str(ROOT), capture_output=True, text=True,
+        # UTF-8 explicitly, and never raise on a byte we cannot decode.
+        # `text=True` alone decodes with the OS default -- cp1252 on
+        # Windows -- so the first test to print Arabic killed the reader
+        # thread with UnicodeDecodeError, left proc.stdout as None, and
+        # crashed the RUNNER. Every test had passed; the harness fell over
+        # collecting the results, which reads in CI as a failed build with
+        # no failing test in it.
+        encoding='utf-8', errors='replace',
     )
     duration = time.time() - start
     tail = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else '(no output)'
@@ -169,6 +203,14 @@ def run_one_js(path):
     proc = subprocess.run(
         ['node', str(path)],
         cwd=str(ROOT), capture_output=True, text=True,
+        # UTF-8 explicitly, and never raise on a byte we cannot decode.
+        # `text=True` alone decodes with the OS default -- cp1252 on
+        # Windows -- so the first test to print Arabic killed the reader
+        # thread with UnicodeDecodeError, left proc.stdout as None, and
+        # crashed the RUNNER. Every test had passed; the harness fell over
+        # collecting the results, which reads in CI as a failed build with
+        # no failing test in it.
+        encoding='utf-8', errors='replace',
     )
     duration = time.time() - start
     ok = proc.returncode == 0

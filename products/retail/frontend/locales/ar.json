@@ -13,7 +13,6 @@
   "Create your administrator account to get started.": "أنشئ حساب المسؤول للبدء.",
   "Your session has expired. Please log in again.": "انتهت صلاحية جلستك. الرجاء تسجيل الدخول مرة أخرى.",
   "Sign in to your store": "سجّل الدخول إلى متجرك",
-
   "Accounting System": "نظام المحاسبة",
   "HR System": "نظام الموارد البشرية",
   "Inventory System": "نظام المخزون",
@@ -23,7 +22,6 @@
   "Retail & POS": "التجزئة ونقاط البيع",
   "Clinic Management": "إدارة العيادة",
   "Business Activity": "نشاط الأعمال",
-
   "Transactions": "المعاملات",
   "Invoices": "الفواتير",
   "Expenses": "المصروفات",
@@ -75,13 +73,11 @@
   "Billing": "الفوترة",
   "Prescriptions": "الوصفات الطبية",
   "Doctors": "الأطباء",
-
   "Active Employees": "الموظفون النشطون",
   "Present Today": "الحاضرون اليوم",
   "Late Today": "المتأخرون اليوم",
   "Pending Leaves": "الإجازات المعلّقة",
   "No employee data yet": "لا توجد بيانات موظفين بعد",
-
   "HR Intelligence": "ذكاء الموارد البشرية",
   "Employee lifecycle and organizational health": "دورة حياة الموظف وصحة المؤسسة",
   "Log Attendance": "تسجيل الحضور",
@@ -97,7 +93,6 @@
   "View Payroll Status": "عرض حالة الرواتب",
   "Today's Attendance": "حضور اليوم",
   "No pending leaves": "لا توجد إجازات معلّقة",
-
   "CRM Dashboard": "لوحة إدارة علاقات العملاء",
   "Live sales pipeline & customer intelligence": "مسار المبيعات المباشر وذكاء العملاء",
   "Financial Dashboard": "اللوحة المالية",
@@ -112,7 +107,6 @@
   "Retail Overview": "نظرة عامة على التجزئة",
   "Ready to sell": "جاهز للبيع",
   "Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales.": "إجماليات المبيعات والتقارير متاحة للمديرين ومالك المتجر فقط. افتح نقطة البيع لبدء تسجيل المبيعات.",
-
   "Choose a System": "اختر نظامًا",
   "Analytics & Reports": "التحليلات والتقارير",
   "Revenue": "الإيرادات",
@@ -155,14 +149,12 @@
   "Smart Import": "الاستيراد الذكي",
   "Import All Selected": "استيراد كل المحدد",
   "Upload one file — we route it to the right functions": "ارفع ملفًا واحدًا — نوجّهه إلى الوظائف الصحيحة",
-
   "Opening Stock Qty": "كمية المخزون الافتتاحي",
   "Total opening stock declared for this product, not a live shelf count. Re-importing the same number changes nothing; raising it adds only the difference. Sales, returns and manual adjustments are never overwritten. Leave the cell blank to leave stock untouched, or enter 0 to declare an opening of zero.": "إجمالي المخزون الافتتاحي المُعلَن لهذا المنتج، وليس جردًا فعليًا للرف. إعادة استيراد الرقم نفسه لا تغيّر شيئًا؛ ورفعه يضيف الفارق فقط. لا يتم أبدًا استبدال المبيعات أو المرتجعات أو التسويات اليدوية. اترك الخانة فارغة لترك المخزون كما هو، أو أدخل 0 للإعلان عن مخزون افتتاحي صفري.",
   "Stock was left unchanged for these products:": "تُرك المخزون دون تغيير لهذه المنتجات:",
   "Declared less than has already been sold or moved": "الكمية المُعلَنة أقل مما تم بيعه أو تحريكه بالفعل",
   "Opening quantity cannot be negative": "لا يمكن أن تكون الكمية الافتتاحية سالبة",
   "currently on hand": "المتوفر حاليًا",
-
   "Add Category": "إضافة فئة",
   "Edit Category": "تعديل الفئة",
   "Category Name": "اسم الفئة",
@@ -171,9 +163,7 @@
   "Category updated": "تم تحديث الفئة",
   "Category added": "تمت إضافة الفئة",
   "Name required": "الاسم مطلوب",
-
   "Supplier": "المورد",
-
   "Preview split": "معاينة التقسيم",
   "Add at least one item": "أضف عنصرًا واحدًا على الأقل",
   "Error": "خطأ",
@@ -199,7 +189,6 @@
   "Primary contact": "جهة الاتصال الرئيسية",
   "Supplier fallback": "بيانات المورد الاحتياطية",
   "No contact": "لا توجد جهة اتصال",
-
   "Details": "التفاصيل",
   "Add Contact": "إضافة جهة اتصال",
   "Edit Contact": "تعديل جهة الاتصال",
@@ -216,14 +205,11 @@
   "Contact updated": "تم تحديث جهة الاتصال",
   "Contact added": "تمت إضافة جهة الاتصال",
   "Contact deactivated": "تم إلغاء تفعيل جهة الاتصال",
-
   "Not syncing with your other devices right now": "لا تتم المزامنة مع أجهزتك الأخرى حاليًا",
   "This device's recent changes haven't reached your other devices yet": "التغييرات الأخيرة على هذا الجهاز لم تصل بعد إلى أجهزتك الأخرى",
   "This device isn't receiving updates from your other devices right now": "هذا الجهاز لا يستقبل التحديثات من أجهزتك الأخرى حاليًا",
   "This device is still working normally. Everything will catch up automatically once the connection comes back.": "هذا الجهاز يعمل بشكل طبيعي. سيتم تحديث كل شيء تلقائيًا فور عودة الاتصال.",
-
   "Branch filter applies to every figure on this page except Revenue by Branch, which always compares all branches.": "يُطبَّق تصفية الفرع على كل رقم في هذه الصفحة باستثناء الإيرادات حسب الفرع، التي تقارن جميع الفروع دائمًا.",
-
   "Synced": "تمت المزامنة",
   "Waiting for first sync": "بانتظار أول مزامنة",
   "pending": "قيد الانتظار",
@@ -232,7 +218,6 @@
   "m ago": " دقيقة مضت",
   "h ago": " ساعة مضت",
   "d ago": " يوم مضت",
-
   "Authentication required": "مطلوب تسجيل الدخول",
   "Session expired or revoked. Please log in again.": "انتهت الجلسة أو تم إلغاؤها. يرجى تسجيل الدخول مرة أخرى.",
   "Role must be manager or cashier.": "يجب أن يكون الدور مديرًا أو أمين صندوق.",
@@ -241,7 +226,6 @@
   "You do not have permission to apply a discount.": "ليس لديك إذن لتطبيق خصم.",
   "You do not have permission to change credit terms.": "ليس لديك إذن لتغيير شروط الائتمان.",
   "You do not have permission to record a payment to a supplier.": "ليس لديك إذن لتسجيل دفعة لأحد المورّدين.",
-
   "A PIN identifies who is acting. It does not grant permission.": "رمز PIN يحدد من يقوم بالعملية، ولا يمنح أي صلاحية.",
   "A cashier can sell, refund against a sale, and close their own drawer. A manager can also discount, adjust stock and read reports.": "يمكن لأمين الصندوق البيع، وإرجاع المبلغ مقابل عملية بيع، وإغلاق درجه الخاص. أما المدير فيمكنه أيضًا تطبيق الخصم وتعديل المخزون وقراءة التقارير.",
   "Account deactivated": "تم تعطيل الحساب",
@@ -314,7 +298,6 @@
   "Payment": "الدفع",
   "The activity log is limited to managers and the store owner.": "سجل النشاط مقصور على المديرين ومالك المتجر.",
   "Audit Log": "سجل النشاط",
-
   "Sales History": "سجل المبيعات",
   "Search receipt # or customer…": "ابحث برقم الفاتورة أو باسم العميل…",
   "From date": "من تاريخ",
@@ -331,7 +314,6 @@
   "most recent sales shown. Narrow with search or a date range to reach older sales.": "من أحدث المبيعات معروضة. ضيّق البحث أو حدّد نطاقًا زمنيًا للوصول إلى مبيعات أقدم.",
   "most recent sales shown. Search by receipt number or customer name to reach older sales.": "من أحدث المبيعات معروضة. ابحث برقم الفاتورة أو باسم العميل للوصول إلى مبيعات أقدم.",
   "Browsing sales by date is limited to managers and the store owner. Search by receipt number or customer name to find a sale.": "تصفّح المبيعات حسب التاريخ مقصور على المديرين ومالك المتجر. ابحث برقم الفاتورة أو باسم العميل للعثور على عملية بيع.",
-
   "Scan a barcode or search": "امسح باركود أو ابحث",
   "Ready to scan": "جاهز للمسح",
   "Current Sale": "البيع الحالي",
@@ -364,7 +346,6 @@
   "Park this sale and start a new one": "علّق هذا البيع وابدأ بيعًا جديدًا",
   "Browse and resume sales you've held": "استعرض المبيعات المعلّقة واستأنفها",
   "Sale total": "إجمالي البيع",
-
   "Today so far": "اليوم حتى الآن",
   "Needs attention": "يحتاج إلى إجراء",
   "Nothing needs attention": "لا شيء يحتاج إلى إجراء",
@@ -384,5 +365,20 @@
   "No transactions yet today": "لا توجد معاملات اليوم بعد",
   "No sales today yet": "لا توجد مبيعات اليوم بعد",
   "No transactions today": "لا توجد معاملات اليوم",
-  "Open the till": "افتح الصندوق"
+  "Open the till": "افتح الصندوق",
+  "View customer": "عرض العميل",
+  "From": "من",
+  "To": "إلى",
+  "Action": "الإجراء",
+  "All actions": "كل الإجراءات",
+  "Entity": "العنصر",
+  "All entities": "كل العناصر",
+  "Timestamp": "الوقت والتاريخ",
+  "User": "المستخدم",
+  "‹ Prev": "السابق ›",
+  "Next ›": "‹ التالي",
+  "item": "عنصر",
+  "Resume": "استئناف",
+  "Discard": "تجاهل",
+  "Failed to load held sales.": "تعذّر تحميل المبيعات المعلّقة."
 }
