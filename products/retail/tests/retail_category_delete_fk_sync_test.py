@@ -111,13 +111,19 @@ def test_schema_version_is_v6_and_products_fk_declares_on_delete_set_null():
     # _migrate_add_identity_and_attribution_columns) and v14 (the company_id
     # rebind, _migrate_rebind_company_id_to_owner_issued) -- both reserved
     # ahead of time in ROADMAP.md's 2026-08-21 ledger, precisely so this
-    # number could not be claimed twice the way v9 once was. The
-    # FK-on-delete-set-null assertion this test exists for is unaffected by
-    # any of these later changes.
-    assert retail_schema.RETAIL_SCHEMA_VERSION == 14
+    # number could not be claimed twice the way v9 once was. Phase 3 then
+    # bumped it to v15 (the ledger becomes able to reproduce the cache,
+    # _migrate_seed_opening_counts_and_gate_drift). v15 is the one bump in
+    # this list that can REFUSE to advance, so a pin here is worth more than
+    # bookkeeping: this file hand-builds a minimal schema with no
+    # `inventory_balances` at all, and v15's existence guard is what keeps it
+    # skipping rather than crashing. If that guard ever narrows, this
+    # assertion is where it surfaces. The FK-on-delete-set-null assertion
+    # this test exists for is unaffected by any of these later changes.
+    assert retail_schema.RETAIL_SCHEMA_VERSION == 15
     conn = retail_schema.get_retail_conn()
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
         assert retail_schema._products_category_fk_is_set_null(conn) is True
     finally:
         conn.close()

@@ -819,6 +819,43 @@ const REPORT_SUMMARY = {
   margin_pct: 36.9, avg_ticket: 95.71,
 };
 
+/* GET /inventory/reconciliation, for the Stock accuracy screen.
+ *
+ * THE FIXTURE HAS DRIFT ON PURPOSE, and it is the branch of that screen with
+ * the most to look at: a `.ret-kpi-grid` of headline figures, a `.ret-table`
+ * of real rows, and the repair offer. A response with `drift_count: 0` would
+ * render the clean panel — one card, four elements, no table at all — and
+ * `testCorpusRendersRealScreens`'s empty-state check would then be the only
+ * thing between this corpus and a screen it looks at without seeing.
+ *
+ * The three rows are three DIFFERENT cells, not three of the same one:
+ *   * a positive drift (the balance claims MORE than the ledger accounts for
+ *     — the double-received-PO signature the screen exists to name);
+ *   * a negative drift, so both sign glyphs are rendered elements;
+ *   * a NULL branch_id with `repairable: false`, which is the legacy
+ *     movement with nowhere to put a balance. It renders the yellow
+ *     "Needs a branch" badge and drives the stranded-rows card, so both are
+ *     real elements in the corpus rather than dead branches.
+ *
+ * `pairs_examined` is deliberately much larger than `drift_count`: it is the
+ * number that lets the screen say a check RAN, and a fixture where the two
+ * were equal would make the two figures indistinguishable in the render.
+ */
+const STOCK_DRIFT = {
+  drift_count: 3,
+  net_drift: 5,               // 7 - 2.5 + 0.5
+  pairs_examined: 512,
+  repair_confirmation: 'RECONCILE-11111111-2222-3333-4444-555555555555',
+  rows: [
+    { product_id: 'p1', product_name: 'Coffee beans 250g', sku: 'CB250', branch_id: 1,
+      branch_name: 'Main Branch', stored_balance: 24, ledger_balance: 17, drift: 7, repairable: true },
+    { product_id: 'p3', product_name: 'Sold out item', sku: 'SO1', branch_id: 2,
+      branch_name: 'Airport Kiosk', stored_balance: 0, ledger_balance: 2.5, drift: -2.5, repairable: true },
+    { product_id: 'p9', product_name: null, sku: null, branch_id: null,
+      branch_name: null, stored_balance: 0, ledger_balance: -0.5, drift: 0.5, repairable: false },
+  ],
+};
+
 /**
  * The response for a URL. Routed, because the screens below fan out across nine
  * endpoints and a single blanket payload would render every table as its EMPTY
@@ -837,6 +874,13 @@ function apiResponseFor(url) {
   // testCorpusRendersRealScreens exists to refuse.
   if (/\/reports\/by-employee/.test(u)) return ok(TABLE_DATA.employeeSales);
   if (/\/reports\/summary/.test(u)) return ok(REPORT_SUMMARY);
+  // Before the /products rule below for the same reason `top-products` is:
+  // this URL contains no "products", but it WOULD fall through to the
+  // catch-all, and STATS carries no `rows`/`pairs_examined` — which the Stock
+  // accuracy screen correctly reads as "nothing was compared" and renders as
+  // its no-records panel. A screen in the corpus showing its empty state is
+  // exactly the miss testCorpusRendersRealScreens exists to refuse.
+  if (/\/inventory\/reconciliation/.test(u)) return ok(STOCK_DRIFT);
   if (/\/customers\/[^/?]+\/sales/.test(u)) return ok(SALES_ROWS);
   if (/\/sales\/recent/.test(u)) return ok(SALES_ROWS);
   if (/\/sales\/\d+/.test(u)) return ok(SALE_DETAIL);
@@ -1117,6 +1161,10 @@ async function buildCorpus() {
     ['reports', (rs, c) => rs._renderReports(c)],
     ['categories', (rs, c) => rs._renderCategories(c)],
     ['scanner', (rs, c) => rs._renderScannerSettings(c)],
+    // Phase 3's Stock accuracy screen. Renders into #stka-body by id, so the
+    // deferred-write splice above is what puts its table back where the code
+    // put it — same mechanism as every other screen here.
+    ['stock-accuracy', (rs, c) => rs._renderStockAccuracy(c)],
   ];
   for (const [name, render] of listScreens) {
     const ctx = loadRetailSystem(['retail.reports']);
@@ -1272,6 +1320,7 @@ const DECLARED_SCREENS = [
   'dashboard', 'cashier-landing', 'pos',
   'sales-history', 'returns', 'purchase-orders', 'products', 'customers',
   'suppliers', 'audit-log', 'reports', 'categories', 'scanner',
+  'stock-accuracy',
   'customer-modal', 'sale-modal', 'held-sales-modal',
 ];
 
@@ -1312,6 +1361,7 @@ const SCREEN_ROUTES = {
   reports: 'reports',
   categories: 'categories',
   scanner: 'scanner',
+  'stock-accuracy': 'stock-accuracy',
 };
 
 /* The two router sections this corpus does NOT build, each with the reason.
@@ -1526,6 +1576,17 @@ function testCorpusContainsTheKnownHazards(h) {
     ['reports', (el) => el.tag === 'bdi', 'the Reports by-employee identity cell (_attributionCell\'s dir="auto" isolation)'],
     ['categories', (el) => el.classes.includes('ret-btn-danger'), 'the Categories Delete button — a fifth home for the destructive-button pairing, and the reason :active is now an evaluated state'],
     ['scanner', (el) => el.classes.includes('ret-input'), 'the scanner test readout (.ret-input)'],
+    // Stock accuracy. Named individually for the reason the Reports entries
+    // above are: "stock-accuracy is in DECLARED_SCREENS" is satisfied by the
+    // clean panel, the no-records panel and the check-failed panel alike, and
+    // none of those three contains a drifted row, a signed figure or the
+    // repair control. If the fixture stops carrying drift, the screen still
+    // renders and this suite still measures — the wrong screen.
+    ['stock-accuracy', (el) => el.classes.includes('ret-kpi-sub'), 'the Stock accuracy headline caption (.ret-kpi-sub — a chrome rule the ledger listed as reaching no rendered element at all)'],
+    ['stock-accuracy', (el) => el.classes.includes('num'), 'a Stock accuracy quantity (.num — tabular figures with no money colour, the class rtl.css forces back to LTR)'],
+    ['stock-accuracy', (el) => el.tag === 'bdi', 'the bidi isolation around a signed drift figure (a "+7" run carries no strong directional character at all)'],
+    ['stock-accuracy', (el) => el.classes.includes('ret-badge-yellow'), 'the "Needs a branch" badge on a NULL-branch movement (the row a repair cannot touch)'],
+    ['stock-accuracy', (el) => el.attrs.id === 'stka-repair-btn', 'the repair control — the ONLY route into a stock repair, and the reason it is never automatic'],
   ];
   const missing = [];
   for (const [screenName, pred, what] of wanted) {

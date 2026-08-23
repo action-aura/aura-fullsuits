@@ -4849,9 +4849,22 @@ def _require_company_admin():
     return None
 
 
+def _confirmation_token(prefix, cid):
+    """The one spelling of a company-scoped confirmation token.
+
+    Extracted so `_require_confirmation` (which CHECKS it) and any route that
+    has to TELL a caller what to send back (see inventory_reconciliation)
+    cannot drift apart. Two f-strings that must stay byte-identical forever is
+    exactly the shape of thing that silently stops matching -- and the failure
+    would be a repair button that answers 400 on every click, with a message
+    quoting the very string the client just sent.
+    """
+    return f'{prefix}-{cid}'
+
+
 def _require_confirmation(expected_prefix, cid):
     data = request.get_json(silent=True) or {}
-    expected = f'{expected_prefix}-{cid}'
+    expected = _confirmation_token(expected_prefix, cid)
     if (data.get('confirm') or '').strip() != expected:
         return jsonify({
             'error': f'Confirmation required. Resend the request with {{"confirm": "{expected}"}}.'
@@ -4982,6 +4995,20 @@ def demo_seed():
 # regression. See core/retail/stock_reconciliation.py for why the repair
 # writes no correcting movement row.
 
+# "Report every (product, branch) pair, drifted or not."
+#
+# compute_drift's `tolerance` is the width below which stored-minus-ledger
+# counts as agreement; a NEGATIVE width is the coherent reading of the same
+# parameter for "nothing counts as agreement", so every key its UNION produces
+# comes back. That is how this file asks "how many pairs are there?" WITHOUT
+# writing a second copy of the key-set SQL -- see inventory_reconciliation.
+#
+# Not zero: exact float equality is what compute_drift's own DEFAULT_TOLERANCE
+# comment exists to avoid, and `abs(drift) <= 0` would drop every pair that
+# agrees exactly -- i.e. precisely the healthy ones this count is for.
+_ALL_PAIRS_TOLERANCE = -1.0
+
+
 @retail_bp.route('/inventory/reconciliation', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -5005,7 +5032,23 @@ def inventory_reconciliation():
     cid = _cid()
     conn = get_retail_conn()
     try:
-        rows = stock_reconciliation.compute_drift(conn, cid)
+        # ONE call, not two, and the drifted rows are a SUBSET of what it
+        # returns rather than a second query. See _ALL_PAIRS_TOLERANCE.
+        #
+        # Filtering here duplicates compute_drift's own `abs(drift) <=
+        # tolerance` comparison, and that is the lesser of the two available
+        # duplications: the alternative -- re-typing _DRIFT_SQL's UNION over
+        # inventory_balances and inventory_movements to COUNT the key set --
+        # would put the definition of "which (product, branch) pairs exist"
+        # in two files, and the copy in THIS one would go quietly wrong the
+        # first time the reconciliation module widened its key set. What is
+        # duplicated below is the operator; the NUMBER still comes from the
+        # module, and retail_stock_accuracy_screen_route_test.py pins the two
+        # against each other on a fixture that exercises both directions of
+        # the union plus a sub-tolerance residue.
+        examined = stock_reconciliation.compute_drift(conn, cid, tolerance=_ALL_PAIRS_TOLERANCE)
+        rows = [r for r in examined
+                if abs(r['drift']) > stock_reconciliation.DEFAULT_TOLERANCE]
     except sqlite3.DatabaseError as exc:
         current_app.logger.exception("inventory_reconciliation failed: %s", exc)
         return jsonify({'status': 'error', 'message': 'Could not reconcile inventory.'}), 400
@@ -5017,6 +5060,38 @@ def inventory_reconciliation():
         # honest headline number for "is the company's total stock figure
         # overstated?". drift_count is what says how many rows are wrong.
         'net_drift': round(sum(r['drift'] for r in rows), 4),
+        # HOW MUCH WAS LOOKED AT. Without this, `drift_count: 0` is the same
+        # response from a healthy 500-product shop and from a company with no
+        # stock records at all, and the Stock accuracy screen's empty state
+        # would be asserting an OUTCOME ("your stock is accurate") on evidence
+        # that only says a query returned nothing. The screen renders the two
+        # differently and cannot do that without this number.
+        #
+        # `pairs_examined >= drift_count` holds BY CONSTRUCTION here, because
+        # `rows` is a filter over the very list this counts -- not by two
+        # queries agreeing.
+        'pairs_examined': len(examined),
+        # What the repair twin will demand back, verbatim.
+        #
+        # It is not a secret and cannot be used as one: _require_confirmation
+        # compares it against the CALLER'S OWN session company, so a token
+        # handed to an admin of company A is refused for every other company,
+        # and this route already required company-admin before it got here.
+        # What the token actually buys -- a mutation that cannot be triggered
+        # by a stray click or replayed at a different tenant -- is untouched.
+        #
+        # It is here because without it the repair is UNREACHABLE from any
+        # frontend: the token embeds the company id, and no surface in
+        # products/retail/frontend knows the company id (nor does
+        # /api/auth/session return it). The alternative -- teaching the client
+        # to build "RECONCILE-<id>" itself -- would put the token's format in
+        # a second file. See _confirmation_token.
+        #
+        # No `unrepairable_count` beside it on purpose: `rows[].repairable` is
+        # already the exact predicate repair_drift skips on, and a second
+        # aggregate computed here is a second thing that can disagree with the
+        # repair about what it is going to do.
+        'repair_confirmation': _confirmation_token('RECONCILE', cid),
         'rows': rows,
     }})
 
@@ -5043,7 +5118,14 @@ def repair_inventory_reconciliation():
     conn = get_retail_conn()
     try:
         conn.execute("BEGIN IMMEDIATE")
-        result = stock_reconciliation.repair_drift(conn, cid)
+        # `actor_user_id` is passed because THIS caller has one. repair_drift
+        # writes its own summary audit row inside this transaction and leaves
+        # the actor NULL when nobody supplied it -- the honest answer for a
+        # repair run from a maintenance prompt, and the wrong one for a button
+        # somebody pressed. The Stock accuracy screen made this route reachable
+        # from a UI for the first time, so "who rewrote the shop's stock" now
+        # has a real answer and it belongs in the trail.
+        result = stock_reconciliation.repair_drift(conn, cid, actor_user_id=_uid())
         for row in result['repaired']:
             _audit(conn, 'STOCK_RECONCILED', 'product', row['product_id'],
                    f"branch={row['branch_id']}, stored={row['stored_balance']} -> "

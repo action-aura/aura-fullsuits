@@ -1142,7 +1142,14 @@ KNOWN_UNTRANSLATED_BASELINE = frozenset({
     # feature and 41 strings was never this change's job.
     'Automatically drafted when a sale drops a product at or below its reorder level. '
     'Accept drafts a local purchase order for this device; Decline dismisses it.',
-    'Branch',
+    # 'Branch' was here and is deliberately gone (2026-08-23). Phase 3's Stock
+    # accuracy screen renders it as a column header -- "which (product, branch)
+    # disagree" is the question that screen exists to answer, so a permanently
+    # English header sat in the middle of it -- and it is now in both catalogs
+    # with real Arabic. Every other consumer of the bare word gets it too,
+    # because i18n.js's DOM sweep matches any node whose full trimmed text is a
+    # catalog key. Same ratchet rule as the entries above: an entry may leave
+    # this list, never rejoin it.
     'Category deleted',
     # 'Clear' was here and is deliberately gone. The Sales History screen now
     # renders it through t() (its own "Clear filters" button), so it is a

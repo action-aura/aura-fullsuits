@@ -17,7 +17,7 @@ generic connection helpers it needs are kept here.
 import os
 import sqlite3
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 _app_data = os.environ.get('AURA_APP_DATA')
 if _app_data:
@@ -230,7 +230,56 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # therefore advances unconditionally and the rebind is a no-op when there is
 # nothing to rebind to. See _migrate_rebind_company_id_to_owner_issued and
 # rebind_company_id below.
-RETAIL_SCHEMA_VERSION = 14
+# v14 -> v15 (launch-readiness Phase 3, docs/launch-readiness/
+# phase3-ledger-truth.md, ROADMAP.md's 2026-08-21 reservation): the ledger
+# becomes able to reproduce the cache. `inventory_balances.quantity_on_hand`
+# is a STORED number five writers keep in step with `inventory_movements` by
+# hand; core/retail/stock_reconciliation.py can already MEASURE the two
+# disagreeing, but on a pre-existing install the ledger simply has no rows
+# behind most balances at all -- the stock was there before the movement
+# table was ever written to, or it arrived through the importer's absolute
+# SET, or through _seed_retail. v15 seeds ONE `opening_count` movement per
+# unexplained key carrying the RESIDUAL -- quantity_on_hand minus whatever
+# the ledger already accounts for there -- and then GATES: it recomputes
+# drift afterwards and refuses to advance the version marker if any
+# REPAIRABLE row still disagrees. That gate is the point of the step; the
+# seeding is only what makes passing it possible. Phase 5 (devices exchanging
+# movements and each recomputing its own balances) is unsafe without it -- on
+# an install whose ledger cannot reproduce its balances, sync replaces one
+# correct-looking number with a different correct-looking number and nobody
+# can say which was right. Four consequences that look like details and are
+# not:
+#   - THE RESIDUAL, not the absence of history. The seeding originally
+#     covered only keys with ZERO movements, and that skipped the COMMON
+#     legacy key: the importer wrote an absolute SET with no movement row
+#     (git 13c1c92, api/import_api.py:1146) and every sale since wrote one,
+#     so the ordinary shop has sales and no opening. It was refused, the POS
+#     could not boot (app.py calls init_retail() unconditionally), and the
+#     refusal's own recovery advice then turned shelves of [112, 57, 7] into
+#     [-8, -3, -1]. An opening count IS the residual by definition; the
+#     zero-movement case is its special case.
+#   - "repairable" excludes the two STRUCTURAL impossibilities: a movement
+#     whose branch_id is NULL (inventory_balances.branch_id is NOT NULL, so
+#     no balance row could hold it) and a balance whose product row is gone
+#     (inventory_movements.product_id has an enforced FK, so no movement row
+#     can be written for it). A gate demanding GLOBAL zero drift wedges such
+#     an install out of EVERY future migration -- the permanent wedge the v13
+#     duplicate-uid defect produced, reached from two more directions. So
+#     NULL-branch rows are resolved where the answer is unambiguous (a
+#     company with exactly one branch has only one place they can belong),
+#     and what stays ambiguous -- along with every orphan balance -- is
+#     counted, recorded and excluded. Such an install STILL ADVANCES, with
+#     visible queues instead of a guess or a brick.
+#   - the gate still REFUSES a negative residual: the ledger accounting for
+#     more goods than the shelf shows is not something an opening count can
+#     explain, and seeding it anyway would make the gate incapable of
+#     failing.
+#   - the seeding is COMMITTED before the gate can raise, and
+#     stock_reconciliation.repair_drift refuses to LOWER any balance until
+#     this gate has passed. See _migrate_seed_opening_counts_and_gate_drift
+#     for why either one alone leaves the documented recovery able to wipe a
+#     shop's stock.
+RETAIL_SCHEMA_VERSION = 15
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -272,6 +321,41 @@ class RetailUidIndexError(Exception):
     permanent wedge an unguarded `CREATE UNIQUE INDEX` produced -- see
     `_ensure_unique_uid_index` for why reaching this is close to impossible
     once the duplicate repair has run.
+    """
+
+
+class RetailLedgerDriftError(Exception):
+    """Raised by v15 when this install's `inventory_balances` cannot be
+    reproduced from `inventory_movements` even after the opening counts are
+    seeded -- i.e. some (product, branch) whose ledger accounts for MORE
+    stock than the balance claims, which no inferred opening count can
+    explain because a shop cannot have started with less than nothing.
+
+    Deliberately NOT caught anywhere, and deliberately not softened into a
+    warning. `ensure_schema_version` advances `PRAGMA user_version` only when
+    `migrate_fn` returns, so raising is the mechanism by which v15 refuses to
+    call the cache derivable when it demonstrably is not. A shop that reaches
+    this has a real, measurable inconsistency between what its shelves are
+    said to hold and what its own recorded history can account for -- the
+    exact condition Phase 3 exists to surface, and the one Phase 5 must never
+    sync across devices.
+
+    The message names the offending rows and the recovery, because "migration
+    failed" is not an actionable report about a shop's stock. Recovery is the
+    EXPLICIT, owner-initiated repair (core/retail/stock_reconciliation.py::
+    repair_drift), which on these rows RAISES the balance to the total the
+    ledger can prove arrived and so destroys no stock. Two things make it
+    safe to point an operator at, and the first one alone was not enough:
+    v15 commits its seeded opening counts BEFORE this can be raised, AND
+    `repair_drift` refuses to lower any balance until this gate has passed.
+    See `_migrate_seed_opening_counts_and_gate_drift`.
+
+    THE REFUSAL BLOCKS THE APP FROM STARTING -- `app.py` calls
+    `init_retail()` with no handler -- so what reaches it must be worth that.
+    After the residual fix it is: the ordinary legacy shop is seeded and
+    advances, the two structurally unreconcilable classes are excluded, and
+    what is left is a shop whose recorded history and shelves genuinely
+    contradict each other in the one direction no inference can resolve.
     """
 
 
@@ -1005,6 +1089,16 @@ def _migrate_retail_schema(conn):
     # carry the `uid` that identifies them on the wire, so an interrupted
     # rebind could not be reconciled against anything afterwards.
     _migrate_rebind_company_id_to_owner_issued(conn)
+    # v14 -> v15 (launch-readiness Phase 3): appended LAST, and it must stay
+    # last for a reason of its own on top of the convention. This step is a
+    # GATE -- it recomputes drift after seeding and raises rather than let
+    # `ensure_schema_version` advance the marker on an install whose ledger
+    # cannot reproduce its balances. Anything appended after it would be
+    # silently skipped on exactly those installs. It must also stay after
+    # v14: the rebind rewrites `company_id` on every scoped table, and this
+    # step groups, gates and reports per company, so running it first would
+    # measure and record the tenant key the shop is about to stop using.
+    _migrate_seed_opening_counts_and_gate_drift(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -2392,6 +2486,558 @@ def rebind_company_id_after_activation():
         }
 
 
+# ── v15: making the cache provably derivable from the ledger ────────────────
+
+#: The movement type v15 writes for a balance that had no ledger history.
+#:
+#: Deliberately NOT `opening_stock`. That type means "an operator declared
+#: this opening figure", and api/import_api.py sums exactly those rows (plus
+#: its own import reference) to work out how much of a product's stock has
+#: already been declared, so it can post a DELTA instead of re-adding the
+#: whole figure on every re-import. These rows were declared by nobody: the
+#: migration inferred them from the cached balance. Filing an inference under
+#: the type reserved for a human declaration would make the importer treat a
+#: guess as evidence, which is the same category of mistake as stamping a
+#: real user on the row.
+V15_OPENING_COUNT_TYPE = 'opening_count'
+
+#: Reference marker on the seeded rows, so they are one indexed query away
+#: from any screen, report or later migration that needs to tell an inferred
+#: opening count apart from a counted one.
+V15_OPENING_COUNT_REFERENCE = 'V15-OPENING-COUNT'
+
+#: The reason, stored on the row itself rather than only in this file. A
+#: number in a goods ledger with no explanation attached is exactly how the
+#: next person concludes somebody counted this stock.
+V15_OPENING_COUNT_REASON = (
+    'Opening count inferred by schema migration v15: the cached balance minus '
+    'everything the ledger already accounts for at this product/branch. This '
+    'is what must have been on hand before the recorded history for that '
+    'history to end where the balance says it does. Nobody counted it.'
+)
+
+#: How many seeded movements are handed to one executemany. The candidate
+#: list is bounded by products x branches (not by transaction history, which
+#: is orders of magnitude larger), so it is materialised in one query -- but
+#: the INSERT is still sliced, because this runs on a till machine.
+_V15_SEED_CHUNK = 2000
+
+#: Rows named individually in the gate's failure message. The full list is a
+#: whole-catalogue dump; the first few are what makes the message actionable.
+_V15_REPORTED_OFFENDERS = 5
+
+#: How many product ids go into one `IN (...)` when the seeder re-checks that
+#: its candidates still have a product row. Well under SQLite's 999-variable
+#: floor (SQLITE_MAX_VARIABLE_NUMBER was raised to 32766 only in 3.32), so
+#: this holds on whatever SQLite the packaged interpreter happens to carry.
+_V15_PRODUCT_PROBE_CHUNK = 500
+
+
+def _v15_company_ids(conn):
+    """Every company_id that has stock state at all, from BOTH sides.
+
+    UNION rather than a read of `inventory_balances` alone: a company whose
+    balances were all deleted still has movements, and it is exactly that
+    company whose drift nobody would otherwise look at.
+    """
+    return [row[0] for row in conn.execute(
+        "SELECT company_id FROM inventory_balances "
+        "UNION "
+        "SELECT company_id FROM inventory_movements"
+    ).fetchall()]
+
+
+def _v15_resolve_unambiguous_null_branches(conn, company_id, live_tables):
+    """Give legacy NULL-branch movements a branch ONLY where there is exactly
+    one branch they could belong to. Returns how many rows moved.
+
+    `inventory_balances.branch_id` is NOT NULL, so a movement with a NULL
+    branch has no balance row that could ever hold it and `compute_drift`
+    reports it as `repairable: False` forever. A company with exactly ONE
+    branch has one answer and it is not a guess. A company with two has two,
+    and picking either puts real stock in the wrong shop -- worse than
+    leaving it visibly unassigned, because a wrong number looks right.
+
+    Counts ALL branches, not just active ones: an archived branch is still
+    somewhere the stock could have been, so its existence makes the answer
+    ambiguous even though nobody sells there any more.
+
+    Runs BEFORE the opening-count seeding, and the order is load-bearing.
+    Resolving a NULL-branch movement onto branch B gives (product, B) ledger
+    history; seeding first would have already written an opening count for
+    that key on the grounds that it had none, and the two would then sum to
+    double the stock and fail the gate.
+    """
+    if 'branches' not in live_tables:
+        return 0
+    pending = conn.execute(
+        "SELECT COUNT(*) FROM inventory_movements "
+        "WHERE company_id=? AND branch_id IS NULL", (company_id,)
+    ).fetchone()[0]
+    if not pending:
+        return 0
+    branch_ids = [row[0] for row in conn.execute(
+        "SELECT id FROM branches WHERE company_id=?", (company_id,)
+    ).fetchall()]
+    if len(branch_ids) != 1:
+        return 0        # zero branches: nowhere to put them. Two or more: a guess.
+    conn.execute(
+        "UPDATE inventory_movements SET branch_id=? "
+        "WHERE company_id=? AND branch_id IS NULL",
+        (branch_ids[0], company_id),
+    )
+    return pending
+
+
+def _v15_seed_opening_counts(conn, company_id, movement_columns, drifted):
+    """One `opening_count` movement carrying the RESIDUAL for every key the
+    ledger cannot yet explain. `drifted` is `compute_drift`'s output AFTER
+    the NULL-branch resolve step.
+
+    THE RESIDUAL, NOT THE ABSENCE OF HISTORY. This function originally seeded
+    only keys with ZERO movements, and that was the single most dangerous
+    defect this phase produced. The importer used to write an absolute
+    `SET quantity_on_hand=?` with NO movement row (git 13c1c92,
+    api/import_api.py:1146), and every sale since has written one -- so the
+    COMMON legacy key has sales and no opening. It was skipped, the gate
+    refused, `app.py`'s unconditional `init_retail()` meant the POS would not
+    boot, and the refusal's own recovery advice then completed the disaster:
+    `repair_drift` saw real ledger history (the sales), so
+    SKIP_NO_LEDGER_HISTORY never fired, and it wrote the sales-only sum as
+    the balance. Measured end to end: shelves [112, 57, 7] -> refused ->
+    "repaired 3, skipped 0" -> shelves [-8, -3, -1] -> relaunch advances
+    reporting zero drift. A shop's stock, destroyed by following the
+    instructions.
+
+    An opening count is "what must have been on the shelf before the recorded
+    history, for that history to end where the balance says it does". That is
+    the residual -- `quantity_on_hand` minus the ledger total at the key --
+    by definition, and the zero-movement case is just its special case where
+    the ledger total is zero. `_seed_retail` at the bottom of this file had
+    the correct expression all along; this is the same one.
+
+    The residual is `compute_drift`'s `drift`, so the candidates come FROM
+    `compute_drift` rather than from a second copy of its key-set SQL. That
+    is not merely tidy: the gate is evaluated on `compute_drift`'s output, so
+    seeding from anything else would let the two disagree about which keys
+    exist -- which is exactly how the zero-movement version got it wrong.
+
+    ONLY NON-NEGATIVE RESIDUALS ARE SEEDED, and this is what keeps the gate
+    real rather than softening it into decoration. A NEGATIVE residual says
+    the ledger accounts for MORE goods than the shelf shows, and no opening
+    count explains that: "the shop began with minus eight units" is not a
+    fact about a shop. It is shrinkage, theft, or a writer that decremented a
+    balance without recording why -- a human decision, not a migration's
+    inference. Those rows fall through to the gate and are refused, and
+    `repair_drift` can resolve them because doing so RAISES the balance to a
+    total the ledger can prove arrived.
+
+    Idempotent by construction, still: after this run the residual at every
+    seeded key is zero, so a second run's `compute_drift` yields nothing to
+    seed. Nothing is keyed off the seeded rows' own marker, so a shop that
+    later posts a real movement is unaffected either way.
+
+    Zero-quantity balances with NO history at all are seeded too, at zero.
+    A zero balance with no movements behind it is not "counted, found
+    nothing" -- it is "never counted", and after v15 the difference has to be
+    visible in the ledger rather than inferred from an absence. It is also
+    what stops `repair_drift` refusing the key forever for
+    SKIP_NO_LEDGER_HISTORY. These keys have no drift, so `compute_drift`
+    never reports them and they need the second query below.
+
+    WHAT THE ROW DOES NOT CLAIM: `actor_user_uid` and `terminal_id` stay
+    NULL, and `created_by` is the schema's existing non-person sentinel.
+    Nobody performed this count and this device cannot prove which terminal
+    would have. `created_at_utc` IS stamped, and the contrast with v13 --
+    which left `created_at_utc` NULL on every history row it touched -- is
+    deliberate rather than inconsistent: v13's rows already existed and their
+    real instant was unknowable, while these rows are being created right
+    now, so their creation time is a fact about them. `unit_cost` is left at
+    its default: the shop's cost_price today is not evidence of what this
+    stock cost when it arrived, and valuation reading a made-up figure is
+    worse than valuation reading a zero it can see.
+    """
+    import uuid as _uuid
+    from core.retail.stock_reconciliation import DEFAULT_TOLERANCE
+
+    # `repairable` already excludes both structural impossibilities: a
+    # NULL branch (no balance row could hold it) and a product row that is
+    # gone (`inventory_movements.product_id` has a FOREIGN KEY to
+    # products(id) and `_conn()` turns enforcement ON, so the INSERT below
+    # would raise IntegrityError and kill the migration on "FOREIGN KEY
+    # constraint failed" -- a message that says nothing about stock and
+    # leaves the operator with a crashing app). See compute_drift.
+    pending = {
+        (row['product_id'], row['branch_id']): float(row['drift'])
+        for row in drifted
+        if row['repairable'] and row['drift'] > DEFAULT_TOLERANCE
+    }
+
+    # The never-counted keys `compute_drift` cannot report, because they do
+    # not drift: a balance of zero with no ledger history at all.
+    #
+    # `branch_id IS b.branch_id` rather than `=`: movements' branch_id is
+    # nullable, and `=` against NULL is NULL (never true), which would make
+    # an unresolved NULL-branch movement look like "no history" and earn the
+    # balance a duplicate opening count on every single run.
+    for product_id, branch_id, quantity in conn.execute(
+        "SELECT b.product_id, b.branch_id, b.quantity_on_hand "
+        "FROM inventory_balances b "
+        "WHERE b.company_id=? "
+        "  AND NOT EXISTS ("
+        "      SELECT 1 FROM inventory_movements m "
+        "      WHERE m.company_id=b.company_id "
+        "        AND m.product_id=b.product_id "
+        "        AND m.branch_id IS b.branch_id)"
+        "  AND EXISTS (SELECT 1 FROM products p WHERE p.id=b.product_id)",
+        (company_id,),
+    ).fetchall():
+        key = (product_id, branch_id)
+        if key in pending:
+            continue        # already carrying its residual from the drift set
+        value = float(quantity or 0)
+        if value < 0:
+            continue        # a negative opening count is not an opening count
+        pending[key] = value
+
+    if not pending:
+        return 0
+
+    # ONE LAST PROBE, and it is not redundant with `repairable` above.
+    #
+    # `inventory_movements.product_id` has a FOREIGN KEY to products(id) and
+    # `_conn()` turns enforcement ON, so an INSERT for a product that is gone
+    # raises IntegrityError and kills the whole migration on "FOREIGN KEY
+    # constraint failed" -- a message that says nothing about stock and
+    # leaves the operator with an app that will not start and no idea why.
+    # The `repairable` filter already excludes those keys, so this can only
+    # fire if `compute_drift` and this function ever disagree about what a
+    # missing product is. That is exactly the kind of coupling that goes
+    # quietly wrong later, and a migration is the worst possible place to
+    # find out: the cost of being wrong here is a crash loop, the cost of the
+    # probe is one indexed lookup per candidate product. A test that
+    # deliberately mis-classifies an orphan as repairable found this.
+    candidates = sorted({key[0] for key in pending}, key=str)
+    live = set()
+    for start in range(0, len(candidates), _V15_PRODUCT_PROBE_CHUNK):
+        chunk = candidates[start:start + _V15_PRODUCT_PROBE_CHUNK]
+        live.update(row[0] for row in conn.execute(
+            f"SELECT id FROM products WHERE id IN ({','.join('?' * len(chunk))})",
+            tuple(chunk)).fetchall())
+    pending = {key: value for key, value in pending.items() if key[0] in live}
+
+    if not pending:
+        return 0
+
+    columns = ['company_id', 'product_id', 'branch_id', 'movement_type',
+               'quantity', 'reference', 'notes', 'created_by']
+    # v13 columns, present on every real install by the time this runs (v13 is
+    # earlier in the same chain) but absent from hand-built minimal fixtures,
+    # so they are added only when the live table actually has them.
+    optional = [c for c in ('uid', 'created_at_utc') if c in movement_columns]
+    columns.extend(optional)
+    sql = (f"INSERT INTO inventory_movements ({','.join(columns)}) "
+           f"VALUES ({','.join('?' * len(columns))})")
+
+    stamp = datetime.now(timezone.utc).isoformat()
+    rows = []
+    # Sorted so a run is reproducible and two installs with the same data
+    # seed in the same order -- dict iteration order is insertion order here,
+    # which is compute_drift's ORDER BY followed by the second query's, and
+    # depending on that would be depending on an implementation detail.
+    #
+    # `str(product_id)` because v13 moved products off autoincrement ids onto
+    # uuids and a database mid-migration can hold both, which sort against
+    # each other with a TypeError rather than an ordering. `branch_id` cannot
+    # be NULL among these candidates (both sources exclude it) but is
+    # defended anyway: a sort key is a terrible place to learn otherwise.
+    for (product_id, branch_id), quantity in sorted(
+            pending.items(),
+            key=lambda item: (str(item[0][0]),
+                              -1 if item[0][1] is None else item[0][1])):
+        values = [company_id, product_id, branch_id, V15_OPENING_COUNT_TYPE,
+                  quantity, V15_OPENING_COUNT_REFERENCE,
+                  V15_OPENING_COUNT_REASON, 'System']
+        for column in optional:
+            # A real RFC-4122 uuid4 per row, generated in Python -- never
+            # SQLite's lower(hex(randomblob(16))), which is 32 characters of
+            # something that is not a UUID and that Owner's sync ingest
+            # rejects at the point it is most expensive to discover. Same
+            # decision, same reason, as v13's uid backfill.
+            values.append(str(_uuid.uuid4()) if column == 'uid' else stamp)
+        rows.append(tuple(values))
+
+    for start in range(0, len(rows), _V15_SEED_CHUNK):
+        conn.executemany(sql, rows[start:start + _V15_SEED_CHUNK])
+    return len(rows)
+
+
+def _v15_record_outcome(conn, company_id, summary, live_tables):
+    """Write what v15 did, and what it deliberately did not do, to audit_log.
+
+    `user_id` is NULL on purpose: no person seeded these counts or declined
+    to assign those branches, and audit_log's `user_id` is the one place a
+    reader looks to find out who did. The unassigned and orphaned counts are
+    recorded here because "the gate passed" and "the gate passed while
+    excluding four rows it could not place and two whose products no longer
+    exist" are different facts, and only one of them is true.
+
+    An observation, not state: re-running the step (which only happens while
+    the version marker is still behind) appends a second observation rather
+    than editing the first. The ledger, the balances and the branch
+    assignments are what must be idempotent, and they are.
+    """
+    if 'audit_log' not in live_tables:
+        return
+    if not (summary['seeded'] or summary['branches_resolved']
+            or summary['unassigned'] or summary['orphaned']):
+        return
+    import json as _json
+    conn.execute(
+        "INSERT INTO audit_log (company_id,user_id,action,entity,entity_id,details) "
+        "VALUES (?,?,?,?,?,?)",
+        (company_id, None, 'STOCK_LEDGER_SEEDED_V15', 'inventory_movements', None,
+         _json.dumps(summary, sort_keys=True, default=str)),
+    )
+
+
+def _v15_gate_message(refusals):
+    """The refusal, written to be acted on.
+
+    "Migration failed" is not a report about a shop's stock. Every company
+    that could not be reconciled is named, with the rows that could not be,
+    and with the one recovery that is supported -- because an operator who
+    reaches this cannot open the app to look, and the message is all they
+    have.
+    """
+    parts = []
+    for company_id, blocking, summary in refusals:
+        net = round(sum(row['drift'] for row in blocking), 4)
+        offenders = '; '.join(
+            f"{row['sku'] or row['product_id']} @ branch {row['branch_id']}: "
+            f"balance {row['stored_balance']} vs ledger {row['ledger_balance']} "
+            f"(drift {round(row['drift'], 4)})"
+            for row in blocking[:_V15_REPORTED_OFFENDERS]
+        )
+        more = ('' if len(blocking) <= _V15_REPORTED_OFFENDERS
+                else f" ...and {len(blocking) - _V15_REPORTED_OFFENDERS} more")
+        parts.append(
+            f"company {company_id}: {len(blocking)} (product, branch) balance(s) "
+            f"account for LESS stock than inventory_movements records arriving, "
+            f"net drift {net} [{offenders}{more}]; "
+            f"{summary['seeded']} opening count(s) seeded and committed; "
+            f"recover with core.retail.stock_reconciliation.repair_drift(conn, "
+            f"{company_id!r})"
+        )
+    return (
+        "Retail schema v15 refused to advance PRAGMA user_version. "
+        + ' | '.join(parts) + ". "
+        "This is NOT a broken migration, and it is not the ordinary legacy shape "
+        "either -- v15 already inferred and seeded an opening count for every key "
+        "whose balance merely exceeded what the ledger knew about. What is left is "
+        "the opposite: the ledger records MORE goods arriving than the shelf claims "
+        "to hold, and no opening count explains that, because a shop cannot have "
+        "started with less than nothing. It is shrinkage, loss, or a writer that "
+        "decremented a balance without recording why -- the inconsistency Phase 3 "
+        "exists to surface and the one multi-device sync must never spread. "
+        "The repair above RAISES each of these balances to the total the ledger can "
+        "prove arrived (it takes its own transaction and writes its own audit row) "
+        "and destroys no stock; if the goods really are gone, post an adjustment "
+        "movement for the loss instead, which is the honest record. Either way, "
+        "relaunch afterwards and v15 will re-run and pass. Do not relax this check: "
+        "it converts a detected problem into an undetected one."
+    )
+
+
+def _migrate_seed_opening_counts_and_gate_drift(conn):
+    """One-time migration (schema v15): make `inventory_balances` provably
+    derivable from `inventory_movements` -- launch-readiness Phase 3
+    (docs/launch-readiness/phase3-ledger-truth.md), reserved in ROADMAP.md's
+    2026-08-21 ledger.
+
+    Additive only, like v13 and v14: one INSERT per unbacked balance, one
+    guarded UPDATE for unambiguous NULL branches, one CREATE INDEX IF NOT
+    EXISTS. No table is rebuilt, no row is deleted, no existing quantity is
+    rewritten -- in particular this step never touches
+    `inventory_balances.quantity_on_hand`. It moves the LEDGER to explain the
+    cache, never the cache to match the ledger: overwriting a balance is a
+    repair, repair destroys the evidence that a writer is broken, and repair
+    is owner-initiated by design (see core/retail/stock_reconciliation.py's
+    module docstring).
+
+    THE ORDER OF THE FIVE STEPS IS THE DESIGN:
+
+    1. measure BEFORE, so the run can say what it found rather than only what
+       it left;
+    2. resolve NULL branches where one branch makes it unambiguous;
+    3. RE-measure, because step 2 moved ledger history onto a branch and so
+       changed the residual there;
+    4. seed one opening count carrying that residual per unexplained key;
+    5. measure AFTER and GATE.
+
+    STEPS 2 AND 3 ARE NOT INTERCHANGEABLE WITH 4. Resolving a NULL-branch
+    movement onto branch B gives (product, B) ledger history it did not have;
+    seeding first would have written an opening count computed without it,
+    and the two would sum to the wrong stock and fail the gate. The
+    re-measure between them exists for the same reason at the level of the
+    number rather than the key.
+
+    STEP 2 IS THE ONLY NON-ADDITIVE WRITE IN THE MIGRATION, and it earns its
+    place. A verifier found that on a single-branch shop with pre-branch NULL
+    history it was the step that caused the refusal -- but that was true only
+    while step 4 seeded the ABSENCE of history rather than the residual: the
+    resolve gave the key history, the old seeder therefore skipped it, and
+    the gate refused a shop whose answer was never in doubt. With the
+    residual it is the resolve that makes the shop CORRECT rather than merely
+    unblocked: the sales land on the one branch they can have happened at,
+    the opening count is computed against them, and the stock is intact.
+    Deleting the step would also have worked -- every NULL row to the queue,
+    still advancing, still simpler -- and it was rejected because it is worse
+    for the common install: a single-branch shop is the overwhelmingly likely
+    legacy shape, and it would be handed a permanent "needs assignment" queue
+    whose every entry has exactly one possible answer. A queue nobody can
+    resolve wrongly is not a safety feature, it is a chore.
+
+    THE GATE IS ZERO DRIFT AMONG REPAIRABLE ROWS, NOT ZERO DRIFT.
+    `compute_drift` reports `repairable: False` for the two STRUCTURAL
+    impossibilities -- a movement whose branch_id is still NULL after step 2
+    (`inventory_balances.branch_id` is NOT NULL, so no balance row could ever
+    hold it) and a balance whose product row is gone
+    (`inventory_movements.product_id` has a FOREIGN KEY to products(id), so
+    no movement row can ever be written for it). A gate demanding global zero
+    would mean an install carrying one such row could never advance its
+    schema version AGAIN -- not for v15, not for anything after it. That is
+    the permanent wedge the v13 duplicate-uid defect produced, and the orphan
+    balance reached it from a third direction: the seeder skipped the row,
+    the gate refused over it, and `repair_drift` refused it too, so three
+    measured launch/repair/launch cycles left `user_version` at 14, 14, 14
+    with nothing an operator could do. Such an install advances here carrying
+    counted, recorded queues (`stock_reconciliation.unassigned_movements` and
+    `orphan_balances`) instead of a guess or a brick.
+
+    WHAT THE GATE STILL REFUSES, and it must: a key whose residual is
+    NEGATIVE -- the ledger accounts for more goods than the shelf shows. No
+    opening count explains that (a shop cannot begin with less than nothing),
+    so `_v15_seed_opening_counts` deliberately leaves it alone and it reaches
+    here. Softening this into "seed whatever closes the gap" would make the
+    gate incapable of failing, which is the opposite failure and just as bad.
+
+    WHY THE COMMIT IS WHERE IT IS. The seeding is committed BEFORE the gate
+    can raise, which looks like a violation of "leave the database as the
+    backup found it" and is the opposite. `ensure_schema_version` does not
+    commit on the failure path, so without this the seeded opening counts
+    would be discarded, and the recovery this failure names would run against
+    a ledger that had been rolled back to silence. Seeding first, durably, is
+    half of what makes `repair_drift` safe to point an operator at; the other
+    half is `SKIP_LEDGER_NOT_ESTABLISHED`, which refuses to LOWER a balance
+    at all until this gate has passed, so that even an operator who runs the
+    repair on an install v15 has never touched cannot lose stock by it.
+    Because every write here is idempotent and additive, committing it costs
+    nothing if the next launch retries.
+
+    Existence-guarded: some fixtures hand-build a minimal schema and call
+    `_migrate_retail_schema` directly (see
+    retail_category_delete_fk_sync_test.py, which builds no
+    `inventory_balances` at all), and a migration that assumed the full
+    schema would crash them.
+
+    Returns {company_id: summary} for the caller that wants to report what
+    happened; `_migrate_retail_schema` ignores it, and the durable record is
+    the audit_log row (`_v15_record_outcome`).
+    """
+    live_tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    # All four, not just the two this step writes: `compute_drift` LEFT JOINs
+    # `products` and `branches` to name the rows it reports, so the gate
+    # cannot run without them either. Every real install has all four from
+    # `_init_retail`'s base executescript; what this guard is for is the
+    # hand-built minimal fixtures that call `_migrate_retail_schema`
+    # directly (retail_category_delete_fk_sync_test.py builds only
+    # categories/products/inventory_movements), where skipping is the
+    # correct answer rather than a crash.
+    if not {'inventory_balances', 'inventory_movements',
+            'products', 'branches'} <= live_tables:
+        return {}
+
+    # `compute_drift` reads its rows by NAME. Every real caller comes through
+    # `get_retail_conn()` (row_factory = sqlite3.Row), but a migration that
+    # only works on a connection configured a particular way is a trap for
+    # the next person calling it directly, so the factory is set here and
+    # restored afterwards rather than assumed.
+    from core.retail.stock_reconciliation import (
+        SKIP_NO_BRANCH, SKIP_NO_PRODUCT, compute_drift)
+    previous_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        # Both sides of `compute_drift`'s UNION, plus this step's own
+        # NOT EXISTS probe and the importer's already-declared sum, look
+        # rows up by exactly this triple and there was no index on it.
+        # Created here rather than in the base executescript so a pre-v15
+        # install gets it too.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_inventory_movements_key "
+            "ON inventory_movements(company_id, product_id, branch_id)"
+        )
+        movement_columns = {
+            row[1] for row in conn.execute('PRAGMA table_info("inventory_movements")').fetchall()
+        }
+
+        outcomes, refusals = {}, []
+        for company_id in _v15_company_ids(conn):
+            before = compute_drift(conn, company_id)
+            resolved = _v15_resolve_unambiguous_null_branches(conn, company_id, live_tables)
+            # Re-measured AFTER the resolve, because the resolve MOVES ledger
+            # history onto a branch and therefore changes the residual at
+            # that key. Seeding from `before` would seed the pre-resolve
+            # figure and double-count by exactly the resolved rows.
+            resolvable = compute_drift(conn, company_id)
+            seeded = _v15_seed_opening_counts(
+                conn, company_id, movement_columns, resolvable)
+            after = compute_drift(conn, company_id)
+
+            blocking = [row for row in after if row['repairable']]
+            unassigned = [row for row in after
+                          if row['blocked_reason'] == SKIP_NO_BRANCH]
+            orphaned = [row for row in after
+                        if row['blocked_reason'] == SKIP_NO_PRODUCT]
+            summary = {
+                'company_id': company_id,
+                'drift_rows_before': len(before),
+                'net_drift_before': round(sum(row['drift'] for row in before), 4),
+                'branches_resolved': resolved,
+                'seeded': seeded,
+                'unassigned': len(unassigned),
+                'net_drift_unassigned': round(sum(row['drift'] for row in unassigned), 4),
+                'orphaned': len(orphaned),
+                'net_drift_orphaned': round(sum(row['drift'] for row in orphaned), 4),
+                'drift_rows_after': len(blocking),
+            }
+            _v15_record_outcome(conn, company_id, summary, live_tables)
+            outcomes[company_id] = summary
+
+            if blocking:
+                # Collected, not raised here. One install CAN host more than
+                # one company, and stopping at the first refusal would leave
+                # every later company's seeding undone and its drift
+                # undiscovered until the operator had fixed this one and
+                # relaunched -- learning about the next shop one relaunch at
+                # a time. Every company's honest work lands; the refusal at
+                # the end names all of them.
+                refusals.append((company_id, blocking, summary))
+
+        # Durable BEFORE any refusal -- see this function's docstring. This
+        # commit is what makes the recovery the message recommends safe.
+        conn.commit()
+        if refusals:
+            raise RetailLedgerDriftError(_v15_gate_message(refusals))
+        return outcomes
+    finally:
+        conn.row_factory = previous_factory
+
+
 def init_retail():
     """Create/upgrade retail.db and seed it on first boot.
 
@@ -2897,6 +3543,57 @@ def _seed_retail(conn, cur, company_id=1):
         cur.execute(
             "UPDATE sales SET subtotal=?,tax_amount=?,total=?,amount_paid=?,change_amount=0 WHERE id=?",
             (round(subtotal, 2), round(tax_total, 2), total, total, sid)
+        )
+
+    # ── the demo shop's opening declaration (Phase 3, schema v15) ───────────
+    #
+    # Everything above writes `inventory_balances` rows out of thin air and
+    # then posts `sale_out` movements against them, so the demo database
+    # arrived with a cache its own ledger flatly contradicted: 120 on hand
+    # for a product whose entire recorded history is "-8". That was a real
+    # inconsistency in seed data, not a rounding artefact, and until v15 it
+    # merely made `stock_reconciliation.compute_drift` report every seeded
+    # product forever. It stopped being harmless at v15 for two reasons:
+    #
+    #   * v15's gate refuses to advance `PRAGMA user_version` while a
+    #     REPAIRABLE balance cannot be reproduced from the ledger. This
+    #     seeder runs AFTER the migration on a fresh install, so such a
+    #     database is born past the gate and fails it the next time ANY
+    #     migration runs -- v16 is already reserved in ROADMAP.md. Every
+    #     demo and dev install would have refused to start, on a defect
+    #     planted months earlier by seed data.
+    #   * the Repair action rewrites a drifted balance from its ledger total.
+    #     On these rows that total is NEGATIVE (sales with nothing to sell
+    #     from), so repairing a demo database drove its whole catalogue below
+    #     zero -- while reporting success.
+    #
+    # The fix is the honest one and it changes no balance: the demo shop
+    # DECLARES the opening stock it must have had, exactly as
+    # api/import_api.py records a real operator's opening declaration
+    # ('opening_stock' / 'OPENING'). Declared quantity is what is on hand now
+    # plus everything sold since, so the ledger sums to the cached balance
+    # and the demo database can pass the same gate a customer's does.
+    #
+    # Computed per (product, branch) from what was actually written rather
+    # than from the quantities chosen above, so it stays correct if the sales
+    # loop, the branch ids or the balance rows ever change shape.
+    residuals = cur.execute(
+        "SELECT b.product_id, b.branch_id, "
+        "       b.quantity_on_hand - COALESCE(("
+        "           SELECT SUM(m.quantity) FROM inventory_movements m "
+        "           WHERE m.company_id=b.company_id AND m.product_id=b.product_id "
+        "             AND m.branch_id IS b.branch_id), 0) AS opening "
+        "FROM inventory_balances b WHERE b.company_id=?",
+        (cid,)
+    ).fetchall()
+    for product_id, branch_id, opening in residuals:
+        if not opening:
+            continue
+        cur.execute(
+            "INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,notes,created_by) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (cid, product_id, branch_id, 'opening_stock', float(opening), 'OPENING',
+             'Demo opening stock', 'System')
         )
 
     conn.commit()

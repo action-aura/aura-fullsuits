@@ -616,6 +616,26 @@ const SubsystemApp = {
         // cashier standing AT the admin terminal looking at an entry that
         // 403s -- the identical bug the Reports entry above just had.
         { id: 'audit-log',   label: 'Audit Log',        icon: '📜', adminOnly: true, capability: 'retail.reports' },
+        // Phase 3 (docs/launch-readiness/phase3-ledger-truth.md): the stock
+        // accuracy report, over GET /api/sub/retail/inventory/reconciliation.
+        //
+        // `ownerOnly`, NOT `adminOnly` -- and the distinction is the one the
+        // Employees entry above spells out, applied to a different route.
+        // That route enforces `_require_company_admin()`, which reads
+        // `session['mt_role'] == 'admin'`: the USER axis. `adminOnly` means
+        // `this.isAdminDevice`, the DEVICE axis, and picking it here would
+        // hide the shop's own stock report from the owner the moment they
+        // opened it on a second terminal, while showing it to a manager
+        // standing at the admin till whose one request answers 403.
+        //
+        // The capability is the third axis and is also real: the route
+        // carries @mt_require_capability(CAP_REPORTS) like every other read
+        // that dumps the shop's position. Both are needed, exactly as on the
+        // Audit Log entry above -- and neither is the enforcement. The render
+        // guard in subsystem-retail.js's _renderStockAccuracy repeats both,
+        // because AuraRouter replays the last section out of the URL hash and
+        // reaches this screen with no nav click in between.
+        { id: 'stock-accuracy', label: 'Stock Accuracy', icon: '⚖️', ownerOnly: true, capability: 'retail.reports' },
       ]
     },
   },

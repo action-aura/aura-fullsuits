@@ -250,6 +250,42 @@ DELIBERATELY_UNGATED_MONEY_READS = {
 }
 
 
+#: Routes that call `_require_company_admin()` in their own body -- the fourth
+#: axis, and the only one no decorator declares.
+#:
+#: The three axes above it are visible to the AST sweep because they are
+#: DECORATORS: mt_login_required (authenticated), mt_require_subsystem (this
+#: install has retail), mt_require_capability (this user holds the grant).
+#: `_require_company_admin()` is an ordinary call on the first line of a
+#: handler, checking `session['mt_role'] == 'admin'` -- the shop OWNER, which
+#: no capability code expresses. Nothing in this file used to look at it, so
+#: deleting that one line from a route left every static assertion here green.
+#:
+#: Frozen exactly, in both directions, like EXPECTED_MUTATION_CAPABILITIES:
+#: a route that loses the call fails, and a route that gains one fails until
+#: somebody writes down why it needs owner authority.
+EXPECTED_COMPANY_ADMIN_ROUTES = {
+    # Destroys or fabricates the company's entire dataset. Demo builds only
+    # (retail_demo_mode_enabled), plus a company-specific confirmation token.
+    'demo_wipe',
+    'demo_seed',
+    # ── The Stock accuracy screen's two routes ───────────────────────────────
+    # Phase 3 (docs/launch-readiness/phase3-ledger-truth.md). They are gated as
+    # a PAIR and that pairing is the point: the report's response is an
+    # unpaginated dump of every product name, SKU, branch and quantity in the
+    # company, and the repair rewrites cached stock for all of them. A cashier
+    # holding retail.reports must reach NEITHER.
+    #
+    # Capability alone would not do it. retail.reports is a manager code, and a
+    # manager is not the shop owner -- the gate has to match what the endpoint
+    # DISCLOSES, not the tier that reads sales figures. The frontend's nav
+    # entry and _renderStockAccuracy's own guard both mirror this with
+    # `ownerOnly` (the USER axis), never `adminOnly` (the DEVICE axis).
+    'inventory_reconciliation',
+    'repair_inventory_reconciliation',
+}
+
+
 # ── AST extraction ───────────────────────────────────────────────────────────
 
 class _Route:
@@ -328,6 +364,32 @@ MUTATING_ROUTES = [r for r in ALL_ROUTES if r.methods & MUTATING_METHODS]
 READ_ROUTES = [r for r in ALL_ROUTES if not (r.methods & MUTATING_METHODS)]
 
 
+def _company_admin_routes(path):
+    """Every @route handler whose OWN BODY calls `_require_company_admin()`.
+
+    Body, not decorators, because that is where the check lives -- and it is
+    the reason this needs its own walk rather than another field on _Route.
+    `ast.walk` over the function node finds the call wherever it sits: on its
+    own line, inside the `for guard in (...)` tuple both demo routes use, or
+    inside a nested block.
+    """
+    tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+    found = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not any(_decorator_name(d).endswith('.route') for d in node.decorator_list):
+            continue
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Call) and _decorator_name(inner) == '_require_company_admin':
+                found.add(node.name)
+                break
+    return found
+
+
+COMPANY_ADMIN_ROUTES = _company_admin_routes(RETAIL_API) | _company_admin_routes(IMPORT_API)
+
+
 # ── 1. The static guard ──────────────────────────────────────────────────────
 
 def test_the_route_files_were_actually_parsed():
@@ -380,6 +442,74 @@ def test_the_mutating_capability_matrix_matches_exactly():
 def test_the_gated_read_routes_match_exactly():
     actual = {r.func: r.capability for r in READ_ROUTES if r.capability is not None}
     assert actual == EXPECTED_READ_CAPABILITIES
+
+
+def test_the_company_admin_routes_match_exactly():
+    """The fourth axis, frozen like the other three.
+
+    ANTI-VACUITY FIRST: this whole assertion is a set comparison, and a walk
+    that stopped finding the call -- the helper renamed, the AST shape changed
+    -- would produce an EMPTY set, which fails loudly against a non-empty
+    table rather than passing. The explicit floor below says the same thing in
+    the failure message, so a reader who hits it is not left guessing whether
+    the sweep or the product moved.
+    """
+    assert len(COMPANY_ADMIN_ROUTES) >= 2, (
+        "the _require_company_admin() body scan found "
+        f"{len(COMPANY_ADMIN_ROUTES)} route(s). The scan is broken -- either "
+        "the helper was renamed or the AST shape changed -- so 'these routes "
+        "require the shop owner' would be a claim about an empty set."
+    )
+    assert COMPANY_ADMIN_ROUTES == EXPECTED_COMPANY_ADMIN_ROUTES, (
+        "the set of routes requiring company-admin changed. This is the axis "
+        "no decorator declares, so a route that quietly loses the call keeps "
+        "every other assertion in this file green while handing a manager the "
+        "shop's whole stock position.\n"
+        f"only in code:  {sorted(COMPANY_ADMIN_ROUTES - EXPECTED_COMPANY_ADMIN_ROUTES)}\n"
+        f"only in table: {sorted(EXPECTED_COMPANY_ADMIN_ROUTES - COMPANY_ADMIN_ROUTES)}"
+    )
+
+
+def test_the_stock_accuracy_screens_two_routes_are_gated_as_a_pair():
+    """Both halves of the Stock accuracy screen, checked together.
+
+    Its report and its repair are one feature and are reached from one screen.
+    Splitting them across two tables (READ capabilities, MUTATION
+    capabilities, company-admin) is right for maintenance and wrong for
+    review: nothing anywhere states that all four gates belong to the same
+    surface, so loosening one is a one-line diff in a file where it looks
+    unrelated to the other three.
+
+    The report is retail.reports (what it DISCLOSES) and the repair is
+    retail.stock.adjust (what it WRITES) -- deliberately different codes, and
+    that asymmetry is asserted rather than assumed, because making them equal
+    in either direction is a plausible-looking 'tidy-up'.
+    """
+    by_func = {r.func: r for r in ALL_ROUTES}
+    report = by_func.get('inventory_reconciliation')
+    repair = by_func.get('repair_inventory_reconciliation')
+    assert report is not None and repair is not None, sorted(by_func)
+
+    assert report.methods == {'GET'}, report
+    assert repair.methods == {'POST'}, repair
+    assert report.capability == CAP_REPORTS, report
+    assert repair.capability == CAP_STOCK, repair
+    assert 'inventory_reconciliation' in COMPANY_ADMIN_ROUTES
+    assert 'repair_inventory_reconciliation' in COMPANY_ADMIN_ROUTES
+
+    # And the repair keeps its confirmation interlock. The report now HANDS
+    # THE CLIENT the token (see _confirmation_token / the Stock accuracy
+    # screen, which cannot build it -- the token embeds the company id and no
+    # frontend surface knows it), so "the token is required at all" stopped
+    # being something the frontend implicitly proves by not having one.
+    source = RETAIL_API.read_text(encoding='utf-8')
+    body = source[source.index('def repair_inventory_reconciliation('):]
+    body = body[:body.index('\n@')]
+    assert "_require_confirmation('RECONCILE'" in body, (
+        "repair_inventory_reconciliation no longer demands its company-scoped "
+        "confirmation token. It is what stops a stray click and a request "
+        "replayed at another tenant from rewriting a shop's stock."
+    )
 
 
 def test_capability_is_checked_inside_the_login_check():

@@ -155,6 +155,11 @@ const RetailSystem = {
       case 'employees': return RetailEmployees.render(c);
       case 'admin-center': return this._renderAdminCenter(c);
       case 'audit-log':    return this._renderAuditLog(c);
+      // Phase 3 (docs/launch-readiness/phase3-ledger-truth.md). Owner-facing
+      // report over the inventory_balances/inventory_movements comparison --
+      // see _renderStockAccuracy for the gating and for why the repair on it
+      // is never automatic.
+      case 'stock-accuracy': return this._renderStockAccuracy(c);
       default:
         c.innerHTML = `<div style="text-align:center;padding:80px;color:var(--text-muted)"><h2>${sectionId}</h2><p>Coming soon.</p></div>`;
     }
@@ -5147,6 +5152,536 @@ const RetailSystem = {
           ${o.message}
         </p>
         <button class="sub-btn-primary" onclick="SubsystemApp._navigate('pos')">🛒 ${t('Point of Sale')}</button>
+      </div>`;
+  },
+
+  // ══ STOCK ACCURACY ════════════════════════════════════════════════════════
+  //
+  // The screen that answers "the stock is not accurate" by turning it into a
+  // list somebody can check.
+  //
+  // Reads GET /api/sub/retail/inventory/reconciliation, which compares every
+  // cached `inventory_balances.quantity_on_hand` against the
+  // `inventory_movements` ledger it is supposed to be a cache of. See
+  // backend/core/retail/stock_reconciliation.py for why the ledger is the
+  // truth and the balance is the cache.
+  //
+  // ── THREE THINGS THIS SCREEN IS BUILT AROUND ──────────────────────────────
+  //
+  // 1. NET DRIFT IS NOT THE ANSWER ON ITS OWN. A +10 and a -10 net to zero
+  //    while two products are wrong, so the count sits beside the net and the
+  //    tile says as much in words. A headline that can read "0" over a broken
+  //    shop is worse than no headline.
+  //
+  // 2. AN EMPTY LIST IS THREE DIFFERENT FACTS. "Everything agrees",
+  //    "there was nothing to compare" and "the check did not run" all produce
+  //    zero rows, and this programme has already shipped one screen where an
+  //    error rendered as emptiness and one where a refusal rendered as
+  //    "nobody sold anything". So the state is explicit -- one panel per
+  //    state, each carrying its own `data-sa-state` -- and `pairs_examined`
+  //    (how much was actually looked at) is what separates the first two.
+  //    A green tick is only honest if something was compared.
+  //
+  // 3. REPAIR IS OWNER-INITIATED, ALWAYS. Repairing on load would take a
+  //    visible discrepancy and make it invisible, which is the exact opposite
+  //    of what this screen is for -- and it would destroy the evidence that
+  //    one of the five balance writers is broken. _repairStockAccuracy()
+  //    therefore refuses to run unless the state machine is sitting in
+  //    'confirm', i.e. unless a human went through the step that says what it
+  //    is about to do. Nothing on the load path can reach it.
+  //
+  // Gated on BOTH axes the route itself gates on, for the reason the Reports
+  // and Audit Log guards above spell out: `_navigate('stock-accuracy')` is
+  // reachable without the nav entry, because AuraRouter replays the last
+  // section from the URL hash on the next launch.
+  async _renderStockAccuracy(c) {
+    this._injectStyles();
+
+    // retail.reports -- the same capability inventory_reconciliation carries
+    // (@mt_require_capability(CAP_REPORTS)), and the same code its sibling
+    // read-only report routes use.
+    if (window.SubsystemApp && !SubsystemApp.hasCapability('retail.reports')) {
+      return this._renderCapabilityRestricted(c, {
+        icon: '⚖️',
+        title: t('Stock Accuracy'),
+        message: t('Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales.'),
+      });
+    }
+    // ...and company-admin, which the route ALSO enforces
+    // (_require_company_admin -> session mt_role == 'admin'). That is the
+    // USER axis, not the device axis: an owner who picks up a second terminal
+    // still owns the shop, and a manager standing at the admin terminal still
+    // does not. Checking only the capability would leave a manager with
+    // retail.reports on a screen whose one request answers 403.
+    //
+    // Refuses only when the role is KNOWN and is not admin. `SubsystemApp.role`
+    // is '' until /api/auth/session resolves, and that is "unknown", not
+    // "denied" -- the same fail-open convention hasCapability() documents,
+    // and the reason this file stays loadable with no SubsystemApp at all.
+    if (window.SubsystemApp && SubsystemApp.role && SubsystemApp.role !== 'admin') {
+      return this._renderCapabilityRestricted(c, {
+        icon: '⚖️',
+        title: t('Stock Accuracy'),
+        message: t('Comparing the whole catalogue against the stock ledger is limited to the store owner.'),
+      });
+    }
+
+    // 'checking' from the very first paint, never 'empty'. An unfilled region
+    // between the frame and the first response is indistinguishable from
+    // "found nothing", which is the failure this screen exists to refuse --
+    // so #stka-body is never empty for a single tick.
+    this._stockAccuracy = { state: 'checking', data: null, repair: null, error: '' };
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <h2 class="ret-title">${t('Stock Accuracy')}</h2>
+        <button class="ret-btn ret-btn-ghost" id="stka-recheck"
+                onclick="RetailSystem._loadStockAccuracy()">${t('Run the check again')}</button>
+      </div>
+      <p style="color:var(--text-muted);font-size:13px;margin:0 0 18px;max-width:780px;line-height:1.7">
+        ${t('Every stock figure in this product is a cached total. This compares each one against the movement ledger it is supposed to be a cache of, and lists the ones that disagree.')}
+      </p>
+      <div id="stka-body">${this._stockAccuracyPanel()}</div>`;
+    await this._loadStockAccuracy();
+  },
+
+  async _loadStockAccuracy() {
+    const s = this._stockAccuracy ||
+      (this._stockAccuracy = { state: 'checking', data: null, repair: null, error: '' });
+    s.state = 'checking';
+    s.error = '';
+    s.repair = null;
+    this._paintStockAccuracy();
+    try {
+      const res = await this._get('/api/sub/retail/inventory/reconciliation');
+      // `status !== 'success'` covers the 400 envelope; `res.error` with no
+      // `status` at all is what _require_company_admin's 403 looks like. Both
+      // are shown as the server worded them -- a refusal and a database
+      // failure are different facts and neither is "no drift".
+      if (!res || res.status !== 'success' || !res.data) {
+        s.state = 'failed';
+        s.data = null;
+        s.error = (res && (res.message || res.error)) || t('Could not check stock accuracy.');
+      } else {
+        s.data = res.data;
+        s.error = '';
+        // pairs_examined is what makes a clean result mean anything. Zero
+        // pairs compared is NOT a clean bill of health, and gets its own
+        // panel saying so.
+        const examined = +(res.data.pairs_examined || 0);
+        const drifted = +(res.data.drift_count || 0);
+        s.state = drifted > 0 ? 'drift' : (examined > 0 ? 'clean' : 'nothing');
+      }
+    } catch (e) {
+      console.error('Stock accuracy check failed', e);
+      s.state = 'failed';
+      s.data = null;
+      s.error = t('Could not check stock accuracy.');
+    }
+    this._paintStockAccuracy();
+  },
+
+  _paintStockAccuracy() {
+    const host = document.getElementById('stka-body');
+    if (!host) return;
+    host.innerHTML = this._stockAccuracyPanel();
+  },
+
+  // Step one of the repair, and the only way into step two. Shows what the
+  // repair will do -- counted, not described in general terms -- before
+  // anything is sent.
+  _askRepairStockAccuracy() {
+    const s = this._stockAccuracy;
+    if (!s || s.state !== 'drift') return;
+    s.state = 'confirm';
+    this._paintStockAccuracy();
+  },
+
+  _cancelRepairStockAccuracy() {
+    const s = this._stockAccuracy;
+    if (!s || s.state !== 'confirm') return;
+    s.state = 'drift';
+    this._paintStockAccuracy();
+  },
+
+  async _repairStockAccuracy() {
+    const s = this._stockAccuracy;
+    // THE GUARD THAT MAKES "OWNER-INITIATED" STRUCTURAL RATHER THAN A HABIT.
+    // 'confirm' is only ever set by _askRepairStockAccuracy, which is only
+    // ever reached from a button on the drift panel. So this function is
+    // inert on the load path, inert while the check is in flight, and inert
+    // if it is called a second time from a stale handler after the first
+    // repair already landed -- automatically repairing a drifted shop turns a
+    // visible discrepancy into an invisible one.
+    if (!s || s.state !== 'confirm') return;
+    // The token the server will demand back, taken from the report response
+    // rather than assembled here: its format is the backend's
+    // (_confirmation_token), and a client that spells it out itself is a
+    // second copy of that format waiting to drift.
+    const token = s.data && s.data.repair_confirmation;
+    if (!token) {
+      s.state = 'repair-failed';
+      s.error = t('This build cannot confirm the repair, so nothing was changed.');
+      this._paintStockAccuracy();
+      return;
+    }
+    s.state = 'repairing';
+    s.error = '';
+    this._paintStockAccuracy();
+    try {
+      const res = await this._post('/api/sub/retail/inventory/reconciliation/repair', { confirm: token });
+      if (!res || res.status !== 'success' || !res.data) {
+        // A refusal (403, a restricted licence, a 400) is NOT "repaired 0".
+        // Its own panel, with the server's own words.
+        s.state = 'repair-failed';
+        s.error = (res && (res.message || res.error)) || t('The repair did not run, so nothing was changed.');
+      } else {
+        s.state = 'repaired';
+        s.repair = res.data;
+      }
+    } catch (e) {
+      console.error('Stock accuracy repair failed', e);
+      s.state = 'repair-failed';
+      s.error = t('The repair did not run, so nothing was changed.');
+    }
+    // Deliberately does NOT re-run the check here. Replacing "12 balances
+    // rewritten, 2 skipped" with a green tick the instant it lands is how a
+    // repair becomes something nobody can audit afterwards. The owner reads
+    // what happened, then asks for the check again.
+    this._paintStockAccuracy();
+  },
+
+  // ── ONE PANEL PER STATE ───────────────────────────────────────────────────
+  //
+  // Every branch returns exactly one element carrying its own
+  // `data-sa-state`, so two states can never be on screen together and no
+  // state can render as another one's markup. That attribute is the contract
+  // retail_stock_accuracy_screen_test.js reads.
+  _stockAccuracyPanel() {
+    const s = this._stockAccuracy || { state: 'checking' };
+    switch (s.state) {
+      case 'checking':      return this._stkaChecking();
+      case 'failed':        return this._stkaFailed();
+      case 'nothing':       return this._stkaNothingToCheck();
+      case 'clean':         return this._stkaClean();
+      case 'drift':
+      case 'confirm':
+      case 'repairing':     return this._stkaDrift(s.state);
+      case 'repaired':      return this._stkaRepaired();
+      case 'repair-failed': return this._stkaRepairFailed();
+      // No silent default. An unknown state is a bug in this file, and
+      // rendering nothing for it would be the empty-screen failure again.
+      default:              return this._stkaUnknownState(s.state);
+    }
+  },
+
+  // A quantity, not an amount: no currency, and never through _money().
+  // inventory_movements.quantity is REAL (goods are sold by weight here), so
+  // a fixed 0dp would round half a kilo away and a fixed 2dp would print
+  // every whole unit as "24.00".
+  _qty(n) {
+    const v = +(n || 0);
+    if (!isFinite(v)) return '0';
+    return String(Math.round(v * 1000) / 1000);
+  },
+
+  // The sign IS the message on this screen, so it is always drawn: U+002B for
+  // "the balance claims MORE than the ledger can account for" (the
+  // double-received-PO and resurrected-by-import signature) and U+2212 MINUS
+  // -- not a hyphen -- for the other direction, matching _moneyDigits()'s
+  // reasoning about a glyph that cannot be misread inside a product name.
+  _signedQty(n) {
+    const v = +(n || 0);
+    if (!isFinite(v) || v === 0) return this._qty(0);
+    return (v > 0 ? '+' : '−') + this._qty(Math.abs(v));
+  },
+
+  // A figure, isolated and tabular. `.num` is main.css's numeric class: it
+  // supplies tabular figures and nowrap, declares no colour of its own (so
+  // the cell decides), and rtl.css already forces it back to direction:ltr.
+  // <bdi dir="ltr"> on top of that because a signed run like "+7" carries no
+  // strong directional character at all, so in Arabic it would otherwise take
+  // its direction from the paragraph and swap the sign to the far side of the
+  // digits. See _bdi()'s own note on why "auto" is not enough here.
+  _stkaNum(text) {
+    return `<span class="num">${this._bdi(text)}</span>`;
+  },
+
+  _stkaChecking() {
+    return `
+      <div class="sub-chart-card" data-sa-state="checking" style="text-align:center;padding:48px 32px">
+        <div style="font-size:34px;margin-bottom:12px" aria-hidden="true">⏳</div>
+        <h3 style="color:var(--text);margin:0 0 8px;font-size:17px">${t('Comparing every stock figure against the ledger…')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0;line-height:1.7">${t('Nothing has been compared yet, so this screen has no result to show.')}</p>
+      </div>`;
+  },
+
+  _stkaFailed() {
+    const s = this._stockAccuracy || {};
+    return `
+      <div class="sub-chart-card" data-sa-state="failed" style="text-align:center;padding:48px 32px;border:1px solid var(--state-danger-border)">
+        <div style="font-size:34px;margin-bottom:12px" aria-hidden="true">⚠️</div>
+        <h3 style="color:var(--state-danger-text);margin:0 0 8px;font-size:17px">${t('The stock accuracy check did not run.')}</h3>
+        <p style="color:var(--text);font-size:13px;margin:0 0 8px;line-height:1.7">${this._esc(s.error || '')}</p>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 20px;line-height:1.7;max-width:520px;margin-left:auto;margin-right:auto">${t('This is not the same as finding no problems. Nothing was compared, so nothing is known.')}</p>
+        <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._loadStockAccuracy()">${t('Try the check again')}</button>
+      </div>`;
+  },
+
+  // pairs_examined === 0. A shop with no stock records produces the same
+  // empty row list as a perfectly reconciled one, and calling that "accurate"
+  // would be a claim about evidence that does not exist.
+  _stkaNothingToCheck() {
+    return `
+      <div class="sub-chart-card" data-sa-state="nothing" style="text-align:center;padding:48px 32px">
+        <div style="font-size:34px;margin-bottom:12px" aria-hidden="true">📭</div>
+        <h3 style="color:var(--text);margin:0 0 8px;font-size:17px">${t('There is nothing to check yet.')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0;line-height:1.7;max-width:520px;margin-left:auto;margin-right:auto">${t('This company has no stock records, so the check compared nothing. That is not the same as being accurate.')}</p>
+      </div>`;
+  },
+
+  _stkaClean() {
+    const d = (this._stockAccuracy && this._stockAccuracy.data) || {};
+    return `
+      <div class="sub-chart-card" data-sa-state="clean" style="text-align:center;padding:48px 32px">
+        <div style="font-size:34px;margin-bottom:12px" aria-hidden="true">✅</div>
+        <h3 style="color:var(--text);margin:0 0 8px;font-size:17px">${t('Every stock figure agrees with the ledger.')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0;line-height:1.7">
+          <span>${t('Product and branch pairs compared')}</span>
+          ${this._stkaNum(this._qty(d.pairs_examined))}
+        </p>
+      </div>`;
+  },
+
+  _stkaUnknownState(state) {
+    return `
+      <div class="sub-chart-card" data-sa-state="unknown" style="text-align:center;padding:48px 32px;border:1px solid var(--state-danger-border)">
+        <div style="font-size:34px;margin-bottom:12px" aria-hidden="true">⚠️</div>
+        <h3 style="color:var(--state-danger-text);margin:0 0 8px;font-size:17px">${t('This screen lost track of what it was showing.')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 20px;line-height:1.7">
+          <span>${t('Unrecognised state')}</span>
+          <bdi dir="ltr">${this._esc(String(state))}</bdi>
+        </p>
+        <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._loadStockAccuracy()">${t('Try the check again')}</button>
+      </div>`;
+  },
+
+  _stkaDrift(mode) {
+    const d = (this._stockAccuracy && this._stockAccuracy.data) || {};
+    const rows = Array.isArray(d.rows) ? d.rows : [];
+    // `repairable` is the server's own field and the exact predicate
+    // repair_drift skips on -- not a second rule invented here about which
+    // rows a repair will touch.
+    const fixable = rows.filter(r => r && r.repairable).length;
+    const stranded = rows.length - fixable;
+    return `
+      <div data-sa-state="${mode}">
+        <div class="ret-kpi-grid" style="grid-template-columns:repeat(3,1fr)">
+          <div class="ret-kpi">
+            <div class="ret-kpi-label">${t('Net drift')}</div>
+            <div class="ret-kpi-value">${this._stkaNum(this._signedQty(d.net_drift))}</div>
+            <div class="ret-kpi-sub">${t('Units. Positive means the balances claim more than the ledger can account for.')}</div>
+          </div>
+          <div class="ret-kpi">
+            <div class="ret-kpi-label">${t('Figures that disagree')}</div>
+            <div class="ret-kpi-value">${this._stkaNum(this._qty(d.drift_count))}</div>
+            <div class="ret-kpi-sub">${t('Read this beside the net. A +10 and a −10 net to zero while two products are wrong.')}</div>
+          </div>
+          <div class="ret-kpi">
+            <div class="ret-kpi-label">${t('Pairs compared')}</div>
+            <div class="ret-kpi-value">${this._stkaNum(this._qty(d.pairs_examined))}</div>
+            <div class="ret-kpi-sub">${t('Every product and branch the check looked at, agreeing or not.')}</div>
+          </div>
+        </div>
+        <div class="sub-chart-card">
+          <div class="sub-chart-title" style="margin-bottom:14px">${t('Which figures disagree')}</div>
+          <div style="overflow-x:auto">
+            <table class="ret-table" id="stka-table">
+              <thead><tr>
+                <th>${t('Product')}</th>
+                <th>${t('SKU')}</th>
+                <th>${t('Branch')}</th>
+                <th style="text-align:right">${t('Balance says')}</th>
+                <th style="text-align:right">${t('Ledger says')}</th>
+                <th style="text-align:right">${t('Drift')}</th>
+              </tr></thead>
+              <tbody>${rows.map(r => this._stkaRow(r)).join('')}</tbody>
+            </table>
+          </div>
+          <p style="color:var(--text-faint);font-size:12px;margin:14px 0 0;line-height:1.7">${t('Drift is the cached balance minus the ledger total. The ledger is the record of what happened; the balance is only a running copy of it.')}</p>
+        </div>
+        ${stranded ? `
+        <div class="sub-chart-card" style="margin-top:18px">
+          <div class="sub-chart-title" style="margin-bottom:10px">${t('Rows that cannot be repaired yet')}</div>
+          <p style="color:var(--text-muted);font-size:13px;margin:0;line-height:1.7;max-width:760px">
+            <span>${t('These movements were recorded without a branch, and a cached balance always belongs to one, so there is no figure to correct. They need a branch before they can be reconciled.')}</span>
+            ${this._stkaNum(this._qty(stranded))}
+          </p>
+        </div>` : ''}
+        ${mode === 'confirm' ? this._stkaConfirm(fixable, stranded) : this._stkaRepairOffer(fixable, mode)}
+      </div>`;
+  },
+
+  _stkaRow(r) {
+    const row = r || {};
+    // product_name is a LEFT JOIN and can be null -- a movement whose product
+    // row is gone is one of the two shapes the drift query exists to surface,
+    // and rendering it as a blank cell would hide exactly that case.
+    const name = row.product_name
+      ? this._esc(row.product_name)
+      : `<span>${t('Product no longer in the catalogue')}</span> <bdi dir="ltr">${this._esc(String(row.product_id == null ? '' : row.product_id))}</bdi>`;
+    const sku = row.sku ? this._bdi(row.sku) : '—';
+    const branch = row.branch_id == null
+      ? this._badge(t('Needs a branch'), 'yellow')
+      : (row.branch_name
+          ? this._esc(row.branch_name)
+          : this._bdi('#' + String(row.branch_id)));
+    return `<tr>
+      <td>${name}</td>
+      <td style="font-family:monospace;font-size:12px">${sku}</td>
+      <td>${branch}</td>
+      <td style="text-align:right">${this._stkaNum(this._qty(row.stored_balance))}</td>
+      <td style="text-align:right">${this._stkaNum(this._qty(row.ledger_balance))}</td>
+      <td style="text-align:right;font-weight:700">${this._stkaNum(this._signedQty(row.drift))}</td>
+    </tr>`;
+  },
+
+  _stkaRepairOffer(fixable, mode) {
+    if (!fixable) return '';
+    const busy = mode === 'repairing';
+    return `
+      <div class="sub-chart-card" style="margin-top:18px">
+        <div class="sub-chart-title" style="margin-bottom:10px">${t('Repair')}</div>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 8px;line-height:1.7;max-width:760px">${t('Repairing rewrites each cached balance to match its ledger total. It creates no stock movement and changes none, so the ledger stays the record of what happened.')}</p>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 18px;line-height:1.7;max-width:760px">${t('Count the shelves first if you can. A repair makes the two numbers agree; it cannot make either of them true.')}</p>
+        <button class="ret-btn ret-btn-primary" id="stka-repair-btn"${busy ? ' disabled' : ''}
+                onclick="RetailSystem._askRepairStockAccuracy()">${busy ? t('Rewriting…') : t('Repair balances from the ledger')}</button>
+      </div>`;
+  },
+
+  // One line of a counted list. Its own helper so the confirm panel and the
+  // result panel cannot drift into two different shapes for the same fact.
+  _stkaTally(label, value) {
+    return `<div style="display:flex;justify-content:space-between;gap:18px;color:var(--text);font-size:13px">
+            <span>${label}</span>${this._stkaNum(this._qty(value))}
+          </div>`;
+  },
+
+  // WHY THE REPAIR REFUSED A ROW, in the owner's words.
+  //
+  // The keys are backend constants -- core/retail/stock_reconciliation.py's
+  // SKIP_NO_BRANCH / SKIP_NO_LEDGER_HISTORY -- and
+  // retail_stock_accuracy_screen_route_test.py fails if that module grows a
+  // reason this function does not name. That coupling is deliberate: a
+  // skipped row rendered under the WRONG reason is worse than one rendered
+  // under no reason, because the owner acts on the reason.
+  //
+  // An unrecognised reason therefore says so, rather than being folded into
+  // whichever of the two is nearest. "It carried no branch" is an instruction
+  // to go and assign a branch, and telling somebody that about a row that was
+  // actually refused for having no ledger history at all sends them to fix
+  // the wrong thing.
+  _stkaSkipReasonLabel(reason) {
+    switch (reason) {
+      case 'no_branch':
+        return t('Their movements carry no branch, and a cached balance always belongs to one.');
+      case 'no_ledger_history':
+        return t('The ledger has no history for them at all, so a repair would have written away an opening stock.');
+      case 'no_product':
+        return t('Their product record no longer exists, so no ledger entry can ever be written for them.');
+      case 'ledger_not_established':
+        return t('This install has not finished the stock-ledger upgrade, so lowering a balance to match the ledger could erase opening stock. Restart the app to finish it.');
+      default:
+        return t('The server did not say why.');
+    }
+  },
+
+  // "It says what it will do" -- counted, from the same rows the table above
+  // is drawn from, including the one that is deliberately zero.
+  //
+  // "AT MOST", and that word is load-bearing. The repair refuses FOUR kinds of
+  // row and this report can see only two of them.
+  //
+  // VISIBLE here, because compute_drift reports `repairable: false` for both:
+  //   no_branch    -- the movements carry no branch, and a cached balance
+  //                   always belongs to one
+  //   no_product   -- the product row is gone, so no ledger entry can ever be
+  //                   written against that key
+  //
+  // DECIDED AT REPAIR TIME, per row, and therefore invisible to this report:
+  //   no_ledger_history        -- the ledger has no history at all, so a
+  //                               repair would write away an opening stock
+  //   ledger_not_established   -- this install has not finished the v15
+  //                               upgrade, so LOWERING a balance to match the
+  //                               ledger could erase opening stock
+  //
+  // That last one is the guard that keeps a pre-v15 install from being told
+  // its entire stock is zero. Before it existed, a legacy shop that followed
+  // the migration's own recovery advice went from shelves of 112/57/7 to
+  // -8/-3/-1. Promising an exact number this screen cannot know would make the
+  // result panel underneath look like a failure every time a guard fired.
+  _stkaConfirm(fixable, stranded) {
+    return `
+      <div class="sub-chart-card" data-sa-confirm="1" style="margin-top:18px;border:1px solid var(--state-warning-border)">
+        <div class="sub-chart-title" style="margin-bottom:12px">${t('Confirm the repair')}</div>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;max-width:760px">
+          ${this._stkaTally(t('Cached balances this will rewrite, at most'), fixable)}
+          ${this._stkaTally(t('Rows it cannot touch, because their movements carry no branch'), stranded)}
+          ${this._stkaTally(t('Stock movements this will create or change'), 0)}
+        </div>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 10px;line-height:1.7;max-width:760px">${t('The repair also refuses any balance the ledger has no history for at all, because the ledger saying nothing is not the ledger saying zero. Whatever it refuses is listed when it finishes.')}</p>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 18px;line-height:1.7;max-width:760px">${t('Each rewrite is written to the audit log with the figure it replaced and the figure it wrote.')}</p>
+        <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._cancelRepairStockAccuracy()">${t('Cancel')}</button>
+        <button class="ret-btn ret-btn-primary" style="margin-left:8px" id="stka-confirm-btn"
+                onclick="RetailSystem._repairStockAccuracy()">${t('Rewrite the balances')}</button>
+      </div>`;
+  },
+
+  // "It reports what it did." Both totals, and the refusals broken down by
+  // the reason THE SERVER gave for each one -- never by re-deriving it here
+  // from the report's `repairable` flag, which cannot see one of the two
+  // refusals at all. No automatic re-check underneath them.
+  _stkaRepaired() {
+    const r = (this._stockAccuracy && this._stockAccuracy.repair) || {};
+    const skipped = Array.isArray(r.skipped) ? r.skipped : [];
+    const byReason = new Map();
+    for (const row of skipped) {
+      const key = (row && row.skip_reason) || '';
+      byReason.set(key, (byReason.get(key) || 0) + 1);
+    }
+    // The TOTAL comes from the server's own count, so it stays true even on a
+    // build that sends the counts without the rows; the breakdown is detail
+    // layered on top of it, never a substitute for it.
+    const total = r.skipped_count == null ? skipped.length : r.skipped_count;
+    const breakdown = [...byReason.entries()]
+      .map(([reason, n]) => this._stkaTally(this._stkaSkipReasonLabel(reason), n))
+      .join('');
+    return `
+      <div class="sub-chart-card" data-sa-state="repaired" style="padding:40px 32px">
+        <div style="font-size:34px;margin-bottom:12px" aria-hidden="true">🧾</div>
+        <h3 style="color:var(--text);margin:0 0 16px;font-size:17px">${t('The repair finished.')}</h3>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;max-width:760px">
+          ${this._stkaTally(t('Cached balances rewritten'), r.repaired_count)}
+          ${this._stkaTally(t('Rows the repair left alone'), total)}
+          ${breakdown}
+        </div>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 20px;line-height:1.7;max-width:760px">${t('Nothing above has been re-checked yet. Run the check again to see where the shop stands now.')}</p>
+        <button class="ret-btn ret-btn-primary" onclick="RetailSystem._loadStockAccuracy()">${t('Run the check again')}</button>
+      </div>`;
+  },
+
+  // A refused or failed repair. Distinct from _stkaFailed (the CHECK failing)
+  // and from _stkaRepaired with zeroes (a repair that ran and moved nothing).
+  // A restricted licence refuses this route while leaving the report working,
+  // so this panel is a real state on a real install, not a theoretical one.
+  _stkaRepairFailed() {
+    const s = this._stockAccuracy || {};
+    return `
+      <div class="sub-chart-card" data-sa-state="repair-failed" style="text-align:center;padding:48px 32px;border:1px solid var(--state-danger-border)">
+        <div style="font-size:34px;margin-bottom:12px" aria-hidden="true">⚠️</div>
+        <h3 style="color:var(--state-danger-text);margin:0 0 8px;font-size:17px">${t('The repair did not run.')}</h3>
+        <p style="color:var(--text);font-size:13px;margin:0 0 8px;line-height:1.7">${this._esc(s.error || '')}</p>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 20px;line-height:1.7;max-width:520px;margin-left:auto;margin-right:auto">${t('No cached balance was changed. The figures are exactly as the check last found them.')}</p>
+        <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._loadStockAccuracy()">${t('Try the check again')}</button>
       </div>`;
   },
 
