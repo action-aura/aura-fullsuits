@@ -9,11 +9,10 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import cast, Date, select
+from sqlalchemy import cast, Date, func, select
 
-from app.commercial_sales.invoices import confirmed_allocated_amount
 from app.extensions import db_session
-from app.models.commercial_sales import CommercialInvoice, CommercialRefund
+from app.models.commercial_sales import CommercialInvoice, CommercialRefund, PaymentAllocation
 from app.models.commissions import CommissionPayoutLine
 from app.models.expenses import Expense, ExpensePayment
 from app.models.subscriptions import PaymentRecord
@@ -62,16 +61,49 @@ def recorded_commission_payouts_total(period_start: date, period_end: date, curr
 
 def outstanding_receivables_total(currency: str) -> Decimal:
     """Point-in-time snapshot (not period-bound) -- sum of (invoice.total -
-    confirmed_allocated_amount) over every non-VOID, not-fully-paid invoice."""
+    confirmed_allocated_amount) over every non-VOID, not-fully-paid invoice.
+
+    AUDIT-perf: this was the third N+1 of the same shape as
+    app/attention/service.py::_overdue_invoice_items() and
+    app/operational_reports/dashboards.py::_overdue_invoice_count() -- one
+    confirmed_allocated_amount() query per invoice in the currency, no
+    LIMIT, discovered while measuring those two fixes and left for this
+    pass. Batched the same way: one query for the candidate invoices
+    (currency, non-VOID/DRAFT status) and one GROUP BY
+    SUM(PaymentAllocation.allocated_amount) instead of one
+    confirmed_allocated_amount() query per candidate.
+    confirmed_allocated_amount() (app/commercial_sales/invoices.py) stays
+    the canonical per-invoice definition -- its own "non-reversed
+    PaymentAllocation rows" condition is reproduced below as a SQL WHERE
+    clause. If that condition ever changes, update this to match (see
+    tests/test_operational_finance_aggregation_query_counts.py's agreement
+    test, which fails loudly if the two drift).
+
+    Deliberately NO LIMIT, matching _overdue_invoice_count(): this is a
+    total for a finance dashboard, not a capped list -- undercounting a
+    long-history customer's receivables would be a silent correctness
+    regression, not an acceptable trade-off."""
     invoices = db_session.execute(
-        select(CommercialInvoice).where(
+        select(CommercialInvoice.id, CommercialInvoice.total).where(
             CommercialInvoice.currency == currency,
             CommercialInvoice.status.notin_(("DRAFT", "VOID")),
         )
-    ).scalars().all()
+    ).all()
+    if not invoices:
+        return Decimal("0")
+
+    invoice_ids = [invoice_id for invoice_id, _total in invoices]
+    allocated_by_invoice = dict(
+        db_session.execute(
+            select(PaymentAllocation.commercial_invoice_id, func.sum(PaymentAllocation.allocated_amount))
+            .where(PaymentAllocation.commercial_invoice_id.in_(invoice_ids), PaymentAllocation.reversed_at.is_(None))
+            .group_by(PaymentAllocation.commercial_invoice_id)
+        ).all()
+    )
+
     total = Decimal("0")
-    for invoice in invoices:
-        outstanding = invoice.total - confirmed_allocated_amount(invoice)
+    for invoice_id, invoice_total in invoices:
+        outstanding = invoice_total - allocated_by_invoice.get(invoice_id, Decimal("0.00"))
         if outstanding > 0:
             total += outstanding
     return total

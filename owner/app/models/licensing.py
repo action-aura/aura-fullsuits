@@ -86,7 +86,12 @@ class LicenseStatusHistory(Base, UUIDPKMixin, TimestampMixin):
 class LicenseEntitlement(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_license_entitlements"
 
-    license_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_licenses.id"), nullable=False)
+    # AUDIT-perf: indexed to match PaymentAllocation's FK columns and
+    # LicenseStatusHistory.license_id; see migration
+    # d8dfeb46d1d6_license_entitlement_and_issuance_event_missing_indexes.py.
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_licenses.id"), nullable=False, index=True
+    )
     entitlement_definition_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_entitlement_definitions.id"), nullable=False
     )
@@ -99,7 +104,12 @@ class LicenseEntitlement(Base, UUIDPKMixin, TimestampMixin):
 class LicenseKeyIssuanceEvent(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "owner_license_key_issuance_events"
 
-    license_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("owner_licenses.id"), nullable=False)
+    # AUDIT-perf: indexed to match PaymentAllocation's FK columns and
+    # LicenseStatusHistory.license_id; see migration
+    # d8dfeb46d1d6_license_entitlement_and_issuance_event_missing_indexes.py.
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("owner_licenses.id"), nullable=False, index=True
+    )
     issued_by_staff_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("owner_staff_users.id"), nullable=False
     )
