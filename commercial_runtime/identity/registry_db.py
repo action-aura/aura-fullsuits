@@ -41,7 +41,15 @@ DB_PATH = os.path.join(_db_dir, 'registry.db')
 # updated_at_utc/deleted_at_utc, widened role domain, seeded capability
 # rows) -- see account_schema.py and
 # docs/launch-readiness/multi-device-design.md §6.
-REGISTRY_SCHEMA_VERSION = 3
+# v4: identity-side company_id rebind from md5(admin_email) to the
+# Owner-issued license_public_id, across every company_id-bearing table in
+# THIS database -- discovered at runtime, never hardcoded. Launch-readiness
+# Phase 5 prerequisite #1, reserved in ROADMAP.md's 2026-08-21 ledger. See
+# company_rebind.py and docs/launch-readiness/phase5-prerequisites.md §1.
+# Retail's own v14 (products/retail/backend/database/schema.py) is
+# deliberately inert until this lands -- it only ever converges onto a
+# tenant key THIS migration has already adopted, never the other way round.
+REGISTRY_SCHEMA_VERSION = 4
 
 
 def _migrate_registry_schema(conn):
@@ -50,19 +58,29 @@ def _migrate_registry_schema(conn):
     behind REGISTRY_SCHEMA_VERSION, same "run every step, each
     independently idempotent" shape as products/retail/backend/database/
     schema.py::_migrate_retail_schema. A v0 (pre-user_version) database
-    upgrading straight to v3 runs all three steps in one pass.
+    upgrading straight to v4 runs all four steps in one pass.
 
     New steps are appended LAST and never reordered: a database that is
-    already at v2 still runs v1 and v2 on its way to v3 (there is one
+    already at v2 still runs v1 and v2 on its way to v4 (there is one
     version gate for the whole function, not one per step), so each step has
     to be a no-op against a database that already has its changes -- which
-    is exactly what each of them is."""
+    is exactly what each of them is.
+
+    v4 (the company_id rebind) is appended after v3 deliberately, not merely
+    by the "new steps go last" convention: v3 (account_schema.py) is what
+    gives `users` its `uid`/`row_version`/`updated_at_utc` columns, and while
+    the rebind itself does not read them, running it before v3 would still
+    mean it acts on a database whose account model is mid-upgrade -- the
+    same "finish the schema shape before touching tenant identity" ordering
+    retail's v14 follows relative to its own v13."""
     from commercial_runtime.identity.device_registry import apply_identity_device_schema
     from commercial_runtime.identity.verification_schema import apply_email_verification_schema
     from commercial_runtime.identity.account_schema import apply_account_schema
+    from commercial_runtime.identity.company_rebind import _migrate_rebind_registry_company_id_to_owner_issued
     apply_identity_device_schema(conn)
     apply_email_verification_schema(conn)
     apply_account_schema(conn)
+    _migrate_rebind_registry_company_id_to_owner_issued(conn)
 
 
 def get_conn():

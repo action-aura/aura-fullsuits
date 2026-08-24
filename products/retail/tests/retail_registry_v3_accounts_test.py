@@ -16,8 +16,11 @@ commercial_runtime/identity/user_accounts.py:
 
 registry.db is a SEPARATE database from retail.db with its OWN version
 counter -- this file is entirely about the registry one (REGISTRY_SCHEMA_VERSION
-in registry_db.py, now 3). retail.db's RETAIL_SCHEMA_VERSION is untouched by
-this phase.
+in registry_db.py, at least 3 as of this wave; a later wave's launch-readiness
+Phase 5 prerequisite #1 added v4 on top -- see commercial_runtime/identity/
+company_rebind.py -- and this file's own version-floor assertion below is
+deliberately written not to pin an exact number for that reason). retail.db's
+RETAIL_SCHEMA_VERSION is untouched by this phase.
 
 Structure follows commercial_runtime/tests/registry_migration_test.py: most
 tests run the migration against a synthetic, product-independent fixture
@@ -550,11 +553,25 @@ def test_there_is_no_way_to_turn_a_pin_into_a_permission():
 # ── The real wiring: a live registry.db reaches v3 ───────────────────────────
 
 def test_the_live_registry_database_is_at_version_3():
+    """This file's whole subject is registry v3 (see module docstring), so
+    the floor asserted here is 3, not an exact match against whatever
+    REGISTRY_SCHEMA_VERSION happens to be today -- a later wave's own
+    migration (v4, launch-readiness Phase 5 prerequisite #1 -- see
+    commercial_runtime/identity/company_rebind.py) legitimately advances the
+    live constant further, and pinning an exact number here would make this
+    test fail on every future version bump for a reason that has nothing to
+    do with what it actually verifies: that a live registry.db really does
+    converge to whatever version the running code expects. Same "assert a
+    floor, not an exact count, so a later additive migration doesn't fail
+    this test for the wrong reason" convention this codebase already uses
+    everywhere else a schema version could be asserted (e.g. products/retail/
+    tests/retail_v14_company_rebind_migration_test.py's table-count floor) --
+    this file was the one place that convention had been missed."""
     registry_db.init_registry_db()
     conn = registry_db.get_conn()
     try:
-        assert registry_db.REGISTRY_SCHEMA_VERSION == 3
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 3
+        assert registry_db.REGISTRY_SCHEMA_VERSION >= 3
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == registry_db.REGISTRY_SCHEMA_VERSION
     finally:
         conn.close()
 

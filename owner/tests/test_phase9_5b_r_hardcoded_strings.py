@@ -26,6 +26,13 @@ GATED_DIRS = (
     # UI modernization Stage D -- the enterprise table/list macro library
     # (templates/components/table.html), imported by domain list screens.
     "components",
+    # Phase 5 prerequisite #3 -- the sync quarantine console
+    # (app/sync/quarantine_routes.py, templates/sync/quarantine_list.html).
+    # Adding it here does not merely silence the companion
+    # test_all_real_template_directories_are_now_gated assertion -- it
+    # actually brings quarantine_list.html under the hardcoded-string
+    # scanner below, which is the point of registering it.
+    "sync",
 )
 
 # Attribute names whose value is never translatable prose (ids, urls, form

@@ -27,6 +27,11 @@ REAL_TEMPLATE_DIRS = (
     # UI modernization Stage D -- the enterprise table/list macro library
     # (templates/components/table.html), imported by domain list screens.
     "components",
+    # Phase 5 prerequisite #3 -- the sync quarantine console
+    # (app/sync/quarantine_routes.py, templates/sync/quarantine_list.html).
+    # Registered here because this guard exists precisely to catch a new
+    # template directory shipping unregistered; it caught this one.
+    "sync",
 )
 
 # No-fixture-required GET routes: real, reachable, list/index/status pages.

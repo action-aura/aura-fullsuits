@@ -93,6 +93,7 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.releases.routes import bp as releases_bp
     from app.system import bp as system_bp
     from app.licensing_admin import bp as licensing_admin_bp
+    from app.sync.quarantine_routes import bp as sync_quarantine_bp
     from app.commercial_ops.routes import bp as commercial_ops_bp
     from app.commercial_ops.ui_routes import bp as commercial_ops_ui_bp
     from app.health import bp as health_bp
@@ -121,6 +122,7 @@ def create_app(config_name: str | None = None) -> Flask:
     app.register_blueprint(releases_bp)
     app.register_blueprint(system_bp)
     app.register_blueprint(licensing_admin_bp)
+    app.register_blueprint(sync_quarantine_bp)
     app.register_blueprint(commercial_ops_bp)
     app.register_blueprint(commercial_ops_ui_bp)
     app.register_blueprint(health_bp)

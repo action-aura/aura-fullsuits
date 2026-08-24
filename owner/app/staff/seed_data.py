@@ -64,6 +64,18 @@ PERMISSIONS: list[tuple[str, str, str]] = [
     ("entitlement_resolution.preview", "ACTIVATION_SERVICE", "Preview entitlement resolution for a license"),
     ("licenses.reactivate", "LICENSES", "Reactivate a suspended license"),
     ("installations.replace_device", "INSTALLATIONS", "Replace a device on an installation"),
+    # Phase 5 prerequisite #3 -- sync quarantine console
+    # (docs/launch-readiness/phase5-prerequisites.md section 3). Same
+    # view/mutate split precedent as device_keys.view/device_keys.revoke:
+    # view is granted to SUPPORT below, replay/discard are deliberately
+    # NOT granted to any role except via the SUPER_ADMIN wildcard -- both
+    # actions mutate the sync ledger (a replayed event becomes a real,
+    # permanent SyncEvent; a discard is a considered "never apply this"
+    # decision), the same class of security-relevant action as revoking a
+    # device key.
+    ("sync_quarantine.view", "ACTIVATION_SERVICE", "View quarantined sync events"),
+    ("sync_quarantine.replay", "ACTIVATION_SERVICE", "Replay a quarantined sync event"),
+    ("sync_quarantine.discard", "ACTIVATION_SERVICE", "Discard a quarantined sync event"),
     # Phase 8 Milestone 4 -- pilot lifecycle and emergency extensions.
     ("pilots.view", "SUBSCRIPTIONS", "View pilot records"),
     ("pilots.manage", "SUBSCRIPTIONS", "Create/approve/activate/extend/complete/cancel pilot records"),
@@ -226,6 +238,11 @@ ROLES: dict[str, dict] = {
             "pilots.view",
             "pending_activations.view", "pending_activations.decide",
             "device_slot_exceptions.view", "device_slot_exceptions.manage",
+            # Phase 5 prerequisite #3 -- view-only, same precedent as
+            # device_keys.view above: SUPPORT can see what's quarantined to
+            # help diagnose a customer's stuck sync, but replay/discard
+            # (mutating the ledger) stay SUPER_ADMIN-only.
+            "sync_quarantine.view",
             # No signing-key management, no plan/entitlement changes, no license-secret issuance (Part S).
             # Phase 9.5A -- Support reads customer/lead context to help, but
             # does not own the sales pipeline or approve money.

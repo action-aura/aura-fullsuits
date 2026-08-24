@@ -9,6 +9,7 @@ monolith's app.py for the pieces that must behave identically (secret key
 handling, session cookie hardening, CORS-to-loopback-only) -- see
 docs/migration/retail-extraction-report.md.
 """
+import logging
 import os
 import re
 import sys
@@ -34,7 +35,7 @@ for _p in (str(SUITE_ROOT), str(BACKEND_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 from config import (
@@ -131,6 +132,18 @@ from commercial_runtime.identity.auth_routes import auth_bp
 from commercial_runtime.identity.onboarding_routes import onboarding_bp
 from commercial_runtime.identity.registry_db import init_registry_db
 from database.schema import get_retail_conn, init_retail, rebind_company_id_after_activation
+# Launch-readiness Phase 5 prerequisite #1 (registry v4) -- the identity-side
+# half of the company_id rebind. Aliased because the retail-side function
+# just above shares the exact same name by design (mirrored dialect, see
+# commercial_runtime/identity/company_rebind.py's module docstring) and both
+# are needed here, composed in the right order. See _on_licence_activated
+# and init_app() below for where each is actually called.
+from commercial_runtime.identity.company_rebind import (
+    rebind_company_id_after_activation as rebind_registry_company_id_after_activation,
+    owner_issued_company_id as registry_owner_issued_company_id,
+    registry_tenant_ids as registry_company_tenant_ids,
+)
+from commercial_runtime.identity.registry_db import get_conn as get_registry_conn
 from api.retail_api import retail_bp
 from api.import_api import import_bp
 from commercial_runtime.backup.routes import make_backup_blueprint
@@ -253,6 +266,184 @@ else:
     from commercial_runtime.licensing_contracts.device_identity import WindowsDpapiDeviceIdentityProvider
     _licensing_device_identity_factory = WindowsDpapiDeviceIdentityProvider
 
+def _detect_split_state_reason():
+    """Run BOTH halves of the launch-readiness Phase 5 prerequisite #1
+    rebind (identity, then retail -- same order and same never-raises
+    contract as `_on_licence_activated` below) and report whether the
+    process is now stuck in Defect 2's split state: identity has
+    UNAMBIGUOUSLY adopted the Owner-issued `company_id` but retail.db could
+    not follow.
+
+    THE ONE PLACE this decision gets made. `_converge_and_refuse_to_serve_
+    if_stuck()` (the boot-time guard, already correct and mutation-proven --
+    see its own docstring) and the activation-time refusal below
+    (`_on_licence_activated` / `_refuse_while_split_state`) both call this
+    SAME function rather than each holding its own opinion about what
+    "stuck" means. Two independently-written predicates for the identical
+    question are exactly how the two seams quietly drift apart and disagree
+    about a shop's data -- reusing one function is what keeps that
+    impossible.
+
+    Returns the refusal message (a non-empty string, ready to raise or to
+    serve as a 503 body) if genuinely stuck, or `None` for every other
+    outcome: nothing to do, converged just now, deferred (identity has not
+    adopted the Owner id yet), or the CLAUDE.md-legitimate multi-tenant
+    case. See `_converge_and_refuse_to_serve_if_stuck`'s docstring for the
+    full reasoning behind each branch below -- this function only extracts
+    the shared decision, it does not re-derive it.
+    """
+    rebind_registry_company_id_after_activation()
+    result = rebind_company_id_after_activation()
+    if result['status'] != 'failed':
+        return None  # skipped / deferred / already_bound / rebound -- all fine
+
+    new_company_id = registry_owner_issued_company_id()
+    if not new_company_id:
+        return None  # the licence disappeared between the call above and this check
+
+    registry_conn = get_registry_conn()
+    try:
+        tenants = registry_company_tenant_ids(registry_conn)
+    finally:
+        registry_conn.close()
+
+    if tenants != {new_company_id}:
+        # Either genuinely multi-tenant, or identity itself has not adopted
+        # the Owner-issued id yet -- either way retail's failure above is
+        # not the empty-shop catastrophe this guard exists to prevent.
+        return None
+
+    return (
+        "REFUSING TO SERVE: registry.db's identity layer has adopted the "
+        f"Owner-issued company_id {new_company_id!r}, but retail.db could not "
+        f"converge onto it ({result.get('reason')!r}). Starting the server now "
+        "would make every WHERE company_id=? query in retail_api.py match zero "
+        "rows -- this shop's entire history would silently disappear from the "
+        "screen. See docs/launch-readiness/phase5-prerequisites.md §1."
+    )
+
+
+# Defect 2 (launch-readiness Phase 5 verification, HIGH): the in-process
+# equivalent of the boot-time refusal above, for the window `_converge_and_
+# refuse_to_serve_if_stuck()` cannot see -- an ACTIVATION that lands while
+# this process is already up and serving. `_on_licence_activated` (below)
+# used to call both rebind halves and discard BOTH result dicts; if
+# identity's half committed and retail's half then failed (a locked
+# retail.db under a concurrent sale is the ordinary cause), nothing noticed,
+# and this process kept serving that split state -- an empty-looking shop,
+# `200 OK`, for the rest of its running lifetime, healed only by the NEXT
+# restart's boot-time guard. `docs/launch-readiness/phase5-prerequisites.md`
+# §1 says plainly: "If retail's half fails, identity's half must be rolled
+# back or the app must refuse to serve." The boot path already refuses; this
+# is what makes the activation seam refuse too, instead of quietly serving.
+#
+# A tiny mutable module-level dict (not a bare global string) so the
+# `before_request` hook below can read AND clear it without a `global`
+# statement, and so a value of `None` is unambiguous: "not currently
+# refusing" is not a special string, it is the literal absence of a reason.
+_split_state_refusal = {'reason': None}
+
+
+_split_state_log = logging.getLogger(__name__)
+
+
+def _enter_split_state_refusal(reason):
+    _split_state_log.error("Entering split-state refusal after activation: %s", reason)
+    _split_state_refusal['reason'] = reason
+
+
+def _clear_split_state_refusal():
+    if _split_state_refusal['reason'] is not None:
+        _split_state_log.info(
+            "Split-state refusal cleared -- retail.db has converged; resuming normal service."
+        )
+    _split_state_refusal['reason'] = None
+
+
+@app.before_request
+def _refuse_while_split_state():
+    """Serves the 503 half of Defect 2's fix -- see the module-level
+    `_split_state_refusal` comment above for why this exists at all.
+
+    THE COMMON CASE (no activation has ever landed the process into this
+    state) is a single dict-key read and nothing else: no database touched,
+    no measurable cost added to every other request this app serves.
+
+    WHILE REFUSING, every request pays the cost of retrying convergence --
+    deliberately, not merely tolerated: "clear it as soon as convergence
+    succeeds (retry on a later request or at next boot)" is the whole point
+    of an in-process refusal instead of a hard crash. Re-running `_detect_
+    split_state_reason()` (the SAME predicate the boot guard and the
+    activation hook both use) means the very next request after whatever
+    was blocking retail's convergence clears (the lock let go, the disk
+    issue resolved, an operator fixed a fabricated multi-tenant retail.db)
+    is the request that ends the refusal -- no restart required, though a
+    restart still heals it too via the boot guard.
+
+    `/api/health` is exempted: its own docstring already freezes its
+    contract for the desktop launcher's startup readiness probe, it reveals
+    no business data, and refusing it would make the launcher unable to
+    tell "the process is up but refusing" apart from "the process never
+    started" -- turning an honest, diagnosable 503 into a bare timeout.
+    """
+    if _split_state_refusal['reason'] is None:
+        return None
+    if request.path == '/api/health':
+        return None
+
+    reason = _detect_split_state_reason()
+    if reason is None:
+        _clear_split_state_refusal()
+        return None
+
+    _split_state_refusal['reason'] = reason
+    return jsonify({
+        'error': (
+            'This till is finishing a one-time tenant-identity upgrade and cannot '
+            'serve requests yet. It retries automatically on the next request; '
+            'restarting the app also retries immediately. Contact support if this '
+            'persists.'
+        ),
+        'code': 503,
+        'reason': reason,
+    }), 503
+
+
+def _on_licence_activated():
+    """Composed `on_activation_success` hook: BOTH halves of the
+    launch-readiness Phase 5 prerequisite #1 rebind, in the order that keeps
+    the identity layer the leader and retail the follower, PLUS Defect 2's
+    activation-seam refusal check.
+
+    IDENTITY FIRST, ALWAYS -- inherited from `_detect_split_state_reason`,
+    which runs `rebind_registry_company_id_after_activation()` before
+    `rebind_company_id_after_activation()` for the same reason this
+    function always has: only once identity has landed does retail's own
+    convergence find `local_authoritative_company_id() == new_company_id`
+    and follow (see database/schema.py::_rebind_to_owner_issued's
+    docstring). Calling them in the opposite order would mean retail's
+    check never passes on THIS activation, deferring the real work to
+    whatever boot happens to come next -- correct eventually, but a
+    needless extra window.
+
+    NEVER RAISES (unchanged contract -- both rebind calls inside `_detect_
+    split_state_reason` are explicitly documented NEVER TO RAISE, for the
+    same reason: a licence activation that genuinely succeeded at Owner
+    must not be reported back to the customer as a failure because a local
+    bookkeeping rewrite hit a locked database). `_run_activation_hook` in
+    commercial_runtime/licensing_contracts/routes.py also swallows whatever
+    a hook raises regardless, so this composed function inherits that
+    safety net too, belt and suspenders -- but the split-state check itself
+    only ever reads status dicts and a set of strings, so there is nothing
+    left here that should raise in the first place.
+    """
+    reason = _detect_split_state_reason()
+    if reason is not None:
+        _enter_split_state_refusal(reason)
+    else:
+        _clear_split_state_refusal()
+
+
 app.register_blueprint(make_licensing_blueprint(
     product_code='AURA_RETAIL',
     platform=LICENSING_PLATFORM,
@@ -264,17 +455,18 @@ app.register_blueprint(make_licensing_blueprint(
     trust_anchor_path=Path(LICENSING_TRUST_ANCHOR_PATH),
     device_identity_factory=_licensing_device_identity_factory,
     internal_shared_secret=LICENSING_INTERNAL_SHARED_SECRET,
-    # Launch-readiness Phase 2 (retail schema v14): activation is the exact
-    # moment this install first learns its Owner-issued tenant key
-    # (`license_public_id`, the same value owner/app/sync/routes.py scopes
-    # every relayed event by). retail.db's `company_id` -- derived locally at
-    # onboarding as md5(admin_email) and therefore meaningless to Owner --
-    # has to converge onto it, and the v14 migration alone cannot do that:
-    # licensing is OFF by default here, so the common install migrates long
-    # before it ever activates, and a rebind that only ran at migration time
-    # would silently never happen. Idempotent and fail-safe -- see
-    # database/schema.py::rebind_company_id_after_activation.
-    on_activation_success=rebind_company_id_after_activation,
+    # Launch-readiness Phase 2 (retail schema v14) + Phase 5 prerequisite #1
+    # (registry v4): activation is the exact moment this install first
+    # learns its Owner-issued tenant key (`license_public_id`, the same
+    # value owner/app/sync/routes.py scopes every relayed event by).
+    # registry.db's identity layer has to adopt it before retail.db's
+    # `company_id` -- derived locally at onboarding as md5(admin_email) and
+    # therefore meaningless to Owner -- can safely converge onto it, and
+    # neither migration alone can do that: licensing is OFF by default here,
+    # so the common install migrates long before it ever activates, and a
+    # rebind that only ran at migration time would silently never happen.
+    # See _on_licence_activated above.
+    on_activation_success=_on_licence_activated,
 ))
 
 # Multi-device sync foundation (2026-08-06), Task 5: the background push/pull
@@ -363,6 +555,79 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
     ))
 
 
+def _converge_and_refuse_to_serve_if_stuck():
+    """Launch-readiness Phase 5 prerequisite #1 -- closes the boot-time half
+    of "the window" described in
+    docs/launch-readiness/phase5-prerequisites.md §1 and required by the
+    task that added this function (see git history / PR description for
+    "registry v4, the identity-side company_id rebind").
+
+    WHY THIS HAS TO RUN ON EVERY SINGLE BOOT, not just when a migration is
+    due: `ensure_schema_version`'s whole point is a fast no-op once a
+    database is already at its target version. That is exactly wrong for
+    this specific piece of state, because a crash landing between identity
+    adopting the Owner-issued company_id (registry v4's migration step, or
+    `_on_licence_activated`'s identity half) and retail's own convergence
+    following it would otherwise NEVER be revisited -- neither
+    registry_db.py's v4 step nor schema.py's v14 step re-enters a database
+    that is already at its own target version. `rebind_company_id_after_
+    activation()` has no such gate: it is a plain idempotent
+    read-then-maybe-write, safe to call on every boot at negligible cost (a
+    handful of SELECT DISTINCT queries) once an install has converged, and
+    it is what actually CLOSES this window on a converged single-tenant
+    install -- the far more common outcome than the refusal below.
+
+    THE REFUSAL, for the install that genuinely cannot converge: if identity
+    has UNAMBIGUOUSLY adopted the Owner-issued id (registry.db holds exactly
+    that one company_id and nothing else -- the ordinary single-tenant case,
+    never the legitimate "one install hosts more than one company" case
+    CLAUDE.md documents) and retail's attempt to follow still reports
+    'failed', starting the server anyway would mean serving a shop whose
+    entire history is invisible: `session['company_id']` would come from
+    registry.db's now-Owner-issued value, `retail_api._cid()` filters every
+    query on it, and not one row in retail.db would match. That is strictly
+    worse than refusing to boot, so this raises instead -- and because
+    `init_app()` is called unconditionally, synchronously, before this
+    process ever starts accepting a request (see `if __name__ == '__main__'`
+    at the bottom of this file), raising here means the process never
+    listens at all rather than listening and serving an empty-looking shop.
+
+    A genuinely multi-tenant registry.db (`registry_company_tenant_ids`
+    returns more than one value, or a value other than the Owner-issued one)
+    is deliberately NOT covered by this refusal -- that ambiguity is
+    `rebind_company_id`'s own, correct, permanent refusal (CLAUDE.md: "one
+    install *can* host more than one company"), and this function must never
+    mistake that legitimate, unchanged state for the specific catastrophe it
+    exists to prevent.
+
+    IDENTITY FIRST, on every boot, for the SAME reason the retail half runs
+    on every boot -- and it was missing before this function existed.
+    Identity's own rebind is reachable from exactly two seams: registry v4's
+    migration step (version-gated, so it never re-enters once user_version
+    is already 4) and `_on_licence_activated` (only /activate and
+    /_internal/sync-activation fire it -- NOT /check-in). An activation
+    whose identity half returned 'failed' (a locked registry.db is the
+    ordinary cause) therefore had no third chance at all: retail's half
+    correctly deferred, both databases stayed consistently on the legacy
+    key, the shop kept working -- and the install stayed permanently
+    un-rebound despite holding a licence, which is precisely the state
+    Phase 5 must not open on top of (rows pushed under md5(admin_email)
+    arrive at Owner scoped to a tenant it does not recognise).
+
+    THE ACTUAL DECISION is delegated to `_detect_split_state_reason()` --
+    see that function's docstring for why: `_on_licence_activated`'s own
+    in-process refusal (Defect 2) has to ask the identical question this
+    function asks, and two independently-written answers to "are we stuck?"
+    is how the two seams end up disagreeing about a shop's data. This
+    function's only remaining job is turning a non-`None` answer into the
+    boot-time consequence: refuse to start at all, rather than the
+    activation-time consequence (serve 503s until it clears).
+    """
+    reason = _detect_split_state_reason()
+    if reason is not None:
+        raise RuntimeError(reason)
+
+
 def init_app():
     """Initialize the registry + retail schema, and start the background
     sync loop (if configured). Call once before serving.
@@ -376,6 +641,12 @@ def init_app():
     Android's push/pull loop instead."""
     init_registry_db()
     init_retail()
+    # Launch-readiness Phase 5 prerequisite #1 -- must run AFTER both
+    # migrations (it is what catches up when a migration's own version gate
+    # can no longer fire, see the docstring above) and BEFORE anything below
+    # this line reads company-scoped retail data, so a stuck install is
+    # caught before the sync loop or any outbox worker touches it.
+    _converge_and_refuse_to_serve_if_stuck()
     if _sync_service is not None:
         _sync_service.start()
     _resume_einvoicing_workers()

@@ -7362,6 +7362,78 @@ msgstr "استعادة"
 msgid "No backups taken yet."
 msgstr "لم يتم أخذ أي نسخة احتياطية بعد."
 
+#: app/i18n_labels.py:364
+msgid "Replayed"
+msgstr "أُعيد التطبيق"
+
+#: app/i18n_labels.py:365
+msgid "Discarded"
+msgstr "مُتجاهَل"
+
+#: app/sync/quarantine_routes.py
+msgid "This event was already resolved."
+msgstr "تمت معالجة هذا الحدث بالفعل."
+
+#: app/sync/quarantine_routes.py
+msgid "Replay failed -- payload is still invalid: %(reason)s"
+msgstr "فشلت إعادة التطبيق — الحمولة ما زالت غير صالحة: %(reason)s"
+
+#: app/sync/quarantine_routes.py
+msgid "Event was already present -- marked as replayed."
+msgstr "الحدث موجود بالفعل — تم تعليمه كمُعاد التطبيق."
+
+#: app/sync/quarantine_routes.py
+msgid "Replay failed: %(reason)s"
+msgstr "فشلت إعادة التطبيق: %(reason)s"
+
+#: app/sync/quarantine_routes.py
+msgid "Event replayed successfully."
+msgstr "تمت إعادة تطبيق الحدث بنجاح."
+
+#: app/sync/quarantine_routes.py
+msgid "Event discarded."
+msgstr "تم تجاهل الحدث."
+
+#: app/templates/sync/quarantine_list.html:3
+msgid "Sync Quarantine"
+msgstr "حجر المزامنة"
+
+#: app/templates/sync/quarantine_list.html
+msgid "Quarantined sync events"
+msgstr "أحداث المزامنة المحجوزة"
+
+#: app/templates/sync/quarantine_list.html
+msgid "Device"
+msgstr "الجهاز"
+
+#: app/templates/sync/quarantine_list.html
+msgid "Batch #"
+msgstr "رقم الدفعة"
+
+#: app/templates/sync/quarantine_list.html
+msgid "Quarantined"
+msgstr "تاريخ الحجر"
+
+#: app/templates/sync/quarantine_list.html
+msgid "No quarantined sync events."
+msgstr "لا توجد أحداث مزامنة محجوزة."
+
+#: app/templates/sync/quarantine_list.html
+msgid "Replay this event? It will be re-validated and, if it now passes, applied as a real sync event."
+msgstr "إعادة تطبيق هذا الحدث؟ ستتم إعادة التحقق منه، وإذا اجتاز التحقق الآن فسيُطبَّق كحدث مزامنة حقيقي."
+
+#: app/templates/sync/quarantine_list.html
+msgid "Replay"
+msgstr "إعادة التطبيق"
+
+#: app/templates/sync/quarantine_list.html
+msgid "Discard this event? It stays visible under the Discarded filter, but will never be applied."
+msgstr "تجاهل هذا الحدث؟ سيبقى ظاهرًا ضمن عامل تصفية المُتجاهَلة، لكنه لن يُطبَّق أبدًا."
+
+#: app/templates/sync/quarantine_list.html
+msgid "Discard"
+msgstr "تجاهل"
+
 #~ msgid ""
 #~ "Each code can be used once if "
 #~ "you lose access to your authenticator."

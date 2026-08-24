@@ -2315,35 +2315,57 @@ def rebind_company_id(conn, new_company_id, old_company_id=None):
             )
         old_company_id = next(iter(others))
 
-    before_old = {
-        table: conn.execute(
-            f'SELECT COUNT(*) FROM "{table}" WHERE company_id=?', (old_company_id,)
-        ).fetchone()[0]
-        for table in tables
-    }
-    before_new = {
-        table: conn.execute(
-            f'SELECT COUNT(*) FROM "{table}" WHERE company_id=?', (new_company_id,)
-        ).fetchone()[0]
-        for table in tables
-    }
-    before_total = {
-        table: conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
-        for table in tables
-    }
-    if sum(before_old.values()) == 0:
-        return {
-            'status': 'already_bound',
-            'rows': 0,
-            'old_company_id': old_company_id,
-            'new_company_id': new_company_id,
-            'tables': tables,
-        }
-
     if conn.in_transaction:
         conn.commit()
     conn.execute('BEGIN IMMEDIATE')
     try:
+        # AUDIT (Defect 3, launch-readiness Phase 5 verification, MEDIUM):
+        # before_old/before_new/before_total used to be counted BEFORE this
+        # BEGIN IMMEDIATE. IMMEDIATE already takes the write lock up front --
+        # that is the whole point of using it instead of a deferred BEGIN --
+        # but taking the lock and THEN trusting a snapshot counted before the
+        # lock existed throws that guarantee away: a single concurrent
+        # INSERT landing in the gap between the old count and this lock (a
+        # till ringing up a sale, ordinary on a busy store) changes what the
+        # UPDATE below actually moves, so the in-transaction verification
+        # compares a stale "before" against a real "after" and raises
+        # CompanyRebindError on a rebind that was actually fine -- a SAFE
+        # failure, but exactly how a busy till reaches the split state its
+        # sibling identity-side rebind (commercial_runtime/identity/
+        # company_rebind.py) guards against at the activation seam. Counting
+        # HERE, after the lock, is what makes the count and the update see
+        # the identical snapshot; nothing else can commit a write against
+        # this database between this line and the `conn.commit()` below.
+        before_old = {
+            table: conn.execute(
+                f'SELECT COUNT(*) FROM "{table}" WHERE company_id=?', (old_company_id,)
+            ).fetchone()[0]
+            for table in tables
+        }
+        before_new = {
+            table: conn.execute(
+                f'SELECT COUNT(*) FROM "{table}" WHERE company_id=?', (new_company_id,)
+            ).fetchone()[0]
+            for table in tables
+        }
+        before_total = {
+            table: conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+            for table in tables
+        }
+        if sum(before_old.values()) == 0:
+            # Nothing to move. The write lock BEGIN IMMEDIATE took is
+            # released honestly via rollback (nothing was written, so
+            # rollback and commit are equivalent here) rather than held
+            # while this function returns.
+            conn.rollback()
+            return {
+                'status': 'already_bound',
+                'rows': 0,
+                'old_company_id': old_company_id,
+                'new_company_id': new_company_id,
+                'tables': tables,
+            }
+
         moved = 0
         for table in tables:
             cur = conn.execute(

@@ -7393,6 +7393,78 @@ msgstr "Restore"
 msgid "No backups taken yet."
 msgstr "No backups taken yet."
 
+#: app/i18n_labels.py:364
+msgid "Replayed"
+msgstr "Replayed"
+
+#: app/i18n_labels.py:365
+msgid "Discarded"
+msgstr "Discarded"
+
+#: app/sync/quarantine_routes.py
+msgid "This event was already resolved."
+msgstr "This event was already resolved."
+
+#: app/sync/quarantine_routes.py
+msgid "Replay failed -- payload is still invalid: %(reason)s"
+msgstr "Replay failed -- payload is still invalid: %(reason)s"
+
+#: app/sync/quarantine_routes.py
+msgid "Event was already present -- marked as replayed."
+msgstr "Event was already present -- marked as replayed."
+
+#: app/sync/quarantine_routes.py
+msgid "Replay failed: %(reason)s"
+msgstr "Replay failed: %(reason)s"
+
+#: app/sync/quarantine_routes.py
+msgid "Event replayed successfully."
+msgstr "Event replayed successfully."
+
+#: app/sync/quarantine_routes.py
+msgid "Event discarded."
+msgstr "Event discarded."
+
+#: app/templates/sync/quarantine_list.html:3
+msgid "Sync Quarantine"
+msgstr "Sync Quarantine"
+
+#: app/templates/sync/quarantine_list.html
+msgid "Quarantined sync events"
+msgstr "Quarantined sync events"
+
+#: app/templates/sync/quarantine_list.html
+msgid "Device"
+msgstr "Device"
+
+#: app/templates/sync/quarantine_list.html
+msgid "Batch #"
+msgstr "Batch #"
+
+#: app/templates/sync/quarantine_list.html
+msgid "Quarantined"
+msgstr "Quarantined"
+
+#: app/templates/sync/quarantine_list.html
+msgid "No quarantined sync events."
+msgstr "No quarantined sync events."
+
+#: app/templates/sync/quarantine_list.html
+msgid "Replay this event? It will be re-validated and, if it now passes, applied as a real sync event."
+msgstr "Replay this event? It will be re-validated and, if it now passes, applied as a real sync event."
+
+#: app/templates/sync/quarantine_list.html
+msgid "Replay"
+msgstr "Replay"
+
+#: app/templates/sync/quarantine_list.html
+msgid "Discard this event? It stays visible under the Discarded filter, but will never be applied."
+msgstr "Discard this event? It stays visible under the Discarded filter, but will never be applied."
+
+#: app/templates/sync/quarantine_list.html
+msgid "Discard"
+msgstr "Discard"
+
 #~ msgid ""
 #~ "Each code can be used once if "
 #~ "you lose access to your authenticator."

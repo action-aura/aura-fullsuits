@@ -1,0 +1,54 @@
+{% extends "layout/base.html" %}
+{% import "components/table.html" as table with context %}
+{% block title %}{{ _("Sync Quarantine") }}{% endblock %}
+{% block content %}
+<div class="card">
+  {{ table.toolbar(_("Quarantined sync events")) }}
+  {{ table.filter_bar(
+      status_options=["PENDING","REPLAYED","DISCARDED"], status_value=status_filter,
+      status_label_fn=sync_quarantine_status_label
+  ) }}
+  {% call table.table(
+      columns=[
+        {"label": _("License")},
+        {"label": _("Device")},
+        {"label": _("Batch #")},
+        {"label": _("Reason")},
+        {"label": _("Status"), "sort_key": "status"},
+        {"label": _("Quarantined"), "sort_key": "created_at"},
+        {"label": ""},
+      ],
+      has_rows=result.rows, empty_message=_("No quarantined sync events."), caption=_("Quarantined sync events")
+  ) %}
+    {% for row in result.rows %}
+    <tr>
+      <td><bdi dir="ltr">{{ (row.license_id|string)[:8] }}</bdi></td>
+      <td><bdi dir="ltr">{{ (row.device_id|string)[:8] }}</bdi></td>
+      <td>{{ row.batch_index }}</td>
+      <td><code style="font-size:0.78rem;" dir="ltr">{{ row.rejection_reason[:120] }}</code></td>
+      <td><span class="badge {{ 'active' if row.status == 'REPLAYED' else ('danger' if row.status == 'PENDING' else 'draft') }}">{{ sync_quarantine_status_label(row.status) }}</span></td>
+      <td>{{ format_owner_datetime(row.created_at) }}</td>
+      <td>
+        {% if row.status == "PENDING" %}
+        {% if has_permission("sync_quarantine.replay") %}
+        <form class="inline" method="post" action="{{ url_for('sync_quarantine.replay', quarantine_id=row.id) }}"
+              data-confirm="{{ _('Replay this event? It will be re-validated and, if it now passes, applied as a real sync event.') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit">{{ _("Replay") }}</button>
+        </form>
+        {% endif %}
+        {% if has_permission("sync_quarantine.discard") %}
+        <form class="inline" method="post" action="{{ url_for('sync_quarantine.discard', quarantine_id=row.id) }}"
+              data-confirm="{{ _('Discard this event? It stays visible under the Discarded filter, but will never be applied.') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="danger">{{ _("Discard") }}</button>
+        </form>
+        {% endif %}
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  {% endcall %}
+  {{ table.pagination_nav(result) }}
+</div>
+{% endblock %}

@@ -359,6 +359,15 @@ def device_key_status_label(code: str) -> str:
     return labels.get(code, code)
 
 
+def sync_quarantine_status_label(code: str) -> str:
+    labels = {
+        "PENDING": _("Pending"),
+        "REPLAYED": _("Replayed"),
+        "DISCARDED": _("Discarded"),
+    }
+    return labels.get(code, code)
+
+
 def localize_pilot_lifecycle_error(code: str, **params) -> str:
     """Presentation-boundary translation for app.commercial_ops.pilot_lifecycle
     .PilotLifecycleError -- called ONLY from a real Flask request handler
