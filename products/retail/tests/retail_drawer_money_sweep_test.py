@@ -207,37 +207,95 @@ def shop():
     return {'company_id': company_id, 'admin': admin, 'a_sid': a_sid, 'b_sid': b_sid, 'pid': pid}
 
 
-def _money_keys_in(payload, session_id, keys=DRAWER_MONEY_KEYS, _depth=0, _owner=None):
+def _entitled_session_ids(company_id):
+    """Every session id the CURRENT caller is entitled to see IN FULL, right
+    now -- derived from the caller's own terminal, not from whichever single
+    session happens to be under probe.
+
+    This is `_session_read_scope`'s own-terminal branch, replayed here rather
+    than re-imagined: "your OWN till's drawer is yours" is not "the one
+    session id you asked about is yours" -- `list_cash_sessions` widens an
+    own-terminal read to that terminal's WHOLE history, past shifts included,
+    whoever staffed them (see test_the_session_list_does_not_hand_a_cashier_
+    every_tills_takings and the terminal-scope file's own version of the same
+    assertion). A checker keyed only on the probed session id cannot tell
+    that legitimate widening apart from a DIFFERENT till's money leaking in
+    beside it -- which is exactly the gap this function closes: querying the
+    real table for the real terminal, instead of trusting a single id.
+
+    Reads `retail_api._this_terminal()` -- not a terminal id passed in -- so
+    this keeps working under `at_terminal`, which patches
+    `retail_api.local_terminal_id` and is read by `_this_terminal()` at call
+    time.
+
+    Deliberately NOT widened for retail.reports / retail.cash.approve (the
+    other half of `_session_read_scope`'s rule). Every test in this file that
+    holds one of those capabilities already probes a session that belongs to
+    its own terminal, so own-terminal-only entitlement is never over-strict
+    for what this file actually exercises; adding capability-awareness here
+    would be modelling a rule this sweep does not yet have a case that needs.
+    """
+    terminal = retail_api._this_terminal()
+    conn = get_retail_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id FROM cash_sessions WHERE company_id=? AND terminal_id IS ?",
+            (company_id, terminal)
+        ).fetchall()
+    finally:
+        conn.close()
+    return frozenset(row['id'] for row in rows)
+
+
+def _money_keys_in(payload, session_id, entitled_ids, keys=DRAWER_MONEY_KEYS,
+                   _depth=0, _owner=None):
     """Every money key present with a NON-NULL value, at any depth, that is
-    NOT another REAL session's own business.
+    either the session under probe or NOT some other session the caller is
+    legitimately entitled to see.
 
     Non-null matters for the same reason the original sweep says it does: a
     route that returns the key as `null` has disclosed nothing, and treating
     that as a leak pushes people toward stripping keys rather than values.
 
-    `session_id` is new (see the FIX B.2 note on `_leaks_for` below): a dict
-    that names its OWN session -- `'session_id'` on an X/Z report or a cash
-    movement, `'id'` on a `cash_sessions` row (`_cash_session_public`'s
-    shape) -- for a session OTHER than the one being probed is a different,
-    REAL session the caller is entitled to see for reasons this sweep is not
-    testing (most commonly: `list_cash_sessions`'s own-terminal history,
-    which is allowed to include the caller's OWN till's past shifts even
-    when somebody else worked them -- see
-    test_the_session_list_does_not_hand_a_cashier_every_tills_takings and
-    the terminal-scope file's `test_the_session_list_scopes_to_this_
-    terminal_until_authority_widens_it`, both of which assert exactly that
-    as correct behaviour). Its money is that session's own scoping tests'
-    business, not this one's, so it is not counted as a leak of `session_id`.
-    `session_id` FOR `session_id` obviously still counts, and so does any
-    money with NO owning id at all -- which is deliberately what keeps this
-    the same sweep the module docstring's two injections (a bare
-    `expected_cash`, and the SUM of other terminals' `opening_float`, both
-    added straight onto `/cash-sessions/current`'s UNOWNED top-level body)
-    still have to be caught by. `session_id` is checked before `id` on
-    purpose: a `cash_movements` row carries BOTH its own `id` (the movement's,
-    never equal to any session id) and the `session_id` it belongs to, and
-    keying off `id` first would misread every movement as ownerless and
-    flag it regardless of whose drawer it is in.
+    Two things now decide whether a subtree counts, not one:
+
+      `session_id`     the ONE session this probe is about. Its own money
+                        always counts -- that is the whole point of probing
+                        it, own-drawer or deliberately-injected-foreign alike
+                        (`test_the_fixture_really_has_money_in_the_drawers`
+                        and the reopened-leak control both rely on this).
+
+      `entitled_ids`    (see `_entitled_session_ids` above) every OTHER
+                        session id the caller's own terminal legitimately
+                        owns -- e.g. `list_cash_sessions`'s own-terminal
+                        history, which surfaces past shifts on THIS till
+                        that are not the session under probe and are not a
+                        leak of anything.
+
+    A subtree is skipped (excluded from `found`) only when its owner is
+    SOME OTHER session (`owner != session_id`) that IS in `entitled_ids` --
+    the caller's own legitimate history. FIXED: this used to skip on any
+    owner mismatch against `session_id` alone, which happened to also
+    exclude legitimate own-terminal history (Path 2: `2_owned_by_probed`
+    stayed correct) but, for exactly the same reason, ALSO excluded money
+    nested under a genuinely FOREIGN till's session id (Paths 3-5:
+    `3_owned_by_other_till`, `4_list_of_other_tills`,
+    `5_other_till_nested_under_current`) -- a foreign session id is,
+    definitionally, "a string other than the probed session", so the old
+    rule could never tell "your own other shift" apart from "someone else's
+    drawer". Checking `entitled_ids` is what tells those apart: a foreign
+    till's session id is not in that set, so its subtree is NOT skipped and
+    its money is flagged; the caller's own other shifts ARE in that set, so
+    they stay excluded exactly as before. Money with NO owning id at all is
+    unaffected either way -- which is deliberately what keeps this the same
+    sweep the module docstring's two injections (a bare `expected_cash`, and
+    the SUM of other terminals' `opening_float`, both added straight onto
+    `/cash-sessions/current`'s UNOWNED top-level body) still have to be
+    caught by. `session_id` is checked before `id` on purpose: a
+    `cash_movements` row carries BOTH its own `id` (the movement's, never
+    equal to any session id) and the `session_id` it belongs to, and keying
+    off `id` first would misread every movement as ownerless and flag it
+    regardless of whose drawer it is in.
     """
     found = set()
     if _depth > 12:
@@ -245,15 +303,15 @@ def _money_keys_in(payload, session_id, keys=DRAWER_MONEY_KEYS, _depth=0, _owner
     if isinstance(payload, dict):
         raw_owner = payload.get('session_id', payload.get('id'))
         owner = raw_owner if isinstance(raw_owner, str) else _owner
-        if owner is not None and owner != session_id:
+        if owner is not None and owner != session_id and owner in entitled_ids:
             return found
         for key, value in payload.items():
             if key in keys and value is not None:
                 found.add(key)
-            found |= _money_keys_in(value, session_id, keys, _depth + 1, owner)
+            found |= _money_keys_in(value, session_id, entitled_ids, keys, _depth + 1, owner)
     elif isinstance(payload, list):
         for item in payload:
-            found |= _money_keys_in(item, session_id, keys, _depth + 1, _owner)
+            found |= _money_keys_in(item, session_id, entitled_ids, keys, _depth + 1, _owner)
     return found
 
 
@@ -280,8 +338,14 @@ def _drawer_get_rules(session_id):
     return sorted(rules)
 
 
-def _leaks_for(client, session_id):
-    """{endpoint: [money keys]} for every drawer GET this client can reach."""
+def _leaks_for(client, session_id, company_id):
+    """{endpoint: [money keys]} for every drawer GET this client can reach.
+
+    `company_id` is new: it is how `_entitled_session_ids` looks up the
+    caller's own-terminal history from the real table, rather than trusting
+    the single `session_id` under probe to stand in for everything the
+    caller may legitimately see."""
+    entitled_ids = _entitled_session_ids(company_id)
     leaks = {}
     for endpoint, _pattern, url in _drawer_get_rules(session_id):
         if url is None:
@@ -293,7 +357,7 @@ def _leaks_for(client, session_id):
             body = json.loads(r.get_data(as_text=True) or 'null')
         except ValueError:
             continue
-        keys = _money_keys_in(body, session_id)
+        keys = _money_keys_in(body, session_id, entitled_ids)
         if keys:
             leaks[endpoint] = sorted(keys)
     return leaks
@@ -316,7 +380,7 @@ def test_the_fixture_really_has_money_in_the_drawers(shop):
     """If this fails, every "no leak" result below means nothing -- which is
     precisely what went wrong with the sweep this file supplements."""
     with at_terminal(TILL_A):
-        owner_view = _leaks_for(shop['admin'], shop['a_sid'])
+        owner_view = _leaks_for(shop['admin'], shop['a_sid'], shop['company_id'])
     assert owner_view, 'the owner sees no drawer money -- the drawers are empty'
     assert 'cash_session_x_report' in owner_view, owner_view
     assert 'expected_cash' in owner_view['cash_session_x_report'], owner_view
@@ -332,7 +396,7 @@ def test_an_account_without_the_drawer_capability_reads_no_drawer_money(shop):
     stripped = _make_user('cashier', shop['company_id'],
                           capabilities={'retail.cash.close': 'none'})
     with at_terminal(TILL_A):
-        leaks = _leaks_for(stripped, shop['a_sid'])
+        leaks = _leaks_for(stripped, shop['a_sid'], shop['company_id'])
     assert leaks == {}, (
         'these drawer routes disclosed transacted money to an account holding '
         f'neither retail.cash.close nor retail.reports: {leaks}')
@@ -349,13 +413,13 @@ def test_a_cashier_at_one_till_reads_no_money_from_the_other_tills_drawer(shop):
         # Terminal A's own drawer: this cashier is standing at it, so the
         # money is theirs to read. Asserted so the empty result below is
         # isolation and not a route that refuses everyone.
-        own = _leaks_for(cashier, shop['a_sid'])
+        own = _leaks_for(cashier, shop['a_sid'], shop['company_id'])
     assert 'cash_session_x_report' in own, own
 
     with at_terminal(TILL_B):
         # Same account, same routes, different till. Terminal A's drawer is
         # now somebody else's.
-        foreign = _leaks_for(cashier, shop['a_sid'])
+        foreign = _leaks_for(cashier, shop['a_sid'], shop['company_id'])
     # FIXED (real AUDIT gap, reproduced): this used to assert only that two
     # NAMED endpoints ('cash_session_x_report', 'get_cash_session') were
     # absent from `foreign`, instead of asserting the whole leak map was
@@ -416,7 +480,7 @@ def test_the_sweep_catches_a_deliberately_reopened_leak(shop, monkeypatch):
                         lambda sess, this_terminal=retail_api._UNSET: (False, True))
 
     with at_terminal(TILL_B):
-        foreign = _leaks_for(cashier, shop['a_sid'])
+        foreign = _leaks_for(cashier, shop['a_sid'], shop['company_id'])
     assert 'cash_session_x_report' in foreign, (
         'the scope was disabled and the sweep still found no cross-terminal '
         'disclosure, so it is not actually measuring one')
@@ -424,5 +488,189 @@ def test_the_sweep_catches_a_deliberately_reopened_leak(shop, monkeypatch):
 
     monkeypatch.undo()
     with at_terminal(TILL_B):
-        restored = _leaks_for(cashier, shop['a_sid'])
+        restored = _leaks_for(cashier, shop['a_sid'], shop['company_id'])
     assert 'cash_session_x_report' not in restored, restored
+
+
+# ── THE FIVE-PATH MATRIX (AUDIT follow-on) ────────────────────────────────────
+#
+# `_money_keys_in` used to decide "is this subtree somebody else's business"
+# by ONE comparison: owner != session_id. That rule is right for Path 2 (the
+# caller's own probed drawer) and, by accident, right-looking for the
+# caller's own OTHER shifts on the same till (2b) -- but it is ALSO the exact
+# rule that silently discarded Path 3: a genuinely FOREIGN till's session id
+# is, definitionally, "a string other than the probed session", so the old
+# code could not tell 2b and 3 apart. Path 1 (no owner at all) and the
+# control (2) already had coverage; 2b, 3, 4, and 5 did not -- probed
+# directly against the real function, the way the fix's own investigation
+# probed it, rather than only through the full Flask round-trip below.
+
+#: The caller's own terminal owns exactly these two sessions -- the one
+#: under probe, and one other shift on the same till. Nothing else.
+_PROBED_SID = 'aaaa0000-aaaa-4aaa-8aaa-aaaaaaaa0001'
+_OWN_OTHER_SID = 'bbbb0000-bbbb-4bbb-8bbb-bbbbbbbb0002'
+_FOREIGN_SID = 'cccc0000-cccc-4ccc-8ccc-cccccccc0003'
+_ENTITLED = frozenset({_PROBED_SID, _OWN_OTHER_SID})
+
+
+def test_the_five_path_matrix_of_owner_shapes():
+    """Every owner shape `_money_keys_in` has to distinguish, in one place,
+    run directly against the function rather than through a live server.
+
+    2b is the legitimate-widening control: money owned by a DIFFERENT
+    session than the one under probe, but one the caller's own terminal
+    genuinely owns, must NOT be flagged -- this is what proves the fix has
+    not over-corrected into flagging the caller's own drawer history. 3, 4,
+    and 5 are the entitlement hole this file's fix closes: a foreign till's
+    session id is just as much "not the probed session" as 2b is, and only
+    checking it against the caller's real entitled set (rather than the
+    single probed id) tells the two apart."""
+    cases = {
+        '1_unowned_bare': (
+            {'expected_cash': 500.0, 'opening_float': 100.0},
+            {'expected_cash', 'opening_float'}),
+        '2_owned_by_probed': (
+            {'id': _PROBED_SID, 'opening_float': 150.0, 'variance': -5.0},
+            {'opening_float', 'variance'}),
+        '2b_owned_by_callers_own_other_shift': (
+            {'id': _OWN_OTHER_SID, 'opening_float': 75.0, 'variance': 2.0},
+            set()),
+        '3_owned_by_other_till': (
+            {'id': _FOREIGN_SID, 'opening_float': 75.0, 'variance': 2.0},
+            {'opening_float', 'variance'}),
+        '4_list_of_other_tills': (
+            {'other_terminals': [{'id': _FOREIGN_SID, 'expected_cash': 999.0}]},
+            {'expected_cash'}),
+        '5_other_till_nested_under_current': (
+            {'id': _PROBED_SID, 'opening_float': 150.0,
+             'related': {'session_id': _FOREIGN_SID, 'variance': 42.0}},
+            {'opening_float', 'variance'}),
+    }
+    for label, (payload, expected) in cases.items():
+        found = _money_keys_in(payload, _PROBED_SID, _ENTITLED)
+        assert found == expected, (label, found, expected)
+
+
+# ── THE SAME THREE SHAPES, END TO END THROUGH THE REAL /cash-sessions/current
+#    ROUTE -- proving `_leaks_for`, not just `_money_keys_in` in isolation,
+#    actually catches them when the product's own JSON is what carries them.
+# ────────────────────────────────────────────────────────────────────────────
+
+def _patch_current_cash_session_response(monkeypatch, mutate):
+    """Wrap the REAL `/cash-sessions/current` view so its JSON body can be
+    mutated after the real handler runs -- the same technique
+    `test_the_sweep_catches_a_deliberately_reopened_leak` uses on
+    `_session_read_scope`, aimed at the route's OUTPUT instead of its gate.
+    `mutate(body) -> body` receives the parsed response body and returns the
+    (possibly mutated) body to serve in its place."""
+    endpoint = 'retail_api.current_cash_session'
+    original = app.view_functions[endpoint]
+
+    def wrapper(*args, **kwargs):
+        resp = original(*args, **kwargs)
+        body = json.loads(resp.get_data(as_text=True))
+        resp.set_data(json.dumps(mutate(body)))
+        return resp
+
+    monkeypatch.setitem(app.view_functions, endpoint, wrapper)
+
+
+def test_the_sweep_catches_an_other_terminals_array_on_current(shop, monkeypatch):
+    """Mutation proof (Path 4), against the real route. `other_terminals_open`
+    already exists as a COUNT on this exact response; a future `other_terminals`
+    array of the terminals themselves is the obvious next step, and it must
+    not get a free pass just because it arrived as a list instead of a
+    single field.
+
+    Compared against a BASELINE taken before the mutation, not against an
+    empty dict: the caller's own current drawer legitimately carries
+    `opening_float` on this same endpoint (that is Path 2, and it is
+    supposed to show up -- see test_the_fixture_really_has_money_in_the_
+    drawers), so "the mutation is gone" has to mean "back to what it was",
+    not "reports nothing at all"."""
+    cashier = _make_user('cashier', shop['company_id'])
+    with at_terminal(TILL_A):
+        baseline = _leaks_for(cashier, shop['a_sid'], shop['company_id'])
+
+    def inject(body):
+        body['other_terminals'] = [{
+            'id': shop['b_sid'], 'expected_cash': 9999.99, 'opening_float': 111.11,
+        }]
+        return body
+
+    _patch_current_cash_session_response(monkeypatch, inject)
+    with at_terminal(TILL_A):
+        leaked = _leaks_for(cashier, shop['a_sid'], shop['company_id'])
+    assert 'current_cash_session' in leaked, (
+        f'an other_terminals array naming a foreign till went undetected: {leaked}')
+    assert {'expected_cash', 'opening_float'} <= set(leaked['current_cash_session']), leaked
+
+    monkeypatch.undo()
+    with at_terminal(TILL_A):
+        clean = _leaks_for(cashier, shop['a_sid'], shop['company_id'])
+    assert clean == baseline, (
+        f'the mutation is gone but the route no longer matches its own baseline: '
+        f'{clean} != {baseline}')
+
+
+def test_the_sweep_catches_a_foreign_session_nested_under_current(shop, monkeypatch):
+    """Mutation proof (Path 5), against the real route. The caller's OWN
+    current-session object is legitimate to return in full -- this proves a
+    FOREIGN session smuggled in as a nested field of that same object is not
+    given the same pass merely for sharing a dict with something legitimate.
+
+    Baseline-compared for the same reason as the test above."""
+    cashier = _make_user('cashier', shop['company_id'])
+    with at_terminal(TILL_A):
+        baseline = _leaks_for(cashier, shop['a_sid'], shop['company_id'])
+
+    def inject(body):
+        if body.get('data'):
+            body['data']['related_till'] = {
+                'session_id': shop['b_sid'], 'variance': 42.42,
+            }
+        return body
+
+    _patch_current_cash_session_response(monkeypatch, inject)
+    with at_terminal(TILL_A):
+        leaked = _leaks_for(cashier, shop['a_sid'], shop['company_id'])
+    assert 'current_cash_session' in leaked, (
+        f'a foreign session nested under the current-session object went undetected: {leaked}')
+    assert 'variance' in leaked['current_cash_session'], leaked
+
+    monkeypatch.undo()
+    with at_terminal(TILL_A):
+        clean = _leaks_for(cashier, shop['a_sid'], shop['company_id'])
+    assert clean == baseline, (
+        f'the mutation is gone but the route no longer matches its own baseline: '
+        f'{clean} != {baseline}')
+
+
+def test_the_sweep_catches_a_bare_unowned_figure_on_current(shop, monkeypatch):
+    """Mutation proof (Path 1), against the real route -- the module
+    docstring's own worked example, actually run rather than only narrated:
+    a bare money figure with no owning id at all, dropped straight onto the
+    top level of `/cash-sessions/current`'s body.
+
+    Baseline-compared for the same reason as the two tests above."""
+    cashier = _make_user('cashier', shop['company_id'])
+    with at_terminal(TILL_A):
+        baseline = _leaks_for(cashier, shop['a_sid'], shop['company_id'])
+
+    def inject(body):
+        body['expected_cash'] = 12345.0
+        return body
+
+    _patch_current_cash_session_response(monkeypatch, inject)
+    with at_terminal(TILL_A):
+        leaked = _leaks_for(cashier, shop['a_sid'], shop['company_id'])
+    assert 'current_cash_session' in leaked, (
+        f'a bare unowned expected_cash figure went undetected: {leaked}')
+    assert 'expected_cash' in leaked['current_cash_session'], leaked
+
+    monkeypatch.undo()
+    with at_terminal(TILL_A):
+        clean = _leaks_for(cashier, shop['a_sid'], shop['company_id'])
+    assert clean == baseline, (
+        f'the mutation is gone but the route no longer matches its own baseline: '
+        f'{clean} != {baseline}')

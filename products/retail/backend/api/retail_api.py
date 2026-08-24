@@ -3881,8 +3881,15 @@ def list_cash_sessions():
     # cash drawers rather than sales.
     limit = clamp_page_limit(request.args.get('limit', 50), 50, 200)
     terminal = _this_terminal()
-    all_terminals = (session_has_capability(CAP_REPORTS)
-                     or session_has_capability(CAP_CASH_APPROVE))
+    # Read retail.cash.approve ONCE and reuse the verdict for both the gate
+    # and the disclosure below -- the same fix close_cash_session's own
+    # comment already argues for (~line 4111): "Calling session_has_capability()
+    # twice ... is two registry reads that could disagree across a permission
+    # change mid-request." Here a disagreement would be milder (a stale
+    # 'may_approve' hint, not a misattributed approval) but it is the same
+    # defect for the same reason, so it gets the same fix.
+    may_approve = session_has_capability(CAP_CASH_APPROVE)
+    all_terminals = session_has_capability(CAP_REPORTS) or may_approve
     conn = get_retail_conn()
     if all_terminals:
         rows = conn.execute(
@@ -3906,7 +3913,7 @@ def list_cash_sessions():
         # offering it to everyone and letting the 403 explain. This is a
         # rendering hint and nothing else: /approve re-checks the capability
         # itself, because a hint the client could lie about is not a gate.
-        'may_approve': session_has_capability(CAP_CASH_APPROVE),
+        'may_approve': may_approve,
     })
 
 @retail_bp.route('/cash-sessions/<session_id>', methods=['GET'])

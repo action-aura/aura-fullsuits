@@ -463,46 +463,46 @@ def test_every_in_handler_capability_check_the_product_ships_is_consumed():
     in exactly one direction and a tightening in every other, so the risk it
     introduces is reporting a real, working gate as absent. Every
     `session_has_capability` CHECK in the shipped route files is a deliberate
-    gate; if one of them stops grading as consumed anywhere, the analysis has
-    become wrong about production code and this fails before the ratchet can
-    start manufacturing false alarms.
+    gate; if one of them stops grading as consumed, the analysis has become
+    wrong about production code and this fails before the ratchet can start
+    manufacturing false alarms.
 
-    Grouped by (handler, exact call source) rather than by individual call
-    SITE, because `list_cash_sessions` genuinely, deliberately calls
-    `session_has_capability(CAP_CASH_APPROVE)` twice: once to compute
-    `all_terminals` (consumed immediately -- `if all_terminals:` chooses the
-    query), and a second time, byte-for-byte identical, to put that same
-    boolean into the response body as `may_approve`. Read retail_api.py's own
-    comment on that second line: "a hint the client could lie about is not a
-    gate" -- /approve re-checks retail.cash.approve itself; this one exists so
-    the screen can decide whether to OFFER the button. Two identical source
-    strings, same capability, same handler, same request: the first IS the
-    gate, the second DISCLOSES what the first already decided. Requiring
-    every syntactic occurrence to independently grade as consumed would
-    demand deleting or obfuscating a legitimate, already-reasoned-about
-    disclosure line to satisfy a test -- which fixes nothing real, since the
-    enforcement already happened one line above it. What this guard actually
-    cares about is whether a CAPABILITY, IN A HANDLER, is EVER enforced --
-    not whether every mention of it independently is -- so a genuinely dead
-    check (the only kind that should fail this) is one where NONE of its
-    occurrences, for that exact source text in that handler, ever reach a
-    decision anywhere."""
+    STRICT per call SITE, not grouped by (handler, exact call source). This
+    file used to group, because `list_cash_sessions` called
+    `session_has_capability(CAP_CASH_APPROVE)` twice with byte-identical
+    source text: once to compute `all_terminals` (a real gate) and a second
+    time, verbatim, to put the same boolean into the response body as
+    `may_approve`. Grouping hid that second call from this assertion --
+    which also hides a DIFFERENT defect it was never meant to tolerate: a
+    dead check, byte-identical to a live gate in the same handler, is
+    invisible to a guard that only demands "one of the occurrences counts".
+    A verifier proved this concretely by injecting a dead
+    `session_has_capability(CAP_DISCOUNT)` into `create_sale`, next to its
+    real, already-consumed gate -- same source text, same handler -- and the
+    grouped assertion stayed green.
+
+    The real double-read was the actual bug, not a shape this guard needed
+    to accommodate: `list_cash_sessions` now reads retail.cash.approve ONCE
+    into `may_approve` and reuses that local for both the gate and the
+    disclosure, the same fix `close_cash_session`'s own comment already
+    argues for ("Calling session_has_capability() twice ... is two registry
+    reads that could disagree across a permission change mid-request"). With
+    the duplicate read gone, every real call site in the shipped route files
+    is independently a gate, and this assertion can go back to requiring
+    exactly that -- one dead line anywhere, even disguised as a legitimate
+    disclosure sitting next to a real gate, is a real gap and must fail
+    here."""
     calls = _real_calls()
     assert len(calls) >= 5, (
         f"the analysis found almost no capability calls in the real route "
         f"files -- it is not reading what it thinks it is: {calls}")
 
-    grades_by_check = {}
-    for fn, source, grade in calls:
-        grades_by_check.setdefault((fn, source), []).append(grade)
-
-    dropped = [(fn, source, grades) for (fn, source), grades in grades_by_check.items()
-               if not any(g in ratchet.CONSUMING_GRADES for g in grades)]
+    dropped = [(fn, source, grade) for fn, source, grade in calls
+               if grade not in ratchet.CONSUMING_GRADES]
     assert not dropped, (
-        "these REAL, shipped capability checks now grade as unconsumed on EVERY "
-        "occurrence in their handler. Either production grew a genuinely dead "
-        "check, or the analysis is wrong:\n  "
-        + "\n  ".join(f"{fn}: {source} -> {grades}" for fn, source, grades in dropped))
+        "these REAL, shipped capability checks now grade as unconsumed. Either "
+        "production grew a genuinely dead check, or the analysis is wrong:\n  "
+        + "\n  ".join(f"{fn}: {source} -> {grade}" for fn, source, grade in dropped))
 
 
 def test_the_two_real_consumption_shapes_are_both_present_in_production():

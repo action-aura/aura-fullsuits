@@ -289,7 +289,39 @@ def test_fresh_install_lands_on_v8_with_reorder_schema_present():
 
         conn = retail_schema.get_retail_conn()
         try:
-            assert conn.execute("PRAGMA user_version").fetchone()[0] == 16
+            # FIXED (the same magic-number anti-pattern
+            # retail_v15_ledger_truth_migration_test.py was cured of, and
+            # retail_category_delete_fk_sync_test.py's identically-named
+            # `_assert_landed_on_head` was fixed for at the same time): this
+            # used to hardcode `== 16`, exactly the kind of literal this
+            # docstring already spends three paragraphs narrating going
+            # stale bump after bump. Comparing against
+            # `retail_schema.RETAIL_SCHEMA_VERSION` -- the freshly reloaded
+            # module actually under test a few lines above -- means this
+            # keeps meaning "a fresh install reaches today's head" at
+            # whatever version the chain reaches next, instead of needing
+            # another hand-edit (and another paragraph) the next time
+            # RETAIL_SCHEMA_VERSION moves.
+            # The FLOOR, kept alongside the head comparison for the reason
+            # retail_v15_ledger_truth_migration_test.py keeps its own
+            # `>= 15` instead of `== 15`: `landed == RETAIL_SCHEMA_VERSION`
+            # compares two values that move TOGETHER, so a constant that
+            # drifted DOWNWARD (bad merge, branch reconciliation clobbering
+            # database/schema.py, the mixed-schema-state across branches
+            # CLAUDE.md warns about) would still satisfy it -- a fresh
+            # install would simply land on the lower number and the
+            # assertion would confirm only its own self-consistency. The
+            # `== 16` this replaced was the one line that would have caught
+            # that; `>= 16` keeps that tripwire while still letting the head
+            # move forward without another hand-edit here.
+            assert retail_schema.RETAIL_SCHEMA_VERSION >= 16, (
+                f'RETAIL_SCHEMA_VERSION went BACKWARDS to '
+                f'{retail_schema.RETAIL_SCHEMA_VERSION}: steps have been lost '
+                f'from the migration chain')
+            landed = conn.execute("PRAGMA user_version").fetchone()[0]
+            assert landed == retail_schema.RETAIL_SCHEMA_VERSION, (
+                f'expected a fresh install to land on the current schema head '
+                f'({retail_schema.RETAIL_SCHEMA_VERSION}), got {landed}')
             cols = {r[1] for r in conn.execute("PRAGMA table_info(products)").fetchall()}
             assert "reorder_method" in cols
             tables = {r[0] for r in conn.execute(

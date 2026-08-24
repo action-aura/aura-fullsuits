@@ -85,6 +85,52 @@ def _seed_category_with_product(cat_id, company_id=1):
 
 # ── The schema change itself ────────────────────────────────────────────────
 
+def _assert_landed_on_head(conn):
+    """'Landed on head' means PRAGMA user_version reached
+    `database.schema.RETAIL_SCHEMA_VERSION` as the imported module defines it
+    TODAY, not a number this test file freezes in place.
+
+    FIXED (the same magic-number anti-pattern retail_v15_ledger_truth_
+    migration_test.py was cured of): this used to hardcode `== 16` in two
+    places, including one line that compared `RETAIL_SCHEMA_VERSION` against
+    a bare literal -- i.e. asserted the module's own constant equals a copy
+    of itself written down by hand. That number was already stale by one
+    Phase before this fix landed (v16 was current when the comment above
+    this test was last updated, but the surrounding narrative shows the
+    version had already moved five more times since the test's own name --
+    "v6" -- was accurate), and every future schema bump would have had to
+    remember to update it again or start failing for a reason that has
+    nothing to do with the FK-on-delete-set-null behaviour this test exists
+    to cover. Comparing against the live module constant instead means this
+    keeps meaning "did the install reach today's head", at whatever version
+    that head is, the same way retail_v15_ledger_truth_migration_test.py's
+    own `_assert_landed_on_head` does.
+
+    The FLOOR below is the half that must NOT be dropped along with the magic
+    number. `version == RETAIL_SCHEMA_VERSION` compares two things that move
+    TOGETHER: if the constant were ever to drift DOWNWARD -- a bad merge, a
+    branch reconciliation clobbering database/schema.py, the mixed-schema-
+    state across branches CLAUDE.md warns about by name -- a fresh install
+    would dutifully land on that lower number and this assertion would still
+    pass, having verified nothing but its own self-consistency. The literal
+    `== 16` that used to sit in the calling test was, whatever else was wrong
+    with it, the one line that would have caught exactly that. Replacing it
+    with `>= 16` keeps the tripwire (the chain can never silently LOSE the
+    v16 terminal-bound-drawer step this file's own comment documents) while
+    still letting the head move forward freely, which is precisely the
+    reasoning retail_v15_ledger_truth_migration_test.py spells out for its
+    own `assert sch.RETAIL_SCHEMA_VERSION >= 15` rather than `== 15`.
+    """
+    assert retail_schema.RETAIL_SCHEMA_VERSION >= 16, (
+        f'RETAIL_SCHEMA_VERSION went BACKWARDS to '
+        f'{retail_schema.RETAIL_SCHEMA_VERSION}: the v16 migration step that '
+        f'binds the cash drawer to a terminal has been lost from the chain')
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    assert version == retail_schema.RETAIL_SCHEMA_VERSION, (
+        f'expected a fresh install to land on the current schema head '
+        f'({retail_schema.RETAIL_SCHEMA_VERSION}), got {version}')
+
+
 def test_schema_version_is_v6_and_products_fk_declares_on_delete_set_null():
     # Was v3 when this file was written; the multi-device sync foundation's
     # products.id -> UUID migration bumped this to v4, the customers/
@@ -125,11 +171,12 @@ def test_schema_version_is_v6_and_products_fk_declares_on_delete_set_null():
     # creates a different one -- and it carries the identical existence guard,
     # since this file hand-builds a minimal schema with no `cash_sessions`
     # table either. The FK-on-delete-set-null assertion this test exists for
-    # is unaffected by any of these later changes.
-    assert retail_schema.RETAIL_SCHEMA_VERSION == 16
+    # is unaffected by any of these later changes -- whatever version the
+    # chain reaches next, `_assert_landed_on_head` below tracks it rather
+    # than needing another hand-edit here.
     conn = retail_schema.get_retail_conn()
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 16
+        _assert_landed_on_head(conn)
         assert retail_schema._products_category_fk_is_set_null(conn) is True
     finally:
         conn.close()
