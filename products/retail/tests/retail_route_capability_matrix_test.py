@@ -150,9 +150,26 @@ EXPECTED_MUTATION_CAPABILITIES = {
     'void_payment': CAP_REFUND,
 
     # ── This terminal's drawer: retail.cash.close ────────────────────────────
+    # All three are own-terminal-only in the handler as well as capability-
+    # gated here, and no capability widens that: cash physically leaving a
+    # drawer can only be witnessed by the device standing at it (Phase 4,
+    # retail_drawer_terminal_scope_test.py).
     'open_cash_session': CAP_CASH_CLOSE,
     'create_cash_movement': CAP_CASH_CLOSE,
+    # ENDS the shift. Deliberately NOT retail.cash.approve: a cashier who
+    # counted short must be able to finish and go home. What the approval
+    # authority changes is the STATUS this produces -- 'ended' (variance
+    # unverified) without it, 'closed' with it.
     'close_cash_session': CAP_CASH_CLOSE,
+
+    # ── Accepting a cash variance: retail.cash.approve ───────────────────────
+    # The first and only route to carry this code. It is withheld from every
+    # role that holds retail.cash.close, manager included, so that no role can
+    # count its own drawer and sign off its own shortfall -- AUDIT-032. The
+    # pairing is asserted behaviourally by
+    # test_nobody_who_can_close_a_drawer_gets_variance_approval_by_default
+    # below, which is what makes this line more than a label.
+    'approve_cash_variance': CAP_CASH_APPROVE,
 
     # ── Sending or generating the shop's numbers: retail.reports ─────────────
     'report_summary_email': CAP_REPORTS,
@@ -228,6 +245,28 @@ EXPECTED_READ_CAPABILITIES = {
     # close_cash_session's own authority keeps the report and the act it
     # feeds on one permission.
     'cash_session_x_report': CAP_CASH_CLOSE,
+
+    # ── The drawer's other three GETs, gated by Phase 4 ──────────────────────
+    # The same comment block that mis-stated x-report's status also excused
+    # these three, on the grounds that they "return session STATE rather than
+    # a money report". That reads as true and is not: a cash_sessions row
+    # carries `opening_float` and `variance`, both of which the runtime money
+    # sweep's own MONEY_KEYS call transacted money. The reason nobody caught
+    # it is worth writing down, because it is the more instructive half --
+    # retail_money_leak_runtime_sweep_test.py's fixture never opens a cash
+    # session, so every one of these responses it has ever measured was
+    # `null` or `[]` and no money key was there to find. A fixture that
+    # manufactured the state that hid the leak.
+    #
+    # retail.cash.close, matching x-report: the till operator needs their own
+    # drawer's state to work. WHOSE drawer they may read is a separate
+    # question the capability does not answer -- own terminal is yours,
+    # another terminal is a report (retail.reports / retail.cash.approve) --
+    # and that split is enforced in the handlers and asserted by
+    # retail_drawer_terminal_scope_test.py.
+    'current_cash_session': CAP_CASH_CLOSE,
+    'list_cash_sessions': CAP_CASH_CLOSE,
+    'get_cash_session': CAP_CASH_CLOSE,
 }
 
 #: Read routes that DISCLOSE money and deliberately carry no capability, each

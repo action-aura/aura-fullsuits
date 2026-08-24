@@ -522,7 +522,25 @@ PRE_EXISTING_UNGATED_MONEY_READS = frozenset({
     'list_customers', 'customer_sales', 'customer_statement',
     'list_suppliers', 'list_purchase_orders', 'get_purchase_order',
     'get_sale', 'list_held_sales', 'list_returns',
-    'current_cash_session', 'list_cash_sessions', 'get_cash_session',
+    # REMOVED BY PHASE 4, which is what this baseline is for.
+    #
+    #   current_cash_session, list_cash_sessions, get_cash_session
+    #
+    # All three sat here because they were genuinely ungated and genuinely
+    # money-returning: a cash_sessions row carries `opening_float` and
+    # `variance`. `list_cash_sessions` in particular handed every drawer in
+    # the company, with its float and its shortfall on each row, to anybody
+    # who could log in. They now carry retail.cash.close, and WHOSE drawer
+    # you may read is a second question the capability does not answer --
+    # own terminal is yours, another terminal is a report. The gate is
+    # pinned in retail_route_capability_matrix_test.py's
+    # EXPECTED_READ_CAPABILITIES and the terminal scope in
+    # retail_drawer_terminal_scope_test.py.
+    #
+    # Deleted rather than left in place: `_stale_baseline_entries` fails on
+    # an entry for a route that has since been gated, precisely so that an
+    # exemption cannot go on excusing a route that no longer needs excusing
+    # and quietly cover the day somebody un-gates it again.
 })
 
 

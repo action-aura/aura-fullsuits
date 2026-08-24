@@ -267,6 +267,66 @@ def _v15_audit(db_path, company_id):
         conn.close()
 
 
+# ── version assertions: three different questions, three different helpers ──
+#
+# AUDIT (post-Phase-4 regression): this file used to assert
+# `_user_version(db_path) == 15` to mean "the v15 gate accepted this install",
+# which was true right up until schema v16 (launch-readiness Phase 4, the
+# terminal-bound cash drawer) got chained onto the SAME `_migrate_retail_schema`
+# pass immediately after v15. From that point on, an install that clears the
+# v15 gate does not stop at 15 to be observed there -- it keeps going to 16 in
+# the very same `init_retail()` call. A bare `==15` stopped meaning "the gate
+# was cleared" and started meaning "the gate was cleared AND the schema chain
+# has not grown since this file was written", which is a materially different,
+# permanently-false claim the moment ANY step is appended after v15. Measured
+# directly: 11 of this file's assertions failed against v16 with messages that
+# said REFUSED about installs the v15 gate had correctly accepted -- exactly
+# the false alarm that sends whoever reads CI looking for a Phase 3 regression
+# that was never there.
+#
+# Introduced once, here, so the fix is "assert the right question" rather than
+# "swap one magic number for another" (`==16` would only move the identical
+# defect to whatever v17 turns out to be) and so the three questions this file
+# actually asks cannot drift back out of sync with their messages the way the
+# bare literal did.
+
+def _assert_refused_at_v14(db_path, message=None):
+    """'Refused' means the v15 gate declined to advance the marker at all --
+    STUCK at 14, the version below the gate under test. Most of this file's
+    ==14 assertions are already exactly this question asked directly and are
+    left as bare literals; this helper exists for the few call sites that
+    want the shared wording, not because ==14 was ever the ambiguous half of
+    this file's stale-version defect.
+    """
+    version = _user_version(db_path)
+    assert version == 14, message or (
+        f'expected the v15 gate to refuse and leave user_version at 14, got {version}')
+
+
+def _assert_advanced_past_v15(db_path, message=None):
+    """'Advanced past the v15 gate' means user_version >= 15, NOT ==15 --
+    see the module-level note above this helper for why those stopped being
+    the same question the moment v16 chained onto v15 in the same pass.
+    """
+    version = _user_version(db_path)
+    assert version >= 15, message or (
+        f'expected the v15 gate to accept this install (user_version >= 15), '
+        f'got {version}')
+
+
+def _assert_landed_on_head(sch, db_path, message=None):
+    """'Landed on head' means user_version reached RETAIL_SCHEMA_VERSION as
+    the imported module defines it TODAY, not a number this test file
+    hardcodes. Hardcoding today's head here would only relocate today's
+    defect to whichever version comes after it -- see the module-level note
+    above for the exact way that already happened once.
+    """
+    version = _user_version(db_path)
+    assert version == sch.RETAIL_SCHEMA_VERSION, message or (
+        f'expected the install to reach the current schema head '
+        f'({sch.RETAIL_SCHEMA_VERSION}), got {version}')
+
+
 # ── 0. the anti-vacuity guard, stated on its own ────────────────────────────
 
 def test_the_fixture_really_is_drifted_before_the_migration_runs():
@@ -294,7 +354,12 @@ def test_the_fixture_really_is_drifted_before_the_migration_runs():
     assert before[0]['ledger_balance'] == 0.0, (
         'the ledger already explains this balance -- the fixture is not the '
         'unbacked-balance case it claims to be')
-    assert sch.RETAIL_SCHEMA_VERSION == 15
+    # Sanity on the imported module's OWN constant, not a live migrated
+    # database: this file's v15 gate must still exist at all (>=15), not
+    # exactly at 15 -- see the module-level note above `_assert_refused_at_v14`
+    # for why a bare ==15 here would go stale the moment any step is
+    # appended after v15, which is exactly what v16 already did.
+    assert sch.RETAIL_SCHEMA_VERSION >= 15
 
 
 # ── 1. the ordinary case: balances with no ledger history ───────────────────
@@ -318,7 +383,7 @@ def test_a_balance_with_no_movements_is_seeded_and_drift_becomes_zero():
 
     sch.init_retail()
 
-    assert _user_version(db_path) == 15
+    _assert_landed_on_head(sch, db_path)
     assert _drift(db_path, company_id) == []
 
     # The ledger moved to explain the cache. The cache did NOT move: v15 is a
@@ -488,9 +553,9 @@ def test_the_ordinary_legacy_shop_advances_and_every_shelf_figure_is_unchanged()
     _rewind_to_v14(db_path)
     sch.init_retail()
 
-    assert _user_version(db_path) == 15, (
+    _assert_advanced_past_v15(db_path, (
         'the ordinary legacy shop was refused; the POS does not boot, because '
-        'app.py calls init_retail() unconditionally with no handler')
+        'app.py calls init_retail() unconditionally with no handler'))
     assert _drift(db_path, company_id) == []
     assert _shelf_figures(db_path, company_id) == [112.0, 57.0, 7.0], (
         'v15 moved stock. It is a migration, not a repair: the LEDGER moves to '
@@ -597,7 +662,7 @@ def test_repair_drift_after_v15_still_leaves_that_shop_untouched():
     company_id, _branch_id, _keys = _legacy_shop(sch, db_path)
     _rewind_to_v14(db_path)
     sch.init_retail()
-    assert _user_version(db_path) == 15
+    _assert_landed_on_head(sch, db_path)
 
     conn = sch.get_retail_conn()
     try:
@@ -685,10 +750,10 @@ def test_an_ambiguous_null_branch_install_still_advances_with_the_count_surfaced
 
     sch.init_retail()
 
-    assert _user_version(db_path) == 15, (
+    _assert_advanced_past_v15(db_path, (
         'an install carrying ONE ambiguous legacy row can now never take '
         'another migration -- the permanent wedge this gate shape exists to '
-        'avoid')
+        'avoid'))
 
     after = _drift(db_path, company_id)
     assert [r['repairable'] for r in after] == [False], after
@@ -744,7 +809,7 @@ def test_a_single_branch_company_has_its_null_branch_movements_resolved():
 
     sch.init_retail()
 
-    assert _user_version(db_path) == 15
+    _assert_landed_on_head(sch, db_path)
     assert _drift(db_path, company_id) == []
 
     rows = _movements_of(db_path, company_id, product_id)
@@ -791,7 +856,7 @@ def test_a_single_branch_shop_with_null_branch_sales_advances_with_stock_intact(
 
     sch.init_retail()
 
-    assert _user_version(db_path) == 15
+    _assert_landed_on_head(sch, db_path)
     assert _drift(db_path, company_id) == []
     assert _balances_snapshot(db_path, company_id) == {(product_id, branch_id): 120.0}, (
         'the shop went in holding 120 and did not come out holding 120')
@@ -917,9 +982,9 @@ def test_an_orphan_balance_lets_the_install_advance_instead_of_wedging_it():
 
     sch.init_retail()
 
-    assert _user_version(db_path) == 15, (
+    _assert_advanced_past_v15(db_path, (
         'an install carrying one orphan balance can now never take another '
-        'migration -- and no operator action changes that')
+        'migration -- and no operator action changes that'))
 
     # The honest half of the work still landed: the live key was seeded its
     # residual and no longer drifts.
@@ -1123,10 +1188,10 @@ def test_seeding_a_negative_residual_would_make_the_gate_incapable_of_failing():
     finally:
         recon.DEFAULT_TOLERANCE = real_tolerance
 
-    assert _user_version(db_path) == 15, (
+    _assert_advanced_past_v15(db_path, (
         'the undeducible install was refused even with the sign check off, so '
         'something else is doing the refusing and the real test below does '
-        'not prove what it claims')
+        'not prove what it claims'))
     # ...and look at what it advanced WITH: a goods ledger stating that this
     # shop opened with MINUS THIRTY units on the shelf. Nothing downstream
     # would ever question it -- valuation, COGS and reorder maths all read
@@ -1246,7 +1311,7 @@ def test_the_documented_recovery_actually_recovers_and_costs_no_other_stock():
         'opening count was supposed to make it derivable, not disposable')
 
     sch.init_retail()
-    assert _user_version(db_path) == 15
+    _assert_landed_on_head(sch, db_path)
     assert _drift(db_path, company_id) == []
 
 
@@ -1328,7 +1393,7 @@ def test_a_second_run_seeds_nothing_and_changes_nothing():
         'the stock it was supposed to explain')
     assert _balances_snapshot(db_path, company_id) == balances
     assert _drift(db_path, company_id) == []
-    assert _user_version(db_path) == 15
+    _assert_landed_on_head(sch, db_path)
 
 
 # ── 5. repair_drift's own transaction ───────────────────────────────────────

@@ -22,7 +22,7 @@ from commercial_runtime.identity.mt_auth import (
 )
 from commercial_runtime.identity.user_accounts import (
     CAP_SELL, CAP_REFUND, CAP_DISCOUNT, CAP_STOCK_ADJUST, CAP_REPORTS,
-    CAP_CASH_CLOSE, CAP_EMPLOYEES,
+    CAP_CASH_CLOSE, CAP_CASH_APPROVE, CAP_EMPLOYEES,
     # The ONE format every *_at_utc column in this suite is written in --
     # timezone-aware '...+00:00', never `datetime.utcnow()`'s naive string.
     # Imported rather than re-spelled inline so retail's `created_at_utc` and
@@ -40,7 +40,16 @@ from commercial_runtime.sync.sync_service import get_active_health as _sync_get_
 from commercial_runtime.notifications import settings as _notification_settings
 from commercial_runtime.notifications.outbox import EmailOutboxRepository as _EmailOutboxRepository
 from commercial_runtime.notifications import whatsapp_settings as _whatsapp_settings
-from database.schema import get_retail_conn, sub_create, local_terminal_id
+from database.schema import (
+    get_retail_conn, sub_create, local_terminal_id,
+    # The drawer's status vocabulary and v16's force-end markers. IMPORTED,
+    # never re-spelled: schema.py's migration writes these exact values onto
+    # real rows, and a second copy of the word 'ended' living in this file is
+    # how a route comes to disagree with the migration that produced the row
+    # it is reading. Same discipline as `now_utc_iso` above.
+    CASH_SESSION_STATUS_OPEN, CASH_SESSION_STATUS_ENDED, CASH_SESSION_STATUS_CLOSED,
+    V16_UNVERIFIED_END_REASONS,
+)
 from datetime import datetime, timedelta, timezone
 from core.retail import pricing as tax_engine
 from core.retail import po_split
@@ -141,15 +150,17 @@ RETAIL_RESTRICTED_ALLOWLIST = frozenset({
 #    retail.reports       see, send or generate the shop's numbers
 #    retail.cash.close    operate THIS terminal's drawer: open, movements,
 #                         close
-#    retail.cash.approve  accept a cash variance. NO ROUTE TODAY, and none is
-#                         invented here: cash_sessions has only open/closed,
-#                         with no state for "closed, variance not yet
-#                         accepted" until retail v16 adds the ENDED/CLOSED
-#                         split (design §6). Requiring it to CLOSE would be
-#                         backwards -- a cashier who counted short could never
-#                         end their shift. It stays reserved, and is kept out
-#                         of the manager default so that no role can both
-#                         close a drawer and sign off its own shortfall
+#    retail.cash.approve  accept a cash variance. It now has exactly ONE route
+#                         (POST /cash-sessions/<id>/approve), added by Phase 4
+#                         together with the ENDED/CLOSED split this comment
+#                         used to say it was waiting for. It is still NOT
+#                         required to CLOSE, for the reason this comment gave
+#                         when the route did not exist and which has not
+#                         changed: a cashier who counted short could never end
+#                         their shift. Ending needs retail.cash.close; only
+#                         ACCEPTING the resulting variance needs this. Kept out
+#                         of the manager default so that no role can both close
+#                         a drawer and sign off its own shortfall
 #    retail.employees     owner-level administration of the shop itself:
 #                         settings, branches, payment methods, demo reset, and
 #                         money paid OUT to suppliers. Read it as "owner
@@ -583,11 +594,88 @@ def _default_branch(conn, cid):
                 (cid, 'Main Branch', '', '', _new_uid()))
     return cur.lastrowid
 
-def _open_cash_session_id(conn, cid, bid):
+#: "the caller did not pass this argument", distinct from "the caller passed
+#: None". None is a MEANINGFUL terminal value here (an unidentified till), so
+#: it cannot double as the default -- a `terminal=None` default would make
+#: "use this device's identity" and "scope to the unidentified till"
+#: indistinguishable at the call site.
+_UNSET = object()
+
+
+def _terminal(value):
+    """The one spelling of a terminal id used by every drawer comparison here.
+
+    `''` and `NULL` both mean "this row does not know which till it belongs
+    to", and they have to compare EQUAL or the same physical device would be
+    treated as two different tills depending on which code path wrote the row.
+    Normalising to None once, here, is the same discipline account_schema
+    applies to a blank `uid` (see `_actor_user_uid` above).
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _this_terminal():
+    """THIS device's terminal id -- the scope every drawer read and write below
+    is bound to.
+
+    Identical value to the one `_stamp()` writes into `terminal_id`
+    (`local_terminal_id()` -> `peek_local_device_uuid()`), and that identity is
+    the whole point: the column a session is SCOPED by must be the same column
+    the row was STAMPED with, or a drawer would be owned by one notion of
+    "this terminal" and found by another.
+
+    MAY BE None, and the drawer code below must keep working when it is.
+    `peek_*` never creates the local-device file, so an install that has not
+    established a device identity yet (and a stripped Android build, where the
+    import fails) has no terminal id at all. That case is handled by treating
+    "no terminal id" as its own scope -- see `_TERMINAL_IS` -- which means two
+    unidentified devices still share one drawer, exactly as they do today.
+    That is a KNOWN, NARROWED residual, not a fix: it is strictly better than
+    today's branch-wide fold (which merges identified devices too), it is
+    visible on the screen rather than silent (the drawer bar says the till is
+    unidentified), and it disappears the moment device identity exists.
+    """
+    return _terminal(local_terminal_id())
+
+
+#: `IS`, not `=`, and this is load-bearing rather than a style preference.
+#:
+#: SQL `=` against NULL is NULL, which is not TRUE, so `terminal_id = ?` bound
+#: to None matches NOTHING -- including the rows this device itself wrote when
+#: it had no terminal id. An unidentified till would open a drawer, fail to
+#: find it one line later, and open a second. SQLite's `IS` is null-safe
+#: equality (IS NOT DISTINCT FROM), so one predicate serves both cases.
+_TERMINAL_IS = 'terminal_id IS ?'
+
+
+def _open_cash_session_id(conn, cid, bid, terminal=_UNSET):
     """Best-effort lookup of the currently OPEN cash_sessions row for this
-    company+branch (feat/shift-cash-drawer, schema v10), used to stamp
-    sales.session_id / returns.session_id at write time so the X/Z report
-    math can attribute a sale/return to the EXACT session it happened in.
+    company+branch+TERMINAL (feat/shift-cash-drawer, schema v10; terminal
+    scoping is Phase 4 / retail v16), used to stamp sales.session_id /
+    returns.session_id at write time so the X/Z report math can attribute a
+    sale/return to the EXACT session it happened in.
+
+    ── THE TERMINAL PREDICATE IS THE PHASE-4 FIX, AND IT IS HERE ────────────
+    This lookup used to read "the open session for this company and branch",
+    and THAT is why a phone's takings landed in the desktop's Z report. Not
+    `_cash_session_report`, which has always summed strictly by `session_id`
+    and has always been right about the rows it was given: the contamination
+    was upstream, at the stamp. With one open session per BRANCH, every device
+    selling into that branch -- desktop, phone, the second till by the door --
+    resolved to the SAME session id here and wrote it onto its sales. By the
+    time the desktop cashier pressed "Close Shift", the phone's cash was
+    already, permanently, part of the desktop drawer's `cash_sales`, and no
+    report-side filter could separate them again because nothing recorded that
+    they had ever been different.
+
+    So the fix has to be at write time, and it has to be the terminal: this
+    device stamps sales with the session THIS device opened, or with nothing.
+    `None` when this terminal has no open drawer is the correct answer and
+    always was -- a sale rung on a till with no drawer open is unattributed,
+    not somebody else's.
 
     A direct FK stamp, not a branch+time-range lookup at report time --
     see database/schema.py's RETAIL_SCHEMA_VERSION v10 comment for why a
@@ -597,12 +685,21 @@ def _open_cash_session_id(conn, cid, bid):
     (table not migrated yet, DB error, whatever) rather than let a cash-
     session lookup ever touch a sale or return's success -- see
     retail_cash_drawer_regression_test.py, which asserts create_sale's
-    response is byte-for-byte identical whether or not a session is open."""
+    response is byte-for-byte identical whether or not a session is open.
+    That posture is unchanged and matters MORE now, not less: the terminal
+    predicate is one more thing that can decline, and declining must still
+    cost the sale nothing.
+
+    `terminal` is injectable for tests that need to act as a second device
+    without a second process; it defaults to this device's real identity so no
+    production call site can accidentally supply the wrong one."""
     try:
+        term = _this_terminal() if terminal is _UNSET else _terminal(terminal)
         row = conn.execute(
-            "SELECT id FROM cash_sessions WHERE company_id=? AND branch_id=? AND status='open' "
+            "SELECT id FROM cash_sessions "
+            f"WHERE company_id=? AND branch_id=? AND {_TERMINAL_IS} AND status='open' "
             "ORDER BY opened_at DESC LIMIT 1",
-            (cid, bid)
+            (cid, bid, term)
         ).fetchone()
         return row['id'] if row else None
     except Exception:
@@ -3156,11 +3253,303 @@ def create_return():
 # all three of those routes had already been moved onto retail.reports -- and
 # it aged into cover for a real hole: `x-report` is the drawer's entire money
 # picture and it was readable by anyone who could reach the product at all.
-# It now carries retail.cash.close (see the route). The other three return
-# session STATE rather than a money report, and `current` in particular is
-# till plumbing the POS reads before it can sell, so they stay open; both
-# facts are now pinned from the live url_map rather than from a comment, by
-# retail_route_capability_matrix_test.py's exhaustive sweep.
+#
+# It then said the other three "return session STATE rather than a money
+# report", and THAT claim aged the same way, for the same reason: a
+# cash_sessions row carries `opening_float` and `variance`, which the runtime
+# money sweep's own vocabulary calls transacted money. It read as true only
+# because the sweep's fixture never opens a drawer, so every session response
+# it ever measured was `null` and no money key was there to find. All four now
+# carry retail.cash.close.
+#
+# WHAT THE CAPABILITY DOES NOT DECIDE is WHOSE drawer you may read. Phase 4
+# splits that from the gate: your own till's drawer is yours (cash.close is
+# enough), another till's is a report (retail.reports, or retail.cash.approve
+# because you cannot accept a variance you may not look at). See
+# _session_read_scope. Both facts are pinned from the live url_map rather than
+# from a comment, by retail_route_capability_matrix_test.py's exhaustive sweep
+# and by retail_drawer_terminal_scope_test.py.
+# ── The drawer's state machine, and what a caller is allowed to see ──────────
+#
+# THE ENDED / CLOSED SPLIT (design §6, retail v16).
+#
+#   open    the till is live. Sales stamp into it, movements are accepted.
+#   ended   a human counted the drawer and the count is locked. The drawer is
+#           out of service. The VARIANCE that count produced has NOT been
+#           accepted by anybody.
+#   closed  an authority holding retail.cash.approve accepted that variance.
+#
+# Ending and approving are two authorities on purpose, and the reason is
+# AUDIT-032, already closed once on the Owner side: a role that could both
+# count its own drawer and sign off its own shortfall is a role that can steal
+# in a straight line. `retail.cash.approve` is therefore withheld from every
+# role that holds `retail.cash.close`, manager included
+# (commercial_runtime/identity/user_accounts.py's ROLE_CAPABILITIES).
+#
+# THE CASHIER IS NEVER TRAPPED. Ending a shift requires retail.cash.close and
+# NOTHING ELSE -- not approval, not a variance of zero, not a manager standing
+# behind them. A till that refused to close on a short count would leave the
+# person who is short standing at it, which is both cruel and the fastest way
+# to teach a shop to stop counting honestly. They end; the shortfall is
+# recorded; somebody with the authority accepts it later.
+#
+# A caller who holds BOTH (the shop owner, and the admin bypass) ends and
+# approves in one act -- there is no second person for them to wait for, and
+# manufacturing a two-step ceremony for a one-person shop would only teach
+# everyone to click through it. It is not silent: `closed_by`/`closed_at`
+# record who accepted it, and the audit trail says the ender approved their
+# own count.
+#
+# FORCE-ENDED is the fourth shape and it is NOT a status of its own. A session
+# the shop never counted -- swept up by v16's business-date force-end, or left
+# standing between another shift and the terminal it is bound to -- is ENDED
+# with `ended_by='System'`, an `ended_reason` out of
+# schema.V16_UNVERIFIED_END_REASONS, and NULL `closing_float_counted` /
+# `variance`. Nobody counted it, so its variance is UNKNOWN, not zero.
+# Reporting 0.00 there would be the single worst thing this file could do,
+# because 0.00 is the number a shop reads as "the drawer was fine".
+#
+# The three statuses come from database/schema.py (CASH_SESSION_STATUS_*),
+# imported at the top of this file. They are the migration's vocabulary and
+# there is exactly one copy of it.
+
+#: What is known about the variance on a session, in one word.
+VARIANCE_PENDING = 'pending'        # still open; there is no count yet
+VARIANCE_NOT_COUNTED = 'not_counted'  # out of service, never counted: UNKNOWN
+VARIANCE_UNVERIFIED = 'unverified'  # counted, nobody has accepted it yet
+VARIANCE_APPROVED = 'approved'      # counted and accepted by cash.approve
+
+
+def _cash_session_columns(conn):
+    """The `cash_sessions` columns this database actually has.
+
+    Phase 4's routes are written against the retail v16 contract
+    (`ended_at`/`ended_by`, and `terminal_id` backfilled from the device
+    fingerprint) while the migration that adds `ended_at`/`ended_by` is landing
+    separately. Reading the real column list means this file works on both
+    sides of that landing instead of crashing on one of them, and it is the
+    same `PRAGMA table_info` idempotency check every migration in
+    database/schema.py already uses.
+
+    `terminal_id` is NOT conditional: v13 put it on cash_sessions years before
+    this phase, so every install that can run this code has it. Only the two
+    v16 columns are guarded.
+    """
+    try:
+        return {row[1] for row in conn.execute('PRAGMA table_info(cash_sessions)').fetchall()}
+    except Exception:
+        return set()
+
+
+def _ended_reason(sess):
+    """v16's `ended_reason`, or None on a database that predates the column."""
+    return (sess['ended_reason'] if 'ended_reason' in sess.keys() else None) or None
+
+
+def _is_force_closed(sess):
+    """True when this drawer went out of service without anybody counting it.
+
+    TWO INDEPENDENT SIGNALS, and they are meant to agree -- schema.py's
+    `_v16_force_end` docstring says so explicitly ("the reason text says
+    `unverified_*` and the empty figures say the same thing structurally, so a
+    consumer that reads either one gets the same answer"):
+
+      the REASON      `ended_reason` in V16_UNVERIFIED_END_REASONS. Explicit,
+                      and it survives an approval -- accepting an uncounted
+                      drawer moves `status` to closed and must not make the
+                      row look counted.
+      the FIGURES     `closing_float_counted IS NULL` on a drawer that has
+                      stopped trading. This is the one that works on a
+                      database where `ended_reason` does not exist yet, and
+                      the one that catches a force-end written by anything
+                      other than v16.
+
+    Either is sufficient. Requiring BOTH would mean a row where one signal was
+    lost reads as properly counted, which is the direction that costs money.
+    """
+    status = (sess['status'] if 'status' in sess.keys() else None) or ''
+    if status == CASH_SESSION_STATUS_OPEN:
+        return False
+    if _ended_reason(sess) in V16_UNVERIFIED_END_REASONS:
+        return True
+    return sess['closing_float_counted'] is None
+
+
+def _variance_state(sess):
+    """`(variance_status, variance, counted)` -- what is KNOWN, never inferred.
+
+    The whole point of returning a triple is that a force-closed session's
+    variance is None rather than 0.0. `sess['variance']` on such a row is NULL
+    already; this function's job is to make sure nothing downstream helpfully
+    coerces that NULL into a number on the way to a screen.
+    """
+    status = (sess['status'] if 'status' in sess.keys() else None) or ''
+    if status == CASH_SESSION_STATUS_OPEN:
+        return VARIANCE_PENDING, None, None
+    if _is_force_closed(sess):
+        return VARIANCE_NOT_COUNTED, None, None
+    counted = sess['closing_float_counted']
+    variance = sess['variance']
+    state = VARIANCE_APPROVED if status == CASH_SESSION_STATUS_CLOSED else VARIANCE_UNVERIFIED
+    return state, variance, counted
+
+
+def _terminal_short(value):
+    """A terminal id a human can read off a screen and say out loud.
+
+    Last four characters of the uuid, uppercased. NOT a new identity: the full
+    id travels beside it in `terminal_id` for anyone who needs to match the row
+    against device_registry.devices, exactly as `_bdi()`'s own comment in
+    subsystem-retail.js insists ("a truncated-only id cannot be matched against
+    device_registry.devices when someone actually needs to identify a
+    terminal"). None stays None -- an unidentified till must not be given a
+    label that implies it was identified.
+    """
+    term = _terminal(value)
+    if not term:
+        return None
+    return term.replace('-', '')[-4:].upper()
+
+
+def _cash_session_public(sess, this_terminal=_UNSET):
+    """The wire shape of one cash_sessions row.
+
+    Starts from the raw row -- every field this route family has ever returned
+    keeps its name and its meaning -- and adds the four facts a terminal-aware
+    drawer screen cannot work without:
+
+      terminal_id / terminal_short  WHICH till this drawer belongs to. The
+                                    phase exists because that was unanswerable.
+      is_this_terminal              whether the device asking owns it. The
+                                    screen needs this to tell "your drawer"
+                                    from "another till's drawer" without the
+                                    reader having to compare two uuids by eye.
+      variance_status               pending / not_counted / unverified /
+                                    approved -- see the block comment above.
+      force_closed                  nobody counted this one.
+      ended_reason                  WHY nobody counted it, when v16 ended the
+                                    shift: a business date that had already
+                                    passed, or a collision on one terminal.
+                                    Passed straight through rather than
+                                    translated here, because the screen is
+                                    where a reason becomes a sentence and the
+                                    catalogs are where it becomes Arabic.
+
+    `ended_at`/`ended_by` are surfaced from the v16 columns when they exist and
+    fall back to `closed_at`/`closed_by` when they do not, so a screen written
+    against the contract renders correctly on both sides of the migration
+    rather than showing a blank where the count happened.
+    """
+    row = dict(sess)
+    keys = set(sess.keys())
+    term = _terminal(row.get('terminal_id'))
+    mine = _this_terminal() if this_terminal is _UNSET else _terminal(this_terminal)
+
+    variance_status, variance, counted = _variance_state(sess)
+    forced = _is_force_closed(sess)
+
+    row['terminal_id'] = term
+    row['terminal_short'] = _terminal_short(term)
+    row['is_this_terminal'] = (term == mine)
+    row['variance_status'] = variance_status
+    row['force_closed'] = forced
+    # Re-stated from _variance_state rather than left as the raw column, so a
+    # force-closed row can never hand a screen a variance of 0.00 for a drawer
+    # that was never counted.
+    row['variance'] = variance
+    row['closing_float_counted'] = counted
+    row['ended_reason'] = _ended_reason(sess)
+
+    approved = (row.get('status') == CASH_SESSION_STATUS_CLOSED)
+    if 'ended_at' in keys:
+        # v16 has landed: two events, two column pairs. `ended_*` is the
+        # person who counted, `closed_*` is the person who accepted the count.
+        row['ended_at'] = row.get('ended_at')
+        row['ended_by'] = row.get('ended_by')
+        row['approved_at'] = row.get('closed_at') if approved else None
+        row['approved_by'] = row.get('closed_by') if approved else None
+    else:
+        # Pre-v16 there is ONE column pair for two events, so the end is
+        # recorded and the approval is not. Reporting the ender as the
+        # approver would be a fabricated audit fact -- the exact category of
+        # mistake schema.py's own migration docstring refuses when it declines
+        # to backfill `created_at_utc` from this machine's offset -- so this
+        # says None and means it. Who approved is still recoverable from
+        # audit_log (CASH_VARIANCE_APPROVED), it is simply not a column yet.
+        row['ended_at'] = None if forced else row.get('closed_at')
+        row['ended_by'] = None if forced else row.get('closed_by')
+        row['approved_at'] = None
+        row['approved_by'] = None
+    return row
+
+
+def _same_actor(sess, actor_uid):
+    """True when `actor_uid` is the person who ended this shift.
+
+    Reads `ended_by` where v16 has landed and `closed_by` where it has not --
+    which is the SAME fallback `_cash_session_public` documents, and it has to
+    be, or "did the ender approve their own count?" would be answered from one
+    column while the screen reported the other.
+    """
+    keys = sess.keys()
+    ender = (sess['ended_by'] if 'ended_by' in keys else None) or (
+        sess['closed_by'] if 'closed_by' in keys else None)
+    return bool(ender) and str(ender) == str(actor_uid)
+
+
+def _terminal_owns(sess, this_terminal=_UNSET):
+    """True when THIS device is the terminal the drawer belongs to.
+
+    The predicate every drawer WRITE is guarded by. Kept separate from
+    `_session_read_scope` on purpose: reads widen with authority, writes never
+    do, and one function returning both would make it one edit to give an
+    owner the ability to file a movement on somebody else's till.
+    """
+    term = _terminal(sess['terminal_id'] if 'terminal_id' in sess.keys() else None)
+    mine = _this_terminal() if this_terminal is _UNSET else _terminal(this_terminal)
+    return term == mine
+
+
+def _session_read_scope(sess, this_terminal=_UNSET):
+    """`(is_mine, may_read)` for one session and the CURRENT request.
+
+    THE RULE, stated once here and applied by every drawer read below:
+
+      your OWN till's drawer is yours          -- retail.cash.close is enough,
+                                                  which is what the route
+                                                  decorator already required
+      ANOTHER till's drawer is a REPORT        -- retail.reports, or
+                                                  retail.cash.approve because
+                                                  you cannot accept a variance
+                                                  you are not allowed to look at
+
+    This is the same distinction cash_session_x_report's own docstring already
+    draws for its capability choice ("the person who counts the drawer is the
+    person who closes it"), carried one step further now that "the drawer" is a
+    specific till rather than a whole branch. Without it, `retail.cash.close`
+    -- a CASHIER default -- would read every till in the shop by id, which is
+    exactly the disclosure the x-report gate was added to stop, reopened
+    through a different door.
+    """
+    term = _terminal(sess['terminal_id'] if 'terminal_id' in sess.keys() else None)
+    mine = _this_terminal() if this_terminal is _UNSET else _terminal(this_terminal)
+    is_mine = (term == mine)
+    if is_mine:
+        return True, True
+    return False, (session_has_capability(CAP_REPORTS)
+                   or session_has_capability(CAP_CASH_APPROVE))
+
+
+#: The refusal a caller gets for another till's drawer. Its own sentence, not
+#: CAPABILITY_DENIED_MESSAGE: "you may not do this" would send a cashier to
+#: their owner asking for a permission that would not have helped, when the
+#: real answer is "that drawer belongs to a different till".
+FOREIGN_DRAWER_MESSAGE = (
+    'That cash drawer belongs to a different terminal. Ask the shop owner to '
+    'review it.'
+)
+
+
 def _cash_session_report(conn, cid, sess):
     """Live X/Z math for one cash_sessions row -- a pure read, safe to call
     from both GET .../x-report (mid-shift, non-destructive, callable any
@@ -3194,7 +3583,13 @@ def _cash_session_report(conn, cid, sess):
     """
     session_id = sess['id']
     bid = sess['branch_id']
-    window_end = sess['closed_at'] or _now()
+    keys = set(sess.keys())
+    session_terminal = _terminal(sess['terminal_id'] if 'terminal_id' in keys else None)
+    window_end = (
+        sess['closed_at']
+        or (sess['ended_at'] if 'ended_at' in keys else None)
+        or _now()
+    )
 
     cash_sales = conn.execute("""
         SELECT COALESCE(SUM(p.amount),0) FROM payments p
@@ -3225,12 +3620,62 @@ def _cash_session_report(conn, cid, sess):
         + movements['float_in'] - movements['float_out']
         + movements['paid_in'] - movements['paid_out']
     )
+
+    # ── FOREIGN-TERMINAL CONTAMINATION, COUNTED RATHER THAN HIDDEN ───────────
+    #
+    # `_open_cash_session_id` now stamps sales with THIS terminal's session, so
+    # nothing written from today on can land in another till's drawer. What
+    # that fix cannot do is un-write the rows already stamped the old way: on
+    # any shop that has been running more than one device, every session opened
+    # before Phase 4 has other terminals' sales inside it, permanently, and the
+    # arithmetic above will happily total them because it is summing exactly
+    # the rows the FK says belong here.
+    #
+    # A number that is wrong for a knowable reason must SAY SO. So the report
+    # counts the sales in this session whose terminal is provably a DIFFERENT
+    # one and reports that count beside the money, and the drawer screen shows
+    # it. This is the honest half of the phase: the going-forward bug is fixed,
+    # the historical contamination is disclosed, and nobody reads a legacy Z
+    # report as clean because the code that produced it had been patched.
+    #
+    # 'provably different' is doing real work. A sale with terminal_id NULL --
+    # every sale rung before v13 -- is NOT evidence of another till; it is
+    # evidence of nothing, and counting it as foreign would put a permanent
+    # false alarm on every shop with history. It is counted separately, as
+    # unattributed, which is what it is.
+    foreign_sales = 0
+    unattributed_sales = 0
+    try:
+        row = conn.execute("""
+            SELECT
+              SUM(CASE WHEN s.terminal_id IS NOT NULL AND TRIM(s.terminal_id) <> ''
+                        AND s.terminal_id IS NOT ? THEN 1 ELSE 0 END) AS foreign_n,
+              SUM(CASE WHEN s.terminal_id IS NULL OR TRIM(s.terminal_id) = ''
+                       THEN 1 ELSE 0 END) AS unattributed_n
+            FROM sales s
+            WHERE s.company_id=? AND s.session_id=?
+        """, (session_terminal, cid, session_id)).fetchone()
+        foreign_sales = int(row['foreign_n'] or 0)
+        unattributed_sales = int(row['unattributed_n'] or 0)
+    except Exception:
+        # Same posture as _open_cash_session_id: a disclosure ABOUT the numbers
+        # must never be able to take the numbers down with it. -1 says "not
+        # determined" and is distinguishable from 0, "determined to be clean" --
+        # which is the whole distinction this block exists to preserve.
+        foreign_sales = -1
+        unattributed_sales = -1
+
     return {
         'session_id': session_id, 'status': sess['status'],
+        'terminal_id': session_terminal,
+        'terminal_short': _terminal_short(session_terminal),
+        'is_this_terminal': (session_terminal == _this_terminal()),
         'opening_float': opening_float,
         'cash_sales': _money(cash_sales), 'cash_refunds': _money(cash_refunds),
         'movements': {k: _money(v) for k, v in movements.items()},
         'expected_cash': expected,
+        'foreign_terminal_sales': foreign_sales,
+        'unattributed_sales': unattributed_sales,
         'window_start': sess['opened_at'], 'window_end': window_end,
     }
 
@@ -3263,14 +3708,24 @@ def open_cash_session():
             conn.close()
             return jsonify({'status': 'error', 'message': 'Opening float cannot be negative.'}), 400
 
+        # ONE OPEN DRAWER PER TERMINAL, not per branch. The branch-wide version
+        # of this check is the front door of the bug this phase exists to fix:
+        # it refused a second till in the same shop a drawer of its own, which
+        # left that till selling into somebody else's, which is how a phone's
+        # takings ended up in the desktop's Z report.
+        terminal = _this_terminal()
         existing = conn.execute(
-            "SELECT id FROM cash_sessions WHERE company_id=? AND branch_id=? AND status='open'",
-            (cid, bid)
+            "SELECT id FROM cash_sessions "
+            f"WHERE company_id=? AND branch_id=? AND {_TERMINAL_IS} AND status='open'",
+            (cid, bid, terminal)
         ).fetchone()
         if existing:
             conn.close()
-            return jsonify({'status': 'error', 'message': 'A cash session is already open for this branch.',
-                             'data': {'session_id': existing['id']}}), 409
+            return jsonify({'status': 'error',
+                            'message': 'A cash session is already open on this terminal.',
+                            'data': {'session_id': existing['id'],
+                                     'terminal_id': terminal,
+                                     'terminal_short': _terminal_short(terminal)}}), 409
 
         session_id = str(_uuid.uuid4())
         now_local = _now()
@@ -3284,7 +3739,16 @@ def open_cash_session():
         # `opened_by` keeps the local user id, untouched. `created_at_utc` sits
         # beside `opened_at`, which is _now() -- local, like every other clock
         # in this ledger.
-        actor, terminal, utc_now = _stamp()
+        #
+        # `terminal_id` is written from the SAME `terminal` local the
+        # duplicate check above queried on, NOT from _stamp()'s second read of
+        # the device identity. They are the same value in every ordinary run --
+        # and "in every ordinary run" is exactly the property that makes a
+        # disagreement here impossible to find later. A row scoped by one
+        # reading and stamped by another is a drawer that cannot be found by
+        # the terminal that owns it, which is this phase's bug wearing a
+        # different hat. `_stamp()`'s terminal is deliberately discarded.
+        actor, _stamp_terminal, utc_now = _stamp()
         try:
             conn.execute("""
                 INSERT INTO cash_sessions (id,company_id,branch_id,opened_by,opened_at,opening_float,status,
@@ -3293,16 +3757,47 @@ def open_cash_session():
             """, (session_id, cid, bid, _uid(), now_local, opening_float,
                   actor, terminal, utc_now))
         except sqlite3.IntegrityError:
-            # idx_cash_sessions_one_open_per_branch backstop -- a concurrent
-            # open() for the same branch won the race between the SELECT
-            # above and this INSERT.
+            # The partial UNIQUE index backstop. WHICH index fired depends on
+            # whether retail v16 has landed, and the two mean different things,
+            # so the refusal says which:
+            #
+            #   pre-v16   idx_cash_sessions_one_open_per_branch -- (company,
+            #             branch). Another TERMINAL holds this branch's only
+            #             drawer. The SELECT above passed because this terminal
+            #             genuinely has none; the database is still enforcing
+            #             the branch-wide rule Phase 4 replaces. Telling the
+            #             cashier "already open on this terminal" there would
+            #             be a flat lie, and would send them looking for a
+            #             drawer that is not on their screen.
+            #
+            #   post-v16  UNIQUE(company_id, terminal_id) WHERE status='open'
+            #             -- a concurrent open() from this same terminal won
+            #             the race between the SELECT and this INSERT.
+            conn.rollback()
+            other = conn.execute(
+                "SELECT id, terminal_id FROM cash_sessions "
+                f"WHERE company_id=? AND branch_id=? AND status='open' AND NOT ({_TERMINAL_IS}) "
+                "LIMIT 1",
+                (cid, bid, terminal)
+            ).fetchone()
             conn.close()
-            return jsonify({'status': 'error', 'message': 'A cash session is already open for this branch.'}), 409
-        _audit(conn, 'CASH_SESSION_OPENED', 'cash_session', session_id, f'opening_float={opening_float}')
+            if other is not None:
+                return jsonify({
+                    'status': 'error',
+                    'message': ('Another terminal already has the drawer open on this branch, '
+                                'and this install still enforces one drawer per branch. '
+                                'Per-terminal drawers need the retail v16 migration.'),
+                    'data': {'blocking_terminal_short':
+                             _terminal_short(other['terminal_id'])},
+                }), 409
+            return jsonify({'status': 'error',
+                            'message': 'A cash session is already open on this terminal.'}), 409
+        _audit(conn, 'CASH_SESSION_OPENED', 'cash_session', session_id,
+               f'opening_float={opening_float} terminal={_terminal_short(terminal)}')
         conn.commit()
         sess = conn.execute("SELECT * FROM cash_sessions WHERE id=?", (session_id,)).fetchone()
         conn.close()
-        return jsonify({'status': 'success', 'data': dict(sess)})
+        return jsonify({'status': 'success', 'data': _cash_session_public(sess, terminal)})
     except Exception as e:
         conn.rollback(); conn.close()
         return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -3310,46 +3805,135 @@ def open_cash_session():
 @retail_bp.route('/cash-sessions/current', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
+# NOW GATED, and it used to be deliberately open ("till plumbing the POS reads
+# before it can sell"). Two things changed. This response is a session row, and
+# a session row carries `opening_float` and `variance` -- transacted money, by
+# the runtime sweep's own vocabulary -- so "it returns state, not a report" was
+# only ever true while the drawer was empty. And the answer it gives is now
+# THIS TERMINAL's drawer, which is a thing only somebody who works this drawer
+# has any use for. retail.cash.close is the code for exactly that, it is a
+# cashier default, and the POS is driven by people who hold it. A till operator
+# who does NOT hold it now gets a clean 403 the drawer bar renders as "you do
+# not operate a drawer on this terminal" -- which is the truth, and is
+# distinguishable from both "no drawer is open" and "could not load".
+@mt_require_capability(CAP_CASH_CLOSE)
 def current_cash_session():
     cid = _cid()
     conn = get_retail_conn()
     bid = int(request.args.get('branch_id') or _default_branch(conn, cid))
+    terminal = _this_terminal()
+    # THE ROUTE THE POS ASKS ON EVERY RENDER, and the one that used to answer
+    # "the branch's open drawer" -- so a second till, which had never opened
+    # anything, was shown the first till's drawer, its float, and a "Close
+    # Shift (Z)" button wired to it.
     sess = conn.execute(
-        "SELECT * FROM cash_sessions WHERE company_id=? AND branch_id=? AND status='open'",
-        (cid, bid)
+        "SELECT * FROM cash_sessions "
+        f"WHERE company_id=? AND branch_id=? AND {_TERMINAL_IS} AND status='open'",
+        (cid, bid, terminal)
     ).fetchone()
+    # Counted whether or not THIS terminal has a drawer: "no drawer here, and
+    # two other tills are trading" is a materially different screen from "no
+    # drawer anywhere", and the difference is what tells a cashier they are
+    # about to sell into nothing while the shop is open.
+    others = conn.execute(
+        "SELECT COUNT(*) FROM cash_sessions "
+        f"WHERE company_id=? AND branch_id=? AND status='open' AND NOT ({_TERMINAL_IS})",
+        (cid, bid, terminal)
+    ).fetchone()[0]
     conn.close()
-    return jsonify({'status': 'success', 'data': dict(sess) if sess else None})
+    return jsonify({
+        'status': 'success',
+        'data': _cash_session_public(sess, terminal) if sess else None,
+        'terminal_id': terminal,
+        'terminal_short': _terminal_short(terminal),
+        'other_terminals_open': int(others or 0),
+    })
 
 @retail_bp.route('/cash-sessions', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
+# Gated for the same reason `current` is, and harder: this one returns a LIST
+# of drawers with `variance` and `opening_float` on every row. Ungated, it
+# handed anybody who could reach the product every till's takings and every
+# till's shortfall, company-wide, in one unauthenticated-except-for-login GET.
+# The runtime money sweep could not see it because its fixture never opens a
+# drawer, so every row it swept was empty and every money key was absent --
+# a fixture that manufactured the state that hid the hole.
+@mt_require_capability(CAP_CASH_CLOSE)
 def list_cash_sessions():
+    """This terminal's own drawer history -- widened to the whole shop for a
+    caller who holds the authority to look at other tills.
+
+    NOT a query parameter. `?scope=all` would put the decision in the URL,
+    where the only thing standing between a cashier and every till's variance
+    is remembering to check a string. The widening IS the capability: hold
+    retail.reports (you may see the shop's numbers) or retail.cash.approve (you
+    cannot accept a variance you may not look at), and you see every terminal;
+    hold neither and you see the drawers this terminal worked. Every row says
+    which till it belongs to either way, so the widened list is legible rather
+    than a pile of uuids.
+    """
     cid = _cid()
-    limit = int(request.args.get('limit', 50))
+    # Clamped, not `int(...)`. The route it replaces read `int(request.args
+    # .get('limit', 50))`, which SQLite reads as UNBOUNDED for `?limit=-1` and
+    # which raises a 500 on `?limit=abc` -- both of which clamp_page_limit was
+    # written for, and neither of which stops being true because the table is
+    # cash drawers rather than sales.
+    limit = clamp_page_limit(request.args.get('limit', 50), 50, 200)
+    terminal = _this_terminal()
+    all_terminals = (session_has_capability(CAP_REPORTS)
+                     or session_has_capability(CAP_CASH_APPROVE))
     conn = get_retail_conn()
-    rows = conn.execute(
-        "SELECT * FROM cash_sessions WHERE company_id=? ORDER BY opened_at DESC LIMIT ?",
-        (cid, limit)
-    ).fetchall()
+    if all_terminals:
+        rows = conn.execute(
+            "SELECT * FROM cash_sessions WHERE company_id=? ORDER BY opened_at DESC LIMIT ?",
+            (cid, limit)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM cash_sessions "
+            f"WHERE company_id=? AND {_TERMINAL_IS} ORDER BY opened_at DESC LIMIT ?",
+            (cid, terminal, limit)
+        ).fetchall()
     conn.close()
-    return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
+    return jsonify({
+        'status': 'success',
+        'data': [_cash_session_public(r, terminal) for r in rows],
+        'terminal_id': terminal,
+        'terminal_short': _terminal_short(terminal),
+        'scope': 'all_terminals' if all_terminals else 'this_terminal',
+        # So the screen can decide whether to OFFER approval rather than
+        # offering it to everyone and letting the 403 explain. This is a
+        # rendering hint and nothing else: /approve re-checks the capability
+        # itself, because a hint the client could lie about is not a gate.
+        'may_approve': session_has_capability(CAP_CASH_APPROVE),
+    })
 
 @retail_bp.route('/cash-sessions/<session_id>', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
+@mt_require_capability(CAP_CASH_CLOSE)
 def get_cash_session(session_id):
     cid = _cid()
     conn = get_retail_conn()
     sess = conn.execute("SELECT * FROM cash_sessions WHERE id=? AND company_id=?", (session_id, cid)).fetchone()
     if not sess:
         conn.close(); return jsonify({'status': 'error', 'message': 'Cash session not found.'}), 404
+    # COMPANY FIRST, TERMINAL SECOND, and the two refusals are deliberately
+    # different. Another company's session is 404: its existence is not this
+    # tenant's business. Another TERMINAL's session inside your own shop is
+    # 403: it exists, you are simply not the till that worked it, and a 404
+    # there would send a cashier hunting for a drawer their own owner can see.
+    _mine, may_read = _session_read_scope(sess)
+    if not may_read:
+        conn.close()
+        return jsonify({'status': 'error', 'message': FOREIGN_DRAWER_MESSAGE}), 403
     movements = conn.execute(
         "SELECT * FROM cash_movements WHERE session_id=? ORDER BY created_at", (session_id,)
     ).fetchall()
     conn.close()
     return jsonify({'status': 'success', 'data': {
-        'session': dict(sess), 'movements': [dict(m) for m in movements],
+        'session': _cash_session_public(sess), 'movements': [dict(m) for m in movements],
     }})
 
 @retail_bp.route('/cash-sessions/<session_id>/movements', methods=['POST'])
@@ -3365,7 +3949,18 @@ def create_cash_movement(session_id):
         sess = conn.execute("SELECT * FROM cash_sessions WHERE id=? AND company_id=?", (session_id, cid)).fetchone()
         if not sess:
             conn.close(); return jsonify({'status': 'error', 'message': 'Cash session not found.'}), 404
-        if sess['status'] != 'open':
+        # WRITES ARE OWN-TERMINAL ONLY, with no capability that widens them --
+        # unlike the reads above, where retail.reports opens the whole shop.
+        # Cash physically leaving a drawer can only be recorded by the device
+        # standing at that drawer; a float_out filed from the back office
+        # against a till across the room is a movement nobody witnessed, and it
+        # lands in that till's expected-cash total as though somebody had. The
+        # owner's authority here is to APPROVE what the till recorded, not to
+        # record it on the till's behalf.
+        if not _terminal_owns(sess):
+            conn.close()
+            return jsonify({'status': 'error', 'message': FOREIGN_DRAWER_MESSAGE}), 403
+        if sess['status'] != CASH_SESSION_STATUS_OPEN:
             conn.close(); return jsonify({'status': 'error', 'message': 'Cash session is closed.'}), 409
 
         mtype = data.get('type')
@@ -3428,15 +4023,52 @@ def cash_session_x_report(session_id):
     (frontend/cash-drawer.js). Putting a shift's own numbers behind a
     manager-and-above code would have gated the reading behind an authority
     the person doing the counting does not have. Matching close_cash_session's
-    authority keeps the report and the act it feeds on one permission."""
+    authority keeps the report and the act it feeds on one permission.
+
+    WHAT PHASE 4 ADDS: that reasoning is about YOUR drawer. Carried unchanged
+    onto a route that can now name a specific till, retail.cash.close -- a
+    CASHIER default -- would read every other till's takings, refunds, paid-outs
+    and variance by id. That is the same disclosure this route was gated to
+    stop, reached through a different door. So another terminal's X report is
+    a REPORT: retail.reports, or retail.cash.approve (you cannot accept a
+    variance you may not look at). See _session_read_scope.
+
+    A BRAND-NEW SHOP COULD NOT READ ITS OWN FIRST DRAWER -- gap reproduced
+    against a fresh install with zero sales. `_cash_session_report` reads
+    `payments.direction`/`payments.related_type`, two columns that only exist
+    once `_ensure_credit_schema()` has run its lazy ALTER TABLE pass -- and
+    nothing on the drawer's read path ever called it, because credit/AR-AP
+    was built after cash drawers were and nobody noticed the drawer routes
+    never got the same bootstrap every payment-touching route already has
+    (see the many `_ensure_credit_schema(conn)` call sites elsewhere in this
+    file). On a fresh `payments` table -- id/company_id/sale_id/method/
+    amount/reference/status/idempotency_key/created_at/uid, no `direction`
+    -- this route raised an UNCAUGHT sqlite3.OperationalError('no such
+    column: p.direction'): no try/except existed here at all, so the
+    JSON-consuming frontend (frontend/cash-drawer.js, which fetches this
+    route to build the close-out modal) got Flask's default error response
+    instead of a body it could read. Calling `_ensure_credit_schema` here,
+    before the query that needs its columns, is the fix; catching the
+    (now much less likely, but not impossible) failure and answering with a
+    JSON envelope instead of an uncaught exception closes the rest of the
+    gap -- see close_cash_session for the identical fix on the write side.
+    """
     cid = _cid()
     conn = get_retail_conn()
-    sess = conn.execute("SELECT * FROM cash_sessions WHERE id=? AND company_id=?", (session_id, cid)).fetchone()
-    if not sess:
-        conn.close(); return jsonify({'status': 'error', 'message': 'Cash session not found.'}), 404
-    report = _cash_session_report(conn, cid, sess)
-    conn.close()
-    return jsonify({'status': 'success', 'data': report})
+    try:
+        _ensure_credit_schema(conn)
+        sess = conn.execute("SELECT * FROM cash_sessions WHERE id=? AND company_id=?", (session_id, cid)).fetchone()
+        if not sess:
+            return jsonify({'status': 'error', 'message': 'Cash session not found.'}), 404
+        _mine, may_read = _session_read_scope(sess)
+        if not may_read:
+            return jsonify({'status': 'error', 'message': FOREIGN_DRAWER_MESSAGE}), 403
+        report = _cash_session_report(conn, cid, sess)
+        return jsonify({'status': 'success', 'data': report})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    finally:
+        conn.close()
 
 @retail_bp.route('/cash-sessions/<session_id>/close', methods=['POST'])
 @mt_login_required
@@ -3444,10 +4076,67 @@ def cash_session_x_report(session_id):
 @require_license_capability("retail.cash_session.close", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
 @mt_require_capability(CAP_CASH_CLOSE)
 def close_cash_session(session_id):
+    """END this terminal's shift: count the drawer, lock the count.
+
+    ── retail.cash.close AND NOTHING MORE, ON PURPOSE ───────────────────────
+    Ending a shift is not the same act as accepting what the count says, and
+    conflating them is how a till traps the person standing at it. A cashier
+    who is $40 short must be able to finish, hand over and go home; the money
+    is already gone and holding the drawer open does not bring it back. So
+    this route asks for the code every cashier holds, and it NEVER refuses a
+    close because of what the variance turned out to be.
+
+    What it does instead is record whether the variance has been ACCEPTED,
+    and by whom, in `status`:
+
+      'ended'   the count is locked, the drawer is out of service, and the
+                variance is UNVERIFIED. This is the ordinary outcome for a
+                cashier or a manager -- retail.cash.approve is withheld from
+                every role that can close, which is AUDIT-032's whole
+                mechanism (see user_accounts.ROLE_CAPABILITIES).
+      'closed'  the caller also holds retail.cash.approve, so the count was
+                accepted in the same act by somebody entitled to accept it.
+                In practice this is the shop owner, who has no second person
+                to wait for. Recorded, not silent: `closed_by`/`closed_at`
+                name the acceptor and the audit line says the ender approved
+                their own count.
+
+    Both are terminal for the till in exactly the way `closed` always was --
+    `current` stops returning the session, movements are refused -- so nothing
+    downstream that asked "is this drawer still live?" changes meaning.
+    """
     data = request.json or {}
     cid = _cid()
+    # Read the approval authority ONCE, before the transaction, and carry the
+    # verdict. Calling session_has_capability() twice (once to choose the
+    # status, once to decide what to write) is two registry reads that could
+    # disagree across a permission change mid-request, and the row would then
+    # say 'closed' with no acceptor recorded -- an approval attributed to
+    # nobody, which is worse than no approval at all.
+    may_approve = session_has_capability(CAP_CASH_APPROVE)
     conn = get_retail_conn()
     try:
+        # A BRAND-NEW SHOP COULD NOT CLOSE ITS FIRST DRAWER -- reproduced
+        # against a fresh install with zero sales. `_cash_session_report`
+        # below (used to compute this close's own expected-cash figure)
+        # reads `payments.direction`/`payments.related_type`, columns added
+        # lazily by `_ensure_credit_schema()`; nothing on the drawer's write
+        # path ever called it. On a fresh `payments` table this raised
+        # sqlite3.OperationalError('no such column: p.direction'), caught by
+        # the generic `except Exception as e` below and returned as
+        # `{'message': 'no such column: p.direction'}` -- a raw SQL string in
+        # a customer-facing body -- AND the drawer could never be closed at
+        # all: the one promise Phase 4 makes.
+        #
+        # Called HERE, before BEGIN IMMEDIATE, deliberately: `_ensure_credit_
+        # schema` runs its own ALTER TABLE / CREATE INDEX statements and
+        # commits them (see its own docstring), and running that INSIDE this
+        # route's immediate transaction would commit -- and so silently end
+        # -- that transaction early, breaking the "same snapshot" guarantee
+        # the BEGIN IMMEDIATE comment right below exists to make. Matches the
+        # identical fix (and reasoning) in cash_session_x_report above, the
+        # other route that calls `_cash_session_report`.
+        _ensure_credit_schema(conn)
         # BEGIN IMMEDIATE: the expected-cash figure locked into this Z report
         # must be computed from the SAME snapshot the close actually commits
         # against -- a movement or sale racing in between "compute expected"
@@ -3458,7 +4147,14 @@ def close_cash_session(session_id):
         if not sess:
             conn.rollback(); conn.close()
             return jsonify({'status': 'error', 'message': 'Cash session not found.'}), 404
-        if sess['status'] != 'open':
+        # A drawer is counted by the till it belongs to. Same rule as
+        # create_cash_movement, and no authority widens it: a closing count
+        # filed from another device is a count of a drawer the device cannot
+        # see, and it would overwrite the real one.
+        if not _terminal_owns(sess):
+            conn.rollback(); conn.close()
+            return jsonify({'status': 'error', 'message': FOREIGN_DRAWER_MESSAGE}), 403
+        if sess['status'] != CASH_SESSION_STATUS_OPEN:
             conn.rollback(); conn.close()
             return jsonify({'status': 'error', 'message': 'Cash session is already closed.'}), 409
 
@@ -3475,21 +4171,57 @@ def close_cash_session(session_id):
         expected = report['expected_cash']
         variance = _money(counted - expected)
         now_local = _now()
+        new_status = CASH_SESSION_STATUS_CLOSED if may_approve else CASH_SESSION_STATUS_ENDED
+        actor_uid = _uid()
 
-        conn.execute("""
-            UPDATE cash_sessions SET status='closed', closed_by=?, closed_at=?,
-                   closing_float_counted=?, closing_float_expected=?, variance=?
-            WHERE id=?
-        """, (_uid(), now_local, counted, expected, variance, session_id))
-        _audit(conn, 'CASH_SESSION_CLOSED', 'cash_session', session_id,
-               f'counted={counted} expected={expected} variance={variance}')
+        # WHICH COLUMNS EXIST decides how the two events are recorded, and both
+        # spellings are honest about what they can prove:
+        #
+        #   with v16     `ended_by`/`ended_at` record the person who counted.
+        #                `closed_by`/`closed_at` stay NULL unless this same
+        #                caller also accepted the count, in which case both
+        #                pairs are written in this one statement.
+        #   without v16  there is one column pair for two events, so it records
+        #                the ender -- the fact that actually happened here --
+        #                and approve_cash_variance leaves it alone rather than
+        #                overwriting the ender with the acceptor.
+        columns = _cash_session_columns(conn)
+        if 'ended_at' in columns and 'ended_by' in columns:
+            conn.execute("""
+                UPDATE cash_sessions SET status=?, ended_by=?, ended_at=?,
+                       closed_by=?, closed_at=?,
+                       closing_float_counted=?, closing_float_expected=?, variance=?
+                WHERE id=?
+            """, (new_status, actor_uid, now_local,
+                  actor_uid if may_approve else None, now_local if may_approve else None,
+                  counted, expected, variance, session_id))
+        else:
+            conn.execute("""
+                UPDATE cash_sessions SET status=?, closed_by=?, closed_at=?,
+                       closing_float_counted=?, closing_float_expected=?, variance=?
+                WHERE id=?
+            """, (new_status, actor_uid, now_local, counted, expected, variance, session_id))
+
+        _audit(conn, 'CASH_SESSION_ENDED', 'cash_session', session_id,
+               f'counted={counted} expected={expected} variance={variance} '
+               f'status={new_status} terminal={_terminal_short(sess["terminal_id"])}')
+        if may_approve:
+            # Written as its OWN audit line even though it happened in the same
+            # request. "The person who counted also accepted it" is the fact
+            # AUDIT-032 is about, and a fact that only exists as an implication
+            # of two other fields is a fact nobody will ever query for.
+            _audit(conn, 'CASH_VARIANCE_APPROVED', 'cash_session', session_id,
+                   f'variance={variance} approved_by={actor_uid} self_approved=1')
         conn.commit()
 
         sess = conn.execute("SELECT * FROM cash_sessions WHERE id=?", (session_id,)).fetchone()
         conn.close()
-        report['status'] = 'closed'
+        report['status'] = new_status
         report['closing_float_counted'] = counted
         report['variance'] = variance
+        report['variance_status'] = (
+            VARIANCE_APPROVED if may_approve else VARIANCE_UNVERIFIED)
+        report['self_approved'] = bool(may_approve)
 
         # WhatsApp shift-close report -- best-effort, never blocks or fails
         # the close that already committed above. Opens its OWN connection
@@ -3510,7 +4242,130 @@ def close_cash_session(session_id):
             import logging
             logging.getLogger(__name__).warning(f"WhatsApp shift-close report enqueue failed: {e}")
 
-        return jsonify({'status': 'success', 'data': {'session': dict(sess), 'report': report}})
+        return jsonify({'status': 'success',
+                        'data': {'session': _cash_session_public(sess), 'report': report}})
+    except Exception as e:
+        conn.rollback(); conn.close()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@retail_bp.route('/cash-sessions/<session_id>/approve', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.cash_session.close", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+# retail.cash.approve, and this is the FIRST route in the product to carry it.
+# The code has existed since the capability pass, seeded on every account and
+# granted to nobody but the owner, with a comment on the eight-code map saying
+# "NO ROUTE TODAY, and none is invented here: cash_sessions has only
+# open/closed, with no state for 'closed, variance not yet accepted' until
+# retail v16 adds the ENDED/CLOSED split". That state now exists, so the route
+# does too.
+#
+# Withheld from ROLE_MANAGER as well as ROLE_CASHIER, deliberately, and that is
+# the entire guard: a role holding this alongside retail.cash.close could count
+# its own drawer and sign off its own shortfall in two clicks with nobody else
+# involved. That is AUDIT-032, closed once already on the Owner side. Nothing
+# below re-checks it -- the decorator IS the check, and the seeding table is
+# where the property lives.
+@mt_require_capability(CAP_CASH_APPROVE)
+def approve_cash_variance(session_id):
+    """Accept the variance an ENDED shift recorded, moving it to CLOSED.
+
+    NOT terminal-scoped, and that asymmetry is the point of the whole split.
+    Every WRITE to a live drawer is own-terminal-only, because only the device
+    at the till can witness the cash. Approval is the opposite kind of act: it
+    is somebody in the back office, or at another till entirely, looking at a
+    count that has already been locked and saying yes. Requiring them to walk
+    to the terminal would mean the only person who could approve a shortfall is
+    the person standing where the shortfall happened.
+
+    Company scoping still applies in full -- a session from another tenant is
+    404, exactly as everywhere else in this file.
+    """
+    data = request.json or {}
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        sess = conn.execute("SELECT * FROM cash_sessions WHERE id=? AND company_id=?",
+                            (session_id, cid)).fetchone()
+        if not sess:
+            conn.rollback(); conn.close()
+            return jsonify({'status': 'error', 'message': 'Cash session not found.'}), 404
+
+        status = sess['status']
+        if status == CASH_SESSION_STATUS_OPEN:
+            conn.rollback(); conn.close()
+            return jsonify({'status': 'error',
+                            'message': 'This drawer is still open. It has to be counted before '
+                                       'its variance can be accepted.'}), 409
+        if status == CASH_SESSION_STATUS_CLOSED:
+            conn.rollback(); conn.close()
+            return jsonify({'status': 'error',
+                            'message': 'This variance has already been accepted.'}), 409
+
+        # A DRAWER NOBODY COUNTED CANNOT BE RUBBER-STAMPED BY ACCIDENT.
+        #
+        # A force-closed session -- swept up by v16's business-date force-close,
+        # or abandoned on a till that died -- has NO count and therefore an
+        # UNKNOWN variance, not a variance of zero. Accepting one is a real and
+        # legitimate act (the owner acknowledges the shop will never know what
+        # was in that drawer), but it is a different act from accepting a
+        # counted shortfall, and it must not be reachable by the same one-click
+        # path. So it needs saying out loud, in the request body.
+        #
+        # The explicit flag is here rather than as a confirm dialog in the UI
+        # because a client-side confirmation is not a guard -- this route is
+        # reachable without the client.
+        if _is_force_closed(sess):
+            if not data.get('acknowledge_uncounted'):
+                conn.rollback(); conn.close()
+                return jsonify({
+                    'status': 'error',
+                    'message': ('This drawer was never counted, so its variance is unknown. '
+                                'Accepting it records that the shop will never know what was '
+                                'in it -- confirm that explicitly.'),
+                    'data': {'requires': 'acknowledge_uncounted',
+                             'variance_status': VARIANCE_NOT_COUNTED},
+                }), 409
+
+        actor_uid = _uid()
+        now_local = _now()
+        columns = _cash_session_columns(conn)
+        if 'ended_at' in columns and 'ended_by' in columns:
+            # v16: `closed_*` is the acceptor's slot and `ended_*` already
+            # holds the person who counted, so writing here loses nothing.
+            conn.execute(
+                "UPDATE cash_sessions SET status=?, closed_by=?, closed_at=? WHERE id=?",
+                (CASH_SESSION_STATUS_CLOSED, actor_uid, now_local, session_id))
+        else:
+            # Pre-v16 `closed_by`/`closed_at` are the only record of WHO ENDED
+            # the shift. Overwriting them with the acceptor would destroy the
+            # one identity this row has in order to store a second one -- so
+            # the status moves and the acceptor is recorded in the audit trail
+            # only. Stated in the response too, so no caller reads a missing
+            # `approved_by` as an approval that never happened.
+            conn.execute("UPDATE cash_sessions SET status=? WHERE id=?",
+                         (CASH_SESSION_STATUS_CLOSED, session_id))
+
+        _audit(conn, 'CASH_VARIANCE_APPROVED', 'cash_session', session_id,
+               f'variance={sess["variance"]} approved_by={actor_uid} '
+               f'self_approved={1 if _same_actor(sess, actor_uid) else 0} '
+               f'uncounted={1 if _is_force_closed(sess) else 0}')
+        conn.commit()
+        approved = conn.execute("SELECT * FROM cash_sessions WHERE id=?", (session_id,)).fetchone()
+        conn.close()
+        return jsonify({'status': 'success', 'data': {
+            'session': _cash_session_public(approved),
+            # SURFACED, NOT BLOCKED. In a one-person shop the owner is the only
+            # authority there is, and refusing a self-approval would leave that
+            # shop with a drawer it can never close. In a shop with staff it is
+            # information the owner wants, so it is reported here and written
+            # into the audit line above rather than inferred by whoever
+            # eventually reads the row.
+            'self_approved': _same_actor(sess, actor_uid),
+            'approver_recorded': ('ended_at' in columns and 'ended_by' in columns),
+        }})
     except Exception as e:
         conn.rollback(); conn.close()
         return jsonify({'status': 'error', 'message': str(e)}), 500

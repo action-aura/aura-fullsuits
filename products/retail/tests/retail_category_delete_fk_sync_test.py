@@ -118,12 +118,18 @@ def test_schema_version_is_v6_and_products_fk_declares_on_delete_set_null():
     # bookkeeping: this file hand-builds a minimal schema with no
     # `inventory_balances` at all, and v15's existence guard is what keeps it
     # skipping rather than crashing. If that guard ever narrows, this
-    # assertion is where it surfaces. The FK-on-delete-set-null assertion
-    # this test exists for is unaffected by any of these later changes.
-    assert retail_schema.RETAIL_SCHEMA_VERSION == 15
+    # assertion is where it surfaces. Phase 4 then bumped it to v16 (the
+    # terminal-bound cash drawer, _migrate_bind_cash_drawer_to_terminal),
+    # which is worth a second word for the same reason v15 was: it is the
+    # first NON-ADDITIVE step in the chain -- it drops a unique index and
+    # creates a different one -- and it carries the identical existence guard,
+    # since this file hand-builds a minimal schema with no `cash_sessions`
+    # table either. The FK-on-delete-set-null assertion this test exists for
+    # is unaffected by any of these later changes.
+    assert retail_schema.RETAIL_SCHEMA_VERSION == 16
     conn = retail_schema.get_retail_conn()
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 16
         assert retail_schema._products_category_fk_is_set_null(conn) is True
     finally:
         conn.close()

@@ -279,7 +279,69 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 #     this gate has passed. See _migrate_seed_opening_counts_and_gate_drift
 #     for why either one alone leaves the documented recovery able to wipe a
 #     shop's stock.
-RETAIL_SCHEMA_VERSION = 15
+# v15 -> v16 (launch-readiness Phase 4, ROADMAP.md's 2026-08-21 reservation):
+# the cash drawer stops belonging to a BRANCH and starts belonging to a
+# TERMINAL. Today `idx_cash_sessions_one_open_per_branch` enforces at most one
+# open till session per (company_id, branch_id), which is the wrong shape for
+# a shop running a desktop and a phone at the same counter: the second device
+# cannot open a drawer at all, and every sale it rings is stamped with
+# `session_id` = whatever session IS open on that branch (api/retail_api.py::
+# _open_cash_session_id looks up by company+branch+status). The end-of-day Z
+# report then reconciles one physical drawer against money that was never in
+# it. That is a defect TODAY, on a single-database install, which is why this
+# phase sits BEFORE the sync widening rather than inside it -- nothing here
+# needs two devices to be sharing a database to be wrong.
+#
+# THIS IS THE FIRST NON-ADDITIVE STEP IN THE WHOLE CHAIN. Every migration
+# before it either created a table, added a column, or wrote rows; this one
+# DROPS a unique index and creates a different one. `CREATE UNIQUE INDEX`
+# evaluates against the data that is already there, so on an install that
+# already holds two open sessions the create RAISES -- and `app.py`'s
+# `init_app()` calls `init_retail()` unconditionally with no handler, which is
+# precisely how the v15 defect turned into a POS that would not boot. So the
+# conflict is DETECTED AND RESOLVED BEFORE the index is created, never
+# discovered by the index refusing to build. Four pieces:
+#   - `terminal_id` (v13's column, NULL on everything older than it) is
+#     backfilled ON OPEN SESSIONS ONLY, from `local_terminal_id()` -- which is
+#     `peek_local_device_uuid()`, the same install-stable identity
+#     `device_registry.devices` is keyed by and the same one `_stamp()`
+#     already writes at open time. No second notion of "which terminal is
+#     this" is invented here; inventing one would guarantee that
+#     `cash_sessions.terminal_id` and `devices.id` disagree the first time
+#     anybody joined them. Closed history keeps its NULL for v13's reason
+#     exactly: this device cannot prove it is the till that held a drawer
+#     from before the column existed. An OPEN drawer is different -- it is
+#     open HERE, NOW, on this install, and its money is on this counter.
+#   - a session that CROSSES A BUSINESS DATE is force-ended. A shift nobody
+#     ended is a fact about the shop, not an error to hide, so it is recorded
+#     as an UNVERIFIED end (`ended_reason` = 'unverified_stale_business_date',
+#     `ended_by` = 'System', `closing_float_counted` and `variance` left NULL
+#     because nobody counted it and no variance was ever computed) rather than
+#     laundered into a clean close. Not one figure on the row is rewritten.
+#   - `ended_at`/`ended_by` land beside `closed_at`/`closed_by` for the
+#     ENDED / CLOSED split: a drawer that has been COUNTED is not the same
+#     thing as one whose variance has been ACCEPTED, and `retail.cash.approve`
+#     (commercial_runtime/identity/user_accounts.py::CAP_CASH_APPROVE) is the
+#     authority for the second question, deliberately withheld from every role
+#     that holds `retail.cash.close`. Existing `status='closed'` rows are NOT
+#     rewritten to 'ended': under the pre-v16 model closing WAS the counting
+#     act, so their `closed_at`/`closed_by` is restated into the new columns
+#     (the same instant and the same person the row already carried, moved
+#     into the column the new code path reads) and `status` is left exactly as
+#     it is. Rewriting a shop's financial history to say "never approved" --
+#     about an approval step that did not exist when those drawers were
+#     counted -- would be a non-additive DML pass over years of closed shifts
+#     to record the absence of an authority nobody was ever asked for.
+#   - only THEN is `idx_cash_sessions_one_open_per_terminal`
+#     (UNIQUE(company_id, terminal_id) WHERE status='open') created, and only
+#     after it exists is `idx_cash_sessions_one_open_per_branch` dropped. That
+#     order is deliberate: at no instant is the table left with neither
+#     constraint, so an interruption between the two leaves the OLD guarantee
+#     standing rather than none at all.
+# See _migrate_bind_cash_drawer_to_terminal below for the step-by-step
+# reasoning, including why an open session whose terminal cannot be named
+# stays open rather than being ended.
+RETAIL_SCHEMA_VERSION = 16
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -356,6 +418,58 @@ class RetailLedgerDriftError(Exception):
     advances, the two structurally unreconcilable classes are excluded, and
     what is left is a shop whose recorded history and shelves genuinely
     contradict each other in the one direction no inference can resolve.
+    """
+
+
+class RetailCashDrawerBindError(Exception):
+    """Raised by v16 when the terminal-bound drawer constraint cannot be put
+    in place -- either because two open sessions still share one terminal
+    after the resolution pass, or because the index did not come out UNIQUE
+    and partial over exactly (company_id, terminal_id).
+
+    THIS IS A BACKSTOP, NOT A PATHWAY, and the difference matters. v16's whole
+    design is that the collision is found and resolved BEFORE the index is
+    built, because `CREATE UNIQUE INDEX` failing on live data means
+    `init_retail()` raises, and `app.py::init_app()` calls it unconditionally
+    with no handler -- the exact route by which the v15 defect became a POS
+    that would not start. Reaching this exception means the resolution pass
+    and the probe that follows it disagree about what a collision is, which is
+    a defect in this file rather than a state a shop can be in.
+
+    It is still spelled out rather than left to SQLite because the two
+    messages are not comparable. SQLite says "UNIQUE constraint failed:
+    cash_sessions.company_id, cash_sessions.terminal_id", which names no shop,
+    no shift and no recovery; this one names the terminal, every session id
+    involved, and the one action that clears it. An operator who reaches this
+    cannot open the app to look, so the message is all they have.
+
+    Nothing v16 WROTE TO A ROW is committed on this path: unlike v15 -- which
+    commits its seeded ledger rows before it can refuse, because the recovery
+    it recommends has to run against them -- v16 has no recovery that depends
+    on its own half-finished work, so letting `ensure_schema_version` discard
+    every `UPDATE` this migration issued (blanking a terminal id, force-ending
+    a shift, restating `ended_at`/`ended_by`) leaves those rows exactly as
+    they were: verified by reading them back after a forced failure --
+    `user_version` at 15, every drawer's status/float/terminal_id unchanged,
+    zero force-end audit rows, the v10 branch index still the one in force.
+
+    THE THREE `ALTER TABLE ... ADD COLUMN` STATEMENTS IN STEP 1 ARE THE ONE
+    EXCEPTION, and this paragraph exists because an earlier version of this
+    docstring did not carry it -- in a file whose stated convention is that a
+    comment is the durable record, an untrue one is worse than none. `ALTER
+    TABLE` is DDL, and Python's `sqlite3` module auto-commits DDL the instant
+    it runs, independent of -- and before -- the DML transaction the `UPDATE`s
+    above sit inside. Those three columns (`ended_at`, `ended_by`,
+    `ended_reason`) run FIRST, ahead of any DML, so by the time this exception
+    can even be raised they are already durably on disk regardless of what
+    happens next. This is harmless in effect: the columns are nullable and
+    additive, every value in them stays NULL until a later pass actually
+    force-ends a row, and every future call guards adding them again on
+    `PRAGMA table_info` (so a retry is a no-op ALTER, not a duplicate-column
+    error). But the honest description of what this path leaves behind is
+    "v15's rows, plus three new NULL-filled columns; v16's own writes and its
+    index swap not started" -- not, as this docstring previously and
+    incorrectly claimed, a database left at exactly v15.
     """
 
 
@@ -1099,6 +1213,29 @@ def _migrate_retail_schema(conn):
     # step groups, gates and reports per company, so running it first would
     # measure and record the tenant key the shop is about to stop using.
     _migrate_seed_opening_counts_and_gate_drift(conn)
+    # v15 -> v16 (launch-readiness Phase 4): the terminal-bound cash drawer.
+    # Appended LAST, by the same convention as every step above -- but this
+    # one is also the FIRST NON-ADDITIVE step in the chain (it drops a unique
+    # index and creates a different one), so two placement facts are worth
+    # stating explicitly rather than leaving to the convention:
+    #
+    #   - it must stay after `_migrate_add_shift_cash_drawer` (v10), which
+    #     creates `idx_cash_sessions_one_open_per_branch`. v16 drops that
+    #     index; v10 declines to recreate it once v16's replacement exists
+    #     (`_v10_branch_index_is_superseded`). Run in this order the pair
+    #     settles on exactly one constraint. Run the other way round, v16
+    #     would drop an index that does not exist yet and v10 would then
+    #     create it -- because at that moment the terminal index it checks for
+    #     is still absent -- leaving the branch constraint in force with the
+    #     terminal one beside it, a shop unable to open its second drawer and
+    #     a schema version claiming otherwise.
+    #   - it runs after v15's gate, which RAISES on an install whose ledger
+    #     cannot reproduce its balances. On such an install this step never
+    #     runs, and that is correct rather than a silent skip: `user_version`
+    #     does not advance either, so there is no state in which the marker
+    #     claims 16 while the drawer is still branch-bound. The next launch
+    #     re-runs the whole chain from the top.
+    _migrate_bind_cash_drawer_to_terminal(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -1329,6 +1466,28 @@ def _migrate_add_notifications_foundation(conn):
     apply_notifications_schema(conn)
 
 
+def _v10_branch_index_is_superseded(conn):
+    """True when v16's terminal-bound constraint is already in place, and v10's
+    branch-bound one must therefore NOT be put back.
+
+    A named predicate rather than the condition inlined at its one call site,
+    so that the guard can be watched failing: restoring the old unconditional
+    behaviour is a one-line stub over this function, and
+    retail_v16_terminal_cash_drawer_test.py does exactly that and requires the
+    boot crash to reappear. A guard nobody has watched fail is a guard nobody
+    knows the shape of.
+
+    Reads the index's real SHAPE, not just its name -- see
+    `_v16_terminal_index_is_correct` for why a name is not evidence in this
+    file. An index called `idx_cash_sessions_one_open_per_terminal` that is not
+    actually UNIQUE would mean the drawer is unconstrained, and answering
+    "superseded" on the strength of it would drop the branch constraint too and
+    leave the table with neither.
+    """
+    return _v16_terminal_index_is_correct(
+        _uid_index_shape(conn, 'cash_sessions', V16_TERMINAL_INDEX))
+
+
 def _migrate_add_shift_cash_drawer(conn):
     """One-time migration (schema v9 -> v10): shift / cash-drawer management
     (feat/shift-cash-drawer) -- cash float in/out tracking plus X (mid-shift,
@@ -1348,7 +1507,11 @@ def _migrate_add_shift_cash_drawer(conn):
        yet. idx_cash_sessions_one_open_per_branch is a partial UNIQUE index
        enforcing "at most one OPEN session per (company_id, branch_id)" as a
        real database constraint, not just an application-level check --
-       identical technique to idx_reorder_requests_open.
+       identical technique to idx_reorder_requests_open. SCHEMA v16 REPLACES
+       THAT INDEX with a terminal-bound one, and because this function re-runs
+       on every pass through the chain it must not put a superseded constraint
+       back on top of data that now legitimately violates it -- see
+       `_v10_branch_index_is_superseded` and the comment at the CREATE below.
 
     2. `cash_movements` -- one row per float-in/float-out/paid-in/paid-out
        event against a session. Deliberately has NO company_id/branch_id of
@@ -1400,10 +1563,30 @@ def _migrate_add_shift_cash_drawer(conn):
         "CREATE INDEX IF NOT EXISTS idx_cash_sessions_company "
         "ON cash_sessions(company_id, branch_id, status)"
     )
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_sessions_one_open_per_branch "
-        "ON cash_sessions(company_id, branch_id) WHERE status='open'"
-    )
+    # ONE-OPEN-PER-BRANCH IS NOT RECREATED ONCE v16 HAS SUPERSEDED IT, and
+    # this guard is load-bearing rather than tidy. Every statement in this
+    # function runs on EVERY pass through `_migrate_retail_schema` -- the chain
+    # is re-entered in full whenever `user_version` is behind, which is what a
+    # future v17 means. On a database v16 has already bound to terminals, two
+    # open drawers on ONE branch are legal and expected (a desktop and a phone
+    # at the same counter, which is the entire point of that phase). An
+    # unconditional `CREATE UNIQUE INDEX IF NOT EXISTS` here would then be
+    # evaluated against exactly those rows, raise `UNIQUE constraint failed`,
+    # and -- since `app.py::init_app()` calls `init_retail()` with no handler
+    # -- turn the next release into a POS that will not start, on the shops
+    # that had adopted the feature most.
+    #
+    # Note the direction of the check: it asks whether the REPLACEMENT
+    # constraint is in place, not whether this one is. "The terminal index
+    # exists" is the only evidence that v16 has run and that this index is
+    # deliberately absent rather than missing; an install that has simply
+    # never reached v16 still gets it, which is what keeps a v10-to-v15
+    # database correctly constrained.
+    if not _v10_branch_index_is_superseded(conn):
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_sessions_one_open_per_branch "
+            "ON cash_sessions(company_id, branch_id) WHERE status='open'"
+        )
 
     if 'cash_movements' not in existing_tables:
         conn.execute("""
@@ -3038,6 +3221,1063 @@ def _migrate_seed_opening_counts_and_gate_drift(conn):
         conn.row_factory = previous_factory
 
 
+# ── v16: the terminal-bound cash drawer ─────────────────────────────────────
+#
+# The status vocabulary, as module constants rather than string literals
+# scattered through this file and api/retail_api.py. `open` and `closed` are
+# what schema v10 already wrote; `ended` is new here and is the half of the
+# split that did not previously exist.
+#
+#   open    -- trading. At most one per (company_id, terminal_id), enforced by
+#              a real partial UNIQUE index rather than an application check.
+#   ended   -- the drawer has stopped trading. Either somebody counted it, or
+#              v16 ended it because it had run past its business date or was
+#              standing between another shift and the terminal it is bound to.
+#              An ENDED session is NOT a claim that anybody accepted what the
+#              count found.
+#   closed  -- the variance has been ACCEPTED, which is a separate authority
+#              (`retail.cash.approve`, CAP_CASH_APPROVE) deliberately withheld
+#              from every role that can close a drawer.
+#
+# Pre-v16 rows keep the `closed` they were written with. Under that model
+# closing WAS counting, there was no approval step to have skipped, and
+# rewriting years of a shop's closed shifts to record the absence of an
+# authority nobody was ever asked for would be a fabrication in the opposite
+# direction from the one v13 refused. See _migrate_bind_cash_drawer_to_terminal.
+CASH_SESSION_STATUS_OPEN = 'open'
+CASH_SESSION_STATUS_ENDED = 'ended'
+CASH_SESSION_STATUS_CLOSED = 'closed'
+
+#: The constraint v16 exists to install: at most one OPEN drawer per terminal.
+V16_TERMINAL_INDEX = 'idx_cash_sessions_one_open_per_terminal'
+
+#: The v10 constraint it replaces: at most one OPEN drawer per BRANCH.
+#:
+#: Two steps in this file now reference it and they have to stay in step.
+#: `_migrate_add_shift_cash_drawer` creates it, but only while
+#: `_v10_branch_index_is_superseded` says no terminal-bound index exists yet;
+#: v16 drops it, but only after that terminal-bound index is in place. Written
+#: that way round because the chain is re-entered from the TOP on every future
+#: migration, so v10 runs again on a v16 database -- and by then two open
+#: drawers on one branch are legal, which an unconditional recreate would
+#: refuse at boot. Either half alone is not idempotent; the pair is.
+V16_SUPERSEDED_BRANCH_INDEX = 'idx_cash_sessions_one_open_per_branch'
+
+#: `ended_by` on a shift the migration ended. The same non-person sentinel
+#: v15 stamps on the opening counts it seeds (`created_by='System'`) and for
+#: the same reason: no human performed this act, and the column a reader looks
+#: at to find out who did must not name one.
+V16_ENDED_BY_SYSTEM = 'System'
+
+#: The drawer was still open on a business date that has since passed. The
+#: value is stored on the row, not merely logged, because a number in a cash
+#: ledger with no explanation attached is exactly how the next person
+#: concludes somebody counted this drawer.
+V16_ENDED_REASON_STALE = 'unverified_stale_business_date'
+
+#: The drawer was one of two or more open on a single terminal, and was not
+#: the most recently opened of them. See _migrate_bind_cash_drawer_to_terminal
+#: for why the newest is the one that keeps the terminal.
+V16_ENDED_REASON_COLLISION = 'unverified_terminal_collision'
+
+#: Both force-end reasons, for consumers that need to ask "was this shift
+#: ended by a person or by the migration?" without matching on strings.
+#: Every value starts `unverified_` on purpose: an ENDED row carrying one of
+#: these has NULL `closing_float_counted` and NULL `variance`, and the two
+#: statements -- the reason text and the absent figures -- have to agree.
+V16_UNVERIFIED_END_REASONS = frozenset({
+    V16_ENDED_REASON_STALE, V16_ENDED_REASON_COLLISION,
+})
+
+#: audit_log action for a shift v16 ended. One row per session, matching
+#: api/retail_api.py's own CASH_SESSION_OPENED / CASH_SESSION_CLOSED trail,
+#: because "where did my open drawer go?" is a question asked about ONE
+#: drawer and answered from the audit screen.
+V16_FORCE_END_AUDIT_ACTION = 'CASH_SESSION_FORCE_ENDED_V16'
+
+#: Accepted spellings for a stored timestamp, tried after `fromisoformat`.
+#: `opened_at` is written by api/retail_api.py::_now() as
+#: '%Y-%m-%d %H:%M:%S', but the column also carries SQLite's own
+#: DEFAULT CURRENT_TIMESTAMP for any row inserted without one, and a database
+#: restored from an export can carry either. A migration is the wrong place to
+#: be strict about a format nobody promised.
+_V16_TIMESTAMP_FORMATS = (
+    '%Y-%m-%d %H:%M:%S.%f',
+    '%Y-%m-%d %H:%M:%S',
+    '%Y-%m-%d %H:%M',
+    '%Y-%m-%d',
+)
+
+
+def _v16_parse_timestamp(raw):
+    """A stored timestamp as a NAIVE local `datetime`, or None if it cannot be
+    read as one.
+
+    Always naive, never aware, even when the stored text carries an offset:
+    an aware value is converted onto this machine's own zone and then
+    stripped. Two reasons, and the second is the one that bites. First, every
+    other timestamp in this table is device-local wall clock (`_now()`), so a
+    naive local value is the shape the rest of the code already means.
+    Second, `datetime` refuses to order an aware value against a naive one
+    with a TypeError, and the one place these get compared is the sort that
+    decides which of two open drawers keeps a terminal -- a migration failing
+    on `can't compare offset-naive and offset-aware datetimes` would be an
+    app that will not start, over a tie-break.
+
+    None rather than a raise on unreadable input. The caller treats "cannot
+    determine" as "do not force-end this shift", which is the conservative
+    direction: ending a drawer is the act that needs justification, so an
+    unreadable timestamp must not be able to cause one.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    parsed = None
+    try:
+        parsed = datetime.fromisoformat(text.replace('Z', '+00:00'))
+    except ValueError:
+        for fmt in _V16_TIMESTAMP_FORMATS:
+            try:
+                parsed = datetime.strptime(text, fmt)
+                break
+            except ValueError:
+                continue
+    if parsed is None:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone().replace(tzinfo=None)
+    return parsed
+
+
+def _v16_business_date(conn, company_id, moment):
+    """`moment` as this company's BUSINESS date, or None if it cannot be
+    placed on that clock.
+
+    Delegates to core/retail/metrics.py::business_now rather than reimplementing
+    the shop-clock rule. That function already handles the whole of it -- the
+    declared IANA `business_timezone`, the `business_day_start_hour` a shop
+    trading past midnight sets, an undeclared shop falling back to device
+    local time, and a `retail_settings` table that does not exist yet -- and a
+    second copy here would be a second thing to keep in step with a rule this
+    project has already had to correct once (see that function's docstring for
+    the off-by-one it shipped).
+
+    `business_now` names its argument `now`, but nothing in it is specific to
+    the present: it takes any instant and moves it onto the business clock.
+    Passing a historical `opened_at` through the SAME transform as the current
+    time is the entire point -- comparing a raw stored timestamp against a
+    business-clock "today" is how a comparison ends up half on one clock and
+    half on the other.
+
+    The one inexactness, stated rather than hidden: attaching a device zone to
+    a naive historical timestamp uses the offset in force NOW, not the offset
+    in force on the day it was written, so a row from the other side of a
+    daylight-saving change can be off by an hour. The caller compares whole
+    DATES with a strict `<`, so an hour cannot move a shift opened minutes ago
+    across a day boundary, and a shift open since last year is over that
+    boundary by hundreds of hours.
+    """
+    if moment is None:
+        return None
+    try:
+        from core.retail import metrics
+        return metrics.business_now(conn, company_id, moment).date()
+    except Exception:
+        # A shop whose clock cannot be resolved is not a shop whose drawers
+        # should be force-ended on a guess. `business_day` already degrades to
+        # "unconfigured" for the ordinary causes (no `retail_settings` table,
+        # an unparseable zone name, a nonsense start hour), so what reaches
+        # here is unexpected -- and the safe answer to an unexpected clock is
+        # to leave the shift alone and let the collision pass below, which
+        # needs no clock at all, do whatever is still necessary.
+        return None
+
+
+def _v16_force_end(conn, session, reason, ended_at, live_tables):
+    """End one shift the shop never ended, and say so on the row.
+
+    WHAT IS WRITTEN: `status`, `ended_at`, `ended_by`, `ended_reason`. That is
+    all. `opening_float` is untouched, `closing_float_counted`,
+    `closing_float_expected` and `variance` stay NULL, `closed_at`/`closed_by`
+    stay NULL. Every one of those absences is load-bearing:
+
+      - a `variance` figure would be a claim that somebody counted this
+        drawer and found it short or over. Nobody counted it. The reason text
+        says `unverified_*` and the empty figures say the same thing
+        structurally, so a consumer that reads either one gets the same
+        answer.
+      - `closed_at` staying NULL is what keeps ENDED distinguishable from
+        CLOSED on a row this migration touched. A force-ended shift has not
+        been through the approval question at all; filling in the close trail
+        would launder it into a shift that had.
+
+    `ended_at` IS stamped, with now, and the contrast with v13 -- which left
+    `created_at_utc` NULL on every history row it touched -- is deliberate
+    rather than inconsistent. v13's rows already existed and their real
+    instant was unknowable. This END is happening right now: the migration is
+    what is ending the shift, so the instant it happened at is a fact about
+    it. It is not, and does not claim to be, the instant trading stopped --
+    `ended_by='System'` and the reason on the row say who ended it and why.
+
+    The audit row is per session, not per company, matching the
+    CASH_SESSION_OPENED / CASH_SESSION_CLOSED trail api/retail_api.py already
+    writes: "where did my open drawer go?" is asked about one drawer.
+    `user_id` is NULL because no person did this, and `user_id` is the column
+    a reader looks at to find out who did.
+    """
+    conn.execute(
+        "UPDATE cash_sessions SET status=?, ended_at=?, ended_by=?, ended_reason=? "
+        "WHERE id=?",
+        (CASH_SESSION_STATUS_ENDED, ended_at, V16_ENDED_BY_SYSTEM, reason,
+         session['id']),
+    )
+    if 'audit_log' not in live_tables:
+        return
+    import json as _json
+    conn.execute(
+        "INSERT INTO audit_log (company_id,user_id,action,entity,entity_id,details) "
+        "VALUES (?,?,?,?,?,?)",
+        (session['company_id'], None, V16_FORCE_END_AUDIT_ACTION, 'cash_session',
+         session['id'],
+         _json.dumps({
+             'reason': reason,
+             'branch_id': session['branch_id'],
+             'terminal_id': session['terminal_id'],
+             'opened_at': session['opened_at'],
+             'opened_by': session['opened_by'],
+             'opening_float': session['opening_float'],
+             'ended_at': ended_at,
+             'counted': False,
+             'note': (
+                 'Schema migration v16 ended this shift so the drawer could be '
+                 'bound to a terminal. Nobody counted it, so no closing float '
+                 'and no variance were recorded -- the money figures on the row '
+                 'are exactly what they were before the migration ran.'
+             ),
+         }, sort_keys=True, default=str)),
+    )
+
+
+def _v16_terminal_id_is_blank(value):
+    """True when `value` is not a usable terminal name: SQL NULL, or a string
+    that is nothing but whitespace once Python's `str.strip()` is done with
+    it.
+
+    THE ONE DEFINITION OF "BLANK" in this migration -- used by step 4's
+    normalisation and step 5's skip check alike. It used to be two.
+    REPRODUCED: step 4 blanked with SQL `TRIM(terminal_id) = ''`, and
+    SQLite's `TRIM` with no second argument strips only 0x20; step 5 skipped
+    with `not str(value).strip()`, and Python's `str.strip()` strips every
+    code point `str.isspace()` calls whitespace -- ASCII tab and newline
+    among them, and U+00A0 NO-BREAK SPACE too. Measured directly: '' and
+    '   ' agreed under both tests; '\t', '\t\t', '\xa0' and '\n' did not.
+
+    Two open sessions both holding terminal_id='\t' are a GENUINE duplicate
+    as far as SQLite's own unique index is concerned -- it compares two
+    non-NULL strings byte for byte, and '\t' equals '\t' -- but the old step
+    5 called them "unnameable" and left them unresolved, so
+    `CREATE UNIQUE INDEX` a few lines below raised `UNIQUE constraint failed`
+    out of `init_retail()`, which `app.py::init_app()` calls with no handler:
+    a POS that will not start, `user_version` stuck at 15, every relaunch
+    repeating the exact same failure forever.
+
+    Deliberately Python's `str.strip()`, not SQL `TRIM`, and not a
+    hand-rolled character class: it is the test step 5 already used, so
+    making step 4 match it (rather than inventing a third definition) is
+    what makes the probe, the resolution and SQLite agree without changing
+    what "genuinely different terminals" means. '  X  ' and 'X' stay
+    different terminals under this test exactly as before -- over-grouping
+    those would end a live till to tidy up a difference SQLite was never
+    going to object to.
+    """
+    return value is None or not str(value).strip()
+
+
+def _v16_open_sessions(conn):
+    """Every session still `status='open'`, newest first.
+
+    Ordered here so the two passes below (stale sweep, collision resolution)
+    both see the same order and neither has to re-derive it.
+    """
+    return conn.execute(
+        "SELECT id, company_id, branch_id, opened_by, opened_at, opening_float, "
+        "       terminal_id "
+        "FROM cash_sessions WHERE status=? ORDER BY opened_at DESC, id DESC",
+        (CASH_SESSION_STATUS_OPEN,),
+    ).fetchall()
+
+
+def _v16_terminal_index_is_correct(shape):
+    """True when `shape` (from `_uid_index_shape`) is the ONE shape that makes
+    the terminal binding a real constraint: UNIQUE, partial, over exactly
+    (company_id, terminal_id).
+
+    Read from `PRAGMA index_list`/`index_info` -- the shape SQLite actually
+    stored -- rather than from `sqlite_master.sql`, which is the text somebody
+    typed. That distinction is v13's F4 defect exactly: a
+    `CREATE UNIQUE INDEX IF NOT EXISTS` whose name is already taken by a plain
+    index leaves the plain index in place, the UNIQUE text nowhere, and the
+    migration reporting success. The name is new in this file, so the only way
+    to reach that state is a database touched by a branch this one has not
+    seen -- which CLAUDE.md names as a routine condition of testing here, not
+    a hypothetical.
+    """
+    return bool(
+        shape is not None
+        and shape['unique']
+        and shape['partial']
+        and shape['columns'] == ['company_id', 'terminal_id']
+    )
+
+
+def _v16_collision_probe(conn):
+    """(company_id, terminal_id, count) for every terminal that still holds
+    more than one OPEN session -- i.e. every row-group that would make
+    `CREATE UNIQUE INDEX` raise.
+
+    WRITTEN TO BE THE SAME QUESTION THE INDEX ASKS, not a tidier one, and the
+    two ways of being different both cost something real.
+
+    ASKING LESS than the index does means the create raises on a row this
+    never reported. An earlier draft excluded `TRIM(terminal_id) = ''` on the
+    reasoning that the migration normalises blanks to NULL before this runs,
+    so they cannot reach here. True today, and still wrong: it made the probe
+    blind to exactly the case -- two identical blank terminal ids -- that
+    SQLite treats as a duplicate, so deleting the normalisation would have
+    moved the failure from this function's actionable refusal to a raw
+    `UNIQUE constraint failed` at boot. A backstop that cannot see the thing
+    it backstops is decoration. So values group by their EXACT stored text,
+    because that is how SQLite compares them: two rows holding '' collide, and
+    a row holding '' and a row holding '   ' do not.
+
+    ASKING MORE than the index does costs a shop a live till, because the
+    caller resolves what this reports by ENDING a drawer. Hence BOTH key
+    columns are required non-NULL, not just the terminal. SQL uniqueness
+    treats a NULL as distinct from everything including another NULL, and that
+    rule is per COLUMN OF THE KEY, not per table: two open sessions with a
+    NULL `company_id` and the identical terminal id are NOT a duplicate as far
+    as the index is concerned, while `GROUP BY company_id, terminal_id` groups
+    them together and would have reported one. `cash_sessions.company_id` is
+    nullable and always has been, so that is a row a legacy install can be
+    holding -- and ending somebody's open drawer to satisfy a constraint that
+    was never going to object to it is the worse of the two errors by a wide
+    margin.
+    """
+    return conn.execute(
+        "SELECT company_id, terminal_id, COUNT(*) AS sessions "
+        "FROM cash_sessions "
+        "WHERE status=? AND terminal_id IS NOT NULL AND company_id IS NOT NULL "
+        "GROUP BY company_id, terminal_id HAVING COUNT(*) > 1",
+        (CASH_SESSION_STATUS_OPEN,),
+    ).fetchall()
+
+
+def _v16_bind_message(collisions):
+    """The refusal, written to be acted on rather than merely logged.
+
+    An operator who reaches this cannot open the app to look at anything, so
+    every terminal, every count and the one supported action have to be in the
+    string itself.
+    """
+    parts = [
+        f"company {row['company_id']} terminal {row['terminal_id']}: "
+        f"{row['sessions']} sessions still open"
+        for row in collisions
+    ]
+    return (
+        "Retail schema v16 refused to bind the cash drawer to a terminal: "
+        + '; '.join(parts) + ". "
+        "v16 resolves this before it builds the index -- reaching it means the "
+        "resolution pass and the check that follows it disagree about what a "
+        "collision is, which is a defect in database/schema.py rather than a "
+        "state your shop can be in. Nothing was changed: PRAGMA user_version "
+        "was not advanced and this migration's writes were not committed, so "
+        "the next launch retries from the same point. Recovery, if this is "
+        "ever seen in the field, is to end all but one of the sessions named "
+        "above (UPDATE cash_sessions SET status='ended' -- do NOT delete them, "
+        "they hold a float somebody put in a drawer) and relaunch."
+    )
+
+
+def _index_owning_table(conn, index_name):
+    """The table `sqlite_master` says owns an index called `index_name`,
+    database-WIDE, or None if no such index exists at all.
+
+    Index names are a single global namespace in SQLite -- unlike a column or
+    a table name, an index does not belong to the table it indexes as far as
+    naming goes. `PRAGMA index_list(<table>)`, which `_uid_index_shape`
+    reads, can only ever answer "is there an index by this name ON THIS
+    TABLE"; it is blind to the identical name sitting on some OTHER table,
+    because that pragma only lists the one table's indexes. `CREATE INDEX` is
+    not blind to it: SQLite raises `index ... already exists` regardless of
+    which table's CREATE statement asks.
+
+    REPRODUCED: a plain `CREATE INDEX idx_cash_sessions_one_open_per_terminal
+    ON sales(company_id)` on a real v15 database. `_uid_index_shape(conn,
+    'cash_sessions', V16_TERMINAL_INDEX)` correctly returns None (the name is
+    not on `cash_sessions`), so the drop-and-rebuild branch below is skipped
+    and the bare `CREATE UNIQUE INDEX` raises `OperationalError` straight out
+    of `init_retail()` -- naming no shop, no shift and no recovery, on a path
+    `RetailCashDrawerBindError` exists to cover and did not. Checking here,
+    by NAME, database-wide, before that CREATE runs, is what lets this
+    migration raise its own named, actionable refusal instead.
+    """
+    row = conn.execute(
+        "SELECT tbl_name FROM sqlite_master WHERE type='index' AND name=?",
+        (index_name,),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _v16_run_index_ddl(conn, sql):
+    """Runs exactly one DDL statement for step 6 -- the CREATE of the
+    terminal-bound index, or the DROP of the branch-bound one it replaces.
+
+    Broken out into its own function purely so a test can interrupt EXACTLY
+    between the two statements without needing to fake a raw SQL substring
+    match, and without caring which of the two is coded first in
+    `_migrate_bind_cash_drawer_to_terminal` -- see that function's step 6 for
+    why the order between them is not decorative.
+
+    THE ORDER MATTERS BECAUSE OF WHAT THIS FUNCTION DOES NOT DO: it does not
+    wrap `conn.execute` in any transaction control of its own. `CREATE INDEX`
+    and `DROP INDEX` are DDL, and Python's `sqlite3` module auto-commits DDL
+    the instant it runs, independent of -- and before -- the DML transaction
+    the rest of this migration's `UPDATE`s sit inside (see
+    `RetailCashDrawerBindError`'s docstring for what that already means for
+    the `ALTER TABLE` columns in step 1). So whichever of the two statements
+    executes first is durably on disk before the second one gets a chance to
+    run at all, and an interruption between them leaves the table with
+    whichever ONE of the two constraints ran first -- never neither, and only
+    if the safer one (CREATE the new index) is the one coded first. Swap the
+    two calls in `_migrate_bind_cash_drawer_to_terminal` and an interruption
+    here instead leaves NEITHER constraint standing, because the DROP (now
+    first) durably removes the old one before the CREATE (now second, and the
+    one that got interrupted) ever adds the new one.
+    """
+    conn.execute(sql)
+
+
+def _migrate_bind_cash_drawer_to_terminal(conn):
+    """One-time migration (schema v16): the cash drawer stops belonging to a
+    BRANCH and starts belonging to a TERMINAL -- launch-readiness Phase 4,
+    reserved in ROADMAP.md's 2026-08-21 ledger.
+
+    THE DEFECT THIS FIXES IS PRESENT TODAY, WITH NO SYNC INVOLVED. schema v10
+    put a partial UNIQUE index on (company_id, branch_id) WHERE status='open',
+    so one branch gets one drawer. A shop with a desktop till and a phone at
+    the same counter cannot open a second drawer at all, and every sale the
+    phone rings is stamped with the session that IS open on that branch --
+    the desktop's (api/retail_api.py::_open_cash_session_id looks the session
+    up by company+branch+status, nothing else). The Z report at close then
+    reconciles one physical cash drawer against takings that were never in it,
+    and the variance it reports is arithmetic on two different tills.
+
+    THIS IS THE FIRST NON-ADDITIVE STEP IN THIS FILE'S CHAIN, and the whole
+    shape of the function follows from that. `CREATE UNIQUE INDEX` is
+    evaluated against the rows that are already there. On an install that
+    already holds two sessions that would collide, it raises -- and
+    `app.py::init_app()` calls `init_retail()` unconditionally with no
+    handler, so a raise there is a POS that will not start. That is not a
+    hypothetical failure mode in this repository; it is what the v15 gate did
+    to a real shop. So THE CONFLICT IS FOUND AND RESOLVED BEFORE THE INDEX IS
+    BUILT. The index never discovers anything.
+
+    THE SIX STEPS, AND WHY THEY ARE IN THIS ORDER:
+
+    1. ADD the three columns -- `ended_at`, `ended_by`, `ended_reason`.
+       Guarded on `PRAGMA table_info`, so a retry is a no-op. `terminal_id`
+       itself is NOT added here: it is v13's column, and its absence means
+       something this step must decline rather than repair -- see the comment
+       at the early return above the ALTERs.
+
+    2. RESTATE the counting instant on rows that are already `closed`:
+       `ended_at` := `closed_at`, `ended_by` := `closed_by`. Under the pre-v16
+       model, closing WAS counting; that instant and that person are facts the
+       row already carries, moved into the columns the ENDED/CLOSED split
+       reads. Nothing is invented and nothing is destroyed -- `closed_at` and
+       `closed_by` stay exactly where they were. `status` is NOT rewritten to
+       'ended': see the note below on why.
+
+    3. FORCE-END every open session whose business date has passed. This step
+       is FIRST among the three that touch open rows, and that ordering does
+       real work: on the ordinary legacy install -- a shop with a shift
+       somebody forgot to close months ago, or one per branch -- this alone
+       removes the collision, so the terminal backfill lands on a single
+       genuinely-live drawer and step 5 finds nothing to resolve.
+
+    4. BIND the remaining open sessions to this device. Blank terminal ids are
+       normalised to NULL first (SQLite's unique index treats two NULLs as
+       distinct and two empty strings as equal, so a blank is a collision
+       where a NULL is not), then `local_terminal_id()` fills every open row
+       that has none. That function is `peek_local_device_uuid()` -- the same
+       install-stable identity `device_registry.devices` is keyed by, the same
+       one `_stamp()` already writes at open time, and deliberately the `peek`
+       variant, which never CREATES the identity file. A migration is not a
+       reason to manufacture an install identity as a side effect.
+
+       CLOSED HISTORY IS NOT BACKFILLED, for v13's reason exactly: this device
+       cannot prove it is the till that held a drawer from before the column
+       existed, and a wrong terminal on a closed shift is worse than no
+       terminal, because it is the only surviving evidence about where that
+       money was. An OPEN drawer is a different claim -- it is open HERE, NOW,
+       on this install, with its float on this counter.
+
+       WHEN `local_terminal_id()` RETURNS None -- a build with no local device
+       record, or a stripped Android build with no `device_context` at all --
+       the open rows keep their NULL and STAY OPEN. The index is still created
+       and still binds every drawer that does have a terminal; NULLs simply do
+       not participate. Ending a shop's live drawer because this build cannot
+       name its own terminal would be destroying real bookkeeping to enforce a
+       constraint that has nothing to say about it.
+
+    5. RESOLVE any collision that survives: a terminal holding two or more
+       open sessions keeps the MOST RECENTLY OPENED and the rest are
+       force-ended. Newest-wins because the drawer a cashier is standing at is
+       the one they opened last; the older ones are shifts nobody ended, which
+       is the same fact step 3 acts on, reached from a different direction. A
+       session whose `opened_at` cannot be parsed sorts oldest -- a drawer
+       whose open instant is unreadable is the worst candidate for "the one
+       currently in use" -- and the id breaks ties so two installs with the
+       same data resolve the same way.
+
+    6. CREATE the new index, then DROP the old one -- in that order, so the
+       table is never left with neither. An interruption between them leaves
+       the v10 branch constraint standing, which is the wrong constraint but
+       not the absence of one, and the next launch finishes the job.
+
+       THE DROP IS NOT THE END OF IT. `ensure_schema_version` re-enters this
+       chain from the TOP whenever `user_version` is behind, so v10 runs again
+       on every future migration -- on a database where two open drawers on
+       one branch are now legal and expected. Recreating a branch-bound unique
+       index over them raises, out of `init_retail()`, on precisely the shops
+       that adopted this feature. `_v10_branch_index_is_superseded` is what
+       stops that, and it lives beside the CREATE it guards rather than here.
+
+    WHY FORCE-ENDING RATHER THAN ANY OF THE ALTERNATIVES. A session that must
+    be moved aside holds a float somebody physically put in a drawer, so:
+
+      - it is never DELETED. The row, its float, its `opened_by` and its
+        `cash_movements` all survive untouched.
+      - it is never CLOSED. `status='closed'` after v16 means a variance was
+        accepted, and nothing about this shift was ever counted, let alone
+        accepted.
+      - it is not LEFT OPEN WITH A NULL TERMINAL to dodge the constraint. That
+        looks like the gentlest option and is the worst: NULLs are distinct in
+        a unique index, so any number of such rows could accumulate, and
+        `_open_cash_session_id` -- which matches on company+branch+status and
+        never looks at `terminal_id` -- would keep folding sales into them.
+        The pass condition would BE the bug signature.
+
+      It is ENDED, with `ended_reason` naming why, `ended_by='System'` naming
+      that no person did it, and `closing_float_counted`/`variance` left NULL
+      because nobody counted it. A shift nobody ended is a fact about the
+      shop; recording it as a clean close would be hiding it.
+
+    WHY PRE-v16 `closed` ROWS KEEP `status='closed'`. Under the new split,
+    CLOSED means the variance was accepted. Those historical rows were never
+    put to an approver, because no approval step existed when they were
+    written. Both available stories about them are therefore imperfect, and
+    they are not equally so: leaving them CLOSED overstates an approval nobody
+    was asked for, while rewriting thousands of a shop's settled shifts to
+    'ended' is a non-additive DML pass over years of financial history that
+    changes what every existing report and screen shows, to record the absence
+    of an authority that did not exist -- and it would leave a permanent queue
+    of shifts nobody will ever approve. The restatement in step 2 is what
+    makes the difference legible without rewriting anything: those rows carry
+    `ended_at == closed_at`, which is precisely "counted and closed in one
+    act", the pre-v16 model stated honestly.
+
+    IDEMPOTENT AND RESUMABLE. Every ADD COLUMN is guarded on
+    `PRAGMA table_info`; step 2 only touches rows whose `ended_at` is still
+    NULL; steps 3 and 5 only look at rows that are still `open`, and a row
+    they have already ended is not; step 6 uses IF NOT EXISTS / IF EXISTS and
+    verifies the shape it left rather than the name. `ensure_schema_version`
+    leaves `user_version` un-advanced on any failure and the whole chain
+    re-runs on the next launch, so a run interrupted anywhere above resumes
+    from wherever it stopped and reaches the same end state.
+
+    APPENDED LAST in `_migrate_retail_schema`, after v15's gate. On an install
+    v15 refuses, this never runs -- which is correct rather than a silent
+    skip: `user_version` does not advance either, the app does not start, and
+    the next launch re-runs the entire chain from the top. There is no state
+    in which the marker claims 16 while this step has not run.
+
+    EXISTENCE-GUARDED. Some fixtures hand-build a minimal schema and call
+    `_migrate_retail_schema` directly (retail_category_delete_fk_sync_test.py
+    builds only categories/products/inventory_movements), where skipping is
+    the right answer rather than a crash -- the same guard
+    `_migrate_add_shift_cash_drawer` and v15 already carry.
+
+    Returns a summary of what it did, for callers that want to report it;
+    `_migrate_retail_schema` ignores it, and the durable record is the
+    per-session audit_log rows.
+    """
+    live_tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if 'cash_sessions' not in live_tables:
+        return {}
+
+    summary = {
+        'terminal_id': None,
+        'restated_from_close': 0,
+        'blanked_terminal_ids': 0,
+        'bound_to_terminal': 0,
+        'force_ended_stale': [],
+        'force_ended_collision': [],
+    }
+
+    columns = {
+        row[1] for row in conn.execute('PRAGMA table_info("cash_sessions")').fetchall()
+    }
+    # ── 0b. the column this step binds to ───────────────────────────────
+    # `terminal_id` belongs to v13, which runs earlier in this same chain and
+    # adds it unconditionally to every table in RETAIL_ACTOR_TABLES that
+    # exists -- so on every real install it is already here, and this branch is
+    # unreachable in production.
+    #
+    # THE ANSWER TO ITS ABSENCE IS TO DO NOTHING, NOT TO ADD IT. A first draft
+    # of this function self-healed with an `ALTER TABLE ... ADD COLUMN
+    # terminal_id`, on the reasoning that a one-line ALTER beats a crash. Two
+    # things were wrong with that. The visible one: it stole a column v13 is
+    # supposed to add, so a test calling v13 in isolation against such a
+    # database found it had nothing left to do
+    # (retail_v13_additive_only_behavioural_test.py catches exactly this). The
+    # one that actually matters: a `cash_sessions` with no `terminal_id` is a
+    # table whose WRITERS do not know about terminals either, so a
+    # terminal-bound unique index over it would be a constraint on a column
+    # nothing ever populates -- binding nothing -- while the branch-bound
+    # constraint it replaced got dropped. Replacing a working constraint with
+    # a decorative one is strictly worse than leaving the working one alone.
+    #
+    # Returning early leaves v10's branch index in force (nothing drops it,
+    # and `_v10_branch_index_is_superseded` keeps answering False because no
+    # terminal index exists), so the table is never left unconstrained.
+    if 'terminal_id' not in columns:
+        return {'skipped': 'cash_sessions has no terminal_id column, so v13 has '
+                           'not run against this database and there is no device '
+                           'identity to bind a drawer to'}
+
+    # ── 1. the columns ──────────────────────────────────────────────────
+    for column, decl in (
+        ('ended_at', 'TIMESTAMP'),
+        ('ended_by', 'TEXT'),
+        ('ended_reason', 'TEXT'),
+    ):
+        if column not in columns:
+            conn.execute(f'ALTER TABLE cash_sessions ADD COLUMN {column} {decl}')
+            columns.add(column)
+
+    previous_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        # ── 2. restate the counting instant on settled shifts ────────────
+        summary['restated_from_close'] = conn.execute(
+            "UPDATE cash_sessions SET ended_at=closed_at, ended_by=closed_by "
+            "WHERE status=? AND closed_at IS NOT NULL AND ended_at IS NULL",
+            (CASH_SESSION_STATUS_CLOSED,),
+        ).rowcount
+
+        stamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # ── 3. shifts that ran past their business date ──────────────────
+        # `today` is resolved once per COMPANY, not once per row: one install
+        # can host more than one, each with its own declared timezone and
+        # trading-day start, and each pays one settings lookup.
+        #
+        # THE BAR IS "before the PREVIOUS business date", NOT "before today's"
+        # -- i.e. `opened < today - 1 day`, not `opened < today`. A POS is
+        # exactly the software that trades past midnight, and the difference
+        # between those two comparisons is a real shift a cashier is standing
+        # at right now. REPRODUCED: a genuine v15 install with no
+        # `retail_settings` row (so the shop clock falls back to plain local
+        # midnight), one drawer opened 2026-08-23T23:00, still open at
+        # 2026-08-24T01:00, opening_float 420.00, cashier still serving --
+        # `opened < today` is true the instant the calendar date ticks over,
+        # so the OLD comparison force-ended a two-hour-old drawer with real
+        # money in it, permanently marked `unverified_stale_business_date`
+        # (never counted), the moment `init_retail()` next ran. `opened` here
+        # is at most one business day behind `today`; only a drawer at least
+        # TWO business days behind is stale enough that nobody is plausibly
+        # still standing at it.
+        #
+        # This is safe for the partial-unique-index build a few lines below:
+        # the collision pass (step 5) is what actually clears same-terminal
+        # contention -- newest wins, the rest get force-ended by THAT pass,
+        # on whatever business date they were opened -- so nothing about
+        # making step 3 less eager leaves `CREATE UNIQUE INDEX` unable to
+        # run. Step 3 only needs to catch the shift nobody is coming back
+        # for; step 5 is what makes the index creatable.
+        today_by_company = {}
+        for session in _v16_open_sessions(conn):
+            company_id = session['company_id']
+            if company_id not in today_by_company:
+                today_by_company[company_id] = _v16_business_date(
+                    conn, company_id, datetime.now())
+            today = today_by_company[company_id]
+            opened = _v16_business_date(
+                conn, company_id, _v16_parse_timestamp(session['opened_at']))
+            if today is None or opened is None:
+                # Either the shop clock or this row's own timestamp could not
+                # be read. Ending a drawer on a date comparison that could not
+                # be made is exactly the guess this file does not make; the
+                # collision pass below needs no clock and still runs.
+                continue
+            if opened < today - timedelta(days=1):
+                _v16_force_end(conn, session, V16_ENDED_REASON_STALE,
+                               stamp, live_tables)
+                summary['force_ended_stale'].append(session['id'])
+
+        # ── 4. bind what is left to this terminal ────────────────────────
+        # Blanks first. An empty string -- or any string that is nothing but
+        # whitespace once trimmed -- is not a terminal name, and unlike a
+        # NULL it makes two open drawers collide: SQLite's unique index
+        # treats every NULL as distinct from every other NULL, but compares
+        # two non-NULL strings byte for byte, so two rows holding the same
+        # "blank" text are a genuine duplicate to it. Normalised in PYTHON
+        # via `_v16_terminal_id_is_blank` -- the SAME predicate step 5 below
+        # uses to decide what it may skip -- rather than SQL TRIM. See that
+        # function's docstring for the disagreement this closes: SQL TRIM
+        # only strips 0x20, so a value like '\t' used to sail past this
+        # UPDATE unnormalised, reach step 5 still non-NULL, get called
+        # "unnameable" there and left unresolved, and then meet SQLite's own
+        # unique index as the genuine duplicate it always was. Scoped to
+        # OPEN rows because the index is partial on exactly those; a blank
+        # on a settled shift is meaningless too, but rewriting closed
+        # history to tidy it up would be a non-additive pass for no gain.
+        open_terminal_rows = conn.execute(
+            "SELECT id, terminal_id FROM cash_sessions "
+            "WHERE status=? AND terminal_id IS NOT NULL",
+            (CASH_SESSION_STATUS_OPEN,),
+        ).fetchall()
+        blank_ids = [row['id'] for row in open_terminal_rows
+                     if _v16_terminal_id_is_blank(row['terminal_id'])]
+        if blank_ids:
+            placeholders = ','.join('?' for _ in blank_ids)
+            conn.execute(
+                f"UPDATE cash_sessions SET terminal_id=NULL "
+                f"WHERE id IN ({placeholders})",
+                blank_ids,
+            )
+        summary['blanked_terminal_ids'] = len(blank_ids)
+
+        terminal = local_terminal_id()
+        summary['terminal_id'] = terminal
+        if terminal:
+            summary['bound_to_terminal'] = conn.execute(
+                "UPDATE cash_sessions SET terminal_id=? "
+                "WHERE status=? AND terminal_id IS NULL",
+                (terminal, CASH_SESSION_STATUS_OPEN),
+            ).rowcount
+
+        # ── 5. two drawers, one terminal ─────────────────────────────────
+        contested = {}
+        for session in _v16_open_sessions(conn):
+            value = session['terminal_id']
+            if value is None:
+                # Step 4 above already normalised every BLANK value -- by
+                # the exact same predicate, `_v16_terminal_id_is_blank` --
+                # to NULL, so None is the only thing left to skip here.
+                # Checking for None alone, rather than re-testing blankness
+                # with a second hand-written condition, is deliberate: it is
+                # what keeps this step and step 4 unable to drift apart the
+                # way SQL TRIM and Python str.strip() once did, because
+                # there is now exactly one blank test, used once, upstream.
+                continue        # unnameable terminal: cannot collide, stays open
+            if session['company_id'] is None:
+                # A NULL anywhere in a unique index key makes the whole row
+                # distinct from every other row, so this one cannot be what
+                # makes the create fail either -- and ending it would be
+                # taking a live drawer off a shop to satisfy a constraint that
+                # was never going to object. Same rule, same reasoning, as
+                # `_v16_collision_probe`'s two IS NOT NULL predicates; the two
+                # must agree or the resolution and the check that follows it
+                # would disagree about what a collision is.
+                continue
+            # Keyed on the EXACT stored value, never a trimmed or normalised
+            # one. The index compares strings byte for byte, so grouping ' A '
+            # with 'A' here would end a drawer SQLite was never going to
+            # object to -- over-grouping costs a shop a live till, which is a
+            # far worse error than the tidiness it buys.
+            contested.setdefault((session['company_id'], value), []).append(session)
+
+        for key in sorted(contested, key=lambda item: (str(item[0]), str(item[1]))):
+            rivals = contested[key]
+            if len(rivals) < 2:
+                continue
+            # Newest-opened keeps the terminal. `_v16_open_sessions` already
+            # returns newest-first by the stored text, which sorts
+            # lexicographically and therefore chronologically for the ISO-like
+            # shapes this column holds -- but "therefore" is doing too much
+            # work there for a decision about somebody's till, so the order is
+            # re-derived from parsed datetimes. An unparseable `opened_at`
+            # sorts oldest (datetime.min); the id breaks ties so that two
+            # installs holding the same data resolve it the same way.
+            rivals.sort(key=lambda row: (
+                _v16_parse_timestamp(row['opened_at']) or datetime.min,
+                str(row['id']),
+            ), reverse=True)
+            for loser in rivals[1:]:
+                _v16_force_end(conn, loser, V16_ENDED_REASON_COLLISION,
+                               stamp, live_tables)
+                summary['force_ended_collision'].append(loser['id'])
+
+        # ── 6. the constraint ────────────────────────────────────────────
+        # Probed, not attempted. See RetailCashDrawerBindError: the difference
+        # between this refusal and SQLite's own is that this one names the
+        # shop, the terminal and the recovery.
+        collisions = _v16_collision_probe(conn)
+        if collisions:
+            raise RetailCashDrawerBindError(_v16_bind_message(collisions))
+
+        shape = _uid_index_shape(conn, 'cash_sessions', V16_TERMINAL_INDEX)
+        if shape is not None and not _v16_terminal_index_is_correct(shape):
+            # The name exists carrying the wrong shape -- v13's F4 defect,
+            # where CREATE UNIQUE INDEX IF NOT EXISTS silently accepts a plain
+            # index that already holds the name and advances the version with
+            # no constraint in place. Dropped and rebuilt rather than trusted.
+            conn.execute(f'DROP INDEX IF EXISTS {V16_TERMINAL_INDEX}')
+            shape = None
+        if shape is None:
+            # Checked by NAME, database-wide, before the CREATE is even
+            # attempted -- see `_index_owning_table`. `_uid_index_shape`
+            # above only asked "is this name on cash_sessions", which is a
+            # different question from "does this name exist at all", and
+            # SQLite's CREATE INDEX answers the second one, not the first.
+            owner = _index_owning_table(conn, V16_TERMINAL_INDEX)
+            if owner is not None and owner != 'cash_sessions':
+                raise RetailCashDrawerBindError(
+                    f"Retail schema v16 cannot create index {V16_TERMINAL_INDEX}: "
+                    f"that name already exists on table '{owner}', not on "
+                    f"cash_sessions. SQLite index names are a single namespace "
+                    f"for the whole database, not scoped per table, so this is a "
+                    f"name collision from something else in this install -- not "
+                    f"a defect in the cash-drawer migration itself. Nothing was "
+                    f"changed: PRAGMA user_version was not advanced. Recovery: "
+                    f"rename or drop the conflicting index on '{owner}' (it does "
+                    f"not belong to this migration) and relaunch."
+                )
+            _v16_run_index_ddl(
+                conn,
+                f"CREATE UNIQUE INDEX {V16_TERMINAL_INDEX} "
+                f"ON cash_sessions(company_id, terminal_id) "
+                f"WHERE status='{CASH_SESSION_STATUS_OPEN}'"
+            )
+        if not _v16_terminal_index_is_correct(
+                _uid_index_shape(conn, 'cash_sessions', V16_TERMINAL_INDEX)):
+            raise RetailCashDrawerBindError(
+                f"Retail schema v16 created {V16_TERMINAL_INDEX} on cash_sessions "
+                f"but it did not come out UNIQUE and partial over exactly "
+                f"(company_id, terminal_id). Advancing PRAGMA user_version now "
+                f"would record a terminal-bound drawer that is not actually "
+                f"constrained -- two tills could share one open session and "
+                f"nothing would say so. user_version was not advanced; the next "
+                f"launch retries."
+            )
+
+        # Only now is the branch constraint dropped: creating first means the
+        # table is never left with neither, so an interruption between these
+        # two statements leaves the v10 guarantee standing rather than none.
+        # Both statements run through `_v16_run_index_ddl` -- see that
+        # function's docstring for why the ORDER of these two specific calls,
+        # not just their presence, is what keeps an interrupted migration
+        # safe.
+        _v16_run_index_ddl(conn, f'DROP INDEX IF EXISTS {V16_SUPERSEDED_BRANCH_INDEX}')
+        return summary
+    finally:
+        conn.row_factory = previous_factory
+
+
+def _v16_rebind_orphaned_open_drawers(conn):
+    """Boot-time, NOT version-gated: bind any OPEN drawer still carrying a
+    NULL `terminal_id` to this device, the moment this device is able to name
+    itself. Runs on EVERY launch, from the same place `_init_retail` already
+    runs the schema work -- unlike `_migrate_bind_cash_drawer_to_terminal`
+    above, this is not a one-time migration step and must never be folded
+    into one, for the reason this docstring exists to record.
+
+    THE GAP THIS CLOSES. `_migrate_bind_cash_drawer_to_terminal`'s own
+    backfill (step 4) binds every open, NULL-terminal drawer to
+    `local_terminal_id()` -- but ONLY ONCE, the moment schema v16 itself
+    runs, and only using whatever `local_terminal_id()` returns AT THAT
+    INSTANT. `local_terminal_id()` is `peek_local_device_uuid()`, which BY
+    DESIGN never creates `local_device.json` -- the only thing that writes it
+    is `device_context.resolve_local_device()`, reached in production only
+    via `GET /api/devices/me`, which the frontend calls from
+    `app-shell.js::init()` -- AFTER LOGIN. `init_retail()` runs at PROCESS
+    BOOT, before any login has happened. So on the FIRST boot after an
+    install upgrades to v16, the migration runs with no device identity yet,
+    every open drawer's `terminal_id` stays NULL, and `PRAGMA user_version`
+    advances to 16 regardless -- correctly, because the migration did
+    everything it could with the identity it had. The device identity then
+    appears moments later, at login, and `_migrate_bind_cash_drawer_to_terminal`
+    NEVER RUNS AGAIN: `ensure_schema_version` only re-enters the chain when
+    `user_version` is behind, and it is not, not ever again for this
+    install. Without this function, that shop's live, counted-into drawer is
+    stranded with a NULL terminal forever: no device can find it through
+    `_open_cash_session_id` (which will bind THIS device to nothing, since
+    there is no open row with THIS terminal_id), no device can close it,
+    and the float somebody physically counted into it is unreachable by any
+    code path this product ships. This function is the reconciliation that
+    catches up once the identity that step 4 needed finally exists.
+
+    WHY NOT VERSION-GATED. A version-gated step runs once, ever, at the
+    moment the marker crosses its threshold -- which is fine for a migration
+    reshaping the SCHEMA, but wrong for reconciling against a device identity
+    that this function has no control over the timing of. The identity can
+    appear on boot 1, boot 50, or never (a stripped Android build with no
+    `device_context` at all, or a machine that has genuinely never logged
+    in). Tying this to a version bump would mean "did the boot happen to
+    also be the one that changed a version" decides whether a shop's drawer
+    ever gets bound -- unrelated facts, coupled by accident. Running
+    unconditionally, every boot, makes the answer "as soon as the identity
+    exists, the very next launch" instead, with no dependency on which
+    launch that happens to be.
+
+    THE FOUR RULES, IN ORDER:
+
+      1. `local_terminal_id()` returns None -> do nothing at all. Still no
+         device identity: nothing here can be bound to anything, and the
+         correct action is to try again next boot, not to invent an
+         identity or leave a stale one behind. This is the SAME reasoning
+         `_migrate_bind_cash_drawer_to_terminal` step 4 already uses for the
+         identical return value, applied on a schedule that keeps checking
+         instead of checking exactly once.
+
+      2. An open session with a NON-NULL `terminal_id` is never touched.
+         This function only ever fills an absence; it does not reassign, and
+         it does not adjudicate between two drawers that both already claim
+         a terminal (`_migrate_bind_cash_drawer_to_terminal` step 5's
+         newest-wins collision resolution owns that question, and it owns it
+         exactly once, during the migration, not on every boot).
+
+      3. Binding a NULL-terminal drawer to THIS terminal is SKIPPED, leaving
+         the NULL in place, whenever this terminal already holds an open
+         drawer for that same `company_id`. Not attempted-and-caught: BINDING
+         WOULD VIOLATE `idx_cash_sessions_one_open_per_terminal`, the
+         partial UNIQUE index over exactly (company_id, terminal_id), and a
+         boot-time reconciliation raising `IntegrityError` out of
+         `init_retail()` -- which `app.py::init_app()` calls unconditionally,
+         no handler -- would turn "help this drawer find its terminal" into
+         "the POS will not start", the exact failure category this whole
+         file exists to keep off the boot path. The check is a real
+         same-transaction SELECT immediately before each UPDATE, not a
+         stale snapshot: binding one orphan for a company makes it visible
+         to the check run for the NEXT orphan of that same company, so two
+         or more NULL-terminal drawers stacked on one company correctly
+         bind at most one of them and leave the rest NULL rather than
+         raising on the second.
+
+         A `company_id IS NULL` row is the one exception to "check first":
+         SQL uniqueness treats a NULL as distinct from every other value
+         including another NULL, and that rule applies to EVERY column of a
+         composite key -- so two open sessions with a NULL company_id can
+         never collide in this index no matter what terminal_id either one
+         carries. Running the same collision check against a NULL company
+         would ask a question the index itself is never going to ask, and
+         answering it "yes, this collides" would leave a live drawer
+         unbound for a constraint that was never going to object to it --
+         the identical reasoning `_v16_collision_probe`'s two `IS NOT NULL`
+         predicates already state for the migration proper.
+
+      4. Never write, alter or fabricate a money column. Only `terminal_id`
+         is written, only on rows this function selected by `status='open'
+         AND terminal_id IS NULL`, so no float, count, or variance already
+         on a row is at any risk of being touched here.
+
+      CHEAP ON THE COMMON PATH, WHICH IS EVERY LAUNCH AFTER THE FIRST WHERE
+      IDENTITY ALREADY EXISTED AT MIGRATION TIME. `local_terminal_id()` is
+      checked before any query touches `cash_sessions` at all, so a build
+      with no device identity yet costs one file-system check per boot, not
+      one. When an identity DOES exist, the very next thing this function
+      does is a single indexed COUNT against
+      `idx_cash_sessions_one_open_per_terminal` (partial on `status='open'`,
+      covering `terminal_id`) -- on the overwhelmingly common case, where
+      step 4 already bound everything at migration time, that COUNT is zero
+      and this function returns immediately having issued exactly one query.
+
+      Commits its own work: unlike the steps inside
+      `_migrate_bind_cash_drawer_to_terminal`, which all sit inside
+      `ensure_schema_version`'s own transaction, this function runs AFTER
+      that call returns, so nothing else in `_init_retail` commits on its
+      behalf.
+    """
+    live_tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if 'cash_sessions' not in live_tables:
+        return
+
+    columns = {
+        row[1] for row in conn.execute('PRAGMA table_info("cash_sessions")').fetchall()
+    }
+    if 'terminal_id' not in columns:
+        # v13 has not run against this database (see the identical guard and
+        # reasoning in _migrate_bind_cash_drawer_to_terminal above) -- there
+        # is no column to bind and no device identity is meaningful yet.
+        return
+
+    # Rule 1, checked BEFORE any query touches cash_sessions: a build that
+    # cannot yet name its own terminal has nothing this function can do, and
+    # the cost of finding that out is one file read, not one database query.
+    terminal = local_terminal_id()
+    if not terminal:
+        return
+
+    previous_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        # The cheap common path: one indexed COUNT, and out. On every launch
+        # after the one where identity already existed at migration time,
+        # step 4 above has already bound everything there is to bind, and
+        # this returns having done a single query.
+        orphan_count = conn.execute(
+            "SELECT COUNT(*) FROM cash_sessions WHERE status=? AND terminal_id IS NULL",
+            (CASH_SESSION_STATUS_OPEN,),
+        ).fetchone()[0]
+        if not orphan_count:
+            return
+
+        orphans = conn.execute(
+            "SELECT id, company_id FROM cash_sessions "
+            "WHERE status=? AND terminal_id IS NULL "
+            "ORDER BY opened_at ASC, id ASC",
+            (CASH_SESSION_STATUS_OPEN,),
+        ).fetchall()
+        bound = 0
+        for row in orphans:
+            company_id = row['company_id']
+            if company_id is not None:
+                # Rule 3: re-checked fresh for every orphan, not from a
+                # snapshot taken before this loop started, so binding one
+                # orphan for a company is visible to the check for the next
+                # one -- see this function's own docstring for why that is
+                # what keeps two stacked orphans from raising on the second.
+                collision = conn.execute(
+                    "SELECT 1 FROM cash_sessions "
+                    "WHERE status=? AND terminal_id=? AND company_id=? LIMIT 1",
+                    (CASH_SESSION_STATUS_OPEN, terminal, company_id),
+                ).fetchone()
+                if collision:
+                    continue
+            conn.execute(
+                "UPDATE cash_sessions SET terminal_id=? WHERE id=?",
+                (terminal, row['id']),
+            )
+            bound += 1
+        if bound:
+            conn.commit()
+    finally:
+        conn.row_factory = previous_factory
+
+
 def init_retail():
     """Create/upgrade retail.db and seed it on first boot.
 
@@ -3378,6 +4618,19 @@ def _init_retail(conn):
         conn, _get_path('retail'), RETAIL_SCHEMA_VERSION, _migrate_retail_schema,
         backup_dir=os.path.join(BASE_DIR, 'migration_backups'),
     )
+
+    # NOT version-gated, and deliberately outside the block above: this is a
+    # boot-time reconciliation, not a one-time migration step, and it must
+    # run every launch regardless of whether `user_version` moved this time.
+    # See _v16_rebind_orphaned_open_drawers's own docstring for the gap this
+    # closes -- schema v16's own backfill can only bind an open drawer to a
+    # device identity that exists AT THE MOMENT v16 RUNS, and that identity
+    # is not created until the first post-login /api/devices/me call, which
+    # is always later than the process-boot init_retail() that just ran
+    # above. Placed here, right after the migration this reconciles against,
+    # by the same "run every launch" reasoning as everything below it in this
+    # function.
+    _v16_rebind_orphaned_open_drawers(conn)
 
     if cur.execute("SELECT COUNT(*) FROM branches").fetchone()[0] == 0 and not _is_standalone():
         _seed_retail(conn, cur)

@@ -80,6 +80,14 @@ def _handler(source):
     return next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef))
 
 
+def _module(source):
+    """A whole multi-function snippet, as an AST tree -- for the
+    interprocedural (helper + caller) shapes, which need more than one
+    function in scope at once. `graded_capability_calls_in_module` is the
+    only thing here that reads more than a single function."""
+    return ast.parse(source)
+
+
 def _presence_only(fn):
     """THE OLD PREDICATE, reproduced verbatim in behaviour.
 
@@ -419,15 +427,24 @@ def report_summary():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _real_calls():
-    """Every session_has_capability call in the two real route files, graded."""
+    """Every session_has_capability call in the two real route files, graded.
+
+    Module-aware (`graded_capability_calls_in_module`), not the plain
+    per-function `graded_capability_calls` this file used before AUDIT-032's
+    follow-on: `_session_read_scope` returns its verdict as one element of a
+    tuple, and both its real callers (`get_cash_session`,
+    `cash_session_x_report`) destructure that tuple and branch on the second
+    slot -- a real, interprocedural gate the plain per-function pass cannot
+    see (see retail_capability_ratchet_ast.py, honest limit 1's 2026-08-24
+    addendum). Graded per FILE, not across both at once, matching the
+    original per-function loop: a helper in retail_api.py and one of the same
+    name in import_api.py (there are none today, but nothing pins that) stay
+    two separate analyses rather than one that could cross-wire them.
+    """
     out = []
     for path in (RETAIL_API, IMPORT_API):
         tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
-        for fn in ast.walk(tree):
-            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            for source, grade in ratchet.graded_capability_calls(fn):
-                out.append((fn.name, source, grade))
+        out.extend(ratchet.graded_capability_calls_in_module(tree))
     return out
 
 
@@ -445,20 +462,47 @@ def test_every_in_handler_capability_check_the_product_ships_is_consumed():
     Tightening presence into data flow is a LOOSENING of what counts as gated
     in exactly one direction and a tightening in every other, so the risk it
     introduces is reporting a real, working gate as absent. Every
-    `session_has_capability` call in the shipped route files is a deliberate
-    gate; if any one of them stops grading as consumed, the analysis has become
-    wrong about production code and this fails before the ratchet can start
-    manufacturing false alarms."""
+    `session_has_capability` CHECK in the shipped route files is a deliberate
+    gate; if one of them stops grading as consumed anywhere, the analysis has
+    become wrong about production code and this fails before the ratchet can
+    start manufacturing false alarms.
+
+    Grouped by (handler, exact call source) rather than by individual call
+    SITE, because `list_cash_sessions` genuinely, deliberately calls
+    `session_has_capability(CAP_CASH_APPROVE)` twice: once to compute
+    `all_terminals` (consumed immediately -- `if all_terminals:` chooses the
+    query), and a second time, byte-for-byte identical, to put that same
+    boolean into the response body as `may_approve`. Read retail_api.py's own
+    comment on that second line: "a hint the client could lie about is not a
+    gate" -- /approve re-checks retail.cash.approve itself; this one exists so
+    the screen can decide whether to OFFER the button. Two identical source
+    strings, same capability, same handler, same request: the first IS the
+    gate, the second DISCLOSES what the first already decided. Requiring
+    every syntactic occurrence to independently grade as consumed would
+    demand deleting or obfuscating a legitimate, already-reasoned-about
+    disclosure line to satisfy a test -- which fixes nothing real, since the
+    enforcement already happened one line above it. What this guard actually
+    cares about is whether a CAPABILITY, IN A HANDLER, is EVER enforced --
+    not whether every mention of it independently is -- so a genuinely dead
+    check (the only kind that should fail this) is one where NONE of its
+    occurrences, for that exact source text in that handler, ever reach a
+    decision anywhere."""
     calls = _real_calls()
     assert len(calls) >= 5, (
         f"the analysis found almost no capability calls in the real route "
         f"files -- it is not reading what it thinks it is: {calls}")
-    dropped = [(fn, source, grade) for fn, source, grade in calls
-               if grade not in ratchet.CONSUMING_GRADES]
+
+    grades_by_check = {}
+    for fn, source, grade in calls:
+        grades_by_check.setdefault((fn, source), []).append(grade)
+
+    dropped = [(fn, source, grades) for (fn, source), grades in grades_by_check.items()
+               if not any(g in ratchet.CONSUMING_GRADES for g in grades)]
     assert not dropped, (
-        "these REAL, shipped capability checks now grade as unconsumed. Either "
-        "production grew a genuinely dead check, or the analysis is wrong:\n  "
-        + "\n  ".join(f"{fn}: {source} -> {grade}" for fn, source, grade in dropped))
+        "these REAL, shipped capability checks now grade as unconsumed on EVERY "
+        "occurrence in their handler. Either production grew a genuinely dead "
+        "check, or the analysis is wrong:\n  "
+        + "\n  ".join(f"{fn}: {source} -> {grades}" for fn, source, grades in dropped))
 
 
 def test_the_two_real_consumption_shapes_are_both_present_in_production():
@@ -497,3 +541,248 @@ def test_the_real_file_still_contains_ungated_handlers():
     assert 'list_products' in ungated, (
         "the catalogue read a till depends on now reads as gated; the existing "
         "sweeps pin it as deliberately open, so the analysis disagrees with them")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# THE INTERPROCEDURAL EXTENSION, MUTATION-PROVED (AUDIT-032 follow-on,
+# 2026-08-24)
+#
+# `_session_read_scope` returns its verdict as one element of a tuple; its two
+# real callers destructure that tuple and branch on the matching slot. Graded
+# in isolation that is `packaged` (a bare tuple is one of the "anything else"
+# shapes `grade_value` gives up at -- honest limit 5), and the real-file tests
+# above went red over exactly that: three REAL, shipped, security-relevant
+# capability checks reporting as unconsumed. `graded_capability_calls_in_module`
+# follows this one interprocedural shape to fix that -- and a widened analysis
+# is worthless unless it is proved in BOTH directions, same as every other
+# grade in this file: it must still say NO to the shape that only LOOKS like
+# this one -- a helper whose callers destructure the verdict and then drop it
+# -- or "packaged" stopped meaning "not a gate" and started meaning "a gate
+# only if a human happens to notice".
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: A helper that returns its verdict as slot 1 of a tuple, and a caller that
+#: destructures the tuple into `_mine, ignored` and never reads `ignored`
+#: again -- the interprocedural twin of `NOT_CONSUMED_SPELLINGS['bound, then
+#: only logged']` one hop further out. If the module-aware pass ever started
+#: crediting a helper for a caller that drops the value, THIS is what would
+#: stop catching it.
+INTERPROCEDURAL_DEAD_CHECK = '''
+def _read_scope(sess):
+    return True, session_has_capability(CAP_REPORTS)
+
+def get_thing(sess):
+    _mine, ignored = _read_scope(sess)
+    return jsonify({'data': rows})
+'''
+
+#: Byte-for-byte the same helper, but the caller branches on the destructured
+#: name -- the exact shape `_session_read_scope` / `get_cash_session` /
+#: `cash_session_x_report` use in production, reduced to its smallest form.
+INTERPROCEDURAL_CONSUMED_CHECK = '''
+def _read_scope(sess):
+    return True, session_has_capability(CAP_REPORTS)
+
+def get_thing(sess):
+    _mine, may_read = _read_scope(sess)
+    if not may_read:
+        return jsonify({'status': 'error'}), 403
+    return jsonify({'data': rows})
+'''
+
+#: The REAL shape, unreduced: two calls combined by `or` inside the returned
+#: tuple, exactly as `_session_read_scope` writes it, plus a second caller
+#: that ignores the result entirely (present because production has one
+#: caller of `_session_read_scope` for every route that reads a specific
+#: session, and this proves a caller who does nothing with the tuple does not
+#: spoil the verdict for the callers who do).
+INTERPROCEDURAL_OR_WITH_AN_IGNORING_CALLER = '''
+def _read_scope(sess):
+    if is_mine(sess):
+        return True, True
+    return False, (session_has_capability(CAP_REPORTS)
+                   or session_has_capability(CAP_CASH_APPROVE))
+
+def list_thing(sess):
+    _read_scope(sess)
+    return jsonify({'data': rows})
+
+def get_thing(sess):
+    _mine, may_read = _read_scope(sess)
+    if not may_read:
+        return jsonify({'status': 'error'}), 403
+    return jsonify({'data': rows})
+'''
+
+
+def test_a_helper_verdict_whose_callers_all_drop_it_is_still_not_a_gate():
+    """(a) THE MUTATION PROOF, dead direction. A helper returning its verdict
+    in a tuple is not, by itself, a gate -- the caller has to DO something
+    with the slot it unpacks into. `ignored` is read nowhere, so this must
+    grade exactly like any other dropped verdict: not consumed."""
+    tree = _module(INTERPROCEDURAL_DEAD_CHECK)
+    calls = ratchet.graded_capability_calls_in_module(tree)
+    read_scope_calls = [(fn, source, grade) for fn, source, grade in calls if fn == '_read_scope']
+    assert read_scope_calls == [
+        ('_read_scope', 'session_has_capability(CAP_REPORTS)', ratchet.UNCONSUMED_PACKAGED)
+    ], read_scope_calls
+    assert read_scope_calls[0][2] not in ratchet.CONSUMING_GRADES, read_scope_calls
+
+
+def test_a_helper_verdict_a_caller_branches_on_is_a_real_gate():
+    """(b) THE MUTATION PROOF, consumed direction. Same helper, byte-for-byte,
+    with the caller now branching on the unpacked name -- this MUST flip to a
+    consuming grade, or the widening did nothing but add a new way to be
+    wrong about a genuinely dead check."""
+    tree = _module(INTERPROCEDURAL_CONSUMED_CHECK)
+    calls = ratchet.graded_capability_calls_in_module(tree)
+    read_scope_calls = [(fn, source, grade) for fn, source, grade in calls if fn == '_read_scope']
+    assert read_scope_calls == [
+        ('_read_scope', 'session_has_capability(CAP_REPORTS)', ratchet.CONSUMED_VIA_CALLER)
+    ], read_scope_calls
+    assert read_scope_calls[0][2] in ratchet.CONSUMING_GRADES, read_scope_calls
+
+
+def test_an_ignoring_caller_does_not_spoil_the_verdict_for_a_consuming_one():
+    """The `or`-combined, two-caller shape production actually has:
+    `list_cash_sessions`-shaped code calls a scope helper and does nothing
+    with it in one route, while `get_cash_session` branches on it in
+    another. One careless caller must not blind the analysis to the real
+    gate a DIFFERENT caller provides -- and both calls inside the `or` must
+    resolve, not just the first one reached while climbing."""
+    tree = _module(INTERPROCEDURAL_OR_WITH_AN_IGNORING_CALLER)
+    calls = ratchet.graded_capability_calls_in_module(tree)
+    read_scope_calls = [(source, grade) for fn, source, grade in calls if fn == '_read_scope']
+    assert read_scope_calls == [
+        ('session_has_capability(CAP_REPORTS)', ratchet.CONSUMED_VIA_CALLER),
+        ('session_has_capability(CAP_CASH_APPROVE)', ratchet.CONSUMED_VIA_CALLER),
+    ], read_scope_calls
+
+
+def test_the_interprocedural_pass_does_not_change_single_function_grading():
+    """`graded_capability_calls` (the plain, single-function pass everything
+    else in this file and `capability_check_in`/`capability_check_detail`
+    still use) must be byte-for-byte unaffected by the new
+    `on_tuple_return` parameter existing -- it is never passed by that path,
+    so a helper graded on its own, outside a module-aware call, still reports
+    `packaged` for a tuple-returned verdict. If this ever changed, a route
+    handler's OWN single-function analysis (used by `route_handlers` +
+    `capability_check_in`, i.e. everything in this suite before this
+    section) would start crediting gates it cannot actually see the caller
+    side of."""
+    tree = _module(INTERPROCEDURAL_CONSUMED_CHECK)
+    read_scope_fn = next(n for n in ast.walk(tree)
+                          if isinstance(n, ast.FunctionDef) and n.name == '_read_scope')
+    assert ratchet.graded_capability_calls(read_scope_fn) == [
+        ('session_has_capability(CAP_REPORTS)', ratchet.UNCONSUMED_PACKAGED)
+    ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TWO FAIL-OPEN HOLES IN THE INTERPROCEDURAL PASS, FOUND BY AN ADVERSARIAL
+# READ OF IT AND CLOSED IN retail_capability_ratchet_ast.py. Both are shapes
+# retail_api.py does not currently contain -- which is exactly why they need
+# tests: nothing else would notice the day it grows one.
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: The verdict is returned as a tuple by a function NESTED inside the helper.
+#: The helper's own callers destructure the helper's return -- which is the
+#: nested function OBJECT, never that tuple -- so they are no evidence at all
+#: about the check, and crediting it would be a false PASS: the one direction
+#: this analysis is not allowed to be wrong in.
+NESTED_TUPLE_RETURN_WITH_A_CONSUMING_OUTER_CALLER = '''
+def _read_scope(sess):
+    def inner():
+        return True, session_has_capability(CAP_REPORTS)
+    return inner
+
+def get_thing(sess):
+    mine, may_read = _read_scope(sess)
+    if not may_read:
+        return jsonify({'status': 'error'}), 403
+'''
+
+#: Two functions sharing one name, only one of which reads a capability. A
+#: name-keyed function table kept whichever came last and never analysed the
+#: other -- the check simply disappeared from the sweep rather than grading as
+#: anything.
+TWO_FUNCTIONS_SHARING_A_NAME = '''
+class Alpha:
+    def _read_scope(self, sess):
+        if session_has_capability(CAP_REPORTS):
+            return True
+        return False
+
+class Beta:
+    def _read_scope(self, sess):
+        return False
+'''
+
+#: The same collision, but now the interprocedural pass has something to be
+#: tempted by: `Alpha._read_scope` returns its verdict in a tuple, and a caller
+#: destructures and branches -- on a call to `Beta._read_scope`. Call sites are
+#: matched by IDENTIFIER, so the analysis cannot tell those two apart, and the
+#: only honest answer is to credit neither.
+SHADOWED_HELPER_WITH_A_CONSUMING_CALLER_OF_THE_OTHER_ONE = '''
+class Alpha:
+    def _read_scope(self, sess):
+        return True, session_has_capability(CAP_REPORTS)
+
+class Beta:
+    def _read_scope(self, sess):
+        return True, False
+
+def get_thing(sess):
+    mine, may_read = Beta()._read_scope(sess)
+    if not may_read:
+        return jsonify({'status': 'error'}), 403
+'''
+
+
+def test_a_verdict_returned_by_a_NESTED_function_is_not_credited_to_its_outer_callers():
+    """A `return a, b` inside `def inner()` returns through `inner`, not
+    through the helper that defines it. `get_thing` unpacks what `_read_scope`
+    returns -- a function object -- and has never seen `inner`'s tuple, so it
+    cannot possibly be the gate for the check inside it. Grading this
+    `via-caller` would be the analysis inventing a gate, which is worse than
+    admitting it cannot see one."""
+    calls = ratchet.graded_capability_calls_in_module(
+        _module(NESTED_TUPLE_RETURN_WITH_A_CONSUMING_OUTER_CALLER))
+    graded = [(fn, grade) for fn, _source, grade in calls]
+    assert graded == [
+        ('_read_scope', ratchet.UNCONSUMED_PACKAGED),
+        ('inner', ratchet.UNCONSUMED_PACKAGED),
+    ], graded
+    assert all(g not in ratchet.CONSUMING_GRADES for _fn, g in graded), graded
+
+
+def test_two_functions_sharing_a_name_are_both_analysed():
+    """The module pass must EXAMINE every shipped check, whatever its
+    function is called. A function table keyed by name silently dropped one of
+    a colliding pair -- and a check that is never graded cannot fail the
+    real-file assertion, which is fail-OPEN: the sweep would go quietly green
+    over code it never read."""
+    calls = ratchet.graded_capability_calls_in_module(_module(TWO_FUNCTIONS_SHARING_A_NAME))
+    scope_calls = [(fn, source) for fn, source, _g in calls]
+    assert scope_calls == [('_read_scope', 'session_has_capability(CAP_REPORTS)')], scope_calls
+    # …and the Beta copy is present in the table too, so the sweep genuinely
+    # walked both bodies rather than the collision happening to keep the
+    # interesting one.
+    names = [fn.name for fn in ast.walk(_module(TWO_FUNCTIONS_SHARING_A_NAME))
+             if isinstance(fn, ast.FunctionDef)]
+    assert names == ['_read_scope', '_read_scope'], names
+
+
+def test_a_caller_of_a_SHADOWED_helper_name_credits_neither_of_them():
+    """Analysing both halves of a name collision (the test above) must not
+    turn into crediting the wrong half. `get_thing` branches on what
+    `Beta._read_scope` returned; `Alpha._read_scope` is the one holding a
+    capability call, and nothing in this module can tell the two call targets
+    apart -- identifiers are all it matches on. Crediting `Alpha` here would
+    manufacture a gate out of a name clash, so both must stay `packaged` and
+    a human adjudicates."""
+    calls = ratchet.graded_capability_calls_in_module(
+        _module(SHADOWED_HELPER_WITH_A_CONSUMING_CALLER_OF_THE_OTHER_ONE))
+    assert calls == [
+        ('_read_scope', 'session_has_capability(CAP_REPORTS)', ratchet.UNCONSUMED_PACKAGED)
+    ], calls

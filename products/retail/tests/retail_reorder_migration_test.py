@@ -253,16 +253,27 @@ def test_fresh_install_lands_on_v8_with_reorder_schema_present():
     one, unlike that one, calls the REAL init_retail() and therefore always
     reflects whatever RETAIL_SCHEMA_VERSION currently is -- see
     retail_category_delete_fk_sync_test.py's identical
-    RETAIL_SCHEMA_VERSION==15 update for the same reasoning -- launch-
+    RETAIL_SCHEMA_VERSION==16 update for the same reasoning -- launch-
     readiness Phase 2 moved the number again, to v13 (identity/attribution
-    columns) and v14 (the company_id rebind), and Phase 3 to v15).
+    columns) and v14 (the company_id rebind), Phase 3 to v15, and Phase 4 to
+    v16).
 
     v15 is worth a word here because it is the first step in the chain that
     can REFUSE to advance: it gates on `inventory_balances` being reproducible
     from `inventory_movements`. This test runs with AURA_STANDALONE=1, so no
     demo data is seeded and there is no stock for it to disagree about --
     which makes the assertion below a real statement that a FRESH, EMPTY
-    install sails through the gate rather than tripping over it."""
+    install sails through the gate rather than tripping over it.
+
+    v16 is worth a word for a different reason: it is the first NON-ADDITIVE
+    step in the chain, dropping `idx_cash_sessions_one_open_per_branch` and
+    creating `idx_cash_sessions_one_open_per_terminal` in its place, and a
+    `CREATE UNIQUE INDEX` is evaluated against whatever rows are already
+    there. A fresh, empty install has no cash sessions to collide, so the
+    assertion below is also a real statement that the non-additive step is a
+    clean no-op on a shop that has never opened a till -- the case that must
+    stay boring while retail_v16_terminal_cash_drawer_test.py carries the
+    ones that are not."""
     data_dir = Path(tempfile.mkdtemp(prefix="aura_retail_reorder_freshinstall_"))
     (data_dir / "database" / "subsystems").mkdir(parents=True, exist_ok=True)
     old_app_data = os.environ.get("AURA_APP_DATA")
@@ -278,7 +289,7 @@ def test_fresh_install_lands_on_v8_with_reorder_schema_present():
 
         conn = retail_schema.get_retail_conn()
         try:
-            assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 16
             cols = {r[1] for r in conn.execute("PRAGMA table_info(products)").fetchall()}
             assert "reorder_method" in cols
             tables = {r[0] for r in conn.execute(

@@ -64,13 +64,58 @@ Two ways a value gets there, both of which the real code uses:
 Written out rather than glossed, because a previous guard in this area
 claimed coverage it did not have and the CLAIM is what let the bug through.
 
-1. NOT INTERPROCEDURAL. `abort_unless(session_has_capability(CODE))` -- a
-   helper that raises -- is a real gate this module scores as `packaged`,
-   i.e. NOT consumed. It cannot see inside `abort_unless`. This is the
-   fail-closed direction for a ratchet (a false ALARM, never a false pass:
-   a genuinely-gated route gets flagged and a human adjudicates it), but it
-   is a limit, and if that idiom ever arrives here this module needs
-   widening rather than an exemption bolted onto the ratchet.
+1. NOT INTERPROCEDURAL, WITH ONE NAMED EXCEPTION (2026-08-24, AUDIT-032
+   follow-on). `abort_unless(session_has_capability(CODE))` -- a helper that
+   raises -- is still a real gate this module scores as `packaged`, i.e. NOT
+   consumed. It cannot see inside `abort_unless`. That is still the
+   fail-closed direction for a ratchet (a false ALARM, never a false pass),
+   and still a limit for that shape.
+
+   But ONE interprocedural shape is now followed, because production grew
+   it and the fail-closed direction turned into a false alarm against a
+   real, live gate: a helper that returns its verdict as one element of a
+   tuple --
+
+       def _session_read_scope(sess):
+           ...
+           return False, (session_has_capability(CAP_REPORTS)
+                          or session_has_capability(CAP_CASH_APPROVE))
+
+   -- read on its own, packages the verdict into a `Tuple` (honest limit 5,
+   unchanged: a bare tuple is one of the "anything else" shapes this module
+   gives up at). But `_session_read_scope`'s two real callers destructure
+   that exact tuple and branch on the second slot --
+
+       _mine, may_read = _session_read_scope(sess)
+       if not may_read:
+           return jsonify({'status': 'error', 'message': FOREIGN_DRAWER_MESSAGE}), 403
+
+   -- which is genuinely, load-bearingly gated: it decides whether one till
+   may read another till's takings. Grading the helper's call in isolation
+   said `packaged`; the ratchet built on that verdict would have reported a
+   real, shipped, security-relevant check as absent -- exactly the false
+   alarm limit 1 warns is the failure MODE this module is allowed to have,
+   which does not make an actual instance of it something to ship silently.
+
+   `graded_capability_calls_in_module()` is the module-aware entry point
+   that follows this ONE shape: a `return a, b, ...` tuple, one slot of
+   which carries a capability verdict (directly, or through the same
+   value-preserving wrappers and name-binding `grade_value` already
+   understands), destructured by a caller as `x, y, ... = helper(...)` with
+   a same-position plain-`Name` target, and THAT name graded by the exact
+   same single-function machinery as everything else -- so all of that
+   machinery's OWN honest limits (4: name shadowing; 5: no positional
+   matching through a second layer of packaging; 7: inert-but-present
+   branches) apply again, once per caller, unchanged.
+
+   Deliberately NOT widened past that: a verdict packaged into a `dict`,
+   consumed by a decorator-wrapped helper, threaded through a second call
+   before reaching a decision, or read by a caller that itself only reads
+   the name inside ANOTHER helper's tuple return (two hops) all still grade
+   `packaged`, on purpose, for the same reason limit 1 gives -- proving
+   arbitrary data flow through arbitrary Python is undecidable, and this
+   module chases exactly the shapes production actually uses and no
+   further, per the reduced claim below.
 
 2. NOT REACHABILITY. A call inside a nested function or a branch that never
    executes still scores as consumed if the value syntactically reaches a
@@ -181,6 +226,14 @@ CAPABILITY_READER = 'session_has_capability'
 CONSUMED_BRANCH = 'branch'
 CONSUMED_RETURN = 'return'
 CONSUMED_RAISE = 'raise'
+#: The verdict is packaged into a tuple this function RETURNS, and a caller
+#: that destructures that tuple goes on to consume the matching slot -- see
+#: the interprocedural section of honest limit 1. Kept distinct from
+#: CONSUMED_BRANCH/RETURN/RAISE (rather than reporting whichever of those the
+#: CALLER happened to use) because "you have to look at the caller to see
+#: why this is gated" is a genuinely different fact than "the gate is right
+#: here", and collapsing them would hide that from whoever reads a grade.
+CONSUMED_VIA_CALLER = 'via-caller'
 UNCONSUMED_DISCARDED = 'discarded'
 UNCONSUMED_PACKAGED = 'packaged'
 #: The verdict reached a branch, and the branch does NOTHING -- every arm is
@@ -189,7 +242,7 @@ UNCONSUMED_PACKAGED = 'packaged'
 #: much as the dead line did. See honest limit 7 for what remains open past it.
 UNCONSUMED_INERT = 'inert-branch'
 
-CONSUMING_GRADES = frozenset({CONSUMED_BRANCH, CONSUMED_RETURN, CONSUMED_RAISE})
+CONSUMING_GRADES = frozenset({CONSUMED_BRANCH, CONSUMED_RETURN, CONSUMED_RAISE, CONSUMED_VIA_CALLER})
 NON_CONSUMING_GRADES = frozenset({UNCONSUMED_DISCARDED, UNCONSUMED_PACKAGED, UNCONSUMED_INERT})
 
 #: Nodes that hand a value onward UNCHANGED in the sense that matters here:
@@ -247,13 +300,24 @@ def _assigned_names(node):
             if isinstance(sub, ast.Name)]
 
 
-def grade_value(node, root, parents=None, _seen=None):
-    """How the value produced by `node` is used, as one of the five grades.
+def grade_value(node, root, parents=None, _seen=None, on_tuple_return=None):
+    """How the value produced by `node` is used, as one of six grades.
 
     Walks UP from the node. At each step the only question is what role the
     value plays in its parent: a decision (stop, consumed), a binding (switch
-    to following the name), a wrapper (keep climbing, same value), or anything
-    else (stop, not consumed).
+    to following the name), a wrapper (keep climbing, same value), a tuple
+    RETURN slot (ask `on_tuple_return`, see below), or anything else (stop,
+    not consumed).
+
+    `on_tuple_return`, when given, is called as `on_tuple_return(index)` the
+    moment climbing reaches "this is element `index` of a tuple that is a
+    `return` statement's whole value" -- the interprocedural on-ramp described
+    in honest limit 1's 2026-08-24 addendum. It must answer with a grade
+    string (typically CONSUMED_VIA_CALLER) if some caller consumes that slot,
+    or None to fall through to the ordinary UNCONSUMED_PACKAGED a bare tuple
+    gets otherwise. Left as None (the default, and what every single-function
+    caller in this module still passes) this function's behaviour toward a
+    tuple return is byte-for-byte what it always was.
     """
     if parents is None:
         parents = parent_map(root)
@@ -301,11 +365,11 @@ def grade_value(node, root, parents=None, _seen=None):
 
         # ── bound to a name: follow every READ of that name ──────────────────
         if isinstance(parent, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and parent.value is child:
-            return _grade_names(_assigned_names(parent), root, parents, _seen)
+            return _grade_names(_assigned_names(parent), root, parents, _seen, on_tuple_return)
         if isinstance(parent, ast.NamedExpr) and parent.value is child:
             # A walrus both binds AND yields, so try the binding first and
             # otherwise keep climbing with the inline value.
-            via_name = _grade_names([parent.target.id], root, parents, _seen)
+            via_name = _grade_names([parent.target.id], root, parents, _seen, on_tuple_return)
             if via_name in CONSUMING_GRADES:
                 return via_name
             child = parent
@@ -321,6 +385,25 @@ def grade_value(node, root, parents=None, _seen=None):
             child = parent
             continue
 
+        # ── one slot of a tuple this function RETURNS: ask the caller ────────
+        # `return a, (session_has_capability(C) or ...)` -- read alone this is
+        # just another "anything else" packaging (a Tuple), but a caller that
+        # destructures the return and consumes the matching slot genuinely did
+        # gate on this verdict. Only asked when a resolver was supplied (the
+        # module-aware entry point below); every single-function caller in
+        # this module passes None, so this branch is inert for them and they
+        # fall straight through to UNCONSUMED_PACKAGED exactly as before. See
+        # honest limit 1's 2026-08-24 addendum.
+        if (on_tuple_return is not None and isinstance(parent, ast.Tuple)
+                and isinstance(parents.get(parent), ast.Return)
+                and parents[parent].value is parent):
+            for index, elt in enumerate(parent.elts):
+                if elt is child:
+                    resolved = on_tuple_return(index)
+                    if resolved is not None:
+                        return resolved
+                    break
+
         # ── anything else PACKAGES the value ────────────────────────────────
         # A call argument, a dict/list/set/tuple, an f-string, a subscript, an
         # attribute access. The value went somewhere this module cannot follow,
@@ -328,7 +411,7 @@ def grade_value(node, root, parents=None, _seen=None):
         return UNCONSUMED_PACKAGED
 
 
-def _grade_names(names, root, parents, seen):
+def _grade_names(names, root, parents, seen, on_tuple_return=None):
     """Best grade reachable from any READ of any of these identifiers.
 
     `seen` breaks the `a = b; b = a` cycle and stops one name being chased
@@ -342,7 +425,7 @@ def _grade_names(names, root, parents, seen):
         for node in ast.walk(root):
             if (isinstance(node, ast.Name) and node.id == name
                     and isinstance(node.ctx, ast.Load)):
-                grade = grade_value(node, root, parents, seen)
+                grade = grade_value(node, root, parents, seen, on_tuple_return)
                 if grade in CONSUMING_GRADES:
                     return grade
                 if grade == UNCONSUMED_PACKAGED:
@@ -354,10 +437,174 @@ def _grade_names(names, root, parents, seen):
 
 
 def graded_capability_calls(fn):
-    """[(source of each session_has_capability call, its grade)], in source order."""
+    """[(source of each session_has_capability call, its grade)], in source order.
+
+    Single-function only -- no interprocedural following. This is still what
+    `capability_check_detail`/`capability_check_in` use for "is THIS handler
+    gated", and it is what every synthetic single-function test in the suite
+    exercises. `graded_capability_calls_in_module` below is the wider,
+    module-aware sibling; this one is unchanged on purpose so nothing that
+    already depends on its exact behaviour moves.
+    """
     parents = parent_map(fn)
     return [(ast.unparse(node), grade_value(node, fn, parents))
             for node in ast.walk(fn) if is_capability_call(node)]
+
+
+def _calls_named(call, name):
+    """Same two spellings `is_capability_call` recognises (bare name, dotted
+    attribute), generalised to any callee -- used below to find call sites of
+    a specific LOCAL helper rather than of `session_has_capability` itself."""
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id == name
+    if isinstance(func, ast.Attribute):
+        return func.attr == name
+    return False
+
+
+def _enclosing_function(node, parents):
+    """The nearest FunctionDef ANCESTOR of `node` within the subtree `parents`
+    was built for -- which for a call in the root function's own body IS that
+    root function (`parent_map` records the root as the parent of its own body
+    statements), and for a call one `def` deeper is that inner function.
+    None only if `node` has no function ancestor at all.
+
+    Exists for one reason: `ast.walk(fn)` descends into functions DEFINED
+    inside `fn`, and a `return` inside a nested function returns through the
+    NESTED function, not through `fn`. Without this, a capability verdict in
+
+        def _read_scope(sess):
+            def inner():
+                return True, session_has_capability(CAP_REPORTS)
+            return inner
+
+    was credited as `via-caller` off `_read_scope`'s callers -- callers that
+    unpack `_read_scope`'s OWN return (a function object) and have never seen
+    `inner`'s tuple at all. A false CREDIT is the one direction a ratchet may
+    not fail in, so the resolver is simply not offered for nested calls; they
+    fall back to the ordinary `packaged`, which is what they were before the
+    interprocedural pass existed.
+    """
+    current = parents.get(node)
+    while current is not None:
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return current
+        current = parents.get(current)
+    return None
+
+
+def _grade_tuple_return_via_callers(helper_name, index, functions, parents_by_fn):
+    """Best grade reachable by following slot `index` of `helper_name`'s
+    return tuple into every OTHER function in `functions` that destructures a
+    direct call to it, then grading what that caller does with the bound
+    name.
+
+    Deliberately narrow, matching only the shape production actually uses:
+
+      * the caller assigns FROM a bare call to `helper_name` -- `x, y =
+        helper(...)` or `x, y = mod.helper(...)` -- not a call wrapped in
+        anything else, which would be a second layer of packaging this
+        module still cannot see through (honest limit 1, one hop out);
+      * the assignment target is a plain `Tuple`/`List` of `Name`s -- no
+        starred or nested targets, which stay unresolved rather than guessed
+        at (mirrors honest limit 5's "positional matching is not worth
+        building" stance, now one layer removed from where it was written);
+      * the target at `index` is graded by NAME over the CALLER's own body,
+        via the exact same `_grade_names` pass the single-function via-a-name
+        case uses -- so limit 4 (name shadowing: by identifier, no scope or
+        ordering analysis) applies again here, once per caller, unchanged;
+      * …with one place limit 4 is NOT merely inherited but explicitly
+        fail-closed: if the module defines `helper_name` more than once, no
+        caller can be attributed to a particular definition, and this
+        function credits NONE of them (see the guard below). The single-
+        function machinery has no equivalent situation to be wrong about;
+        this one is created by looking across functions, so it is answered
+        here rather than left to whoever reads the grade.
+
+    Stops at the FIRST caller that consumes it. A caller that destructures
+    the tuple and drops the name is not evidence of anything -- other callers
+    may still genuinely gate on it, and each caller's OWN single-function
+    analysis (via `route_handlers` + `capability_check_in`, if that caller is
+    itself a route) independently judges whether THAT caller's handling is
+    gated. This function only answers "does the helper's returned slot reach
+    a decision ANYWHERE", which is the question `on_tuple_return` was asked.
+    """
+    # AMBIGUOUS NAME -> NO CREDIT. Call sites are matched by identifier (this
+    # module has no scope or type analysis -- honest limit 4), so if the module
+    # defines this name twice, `x, y = _read_scope(...)` could be unpacking
+    # EITHER of them, and crediting the one that happens to hold a capability
+    # call would be inventing a gate out of a name collision. Declining is the
+    # fail-closed answer: the check reverts to `packaged` and a human looks.
+    if sum(1 for name, _fn in functions if name == helper_name) > 1:
+        return None
+
+    for caller_name, caller_fn in functions:
+        if caller_name == helper_name:
+            continue  # no self-recursion; a helper cannot be its own caller here
+        caller_parents = parents_by_fn[id(caller_fn)]
+        for node in ast.walk(caller_fn):
+            if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+                continue
+            target = node.targets[0]
+            if not isinstance(target, (ast.Tuple, ast.List)):
+                continue
+            if not (isinstance(node.value, ast.Call) and _calls_named(node.value, helper_name)):
+                continue
+            if index >= len(target.elts) or not isinstance(target.elts[index], ast.Name):
+                continue  # out of range, or a nested/starred target -- not tracked
+            grade = _grade_names([target.elts[index].id], caller_fn, caller_parents, set())
+            if grade in CONSUMING_GRADES:
+                return CONSUMED_VIA_CALLER
+    return None
+
+
+def graded_capability_calls_in_module(module_tree):
+    """[(function name, call source, grade)] for every session_has_capability
+    call in a whole module -- `graded_capability_calls` run per function, PLUS
+    the one interprocedural shape described in honest limit 1's 2026-08-24
+    addendum: a verdict a helper RETURNS as one element of a tuple, followed
+    into every caller that destructures that exact tuple.
+
+    This is the entry point the real-file tests use (`_real_calls` in
+    retail_capability_ratchet_consumption_test.py); `capability_check_in` and
+    everything downstream of it for a SINGLE handler still goes through
+    `graded_capability_calls`/`capability_check_detail` unchanged, because
+    `_session_read_scope` is a helper, not a `_bp.route` handler, and never
+    appears in `route_handlers`'s output either way.
+    """
+    # A LIST of (name, node), not a name-keyed dict, and parents keyed by the
+    # node's identity. Keyed by name, two functions sharing a name -- a method
+    # on two classes, a helper redefined under a feature flag, a nested
+    # `def _row(...)` inside two different handlers -- collapsed to ONE entry
+    # and the loser was never analysed AT ALL: its capability calls vanished
+    # from this sweep silently, which is the fail-OPEN direction (the whole
+    # point of the real-file test is that no shipped check goes unexamined).
+    # retail_api.py has no duplicate names today, so nothing was actually being
+    # dropped; nothing pins that, and a silent drop is not something to leave
+    # armed in a security ratchet.
+    functions = [(fn.name, fn) for fn in ast.walk(module_tree)
+                 if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    parents_by_fn = {id(fn): parent_map(fn) for _name, fn in functions}
+
+    out = []
+    for name, fn in functions:
+        parents = parents_by_fn[id(fn)]
+
+        def resolver(index, _name=name):
+            return _grade_tuple_return_via_callers(_name, index, functions, parents_by_fn)
+
+        for node in ast.walk(fn):
+            if is_capability_call(node):
+                # The interprocedural resolver is offered ONLY for calls in
+                # `fn`'s own body. One nested a function deeper returns through
+                # THAT function, so `fn`'s callers are no evidence about it --
+                # see `_enclosing_function`.
+                in_fn_itself = _enclosing_function(node, parents) in (None, fn)
+                grade = grade_value(node, fn, parents,
+                                    on_tuple_return=resolver if in_fn_itself else None)
+                out.append((name, ast.unparse(node), grade))
+    return out
 
 
 def decorator_capability(fn):
