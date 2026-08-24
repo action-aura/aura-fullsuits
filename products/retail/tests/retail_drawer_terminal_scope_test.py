@@ -949,6 +949,119 @@ def test_the_ended_or_closed_outcome_tracks_the_live_approval_verdict(monkeypatc
         assert closed['report']['self_approved'] is True
 
 
+def test_close_and_approve_report_self_approval_symmetrically():
+    """AUDIT-032, response/audit symmetry between the two routes that can
+    accept a variance.
+
+    `approve_cash_variance` reports `self_approved` and `approved_by`, and
+    writes a `CASH_VARIANCE_APPROVED` audit line spelling out
+    `variance=... approved_by=... self_approved=0|1`. An ADMIN's close
+    accepts the variance in the very same act -- the closer IS the approver,
+    by construction -- so a caller (or an owner reading the audit trail six
+    months later) must not have to know which route produced a given
+    approval to know whether one happened. This proves close says the SAME
+    three things, in the SAME shapes, rather than a second spelling of them:
+
+      1. an admin closing short gets `self_approved=True` AND
+         `approved_by=<their own id>` back -- both the field the approve
+         route's response carries, and the field `_cash_session_public`
+         already surfaces on `session` for both routes -- plus a
+         `CASH_VARIANCE_APPROVED` audit line carrying the same three facts
+         `approve_cash_variance` records: `variance=`, `approved_by=`,
+         `self_approved=`.
+
+         The two lines are NOT byte-identical and are not asserted to be:
+         approve appends a fourth field, `uncounted=`, and close does not.
+         That is deliberate, not drift, so do not "fix" close to match.
+         `uncounted=` exists because approve is the only route that can
+         accept a drawer NOBODY COUNTED -- a force-closed session whose
+         variance is unknown rather than zero, reachable only behind the
+         explicit `acknowledge_uncounted` flag. A close-path approval is
+         counted by construction: the closer supplied `closing_float_counted`
+         in the very same request, so the field could only ever read
+         `uncounted=0`. Both spellings are pinned exactly below, so a change
+         to EITHER format is caught here rather than discovered by whoever
+         greps the audit trail for approvals months later.
+      2. a cashier closing short is told, in the response, that nothing was
+         approved -- `self_approved=False` stated explicitly, never an
+         absent key a caller would have to interpret -- and no
+         `CASH_VARIANCE_APPROVED` line exists for that session at all: nobody
+         accepted anything, so nothing should claim otherwise.
+      3. an admin approving a DIFFERENT person's already-ended session (a
+         real other-person approval, not a hardcoded constant) gets
+         `self_approved=False` from the approve route too, with its own
+         audit line in the same `self_approved=` shape -- proving the field
+         is computed from who actually acted, not always-true because it
+         is reachable from an admin account.
+    """
+    company_id = str(uuid.uuid4())
+    admin, admin_uid = _make_user('admin', company_id, email_prefix='sym')
+    r = admin.post(f'{API}/products', json={
+        'name': 'Symmetry Widget', 'sku': f'SYM-{uuid.uuid4().hex[:8]}',
+        'cost_price': 25.0, 'sell_price': 50.0, 'tax_rate': 0, 'initial_stock': 5000})
+    assert r.status_code == 200, r.get_json()
+
+    def _approval_audit_lines(session_id):
+        # A FRESH connection per read, opened and closed around the query
+        # rather than held for the test's duration: every close/approve call
+        # above runs its own `BEGIN IMMEDIATE` against this same database
+        # file, and a long-lived connection sitting mid-transaction here
+        # would be a second, unrelated way to deadlock that write -- the
+        # exact hazard `_ensure_credit_schema`'s own placement comment in
+        # `close_cash_session` warns about, just from the test side instead
+        # of production's.
+        conn = get_retail_conn()
+        try:
+            return [row['details'] for row in conn.execute(
+                "SELECT details FROM audit_log WHERE action='CASH_VARIANCE_APPROVED' "
+                "AND entity_id=? ORDER BY id", (session_id,)).fetchall()]
+        finally:
+            conn.close()
+
+    # ── 1. admin closes short: self-approval, reported and audited ─────────
+    with at_terminal(TILL_DESK):
+        sid = _open(admin, 100.0).get_json()['data']['id']
+        closed = _end(admin, sid, 90.0)
+        assert closed.status_code == 200, closed.get_json()
+        data = closed.get_json()['data']
+        assert data['session']['status'] == 'closed', data
+        assert data['report']['self_approved'] is True, data
+        assert data['session']['approved_by'] == admin_uid, data
+
+        lines = _approval_audit_lines(sid)
+        assert lines == [f'variance=-10.0 approved_by={admin_uid} self_approved=1'], lines
+
+    # ── 2. cashier closes short: no approval, said out loud, none audited ──
+    cashier, cashier_uid = _make_user('cashier', company_id, email_prefix='sym')
+    with at_terminal(TILL_PHONE):
+        sid2 = _open(cashier, 50.0).get_json()['data']['id']
+        ended = _end(cashier, sid2, 40.0)
+        assert ended.status_code == 200, ended.get_json()
+        edata = ended.get_json()['data']
+        assert edata['session']['status'] == 'ended', edata
+        assert edata['report']['self_approved'] is False, edata
+        assert 'self_approved' in edata['report'], (
+            'self_approved must be an explicit key, never silently omitted')
+        assert _approval_audit_lines(sid2) == [], (
+            'a plain end must not write a CASH_VARIANCE_APPROVED line -- '
+            'nobody accepted this variance')
+
+        # ── 3. a DIFFERENT admin (not the ender) approves it separately ────
+        approved = _approve(admin, sid2)
+        assert approved.status_code == 200, approved.get_json()
+        adata = approved.get_json()['data']
+        assert adata['session']['status'] == 'closed', adata
+        assert adata['self_approved'] is False, (
+            'the approver is not the cashier who ended this shift -- a '
+            'hardcoded True here would misreport a real other-person '
+            'approval as a self-approval')
+        assert adata['session']['approved_by'] == admin_uid, adata
+
+        assert _approval_audit_lines(sid2) == [
+            f'variance=-10.0 approved_by={admin_uid} self_approved=0 uncounted=0'
+        ], _approval_audit_lines(sid2)
+
+
 def test_approving_an_already_closed_or_still_open_drawer_is_refused():
     admin, cid, pid = _new_shop()
     with at_terminal(TILL_DESK):

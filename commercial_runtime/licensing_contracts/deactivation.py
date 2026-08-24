@@ -4,18 +4,72 @@ activation.py's shape.
 """
 from __future__ import annotations
 
+import logging
 import uuid
+from typing import Optional
 
 from .client import LicensingClientError
 from .events import LicensingEventRecorder
 from .state_machine import LicenseState
-from .state_repository import LicenseStateRepository
+from .state_repository import LicenseStateRecord, LicenseStateRepository
+
+logger = logging.getLogger(__name__)
 
 
 class DeactivationFailed(Exception):
     def __init__(self, reason_code: str, message: str):
         super().__init__(message)
         self.reason_code = reason_code
+
+
+def _resolve_stored_state(record: Optional[LicenseStateRecord], event_recorder: LicensingEventRecorder) -> LicenseState:
+    """Turn whatever `licensing_state.current_state` actually holds into a
+    LicenseState, without ever raising. Mirrors flask_guard.py's
+    _resolve_current_state() / checkin_scheduler.py's identically-named
+    twin -- same reasoning, same shape (AUDIT: this module had the same
+    unguarded `LicenseState(record.current_state)` construction at both of
+    its no-op early-return branches).
+
+    A MISSING record, or one whose owner_installation_id is unset, is still
+    a legitimate "nothing to deactivate" no-op, not an error -- but the
+    record CAN exist with a genuinely corrupt current_state (a downgrade, a
+    restored backup, a partial write) while still carrying a real
+    owner_installation_id, and the pre-fix code called LicenseState(...) on
+    that value unconditionally on the way out, crashing an explicit,
+    user-initiated deactivation request instead of just no-op'ing or
+    reporting LOCAL_STATE_CORRUPT.
+
+    A MISSING record is a fresh install, not a damaged one -- NOT_CONFIGURED,
+    exactly as before this fix.
+
+    The raw stored value is logged (logs are not subject to the
+    forbidden-marker scan) but never placed in the recorded event's details:
+    it is untrusted data read off disk, and event_recorder.record() itself
+    RAISES LicensingEventError when details contain a forbidden-marker
+    substring (license_key, patient, sale_total, ...) -- echoing the raw
+    value in would risk that exact re-raise from inside the handler written
+    to prevent one.
+    """
+    if record is None:
+        return LicenseState.NOT_CONFIGURED
+
+    raw_state = record.current_state
+    try:
+        return LicenseState(raw_state)
+    except ValueError:
+        logger.warning(
+            "deactivation: stored current_state %r is not a recognized "
+            "LicenseState (missing, empty, or unrecognized value -- a "
+            "downgrade, restored backup, or partial write can all produce "
+            "this). Treating as LOCAL_STATE_CORRUPT instead of raising.",
+            raw_state,
+        )
+        event_recorder.record(
+            "LOCAL_STATE_CORRUPT",
+            {"detected_by": "deactivation._resolve_stored_state"},
+            trusted_keys=frozenset({"detected_by"}),
+        )
+        return LicenseState.LOCAL_STATE_CORRUPT
 
 
 def perform_deactivation(
@@ -43,8 +97,13 @@ def perform_deactivation(
     """
     record = state_repository.load()
     if record is None or not record.owner_installation_id:
-        # Nothing to deactivate -- not an error, just a no-op.
-        return LicenseState(record.current_state) if record else LicenseState.NOT_CONFIGURED
+        # Nothing to deactivate -- not an error, just a no-op. Resolved
+        # lazily (only on this branch, exactly like the original bare
+        # LicenseState(record.current_state) expression it replaces) so a
+        # deactivation that actually proceeds below never fires a spurious
+        # LOCAL_STATE_CORRUPT event/log for a record it isn't even using
+        # current_state from.
+        return _resolve_stored_state(record, event_recorder)
 
     idempotency_key = str(uuid.uuid4())
     try:
@@ -77,7 +136,7 @@ def ingest_deactivation_response(
     own belief that deactivation succeeded is not, by itself, sufficient."""
     record = state_repository.load()
     if record is None or not record.owner_installation_id:
-        return LicenseState(record.current_state) if record else LicenseState.NOT_CONFIGURED
+        return _resolve_stored_state(record, event_recorder)
 
     if response.get("result") != "SUCCESS":
         reason_code = response.get("reason_code", "ACTIVATION_REJECTED")

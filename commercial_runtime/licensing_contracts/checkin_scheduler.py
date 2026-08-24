@@ -7,6 +7,7 @@ this sequence themselves.
 """
 from __future__ import annotations
 
+import logging
 import threading
 from datetime import datetime, timezone
 from typing import Callable, Optional
@@ -20,11 +21,134 @@ from .state_repository import LicenseStateRecord, LicenseStateRepository
 from .trust_store import OwnerTrustStore
 from .trusted_time import TrustedTimeAnchor, cache_fresh_anchor, get_cached_or_rehydrate_anchor, new_anchor
 
+logger = logging.getLogger(__name__)
+
 # States in which there is no installation_id yet to check in with --
 # run_once() is a no-op (by design, not an error) in these states.
 _NOT_YET_ACTIVATED = frozenset(
     {LicenseState.NOT_CONFIGURED, LicenseState.ACTIVATION_REQUIRED, LicenseState.ACTIVATING}
 )
+
+
+def _resolve_stored_state(
+    record: Optional[LicenseStateRecord], events: LicensingEventRecorder
+) -> tuple[LicenseState, bool]:
+    """Turn whatever `licensing_state.current_state` actually holds into a
+    LicenseState, without ever raising. Mirrors flask_guard.py's
+    _resolve_current_state() -- same reasoning, same shape -- because this
+    scheduler had the identical unguarded `LicenseState(record.
+    current_state)` construction at FOUR call sites (run_once(),
+    ingest_checkin_response(), reevaluate_only(), _reevaluate()) that
+    flask_guard.py's own AUDIT fix did not touch.
+
+    This matters MORE here than in flask_guard.py, not less: flask_guard
+    runs inside a Flask request, so an unhandled ValueError there at least
+    produces a visible (if ugly) HTTP 500. This scheduler's tick runs on a
+    background threading.Timer thread (see _schedule_next() below) -- an
+    exception escaping that thread's target is NOT visible to any caller,
+    any route, or any log a shop owner would ever look at. It goes to
+    threading.excepthook, which prints a traceback to stderr that nobody is
+    watching on an unattended background thread.
+
+    Be precise about what does and does not die, because the difference
+    decides where the fix belongs. The TIMER CHAIN SURVIVES: _schedule_next()
+    arms the next tick from a `finally`, so it re-arms even when run_once()
+    raises, and the scheduler goes on ticking forever. What dies is the WORK
+    INSIDE each tick -- the raise happens at the very top of run_once(),
+    before _refresh_trust_manifest_best_effort() and before check_in(), so
+    every tick aborts having done nothing. (Verified by mutation, not
+    inferred: with this guard removed, a corrupt row yields one
+    threading.excepthook entry PER TICK while scheduler._timer stays alive
+    and armed. An earlier draft of this docstring said the thread "quietly
+    stops rescheduling itself"; that is wrong, and believing it would send
+    the next reader hunting for a dead thread that is in fact running.)
+
+    The end state is the same and is why this matters: no check-in ever
+    completes, the licence drifts toward expiry with nobody told, and the
+    first symptom is a lockout that looks unrelated to its actual cause. A
+    corrupt current_state must never be allowed to produce that -- and it
+    has to be fixed HERE, at the resolution, because a scheduler that is
+    still dutifully re-arming a tick that can never do anything will not
+    look broken from the outside.
+
+    A MISSING record is a fresh install, not a damaged one -- NOT_CONFIGURED,
+    exactly as before this fix. A record that exists but whose current_state
+    is None, empty, or not a recognized LicenseState member is genuinely
+    damaged, and LOCAL_STATE_CORRUPT already exists in the enum for
+    precisely this (state_machine.py: it's in DATA_PRESERVED_FAMILY, so nothing
+    downstream that depends on "corrupt still means don't destroy local
+    data" breaks).
+
+    The raw stored value is logged (safe: application logs are not subject
+    to the forbidden-marker scan) but deliberately never placed in the
+    recorded event's details -- raw_state is UNTRUSTED data read off disk,
+    and events.record() itself RAISES LicensingEventError when details
+    contain a forbidden-marker substring (license_key, patient, sale_total,
+    ...). Echoing the raw value into details would risk that exact re-raise
+    from inside the handler written to prevent one, which is precisely the
+    gap flask_guard.py's own verifier already found and fixed in its twin --
+    not to be reintroduced here.
+
+    Returns (state, state_unreadable). The SECOND element is why this is a
+    pair and not just a LicenseState, and it is load-bearing:
+    LOCAL_STATE_CORRUPT is itself a real, legitimately PERSISTED value of
+    this column -- _reevaluate() below writes it whenever a stored assertion
+    fails re-verification, and _apply_state_transition() then saves it. So
+    "the resolved state is LOCAL_STATE_CORRUPT" and "the stored bytes were
+    unreadable" are two DIFFERENT conditions that happen to share one enum
+    member, and callers must not conflate them:
+
+      * unreadable (state_unreadable=True) -- we do not know what state this
+        install is in, so the tick stops here rather than acting on a
+        guess.
+      * a stored, readable "LOCAL_STATE_CORRUPT" (state_unreadable=False) --
+        we know exactly what state this install is in, and the ONLY way out
+        of it short of a destructive local reset (state_repository.py's
+        controlled reset flow, which forces full re-activation) is for a
+        check-in to succeed and overwrite it. Collapsing this into the
+        unreadable case would make run_once() return before
+        _refresh_trust_manifest_best_effort() and before check_in() -- which
+        would permanently strand exactly the installs that land here for a
+        TRANSIENT reason. The most likely such reason is the one this
+        package already handles everywhere else: Owner rotated its signing
+        key, so the locally stored (still perfectly genuine) assertion no
+        longer verifies against a stale trust store -> _reevaluate()'s
+        AssertionVerificationError branch -> LOCAL_STATE_CORRUPT persisted.
+        The very next tick's manifest refresh is what heals that. A paying
+        shop must not be pushed into a manual re-activation because of a key
+        rotation it never saw.
+    """
+    if record is None:
+        return LicenseState.NOT_CONFIGURED, False
+
+    raw_state = record.current_state
+    try:
+        # None and "" both fail this lookup exactly like a bogus string does
+        # (LicenseState has no member whose value is None or ""), so one
+        # except branch below correctly covers all three cases.
+        #
+        # A readable value -- INCLUDING a readable "LOCAL_STATE_CORRUPT" --
+        # comes back with state_unreadable=False, so every state that
+        # parsed before this AUDIT fix keeps behaving exactly as it did.
+        # This fix only ever changes what happens to values that used to
+        # raise.
+        return LicenseState(raw_state), False
+    except ValueError:
+        logger.warning(
+            "checkin_scheduler: stored current_state %r is not a recognized "
+            "LicenseState (missing, empty, or unrecognized value -- a "
+            "downgrade, restored backup, or partial write can all produce "
+            "this). Treating this tick as LOCAL_STATE_CORRUPT instead of "
+            "raising -- the scheduler thread must survive this.",
+            raw_state,
+        )
+        events.record(
+            "LOCAL_STATE_CORRUPT",
+            {"detected_by": "checkin_scheduler._resolve_stored_state"},
+            trusted_keys=frozenset({"detected_by"}),
+        )
+        return LicenseState.LOCAL_STATE_CORRUPT, True
+
 
 # State-entry events (Part W) fired the first time a check-in cycle lands on
 # that state, keyed by the target LicenseState.
@@ -71,8 +195,14 @@ class LicenseCheckInScheduler:
         the HTTP call. Android never calls this -- see
         ingest_checkin_response()/reevaluate_only() below."""
         record = self._state_repository.load()
-        if record is None or LicenseState(record.current_state) in _NOT_YET_ACTIVATED:
-            return LicenseState(record.current_state) if record else LicenseState.NOT_CONFIGURED
+        # state_unreadable, NOT "state == LOCAL_STATE_CORRUPT" -- see
+        # _resolve_stored_state()'s docstring: a readable, persisted
+        # LOCAL_STATE_CORRUPT must still fall through to the manifest
+        # refresh + check-in below, because that is the only non-destructive
+        # way out of that state.
+        current_state, state_unreadable = _resolve_stored_state(record, self._events)
+        if state_unreadable or current_state in _NOT_YET_ACTIVATED:
+            return current_state
 
         self._refresh_trust_manifest_best_effort()
 
@@ -106,8 +236,13 @@ class LicenseCheckInScheduler:
         Windows path, which is already covered by run_once()'s refresh.
         """
         record = self._state_repository.load()
-        if record is None or LicenseState(record.current_state) in _NOT_YET_ACTIVATED:
-            return LicenseState(record.current_state) if record else LicenseState.NOT_CONFIGURED
+        # Same reasoning as run_once(): a readable, persisted
+        # LOCAL_STATE_CORRUPT must still be allowed to ingest a fresh,
+        # independently verified assertion -- that ingestion is Android's
+        # only route out of the state.
+        current_state, state_unreadable = _resolve_stored_state(record, self._events)
+        if state_unreadable or current_state in _NOT_YET_ACTIVATED:
+            return current_state
 
         checkin_ok = False
         envelope = response.get("signed_assertion") if response else None
@@ -189,8 +324,9 @@ class LicenseCheckInScheduler:
         trip needed to notice a WARNING/GRACE_PERIOD/RESTRICTED boundary
         has been crossed purely by time passing)."""
         record = self._state_repository.load()
-        if record is None or LicenseState(record.current_state) in _NOT_YET_ACTIVATED:
-            return LicenseState(record.current_state) if record else LicenseState.NOT_CONFIGURED
+        current_state, state_unreadable = _resolve_stored_state(record, self._events)
+        if state_unreadable or current_state in _NOT_YET_ACTIVATED:
+            return current_state
         new_state = self._reevaluate(record, checkin_ok)
         self._apply_state_transition(record, new_state)
         return new_state
@@ -297,8 +433,16 @@ class LicenseCheckInScheduler:
     def _reevaluate(self, record: LicenseStateRecord, checkin_ok: bool) -> LicenseState:
         if record.assertion_envelope_json is None:
             # Never successfully activated far enough to have an assertion
-            # at all -- nothing to evaluate against.
-            return LicenseState(record.current_state)
+            # at all -- nothing to evaluate against. record is guaranteed
+            # non-None here (every caller already passed the
+            # _resolve_stored_state()/_NOT_YET_ACTIVATED guard above), but
+            # current_state itself can still be a corrupt value, so this
+            # must go through the same guarded resolution rather than a
+            # bare LicenseState(record.current_state). Only the state itself
+            # is wanted here: every caller already consumed the
+            # state_unreadable flag above, and an unreadable value cannot
+            # reach this line at all (it short-circuited there).
+            return _resolve_stored_state(record, self._events)[0]
 
         import json
 

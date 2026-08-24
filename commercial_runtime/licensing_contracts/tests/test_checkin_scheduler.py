@@ -445,6 +445,200 @@ def test_first_ever_assertion_is_never_rejected_as_stale(owner_key, trust_store,
     assert "ASSERTION_STALE_REJECTED" not in event_types
 
 
+# ── AUDIT: unguarded LicenseState(record.current_state) (Part L twin of ──
+# ── flask_guard.py's fix) -- corrupt current_state must never raise, and ──
+# ── the scheduler's background thread must survive it. ────────────────────
+
+
+def test_run_once_survives_corrupt_current_state(trust_store, state_repo, events):
+    """Proof 1: a corrupt current_state must not raise out of run_once() --
+    it must be treated as LOCAL_STATE_CORRUPT and the tick must complete."""
+    state_repo.save(
+        LicenseStateRecord(
+            licensing_schema_version=LICENSING_SCHEMA_VERSION,
+            product_code="AURA_RETAIL",
+            platform="WINDOWS",
+            current_state="TOTALLY_BOGUS_STATE",  # not a LicenseState member
+            owner_installation_id=INSTALLATION_ID,
+        )
+    )
+    scheduler = _scheduler(FakeClient(), trust_store, state_repo, events)
+
+    result = scheduler.run_once()  # must not raise
+
+    assert result == LicenseState.LOCAL_STATE_CORRUPT
+    event_types = [e.event_type for e in events.recent()]
+    assert "LOCAL_STATE_CORRUPT" in event_types
+
+
+def test_ingest_checkin_response_survives_corrupt_current_state(trust_store, state_repo, events):
+    """Same guard, Android entry point (Part U)."""
+    state_repo.save(
+        LicenseStateRecord(
+            licensing_schema_version=LICENSING_SCHEMA_VERSION,
+            product_code="AURA_RETAIL",
+            platform="WINDOWS",
+            current_state="",  # empty string -- also not a LicenseState member
+            owner_installation_id=INSTALLATION_ID,
+        )
+    )
+    scheduler = _scheduler(FakeClient(), trust_store, state_repo, events)
+
+    result = scheduler.ingest_checkin_response({"result": "SUCCESS", "signed_assertion": None})
+
+    assert result == LicenseState.LOCAL_STATE_CORRUPT
+
+
+def test_reevaluate_only_survives_corrupt_current_state(trust_store, state_repo, events):
+    """Same guard, the no-network-call re-evaluation entry point."""
+    state_repo.save(
+        LicenseStateRecord(
+            licensing_schema_version=LICENSING_SCHEMA_VERSION,
+            product_code="AURA_RETAIL",
+            platform="WINDOWS",
+            current_state="DOWNGRADED_UNKNOWN_STATE",
+            owner_installation_id=INSTALLATION_ID,
+        )
+    )
+    scheduler = _scheduler(FakeClient(), trust_store, state_repo, events)
+
+    result = scheduler.reevaluate_only(checkin_ok=False)
+
+    assert result == LicenseState.LOCAL_STATE_CORRUPT
+
+
+def test_run_once_with_missing_record_resolves_not_configured(trust_store, state_repo, events):
+    """Proof 5: a MISSING record (no row saved at all -- a fresh install)
+    must still resolve NOT_CONFIGURED, never LOCAL_STATE_CORRUPT -- a fresh
+    install is not a damaged one."""
+    scheduler = _scheduler(FakeClient(), trust_store, state_repo, events)
+
+    result = scheduler.run_once()
+
+    assert result == LicenseState.NOT_CONFIGURED
+    event_types = [e.event_type for e in events.recent()]
+    assert "LOCAL_STATE_CORRUPT" not in event_types
+
+
+def test_persisted_local_state_corrupt_still_checks_in_and_can_recover(owner_key, trust_store, state_repo, events):
+    """Regression guard for the fix above, found by mutation-testing it.
+
+    LOCAL_STATE_CORRUPT is not only something _resolve_stored_state()
+    RETURNS -- it is a real value this very module PERSISTS: _reevaluate()
+    writes it whenever a stored assertion fails re-verification, and
+    _apply_state_transition() saves it to licensing_state.current_state. So
+    "resolved LOCAL_STATE_CORRUPT" must never be used as a proxy for "the
+    stored bytes were unreadable": a guard written as
+
+        if current_state is LicenseState.LOCAL_STATE_CORRUPT or ...: return
+
+    reads correctly but silently strands every install that legitimately
+    holds that state -- run_once() would return before
+    _refresh_trust_manifest_best_effort() and before check_in(), so the one
+    non-destructive route out of the state (a successful check-in
+    overwriting it) never runs again. The realistic way in is entirely
+    transient and invisible to the shop: Owner rotates its signing key, the
+    locally stored genuine assertion stops verifying against a now-stale
+    trust store, _reevaluate() persists LOCAL_STATE_CORRUPT -- and the very
+    next tick's manifest refresh is exactly what would have healed it.
+    Asserting the check-in was ATTEMPTED (not merely that some state came
+    back) is the point: the outage this guards against is a silent no-op,
+    which any assertion on the return value alone would happily accept."""
+    _seed_activated_record(state_repo, current_state="LOCAL_STATE_CORRUPT", assertion_envelope_json=None)
+    envelope = _envelope(owner_key, "owner-1", _payload())
+    client = FakeClient(checkin_responses=[{"result": "SUCCESS", "signed_assertion": envelope}])
+    scheduler = _scheduler(client, trust_store, state_repo, events)
+
+    result = scheduler.run_once()
+
+    assert client.checkin_calls == 1, "run_once() never even attempted a check-in -- the install is stranded"
+    assert result == LicenseState.ACTIVE_ONLINE
+    assert state_repo.load().current_state == "ACTIVE_ONLINE"
+
+
+def test_persisted_local_state_corrupt_still_ingests_a_fresh_assertion(owner_key, trust_store, state_repo, events):
+    """Same guarantee on the Android path (Part U): Kotlin made the call, so
+    the equivalent of "the check-in was attempted" is "the handed-in
+    assertion was actually verified and persisted" rather than discarded by
+    an early return."""
+    _seed_activated_record(state_repo, current_state="LOCAL_STATE_CORRUPT", assertion_envelope_json=None)
+    envelope = _envelope(owner_key, "owner-1", _payload())
+    scheduler = _scheduler(FakeClient(), trust_store, state_repo, events)
+
+    result = scheduler.ingest_checkin_response({"result": "SUCCESS", "signed_assertion": envelope})
+
+    assert result == LicenseState.ACTIVE_ONLINE
+    assert state_repo.load().assertion_id == "a-1", "the fresh assertion was dropped instead of ingested"
+
+
+def test_corrupt_current_state_containing_forbidden_marker_does_not_raise_from_recorder(trust_store, state_repo, events):
+    """Proof 4: events.record() RAISES LicensingEventError when details
+    contain a forbidden-marker substring (license_key, patient, sale_total,
+    ...). A corrupt current_state that happens to itself contain one of
+    those substrings (a plausible real-world corruption -- e.g. a value
+    swapped in from the wrong column during a bad restore) must not
+    re-raise LicensingEventError from inside the handler written to
+    prevent exactly that -- this is the exact gap flask_guard.py's own
+    verifier found and fixed in its twin; must not be reintroduced here."""
+    state_repo.save(
+        LicenseStateRecord(
+            licensing_schema_version=LICENSING_SCHEMA_VERSION,
+            product_code="AURA_RETAIL",
+            platform="WINDOWS",
+            current_state="patient_sale_total_leaked_into_this_column",
+            owner_installation_id=INSTALLATION_ID,
+        )
+    )
+    scheduler = _scheduler(FakeClient(), trust_store, state_repo, events)
+
+    result = scheduler.run_once()  # must not raise LicensingEventError
+
+    assert result == LicenseState.LOCAL_STATE_CORRUPT
+    event_types = [e.event_type for e in events.recent()]
+    assert "LOCAL_STATE_CORRUPT" in event_types
+
+
+def test_scheduler_thread_keeps_ticking_through_corrupt_current_state(trust_store, state_repo, events):
+    """Proof 2: the background thread must SURVIVE a corrupt current_state,
+    not just fail to raise once. Before this fix, run_once() raised a bare
+    ValueError before ever reaching self._events.record(...) -- so
+    LOCAL_STATE_CORRUPT would never appear in the event log at all, no
+    matter how long this polls. Starting the real scheduler on a real
+    threading.Timer (not calling run_once() directly) and observing MULTIPLE
+    LOCAL_STATE_CORRUPT events accumulate over several real intervals is
+    the actual proof that ticks keep completing -- a single non-raising
+    call proves the guard exists, but not that the thread that reschedules
+    itself keeps working tick after tick."""
+    import time as time_module
+
+    state_repo.save(
+        LicenseStateRecord(
+            licensing_schema_version=LICENSING_SCHEMA_VERSION,
+            product_code="AURA_RETAIL",
+            platform="WINDOWS",
+            current_state="TOTALLY_BOGUS_STATE",
+            owner_installation_id=INSTALLATION_ID,
+        )
+    )
+    scheduler = _scheduler(FakeClient(), trust_store, state_repo, events)
+    scheduler.start(interval_seconds=0.02)
+    try:
+        deadline = time_module.time() + 3.0
+        corrupt_event_count = 0
+        while time_module.time() < deadline:
+            corrupt_event_count = len([e for e in events.recent() if e.event_type == "LOCAL_STATE_CORRUPT"])
+            if corrupt_event_count >= 3:
+                break
+            time_module.sleep(0.01)
+    finally:
+        scheduler.stop()
+
+    assert corrupt_event_count >= 3, (
+        f"expected at least 3 completed ticks (LOCAL_STATE_CORRUPT events), got {corrupt_event_count} -- "
+        "the scheduler thread did not keep ticking through a corrupt current_state"
+    )
+
+
 def test_reevaluate_only_before_activation_is_noop(trust_store, state_repo, events):
     state_repo.save(
         LicenseStateRecord(
