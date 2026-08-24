@@ -86,12 +86,34 @@ coexist.
   (`products/*/frontend/licensing.html`).
 - Device-bound (Ed25519 signed lease, `commercial_runtime/licensing_contracts/`),
   verified against a trust anchor.
-- **If `OWNER_LICENSING_BASE_URL` is unset (the default), licensing is not
-  enforced at all** — the app runs fully unlocked. This matters for local
-  dev/testing: nothing is gated unless Owner is actually wired up.
+- **An install with no licensing configured is READ-ONLY, not unlocked.** This
+  paragraph used to claim the opposite — "if `OWNER_LICENSING_BASE_URL` is
+  unset, licensing is not enforced at all, the app runs fully unlocked" — and
+  that is false. Measured against a fresh install on 2026-08-24:
+
+      GET  products / sales / cash-sessions      200
+      POST sales            403  LICENSE_INACTIVE
+      POST cash-sessions/open  403  LICENSE_INACTIVE
+      POST products         403  LICENSE_INACTIVE
+      POST returns          allowed (on the allowlist)
+
+  With no licence record, `LicenseStateRepository.load()` returns nothing and
+  the state resolves to `NOT_CONFIGURED`, which is in `DATA_PRESERVED_FAMILY`
+  but **not** in `ACTIVE_FAMILY` (`licensing_contracts/state_machine.py`), so
+  `evaluate_capability` denies anything outside the restricted allowlist. This
+  is deliberate and pinned — see `test_pre_activation_states_deny_new_mutation`
+  in `licensing_contracts/tests/test_capability_guard.py`, and the "Part Y"
+  reasoning it cites. `require_license_capability` never reads
+  `OWNER_LICENSING_BASE_URL` at all; it reads `licensing.db`.
+
+  **So a dev machine or demo cannot ring a sale or open a cash drawer until a
+  licence is activated.** Correcting this here because the old claim sent
+  anyone reading it — human or AI — looking for a bug in the licence gate that
+  is actually the gate working as designed.
 - Feature gating uses a `require_license_capability(...)` decorator +
   `RETAIL_RESTRICTED_ALLOWLIST` — restricted/expired license state allows
-  read-only operations (view, reports, backup), blocks mutations.
+  read-only operations (view, reports, backup, returns, customer payments),
+  blocks mutations.
 
 ## E-invoicing (Jordan JoFotara/ISTD)
 
