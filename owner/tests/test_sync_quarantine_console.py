@@ -298,3 +298,123 @@ def test_discard_marks_discarded_and_stays_visible(app, client, seeded, signing_
     discarded_page = client.get("/sync/quarantine?status=DISCARDED")
     assert discarded_page.status_code == 200
     assert str(license_id)[:8].encode() in discarded_page.data
+
+
+def test_quarantine_console_is_reachable_from_the_activation_service_page(app, client, seeded):
+    """AUDIT: the console shipped registered in app/__init__.py but linked
+    from NOWHERE -- no nav entry, no quick link, nothing. An operator screen
+    reachable only by typing /sync/quarantine from memory is, in practice,
+    not shipped, and the prerequisite this console belongs to says
+    explicitly that "the console view is part of this task, not a
+    follow-up".
+
+    /licensing-admin's Quick links card is the established discovery point
+    for exactly this class of console (device keys, signing keys, offline
+    policies are all reached from there and nowhere else), so this asserts
+    the link is there, and that it is PERMISSION-GATED -- unlike its
+    neighbours, because sync_quarantine.view is granted to SUPPORT and
+    SUPER_ADMIN only, so an ungated link would hand other staff a link
+    straight into a 403.
+
+    Asserts on the real rendered HREF from a real request, not on the
+    template source."""
+    super_admin_id = make_staff(app, "quar-link-superadmin@example.com", super_admin=True)
+    force_login(client, app, super_admin_id)
+    page = client.get("/licensing-admin")
+    assert page.status_code == 200
+    assert b'href="/sync/quarantine"' in page.data
+
+    # The gate itself, against a REAL principal rather than an assertion
+    # read off the seed table: VIEWER is granted activation_service.view but
+    # NOT sync_quarantine.view (staff/seed_data.py), so it is the exact
+    # staff user who can open this page and must not be offered the link.
+    # A separate client so this is a genuinely different session, not the
+    # super-admin one above with its permissions swapped underneath it.
+    viewer_client = app.test_client()
+    viewer_id = make_staff(app, "quar-link-viewer@example.com", role_codes=["VIEWER"])
+    force_login(viewer_client, app, viewer_id)
+    viewer_page = viewer_client.get("/licensing-admin")
+    assert viewer_page.status_code == 200  # can see the page itself
+    assert b'href="/sync/quarantine"' not in viewer_page.data  # but not the link
+    assert viewer_client.get("/sync/quarantine").status_code in (302, 403)  # nor reach it directly
+
+
+def test_replay_acquires_per_license_advisory_lock_before_inserting_event(app, client, seeded, signing_key, monkeypatch):
+    """AUDIT: replay INSERTs a real row into a license's owner_sync_events
+    stream, which makes this console the SECOND writer into that stream --
+    push() (app/sync/routes.py) was the only one before it existed. Both
+    must take _lock_license_stream, for the reason that function's own
+    docstring spells out: `seq` is a table-wide IDENTITY, values are
+    ASSIGNED at INSERT but only become VISIBLE at COMMIT, so two
+    unserialized writers for the same license can assign seq in one order
+    and commit in the other. A device pulling in that window advances its
+    cursor past the higher seq and can never see the lower one again
+    (its next pull is `WHERE seq > cursor`), and pruning.py then deletes it
+    outright once every active device's cursor has passed it.
+
+    Worse here than in the push-vs-push case the lock was written for: the
+    row silently destroyed is the one an operator deliberately clicked
+    Replay to restore, on a shop that is by definition actively pushing
+    (that is WHY an event got quarantined in the first place), and there is
+    no second copy anywhere to replay from a second time.
+
+    Same wiring-proof shape as test_sync_routes.py::
+    test_push_acquires_per_license_advisory_lock_before_storing_events:
+    spy on _lock_license_stream, assert it is called exactly once with the
+    QUARANTINE ROW's own license_id (never anything client-supplied), and
+    assert it happens strictly before the SyncEvent INSERT -- observed
+    through a genuine SQLAlchemy after_insert mapper event on the real
+    flush, not a stub standing in for it.
+
+    MUTATION PROOF: delete the `_lock_license_stream(row.license_id)` call
+    from quarantine_routes.py::replay and this test fails on
+    `lock_calls == [license_id]` (it is `[]`) -- i.e. it fails because the
+    lock genuinely was not taken, not because some incidental ordering
+    shifted."""
+    from sqlalchemy import event as sa_event
+
+    from app.models.sync import SyncEvent
+    from app.sync import quarantine_routes
+
+    actor_id = make_staff(app, "quar-replaylock-actor@example.com", super_admin=True)
+    license_id, device_id = _do_activation(app, client, actor_id)
+    payload = _valid_payload()
+    quarantine_id = _insert_quarantine_row(app, license_id, device_id, raw_payload=payload)
+
+    staff_id = make_staff(app, "quar-replaylock@example.com", super_admin=True)
+    force_login(client, app, staff_id)
+    _grant_recent_auth(app, staff_id)
+    page = client.get("/sync/quarantine")
+    csrf = get_csrf(page.get_data(as_text=True))
+
+    call_order = []
+    lock_calls = []
+
+    def _spy_lock(passed_license_id):
+        lock_calls.append(passed_license_id)
+        call_order.append("lock")
+
+    def _on_sync_event_insert(mapper, connection, target):
+        call_order.append("insert")
+
+    monkeypatch.setattr(quarantine_routes, "_lock_license_stream", _spy_lock)
+    sa_event.listen(SyncEvent, "after_insert", _on_sync_event_insert)
+    try:
+        resp = client.post(f"/sync/quarantine/{quarantine_id}/replay", data={"csrf_token": csrf})
+    finally:
+        # Removed in a finally so a failure above can never leak this
+        # listener into every later test in the session.
+        sa_event.remove(SyncEvent, "after_insert", _on_sync_event_insert)
+
+    assert resp.status_code == 302
+    assert lock_calls == [license_id]  # exactly once, with the row's OWN license
+    assert call_order == ["lock", "insert"]  # lock strictly before the real INSERT
+
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.sync import SyncQuarantineEvent
+
+        # The replay still genuinely succeeded -- proves the lock was added
+        # WITHOUT breaking the thing replay exists to do.
+        assert db_session.get(SyncEvent, uuid.UUID(payload["id"])) is not None
+        assert db_session.get(SyncQuarantineEvent, quarantine_id).status == "REPLAYED"

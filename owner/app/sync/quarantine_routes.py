@@ -29,7 +29,7 @@ from app.models.base import utcnow
 from app.models.sync import SyncEvent, SyncQuarantineEvent
 from app.security.rbac import require_permission, require_recent_auth
 from app.sync import list_queries
-from app.sync.routes import InvalidEventError, _build_event
+from app.sync.routes import InvalidEventError, _build_event, _lock_license_stream
 
 bp = Blueprint("sync_quarantine", __name__, url_prefix="/sync")
 
@@ -71,6 +71,33 @@ def replay(quarantine_id: uuid.UUID):
     except InvalidEventError as exc:
         flash(_("Replay failed -- payload is still invalid: %(reason)s", reason=str(exc)), "error")
         return redirect(url_for("sync_quarantine.list_view"))
+
+    # AUDIT: replay is the SECOND writer into this license's
+    # owner_sync_events stream -- push() (routes.py) was the only one until
+    # this console existed -- so it must take the SAME per-license advisory
+    # lock push() takes, for exactly the reason _lock_license_stream's own
+    # docstring gives. `seq` is a table-wide IDENTITY: values are ASSIGNED
+    # at INSERT and only become VISIBLE at COMMIT, so two unserialized
+    # writers for one license can assign seq in one order and commit in the
+    # other. A device pulling in that window sees the higher seq, advances
+    # its cursor past it, and can never see the lower one again (its next
+    # pull is `WHERE seq > cursor`).
+    #
+    # That is strictly worse here than in the push-vs-push case the lock was
+    # written for. The row silently lost is the one an operator deliberately
+    # clicked Replay to restore, on a shop that is by definition actively
+    # pushing (that is WHY an event got quarantined) -- and pruning.py then
+    # DELETES it outright, since every active device's cursor has already
+    # moved past it. Nothing errors, nothing retries, and unlike the client
+    # outbox there is no second copy anywhere to replay from a second time.
+    #
+    # Taken BEFORE the already-landed check below rather than immediately
+    # before the INSERT, so check-then-insert is atomic against a concurrent
+    # push of this same event id -- the same ordering push() uses (lock,
+    # then _store_events' own fast-path existence check). Transaction-scoped,
+    # so it releases on the commit or rollback that ends every path out of
+    # this handler; no manual unlock, nothing leaked if a later step raises.
+    _lock_license_stream(row.license_id)
 
     if db_session.get(SyncEvent, event.id) is not None:
         # Already landed for real -- e.g. the client's own outbox retried
