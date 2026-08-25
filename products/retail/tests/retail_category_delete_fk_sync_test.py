@@ -382,6 +382,15 @@ def test_the_old_v2_schema_really_did_wedge_on_this_exact_event(tmp_path):
     conn.executescript(
         "CREATE TABLE sync_cursor (id INTEGER PRIMARY KEY CHECK (id = 1), last_seq INTEGER NOT NULL DEFAULT 0);"
         "INSERT INTO sync_cursor (id, last_seq) VALUES (1, 0);"
+        # Phase 5: apply_pull_result() unconditionally checks this table now
+        # (SyncService._has_quarantined_events) -- must exist even though
+        # this test's event is a plain category delete, or the check itself
+        # raises sqlite3.OperationalError before the real category/FK logic
+        # this test is actually pinning ever runs.
+        "CREATE TABLE sync_apply_quarantine (entity_id TEXT NOT NULL, entity_type TEXT NOT NULL, "
+        "event_type TEXT NOT NULL, payload TEXT NOT NULL, reason TEXT NOT NULL, detail TEXT, "
+        "quarantined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+        "PRIMARY KEY (entity_id, event_type));"
     )
     conn.commit()
     service = SyncService(client_factory=lambda: None, get_conn=lambda: conn,

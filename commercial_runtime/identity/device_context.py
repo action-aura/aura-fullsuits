@@ -218,6 +218,97 @@ def local_device_uuid() -> str:
     return new_uuid
 
 
+def peek_doc_discriminator() -> Optional[str]:
+    """Read-only: this install's persisted document-numbering discriminator
+    (see `persist_doc_discriminator()` below), or None if it has never been
+    generated. NEVER creates the file, and the file it reads has NOTHING to
+    do with `local_device.json` -- see `persist_doc_discriminator()`'s
+    docstring for exactly why the two must stay separate.
+
+    Unlike `peek_local_device_uuid()`, a corrupt file here returns None
+    rather than raising `LocalDeviceStateCorruptError`: this value carries
+    no authorization meaning and nothing joins on it the way
+    `device_registry.devices` joins on the device uuid, so "unreadable" and
+    "never created" are the same case for every caller -- `persist_doc_
+    discriminator()` below self-heals by writing a fresh value rather than
+    making a sale-numbering call site handle a corrupt-state exception for
+    something this low-stakes.
+    """
+    path = os.path.join(_resolve_app_data(), "device", "doc_discriminator.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    value = raw.get("discriminator")
+    return value if isinstance(value, str) and value else None
+
+
+def persist_doc_discriminator(seed: Optional[str] = None) -> str:
+    """Returns this install's persisted document-numbering discriminator,
+    generating and persisting one on first call only.
+
+    THE FIX for AUDIT-032D: the AUDIT-032B fix (two tills wedging sync
+    permanently on a `sale_number` collision -- see products/retail/backend/
+    api/retail_api.py's `_device_doc_discriminator()`) originally fell back
+    to `local_device_uuid()` -- the CREATING twin of the device identity
+    file -- whenever no terminal id existed yet. That made minting a sale
+    number, a pure bookkeeping act, secretly manufacture device identity as
+    a side effect. Phase 4's drawer scoping (`_terminal_owns()` in
+    retail_api.py) reads that exact identity file via `local_terminal_id()`,
+    so a drawer opened on a brand-new till (terminal_id stamped None, no
+    identity yet) followed by that till's first sale (which, under the old
+    code, created the identity file mid-shift) made every subsequent drawer
+    write on that same shift compare a stamped `None` against a freshly-
+    materialized real uuid -- permanent 403, first shift can never close.
+    Same lesson this repo already wrote down in docs/einvoicing/phase1/
+    invoice-numbering-audit.md: a number minted for one purpose must never
+    acquire another purpose's obligations.
+
+    This function (and `peek_doc_discriminator()` above) is THE fix: a
+    dedicated value, persisted separately from device identity at
+    `<AURA_APP_DATA>/device/doc_discriminator.json`, that document numbering
+    owns exclusively. It is generated here, on first use, and this function
+    NEVER touches `local_device.json` and NEVER calls `local_device_uuid()`
+    -- so minting a document number can no longer have an authorization side
+    effect, no matter what else later reads or writes device identity.
+
+    `seed`, when given and non-empty, becomes the persisted value verbatim.
+    Callers pass an already-*peeked* `local_terminal_id()` here so a device
+    that already has an established terminal identity gets a matching,
+    human-readable discriminator instead of a second, unrelated-looking
+    value -- purely for traceability in a `sale_number` string; nothing
+    reads this field back and compares it against `devices.id`, so this is
+    cosmetic, not load-bearing. When `seed` is falsy (no terminal id existed
+    yet at first use), a fresh `uuid.uuid4()` is used instead, matching
+    `local_device_uuid()`'s own fallback.
+
+    Idempotent and STABLE: once a value is persisted, every later call
+    returns that SAME value -- even one made after a terminal identity has
+    since been established (or changed). Re-deriving from a live terminal id
+    on every call would let one till's numbering split into two series
+    (early sales suffixed with the seed/uuid4 value, later ones with the
+    real terminal id), reopening the exact collision risk this mechanism
+    exists to close. The persisted file is always read first; `seed`/uuid4
+    is only used when it is genuinely still empty.
+    """
+    existing = peek_doc_discriminator()
+    if existing:
+        return existing
+    app_data = _resolve_app_data()
+    device_dir = os.path.join(app_data, "device")
+    path = os.path.join(device_dir, "doc_discriminator.json")
+    value = (str(seed).strip() if seed else "") or str(uuid.uuid4())
+    os.makedirs(device_dir, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"discriminator": value}, f, indent=2)
+    return value
+
+
 _cache_lock = threading.Lock()
 _cached_device: Optional[dict] = None
 

@@ -182,6 +182,60 @@ def test_full_shift_round_trip_with_correct_expected_cash_and_variance_math():
     assert current is None
 
 
+def test_brand_new_till_can_close_its_first_shift_without_ever_creating_device_identity():
+    """AUDIT-032D. `_device_doc_discriminator()` (retail_api.py) used to fall
+    back to `local_device_uuid()` -- the CREATING twin of
+    `device/local_device.json` -- whenever no terminal id existed yet, i.e.
+    on exactly the brand-new-till state this whole test file boots into
+    (`local_terminal_id()` is a deliberate peek that never creates that
+    file). Ringing that till's first sale therefore minted device identity
+    MID-SHIFT: the drawer was opened with `terminal_id` stamped None (no
+    identity yet), the sale that followed created a REAL terminal uuid, and
+    every later `_terminal_owns()` check (float/close) compared the
+    session's stamped None against that now-real uuid -- 403, permanently.
+    See `test_full_shift_round_trip_with_correct_expected_cash_and_variance_math`
+    above for the same round trip without this file's own device-identity
+    assertions; this test's job is specifically to assert on the file's
+    absence directly, per this fix's own requirement -- a test that only
+    checked "float/close return 200" would already have been satisfied by a
+    fix that merely special-cased the FIRST call differently while still
+    creating identity somewhere in the chain.
+    """
+    local_device_json = DATA / "device" / "local_device.json"
+    assert not local_device_json.exists(), (
+        'a PRIOR test in this module already created device/local_device.json '
+        '-- this test cannot prove anything about a "brand-new till" anymore')
+
+    client, cid, pid = _make_admin_and_product(price=50.0)
+    assert not local_device_json.exists(), \
+        'creating a company/admin/product created device identity'
+
+    r = _open_shift(client, 100.0)
+    assert r.status_code == 200, r.get_json()
+    sid = r.get_json()['data']['id']
+    assert not local_device_json.exists(), 'opening a shift created device identity'
+
+    sale = _sell_cash(client, pid, qty=1, amount_paid=50.0)
+    assert sale.status_code == 200, sale.get_json()
+    assert not local_device_json.exists(), (
+        'ringing a sale created device identity -- THE AUDIT-032D bug: minting '
+        'a document number must never manufacture device identity as a side '
+        'effect')
+
+    # THE regression itself: before this fix, this next call 403'd, because
+    # the sale above had just materialized a terminal identity the OPEN
+    # shift was never stamped with.
+    assert _movement(client, sid, 'float_out', 10.0, 'bank drop').status_code == 200
+    assert not local_device_json.exists(), 'filing a float movement created device identity'
+
+    close_resp = _close(client, sid, 140.0)
+    assert close_resp.status_code == 200, close_resp.get_json()
+    assert close_resp.get_json()['data']['session']['status'] == 'closed'
+    assert not local_device_json.exists(), (
+        'closing the shift created device identity -- device/local_device.json '
+        'must not exist after a brand-new till completes its first full shift')
+
+
 def test_variance_sign_is_counted_minus_expected():
     """No sales/movements at all -- expected cash is just the opening float,
     so variance is pure counted-vs-opening-float arithmetic, unambiguous."""

@@ -4588,6 +4588,48 @@ def _init_retail(conn):
         last_seq INTEGER NOT NULL DEFAULT 0
     );
     INSERT OR IGNORE INTO sync_cursor (id, last_seq) VALUES (1, 0);
+    -- Phase 5 (money-moving sync, launch-readiness): sync_apply_quarantine is
+    -- the APPLY-side twin of Owner's own push-side quarantine (681b0fa,
+    -- owner/app/sync/quarantine_routes.py) -- same philosophy, opposite end
+    -- of the wire. A pulled sale_item/return_item/return/payment event can
+    -- legitimately arrive with its parent unresolvable on THIS device even
+    -- though nothing here is malformed: Owner's own quarantine can skip a
+    -- PARENT event (a malformed sale) while still relaying its already-valid
+    -- CHILDREN (its sale_items), or a device's cursor range can genuinely
+    -- split parent and child across two pulls. Letting the INSERT raise a
+    -- real FK violation would abort apply_pull_result() entirely -- the
+    -- cursor never advances, and EVERY event after the failing one (from
+    -- every device on the license, not just the one that caused it) is
+    -- retried and re-fails forever. Silently dropping the child is worse:
+    -- money vanishes with no trace. This table is the third option Owner's
+    -- own commit message names: "written verbatim, skipped so the batch
+    -- applies and the cursor advances, and stays visible and replayable."
+    -- SyncService._quarantine_apply_event / _retry_quarantined_events (Phase
+    -- 5) are the only writers/readers. `(entity_id, event_type)` -- NOT
+    -- `entity_id` alone -- is the PRIMARY KEY, so re-parking the same
+    -- still-blocked event on every retry tick is a no-op (INSERT OR IGNORE)
+    -- rather than an ever-growing pile of duplicate rows for one stuck
+    -- event. `entity_id` alone would be too coarse: a `payment`'s `create`
+    -- and its later `void` share one entity_id (the payment's own wire
+    -- `uid`) but are DIFFERENT events that can each independently need
+    -- quarantining -- keying on entity_id alone would let a quarantined
+    -- `void` silently overwrite (INSERT OR IGNORE no-ops, so it would
+    -- instead silently DROP) a still-pending `create` row for the same id,
+    -- or vice versa, depending on which arrived first. Currently
+    -- unreachable in practice (void refuses a sale-tied payment outright,
+    -- the only kind of payment event this table would ever see -- see
+    -- sync_service.py's `_apply_event` "payment" branch), but cheap
+    -- insurance against a later wave that relaxes that refusal.
+    CREATE TABLE IF NOT EXISTS sync_apply_quarantine (
+        entity_id TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        detail TEXT,
+        quarantined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (entity_id, event_type)
+    );
     -- PO-preview-by-supplier foundation (schema v6): a supplier can have
     -- several named contacts (orders/accounts/general), each with its own
     -- preferred channel -- read by core/retail/po_split.py's contact

@@ -1892,6 +1892,7 @@ def create_purchase_order():
         _adjust_credit(conn, 'suppliers', supplier_id, cid, balance)
     _audit(conn, 'PO_CREATED', 'purchase_order', po_id, po_number)
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py (only queues an event when amount_paid > 0)
     return jsonify({'status': 'success', 'data': {'id': po_id, 'po_number': po_number, 'payment_status': payment_status}})
 
 @retail_bp.route('/purchase-orders/<int:po_id>', methods=['GET'])
@@ -2394,6 +2395,23 @@ def create_sale():
         # falling on the wrong day).
         now_local = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         bid = int(data.get('branch_id') or _default_branch(conn, cid))
+        # AUDIT-032C fix (DEFECT 3): `branches.id` is a plain per-device
+        # autoincrement -- `branches` is in RETAIL_UID_TABLES for its `uid`
+        # column alone, but `branch` is NOT one of Phase 5's five synced
+        # entity types (wave B; see sync_service.py's module docstring), so
+        # no branch row is ever created on a peer device by sync. A pulled
+        # sale that carried only the raw integer `bid` would file itself
+        # under WHATEVER branch that number happens to mean on the
+        # RECEIVING device -- harmless where every device only ever has one
+        # branch (id 1 means the same "the shop" everywhere), silently
+        # wrong the instant either side has more than one. Resolved here,
+        # once, alongside `bid` itself, and carried on the sync payload
+        # below as `branch_uid` so the receiving device can resolve it back
+        # to ITS OWN local branches.id (see sync_service.py's
+        # `_resolve_branch_id`, which falls back -- visibly, via a logged
+        # warning -- to that device's own default branch when it cannot).
+        branch_uid_row = conn.execute("SELECT uid FROM branches WHERE id=?", (bid,)).fetchone()
+        branch_uid = branch_uid_row['uid'] if branch_uid_row else None
         mode = _settings(conn, cid).get('tax_calculation_mode', tax_engine.DEFAULT_MODE)
         # feat/shift-cash-drawer (schema v10): best-effort stamp of the
         # currently open cash session, if any -- see _open_cash_session_id's
@@ -2504,16 +2522,22 @@ def create_sale():
                 warning = 'Credit limit exceeded.'
 
         due_date = data.get('due_date')
-        # sales.sale_number carries a bare (not company-scoped) UNIQUE
-        # constraint, but _next_ref()'s counter resets per company -- two
+        # sales.sale_number carries a bare (not company-scoped, not
+        # device-scoped) UNIQUE constraint, but _next_ref()'s counter resets
+        # per company AND is a per-DEVICE table (`doc_sequences` is never
+        # synced -- see _device_doc_discriminator's docstring). Two
         # different companies' first sale would otherwise both generate
-        # "SALE-000001" and collide in this shared multi-tenant database.
-        # Same fix already applied to returns.return_number above (see that
-        # comment) -- appending a company fragment keeps the sequential
-        # part human-readable/searchable while guaranteeing global
-        # uniqueness without altering the shared _next_ref helper or its
-        # format for other doc types.
-        sale_number = f"{_next_ref(conn, cid, 'sale')}-{str(cid)[:8]}"
+        # "SALE-000001" and collide in this shared multi-tenant database
+        # (fixed first, appending a company fragment); two DEVICES on the
+        # SAME company would independently generate the identical
+        # "SALE-000001-<cid8>" and collide the moment sync relayed both to
+        # a third device (AUDIT-032B -- see _device_doc_discriminator's
+        # docstring for the full wedge-sync failure chain this closes).
+        # Appending both fragments keeps the sequential part
+        # human-readable/searchable while guaranteeing global uniqueness
+        # without altering the shared _next_ref helper or its format for
+        # other doc types.
+        sale_number = f"{_next_ref(conn, cid, 'sale')}-{str(cid)[:8]}-{_device_doc_discriminator()}"
 
         # `cashier` still takes data.get('cashier', _uid()) -- a caller-supplied
         # display name where one is given, the local user id otherwise. That is
@@ -2522,6 +2546,12 @@ def create_sale():
         # structured columns sit beside the free text rather than overwrite it.
         # `actor_user_uid` is never derived from it, because a name is not an
         # identity and matching one to the other would be a guess.
+        # Phase 5 (money-moving sync): the sale's own wire identity, resolved
+        # ONCE here (not inline in the VALUES tuple) because both the INSERT
+        # below AND the sync_outbox event right after it need the SAME value
+        # -- `entity_id` must equal the row's own `uid`, or the receiving
+        # device could never resolve sale_items/payments back to this sale.
+        sale_uid = _new_uid()
         cur.execute("""
             INSERT INTO sales (company_id,sale_number,branch_id,customer_id,cashier,
                                subtotal,discount_amount,tax_amount,total,amount_paid,
@@ -2531,8 +2561,37 @@ def create_sale():
         """, (cid, sale_number, bid, customer_id, data.get('cashier', _uid()),
               subtotal, discount, tax, total, paid, change,
               pm, idem, data.get('notes',''), now_local, due_date, cash_session_id,
-              _new_uid(), actor, terminal, utc_now))
+              sale_uid, actor, terminal, utc_now))
         sale_id = cur.lastrowid
+
+        # ── Phase 5 sync emission: the sale itself ───────────────────────────
+        # `company_id`, `idempotency_key` and `session_id` are all
+        # deliberately ABSENT from this payload:
+        #   * `company_id` -- meaningless cross-device (see sync_service.py's
+        #     module docstring's "Cross-device company_id bug fix"); the
+        #     receiving device stamps its own.
+        #   * `idempotency_key` -- carries a BARE (not company-scoped) UNIQUE
+        #     constraint on `sales`, and its whole job (letting THIS device
+        #     detect a resubmission of a request it already wrote) is already
+        #     done by the time this row exists. Carrying it onto a pulled
+        #     copy would risk a genuine cross-device collision on that same
+        #     bare index for no benefit -- the sync `uid` unique index is the
+        #     correct, collision-safe idempotency key for a PULLED row.
+        #   * `session_id` -- a local `cash_sessions.id` FK. cash_sessions is
+        #     NOT one of Phase 5's five synced entity types (out of scope,
+        #     wave B), so no matching row will ever exist on the receiving
+        #     device; the apply side must never even try to preserve or
+        #     remap it (see sync_service.py's sale branch for the full
+        #     reasoning -- this is hazard #2 from the phase brief: a synced
+        #     sale must never be re-attributed to any local drawer).
+        _queue_sync_event(cur, 'sale', sale_uid, 'create', {
+            'uid': sale_uid, 'sale_number': sale_number, 'branch_id': bid, 'branch_uid': branch_uid,
+            'customer_id': customer_id, 'cashier': data.get('cashier', _uid()),
+            'subtotal': subtotal, 'discount_amount': discount, 'tax_amount': tax, 'total': total,
+            'amount_paid': paid, 'change_amount': change, 'payment_method': pm, 'status': 'completed',
+            'notes': data.get('notes', ''), 'created_at': now_local, 'due_date': due_date,
+            'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
+        })
 
         for line in resolved_lines:
             pid, qty = line['product_id'], line['quantity']
@@ -2541,11 +2600,23 @@ def create_sale():
             # the loop would make every multi-line sale fail on its second
             # line -- and, before v13's index existed, would have silently
             # given a peer device several rows it could not tell apart.
+            item_uid = _new_uid()
             cur.execute("""
                 INSERT INTO sale_items (sale_id,product_id,quantity,unit_price,discount_pct,tax_rate,line_total,uid)
                 VALUES (?,?,?,?,?,?,?,?)
             """, (sale_id, pid, qty, line['unit_price'], line['discount_pct'], line['tax_rate'],
-                  line['line_total'], _new_uid()))
+                  line['line_total'], item_uid))
+            # `sale_uid`, not `sale_id` -- the local autoincrement id means
+            # nothing on another device. The receiving side resolves this
+            # line's parent by looking up `sales.uid = sale_uid` locally (see
+            # sync_service.py's sale_item branch); product_id is passed
+            # through as-is because products are already a synced entity
+            # whose `id` IS its cross-device wire identity (unlike sales).
+            _queue_sync_event(cur, 'sale_item', item_uid, 'create', {
+                'uid': item_uid, 'sale_uid': sale_uid, 'product_id': pid, 'quantity': qty,
+                'unit_price': line['unit_price'], 'discount_pct': line['discount_pct'],
+                'tax_rate': line['tax_rate'], 'line_total': line['line_total'],
+            })
             cur.execute("""
                 INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,created_by,
                                                  uid,actor_user_uid,terminal_id,created_at_utc)
@@ -2593,6 +2664,7 @@ def create_sale():
             _adjust_credit(conn, 'customers', customer_id, cid, balance_due)
 
         conn.commit()
+        _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
         _emit('SaleCompleted', {'sale_id': sale_id, 'sale_number': sale_number, 'total': total,
                                  'payment_method': pm})
 
@@ -3043,8 +3115,13 @@ def create_return():
                 conn.close()
                 return jsonify({'status': 'success', 'data': {'id': ex['id'], 'return_number': ex['return_number']}})
 
+        # `uid` selected alongside the columns this route already needed --
+        # Phase 5 (money-moving sync) needs the parent sale's WIRE identity
+        # to stamp onto the return's own sync_outbox payload below (see that
+        # payload's `sale_uid` field); the local integer `id` this route uses
+        # everywhere else means nothing on another device.
         sale = cur.execute(
-            "SELECT id, branch_id, customer_id, total, amount_paid FROM sales WHERE id=? AND company_id=?",
+            "SELECT id, uid, branch_id, customer_id, total, amount_paid FROM sales WHERE id=? AND company_id=?",
             (sale_id, cid)
         ).fetchone()
         if not sale:
@@ -3065,6 +3142,12 @@ def create_return():
         # other must not both read the same "remaining returnable" snapshot.
         conn.execute("BEGIN IMMEDIATE")
         bid = sale['branch_id'] or data.get('branch_id') or _default_branch(conn, cid)
+        # AUDIT-032C fix (DEFECT 3) -- identical reasoning to create_sale's
+        # own `branch_uid` resolution above (see that comment for the full
+        # explanation of why the raw integer `bid` alone is unsafe to carry
+        # onto a pulled row).
+        branch_uid_row = conn.execute("SELECT uid FROM branches WHERE id=?", (bid,)).fetchone()
+        branch_uid = branch_uid_row['uid'] if branch_uid_row else None
         mode = _settings(conn, cid).get('tax_calculation_mode', tax_engine.DEFAULT_MODE)
         # feat/shift-cash-drawer (schema v10): same best-effort session stamp
         # as create_sale above -- see _open_cash_session_id's docstring.
@@ -3129,15 +3212,22 @@ def create_return():
             refund_total += Decimal(str(calc['total']))
 
         refund = float(refund_total.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
-        # returns.return_number carries a bare (not company-scoped) UNIQUE
-        # constraint, but _next_ref()'s counter resets per company -- two
+        # returns.return_number carries a bare (not company-scoped, not
+        # device-scoped) UNIQUE constraint, but _next_ref()'s counter resets
+        # per company AND is a per-DEVICE table (`doc_sequences` is never
+        # synced -- see _device_doc_discriminator's docstring). Two
         # different companies' first return would otherwise both generate
-        # "RET-000001" and collide in this shared multi-tenant database.
-        # Appending a company fragment keeps the sequential part
-        # human-readable/searchable while guaranteeing global uniqueness
-        # without altering the shared _next_ref helper or its format for
-        # other doc types (out of scope for this correction).
-        ret_num = f"{_next_ref(conn, cid, 'return')}-{str(cid)[:8]}"
+        # "RET-000001" and collide in this shared multi-tenant database
+        # (fixed first, appending a company fragment); two DEVICES on the
+        # SAME company would independently generate the identical
+        # "RET-000001-<cid8>" and collide the moment sync relayed both to a
+        # third device -- the same AUDIT-032B wedge-sync failure chain
+        # create_sale's identical fix closes (see
+        # _device_doc_discriminator's docstring). Appending both fragments
+        # keeps the sequential part human-readable/searchable while
+        # guaranteeing global uniqueness without altering the shared
+        # _next_ref helper or its format for other doc types.
+        ret_num = f"{_next_ref(conn, cid, 'return')}-{str(cid)[:8]}-{_device_doc_discriminator()}"
         # Write LOCAL time, not the UTC CURRENT_TIMESTAMP default: the dashboard nets
         # returns out of today's revenue by local date(created_at), so a UTC timestamp
         # would file a late-evening return under the wrong day and leave the KPI stale.
@@ -3146,6 +3236,7 @@ def create_return():
         # BEGIN IMMEDIATE. Same warning as create_sale: `utc_now` is a genuinely
         # UTC instant and is NOT `now_local`, which is local wall clock on
         # purpose (see the comment three lines up).
+        ret_uid = _new_uid()
         cur.execute("""
             INSERT INTO returns (company_id,return_number,sale_id,branch_id,cashier,
                                  reason,refund_method,refund_amount,status,idempotency_key,created_at,
@@ -3153,16 +3244,41 @@ def create_return():
             VALUES (?,?,?,?,?,?,?,?,'completed',?,?,?,?,?,?,?)
         """, (cid, ret_num, sale_id, bid, _uid(),
               data.get('reason','Customer return'), data.get('refund_method','cash'), refund, idem, now_local,
-              cash_session_id, _new_uid(), actor, terminal, utc_now))
+              cash_session_id, ret_uid, actor, terminal, utc_now))
         ret_id = cur.lastrowid
+
+        # ── Phase 5 sync emission: the return itself ─────────────────────────
+        # `sale_uid` -- the ORIGINAL sale's wire identity, from the `uid`
+        # column selected above -- not `sale_id` (local, meaningless
+        # cross-device). The apply side resolves `returns.sale_id`'s real FK
+        # by looking up `sales.uid = sale_uid` locally, exactly like
+        # sale_item resolves its own parent (see sync_service.py). Same
+        # `company_id` / `idempotency_key` / `session_id` omissions as
+        # create_sale's own event, for the identical reasons.
+        _queue_sync_event(cur, 'return', ret_uid, 'create', {
+            'uid': ret_uid, 'sale_uid': sale['uid'], 'return_number': ret_num, 'branch_id': bid,
+            'branch_uid': branch_uid,
+            'cashier': _uid(), 'reason': data.get('reason', 'Customer return'),
+            'refund_method': data.get('refund_method', 'cash'), 'refund_amount': refund,
+            'status': 'completed', 'created_at': now_local,
+            'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
+        })
+
         for line in resolved_items:
             pid, qty = line['product_id'], line['quantity']
             # Fresh uid per line -- see the identical note in create_sale's
             # sale_items write about the partial UNIQUE index on uid.
+            item_uid = _new_uid()
             cur.execute("""
                 INSERT INTO return_items (return_id,product_id,quantity,unit_price,line_total,uid)
                 VALUES (?,?,?,?,?,?)
-            """, (ret_id, pid, qty, line['unit_price'], line['line_total'], _new_uid()))
+            """, (ret_id, pid, qty, line['unit_price'], line['line_total'], item_uid))
+            # `return_uid`, not `return_id` -- see the identical note on
+            # sale_item's `sale_uid` above.
+            _queue_sync_event(cur, 'return_item', item_uid, 'create', {
+                'uid': item_uid, 'return_uid': ret_uid, 'product_id': pid, 'quantity': qty,
+                'unit_price': line['unit_price'], 'line_total': line['line_total'],
+            })
             cur.execute("""
                 INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
                 VALUES (?,?,?,0)
@@ -3207,6 +3323,7 @@ def create_return():
 
         _audit(conn, 'RETURN_PROCESSED', 'return', ret_id, f'{ret_num} refund={refund}')
         conn.commit()
+        _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
         return jsonify({'status': 'success', 'data': {
             'id': ret_id, 'return_number': ret_num, 'refund_amount': round(refund, 2),
             'idempotency_key': idem, 'items': resolved_items,
@@ -4866,6 +4983,136 @@ def _next_ref(conn, cid, doc_type):
     n = conn.execute("SELECT last_no FROM doc_sequences WHERE company_id=? AND doc_type=?", (cid, doc_type)).fetchone()[0]
     return f"{_REF_PREFIX.get(doc_type, doc_type.upper())}-{int(n):06d}"
 
+#: Width of the per-device suffix `_device_doc_discriminator()` appends to a
+#: newly minted sale_number/return_number. Deliberately the SAME width the
+#: pre-existing per-COMPANY fragment already uses (`str(cid)[:8]`, see
+#: create_sale/create_return's own comments below) -- a uuid4-derived value
+#: truncated to 8 hex characters still carries ~32 bits of entropy, and a
+#: single shop running even a few dozen simultaneous tills has a collision
+#: probability many orders of magnitude below anything worth defending
+#: against. Same argument the company fragment already relies on, restated
+#: here for the device fragment rather than re-derived.
+_DOC_DISCRIMINATOR_WIDTH = 8
+
+# Populated at most once per PROCESS -- see _device_doc_discriminator's
+# docstring, tier 3. Never written to disk: that tier is reached only when
+# persist_doc_discriminator() itself raises (its file write failing, or an
+# ImportError on a stripped Android build), so there is nothing safe to
+# persist to.
+_process_doc_discriminator = None
+
+
+def _device_doc_discriminator():
+    """Stable per-device fragment for a newly minted sale_number/return_number.
+
+    THE ORIGINAL FIX for AUDIT-032B (two tills wedge sync permanently on the
+    second till's first sale): `_next_ref` above increments `doc_sequences`,
+    a table that is per-device and never synced (it has no entry in
+    sync_service.py's entity_type allowlist at all). Two DEVICES on the SAME
+    company therefore both start their counter at 0, and without a
+    per-device fragment would both mint the identical string
+    "SALE-000001-<cid8>" -- harmless until the SECOND device's sale is
+    pulled by any THIRD device (or the first device pulls it back), where it
+    collides with the first device's own row on `sales.sale_number`'s bare
+    UNIQUE index, raises `sqlite3.IntegrityError` out of `_apply_event`, and
+    wedges that device's `sync_cursor` at the failing event forever -- every
+    row behind it, from every device, catalogue included, stops arriving.
+    The counter itself is not the bug (it is correctly atomic and gapless
+    PER DEVICE, exactly as `_next_ref`'s own docstring promises); the bug is
+    that its output was never made to disambiguate BETWEEN devices, only
+    between companies (see the pre-existing `str(cid)[:8]` fragment this one
+    sits beside).
+
+    AUDIT-032D -- why this is no longer just "peek, then fall back to the
+    CREATING call": the first version of this fix, when `local_terminal_id()`
+    returned None (a brand-new till that has never opened a drawer or logged
+    in under Phase 4's terminal scoping -- `init_retail()`, and therefore a
+    device's very first sale, runs before any of that), fell back to
+    `local_device_uuid()` -- the CREATING twin of the exact same device
+    identity file `local_terminal_id()` peeks. That call site was
+    deliberately unlike every other read in this file (`_stamp()`, `_this_
+    terminal()`) in that it WROTE `device/local_device.json` into existence.
+    The premise ("minting a number is not an authorization question") was
+    right; the conclusion was wrong, because the function it called has an
+    authorization side effect downstream: Phase 4's drawer scoping
+    (`_terminal_owns()` below) reads that exact same file via `local_
+    terminal_id()`. A drawer OPENED on that brand-new till stamps
+    `terminal_id = None` (no identity yet); ringing that shift's first sale
+    then MINTED the identity mid-shift; every float/close call for the REST
+    of that shift compared the session's stamped `None` against the now-
+    real, freshly-materialized terminal uuid -- permanent 403, and the
+    till's first shift could never be closed. Same lesson this repo already
+    wrote down in docs/einvoicing/phase1/invoice-numbering-audit.md: a
+    number minted for one purpose must never acquire another purpose's
+    obligations.
+
+    THE FIX: document numbering now owns its OWN persisted discriminator
+    (`commercial_runtime.identity.device_context.peek_doc_discriminator()` /
+    `persist_doc_discriminator()`, `<AURA_APP_DATA>/device/
+    doc_discriminator.json`) -- entirely separate from `local_device.json`.
+    Two tiers, each falling back to the next only when the one above
+    genuinely cannot answer:
+
+      1. `peek_doc_discriminator()` -- read-only, never creates anything.
+         The common case: this device has minted at least one document
+         before, so a value is already on disk.
+
+      2. `persist_doc_discriminator(seed=local_terminal_id())` -- reached
+         only when tier 1 returned None, i.e. this device's very first
+         document. `local_terminal_id()` here is ALSO a read-only peek (of
+         `local_device.json`, unchanged from before) -- passed only as a
+         SEED for traceability when a terminal identity happens to already
+         exist; when it does not (the brand-new-till case that broke drawer
+         closing), `persist_doc_discriminator()` mints its own fresh uuid4
+         and persists THAT, never touching `local_device.json` either way.
+         Once persisted, every later call -- on this device, forever,
+         including after a terminal identity eventually IS established --
+         reads that SAME value back (see `persist_doc_discriminator()`'s own
+         docstring for why re-deriving from a live terminal id on every call
+         would be wrong: it would split one till's numbering into two
+         series).
+
+      3. A value cached in this process only. Reached only when tier 2
+         itself raises (device_context's file write failing, or, on a
+         stripped Android build, an ImportError). Nothing safe to persist in
+         that branch, so a value that is at least stable for the life of
+         THIS process is strictly better than a fresh one per call, which
+         would let this SAME device mint two colliding numbers within a
+         single run. A process restart on a permanently-broken install gets
+         a new value each time -- an accepted, narrow residual, matching
+         `local_terminal_id()`'s own documented posture on its identical
+         corrupt-state case ("a real problem, but the correct place to
+         surface it is device resolution, not the middle of a sale").
+
+    Existing rows are never touched -- only the SHAPE of newly minted
+    numbers changes, exactly like the pre-existing company fragment before
+    it (see docs/einvoicing/phase1/invoice-numbering-audit.md's "Follow-ups"
+    section for that precedent, including the grep-confirmed absence of any
+    code that parses/reconstructs a sale_number by format -- re-confirmed
+    for this change too).
+
+    Never raises, and -- unlike the AUDIT-032B version of this function --
+    never CREATES device identity either: matches every other identity
+    helper in this file (`_stamp()`, `local_terminal_id()`, `_this_
+    terminal()`) on both counts now. A sale is the business, its number is
+    bookkeeping, and minting one must never manufacture state that changes
+    who is allowed to close a drawer.
+    """
+    global _process_doc_discriminator
+    try:
+        from commercial_runtime.identity.device_context import (
+            peek_doc_discriminator,
+            persist_doc_discriminator,
+        )
+        value = peek_doc_discriminator()
+        if not value:
+            value = persist_doc_discriminator(seed=local_terminal_id())
+    except Exception:
+        if _process_doc_discriminator is None:
+            _process_doc_discriminator = local_terminal_id() or _new_uid()
+        value = _process_doc_discriminator
+    return str(value)[:_DOC_DISCRIMINATOR_WIDTH]
+
 _DEFAULT_SETTINGS = {
     'base_currency': 'USD',
     'default_credit_mode': 'none',      # none | limited | unlimited
@@ -4963,13 +5210,43 @@ def _record_payment(conn, cid, party_type, party_id, direction, amount, method='
     # payment, a supplier payment, a PO down-payment and a void's reversal all
     # funnel through this single INSERT, so stamping it once covers the whole
     # ledger and no route can write an unnamed payment by going around it.
+    pay_uid = _new_uid()
+    created_by = _uid()
+    created_at = _now()
+    sale_id_fk = related_id if related_type == 'sale' else None
     conn.execute("""INSERT INTO payments
         (company_id,reference,party_type,party_id,direction,amount,currency,fx_rate,method,
          related_type,related_id,sale_id,notes,status,created_by,device,created_at,uid)
         VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?, 'active', ?, ?, ?, ?)""",
         (cid, ref, party_type, party_id, direction, amt, cur, method,
-         related_type, related_id, (related_id if related_type == 'sale' else None),
-         notes, _uid(), device, _now(), _new_uid()))
+         related_type, related_id, sale_id_fk,
+         notes, created_by, device, created_at, pay_uid))
+
+    # ── Phase 5 sync emission: the payment itself ────────────────────────────
+    # ONE funnel, every money movement (see this function's own comment
+    # above) -- a sale's retained cash, a customer/supplier account payment,
+    # a PO down-payment. Every one of them gets exactly one sync event here,
+    # rather than each call site having to remember to queue its own.
+    #
+    # `sale_uid` is resolved ONLY when this payment is FK-tied to a sale
+    # (`related_type == 'sale'`, e.g. create_sale's own retained-cash entry)
+    # -- `payments.sale_id REFERENCES sales(id)` is the ONE real FK this
+    # table declares (related_id/related_type carry no FK at all, e.g. a PO
+    # down-payment's related_id, so they are passed through as-is, an opaque
+    # local-only reference exactly like branch_id elsewhere in this phase).
+    # The apply side resolves the real local `sales.id` by looking up
+    # `sales.uid = sale_uid`, exactly like sale_item/return resolve theirs.
+    sale_uid = None
+    if related_type == 'sale' and related_id:
+        row = conn.execute("SELECT uid FROM sales WHERE id=? AND company_id=?", (related_id, cid)).fetchone()
+        sale_uid = row['uid'] if row else None
+    _queue_sync_event(conn, 'payment', pay_uid, 'create', {
+        'uid': pay_uid, 'reference': ref, 'party_type': party_type, 'party_id': party_id,
+        'direction': direction, 'amount': amt, 'currency': cur, 'method': method,
+        'related_type': related_type, 'related_id': related_id, 'sale_uid': sale_uid,
+        'notes': notes, 'status': 'active', 'created_by': created_by, 'device': device,
+        'created_at': created_at,
+    })
     return ref
 
 def _adjust_credit(conn, table, pid, cid, delta):
@@ -5321,6 +5598,7 @@ def customer_payment(cust_id):
         newbal = _adjust_credit(conn, 'customers', cust_id, cid, -amt)
         _audit(conn, 'CUSTOMER_PAYMENT', 'customer', cust_id, f'{ref} amount={amt}')
         conn.commit(); conn.close()
+        _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
         return jsonify({'status': 'success', 'data': {'reference': ref, 'new_balance': newbal}})
     except Exception as e:
         conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -5395,6 +5673,7 @@ def supplier_payment(sid):
         newbal = _adjust_credit(conn, 'suppliers', sid, cid, -amt)
         _audit(conn, 'SUPPLIER_PAYMENT', 'supplier', sid, f'{ref} amount={amt}')
         conn.commit(); conn.close()
+        _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
         return jsonify({'status': 'success', 'data': {'reference': ref, 'new_balance': newbal}})
     except Exception as e:
         conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -5426,6 +5705,7 @@ def pay_purchase_order(po_id):
             _adjust_credit(conn, 'suppliers', po['supplier_id'], cid, -amt)
         _audit(conn, 'PO_PAYMENT', 'purchase_order', po_id, f"{ref} amount={amt}")
         conn.commit(); conn.close()
+        _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
         return jsonify({'status': 'success', 'data': {'reference': ref, 'payment_status': status, 'amount_paid': new_paid}})
     except Exception as e:
         conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -5589,7 +5869,31 @@ def void_payment(pid):
             # 'in' reduced AR / 'out' reduced AP, so voiding adds it back.
             _adjust_credit(conn, table, p['party_id'], cid, _money(p['amount']))
         _audit(conn, 'PAYMENT_VOIDED', 'payment', pid, data.get('reason', ''))
+        # AUDIT-032A fix (DEFECT 2): this route mutates `payments.status` in
+        # place -- the ONE documented exception to Phase 5's "money is an
+        # immutable fact, corrected by a new row, never edited in place"
+        # posture (see the "CREDIT & PAYMENTS" section header above: "never
+        # edited -- only voided/reversed (status flag)" already SAYS this is
+        # how payments work; what was missing is that the mutation never
+        # told the other devices). Before this fix, no sync_outbox row was
+        # ever queued for a void at all, so a receipt cancelled on THIS
+        # device stayed live money on every other device forever -- their
+        # copy of the row never changed, and every company-wide revenue read
+        # on them kept counting it.
+        #
+        # `uid` only -- a payment created before v13's uid backfill has no
+        # wire identity and was never syncable to begin with (see
+        # `_local_id_by_uid`'s identical "no uid, nothing to resolve"
+        # posture); voiding it locally is still correct, it just has no peer
+        # copy to correct. The apply side (sync_service.py's payment branch)
+        # accepts ONLY this exact transition -- status -> 'voided', nothing
+        # else, never `amount` -- so a device cannot use this path to
+        # rewrite money it did not ring; see that branch's own comment for
+        # why a general `update` was rejected.
+        if p['uid']:
+            _queue_sync_event(conn, 'payment', p['uid'], 'update', {'uid': p['uid'], 'status': 'voided'})
         conn.commit(); conn.close()
+        _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
         return jsonify({'status': 'success'})
     except Exception as e:
         conn.rollback(); conn.close(); return jsonify({'status': 'error', 'message': str(e)}), 500

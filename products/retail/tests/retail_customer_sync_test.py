@@ -148,6 +148,13 @@ def test_pulled_customer_delete_soft_deletes_and_never_touches_a_row_this_device
         CREATE TABLE sales (id INTEGER PRIMARY KEY, company_id INTEGER, customer_id TEXT, total REAL);
         CREATE TABLE sync_cursor (id INTEGER PRIMARY KEY CHECK (id=1), last_seq INTEGER NOT NULL DEFAULT 0);
         INSERT INTO sync_cursor (id, last_seq) VALUES (1, 0);
+        -- Phase 5: apply_pull_result() unconditionally checks this table now
+        -- (SyncService._has_quarantined_events) -- see
+        -- products/retail/backend/database/schema.py's own CREATE TABLE.
+        CREATE TABLE sync_apply_quarantine (entity_id TEXT NOT NULL, entity_type TEXT NOT NULL,
+            event_type TEXT NOT NULL, payload TEXT NOT NULL, reason TEXT NOT NULL, detail TEXT,
+            quarantined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (entity_id, event_type));
     """)
     conn.execute("INSERT INTO customers (id,company_id,name,status) VALUES ('c-1',9,'Ahmed','active')")
     conn.execute("INSERT INTO sales (company_id,customer_id,total) VALUES (9,'c-1',150.0)")

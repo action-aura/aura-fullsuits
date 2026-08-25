@@ -38,6 +38,21 @@ CREATE TABLE sync_cursor (
     last_seq INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO sync_cursor (id, last_seq) VALUES (1, 0);
+-- Phase 5 (money-moving sync): apply_pull_result() now unconditionally
+-- checks this table (SyncService._has_quarantined_events) on every pull, so
+-- it must exist even for a route test that never touches a money entity --
+-- see products/retail/backend/database/schema.py's own CREATE TABLE for the
+-- full reasoning.
+CREATE TABLE sync_apply_quarantine (
+    entity_id TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    detail TEXT,
+    quarantined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (entity_id, event_type)
+);
 """
 
 

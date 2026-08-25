@@ -144,7 +144,7 @@ from commercial_runtime.identity.company_rebind import (
     registry_tenant_ids as registry_company_tenant_ids,
 )
 from commercial_runtime.identity.registry_db import get_conn as get_registry_conn
-from api.retail_api import retail_bp
+from api.retail_api import retail_bp, _ensure_credit_schema
 from api.import_api import import_bp
 from commercial_runtime.backup.routes import make_backup_blueprint
 from commercial_runtime.licensing_contracts.routes import make_licensing_blueprint
@@ -514,7 +514,15 @@ if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':
     # batch that needs it -- never the pulled payload's own company_id (a
     # different device's value). See that function's docstring and the
     # module-level "Cross-device company_id bug fix" note.
-    _sync_service = SyncService(_build_sync_client, _sync_get_conn, local_company_id_from_registry)
+    #
+    # `_ensure_credit_schema` (Launch-readiness Phase 5, money-moving sync):
+    # SyncService's own `local_ensure_schema` hook -- see that constructor
+    # parameter's docstring for the exact bug this closes (a lazy, route-
+    # triggered migration `sales.due_date`/`payments`'s AR-AP columns depend
+    # on, which the sync background loop's own timer can reach before any
+    # HTTP route ever has on a brand-new device).
+    _sync_service = SyncService(_build_sync_client, _sync_get_conn, local_company_id_from_registry,
+                                local_ensure_schema=_ensure_credit_schema)
     register_active_service(_sync_service)
 elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
     # Android's own wiring (multi-device-sync-foundation, Task 9): this
@@ -543,10 +551,14 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
         from database.schema import get_retail_conn
         return get_retail_conn()
 
-    # local_company_id_from_registry: see the Windows branch above -- the
-    # /_internal/sync/pull-apply route below calls apply_pull_result() on
-    # THIS service, which needs the same fix.
-    _android_sync_service = SyncService(None, _sync_get_conn, local_company_id_from_registry)  # client_factory never used -- see comment above
+    # local_company_id_from_registry / local_ensure_schema: see the Windows
+    # branch above for both -- the /_internal/sync/pull-apply route below
+    # calls apply_pull_result() on THIS service too, and needs the identical
+    # fix (Kotlin's own pull loop can reach this route before any other
+    # request has, on a brand-new Android install, exactly like the Windows
+    # timer can).
+    _android_sync_service = SyncService(None, _sync_get_conn, local_company_id_from_registry,
+                                        local_ensure_schema=_ensure_credit_schema)  # client_factory never used -- see comment above
     app.register_blueprint(make_sync_internal_blueprint(
         sync_service=_android_sync_service,
         get_conn=_sync_get_conn,

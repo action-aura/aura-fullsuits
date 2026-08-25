@@ -5,14 +5,87 @@
 `LicenseCheckInScheduler` exactly: a self-rescheduling `threading.Timer`,
 daemon thread, `threading.Event` stop flag.
 
-Scope note: only `entity_type in ("category", "product", "customer",
-"supplier", "reorder_request")` is understood by `_apply_event` -- this
-sub-project (multi-device-sync-foundation, retail-catalog-party-sync-
-expansion, reorder-automation-foundation) only wires
-category/product/customer/supplier/reorder_request routes through the
-outbox. A future entity type arriving from Owner is silently skipped, not
-an error -- forward compatibility for a relay that may carry entity types
-this particular product build doesn't know how to apply yet.
+Scope note: `entity_type in ("category", "product", "customer", "supplier",
+"reorder_request", "sale", "sale_item", "payment", "return", "return_item")`
+is understood by `_apply_event` -- the first five from earlier sub-projects
+(multi-device-sync-foundation, retail-catalog-party-sync-expansion,
+reorder-automation-foundation), the last five from launch-readiness Phase 5
+(money-moving sync). A future entity type arriving from Owner is silently
+skipped, not an error -- forward compatibility for a relay that may carry
+entity types this particular product build doesn't know how to apply yet.
+
+Phase 5's five are architecturally DIFFERENT from the first five, and that
+difference is the whole design of their branches below: a category/product/
+customer/supplier/reorder_request row is a MUTABLE record with its own `id`
+AS its wire identity, upserted with `ON CONFLICT(id) DO UPDATE` because the
+row is meant to converge to whichever device edited it last. A sale,
+sale_item, payment, return or return_item is an IMMUTABLE business fact --
+money that moved -- with a separate local autoincrement `id` (private to
+this install) and a `uid` (the wire identity, v13's partial-unique-indexed
+column). These are applied `ON CONFLICT(uid) WHERE uid IS NOT NULL DO
+NOTHING` -- the WHERE clause repeats `idx_<table>_uid`'s own partial-index
+predicate verbatim, which SQLite's UPSERT syntax requires to match a partial
+index at all (omitting it does not fall back to matching the index; it
+raises `OperationalError` on every apply -- see each branch's own comment
+for the precise verification). Never DO UPDATE,
+and `event_type` OUTSIDE `"create"` is silently ignored for FOUR of the
+five (sale, sale_item, return, return_item): a completed sale is corrected
+by a return, never edited or deleted in place, and accepting an
+update/delete event for money would let one device rewrite what another
+device's till actually rang (see each branch's own comment).
+
+`payment` is the ONE documented exception (AUDIT-032A, launch-readiness
+Phase 5B): retail_api.py's `POST /payments/<id>/void` mutates
+`payments.status` in place -- 'active' -> 'voided' -- and that has always
+been true (see that route's own "CREDIT & PAYMENTS" section header: "never
+edited -- only voided/reversed (status flag)"), so a blanket "money is
+immutable, corrected only by a new row" premise was never actually correct
+for this one table. What was missing was not the premise but the sync
+event: a void queued nothing at all, so a receipt cancelled on one device
+stayed live money on every other device forever. The fix is a `"payment"` /
+`"update"` branch that accepts EXACTLY ONE transition -- `status` ->
+`'voided'`, nothing else, and NEVER `amount` or any other column -- so a
+device still cannot use this path to rewrite money it did not ring; see
+that branch's own comment for the full reasoning, including why widening it
+to a general `update` was rejected. Every other event_type on `payment`
+(anything that is not `"create"` or this one narrow `"update"`) is still
+silently ignored, same as the other four.
+Three more differences worth stating once here rather than five times below:
+
+  * `company_id` is still always the RECEIVING device's own (never the
+    payload's) -- identical reasoning to the "Cross-device company_id bug
+    fix" note below, just for five more tables.
+  * `session_id` (sales.session_id / returns.session_id, a local
+    `cash_sessions.id` FK) is NEVER preserved or remapped on apply -- always
+    written NULL. `cash_sessions` is not one of these five synced entity
+    types, so no matching row can ever exist on the receiving device, and
+    Phase 4 (retail v16, docs/launch-readiness/phase4-terminal-drawer.md)
+    made a cash drawer's expected-cash arithmetic sum strictly by
+    `session_id` for exactly this reason: a pulled sale with `session_id`
+    NULL can never be counted into ANY local drawer, which is what keeps a
+    synced sale from being re-attributed to the receiving device's own open
+    till. `actor_user_uid` / `terminal_id` / `created_at_utc`, by contrast,
+    ARE always preserved from the payload -- a pulled sale keeps its
+    ORIGINATING actor and terminal, never the receiving device's own.
+  * A sale_item/return_item/payment(sale) needs its parent (sale/return)
+    resolved to a LOCAL row by `uid` before it can be inserted (its FK
+    points at the parent's local autoincrement `id`, which differs per
+    device). When the parent cannot be found -- most notably because
+    Owner's own push-side quarantine (681b0fa) can skip a malformed PARENT
+    event while still relaying its already-valid children -- the child is
+    parked in `sync_apply_quarantine` (visible, replayable) rather than
+    dropped or allowed to raise and wedge the whole pull batch. See
+    `_quarantine_apply_event` / `_retry_quarantined_events` below.
+  * `sales.branch_id` / `returns.branch_id` are NEVER the payload's raw
+    integer (AUDIT-032C, launch-readiness Phase 5B) -- `branches.id` is a
+    plain per-device autoincrement, and `branch` is deliberately NOT one of
+    these five synced entity types (wave B), so no branch row is guaranteed
+    to exist locally under that same number, or to mean the same physical
+    place if it does. Resolved instead via `_resolve_branch_id()` from the
+    payload's `branch_uid` (v13's `branches.uid`, carried by the emitting
+    device) to THIS device's own local `branches.id` -- falling back,
+    visibly (a logged warning, never a silent guess), to this device's own
+    default branch when the uid is absent or does not resolve locally.
 
 `reorder_request` (feat/reorder-automation-foundation) is a narrower case
 than the other four: its `id` is a real client-generated UUID (unlike
@@ -48,7 +121,9 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import sqlite3
 import threading
+import uuid
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
@@ -111,6 +186,7 @@ class SyncService:
         client_factory: Callable[[], "SyncRelayClient"],
         get_conn: Callable[[], "sqlite3.Connection"],
         local_company_id_provider: Optional[Callable[[], Optional[str]]] = None,
+        local_ensure_schema: Optional[Callable[["sqlite3.Connection"], None]] = None,
     ):
         """`client_factory` is called fresh on every push_once()/pull_once()
         attempt, not once at construction time -- deliberately, mirroring
@@ -132,10 +208,37 @@ class SyncService:
         function callers may pass in): a `SyncService` constructed without
         one raises loudly the first time a category event actually needs it,
         rather than silently touching a real on-disk registry DB a test (or
-        some future caller) never intended to read."""
+        some future caller) never intended to read.
+
+        `local_ensure_schema`, when supplied, is called with the local
+        connection on every `apply_pull_result()` batch that touches a Phase
+        5 money-moving entity (create/update sale/return/payment; see that
+        method's own eager-fetch comment for the exact condition, shared
+        with `local_company_id_provider`'s own fetch) -- BEFORE any of those
+        branches writes a row. This exists for one reason: several columns
+        `_apply_event`'s sale/return/payment branches write to
+        (`sales.due_date`, most of `payments`) are added by a LAZY,
+        route-triggered migration in this product (`_ensure_credit_schema`,
+        products/retail/backend/api/retail_api.py) that has always assumed
+        some HTTP request reaches the app before anything else needs those
+        columns. The sync background loop's first pull tick fires on its own
+        timer, completely independent of any route ever being hit -- so a
+        brand-new device that has never served a single request could
+        receive its first pulled sale before those columns exist. Reproduced
+        directly against a real install: `sqlite3.OperationalError: table
+        sales has no column named due_date`. Deliberately a CONSTRUCTOR
+        HOOK, not a hardcoded import of retail_api's own migration function:
+        this module is shared with any future product wiring a SyncService
+        (clinic does not today), and must never hardcode one product's lazy-
+        migration function by name. Optional and a no-op when absent (unlike
+        `local_company_id_provider`, which raises when needed-but-missing --
+        see `_get_local_company_id`): a product with no such lazy migration
+        at all, or a test that only ever exercises the pre-existing five
+        catalogue entity types, has nothing to call."""
         self._client_factory = client_factory
         self._get_conn = get_conn
         self._local_company_id_provider = local_company_id_provider
+        self._local_ensure_schema = local_ensure_schema
         self._timer: Optional[threading.Timer] = None
         self._stopped = threading.Event()
         # Serializes push_once/pull_once against each other -- the 10s timer
@@ -282,21 +385,90 @@ class SyncService:
         events = result.get("events", [])
         # Fetched at most once per batch (not once per event) -- it is the
         # SAME value (this device's own company_id) for every event in the
-        # batch. Only actually needed for a category create/update (the ONLY
-        # writes that stamp a company_id) -- a batch of pure deletes (keyed
-        # by categories.id alone) or unknown entity types never touches the
-        # provider at all, so a SyncService with no provider configured can
-        # still apply those without raising.
+        # batch. Needed for a category/sale/return/payment create or update
+        # (the writes that stamp a company_id -- sale_item/return_item carry
+        # no company_id column of their own, so they never need this) -- a
+        # batch of pure deletes (keyed by categories.id alone) or unknown
+        # entity types never touches the provider at all, so a SyncService
+        # with no provider configured can still apply those without raising.
+        # Also fetched whenever a PREVIOUSLY quarantined event is about to be
+        # retried below -- a sale_item alone in this batch (its parent
+        # already resolved and its own company_id-less INSERT needs no
+        # provider) must not force a provider requirement, but a quarantined
+        # SALE waiting for retry does, and there is no cheap way to know in
+        # advance which kind is sitting in sync_apply_quarantine without
+        # reading it -- so this is a small, deliberate over-fetch rather than
+        # a second, more precise scan of the quarantine table.
         local_company_id = None
+        touches_pending_or_quarantine = self._has_quarantined_events(conn)
         if any(
-            ev.get("entity_type") in ("category", "product", "customer", "supplier", "reorder_request")
+            ev.get("entity_type") in ("category", "product", "customer", "supplier", "reorder_request",
+                                       "sale", "return", "payment")
             and ev.get("event_type") in ("create", "update")
             for ev in events
-        ):
+        ) or touches_pending_or_quarantine:
             local_company_id = self._get_local_company_id()
+        # `local_ensure_schema` only ever needs to run for sale/return/
+        # payment specifically (see this hook's own constructor docstring --
+        # `sales.due_date`, `returns.idempotency_key`, most of `payments`).
+        # category/product/customer/supplier/reorder_request never touch any
+        # column it would create, so calling it for a pure-catalogue batch
+        # would be correct but pointless; scoped narrower than the
+        # company_id fetch just above on purpose.
+        if self._local_ensure_schema is not None and (
+            any(
+                ev.get("entity_type") in ("sale", "return", "payment")
+                and ev.get("event_type") in ("create", "update")
+                for ev in events
+            ) or touches_pending_or_quarantine
+        ):
+            self._local_ensure_schema(conn)
+        # Collects every branch_uid this batch discarded (see
+        # `_resolve_branch_id`'s `fallback_sink` paragraph) instead of
+        # letting each one log its own WARNING -- on a busy multi-device
+        # install this is a steady per-row WARNING (measured: ~5,000/day/
+        # device), which is the same as no log. One consolidated line below
+        # keeps the exact same information -- every discarded uid, how many
+        # times, where it landed -- at batch granularity instead.
+        branch_fallbacks: list = []
         for ev in events:
-            self._apply_event(conn, ev, local_company_id)
+            self._apply_event(conn, ev, local_company_id, branch_fallback_sink=branch_fallbacks)
+        # Retried AFTER this batch's own events, not before: the whole point
+        # of a batch containing the once-missing parent (e.g. an operator
+        # replayed a quarantined sale from Owner's console) is that its
+        # previously-parked children can resolve in the SAME tick they
+        # arrive in, rather than waiting one more pull cycle.
+        self._retry_quarantined_events(conn, local_company_id, branch_fallback_sink=branch_fallbacks)
+        if branch_fallbacks:
+            self._log_branch_fallback_summary(branch_fallbacks)
         conn.execute("UPDATE sync_cursor SET last_seq=? WHERE id=1", (result["cursor"],))
+
+    @staticmethod
+    def _log_branch_fallback_summary(branch_fallbacks: list) -> None:
+        """One WARNING for the whole batch, replacing what used to be one
+        WARNING per row -- see `_resolve_branch_id`'s `fallback_sink`
+        paragraph for why. Keeps the SAME information a per-row line would
+        have: every discarded `branch_uid`, how many rows it hit this batch,
+        which company_id, and which local branch id absorbed them -- grouped
+        so a uid appearing 500 times in one batch is one entry with count
+        500, not 500 identical lines. `did not resolve` and the discarded
+        uid(s) both still appear in the message verbatim, matching the
+        original per-row wording, so anything that used to grep/assert on
+        those substrings for a single-row batch keeps working unchanged."""
+        counts: dict = {}
+        for branch_uid, local_company_id, default_id in branch_fallbacks:
+            key = (branch_uid, local_company_id, default_id)
+            counts[key] = counts.get(key, 0) + 1
+        parts = [
+            f"branch_uid={branch_uid!r} x{count} (company_id={local_company_id!r}, "
+            f"filed under default branch id={default_id!r})"
+            for (branch_uid, local_company_id, default_id), count in counts.items()
+        ]
+        logger.warning(
+            "sync: %d pulled row(s) this batch had a branch_uid that did not resolve to any "
+            "local branch; each was filed under this device's default branch instead. %s",
+            len(branch_fallbacks), "; ".join(parts),
+        )
 
     def _get_local_company_id(self) -> str:
         """Returns THIS device's own locally-authoritative company_id --
@@ -321,10 +493,29 @@ class SyncService:
             )
         return company_id
 
-    def _apply_event(self, conn, ev: dict, local_company_id: Optional[str] = None) -> None:
+    def _apply_event(self, conn, ev: dict, local_company_id: Optional[str] = None,
+                      branch_fallback_sink: Optional[list] = None) -> bool:
+        """Applies one pulled event to a local table. Returns True when the
+        event is FULLY handled -- inserted, upserted, a legitimate no-op
+        (unknown entity_type, a non-`create` event on one of the five
+        money-moving types, other than `payment`'s one narrow `update` void
+        transition -- AUDIT-032A, see that branch's own comment) -- and
+        False only when a Phase 5 money-moving event was PARKED in
+        `sync_apply_quarantine` because a row it depends on could not be
+        resolved locally (see `_quarantine_apply_event`): a sale_item/
+        return/return_item/payment(sale) whose PARENT hasn't arrived yet, or
+        a payment `update` (void) whose OWN `create` hasn't arrived yet. The
+        pre-Phase-5 five entity types never return False; every one of their
+        branches falls through to the unconditional `return True` at the
+        bottom, unchanged from before this return value existed. Callers
+        that only care about "did this raise" (the main loop in
+        apply_pull_result) can ignore the return value entirely; only
+        `_retry_quarantined_events` uses it, to decide whether a previously
+        parked row may now be deleted."""
         entity_type = ev.get("entity_type")
-        if entity_type not in ("category", "product", "customer", "supplier", "reorder_request"):
-            return
+        if entity_type not in ("category", "product", "customer", "supplier", "reorder_request",
+                                "sale", "sale_item", "payment", "return", "return_item"):
+            return True
         p = ev.get("payload") or {}
         event_type = ev.get("event_type")
         if entity_type == "category":
@@ -419,6 +610,474 @@ class SyncService:
                     "draft_message=excluded.draft_message, resolved_at=excluded.resolved_at",
                     (p.get("id"), local_company_id, p.get("branch_id"), p.get("product_id"),
                      p.get("status", "pending"), p.get("draft_message"), p.get("resolved_at")),
+                )
+        elif entity_type == "sale":
+            # Money is an immutable business fact, not a mutable row (see the
+            # module docstring's Phase 5 note) -- a completed sale is
+            # corrected by a RETURN, never edited or deleted in place.
+            # event_type outside "create" is silently ignored: create_sale
+            # never emits an update/delete event for this entity type today,
+            # so reaching this branch with one means either a future bug on
+            # the write side or a malicious/corrupt relay payload -- either
+            # way, refusing to apply it is the safe default.
+            if event_type != "create":
+                return True
+            # `session_id` is hardcoded NULL, never taken from the payload
+            # (there is no `session_id` key in it at all -- see create_sale's
+            # own emission comment) -- see the module docstring's Phase 5
+            # note for why this is hazard #2's fix, not an omission.
+            # `idempotency_key` is likewise never carried onto a pulled row
+            # (also absent from the payload) -- its bare UNIQUE constraint
+            # exists for THIS device's own resubmission detection, and `uid`
+            # is the correct, collision-safe idempotency key for a pulled
+            # copy (see ON CONFLICT(uid) below).
+            #
+            # `ON CONFLICT(uid) WHERE uid IS NOT NULL` -- the WHERE clause is
+            # NOT decorative. `idx_sales_uid` (v13, _ensure_unique_uid_index)
+            # is a PARTIAL unique index (`... WHERE uid IS NOT NULL`, so
+            # un-backfilled legacy rows with no uid yet don't collide with
+            # each other), and SQLite's UPSERT syntax requires the conflict
+            # target to repeat a partial index's own WHERE clause verbatim to
+            # match it at all -- omitting it does not fall back to matching
+            # the index anyway; it raises `OperationalError: ON CONFLICT
+            # clause does not match any PRIMARY KEY or UNIQUE constraint` on
+            # EVERY apply, unconditionally (verified directly against
+            # sqlite3, not assumed from documentation). Same reasoning on
+            # sale_item/return/return_item/payment below -- all five share
+            # the identical partial-index shape.
+            # AUDIT-032C (DEFECT 3): `p.get("branch_id")` is the SENDING
+            # device's own local integer -- resolved to THIS device's own
+            # local branches.id via the payload's `branch_uid` instead. See
+            # `_resolve_branch_id`'s own docstring and the module docstring's
+            # matching bullet above.
+            resolved_branch_id = self._resolve_branch_id(
+                conn, local_company_id, p.get("branch_uid"), fallback_sink=branch_fallback_sink)
+            conn.execute(
+                "INSERT INTO sales (company_id, sale_number, branch_id, customer_id, cashier, "
+                "subtotal, discount_amount, tax_amount, total, amount_paid, change_amount, "
+                "payment_method, status, idempotency_key, notes, created_at, due_date, session_id, "
+                "uid, actor_user_uid, terminal_id, created_at_utc) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,NULL,?,?,?,?) "
+                "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
+                (local_company_id, p.get("sale_number"), resolved_branch_id, p.get("customer_id"),
+                 p.get("cashier", "POS"), p.get("subtotal", 0), p.get("discount_amount", 0),
+                 p.get("tax_amount", 0), p.get("total", 0), p.get("amount_paid", 0),
+                 p.get("change_amount", 0), p.get("payment_method", "cash"), p.get("status", "completed"),
+                 p.get("notes", ""), p.get("created_at"), p.get("due_date"),
+                 p.get("uid"), p.get("actor_user_uid"), p.get("terminal_id"), p.get("created_at_utc")),
+            )
+        elif entity_type == "sale_item":
+            if event_type != "create":
+                return True
+            sale_local_id = self._local_id_by_uid(conn, "sales", p.get("sale_uid"))
+            if sale_local_id is None:
+                return self._quarantine_apply_event(
+                    conn, ev, reason="missing_parent:sale",
+                    detail=f"sale_uid={p.get('sale_uid')!r} not found locally")
+            # `sale_items` declares TWO real FKs, not one: sale_id -> sales(id)
+            # AND product_id -> products(id). Resolving only the first leaves
+            # the second as an uncovered wedge with the IDENTICAL cause the
+            # quarantine table was built for -- Owner's push-side quarantine
+            # (681b0fa) can skip a malformed PRODUCT event just as easily as a
+            # malformed sale, and a device that sold a product it had itself
+            # RECEIVED by sync emits no product event of its own, so nothing
+            # downstream re-supplies it. Reproduced end to end against two real
+            # installs (drop the product event, relay sale/sale_item/payment):
+            # `sqlite3.IntegrityError: FOREIGN KEY constraint failed`, cursor
+            # stuck at 0, nothing applied, and every later pull re-fails on the
+            # same batch forever -- catalogue included, from every device on
+            # the license, not just the one that caused it.
+            #
+            # Checked here rather than left to the FK because the whole point
+            # of this phase's third hazard is that an unresolvable parent is
+            # PARKED (visible, replayable) rather than allowed to raise. Uses
+            # the same `_quarantine_apply_event` path, and the same
+            # "missing_parent:<thing>" reason vocabulary, as the sale link
+            # above.
+            #
+            # An ABSENT product_id is parked too, not waved through: this
+            # column is `INTEGER NOT NULL` (schema.py), so a payload without
+            # one raises `sqlite3.IntegrityError: NOT NULL constraint failed`
+            # and wedges the batch just as surely as a dangling FK does.
+            # Letting "None" past the guard on the theory that a NULL FK is
+            # never a violation would have re-opened the very hole this check
+            # closes, one row-shape to the left -- `_row_exists` returns False
+            # for a falsy id precisely so both cases land here together.
+            if not self._row_exists(conn, "products", p.get("product_id")):
+                return self._quarantine_apply_event(
+                    conn, ev, reason="missing_parent:product",
+                    detail=f"product_id={p.get('product_id')!r} not found locally")
+            conn.execute(
+                "INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, discount_pct, "
+                "tax_rate, line_total, uid) VALUES (?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
+                (sale_local_id, p.get("product_id"), p.get("quantity"), p.get("unit_price"),
+                 p.get("discount_pct", 0), p.get("tax_rate", 0), p.get("line_total"), p.get("uid")),
+            )
+        elif entity_type == "return":
+            if event_type != "create":
+                # Same immutability posture as "sale" above -- a return is
+                # itself the reversal; it is never reversed a second time by
+                # editing this row.
+                return True
+            sale_local_id = self._local_id_by_uid(conn, "sales", p.get("sale_uid"))
+            if sale_local_id is None:
+                return self._quarantine_apply_event(
+                    conn, ev, reason="missing_parent:sale",
+                    detail=f"sale_uid={p.get('sale_uid')!r} not found locally")
+            # AUDIT-032C (DEFECT 3) -- identical reasoning to the "sale"
+            # branch's own `_resolve_branch_id` call above.
+            resolved_branch_id = self._resolve_branch_id(
+                conn, local_company_id, p.get("branch_uid"), fallback_sink=branch_fallback_sink)
+            conn.execute(
+                "INSERT INTO returns (company_id, return_number, sale_id, branch_id, cashier, reason, "
+                "refund_method, refund_amount, status, idempotency_key, created_at, session_id, "
+                "uid, actor_user_uid, terminal_id, created_at_utc) "
+                "VALUES (?,?,?,?,?,?,?,?,?,NULL,?,NULL,?,?,?,?) "
+                "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
+                (local_company_id, p.get("return_number"), sale_local_id, resolved_branch_id,
+                 p.get("cashier", "POS"), p.get("reason", ""), p.get("refund_method", "cash"),
+                 p.get("refund_amount", 0), p.get("status", "completed"), p.get("created_at"),
+                 p.get("uid"), p.get("actor_user_uid"), p.get("terminal_id"), p.get("created_at_utc")),
+            )
+        elif entity_type == "return_item":
+            if event_type != "create":
+                return True
+            return_local_id = self._local_id_by_uid(conn, "returns", p.get("return_uid"))
+            if return_local_id is None:
+                return self._quarantine_apply_event(
+                    conn, ev, reason="missing_parent:return",
+                    detail=f"return_uid={p.get('return_uid')!r} not found locally")
+            # `return_items.product_id -> products(id)` -- the identical second
+            # FK, the identical `INTEGER NOT NULL` column, and the identical
+            # uncovered wedge, as the sale_item branch above. See that
+            # branch's own comment for the full reasoning.
+            if not self._row_exists(conn, "products", p.get("product_id")):
+                return self._quarantine_apply_event(
+                    conn, ev, reason="missing_parent:product",
+                    detail=f"product_id={p.get('product_id')!r} not found locally")
+            conn.execute(
+                "INSERT INTO return_items (return_id, product_id, quantity, unit_price, line_total, uid) "
+                "VALUES (?,?,?,?,?,?) ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
+                (return_local_id, p.get("product_id"), p.get("quantity"), p.get("unit_price"),
+                 p.get("line_total"), p.get("uid")),
+            )
+        elif entity_type == "payment":
+            if event_type == "update":
+                # AUDIT-032A (DEFECT 2): the ONE narrow, explicit exception to
+                # every other branch's "non-create is silently ignored" rule
+                # -- see the module docstring's "`payment` is the ONE
+                # documented exception" paragraph for the full reasoning.
+                # retail_api.py's void_payment route queues EXACTLY this
+                # shape (`{'uid': ..., 'status': 'voided'}`); anything else
+                # reaching here is either a future bug on the write side or a
+                # malicious/corrupt relay payload, and is refused exactly
+                # like an unrecognised event_type on any other branch.
+                # `amount` (and every other column) is DELIBERATELY absent
+                # from both this check and the UPDATE below -- accepting a
+                # general update would let one device rewrite money it did
+                # not ring, precisely the hole the create-only rule protects
+                # sale/return/sale_item/return_item from; this branch exists
+                # only because it does NOT reopen that hole.
+                if p.get("status") != "voided" or not p.get("uid"):
+                    return True
+                cursor = conn.execute(
+                    "UPDATE payments SET status='voided' WHERE uid=?", (p.get("uid"),)
+                )
+                if cursor.rowcount == 0:
+                    # The void arrived before (or without) its own payment's
+                    # `create` event -- the identical orphan shape as
+                    # sale_item/return/return_item above (Owner's push-side
+                    # quarantine can split a parent from a later event just
+                    # as easily as from a child); "parent" here means "the
+                    # row this update is about". Parked, not dropped or
+                    # allowed to raise and wedge the batch.
+                    return self._quarantine_apply_event(
+                        conn, ev, reason="missing_parent:payment",
+                        detail=f"uid={p.get('uid')!r} not found locally to void")
+                return True
+            if event_type != "create":
+                return True
+            # Only a payment FK-tied to a sale (`related_type == "sale"`) has
+            # a parent to resolve at all -- `payments.sale_id` is the ONE
+            # real FK this table declares (see create_sale/create_return's
+            # own emission comments). Every other payment (a customer/
+            # supplier account payment, a PO down-payment) has no parent
+            # here and applies directly.
+            sale_local_id = None
+            if p.get("related_type") == "sale" and p.get("sale_uid"):
+                sale_local_id = self._local_id_by_uid(conn, "sales", p.get("sale_uid"))
+                if sale_local_id is None:
+                    return self._quarantine_apply_event(
+                        conn, ev, reason="missing_parent:sale",
+                        detail=f"sale_uid={p.get('sale_uid')!r} not found locally")
+            conn.execute(
+                "INSERT INTO payments (company_id, reference, party_type, party_id, direction, amount, "
+                "currency, fx_rate, method, related_type, related_id, sale_id, notes, status, "
+                "created_by, device, created_at, uid) "
+                "VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
+                (local_company_id, p.get("reference"), p.get("party_type"), p.get("party_id"),
+                 p.get("direction"), p.get("amount", 0), p.get("currency", "USD"), p.get("method", "cash"),
+                 p.get("related_type"), p.get("related_id"), sale_local_id, p.get("notes", ""),
+                 p.get("status", "active"), p.get("created_by"), p.get("device"), p.get("created_at"),
+                 p.get("uid")),
+            )
+        return True
+
+    @staticmethod
+    def _local_id_by_uid(conn, table: str, uid: Optional[str]):
+        """Resolves a Phase 5 money-moving parent's LOCAL autoincrement `id`
+        from its wire `uid` -- the receiving device's own row, never the
+        sending device's local id (which means nothing here). Returns None
+        both when `uid` itself is falsy (a malformed/absent payload field)
+        and when no local row carries it yet (the genuine orphan case this
+        phase's third hazard is about) -- callers treat both identically.
+        `table` is always one of the two literal strings this module passes
+        ("sales", "returns"), never external input, so the f-string below
+        carries no injection risk despite not being parameterized -- SQLite
+        has no way to parameterize a table name at all."""
+        if not uid:
+            return None
+        row = conn.execute(f'SELECT id FROM "{table}" WHERE uid=?', (uid,)).fetchone()
+        return row["id"] if row else None
+
+    @staticmethod
+    def _row_exists(conn, table: str, row_id) -> bool:
+        """Does `table` hold a row with this PRIMARY KEY id, on THIS device?
+
+        Unlike `_local_id_by_uid` above, no remapping is involved: `products`
+        is one of the pre-existing synced entity types whose own `id` IS its
+        cross-device wire identity (see the module docstring), so a pulled
+        line item's `product_id` is already the value this device would use --
+        the only question is whether the row has ARRIVED yet.
+
+        Exists so a missing one can be PARKED rather than left to raise a real
+        FK violation and wedge the batch; see the sale_item branch's own
+        comment for the failure it closes. `table` is always a literal string
+        this module passes ("products"), never external input, so the f-string
+        carries no injection risk -- SQLite cannot parameterize a table name.
+        A falsy `row_id` returns False (nothing to find), matching
+        `_local_id_by_uid`'s own posture on an absent key; callers that must
+        distinguish "absent" from "missing" check for None themselves before
+        calling."""
+        if not row_id:
+            return False
+        return conn.execute(
+            f'SELECT 1 FROM "{table}" WHERE id=?', (row_id,)
+        ).fetchone() is not None
+
+    @staticmethod
+    def _resolve_branch_id(conn, local_company_id: Optional[str], branch_uid: Optional[str],
+                            fallback_sink: Optional[list] = None) -> Optional[int]:
+        """Resolves a pulled sale/return's branch to one of THIS device's OWN
+        local `branches.id` values (AUDIT-032C, launch-readiness Phase 5B) --
+        never the sending device's raw integer, which means nothing here.
+        `branches.id` is a plain per-device autoincrement; `branches` sits in
+        RETAIL_UID_TABLES for its `uid` column alone, but `branch` is
+        deliberately NOT one of Phase 5's five synced entity types (wave B,
+        see the module docstring), so no row bearing this exact uid is
+        guaranteed to exist locally at all, let alone under the same integer
+        id the sending device used.
+
+        Two tiers:
+
+          1. Look up `branch_uid` (the payload's `branches.uid`, carried by
+             the emitting device -- see create_sale/create_return's own
+             comment) against THIS device's own `branches` table, scoped to
+             `local_company_id` for the same reason every other lookup in
+             this file is. When it resolves, the pulled row lands under the
+             CORRECT physical branch on this device.
+          2. Otherwise -- `branch_uid` absent (an older emitter, or a
+             hand-built payload in a test), or present but no local row
+             carries it (the two devices' branch rows were never
+             reconciled, which is always true today since `branch` itself
+             never syncs) -- fall back to THIS device's own default/first
+             branch, self-healing one if none exists yet at all. Identical
+             rule to `_default_branch()` in retail_api.py, duplicated here
+             rather than imported: this module is shared with any future
+             product wiring a SyncService (clinic does not today) and must
+             never hardcode one product's route-file import.
+
+        Falling back is logged at WARNING when a real (non-empty)
+        `branch_uid` was actually discarded to reach it -- so a pulled sale
+        silently filed under the wrong branch leaves a visible trail rather
+        than a silent guess (the phase brief's explicit DEFECT 3
+        requirement). Never logged when `branch_uid` was already absent --
+        an absent uid is an older emitter or a hand-built test payload, not a
+        resolution FAILURE, so it is not worth a warning.
+
+        Be clear-eyed about the volume this implies, because an earlier
+        revision of this docstring got it backwards. `branch_uid` is NOT
+        ordinarily absent: create_sale/create_return resolve and send it on
+        EVERY sale and EVERY return. And tier 1 ordinarily does NOT resolve,
+        because `branch` is not a synced entity type (wave B) -- device A's
+        "Main Branch" and device B's "Main Branch" are separate rows with
+        separate uids that were never reconciled. So on a plain two-till shop
+        the steady state is: every pulled sale takes tier 2 and logs one
+        WARNING. Measured directly -- two devices, each with only its own
+        self-healed Main Branch, three sales pushed from A: three warnings on
+        B, all three rows filed under B's own default branch.
+
+        That is the correct behaviour (there is no better answer available
+        until branch rows reconcile) and the visibility is deliberate, but it
+        was originally a per-pulled-sale WARNING, not a rare one -- and on a
+        busy multi-device install (measured: ~5,000 such events/day/device)
+        that steady per-row volume is the same as no log: nobody reads a
+        WARNING line repeated thousands of times a day. `fallback_sink`
+        below exists to fix exactly that, without losing the information --
+        see its own paragraph.
+
+        Neither the fallback ITSELF nor its visibility is what changed here
+        -- a silent wrong-branch filing is exactly what DEFECT 3 was, and
+        cross-device branch attribution is still effectively "the receiving
+        device's default branch" until `branch` itself syncs (a reason for
+        wave B to make branch reconciliation real, unrelated to logging
+        volume).
+
+        `fallback_sink`, when given a list, gets the discarded `branch_uid`
+        appended to it INSTEAD OF this function logging anything itself --
+        the caller (`apply_pull_result`, via `_apply_event`) collects one
+        list per BATCH and logs a single consolidated WARNING once, after
+        every event in the batch (including retried quarantine rows) has
+        been applied, rather than once per row. `fallback_sink=None` (the
+        default) preserves the original per-call WARNING -- every existing
+        direct caller of this function (and of `_apply_event` outside
+        `apply_pull_result`, e.g. tests) keeps its old behavior unchanged."""
+        if branch_uid:
+            row = conn.execute(
+                "SELECT id FROM branches WHERE uid=? AND company_id=?",
+                (branch_uid, local_company_id),
+            ).fetchone()
+            if row:
+                return row["id"]
+        row = conn.execute(
+            "SELECT id FROM branches WHERE company_id=? ORDER BY id LIMIT 1",
+            (local_company_id,),
+        ).fetchone()
+        if row is not None:
+            default_id = row["id"]
+        else:
+            # No branch at all yet on this device (never onboarded, or a
+            # bare test fixture) -- self-heal exactly like _default_branch()
+            # does, with the same fresh v13 `uid` a self-healed branch gets
+            # there, so it is named identically on the wire however it came
+            # into existence.
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO branches (company_id,name,address,phone,uid) VALUES (?,?,?,?,?)",
+                (local_company_id, "Main Branch", "", "", str(uuid.uuid4())),
+            )
+            default_id = cur.lastrowid
+        if branch_uid:
+            if fallback_sink is not None:
+                # Same three facts a per-row WARNING would have carried --
+                # the discarded uid, the company scope, and where the row
+                # actually landed -- just deferred to the batch-level
+                # summary instead of logged immediately.
+                fallback_sink.append((branch_uid, local_company_id, default_id))
+            else:
+                logger.warning(
+                    "sync: pulled row's branch_uid=%r did not resolve to any local branch for "
+                    "company_id=%r; filed under this device's default branch id=%r instead.",
+                    branch_uid, local_company_id, default_id,
+                )
+        return default_id
+
+    @staticmethod
+    def _quarantine_apply_event(conn, ev: dict, reason: str, detail: str) -> bool:
+        """Parks a Phase 5 money-moving child event in `sync_apply_quarantine`
+        instead of dropping it or letting an FK violation raise and wedge the
+        whole pull batch -- see schema.py's `CREATE TABLE sync_apply_quarantine`
+        for the full reasoning (the client-side twin of Owner's own push-side
+        quarantine, 681b0fa). `INSERT OR IGNORE` keyed on `(entity_id,
+        event_type)` -- NOT `entity_id` alone, see that CREATE TABLE's own
+        comment for why -- makes re-parking the SAME still-blocked event on
+        every retry tick a no-op rather than an ever-growing pile of
+        duplicate rows -- `quarantined_at` on an already-parked row therefore
+        stays at the FIRST time it was seen, which is exactly what "how long
+        has this been stuck" should show. Always returns False -- the event
+        was NOT applied -- so `_apply_event`'s callers can tell this case
+        apart from a genuine success."""
+        conn.execute(
+            "INSERT OR IGNORE INTO sync_apply_quarantine "
+            "(entity_id, entity_type, event_type, payload, reason, detail) VALUES (?,?,?,?,?,?)",
+            (ev.get("entity_id"), ev.get("entity_type"), ev.get("event_type"),
+             json.dumps(ev.get("payload") or {}), reason, detail),
+        )
+        return False
+
+    @staticmethod
+    def _is_missing_table_error(exc: sqlite3.OperationalError) -> bool:
+        return "no such table" in str(exc).lower()
+
+    def _has_quarantined_events(self, conn) -> bool:
+        """False both when the table is genuinely empty AND when it does not
+        exist at all yet. The second case is real, not hypothetical: this
+        method is called on EVERY `apply_pull_result()`, including from test
+        fixtures (and, in principle, a not-yet-upgraded production database)
+        that hand-build a minimal schema with only the tables their own
+        scenario needs -- `sync_apply_quarantine` is additive and created
+        unconditionally by `init_retail()`'s base executescript for every
+        REAL install, but a fixture that never calls `init_retail()` at all
+        should not be forced to know this table exists purely because Phase
+        5 added an unconditional check here. `OperationalError` is caught
+        narrowly (message-matched), not swallowed wholesale -- a locked
+        database or genuine corruption must still raise."""
+        try:
+            row = conn.execute("SELECT 1 FROM sync_apply_quarantine LIMIT 1").fetchone()
+        except sqlite3.OperationalError as exc:
+            if self._is_missing_table_error(exc):
+                return False
+            raise
+        return row is not None
+
+    def _retry_quarantined_events(self, conn, local_company_id: Optional[str] = None,
+                                   branch_fallback_sink: Optional[list] = None) -> None:
+        """Re-attempts every row currently parked in `sync_apply_quarantine`,
+        oldest first, and deletes exactly the ones that resolve this pass.
+        Safe to call every `apply_pull_result()` -- an empty quarantine table
+        is a cheap SELECT and an empty loop; a row that is STILL blocked is
+        re-parked by `_quarantine_apply_event` (INSERT OR IGNORE onto its own
+        PRIMARY KEY) rather than duplicated, so this is idempotent to call as
+        often as convenient. `local_company_id` is only actually consumed by
+        the "sale"/"return"/"payment" branches inside `_apply_event`; a batch
+        of purely still-orphaned sale_items would never need it, but the
+        caller (`apply_pull_result`) already resolves it eagerly whenever the
+        quarantine table is non-empty at all -- see that method's comment.
+
+        Missing-table tolerant for the identical reason `_has_quarantined_
+        events` is -- see that method's docstring.
+
+        `branch_fallback_sink`, when given, is forwarded to `_apply_event`
+        unchanged -- a retried quarantined sale/return can ALSO fall back to
+        this device's default branch, and that fallback belongs in the same
+        one-per-batch summary `apply_pull_result` logs for its own loop, not
+        a second, separate WARNING."""
+        try:
+            rows = conn.execute(
+                "SELECT entity_id, entity_type, event_type, payload FROM sync_apply_quarantine "
+                "ORDER BY quarantined_at"
+            ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if self._is_missing_table_error(exc):
+                return
+            raise
+        for row in rows:
+            ev = {
+                "entity_id": row["entity_id"],
+                "entity_type": row["entity_type"],
+                "event_type": row["event_type"],
+                "payload": json.loads(row["payload"]),
+            }
+            if self._apply_event(conn, ev, local_company_id, branch_fallback_sink=branch_fallback_sink):
+                # Keyed on BOTH columns -- entity_id alone would risk
+                # deleting a DIFFERENT still-blocked event_type that happens
+                # to share this entity_id (see the table's own CREATE
+                # comment for why the primary key itself is composite).
+                conn.execute(
+                    "DELETE FROM sync_apply_quarantine WHERE entity_id=? AND event_type=?",
+                    (row["entity_id"], row["event_type"]),
                 )
 
     def run_once(self) -> None:
