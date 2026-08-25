@@ -1236,6 +1236,16 @@ def _new_uid():
     return str(_uuid.uuid4())
 
 
+def _branch_uid(conn, branch_id):
+    """Same lookup as retail_api.py::_branch_uid (duplicated rather than
+    imported -- see `_queue_sync_event`'s own comment just below for why this
+    file never imports a private helper from that one). Resolves a local
+    `branches.id` to its v13 wire identity for an inventory_movement
+    payload's `branch_uid` field."""
+    row = conn.execute("SELECT uid FROM branches WHERE id=?", (branch_id,)).fetchone()
+    return row['uid'] if row else None
+
+
 # AUDIT fix (2026-08-19, CRITICAL): the handlers below inserted categories/
 # products/customers/suppliers with NO sync_outbox event at all, so a bulk
 # import never left the importing device -- other devices silently never saw
@@ -1292,9 +1302,22 @@ def _handle_retail_products(records):
         # _default_branch does, and it has to agree with it: a branch invented
         # by an upload is as real as one created through /branches, and the
         # stock this import is about to file lands against it.
+        self_heal_branch_uid = _new_uid()
         cur.execute("INSERT INTO branches (company_id,name,uid) VALUES (?,'Main Store',?)",
-                    (cid, _new_uid()))
+                    (cid, self_heal_branch_uid))
         bid = cur.lastrowid
+        # Wave B: `branch` is now a synced entity type -- see
+        # sync_service.py's module docstring and retail_api.py's
+        # `_default_branch` for the identical self-heal emission.
+        _queue_sync_event(cur, 'branch', self_heal_branch_uid, 'create', {
+            'uid': self_heal_branch_uid, 'name': 'Main Store', 'address': '', 'phone': '', 'status': 'active',
+        })
+        import_branch_uid = self_heal_branch_uid
+    else:
+        # Resolved once, outside the record loop -- same reasoning as
+        # `actor, terminal, utc_now` above: every row this run posts a
+        # movement for lands at the SAME branch.
+        import_branch_uid = _branch_uid(conn, bid)
 
     for rec in records:
         cat_name = (rec.get('category') or '').strip()
@@ -1496,18 +1519,31 @@ def _handle_retail_products(records):
                 # per-ROW (inside the loop, one fresh uuid4 each) while the
                 # actor triple is per-RUN (hoisted above the loop): the rows
                 # are distinct records of one act by one person at one moment.
+                movement_type = 'opening_stock' if is_new else ('stock_in' if delta > 0 else 'stock_out')
+                movement_reference = 'OPENING' if is_new else _IMPORT_STOCK_REFERENCE
+                movement_notes = '' if is_new else f'Declared stock changed by bulk import ({already_declared} -> {declared})'
+                movement_uid = _new_uid()
                 cur.execute("""
                     INSERT INTO inventory_movements
                         (company_id,product_id,branch_id,movement_type,quantity,reference,notes,created_by,
                          uid,actor_user_uid,terminal_id,created_at_utc)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-                """, (cid, pid, bid,
-                      'opening_stock' if is_new else ('stock_in' if delta > 0 else 'stock_out'),
-                      delta,
-                      'OPENING' if is_new else _IMPORT_STOCK_REFERENCE,
-                      '' if is_new else f'Declared stock changed by bulk import ({already_declared} -> {declared})',
-                      _uid(),
-                      _new_uid(), actor, terminal, utc_now))
+                """, (cid, pid, bid, movement_type, delta, movement_reference, movement_notes,
+                      _uid(), movement_uid, actor, terminal, utc_now))
+                # Wave B (AUDIT parity with the 2026-08-19 fix noted on
+                # `_queue_sync_event` above): this is the sixth and highest-
+                # leverage writer into inventory_movements in the product
+                # (see this function's own module-level comment) -- a bulk
+                # import that restates a whole catalogue's opening stock must
+                # reach every other device exactly like a single manual
+                # adjustment does.
+                _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
+                    'uid': movement_uid, 'product_id': pid, 'branch_id': bid,
+                    'branch_uid': import_branch_uid,
+                    'movement_type': movement_type, 'quantity': delta, 'unit_cost': 0,
+                    'reference': movement_reference, 'notes': movement_notes, 'created_by': _uid(),
+                    'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
+                })
 
     conn.commit(); conn.close()
     _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -1584,9 +1620,17 @@ def _handle_retail_suppliers(records):
 
 
 def _handle_retail_branches(records):
-    # Deliberately NO _queue_sync_event here: `branch` is not a sync entity
-    # type (see sync_service.py's _apply_event scope) -- the normal branch
-    # routes queue nothing either, so there is no parity to restore.
+    # Wave B (stock-moving sync): `branch` IS now a sync entity type (see
+    # sync_service.py's module docstring and its `_apply_event` `branch`
+    # branch) -- this handler used to queue nothing at all, on the theory
+    # that there was no parity to restore. That theory no longer holds: every
+    # other branch-creation site in this product (retail_api.py's
+    # `_default_branch`/`create_branch`, this file's own self-heal above)
+    # now queues a `branch`/`create` event, and a bulk-imported branch is as
+    # real as one created through /branches -- omitting it here would leave
+    # this ONE branch-creation path silently un-synced, the identical defect
+    # shape the AUDIT fix on `_queue_sync_event` above closed for categories/
+    # products/customers/suppliers.
     from database.schema import get_retail_conn
     conn = get_retail_conn(); cur = conn.cursor(); cid = _cid()
     imported = 0
@@ -1596,13 +1640,15 @@ def _handle_retail_branches(records):
         if conn.execute("SELECT id FROM branches WHERE company_id=? AND name=?", (cid, name)).fetchone():
             continue
         status = (rec.get('status') or 'active').strip().lower()
-        # v13 `uid`, one per branch. Note this handler deliberately queues no
-        # sync event (see the comment at the top of this function) -- that is
-        # about the OUTBOX, not about identity. A row still needs a stable
-        # wire name whether or not today's sync engine ships it, since the row
-        # long outlives the decision about which entity types travel.
+        # v13 `uid`, one per branch -- the same wire identity every other
+        # branch-creation site in this product stamps.
+        branch_uid = _new_uid()
         cur.execute("INSERT INTO branches (company_id,name,address,phone,status,uid) VALUES (?,?,?,?,?,?)",
-                    (cid, name, rec.get('address',''), rec.get('phone',''), status, _new_uid()))
+                    (cid, name, rec.get('address',''), rec.get('phone',''), status, branch_uid))
+        _queue_sync_event(cur, 'branch', branch_uid, 'create', {
+            'uid': branch_uid, 'name': name, 'address': rec.get('address', ''),
+            'phone': rec.get('phone', ''), 'status': status,
+        })
         imported += 1
     conn.commit(); conn.close()
     return {'imported': imported, 'message': f'{imported} branches imported.'}

@@ -891,8 +891,29 @@ def test_an_unresolvable_branch_uid_falls_back_visibly_not_silently(install_b, r
     sale = _sell_cash(admin, pid, 1)
     assert sale.status_code == 200
     sale_event = _outbox('sale')[0]
-    # B is never given a branch carrying A's uid -- the ordinary state of
-    # every install today, since `branch` itself does not sync.
+    # Wave B UPDATE: `branch` is now a synced entity type, so "B is never
+    # given a branch carrying A's uid" is no longer the ordinary state of
+    # every install -- it is what USED to be true before wave B, and this
+    # test's whole premise (a genuinely unresolvable branch_uid) depends on
+    # it. `_new_shop()`'s own `create_product` call above self-heals A's
+    # branch and (as of wave B) queues a `branch`/`create` event for it into
+    # THIS SAME outbox, ahead of the sale's own events (`read_outbox` orders
+    # by rowid -- insertion order). Left in place, `service_a.push_once()`
+    # below would push that branch event too, B would resolve it via tier 1
+    # BEFORE applying the sale, and the sale's `branch_uid` would legitimately
+    # resolve -- which is the correct new behaviour (see
+    # sync_service.py's `_resolve_branch_id` docstring, "WAVE B UPDATE"), but
+    # would make THIS test's own premise false rather than proving what it
+    # claims to. Deleted here to reconstruct the scenario this test is
+    # actually about -- a batch that arrives before the branch event does
+    # (replay/ordering; that docstring's own example) -- without touching the
+    # assertions below at all: the fallback mechanism and its visibility are
+    # still real and still required whenever a branch really hasn't arrived
+    # yet, wave B or not.
+    conn = get_retail_conn()
+    conn.execute("DELETE FROM sync_outbox WHERE entity_type='branch'")
+    conn.commit()
+    conn.close()
     b_conn = install_b()
     try:
         b_conn.execute("INSERT INTO branches (company_id,name,address,phone,uid) VALUES (?,?,?,?,?)",

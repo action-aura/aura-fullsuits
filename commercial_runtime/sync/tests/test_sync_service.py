@@ -968,14 +968,21 @@ def test_pull_once_delete_only_batch_never_needs_a_company_id_provider(get_conn)
 
 
 def test_pull_once_ignores_unknown_entity_types(get_conn):
-    # "branch": genuinely unknown to _apply_event -- "category"/"product"/
-    # "customer"/"supplier" are all wired in by this point (see retail-
-    # catalog-party-sync-expansion's Tasks 1-4), so any of those would no
-    # longer exercise the ignore path this test is actually about. Branches
-    # are explicitly out of scope for this entire plan and will never get a
-    # real _apply_event branch, so "branch" is safe to use here permanently.
+    # "warehouse": genuinely unknown to _apply_event -- "category"/"product"/
+    # "customer"/"supplier"/"reorder_request"/"sale"/"sale_item"/"payment"/
+    # "return"/"return_item" are all wired in by this point (see retail-
+    # catalog-party-sync-expansion's Tasks 1-4 and launch-readiness Phase 5),
+    # so any of those would no longer exercise the ignore path this test is
+    # actually about. "branch" USED to be the example this test reached for
+    # (see git history) on the theory that it was permanently out of scope --
+    # Phase 5 wave B (stock-moving sync) proved that theory wrong: `branch`
+    # is now a synced entity type (`inventory_movement`'s own sibling, see
+    # sync_service.py's module docstring), so it would silently stop
+    # exercising THIS test's actual point (an entity_type _apply_event has
+    # never heard of) the moment it landed. "warehouse" names nothing this
+    # product has ever modeled and is the safe permanent stand-in.
     event = {
-        "id": str(uuid.uuid4()), "entity_type": "branch", "entity_id": "b-1",
+        "id": str(uuid.uuid4()), "entity_type": "warehouse", "entity_id": "b-1",
         "event_type": "create", "payload": {"id": "b-1"}, "created_at": "2026-08-06T00:00:00+00:00",
     }
     client = FakeRelayClient(pull_responses=[{"events": [event], "cursor": 5}])

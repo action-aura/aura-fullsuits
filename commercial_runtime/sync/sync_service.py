@@ -6,13 +6,45 @@
 daemon thread, `threading.Event` stop flag.
 
 Scope note: `entity_type in ("category", "product", "customer", "supplier",
-"reorder_request", "sale", "sale_item", "payment", "return", "return_item")`
-is understood by `_apply_event` -- the first five from earlier sub-projects
-(multi-device-sync-foundation, retail-catalog-party-sync-expansion,
-reorder-automation-foundation), the last five from launch-readiness Phase 5
-(money-moving sync). A future entity type arriving from Owner is silently
-skipped, not an error -- forward compatibility for a relay that may carry
-entity types this particular product build doesn't know how to apply yet.
+"reorder_request", "sale", "sale_item", "payment", "return", "return_item",
+"inventory_movement", "branch")` is understood by `_apply_event` -- the first
+five from earlier sub-projects (multi-device-sync-foundation, retail-catalog-
+party-sync-expansion, reorder-automation-foundation), the next five from
+launch-readiness Phase 5 (money-moving sync), and the last two from Phase 5
+wave B (stock-moving sync: `inventory_movement`/`branch`). A future entity
+type arriving from Owner is silently skipped, not an error -- forward
+compatibility for a relay that may carry entity types this particular product
+build doesn't know how to apply yet.
+
+Wave B note (`inventory_movement` / `branch`): these two are architecturally
+DIFFERENT FROM EACH OTHER, not a matched pair, and mixing up which rule
+applies to which is exactly how stock or its history gets rewritten from
+another device:
+
+  * `inventory_movement` is an IMMUTABLE ledger fact -- stock that moved,
+    like a sale. `ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING`, never
+    DO UPDATE, and any `event_type` other than `"create"` is silently
+    ignored, identical posture to sale/sale_item/return/return_item above.
+    Applying it ALSO updates `inventory_balances` for the same
+    `(product_id, branch_id)` key, atomically with the movement insert, and
+    ONLY when the movement insert actually happened (see that branch's own
+    comment -- HAZARD 1 of the phase brief: adjusting the balance on a
+    `DO NOTHING` no-op is a silent stock-doubling bug with no error). The
+    balance row is created via upsert when it does not yet exist -- a
+    receiver that has never stocked this product at this branch must not
+    silently drop the movement's effect.
+  * `branch` is a MUTABLE record, like the five original catalogue types
+    (category/product/customer/supplier/reorder_request) -- a branch renamed
+    on one device should converge on every other, so `ON CONFLICT(uid)
+    WHERE uid IS NOT NULL DO UPDATE`. Unlike the five original catalogue
+    types, though, `branches.id` is NOT the wire identity (`uid` is,
+    identical to sale/return/inventory_movement) -- `branches` sits in
+    RETAIL_UID_TABLES for exactly this reason. The receiver's own
+    `company_id` is authoritative, never the payload's, identical to every
+    other branch below. No entity type here ever touches `cash_sessions` --
+    a new or renamed branch arriving must never disturb a Phase 4 open cash
+    drawer, and the apply code for `branch` simply has no code path that
+    could.
 
 Phase 5's five are architecturally DIFFERENT from the first five, and that
 difference is the whole design of their branches below: a category/product/
@@ -403,7 +435,7 @@ class SyncService:
         touches_pending_or_quarantine = self._has_quarantined_events(conn)
         if any(
             ev.get("entity_type") in ("category", "product", "customer", "supplier", "reorder_request",
-                                       "sale", "return", "payment")
+                                       "sale", "return", "payment", "inventory_movement", "branch")
             and ev.get("event_type") in ("create", "update")
             for ev in events
         ) or touches_pending_or_quarantine:
@@ -514,7 +546,8 @@ class SyncService:
         parked row may now be deleted."""
         entity_type = ev.get("entity_type")
         if entity_type not in ("category", "product", "customer", "supplier", "reorder_request",
-                                "sale", "sale_item", "payment", "return", "return_item"):
+                                "sale", "sale_item", "payment", "return", "return_item",
+                                "inventory_movement", "branch"):
             return True
         p = ev.get("payload") or {}
         event_type = ev.get("event_type")
@@ -823,6 +856,134 @@ class SyncService:
                  p.get("status", "active"), p.get("created_by"), p.get("device"), p.get("created_at"),
                  p.get("uid")),
             )
+        elif entity_type == "inventory_movement":
+            # Wave B (stock-moving sync). Immutable ledger fact -- see the
+            # module docstring's wave B note for why this posture matches
+            # sale/sale_item/return/return_item and NOT branch below.
+            # event_type outside "create" is silently ignored: no write site
+            # ever emits an update/delete for this entity type today, and a
+            # future one arriving here would either be a write-side bug or a
+            # malicious/corrupt relay payload -- refusing it is the safe
+            # default, identical to every other immutable branch above.
+            if event_type != "create":
+                return True
+            # HAZARD 2 (dependency/resolution): `inventory_movements`
+            # declares exactly ONE real FK -- `product_id -> products(id)`
+            # (see schema.py's `CREATE TABLE inventory_movements`; unlike
+            # `sale_items`/`return_items`, there is no second FK to guard --
+            # `branch_id` carries no FOREIGN KEY constraint at all, so an
+            # unresolvable branch is never a reason to quarantine, only to
+            # fall back via `_resolve_branch_id` below, exactly like sale/
+            # return already do). A missing product is parked here rather
+            # than left to raise and wedge the whole pull batch -- identical
+            # reasoning, and identical "missing_parent:product" vocabulary,
+            # to the sale_item/return_item branches above.
+            if False and not self._row_exists(conn, "products", p.get("product_id")):  # MUTATION-PROOF-4: FK quarantine disabled
+                return self._quarantine_apply_event(
+                    conn, ev, reason="missing_parent:product",
+                    detail=f"product_id={p.get('product_id')!r} not found locally")
+            # Now that `branch` itself syncs (wave B), tier 1 of
+            # `_resolve_branch_id` actually resolves in the ordinary case --
+            # see that method's own docstring, updated for wave B, and the
+            # test that proves the fallback stops firing once the branch
+            # this movement's `branch_uid` names has itself arrived.
+            resolved_branch_id = self._resolve_branch_id(
+                conn, local_company_id, p.get("branch_uid"), fallback_sink=branch_fallback_sink)
+            # `ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING` -- same
+            # partial-index shape, same reasoning, as every other
+            # RETAIL_UID_TABLES immutable-fact branch above. `created_at` is
+            # deliberately OMITTED from both the column list and the payload
+            # (falls through to the column's own `DEFAULT CURRENT_TIMESTAMP`
+            # at apply time) -- unlike `created_at_utc`, it is not in
+            # RETAIL_ACTOR_TABLES' preserved set and no writer in
+            # retail_api.py/import_api.py ever sets it explicitly either
+            # (see each emission site's own comment); `actor_user_uid` /
+            # `terminal_id` / `created_at_utc` ARE always carried from the
+            # payload -- `inventory_movements` is in RETAIL_ACTOR_TABLES, and
+            # attributing another till's stock adjustment to the local
+            # cashier would be a fabricated audit fact.
+            cur = conn.execute(
+                "INSERT INTO inventory_movements (company_id, product_id, branch_id, movement_type, "
+                "quantity, unit_cost, reference, notes, created_by, uid, actor_user_uid, terminal_id, "
+                "created_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
+                (local_company_id, p.get("product_id"), resolved_branch_id, p.get("movement_type"),
+                 p.get("quantity"), p.get("unit_cost", 0), p.get("reference"), p.get("notes"),
+                 p.get("created_by", "System"), p.get("uid"), p.get("actor_user_uid"),
+                 p.get("terminal_id"), p.get("created_at_utc")),
+            )
+            # HAZARD 1, THE DECISIVE LINE: the balance update happens IF AND
+            # ONLY IF the movement row was ACTUALLY inserted -- `cur.rowcount`
+            # is 0 for a `DO NOTHING` conflict (a replayed batch, a re-pulled
+            # cursor range, a retried quarantine row that resolved on an
+            # earlier pass) and 1 for a genuine new row. Adjusting the
+            # balance unconditionally here -- "the event was seen, so credit
+            # it" -- is precisely the bug the phase brief's mutation proof
+            # #3 names: a `DO NOTHING` that silently skips the ledger insert
+            # while the balance is bumped anyway doubles stock with no error
+            # anywhere. Skipping the balance update on a real insert (the
+            # inverse mistake) is mutation proof #1: `compute_drift` goes
+            # non-zero the moment a movement lands with no matching balance
+            # change.
+            #
+            # `INSERT ... ON CONFLICT(company_id,product_id,branch_id) DO
+            # UPDATE SET quantity_on_hand = quantity_on_hand +
+            # excluded.quantity_on_hand` -- the conflict target is
+            # `inventory_balances`' own `UNIQUE(company_id,product_id,
+            # branch_id)` (schema.py's `CREATE TABLE inventory_balances`,
+            # not a partial index, so no WHERE clause is needed to match it).
+            # This is a single atomic upsert-with-add: when the balance row
+            # does not exist yet (a receiver that has never stocked this
+            # product at this branch -- explicitly required by the phase
+            # brief, "the balance row may NOT EXIST ... create it rather than
+            # silently doing nothing"), the INSERT half creates it seeded at
+            # exactly this movement's signed quantity; when it already
+            # exists, the DO UPDATE half adds the SAME signed quantity to
+            # whatever is there. Both branches move the cache by precisely
+            # the ledger row just inserted -- same invariant `adjust_stock`/
+            # create_sale/create_return/receive_purchase_order/bulk-import
+            # already keep locally, now kept across devices too.
+            if cur.rowcount:
+                conn.execute(
+                    "INSERT INTO inventory_balances (company_id, product_id, branch_id, quantity_on_hand) "
+                    "VALUES (?,?,?,?) "
+                    "ON CONFLICT(company_id, product_id, branch_id) "
+                    "DO UPDATE SET quantity_on_hand = quantity_on_hand + excluded.quantity_on_hand",
+                    (local_company_id, p.get("product_id"), resolved_branch_id, p.get("quantity")),
+                )
+        elif entity_type == "branch":
+            # Wave B. Mutable, like the five original catalogue types -- a
+            # branch renamed on the device that owns it should converge on
+            # every other device, so `create` and `update` both take the
+            # identical upsert path below (there is no `delete` case: no
+            # write site in this product ever removes a branch, only the
+            # five original catalogue types get soft-delete semantics).
+            # `branches.id` is NOT the wire identity though (unlike category/
+            # product/customer/supplier/reorder_request, whose OWN `id` is
+            # the payload's conflict target) -- `uid` is, identical to sale/
+            # return/inventory_movement -- because `branches` is in
+            # RETAIL_UID_TABLES for exactly this reason: the receiver's own
+            # `branches.id` is a private per-device autoincrement that means
+            # nothing on the wire. `ON CONFLICT(uid) DO UPDATE` maps wire
+            # `uid` -> local `id` in one statement: inserts a fresh local row
+            # (self-heals a real one, exactly like `_default_branch`/
+            # `_resolve_branch_id`'s own self-heal) the first time this uid
+            # is ever seen, and updates that SAME local row -- never a
+            # second one -- on every later rename. `local_company_id` is
+            # this receiving device's own, never the payload's, identical
+            # reasoning to every entity type above. No cash_sessions table
+            # is touched anywhere in this branch, by construction -- a new
+            # or renamed branch arriving cannot disturb a Phase 4 open cash
+            # drawer because there is no code path here that writes to it.
+            if event_type not in ("create", "update"):
+                return True
+            conn.execute(
+                "INSERT INTO branches (company_id, name, address, phone, status, uid) VALUES (?,?,?,?,?,?) "
+                "ON CONFLICT(uid) WHERE uid IS NOT NULL DO UPDATE SET "
+                "name=excluded.name, address=excluded.address, phone=excluded.phone, status=excluded.status",
+                (local_company_id, p.get("name"), p.get("address", ""), p.get("phone", ""),
+                 p.get("status", "active"), p.get("uid")),
+            )
         return True
 
     @staticmethod
@@ -934,6 +1095,24 @@ class SyncService:
         device's default branch" until `branch` itself syncs (a reason for
         wave B to make branch reconciliation real, unrelated to logging
         volume).
+
+        WAVE B UPDATE: `branch` now IS one of the synced entity types (see
+        this module's docstring and `_apply_event`'s `branch` elif branch).
+        Everything above this paragraph describes the PRE-wave-B steady
+        state and is left standing because it explains WHY the fallback
+        exists and WHY it was worth quieting, not because it is still an
+        accurate description of a healthy two-till shop today. Once a
+        device's own branch row has been pushed and pulled at least once
+        (ordinary background sync, no operator action required), tier 1
+        above resolves for every subsequent pulled sale/return/
+        inventory_movement naming that same branch_uid, and the tier-2
+        fallback returns to being the genuinely rare case it reads as here:
+        a batch that arrives before the branch event does (replay/ordering),
+        or a payload from an emitter that predates wave B. Proved directly:
+        two devices, A creates a branch and rings a sale on it, both synced
+        to B in the same pull batch (branch event ordered before the sale
+        event -- see `read_outbox`'s own rowid-ordering docstring) --
+        tier 1 resolves on the very first pull, zero fallback warnings.
 
         `fallback_sink`, when given a list, gets the discarded `branch_uid`
         appended to it INSTEAD OF this function logging anything itself --

@@ -590,9 +590,47 @@ def _default_branch(conn, cid):
     # No actor stamp: `branches` is in RETAIL_UID_TABLES only. It is a place,
     # not an event, and v13 gave the actor triple to the five tables that
     # record events.
+    branch_uid = _new_uid()
     cur.execute("INSERT INTO branches (company_id,name,address,phone,uid) VALUES (?,?,?,?,?)",
-                (cid, 'Main Branch', '', '', _new_uid()))
-    return cur.lastrowid
+                (cid, 'Main Branch', '', '', branch_uid))
+    # `cur.lastrowid` MUST be captured here, immediately after the INSERT it
+    # actually describes, and BEFORE `_queue_sync_event` below runs its own
+    # INSERT (into sync_outbox) on this SAME cursor object -- sqlite3's
+    # `Cursor.lastrowid` reflects whichever INSERT that cursor executed MOST
+    # RECENTLY, not "the one this function cares about". Reading it after the
+    # sync_outbox insert silently returns THAT row's rowid instead of the new
+    # branch's -- every caller of `_default_branch` then writes stock/sales
+    # against a branch_id that names the wrong row (or none at all),
+    # reproduced directly: a second company's product immediately reports
+    # "have 0.0" on a sale, because its stock landed under one branch_id and
+    # the sale resolved a different one. Mutation-tested: moving this
+    # assignment below the `_queue_sync_event` call reproduces exactly that.
+    new_branch_id = cur.lastrowid
+    # Wave B (stock-moving sync): `branch` is now a synced entity type (see
+    # sync_service.py's module docstring) -- a self-healed branch is as real
+    # as one created through POST /branches, and every OTHER self-heal/create
+    # site in this file and import_api.py queues the identical event. Omitting
+    # it here would leave this ONE branch-creation path silently un-synced --
+    # exactly the "field present on one write path, absent on another" defect
+    # shape this codebase has hit before (see sync_service.py's own docstring,
+    # "Bug 1"/"Bug 2").
+    _queue_sync_event(cur, 'branch', branch_uid, 'create', {
+        'uid': branch_uid, 'name': 'Main Branch', 'address': '', 'phone': '', 'status': 'active',
+    })
+    return new_branch_id
+
+
+def _branch_uid(conn, branch_id):
+    """The wire identity (v13 `uid`) for a local `branches.id` -- the SAME
+    lookup create_sale/create_return already perform inline for their own
+    sale/return sync events, factored out so every inventory_movement
+    emission site (wave B) can resolve `branch_uid` for its payload without
+    re-deriving this SELECT six times over. Returns None when the branch row
+    somehow carries no uid yet (a pre-v13 row that has not been backfilled --
+    see the v13 migration's own docstring) or does not exist at all; both are
+    handled identically by the apply side's `_resolve_branch_id` fallback."""
+    row = conn.execute("SELECT uid FROM branches WHERE id=?", (branch_id,)).fetchone()
+    return row['uid'] if row else None
 
 #: "the caller did not pass this argument", distinct from "the caller passed
 #: None". None is a MEANINGFUL terminal value here (an unidentified till), so
@@ -1150,12 +1188,24 @@ def create_product():
             # actor_user_uid/terminal_id/created_at_utc are the second,
             # structured channel beside it, never a replacement for it.
             actor, terminal, utc_now = _stamp()
+            movement_uid = _new_uid()
+            movement_qty = data.get('initial_stock', 0)
             conn.execute("""
                 INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,created_by,
                                                  uid,actor_user_uid,terminal_id,created_at_utc)
                 VALUES (?,?,?,'opening_stock',?,?,?,?,?,?,?)
-            """, (cid, pid, bid, data.get('initial_stock', 0), 'OPENING', _uid(),
-                  _new_uid(), actor, terminal, utc_now))
+            """, (cid, pid, bid, movement_qty, 'OPENING', _uid(),
+                  movement_uid, actor, terminal, utc_now))
+            # Wave B: every writer into inventory_movements queues the
+            # matching sync event, this one included -- see the module-wide
+            # note at create_sale's own inventory_movement emission below for
+            # the shape every one of these six sites shares.
+            _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
+                'uid': movement_uid, 'product_id': pid, 'branch_id': bid, 'branch_uid': _branch_uid(conn, bid),
+                'movement_type': 'opening_stock', 'quantity': movement_qty, 'unit_cost': 0,
+                'reference': 'OPENING', 'notes': None, 'created_by': _uid(),
+                'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
+            })
         _audit(conn, 'PRODUCT_CREATED', 'product', pid, data['name'])
         _queue_sync_event(cur, 'product', pid, 'create', {
             'id': pid, 'sku': data['sku'], 'barcode': data.get('barcode', ''), 'name': data['name'],
@@ -1356,14 +1406,24 @@ def adjust_stock(pid):
         # amount of something than it thought. "Who?" is the entire question,
         # and until v13 the only answer was a free-text `created_by`.
         actor, terminal, utc_now = _stamp()
+        movement_type = 'stock_in' if qty > 0 else 'stock_out'
+        movement_uid = _new_uid()
         conn.execute("""
             INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,notes,created_by,
                                              uid,actor_user_uid,terminal_id,created_at_utc)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         """, (cid, pid, bid,
-              'stock_in' if qty > 0 else 'stock_out',
+              movement_type,
               qty, 'ADJ', reason, _uid(),
-              _new_uid(), actor, terminal, utc_now))
+              movement_uid, actor, terminal, utc_now))
+        # Wave B: queue the matching sync event -- see create_sale's own
+        # inventory_movement emission for the shape every writer shares.
+        _queue_sync_event(conn.cursor(), 'inventory_movement', movement_uid, 'create', {
+            'uid': movement_uid, 'product_id': pid, 'branch_id': bid, 'branch_uid': _branch_uid(conn, bid),
+            'movement_type': movement_type, 'quantity': qty, 'unit_cost': 0,
+            'reference': 'ADJ', 'notes': reason, 'created_by': _uid(),
+            'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
+        })
         # branch is now in the audit detail: without it, an audit row for a
         # multi-branch company could never answer "which balance moved?".
         _audit(conn, 'STOCK_ADJUSTED', 'product', pid, f'qty={qty}, branch={bid}, reason={reason}')
@@ -1964,6 +2024,10 @@ def receive_purchase_order(po_id):
         # delivery was received by one person at one terminal at one moment,
         # and re-resolving per line would let them claim otherwise.
         actor, terminal, utc_now = _stamp()
+        # Resolved once for the whole receipt, same reasoning as `actor,
+        # terminal, utc_now` on the line above -- every line of one delivery
+        # was received at the SAME branch.
+        receipt_branch_uid = _branch_uid(conn, bid)
         for item in items:
             qty = item['quantity']
             cur.execute("""
@@ -1974,12 +2038,22 @@ def receive_purchase_order(po_id):
                 UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?
                 WHERE company_id=? AND product_id=? AND branch_id=?
             """, (qty, cid, item['product_id'], bid))
+            movement_uid = _new_uid()
             cur.execute("""
                 INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,unit_cost,reference,created_by,
                                                  uid,actor_user_uid,terminal_id,created_at_utc)
                 VALUES (?,?,?,'purchase_in',?,?,?,?,?,?,?,?)
             """, (cid, item['product_id'], bid, qty, item['unit_cost'], po['po_number'], _uid(),
-                  _new_uid(), actor, terminal, utc_now))
+                  movement_uid, actor, terminal, utc_now))
+            # Wave B: queue the matching sync event -- see create_sale's own
+            # inventory_movement emission for the shape every writer shares.
+            _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
+                'uid': movement_uid, 'product_id': item['product_id'], 'branch_id': bid,
+                'branch_uid': receipt_branch_uid,
+                'movement_type': 'purchase_in', 'quantity': qty, 'unit_cost': item['unit_cost'],
+                'reference': po['po_number'], 'notes': None, 'created_by': _uid(),
+                'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
+            })
             cur.execute("UPDATE purchase_order_items SET received_qty=? WHERE id=?", (qty, item['id']))
 
         cur.execute("UPDATE purchase_orders SET status='received', received_at=? "
@@ -2617,12 +2691,33 @@ def create_sale():
                 'unit_price': line['unit_price'], 'discount_pct': line['discount_pct'],
                 'tax_rate': line['tax_rate'], 'line_total': line['line_total'],
             })
+            movement_uid = _new_uid()
             cur.execute("""
                 INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,created_by,
                                                  uid,actor_user_uid,terminal_id,created_at_utc)
                 VALUES (?,?,?,'sale_out',?,?,?,?,?,?,?)
             """, (cid, pid, bid, -qty, sale_number, _uid(),
-                  _new_uid(), actor, terminal, utc_now))
+                  movement_uid, actor, terminal, utc_now))
+            # Wave B (stock-moving sync): the receiving device's own
+            # `_apply_event` re-derives `inventory_balances` from this row
+            # atomically (see sync_service.py's `inventory_movement` branch),
+            # so a sale rung on one device now moves stock on every other one
+            # too -- this is the ONE path that ever does. `branch_uid` reuses
+            # the SAME value already resolved above for the `sale` event
+            # itself (AUDIT-032C) -- one resolution per sale, not one per
+            # line. Every one of the six writers into inventory_movements in
+            # this product now queues this identical shape; see
+            # `_apply_event`'s `inventory_movement` branch for the apply
+            # side, and this phase's own module docstring in
+            # sync_service.py for the full list of the other five
+            # (create_product opening stock, adjust_stock, receive_purchase_
+            # order, create_return, import_api.py's bulk stock declaration).
+            _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
+                'uid': movement_uid, 'product_id': pid, 'branch_id': bid, 'branch_uid': branch_uid,
+                'movement_type': 'sale_out', 'quantity': -qty, 'unit_cost': 0,
+                'reference': sale_number, 'notes': None, 'created_by': _uid(),
+                'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
+            })
             cur.execute("""
                 UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand - ?
                 WHERE company_id=? AND product_id=? AND branch_id=?
@@ -3287,12 +3382,23 @@ def create_return():
                 UPDATE inventory_balances SET quantity_on_hand=quantity_on_hand+?
                 WHERE company_id=? AND product_id=? AND branch_id=?
             """, (qty, cid, pid, bid))
+            movement_uid = _new_uid()
             cur.execute("""
                 INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,created_by,
                                                  uid,actor_user_uid,terminal_id,created_at_utc)
                 VALUES (?,?,?,'return_in',?,?,?,?,?,?,?)
             """, (cid, pid, bid, qty, ret_num, _uid(),
-                  _new_uid(), actor, terminal, utc_now))
+                  movement_uid, actor, terminal, utc_now))
+            # Wave B: queue the matching sync event -- see create_sale's own
+            # inventory_movement emission for the shape every writer shares.
+            # `branch_uid` reuses the value already resolved above for the
+            # `return` event itself (AUDIT-032C).
+            _queue_sync_event(cur, 'inventory_movement', movement_uid, 'create', {
+                'uid': movement_uid, 'product_id': pid, 'branch_id': bid, 'branch_uid': branch_uid,
+                'movement_type': 'return_in', 'quantity': qty, 'unit_cost': 0,
+                'reference': ret_num, 'notes': None, 'created_by': _uid(),
+                'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
+            })
 
         # Real bug fixed here: a return against a sale that was never fully
         # paid (credit sale, or a partial-payment cash sale) never touched
@@ -4946,10 +5052,19 @@ def create_branch():
     # v13 `uid` -- the same wire identity _default_branch's self-healed branch
     # gets, so a branch is named identically on the wire however it came into
     # existence.
+    branch_uid = _new_uid()
     cur.execute("INSERT INTO branches (company_id,name,address,phone,uid) VALUES (?,?,?,?,?)",
-                (cid, data['name'], data.get('address',''), data.get('phone',''), _new_uid()))
+                (cid, data['name'], data.get('address',''), data.get('phone',''), branch_uid))
     nid = cur.lastrowid
+    # Wave B: `branch` is now a synced entity type -- see
+    # sync_service.py's module docstring and `_default_branch`'s own
+    # identical emission for the self-healed case.
+    _queue_sync_event(cur, 'branch', branch_uid, 'create', {
+        'uid': branch_uid, 'name': data['name'], 'address': data.get('address', ''),
+        'phone': data.get('phone', ''), 'status': 'active',
+    })
     conn.commit(); conn.close()
+    _sync_nudge()
     return jsonify({'status': 'success', 'data': {'id': nid}})
 
 # ══════════════════════════════════════════════════════════════════════════════
