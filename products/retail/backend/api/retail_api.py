@@ -1056,14 +1056,24 @@ def create_category():
     conn = get_retail_conn()
     cur = conn.cursor()
     new_id = str(_uuid.uuid4())
-    cur.execute("INSERT INTO categories (id, company_id, name, description) VALUES (?,?,?,?)",
-                (new_id, cid, data['name'], data.get('description', '')))
+    # launch-readiness Phase 6 stage 6a-i: row_version/updated_at_utc stamped
+    # explicitly at creation (1/now) rather than left to the column's own
+    # `DEFAULT 1` -- the emission payload below needs the real value, and a
+    # future device applying this row needs a non-NULL updated_at_utc from
+    # the moment the row exists, not only from its first edit. See
+    # docs/launch-readiness/phase6-catalogue-correctness.md.
+    now = now_utc_iso()
+    cur.execute(
+        "INSERT INTO categories (id, company_id, name, description, row_version, updated_at_utc) "
+        "VALUES (?,?,?,?,?,?)",
+        (new_id, cid, data['name'], data.get('description', ''), 1, now))
     # No `company_id` in the wire payload -- it is meaningless cross-device
     # (each device derives its own `company_id` locally at onboarding; see
     # commercial_runtime/sync/sync_service.py's module docstring). The
     # receiving device stamps ITS OWN company_id on apply.
     _queue_sync_event(cur, 'category', new_id, 'create', {
         'id': new_id, 'name': data['name'], 'description': data.get('description', ''),
+        'row_version': 1, 'updated_at_utc': now,
     })
     conn.commit(); conn.close()
     _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -1081,14 +1091,26 @@ def update_category(category_id):
     cid = _cid()
     conn = get_retail_conn()
     cur = conn.cursor()
-    cur.execute("UPDATE categories SET name=?, description=? WHERE id=? AND company_id=?",
-                (data['name'], data.get('description', ''), category_id, cid))
+    # launch-readiness Phase 6 stage 6a-i: row_version/updated_at_utc bumped
+    # in the SAME UPDATE statement as the field change it describes -- never
+    # a second statement, and never derived from a value read before this
+    # one runs. `name`/`description` are unconditionally part of this
+    # route's own payload (name is required, description defaults to ''), so
+    # every successful call here changes a SYNCED field and always bumps.
+    # See docs/launch-readiness/phase6-catalogue-correctness.md.
+    now = now_utc_iso()
+    cur.execute(
+        "UPDATE categories SET name=?, description=?, row_version=row_version+1, updated_at_utc=? "
+        "WHERE id=? AND company_id=?",
+        (data['name'], data.get('description', ''), now, category_id, cid))
     if cur.rowcount == 0:
         conn.close()
         return jsonify({'status': 'error', 'message': 'Category not found'}), 404
+    row = conn.execute("SELECT row_version FROM categories WHERE id=?", (category_id,)).fetchone()
     # No `company_id` in the wire payload -- see create_category's comment above.
     _queue_sync_event(cur, 'category', category_id, 'update', {
         'id': category_id, 'name': data['name'], 'description': data.get('description', ''),
+        'row_version': row['row_version'], 'updated_at_utc': now,
     })
     conn.commit(); conn.close()
     _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -1191,14 +1213,19 @@ def create_product():
                 return jsonify({'status': 'error', 'message': 'Barcode already exists'}), 409
         cur = conn.cursor()
         pid = str(_uuid.uuid4())
+        # launch-readiness Phase 6 stage 6a-i: row_version/updated_at_utc
+        # stamped explicitly at creation, same reasoning as
+        # create_category's identical comment above.
+        now = now_utc_iso()
         cur.execute("""
             INSERT INTO products (id,company_id,sku,barcode,name,category_id,supplier_id,cost_price,
-                                  sell_price,tax_rate,unit,reorder_level,reorder_method,status)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'active')
+                                  sell_price,tax_rate,unit,reorder_level,reorder_method,status,
+                                  row_version,updated_at_utc)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?)
         """, (pid, cid, data['sku'], data.get('barcode',''), data['name'],
               data.get('category_id'), data.get('supplier_id'), data.get('cost_price',0), data.get('sell_price',0),
               data.get('tax_rate',0), data.get('unit','pcs'), data.get('reorder_level',5),
-              data.get('reorder_method','none')))
+              data.get('reorder_method','none'), 1, now))
         # File opening stock under the company's working branch — the SAME branch that
         # sales/returns/adjustments resolve to (via _default_branch), so a sale always
         # decrements the row this created. Self-heals a branch on fresh/standalone installs.
@@ -1241,6 +1268,7 @@ def create_product():
             # a second device's SyncService._apply_event product upsert
             # picks it up too -- see that function's product branch.
             'reorder_method': data.get('reorder_method', 'none'),
+            'row_version': 1, 'updated_at_utc': now,
         })
         conn.commit(); conn.close()
         _emit('ProductCreated', {'product_id': pid})
@@ -1278,8 +1306,15 @@ def update_product(pid):
             return jsonify({'status': 'error', 'message': 'Barcode already exists'}), 409
     cur = conn.cursor()
     sets = ', '.join(f'{k}=?' for k in fields)
-    cur.execute(f'UPDATE products SET {sets} WHERE id=? AND company_id=?',
-                list(fields.values()) + [pid, cid])
+    # launch-readiness Phase 6 stage 6a-i: row_version/updated_at_utc bumped
+    # in the SAME UPDATE statement as the field change. `allowed` above is
+    # EXACTLY the set of columns products syncs (sync_service.py's product
+    # upsert), so `fields` non-empty (checked above) always means a synced
+    # field changed -- unlike update_customer/update_supplier below, this
+    # route needs no conditional: every successful call bumps.
+    now = now_utc_iso()
+    cur.execute(f'UPDATE products SET {sets}, row_version=row_version+1, updated_at_utc=? WHERE id=? AND company_id=?',
+                list(fields.values()) + [now, pid, cid])
     if cur.rowcount == 0:
         conn.close()
         return jsonify({'status': 'error', 'message': 'Product not found'}), 404
@@ -1290,7 +1325,7 @@ def update_product(pid):
     # payload could never carry the restore, so the other device stayed
     # stuck showing the product inactive forever. See sync_service.py's
     # product upsert for the matching apply-side fix.
-    row = conn.execute("SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,reorder_level,reorder_method,status FROM products WHERE id=?", (pid,)).fetchone()
+    row = conn.execute("SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,reorder_level,reorder_method,status,row_version,updated_at_utc FROM products WHERE id=?", (pid,)).fetchone()
     _queue_sync_event(cur, 'product', pid, 'update', dict(row) | {'id': pid})
     conn.commit(); conn.close()
     _sync_nudge()
@@ -1306,11 +1341,21 @@ def delete_product(pid):
     conn = get_retail_conn()
     try:
         cur = conn.cursor()
-        cur.execute("UPDATE products SET status='inactive' WHERE id=? AND company_id=?", (pid, cid))
+        # launch-readiness Phase 6 stage 6a-i: `status` is a synced product
+        # field (sync_service.py's product upsert), so this soft-delete
+        # bumps row_version in the SAME UPDATE, same as every other site.
+        now = now_utc_iso()
+        cur.execute(
+            "UPDATE products SET status='inactive', row_version=row_version+1, updated_at_utc=? "
+            "WHERE id=? AND company_id=?",
+            (now, pid, cid))
         if cur.rowcount == 0:
             return jsonify({'status': 'error', 'message': 'Product not found'}), 404
         _audit(conn, 'PRODUCT_DELETED', 'product', pid, 'Product deactivated')
-        _queue_sync_event(cur, 'product', pid, 'delete', {'id': pid})
+        row = conn.execute("SELECT row_version FROM products WHERE id=?", (pid,)).fetchone()
+        _queue_sync_event(cur, 'product', pid, 'delete', {
+            'id': pid, 'row_version': row['row_version'], 'updated_at_utc': now,
+        })
         conn.commit()
     except sqlite3.IntegrityError as exc:
         conn.rollback()
@@ -1467,6 +1512,18 @@ def adjust_stock(pid):
 
 # ── Customers ─────────────────────────────────────────────────────────────────
 
+# launch-readiness Phase 6 stage 6a-i: the exact set of `customers` columns
+# sync_service.py's customer upsert applies (name/phone/email/address/status
+# -- see that module's `entity_type == "customer"` branch). update_customer's
+# own `allowed` fields list below is WIDER than this (it also accepts
+# credit_mode/credit_limit, which are local-only credit-terms fields with no
+# apply-side column at all), so this set is what update_customer checks a
+# given PATCH's fields against before deciding whether to bump row_version
+# and emit a sync event at all -- see that route for why "bump only when a
+# SYNCED field actually changes" applies here exactly as it does to the
+# loyalty-accumulator trap this phase is built around.
+SYNCED_CUSTOMER_FIELDS = frozenset({'name', 'phone', 'email', 'address'})
+
 @retail_bp.route('/customers', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -1510,12 +1567,18 @@ def create_customer():
     conn = get_retail_conn()
     cur  = conn.cursor()
     nid = str(_uuid.uuid4())
-    cur.execute("INSERT INTO customers (id,company_id,name,phone,email,address) VALUES (?,?,?,?,?,?)",
-                (nid, cid, data['name'], data.get('phone',''), data.get('email',''), data.get('address','')))
+    # launch-readiness Phase 6 stage 6a-i: stamped at creation, same
+    # reasoning as create_category's identical comment above.
+    now = now_utc_iso()
+    cur.execute(
+        "INSERT INTO customers (id,company_id,name,phone,email,address,row_version,updated_at_utc) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (nid, cid, data['name'], data.get('phone',''), data.get('email',''), data.get('address',''), 1, now))
     _audit(conn, 'CUSTOMER_CREATED', 'customer', nid, data['name'])
     _queue_sync_event(cur, 'customer', nid, 'create', {
         'id': nid, 'name': data['name'], 'phone': data.get('phone', ''),
         'email': data.get('email', ''), 'address': data.get('address', ''),
+        'row_version': 1, 'updated_at_utc': now,
     })
     conn.commit(); conn.close()
     _sync_nudge()
@@ -1549,14 +1612,36 @@ def update_customer(cust_id):
     conn = get_retail_conn()
     cur = conn.cursor()
     sets = ', '.join(f'{k}=?' for k in fields)
+    params = list(fields.values())
+    # launch-readiness Phase 6 stage 6a-i, THE loyalty-accumulator rule
+    # applied to a second site: `fields` here can be entirely credit_mode/
+    # credit_limit, which are local-only credit-terms columns with no
+    # apply-side column at all (SYNCED_CUSTOMER_FIELDS above). Bumping
+    # row_version on a credit-only edit would mean a genuine name/phone
+    # correction made on another till later would arrive with a LOWER
+    # version than this device's own credit-only bump and be rejected as
+    # stale once stage 6a-ii's gate is live -- the exact shape
+    # phase6-catalogue-correctness.md's "THE TRAP" describes for the
+    # loyalty accumulator, reproduced here by a different route. So this
+    # bumps -- and emits -- ONLY when a field in THIS request is actually
+    # synced; a credit-only PATCH bumps nothing and queues nothing.
+    touches_synced = bool(SYNCED_CUSTOMER_FIELDS & fields.keys())
+    now = None
+    if touches_synced:
+        now = now_utc_iso()
+        sets += ', row_version=row_version+1, updated_at_utc=?'
+        params.append(now)
     cur.execute(f'UPDATE customers SET {sets} WHERE id=? AND company_id=?',
-                list(fields.values()) + [cust_id, cid])
+                params + [cust_id, cid])
     if cur.rowcount == 0:
         conn.close()
         return jsonify({'status': 'error', 'message': 'Customer not found'}), 404
     _audit(conn, 'CUSTOMER_UPDATED', 'customer', cust_id)
-    row = conn.execute("SELECT name,phone,email,address FROM customers WHERE id=?", (cust_id,)).fetchone()
-    _queue_sync_event(cur, 'customer', cust_id, 'update', dict(row) | {'id': cust_id})
+    if touches_synced:
+        row = conn.execute(
+            "SELECT name,phone,email,address,row_version,updated_at_utc FROM customers WHERE id=?",
+            (cust_id,)).fetchone()
+        _queue_sync_event(cur, 'customer', cust_id, 'update', dict(row) | {'id': cust_id})
     conn.commit(); conn.close()
     _sync_nudge()
     return jsonify({'status': 'success'})
@@ -1577,11 +1662,20 @@ def delete_customer(cust_id):
     conn = get_retail_conn()
     try:
         cur = conn.cursor()
-        cur.execute("UPDATE customers SET status='inactive' WHERE id=? AND company_id=?", (cust_id, cid))
+        # launch-readiness Phase 6 stage 6a-i: `status` is a synced customer
+        # field, so this soft-delete bumps row_version in the SAME UPDATE.
+        now = now_utc_iso()
+        cur.execute(
+            "UPDATE customers SET status='inactive', row_version=row_version+1, updated_at_utc=? "
+            "WHERE id=? AND company_id=?",
+            (now, cust_id, cid))
         if cur.rowcount == 0:
             return jsonify({'status': 'error', 'message': 'Customer not found'}), 404
         _audit(conn, 'CUSTOMER_DELETED', 'customer', cust_id, 'Customer deactivated')
-        _queue_sync_event(cur, 'customer', cust_id, 'delete', {'id': cust_id})
+        row = conn.execute("SELECT row_version FROM customers WHERE id=?", (cust_id,)).fetchone()
+        _queue_sync_event(cur, 'customer', cust_id, 'delete', {
+            'id': cust_id, 'row_version': row['row_version'], 'updated_at_utc': now,
+        })
         conn.commit()
     except sqlite3.IntegrityError as exc:
         conn.rollback()
@@ -1614,6 +1708,15 @@ def customer_sales(cust_id):
 
 # ── Suppliers ─────────────────────────────────────────────────────────────────
 
+# launch-readiness Phase 6 stage 6a-i: the exact set of `suppliers` columns
+# sync_service.py's supplier upsert applies (name/phone/email/address/status
+# -- see that module's `entity_type == "supplier"` branch). update_supplier's
+# own `allowed` fields list below also accepts `payment_terms`, which is
+# NOT yet a first-class synced column (see that route's own comment) -- same
+# "bump only when a SYNCED field actually changes" gate as
+# SYNCED_CUSTOMER_FIELDS above.
+SYNCED_SUPPLIER_FIELDS = frozenset({'name', 'phone', 'email', 'address', 'status'})
+
 @retail_bp.route('/suppliers', methods=['GET'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -1643,12 +1746,18 @@ def create_supplier():
     conn = get_retail_conn()
     cur = conn.cursor()
     nid = str(_uuid.uuid4())
-    cur.execute("INSERT INTO suppliers (id,company_id,name,phone,email,address) VALUES (?,?,?,?,?,?)",
-                (nid, cid, data['name'], data.get('phone',''), data.get('email',''), data.get('address','')))
+    # launch-readiness Phase 6 stage 6a-i: stamped at creation, same
+    # reasoning as create_category's identical comment above.
+    now = now_utc_iso()
+    cur.execute(
+        "INSERT INTO suppliers (id,company_id,name,phone,email,address,row_version,updated_at_utc) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (nid, cid, data['name'], data.get('phone',''), data.get('email',''), data.get('address',''), 1, now))
     _audit(conn, 'SUPPLIER_CREATED', 'supplier', nid, data['name'])
     _queue_sync_event(cur, 'supplier', nid, 'create', {
         'id': nid, 'name': data['name'], 'phone': data.get('phone', ''),
         'email': data.get('email', ''), 'address': data.get('address', ''),
+        'row_version': 1, 'updated_at_utc': now,
     })
     conn.commit(); conn.close()
     _sync_nudge()
@@ -1668,8 +1777,22 @@ def update_supplier(sid):
     conn = get_retail_conn()
     cur = conn.cursor()
     sets = ', '.join(f'{k}=?' for k in fields)
+    params = list(fields.values())
+    # launch-readiness Phase 6 stage 6a-i: same "bump only when a SYNCED
+    # field actually changes" gate as update_customer above -- `fields` here
+    # can be entirely `payment_terms`, which is not yet a first-class synced
+    # column (SYNCED_SUPPLIER_FIELDS above / the comment on this route's own
+    # SELECT below), so a payment_terms-only PATCH must bump nothing and
+    # emit nothing, for the identical reason a credit-only customer PATCH
+    # must not.
+    touches_synced = bool(SYNCED_SUPPLIER_FIELDS & fields.keys())
+    now = None
+    if touches_synced:
+        now = now_utc_iso()
+        sets += ', row_version=row_version+1, updated_at_utc=?'
+        params.append(now)
     cur.execute(f'UPDATE suppliers SET {sets} WHERE id=? AND company_id=?',
-                list(fields.values()) + [sid, cid])
+                params + [sid, cid])
     if cur.rowcount == 0:
         conn.close()
         return jsonify({'status': 'error', 'message': 'Supplier not found'}), 404
@@ -1688,8 +1811,11 @@ def update_supplier(sid):
     # not first-class synced columns in this phase; see
     # docs/superpowers/specs/2026-08-07-retail-catalog-party-sync-expansion-design.md),
     # so it does not cross-device propagate yet even after this change.
-    row = conn.execute("SELECT name,phone,email,address,status,payment_terms FROM suppliers WHERE id=?", (sid,)).fetchone()
-    _queue_sync_event(cur, 'supplier', sid, 'update', dict(row) | {'id': sid})
+    if touches_synced:
+        row = conn.execute(
+            "SELECT name,phone,email,address,status,payment_terms,row_version,updated_at_utc "
+            "FROM suppliers WHERE id=?", (sid,)).fetchone()
+        _queue_sync_event(cur, 'supplier', sid, 'update', dict(row) | {'id': sid})
     conn.commit(); conn.close()
     _sync_nudge()
     return jsonify({'status': 'success'})
@@ -1704,11 +1830,20 @@ def delete_supplier(sid):
     conn = get_retail_conn()
     try:
         cur = conn.cursor()
-        cur.execute("UPDATE suppliers SET status='inactive' WHERE id=? AND company_id=?", (sid, cid))
+        # launch-readiness Phase 6 stage 6a-i: `status` is a synced supplier
+        # field, so this soft-delete bumps row_version in the SAME UPDATE.
+        now = now_utc_iso()
+        cur.execute(
+            "UPDATE suppliers SET status='inactive', row_version=row_version+1, updated_at_utc=? "
+            "WHERE id=? AND company_id=?",
+            (now, sid, cid))
         if cur.rowcount == 0:
             return jsonify({'status': 'error', 'message': 'Supplier not found'}), 404
         _audit(conn, 'SUPPLIER_DELETED', 'supplier', sid, 'Supplier deactivated')
-        _queue_sync_event(cur, 'supplier', sid, 'delete', {'id': sid})
+        row = conn.execute("SELECT row_version FROM suppliers WHERE id=?", (sid,)).fetchone()
+        _queue_sync_event(cur, 'supplier', sid, 'delete', {
+            'id': sid, 'row_version': row['row_version'], 'updated_at_utc': now,
+        })
         conn.commit()
     except sqlite3.IntegrityError as exc:
         conn.rollback()
@@ -2317,13 +2452,21 @@ def accept_reorder_request(rid):
         # route's own docstring above.
 
         now = datetime.now(timezone.utc).isoformat()
+        # launch-readiness Phase 6 stage 6a-i: `status`/`resolved_at` are
+        # both synced reorder_request fields (sync_service.py's apply
+        # branch), so this bumps row_version in the SAME UPDATE, reusing
+        # the SAME `now` already computed for `resolved_at` as
+        # `updated_at_utc` too -- one instant, not two.
         cur.execute(
-            "UPDATE reorder_requests SET status='accepted', resolved_at=? WHERE id=?",
-            (now, rid),
+            "UPDATE reorder_requests SET status='accepted', resolved_at=?, "
+            "row_version=row_version+1, updated_at_utc=? WHERE id=?",
+            (now, now, rid),
         )
+        row = conn.execute("SELECT row_version FROM reorder_requests WHERE id=?", (rid,)).fetchone()
         _queue_sync_event(cur, 'reorder_request', rid, 'update', {
             'id': rid, 'branch_id': req['branch_id'], 'product_id': req['product_id'],
             'status': 'accepted', 'draft_message': req['draft_message'], 'resolved_at': now,
+            'row_version': row['row_version'], 'updated_at_utc': now,
         })
         _audit(conn, 'REORDER_REQUEST_ACCEPTED', 'reorder_request', rid,
                f'PO {po_number} drafted for product {product["name"]}')
@@ -2360,13 +2503,18 @@ def decline_reorder_request(rid):
             return jsonify({'status': 'error', 'message': 'This request was already resolved.'}), 409
 
         now = datetime.now(timezone.utc).isoformat()
+        # launch-readiness Phase 6 stage 6a-i: same reasoning as
+        # accept_reorder_request's identical comment above.
         cur.execute(
-            "UPDATE reorder_requests SET status='declined', resolved_at=? WHERE id=?",
-            (now, rid),
+            "UPDATE reorder_requests SET status='declined', resolved_at=?, "
+            "row_version=row_version+1, updated_at_utc=? WHERE id=?",
+            (now, now, rid),
         )
+        row = conn.execute("SELECT row_version FROM reorder_requests WHERE id=?", (rid,)).fetchone()
         _queue_sync_event(cur, 'reorder_request', rid, 'update', {
             'id': rid, 'branch_id': req['branch_id'], 'product_id': req['product_id'],
             'status': 'declined', 'draft_message': req['draft_message'], 'resolved_at': now,
+            'row_version': row['row_version'], 'updated_at_utc': now,
         })
         _audit(conn, 'REORDER_REQUEST_DECLINED', 'reorder_request', rid)
         conn.commit()
@@ -2748,6 +2896,27 @@ def create_sale():
             """, (qty, cid, pid, bid))
 
         # Update customer total spent & loyalty points
+        #
+        # launch-readiness Phase 6 stage 6a-i -- THE TRAP this phase is built
+        # around (phase6-catalogue-correctness.md, "Flagged, not fixed" in
+        # the design doc). `total_spent`/`loyalty_points` are accumulators,
+        # NOT synced fields: sync_service.py's customer apply branch carries
+        # only name/phone/email/address/status (see
+        # SYNCED_CUSTOMER_FIELDS above), on purpose -- last-write-wins on an
+        # accumulator would LOSE points/spend, the same way it would lose
+        # stock. This UPDATE therefore MUST NOT bump `row_version` and MUST
+        # NOT queue a sync event, deliberately, on every single call --
+        # this runs on EVERY sale, so it is the hottest write path any
+        # customer row has. If it bumped, ringing sales for a customer on
+        # till A would keep advancing that customer's row_version, and a
+        # genuine name/phone correction made on till B would then arrive
+        # with a LOWER version and be rejected as stale once stage 6a-ii's
+        # gate is live -- a shop could become permanently unable to fix a
+        # customer's phone number from any device but the one that happens
+        # to sell to them least. See
+        # products/retail/tests/retail_row_version_bump_test.py's
+        # `test_loyalty_accumulator_sale_does_not_bump_row_version_or_emit`
+        # for the mutation proof.
         if customer_id:
             pts = int(total / 10)  # 1 point per $10
             cur.execute("""
@@ -5389,7 +5558,21 @@ def _record_payment(conn, cid, party_type, party_id, direction, amount, method='
     return ref
 
 def _adjust_credit(conn, table, pid, cid, delta):
-    """Decimal-safe balance update (avoids SQL float accumulation). Returns new balance."""
+    """Decimal-safe balance update (avoids SQL float accumulation). Returns new balance.
+
+    launch-readiness Phase 6 stage 6a-i: `credit_balance` is a SECOND
+    accumulator column, on both `customers` and `suppliers`, found by
+    searching every UPDATE against these five tables rather than trusting
+    the design doc's own count -- it is not in SYNCED_CUSTOMER_FIELDS or
+    SYNCED_SUPPLIER_FIELDS above, sync_service.py's customer/supplier apply
+    branches never mention it, and this function's own callers never queue
+    a catalogue sync event around this call. Structurally identical to
+    total_spent/loyalty_points at create_sale's loyalty-accumulator UPDATE
+    (see that site's own comment): device-local, never synced, and this
+    UPDATE deliberately touches ONLY `credit_balance`, so it correctly stays
+    outside every row_version bump this stage adds -- there is nothing to
+    change here, and that omission is the point, not an oversight.
+    """
     row = conn.execute(f"SELECT credit_balance FROM {table} WHERE id=? AND company_id=?", (pid, cid)).fetchone()
     base = Decimal(str(row['credit_balance'] if row and row['credit_balance'] is not None else 0))
     newbal = (base + Decimal(str(delta))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)

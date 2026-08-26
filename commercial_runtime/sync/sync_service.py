@@ -706,12 +706,40 @@ class SyncService:
                 # `p.get("company_id")`, which is the SENDING device's company_id
                 # and is never valid to write into a local row here. See the
                 # module docstring's "Cross-device company_id bug fix" note.
+                #
+                # launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up):
+                # `row_version`/`updated_at_utc` are now CARRIED here -- the
+                # sender's values overwrite this row's own, exactly like every
+                # other column above -- but this is still plain
+                # last-write-wins: no `WHERE excluded.row_version > ...` gate.
+                # That gate is stage 6a-ii, and it CANNOT be added before this
+                # carry exists, because until every device's copy of a row
+                # actually stores the version the LAST WRITER stamped, two
+                # devices' counters silently diverge (A bumps to 2 and emits,
+                # B's apply never wrote anything into row_version so B stays
+                # at 1) -- and a gate built on top of diverged counters would
+                # then reject B's own NEXT genuine edit as "stale" forever.
+                # `p.get("row_version") or 1` falls back to 1 for a payload
+                # that predates this column on the wire (an older emitter, or
+                # replayed history) -- never NULL into a NOT NULL column, and
+                # `or` (not a bare `.get(..., 1)`) also catches an explicit
+                # `0`/`None` value some future hand-built payload might carry.
+                # `updated_at_utc` has no such guard: the column is nullable
+                # and a missing payload value is honestly "this row's
+                # timestamp is not known from the wire", not a value to
+                # invent.
                 conn.execute(
-                    "INSERT INTO categories (id, company_id, name, description) VALUES (?,?,?,?) "
-                    "ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description",
-                    (p.get("id"), local_company_id, p.get("name"), p.get("description", "")),
+                    "INSERT INTO categories (id, company_id, name, description, row_version, updated_at_utc) "
+                    "VALUES (?,?,?,?,?,?) "
+                    "ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description, "
+                    "row_version=excluded.row_version, updated_at_utc=excluded.updated_at_utc",
+                    (p.get("id"), local_company_id, p.get("name"), p.get("description", ""),
+                     p.get("row_version") or 1, p.get("updated_at_utc")),
                 )
             elif event_type == "delete":
+                # Hard DELETE -- the row is gone, so there is no row_version
+                # left to carry (tombstones/soft-delete-with-version are
+                # stage 6b, not this fix).
                 conn.execute("DELETE FROM categories WHERE id=?", (p.get("id"),))
         elif entity_type == "product":
             if event_type in ("create", "update"):
@@ -730,50 +758,93 @@ class SyncService:
                 # payload that predates this column (an older device's outbox
                 # entry, or a hand-built test payload) is treated as the
                 # column's own default, never as NULL.
+                # launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up):
+                # row_version/updated_at_utc carried through -- see the
+                # category branch's comment above for the full reasoning
+                # (still plain last-write-wins, no gate).
                 conn.execute(
                     "INSERT INTO products (id, company_id, sku, barcode, name, category_id, supplier_id, "
-                    "cost_price, sell_price, tax_rate, unit, reorder_level, reorder_method, status) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "cost_price, sell_price, tax_rate, unit, reorder_level, reorder_method, status, "
+                    "row_version, updated_at_utc) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET sku=excluded.sku, barcode=excluded.barcode, name=excluded.name, "
                     "category_id=excluded.category_id, supplier_id=excluded.supplier_id, "
                     "cost_price=excluded.cost_price, sell_price=excluded.sell_price, "
                     "tax_rate=excluded.tax_rate, unit=excluded.unit, reorder_level=excluded.reorder_level, "
-                    "reorder_method=excluded.reorder_method, status=excluded.status",
+                    "reorder_method=excluded.reorder_method, status=excluded.status, "
+                    "row_version=excluded.row_version, updated_at_utc=excluded.updated_at_utc",
                     (p.get("id"), local_company_id, p.get("sku"), p.get("barcode", ""), p.get("name"),
                      p.get("category_id"), p.get("supplier_id"), p.get("cost_price", 0), p.get("sell_price", 0),
                      p.get("tax_rate", 0), p.get("unit", "pcs"), p.get("reorder_level", 5),
-                     p.get("reorder_method", "none"), p.get("status", "active")),
+                     p.get("reorder_method", "none"), p.get("status", "active"),
+                     p.get("row_version") or 1, p.get("updated_at_utc")),
                 )
             elif event_type == "delete":
-                conn.execute("UPDATE products SET status='inactive' WHERE id=?", (p.get("id"),))
+                # A delete event also stamps row_version/updated_at_utc on
+                # its sending device (retail_api.py's delete_product) -- carry
+                # them here too, or a delete/restore cycle would leave B's
+                # counter behind exactly like an update would.
+                conn.execute(
+                    "UPDATE products SET status='inactive', row_version=?, updated_at_utc=? WHERE id=?",
+                    (p.get("row_version") or 1, p.get("updated_at_utc"), p.get("id")),
+                )
         elif entity_type == "customer":
             if event_type in ("create", "update"):
                 # `status` parameterized for the same reason as the product
                 # upsert above -- see that block's comment.
+                # launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up):
+                # row_version/updated_at_utc carried through -- see the
+                # category branch's comment above for the full reasoning
+                # (still plain last-write-wins, no gate). Note this is
+                # DELIBERATELY distinct from total_spent/loyalty_points,
+                # which never appear in this payload at all -- see
+                # retail_api.py's create_sale comment on that accumulator.
                 conn.execute(
-                    "INSERT INTO customers (id, company_id, name, phone, email, address, status) "
-                    "VALUES (?,?,?,?,?,?,?) "
+                    "INSERT INTO customers (id, company_id, name, phone, email, address, status, "
+                    "row_version, updated_at_utc) "
+                    "VALUES (?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone, "
-                    "email=excluded.email, address=excluded.address, status=excluded.status",
+                    "email=excluded.email, address=excluded.address, status=excluded.status, "
+                    "row_version=excluded.row_version, updated_at_utc=excluded.updated_at_utc",
                     (p.get("id"), local_company_id, p.get("name"), p.get("phone", ""),
-                     p.get("email", ""), p.get("address", ""), p.get("status", "active")),
+                     p.get("email", ""), p.get("address", ""), p.get("status", "active"),
+                     p.get("row_version") or 1, p.get("updated_at_utc")),
                 )
             elif event_type == "delete":
-                conn.execute("UPDATE customers SET status='inactive' WHERE id=?", (p.get("id"),))
+                # See the product delete branch's comment above -- a delete
+                # event carries row_version/updated_at_utc too.
+                conn.execute(
+                    "UPDATE customers SET status='inactive', row_version=?, updated_at_utc=? WHERE id=?",
+                    (p.get("row_version") or 1, p.get("updated_at_utc"), p.get("id")),
+                )
         elif entity_type == "supplier":
             if event_type in ("create", "update"):
                 # `status` parameterized for the same reason as the product
                 # upsert above -- see that block's comment.
+                # launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up):
+                # row_version/updated_at_utc carried through -- see the
+                # category branch's comment above for the full reasoning
+                # (still plain last-write-wins, no gate). Distinct from
+                # credit_balance, which never appears in this payload -- see
+                # retail_api.py's `_adjust_credit`.
                 conn.execute(
-                    "INSERT INTO suppliers (id, company_id, name, phone, email, address, status) "
-                    "VALUES (?,?,?,?,?,?,?) "
+                    "INSERT INTO suppliers (id, company_id, name, phone, email, address, status, "
+                    "row_version, updated_at_utc) "
+                    "VALUES (?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone, "
-                    "email=excluded.email, address=excluded.address, status=excluded.status",
+                    "email=excluded.email, address=excluded.address, status=excluded.status, "
+                    "row_version=excluded.row_version, updated_at_utc=excluded.updated_at_utc",
                     (p.get("id"), local_company_id, p.get("name"), p.get("phone", ""),
-                     p.get("email", ""), p.get("address", ""), p.get("status", "active")),
+                     p.get("email", ""), p.get("address", ""), p.get("status", "active"),
+                     p.get("row_version") or 1, p.get("updated_at_utc")),
                 )
             elif event_type == "delete":
-                conn.execute("UPDATE suppliers SET status='inactive' WHERE id=?", (p.get("id"),))
+                # See the product delete branch's comment above -- a delete
+                # event carries row_version/updated_at_utc too.
+                conn.execute(
+                    "UPDATE suppliers SET status='inactive', row_version=?, updated_at_utc=? WHERE id=?",
+                    (p.get("row_version") or 1, p.get("updated_at_utc"), p.get("id")),
+                )
         elif entity_type == "reorder_request":
             # feat/reorder-automation-foundation. Only create/update ever
             # arrive for this entity -- there is no delete event type (see
@@ -785,13 +856,19 @@ class SyncService:
             # 'accepted'/'declined') actually takes effect here, not just on
             # the device that made the decision.
             if event_type in ("create", "update"):
+                # launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up):
+                # row_version/updated_at_utc carried through -- see the
+                # category branch's comment above for the full reasoning
+                # (still plain last-write-wins, no gate).
                 conn.execute(
                     "INSERT INTO reorder_requests (id, company_id, branch_id, product_id, status, "
-                    "draft_message, resolved_at) VALUES (?,?,?,?,?,?,?) "
+                    "draft_message, resolved_at, row_version, updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET status=excluded.status, "
-                    "draft_message=excluded.draft_message, resolved_at=excluded.resolved_at",
+                    "draft_message=excluded.draft_message, resolved_at=excluded.resolved_at, "
+                    "row_version=excluded.row_version, updated_at_utc=excluded.updated_at_utc",
                     (p.get("id"), local_company_id, p.get("branch_id"), p.get("product_id"),
-                     p.get("status", "pending"), p.get("draft_message"), p.get("resolved_at")),
+                     p.get("status", "pending"), p.get("draft_message"), p.get("resolved_at"),
+                     p.get("row_version") or 1, p.get("updated_at_utc")),
                 )
         elif entity_type == "sale":
             # Money is an immutable business fact, not a mutable row (see the

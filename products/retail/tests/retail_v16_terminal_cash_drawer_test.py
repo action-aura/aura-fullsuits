@@ -91,6 +91,28 @@ shared conftest.py exists here): own temp app-data dir, own local device
 record, real `init_retail()`. Run:
 
     pytest products/retail/tests/retail_v16_terminal_cash_drawer_test.py -v
+
+launch-readiness Phase 6 (2026-08-26): every "the migration succeeded" assert
+in this file read `_user_version(db_path) == 16` -- a hardcoded literal, not
+`sch.RETAIL_SCHEMA_VERSION` -- unlike retail_v15_ledger_truth_migration_
+test.py's own `_assert_landed_on_head`, which this file's module docstring
+does not otherwise depart from in spirit. `sch.init_retail()` has always
+migrated a database all the way to CURRENT head in one call, never stopping
+at an intermediate version -- so the moment v17 (Phase 6, `sync_conflicts` +
+dropping dead `quantity_reserved`) landed, every one of those 15 asserts
+started comparing a `PRAGMA user_version` of 17 against a hardcoded 16 and
+failed, on a v16 migration that was working exactly as designed. That is the
+identical "compares two things that move together" defect the v15 file's own
+`_assert_landed_on_head` docstring names and was written to avoid; this file
+simply had not been touched since v16 was the head. Fixed by replacing all 15
+occurrences with `sch.RETAIL_SCHEMA_VERSION` -- each site already has `sch`
+in scope from its own `_install()`/`_install_at_v15()` call, and each asserts
+a SUCCESS path ("migrates", "changes nothing", "never wedges", "the same
+install migrates"), never a "stuck below the gate" refusal (those correctly
+compare against 14 or 15 elsewhere in this file and are untouched). This
+loses no coverage the test ever had: the property under test was always "v16
+completes and the chain proceeds", never "no version is ever added after
+v16".
 """
 import json
 import os
@@ -586,7 +608,7 @@ def test_a_two_year_old_shop_migrates_with_every_session_s_money_unchanged():
 
     sch.init_retail()
 
-    assert _user_version(db_path) == 16
+    assert _user_version(db_path) == sch.RETAIL_SCHEMA_VERSION
     assert _money_snapshot(db_path) == money_before, (
         'v16 rewrote a money figure on a settled shift')
     assert _movement_totals(db_path) == movements_before, (
@@ -685,7 +707,7 @@ def test_an_install_with_one_open_session_per_branch_migrates():
 
     sch.init_retail()
 
-    assert _user_version(db_path) == 16
+    assert _user_version(db_path) == sch.RETAIL_SCHEMA_VERSION
     assert _money_snapshot(db_path) == money_before
     after = _sessions(db_path, company_id)
     assert len(after) == 3, 'a drawer was deleted'
@@ -1123,7 +1145,7 @@ def test_a_later_chain_re_entry_does_not_put_the_branch_constraint_back():
     _rewind_to_v15(db_path)
     sch.init_retail()
 
-    assert _user_version(db_path) == 16
+    assert _user_version(db_path) == sch.RETAIL_SCHEMA_VERSION
     after = _sessions(db_path, company_id)
     assert after[desktop]['status'] == sch.CASH_SESSION_STATUS_OPEN
     assert after[phone]['status'] == sch.CASH_SESSION_STATUS_OPEN
@@ -1164,7 +1186,7 @@ def test_without_the_supersession_guard_the_next_launch_cannot_boot():
 
     # ...and with the guard restored, the same database migrates.
     sch.init_retail()
-    assert _user_version(db_path) == 16
+    assert _user_version(db_path) == sch.RETAIL_SCHEMA_VERSION
 
 
 def test_the_same_terminal_in_two_companies_is_two_drawers():
@@ -1218,7 +1240,7 @@ def test_an_install_with_no_device_record_keeps_its_drawer_and_gets_the_constrai
 
     sch.init_retail()
 
-    assert _user_version(db_path) == 16
+    assert _user_version(db_path) == sch.RETAIL_SCHEMA_VERSION
     row = _sessions(db_path, company_id)[live]
     assert row['status'] == sch.CASH_SESSION_STATUS_OPEN, (
         'a live drawer was ended because this build could not name its terminal')
@@ -1263,7 +1285,7 @@ def test_running_the_migration_again_changes_nothing():
     _rewind_to_v15(db_path)
     sch.init_retail()
 
-    assert _user_version(db_path) == 16
+    assert _user_version(db_path) == sch.RETAIL_SCHEMA_VERSION
     assert _sessions(db_path) == first_pass, 'the second pass moved something'
     assert _force_end_audit(db_path) == audit_after_first, (
         'the second pass re-ended a shift that was already ended')
@@ -1317,7 +1339,7 @@ def test_an_interrupted_migration_is_finished_by_the_next_launch():
     # The next launch finishes it.
     sch.init_retail()
 
-    assert _user_version(db_path) == 16
+    assert _user_version(db_path) == sch.RETAIL_SCHEMA_VERSION
     assert sch._v16_terminal_index_is_correct(
         _index_shape(db_path, sch.V16_TERMINAL_INDEX))
     assert _index_shape(db_path, sch.V16_SUPERSEDED_BRANCH_INDEX) is None
@@ -1375,7 +1397,7 @@ def test_without_the_resolution_the_index_creation_is_what_fails():
 
     # ...and with the resolution restored, the same install migrates.
     sch.init_retail()
-    assert _user_version(db_path) == 16
+    assert _user_version(db_path) == sch.RETAIL_SCHEMA_VERSION
     assert not _collisions(db_path)
 
 
@@ -1514,7 +1536,7 @@ def test_two_open_drawers_with_a_null_company_id_are_left_alone():
 
     sch.init_retail()
 
-    assert _user_version(db_path) == 16
+    assert _user_version(db_path) == sch.RETAIL_SCHEMA_VERSION
     after = _sessions(db_path)
     assert after[first]['status'] == sch.CASH_SESSION_STATUS_OPEN, (
         'a drawer the constraint would have accepted was ended anyway')
@@ -1691,7 +1713,7 @@ def test_two_stranded_drawers_on_one_company_bind_one_and_leave_the_other():
         'holding real money, not a row to tidy away')
     assert after[bound[0]]['status'] == sch.CASH_SESSION_STATUS_OPEN
     assert {after[first]['opening_float'], after[second]['opening_float']} == {11.0, 22.0}
-    assert _user_version(db_path) == 16
+    assert _user_version(db_path) == sch.RETAIL_SCHEMA_VERSION
 
 
 def test_an_install_with_no_device_identity_never_wedges_across_repeated_boots():
@@ -1714,7 +1736,7 @@ def test_an_install_with_no_device_identity_never_wedges_across_repeated_boots()
 
     for _cycle in range(3):
         sch.init_retail()
-        assert _user_version(db_path) == 16
+        assert _user_version(db_path) == sch.RETAIL_SCHEMA_VERSION
         row = _sessions(db_path, company_id)[live]
         assert row['status'] == sch.CASH_SESSION_STATUS_OPEN, (
             f'the drawer was disturbed on repeated boot {_cycle}')
@@ -1759,7 +1781,7 @@ def test_every_flavour_of_blank_terminal_id_is_normalised_without_wedging(blank_
 
     sch.init_retail()   # must not raise, and must not wedge user_version
 
-    assert _user_version(db_path) == 16
+    assert _user_version(db_path) == sch.RETAIL_SCHEMA_VERSION
     after = _sessions(db_path, company_id)
     assert after[first]['terminal_id'] is None, (
         f'{blank_value!r} was not normalised to NULL')
@@ -1792,7 +1814,7 @@ def test_padded_and_bare_values_stay_different_terminals():
 
     sch.init_retail()
 
-    assert _user_version(db_path) == 16
+    assert _user_version(db_path) == sch.RETAIL_SCHEMA_VERSION
     after = _sessions(db_path, company_id)
     assert after[padded]['terminal_id'] == '  X  ', (
         'a non-blank value was rewritten by the blank normalisation')
@@ -1842,7 +1864,7 @@ def test_an_index_name_collision_on_a_different_table_is_refused_by_name_not_by_
     finally:
         conn.close()
     sch.init_retail()
-    assert _user_version(db_path) == 16
+    assert _user_version(db_path) == sch.RETAIL_SCHEMA_VERSION
 
 
 # ── 10. create-before-drop is not decorative (FIX E) ─────────────────────────
@@ -1935,7 +1957,7 @@ def test_an_interruption_between_the_two_index_statements_never_leaves_neither_c
         'the raw migration call must not have touched PRAGMA user_version -- '
         'only ensure_schema_version does that, and this test bypassed it')
     sch.init_retail()
-    assert _user_version(db_path) == 16
+    assert _user_version(db_path) == sch.RETAIL_SCHEMA_VERSION
     assert sch._v16_terminal_index_is_correct(
         _index_shape(db_path, sch.V16_TERMINAL_INDEX))
     assert _index_shape(db_path, sch.V16_SUPERSEDED_BRANCH_INDEX) is None

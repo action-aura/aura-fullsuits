@@ -19,11 +19,18 @@ from commercial_runtime.sync.sync_service import SyncService
 SECRET = "test-internal-secret"
 
 _SCHEMA = """
+-- launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up): row_version/
+-- updated_at_utc added -- _apply_event's category branch now writes both
+-- columns (carrying the sender's row_version through, so two devices'
+-- counters converge instead of silently diverging), and this hand-built
+-- minimal fixture predates that.
 CREATE TABLE categories (
     id TEXT PRIMARY KEY,
     company_id INTEGER DEFAULT 1,
     name TEXT NOT NULL,
-    description TEXT
+    description TEXT,
+    row_version INTEGER NOT NULL DEFAULT 1,
+    updated_at_utc TEXT
 );
 CREATE TABLE sync_outbox (
     id TEXT PRIMARY KEY,

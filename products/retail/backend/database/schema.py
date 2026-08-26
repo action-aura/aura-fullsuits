@@ -341,7 +341,48 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # See _migrate_bind_cash_drawer_to_terminal below for the step-by-step
 # reasoning, including why an open session whose terminal cannot be named
 # stays open rather than being ended.
-RETAIL_SCHEMA_VERSION = 16
+#
+# v16 -> v17 (launch-readiness Phase 6, "catalogue correctness", stage 6a-i;
+# docs/launch-readiness/phase6-catalogue-correctness.md; ROADMAP.md's
+# 2026-08-21 reservation): retail v17 lands the FOUNDATION for reject-stale
+# catalogue sync, not the gate itself. Two additive/destructive pieces, see
+# _migrate_add_sync_conflicts_and_drop_quantity_reserved below:
+#   - `sync_conflicts` (CREATE TABLE IF NOT EXISTS, empty at creation): the
+#     visible landing spot a rejected stale write will land in once stage
+#     6a-ii turns the gate on, replacing what would otherwise be a silent
+#     drop (design doc §6). Created now, ahead of any writer, so that stage
+#     only has to fill it in rather than design it under time pressure.
+#   - `inventory_balances.quantity_reserved` is DROPPED. Confirmed dead by
+#     three prior audits and by grep: no code path in this product's history
+#     reads or writes it. `inventory_balances` is fully derivable from
+#     `inventory_movements` (Phase 3's ledger-is-truth invariant --
+#     core/retail/stock_reconciliation.compute_drift/repair_drift), so even
+#     total loss of this column is recoverable, which is what makes it the
+#     lowest-risk destructive migration available in this chain. SQLite
+#     3.35+ supports `ALTER TABLE ... DROP COLUMN` natively (this codebase
+#     targets 3.50.4), so no DROP+RENAME table rebuild is needed.
+#
+# `stock_exceptions` is DELIBERATELY NOT created here even though it was
+# reserved alongside `sync_conflicts` in the same ROADMAP.md entry: nothing
+# in Phase 6's scope writes it -- it belongs to the oversell exception queue,
+# a feature no stage of this phase implements -- and a shipped table with no
+# writer actively misleads the next reader into assuming the feature exists.
+# It stays reserved for the phase that actually implements that queue.
+#
+# THE REAL WORK OF v17, deliberately NOT a schema change: `row_version` has
+# existed on these five tables since v13 and nothing has ever bumped it, so
+# reject-stale on top of it (stage 6a-ii) would silently discard every
+# catalogue write from every device on day one -- see the design doc's "The
+# finding that reshapes this phase". Making every catalogue write site in
+# retail_api.py/import_api.py/reorder_hook.py actually bump `row_version` and
+# stamp `updated_at_utc` is stage 6a-i's other half, and it is ordinary
+# application code, not a migration -- there is nothing in THIS function
+# about it. The apply side (commercial_runtime/sync/sync_service.py) is
+# deliberately UNTOUCHED this stage: it keeps its current
+# `ON CONFLICT(id) DO UPDATE` last-write-wins posture for all five catalogue
+# types until the bump has been proven live. Switching it to reject-stale is
+# stage 6a-ii and does not happen here.
+RETAIL_SCHEMA_VERSION = 17
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -1236,6 +1277,11 @@ def _migrate_retail_schema(conn):
     #     claims 16 while the drawer is still branch-bound. The next launch
     #     re-runs the whole chain from the top.
     _migrate_bind_cash_drawer_to_terminal(conn)
+    # v16 -> v17 (launch-readiness Phase 6, stage 6a-i): appended LAST, same
+    # convention as every step above. See the RETAIL_SCHEMA_VERSION v17
+    # comment for what this does and, just as importantly, what it does NOT
+    # do -- the apply side is untouched this stage, on purpose.
+    _migrate_add_sync_conflicts_and_drop_quantity_reserved(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -4113,6 +4159,69 @@ def _migrate_bind_cash_drawer_to_terminal(conn):
         return summary
     finally:
         conn.row_factory = previous_factory
+
+
+def _migrate_add_sync_conflicts_and_drop_quantity_reserved(conn):
+    """One-time migration (schema v16 -> v17): launch-readiness Phase 6,
+    "catalogue correctness", stage 6a-i. See the RETAIL_SCHEMA_VERSION v17
+    comment above for the full reasoning; this function is deliberately
+    small because the actual weight of stage 6a-i is in application code
+    (every catalogue write site bumping `row_version`), not here.
+
+    1. `sync_conflicts` -- CREATE TABLE IF NOT EXISTS, empty. The visible
+       landing spot for a row stage 6a-ii's reject-stale gate refuses to
+       apply, instead of the silent drop design §6 explicitly forbids.
+       Columns record exactly what a human needs to act on a conflict:
+       which row (`entity_type`/`entity_id`), which company (multi-tenant
+       scoping, like every other business table in this database), what
+       kind of write was rejected (`event_type`), the version comparison
+       that caused the rejection (`local_row_version`/
+       `incoming_row_version`), when (`detected_at_utc`), and the full
+       incoming payload so the conflict is actually actionable rather than
+       just a number. None of the five catalogue types' payloads carry a
+       credential (that is only ever true of `user`/`user_permission`
+       events, a different sync stream entirely -- see
+       commercial_runtime/identity/user_accounts.py's own payload
+       allowlist), so storing the payload verbatim here is safe.
+       Deliberately no writer yet: stage 6a-ii is the first thing that ever
+       inserts a row.
+    2. `inventory_balances.quantity_reserved` -- DROPPED. See the
+       RETAIL_SCHEMA_VERSION v17 comment for why this is judged the
+       lowest-risk destructive migration available in this chain.
+
+    Idempotent: `sync_conflicts` uses CREATE TABLE/INDEX IF NOT EXISTS; the
+    DROP COLUMN is preceded by a PRAGMA table_info existence check, exactly
+    like every ADD COLUMN elsewhere in this chain -- a retried run (the
+    normal case after any failure, since `ensure_schema_version` leaves
+    `user_version` un-advanced) is a clean no-op both times.
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sync_conflicts (
+            id TEXT PRIMARY KEY,
+            company_id INTEGER,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            local_row_version INTEGER,
+            incoming_row_version INTEGER,
+            incoming_payload TEXT NOT NULL,
+            detected_at_utc TEXT NOT NULL
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sync_conflicts_entity "
+        "ON sync_conflicts(company_id, entity_type, entity_id)"
+    )
+
+    live_tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if 'inventory_balances' in live_tables:
+        cols = {row[1] for row in conn.execute('PRAGMA table_info(inventory_balances)').fetchall()}
+        if 'quantity_reserved' in cols:
+            conn.execute('ALTER TABLE inventory_balances DROP COLUMN quantity_reserved')
 
 
 def _v16_rebind_orphaned_open_drawers(conn):

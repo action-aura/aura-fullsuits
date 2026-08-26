@@ -173,7 +173,14 @@ def test_pulled_supplier_delete_soft_deletes_and_never_touches_a_row_this_device
     conn = sqlite3.connect(':memory:')
     conn.row_factory = sqlite3.Row
     conn.executescript("""
-        CREATE TABLE suppliers (id TEXT PRIMARY KEY, company_id INTEGER, name TEXT, phone TEXT, email TEXT, address TEXT, status TEXT DEFAULT 'active');
+        -- launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up):
+        -- row_version/updated_at_utc added -- _apply_event's supplier
+        -- create/update/delete branches now write both columns (carrying
+        -- the sender's row_version through, so two devices' counters
+        -- converge instead of silently diverging), and this hand-built
+        -- minimal fixture predates that.
+        CREATE TABLE suppliers (id TEXT PRIMARY KEY, company_id INTEGER, name TEXT, phone TEXT, email TEXT, address TEXT, status TEXT DEFAULT 'active',
+            row_version INTEGER NOT NULL DEFAULT 1, updated_at_utc TEXT);
         CREATE TABLE purchase_orders (id INTEGER PRIMARY KEY, company_id INTEGER, supplier_id TEXT, total REAL,
             FOREIGN KEY (supplier_id) REFERENCES suppliers(id));
         CREATE TABLE sync_cursor (id INTEGER PRIMARY KEY CHECK (id=1), last_seq INTEGER NOT NULL DEFAULT 0);
@@ -203,7 +210,14 @@ def test_pulled_supplier_create_stamps_the_receiving_devices_own_company_id():
     conn = sqlite3.connect(':memory:')
     conn.row_factory = sqlite3.Row
     conn.executescript("""
-        CREATE TABLE suppliers (id TEXT PRIMARY KEY, company_id INTEGER, name TEXT, phone TEXT, email TEXT, address TEXT, status TEXT DEFAULT 'active');
+        -- launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up):
+        -- row_version/updated_at_utc added -- _apply_event's supplier
+        -- create/update/delete branches now write both columns (carrying
+        -- the sender's row_version through, so two devices' counters
+        -- converge instead of silently diverging), and this hand-built
+        -- minimal fixture predates that.
+        CREATE TABLE suppliers (id TEXT PRIMARY KEY, company_id INTEGER, name TEXT, phone TEXT, email TEXT, address TEXT, status TEXT DEFAULT 'active',
+            row_version INTEGER NOT NULL DEFAULT 1, updated_at_utc TEXT);
         CREATE TABLE sync_cursor (id INTEGER PRIMARY KEY CHECK (id=1), last_seq INTEGER NOT NULL DEFAULT 0);
         INSERT INTO sync_cursor (id, last_seq) VALUES (1, 0);
     """)

@@ -138,7 +138,14 @@ def test_pulled_product_delete_soft_deletes_and_never_touches_a_row_this_device_
     conn = sqlite3.connect(':memory:')
     conn.row_factory = sqlite3.Row
     conn.executescript("""
-        CREATE TABLE products (id TEXT PRIMARY KEY, company_id INTEGER, sku TEXT, name TEXT, status TEXT DEFAULT 'active');
+        -- launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up):
+        -- row_version/updated_at_utc added -- _apply_event's product
+        -- delete branch now writes both columns (carrying the sender's
+        -- row_version through, so two devices' counters converge instead
+        -- of silently diverging), and this hand-built minimal fixture
+        -- predates that.
+        CREATE TABLE products (id TEXT PRIMARY KEY, company_id INTEGER, sku TEXT, name TEXT, status TEXT DEFAULT 'active',
+            row_version INTEGER NOT NULL DEFAULT 1, updated_at_utc TEXT);
         CREATE TABLE sale_items (id INTEGER PRIMARY KEY, sale_id INTEGER, product_id TEXT, quantity REAL, unit_price REAL, line_total REAL);
         CREATE TABLE sync_cursor (id INTEGER PRIMARY KEY CHECK (id=1), last_seq INTEGER NOT NULL DEFAULT 0);
         INSERT INTO sync_cursor (id, last_seq) VALUES (1, 0);

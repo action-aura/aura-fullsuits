@@ -1335,13 +1335,24 @@ def _handle_retail_products(records):
                 row = conn.execute("SELECT id FROM categories WHERE company_id=? AND name=?", (cid, cat_name)).fetchone()
                 if not row:
                     new_cat_id = str(_uuid.uuid4())
-                    cur.execute("INSERT INTO categories (id,company_id,name) VALUES (?,?,?)", (new_cat_id, cid, cat_name))
+                    # launch-readiness Phase 6 stage 6a-i: stamped at
+                    # creation, same reasoning as retail_api.py's
+                    # create_category. `utc_now` is the ONE instant already
+                    # resolved for this whole import run (see _stamp()'s
+                    # docstring above) -- reused here rather than a fresh
+                    # now_utc_iso() call, so every row this run creates or
+                    # touches agrees on when "now" was.
+                    cur.execute(
+                        "INSERT INTO categories (id,company_id,name,row_version,updated_at_utc) "
+                        "VALUES (?,?,?,?,?)",
+                        (new_cat_id, cid, cat_name, 1, utc_now))
                     # Queued BEFORE the product event that will reference it
                     # (same cur, so same outbox insertion order the push
                     # replays in) -- receivers apply parent before child.
                     # Payload mirrors create_category's.
                     _queue_sync_event(cur, 'category', new_cat_id, 'create', {
                         'id': new_cat_id, 'name': cat_name, 'description': '',
+                        'row_version': 1, 'updated_at_utc': utc_now,
                     })
                     cat_cache[cat_name] = new_cat_id
                 else:
@@ -1354,14 +1365,22 @@ def _handle_retail_products(records):
 
         existing = conn.execute("SELECT id FROM products WHERE company_id=? AND sku=?", (cid, sku)).fetchone()
         if existing:
+            # launch-readiness Phase 6 stage 6a-i: every column this
+            # statement sets (name/barcode/category_id/cost_price/
+            # sell_price/tax_rate/unit/reorder_level) is a synced product
+            # column, always written regardless of the sheet's values (same
+            # "unconditional overwrite always counts as a change" reasoning
+            # as retail_api.py's update_category), so this always bumps, in
+            # the SAME UPDATE. `utc_now` is this run's one resolved instant.
             cur.execute("""
                 UPDATE products SET name=?, barcode=?, category_id=?, cost_price=?,
-                    sell_price=?, tax_rate=?, unit=?, reorder_level=?
+                    sell_price=?, tax_rate=?, unit=?, reorder_level=?,
+                    row_version=row_version+1, updated_at_utc=?
                 WHERE company_id=? AND sku=?
             """, (rec.get('name',''), rec.get('barcode',''), cat_id,
                   rec.get('cost_price') or 0, rec.get('sell_price') or 0,
                   rec.get('tax_rate') or 0, rec.get('unit','pcs') or 'pcs',
-                  rec.get('reorder_level') or 5,
+                  rec.get('reorder_level') or 5, utc_now,
                   cid, sku))
             pid = existing['id']
             # Same full-current-row 'update' payload update_product queues
@@ -1369,20 +1388,23 @@ def _handle_retail_products(records):
             # price/name change must reach other devices exactly like a
             # PATCH would.
             prow = conn.execute(
-                "SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,reorder_level,reorder_method,status "
+                "SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,reorder_level,reorder_method,status,row_version,updated_at_utc "
                 "FROM products WHERE id=?", (pid,)).fetchone()
             _queue_sync_event(cur, 'product', pid, 'update', dict(prow) | {'id': pid})
             dupes += 1
         else:
             pid = str(_uuid.uuid4())
+            # launch-readiness Phase 6 stage 6a-i: stamped at creation, same
+            # reasoning as retail_api.py's create_product.
             cur.execute("""
                 INSERT INTO products (id,company_id,sku,barcode,name,category_id,cost_price,
-                                      sell_price,tax_rate,unit,reorder_level,status)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,'active')
+                                      sell_price,tax_rate,unit,reorder_level,status,
+                                      row_version,updated_at_utc)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',?,?)
             """, (pid, cid, sku, rec.get('barcode',''), rec.get('name',''), cat_id,
                   rec.get('cost_price') or 0, rec.get('sell_price') or 0,
                   rec.get('tax_rate') or 0, rec.get('unit','pcs') or 'pcs',
-                  rec.get('reorder_level') or 5))
+                  rec.get('reorder_level') or 5, 1, utc_now))
             # Mirrors create_product's payload key-for-key. supplier_id is
             # None (the import schema has no supplier column) and
             # reorder_method is 'none' (the INSERT above never sets it, so
@@ -1396,6 +1418,7 @@ def _handle_retail_products(records):
                 'sell_price': rec.get('sell_price') or 0, 'tax_rate': rec.get('tax_rate') or 0,
                 'unit': rec.get('unit', 'pcs') or 'pcs', 'reorder_level': rec.get('reorder_level') or 5,
                 'reorder_method': 'none',
+                'row_version': 1, 'updated_at_utc': utc_now,
             })
             imported += 1
 
@@ -1566,6 +1589,11 @@ def _handle_retail_customers(records):
     cur  = conn.cursor()
     cid  = _cid()
     imported, updated = 0, 0
+    # launch-readiness Phase 6 stage 6a-i: one instant for the whole run,
+    # same "resolved once, not per record" reasoning as _stamp()'s own
+    # docstring -- this handler has no actor/terminal to resolve so it never
+    # called _stamp() at all, but `updated_at_utc` still needs ONE now.
+    utc_now = now_utc_iso()
     for rec in records:
         name = (rec.get('name') or '').strip()
         if not name: continue
@@ -1578,23 +1606,37 @@ def _handle_retail_customers(records):
         ts = rec.get('total_spent')
         ts = float(ts) if ts is not None else 0
         if existing:
-            cur.execute("UPDATE customers SET name=?,phone=?,address=?,loyalty_points=?,total_spent=? WHERE id=?",
-                        (name, rec.get('phone',''), rec.get('address',''), lp, ts, existing['id']))
+            # `name`/`phone`/`address` are unconditionally written every
+            # time (name is required above), so this always changes a
+            # SYNCED field (SYNCED_CUSTOMER_FIELDS, retail_api.py) and
+            # always bumps, in the SAME statement -- loyalty_points/
+            # total_spent ride along in the same UPDATE but are NOT what
+            # triggers the bump; see the loyalty-accumulator comment on
+            # create_sale for why those two never gate a bump on their own.
+            cur.execute(
+                "UPDATE customers SET name=?,phone=?,address=?,loyalty_points=?,total_spent=?,"
+                "row_version=row_version+1,updated_at_utc=? WHERE id=?",
+                (name, rec.get('phone',''), rec.get('address',''), lp, ts, utc_now, existing['id']))
             # Same re-SELECTed payload update_customer queues. loyalty_points/
             # total_spent stay local-only (not in the normal route's payload
             # either -- the apply side never writes them).
-            crow = conn.execute("SELECT name,phone,email,address FROM customers WHERE id=?", (existing['id'],)).fetchone()
+            crow = conn.execute(
+                "SELECT name,phone,email,address,row_version,updated_at_utc FROM customers WHERE id=?",
+                (existing['id'],)).fetchone()
             _queue_sync_event(cur, 'customer', existing['id'], 'update', dict(crow) | {'id': existing['id']})
             updated += 1
         else:
             nid = str(_uuid.uuid4())
-            cur.execute("INSERT INTO customers (id,company_id,name,phone,email,address,loyalty_points,total_spent) VALUES (?,?,?,?,?,?,?,?)",
-                        (nid, cid, name, rec.get('phone',''), email, rec.get('address',''), lp, ts))
+            cur.execute(
+                "INSERT INTO customers (id,company_id,name,phone,email,address,loyalty_points,total_spent,"
+                "row_version,updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (nid, cid, name, rec.get('phone',''), email, rec.get('address',''), lp, ts, 1, utc_now))
             # Mirrors create_customer's payload key-for-key (see the
             # loyalty_points/total_spent note on the update branch above).
             _queue_sync_event(cur, 'customer', nid, 'create', {
                 'id': nid, 'name': name, 'phone': rec.get('phone', ''),
                 'email': email, 'address': rec.get('address', ''),
+                'row_version': 1, 'updated_at_utc': utc_now,
             })
             imported += 1
     conn.commit(); conn.close()
@@ -1608,18 +1650,24 @@ def _handle_retail_suppliers(records):
     cur  = conn.cursor()
     cid  = _cid()
     imported = 0
+    # launch-readiness Phase 6 stage 6a-i: one instant for the whole run,
+    # same reasoning as _handle_retail_customers above.
+    utc_now = now_utc_iso()
     for rec in records:
         name = (rec.get('name') or '').strip()
         if not name: continue
         existing = conn.execute("SELECT id FROM suppliers WHERE company_id=? AND name=?", (cid, name)).fetchone()
         if existing: continue
         nid = str(_uuid.uuid4())
-        cur.execute("INSERT INTO suppliers (id,company_id,name,phone,email,address) VALUES (?,?,?,?,?,?)",
-                    (nid, cid, name, rec.get('phone',''), rec.get('email',''), rec.get('address','')))
+        cur.execute(
+            "INSERT INTO suppliers (id,company_id,name,phone,email,address,row_version,updated_at_utc) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (nid, cid, name, rec.get('phone',''), rec.get('email',''), rec.get('address',''), 1, utc_now))
         # Mirrors create_supplier's payload key-for-key.
         _queue_sync_event(cur, 'supplier', nid, 'create', {
             'id': nid, 'name': name, 'phone': rec.get('phone', ''),
             'email': rec.get('email', ''), 'address': rec.get('address', ''),
+            'row_version': 1, 'updated_at_utc': utc_now,
         })
         imported += 1
     conn.commit(); conn.close()
@@ -1666,17 +1714,23 @@ def _handle_retail_categories(records):
     from database.schema import get_retail_conn
     conn = get_retail_conn(); cur = conn.cursor(); cid = _cid()
     imported = 0
+    # launch-readiness Phase 6 stage 6a-i: one instant for the whole run,
+    # same reasoning as _handle_retail_customers above.
+    utc_now = now_utc_iso()
     for rec in records:
         name = (rec.get('name') or '').strip()
         if not name: continue
         if conn.execute("SELECT id FROM categories WHERE company_id=? AND name=?", (cid, name)).fetchone():
             continue
         nid = str(_uuid.uuid4())
-        cur.execute("INSERT INTO categories (id,company_id,name,description) VALUES (?,?,?,?)",
-                    (nid, cid, name, rec.get('description','')))
+        cur.execute(
+            "INSERT INTO categories (id,company_id,name,description,row_version,updated_at_utc) "
+            "VALUES (?,?,?,?,?,?)",
+            (nid, cid, name, rec.get('description',''), 1, utc_now))
         # Mirrors create_category's payload key-for-key.
         _queue_sync_event(cur, 'category', nid, 'create', {
             'id': nid, 'name': name, 'description': rec.get('description', ''),
+            'row_version': 1, 'updated_at_utc': utc_now,
         })
         imported += 1
     conn.commit(); conn.close()

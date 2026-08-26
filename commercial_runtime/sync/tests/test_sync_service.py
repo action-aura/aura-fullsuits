@@ -55,11 +55,20 @@ class FakeRelayClient:
 
 
 _SCHEMA = """
+-- launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up): row_version/
+-- updated_at_utc added to all five catalogue tables below -- _apply_event's
+-- category/product/customer/supplier/reorder_request branches now write
+-- both columns (carrying the sender's row_version through, so two devices'
+-- counters converge instead of silently diverging), and this hand-built
+-- minimal fixture predates that. test_internal_routes.py mirrors this same
+-- shape for its own `categories` table -- keep the two in step.
 CREATE TABLE categories (
     id TEXT PRIMARY KEY,
     company_id INTEGER DEFAULT 1,
     name TEXT NOT NULL,
-    description TEXT
+    description TEXT,
+    row_version INTEGER NOT NULL DEFAULT 1,
+    updated_at_utc TEXT
 );
 CREATE TABLE products (
     id TEXT PRIMARY KEY,
@@ -75,7 +84,9 @@ CREATE TABLE products (
     unit TEXT DEFAULT 'pcs',
     reorder_level INTEGER DEFAULT 5,
     reorder_method TEXT DEFAULT 'none',
-    status TEXT DEFAULT 'active'
+    status TEXT DEFAULT 'active',
+    row_version INTEGER NOT NULL DEFAULT 1,
+    updated_at_utc TEXT
 );
 CREATE TABLE customers (
     id TEXT PRIMARY KEY,
@@ -84,7 +95,9 @@ CREATE TABLE customers (
     phone TEXT,
     email TEXT,
     address TEXT,
-    status TEXT DEFAULT 'active'
+    status TEXT DEFAULT 'active',
+    row_version INTEGER NOT NULL DEFAULT 1,
+    updated_at_utc TEXT
 );
 CREATE TABLE suppliers (
     id TEXT PRIMARY KEY,
@@ -93,7 +106,9 @@ CREATE TABLE suppliers (
     phone TEXT,
     email TEXT,
     address TEXT,
-    status TEXT DEFAULT 'active'
+    status TEXT DEFAULT 'active',
+    row_version INTEGER NOT NULL DEFAULT 1,
+    updated_at_utc TEXT
 );
 CREATE TABLE reorder_requests (
     id TEXT PRIMARY KEY,
@@ -103,7 +118,9 @@ CREATE TABLE reorder_requests (
     status TEXT NOT NULL DEFAULT 'pending',
     draft_message TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    resolved_at TEXT
+    resolved_at TEXT,
+    row_version INTEGER NOT NULL DEFAULT 1,
+    updated_at_utc TEXT
 );
 CREATE TABLE sync_outbox (
     id TEXT PRIMARY KEY,
