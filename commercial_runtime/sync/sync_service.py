@@ -906,7 +906,7 @@ class SyncService:
                 "INSERT INTO inventory_movements (company_id, product_id, branch_id, movement_type, "
                 "quantity, unit_cost, reference, notes, created_by, uid, actor_user_uid, terminal_id, "
                 "created_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
-                "ON CONFLICT(uid) WHERE uid IS NOT NULL DO UPDATE SET quantity=excluded.quantity",  # MUTATION-PROOF-6: movement made mutable
+                "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
                 (local_company_id, p.get("product_id"), resolved_branch_id, p.get("movement_type"),
                  p.get("quantity"), p.get("unit_cost", 0), p.get("reference"), p.get("notes"),
                  p.get("created_by", "System"), p.get("uid"), p.get("actor_user_uid"),
