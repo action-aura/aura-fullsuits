@@ -878,7 +878,7 @@ class SyncService:
             # than left to raise and wedge the whole pull batch -- identical
             # reasoning, and identical "missing_parent:product" vocabulary,
             # to the sale_item/return_item branches above.
-            if False and not self._row_exists(conn, "products", p.get("product_id")):  # MUTATION-PROOF-4: FK quarantine disabled
+            if not self._row_exists(conn, "products", p.get("product_id")):
                 return self._quarantine_apply_event(
                     conn, ev, reason="missing_parent:product",
                     detail=f"product_id={p.get('product_id')!r} not found locally")
@@ -906,7 +906,7 @@ class SyncService:
                 "INSERT INTO inventory_movements (company_id, product_id, branch_id, movement_type, "
                 "quantity, unit_cost, reference, notes, created_by, uid, actor_user_uid, terminal_id, "
                 "created_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
-                "ON CONFLICT(uid) WHERE uid IS NOT NULL DO NOTHING",
+                "ON CONFLICT(uid) WHERE uid IS NOT NULL DO UPDATE SET quantity=excluded.quantity",  # MUTATION-PROOF-6: movement made mutable
                 (local_company_id, p.get("product_id"), resolved_branch_id, p.get("movement_type"),
                  p.get("quantity"), p.get("unit_cost", 0), p.get("reference"), p.get("notes"),
                  p.get("created_by", "System"), p.get("uid"), p.get("actor_user_uid"),
