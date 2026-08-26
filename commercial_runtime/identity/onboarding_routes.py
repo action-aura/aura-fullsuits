@@ -159,7 +159,28 @@ def create_admin():
             # longer exists -- harmless to read, but they accumulate on every
             # re-onboard and they make the permission table lie about who
             # exists.
+            #
+            # Phase 5 wave B2 stage 3 (Decision 4): if this pending admin's
+            # grants ever reached another device (its own `create` user
+            # event queued the moment it was first onboarded, immediately
+            # below in this same function), that peer must also learn they
+            # are gone -- a delete that does not travel leaves a permission
+            # GRANTED there forever. Read BEFORE deleting (there is no fixed
+            # code list to emit against here, unlike update_role's own
+            # CAPABILITY_CODES -- this DELETE has no subsystem filter at
+            # all), and queued BEFORE `DELETE FROM users` below:
+            # `_queue_user_permission_sync_event` reads the owning user's
+            # `uid` from the `users` table itself, which must still exist
+            # at the moment each call runs.
+            _old_admin_perm_subsystems = [
+                r['subsystem'] for r in conn.execute(
+                    "SELECT subsystem FROM user_permissions WHERE user_id=?",
+                    (existing_admin['id'],),
+                ).fetchall()
+            ]
             conn.execute("DELETE FROM user_permissions WHERE user_id=?", (existing_admin['id'],))
+            for _sub in _old_admin_perm_subsystems:
+                _accounts._queue_user_permission_sync_event(conn, existing_admin['id'], _sub, 'delete')
             conn.execute("DELETE FROM users WHERE role='admin'")
 
         company_id = cfg.get('company_id') or hashlib.md5(email.encode()).hexdigest()
@@ -188,7 +209,11 @@ def create_admin():
         # these rows change no decision today; they exist so the owner's own
         # account shows up in the capability grid the employee screens read,
         # instead of appearing as an account with no permissions at all.
-        _accounts.seed_capabilities_for_user(conn, user_id, _accounts.ROLE_ADMIN)
+        # `emit_sync=True` (Phase 5 wave B2 stage 3): a second device
+        # onboarded later, or a restore, needs the owner's own grants too --
+        # not just the `users` row `_queue_user_sync_event` above already
+        # sends.
+        _accounts.seed_capabilities_for_user(conn, user_id, _accounts.ROLE_ADMIN, emit_sync=True)
 
         # Kept inside the same transaction as the user insert -- either both
         # land or neither does, so a mid-onboarding failure can never leave
@@ -687,13 +712,22 @@ def create_employee():
             if lvl != 'none':
                 cur.execute("INSERT INTO user_permissions (id, user_id, subsystem, access_level) VALUES (?, ?, ?, ?)",
                             (str(uuid.uuid4()), user_id, sub, lvl))
+                # Phase 5 wave B2 stage 3: an explicit grant made AT CREATION
+                # TIME is still a grant a peer device needs -- `conn`, not
+                # `cur`, matching every other emit call in this file (see
+                # _queue_user_sync_event's own docstring for the lastrowid
+                # trap this avoids).
+                _accounts._queue_user_permission_sync_event(conn, user_id, sub, 'create')
 
         # AFTER the caller's explicit grants, never before: seeding is
         # INSERT OR IGNORE against UNIQUE(user_id, subsystem), so running it
         # second means an explicit grant for the same code wins and the seed
         # only fills the gaps. Running it first would make the caller's own
-        # request collide with the defaults.
-        _accounts.seed_capabilities_for_user(conn, user_id, role)
+        # request collide with the defaults. `emit_sync=True`: this is the
+        # headline stage-3 site -- a new hire arrives on another till with a
+        # WORKING permission set, not an account that logs in and can do
+        # nothing there.
+        _accounts.seed_capabilities_for_user(conn, user_id, role, emit_sync=True)
 
         raw_token = uuid.uuid4().hex
         token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
@@ -898,7 +932,19 @@ def update_role(user_id):
             f"DELETE FROM user_permissions WHERE user_id=? AND subsystem IN ({placeholders})",
             (user_id, *_accounts.CAPABILITY_CODES),
         )
-        _accounts.seed_capabilities_for_user(conn, user_id, role)
+        # Phase 5 wave B2 stage 3 (Decision 4): each of the eight rows just
+        # removed must reach every other device, or a peer that already had
+        # this user's OLD grants keeps them after this device revoked them
+        # -- a silent privilege escalation elsewhere. The reseed immediately
+        # below re-queues a `create` for every one of these same eight
+        # `(user, subsystem)` pairs with the NEW role's defaults, so a
+        # receiver ends up correct either way the two arrive relative to
+        # each other -- but the explicit delete is what keeps a receiver
+        # correct even if only PART of this transaction's events have
+        # arrived so far (see the design doc's own D4 reasoning).
+        for _code in _accounts.CAPABILITY_CODES:
+            _accounts._queue_user_permission_sync_event(conn, user_id, _code, 'delete')
+        _accounts.seed_capabilities_for_user(conn, user_id, role, emit_sync=True)
 
         try:
             conn.execute(
@@ -1088,8 +1134,20 @@ def update_perms(user_id):
             return jsonify({'error': 'User not found.'}), 404
 
         conn.execute("DELETE FROM user_permissions WHERE user_id=? AND subsystem=?", (user_id, sub))
+        # Phase 5 wave B2 stage 3 (Decision 4): this DELETE really can leave
+        # the pair with no row at all until the INSERT just below runs --
+        # queued here, before the INSERT, so a receiver applying the two in
+        # this same order sees the same momentary state this device did.
+        _accounts._queue_user_permission_sync_event(conn, user_id, sub, 'delete')
         conn.execute("INSERT INTO user_permissions (id, user_id, subsystem, access_level) VALUES (?, ?, ?, ?)",
                      (str(uuid.uuid4()), user_id, sub, lvl))
+        # The corrected grant -- 'update' (not 'create'): this route's whole
+        # job is changing an EXISTING (user, subsystem) pair's access_level,
+        # even though the row underneath it was just replaced. Either
+        # event_type upserts identically on the receiver (design Decision
+        # 2), so this is a naming choice for a future reader, not a
+        # behavioural one.
+        _accounts._queue_user_permission_sync_event(conn, user_id, sub, 'update')
         conn.execute("UPDATE users SET session_version=session_version+1, "
                      "row_version=COALESCE(row_version, 1)+1, updated_at_utc=? WHERE id=? AND company_id=?",
                      (_accounts.now_utc_iso(), user_id, session['company_id']))

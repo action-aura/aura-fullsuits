@@ -192,6 +192,18 @@ def _seed_capability_rows(conn: sqlite3.Connection) -> None:
     subsystem='retail' grants `mt_require_subsystem` reads today, which use a
     different `subsystem` value entirely and are therefore untouched by
     construction, not merely by luck.
+
+    `emit_sync=False`, explicitly (Phase 5 wave B2 stage 3, docs/
+    launch-readiness/phase5-waveb2-user-sync.md, task B): this is a
+    migration backfilling capability rows for accounts that ALREADY exist
+    on THIS device, not a new grant a peer device needs to learn about --
+    identical reasoning to why stage 2b's own v3/v4 backfills never queue a
+    `user` event either. It is also the ONE call site that must not emit,
+    full stop: `seed_capabilities_for_user`'s default already matches this
+    (`emit_sync: bool = False`), but the migration states its own posture
+    explicitly here rather than leaning on a default silently, matching the
+    same "no default is silently trusted" discipline the design doc's
+    write-site table asks for.
     """
     for row in conn.execute("SELECT id, role FROM users").fetchall():
-        seed_capabilities_for_user(conn, row[0], row[1])
+        seed_capabilities_for_user(conn, row[0], row[1], emit_sync=False)

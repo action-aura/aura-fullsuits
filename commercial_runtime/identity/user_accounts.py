@@ -60,6 +60,13 @@ Three things live here.
    what makes a stripped `row_version` bump elsewhere show up here as an
    UNBUMPED payload rather than silently going unnoticed: nothing has to
    police every call site, the re-read simply reports what is actually true.
+
+   Stage 3 (same document) adds `_queue_user_permission_sync_event`, the
+   analogous single place a `user_permission` sync_outbox row is built. See
+   its own docstring for the trap unique to this table: the payload carries
+   the owning user's `uid`, NEVER `user_id` (a local, per-device value the
+   receiver mints fresh for every user it applies -- naming it on the wire
+   would either resolve to nothing or, far worse, to a different person).
 """
 from __future__ import annotations
 
@@ -224,7 +231,8 @@ def capabilities_for_role(role) -> frozenset:
     return ROLE_CAPABILITIES[normalize_role(role)]
 
 
-def seed_capabilities_for_user(conn: sqlite3.Connection, user_id: str, role) -> int:
+def seed_capabilities_for_user(conn: sqlite3.Connection, user_id: str, role, *,
+                                emit_sync: bool = False) -> int:
     """Write one `user_permissions` row per capability code for `user_id`,
     granting the ones `role` implies and explicitly denying the rest. Returns
     the number of rows actually inserted.
@@ -239,6 +247,38 @@ def seed_capabilities_for_user(conn: sqlite3.Connection, user_id: str, role) -> 
     Does NOT commit -- both callers (the migration, and `create_employee`)
     own a transaction that has other statements in it, and a commit here
     would split those in half.
+
+    `emit_sync` (Phase 5 wave B2 stage 3, docs/launch-readiness/
+    phase5-waveb2-user-sync.md, Decision 3/5) -- queues a `user_permission`
+    sync event for every row THIS CALL actually inserts, so a cashier hired
+    on one till arrives on another with a WORKING permission set instead of
+    an account that logs in and can do nothing there. Gated per-code on
+    THIS statement's own `cur.rowcount`, never the aggregate `inserted`
+    count -- the count alone says how many rows landed, not WHICH
+    `(user_id, subsystem)` pairs they were, and a code that already had a
+    row (rowcount 0 -- the account was seeded before, or an admin already
+    tuned it) is correctly never re-emitted, matching this function's own
+    non-destructive/idempotent contract.
+
+    Deliberately keyword-only with NO default the caller can silently
+    inherit through positional args, but DOES default to `False` -- the
+    safe, backward-compatible posture for the many existing direct callers
+    (tests across `products/retail/tests` and `commercial_runtime/identity/
+    tests` build minimal hand-rolled schemas with no `sync_outbox`/`users`
+    table at all, e.g. `retail_registry_v3_accounts_test.py`'s
+    `test_a_manager_gets_neither_owner_capability`) that call this function
+    purely for its capability-seeding side effect and have no reason to
+    know sync exists. The THREE real production write sites that create or
+    reset a live account's grants -- `onboarding_routes.create_admin`,
+    `create_employee`, `update_role` -- pass `emit_sync=True` explicitly.
+    The ONE call site that must NOT emit -- `account_schema.py`'s
+    `_seed_capability_rows`, the v3 migration step -- relies on this
+    default (and states so explicitly at its own call site): a migration
+    backfilling capability rows for accounts that ALREADY exist locally is
+    catching this device's own data up to its current shape, not a new
+    grant a peer device needs to learn about -- identical reasoning to why
+    stage 2b's own v3/v4 backfills never emit either (see this module's
+    docstring, item 4, and account_schema.py's own module docstring).
     """
     granted = capabilities_for_role(role)
     inserted = 0
@@ -248,7 +288,10 @@ def seed_capabilities_for_user(conn: sqlite3.Connection, user_id: str, role) -> 
             "VALUES (?, ?, ?, ?)",
             (str(uuid.uuid4()), user_id, code, ACCESS_FULL if code in granted else ACCESS_NONE),
         )
-        inserted += cur.rowcount or 0
+        rowcount = cur.rowcount or 0
+        inserted += rowcount
+        if emit_sync and rowcount:
+            _queue_user_permission_sync_event(conn, user_id, code, "create")
     return inserted
 
 
@@ -437,6 +480,100 @@ def _queue_user_sync_event(conn: sqlite3.Connection, user_id: str, event_type: s
         "INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, payload, created_at) "
         "VALUES (?,?,?,?,?,?)",
         (str(uuid.uuid4()), "user", row["uid"], event_type, json.dumps(payload), now_utc_iso()),
+    )
+
+
+def _queue_user_permission_sync_event(conn: sqlite3.Connection, user_id: str, subsystem: str,
+                                       event_type: str) -> None:
+    """Queue a `user_permission` sync_outbox event into registry.db, in the
+    SAME transaction as the row write it describes -- identical shape and
+    identical reasoning to `_queue_user_sync_event` above (Phase 5 wave B2
+    stage 3, docs/launch-readiness/phase5-waveb2-user-sync.md, "Decision 5
+    -- user_permissions is in scope").
+
+    THE TRAP this function exists to design around (identified while
+    reviewing stage 2a, see the design doc's own "trap stage 3 must not
+    walk into" section): `user_permissions.user_id` is the LOCAL `users.id`
+    -- a value the receiving device MINTS FRESH for every user it applies
+    (`str(uuid.uuid4())` in sync_service.py's `user` branch). It is NOT the
+    wire identity and is never valid to carry across devices; a payload
+    naming the SENDING device's `user_id` would, on the receiver, either
+    resolve to nothing or -- far worse -- to a DIFFERENT PERSON who happens
+    to have been minted that same local id. So the payload NEVER carries
+    `user_id` at all. It carries the owning user's `uid` (read fresh from
+    `users` here, never trusted from a caller who might be holding a stale
+    copy), and the apply side (`sync_service.py`'s `user_permission`
+    branch) resolves `uid` back to ITS OWN local `users.id` before writing
+    anything -- exactly the way wave A's `sale_item` branch resolves
+    `sale_uid` via `_local_id_by_uid`.
+
+    `entity_id` is a freshly minted uuid4 on every call, unlike
+    `_queue_user_sync_event`'s `uid` (a real, STABLE, cross-device
+    identity). `user_permissions` has no such column of its own -- design
+    Decision 2 states this table's real wire key is the composite
+    `(user_uid, subsystem)` carried IN THE PAYLOAD, and the local
+    `user_permissions.id` this device happens to have "is a per-device
+    value and means nothing on the wire" (same document). Owner only
+    requires `entity_id` to be a well-formed UUID
+    (`owner/app/sync/routes.py::_build_event`); it plays no role in this
+    table's own conflict resolution on the receiver (`ON CONFLICT(user_id,
+    subsystem)`, never `ON CONFLICT` on `entity_id`), so there is nothing
+    to gain from trying to keep it stable across a row's create/update/
+    delete lifecycle the way a table that actually upserts on its own uid
+    needs to.
+
+    `event_type='delete'` (design Decision 4) carries no `access_level` in
+    its payload -- there is nothing left to report once the grant is gone,
+    only WHICH `(user, subsystem)` pair the receiver must also stop
+    granting. Callers issue this AFTER their own DELETE has run (matching
+    every other emit-after-write call site in this module), but the
+    OWNING USER'S `users` ROW must still exist at the moment this runs,
+    because `uid` is read from it here -- `onboarding_routes.create_admin`'s
+    re-onboarding path is the one call site where this ordering is
+    load-bearing (the old admin's `user_permissions` rows, and this call,
+    both run BEFORE its `users` row is hard-deleted, never after).
+
+    `event_type` in ('create', 'update') re-reads the row's CURRENT
+    `access_level` from `conn` -- same "never trust what the caller already
+    has in hand" reasoning as `_queue_user_sync_event`'s own docstring, and
+    what makes calling this from `seed_capabilities_for_user`'s per-code
+    loop (which never holds the row open on its own cursor) correct with
+    no second read needed anywhere else. A row that has already vanished by
+    the time this runs (should be unreachable -- every real call site emits
+    immediately after its own INSERT, in the same transaction) is skipped
+    rather than queuing a payload with no `access_level` at all.
+
+    A user row with no `uid` yet (should be unreachable -- every real
+    account gets one at INSERT, and account_schema.py's v3 backfill covers
+    every row that predates that) is skipped exactly like
+    `_queue_user_sync_event`'s own guard: no malformed event is ever queued
+    for Owner to reject, and -- as with that function -- neither `password_
+    hash` nor `pin_hash` is ever anywhere near this payload to begin with,
+    so there is no credential to leak even in the unreachable case.
+    """
+    user_row = conn.execute("SELECT uid FROM users WHERE id=?", (user_id,)).fetchone()
+    if user_row is None or not user_row["uid"]:
+        return
+    user_uid = user_row["uid"]
+    if event_type == "delete":
+        payload = {"user_uid": user_uid, "subsystem": subsystem}
+    else:
+        perm_row = conn.execute(
+            "SELECT access_level FROM user_permissions WHERE user_id=? AND subsystem=?",
+            (user_id, subsystem),
+        ).fetchone()
+        if perm_row is None:
+            return
+        payload = {
+            "user_uid": user_uid,
+            "subsystem": subsystem,
+            "access_level": perm_row["access_level"],
+        }
+    conn.execute(
+        "INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, payload, created_at) "
+        "VALUES (?,?,?,?,?,?)",
+        (str(uuid.uuid4()), "user_permission", str(uuid.uuid4()), event_type,
+         json.dumps(payload), now_utc_iso()),
     )
 
 

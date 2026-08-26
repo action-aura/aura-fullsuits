@@ -131,10 +131,22 @@ def _make_employee(admin, role=None):
 # ── Task C.1 / C.2 -- creation sites: emit `create`, row_version==1 ────────
 
 def test_create_admin_emits_a_create_event(admin, db_path):
+    """Phase 5 wave B2 stage 3 note on this test's shape: create-admin now
+    ALSO seeds and emits the owner's own eight `user_permission` rows
+    (`seed_capabilities_for_user(..., emit_sync=True)`), so the outbox no
+    longer holds exactly one row -- it holds one `user` event plus eight
+    `user_permission` events. The assertion below is narrowed to select the
+    `user`-typed row specifically (what it always meant to pin) rather than
+    assume it is the only row in the table; the `user_permission` half of
+    this same call is proven separately by
+    test_create_admin_seeds_and_emits_capability_rows_for_the_owner in
+    commercial_runtime/identity/tests/
+    test_user_permission_sync_emission_write_sites.py, so nothing this test
+    used to catch is lost."""
     rows = _outbox_rows(db_path)
-    assert len(rows) == 1, f"expected exactly one outbox row after create-admin, got {rows}"
-    ev = rows[0]
-    assert ev["entity_type"] == "user"
+    user_events = [r for r in rows if r["entity_type"] == "user"]
+    assert len(user_events) == 1, f"expected exactly one `user` outbox row after create-admin, got {rows}"
+    ev = user_events[0]
     assert ev["event_type"] == "create"
     admin_row = _user_row(db_path, admin.get('/api/auth/session').get_json()['user']['id'])
     assert ev["entity_id"] == admin_row["uid"], "entity_id must be the wire uid, never users.id"
@@ -144,11 +156,17 @@ def test_create_admin_emits_a_create_event(admin, db_path):
 
 
 def test_create_employee_emits_a_create_event(admin, db_path):
+    """Narrowed to the `user`-typed row for the same reason as
+    test_create_admin_emits_a_create_event above -- create-employee also
+    seeds and emits eight `user_permission` rows for the new hire now (see
+    test_user_permission_sync_emission_write_sites.py)."""
     before = len(_outbox_rows(db_path))
     user_id, email, _ = _make_employee(admin, role='manager')
     rows = _outbox_rows(db_path)
-    assert len(rows) == before + 1
-    ev = rows[-1]
+    new_rows = rows[before:]
+    user_events = [r for r in new_rows if r["entity_type"] == "user"]
+    assert len(user_events) == 1, f"expected exactly one new `user` outbox row, got {new_rows}"
+    ev = user_events[0]
     assert ev["event_type"] == "create"
     assert ev["payload"]["email"] == email
     assert ev["payload"]["role"] == "manager"
@@ -181,13 +199,21 @@ def test_update_status_emits_an_update_event_with_the_bumped_row_version(admin, 
 
 
 def test_update_role_emits_an_update_event_with_the_bumped_row_version(admin, db_path):
+    """Narrowed to the LAST `user`-typed row, not `rows[-1]`: update_role now
+    ALSO deletes and re-seeds eight `user_permission` rows for the new role
+    (stage 3, Decision 4), which are queued AFTER this route's own `user`
+    update event in code order (see onboarding_routes.update_role), so the
+    truly-last outbox row is one of those, not this one. The
+    `user_permission` half of this exact call is proven separately in
+    test_user_permission_sync_emission_write_sites.py."""
     user_id, _, _ = _make_employee(admin)
     before_row = _user_row(db_path, user_id)
 
     r = admin.put(f'/api/admin/employees/{user_id}/role', json={'role': 'manager'})
     assert r.status_code == 200, r.get_json()
 
-    ev = _outbox_rows(db_path)[-1]
+    user_events = [r for r in _outbox_rows(db_path) if r["entity_type"] == "user"]
+    ev = user_events[-1]
     assert ev["event_type"] == "update"
     assert ev["payload"]["role"] == "manager"
     assert ev["payload"]["row_version"] == before_row["row_version"] + 1
@@ -214,10 +240,21 @@ def test_update_clinic_role_emits_even_though_clinic_role_itself_never_leaves_th
     assert ev["payload"]["role"] == before_row["role"]
 
 
-def test_update_perms_emits_even_though_the_permission_itself_never_leaves_the_device(admin, db_path):
-    """Same reasoning as clinic-role above -- `user_permission` is stage 3,
-    not synced, but the deliberate session_version bump must still reach
-    other devices or the revocation stays local."""
+def test_update_perms_emits_a_user_update_event_too(admin, db_path):
+    """UPDATED for stage 3: `user_permission` now DOES sync (this test's
+    name and docstring used to say the opposite, back when it was stage
+    3's own documented gap). update_perms queues its `user_permission`
+    delete+update pair BEFORE this route's own `user`/session_version-bump
+    event in code order (onboarding_routes.update_perms), so `rows[-1]` is
+    still this `user` event, unchanged from before stage 3 -- proven here
+    the same way it always was. The `user_permission` half of this exact
+    call (the delete-then-recreate pair, and the actual access_level that
+    travels) is proven separately in
+    test_user_permission_sync_emission_write_sites.py. The session_version
+    bump still matters in its own right regardless: it is what forces a
+    device that already had this user's OLD permission set logged in to
+    re-authenticate, independent of whether the permission payload itself
+    arrives in the same batch."""
     user_id, _, _ = _make_employee(admin)
     before_row = _user_row(db_path, user_id)
 
@@ -226,6 +263,7 @@ def test_update_perms_emits_even_though_the_permission_itself_never_leaves_the_d
     assert r.status_code == 200, r.get_json()
 
     ev = _outbox_rows(db_path)[-1]
+    assert ev["entity_type"] == "user"
     assert ev["event_type"] == "update"
     assert ev["payload"]["row_version"] == before_row["row_version"] + 1
     assert ev["payload"]["session_version"] == before_row["session_version"] + 1

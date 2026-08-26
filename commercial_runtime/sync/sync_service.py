@@ -41,7 +41,21 @@ identity/user_accounts.py's `_queue_user_sync_event` + its call sites in
 onboarding_routes.py/auth_routes.py/mt_auth.py) is the EMIT side, and has
 since landed: every allowlisted write to `users` now queues a `user` event
 into registry.db's own `sync_outbox`, in the same transaction as the row
-write. `user_permission` is still not synced at all (stage 3).
+write.
+
+Stage 3 (`_apply_event`'s `user_permission` branch below +
+`user_accounts._queue_user_permission_sync_event` + its call sites in
+onboarding_routes.py/account_schema.py) closes the gap those two stages
+deliberately left open: `users` alone syncing meant a cashier created on
+one till arrived on another with NO permissions there. `user_permissions.
+user_id` is a LOCAL `users.id`, minted fresh per device by the `user`
+branch's own INSERT -- never the wire identity -- so a `user_permission`
+payload carries the owning user's `uid` instead, and this branch resolves
+it to THIS device's own local `users.id` via `_local_id_by_uid` (the same
+helper `sale_item` uses for its parent) before writing anything. An
+unresolved uid is QUARANTINED, never guessed at -- resolving to the wrong
+local row here would be a SILENT PRIVILEGE CHANGE, the most dangerous
+shape in this whole wave.
 
 This is why the entity-type allowlist above is an ENFORCED constructor
 argument (`handled_entity_types`, defaulting to `RETAIL_SYNC_ENTITY_TYPES` so
@@ -252,11 +266,15 @@ RETAIL_SYNC_ENTITY_TYPES = frozenset({
 #: `user` is never in the retail set, and none of the retail set is ever in
 #: this one -- the whole point of `handled_entity_types` (added stage 1) is
 #: that each stream only ever writes to the database it actually owns.
-#: `user_permissions` (registry.db, keyed `user_id`+`subsystem`) is
-#: deliberately NOT here yet -- out of scope for stage 2a, see that stage's
-#: own task description; a cashier synced to a second till with no
-#: permissions there is a real, known gap this stage does not close.
-REGISTRY_SYNC_ENTITY_TYPES = frozenset({"user"})
+#: `user_permission` (registry.db `user_permissions`, keyed `user_id`+
+#: `subsystem`) joined this set in Phase 5 wave B2 stage 3 -- see
+#: `_apply_event`'s `user_permission` branch below and
+#: `commercial_runtime/identity/user_accounts.py`'s
+#: `_queue_user_permission_sync_event` for the emit side. Before stage 3, a
+#: cashier synced to a second till arrived with NO permissions there --
+#: an account that logs in and can do nothing, which read to the shop as
+#: "the system is broken". That gap is what stage 3 closes.
+REGISTRY_SYNC_ENTITY_TYPES = frozenset({"user", "user_permission"})
 
 #: Of `RETAIL_SYNC_ENTITY_TYPES` (or whatever set a given instance is
 #: actually configured with), the subset that ever stamps a company_id onto
@@ -1246,6 +1264,88 @@ class SyncService:
                         detail=f"employee_id={p.get('employee_id')!r} already registered under "
                                f"company_id={local_company_id!r} (incoming uid={uid!r})")
                 raise
+        elif entity_type == "user_permission":
+            # Phase 5 wave B2 stage 3 (docs/launch-readiness/
+            # phase5-waveb2-user-sync.md, Decision 5). Only ever reachable
+            # from the REGISTRY-configured instance, identical reasoning to
+            # the `user` branch above -- `user_permissions` does not exist
+            # in retail.db at all.
+            #
+            # An event_type outside create/update/delete is silently
+            # ignored -- same posture as every other branch's "unrecognised
+            # shape" fallback.
+            if event_type not in ("create", "update", "delete"):
+                return True
+            # THE TRAP (see this module's own docstring above, and
+            # user_accounts._queue_user_permission_sync_event's docstring):
+            # `user_permissions.user_id` is a LOCAL `users.id`, minted
+            # FRESH per device by the `user` branch's own INSERT above --
+            # never the wire identity. The payload therefore never carries
+            # `user_id`, only the owning user's `uid`, and it MUST be
+            # resolved to THIS device's own local `users.id` before a
+            # single byte is written -- exactly the way `sale_item` resolves
+            # `sale_uid` via `_local_id_by_uid` for its own parent. Getting
+            # this wrong -- applying to the wrong local user, or to "the
+            # only user around" when the real owner has not arrived yet --
+            # is a SILENT PRIVILEGE CHANGE: the single most dangerous shape
+            # in this entire wave, and it would raise nothing. An
+            # unresolvable uid is QUARANTINED, never guessed at and never
+            # dropped, exactly like sale_item's own missing parent.
+            user_uid = p.get("user_uid")
+            subsystem = p.get("subsystem")
+            local_user_id = self._local_id_by_uid(conn, "users", user_uid)
+            if local_user_id is None:
+                return self._quarantine_apply_event(
+                    conn, ev, reason="missing_parent:user",
+                    detail=f"user_uid={user_uid!r} not found locally")
+            # A malformed payload with no subsystem at all (unreachable from
+            # any real write site -- every one of them supplies it) is not a
+            # "missing parent that might resolve later" case, so there is
+            # nothing to gain from quarantining it for a retry that can
+            # never fix a payload shape. `subsystem` is NOT NULL in the
+            # schema, so writing NULL here would raise IntegrityError and
+            # wedge the whole batch -- skipped instead, same posture as an
+            # unrecognised event_type just above.
+            if not subsystem:
+                return True
+            if event_type == "delete":
+                # Design Decision 4 -- a revoke must travel, or a device
+                # that already granted this (user, subsystem) pair keeps it
+                # forever after another device revoked it: the worst
+                # outcome this wave names. A row that does not exist
+                # locally (already applied, never arrived, or this
+                # receiver never had it to begin with) is a NO-OP, never an
+                # error -- matching the module's general "absent row on
+                # delete is fine" posture.
+                conn.execute(
+                    "DELETE FROM user_permissions WHERE user_id=? AND subsystem=?",
+                    (local_user_id, subsystem),
+                )
+                return True
+            # create/update both upsert identically (design Decision 2):
+            # the conflict target is `UNIQUE(user_id, subsystem)` using the
+            # LOCALLY RESOLVED `local_user_id` above -- never the payload's
+            # own `id` (there isn't one in the payload at all; see
+            # _queue_user_permission_sync_event's docstring for why this
+            # table's `id` "means nothing on the wire"). A fresh local `id`
+            # is minted here on insert, identical reasoning to the `user`
+            # branch minting a fresh local `users.id`.
+            #
+            # Plain last-write-wins, NOT `row_version`-gated (design
+            # Decision 5): `user_permissions` carries no version column,
+            # and adding one is out of scope for this wave. Two admins
+            # editing the SAME user's SAME subsystem on two devices at the
+            # same moment can resolve either way -- documented as a known,
+            # accepted residual risk (this product's single-admin model,
+            # rare/deliberate permission edits, and the fact that every
+            # permission change already bumps `session_version`, forcing a
+            # re-login through which the admin sees the resulting state),
+            # never silently.
+            conn.execute(
+                "INSERT INTO user_permissions (id, user_id, subsystem, access_level) VALUES (?,?,?,?) "
+                "ON CONFLICT(user_id, subsystem) DO UPDATE SET access_level=excluded.access_level",
+                (str(uuid.uuid4()), local_user_id, subsystem, p.get("access_level", "none")),
+            )
         return True
 
     @staticmethod
