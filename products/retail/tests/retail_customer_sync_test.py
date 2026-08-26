@@ -162,6 +162,20 @@ def test_pulled_customer_delete_soft_deletes_and_never_touches_a_row_this_device
             event_type TEXT NOT NULL, payload TEXT NOT NULL, reason TEXT NOT NULL, detail TEXT,
             quarantined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (entity_id, event_type));
+        -- launch-readiness Phase 6 stage 6a-ii: `sync_conflicts`, shaped
+        -- exactly like _migrate_add_sync_conflicts_and_drop_quantity_reserved's
+        -- own CREATE TABLE (products/retail/backend/database/schema.py, v17).
+        -- The customer delete branch's reject-stale gate can legitimately
+        -- write a row here on a genuine (non-legacy) stale discard, so this
+        -- hand-built fixture -- which predates v17 the same way it predated
+        -- the row_version columns above -- has to carry the table forward
+        -- too, or it raises `sqlite3.OperationalError: no such table:
+        -- sync_conflicts` the moment that path is reached.
+        CREATE TABLE sync_conflicts (
+            id TEXT PRIMARY KEY, company_id INTEGER, entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL, event_type TEXT NOT NULL, local_row_version INTEGER,
+            incoming_row_version INTEGER, incoming_payload TEXT NOT NULL, detected_at_utc TEXT NOT NULL
+        );
     """)
     conn.execute("INSERT INTO customers (id,company_id,name,status) VALUES ('c-1',9,'Ahmed','active')")
     conn.execute("INSERT INTO sales (company_id,customer_id,total) VALUES (9,'c-1',150.0)")

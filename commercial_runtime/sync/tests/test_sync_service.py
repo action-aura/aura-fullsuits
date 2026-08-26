@@ -122,6 +122,26 @@ CREATE TABLE reorder_requests (
     row_version INTEGER NOT NULL DEFAULT 1,
     updated_at_utc TEXT
 );
+-- launch-readiness Phase 6 stage 6a-ii (this stage): `sync_conflicts`,
+-- shaped exactly like _migrate_add_sync_conflicts_and_drop_quantity_reserved's
+-- own CREATE TABLE (products/retail/backend/database/schema.py, v17). The
+-- five catalogue branches' reject-stale gate below writes a row here on
+-- every discard -- this fixture predates v17 the same way the row_version
+-- columns above did (see this file's own module docstring), so it has to
+-- carry the table forward too, or every discard test in this file raises
+-- `sqlite3.OperationalError: no such table: sync_conflicts` before it ever
+-- reaches its own assertions.
+CREATE TABLE sync_conflicts (
+    id TEXT PRIMARY KEY,
+    company_id INTEGER,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    local_row_version INTEGER,
+    incoming_row_version INTEGER,
+    incoming_payload TEXT NOT NULL,
+    detected_at_utc TEXT NOT NULL
+);
 CREATE TABLE sync_outbox (
     id TEXT PRIMARY KEY,
     entity_type TEXT NOT NULL,
@@ -397,6 +417,13 @@ def _reorder_requests(get_conn):
     return rows
 
 
+def _sync_conflicts(get_conn):
+    conn = get_conn()
+    rows = [dict(r) for r in conn.execute("SELECT * FROM sync_conflicts").fetchall()]
+    conn.close()
+    return rows
+
+
 def _cursor(get_conn):
     conn = get_conn()
     row = conn.execute("SELECT last_seq FROM sync_cursor WHERE id=1").fetchone()
@@ -659,9 +686,15 @@ def test_pull_once_upserts_on_create(get_conn):
 
 
 def test_pull_once_upserts_on_update_overwriting_existing_row(get_conn):
+    # launch-readiness Phase 6 stage 6a-ii: row_version must strictly
+    # increase across the two events for the update to apply at all -- a
+    # real emitter (retail_api.py, since stage 6a-i) always bumps it in the
+    # same statement as the field change, so `row_version=2` on the update
+    # here is what a genuinely later edit actually looks like on the wire,
+    # not a magic number chosen to pass.
     cat_id = str(uuid.uuid4())
-    create_event = _pull_event(cat_id, "create", {"id": cat_id, "company_id": 1, "name": "Old Name", "description": ""})
-    update_event = _pull_event(cat_id, "update", {"id": cat_id, "company_id": 1, "name": "New Name", "description": "updated"})
+    create_event = _pull_event(cat_id, "create", {"id": cat_id, "company_id": 1, "name": "Old Name", "description": "", "row_version": 1})
+    update_event = _pull_event(cat_id, "update", {"id": cat_id, "company_id": 1, "name": "New Name", "description": "updated", "row_version": 2})
     client = FakeRelayClient(pull_responses=[{"events": [create_event], "cursor": 1}, {"events": [update_event], "cursor": 2}])
     service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
 
@@ -725,12 +758,18 @@ def test_pull_once_product_upsert_round_trips_supplier_id(get_conn):
 def test_pull_once_product_upsert_updates_supplier_id_on_conflict(get_conn):
     """The bug as it actually manifested: a create followed by an update
     that changes supplier_id must overwrite it on the receiving device, not
-    just apply it once and then silently ignore it forever after."""
+    just apply it once and then silently ignore it forever after.
+
+    launch-readiness Phase 6 stage 6a-ii: `row_version` must strictly
+    increase across create -> update, same reasoning as the category test
+    above -- a stale-or-equal incoming row_version is now discarded, not
+    applied, so the update payload has to carry a genuinely higher version
+    for this test to still exercise the overwrite it is named for."""
     pid = str(uuid.uuid4())
     supplier_a = str(uuid.uuid4())
     supplier_b = str(uuid.uuid4())
-    create_event = _pull_event_of("product", pid, "create", _product_payload(pid, supplier_id=supplier_a))
-    update_event = _pull_event_of("product", pid, "update", _product_payload(pid, supplier_id=supplier_b))
+    create_event = _pull_event_of("product", pid, "create", _product_payload(pid, supplier_id=supplier_a, row_version=1))
+    update_event = _pull_event_of("product", pid, "update", _product_payload(pid, supplier_id=supplier_b, row_version=2))
     client = FakeRelayClient(pull_responses=[
         {"events": [create_event], "cursor": 1},
         {"events": [update_event], "cursor": 2},
@@ -744,10 +783,16 @@ def test_pull_once_product_upsert_updates_supplier_id_on_conflict(get_conn):
 
 
 def test_pull_once_product_status_round_trips_through_soft_delete_then_restore(get_conn):
+    # launch-readiness Phase 6 stage 6a-ii: each of the three events must
+    # carry a strictly higher row_version than the one before it, same as
+    # retail_api.py's own delete_product/update_product bump on every real
+    # write -- a delete's row_version gate is on `_local_row_version`, not
+    # `excluded.row_version` (it is a bare UPDATE, not an UPSERT), but the
+    # "strictly greater or discarded" posture is identical.
     pid = str(uuid.uuid4())
-    create_event = _pull_event_of("product", pid, "create", _product_payload(pid))
-    delete_event = _pull_event_of("product", pid, "delete", {"id": pid})
-    restore_event = _pull_event_of("product", pid, "update", _product_payload(pid, status="active"))
+    create_event = _pull_event_of("product", pid, "create", _product_payload(pid, row_version=1))
+    delete_event = _pull_event_of("product", pid, "delete", {"id": pid, "row_version": 2})
+    restore_event = _pull_event_of("product", pid, "update", _product_payload(pid, status="active", row_version=3))
     client = FakeRelayClient(pull_responses=[
         {"events": [create_event], "cursor": 1},
         {"events": [delete_event], "cursor": 2},
@@ -766,11 +811,15 @@ def test_pull_once_product_status_round_trips_through_soft_delete_then_restore(g
 
 
 def test_pull_once_customer_status_round_trips_through_soft_delete_then_restore(get_conn):
+    # launch-readiness Phase 6 stage 6a-ii: same strictly-increasing
+    # row_version requirement as the product round trip above -- `base`
+    # itself deliberately carries no row_version so each event below states
+    # its own, rather than all three silently sharing one via `dict(base, ...)`.
     cust_id = str(uuid.uuid4())
     base = {"id": cust_id, "company_id": 1, "name": "Acme Co", "phone": "", "email": "", "address": ""}
-    create_event = _pull_event_of("customer", cust_id, "create", base)
-    delete_event = _pull_event_of("customer", cust_id, "delete", {"id": cust_id})
-    restore_event = _pull_event_of("customer", cust_id, "update", dict(base, status="active"))
+    create_event = _pull_event_of("customer", cust_id, "create", dict(base, row_version=1))
+    delete_event = _pull_event_of("customer", cust_id, "delete", {"id": cust_id, "row_version": 2})
+    restore_event = _pull_event_of("customer", cust_id, "update", dict(base, status="active", row_version=3))
     client = FakeRelayClient(pull_responses=[
         {"events": [create_event], "cursor": 1},
         {"events": [delete_event], "cursor": 2},
@@ -789,11 +838,13 @@ def test_pull_once_customer_status_round_trips_through_soft_delete_then_restore(
 
 
 def test_pull_once_supplier_status_round_trips_through_soft_delete_then_restore(get_conn):
+    # launch-readiness Phase 6 stage 6a-ii: same reasoning as the customer
+    # round trip above.
     sup_id = str(uuid.uuid4())
     base = {"id": sup_id, "company_id": 1, "name": "Acme Supply Co", "phone": "", "email": "", "address": ""}
-    create_event = _pull_event_of("supplier", sup_id, "create", base)
-    delete_event = _pull_event_of("supplier", sup_id, "delete", {"id": sup_id})
-    restore_event = _pull_event_of("supplier", sup_id, "update", dict(base, status="active"))
+    create_event = _pull_event_of("supplier", sup_id, "create", dict(base, row_version=1))
+    delete_event = _pull_event_of("supplier", sup_id, "delete", {"id": sup_id, "row_version": 2})
+    restore_event = _pull_event_of("supplier", sup_id, "update", dict(base, status="active", row_version=3))
     client = FakeRelayClient(pull_responses=[
         {"events": [create_event], "cursor": 1},
         {"events": [delete_event], "cursor": 2},
@@ -843,15 +894,18 @@ def test_pull_once_reorder_request_round_trips_through_accept(get_conn):
     event (status='pending'), then an update event (status='accepted',
     resolved_at set) -- both must be visible here, and there must still be
     only one row, not two."""
+    # launch-readiness Phase 6 stage 6a-ii: row_version must strictly
+    # increase from create (1) to the accept update (2), same reasoning as
+    # the category/product/customer/supplier tests above.
     rid = str(uuid.uuid4())
     pid = str(uuid.uuid4())
     create_event = _pull_event_of("reorder_request", rid, "create", {
         "id": rid, "branch_id": 1, "product_id": pid, "status": "pending",
-        "draft_message": "Stock low.", "resolved_at": None,
+        "draft_message": "Stock low.", "resolved_at": None, "row_version": 1,
     })
     accept_event = _pull_event_of("reorder_request", rid, "update", {
         "id": rid, "branch_id": 1, "product_id": pid, "status": "accepted",
-        "draft_message": "Stock low.", "resolved_at": "2026-08-12T00:00:00+00:00",
+        "draft_message": "Stock low.", "resolved_at": "2026-08-12T00:00:00+00:00", "row_version": 2,
     })
     client = FakeRelayClient(pull_responses=[
         {"events": [create_event], "cursor": 1},
@@ -870,15 +924,17 @@ def test_pull_once_reorder_request_round_trips_through_accept(get_conn):
 
 
 def test_pull_once_reorder_request_round_trips_through_decline(get_conn):
+    # launch-readiness Phase 6 stage 6a-ii: same reasoning as the accept
+    # round trip above.
     rid = str(uuid.uuid4())
     pid = str(uuid.uuid4())
     create_event = _pull_event_of("reorder_request", rid, "create", {
         "id": rid, "branch_id": 1, "product_id": pid, "status": "pending",
-        "draft_message": "Stock low.", "resolved_at": None,
+        "draft_message": "Stock low.", "resolved_at": None, "row_version": 1,
     })
     decline_event = _pull_event_of("reorder_request", rid, "update", {
         "id": rid, "branch_id": 1, "product_id": pid, "status": "declined",
-        "draft_message": "Stock low.", "resolved_at": "2026-08-12T00:00:00+00:00",
+        "draft_message": "Stock low.", "resolved_at": "2026-08-12T00:00:00+00:00", "row_version": 2,
     })
     client = FakeRelayClient(pull_responses=[
         {"events": [create_event], "cursor": 1},
@@ -2025,3 +2081,565 @@ def test_a_differently_configured_instance_applies_what_the_first_ignored(get_co
     service_b.pull_once()
 
     assert len(_customers(get_conn)) == 1
+
+
+# ── launch-readiness Phase 6 stage 6a-ii: reject-stale gate for the five
+# catalogue types (docs/launch-readiness/phase6-catalogue-correctness.md,
+# Task A/B/C) ────────────────────────────────────────────────────────────
+#
+# Stage 6a-i (adcb712) made row_version REAL: every catalogue write site
+# bumps it in the same statement as the field change, and the apply side
+# carries it through -- but still applies with plain last-write-wins
+# (`ON CONFLICT(id) DO UPDATE`, no gate). This stage switches the gate on:
+# apply only when incoming row_version is strictly greater than local,
+# identical posture to wave B2's `user` branch (`WHERE excluded.row_version
+# > users.row_version`). A discarded row is NOT an error and NOT a silent
+# drop -- it writes a `sync_conflicts` entry (Task B) and the batch logs
+# once (Task B), not once per row, matching `_log_branch_fallback_summary`'s
+# own reasoning above.
+#
+# Task C is explicit that the ALLOW half is the one that matters -- a gate
+# mutated to `WHERE 0` passes every "stale is rejected" test while silently
+# discarding the ENTIRE catalogue, exactly the wave B2 `user` gate shape
+# already proved once. The two tests immediately below (category, product)
+# are the ones that mutation-proof pins down: with the real gate's `WHERE
+# excluded.row_version > <table>.row_version` mutated to `WHERE 0`, ONLY
+# these two go red while every DENY-half/create/delete test in this section
+# stays green. See this stage's own report for the RED/GREEN transcript.
+
+def test_category_update_with_genuinely_higher_row_version_applies_every_field(get_conn):
+    """THE headline proof (Task C #1): a genuinely newer incoming
+    row_version must still apply, and EVERY synced column must take the
+    incoming value, not merely row_version itself. Mutating the gate's
+    `WHERE excluded.row_version > categories.row_version` to `WHERE 0` must
+    turn ONLY this test (and its product twin below) red."""
+    cat_id = str(uuid.uuid4())
+    create_event = _pull_event(cat_id, "create", {
+        "id": cat_id, "company_id": 1, "name": "Old Name", "description": "old desc",
+        "row_version": 1, "updated_at_utc": "2026-08-01T00:00:00+00:00",
+    })
+    update_event = _pull_event(cat_id, "update", {
+        "id": cat_id, "company_id": 1, "name": "New Name", "description": "new desc",
+        "row_version": 2, "updated_at_utc": "2026-08-02T00:00:00+00:00",
+    })
+    client = FakeRelayClient(pull_responses=[
+        {"events": [create_event], "cursor": 1},
+        {"events": [update_event], "cursor": 2},
+    ])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+    service.pull_once()
+
+    rows = _categories(get_conn)
+    assert len(rows) == 1
+    assert rows[0]["name"] == "New Name"
+    assert rows[0]["description"] == "new desc"
+    assert rows[0]["row_version"] == 2
+    assert rows[0]["updated_at_utc"] == "2026-08-02T00:00:00+00:00"
+    assert _sync_conflicts(get_conn) == [], "a genuinely newer row must never write a conflict entry"
+
+
+def test_product_update_with_genuinely_higher_row_version_applies_every_field(get_conn):
+    """The second of Task C #1's "at least two entity types" -- same
+    headline proof as the category test above, for `product`."""
+    pid = str(uuid.uuid4())
+    cat_a, cat_b = str(uuid.uuid4()), str(uuid.uuid4())
+    sup_a, sup_b = str(uuid.uuid4()), str(uuid.uuid4())
+    create_payload = _product_payload(
+        pid, sku="SKU-OLD", barcode="OLD-BC", name="Old Widget", category_id=cat_a,
+        supplier_id=sup_a, cost_price=1.0, sell_price=2.0, tax_rate=0, unit="pcs",
+        reorder_level=5, reorder_method="none", status="active",
+        row_version=1, updated_at_utc="2026-08-01T00:00:00+00:00",
+    )
+    update_payload = _product_payload(
+        pid, sku="SKU-NEW", barcode="NEW-BC", name="New Widget", category_id=cat_b,
+        supplier_id=sup_b, cost_price=9.0, sell_price=19.99, tax_rate=0.05, unit="box",
+        reorder_level=10, reorder_method="auto", status="active",
+        row_version=2, updated_at_utc="2026-08-02T00:00:00+00:00",
+    )
+    create_event = _pull_event_of("product", pid, "create", create_payload)
+    update_event = _pull_event_of("product", pid, "update", update_payload)
+    client = FakeRelayClient(pull_responses=[
+        {"events": [create_event], "cursor": 1},
+        {"events": [update_event], "cursor": 2},
+    ])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+    service.pull_once()
+
+    rows = _products(get_conn)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["sku"] == "SKU-NEW"
+    assert row["barcode"] == "NEW-BC"
+    assert row["name"] == "New Widget"
+    assert row["category_id"] == cat_b
+    assert row["supplier_id"] == sup_b
+    assert row["cost_price"] == 9.0
+    assert row["sell_price"] == 19.99
+    assert row["tax_rate"] == 0.05
+    assert row["unit"] == "box"
+    assert row["reorder_level"] == 10
+    assert row["reorder_method"] == "auto"
+    assert row["row_version"] == 2
+    assert row["updated_at_utc"] == "2026-08-02T00:00:00+00:00"
+    assert _sync_conflicts(get_conn) == [], "a genuinely newer row must never write a conflict entry"
+
+
+def test_category_update_with_lower_row_version_is_discarded_byte_unchanged(get_conn):
+    """Task C #2 (DENY, lower): compared as a WHOLE ROW, not field-by-field
+    -- a discard that changed even ONE column nobody thought to assert on
+    would slip past a narrower check."""
+    cat_id = str(uuid.uuid4())
+    create_event = _pull_event(cat_id, "create", {
+        "id": cat_id, "company_id": 1, "name": "Kept Name", "description": "kept desc",
+        "row_version": 5, "updated_at_utc": "2026-08-05T00:00:00+00:00",
+    })
+    stale_event = _pull_event(cat_id, "update", {
+        "id": cat_id, "company_id": 1, "name": "Stale Name", "description": "stale desc",
+        "row_version": 3, "updated_at_utc": "2026-08-03T00:00:00+00:00",
+    })
+    client = FakeRelayClient(pull_responses=[
+        {"events": [create_event], "cursor": 1},
+        {"events": [stale_event], "cursor": 2},
+    ])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+    before = _categories(get_conn)[0]
+    service.pull_once()
+    after = _categories(get_conn)[0]
+
+    assert after == before, (
+        f"a stale (lower row_version) update must leave the row byte-unchanged: {before} -> {after}")
+    assert _cursor(get_conn) == 2, "the cursor must still advance past a discarded row"
+
+
+def test_category_update_with_equal_row_version_is_discarded_byte_unchanged(get_conn):
+    """Task C #2 (DENY, equal) -- `>`, not `>=`: an incoming row_version
+    EQUAL to local must also be discarded, matching wave B2's `user` branch
+    (`WHERE excluded.row_version > users.row_version`, strictly greater)."""
+    cat_id = str(uuid.uuid4())
+    create_event = _pull_event(cat_id, "create", {
+        "id": cat_id, "company_id": 1, "name": "Kept Name", "description": "kept desc",
+        "row_version": 5, "updated_at_utc": "2026-08-05T00:00:00+00:00",
+    })
+    equal_event = _pull_event(cat_id, "update", {
+        "id": cat_id, "company_id": 1, "name": "Equal-Version Name", "description": "equal desc",
+        "row_version": 5, "updated_at_utc": "2026-08-06T00:00:00+00:00",
+    })
+    client = FakeRelayClient(pull_responses=[
+        {"events": [create_event], "cursor": 1},
+        {"events": [equal_event], "cursor": 2},
+    ])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+    before = _categories(get_conn)[0]
+    service.pull_once()
+    after = _categories(get_conn)[0]
+
+    assert after == before, (
+        f"an EQUAL row_version update must also be discarded, not applied: {before} -> {after}")
+
+
+def test_product_update_with_lower_row_version_is_discarded_byte_unchanged(get_conn):
+    """Task C #2 (DENY, lower), for `product` -- the second entity type."""
+    pid = str(uuid.uuid4())
+    create_event = _pull_event_of("product", pid, "create",
+                                   _product_payload(pid, name="Kept", row_version=5))
+    stale_event = _pull_event_of("product", pid, "update",
+                                  _product_payload(pid, name="Stale", sell_price=999, row_version=2))
+    client = FakeRelayClient(pull_responses=[
+        {"events": [create_event], "cursor": 1},
+        {"events": [stale_event], "cursor": 2},
+    ])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+    before = _products(get_conn)[0]
+    service.pull_once()
+    after = _products(get_conn)[0]
+
+    assert after == before, f"a stale product update must leave the row byte-unchanged: {before} -> {after}"
+
+
+def test_device_a_price_change_survives_a_stale_push_from_a_device_b_that_was_offline(get_conn):
+    """Task C #3 -- the exact scenario launch-readiness Phase 6 exists to
+    fix (docs/launch-readiness/phase6-catalogue-correctness.md, "The
+    problem, in shop terms"): device A changes a product's PRICE and syncs
+    it out (row_version bumped, stage 6a-i). Device B was offline while A's
+    edit happened and, on reconnecting, pushes its OWN stale copy of the
+    same product -- the ORIGINAL price, at the row_version it had before it
+    went offline. Before this stage, B's stale push would silently win
+    (ON CONFLICT(id) DO UPDATE, plain last-write-wins) and the shop would
+    sell at the old price until a human noticed. After this stage, B's push
+    is discarded and A's price survives."""
+    pid = str(uuid.uuid4())
+    original = _pull_event_of("product", pid, "create", _product_payload(
+        pid, sell_price=10.00, row_version=1, updated_at_utc="2026-08-01T00:00:00+00:00"))
+
+    # Device A's price change, relayed to THIS device with a genuinely
+    # bumped row_version -- exactly what retail_api.py's update_product does
+    # since stage 6a-i.
+    device_a_price_change = _pull_event_of("product", pid, "update", _product_payload(
+        pid, sell_price=12.50, row_version=2, updated_at_utc="2026-08-10T00:00:00+00:00"))
+
+    # Device B never saw A's edit -- it pushes its own copy, still at the
+    # ORIGINAL price and the ORIGINAL row_version it had before going offline.
+    device_b_stale_push = _pull_event_of("product", pid, "update", _product_payload(
+        pid, sell_price=10.00, row_version=1, updated_at_utc="2026-08-01T00:00:00+00:00"))
+
+    client = FakeRelayClient(pull_responses=[
+        {"events": [original], "cursor": 1},
+        {"events": [device_a_price_change], "cursor": 2},
+        {"events": [device_b_stale_push], "cursor": 3},
+    ])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+    assert _products(get_conn)[0]["sell_price"] == 10.00
+
+    service.pull_once()
+    assert _products(get_conn)[0]["sell_price"] == 12.50, "device A's price change must apply"
+
+    service.pull_once()  # device B's stale, offline push
+    row = _products(get_conn)[0]
+    assert row["sell_price"] == 12.50, (
+        f"device B's stale, offline copy silently reverted the shop's price to "
+        f"{row['sell_price']} -- this is the exact bug launch-readiness Phase 6 exists to fix")
+    assert row["row_version"] == 2, "the local row_version must still reflect A's write, not B's stale one"
+
+    conflicts = _sync_conflicts(get_conn)
+    assert len(conflicts) == 1
+    assert conflicts[0]["entity_type"] == "product"
+    assert conflicts[0]["entity_id"] == pid
+    assert conflicts[0]["event_type"] == "update"
+    assert conflicts[0]["local_row_version"] == 2
+    assert conflicts[0]["incoming_row_version"] == 1
+    assert json.loads(conflicts[0]["incoming_payload"])["sell_price"] == 10.00
+
+
+def test_create_for_a_never_before_seen_id_lands_even_at_row_version_1(get_conn):
+    """Task C #4: the INSERT half of the gated UPSERT is never subject to
+    the WHERE clause -- a `create` for an id this device has never seen has
+    no local row to be "stale" against, so it must land regardless of how
+    low its own row_version is (an emitter that predates stage 6a-i's bump
+    would send no row_version at all, falling back to 1 -- see `p.get(
+    "row_version") or 1` in every catalogue branch)."""
+    cat_id = str(uuid.uuid4())
+    event = _pull_event(cat_id, "create", {
+        "id": cat_id, "company_id": 1, "name": "Brand New", "description": "", "row_version": 1,
+    })
+    client = FakeRelayClient(pull_responses=[{"events": [event], "cursor": 1}])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+
+    rows = _categories(get_conn)
+    assert len(rows) == 1
+    assert rows[0]["name"] == "Brand New"
+    assert _sync_conflicts(get_conn) == [], "a create for an unseen id must never be treated as a conflict"
+
+
+def test_stale_delete_does_not_revert_a_newer_edit(get_conn):
+    """Task C #5 (first half): the three soft-deletes (product/customer/
+    supplier) stamp row_version on the sender -- a delete arriving with a
+    LOWER row_version than an edit this device already applied must not
+    revert that edit to inactive."""
+    pid = str(uuid.uuid4())
+    create_event = _pull_event_of("product", pid, "create", _product_payload(pid, row_version=1))
+    newer_edit = _pull_event_of("product", pid, "update", _product_payload(
+        pid, name="Edited After The Delete Was Sent", row_version=5))
+    stale_delete = _pull_event_of("product", pid, "delete", {"id": pid, "row_version": 3})
+
+    client = FakeRelayClient(pull_responses=[
+        {"events": [create_event], "cursor": 1},
+        {"events": [newer_edit], "cursor": 2},
+        {"events": [stale_delete], "cursor": 3},
+    ])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+    service.pull_once()
+    assert _products(get_conn)[0]["status"] == "active"
+
+    service.pull_once()  # the stale delete
+    row = _products(get_conn)[0]
+    assert row["status"] == "active", "a stale delete must not revert a newer edit to inactive"
+    assert row["row_version"] == 5, "the stale delete must not overwrite the newer row_version either"
+
+    conflicts = _sync_conflicts(get_conn)
+    assert len(conflicts) == 1
+    assert conflicts[0]["event_type"] == "delete"
+    assert conflicts[0]["local_row_version"] == 5
+    assert conflicts[0]["incoming_row_version"] == 3
+
+
+def test_genuinely_newer_delete_still_soft_deletes(get_conn):
+    """Task C #5 (second half): a delete with a genuinely HIGHER row_version
+    than local must still take effect -- the gate must not accidentally
+    block every delete, only stale ones."""
+    pid = str(uuid.uuid4())
+    create_event = _pull_event_of("product", pid, "create", _product_payload(pid, row_version=1))
+    real_delete = _pull_event_of("product", pid, "delete", {"id": pid, "row_version": 2})
+
+    client = FakeRelayClient(pull_responses=[
+        {"events": [create_event], "cursor": 1},
+        {"events": [real_delete], "cursor": 2},
+    ])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+    service.pull_once()
+
+    row = _products(get_conn)[0]
+    assert row["status"] == "inactive"
+    assert row["row_version"] == 2
+    assert _sync_conflicts(get_conn) == []
+
+
+def test_multiple_stale_catalogue_rows_in_one_batch_log_one_summary_warning_not_one_per_row(get_conn, caplog):
+    """Task B/C #6: same reasoning, same fix shape, as
+    test_unresolved_branch_fallback_logs_one_summary_warning_per_batch_not_per_row
+    above -- a WARNING repeated once per discarded row is the same as no log
+    at all on a busy multi-device install. Three catalogue rows (two
+    products, one category) are pushed stale in the SAME pull batch; the fix
+    must log exactly ONE summary WARNING, while every discarded row still
+    gets its OWN `sync_conflicts` entry -- the per-row detail lives in the
+    table, not in the log line."""
+    pid_a, pid_b = str(uuid.uuid4()), str(uuid.uuid4())
+    cat_id = str(uuid.uuid4())
+    seed_events = [
+        _pull_event_of("product", pid_a, "create", _product_payload(pid_a, row_version=5)),
+        _pull_event_of("product", pid_b, "create", _product_payload(pid_b, row_version=5)),
+        _pull_event(cat_id, "create", {
+            "id": cat_id, "company_id": 1, "name": "X", "description": "", "row_version": 5}),
+    ]
+    _apply(get_conn, seed_events, cursor=1, local_company_id="receiving-company")
+
+    stale_events = [
+        _pull_event_of("product", pid_a, "update", _product_payload(pid_a, name="stale a", row_version=1)),
+        _pull_event_of("product", pid_b, "update", _product_payload(pid_b, name="stale b", row_version=1)),
+        _pull_event(cat_id, "update", {
+            "id": cat_id, "company_id": 1, "name": "stale cat", "description": "", "row_version": 1}),
+    ]
+    with caplog.at_level("WARNING", logger="commercial_runtime.sync.sync_service"):
+        _apply(get_conn, stale_events, cursor=2, local_company_id="receiving-company")
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    conflict_warnings = [m for m in warnings if "discarded as stale" in m]
+    assert len(conflict_warnings) == 1, (
+        f"expected exactly ONE consolidated WARNING for a 3-row stale batch, got "
+        f"{len(conflict_warnings)}: {conflict_warnings}")
+    assert "3" in conflict_warnings[0]
+
+    conflicts = _sync_conflicts(get_conn)
+    assert len(conflicts) == 3, "each discarded row must still get its OWN sync_conflicts entry"
+    assert {c["entity_id"] for c in conflicts} == {pid_a, pid_b, cat_id}
+    for c in conflicts:
+        assert c["local_row_version"] == 5
+        assert c["incoming_row_version"] == 1
+
+
+def test_a_discarded_row_does_not_wedge_the_batch_cursor_advances_and_unrelated_events_land(get_conn):
+    """Task C #7: a discard must never wedge a batch -- same posture the
+    unhandled-entity-type gate and the money-moving quarantine path already
+    have (see this file's other cursor-advancement tests above). A single
+    event failing the reject-stale gate must not prevent every OTHER event
+    in the same batch from landing, and the cursor must still advance to the
+    batch's own returned value."""
+    stale_pid = str(uuid.uuid4())
+    unrelated_cat_id = str(uuid.uuid4())
+    seed = _pull_event_of("product", stale_pid, "create", _product_payload(stale_pid, row_version=5))
+    SyncService(lambda: FakeRelayClient(pull_responses=[{"events": [seed], "cursor": 1}]),
+                get_conn, lambda: "receiving-company").pull_once()
+
+    stale_update = _pull_event_of("product", stale_pid, "update",
+                                   _product_payload(stale_pid, name="should not land", row_version=1))
+    unrelated_create = _pull_event(unrelated_cat_id, "create", {
+        "id": unrelated_cat_id, "company_id": 1, "name": "Unrelated Category", "description": "",
+        "row_version": 1,
+    })
+    client = FakeRelayClient(pull_responses=[
+        {"events": [stale_update, unrelated_create], "cursor": 99},
+    ])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()  # must not raise
+
+    assert _products(get_conn)[0]["name"] != "should not land"
+    cats = _categories(get_conn)
+    assert len(cats) == 1 and cats[0]["id"] == unrelated_cat_id, (
+        "the unrelated category create must land in the SAME batch as the discarded product update")
+    assert _cursor(get_conn) == 99, (
+        "the cursor must advance to the whole batch's returned value, not stall on the discard")
+
+
+# ── launch-readiness Phase 6 stage 6a-ii follow-up: missing is not stale ───
+#
+# Retail's own catalogue sync tests (retail_product_sync_test.py,
+# retail_customer_sync_test.py, retail_supplier_sync_test.py) push a bare
+# `{"id": "..."}` delete payload -- NO `row_version` key at all -- against a
+# local row still at the schema `DEFAULT 1`. The ORIGINAL stage 6a-ii gate
+# coalesced a missing key to `p.get("row_version") or 1`, making that event
+# indistinguishable from a genuinely stale write at version 1: `1 > 1` is
+# false, so the write was silently DISCARDED (visible in `sync_conflicts`,
+# never applied) -- and on retail's fixtures, which predated `sync_conflicts`
+# existing at all, that discard path raised `sqlite3.OperationalError: no
+# such table: sync_conflicts` before the wrong-discard itself was even
+# visible.
+#
+# A payload with no `row_version` key predates stage 6a-i entirely --
+# already sitting in an outbox, in flight to the relay, or queued on a
+# device that upgrades mid-backlog. Missing is not stale; missing means
+# legacy, and legacy must still apply, or a shop upgrading with a backlog
+# silently loses real catalogue changes. The fix: the WHERE gate treats a
+# missing key as `NULL` (not 1) and always passes; `row_version=MAX(<table>.
+# row_version, excluded.row_version)` (not plain `excluded.row_version`)
+# keeps that legacy apply from regressing a counter that had legitimately
+# advanced past 1.
+
+def test_legacy_event_missing_row_version_key_applies_and_writes_no_conflict(get_conn):
+    """The first half: a legacy update (no `row_version` key at all) must
+    APPLY its other fields, not be silently discarded, and must never write
+    a `sync_conflicts` entry -- it was not rejected, it was applied."""
+    cat_id = str(uuid.uuid4())
+    create_event = _pull_event(cat_id, "create", {
+        "id": cat_id, "company_id": 1, "name": "Original", "description": "orig", "row_version": 1,
+    })
+    legacy_update = _pull_event(cat_id, "update", {
+        "id": cat_id, "company_id": 1, "name": "Legacy Field Update", "description": "legacy",
+        # deliberately NO "row_version" key -- a payload that predates stage 6a-i.
+    })
+    client = FakeRelayClient(pull_responses=[
+        {"events": [create_event], "cursor": 1},
+        {"events": [legacy_update], "cursor": 2},
+    ])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+    service.pull_once()
+
+    row = _categories(get_conn)[0]
+    assert row["name"] == "Legacy Field Update", "a legacy event must APPLY its other fields, not be discarded"
+    assert row["description"] == "legacy"
+    assert _sync_conflicts(get_conn) == [], (
+        "a legacy event was applied, not rejected -- it must never write a sync_conflicts entry")
+
+
+def test_legacy_create_for_a_never_before_seen_id_still_lands_at_row_version_1(get_conn):
+    """A `create` event that predates stage 6a-i (no `row_version` key) for
+    an id this device has never seen must still land -- there is no local
+    row to be "stale" against, and the NOT NULL row_version column falls
+    back to 1, exactly as it always has."""
+    cat_id = str(uuid.uuid4())
+    event = _pull_event(cat_id, "create", {
+        "id": cat_id, "company_id": 1, "name": "Legacy Create", "description": "",
+    })
+    client = FakeRelayClient(pull_responses=[{"events": [event], "cursor": 1}])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+
+    row = _categories(get_conn)[0]
+    assert row["name"] == "Legacy Create"
+    assert row["row_version"] == 1
+    assert _sync_conflicts(get_conn) == []
+
+
+def test_legacy_delete_missing_row_version_key_still_soft_deletes(get_conn):
+    """The EXACT production bug the coordinator found, reproduced at the
+    sync_service level: retail's own product/customer/supplier delete sync
+    tests push a bare `{"id": "..."}` delete payload -- no `row_version` key
+    -- against a local row at the schema DEFAULT (1). It must still
+    soft-delete."""
+    pid = str(uuid.uuid4())
+    create_event = _pull_event_of("product", pid, "create", _product_payload(pid))  # no row_version -> lands at 1
+    legacy_delete = _pull_event_of("product", pid, "delete", {"id": pid})  # no row_version key at all
+    client = FakeRelayClient(pull_responses=[
+        {"events": [create_event], "cursor": 1},
+        {"events": [legacy_delete], "cursor": 2},
+    ])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+    service.pull_once()
+
+    row = _products(get_conn)[0]
+    assert row["status"] == "inactive", "a legacy delete (no row_version key) must still soft-delete"
+    assert _sync_conflicts(get_conn) == []
+
+
+def test_legacy_event_does_not_regress_a_local_row_version_that_has_advanced(get_conn):
+    """THE subtle half: a local row that legitimately reached row_version 5
+    through real modern edits must not be pulled back down by an old,
+    un-versioned event applying its OTHER fields on top. This is the test
+    the `MAX(<table>.row_version, excluded.row_version)` -- vs. plain
+    `excluded.row_version` -- mutation is proven against (see this stage's
+    own report for the RED/GREEN transcript)."""
+    pid = str(uuid.uuid4())
+    create_event = _pull_event_of("product", pid, "create", _product_payload(pid, row_version=1))
+    # Four genuine modern edits, each bumping row_version by one -- exactly
+    # what real traffic looks like after stage 6a-i.
+    edit_events = [
+        _pull_event_of("product", pid, "update", _product_payload(pid, name=f"Edit {rv}", row_version=rv))
+        for rv in (2, 3, 4, 5)
+    ]
+    # No `row_version=` override at all -- genuinely missing the key, same
+    # as the production bug.
+    legacy_event = _pull_event_of("product", pid, "update", _product_payload(pid, name="Legacy Touch"))
+
+    pull_responses = [{"events": [create_event], "cursor": 1}]
+    pull_responses += [{"events": [e], "cursor": i} for i, e in enumerate(edit_events, start=2)]
+    pull_responses.append({"events": [legacy_event], "cursor": 6})
+    client = FakeRelayClient(pull_responses=pull_responses)
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    for _ in pull_responses:
+        service.pull_once()
+
+    row = _products(get_conn)[0]
+    assert row["row_version"] == 5, (
+        f"a legacy event must never regress a local row_version that had legitimately "
+        f"advanced to 5 -- got {row['row_version']}")
+    assert row["name"] == "Legacy Touch", "the legacy event's OTHER fields must still apply"
+    assert _sync_conflicts(get_conn) == []
+
+
+def test_modern_stale_or_equal_row_version_is_still_denied_after_the_legacy_fix(get_conn):
+    """Confirms the legacy fix did not loosen the deny half: a MODERN event
+    (an explicit, real `row_version` key) at a lower OR equal value than
+    local must still be discarded and still record a `sync_conflicts`
+    entry -- only a MISSING key gets the free pass, never an explicit low
+    one."""
+    cat_id = str(uuid.uuid4())
+    create_event = _pull_event(cat_id, "create", {
+        "id": cat_id, "company_id": 1, "name": "Kept", "description": "", "row_version": 5,
+    })
+    lower_event = _pull_event(cat_id, "update", {
+        "id": cat_id, "company_id": 1, "name": "Should Not Land (lower)", "description": "",
+        "row_version": 3,
+    })
+    equal_event = _pull_event(cat_id, "update", {
+        "id": cat_id, "company_id": 1, "name": "Should Not Land (equal)", "description": "",
+        "row_version": 5,
+    })
+    client = FakeRelayClient(pull_responses=[
+        {"events": [create_event], "cursor": 1},
+        {"events": [lower_event], "cursor": 2},
+        {"events": [equal_event], "cursor": 3},
+    ])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
+
+    service.pull_once()
+    service.pull_once()
+    service.pull_once()
+
+    row = _categories(get_conn)[0]
+    assert row["name"] == "Kept", "an explicit lower-or-equal row_version must still be denied"
+    conflicts = _sync_conflicts(get_conn)
+    assert len(conflicts) == 2, "each explicit stale write must still record its own sync_conflicts entry"
+    assert {c["incoming_row_version"] for c in conflicts} == {3, 5}

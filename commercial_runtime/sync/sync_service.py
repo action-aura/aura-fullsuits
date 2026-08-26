@@ -605,8 +605,18 @@ class SyncService:
         # keeps the exact same information -- every discarded uid, how many
         # times, where it landed -- at batch granularity instead.
         branch_fallbacks: list = []
+        # launch-readiness Phase 6 stage 6a-ii: every catalogue row
+        # `_apply_event`'s reject-stale gate DISCARDS this batch lands here,
+        # not just a WARNING -- see `_record_sync_conflict`'s own docstring
+        # for the full reasoning. Collected the identical way
+        # `branch_fallbacks` is collected just above (same `apply_pull_
+        # result` batch, same "one WARNING per batch, not per row" motive)
+        # so a busy multi-device install discarding many stale rows in one
+        # pull tick logs once, not once per row.
+        conflicts: list = []
         for ev in events:
-            self._apply_event(conn, ev, local_company_id, branch_fallback_sink=branch_fallbacks)
+            self._apply_event(conn, ev, local_company_id, branch_fallback_sink=branch_fallbacks,
+                               conflict_sink=conflicts)
         # Retried AFTER this batch's own events, not before: the whole point
         # of a batch containing the once-missing parent (e.g. an operator
         # replayed a quarantined sale from Owner's console) is that its
@@ -615,6 +625,8 @@ class SyncService:
         self._retry_quarantined_events(conn, local_company_id, branch_fallback_sink=branch_fallbacks)
         if branch_fallbacks:
             self._log_branch_fallback_summary(branch_fallbacks)
+        if conflicts:
+            self._log_sync_conflict_summary(conflicts)
         conn.execute("UPDATE sync_cursor SET last_seq=? WHERE id=1", (result["cursor"],))
 
     @staticmethod
@@ -644,6 +656,109 @@ class SyncService:
             len(branch_fallbacks), "; ".join(parts),
         )
 
+    @staticmethod
+    def _local_row_version(conn, table: str, row_id) -> Optional[int]:
+        """Returns THIS device's own current `row_version` for `table`'s row
+        with this PRIMARY KEY `id`, or None when no such row exists locally
+        yet. Used ONLY on the discard path of the five catalogue types'
+        reject-stale gate below -- the WHERE-gated UPSERT/UPDATE has already
+        decided whether to apply (SQLite leaves every column untouched when
+        an UPSERT's own WHERE evaluates false, or when a bare UPDATE's WHERE
+        does -- proved directly against sqlite3, not assumed; see the
+        `category`/`product` branches' own comments), so this is purely to
+        recover the LOCAL value a stale write was compared against, for
+        `sync_conflicts.local_row_version`.
+
+        A `cursor.rowcount == 0` from that gated statement is ambiguous on
+        its own -- it means EITHER "a local row existed and the incoming
+        version lost" OR, for a `delete` (a bare UPDATE, not an UPSERT --
+        there is no local-row-always-inserted half), "no local row exists
+        at all, nothing to soft-delete". Only the first is a conflict worth
+        a `sync_conflicts` entry; the second is the same silent no-op a
+        delete for an unseen id has always been, before this stage, and
+        stays one. Callers distinguish the two by checking this method's
+        return value: None means "no local row, not a conflict, do not
+        log"; a real integer means "a local row existed and rejected this
+        write".
+
+        `table` is always a literal string this module passes ("categories",
+        "products", "customers", "suppliers", "reorder_requests"), never
+        external input -- see `_row_exists`'s own comment for why the
+        f-string carries no injection risk (SQLite cannot parameterize a
+        table name). A falsy `row_id` returns None immediately, matching
+        `_row_exists`'s own posture on an absent key."""
+        if not row_id:
+            return None
+        row = conn.execute(f'SELECT row_version FROM "{table}" WHERE id=?', (row_id,)).fetchone()
+        return row[0] if row is not None else None
+
+    @staticmethod
+    def _record_sync_conflict(conn, conflict_sink: Optional[list], *, local_company_id,
+                               entity_type: str, entity_id, event_type: str,
+                               local_row_version: int, incoming_row_version, payload: dict) -> None:
+        """Writes ONE visible `sync_conflicts` row for a catalogue write
+        `_apply_event`'s reject-stale gate just discarded, instead of the
+        silent drop launch-readiness Phase 6 exists to replace (design §6:
+        "a visible `sync_conflicts` table instead of silent drops";
+        docs/launch-readiness/phase6-catalogue-correctness.md Task B).
+        Columns match `_migrate_add_sync_conflicts_and_drop_quantity_
+        reserved`'s own CREATE TABLE exactly (retail schema.py, v17) --
+        which row (`entity_type`/`entity_id`), which company, what kind of
+        write lost (`event_type`), the version comparison that caused the
+        rejection, when, and the full incoming payload so the conflict is
+        actually actionable and not just a number.
+
+        Storing `payload` verbatim is safe here specifically because none of
+        the five catalogue types' payloads ever carries a credential -- that
+        is only ever true of the registry-stream `user`/`user_permission`
+        events (a completely different sync stream, see the module
+        docstring's "Two-stream design" paragraph), never anything
+        `RETAIL_SYNC_ENTITY_TYPES` applies. Never call this for a `user` or
+        `user_permission` event.
+
+        `conflict_sink`, when given (always, from `apply_pull_result`'s own
+        loop; None only when a test calls `_apply_event` directly and does
+        not care), also collects `(entity_type, entity_id)` for `apply_pull_
+        result`'s own one-per-batch WARNING -- see `_log_sync_conflict_
+        summary` and `_resolve_branch_id`'s `fallback_sink` paragraph for
+        why a per-ROW log line is the wrong granularity here: the detail
+        this sink's caller needs already lives in the `sync_conflicts` row
+        this method just wrote."""
+        conn.execute(
+            "INSERT INTO sync_conflicts (id, company_id, entity_type, entity_id, event_type, "
+            "local_row_version, incoming_row_version, incoming_payload, detected_at_utc) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (str(uuid.uuid4()), local_company_id, entity_type, entity_id, event_type,
+             local_row_version, incoming_row_version, json.dumps(payload),
+             datetime.now(timezone.utc).isoformat()),
+        )
+        if conflict_sink is not None:
+            conflict_sink.append((entity_type, entity_id))
+
+    @staticmethod
+    def _log_sync_conflict_summary(conflicts: list) -> None:
+        """One WARNING for the whole batch, not one per discarded catalogue
+        row -- identical reasoning to `_log_branch_fallback_summary` above:
+        a busy multi-device install could discard many stale rows in a
+        single pull tick (every till that was offline while a price changed
+        elsewhere pushes its whole stale catalogue on reconnect), and a
+        WARNING repeated that many times is read by nobody, which is the
+        same as no log at all. The exact local/incoming `row_version` and
+        the discarded payload live in `sync_conflicts` itself (see
+        `_record_sync_conflict`) -- this line exists only so an operator
+        scanning logs can tell AT ALL that conflicts happened this batch,
+        grouped by `entity_type` so "12 product conflicts, 1 customer
+        conflict" reads at a glance instead of 13 identical lines."""
+        counts: dict = {}
+        for entity_type, _entity_id in conflicts:
+            counts[entity_type] = counts.get(entity_type, 0) + 1
+        parts = [f"{entity_type}={count}" for entity_type, count in counts.items()]
+        logger.warning(
+            "sync: %d catalogue row(s) this batch were discarded as stale (incoming row_version "
+            "not strictly greater than local); see sync_conflicts for detail. %s",
+            len(conflicts), ", ".join(parts),
+        )
+
     def _get_local_company_id(self) -> str:
         """Returns THIS device's own locally-authoritative company_id --
         never the pulled payload's. Raises rather than silently applying a
@@ -668,7 +783,8 @@ class SyncService:
         return company_id
 
     def _apply_event(self, conn, ev: dict, local_company_id: Optional[str] = None,
-                      branch_fallback_sink: Optional[list] = None) -> bool:
+                      branch_fallback_sink: Optional[list] = None,
+                      conflict_sink: Optional[list] = None) -> bool:
         """Applies one pulled event to a local table. Returns True when the
         event is FULLY handled -- inserted, upserted, a legitimate no-op
         (unknown entity_type, a non-`create` event on one of the five
@@ -685,7 +801,17 @@ class SyncService:
         that only care about "did this raise" (the main loop in
         apply_pull_result) can ignore the return value entirely; only
         `_retry_quarantined_events` uses it, to decide whether a previously
-        parked row may now be deleted."""
+        parked row may now be deleted.
+
+        `conflict_sink`, when given, is forwarded to `_record_sync_conflict`
+        for the five catalogue branches below (`category`/`product`/
+        `customer`/`supplier`/`reorder_request`) -- launch-readiness Phase 6
+        stage 6a-ii's reject-stale gate. A row discarded as stale writes a
+        `sync_conflicts` entry unconditionally (see that method's docstring
+        for why storing the payload is safe) and, when a sink is given,
+        appends to it for `apply_pull_result`'s own one-per-batch WARNING.
+        None is the correct default for a test or caller that only wants the
+        `sync_conflicts` row and does not care about the batch summary."""
         entity_type = ev.get("entity_type")
         # `self._handled_entity_types`, not a hardcoded tuple -- see the
         # module docstring's "Two-stream design" paragraph and `__init__`'s
@@ -708,34 +834,100 @@ class SyncService:
                 # module docstring's "Cross-device company_id bug fix" note.
                 #
                 # launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up):
-                # `row_version`/`updated_at_utc` are now CARRIED here -- the
+                # `row_version`/`updated_at_utc` are CARRIED here -- the
                 # sender's values overwrite this row's own, exactly like every
-                # other column above -- but this is still plain
-                # last-write-wins: no `WHERE excluded.row_version > ...` gate.
-                # That gate is stage 6a-ii, and it CANNOT be added before this
-                # carry exists, because until every device's copy of a row
-                # actually stores the version the LAST WRITER stamped, two
-                # devices' counters silently diverge (A bumps to 2 and emits,
-                # B's apply never wrote anything into row_version so B stays
-                # at 1) -- and a gate built on top of diverged counters would
-                # then reject B's own NEXT genuine edit as "stale" forever.
-                # `p.get("row_version") or 1` falls back to 1 for a payload
-                # that predates this column on the wire (an older emitter, or
-                # replayed history) -- never NULL into a NOT NULL column, and
-                # `or` (not a bare `.get(..., 1)`) also catches an explicit
-                # `0`/`None` value some future hand-built payload might carry.
-                # `updated_at_utc` has no such guard: the column is nullable
-                # and a missing payload value is honestly "this row's
-                # timestamp is not known from the wire", not a value to
-                # invent.
-                conn.execute(
+                # other column above. `p.get("row_version") or 1` falls back
+                # to 1 for a payload that predates this column on the wire
+                # (an older emitter, or replayed history) -- never NULL into
+                # a NOT NULL column, and `or` (not a bare `.get(..., 1)`)
+                # also catches an explicit `0`/`None` value some future
+                # hand-built payload might carry. `updated_at_utc` has no
+                # such guard: the column is nullable and a missing payload
+                # value is honestly "this row's timestamp is not known from
+                # the wire", not a value to invent.
+                #
+                # stage 6a-ii (this stage): `WHERE excluded.row_version >
+                # categories.row_version` on the DO UPDATE -- IDENTICAL
+                # posture to wave B2's `user` branch below (see that
+                # branch's own comment for the full reasoning: reject-stale,
+                # never last-write-wins, a lower-or-equal incoming version
+                # makes the whole UPDATE a no-op, proved directly against
+                # sqlite3). This has no effect on the INSERT half: a
+                # genuinely new id always lands, there is no local row to be
+                # "stale" against.
+                #
+                # stage 6a-ii follow-up (missing vs stale, 2026-08-26): a
+                # payload that predates 6a-i entirely -- already sitting in
+                # SOME device's outbox, in flight to the relay, or queued on
+                # a device that upgrades mid-backlog -- carries NO
+                # `row_version` key at all. The ORIGINAL gate coalesced that
+                # to `p.get("row_version") or 1`, which made a legacy event
+                # indistinguishable from a genuinely stale one at version 1:
+                # `1 > local` is false against any local row past its first
+                # write, so the legacy write was silently DISCARDED --
+                # visible in `sync_conflicts`, never applied. Missing is not
+                # stale; missing means legacy, and legacy must still apply
+                # (a shop upgrading mid-backlog must not lose real catalogue
+                # changes). `raw_row_version` below is `p.get("row_version")`
+                # verbatim -- genuinely `None` when the key is absent --
+                # kept SEPARATE from `insert_row_version` (`or 1`), which is
+                # still needed for the bare INSERT path: `row_version` is
+                # `NOT NULL`, so a brand-new row (no conflict at all) cannot
+                # bind `None` into it, and 1 is the correct starting value
+                # for a row this device has never seen, legacy or not.
+                # `raw_row_version` is bound TWICE more, only inside the
+                # WHERE clause -- `? IS NULL OR ? > categories.row_version`
+                # -- so a legacy event (`raw_row_version is None`) always
+                # passes the gate and its OTHER columns (name/description/
+                # updated_at_utc) apply via `excluded.*` as normal.
+                #
+                # `row_version=MAX(categories.row_version, excluded.row_version)`
+                # -- not plain `excluded.row_version` -- is what keeps the
+                # counter itself from REGRESSING on that legacy path:
+                # `excluded.row_version` there is `insert_row_version` (1,
+                # the "predates this column" fallback), and a local row that
+                # had legitimately reached row_version 5 must not be pulled
+                # back down to 1 by an old, un-versioned event applying its
+                # OTHER fields. For a genuinely modern write the WHERE
+                # clause has already proven `raw_row_version >
+                # categories.row_version`, so `MAX` there is a no-op (it
+                # always resolves to `excluded.row_version` anyway) --
+                # `MAX` only ever changes behaviour on the legacy path,
+                # which is exactly where it has to. Proved directly against
+                # sqlite3 both ways (this stage's own report has the
+                # transcript): with `MAX`, a legacy event on a row at
+                # row_version 5 leaves it at 5; with `MAX` replaced by plain
+                # `excluded.row_version`, it regresses to 1.
+                #
+                # `cur.rowcount == 0` after this statement can now ONLY mean
+                # a MODERN, genuinely stale write (a real `raw_row_version`
+                # that is <= local) -- a legacy write (`raw_row_version is
+                # None`) always satisfies the WHERE and so always reports
+                # rowcount 1, exactly like a brand-new id's plain INSERT.
+                # `sync_conflicts` therefore only ever records true
+                # conflicts, never a legacy event that was actually applied.
+                raw_row_version = p.get("row_version")
+                insert_row_version = raw_row_version if raw_row_version is not None else 1
+                cur = conn.execute(
                     "INSERT INTO categories (id, company_id, name, description, row_version, updated_at_utc) "
                     "VALUES (?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description, "
-                    "row_version=excluded.row_version, updated_at_utc=excluded.updated_at_utc",
+                    "row_version=MAX(categories.row_version, excluded.row_version), "
+                    "updated_at_utc=excluded.updated_at_utc "
+                    "WHERE ? IS NULL OR ? > categories.row_version",
                     (p.get("id"), local_company_id, p.get("name"), p.get("description", ""),
-                     p.get("row_version") or 1, p.get("updated_at_utc")),
+                     insert_row_version, p.get("updated_at_utc"),
+                     raw_row_version, raw_row_version),
                 )
+                if cur.rowcount == 0:
+                    local_row_version = self._local_row_version(conn, "categories", p.get("id"))
+                    if local_row_version is not None:
+                        self._record_sync_conflict(
+                            conn, conflict_sink, local_company_id=local_company_id,
+                            entity_type="category", entity_id=p.get("id"), event_type=event_type,
+                            local_row_version=local_row_version,
+                            incoming_row_version=raw_row_version, payload=p,
+                        )
             elif event_type == "delete":
                 # Hard DELETE -- the row is gone, so there is no row_version
                 # left to carry (tombstones/soft-delete-with-version are
@@ -759,10 +951,16 @@ class SyncService:
                 # entry, or a hand-built test payload) is treated as the
                 # column's own default, never as NULL.
                 # launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up):
-                # row_version/updated_at_utc carried through -- see the
-                # category branch's comment above for the full reasoning
-                # (still plain last-write-wins, no gate).
-                conn.execute(
+                # row_version/updated_at_utc carried through. stage 6a-ii
+                # (this stage): `WHERE excluded.row_version >
+                # products.row_version` gate, NULL-tolerant for a legacy
+                # (pre-6a-i) payload, `MAX`-protected against regressing the
+                # counter -- see the category branch's comment above for the
+                # full reasoning (identical shape, identical `cur.rowcount
+                # == 0` discard signal, identical missing-vs-stale fix).
+                raw_row_version = p.get("row_version")
+                insert_row_version = raw_row_version if raw_row_version is not None else 1
+                cur = conn.execute(
                     "INSERT INTO products (id, company_id, sku, barcode, name, category_id, supplier_id, "
                     "cost_price, sell_price, tax_rate, unit, reorder_level, reorder_method, status, "
                     "row_version, updated_at_utc) "
@@ -772,79 +970,197 @@ class SyncService:
                     "cost_price=excluded.cost_price, sell_price=excluded.sell_price, "
                     "tax_rate=excluded.tax_rate, unit=excluded.unit, reorder_level=excluded.reorder_level, "
                     "reorder_method=excluded.reorder_method, status=excluded.status, "
-                    "row_version=excluded.row_version, updated_at_utc=excluded.updated_at_utc",
+                    "row_version=MAX(products.row_version, excluded.row_version), "
+                    "updated_at_utc=excluded.updated_at_utc "
+                    "WHERE ? IS NULL OR ? > products.row_version",
                     (p.get("id"), local_company_id, p.get("sku"), p.get("barcode", ""), p.get("name"),
                      p.get("category_id"), p.get("supplier_id"), p.get("cost_price", 0), p.get("sell_price", 0),
                      p.get("tax_rate", 0), p.get("unit", "pcs"), p.get("reorder_level", 5),
                      p.get("reorder_method", "none"), p.get("status", "active"),
-                     p.get("row_version") or 1, p.get("updated_at_utc")),
+                     insert_row_version, p.get("updated_at_utc"),
+                     raw_row_version, raw_row_version),
                 )
+                if cur.rowcount == 0:
+                    local_row_version = self._local_row_version(conn, "products", p.get("id"))
+                    if local_row_version is not None:
+                        self._record_sync_conflict(
+                            conn, conflict_sink, local_company_id=local_company_id,
+                            entity_type="product", entity_id=p.get("id"), event_type=event_type,
+                            local_row_version=local_row_version,
+                            incoming_row_version=raw_row_version, payload=p,
+                        )
             elif event_type == "delete":
                 # A delete event also stamps row_version/updated_at_utc on
                 # its sending device (retail_api.py's delete_product) -- carry
                 # them here too, or a delete/restore cycle would leave B's
                 # counter behind exactly like an update would.
-                conn.execute(
-                    "UPDATE products SET status='inactive', row_version=?, updated_at_utc=? WHERE id=?",
-                    (p.get("row_version") or 1, p.get("updated_at_utc"), p.get("id")),
+                #
+                # stage 6a-ii: this soft-delete is a bare UPDATE, not an
+                # UPSERT (there is no "local row didn't exist" INSERT half
+                # to worry about) -- `WHERE id=? AND (? IS NULL OR ? >
+                # row_version)` gates it the same way the create/update
+                # branch above does: NULL-tolerant for a legacy delete (no
+                # `row_version` key at all -- see that branch's own comment
+                # for the full "missing is not stale" reasoning), a stale OR
+                # EQUAL MODERN version leaves the row untouched. `row_version
+                # =MAX(row_version, ?)` (bound to `insert_row_version`, the
+                # `or 1`-equivalent fallback) is the same never-regress
+                # protection: a legacy delete applying `status='inactive'`
+                # on a row already at row_version 5 must not pull the
+                # counter back down to 1.
+                #
+                # `cur.rowcount == 0` is ambiguous between "stale delete,
+                # local row exists" and "no local row at all, nothing to
+                # soft-delete" -- the SAME ambiguity the category/product
+                # create/update branches never have (their INSERT half
+                # always reports rowcount 1 for an unseen id, and a legacy
+                # delete now ALSO always reports rowcount 1 when the row
+                # exists, per the NULL-tolerant WHERE above). Resolved via
+                # `_local_row_version`'s own return value: None means no
+                # local row (the pre-existing, unlogged no-op for a delete
+                # of an unseen id -- unchanged by this stage), a real
+                # integer means a genuine MODERN stale-delete conflict worth
+                # an entry.
+                raw_row_version = p.get("row_version")
+                insert_row_version = raw_row_version if raw_row_version is not None else 1
+                cur = conn.execute(
+                    "UPDATE products SET status='inactive', "
+                    "row_version=MAX(row_version, ?), updated_at_utc=? "
+                    "WHERE id=? AND (? IS NULL OR ? > row_version)",
+                    (insert_row_version, p.get("updated_at_utc"), p.get("id"),
+                     raw_row_version, raw_row_version),
                 )
+                if cur.rowcount == 0:
+                    local_row_version = self._local_row_version(conn, "products", p.get("id"))
+                    if local_row_version is not None:
+                        self._record_sync_conflict(
+                            conn, conflict_sink, local_company_id=local_company_id,
+                            entity_type="product", entity_id=p.get("id"), event_type="delete",
+                            local_row_version=local_row_version,
+                            incoming_row_version=raw_row_version, payload=p,
+                        )
         elif entity_type == "customer":
             if event_type in ("create", "update"):
                 # `status` parameterized for the same reason as the product
                 # upsert above -- see that block's comment.
                 # launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up):
-                # row_version/updated_at_utc carried through -- see the
-                # category branch's comment above for the full reasoning
-                # (still plain last-write-wins, no gate). Note this is
+                # row_version/updated_at_utc carried through. Note this is
                 # DELIBERATELY distinct from total_spent/loyalty_points,
                 # which never appear in this payload at all -- see
                 # retail_api.py's create_sale comment on that accumulator.
-                conn.execute(
+                # stage 6a-ii (this stage): `WHERE excluded.row_version >
+                # customers.row_version` gate, NULL-tolerant + `MAX`-protected
+                # -- see the category branch's comment above for the full
+                # reasoning (missing-vs-stale, why `MAX` and not plain
+                # `excluded.row_version`).
+                raw_row_version = p.get("row_version")
+                insert_row_version = raw_row_version if raw_row_version is not None else 1
+                cur = conn.execute(
                     "INSERT INTO customers (id, company_id, name, phone, email, address, status, "
                     "row_version, updated_at_utc) "
                     "VALUES (?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone, "
                     "email=excluded.email, address=excluded.address, status=excluded.status, "
-                    "row_version=excluded.row_version, updated_at_utc=excluded.updated_at_utc",
+                    "row_version=MAX(customers.row_version, excluded.row_version), "
+                    "updated_at_utc=excluded.updated_at_utc "
+                    "WHERE ? IS NULL OR ? > customers.row_version",
                     (p.get("id"), local_company_id, p.get("name"), p.get("phone", ""),
                      p.get("email", ""), p.get("address", ""), p.get("status", "active"),
-                     p.get("row_version") or 1, p.get("updated_at_utc")),
+                     insert_row_version, p.get("updated_at_utc"),
+                     raw_row_version, raw_row_version),
                 )
+                if cur.rowcount == 0:
+                    local_row_version = self._local_row_version(conn, "customers", p.get("id"))
+                    if local_row_version is not None:
+                        self._record_sync_conflict(
+                            conn, conflict_sink, local_company_id=local_company_id,
+                            entity_type="customer", entity_id=p.get("id"), event_type=event_type,
+                            local_row_version=local_row_version,
+                            incoming_row_version=raw_row_version, payload=p,
+                        )
             elif event_type == "delete":
                 # See the product delete branch's comment above -- a delete
-                # event carries row_version/updated_at_utc too.
-                conn.execute(
-                    "UPDATE customers SET status='inactive', row_version=?, updated_at_utc=? WHERE id=?",
-                    (p.get("row_version") or 1, p.get("updated_at_utc"), p.get("id")),
+                # event carries row_version/updated_at_utc too, and stage
+                # 6a-ii gates it the identical way: NULL-tolerant WHERE,
+                # `MAX`-protected row_version, `_local_row_version`
+                # disambiguating "stale" from "no local row".
+                raw_row_version = p.get("row_version")
+                insert_row_version = raw_row_version if raw_row_version is not None else 1
+                cur = conn.execute(
+                    "UPDATE customers SET status='inactive', "
+                    "row_version=MAX(row_version, ?), updated_at_utc=? "
+                    "WHERE id=? AND (? IS NULL OR ? > row_version)",
+                    (insert_row_version, p.get("updated_at_utc"), p.get("id"),
+                     raw_row_version, raw_row_version),
                 )
+                if cur.rowcount == 0:
+                    local_row_version = self._local_row_version(conn, "customers", p.get("id"))
+                    if local_row_version is not None:
+                        self._record_sync_conflict(
+                            conn, conflict_sink, local_company_id=local_company_id,
+                            entity_type="customer", entity_id=p.get("id"), event_type="delete",
+                            local_row_version=local_row_version,
+                            incoming_row_version=raw_row_version, payload=p,
+                        )
         elif entity_type == "supplier":
             if event_type in ("create", "update"):
                 # `status` parameterized for the same reason as the product
                 # upsert above -- see that block's comment.
                 # launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up):
-                # row_version/updated_at_utc carried through -- see the
-                # category branch's comment above for the full reasoning
-                # (still plain last-write-wins, no gate). Distinct from
+                # row_version/updated_at_utc carried through. Distinct from
                 # credit_balance, which never appears in this payload -- see
                 # retail_api.py's `_adjust_credit`.
-                conn.execute(
+                # stage 6a-ii (this stage): `WHERE excluded.row_version >
+                # suppliers.row_version` gate, NULL-tolerant + `MAX`-protected
+                # -- see the category branch's comment above for the full
+                # reasoning.
+                raw_row_version = p.get("row_version")
+                insert_row_version = raw_row_version if raw_row_version is not None else 1
+                cur = conn.execute(
                     "INSERT INTO suppliers (id, company_id, name, phone, email, address, status, "
                     "row_version, updated_at_utc) "
                     "VALUES (?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone, "
                     "email=excluded.email, address=excluded.address, status=excluded.status, "
-                    "row_version=excluded.row_version, updated_at_utc=excluded.updated_at_utc",
+                    "row_version=MAX(suppliers.row_version, excluded.row_version), "
+                    "updated_at_utc=excluded.updated_at_utc "
+                    "WHERE ? IS NULL OR ? > suppliers.row_version",
                     (p.get("id"), local_company_id, p.get("name"), p.get("phone", ""),
                      p.get("email", ""), p.get("address", ""), p.get("status", "active"),
-                     p.get("row_version") or 1, p.get("updated_at_utc")),
+                     insert_row_version, p.get("updated_at_utc"),
+                     raw_row_version, raw_row_version),
                 )
+                if cur.rowcount == 0:
+                    local_row_version = self._local_row_version(conn, "suppliers", p.get("id"))
+                    if local_row_version is not None:
+                        self._record_sync_conflict(
+                            conn, conflict_sink, local_company_id=local_company_id,
+                            entity_type="supplier", entity_id=p.get("id"), event_type=event_type,
+                            local_row_version=local_row_version,
+                            incoming_row_version=raw_row_version, payload=p,
+                        )
             elif event_type == "delete":
                 # See the product delete branch's comment above -- a delete
-                # event carries row_version/updated_at_utc too.
-                conn.execute(
-                    "UPDATE suppliers SET status='inactive', row_version=?, updated_at_utc=? WHERE id=?",
-                    (p.get("row_version") or 1, p.get("updated_at_utc"), p.get("id")),
+                # event carries row_version/updated_at_utc too, gated the
+                # identical NULL-tolerant, `MAX`-protected way.
+                raw_row_version = p.get("row_version")
+                insert_row_version = raw_row_version if raw_row_version is not None else 1
+                cur = conn.execute(
+                    "UPDATE suppliers SET status='inactive', "
+                    "row_version=MAX(row_version, ?), updated_at_utc=? "
+                    "WHERE id=? AND (? IS NULL OR ? > row_version)",
+                    (insert_row_version, p.get("updated_at_utc"), p.get("id"),
+                     raw_row_version, raw_row_version),
                 )
+                if cur.rowcount == 0:
+                    local_row_version = self._local_row_version(conn, "suppliers", p.get("id"))
+                    if local_row_version is not None:
+                        self._record_sync_conflict(
+                            conn, conflict_sink, local_company_id=local_company_id,
+                            entity_type="supplier", entity_id=p.get("id"), event_type="delete",
+                            local_row_version=local_row_version,
+                            incoming_row_version=raw_row_version, payload=p,
+                        )
         elif entity_type == "reorder_request":
             # feat/reorder-automation-foundation. Only create/update ever
             # arrive for this entity -- there is no delete event type (see
@@ -857,19 +1173,35 @@ class SyncService:
             # the device that made the decision.
             if event_type in ("create", "update"):
                 # launch-readiness Phase 6 stage 6a-i (2026-08-26 follow-up):
-                # row_version/updated_at_utc carried through -- see the
-                # category branch's comment above for the full reasoning
-                # (still plain last-write-wins, no gate).
-                conn.execute(
+                # row_version/updated_at_utc carried through. stage 6a-ii
+                # (this stage): `WHERE excluded.row_version >
+                # reorder_requests.row_version` gate, NULL-tolerant +
+                # `MAX`-protected -- see the category branch's comment above
+                # for the full reasoning.
+                raw_row_version = p.get("row_version")
+                insert_row_version = raw_row_version if raw_row_version is not None else 1
+                cur = conn.execute(
                     "INSERT INTO reorder_requests (id, company_id, branch_id, product_id, status, "
                     "draft_message, resolved_at, row_version, updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET status=excluded.status, "
                     "draft_message=excluded.draft_message, resolved_at=excluded.resolved_at, "
-                    "row_version=excluded.row_version, updated_at_utc=excluded.updated_at_utc",
+                    "row_version=MAX(reorder_requests.row_version, excluded.row_version), "
+                    "updated_at_utc=excluded.updated_at_utc "
+                    "WHERE ? IS NULL OR ? > reorder_requests.row_version",
                     (p.get("id"), local_company_id, p.get("branch_id"), p.get("product_id"),
                      p.get("status", "pending"), p.get("draft_message"), p.get("resolved_at"),
-                     p.get("row_version") or 1, p.get("updated_at_utc")),
+                     insert_row_version, p.get("updated_at_utc"),
+                     raw_row_version, raw_row_version),
                 )
+                if cur.rowcount == 0:
+                    local_row_version = self._local_row_version(conn, "reorder_requests", p.get("id"))
+                    if local_row_version is not None:
+                        self._record_sync_conflict(
+                            conn, conflict_sink, local_company_id=local_company_id,
+                            entity_type="reorder_request", entity_id=p.get("id"), event_type=event_type,
+                            local_row_version=local_row_version,
+                            incoming_row_version=raw_row_version, payload=p,
+                        )
         elif entity_type == "sale":
             # Money is an immutable business fact, not a mutable row (see the
             # module docstring's Phase 5 note) -- a completed sale is

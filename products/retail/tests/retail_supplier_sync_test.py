@@ -185,6 +185,20 @@ def test_pulled_supplier_delete_soft_deletes_and_never_touches_a_row_this_device
             FOREIGN KEY (supplier_id) REFERENCES suppliers(id));
         CREATE TABLE sync_cursor (id INTEGER PRIMARY KEY CHECK (id=1), last_seq INTEGER NOT NULL DEFAULT 0);
         INSERT INTO sync_cursor (id, last_seq) VALUES (1, 0);
+        -- launch-readiness Phase 6 stage 6a-ii: `sync_conflicts`, shaped
+        -- exactly like _migrate_add_sync_conflicts_and_drop_quantity_reserved's
+        -- own CREATE TABLE (products/retail/backend/database/schema.py, v17).
+        -- The supplier delete branch's reject-stale gate can legitimately
+        -- write a row here on a genuine (non-legacy) stale discard, so this
+        -- hand-built fixture -- which predates v17 the same way it predated
+        -- the row_version columns above -- has to carry the table forward
+        -- too, or it raises `sqlite3.OperationalError: no such table:
+        -- sync_conflicts` the moment that path is reached.
+        CREATE TABLE sync_conflicts (
+            id TEXT PRIMARY KEY, company_id INTEGER, entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL, event_type TEXT NOT NULL, local_row_version INTEGER,
+            incoming_row_version INTEGER, incoming_payload TEXT NOT NULL, detected_at_utc TEXT NOT NULL
+        );
     """)
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("INSERT INTO suppliers (id,company_id,name,status) VALUES ('s-1',9,'TechDistrib','active')")
