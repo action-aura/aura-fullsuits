@@ -6,7 +6,9 @@ product in this suite: `users` (multi-tenant accounts), `company_modules`
 (per-tenant product/module licensing), `user_permissions` (per-user subsystem
 access), `audit_logs` (append-oriented security/audit trail), `secure_links`
 (one-time employee-invite tokens), `company_settings` (locale/business
-fields written by onboarding).
+fields written by onboarding), `sync_outbox`/`sync_cursor` (v5, Phase 5 wave
+B2 stage 1 -- registry.db's OWN outbox/cursor pair, mirroring retail.db's;
+see registry_sync_schema.py -- schema only, nothing writes through it yet).
 
 This is a deliberately trimmed extraction of Action Aura Enterprise's
 database/registry_db.py (which owns ~20 tables for the full platform --
@@ -49,7 +51,17 @@ DB_PATH = os.path.join(_db_dir, 'registry.db')
 # Retail's own v14 (products/retail/backend/database/schema.py) is
 # deliberately inert until this lands -- it only ever converges onto a
 # tenant key THIS migration has already adopted, never the other way round.
-REGISTRY_SCHEMA_VERSION = 4
+# v5: registry.db gets its own `sync_outbox`/`sync_cursor` -- Phase 5 wave
+# B2 stage 1, reserved in ROADMAP.md's 2026-08-21 ledger. `users` lives here,
+# not in retail.db, so its future sync stream needs its own outbox in the
+# SAME file as the row it will queue an event for -- ATTACH-ing registry.db
+# to the retail connection was considered and ruled out (both databases run
+# WAL mode; SQLite gives no cross-database atomic commit once either side
+# is in WAL). See registry_sync_schema.py and
+# docs/launch-readiness/phase5-waveb2-user-sync.md §Decision 1. This
+# migration builds ONLY the schema -- no `user` entity type, no user sync
+# event, no write-site change; that is wave B2 stage 2.
+REGISTRY_SCHEMA_VERSION = 5
 
 
 def _migrate_registry_schema(conn):
@@ -58,10 +70,10 @@ def _migrate_registry_schema(conn):
     behind REGISTRY_SCHEMA_VERSION, same "run every step, each
     independently idempotent" shape as products/retail/backend/database/
     schema.py::_migrate_retail_schema. A v0 (pre-user_version) database
-    upgrading straight to v4 runs all four steps in one pass.
+    upgrading straight to v5 runs all five steps in one pass.
 
     New steps are appended LAST and never reordered: a database that is
-    already at v2 still runs v1 and v2 on its way to v4 (there is one
+    already at v2 still runs v1 and v2 on its way to v5 (there is one
     version gate for the whole function, not one per step), so each step has
     to be a no-op against a database that already has its changes -- which
     is exactly what each of them is.
@@ -72,15 +84,24 @@ def _migrate_registry_schema(conn):
     the rebind itself does not read them, running it before v3 would still
     mean it acts on a database whose account model is mid-upgrade -- the
     same "finish the schema shape before touching tenant identity" ordering
-    retail's v14 follows relative to its own v13."""
+    retail's v14 follows relative to its own v13.
+
+    v5 (registry_sync_schema.py) has no ordering dependency on v1-v4 at all
+    -- it only ever creates two brand-new tables (`sync_outbox`/
+    `sync_cursor`) that nothing before it touches or reads -- but is still
+    appended last, per the same convention, so the "new steps go last"
+    invariant stays simple to reason about rather than needing a case-by-case
+    justification for every future step's position."""
     from commercial_runtime.identity.device_registry import apply_identity_device_schema
     from commercial_runtime.identity.verification_schema import apply_email_verification_schema
     from commercial_runtime.identity.account_schema import apply_account_schema
     from commercial_runtime.identity.company_rebind import _migrate_rebind_registry_company_id_to_owner_issued
+    from commercial_runtime.identity.registry_sync_schema import apply_registry_sync_schema
     apply_identity_device_schema(conn)
     apply_email_verification_schema(conn)
     apply_account_schema(conn)
     _migrate_rebind_registry_company_id_to_owner_issued(conn)
+    apply_registry_sync_schema(conn)
 
 
 def get_conn():

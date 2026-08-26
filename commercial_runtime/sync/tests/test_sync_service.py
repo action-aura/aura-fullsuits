@@ -19,6 +19,7 @@ import pytest
 from commercial_runtime.sync.relay_client import NetworkError, RelayRejected
 from commercial_runtime.sync.sync_service import (
     _PUSH_CHUNK_SIZE,
+    RETAIL_SYNC_ENTITY_TYPES,
     SyncService,
     get_active_health,
     nudge,
@@ -1860,3 +1861,150 @@ def test_money_entity_apply_never_touches_the_pre_existing_five_catalogue_types(
         assert after[table] == before[table], (
             f"{table} changed from {before[table]} to {after[table]} "
             f"on a money-entity-only batch")
+
+
+# ── Phase 5 wave B2 stage 1: cross-stream entity-type allowlist ────────────
+#
+# A second SyncService instance will eventually pull the SAME relay stream
+# from a DIFFERENT database (registry.db, syncing `users` -- see
+# sync_service.py's module docstring "Two-stream design" paragraph and
+# docs/launch-readiness/phase5-waveb2-user-sync.md). `_apply_event`
+# dispatches on entity_type alone, so each instance has to know which events
+# are its OWN, or a foreign-stream event reaching a branch that writes a
+# table THIS instance's database doesn't have would wedge every device's
+# cursor forever (wave A's defect #1, reproduced by construction the moment
+# a second stream exists).
+#
+# Stage 1 adds no new entity type at all -- "product" and "customer" stand
+# in here for "a type this instance handles" and "a type belonging to the
+# OTHER stream" (both are already fully wired in this fixture, with real
+# tables and helpers above), proving the `handled_entity_types` mechanism
+# itself is genuinely parameterised rather than merely "ignore everything
+# unusual".
+
+def _product_event(product_id=None, **overrides):
+    product_id = product_id or str(uuid.uuid4())
+    payload = {
+        "id": product_id, "company_id": 1, "sku": f"SKU-{product_id[:8]}", "barcode": "",
+        "name": "Widget", "category_id": None, "supplier_id": None, "cost_price": 1.0,
+        "sell_price": 2.0, "tax_rate": 0, "unit": "pcs", "reorder_level": 5,
+        "reorder_method": "none", "status": "active",
+    }
+    payload.update(overrides)
+    return _pull_event_of("product", product_id, "create", payload)
+
+
+def _customer_event(customer_id=None, **overrides):
+    customer_id = customer_id or str(uuid.uuid4())
+    payload = {
+        "id": customer_id, "company_id": 1, "name": "Alice", "phone": "",
+        "email": "", "address": "", "status": "active",
+    }
+    payload.update(overrides)
+    return _pull_event_of("customer", customer_id, "create", payload)
+
+
+def test_default_handled_entity_types_matches_the_module_constant():
+    """Documents the contract `__init__`'s docstring promises: a SyncService
+    built with no `handled_entity_types` argument at all -- exactly how both
+    of retail's own real call sites (products/retail/backend/app.py) build
+    theirs -- ends up with the exact same set as the module-level default,
+    so introducing this argument changed nothing about their behavior."""
+    service = SyncService(lambda: None, lambda: None, lambda: "co")
+    assert service._handled_entity_types == RETAIL_SYNC_ENTITY_TYPES
+
+
+def test_instance_configured_for_retail_set_applies_a_retail_event(get_conn):
+    """The allow half, baseline: an instance explicitly configured with a
+    handled_entity_types set that includes "product" applies a product
+    create exactly like the default (unconfigured) instance would."""
+    event = _product_event()
+    client = FakeRelayClient(pull_responses=[{"events": [event], "cursor": 1}])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company",
+                           handled_entity_types={"product", "customer"})
+
+    service.pull_once()
+
+    assert len(_products(get_conn)) == 1
+    assert _cursor(get_conn) == 1
+
+
+def test_instance_ignores_an_event_outside_its_configured_set(get_conn):
+    """The deny half: an instance configured to handle ONLY "product" must
+    not write a "customer" event at all -- no row, no exception raised, and
+    no quarantine row either (a foreign-stream event is not poison; see the
+    module docstring -- it simply belongs to the other stream)."""
+    event = _customer_event()
+    client = FakeRelayClient(pull_responses=[{"events": [event], "cursor": 1}])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company",
+                           handled_entity_types={"product"})
+
+    service.pull_once()  # must not raise
+
+    assert _customers(get_conn) == []
+    conn = get_conn()
+    quarantined = conn.execute("SELECT COUNT(*) FROM sync_apply_quarantine").fetchone()[0]
+    conn.close()
+    assert quarantined == 0, "a foreign-stream event must never be parked in the quarantine table"
+
+
+def test_cursor_still_advances_past_an_ignored_event(get_conn):
+    """THE critical proof this guard exists for: an event outside the
+    instance's handled set must not stall the cursor -- that is the exact
+    permanent-wedge failure shape (wave A's defect #1) this guard is meant
+    to prevent. Read directly from sync_cursor, never inferred merely from
+    "pull_once() did not raise"."""
+    event = _customer_event()
+    client = FakeRelayClient(pull_responses=[{"events": [event], "cursor": 7}])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company",
+                           handled_entity_types={"product"})
+
+    service.pull_once()
+
+    assert _cursor(get_conn) == 7
+
+
+def test_mixed_batch_applies_handled_and_skips_unhandled_cursor_lands_at_batch_max(get_conn):
+    """A single pull batch mixing a handled type and an unhandled type --
+    exactly what a real two-stream relay pull would hand either instance,
+    since both pull the SAME relay stream. The handled event applies, the
+    unhandled one is skipped, and the cursor lands at the WHOLE BATCH's max
+    seq (Owner's own returned cursor value), not some partial value stopping
+    short at the skipped event."""
+    product_event = _product_event()
+    customer_event = _customer_event()
+    client = FakeRelayClient(pull_responses=[
+        {"events": [product_event, customer_event], "cursor": 42}
+    ])
+    service = SyncService(lambda: client, get_conn, lambda: "receiving-company",
+                           handled_entity_types={"product"})
+
+    service.pull_once()
+
+    assert len(_products(get_conn)) == 1
+    assert _customers(get_conn) == []
+    assert _cursor(get_conn) == 42
+
+
+def test_a_differently_configured_instance_applies_what_the_first_ignored(get_conn):
+    """The allow half, proven SEPARATELY from the deny half -- this project
+    has shipped a guard that denied everything and passed every deny test
+    once already (ENGINEERING.md §1's "prove both directions" rule exists
+    because of exactly that). The SAME customer event the product-only
+    instance above ignores is APPLIED by a second instance configured with a
+    DIFFERENT set, proving the mechanism is genuinely parameterised -- not
+    "ignore everything unusual"."""
+    event = _customer_event()
+
+    client_a = FakeRelayClient(pull_responses=[{"events": [event], "cursor": 1}])
+    service_a = SyncService(lambda: client_a, get_conn, lambda: "receiving-company",
+                             handled_entity_types={"product"})
+    service_a.pull_once()
+    assert _customers(get_conn) == [], "fixture bug: instance A already applied the customer event"
+
+    client_b = FakeRelayClient(pull_responses=[{"events": [event], "cursor": 1}])
+    service_b = SyncService(lambda: client_b, get_conn, lambda: "receiving-company",
+                             handled_entity_types={"customer"})
+    service_b.pull_once()
+
+    assert len(_customers(get_conn)) == 1

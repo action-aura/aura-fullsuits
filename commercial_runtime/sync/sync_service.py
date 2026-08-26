@@ -5,16 +5,52 @@
 `LicenseCheckInScheduler` exactly: a self-rescheduling `threading.Timer`,
 daemon thread, `threading.Event` stop flag.
 
-Scope note: `entity_type in ("category", "product", "customer", "supplier",
-"reorder_request", "sale", "sale_item", "payment", "return", "return_item",
-"inventory_movement", "branch")` is understood by `_apply_event` -- the first
-five from earlier sub-projects (multi-device-sync-foundation, retail-catalog-
-party-sync-expansion, reorder-automation-foundation), the next five from
-launch-readiness Phase 5 (money-moving sync), and the last two from Phase 5
-wave B (stock-moving sync: `inventory_movement`/`branch`). A future entity
-type arriving from Owner is silently skipped, not an error -- forward
-compatibility for a relay that may carry entity types this particular product
-build doesn't know how to apply yet.
+Scope note: `RETAIL_SYNC_ENTITY_TYPES` -- ("category", "product", "customer",
+"supplier", "reorder_request", "sale", "sale_item", "payment", "return",
+"return_item", "inventory_movement", "branch") -- is the set `_apply_event`
+knows how to write, and the DEFAULT set a `SyncService` instance ever
+applies. The first five are from earlier sub-projects (multi-device-sync-
+foundation, retail-catalog-party-sync-expansion, reorder-automation-
+foundation), the next five from launch-readiness Phase 5 (money-moving
+sync), and the last two from Phase 5 wave B (stock-moving sync:
+`inventory_movement`/`branch`). A future entity type this build has never
+heard of at all -- arriving from Owner, or from a future product's own
+stream -- is silently skipped, not an error: forward compatibility for a
+relay that may carry entity types this particular product build doesn't know
+how to apply yet.
+
+Two-stream design (Phase 5 wave B2, docs/launch-readiness/
+phase5-waveb2-user-sync.md §Decision 6): `users`/`user_permissions` live in
+`registry.db`, a DIFFERENT database file from `retail.db`'s `sync_outbox`/
+`sync_cursor`, so wave B2 gives registry.db its own outbox/cursor
+(registry_sync_schema.py, REGISTRY_SCHEMA_VERSION=5) and runs a SECOND
+`SyncService` instance whose `get_conn` returns registry.db -- rather than
+`ATTACH`-ing the two databases into one transaction (ruled out in that
+document: both run WAL mode, and SQLite gives no cross-database atomic
+commit once either side is in WAL). Both instances pull from the SAME
+relay, so the retail instance WILL receive `user` events and the registry
+instance WILL receive `sale`/`inventory_movement` events -- `_apply_event`
+dispatches on `entity_type` alone, with no other signal for which stream an
+event belongs to.
+
+This is why the entity-type allowlist above is an ENFORCED constructor
+argument (`handled_entity_types`, defaulting to `RETAIL_SYNC_ENTITY_TYPES` so
+every existing call site -- products/retail/backend/app.py's Windows AND
+Android instances -- is unaffected) rather than a comment-documented implicit
+tuple. If a branch this module knows how to write were reachable from a
+stream it does not belong to -- a `user` branch reached from the retail
+instance, say -- it would try to write `users` into `retail.db`, which has
+no such table: `sqlite3.OperationalError: no such table: users` escaping
+`pull_once`, the cursor never advancing, and ALL sync from ALL devices
+stopping forever. That is wave A's defect #1 exactly (an apply branch
+reachable from a stream it does not belong to), reproduced by construction
+the moment a second stream exists. `_apply_event`'s gate below therefore
+checks `entity_type in self._handled_entity_types` -- an event whose type
+is outside the CONSTRUCTING instance's own set is SKIPPED, same posture as
+a type this build has never heard of at all (the paragraph above): not an
+error and never quarantined, because a foreign-stream event is not poison,
+it simply belongs to the other stream -- and the cursor still advances past
+it.
 
 Wave B note (`inventory_movement` / `branch`): these two are architecturally
 DIFFERENT FROM EACH OTHER, not a matched pair, and mixing up which rule
@@ -157,7 +193,7 @@ import sqlite3
 import threading
 import uuid
 from datetime import datetime, timezone
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +216,38 @@ _BACKOFF_MAX_EXPONENT = 32
 # import at runtime. If Owner's cap ever changes, this must stay at or
 # below it (below is always safe; above wedges exactly as described).
 _PUSH_CHUNK_SIZE = 200
+
+#: The entity types retail's `SyncService` instances apply -- see the module
+#: docstring's "Scope note" and "Two-stream design" paragraphs. This is the
+#: DEFAULT for `SyncService.__init__`'s `handled_entity_types` argument, used
+#: whenever a caller does not supply one explicitly -- both of retail's own
+#: call sites (products/retail/backend/app.py's Windows and Android
+#: instances) construct their `SyncService` this way, so their behavior is
+#: unchanged by this constant's introduction. A second stream (e.g. a future
+#: registry.db-backed instance syncing `users`) is constructed with a
+#: DIFFERENT, disjoint set instead -- see `_apply_event`'s gate below, which
+#: is what actually enforces this rather than merely documenting it.
+RETAIL_SYNC_ENTITY_TYPES = frozenset({
+    "category", "product", "customer", "supplier", "reorder_request",
+    "sale", "sale_item", "payment", "return", "return_item",
+    "inventory_movement", "branch",
+})
+
+#: Of `RETAIL_SYNC_ENTITY_TYPES` (or whatever set a given instance is
+#: actually configured with), the subset that ever stamps a company_id onto
+#: the row `_apply_event` writes -- see `apply_pull_result`'s own eager-fetch
+#: comment. `sale_item`/`return_item` are the only two exclusions: both
+#: resolve their parent by `uid` and carry no `company_id` column of their
+#: own (schema.py's `sale_items`/`return_items` tables), so eagerly resolving
+#: `local_company_id` for a batch containing only these two would be correct
+#: but pointless -- and, for a `SyncService` wired with no
+#: `local_company_id_provider` at all, would raise for no reason. Named and
+#: subtracted from the handled set explicitly, rather than re-hardcoding a
+#: second, independent tuple of "the ones that need it" -- exactly the
+#: "field present on one path, absent on another" duplication this file's
+#: own module docstring now calls out as a bug shape this codebase has hit
+#: before.
+_ENTITY_TYPES_WITHOUT_COMPANY_ID = frozenset({"sale_item", "return_item"})
 
 
 def local_company_id_from_registry() -> Optional[str]:
@@ -219,6 +287,7 @@ class SyncService:
         get_conn: Callable[[], "sqlite3.Connection"],
         local_company_id_provider: Optional[Callable[[], Optional[str]]] = None,
         local_ensure_schema: Optional[Callable[["sqlite3.Connection"], None]] = None,
+        handled_entity_types: Optional[Iterable[str]] = None,
     ):
         """`client_factory` is called fresh on every push_once()/pull_once()
         attempt, not once at construction time -- deliberately, mirroring
@@ -266,11 +335,29 @@ class SyncService:
         `local_company_id_provider`, which raises when needed-but-missing --
         see `_get_local_company_id`): a product with no such lazy migration
         at all, or a test that only ever exercises the pre-existing five
-        catalogue entity types, has nothing to call."""
+        catalogue entity types, has nothing to call.
+
+        `handled_entity_types`, when supplied, is the set of `entity_type`
+        strings THIS instance applies -- everything else pulled from the
+        relay is skipped by `_apply_event`'s gate, with the cursor still
+        advancing past it (see the module docstring's "Two-stream design"
+        paragraph for the exact hazard this exists to design out). Defaults
+        to `RETAIL_SYNC_ENTITY_TYPES` when omitted -- the historical,
+        implicit behavior every existing call site relied on before this
+        argument existed, so neither of retail's own two `SyncService`
+        constructions (products/retail/backend/app.py's Windows and Android
+        instances) needs to change. Stored as a `frozenset` regardless of
+        what iterable was passed in, so membership checks in the hot apply
+        path below are O(1) and the set can never be mutated out from under
+        a running instance after construction."""
         self._client_factory = client_factory
         self._get_conn = get_conn
         self._local_company_id_provider = local_company_id_provider
         self._local_ensure_schema = local_ensure_schema
+        self._handled_entity_types = (
+            frozenset(handled_entity_types) if handled_entity_types is not None
+            else RETAIL_SYNC_ENTITY_TYPES
+        )
         self._timer: Optional[threading.Timer] = None
         self._stopped = threading.Event()
         # Serializes push_once/pull_once against each other -- the 10s timer
@@ -433,9 +520,21 @@ class SyncService:
         # a second, more precise scan of the quarantine table.
         local_company_id = None
         touches_pending_or_quarantine = self._has_quarantined_events(conn)
+        # `self._handled_entity_types - _ENTITY_TYPES_WITHOUT_COMPANY_ID`,
+        # not a second independently-hardcoded tuple: both this check and
+        # `_apply_event`'s own gate below derive from the SAME
+        # `self._handled_entity_types` (see `__init__`'s docstring and the
+        # module docstring's "Two-stream design" paragraph) -- a future
+        # entity type added to the handled set is automatically covered here
+        # too unless it is also added to `_ENTITY_TYPES_WITHOUT_COMPANY_ID`,
+        # rather than silently needing a SECOND edit to a SECOND tuple that
+        # could drift from the first without either side raising. An event
+        # whose type is not in `self._handled_entity_types` at all (a
+        # foreign-stream event, or a type this build has never heard of)
+        # never triggers this fetch either way -- `_apply_event` is about to
+        # skip it without ever touching `local_company_id`.
         if any(
-            ev.get("entity_type") in ("category", "product", "customer", "supplier", "reorder_request",
-                                       "sale", "return", "payment", "inventory_movement", "branch")
+            ev.get("entity_type") in self._handled_entity_types - _ENTITY_TYPES_WITHOUT_COMPANY_ID
             and ev.get("event_type") in ("create", "update")
             for ev in events
         ) or touches_pending_or_quarantine:
@@ -545,9 +644,16 @@ class SyncService:
         `_retry_quarantined_events` uses it, to decide whether a previously
         parked row may now be deleted."""
         entity_type = ev.get("entity_type")
-        if entity_type not in ("category", "product", "customer", "supplier", "reorder_request",
-                                "sale", "sale_item", "payment", "return", "return_item",
-                                "inventory_movement", "branch"):
+        # `self._handled_entity_types`, not a hardcoded tuple -- see the
+        # module docstring's "Two-stream design" paragraph and `__init__`'s
+        # own docstring for `handled_entity_types`. An event whose type is
+        # outside THIS instance's own set is skipped exactly like a type
+        # this build has never heard of at all: never an error, never
+        # quarantined (a foreign-stream event is not poison -- it belongs to
+        # the other stream), and the cursor still advances past it, because
+        # this method returning True is what `apply_pull_result`'s caller
+        # reads as "fully handled, nothing left to retry".
+        if entity_type not in self._handled_entity_types:
             return True
         p = ev.get("payload") or {}
         event_type = ev.get("event_type")

@@ -390,7 +390,7 @@ Programme: `docs/launch-readiness/multi-device-design.md`, branch
 |---|---|---|---|
 | registry **v3** | `registry.db` | 1 — **DONE**, commit `28150c8` | `users.uid`/`pin_hash`/`row_version`/`updated_at_utc`/`deleted_at_utc`; role widened to {admin, manager, cashier}; capability rows seeded |
 | registry **v4** | `registry.db` | 5 prerequisite — **CLAIMED** | identity-side `company_id` rebind from `md5(admin_email)` to the Owner-issued `license_public_id`, across every `company_id`-bearing table **discovered at runtime, never hardcoded**. Retail v14 is deliberately inert until this lands — it converges, it never leads. See `docs/launch-readiness/phase5-prerequisites.md` §1 |
-| registry **v5** | `registry.db` | 5 wave B2 — **CLAIMED, not yet written** | registry-side `sync_outbox`/`sync_cursor`, so a `user` row and its sync event commit in ONE transaction in ONE file. `ATTACH`-ing registry.db to the retail connection was considered and **ruled out**: both databases run `PRAGMA journal_mode=WAL`, and SQLite gives no cross-database atomic commit once any attached database is in WAL — it would look correct and lose the event exactly when the process died between the two commits. See `docs/launch-readiness/phase5-waveb2-user-sync.md` §Decision 1 |
+| registry **v5** | `registry.db` | 5 wave B2 stage 1 — **DONE** | registry-side `sync_outbox`/`sync_cursor`, so a `user` row and its sync event commit in ONE transaction in ONE file. `ATTACH`-ing registry.db to the retail connection was considered and **ruled out**: both databases run `PRAGMA journal_mode=WAL`, and SQLite gives no cross-database atomic commit once any attached database is in WAL — it would look correct and lose the event exactly when the process died between the two commits. See `docs/launch-readiness/phase5-waveb2-user-sync.md` §Decision 1. Schema only — no `user` entity type, no user sync event, no write-site change; `SyncService`'s cross-stream entity allowlist guard (`handled_entity_types`) also landed in this stage, ahead of any second stream actually running. Stage 2 (write sites, `user`/`user_permissions` entity types) is separate and not started |
 | retail **v13** | `retail.db` | 2 | `uid` + unique index on `branches`/`sales`/`sale_items`/`returns`/`return_items`/`inventory_movements`/`payments`; `actor_user_uid`/`terminal_id`/`created_at_utc` on the transactional tables; `row_version`/`updated_at_utc`/`deleted_at_utc` on the four catalogue tables and `reorder_requests` |
 | retail **v14** | `retail.db` | 2 | rebind `company_id` from `md5(admin_email)` to the Owner-issued value in the licence assertion, across all ~13 scoped tables in one transaction |
 | retail **v15** | `retail.db` | 3 | opening-count movement for every balance row with no ledger history; refuses to advance `user_version` if drift ≠ 0 |
@@ -398,9 +398,9 @@ Programme: `docs/launch-readiness/multi-device-design.md`, branch
 | retail **v17** | `retail.db` | 6 | drop dead `quantity_reserved`; create `sync_conflicts` and `stock_exceptions` |
 
 `RETAIL_SCHEMA_VERSION` is **16** at `schema.py:344` (Phases 2–4 landed v13–v16).
-`REGISTRY_SCHEMA_VERSION` is **4** at `registry_db.py:52` — v4 landed with the
-Phase 5 prerequisites (commit `681b0fa`). **v5 is claimed above and not yet
-written.**
+`REGISTRY_SCHEMA_VERSION` is **5** at `registry_db.py:62` — v4 landed with the
+Phase 5 prerequisites (commit `681b0fa`); v5 (wave B2 stage 1 — schema and
+the sync allowlist guard only) landed with this ledger entry's update.
 
 Do not read those two numbers as live state — this line has already been stale
 once. Read the constants.
