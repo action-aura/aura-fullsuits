@@ -411,7 +411,7 @@ Programme: `docs/launch-readiness/multi-device-design.md`, branch
 | retail **v14** | `retail.db` | 2 | rebind `company_id` from `md5(admin_email)` to the Owner-issued value in the licence assertion, across all ~13 scoped tables in one transaction |
 | retail **v15** | `retail.db` | 3 | opening-count movement for every balance row with no ledger history; refuses to advance `user_version` if drift ≠ 0 |
 | retail **v16** | `retail.db` | 4 | terminal-bound drawer; `UNIQUE(company_id, terminal_id) WHERE status='open'`; `ended_at`/`ended_by` for the ENDED/CLOSED split |
-| retail **v17** | `retail.db` | 6 | drop dead `quantity_reserved`; create `sync_conflicts` and `stock_exceptions` |
+| retail **v17** | `retail.db` | 6 — **CLAIMED** | create `sync_conflicts`; drop the dead `quantity_reserved` column from `inventory_balances`. **`stock_exceptions` is deliberately NOT created here** even though it was reserved alongside: nothing in Phase 6's scope writes it — it belongs to the oversell exception queue, which no stage of this phase implements — and a shipped table with no writer actively misleads the next reader into assuming the feature exists. It stays reserved for the phase that implements the queue. Dropping `quantity_reserved` is the lowest-risk destructive migration available here: confirmed dead by three audits and by grep, and `inventory_balances` is fully derivable from `inventory_movements` (Phase 3), so even total loss is recoverable via `repair_drift`. See `docs/launch-readiness/phase6-catalogue-correctness.md` |
 
 `RETAIL_SCHEMA_VERSION` is **16** at `schema.py:344` (Phases 2–4 landed v13–v16).
 `REGISTRY_SCHEMA_VERSION` is **6** at `registry_db.py:65` — v4 landed with the
