@@ -96,6 +96,106 @@ deactivated ones. **Do not guess.** They stay as they are, `deleted_at_utc`
 NULL, and only new deletions are tombstoned — the same posture Phase 2 took
 when it refused to fabricate `created_at_utc` for history.
 
+## Read-path findings (exhaustive pass, 2026-08-26)
+
+Infrastructure is already in place and unused: every one of the five tables
+has `deleted_at_utc` AND a ready partial index
+`idx_<table>_live ON "<table>"(company_id) WHERE deleted_at_utc IS NULL`
+(`schema.py:2196-2217`). Nothing writes the column and nothing uses the index.
+
+### The trap: a blanket "filter it everywhere" rule is WRONG
+
+`list_reorder_requests` (`retail_api.py:2369`) reaches products through an
+**INNER JOIN**. Adding `p.deleted_at_utc IS NULL` there makes a pending
+reorder request for a since-deleted product **silently vanish from the admin's
+list** — which is the only surface that can decline or resolve it. The row is
+then stuck `pending` forever with no way to act on it.
+
+The fix belongs at the WRITE gate, not the read: block *accepting* such a
+request (extend the existing "Product no longer exists" 404 in
+`accept_reorder_request`), and leave it visible and declinable.
+
+### Must gain the filter — the ones that actually hurt
+
+* **`list_products` (`:1169`)** is the highest priority in the codebase.
+  `_findByCode` in `subsystem-retail.js:2613` filters CLIENT-SIDE over the
+  array this one query returns, and it backs POS scan, product search and PO
+  scan alike. Miss this query and every scan surface ships the deleted product.
+* **`create_sale`'s line-item read (`:2679`)** — the worst outcome. It filters
+  `status='active'` today, and **that stops being sufficient the moment
+  deletion no longer touches `status`**. A tombstoned row stays `active` and
+  would still be sellable.
+* `adjust_stock` (`:1428`) has **no filter at all today**, even for inactive.
+* Then: dashboard counts, AI-context helpers, `list_categories`' product-count
+  join, `metrics.inventory_value` (a "right now" snapshot that would silently
+  inflate forever), and the PO-preview/reorder-accept write gates.
+
+### Must NOT gain the filter, and why
+
+* **AR/AP: `customers_receivables`, `suppliers_payables`, aging, statements,
+  payments.** Real money owed does not vanish because a record was deleted.
+  Hiding it makes debt untrackable — and `retail_api.py:1656` already carries a
+  comment saying `list_customers` deliberately hides such customers from the
+  till *while receivables still counts them*, precisely so a debt cannot be
+  made invisible.
+* **Historical documents**: `get_sale`, `recent_sales`, `list_returns`,
+  `einvoice_adapter`'s buyer and line-item reads, `metrics.cogs`,
+  `metrics.top_products`. A receipt or a submitted tax document must render the
+  real name. `top_products` already comments on exactly this.
+* **Reconciliation** (`compute_drift`, `unassigned_movements`,
+  `orphan_balances`) asks "does this row exist at all", an FK-integrity
+  question, not "is it sellable". A tombstoned row still exists, so it is
+  correctly not an orphan; filtering would misclassify it as structurally
+  broken.
+
+### `status` is NOT genuinely overloaded — verified
+
+Only four sites ever write `status='inactive'`, and all four are delete-route
+handlers. There is no deactivate endpoint, no toggle, no separate UI action;
+the confirm dialog says "will be deactivated, not permanently removed". The
+only route back to `'active'` is a PATCH whose own comment says it exists so a
+restore reaches the other device.
+
+So the design's assumption was right for the wrong reason: the overload is
+theoretical. Every existing `status='inactive'` row is unambiguously a past
+deletion, which makes the "leave them alone, `deleted_at_utc` NULL" backfill
+posture safe with high confidence.
+
+**Asymmetry found, pre-existing:** `update_customer`'s allowed-fields list
+omits `status` entirely, so **a deleted customer has no restore path at all**
+today, while products and suppliers do. Stage 6b needs a real undelete per
+table (clearing `deleted_at_utc`) and must not carry this gap forward silently.
+
+### The category decision that must be made BEFORE code
+
+`retail_category_delete_fk_sync_test.py` pins a fix for a real shipped bug:
+pre-v3, deleting a category device B still had products in raised
+`IntegrityError` inside `_apply_event`, which aborted `apply_pull_result`
+**before the cursor advanced**, and `run_once` swallowed it — device B stopped
+receiving every event from every device, forever. The fix was
+`products.category_id ... ON DELETE SET NULL`.
+
+Tombstoning categories **removes that self-healing property**. No `DELETE`
+statement runs, so the FK cascade never fires and `category_id` is left
+dangling at a row that still physically exists. Today the database cleans up
+every reference atomically on every device with no application code to get
+wrong; afterwards, every current and future categories join must remember the
+filter forever.
+
+Two of that test's assertions become literally false and it must change —
+`COUNT(*)` would be 1, not 0, and `category_id` would not become NULL. What it
+can no longer catch, stated up front: the specific hard-DELETE-wedges-the-
+cursor failure becomes structurally impossible to reproduce, so those cases
+become historical record.
+
+**Decide explicitly, and write it down before writing code:** does tombstoning
+a category also walk `products` and null out `category_id` — applied
+identically on the local delete path AND the sync-apply path — or is a
+dangling id hidden behind a join filter an accepted trade? One mitigating
+fact: every categories join in the codebase is a `LEFT JOIN` (no
+`INNER JOIN categories` exists anywhere), so tombstoning a category cannot
+silently drop product rows; it only blanks the category name.
+
 ## Acceptance
 
 * An update that changes ONE field leaves every other field on the receiver
