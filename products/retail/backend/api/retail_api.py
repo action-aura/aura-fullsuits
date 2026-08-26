@@ -593,30 +593,54 @@ def _default_branch(conn, cid):
     branch_uid = _new_uid()
     cur.execute("INSERT INTO branches (company_id,name,address,phone,uid) VALUES (?,?,?,?,?)",
                 (cid, 'Main Branch', '', '', branch_uid))
-    # `cur.lastrowid` MUST be captured here, immediately after the INSERT it
-    # actually describes, and BEFORE `_queue_sync_event` below runs its own
-    # INSERT (into sync_outbox) on this SAME cursor object -- sqlite3's
-    # `Cursor.lastrowid` reflects whichever INSERT that cursor executed MOST
-    # RECENTLY, not "the one this function cares about". Reading it after the
-    # sync_outbox insert silently returns THAT row's rowid instead of the new
-    # branch's -- every caller of `_default_branch` then writes stock/sales
-    # against a branch_id that names the wrong row (or none at all),
-    # reproduced directly: a second company's product immediately reports
+    # `cur.lastrowid` is captured immediately after the INSERT it describes.
+    # Nothing sits between the two lines today, and nothing may be added
+    # there: sqlite3's `Cursor.lastrowid` reflects whichever INSERT that
+    # cursor executed MOST RECENTLY, not "the one this function cares about",
+    # so any statement slipped in between silently sends every caller of
+    # `_default_branch` off to file stock and sales against the wrong branch.
+    # That is not hypothetical -- it was reproduced while a sync-event INSERT
+    # briefly did sit here: a second company's product immediately reported
     # "have 0.0" on a sale, because its stock landed under one branch_id and
-    # the sale resolved a different one. Mutation-tested: moving this
-    # assignment below the `_queue_sync_event` call reproduces exactly that.
+    # the sale resolved a different one.
     new_branch_id = cur.lastrowid
-    # Wave B (stock-moving sync): `branch` is now a synced entity type (see
-    # sync_service.py's module docstring) -- a self-healed branch is as real
-    # as one created through POST /branches, and every OTHER self-heal/create
-    # site in this file and import_api.py queues the identical event. Omitting
-    # it here would leave this ONE branch-creation path silently un-synced --
-    # exactly the "field present on one write path, absent on another" defect
-    # shape this codebase has hit before (see sync_service.py's own docstring,
-    # "Bug 1"/"Bug 2").
-    _queue_sync_event(cur, 'branch', branch_uid, 'create', {
-        'uid': branch_uid, 'name': 'Main Branch', 'address': '', 'phone': '', 'status': 'active',
-    })
+    # Wave B, CORRECTED -- this self-heal deliberately queues NO sync event,
+    # which is the opposite of what wave B1 first shipped.
+    #
+    # The first version queued a `branch`/`create` here, arguing that "a
+    # self-healed branch is as real as one created through POST /branches".
+    # The premise is true -- it really does carry stock, sales and cash
+    # sessions -- and the conclusion was still wrong, because a self-heal is
+    # not an OPERATOR ACT. It is a placeholder invented locally by whichever
+    # route happened to need a branch first. Two devices each invent their
+    # own, with different `uid`s, and `_apply_event`'s `branch` upsert dedupes
+    # on `uid` alone -- NOTHING dedupes by name.
+    #
+    # Reproduced end to end: a second till that writes ANYTHING before its
+    # first successful pull (creating its first product is the normal way an
+    # operator provisions one, well inside the sync tick) leaves BOTH devices
+    # holding two permanently-unmerged rows called 'Main Branch', with the
+    # same product reading `branch_id=1: 0.0` and `branch_id=2: 1000.0` --
+    # two entries no UI can tell apart, and no merge path anywhere.
+    #
+    # Worth recording why the wave's own acceptance test could not see it:
+    # `compute_drift` returns ZERO throughout. The per-branch ledger/balance
+    # invariant genuinely holds. The stock is simply filed under the wrong one
+    # of two identical-looking branches -- the defect is in IDENTITY, not
+    # arithmetic. Totals right, place wrong.
+    #
+    # `_resolve_branch_id`'s tier-2 self-heal on the APPLY side had already
+    # made this exact call and stayed local-only; this now agrees with it, so
+    # every self-heal site in the product behaves the same way. Branches an
+    # operator really created -- POST /branches, and the bulk branch import --
+    # still sync, which is what multi-branch shops actually need.
+    #
+    # Known limitation, written down rather than left to be discovered:
+    # renaming a SELF-HEALED default branch does not propagate, because each
+    # device holds its own. Renaming an operator-created branch does. A
+    # movement naming an unresolvable branch_uid falls back to the receiver's
+    # own default (`_resolve_branch_id` tier 2) -- exactly the pre-wave-B
+    # behaviour this restores.
     return new_branch_id
 
 

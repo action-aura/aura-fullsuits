@@ -1306,12 +1306,20 @@ def _handle_retail_products(records):
         cur.execute("INSERT INTO branches (company_id,name,uid) VALUES (?,'Main Store',?)",
                     (cid, self_heal_branch_uid))
         bid = cur.lastrowid
-        # Wave B: `branch` is now a synced entity type -- see
-        # sync_service.py's module docstring and retail_api.py's
-        # `_default_branch` for the identical self-heal emission.
-        _queue_sync_event(cur, 'branch', self_heal_branch_uid, 'create', {
-            'uid': self_heal_branch_uid, 'name': 'Main Store', 'address': '', 'phone': '', 'status': 'active',
-        })
+        # Wave B, CORRECTED: no sync event is queued for a self-heal, and
+        # this must stay in step with `retail_api.py`'s `_default_branch`,
+        # which carries the full reasoning. In short: a self-healed branch is
+        # a LOCAL PLACEHOLDER, not an operator act. Broadcasting it let two
+        # devices that each self-healed before their first pull mint two
+        # different `uid`s for "the default branch", and since the apply-side
+        # upsert dedupes on `uid` alone -- nothing dedupes by name -- both
+        # devices ended up holding two permanently-unmerged branches with the
+        # shop's stock split across them. `compute_drift` stayed zero the
+        # whole time, because the defect is in identity, not arithmetic.
+        #
+        # Branches an operator genuinely created still sync: the bulk branch
+        # import in `_handle_retail_branches` below keeps its event, as does
+        # POST /branches in retail_api.py.
         import_branch_uid = self_heal_branch_uid
     else:
         # Resolved once, outside the record loop -- same reasoning as

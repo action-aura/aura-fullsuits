@@ -241,20 +241,53 @@ def install_b(tmp_path):
 # 1. EMISSION -- every real writer queues the right shape
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_create_product_opening_stock_queues_branch_and_inventory_movement_events():
-    """The self-heal (`_default_branch`, no branch exists yet for a brand new
-    company) fires a `branch`/`create` event, and the opening-stock movement
-    fires an `inventory_movement`/`create` event -- both from ONE route call.
+def test_create_product_self_heal_queues_no_branch_event_but_still_queues_the_inventory_movement():
+    """REPAIRED (was `..._queues_branch_and_inventory_movement_events`): the
+    self-heal (`_default_branch`, no branch exists yet for a brand new
+    company) used to fire a `branch`/`create` event alongside the opening-
+    stock movement -- that is the wave-B1 defect this phase's fix removes.
+    See retail_api.py's `_default_branch`, "Wave B, CORRECTED": broadcasting
+    a self-healed branch let two devices that each self-healed before their
+    first pull mint two different `uid`s for "the default branch", and since
+    the apply-side upsert dedupes on `uid` alone, both devices ended up
+    holding two permanently-unmerged 'Main Branch' rows with the shop's
+    stock split across them -- `compute_drift` stayed zero throughout,
+    because the defect was in IDENTITY, not arithmetic.
+
+    This test is now the REGRESSION GUARD for that exact bug -- a coverage
+    GAIN over the original, which asserted the self-heal DID broadcast and
+    would have stayed green on the very shape that broke two real devices
+    (see `retail_stock_sync_apply_hardening_test.py` and this file's own
+    `test_two_devices_that_each_self_heal_before_first_pull_converge_to_one_branch_row_each`
+    for the end-to-end, two-process version of this same guarantee).
+
+    The opening-stock movement's OWN emission is untouched by the fix and
+    still asserted in full below -- only the branch-uid source changed, from
+    the (now absent) branch event to the `branches` table directly, since
+    that row still exists locally, self-healed, just never broadcast.
     """
     admin, cid, pid = _new_shop(price=10.0, initial_stock=42)
 
     branch_events = _outbox('branch')
-    movement_events = _outbox('inventory_movement')
-    assert len(branch_events) == 1
-    assert branch_events[0]['event_type'] == 'create'
-    assert branch_events[0]['payload']['name'] == 'Main Branch'
-    branch_uid = branch_events[0]['payload']['uid']
+    assert branch_events == [], (
+        "a self-healed default branch must NEVER queue a sync event -- see "
+        "_default_branch's 'Wave B, CORRECTED' comment. If this fires, two "
+        "devices that each self-heal before their first pull will mint two "
+        "permanently-unmerged 'Main Branch' rows -- the exact identity bug "
+        "this test now guards against."
+    )
 
+    # No branch event to read the uid from any more -- the self-healed row
+    # itself still exists locally; read its uid straight from `branches`.
+    conn = get_retail_conn()
+    try:
+        branch_uid = conn.execute(
+            "SELECT uid FROM branches WHERE company_id=? ORDER BY id LIMIT 1", (cid,)
+        ).fetchone()['uid']
+    finally:
+        conn.close()
+
+    movement_events = _outbox('inventory_movement')
     assert len(movement_events) == 1
     mv = movement_events[0]['payload']
     assert movement_events[0]['event_type'] == 'create'
@@ -507,9 +540,24 @@ def test_a_movement_for_an_unresolved_product_is_quarantined_not_wedged(install_
 def test_a_branch_rename_propagates_do_update_not_do_nothing(install_b, relay):
     """HAZARD 3, mutable half: renaming a branch on the device that owns it
     must converge on every other device -- the SAME wire uid maps to the
-    SAME local row on B, updated in place, never a second row."""
+    SAME local row on B, updated in place, never a second row.
+
+    REPAIRED: the branch this test renames must be one that actually
+    SYNCS -- `_new_shop`'s own product-creation self-heal deliberately
+    queues no `branch` event any more (see `_default_branch`'s "Wave B,
+    CORRECTED" comment), so this now creates the branch through the
+    OPERATOR path (`POST /branches`, via `create_branch` below), the same
+    one `test_create_branch_route_queues_a_branch_create_event` already
+    proves emits a real `branch`/create event. The rename mechanics and
+    assertions this test actually exists to prove (`DO UPDATE`, not a
+    second row) are unchanged."""
     admin, cid, pid = _new_shop()
-    branch_uid = _outbox('branch')[0]['payload']['uid']
+    r = admin.post(f'{API}/branches', json={
+        'name': 'Uptown Branch', 'address': '1 Market Rd', 'phone': '555-0100'})
+    assert r.status_code == 200, r.get_json()
+    branch_events = [e for e in _outbox('branch') if e['payload']['name'] == 'Uptown Branch']
+    assert len(branch_events) == 1
+    branch_uid = branch_events[0]['payload']['uid']
 
     service_a = SyncService(client_factory=lambda: relay, get_conn=get_retail_conn)
     service_b = SyncService(client_factory=lambda: relay, get_conn=install_b,
@@ -544,11 +592,28 @@ def test_a_branch_rename_propagates_do_update_not_do_nothing(install_b, relay):
         b_conn.close()
 
 
-def test_an_inventory_movement_update_or_delete_event_is_refused(install_b, relay):
-    """HAZARD 3, immutable half: unlike `branch`, `inventory_movement` never
-    accepts `update`/`delete` -- a stock ledger fact is corrected by a NEW
-    movement (an adjustment), never edited or removed in place. Any other
-    event_type is silently ignored (identical posture to sale/return above)."""
+def test_an_inventory_movement_update_event_on_an_existing_uid_never_rewrites_it(install_b, relay):
+    """HAZARD 3, immutable half, scenario 1 of 2: unlike `branch`,
+    `inventory_movement` never accepts `update`/`delete` -- a stock ledger
+    fact is corrected by a NEW movement (an adjustment), never edited or
+    removed in place.
+
+    RENAMED (was `..._update_or_delete_event_is_refused`) to say precisely
+    what this scenario actually proves and what it does NOT: this sends an
+    "update" for a movement `uid` that has ALREADY been "create"d, and
+    `ON CONFLICT(uid) ... DO NOTHING` alone -- a completely different
+    mechanism from the `if event_type != "create": return True` guard in
+    sync_service.py's `_apply_event` -- is enough to protect an EXISTING
+    row regardless of event_type. Mutation-proven: with that guard removed
+    entirely, this exact scenario stays green, because the INSERT still
+    hits the same uid's conflict and DO NOTHING still fires. The guard's
+    real job only shows up when there is no existing row to conflict
+    with -- see `test_a_bare_inventory_movement_update_event_with_no_prior_create_is_refused_not_fabricated`
+    in `retail_stock_sync_apply_hardening_test.py` for that decisive case,
+    the one actually promoted from the adversarial verifier's mutation
+    proof. This scenario is kept because "an update on a real row can't
+    rewrite it" is still a real property worth guarding -- just not the
+    one this test's old name implied it was proving."""
     admin, cid, pid = _new_shop(price=10.0, initial_stock=200)
     service_a = SyncService(client_factory=lambda: relay, get_conn=get_retail_conn)
     service_b = SyncService(client_factory=lambda: relay, get_conn=install_b,
@@ -668,27 +733,53 @@ def test_two_real_devices_selling_and_adjusting_converge_to_zero_drift_both_side
     its own adjustment against the SAME product -- a real second till, not a
     receiver. A then pulls B's writes back. Both directions, both devices
     real OS processes the whole way through.
+
+    REPAIRED: "the SAME product at the SAME branch" requires a branch B can
+    actually resolve to A's -- and `create_shop`'s own opening-stock self-
+    heal (`_default_branch`) deliberately queues NO `branch` sync event any
+    more (retail_api.py, "Wave B, CORRECTED": broadcasting a self-heal is
+    the exact duplicate-identity bug this phase fixes). Two devices that
+    each self-heal independently can never be proven to agree on "the same
+    place". So A now provisions its stock through an OPERATOR-created
+    branch (`create_branch`, via `POST /branches`) instead -- the only kind
+    of branch two devices can ever agree names the same physical location --
+    and every unit of stock in this test is filed against it explicitly. The
+    convergence arithmetic (1000 - 12 + 25 - 7 = 1006) and every assertion
+    below are otherwise unchanged.
     """
     device_a = tmp_path / "device_a"
     device_b = tmp_path / "device_b"
     relay_db = tmp_path / "relay.db"
 
     [shop] = run_device(PY, device_a, relay_db, [
-        {"op": "create_shop", "price": 40.0, "initial_stock": 1000},
+        {"op": "create_shop", "price": 40.0, "initial_stock": 0},
     ])
-    cid_a, pid, a_branch_uid = shop["company_id"], shop["product_id"], shop["branch_uid"]
-    run_device(PY, device_a, relay_db, [{"op": "push"}])
+    cid_a, pid = shop["company_id"], shop["product_id"]
+
+    _, branch = run_device(PY, device_a, relay_db, [
+        {"op": "login", "email": shop["email"], "password": shop["password"]},
+        {"op": "create_branch", "name": "Shared Branch", "address": "1 Market Rd", "phone": "555-0100"},
+    ])
+    assert branch["status_code"] == 200, branch["body"]
+    a_branch_id, a_branch_uid = branch["branch_id"], branch["branch_uid"]
+
+    run_device(PY, device_a, relay_db, [
+        {"op": "login", "email": shop["email"], "password": shop["password"]},
+        {"op": "adjust_stock", "product_id": pid, "quantity": 1000, "reason": "Opening stock, shared branch",
+         "branch_id": a_branch_id},
+        {"op": "push"},
+    ])
 
     [bootstrap] = run_device(PY, device_b, relay_db, [{"op": "bootstrap"}])
     cid_b = bootstrap["company_id"]
     run_device(PY, device_b, relay_db, [{"op": "pull"}])
 
-    # B now has A's product and A's branch locally (own company_id, per the
-    # cross-device company_id fix) -- resolve B's own local branch id for
-    # A's branch_uid before selling against it.
+    # B now has A's product and A's OPERATOR branch locally (own company_id,
+    # per the cross-device company_id fix) -- resolve B's own local branch id
+    # for A's branch_uid before selling against it.
     [lookup] = run_device(PY, device_b, relay_db, [{"op": "branch_by_uid", "uid": a_branch_uid}])
     b_branch_id = lookup["branch"]["id"]
-    assert lookup["branch"]["name"] == "Main Branch"
+    assert lookup["branch"]["name"] == "Shared Branch"
     assert lookup["branch"]["company_id"] == cid_b  # B's own, never A's
 
     # B rings a real sale and posts a real adjustment -- a second till doing
@@ -713,7 +804,7 @@ def test_two_real_devices_selling_and_adjusting_converge_to_zero_drift_both_side
     # this isn't a one-shot convergence but an ongoing, bidirectional one.
     _, a_sell = run_device(PY, device_a, relay_db, [
         {"op": "login", "email": shop["email"], "password": shop["password"]},
-        {"op": "sell", "product_id": pid, "quantity": 7, "branch_id": shop["branch_id"]},
+        {"op": "sell", "product_id": pid, "quantity": 7, "branch_id": a_branch_id},
     ])
     assert a_sell["status_code"] == 200, a_sell["body"]
     run_device(PY, device_a, relay_db, [{"op": "push"}])
@@ -724,7 +815,7 @@ def test_two_real_devices_selling_and_adjusting_converge_to_zero_drift_both_side
     expected = 1000 - 12 + 25 - 7
 
     [bal_a] = run_device(PY, device_a, relay_db, [
-        {"op": "get_balance", "company_id": cid_a, "product_id": pid, "branch_id": shop["branch_id"]},
+        {"op": "get_balance", "company_id": cid_a, "product_id": pid, "branch_id": a_branch_id},
     ])
     assert bal_a["quantity_on_hand"] == expected, f"A's balance is wrong: {bal_a}"
 
@@ -746,24 +837,43 @@ def test_branch_uid_resolution_stops_falling_back_once_the_branch_has_synced(tmp
     because `branch` never synced. Now that it does, the ORDINARY case is
     tier-1 resolving on the very first pull that carries both the branch and
     a row naming it -- proved with zero fallback warnings, across two real
-    processes."""
+    processes.
+
+    REPAIRED: `shop["branch_uid"]` (from `create_shop`'s own opening-stock
+    self-heal) can never be one of those -- `_default_branch` deliberately
+    queues no `branch` sync event any more (retail_api.py, "Wave B,
+    CORRECTED"), so it is a branch tier 1 will NEVER resolve, on any pull,
+    ever. Tier 1 resolving on the very first pull is still true, but only
+    for a branch that genuinely syncs -- an OPERATOR-created one
+    (`create_branch`). A's stock is filed against that branch instead of
+    the self-healed default; the arithmetic (500 - 3 = 497) is unchanged.
+    """
     device_a = tmp_path / "device_a"
     device_b = tmp_path / "device_b"
     relay_db = tmp_path / "relay.db"
 
     [shop] = run_device(PY, device_a, relay_db, [
-        {"op": "create_shop", "price": 15.0, "initial_stock": 500},
+        {"op": "create_shop", "price": 15.0, "initial_stock": 0},
     ])
+    _, branch = run_device(PY, device_a, relay_db, [
+        {"op": "login", "email": shop["email"], "password": shop["password"]},
+        {"op": "create_branch", "name": "Operator Branch", "address": "1 Market Rd", "phone": "555-0100"},
+    ])
+    assert branch["status_code"] == 200, branch["body"]
+    op_branch_id, op_branch_uid = branch["branch_id"], branch["branch_uid"]
+
     run_device(PY, device_a, relay_db, [
         {"op": "login", "email": shop["email"], "password": shop["password"]},
-        {"op": "sell", "product_id": shop["product_id"], "quantity": 3},
+        {"op": "adjust_stock", "product_id": shop["product_id"], "quantity": 500,
+         "reason": "Stock into operator branch", "branch_id": op_branch_id},
+        {"op": "sell", "product_id": shop["product_id"], "quantity": 3, "branch_id": op_branch_id},
         {"op": "push"},
     ])
 
     [bootstrap] = run_device(PY, device_b, relay_db, [{"op": "bootstrap"}])
     run_device(PY, device_b, relay_db, [{"op": "pull"}])
 
-    [lookup] = run_device(PY, device_b, relay_db, [{"op": "branch_by_uid", "uid": shop["branch_uid"]}])
+    [lookup] = run_device(PY, device_b, relay_db, [{"op": "branch_by_uid", "uid": op_branch_uid}])
     assert lookup["branch"] is not None, "tier 1 did not resolve on the very first pull"
     b_bid = lookup["branch"]["id"]
 
@@ -771,10 +881,11 @@ def test_branch_uid_resolution_stops_falling_back_once_the_branch_has_synced(tmp
         {"op": "get_balance", "company_id": bootstrap["company_id"], "product_id": shop["product_id"],
          "branch_id": b_bid},
     ])
-    # 500 opening - 3 sold, filed under the CORRECT synced branch, not a
-    # self-healed default one -- if the fallback had fired instead, this
-    # balance would be sitting under a DIFFERENT (self-healed) branch_id and
-    # this lookup (by A's own real branch_uid) would show nothing at all.
+    # 500 stocked in - 3 sold, filed under the CORRECT synced (operator)
+    # branch, not a self-healed default one -- if the fallback had fired
+    # instead, this balance would be sitting under a DIFFERENT (self-healed)
+    # branch_id and this lookup (by A's own real, synced branch_uid) would
+    # show nothing at all.
     assert bal["quantity_on_hand"] == 497.0
 
 
@@ -791,16 +902,38 @@ def test_a_product_that_never_arrives_quarantines_the_movement_across_real_proce
     relaying its already-valid children -- without needing Owner itself:
     B genuinely never receives the product in this batch, only the branch
     and the movement that depends on it.
+
+    REPAIRED: proving "the branch event was NOT blocked by the orphaned
+    product" requires a batch that actually CONTAINS a branch event.
+    `create_shop`'s own opening-stock self-heal (`_default_branch`)
+    deliberately queues none any more (retail_api.py, "Wave B, CORRECTED"),
+    so this now files the opening stock through an OPERATOR-created branch
+    (`create_branch`, via `adjust_stock` against it) instead of relying on
+    `create_shop`'s `initial_stock` -- the only path that still produces a
+    genuine `branch`/create event alongside the `inventory_movement`/create
+    event this test orphans. The quarantine mechanics and the final balance
+    (60.0) are unchanged.
     """
     device_a = tmp_path / "device_a"
     device_b = tmp_path / "device_b"
     relay_db = tmp_path / "relay.db"
 
     [shop] = run_device(PY, device_a, relay_db, [
-        {"op": "create_shop", "price": 8.0, "initial_stock": 60},
+        {"op": "create_shop", "price": 8.0, "initial_stock": 0},
     ])
     pid = shop["product_id"]
+
+    _, branch = run_device(PY, device_a, relay_db, [
+        {"op": "login", "email": shop["email"], "password": shop["password"]},
+        {"op": "create_branch", "name": "Orphan Test Branch", "address": "", "phone": ""},
+    ])
+    assert branch["status_code"] == 200, branch["body"]
+    op_branch_id, op_branch_uid = branch["branch_id"], branch["branch_uid"]
+
     run_device(PY, device_a, relay_db, [
+        {"op": "login", "email": shop["email"], "password": shop["password"]},
+        {"op": "adjust_stock", "product_id": pid, "quantity": 60, "reason": "Opening stock, orphan test",
+         "branch_id": op_branch_id},
         {"op": "outbox_delete_entity_type", "entity_type": "product"},
         {"op": "push"},
     ])
@@ -811,7 +944,7 @@ def test_a_product_that_never_arrives_quarantines_the_movement_across_real_proce
     cnt = run_device(PY, device_b, relay_db, [{"op": "quarantine_count"}])[0]["count"]
     assert cnt == 1, "the orphaned movement was not parked"
     b_bal = run_device(PY, device_b, relay_db, [
-        {"op": "branch_by_uid", "uid": shop["branch_uid"]},
+        {"op": "branch_by_uid", "uid": op_branch_uid},
     ])[0]["branch"]
     assert b_bal is not None  # the branch event was NOT blocked by the orphaned product
 
@@ -844,3 +977,71 @@ def test_a_product_that_never_arrives_quarantines_the_movement_across_real_proce
          "branch_id": b_bal["id"]},
     ])[0]
     assert bal["quantity_on_hand"] == 60.0, "the parked movement was not applied once its product arrived"
+
+
+def test_two_devices_that_each_self_heal_before_first_pull_converge_to_one_branch_row_each(tmp_path):
+    """THE decisive proof for the identity bug this phase's fix closes (see
+    retail_api.py's `_default_branch`, "Wave B, CORRECTED", and this file's
+    own module docstring). Two devices that EACH self-heal their own
+    default branch before ever exchanging anything must NOT end up with two
+    permanently-unmerged 'Main Branch' rows once they converge.
+
+    THE HARNESS BLIND SPOT THIS CLOSES: `_stock_sync_device.py`'s own
+    `bootstrap` op docstring says plainly that `_default_branch` is never
+    called by anything it does -- by design, it is a pure receiver with no
+    product of its own. Every stock-sync test that used `bootstrap` alone
+    always pulled BEFORE writing anything locally, so device B never
+    independently minted its own branch in any of them -- this was the
+    THIRD time in this project a fixture manufactured exactly the state
+    that hides the bug wave A's own fixtures did this twice already (see
+    CLAUDE.md's "Team dynamics" / verification-failure-patterns history).
+    This test closes it: B does a real local write (`create_product`,
+    which calls `_default_branch` unconditionally -- see that route's own
+    comment, "the normal way an operator provisions one") BEFORE its first
+    pull, exactly like a genuinely fresh install that starts selling before
+    its first successful sync tick would.
+
+    Neither device ever creates an OPERATOR branch here -- both only ever
+    self-heal -- so with the fix in place, NEITHER `branch` event exists to
+    cross the wire at all, and each device's own `branches` table holds
+    exactly the one row it minted for itself. See this file's own
+    `test_create_product_self_heal_queues_no_branch_event_but_still_queues_the_inventory_movement`
+    for the single-process version of the same guarantee, and
+    `retail_stock_sync_apply_hardening_test.py` for the apply-side unit
+    proofs this end-to-end one complements.
+    """
+    device_a = tmp_path / "device_a"
+    device_b = tmp_path / "device_b"
+    relay_db = tmp_path / "relay.db"
+
+    [shop] = run_device(PY, device_a, relay_db, [
+        {"op": "create_shop", "price": 12.0, "initial_stock": 100},
+    ])
+    cid_a = shop["company_id"]
+    run_device(PY, device_a, relay_db, [{"op": "push"}])
+
+    # B self-heals its OWN default branch via a real local write -- BEFORE
+    # its first pull, the exact ordering that reproduced the duplicate-
+    # branch bug end to end (see retail_api.py's own reproduction note).
+    bootstrap, b_product = run_device(PY, device_b, relay_db, [
+        {"op": "bootstrap"},
+        {"op": "create_product", "name": "B Own Widget", "initial_stock": 10},
+    ])
+    cid_b = bootstrap["company_id"]
+    assert b_product["status_code"] == 200, b_product["body"]
+
+    run_device(PY, device_b, relay_db, [{"op": "push"}])
+    run_device(PY, device_b, relay_db, [{"op": "pull"}])
+    run_device(PY, device_a, relay_db, [{"op": "pull"}])
+
+    [count_a] = run_device(PY, device_a, relay_db, [{"op": "branch_count", "company_id": cid_a}])
+    assert count_a["count"] == 1, (
+        f"device A ended up with {count_a['count']} branch rows for its own company -- "
+        "a self-healed branch must never duplicate across a converged sync"
+    )
+
+    [count_b] = run_device(PY, device_b, relay_db, [{"op": "branch_count", "company_id": cid_b}])
+    assert count_b["count"] == 1, (
+        f"device B ended up with {count_b['count']} branch rows for its own company -- "
+        "a self-healed branch must never duplicate across a converged sync"
+    )

@@ -1,90 +1,74 @@
-"""Aura Retail -- Phase 5 wave B multi-process harness: one device's process.
+"""Adversarial-ACCEPTANCE-pass device process for wave B1 (stock-moving sync).
 
-Run as a bare subprocess (never imported, never collected by pytest -- the
-leading underscore keeps pytest's own default collection pattern from
-picking it up, matching every other `_`-prefixed helper module in this
-directory):
+NOT part of the delivered suite and NOT a modification of any existing file --
+a standalone extension of `_verify_wb1_device.py` (itself a standalone
+extension of the builder's own `_stock_sync_device.py`), copied rather than
+imported for the same survive-independently reason every other duplicate
+helper module in this test directory states explicitly. Every existing op
+this file's ancestors already support is reproduced here UNCHANGED; this file
+only ADDS what this acceptance pass specifically needs and the two ancestors
+do not offer:
 
-    python _stock_sync_device.py <app_data_dir> <relay_db_path> <actions_path> <output_path>
+  * `create_po` gains an optional `branch_id` -- the delivered/verify device
+    scripts always let `receive_purchase_order` fall back to
+    `_default_branch`, which is fine for a single-branch scenario but useless
+    for proving PER-BRANCH correctness (this pass's requirement B) across an
+    OPERATOR-created branch a delivery is deliberately routed to.
+  * `apply_result_raw` -- calls `SyncService.apply_pull_result()` directly
+    with a caller-supplied `{"events": [...], "cursor": N}` dict, exactly the
+    technique retail_stock_sync_test.py's own
+    `test_replaying_the_full_pull_result_twice_does_not_double_stock` already
+    uses in-process (via `install_b`) to replay an already-applied batch --
+    generalised here to a REAL separate OS process and to a 3x replay, so the
+    acceptance pass can prove byte-identical convergence across a genuine
+    process boundary rather than only within one Python interpreter.
+  * A logging capture around every action: `sync_service.py`'s own
+    `_resolve_branch_id` logs a WARNING (batched: see
+    `_log_branch_fallback_summary`) exactly when the tier-2 default-branch
+    fallback fires, and NEVER when tier-1 resolves. This pass's requirement D
+    needs to prove BOTH directions -- the warning existing when the fallback
+    fires, and its absence when it does not -- which requires reading the
+    actual log output, not inferring it from a balance number. A small
+    in-process `logging.Handler` attached to `commercial_runtime.sync.
+    sync_service`'s own logger (the exact name `sync_service.py`'s
+    `logging.getLogger(__name__)` resolves to when imported by its real
+    dotted path, matching how `app.py`/`_verify_wb1_device.py` import it)
+    captures every record emitted DURING each individual action and attaches
+    it to that action's own result entry as `_log_warnings` -- so a test can
+    assert on the log output of one specific `pull`, not the whole process.
 
-Boots a REAL Flask app (`app.init_app()`, exactly like every other route-
-level test file in this suite) fresh inside THIS process, with
-`AURA_APP_DATA` pointed at `app_data_dir` -- see _stock_sync_harness.py's own
-module docstring ("the AURA_APP_DATA trap") for why this has to be a
-separate OS process rather than a second boot inside the caller's own.
-Reads `actions_path` (a JSON list of `{"op": ..., ...}` dicts, executed in
-order against this one device), writes a JSON list of per-action results to
-`output_path`, and exits 0. Any exception aborts the WHOLE batch with a
-non-zero exit and a traceback on stderr -- `run_device()` in
-_stock_sync_harness.py surfaces that verbatim rather than letting a broken
-action look like "the device did nothing, everything downstream found
-nothing to check".
-
-OP VOCABULARY
--------------
-HTTP-route ops (need a logged-in `client` -- `login` must be the first
-action of any invocation that uses one of these, UNLESS `create_shop` is
-that first action, which logs in as part of creating the company):
-
-  create_shop      {"op": "create_shop", "email":.., "password":.., "price": 100.0}
-                    -> {"company_id":.., "product_id":.., "branch_id":.., "branch_uid":..}
-  login            {"op": "login", "email":.., "password":..} -> {"ok": true}
-  create_product   {"op": "create_product", "name":.., "sku":.., "price":.., "initial_stock":..}
-                    -> {"product_id":..}
-  sell             {"op": "sell", "product_id":.., "quantity":.., "branch_id": optional}
-                    -> {"status_code":.., "body": {...}}
-  adjust_stock     {"op": "adjust_stock", "product_id":.., "quantity":.., "reason":.., "branch_id": optional}
-                    -> {"status_code":.., "body": {...}}
-  create_branch    {"op": "create_branch", "name":.., "address":.., "phone":..}
-                    -> {"status_code":.., "body": {...}, "branch_id":.., "branch_uid":..}
-                    (branch_id/branch_uid are looked up from `branches` after
-                    the route responds, since the route's own JSON body only
-                    ever returns `{"id": ...}` -- see retail_api.py's
-                    `create_branch`. An OPERATOR-created branch queues a real
-                    `branch`/create sync event, unlike `_default_branch`'s
-                    self-heal, which deliberately queues none -- see that
-                    function's own "Wave B, CORRECTED" comment -- so this is
-                    the only op in this vocabulary that produces a branch
-                    uid two devices can ever agree names the same place.)
-
-Non-HTTP ops (operate directly on this device's own retail.db / SyncService,
-no login needed -- exactly mirroring how wave A's own `install_b` fixture
-drives `SyncService` methods directly rather than through a route):
-
-  push             {"op": "push"} -> {"ok": true}
-  pull             {"op": "pull"} -> {"ok": true}
-  compute_drift    {"op": "compute_drift", "company_id":..} -> {"drift": [...]}
-  get_balance      {"op": "get_balance", "company_id":.., "product_id":.., "branch_id":..}
-                    -> {"quantity_on_hand": float|None}
-  quarantine_count {"op": "quarantine_count"} -> {"count": int}
-  branch_by_uid    {"op": "branch_by_uid", "uid":..} -> {"branch": dict|None}
-  branch_count     {"op": "branch_count", "company_id":..} -> {"count": int}
-                    (COUNT(*) FROM branches WHERE company_id=? -- the direct
-                    regression check for the duplicate-branch identity bug:
-                    a company that only ever self-healed or synced ONE
-                    physical branch must show exactly 1, never 2.)
-  movement_count_by_uid {"op": "movement_count_by_uid", "uid":..} -> {"count": int}
-  outbox_delete_entity_type {"op": "outbox_delete_entity_type", "entity_type":..} -> {"deleted": int}
-  cash_session_open {"op": "cash_session_open", "branch_id":.., "terminal_id":..}
-                    -> {"status_code":.., "body": {...}}
-  cash_session_status {"op": "cash_session_status"} -> {"open": bool, "session": dict|None}
+Run as a bare subprocess, same contract as its ancestors:
+    python _accept_device.py <app_data_dir> <relay_db_path> <actions_path> <output_path>
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import uuid
 from pathlib import Path
+
+_CAPTURED_LOGS: list = []
+
+
+class _ListHandler(logging.Handler):
+    """Appends the FORMATTED message (not the raw LogRecord, which is not
+    JSON-serialisable) to a shared module-level list. Deliberately only ever
+    attached once, at module import time -- see `main()`'s own attach call.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        _CAPTURED_LOGS.append(self.format(record))
 
 
 def main() -> None:
     app_data_dir, relay_db_path, actions_path, output_path = sys.argv[1:5]
 
     tests_dir = Path(__file__).resolve().parent
-    product_dir = tests_dir.parent           # products/retail
+    product_dir = tests_dir.parent
     backend_dir = product_dir / "backend"
-    suite_root = product_dir.parent.parent   # repo root
+    suite_root = product_dir.parent.parent
     for p in (str(suite_root), str(backend_dir), str(tests_dir)):
         if p not in sys.path:
             sys.path.insert(0, p)
@@ -97,9 +81,6 @@ def main() -> None:
     Path(app_data_dir, "database", "subsystems").mkdir(parents=True, exist_ok=True)
 
     from commercial_runtime.licensing_contracts.test_support import seed_active_license
-    # Idempotent (LicenseStateRepository.save() upserts) -- safe to call on
-    # every invocation, including the Nth relaunch of an already-onboarded
-    # device, not just the very first.
     seed_active_license(app_data_dir, product_code="AURA_RETAIL", platform="WINDOWS")
 
     import app as _app_module
@@ -115,13 +96,16 @@ def main() -> None:
 
     from _stock_sync_harness import FileRelay
 
+    # Attach the capture handler to the EXACT logger sync_service.py's own
+    # `logging.getLogger(__name__)` resolves to, now that the module has
+    # actually been imported under its real dotted path above.
+    _sync_logger = logging.getLogger("commercial_runtime.sync.sync_service")
+    _sync_logger.setLevel(logging.WARNING)
+    _handler = _ListHandler()
+    _handler.setLevel(logging.WARNING)
+    _sync_logger.addHandler(_handler)
+
     relay = FileRelay(relay_db_path)
-    # Mirrors app.py's OWN production wiring exactly (both local_company_id_
-    # provider and local_ensure_schema) -- see that file's own SyncService
-    # construction comment. Using anything narrower here would let this
-    # harness silently dodge the exact lazy-schema bug that comment
-    # describes rather than prove this device survives it like a real one
-    # does.
     service = SyncService(
         client_factory=lambda: relay,
         get_conn=get_retail_conn,
@@ -141,6 +125,7 @@ def main() -> None:
     actions = json.loads(Path(actions_path).read_text(encoding="utf-8"))
     for action in actions:
         op = action["op"]
+        _log_start = len(_CAPTURED_LOGS)
 
         if op == "create_shop":
             company_id = str(uuid.uuid4())
@@ -181,14 +166,6 @@ def main() -> None:
             results.append({"ok": True})
 
         elif op == "bootstrap":
-            # A genuinely fresh receiving device: an admin and a company, but
-            # NO product of its own -- unlike `create_shop`, which is always
-            # the ORIGINATING device of a shared catalogue in these tests.
-            # `_default_branch` is never called by anything this action
-            # does, so this device self-heals no branch of its own either --
-            # its first branch is whichever one arrives by sync, exactly
-            # like `_resolve_branch_id`'s own docstring describes for a
-            # brand-new install's tier-1 case.
             company_id = str(uuid.uuid4())
             email = action.get("email") or f"device-{uuid.uuid4().hex[:8]}@test.local"
             password = action.get("password", "DeviceStockPW1")
@@ -222,7 +199,8 @@ def main() -> None:
             if action.get("branch_id") is not None:
                 body["branch_id"] = action["branch_id"]
             r = client.post(f"{API}/sales", json=body)
-            results.append({"status_code": r.status_code, "body": r.get_json()})
+            results.append({"status_code": r.status_code, "body": r.get_json(),
+                             "sale_id": (r.get_json().get("data") or {}).get("id") if r.status_code == 200 else None})
 
         elif op == "adjust_stock":
             body = {"quantity": action["quantity"], "reason": action.get("reason", "Device stock-sync test")}
@@ -248,12 +226,54 @@ def main() -> None:
             results.append({"status_code": r.status_code, "body": r.get_json(),
                              "branch_id": branch_id, "branch_uid": branch_uid})
 
+        elif op == "create_supplier":
+            r = client.post(f"{API}/suppliers", json={"name": action["name"]})
+            results.append({"status_code": r.status_code, "body": r.get_json(),
+                             "supplier_id": (r.get_json().get("data") or {}).get("id") if r.status_code == 200 else None})
+
+        elif op == "create_po":
+            payload = {"supplier_id": action["supplier_id"], "items": action["items"]}
+            # ACCEPTANCE-PASS ADDITION (see module docstring): explicit
+            # branch routing, so a delivery can be proven to land on a named
+            # OPERATOR-created branch rather than whatever this device's own
+            # `_default_branch` happens to resolve to.
+            if action.get("branch_id") is not None:
+                payload["branch_id"] = action["branch_id"]
+            r = client.post(f"{API}/purchase-orders", json=payload)
+            results.append({"status_code": r.status_code, "body": r.get_json(),
+                             "po_id": (r.get_json().get("data") or {}).get("id") if r.status_code == 200 else None})
+
+        elif op == "receive_po":
+            r = client.post(f"{API}/purchase-orders/{action['po_id']}/receive")
+            results.append({"status_code": r.status_code, "body": r.get_json()})
+
+        elif op == "create_return":
+            body = {"sale_id": action["sale_id"], "items": action["items"]}
+            r = client.post(f"{API}/returns", json=body)
+            results.append({"status_code": r.status_code, "body": r.get_json()})
+
         elif op == "push":
             service.push_once()
             results.append({"ok": True})
 
         elif op == "pull":
             service.pull_once()
+            results.append({"ok": True})
+
+        elif op == "apply_result_raw":
+            # ACCEPTANCE-PASS ADDITION (see module docstring): applies a
+            # caller-supplied pull result directly, bypassing the cursor --
+            # deliberately callable more than once with the IDENTICAL events,
+            # to prove replay convergence across a real process boundary
+            # rather than only within one Python interpreter (as the
+            # delivered suite's own `install_b`-based replay test already
+            # does in-process).
+            conn = get_retail_conn()
+            try:
+                service.apply_pull_result(conn, {"events": action["events"], "cursor": action["cursor"]})
+                conn.commit()
+            finally:
+                conn.close()
             results.append({"ok": True})
 
         elif op == "compute_drift":
@@ -292,15 +312,24 @@ def main() -> None:
                 conn.close()
             results.append({"branch": dict(row) if row else None})
 
-        elif op == "branch_count":
+        elif op == "list_branches":
             conn = get_retail_conn()
             try:
-                n = conn.execute(
-                    "SELECT COUNT(*) AS c FROM branches WHERE company_id=?", (action["company_id"],)
-                ).fetchone()["c"]
+                rows = conn.execute(
+                    "SELECT id, company_id, name, uid, status FROM branches WHERE company_id=? ORDER BY id",
+                    (action["company_id"],),
+                ).fetchall()
             finally:
                 conn.close()
-            results.append({"count": n})
+            results.append({"branches": [dict(r) for r in rows]})
+
+        elif op == "raw_select":
+            conn = get_retail_conn()
+            try:
+                rows = conn.execute(action["sql"], action.get("params", [])).fetchall()
+            finally:
+                conn.close()
+            results.append({"rows": [dict(r) for r in rows]})
 
         elif op == "movement_count_by_uid":
             conn = get_retail_conn()
@@ -325,8 +354,13 @@ def main() -> None:
         elif op == "cash_session_open":
             r = client.post(f"{API}/cash-sessions/open", json={
                 "branch_id": action["branch_id"], "opening_float": action.get("opening_float", 100.0),
-                "terminal_id": action.get("terminal_id"),
             })
+            results.append({"status_code": r.status_code, "body": r.get_json(),
+                             "session_id": (r.get_json().get("data") or {}).get("id") if r.status_code == 200 else None})
+
+        elif op == "cash_session_close":
+            body = {"closing_float_counted": action["closing_float_counted"]}
+            r = client.post(f"{API}/cash-sessions/{action['session_id']}/close", json=body)
             results.append({"status_code": r.status_code, "body": r.get_json()})
 
         elif op == "cash_session_status":
@@ -341,6 +375,12 @@ def main() -> None:
 
         else:
             raise ValueError(f"unknown device action op: {op!r}")
+
+        # Attach whatever this ONE action logged (WARNING+) to its own result
+        # entry -- see module docstring's logging-capture paragraph. Every
+        # branch above appends EXACTLY one entry, so results[-1] is always
+        # this action's own.
+        results[-1]["_log_warnings"] = _CAPTURED_LOGS[_log_start:]
 
     Path(output_path).write_text(json.dumps(results, default=str), encoding="utf-8")
 
