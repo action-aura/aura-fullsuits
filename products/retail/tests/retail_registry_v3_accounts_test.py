@@ -433,7 +433,34 @@ def test_a_fresh_v0_database_reaches_v3_in_one_pass(tmp_path):
 
 @pytest.fixture
 def pin_conn(migrated):
+    from commercial_runtime.identity.registry_sync_schema import apply_registry_sync_schema
+
     conn, _ = migrated
+    # `set_user_pin`/`clear_user_pin` queue a `user` sync event as of wave B2
+    # stage 2b, and that write lands in registry.db's OWN `sync_outbox` -- a
+    # table registry v5 adds, well after the v3 migration the fixtures above
+    # deliberately stop at. Without this the five PIN tests below fail with
+    # `no such table: sync_outbox`.
+    #
+    # The v3 floor is correct for the migration assertions above and wrong
+    # here, and the difference is worth being precise about: those tests
+    # exercise the MIGRATION, so they must stay pinned at exactly 3. These
+    # five call PRODUCTION write functions, and in production
+    # `init_registry_db()` has always brought the registry to the CURRENT
+    # version before any code path can reach `set_user_pin`. A fixture frozen
+    # at v3 is testing a state no running install is ever in.
+    #
+    # Only the sync schema is applied, rather than bumping this file's whole
+    # fixture to current, so the `user_version == 3` assertions above keep
+    # meaning exactly what they mean today.
+    #
+    # What this can no longer catch: `set_user_pin` acquiring a dependency on
+    # some FUTURE registry table would show up here as a green test rather
+    # than a missing-table failure. That is the same trade every other test in
+    # this repo that runs against a current-schema database already makes, and
+    # the emission itself is separately pinned by
+    # `commercial_runtime/identity/tests/test_user_sync_emission_write_sites.py`.
+    apply_registry_sync_schema(conn)
     return conn
 
 

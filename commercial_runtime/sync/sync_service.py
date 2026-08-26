@@ -34,14 +34,14 @@ Both instances pull from the SAME relay, so the retail instance WILL receive
 alone, with no other signal for which stream an event belongs to.
 
 Stage 2a (this file, `_apply_event`'s `user` branch below +
-`REGISTRY_SYNC_ENTITY_TYPES`) wires the APPLY side only: a registry-
-configured instance can now correctly apply a `user` create/update event
-handed to it directly (by a test, or eventually by a real pull). No write
-site anywhere emits a `user` sync event yet, and no user-facing route has
-changed -- that is stage 2b, tracked separately. Until stage 2b lands, this
-branch is reachable only from a test that injects an event by hand, exactly
-like `retail_stock_sync_apply_hardening_test.py` does for wave B1's
-`inventory_movement`/`branch` before their own write sites existed.
+`REGISTRY_SYNC_ENTITY_TYPES`) wired the APPLY side only: a registry-
+configured instance can correctly apply a `user` create/update event handed
+to it directly (by a test, or by a real pull). Stage 2b (commercial_runtime/
+identity/user_accounts.py's `_queue_user_sync_event` + its call sites in
+onboarding_routes.py/auth_routes.py/mt_auth.py) is the EMIT side, and has
+since landed: every allowlisted write to `users` now queues a `user` event
+into registry.db's own `sync_outbox`, in the same transaction as the row
+write. `user_permission` is still not synced at all (stage 3).
 
 This is why the entity-type allowlist above is an ENFORCED constructor
 argument (`handled_entity_types`, defaulting to `RETAIL_SYNC_ENTITY_TYPES` so

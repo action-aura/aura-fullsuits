@@ -305,6 +305,38 @@ together, across `account_schema.py`, `auth_routes.py`, `mt_auth.py`,
 file was missing from the earlier estimate, which is exactly why the
 enumeration has to be exhaustive rather than ranked).
 
+## Known cost to Clinic, decided rather than discovered
+
+Clinic registers `auth_bp` and `onboarding_bp` (`products/clinic/backend/app.py:82-97`)
+and runs the same shared registry migration chain, so it gets the v5
+`sync_outbox` table and every emission site in this wave is reachable from
+Clinic's own routes. Clinic's backend never imports `commercial_runtime.sync`,
+never constructs a `SyncService`, and never calls `push_once` — grep-verified.
+**So a Clinic account action queues a row that nothing will ever drain.**
+
+That is a real cost, not nothing, and it is written down here rather than
+left to be found. Three things bound it:
+
+* **It is the pre-existing pattern, not a new violation.** Retail's own
+  `_queue_sync_event` (`retail_api.py:568`) is likewise UNGATED — it writes to
+  `sync_outbox` whether or not a relay is configured, so a Retail install with
+  sync switched off accumulates rows exactly the same way. Introducing a
+  bespoke gate for the registry stream alone would make the two products
+  behave differently for no principled reason.
+* **The rate is bounded by design.** Every high-frequency path — ordinary
+  login, failed-login counting, lockout, and the hash-upgrade re-encoding — is
+  deliberately excluded and emits nothing. Only deliberate account management
+  (a hire, a role change, a password reset, a PIN change) leaves a row. For a
+  clinic that is a handful of rows a year.
+* **The rows are not worthless if Clinic ever syncs.** An outbox that has been
+  accumulating is history the first sync can carry, which is why retail does
+  not gate either.
+
+It still breaks this codebase's stated "invisible unless opted in" principle
+in the strict sense, so it belongs in `ROADMAP.md` as outbox retention for
+installs with no drain path — an item that applies to BOTH products, and to
+whoever owns Clinic, rather than something this wave should solve unilaterally.
+
 ## Open questions remaining
 * There are roughly **nineteen** write sites against `users` across
   `account_schema.py`, `auth_routes.py`, `mt_auth.py`, `onboarding_routes.py`

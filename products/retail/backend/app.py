@@ -548,12 +548,17 @@ if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':
     # catalogue/money/stock write) pushes through, and there is exactly one
     # slot. Registering this second instance there would silently redirect
     # every existing nudge() call away from the retail outbox it is meant to
-    # drain. No write site emits a `user` event yet (stage 2b, not this
-    # stage), so this instance's own outbox is always empty today; it still
-    # runs its own push/pull timer via `.start()` below so the APPLY side
-    # (a `user` event arriving from Owner, once another device's stage 2b
-    # lands) is live from day one of stage 2a, not held back for a second
-    # deploy.
+    # drain. It runs its OWN push/pull timer via `.start()` below instead --
+    # a plain 10-second tick, not a nudge()-triggered one -- which is what
+    # actually drains this instance's outbox: every identity write site
+    # (Phase 5 wave B2 stage 2b, commercial_runtime/identity/user_accounts.py
+    # `_queue_user_sync_event` + its onboarding_routes.py/auth_routes.py call
+    # sites) now queues a `user` event here on account creation, password
+    # change, role/status change, language change and PIN set/clear. Stage
+    # 2a shipped this timer BEFORE any write site existed specifically so the
+    # APPLY side (a `user` event arriving from Owner, from another device's
+    # own stage 2b) was already live the moment stage 2b landed, with no
+    # second deploy required.
     def _registry_sync_get_conn():
         from commercial_runtime.identity.registry_db import get_conn as _registry_get_conn
         return _registry_get_conn()

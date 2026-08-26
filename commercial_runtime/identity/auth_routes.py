@@ -69,8 +69,19 @@ def set_language():
     own docstring says it is "what the shipped Retail/Clinic standalone
     products actually run"). The rest of that 698-line file (onboarding
     wizard, employee management) was ported in Phase 3 -- see
-    commercial_runtime/identity/onboarding_routes.py."""
+    commercial_runtime/identity/onboarding_routes.py.
+
+    Phase 5 wave B2 stage 2b closed the one gap `user_accounts._touch_user`'s
+    docstring used to document by name: this write used to set `language`
+    with no `row_version`/`updated_at_utc` bump at all, deliberately, because
+    "language...has no cross-device meaning today, and Phase 5 has to decide
+    whether it travels." The wave's own field allowlist settles that --
+    `language` IS synced now -- so this bumps in the SAME UPDATE as every
+    other write site in this file/module, and queues the event, exactly like
+    the account-management routes in onboarding_routes.py already do.
+    """
     from commercial_runtime.identity.registry_db import get_conn
+    from commercial_runtime.identity import user_accounts as _accounts
     data = request.get_json(silent=True) or {}
     lang = data.get('language', 'en')
     if lang not in ('en', 'ar'):
@@ -81,7 +92,12 @@ def set_language():
         return jsonify({'success': True, 'language': lang})
     try:
         conn = get_conn()
-        conn.execute("UPDATE users SET language=? WHERE id=?", (lang, uid))
+        conn.execute(
+            "UPDATE users SET language=?, row_version=COALESCE(row_version, 1)+1, "
+            "updated_at_utc=? WHERE id=?",
+            (lang, _accounts.now_utc_iso(), uid),
+        )
+        _accounts._queue_user_sync_event(conn, uid, 'update')
         conn.commit()
         conn.close()
     except Exception as e:

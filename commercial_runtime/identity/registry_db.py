@@ -12,8 +12,10 @@ see registry_sync_schema.py -- schema only, no write-site emits through it
 yet), `sync_apply_quarantine` (v6, Phase 5 wave B2 stage 2a -- registry.db's
 OWN apply-side quarantine table, mirroring retail.db's; see
 registry_quarantine_schema.py. `_apply_event`'s `user` branch
-(commercial_runtime/sync/sync_service.py) is wired and proven at this stage
--- still no write site emits a `user` event yet, that is stage 2b).
+(commercial_runtime/sync/sync_service.py) was wired and proven at that stage;
+stage 2b -- commercial_runtime/identity/user_accounts.py's
+`_queue_user_sync_event` and its call sites -- has since made every
+allowlisted write to `users` actually queue an event through it).
 
 This is a deliberately trimmed extraction of Action Aura Enterprise's
 database/registry_db.py (which owns ~20 tables for the full platform --

@@ -46,9 +46,24 @@ Three things live here.
 3. PINs. A PIN is ATTRIBUTION, never AUTHORIZATION -- see the PIN section
    below, which is the whole point of that distinction being written down in
    code rather than only in the design document.
+
+4. SYNC EMISSION (Phase 5 wave B2 stage 2b,
+   docs/launch-readiness/phase5-waveb2-user-sync.md). `_queue_user_sync_event`
+   is the one place a `user` sync_outbox row is ever built -- every write site
+   across this module and `onboarding_routes.py`/`auth_routes.py` that changes
+   an allowlisted field calls it, in the SAME transaction as the row write,
+   never after a separate commit. It re-reads the row from `conn` rather than
+   trusting values the caller already has in hand, which is what makes the
+   payload correct regardless of whether the caller's write took one
+   statement or two (`set_user_pin`/`clear_user_pin` write `pin_hash` and then
+   bump `row_version` via `_touch_user` as a SEPARATE statement) -- and it is
+   what makes a stripped `row_version` bump elsewhere show up here as an
+   UNBUMPED payload rather than silently going unnoticed: nothing has to
+   police every call site, the re-read simply reports what is actually true.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import unicodedata
 import uuid
@@ -58,6 +73,24 @@ from commercial_runtime.security.passwords import (
     PasswordPolicyError,
     hash_password,
     verify_password,
+)
+
+#: Exactly the wave B2 field allowlist (design Decision 3) -- `email`,
+#: `employee_id`, `role`, `status`, `require_password_change`, `language`,
+#: `password_hash`, `pin_hash` -- plus the three identity/version fields
+#: every event carries (`uid`, `row_version`, `updated_at_utc`) and
+#: `session_version` (MAX'd on apply, never a plain last-write-wins field --
+#: see sync_service.py's `user` branch). NEVER `clinic_role`,
+#: `failed_login_count`, `locked_until`: each is excluded on the RECEIVING
+#: side (sync_service.py's `user` branch reads only this exact column list),
+#: so queuing them here would be pointless even before the receiver ignores
+#: them -- but this constant is the SECOND place, not just the first, that
+#: has to know the boundary, and it is named once here rather than repeated
+#: at every call site.
+_SYNCED_USER_COLUMNS = (
+    "uid", "email", "employee_id", "role", "status", "require_password_change",
+    "language", "password_hash", "pin_hash", "row_version", "updated_at_utc",
+    "session_version",
 )
 
 # ── Roles ────────────────────────────────────────────────────────────────────
@@ -360,28 +393,87 @@ def now_utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _queue_user_sync_event(conn: sqlite3.Connection, user_id: str, event_type: str) -> None:
+    """Queue a `user` sync_outbox event into registry.db, in the SAME
+    transaction as the row write it describes -- matching
+    products/retail/backend/api/retail_api.py's `_queue_sync_event` shape
+    (identical `sync_outbox` columns: id, entity_type, entity_id, event_type,
+    payload, created_at), placed here rather than imported from retail
+    because `users` lives in registry.db, not retail.db (design Decision 1),
+    and `commercial_runtime.identity` must stay product-agnostic.
+
+    Deliberately takes a full `Connection`, never a caller's own `Cursor`:
+    this issues its own `conn.execute(...)` calls, so it can never disturb a
+    caller's `cur.lastrowid`/`cur.rowcount` from a PRIOR statement on that
+    same cursor -- the exact trap this project has a real, previously-shipped
+    bug from (see `_default_branch` in retail_api.py). Every call site in
+    this module and in `onboarding_routes.py` passes `conn`, never `cur`.
+
+    Re-reads the row's CURRENT state from `conn` rather than building the
+    payload from values the caller already has -- see this module's
+    docstring, item 4, for why that is what makes the payload correct
+    regardless of how many statements the write took, and what makes a
+    stripped `row_version` bump elsewhere show up as an unbumped payload
+    instead of going unnoticed.
+
+    `entity_id` is `uid`, NEVER `users.id` -- Owner parses `entity_id` as a
+    UUID and rejects anything else (design doc, "Settled before
+    implementation"); `users.id` is a private per-device detail with no such
+    guarantee. A row with no `uid` yet is skipped rather than queuing a
+    malformed event -- unreachable in practice, since both insert sites
+    (`create_admin`, `create_employee`) set one at creation, but a guard
+    costs nothing and a future insert site that forgot to set `uid` would
+    otherwise queue an event Owner refuses on the wire, at a point far more
+    expensive to discover than here.
+    """
+    row = conn.execute(
+        "SELECT {} FROM users WHERE id=?".format(", ".join(_SYNCED_USER_COLUMNS)),
+        (user_id,),
+    ).fetchone()
+    if row is None or not row["uid"]:
+        return
+    payload = {col: row[col] for col in _SYNCED_USER_COLUMNS}
+    conn.execute(
+        "INSERT INTO sync_outbox (id, entity_type, entity_id, event_type, payload, created_at) "
+        "VALUES (?,?,?,?,?,?)",
+        (str(uuid.uuid4()), "user", row["uid"], event_type, json.dumps(payload), now_utc_iso()),
+    )
+
+
 def _touch_user(conn: sqlite3.Connection, user_id: str) -> None:
-    """Bump the row's `row_version` and stamp `updated_at_utc`.
+    """Bump the row's `row_version` and stamp `updated_at_utc`, then queue
+    the `user` sync event the bump implies.
 
     `users` is a shared, admin-device-single-writer table in design §4, and
     `row_version` is the reject-stale marker the sync apply path will compare.
     Every write to a user row therefore has to move it, or the row silently
-    looks unchanged to a peer that already has an older copy.
+    looks unchanged to a peer that already has an older copy -- and, as of
+    Phase 5 wave B2 stage 2b, has to queue an event too, or a peer never
+    learns of the change at all regardless of what the local row says.
+    `_queue_user_sync_event` is called HERE, inside the shared helper, rather
+    than separately at each of this function's two call sites
+    (`set_user_pin`/`clear_user_pin`) -- so neither call site can add a write
+    that bumps the version without also emitting; there is exactly one
+    bump-and-emit helper, not two things to keep in sync by hand.
 
     The account-management routes in `onboarding_routes.py` (create, invite
     setup, enable/disable, role change, permission change, password reset)
     apply the same bump inline rather than calling this helper, because each
     of them already has the row open in an UPDATE of its own and a second
-    statement would be a second write for no reason. One known gap remains:
-    `auth_routes.set_language` writes `users.language` without a bump. It is
-    left as-is deliberately -- language is a per-user UI preference with no
-    cross-device meaning today, and Phase 5 has to decide whether it travels
-    at all before it is worth versioning.
+    statement would be a second write for no reason -- each of THOSE sites
+    calls `_queue_user_sync_event` directly instead. `auth_routes.set_language`
+    used to be the one documented gap here ("language...has no cross-device
+    meaning today, and Phase 5 has to decide whether it travels"): stage 2b's
+    field allowlist settles that question -- `language` IS one of the synced
+    fields -- so that route now bumps inline (matching every other
+    onboarding_routes.py site) and queues its own event; it is no longer a
+    gap.
     """
     conn.execute(
         "UPDATE users SET row_version=COALESCE(row_version, 1) + 1, updated_at_utc=? WHERE id=?",
         (now_utc_iso(), user_id),
     )
+    _queue_user_sync_event(conn, user_id, "update")
 
 
 def set_user_pin(conn: sqlite3.Connection, user_id: str, pin: str) -> None:

@@ -178,6 +178,12 @@ def create_admin():
             VALUES (?, ?, 'ADMIN-0001', ?, ?, 'admin', 'active', 0, ?, 1, ?)
         """, (user_id, company_id, email, pwd_hash, str(uuid.uuid4()), _accounts.now_utc_iso()))
 
+        # Phase 5 wave B2 stage 2b: the owner account itself is a `user`
+        # like any other -- a second device onboarded later (or a restore)
+        # needs to learn it exists. `row_version` is already 1 from the
+        # INSERT above, so this is a `create` event, not an `update`.
+        _accounts._queue_user_sync_event(conn, user_id, 'create')
+
         # Admin still bypasses the permission lookup at mt_auth.py:287, so
         # these rows change no decision today; they exist so the owner's own
         # account shows up in the capability grid the employee screens read,
@@ -344,6 +350,14 @@ def reset_password():
             "row_version=COALESCE(row_version, 1)+1, updated_at_utc=? WHERE id=?",
             (hash_password(password), _accounts.now_utc_iso(), user['id']),
         )
+        # Phase 5 wave B2 stage 2b: a genuinely new password must reach every
+        # other device, or a till that stayed offline through this reset
+        # would still accept the OLD password after reconnecting (design
+        # Decision 2 -- exactly the resurrection scenario `row_version`
+        # exists to prevent). `row_version` was just bumped in the SAME
+        # UPDATE above, so the payload this reads back carries the NEW
+        # version, not the one that was true before this statement ran.
+        _accounts._queue_user_sync_event(conn, user['id'], 'update')
         try:
             conn.execute(
                 "INSERT INTO audit_logs (id, company_id, user_id, action, entity_type, entity_id, new_value_json) "
@@ -660,6 +674,15 @@ def create_employee():
         """, (user_id, company_id, emp_id, email, 'PENDING', role, clinic_role,
               str(uuid.uuid4()), _accounts.now_utc_iso()))
 
+        # Phase 5 wave B2 stage 2b. `conn`, never `cur` -- `cur` is reused
+        # below for the permission rows, the secure_links insert and the
+        # audit row, and `_queue_user_sync_event` issues its own statement
+        # internally; running it on `cur` would leave `cur.lastrowid`
+        # pointing at the outbox row instead of whatever the caller reads it
+        # for next (see that function's own docstring for the named bug this
+        # avoids). `row_version` is 1 from the INSERT above -> `create`.
+        _accounts._queue_user_sync_event(conn, user_id, 'create')
+
         for sub, lvl in perms.items():
             if lvl != 'none':
                 cur.execute("INSERT INTO user_permissions (id, user_id, subsystem, access_level) VALUES (?, ?, ?, ?)",
@@ -758,6 +781,10 @@ def update_status(user_id):
                      "row_version=COALESCE(row_version, 1)+1, updated_at_utc=? "
                      "WHERE id=? AND company_id=?",
                      (status, _accounts.now_utc_iso(), user_id, session['company_id']))
+        # Phase 5 wave B2 stage 2b: a suspend must reach every other till, or
+        # a disabled cashier could keep transacting on a device that never
+        # heard about it.
+        _accounts._queue_user_sync_event(conn, user_id, 'update')
         conn.execute(
             "INSERT INTO audit_logs (id, company_id, user_id, action, entity_type, entity_id, new_value_json) VALUES (?,?,?,?,?,?,?)",
             (str(uuid.uuid4()), session['company_id'], session['mt_user_id'], 'UPDATE_STATUS', 'USER', str(user_id), json.dumps({'status': status})))
@@ -839,6 +866,11 @@ def update_role(user_id):
             "WHERE id=? AND company_id=?",
             (role, _accounts.now_utc_iso(), user_id, session['company_id']),
         )
+        # Phase 5 wave B2 stage 2b: a promotion/demotion must reach every
+        # other till -- `session_version` above already forces re-login
+        # there, but without this the account's stale `role` would still be
+        # what a second device's OWN capability table was seeded against.
+        _accounts._queue_user_sync_event(conn, user_id, 'update')
 
         # RESET the capability rows to the new role's defaults.
         #
@@ -966,6 +998,17 @@ def update_clinic_role(user_id):
             "row_version=COALESCE(row_version, 1)+1, updated_at_utc=? WHERE id=? AND company_id=?",
             (clinic_role, _accounts.now_utc_iso(), user_id, session['company_id'])
         )
+        # Phase 5 wave B2 stage 2b -- SUBTLE: `clinic_role` itself is NOT in
+        # the sync allowlist (a Clinic-owned column; see sync_service.py's
+        # `user` branch), so this event's payload carries every OTHER
+        # allowlisted field unchanged. It still has to be queued, because the
+        # `session_version` bump just above is the revocation this route
+        # exists for -- design Decision 3 applies session_version as
+        # MAX(local, incoming) precisely so a bump made here still forces
+        # re-login on every OTHER device, even though clinic_role itself
+        # never travels. Skipping the emit here would silently keep that
+        # revocation local to this one device.
+        _accounts._queue_user_sync_event(conn, user_id, 'update')
         try:
             conn.execute(
                 "INSERT INTO audit_logs (id, company_id, user_id, action, entity_type, entity_id, new_value_json) VALUES (?,?,?,?,?,?,?)",
@@ -1050,6 +1093,15 @@ def update_perms(user_id):
         conn.execute("UPDATE users SET session_version=session_version+1, "
                      "row_version=COALESCE(row_version, 1)+1, updated_at_utc=? WHERE id=? AND company_id=?",
                      (_accounts.now_utc_iso(), user_id, session['company_id']))
+        # Phase 5 wave B2 stage 2b -- SAME reasoning as update_clinic_role's
+        # own comment: `user_permission` rows are not synced yet (stage 3),
+        # so this event's payload does not carry the permission that just
+        # changed. It still has to be queued because the `session_version`
+        # bump above is a deliberate revocation (a device that already had
+        # this user's OLD permission set logged in must re-authenticate to
+        # pick up the new one) -- MAX(local, incoming) on the receiving side
+        # only propagates that revocation if an event actually arrives.
+        _accounts._queue_user_sync_event(conn, user_id, 'update')
         conn.execute(
             "INSERT INTO audit_logs (id, company_id, user_id, action, entity_type, entity_id, new_value_json) VALUES (?,?,?,?,?,?,?)",
             (str(uuid.uuid4()), session['company_id'], session['mt_user_id'], 'UPDATE_PERM', 'USER_PERMISSION', str(user_id), json.dumps({sub: lvl})))
@@ -1241,6 +1293,10 @@ def employee_setup():
         conn.execute("UPDATE users SET password_hash=?, status='active', require_password_change=0, "
                      "row_version=COALESCE(row_version, 1)+1, updated_at_utc=? WHERE id=?",
                      (hash_password(password), _accounts.now_utc_iso(), user['id']))
+        # Phase 5 wave B2 stage 2b: the employee's first real password (and
+        # their move out of 'pending_setup') must reach every other device --
+        # identical reasoning to reset_password's own emit above.
+        _accounts._queue_user_sync_event(conn, user['id'], 'update')
         conn.execute("UPDATE secure_links SET is_used=1 WHERE id=?", (link['id'],))
 
         try:

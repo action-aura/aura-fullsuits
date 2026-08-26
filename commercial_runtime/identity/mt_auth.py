@@ -166,6 +166,13 @@ def authenticate_registry_user(email: str, password: str) -> dict:
         ok, new_hash = authenticate_and_maybe_upgrade(password, user.get('password_hash') or '')
 
         if not ok:
+            # Phase 5 wave B2 (Decision 3): `failed_login_count`/`locked_until`
+            # are DEVICE-LOCAL security state, deliberately absent from the
+            # sync allowlist -- never bumped, never emitted, on any of the
+            # three writes in this function. See sync_service.py's `user`
+            # branch for the full reasoning (a lockout describes THIS device
+            # being attacked; syncing it would let an idle till clear a live
+            # one).
             failed = int(user.get('failed_login_count') or 0) + 1
             if failed >= MAX_FAILED_ATTEMPTS:
                 locked_until_ts = (datetime.now(timezone.utc) + timedelta(seconds=LOCKOUT_SECONDS)).isoformat()
@@ -187,6 +194,47 @@ def authenticate_registry_user(email: str, password: str) -> dict:
             "UPDATE users SET failed_login_count=0, locked_until=NULL WHERE id=?", (user['id'],)
         )
         if new_hash:
+            # Phase 5 wave B2 stage 2b -- JUDGMENT CALL, decided and recorded
+            # here rather than left silent: this write changes `password_hash`,
+            # an allowlisted field, but it deliberately does NOT bump
+            # `row_version` and does NOT queue a sync event.
+            #
+            # `new_hash` is a re-encoding of the SAME password under the
+            # current hash scheme (`authenticate_and_maybe_upgrade` only
+            # returns one after verifying the OLD hash against the password
+            # just typed) -- not a new password. That distinction is the
+            # whole of the reasoning:
+            #
+            #   DIVERGENCE if this stays local: none. Two devices holding
+            #   different hash *representations* of the identical password
+            #   both still authenticate that password correctly -- each
+            #   device runs this exact upgrade independently, the first time
+            #   THAT device sees a login against the legacy hash. Nothing a
+            #   user or an admin can observe differs.
+            #
+            #   RISK if this emitted instead: this write has no knowledge of
+            #   whether a NEWER password exists on another device. Bumping
+            #   row_version and emitting here would race a genuine
+            #   `reset_password`/`update_role`-style change made elsewhere at
+            #   the same wall-clock moment -- and because both changes touch
+            #   `password_hash`, an unlucky ordering could let a mere
+            #   re-hash of the OLD password win the `row_version` compare and
+            #   overwrite a real new one. That is EXACTLY the resurrection
+            #   scenario design Decision 2 exists to prevent ("a device that
+            #   was offline while a password was changed elsewhere would...
+            #   push its stale row and resurrect the old password"), reached
+            #   here via an ordinary login instead of a reconnect.
+            #
+            #   CHURN if this emitted instead: every account still holding a
+            #   legacy hash would queue one event per device on its first
+            #   post-upgrade login, purely to re-transmit a hash of a
+            #   password that has not changed -- volume with no information
+            #   for a peer to converge on.
+            #
+            # Conclusion: leave this write exactly as it already was --
+            # unbumped, unemitted. Each device self-heals its own hash
+            # representation independently and correctly without ever
+            # needing to hear from another one.
             conn.execute("UPDATE users SET password_hash=? WHERE id=?", (new_hash, user['id']))
             _audit(user['company_id'], user['id'], PASSWORD_HASH_UPGRADED,
                    context={'email': email})

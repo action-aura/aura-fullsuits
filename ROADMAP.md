@@ -123,6 +123,21 @@ of a one-off integration.
   and voids — it just has no viewer UI. The real gap is a permission matrix
   and a manager-approval/override flow, not the audit log itself).
 - No shift management (cash-drawer float, X/Z reports).
+- **`sync_outbox` has no retention policy on installs with no drain path.**
+  Both products' outbox writes are UNGATED: retail's `_queue_sync_event`
+  (`retail_api.py:568`) and the registry-stream emissions added in wave B2
+  stage 2b both write regardless of whether a relay is configured. A Retail
+  install with sync switched off, and **every Clinic install** (Clinic
+  registers `auth_bp`/`onboarding_bp` and so reaches the registry emission
+  sites, but never imports `commercial_runtime.sync` and so never drains
+  them), accumulate rows nothing will ever delete. The rate is small by
+  construction — every high-frequency path (login, failed-login counting,
+  lockout, hash-upgrade) is deliberately excluded, so only deliberate account
+  management leaves a row — and the rows are genuine history if that install
+  ever does sync, which is why neither product gates today. But it does breach
+  the "invisible unless opted in" principle in CLAUDE.md, it affects BOTH
+  products, and it needs an owner. See
+  `docs/launch-readiness/phase5-waveb2-user-sync.md` §Known cost to Clinic.
 - Promotions/discounts engine not started (2026-08-12 correction: basic
   loyalty — `loyalty_points`/`total_spent` accrual at 1pt/$10 — is already
   live on every sale, `retail_api.py:1259`. Gap is a rules engine and point
