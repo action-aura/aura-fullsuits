@@ -191,10 +191,85 @@ because a fixture built the second device as a pure receiver. The multi-device
 harness that actually exercises both devices is a precondition here, not a
 deliverable.
 
-## Open questions to settle before implementation
+## Decision 6 — TWO SyncService instances, each owning one database
 
-* Does `owner/app/sync/` genuinely treat `entity_type` opaquely, or is there an
-  allowlist there too? Verify by reading, then by pushing a `user` event.
+`SyncService.__init__` is already fully injected — `client_factory`,
+`get_conn`, `local_company_id_provider`, `local_ensure_schema` — and retail
+already builds two instances of it (`products/retail/backend/app.py:524` and
+`:560`). So the registry stream is a SECOND instance whose `get_conn` returns
+`registry.db`, with its own `sync_outbox` and its own `sync_cursor` in that
+same file. No constructor change is needed.
+
+**Why two streams rather than one stream that routes by entity type:** a
+single stream would have one cursor, and a batch mixing retail and user
+events could not be committed atomically, because the two databases are both
+in WAL and SQLite gives no cross-database atomic commit (Decision 1). With two
+streams, each batch commits atomically inside the one database it belongs to,
+and each cursor advances independently. The cost is that every device pulls
+the relay stream twice, once per service. For a shop with two or three tills
+that is nothing.
+
+**The hazard this creates, which must be designed out rather than tested for
+later.** Both instances pull from the SAME relay, so the retail instance WILL
+receive `user` events and the registry instance WILL receive `sale` and
+`inventory_movement` events. `_apply_event` dispatches on `entity_type`
+alone. If the `user` branch were reachable from the retail instance it would
+try to write `users` into `retail.db`, which has no such table —
+`sqlite3.OperationalError: no such table: users` escaping `pull_once`, the
+cursor never advancing, and **all sync from all devices stopping forever**.
+That is wave A's defect #1 exactly, reproduced by construction.
+
+So `_apply_event` must know WHICH STREAM IT IS. Add an explicit
+constructor-supplied set of handled entity types (defaulting to the retail
+set, so existing call sites are unchanged), and make an event whose type is
+not in that set a **skip that still advances the cursor** — the same posture
+the module already takes for an unknown future entity type from Owner. This
+turns today's implicit, comment-documented allowlist into an enforced one,
+which is worth doing on its own merits.
+
+Both directions need proving, not just the deny half: a `user` event must be
+IGNORED by the retail instance while still being APPLIED by the registry one,
+and a `sale` event the reverse. And in both cases the cursor must still move.
+
+## Settled before implementation (2026-08-26), by reading the code
+
+**The wire identity is `users.uid`, NOT `users.id`.** Registry v3 already added
+`uid` (`account_schema.py:87`) and, critically, a PARTIAL unique index:
+`CREATE UNIQUE INDEX idx_users_uid ON users(uid) WHERE uid IS NOT NULL`
+(`:114`). Two consequences, both load-bearing:
+
+* The conflict target must repeat that clause **verbatim** —
+  `ON CONFLICT(uid) WHERE uid IS NOT NULL` — or SQLite raises on EVERY apply.
+  This is not theoretical: it is exactly the bug wave A hit against retail
+  v13's identically-shaped index, and it fails on the first event, not the
+  hundredth.
+* `uid` is written as `str(uuid.uuid4())` at every insert site
+  (`onboarding_routes.py:179`, `:661`), so it is a real UUID.
+
+That last point matters more than it looks, because **Owner parses
+`entity_id` as a UUID** — `entity_id = uuid.UUID(str(raw["entity_id"]))`,
+`owner/app/sync/routes.py:192`. Anything that is not a UUID is rejected as
+`InvalidEventError("malformed event")`. `users.id` is a TEXT primary key whose
+format is not guaranteed to be a UUID, so using it as the wire identity would
+have every user event refused at the relay. Use `uid`.
+
+`users` also already carries `row_version` and `updated_at_utc`, both
+populated at insert (`1` and `now_utc_iso()`), so the version-based conflict
+resolution in Decision 2 works on day one with no backfill.
+
+**Owner needs no change.** `owner/app/sync/routes.py:199` validates
+`entity_type` only as a string of bounded length — there is no allowlist — and
+`_ALLOWED_EVENT_TYPES = ("create", "update", "delete")` (`:67`) already covers
+what this wave emits. Still push a real `user` event through before believing
+it.
+
+**The write-site count is 26, not nineteen** — `users` and `user_permissions`
+together, across `account_schema.py`, `auth_routes.py`, `mt_auth.py`,
+`onboarding_routes.py`, `user_accounts.py` and `verification.py` (that last
+file was missing from the earlier estimate, which is exactly why the
+enumeration has to be exhaustive rather than ranked).
+
+## Open questions remaining
 * There are roughly **nineteen** write sites against `users` across
   `account_schema.py`, `auth_routes.py`, `mt_auth.py`, `onboarding_routes.py`
   and `user_accounts.py` — far more than wave B1's six. Every one needs an
