@@ -47,6 +47,8 @@ app.config["TESTING"] = True
 def teardown_module(module):
     if _app_module._sync_service is not None:
         _app_module._sync_service.stop()
+    if _app_module._registry_sync_service is not None:
+        _app_module._registry_sync_service.stop()
     shutil.rmtree(DATA, ignore_errors=True)
 
 
@@ -64,6 +66,36 @@ def test_sync_service_start_was_actually_called_by_init_app():
 def test_sync_service_is_registered_for_nudge():
     from commercial_runtime.sync import sync_service as sync_service_module
 
+    assert sync_service_module._active_service is _app_module._sync_service
+
+
+def test_registry_sync_service_is_constructed_when_url_configured():
+    """Phase 5 wave B2, Decision 6 (Task C) -- the SECOND SyncService
+    instance, wired alongside the retail one whenever it is."""
+    assert _app_module._registry_sync_service is not None
+
+
+def test_registry_sync_service_start_was_actually_called_by_init_app():
+    assert _app_module._registry_sync_service._timer is not None
+
+
+def test_registry_sync_service_is_configured_for_the_registry_entity_set():
+    from commercial_runtime.sync.sync_service import REGISTRY_SYNC_ENTITY_TYPES
+
+    assert _app_module._registry_sync_service._handled_entity_types == REGISTRY_SYNC_ENTITY_TYPES
+
+
+def test_registry_sync_service_is_a_genuinely_separate_instance_from_the_retail_one():
+    assert _app_module._registry_sync_service is not _app_module._sync_service
+
+
+def test_registry_sync_service_is_never_registered_for_nudge():
+    """The global nudge() slot must stay pointed at the RETAIL instance --
+    registering the registry one there would silently redirect every
+    existing retail_api.py nudge() call away from the outbox it drains."""
+    from commercial_runtime.sync import sync_service as sync_service_module
+
+    assert sync_service_module._active_service is not _app_module._registry_sync_service
     assert sync_service_module._active_service is _app_module._sync_service
 
 

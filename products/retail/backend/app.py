@@ -476,10 +476,12 @@ app.register_blueprint(make_licensing_blueprint(
 # this client produces verifies against the SAME installation Owner already
 # knows from activation/check-in.
 _sync_service = None
+_registry_sync_service = None
 if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':
     from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
     from commercial_runtime.sync.relay_client import SyncRelayClient
     from commercial_runtime.sync.sync_service import (
+        REGISTRY_SYNC_ENTITY_TYPES,
         SyncService,
         local_company_id_from_registry,
         register_active_service,
@@ -524,6 +526,41 @@ if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':
     _sync_service = SyncService(_build_sync_client, _sync_get_conn, local_company_id_from_registry,
                                 local_ensure_schema=_ensure_credit_schema)
     register_active_service(_sync_service)
+
+    # Phase 5 wave B2, Decision 6 (docs/launch-readiness/
+    # phase5-waveb2-user-sync.md): a SECOND SyncService instance, pulling
+    # the SAME relay stream (`_build_sync_client` -- the exact same signer,
+    # so this stream authenticates as the same installation) into a
+    # DIFFERENT database. `users` lives in registry.db, not retail.db, and
+    # the two run in separate WAL-mode files with no cross-database atomic
+    # commit (§Decision 1) -- so `_sync_get_conn` below is registry.db's own
+    # `get_conn`, never `_sync_get_conn` above. `handled_entity_types=
+    # REGISTRY_SYNC_ENTITY_TYPES` is what keeps this instance from ever
+    # trying to write a `sale`/`category`/... event into registry.db, which
+    # has no such tables -- see sync_service.py's module docstring
+    # "Two-stream design" paragraph for the exact wedge this design avoids.
+    # `local_ensure_schema` is intentionally omitted: that hook only ever
+    # exists for retail's lazy, route-triggered AR/AP migration
+    # (`_ensure_credit_schema`), which has nothing to do with `users`.
+    #
+    # Deliberately NEVER passed to `register_active_service` -- that global
+    # slot is what `nudge()` (called from retail_api.py after every
+    # catalogue/money/stock write) pushes through, and there is exactly one
+    # slot. Registering this second instance there would silently redirect
+    # every existing nudge() call away from the retail outbox it is meant to
+    # drain. No write site emits a `user` event yet (stage 2b, not this
+    # stage), so this instance's own outbox is always empty today; it still
+    # runs its own push/pull timer via `.start()` below so the APPLY side
+    # (a `user` event arriving from Owner, once another device's stage 2b
+    # lands) is live from day one of stage 2a, not held back for a second
+    # deploy.
+    def _registry_sync_get_conn():
+        from commercial_runtime.identity.registry_db import get_conn as _registry_get_conn
+        return _registry_get_conn()
+
+    _registry_sync_service = SyncService(
+        _build_sync_client, _registry_sync_get_conn, local_company_id_from_registry,
+        handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES)
 elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
     # Android's own wiring (multi-device-sync-foundation, Task 9): this
     # process never holds the Android device's private key
@@ -650,7 +687,16 @@ def init_app():
     False on Android. Calling `.start()` on it would run Python's own
     push/pull timer, which would call its `client_factory` (`None`) and
     crash on the first tick -- Kotlin's SyncCoordinator is what drives
-    Android's push/pull loop instead."""
+    Android's push/pull loop instead.
+
+    `_registry_sync_service` (Phase 5 wave B2, Decision 6) is started here
+    too, independently of `_sync_service` -- both are `None` together or
+    both non-`None` together on Windows (both are only ever built inside
+    the SAME `if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM !=
+    'ANDROID':` block above), but each is a genuinely separate
+    `SyncService` with its OWN timer/thread/lock, so each needs its own
+    `.start()` call -- `.start()` on one has no effect on the other's own
+    scheduling."""
     init_registry_db()
     init_retail()
     # Launch-readiness Phase 5 prerequisite #1 -- must run AFTER both
@@ -661,6 +707,8 @@ def init_app():
     _converge_and_refuse_to_serve_if_stuck()
     if _sync_service is not None:
         _sync_service.start()
+    if _registry_sync_service is not None:
+        _registry_sync_service.start()
     _resume_einvoicing_workers()
     _resume_notifications_workers()
     _resume_whatsapp_workers()

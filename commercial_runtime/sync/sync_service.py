@@ -22,16 +22,26 @@ how to apply yet.
 Two-stream design (Phase 5 wave B2, docs/launch-readiness/
 phase5-waveb2-user-sync.md §Decision 6): `users`/`user_permissions` live in
 `registry.db`, a DIFFERENT database file from `retail.db`'s `sync_outbox`/
-`sync_cursor`, so wave B2 gives registry.db its own outbox/cursor
-(registry_sync_schema.py, REGISTRY_SCHEMA_VERSION=5) and runs a SECOND
-`SyncService` instance whose `get_conn` returns registry.db -- rather than
-`ATTACH`-ing the two databases into one transaction (ruled out in that
-document: both run WAL mode, and SQLite gives no cross-database atomic
-commit once either side is in WAL). Both instances pull from the SAME
-relay, so the retail instance WILL receive `user` events and the registry
-instance WILL receive `sale`/`inventory_movement` events -- `_apply_event`
-dispatches on `entity_type` alone, with no other signal for which stream an
-event belongs to.
+`sync_cursor`, so wave B2 gives registry.db its own outbox/cursor/quarantine
+(registry_sync_schema.py + registry_quarantine_schema.py,
+REGISTRY_SCHEMA_VERSION=6) and runs a SECOND `SyncService` instance whose
+`get_conn` returns registry.db -- rather than `ATTACH`-ing the two databases
+into one transaction (ruled out in that document: both run WAL mode, and
+SQLite gives no cross-database atomic commit once either side is in WAL).
+Both instances pull from the SAME relay, so the retail instance WILL receive
+`user` events and the registry instance WILL receive `sale`/
+`inventory_movement` events -- `_apply_event` dispatches on `entity_type`
+alone, with no other signal for which stream an event belongs to.
+
+Stage 2a (this file, `_apply_event`'s `user` branch below +
+`REGISTRY_SYNC_ENTITY_TYPES`) wires the APPLY side only: a registry-
+configured instance can now correctly apply a `user` create/update event
+handed to it directly (by a test, or eventually by a real pull). No write
+site anywhere emits a `user` sync event yet, and no user-facing route has
+changed -- that is stage 2b, tracked separately. Until stage 2b lands, this
+branch is reachable only from a test that injects an event by hand, exactly
+like `retail_stock_sync_apply_hardening_test.py` does for wave B1's
+`inventory_movement`/`branch` before their own write sites existed.
 
 This is why the entity-type allowlist above is an ENFORCED constructor
 argument (`handled_entity_types`, defaulting to `RETAIL_SYNC_ENTITY_TYPES` so
@@ -232,6 +242,21 @@ RETAIL_SYNC_ENTITY_TYPES = frozenset({
     "sale", "sale_item", "payment", "return", "return_item",
     "inventory_movement", "branch",
 })
+
+#: Phase 5 wave B2 (docs/launch-readiness/phase5-waveb2-user-sync.md) -- the
+#: entity types the REGISTRY-configured `SyncService` instance applies (a
+#: SECOND instance, wired in products/retail/backend/app.py alongside the
+#: retail one, whose `get_conn` returns registry.db -- see the module
+#: docstring's "Two-stream design" paragraph and `_apply_event`'s `user`
+#: branch below). Deliberately DISJOINT from `RETAIL_SYNC_ENTITY_TYPES`:
+#: `user` is never in the retail set, and none of the retail set is ever in
+#: this one -- the whole point of `handled_entity_types` (added stage 1) is
+#: that each stream only ever writes to the database it actually owns.
+#: `user_permissions` (registry.db, keyed `user_id`+`subsystem`) is
+#: deliberately NOT here yet -- out of scope for stage 2a, see that stage's
+#: own task description; a cashier synced to a second till with no
+#: permissions there is a real, known gap this stage does not close.
+REGISTRY_SYNC_ENTITY_TYPES = frozenset({"user"})
 
 #: Of `RETAIL_SYNC_ENTITY_TYPES` (or whatever set a given instance is
 #: actually configured with), the subset that ever stamps a company_id onto
@@ -1090,6 +1115,137 @@ class SyncService:
                 (local_company_id, p.get("name"), p.get("address", ""), p.get("phone", ""),
                  p.get("status", "active"), p.get("uid")),
             )
+        elif entity_type == "user":
+            # Phase 5 wave B2 stage 2a (docs/launch-readiness/
+            # phase5-waveb2-user-sync.md). Only ever reachable from the
+            # REGISTRY-configured instance (`conn` is a registry.db
+            # connection there -- see `handled_entity_types`'s gate above and
+            # REGISTRY_SYNC_ENTITY_TYPES); `users` does not exist in
+            # retail.db at all, which is exactly why that gate has to hold.
+            #
+            # `event_type` outside create/update is silently ignored, same
+            # posture as `branch` above -- there is no `delete` case here:
+            # `users` uses a soft `deleted_at_utc` tombstone (design §4), and
+            # neither that column nor a delete event is in this stage's
+            # scope (stage 2a is apply-side only; no write site emits any
+            # `user` event yet -- that is stage 2b).
+            if event_type not in ("create", "update"):
+                return True
+            # `uid` -- NOT `id` -- is the wire identity (settled in the
+            # design doc, "by reading the code"): registry v3's
+            # `idx_users_uid` is a PARTIAL unique index
+            # (`ON users(uid) WHERE uid IS NOT NULL`), and the conflict
+            # target below repeats that WHERE clause VERBATIM for the exact
+            # reason every other partial-indexed table in this file does --
+            # SQLite's UPSERT syntax requires it to match the index at all;
+            # omitting it raises `OperationalError` on EVERY apply, not just
+            # a collision (verified directly against sqlite3, not assumed).
+            # A brand-new local `id` is minted here (str(uuid.uuid4())),
+            # never the sending device's own `id` -- `users.id` is a
+            # private per-device detail (account_schema.py's own docstring:
+            # "the local id ... stays a private detail of this install"),
+            # identical reasoning to `branches.id` never being carried
+            # across the wire.
+            #
+            # Conflict resolution is `row_version`, NEVER last-write-wins
+            # (Decision 2) -- a device that was offline while a password
+            # changed elsewhere must not resurrect the old one on
+            # reconnect, and a `status='suspended'` set on the admin's till
+            # must not be silently undone by a till that has not heard
+            # about it yet. The `WHERE excluded.row_version >
+            # users.row_version` clause on the DO UPDATE is what enforces
+            # this: a lower OR EQUAL incoming row_version makes the whole
+            # UPDATE a no-op (proved directly against sqlite3: SQLite does
+            # not touch a single column when an UPSERT's own WHERE
+            # evaluates false) -- not an error, not a quarantine, just
+            # nothing happening. This has no effect on the INSERT half
+            # (a genuinely new uid always lands; there is no local row to
+            # be "stale" against).
+            #
+            # Exactly the named allowlist below is ever written -- never
+            # `SELECT *`, never `excluded.*` -- so a future column added to
+            # `users` cannot silently start replicating cross-device
+            # (Decision 3). Three columns are DELIBERATELY absent from both
+            # the column list and the SET clause, each for a stated reason,
+            # never "forgotten":
+            #   * `clinic_role` -- a Clinic-owned column; Clinic is out of
+            #     scope for features and must not regress from a Retail
+            #     sync stream writing it.
+            #   * `failed_login_count`, `locked_until` -- device-local
+            #     security state, not a shared fact. A lockout describes
+            #     THIS device being attacked; a stale row arriving from an
+            #     idle till syncing this user's OTHER fields must not clear
+            #     a live lockout mid-attack (ENGINEERING.md Sec1(4)'s named
+            #     failure shape: a legitimately-stored value arriving
+            #     through a normal path and defeating the guard it sits
+            #     behind).
+            # `session_version` is likewise absent from the plain allowlist
+            # -- it is the revocation counter Phase 5's prerequisites bump
+            # to force re-login, and must NEVER move downward regardless of
+            # delivery order. Applied as `MAX(local, incoming)` instead of a
+            # plain `excluded.session_version` -- COALESCE'd against NULL on
+            # both sides (matching the `COALESCE(row_version, 1)+1` idiom
+            # `onboarding_routes.py`/`user_accounts.py` already use for this
+            # exact column) purely as defence against a legacy/hand-built
+            # row that somehow has no value yet; every real write site
+            # always supplies one. `local_company_id` is this receiving
+            # device's own, never the payload's -- identical reasoning to
+            # every other entity type in this file.
+            uid = p.get("uid")
+            try:
+                conn.execute(
+                    "INSERT INTO users (id, company_id, uid, employee_id, email, role, status, "
+                    "require_password_change, language, password_hash, pin_hash, row_version, "
+                    "updated_at_utc, session_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(uid) WHERE uid IS NOT NULL DO UPDATE SET "
+                    "email=excluded.email, employee_id=excluded.employee_id, role=excluded.role, "
+                    "status=excluded.status, require_password_change=excluded.require_password_change, "
+                    "language=excluded.language, password_hash=excluded.password_hash, "
+                    "pin_hash=excluded.pin_hash, row_version=excluded.row_version, "
+                    "updated_at_utc=excluded.updated_at_utc, "
+                    "session_version=MAX(COALESCE(users.session_version,0), COALESCE(excluded.session_version,0)) "
+                    "WHERE excluded.row_version > users.row_version",
+                    (str(uuid.uuid4()), local_company_id, uid, p.get("employee_id"), p.get("email"),
+                     p.get("role", "cashier"), p.get("status", "active"),
+                     p.get("require_password_change", 1), p.get("language", "en"),
+                     p.get("password_hash"), p.get("pin_hash"), p.get("row_version", 1),
+                     p.get("updated_at_utc"), p.get("session_version", 1)),
+                )
+            except sqlite3.IntegrityError as exc:
+                # Decision 4 -- THE defect that stopped all sync from all
+                # devices permanently in wave A: `ON CONFLICT(uid)` only
+                # ever suppresses a collision on the uid partial index. A
+                # DIFFERENT unique index (`email`, or `UNIQUE(company_id,
+                # employee_id)`) still raises a plain IntegrityError that
+                # escapes this statement entirely -- two admins creating
+                # the same person on two offline tills produces exactly
+                # this, same email, two different uids. Caught BY NAME
+                # (matched against SQLite's own constraint-failure message,
+                # verified directly against sqlite3 -- "UNIQUE constraint
+                # failed: users.email" / "UNIQUE constraint failed:
+                # users.company_id, users.employee_id" -- never widened to
+                # swallow IntegrityError generally, which wave A
+                # deliberately rejected: that would silently park a NOT
+                # NULL/FK violation too, converting a real bug into quiet
+                # data loss instead of a loud, fixable one). `detail` below
+                # names the conflicting email/employee_id -- identifiers, a
+                # real operator needs them to resolve a duplicate person --
+                # and NEVER `password_hash`/`pin_hash`: SQLite's own
+                # constraint message already contains no data values at
+                # all (verified directly), and neither `reason` nor
+                # `detail` here ever interpolates either credential field.
+                msg = str(exc)
+                if "users.email" in msg:
+                    return self._quarantine_apply_event(
+                        conn, ev, reason="duplicate_email",
+                        detail=f"email={p.get('email')!r} already registered to a different "
+                               f"account locally (incoming uid={uid!r})")
+                if "users.company_id, users.employee_id" in msg:
+                    return self._quarantine_apply_event(
+                        conn, ev, reason="duplicate_employee_id",
+                        detail=f"employee_id={p.get('employee_id')!r} already registered under "
+                               f"company_id={local_company_id!r} (incoming uid={uid!r})")
+                raise
         return True
 
     @staticmethod

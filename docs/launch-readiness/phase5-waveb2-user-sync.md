@@ -137,7 +137,22 @@ Two admins creating the same person on two tills while offline produces
 exactly this: same email, two different `id`s.
 
 **Requirement: both constraints must be caught and the event quarantined via
-`_quarantine_apply_event`, never allowed to raise.** A duplicate person is a
+`_quarantine_apply_event`, never allowed to raise.**
+
+**This design missed a prerequisite, found during stage 2a and recorded here
+rather than left in a commit message.** `_quarantine_apply_event` writes to
+whatever connection it is handed — `registry.db`, for the registry-configured
+instance — and `sync_apply_quarantine` existed only in `retail.db`. So
+quarantining a user event required a registry-side quarantine table, which is
+**registry v6**. The moment a synced table carries a second unique constraint
+that is not its wire identity, the quarantine path becomes reachable; the
+table has to exist before it is.
+
+It is a SEPARATE migration rather than an addition to v5's function, and that
+distinction is load-bearing: `ensure_schema_version` never re-enters a
+database already at its target version, so silently editing v5's function
+would never reach any install that had already upgraded to v5. New table, new
+version, always. A duplicate person is a
 visible, recoverable data-entry problem; a permanently wedged sync stream is
 not. Widening the quarantine to swallow `IntegrityError` generally was
 considered and rejected in wave A for good reason — catch these two
@@ -152,6 +167,27 @@ nothing, which reads to the shop as "the system is broken".
 
 It ships in the same wave, or wave B2 does not ship. If it is ever split out,
 that consequence must be written down first.
+
+**The trap stage 3 must not walk into, identified while reviewing stage 2a.**
+`user_permissions.user_id` references `users.id` — the LOCAL TEXT primary key,
+which the apply path MINTS FRESH on the receiving device
+(`str(uuid.uuid4())` in the `user` INSERT). It is not the wire identity; `uid`
+is. So a permission row arriving with the SENDING device's `user_id` names a
+row that either does not exist on the receiver or, worse, belongs to a
+DIFFERENT person.
+
+A permission attached to the wrong user is a silent privilege change — the
+most dangerous shape in this whole wave, and it would raise nothing.
+
+So `user_permission` payloads must carry the owning user's **`uid`**, and the
+apply path must resolve it to the local `users.id` the same way wave A's
+`sale_item` resolves its parent through `_local_id_by_uid`. If the uid does
+not resolve yet, the event is QUARANTINED like any other orphan, never
+guessed at and never dropped.
+
+Prove it explicitly with two users present on the receiver, so a
+resolve-to-the-wrong-row bug cannot hide behind there only being one
+candidate.
 
 ## Reserved before any agent is dispatched
 

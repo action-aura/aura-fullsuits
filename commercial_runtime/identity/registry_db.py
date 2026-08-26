@@ -8,7 +8,12 @@ access), `audit_logs` (append-oriented security/audit trail), `secure_links`
 (one-time employee-invite tokens), `company_settings` (locale/business
 fields written by onboarding), `sync_outbox`/`sync_cursor` (v5, Phase 5 wave
 B2 stage 1 -- registry.db's OWN outbox/cursor pair, mirroring retail.db's;
-see registry_sync_schema.py -- schema only, nothing writes through it yet).
+see registry_sync_schema.py -- schema only, no write-site emits through it
+yet), `sync_apply_quarantine` (v6, Phase 5 wave B2 stage 2a -- registry.db's
+OWN apply-side quarantine table, mirroring retail.db's; see
+registry_quarantine_schema.py. `_apply_event`'s `user` branch
+(commercial_runtime/sync/sync_service.py) is wired and proven at this stage
+-- still no write site emits a `user` event yet, that is stage 2b).
 
 This is a deliberately trimmed extraction of Action Aura Enterprise's
 database/registry_db.py (which owns ~20 tables for the full platform --
@@ -61,7 +66,17 @@ DB_PATH = os.path.join(_db_dir, 'registry.db')
 # docs/launch-readiness/phase5-waveb2-user-sync.md §Decision 1. This
 # migration builds ONLY the schema -- no `user` entity type, no user sync
 # event, no write-site change; that is wave B2 stage 2.
-REGISTRY_SCHEMA_VERSION = 5
+# v6: registry.db gets its own `sync_apply_quarantine` -- Phase 5 wave B2
+# stage 2a, reserved in ROADMAP.md's 2026-08-21 ledger. `_apply_event`'s new
+# `user` branch (sync_service.py) has to catch `users`' two non-wire UNIQUE
+# constraints (`email`, `UNIQUE(company_id, employee_id)`) BY NAME and park
+# the losing event via `SyncService._quarantine_apply_event` -- exactly
+# wave A's defect #1, reproduced by construction the moment a second unique
+# constraint exists on a synced table's own wire-identity column -- and that
+# helper writes unconditionally to `sync_apply_quarantine` on WHATEVER
+# connection it is called with. See registry_quarantine_schema.py and
+# docs/launch-readiness/phase5-waveb2-user-sync.md §Decision 4.
+REGISTRY_SCHEMA_VERSION = 6
 
 
 def _migrate_registry_schema(conn):
@@ -91,17 +106,23 @@ def _migrate_registry_schema(conn):
     `sync_cursor`) that nothing before it touches or reads -- but is still
     appended last, per the same convention, so the "new steps go last"
     invariant stays simple to reason about rather than needing a case-by-case
-    justification for every future step's position."""
+    justification for every future step's position.
+
+    v6 (registry_quarantine_schema.py) has the identical "no ordering
+    dependency, appended last anyway" shape as v5 -- one more brand-new
+    table (`sync_apply_quarantine`) nothing before it touches or reads."""
     from commercial_runtime.identity.device_registry import apply_identity_device_schema
     from commercial_runtime.identity.verification_schema import apply_email_verification_schema
     from commercial_runtime.identity.account_schema import apply_account_schema
     from commercial_runtime.identity.company_rebind import _migrate_rebind_registry_company_id_to_owner_issued
     from commercial_runtime.identity.registry_sync_schema import apply_registry_sync_schema
+    from commercial_runtime.identity.registry_quarantine_schema import apply_registry_quarantine_schema
     apply_identity_device_schema(conn)
     apply_email_verification_schema(conn)
     apply_account_schema(conn)
     _migrate_rebind_registry_company_id_to_owner_issued(conn)
     apply_registry_sync_schema(conn)
+    apply_registry_quarantine_schema(conn)
 
 
 def get_conn():
