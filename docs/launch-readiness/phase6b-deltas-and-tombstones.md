@@ -212,3 +212,5 @@ silently drop product rows; it only blanks the category name.
   `retail_category_delete_fk_sync_test.py` still passes — or, if it must
   change, exactly what it can no longer catch is written down.
 * Every guard mutation-proved, both directions, per ENGINEERING.md.
+
+See `phase6b-decisions.md` for the answers to the two open questions above, and for the one change made to Part 1 after reading the apply path.

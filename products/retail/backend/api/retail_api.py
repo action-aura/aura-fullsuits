@@ -1091,26 +1091,48 @@ def update_category(category_id):
     cid = _cid()
     conn = get_retail_conn()
     cur = conn.cursor()
-    # launch-readiness Phase 6 stage 6a-i: row_version/updated_at_utc bumped
-    # in the SAME UPDATE statement as the field change it describes -- never
-    # a second statement, and never derived from a value read before this
-    # one runs. `name`/`description` are unconditionally part of this
-    # route's own payload (name is required, description defaults to ''), so
-    # every successful call here changes a SYNCED field and always bumps.
-    # See docs/launch-readiness/phase6-catalogue-correctness.md.
+    # launch-readiness Phase 6 stage 6b-i (changed-field deltas -- a LOCAL
+    # fix, reached before sync is even involved): this route used to write
+    # `data.get('description', '')` unconditionally, so a caller that sent
+    # ONLY `name` silently blanked `description` on THIS device, before any
+    # other device or the sync layer ever saw the write. That is the exact
+    # clobber this whole stage exists to close, reached by a different route
+    # -- so `fields` is built the same way every sibling update route in
+    # this file already does (update_product/update_customer/
+    # update_supplier above): only a key actually present in the request
+    # goes in the SET clause. `name` stays required (unchanged 400 contract
+    # below) because every sibling route's `allowed`-field gate still needs
+    # SOMETHING to update; a description-only PUT here still 400s, exactly
+    # as before.
+    fields = {'name': data['name']}
+    if 'description' in data:
+        fields['description'] = data.get('description') or ''
+    # row_version/updated_at_utc bumped in the SAME UPDATE statement as the
+    # field change -- launch-readiness Phase 6 stage 6a-i, unchanged by this
+    # stage; `fields` is never empty (name is required above), so every
+    # successful call here always bumps.
     now = now_utc_iso()
+    sets = ', '.join(f'{k}=?' for k in fields)
     cur.execute(
-        "UPDATE categories SET name=?, description=?, row_version=row_version+1, updated_at_utc=? "
+        f"UPDATE categories SET {sets}, row_version=row_version+1, updated_at_utc=? "
         "WHERE id=? AND company_id=?",
-        (data['name'], data.get('description', ''), now, category_id, cid))
+        list(fields.values()) + [now, category_id, cid])
     if cur.rowcount == 0:
         conn.close()
         return jsonify({'status': 'error', 'message': 'Category not found'}), 404
-    row = conn.execute("SELECT row_version FROM categories WHERE id=?", (category_id,)).fetchone()
+    # Read `name`/`description` back from the row rather than from `data` --
+    # the wire payload is still a FULL snapshot (the apply-side INSERT half
+    # needs it for a device that has never seen this id), and reading the
+    # row after the UPDATE gives the current value of a field this request
+    # did not touch, instead of inventing one.
+    row = conn.execute(
+        "SELECT name, description, row_version FROM categories WHERE id=?", (category_id,)
+    ).fetchone()
     # No `company_id` in the wire payload -- see create_category's comment above.
     _queue_sync_event(cur, 'category', category_id, 'update', {
-        'id': category_id, 'name': data['name'], 'description': data.get('description', ''),
+        'id': category_id, 'name': row['name'], 'description': row['description'],
         'row_version': row['row_version'], 'updated_at_utc': now,
+        '_changed_fields': sorted(fields),
     })
     conn.commit(); conn.close()
     _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -1326,7 +1348,16 @@ def update_product(pid):
     # stuck showing the product inactive forever. See sync_service.py's
     # product upsert for the matching apply-side fix.
     row = conn.execute("SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,reorder_level,reorder_method,status,row_version,updated_at_utc FROM products WHERE id=?", (pid,)).fetchone()
-    _queue_sync_event(cur, 'product', pid, 'update', dict(row) | {'id': pid})
+    # launch-readiness Phase 6 stage 6b-i (changed-field deltas): the payload
+    # still carries the full row (the apply-side INSERT half needs it for a
+    # device that has never seen this id), but `_changed_fields` now names
+    # exactly the columns THIS PATCH touched -- `fields` above is already
+    # that set. Without it, a PATCH that only edited `name` would re-send
+    # this device's own possibly-stale `sku`/`cost_price`/etc, and the other
+    # device's DO UPDATE used to apply all of them, clobbering anything it
+    # had changed on those other columns in the meantime. See
+    # sync_service.py's `_delta_set_clause` for the apply-side half of this.
+    _queue_sync_event(cur, 'product', pid, 'update', dict(row) | {'id': pid, '_changed_fields': sorted(fields)})
     conn.commit(); conn.close()
     _sync_nudge()
     return jsonify({'status': 'success'})
@@ -1641,7 +1672,18 @@ def update_customer(cust_id):
         row = conn.execute(
             "SELECT name,phone,email,address,row_version,updated_at_utc FROM customers WHERE id=?",
             (cust_id,)).fetchone()
-        _queue_sync_event(cur, 'customer', cust_id, 'update', dict(row) | {'id': cust_id})
+        # launch-readiness Phase 6 stage 6b-i (changed-field deltas):
+        # `_changed_fields` is `SYNCED_CUSTOMER_FIELDS & fields.keys()`, NOT
+        # `sorted(fields)` -- `fields` can also carry credit_mode/
+        # credit_limit, which are local-only credit-terms columns with no
+        # apply-side column at all (see `touches_synced`'s own comment
+        # above). Naming them would be harmless -- the apply side only ever
+        # membership-tests `_changed_fields` against its own code-owned
+        # column list (`_delta_set_clause`'s docstring) -- but misleading:
+        # a field that has no synced column is not a "changed field" in any
+        # sense the receiving device understands.
+        _queue_sync_event(cur, 'customer', cust_id, 'update',
+                           dict(row) | {'id': cust_id, '_changed_fields': sorted(SYNCED_CUSTOMER_FIELDS & fields.keys())})
     conn.commit(); conn.close()
     _sync_nudge()
     return jsonify({'status': 'success'})
@@ -1815,7 +1857,14 @@ def update_supplier(sid):
         row = conn.execute(
             "SELECT name,phone,email,address,status,payment_terms,row_version,updated_at_utc "
             "FROM suppliers WHERE id=?", (sid,)).fetchone()
-        _queue_sync_event(cur, 'supplier', sid, 'update', dict(row) | {'id': sid})
+        # launch-readiness Phase 6 stage 6b-i (changed-field deltas):
+        # `_changed_fields` is `SYNCED_SUPPLIER_FIELDS & fields.keys()`, NOT
+        # `sorted(fields)` -- `fields` can also carry `payment_terms`, which
+        # is in this route's `allowed` list but is not a first-class synced
+        # column (see `touches_synced`'s own comment above). Same reasoning
+        # as update_customer's identical guard.
+        _queue_sync_event(cur, 'supplier', sid, 'update',
+                           dict(row) | {'id': sid, '_changed_fields': sorted(SYNCED_SUPPLIER_FIELDS & fields.keys())})
     conn.commit(); conn.close()
     _sync_nudge()
     return jsonify({'status': 'success'})
@@ -2463,10 +2512,17 @@ def accept_reorder_request(rid):
             (now, now, rid),
         )
         row = conn.execute("SELECT row_version FROM reorder_requests WHERE id=?", (rid,)).fetchone()
+        # launch-readiness Phase 6 stage 6b-i (changed-field deltas): this
+        # route changes exactly `status`/`resolved_at` -- see the SET clause
+        # two statements above -- so `_changed_fields` names exactly those
+        # two, letting the apply side leave `draft_message` (carried here
+        # only because the INSERT half needs a full snapshot) untouched if
+        # some other device edited it in the meantime.
         _queue_sync_event(cur, 'reorder_request', rid, 'update', {
             'id': rid, 'branch_id': req['branch_id'], 'product_id': req['product_id'],
             'status': 'accepted', 'draft_message': req['draft_message'], 'resolved_at': now,
             'row_version': row['row_version'], 'updated_at_utc': now,
+            '_changed_fields': ['status', 'resolved_at'],
         })
         _audit(conn, 'REORDER_REQUEST_ACCEPTED', 'reorder_request', rid,
                f'PO {po_number} drafted for product {product["name"]}')
@@ -2511,10 +2567,13 @@ def decline_reorder_request(rid):
             (now, now, rid),
         )
         row = conn.execute("SELECT row_version FROM reorder_requests WHERE id=?", (rid,)).fetchone()
+        # launch-readiness Phase 6 stage 6b-i: same reasoning as
+        # accept_reorder_request's identical comment above.
         _queue_sync_event(cur, 'reorder_request', rid, 'update', {
             'id': rid, 'branch_id': req['branch_id'], 'product_id': req['product_id'],
             'status': 'declined', 'draft_message': req['draft_message'], 'resolved_at': now,
             'row_version': row['row_version'], 'updated_at_utc': now,
+            '_changed_fields': ['status', 'resolved_at'],
         })
         _audit(conn, 'REORDER_REQUEST_DECLINED', 'reorder_request', rid)
         conn.commit()

@@ -693,6 +693,28 @@ class SyncService:
         return row[0] if row is not None else None
 
     @staticmethod
+    def _delta_set_clause(table, columns, changed):
+        """Builds the `col=CASE WHEN ? THEN excluded.col ELSE table.col END`
+        SET fragment for a delta-aware upsert, plus the 0/1 binds that drive it.
+
+        `changed is None` -- the payload carries no `_changed_fields` key at
+        all -- means "every column changed", which is exactly the full-snapshot
+        behaviour that shipped before stage 6b-i. Every `create` event and
+        every event emitted by a pre-6b-i device is in that case, so a shop
+        upgrading with a backlog keeps applying its queued events unchanged.
+        Same rule stage 6a-ii established for a missing `row_version`: an
+        event emitted under the old contract is judged by the old contract.
+
+        `changed` is wire data. `columns` is code-owned and is the ONLY source
+        of the column names that reach the SQL string; the wire list is
+        membership-tested against it and never interpolated. A payload naming
+        a column that is not in `columns` is therefore ignored, not injected.
+        """
+        frag = ", ".join(f"{c}=CASE WHEN ? THEN excluded.{c} ELSE {table}.{c} END" for c in columns)
+        binds = [1 if (changed is None or c in changed) else 0 for c in columns]
+        return frag, binds
+
+    @staticmethod
     def _record_sync_conflict(conn, conflict_sink: Optional[list], *, local_company_id,
                                entity_type: str, entity_id, event_type: str,
                                local_row_version: int, incoming_row_version, payload: dict) -> None:
@@ -906,17 +928,36 @@ class SyncService:
                 # rowcount 1, exactly like a brand-new id's plain INSERT.
                 # `sync_conflicts` therefore only ever records true
                 # conflicts, never a legacy event that was actually applied.
+                #
+                # launch-readiness Phase 6 stage 6b-i (changed-field deltas):
+                # the DO UPDATE half no longer blindly writes every column
+                # from `excluded.*` -- a sender that only edited `name` was
+                # ALSO re-sending its own stale `description` at whatever
+                # value it last saw, and applying that stale value here
+                # clobbered a `description` edit some OTHER device made in
+                # the meantime, even though the two edits never touched the
+                # same field. `_changed_fields`, when the payload carries it,
+                # names exactly the columns this write actually changed; the
+                # INSERT half is untouched (a brand-new id has no local value
+                # to preserve, so it always takes the full snapshot). See
+                # `_delta_set_clause`'s own docstring for the missing-key
+                # ("legacy") fallback and why the column list itself is
+                # code-owned, never taken from the wire.
+                changed_fields = p.get("_changed_fields")
+                delta_frag, delta_binds = self._delta_set_clause(
+                    "categories", ["name", "description"], changed_fields)
                 raw_row_version = p.get("row_version")
                 insert_row_version = raw_row_version if raw_row_version is not None else 1
                 cur = conn.execute(
                     "INSERT INTO categories (id, company_id, name, description, row_version, updated_at_utc) "
                     "VALUES (?,?,?,?,?,?) "
-                    "ON CONFLICT(id) DO UPDATE SET name=excluded.name, description=excluded.description, "
+                    "ON CONFLICT(id) DO UPDATE SET " + delta_frag + ", "
                     "row_version=MAX(categories.row_version, excluded.row_version), "
                     "updated_at_utc=excluded.updated_at_utc "
                     "WHERE ? IS NULL OR ? > categories.row_version",
                     (p.get("id"), local_company_id, p.get("name"), p.get("description", ""),
                      insert_row_version, p.get("updated_at_utc"),
+                     *delta_binds,
                      raw_row_version, raw_row_version),
                 )
                 if cur.rowcount == 0:
@@ -958,6 +999,21 @@ class SyncService:
                 # counter -- see the category branch's comment above for the
                 # full reasoning (identical shape, identical `cur.rowcount
                 # == 0` discard signal, identical missing-vs-stale fix).
+                #
+                # launch-readiness Phase 6 stage 6b-i (changed-field deltas):
+                # DO UPDATE now writes only the columns `_changed_fields`
+                # names -- see the category branch's comment above for the
+                # full reasoning (why a full-snapshot re-send used to clobber
+                # an untouched field, why the INSERT half is unaffected, why
+                # a missing `_changed_fields` key means "every column",
+                # `_delta_set_clause`'s own docstring for the wire-vs-code-
+                # owned column-name safety note).
+                changed_fields = p.get("_changed_fields")
+                delta_frag, delta_binds = self._delta_set_clause(
+                    "products",
+                    ["sku", "barcode", "name", "category_id", "supplier_id", "cost_price",
+                     "sell_price", "tax_rate", "unit", "reorder_level", "reorder_method", "status"],
+                    changed_fields)
                 raw_row_version = p.get("row_version")
                 insert_row_version = raw_row_version if raw_row_version is not None else 1
                 cur = conn.execute(
@@ -965,11 +1021,7 @@ class SyncService:
                     "cost_price, sell_price, tax_rate, unit, reorder_level, reorder_method, status, "
                     "row_version, updated_at_utc) "
                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
-                    "ON CONFLICT(id) DO UPDATE SET sku=excluded.sku, barcode=excluded.barcode, name=excluded.name, "
-                    "category_id=excluded.category_id, supplier_id=excluded.supplier_id, "
-                    "cost_price=excluded.cost_price, sell_price=excluded.sell_price, "
-                    "tax_rate=excluded.tax_rate, unit=excluded.unit, reorder_level=excluded.reorder_level, "
-                    "reorder_method=excluded.reorder_method, status=excluded.status, "
+                    "ON CONFLICT(id) DO UPDATE SET " + delta_frag + ", "
                     "row_version=MAX(products.row_version, excluded.row_version), "
                     "updated_at_utc=excluded.updated_at_utc "
                     "WHERE ? IS NULL OR ? > products.row_version",
@@ -978,6 +1030,7 @@ class SyncService:
                      p.get("tax_rate", 0), p.get("unit", "pcs"), p.get("reorder_level", 5),
                      p.get("reorder_method", "none"), p.get("status", "active"),
                      insert_row_version, p.get("updated_at_utc"),
+                     *delta_binds,
                      raw_row_version, raw_row_version),
                 )
                 if cur.rowcount == 0:
@@ -1053,20 +1106,31 @@ class SyncService:
                 # -- see the category branch's comment above for the full
                 # reasoning (missing-vs-stale, why `MAX` and not plain
                 # `excluded.row_version`).
+                #
+                # launch-readiness Phase 6 stage 6b-i (changed-field deltas):
+                # DO UPDATE now writes only the columns `_changed_fields`
+                # names -- see the category branch's comment above for the
+                # full reasoning. This is the branch stage 6b-i's own
+                # decisive test targets: a customer PATCH that only touches
+                # `phone` must not revert an `address` edit some other
+                # device made concurrently.
+                changed_fields = p.get("_changed_fields")
+                delta_frag, delta_binds = self._delta_set_clause(
+                    "customers", ["name", "phone", "email", "address", "status"], changed_fields)
                 raw_row_version = p.get("row_version")
                 insert_row_version = raw_row_version if raw_row_version is not None else 1
                 cur = conn.execute(
                     "INSERT INTO customers (id, company_id, name, phone, email, address, status, "
                     "row_version, updated_at_utc) "
                     "VALUES (?,?,?,?,?,?,?,?,?) "
-                    "ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone, "
-                    "email=excluded.email, address=excluded.address, status=excluded.status, "
+                    "ON CONFLICT(id) DO UPDATE SET " + delta_frag + ", "
                     "row_version=MAX(customers.row_version, excluded.row_version), "
                     "updated_at_utc=excluded.updated_at_utc "
                     "WHERE ? IS NULL OR ? > customers.row_version",
                     (p.get("id"), local_company_id, p.get("name"), p.get("phone", ""),
                      p.get("email", ""), p.get("address", ""), p.get("status", "active"),
                      insert_row_version, p.get("updated_at_utc"),
+                     *delta_binds,
                      raw_row_version, raw_row_version),
                 )
                 if cur.rowcount == 0:
@@ -1114,20 +1178,28 @@ class SyncService:
                 # suppliers.row_version` gate, NULL-tolerant + `MAX`-protected
                 # -- see the category branch's comment above for the full
                 # reasoning.
+                #
+                # launch-readiness Phase 6 stage 6b-i (changed-field deltas):
+                # DO UPDATE now writes only the columns `_changed_fields`
+                # names -- see the category branch's comment above for the
+                # full reasoning.
+                changed_fields = p.get("_changed_fields")
+                delta_frag, delta_binds = self._delta_set_clause(
+                    "suppliers", ["name", "phone", "email", "address", "status"], changed_fields)
                 raw_row_version = p.get("row_version")
                 insert_row_version = raw_row_version if raw_row_version is not None else 1
                 cur = conn.execute(
                     "INSERT INTO suppliers (id, company_id, name, phone, email, address, status, "
                     "row_version, updated_at_utc) "
                     "VALUES (?,?,?,?,?,?,?,?,?) "
-                    "ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone, "
-                    "email=excluded.email, address=excluded.address, status=excluded.status, "
+                    "ON CONFLICT(id) DO UPDATE SET " + delta_frag + ", "
                     "row_version=MAX(suppliers.row_version, excluded.row_version), "
                     "updated_at_utc=excluded.updated_at_utc "
                     "WHERE ? IS NULL OR ? > suppliers.row_version",
                     (p.get("id"), local_company_id, p.get("name"), p.get("phone", ""),
                      p.get("email", ""), p.get("address", ""), p.get("status", "active"),
                      insert_row_version, p.get("updated_at_utc"),
+                     *delta_binds,
                      raw_row_version, raw_row_version),
                 )
                 if cur.rowcount == 0:
@@ -1178,19 +1250,29 @@ class SyncService:
                 # reorder_requests.row_version` gate, NULL-tolerant +
                 # `MAX`-protected -- see the category branch's comment above
                 # for the full reasoning.
+                #
+                # launch-readiness Phase 6 stage 6b-i (changed-field deltas):
+                # DO UPDATE now writes only the columns `_changed_fields`
+                # names -- see the category branch's comment above for the
+                # full reasoning. accept_reorder_request/decline_reorder_
+                # request only ever change status/resolved_at, so their
+                # `_changed_fields` names exactly those two.
+                changed_fields = p.get("_changed_fields")
+                delta_frag, delta_binds = self._delta_set_clause(
+                    "reorder_requests", ["status", "draft_message", "resolved_at"], changed_fields)
                 raw_row_version = p.get("row_version")
                 insert_row_version = raw_row_version if raw_row_version is not None else 1
                 cur = conn.execute(
                     "INSERT INTO reorder_requests (id, company_id, branch_id, product_id, status, "
                     "draft_message, resolved_at, row_version, updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?) "
-                    "ON CONFLICT(id) DO UPDATE SET status=excluded.status, "
-                    "draft_message=excluded.draft_message, resolved_at=excluded.resolved_at, "
+                    "ON CONFLICT(id) DO UPDATE SET " + delta_frag + ", "
                     "row_version=MAX(reorder_requests.row_version, excluded.row_version), "
                     "updated_at_utc=excluded.updated_at_utc "
                     "WHERE ? IS NULL OR ? > reorder_requests.row_version",
                     (p.get("id"), local_company_id, p.get("branch_id"), p.get("product_id"),
                      p.get("status", "pending"), p.get("draft_message"), p.get("resolved_at"),
                      insert_row_version, p.get("updated_at_utc"),
+                     *delta_binds,
                      raw_row_version, raw_row_version),
                 )
                 if cur.rowcount == 0:

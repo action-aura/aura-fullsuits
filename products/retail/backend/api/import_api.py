@@ -1387,6 +1387,19 @@ def _handle_retail_products(records):
             # (re-SELECTed after the UPDATE, status included) -- an imported
             # price/name change must reach other devices exactly like a
             # PATCH would.
+            #
+            # launch-readiness Phase 6 stage 6b-i: this site deliberately
+            # queues NO `_changed_fields` key, and that is a decision, not an
+            # oversight. An absent key means "every column changed" on the
+            # apply side (sync_service.py's `_delta_set_clause`), which is
+            # exactly right here: unlike a PATCH, the UPDATE above writes all
+            # eight synced columns unconditionally from the sheet's values,
+            # whether or not the sheet actually differs from the stored row --
+            # the same reasoning already recorded in this block's stage 6a-i
+            # comment for why an import always bumps `row_version`. Naming a
+            # narrower set would UNDER-state what this write really touched
+            # and would leave the other device holding stale values for the
+            # columns it omitted.
             prow = conn.execute(
                 "SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,reorder_level,reorder_method,status,row_version,updated_at_utc "
                 "FROM products WHERE id=?", (pid,)).fetchone()
