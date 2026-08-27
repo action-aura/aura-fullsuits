@@ -147,8 +147,14 @@ def test_delete_supplier_is_always_a_soft_delete(client, db_conn):
     resp = client.delete(f'/api/sub/retail/suppliers/{sup_id}')
     assert resp.status_code == 200
 
-    row = db_conn.execute("SELECT status FROM suppliers WHERE id=?", (sup_id,)).fetchone()
-    assert row is not None and row['status'] == 'inactive'  # row still exists, never hard-deleted
+    # launch-readiness Phase 6 stage 6b-iii-a (deletion stops overloading
+    # `status`): `delete_supplier` no longer writes `status='inactive'` --
+    # `deleted_at_utc` alone is now the tombstone (row still exists, never
+    # hard-deleted, exactly as before -- just via a different column now).
+    row = db_conn.execute("SELECT status, deleted_at_utc FROM suppliers WHERE id=?", (sup_id,)).fetchone()
+    assert row is not None
+    assert row['status'] == 'active'
+    assert row['deleted_at_utc'] is not None
 
     outbox = db_conn.execute(
         "SELECT event_type FROM sync_outbox WHERE entity_type='supplier' AND entity_id=? ORDER BY created_at DESC LIMIT 1",
@@ -180,10 +186,12 @@ def test_pulled_supplier_delete_soft_deletes_and_never_touches_a_row_this_device
         -- converge instead of silently diverging), and this hand-built
         -- minimal fixture predates that.
         -- launch-readiness Phase 6 stage 6b-ii (tombstones): deleted_at_utc
-        -- added too -- the supplier delete branch now stamps it (alongside
-        -- the unchanged status='inactive'; see retail_api.py's
-        -- delete_supplier comment for why both are written), and this
-        -- fixture predates that the same way it predated row_version.
+        -- added too -- the supplier delete branch now stamps it.
+        -- launch-readiness Phase 6 stage 6b-iii-a: `status='inactive'` was
+        -- ALSO written here between 6b-ii and this stage; it no longer is --
+        -- `deleted_at_utc` alone is now the tombstone (see retail_api.py's
+        -- delete_supplier comment), and this fixture predates that the same
+        -- way it predated row_version.
         CREATE TABLE suppliers (id TEXT PRIMARY KEY, company_id INTEGER, name TEXT, phone TEXT, email TEXT, address TEXT, status TEXT DEFAULT 'active',
             row_version INTEGER NOT NULL DEFAULT 1, updated_at_utc TEXT, deleted_at_utc TEXT);
         CREATE TABLE purchase_orders (id INTEGER PRIMARY KEY, company_id INTEGER, supplier_id TEXT, total REAL,
@@ -217,8 +225,11 @@ def test_pulled_supplier_delete_soft_deletes_and_never_touches_a_row_this_device
     })
     conn.commit()
 
-    row = conn.execute("SELECT status FROM suppliers WHERE id='s-1'").fetchone()
-    assert row['status'] == 'inactive'  # never DELETE FROM -- the declared FK from purchase_orders would fire
+    row = conn.execute("SELECT status, deleted_at_utc FROM suppliers WHERE id='s-1'").fetchone()
+    # launch-readiness Phase 6 stage 6b-iii-a: `status` no longer flips to
+    # 'inactive' on delete -- `deleted_at_utc` is the tombstone now.
+    assert row['status'] == 'active'  # never DELETE FROM -- the declared FK from purchase_orders would fire
+    assert row['deleted_at_utc'] is not None
     assert conn.execute("SELECT COUNT(*) c FROM purchase_orders").fetchone()['c'] == 1
 
 
@@ -236,9 +247,10 @@ def test_pulled_supplier_create_stamps_the_receiving_devices_own_company_id():
         -- converge instead of silently diverging), and this hand-built
         -- minimal fixture predates that.
         -- launch-readiness Phase 6 stage 6b-ii (tombstones): deleted_at_utc
-        -- added too -- the supplier delete branch now stamps it (alongside
-        -- the unchanged status='inactive'; see retail_api.py's
-        -- delete_supplier comment for why both are written), and this
+        -- added too -- the supplier delete branch now stamps it (see
+        -- retail_api.py's delete_supplier comment; stage 6b-iii-a later
+        -- removed the `status='inactive'` write that used to sit alongside
+        -- it), and this
         -- fixture predates that the same way it predated row_version.
         CREATE TABLE suppliers (id TEXT PRIMARY KEY, company_id INTEGER, name TEXT, phone TEXT, email TEXT, address TEXT, status TEXT DEFAULT 'active',
             row_version INTEGER NOT NULL DEFAULT 1, updated_at_utc TEXT, deleted_at_utc TEXT);

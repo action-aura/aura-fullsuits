@@ -1078,11 +1078,17 @@ def cogs(conn, cid, period, branch_id=None):
 
 def inventory_value(conn, cid):
     """Stock on hand at current cost. Not period- or branch-scoped: it is a
-    snapshot of right now, which is why it takes no Period."""
+    snapshot of right now, which is why it takes no Period.
+
+    launch-readiness Phase 6 stage 6b-iii-a: `AND p.deleted_at_utc IS NULL`
+    added alongside the existing `p.status='active'` -- this is a "right now"
+    snapshot, so a tombstoned product's leftover balance would otherwise
+    inflate it forever, exactly the failure mode `docs/launch-readiness/
+    phase6b-deltas-and-tombstones.md` names this function for."""
     row = conn.execute("""
         SELECT COALESCE(SUM(b.quantity_on_hand * p.cost_price),0)
         FROM inventory_balances b JOIN products p ON b.product_id=p.id
-        WHERE b.company_id=? AND p.status='active'
+        WHERE b.company_id=? AND p.status='active' AND p.deleted_at_utc IS NULL
     """, (cid,)).fetchone()
     return _money(row[0])
 

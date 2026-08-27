@@ -912,14 +912,19 @@ def dashboard_stats():
     month_txns     = metrics.transactions(conn, cid, month_p, branch_id)
     month_returns  = metrics.refunds(conn, cid, month_p, branch_id)
 
-    total_customers = q("SELECT COUNT(*) FROM customers WHERE company_id=?", cid)
-    total_products  = q("SELECT COUNT(*) FROM products WHERE company_id=? AND status='active'", cid)
+    # launch-readiness Phase 6 stage 6b-iii-a: `deleted_at_utc IS NULL` added
+    # to all three counts below. `total_customers` carried no `status` filter
+    # at all before this stage either -- left that way, matching the
+    # customer count's pre-existing (unfiltered-by-status) behaviour rather
+    # than introducing an unrelated second change here.
+    total_customers = q("SELECT COUNT(*) FROM customers WHERE company_id=? AND deleted_at_utc IS NULL", cid)
+    total_products  = q("SELECT COUNT(*) FROM products WHERE company_id=? AND status='active' AND deleted_at_utc IS NULL", cid)
 
     low_stock = conn.execute("""
         SELECT COUNT(p.id) FROM products p
         LEFT JOIN (SELECT product_id, SUM(quantity_on_hand) as qty
                    FROM inventory_balances WHERE company_id=? GROUP BY product_id) b ON p.id=b.product_id
-        WHERE p.company_id=? AND COALESCE(b.qty,0) <= p.reorder_level AND p.status='active'
+        WHERE p.company_id=? AND COALESCE(b.qty,0) <= p.reorder_level AND p.status='active' AND p.deleted_at_utc IS NULL
     """, (cid, cid)).fetchone()[0] or 0
 
     # Hourly breakdown today -- zero-fill every hour from midnight through the
@@ -1039,9 +1044,14 @@ def list_categories():
     # NULL` added to the WHERE -- `c` is the main FROM table here (not the
     # LEFT JOIN side), so this is a plain "only live categories" filter, not
     # the LEFT-JOIN-in-WHERE trap that would silently drop unrelated rows.
+    # launch-readiness Phase 6 stage 6b-iii-a: `AND p.deleted_at_utc IS NULL`
+    # added to the product-count JOIN condition, alongside the existing
+    # `p.status='active'` -- a tombstoned product must not inflate a live
+    # category's product_count, and `status` alone stopped being sufficient
+    # to hide it the moment `delete_product` stopped writing it.
     rows = conn.execute(
         "SELECT c.*, COUNT(p.id) as product_count FROM categories c "
-        "LEFT JOIN products p ON p.category_id=c.id AND p.status='active' "
+        "LEFT JOIN products p ON p.category_id=c.id AND p.status='active' AND p.deleted_at_utc IS NULL "
         "WHERE c.company_id=? AND c.deleted_at_utc IS NULL GROUP BY c.id ORDER BY c.name", (cid,)
     ).fetchall()
     conn.close()
@@ -1248,18 +1258,29 @@ def list_products():
     # the JOIN condition it only blanks a dangling/tombstoned category's
     # name, exactly like this codebase's existing behaviour for category_id
     # NULL (this is also the residual divergence phase6b-decisions.md
-    # "Decision A" names: cosmetically invisible either way). Note `p.*`
-    # itself needs NO new filter here -- `p.status='active'` already hides a
-    # tombstoned PRODUCT (deletion still writes `status='inactive'` this
-    # stage, see delete_product's comment), which is why this file's
-    # product-row reads are unchanged.
+    # "Decision A" names: cosmetically invisible either way).
+    #
+    # launch-readiness Phase 6 stage 6b-iii-a (deletion stops overloading
+    # `status`): `p.deleted_at_utc IS NULL` added to the WHERE. Until this
+    # stage `p.status='active'` alone was enough to hide a tombstoned
+    # PRODUCT, because `delete_product` wrote `status='inactive'`
+    # unconditionally alongside the tombstone. That write is now gone, so
+    # `status` no longer says anything about deletion for a NEW delete --
+    # only `deleted_at_utc` does. Both conditions stay: a LEGACY row deleted
+    # before 6b-ii has `status='inactive'`/`deleted_at_utc IS NULL` and is
+    # hidden only by the `status` half; a row deleted after this stage has
+    # `status='active'`/`deleted_at_utc` set and is hidden only by the
+    # `deleted_at_utc` half. This is THE highest-priority read path in the
+    # codebase for this filter -- `_findByCode` (subsystem-retail.js) filters
+    # CLIENT-SIDE over the exact array this query returns, backing POS scan,
+    # product search and PO scan alike.
     rows = conn.execute("""
         SELECT p.*, c.name as category_name,
                COALESCE(SUM(b.quantity_on_hand), 0) as total_stock
         FROM products p
         LEFT JOIN categories c ON p.category_id=c.id AND c.deleted_at_utc IS NULL
         LEFT JOIN inventory_balances b ON p.id=b.product_id AND b.company_id=p.company_id
-        WHERE p.company_id=? AND p.status='active'
+        WHERE p.company_id=? AND p.status='active' AND p.deleted_at_utc IS NULL
         GROUP BY p.id ORDER BY p.name
     """, (cid,)).fetchall()
     conn.close()
@@ -1393,6 +1414,22 @@ def update_product(pid):
             return jsonify({'status': 'error', 'message': 'Barcode already exists'}), 409
     cur = conn.cursor()
     sets = ', '.join(f'{k}=?' for k in fields)
+    values = list(fields.values())
+    # launch-readiness Phase 6 stage 6b-iii-a (Step 3, restore paths must
+    # clear the tombstone): `status` no longer marks deletion as of this
+    # stage, so a PATCH setting it back to 'active' no longer un-deletes a
+    # soft-deleted product on its own. When this happens, `deleted_at_utc=
+    # NULL` is added to the SAME UPDATE (never a second write -- see
+    # delete_product's own gated-write pattern), and `deleted_at_utc` is
+    # added to the changed-field set below so the restore actually reaches
+    # the wire. `changed_fields` is a `set`, not the `fields` dict itself --
+    # `deleted_at_utc` is not a column `allowed` lists or the SET clause
+    # above touches, so it has to be tracked separately from `sets`/`values`.
+    changed_fields = set(fields)
+    restoring = fields.get('status') == 'active'
+    if restoring:
+        sets += ', deleted_at_utc=NULL'
+        changed_fields.add('deleted_at_utc')
     # launch-readiness Phase 6 stage 6a-i: row_version/updated_at_utc bumped
     # in the SAME UPDATE statement as the field change. `allowed` above is
     # EXACTLY the set of columns products syncs (sync_service.py's product
@@ -1401,7 +1438,7 @@ def update_product(pid):
     # route needs no conditional: every successful call bumps.
     now = now_utc_iso()
     cur.execute(f'UPDATE products SET {sets}, row_version=row_version+1, updated_at_utc=? WHERE id=? AND company_id=?',
-                list(fields.values()) + [now, pid, cid])
+                values + [now, pid, cid])
     if cur.rowcount == 0:
         conn.close()
         return jsonify({'status': 'error', 'message': 'Product not found'}), 404
@@ -1412,7 +1449,13 @@ def update_product(pid):
     # payload could never carry the restore, so the other device stayed
     # stuck showing the product inactive forever. See sync_service.py's
     # product upsert for the matching apply-side fix.
-    row = conn.execute("SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,reorder_level,reorder_method,status,row_version,updated_at_utc FROM products WHERE id=?", (pid,)).fetchone()
+    #
+    # `deleted_at_utc` added to this SELECT (stage 6b-iii-a): the payload
+    # must carry the CURRENT (now NULL, if `restoring`) value, not the stale
+    # one `data` never even carried -- exactly the same "re-read after the
+    # UPDATE rather than trust the request" pattern update_category already
+    # uses for its own restore-adjacent fields.
+    row = conn.execute("SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,reorder_level,reorder_method,status,deleted_at_utc,row_version,updated_at_utc FROM products WHERE id=?", (pid,)).fetchone()
     # launch-readiness Phase 6 stage 6b-i (changed-field deltas): the payload
     # still carries the full row (the apply-side INSERT half needs it for a
     # device that has never seen this id), but `_changed_fields` now names
@@ -1422,7 +1465,13 @@ def update_product(pid):
     # device's DO UPDATE used to apply all of them, clobbering anything it
     # had changed on those other columns in the meantime. See
     # sync_service.py's `_delta_set_clause` for the apply-side half of this.
-    _queue_sync_event(cur, 'product', pid, 'update', dict(row) | {'id': pid, '_changed_fields': sorted(fields)})
+    #
+    # `sorted(changed_fields)`, not `sorted(fields)` (stage 6b-iii-a): the two
+    # agree on every ordinary PATCH; they diverge only on a restore, where
+    # `changed_fields` additionally names `deleted_at_utc` so the receiving
+    # device's apply branch (which now delta-gates that column too) actually
+    # clears its own tombstone instead of leaving it alone.
+    _queue_sync_event(cur, 'product', pid, 'update', dict(row) | {'id': pid, '_changed_fields': sorted(changed_fields)})
     conn.commit(); conn.close()
     _sync_nudge()
     return jsonify({'status': 'success'})
@@ -1437,27 +1486,31 @@ def delete_product(pid):
     conn = get_retail_conn()
     try:
         cur = conn.cursor()
-        # launch-readiness Phase 6 stage 6a-i: `status` is a synced product
-        # field (sync_service.py's product upsert), so this soft-delete
-        # bumps row_version in the SAME UPDATE, same as every other site.
+        # launch-readiness Phase 6 stage 6a-i: row_version bumps in the SAME
+        # UPDATE, same as every other site.
         #
-        # launch-readiness Phase 6 stage 6b-ii (tombstones,
-        # phase6b-decisions.md): `deleted_at_utc` is now ALSO stamped here,
-        # in the SAME statement -- but `status='inactive'` is deliberately
-        # KEPT, not replaced. `create_sale`'s line-item read filters
-        # `status='active'`; the moment deletion stopped touching `status`,
-        # a tombstoned product would stay `active` there and remain
-        # SELLABLE until every read path had a `deleted_at_utc IS NULL`
-        # filter. Writing both means a read path this stage did not touch
-        # degrades to exactly today's behaviour instead of selling deleted
-        # stock. Freeing `status` from deletion meaning is a separate later
-        # cleanup, after the read filters are proven -- not done here.
+        # launch-readiness Phase 6 stage 6b-iii-a (deletion stops overloading
+        # `status`): `status='inactive'` is REMOVED from this UPDATE.
+        # `deleted_at_utc` is now the ENTIRE visibility gate for a deletion --
+        # every read path that could sell/list/count a product (list_products,
+        # create_sale's line-item read, adjust_stock, dashboard/AI-context
+        # counts, metrics.inventory_value, the PO-preview/reorder-accept
+        # write gates) was given a `deleted_at_utc IS NULL` filter in this
+        # same stage BEFORE this write changed, and both halves land in the
+        # same commit -- see phase6b-deltas-and-tombstones.md / phase6b-
+        # decisions.md for why the two must not be split. `status` now means
+        # only what it says: a genuinely deactivated-but-not-deleted row
+        # (there is no deactivate UI today, but the column is free to mean
+        # that again). A LEGACY row soft-deleted before 6b-ii still has
+        # `status='inactive'`/`deleted_at_utc IS NULL` and stays hidden by
+        # the `status` half of every read filter -- it is deliberately left
+        # exactly as it is (phase6b-decisions.md's backfill posture).
         # `AND deleted_at_utc IS NULL` makes deleting an already-tombstoned
         # row a no-op that still returns the existing 404 below, rather than
         # re-stamping a new deletion time over the original one.
         now = now_utc_iso()
         cur.execute(
-            "UPDATE products SET status='inactive', deleted_at_utc=?, "
+            "UPDATE products SET deleted_at_utc=?, "
             "row_version=row_version+1, updated_at_utc=? "
             "WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
             (now, now, pid, cid))
@@ -1465,9 +1518,15 @@ def delete_product(pid):
             return jsonify({'status': 'error', 'message': 'Product not found'}), 404
         _audit(conn, 'PRODUCT_DELETED', 'product', pid, 'Product deactivated')
         row = conn.execute("SELECT row_version FROM products WHERE id=?", (pid,)).fetchone()
+        # `_changed_fields` names only `deleted_at_utc` now -- `status` no
+        # longer changes on delete, so naming it would be a lie the apply
+        # side would act on (it would still be membership-tested against the
+        # code-owned column list, so today it would be harmless, but stating
+        # a column changed when it did not is exactly the kind of payload
+        # this stage's delta-gating exists to make trustworthy).
         _queue_sync_event(cur, 'product', pid, 'delete', {
             'id': pid, 'row_version': row['row_version'], 'updated_at_utc': now,
-            'deleted_at_utc': now, '_changed_fields': ['deleted_at_utc', 'status'],
+            'deleted_at_utc': now, '_changed_fields': ['deleted_at_utc'],
         })
         conn.commit()
     except sqlite3.IntegrityError as exc:
@@ -1537,8 +1596,18 @@ def adjust_stock(pid):
     conn = get_retail_conn()
     try:
         conn.execute("BEGIN IMMEDIATE")
+        # launch-readiness Phase 6 stage 6b-iii-a: `AND deleted_at_utc IS
+        # NULL` added -- this route had NO filter at all before this stage,
+        # not even for `status`, so a tombstoned product's id (still
+        # perfectly valid as a foreign key) could have stock adjusted
+        # against it forever, invisibly to every screen that lists products.
+        # Deliberately does not add a `status='active'` check alongside it --
+        # that would be a second, unrelated behaviour change (this route
+        # already allowed adjusting a merely-deactivated product) and is out
+        # of this stage's scope.
         product = conn.execute(
-            "SELECT id, name FROM products WHERE id=? AND company_id=?", (pid, cid)
+            "SELECT id, name FROM products WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
+            (pid, cid)
         ).fetchone()
         if not product:
             conn.rollback()
@@ -1645,18 +1714,25 @@ def list_customers():
     q   = request.args.get('q', '')
     conn = get_retail_conn()
     _ensure_credit_schema(conn)
+    # launch-readiness Phase 6 stage 6b-iii-a: `AND c.deleted_at_utc IS NULL`
+    # added to both branches below, alongside the existing `c.status='active'`
+    # -- see list_products's identical comment for why both conditions stay
+    # (a legacy pre-6b-ii delete is hidden only by `status`, a post-6b-iii-a
+    # delete only by `deleted_at_utc`).
     if q:
         rows = conn.execute("""
             SELECT c.*, COUNT(s.id) as order_count
             FROM customers c LEFT JOIN sales s ON s.customer_id=c.id AND s.company_id=c.company_id
-            WHERE c.company_id=? AND c.status='active' AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ?)
+            WHERE c.company_id=? AND c.status='active' AND c.deleted_at_utc IS NULL
+                  AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ?)
             GROUP BY c.id ORDER BY c.name
         """, (cid, f'%{q}%', f'%{q}%', f'%{q}%')).fetchall()
     else:
         rows = conn.execute("""
             SELECT c.*, COUNT(s.id) as order_count
             FROM customers c LEFT JOIN sales s ON s.customer_id=c.id AND s.company_id=c.company_id
-            WHERE c.company_id=? AND c.status='active' GROUP BY c.id ORDER BY c.total_spent DESC LIMIT 200
+            WHERE c.company_id=? AND c.status='active' AND c.deleted_at_utc IS NULL
+            GROUP BY c.id ORDER BY c.total_spent DESC LIMIT 200
         """, (cid,)).fetchall()
     conn.close()
     return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
@@ -1786,19 +1862,18 @@ def delete_customer(cust_id):
     conn = get_retail_conn()
     try:
         cur = conn.cursor()
-        # launch-readiness Phase 6 stage 6a-i: `status` is a synced customer
-        # field, so this soft-delete bumps row_version in the SAME UPDATE.
+        # launch-readiness Phase 6 stage 6a-i: row_version bumps in the SAME
+        # UPDATE.
         #
-        # launch-readiness Phase 6 stage 6b-ii (tombstones,
-        # phase6b-decisions.md): `deleted_at_utc` stamped here too, in the
-        # SAME statement, with `status='inactive'` deliberately KEPT rather
-        # than replaced -- see delete_product's identical comment above for
-        # the full reasoning (create_sale's `status='active'` read path is
-        # the reason). `AND deleted_at_utc IS NULL` makes a repeat delete of
-        # an already-tombstoned row a no-op 404, not a re-stamp.
+        # launch-readiness Phase 6 stage 6b-iii-a (deletion stops overloading
+        # `status`): `status='inactive'` is REMOVED -- see delete_product's
+        # identical comment above for the full reasoning (both halves of
+        # this stage, the read filters and this write, land in the same
+        # commit). `AND deleted_at_utc IS NULL` makes a repeat delete of an
+        # already-tombstoned row a no-op 404, not a re-stamp.
         now = now_utc_iso()
         cur.execute(
-            "UPDATE customers SET status='inactive', deleted_at_utc=?, "
+            "UPDATE customers SET deleted_at_utc=?, "
             "row_version=row_version+1, updated_at_utc=? "
             "WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
             (now, now, cust_id, cid))
@@ -1806,9 +1881,11 @@ def delete_customer(cust_id):
             return jsonify({'status': 'error', 'message': 'Customer not found'}), 404
         _audit(conn, 'CUSTOMER_DELETED', 'customer', cust_id, 'Customer deactivated')
         row = conn.execute("SELECT row_version FROM customers WHERE id=?", (cust_id,)).fetchone()
+        # `_changed_fields` names only `deleted_at_utc` -- see delete_product's
+        # identical comment above.
         _queue_sync_event(cur, 'customer', cust_id, 'delete', {
             'id': cust_id, 'row_version': row['row_version'], 'updated_at_utc': now,
-            'deleted_at_utc': now, '_changed_fields': ['deleted_at_utc', 'status'],
+            'deleted_at_utc': now, '_changed_fields': ['deleted_at_utc'],
         })
         conn.commit()
     except sqlite3.IntegrityError as exc:
@@ -1858,10 +1935,13 @@ def list_suppliers():
     cid = _cid()
     conn = get_retail_conn()
     _ensure_credit_schema(conn)
+    # launch-readiness Phase 6 stage 6b-iii-a: `AND s.deleted_at_utc IS NULL`
+    # added alongside the existing `s.status='active'` -- see list_customers's
+    # identical comment above for why both conditions stay.
     rows = conn.execute("""
         SELECT s.*, COUNT(po.id) as order_count
         FROM suppliers s LEFT JOIN purchase_orders po ON po.supplier_id=s.id AND po.company_id=s.company_id
-        WHERE s.company_id=? AND s.status='active'
+        WHERE s.company_id=? AND s.status='active' AND s.deleted_at_utc IS NULL
         GROUP BY s.id ORDER BY s.name
     """, (cid,)).fetchall()
     conn.close()
@@ -1920,6 +2000,16 @@ def update_supplier(sid):
     # emit nothing, for the identical reason a credit-only customer PATCH
     # must not.
     touches_synced = bool(SYNCED_SUPPLIER_FIELDS & fields.keys())
+    # launch-readiness Phase 6 stage 6b-iii-a (Step 3, restore paths must
+    # clear the tombstone): same rule as update_product's identical comment
+    # above -- `status` no longer marks deletion, so setting it to 'active'
+    # must ALSO clear `deleted_at_utc`, in the SAME UPDATE. `restoring`
+    # implies `touches_synced` (`status` is a member of
+    # SYNCED_SUPPLIER_FIELDS, checked just above), so this can never fire on
+    # a `payment_terms`-only PATCH that bumps nothing.
+    restoring = fields.get('status') == 'active'
+    if restoring:
+        sets += ', deleted_at_utc=NULL'
     now = None
     if touches_synced:
         now = now_utc_iso()
@@ -1946,8 +2036,11 @@ def update_supplier(sid):
     # docs/superpowers/specs/2026-08-07-retail-catalog-party-sync-expansion-design.md),
     # so it does not cross-device propagate yet even after this change.
     if touches_synced:
+        # `deleted_at_utc` added to this SELECT (stage 6b-iii-a): the payload
+        # must carry the CURRENT value -- NULL when `restoring` just cleared
+        # it in the same UPDATE above, unchanged otherwise.
         row = conn.execute(
-            "SELECT name,phone,email,address,status,payment_terms,row_version,updated_at_utc "
+            "SELECT name,phone,email,address,status,payment_terms,deleted_at_utc,row_version,updated_at_utc "
             "FROM suppliers WHERE id=?", (sid,)).fetchone()
         # launch-readiness Phase 6 stage 6b-i (changed-field deltas):
         # `_changed_fields` is `SYNCED_SUPPLIER_FIELDS & fields.keys()`, NOT
@@ -1955,8 +2048,15 @@ def update_supplier(sid):
         # is in this route's `allowed` list but is not a first-class synced
         # column (see `touches_synced`'s own comment above). Same reasoning
         # as update_customer's identical guard.
+        #
+        # stage 6b-iii-a: `deleted_at_utc` added to the changed set ONLY when
+        # `restoring` -- an ordinary status-untouched PATCH must not claim
+        # `deleted_at_utc` changed, or the apply side's delta gate on that
+        # column (sync_service.py's supplier branch) would clear a tombstone
+        # this PATCH never touched.
+        changed = (SYNCED_SUPPLIER_FIELDS & fields.keys()) | ({'deleted_at_utc'} if restoring else set())
         _queue_sync_event(cur, 'supplier', sid, 'update',
-                           dict(row) | {'id': sid, '_changed_fields': sorted(SYNCED_SUPPLIER_FIELDS & fields.keys())})
+                           dict(row) | {'id': sid, '_changed_fields': sorted(changed)})
     conn.commit(); conn.close()
     _sync_nudge()
     return jsonify({'status': 'success'})
@@ -1971,19 +2071,17 @@ def delete_supplier(sid):
     conn = get_retail_conn()
     try:
         cur = conn.cursor()
-        # launch-readiness Phase 6 stage 6a-i: `status` is a synced supplier
-        # field, so this soft-delete bumps row_version in the SAME UPDATE.
+        # launch-readiness Phase 6 stage 6a-i: row_version bumps in the SAME
+        # UPDATE.
         #
-        # launch-readiness Phase 6 stage 6b-ii (tombstones,
-        # phase6b-decisions.md): `deleted_at_utc` stamped here too, in the
-        # SAME statement, with `status='inactive'` deliberately KEPT rather
-        # than replaced -- see delete_product's identical comment above for
-        # the full reasoning (create_sale's `status='active'` read path is
-        # the reason). `AND deleted_at_utc IS NULL` makes a repeat delete of
-        # an already-tombstoned row a no-op 404, not a re-stamp.
+        # launch-readiness Phase 6 stage 6b-iii-a (deletion stops overloading
+        # `status`): `status='inactive'` is REMOVED -- see delete_product's
+        # identical comment above for the full reasoning. `AND deleted_at_utc
+        # IS NULL` makes a repeat delete of an already-tombstoned row a no-op
+        # 404, not a re-stamp.
         now = now_utc_iso()
         cur.execute(
-            "UPDATE suppliers SET status='inactive', deleted_at_utc=?, "
+            "UPDATE suppliers SET deleted_at_utc=?, "
             "row_version=row_version+1, updated_at_utc=? "
             "WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
             (now, now, sid, cid))
@@ -1991,9 +2089,11 @@ def delete_supplier(sid):
             return jsonify({'status': 'error', 'message': 'Supplier not found'}), 404
         _audit(conn, 'SUPPLIER_DELETED', 'supplier', sid, 'Supplier deactivated')
         row = conn.execute("SELECT row_version FROM suppliers WHERE id=?", (sid,)).fetchone()
+        # `_changed_fields` names only `deleted_at_utc` -- see delete_product's
+        # identical comment above.
         _queue_sync_event(cur, 'supplier', sid, 'delete', {
             'id': sid, 'row_version': row['row_version'], 'updated_at_utc': now,
-            'deleted_at_utc': now, '_changed_fields': ['deleted_at_utc', 'status'],
+            'deleted_at_utc': now, '_changed_fields': ['deleted_at_utc'],
         })
         conn.commit()
     except sqlite3.IntegrityError as exc:
@@ -2427,10 +2527,16 @@ def preview_po_split():
                 return jsonify({'status': 'error', 'message': 'Every item requires a product_id'}), 400
             product_ids.append(pid)
 
+        # launch-readiness Phase 6 stage 6b-iii-a: `AND deleted_at_utc IS
+        # NULL` added -- this is a WRITE gate (it plans a purchase order a
+        # caller may go on to actually create), not a display list, so a
+        # tombstoned product must fall out of `products_by_id` below and hit
+        # the existing "Unknown product_id" 400 exactly like an id that never
+        # existed.
         placeholders = ','.join('?' * len(product_ids))
         prod_rows = conn.execute(
             f"SELECT id, name, sku, supplier_id, cost_price FROM products "
-            f"WHERE company_id=? AND id IN ({placeholders})",
+            f"WHERE company_id=? AND deleted_at_utc IS NULL AND id IN ({placeholders})",
             [cid, *product_ids]
         ).fetchall()
         products_by_id = {r['id']: dict(r) for r in prod_rows}
@@ -2567,8 +2673,18 @@ def accept_reorder_request(rid):
         if req['status'] != 'pending':
             return jsonify({'status': 'error', 'message': 'This request was already resolved.'}), 409
 
+        # launch-readiness Phase 6 stage 6b-iii-a: `AND deleted_at_utc IS
+        # NULL` added -- this is the WRITE gate phase6b-deltas-and-tombstones.md
+        # names for `list_reorder_requests`'s own INNER JOIN trap: that list
+        # route deliberately stays unfiltered so a pending request for a
+        # since-deleted product remains visible and declinable, and THIS is
+        # where deletion is actually enforced -- a tombstoned product now
+        # falls into the existing "Product no longer exists" 404 below,
+        # exactly like a hard-deleted id already did, so the request can be
+        # declined but never accepted.
         product = conn.execute(
-            "SELECT id, name, supplier_id, cost_price, reorder_level FROM products WHERE id=? AND company_id=?",
+            "SELECT id, name, supplier_id, cost_price, reorder_level FROM products "
+            "WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
             (req['product_id'], cid),
         ).fetchone()
         if not product:
@@ -2836,8 +2952,20 @@ def create_sale():
         subtotal = discount = tax = total = Decimal('0')
         for item in items_in:
             pid = item.get('product_id')
+            # launch-readiness Phase 6 stage 6b-iii-a (deletion stops
+            # overloading `status`): `AND deleted_at_utc IS NULL` added here
+            # -- this is THE worst-outcome read path in the whole
+            # enumeration. Before this stage `status='active'` alone was
+            # enough to keep a tombstoned product off this query, because
+            # `delete_product` wrote `status='inactive'` unconditionally
+            # alongside the tombstone; that write is gone as of this stage,
+            # so a deleted product with no filter here would stay `active`
+            # and remain SELLABLE forever. A tombstoned id now falls through
+            # to the same "Product {pid} not found." 400 below as an id that
+            # never existed at all.
             product = cur.execute(
-                "SELECT id, name, sell_price, tax_rate, status FROM products WHERE id=? AND company_id=?",
+                "SELECT id, name, sell_price, tax_rate, status FROM products "
+                "WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
                 (pid, cid)
             ).fetchone()
             if not product:
@@ -7016,12 +7144,16 @@ def _detect_ai_intent(message):
 
 
 def _ai_context_low_stock(conn, cid):
+    # launch-readiness Phase 6 stage 6b-iii-a: `AND p.deleted_at_utc IS NULL`
+    # added -- an AI-facing count/list must not surface a deleted product any
+    # more than the dashboard it mirrors does.
     rows = conn.execute("""
         SELECT p.name, p.sku, COALESCE(b.qty, 0) as on_hand, p.reorder_level
         FROM products p
         LEFT JOIN (SELECT product_id, SUM(quantity_on_hand) as qty
                    FROM inventory_balances WHERE company_id=? GROUP BY product_id) b ON p.id=b.product_id
-        WHERE p.company_id=? AND p.status='active' AND COALESCE(b.qty,0) <= p.reorder_level
+        WHERE p.company_id=? AND p.status='active' AND p.deleted_at_utc IS NULL
+              AND COALESCE(b.qty,0) <= p.reorder_level
         ORDER BY COALESCE(b.qty,0) ASC LIMIT 5
     """, (cid, cid)).fetchall()
     if not rows:
@@ -7031,11 +7163,13 @@ def _ai_context_low_stock(conn, cid):
 
 
 def _ai_context_products(conn, cid):
+    # launch-readiness Phase 6 stage 6b-iii-a: `AND deleted_at_utc IS NULL`
+    # added to both queries below, alongside the existing `status='active'`.
     total = conn.execute(
-        "SELECT COUNT(*) FROM products WHERE company_id=? AND status='active'", (cid,)
+        "SELECT COUNT(*) FROM products WHERE company_id=? AND status='active' AND deleted_at_utc IS NULL", (cid,)
     ).fetchone()[0] or 0
     examples = conn.execute(
-        "SELECT name, sku FROM products WHERE company_id=? AND status='active' "
+        "SELECT name, sku FROM products WHERE company_id=? AND status='active' AND deleted_at_utc IS NULL "
         "ORDER BY created_at DESC LIMIT 3", (cid,)
     ).fetchall()
     text = f"This company has {total} active product(s)."
@@ -7078,13 +7212,21 @@ def _ai_context_sales(conn, cid):
 
 
 def _ai_context_customers(conn, cid):
-    total = conn.execute("SELECT COUNT(*) FROM customers WHERE company_id=?", (cid,)).fetchone()[0] or 0
+    # launch-readiness Phase 6 stage 6b-iii-a: `AND deleted_at_utc IS NULL`
+    # added. No `status='active'` filter here either before or after this
+    # stage -- matching this query's own pre-existing (unfiltered-by-status)
+    # behaviour rather than introducing an unrelated second change.
+    total = conn.execute(
+        "SELECT COUNT(*) FROM customers WHERE company_id=? AND deleted_at_utc IS NULL", (cid,)
+    ).fetchone()[0] or 0
     return f"This company has {total} customer(s) on file."
 
 
 def _ai_context_suppliers(conn, cid):
+    # launch-readiness Phase 6 stage 6b-iii-a: `AND deleted_at_utc IS NULL`
+    # added alongside the existing `status='active'`.
     total = conn.execute(
-        "SELECT COUNT(*) FROM suppliers WHERE company_id=? AND status='active'", (cid,)
+        "SELECT COUNT(*) FROM suppliers WHERE company_id=? AND status='active' AND deleted_at_utc IS NULL", (cid,)
     ).fetchone()[0] or 0
     return f"This company has {total} active supplier(s) on file."
 

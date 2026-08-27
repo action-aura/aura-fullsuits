@@ -810,17 +810,32 @@ def test_pull_once_product_upsert_updates_supplier_id_on_conflict(get_conn):
     assert _products(get_conn)[0]["supplier_id"] == supplier_b
 
 
-def test_pull_once_product_status_round_trips_through_soft_delete_then_restore(get_conn):
+def test_pull_once_product_deleted_at_utc_round_trips_through_soft_delete_then_restore(get_conn):
     # launch-readiness Phase 6 stage 6a-ii: each of the three events must
     # carry a strictly higher row_version than the one before it, same as
     # retail_api.py's own delete_product/update_product bump on every real
     # write -- a delete's row_version gate is on `_local_row_version`, not
     # `excluded.row_version` (it is a bare UPDATE, not an UPSERT), but the
     # "strictly greater or discarded" posture is identical.
+    #
+    # RENAMED and REWRITTEN for launch-readiness Phase 6 stage 6b-iii-a
+    # (deletion stops overloading `status`): this test used to be named
+    # `test_pull_once_product_status_round_trips_through_soft_delete_then_
+    # restore` and tracked `status` flipping active -> inactive -> active.
+    # `delete_product`'s apply branch no longer writes `status='inactive'`,
+    # so `status` stays 'active' through the whole cycle now; `deleted_at_utc`
+    # is what actually round-trips (stamped on delete, cleared on restore via
+    # the update branch's own DELTA-GATED column list). The restore event
+    # below now also has to carry `deleted_at_utc` explicitly (mirroring what
+    # `update_product`'s real route does) and NOT set `_changed_fields`, so
+    # the "no `_changed_fields` key means every column changed" legacy rule
+    # (`_delta_set_clause`'s docstring) is what clears it here.
     pid = str(uuid.uuid4())
     create_event = _pull_event_of("product", pid, "create", _product_payload(pid, row_version=1))
     delete_event = _pull_event_of("product", pid, "delete", {"id": pid, "row_version": 2})
-    restore_event = _pull_event_of("product", pid, "update", _product_payload(pid, status="active", row_version=3))
+    restore_event = _pull_event_of(
+        "product", pid, "update",
+        _product_payload(pid, status="active", deleted_at_utc=None, row_version=3))
     client = FakeRelayClient(pull_responses=[
         {"events": [create_event], "cursor": 1},
         {"events": [delete_event], "cursor": 2},
@@ -829,25 +844,40 @@ def test_pull_once_product_status_round_trips_through_soft_delete_then_restore(g
     service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
 
     service.pull_once()
-    assert _products(get_conn)[0]["status"] == "active"
+    row = _products(get_conn)[0]
+    assert row["status"] == "active"
+    assert row["deleted_at_utc"] is None
 
     service.pull_once()  # soft-delete -- already worked before this fix
-    assert _products(get_conn)[0]["status"] == "inactive"
+    row = _products(get_conn)[0]
+    assert row["status"] == "active", "status no longer marks deletion as of stage 6b-iii-a"
+    assert row["deleted_at_utc"] is not None
 
-    service.pull_once()  # restore -- the part Bug 2 broke
-    assert _products(get_conn)[0]["status"] == "active"
+    service.pull_once()  # restore -- the part Bug 2 broke, now via deleted_at_utc
+    row = _products(get_conn)[0]
+    assert row["status"] == "active"
+    assert row["deleted_at_utc"] is None
 
 
-def test_pull_once_customer_status_round_trips_through_soft_delete_then_restore(get_conn):
+def test_pull_once_customer_deleted_at_utc_round_trips_through_soft_delete_then_restore(get_conn):
     # launch-readiness Phase 6 stage 6a-ii: same strictly-increasing
     # row_version requirement as the product round trip above -- `base`
     # itself deliberately carries no row_version so each event below states
     # its own, rather than all three silently sharing one via `dict(base, ...)`.
+    #
+    # RENAMED and REWRITTEN for stage 6b-iii-a -- see the product round trip
+    # above for the full reasoning. NOTE, stated rather than silently
+    # exercised: `update_customer` (the real route) has no restore path at
+    # all today (a pre-existing asymmetry, not fixed by this stage -- see
+    # phase6b-decisions.md), so this hand-built `restore_event` proves the
+    # APPLY side is ready for a restore, not that one is reachable through
+    # the real HTTP route the way the supplier round trip below is.
     cust_id = str(uuid.uuid4())
     base = {"id": cust_id, "company_id": 1, "name": "Acme Co", "phone": "", "email": "", "address": ""}
     create_event = _pull_event_of("customer", cust_id, "create", dict(base, row_version=1))
     delete_event = _pull_event_of("customer", cust_id, "delete", {"id": cust_id, "row_version": 2})
-    restore_event = _pull_event_of("customer", cust_id, "update", dict(base, status="active", row_version=3))
+    restore_event = _pull_event_of(
+        "customer", cust_id, "update", dict(base, status="active", deleted_at_utc=None, row_version=3))
     client = FakeRelayClient(pull_responses=[
         {"events": [create_event], "cursor": 1},
         {"events": [delete_event], "cursor": 2},
@@ -856,23 +886,31 @@ def test_pull_once_customer_status_round_trips_through_soft_delete_then_restore(
     service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
 
     service.pull_once()
-    assert _customers(get_conn)[0]["status"] == "active"
+    row = _customers(get_conn)[0]
+    assert row["status"] == "active"
+    assert row["deleted_at_utc"] is None
 
     service.pull_once()
-    assert _customers(get_conn)[0]["status"] == "inactive"
+    row = _customers(get_conn)[0]
+    assert row["status"] == "active", "status no longer marks deletion as of stage 6b-iii-a"
+    assert row["deleted_at_utc"] is not None
 
     service.pull_once()
-    assert _customers(get_conn)[0]["status"] == "active"
+    row = _customers(get_conn)[0]
+    assert row["status"] == "active"
+    assert row["deleted_at_utc"] is None
 
 
-def test_pull_once_supplier_status_round_trips_through_soft_delete_then_restore(get_conn):
+def test_pull_once_supplier_deleted_at_utc_round_trips_through_soft_delete_then_restore(get_conn):
     # launch-readiness Phase 6 stage 6a-ii: same reasoning as the customer
-    # round trip above.
+    # round trip above. RENAMED and REWRITTEN for stage 6b-iii-a -- see the
+    # product round trip above for the full reasoning.
     sup_id = str(uuid.uuid4())
     base = {"id": sup_id, "company_id": 1, "name": "Acme Supply Co", "phone": "", "email": "", "address": ""}
     create_event = _pull_event_of("supplier", sup_id, "create", dict(base, row_version=1))
     delete_event = _pull_event_of("supplier", sup_id, "delete", {"id": sup_id, "row_version": 2})
-    restore_event = _pull_event_of("supplier", sup_id, "update", dict(base, status="active", row_version=3))
+    restore_event = _pull_event_of(
+        "supplier", sup_id, "update", dict(base, status="active", deleted_at_utc=None, row_version=3))
     client = FakeRelayClient(pull_responses=[
         {"events": [create_event], "cursor": 1},
         {"events": [delete_event], "cursor": 2},
@@ -881,13 +919,19 @@ def test_pull_once_supplier_status_round_trips_through_soft_delete_then_restore(
     service = SyncService(lambda: client, get_conn, lambda: "receiving-company")
 
     service.pull_once()
-    assert _suppliers(get_conn)[0]["status"] == "active"
+    row = _suppliers(get_conn)[0]
+    assert row["status"] == "active"
+    assert row["deleted_at_utc"] is None
 
     service.pull_once()
-    assert _suppliers(get_conn)[0]["status"] == "inactive"
+    row = _suppliers(get_conn)[0]
+    assert row["status"] == "active", "status no longer marks deletion as of stage 6b-iii-a"
+    assert row["deleted_at_utc"] is not None
 
     service.pull_once()
-    assert _suppliers(get_conn)[0]["status"] == "active"
+    row = _suppliers(get_conn)[0]
+    assert row["status"] == "active"
+    assert row["deleted_at_utc"] is None
 
 
 # ── reorder_request create/accept/decline round trip (2026-08-12) ────────
@@ -1078,16 +1122,25 @@ def test_pull_once_a_product_delete_only_batch_never_needs_a_company_id_provider
 
     rows = _products(get_conn)
     assert len(rows) == 1
-    assert rows[0]["status"] == "inactive"
-    # Unlike category (see the test below), product/customer/supplier get NO
-    # `deleted_at_utc` fallback for a legacy-shaped payload with no
-    # timestamp at all -- `status='inactive'` is unconditionally written and
-    # is what actually hides this row on every read path (retail_api.py's
-    # delete_product comment), so `deleted_at_utc` honestly stays NULL here,
-    # the same "not known from the wire" posture `updated_at_utc` already
-    # has. This is not a gap: category has no `status` column to fall back
-    # on, which is precisely why ONLY its delete branch needed the fallback.
-    assert rows[0]["deleted_at_utc"] is None
+    # launch-readiness Phase 6 stage 6b-iii-a: REWRITTEN. This docstring and
+    # these assertions used to describe the OPPOSITE of what stage 6b-iii-a
+    # made true, and the history is worth keeping rather than deleting,
+    # because it is exactly the bug Step 2c closed. Before this stage,
+    # product/customer/supplier got NO `deleted_at_utc` fallback for a
+    # legacy-shaped payload with no timestamp at all -- `status='inactive'`
+    # was written unconditionally instead, and THAT is what hid the row.
+    # `delete_product`'s apply branch no longer writes `status` at all, so a
+    # bare `p.get("deleted_at_utc")` here would have applied "successfully"
+    # (rowcount 1) while leaving this row fully live and visible forever --
+    # the exact silent-correctness bug the category branch's own fallback
+    # was already written to prevent. The product/customer/supplier delete
+    # branches now carry the SAME `p.get("deleted_at_utc") or datetime.now(
+    # ...)` fallback the category branch has always had, so `status` stays
+    # untouched (still 'active') and `deleted_at_utc` is what actually
+    # hides this row.
+    assert rows[0]["status"] == "active"
+    assert rows[0]["deleted_at_utc"] is not None, \
+        "a legacy delete payload with no deleted_at_utc key must still tombstone the row (Step 2c)"
 
 
 def test_pull_once_a_category_delete_only_batch_never_needs_a_company_id_provider_and_still_cascades(get_conn):
@@ -2446,7 +2499,17 @@ def test_stale_delete_does_not_revert_a_newer_edit(get_conn):
     """Task C #5 (first half): the three soft-deletes (product/customer/
     supplier) stamp row_version on the sender -- a delete arriving with a
     LOWER row_version than an edit this device already applied must not
-    revert that edit to inactive."""
+    revert that edit.
+
+    launch-readiness Phase 6 stage 6b-iii-a: the original assertions here
+    checked `status` reverting to 'inactive'. Since `status` no longer
+    changes on delete at all, a passing `status == 'active'` assertion after
+    the stale delete would be true FOR THE WRONG REASON post-6b-iii-a (it
+    would pass even if the reject-stale gate were deleted outright) -- see
+    ENGINEERING.md's "the pass condition IS the bug signature". The
+    meaningful check is now `deleted_at_utc`, the column that actually
+    carries deletion: a stale delete must leave it untouched (still None),
+    not merely leave `status` untouched."""
     pid = str(uuid.uuid4())
     create_event = _pull_event_of("product", pid, "create", _product_payload(pid, row_version=1))
     newer_edit = _pull_event_of("product", pid, "update", _product_payload(
@@ -2462,11 +2525,14 @@ def test_stale_delete_does_not_revert_a_newer_edit(get_conn):
 
     service.pull_once()
     service.pull_once()
-    assert _products(get_conn)[0]["status"] == "active"
+    row = _products(get_conn)[0]
+    assert row["status"] == "active"
+    assert row["deleted_at_utc"] is None
 
     service.pull_once()  # the stale delete
     row = _products(get_conn)[0]
-    assert row["status"] == "active", "a stale delete must not revert a newer edit to inactive"
+    assert row["status"] == "active", "status is not the tombstone as of stage 6b-iii-a, but must stay untouched"
+    assert row["deleted_at_utc"] is None, "a stale delete must not tombstone a row that has a newer edit"
     assert row["row_version"] == 5, "the stale delete must not overwrite the newer row_version either"
 
     conflicts = _sync_conflicts(get_conn)
@@ -2479,7 +2545,12 @@ def test_stale_delete_does_not_revert_a_newer_edit(get_conn):
 def test_genuinely_newer_delete_still_soft_deletes(get_conn):
     """Task C #5 (second half): a delete with a genuinely HIGHER row_version
     than local must still take effect -- the gate must not accidentally
-    block every delete, only stale ones."""
+    block every delete, only stale ones.
+
+    launch-readiness Phase 6 stage 6b-iii-a: asserts `deleted_at_utc`, not
+    `status` -- see `test_stale_delete_does_not_revert_a_newer_edit`'s
+    identical note above for why the `status` assertion this test used to
+    have would no longer mean anything."""
     pid = str(uuid.uuid4())
     create_event = _pull_event_of("product", pid, "create", _product_payload(pid, row_version=1))
     real_delete = _pull_event_of("product", pid, "delete", {"id": pid, "row_version": 2})
@@ -2494,7 +2565,8 @@ def test_genuinely_newer_delete_still_soft_deletes(get_conn):
     service.pull_once()
 
     row = _products(get_conn)[0]
-    assert row["status"] == "inactive"
+    assert row["status"] == "active", "status is no longer the tombstone as of stage 6b-iii-a"
+    assert row["deleted_at_utc"] is not None, "a genuinely newer delete must still tombstone the row"
     assert row["row_version"] == 2
     assert _sync_conflicts(get_conn) == []
 
@@ -2653,7 +2725,14 @@ def test_legacy_delete_missing_row_version_key_still_soft_deletes(get_conn):
     sync_service level: retail's own product/customer/supplier delete sync
     tests push a bare `{"id": "..."}` delete payload -- no `row_version` key
     -- against a local row at the schema DEFAULT (1). It must still
-    soft-delete."""
+    soft-delete.
+
+    launch-readiness Phase 6 stage 6b-iii-a: asserts `deleted_at_utc`, not
+    `status` -- `status` no longer marks deletion, so it would stay 'active'
+    here regardless of whether this gate works at all. `deleted_at_utc` is
+    what a "legacy, no row_version key" payload must still set (it ALSO has
+    no `deleted_at_utc` key, so this doubles as coverage for Step 2c's
+    `now()` fallback)."""
     pid = str(uuid.uuid4())
     create_event = _pull_event_of("product", pid, "create", _product_payload(pid))  # no row_version -> lands at 1
     legacy_delete = _pull_event_of("product", pid, "delete", {"id": pid})  # no row_version key at all
@@ -2667,7 +2746,8 @@ def test_legacy_delete_missing_row_version_key_still_soft_deletes(get_conn):
     service.pull_once()
 
     row = _products(get_conn)[0]
-    assert row["status"] == "inactive", "a legacy delete (no row_version key) must still soft-delete"
+    assert row["status"] == "active", "status is no longer the tombstone as of stage 6b-iii-a"
+    assert row["deleted_at_utc"] is not None, "a legacy delete (no row_version, no deleted_at_utc key) must still soft-delete"
     assert _sync_conflicts(get_conn) == []
 
 

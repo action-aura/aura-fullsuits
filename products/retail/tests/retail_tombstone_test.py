@@ -491,12 +491,28 @@ def test_the_cascade_does_not_bump_row_version_on_the_products_it_touches(client
     assert events_after == events_before, "the cascade must not queue a product sync event"
 
 
-# ── 5. The deliberate double-write, pinned so a future "free status from
-#      deletion" cleanup has to face this test ─────────────────────────────
+# ── 5. The deliberate double-write, RETIRED by stage 6b-iii-a -- pinned so
+#      the retirement itself has a test that would fail if it were reverted
+#      by accident ──────────────────────────────────────────────────────────
 
-def test_a_deleted_product_stamps_deleted_at_utc_and_still_sets_status_inactive(client, a_conn):
+def test_a_deleted_product_stamps_deleted_at_utc_and_status_stays_active(client, a_conn):
+    """launch-readiness Phase 6 stage 6b-iii-a (deletion stops overloading
+    `status`): this test used to be named `test_a_deleted_product_stamps_
+    deleted_at_utc_and_still_sets_status_inactive` and pinned the OPPOSITE
+    of what it asserts now -- `status='inactive'` written alongside
+    `deleted_at_utc`, deliberately, because every read path had not yet been
+    proven to carry a `deleted_at_utc IS NULL` filter (6b-ii's own comment on
+    `delete_product`, quoted verbatim in this test's git history).
+
+    That double-write is retired as of THIS stage: every read path this
+    module's own docstring and phase6b-deltas-and-tombstones.md's "Must gain
+    the filter" list name now carries `deleted_at_utc IS NULL`, landed in the
+    SAME commit as this write's removal (see this file's other tests, plus
+    `test_a_deleted_product_is_not_sellable` below, for the proof). `status`
+    now means only what it says -- a deactivated-but-not-deleted row -- and
+    stays 'active' across an ordinary delete."""
     create = client.post('/api/sub/retail/products', json={
-        'name': 'Double Write Widget', 'sku': f'TOMB-DW-{uuid.uuid4().hex[:8]}',
+        'name': 'Retired Double Write Widget', 'sku': f'TOMB-DW-{uuid.uuid4().hex[:8]}',
     })
     assert create.status_code == 200
     pid = create.get_json()['data']['id']
@@ -506,12 +522,8 @@ def test_a_deleted_product_stamps_deleted_at_utc_and_still_sets_status_inactive(
 
     row = dict(a_conn.execute(
         "SELECT status, deleted_at_utc FROM products WHERE id=?", (pid,)).fetchone())
-    # `status='inactive'` is NOT freed by this stage -- create_sale's
-    # line-item read still filters `status='active'`, so a tombstoned
-    # product that only carried `deleted_at_utc` would stay sellable until
-    # every read path is proven to carry the new filter. See retail_api.py's
-    # delete_product comment.
-    assert row['status'] == 'inactive'
+    assert row['status'] == 'active', \
+        "status must no longer flip to 'inactive' on delete -- deleted_at_utc alone is the tombstone now"
     assert row['deleted_at_utc'] is not None
 
 
@@ -797,3 +809,360 @@ def test_an_import_resurrection_of_a_tombstoned_category_reaches_the_other_devic
     b_conn.close()
     assert b_after['deleted_at_utc'] is None, "the import resurrection must travel to the OTHER device too"
     assert b_after['row_version'] == 3
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# launch-readiness Phase 6 stage 6b-iii-a -- deletion stops overloading
+# `status`. Everything above this line is 6b-ii (category tombstones); the
+# tests below cover the two things THIS stage does: every read path that
+# could sell/list/count a product/customer/supplier gains a `deleted_at_utc
+# IS NULL` filter, and `delete_product`/`delete_customer`/`delete_supplier`
+# (both the route AND the sync apply branch) stop writing
+# `status='inactive'`. See docs/launch-readiness/phase6b-deltas-and-
+# tombstones.md and phase6b-decisions.md.
+# ═════════════════════════════════════════════════════════════════════════
+
+# ── 12. THE MONEY TEST -- a deleted product cannot be added to a sale ──────
+
+def test_a_deleted_product_is_not_sellable(client, a_conn):
+    """The worst-outcome read path in the whole enumeration, exercised
+    through create_sale's REAL path, not a raw SQL check. Before this
+    stage, create_sale's line-item read filtered only `status='active'`,
+    which stayed true for a tombstoned row the moment deletion stopped
+    touching `status` -- a deleted product would have stayed perfectly
+    sellable, silently, forever."""
+    create = client.post('/api/sub/retail/products', json={
+        'name': 'Unsellable Widget', 'sku': f'TOMB-SELL-{uuid.uuid4().hex[:8]}',
+        'sell_price': 9.99, 'initial_stock': 10,
+    })
+    assert create.status_code == 200
+    pid = create.get_json()['data']['id']
+
+    delete = client.delete(f'/api/sub/retail/products/{pid}')
+    assert delete.status_code == 200
+
+    sale = client.post('/api/sub/retail/sales', json={'items': [{'product_id': pid, 'quantity': 1}]})
+    assert sale.status_code == 400, "a tombstoned product must not be sellable"
+    assert 'not found' in sale.get_json()['message'].lower()
+
+    remaining = a_conn.execute(
+        "SELECT COUNT(*) c FROM sales WHERE company_id=?", (client.company_id,)
+    ).fetchone()['c']
+    assert remaining == 0, "the refused sale must not have written a sales row"
+
+
+# ── 13. The query _findByCode filters over ─────────────────────────────────
+
+def test_a_deleted_product_does_not_appear_in_the_product_list(client):
+    """`_findByCode` (subsystem-retail.js) filters CLIENT-SIDE over the
+    exact array `list_products` returns, and it backs POS scan, product
+    search and PO scan alike -- miss this query and every scan surface
+    ships the deleted product."""
+    create = client.post('/api/sub/retail/products', json={
+        'name': 'Vanishing Widget', 'sku': f'TOMB-LIST-{uuid.uuid4().hex[:8]}',
+    })
+    assert create.status_code == 200
+    pid = create.get_json()['data']['id']
+
+    delete = client.delete(f'/api/sub/retail/products/{pid}')
+    assert delete.status_code == 200
+
+    products = client.get('/api/sub/retail/products').get_json()['data']
+    assert pid not in {p['id'] for p in products}
+
+
+# ── 14. The legacy backfill posture -- the test that fails if someone
+#       "simplifies" the two-condition filter down to one ─────────────────
+
+def test_a_legacy_row_deleted_before_tombstones_is_still_hidden(client, a_conn):
+    """The backfill posture (phase6b-decisions.md): a row soft-deleted
+    BEFORE stage 6b-ii is indistinguishable from a genuinely deactivated
+    one and is left exactly as it is -- `status='inactive'`, `deleted_at_utc`
+    NULL. Read paths must filter on BOTH `status='active'` AND
+    `deleted_at_utc IS NULL`: only the `status` half hides THIS row (a
+    row deleted after this stage is hidden only by the `deleted_at_utc`
+    half -- see test 12/13 above). Remove either condition and one of the
+    two tombstoned populations becomes visible again."""
+    create = client.post('/api/sub/retail/products', json={
+        'name': 'Legacy Deleted Widget', 'sku': f'TOMB-LEGACY-{uuid.uuid4().hex[:8]}',
+        'sell_price': 5, 'initial_stock': 10,
+    })
+    assert create.status_code == 200
+    pid = create.get_json()['data']['id']
+
+    # Bypass the route entirely -- reproduces the LEGACY shape by hand,
+    # exactly as it would sit in a database soft-deleted before 6b-ii ever
+    # ran: status flipped, deleted_at_utc left NULL.
+    a_conn.execute("UPDATE products SET status='inactive' WHERE id=?", (pid,))
+    a_conn.commit()
+    seed = dict(a_conn.execute(
+        "SELECT status, deleted_at_utc FROM products WHERE id=?", (pid,)).fetchone())
+    assert seed == {'status': 'inactive', 'deleted_at_utc': None}, "must reproduce the exact legacy shape"
+
+    products = client.get('/api/sub/retail/products').get_json()['data']
+    assert pid not in {p['id'] for p in products}, "a legacy-deleted row must stay hidden from the product list"
+
+    sale = client.post('/api/sub/retail/sales', json={'items': [{'product_id': pid, 'quantity': 1}]})
+    assert sale.status_code == 400, "a legacy-deleted row must stay unsellable too"
+
+
+# ── 15. Step 2c -- a legacy DELETE EVENT (not a legacy row) with no
+#       deleted_at_utc key at all must still tombstone the row ────────────
+
+def test_a_legacy_delete_event_with_no_deleted_at_utc_still_hides_the_row(client, a_conn, service_a, relay_b):
+    """Before this stage, the product/customer/supplier apply branches
+    bound a bare `p.get("deleted_at_utc")` with NO fallback -- safe ONLY
+    because `status='inactive'` was written unconditionally alongside it.
+    With that write removed, a LEGACY delete payload -- one already sitting
+    in some device's outbox, carrying no `deleted_at_utc` key at all --
+    would otherwise apply "successfully" (rowcount 1) while leaving the row
+    FULLY LIVE AND VISIBLE forever. Reproduced on the RECEIVING side
+    (device A pulling an event pushed as if from device B), because that is
+    where a silent bug like this would actually bite -- a device's own
+    local delete always goes through the real route and always stamps a
+    real timestamp; only an INCOMING event can be this bare."""
+    create = client.post('/api/sub/retail/products', json={
+        'name': 'Legacy Event Widget', 'sku': f'TOMB-LEGACYEV-{uuid.uuid4().hex[:8]}',
+    })
+    assert create.status_code == 200
+    pid = create.get_json()['data']['id']
+
+    seed = dict(a_conn.execute(
+        "SELECT status, deleted_at_utc FROM products WHERE id=?", (pid,)).fetchone())
+    assert seed == {'status': 'active', 'deleted_at_utc': None}
+
+    # The OLDEST legacy shape -- a delete event carrying no `deleted_at_utc`
+    # key at all (and no `row_version` either, for good measure -- the same
+    # bare payload shape this codebase's own pre-tombstone delete routes
+    # could have queued and left sitting in an outbox across an upgrade).
+    relay_b.push([{
+        "id": str(uuid.uuid4()), "entity_type": "product", "entity_id": pid, "event_type": "delete",
+        "payload": {"id": pid},
+        "created_at": "2026-08-27T00:01:00+00:00",
+    }])
+    service_a.pull_once()
+
+    row = dict(a_conn.execute(
+        "SELECT status, deleted_at_utc FROM products WHERE id=?", (pid,)).fetchone())
+    assert row['status'] == 'active', "status is not the tombstone -- it must stay untouched"
+    assert row['deleted_at_utc'] is not None, \
+        "a legacy delete event with no deleted_at_utc key must still tombstone via the now() fallback"
+
+    products = client.get('/api/sub/retail/products').get_json()['data']
+    assert pid not in {p['id'] for p in products}, \
+        "the legacy delete must actually hide the row, not just set a column nobody reads"
+
+
+# ── 16. Step 3 -- restoring a product clears the tombstone on BOTH devices ─
+
+def test_restoring_a_product_clears_the_tombstone_on_both_devices(
+        client, a_conn, service_a, service_b, install_b):
+    """`status` no longer marks deletion as of this stage, so a PATCH
+    setting it back to 'active' no longer un-deletes a soft-deleted product
+    on its own. `update_product` now clears `deleted_at_utc` in the SAME
+    UPDATE and names it in `_changed_fields`, and `SyncService._apply_event`'s
+    product branch now carries `deleted_at_utc` DELTA-GATED -- both halves
+    are required for the restore to reach a device that never ran the
+    restore locally, which is what this test asserts on."""
+    create = client.post('/api/sub/retail/products', json={
+        'name': 'Restorable Widget', 'sku': f'TOMB-RESTORE-{uuid.uuid4().hex[:8]}',
+    })
+    assert create.status_code == 200
+    pid = create.get_json()['data']['id']
+    service_a.push_once()
+    service_b.pull_once()
+
+    def _b_row():
+        b_conn = install_b()
+        row = b_conn.execute("SELECT status, deleted_at_utc FROM products WHERE id=?", (pid,)).fetchone()
+        b_conn.close()
+        return dict(row) if row else None
+
+    assert _b_row() == {'status': 'active', 'deleted_at_utc': None}
+
+    delete = client.delete(f'/api/sub/retail/products/{pid}')
+    assert delete.status_code == 200
+    service_a.push_once()
+    service_b.pull_once()
+
+    b_after_delete = _b_row()
+    assert b_after_delete['status'] == 'active'
+    assert b_after_delete['deleted_at_utc'] is not None, "the delete must have reached B"
+
+    restore = client.patch(f'/api/sub/retail/products/{pid}', json={'status': 'active'})
+    assert restore.status_code == 200
+
+    a_row = dict(a_conn.execute("SELECT status, deleted_at_utc FROM products WHERE id=?", (pid,)).fetchone())
+    assert a_row == {'status': 'active', 'deleted_at_utc': None}, \
+        "the restore must clear the tombstone LOCALLY too, in the SAME UPDATE that sets status='active'"
+
+    service_a.push_once()
+    service_b.pull_once()
+
+    assert _b_row() == {'status': 'active', 'deleted_at_utc': None}, \
+        "the restore must clear the tombstone on the RECEIVING device too, via the delta-gated deleted_at_utc column"
+
+    products = client.get('/api/sub/retail/products').get_json()['data']
+    assert pid in {p['id'] for p in products}, "a restored product must reappear in the product list"
+
+
+# ── 17. The INNER JOIN trap, and its write-gate fix -- both halves ────────
+
+def test_a_pending_reorder_request_for_a_deleted_product_is_still_listed_but_cannot_be_accepted(client, a_conn):
+    """`list_reorder_requests` reaches products through an INNER JOIN and is
+    deliberately NOT given a `deleted_at_utc` filter: doing so would make a
+    pending request for a deleted product silently vanish from the only
+    screen that can decline it, stranding it `pending` forever. The correct
+    fix is at the WRITE gate -- `accept_reorder_request`'s existing "Product
+    no longer exists" 404 now also fires for a tombstoned product. Both
+    halves are proven together, because either alone is a half-truth:
+    visible-but-acceptable ships stock nobody can supply, invisible-and-
+    unacceptable strands the request with no way to resolve it."""
+    create = client.post('/api/sub/retail/products', json={
+        'name': 'Reorder Doomed Widget', 'sku': f'TOMB-REORDER-{uuid.uuid4().hex[:8]}',
+    })
+    assert create.status_code == 200
+    pid = create.get_json()['data']['id']
+    cid = client.company_id
+
+    rid = str(uuid.uuid4())
+    a_conn.execute(
+        "INSERT INTO reorder_requests (id, company_id, product_id, status, row_version) "
+        "VALUES (?,?,?,?,?)",
+        (rid, cid, pid, 'pending', 1))
+    a_conn.commit()
+
+    delete = client.delete(f'/api/sub/retail/products/{pid}')
+    assert delete.status_code == 200
+
+    # STILL LISTED -- the INNER JOIN must not silently drop it.
+    requests = client.get('/api/sub/retail/reorder-requests').get_json()['data']
+    assert rid in {r['id'] for r in requests}, \
+        "a pending reorder request for a deleted product must stay visible, or it is stuck pending forever"
+
+    # CANNOT BE ACCEPTED -- the write gate must refuse it.
+    accept = client.post(f'/api/sub/retail/reorder-requests/{rid}/accept')
+    assert accept.status_code == 404
+    assert 'no longer exists' in accept.get_json()['message'].lower()
+    row = dict(a_conn.execute("SELECT status FROM reorder_requests WHERE id=?", (rid,)).fetchone())
+    assert row['status'] == 'pending', "a refused accept must leave the request pending, not silently resolve it"
+
+    # STILL DECLINABLE -- the escape hatch must still work.
+    decline = client.post(f'/api/sub/retail/reorder-requests/{rid}/decline')
+    assert decline.status_code == 200
+    row = dict(a_conn.execute("SELECT status FROM reorder_requests WHERE id=?", (rid,)).fetchone())
+    assert row['status'] == 'declined'
+
+
+# ── 18. The must-NOT-filter rule, pinned against a future "consistency"
+#       pass that would quietly break it ──────────────────────────────────
+
+def test_a_deleted_customers_debt_is_still_counted_in_receivables(client, a_conn):
+    """Real money owed does not vanish because a record was deleted --
+    `list_customers` already carries a comment saying it hides such
+    customers from the till WHILE `customers_receivables` still counts
+    them, precisely so a debt cannot be made invisible.
+
+    Deliberately does NOT ring a real credit sale to create the debt: a
+    `create_sale` call queues a `sale` sync_outbox event on install A's
+    SHARED database (this file's `client`/`a_conn`/`app` are module-level
+    singletons -- see the module docstring), and nothing in THIS test would
+    ever push or drain it. The very next test in this module that calls
+    `service_a.push_once()` would silently inherit that stale event and
+    relay it to whichever `install_b` happens to be listening, which is not
+    provisioned to apply a `sale` create (see `apply_pull_result`'s own
+    docstring on `local_ensure_schema` -- `sales.due_date` is exactly the
+    kind of column that needs it) -- a real failure this test hit once and
+    is written here to prevent recurring. `credit_balance` is the exact
+    figure `customers_receivables()` sums, so stamping it directly proves
+    the read-path filter with no such side effect."""
+    create = client.post('/api/sub/retail/customers', json={'name': 'Debtor Widget Co'})
+    assert create.status_code == 200
+    cust_id = create.get_json()['data']['id']
+
+    # `list_customers` calls `_ensure_credit_schema(conn)` at its own top --
+    # this cheap GET is what makes `credit_balance` a real column to UPDATE
+    # below, without duplicating that migration's trigger logic here.
+    client.get('/api/sub/retail/customers')
+    a_conn.execute("UPDATE customers SET credit_balance=250.0 WHERE id=?", (cust_id,))
+    a_conn.commit()
+
+    delete = client.delete(f'/api/sub/retail/customers/{cust_id}')
+    assert delete.status_code == 200
+
+    # HIDDEN from the till listing...
+    listing = client.get('/api/sub/retail/customers').get_json()['data']
+    assert cust_id not in {c['id'] for c in listing}
+
+    # ...but the debt itself must still be counted.
+    receivables = client.get('/api/sub/retail/customers/receivables').get_json()['data']
+    assert any(r['id'] == cust_id for r in receivables), \
+        "a deleted customer's debt must still be counted in receivables -- deletion must not make a debt invisible"
+
+
+# ── 19. The mirror DENY half of test 16 -- without this, a gate that writes
+#       `deleted_at_utc` UNCONDITIONALLY (rather than delta-gating it, like
+#       the category branch's own DENY test) would still pass test 16 for
+#       the wrong reason ─────────────────────────────────────────────────
+
+def test_a_name_edit_from_a_device_that_never_saw_the_delete_does_not_resurrect_the_product(
+        client, service_a, service_b, install_b):
+    """`update_product`'s outbox payload always carries the full row --
+    including `deleted_at_utc` -- because the apply side's INSERT half needs
+    it for a device that has never seen this id (phase6b-decisions.md's
+    change to Part 1). Device A, oblivious to B's delete, edits only `name`;
+    A's own payload still carries `deleted_at_utc` at A's own stale value
+    (None, since A never saw a delete), but `_changed_fields` correctly says
+    only `['name']` changed. Unconditional would let that stale None
+    RESURRECT a product B had deleted, off the back of an edit that never
+    touched deletion at all -- the exact untouched-field clobber stage 6b-i
+    exists to close, pointed at the one column where it un-deletes
+    something. This is the mirror of retail_category_delete_fk_sync_test.py's
+    sibling category test, reproduced here for product."""
+    create = client.post('/api/sub/retail/products', json={
+        'name': 'Doomed On B', 'sku': f'TOMB-DENY-{uuid.uuid4().hex[:8]}',
+    })
+    assert create.status_code == 200
+    pid = create.get_json()['data']['id']
+    service_a.push_once()
+    service_b.pull_once()
+
+    # B tombstones it LOCALLY -- raw SQL, matching delete_product's own
+    # UPDATE exactly (deleted_at_utc stamped, row_version bumped in the SAME
+    # statement, status left untouched per stage 6b-iii-a). B never pushes
+    # this anywhere: A must never learn about it, which is the whole point.
+    b_now = "2026-08-27T00:02:00+00:00"
+    b_conn = install_b()
+    b_conn.execute(
+        "UPDATE products SET deleted_at_utc=?, row_version=row_version+1, updated_at_utc=? WHERE id=?",
+        (b_now, b_now, pid))
+    b_conn.commit()
+    b_seed = dict(b_conn.execute(
+        "SELECT row_version, deleted_at_utc FROM products WHERE id=?", (pid,)).fetchone())
+    b_conn.close()
+    assert b_seed == {'row_version': 2, 'deleted_at_utc': b_now}
+
+    # A, oblivious to B's delete, renames the product through the REAL route
+    # TWICE. One PATCH would only reach row_version=2 -- a TIE with B's
+    # tombstone, which 6a-ii's own reject-stale gate would already discard
+    # for a reason that has nothing to do with THIS stage's delta gating,
+    # proving nothing about it. Two PATCHes land A on row_version=3,
+    # genuinely higher than B's 2, so the reject-stale gate lets the write
+    # through and only the delta gating on `deleted_at_utc` can still save
+    # the tombstone.
+    r1 = client.patch(f'/api/sub/retail/products/{pid}', json={'name': 'Renamed Once'})
+    assert r1.status_code == 200
+    r2 = client.patch(f'/api/sub/retail/products/{pid}', json={'name': 'Renamed By A'})
+    assert r2.status_code == 200
+
+    service_a.push_once()
+    service_b.pull_once()
+
+    b_conn = install_b()
+    b_after = dict(b_conn.execute(
+        "SELECT name, row_version, deleted_at_utc FROM products WHERE id=?", (pid,)).fetchone())
+    b_conn.close()
+    assert b_after['name'] == 'Renamed By A', "A's rename must land, not be silently dropped"
+    assert b_after['row_version'] == 3
+    assert b_after['deleted_at_utc'] is not None, \
+        "a name-only edit from a device that never saw the delete must not resurrect B's tombstone"

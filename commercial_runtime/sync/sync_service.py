@@ -969,29 +969,21 @@ class SyncService:
                 # phase6b-decisions.md "Decision B"): a CSV re-import
                 # resurrecting a tombstoned category (import_api.py) queues
                 # an `update` event naming `deleted_at_utc` in
-                # `_changed_fields`. This branch DELIBERATELY does NOT add
-                # `deleted_at_utc` to its own column list here -- attempted,
-                # then reverted, because doing so raises
-                # `sqlite3.OperationalError: no such column: deleted_at_utc`
-                # against every hand-built minimal test fixture in this
-                # codebase whose `categories` table predates this stage
-                # (commercial_runtime/sync/tests/test_sync_service.py,
-                # test_internal_routes.py -- both explicitly in this stage's
-                # own regression scope, and both broke on the first attempt,
-                # for a genuinely NEW category create/update, not just a
-                # resurrection). `_delta_set_clause`'s own docstring already
-                # covers the consequence: a payload naming a column outside
-                # its code-owned list is "ignored, not injected" -- so a
-                # resurrection's `deleted_at_utc` name in `_changed_fields`
-                # is silently a no-op HERE. Net effect, reported rather than
-                # hidden: Decision B's resurrection takes effect on the
-                # IMPORTING device (import_api.py's own local UPDATE clears
-                # it directly) but does not yet propagate to a device that
-                # already applied the earlier tombstone -- that device stays
-                # tombstoned until this branch is taught the column, which
-                # needs those fixtures updated first and is left for a
-                # follow-up rather than done here under this stage's
-                # explicit scope (STEP 3 named only the delete branches).
+                # `_changed_fields`.
+                #
+                # CORRECTION (stage 6b-iii-a, 2026-08-27): the paragraph that
+                # used to sit here claimed this branch deliberately did NOT
+                # add `deleted_at_utc` to its own column list, because doing
+                # so raised `sqlite3.OperationalError: no such column:
+                # deleted_at_utc` against this file's and test_internal_
+                # routes.py's hand-built minimal fixtures. That was true of
+                # the FIRST attempt within this same 6b-ii commit -- it is
+                # not true of the code a few lines below, which DOES include
+                # `deleted_at_utc` in the list, because the fixtures were
+                # updated (both files' `CREATE TABLE categories` gained the
+                # column) rather than the column left out. Left uncorrected,
+                # a reader would trust the comment over the code sitting
+                # right under it.
                 changed_fields = p.get("_changed_fields")
                 # `deleted_at_utc` is in the DELTA-GATED column list, never
                 # written unconditionally, and that distinction is the whole
@@ -1170,19 +1162,32 @@ class SyncService:
                 # a missing `_changed_fields` key means "every column",
                 # `_delta_set_clause`'s own docstring for the wire-vs-code-
                 # owned column-name safety note).
+                #
+                # launch-readiness Phase 6 stage 6b-iii-a (Step 3, restore
+                # paths must clear the tombstone): `deleted_at_utc` added to
+                # the DELTA-GATED column list, exactly as the category
+                # branch already has it -- see that branch's comment for the
+                # full reasoning (unconditional would let a device that
+                # never saw a tombstone resurrect it off the back of an
+                # ordinary edit re-sending its own stale `deleted_at_utc` of
+                # NULL). `update_product`'s restore path (retail_api.py) now
+                # names `deleted_at_utc` in `_changed_fields` only when it
+                # actually cleared it, so this only ever un-deletes a row on
+                # the genuine restore path.
                 changed_fields = p.get("_changed_fields")
                 delta_frag, delta_binds = self._delta_set_clause(
                     "products",
                     ["sku", "barcode", "name", "category_id", "supplier_id", "cost_price",
-                     "sell_price", "tax_rate", "unit", "reorder_level", "reorder_method", "status"],
+                     "sell_price", "tax_rate", "unit", "reorder_level", "reorder_method", "status",
+                     "deleted_at_utc"],
                     changed_fields)
                 raw_row_version = p.get("row_version")
                 insert_row_version = raw_row_version if raw_row_version is not None else 1
                 cur = conn.execute(
                     "INSERT INTO products (id, company_id, sku, barcode, name, category_id, supplier_id, "
                     "cost_price, sell_price, tax_rate, unit, reorder_level, reorder_method, status, "
-                    "row_version, updated_at_utc) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "deleted_at_utc, row_version, updated_at_utc) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET " + delta_frag + ", "
                     "row_version=MAX(products.row_version, excluded.row_version), "
                     "updated_at_utc=excluded.updated_at_utc "
@@ -1190,7 +1195,7 @@ class SyncService:
                     (p.get("id"), local_company_id, p.get("sku"), p.get("barcode", ""), p.get("name"),
                      p.get("category_id"), p.get("supplier_id"), p.get("cost_price", 0), p.get("sell_price", 0),
                      p.get("tax_rate", 0), p.get("unit", "pcs"), p.get("reorder_level", 5),
-                     p.get("reorder_method", "none"), p.get("status", "active"),
+                     p.get("reorder_method", "none"), p.get("status", "active"), p.get("deleted_at_utc"),
                      insert_row_version, p.get("updated_at_utc"),
                      *delta_binds,
                      raw_row_version, raw_row_version),
@@ -1237,22 +1242,39 @@ class SyncService:
                 # integer means a genuine MODERN stale-delete conflict worth
                 # an entry.
                 # launch-readiness Phase 6 stage 6b-ii (tombstones,
-                # phase6b-decisions.md): `deleted_at_utc` carried through too
-                # now -- bound from `p.get("deleted_at_utc")`, which is None
-                # for a payload predating this stage, matching a fresh
-                # column's own NULL default. `status='inactive'` stays
-                # (deliberately -- see retail_api.py's delete_product
-                # comment: `create_sale`'s line-item read still filters
-                # `status='active'`). The reject-stale WHERE, the `MAX`
-                # never-regress protection and the conflict recording below
-                # are all UNCHANGED from stage 6a-ii.
+                # phase6b-decisions.md): `deleted_at_utc` carried through.
+                # The reject-stale WHERE, the `MAX` never-regress protection
+                # and the conflict recording below are all UNCHANGED from
+                # stage 6a-ii.
+                #
+                # launch-readiness Phase 6 stage 6b-iii-a (deletion stops
+                # overloading `status`, Step 2b/2c): `status='inactive'` is
+                # REMOVED from this UPDATE -- `deleted_at_utc` is now the
+                # ENTIRE visibility gate for a product, matching every read
+                # path this stage gave a `deleted_at_utc IS NULL` filter (see
+                # retail_api.py's delete_product comment for the full list).
+                #
+                # `deleted_at_utc` also GAINS a REAL fallback here (this
+                # device's own current time), where before it bound a bare
+                # `p.get("deleted_at_utc")` with no fallback at all -- safe
+                # ONLY while `status='inactive'` was written unconditionally
+                # alongside it. With that write gone, a LEGACY delete payload
+                # -- one carrying no `deleted_at_utc` key at all, already
+                # sitting in some device's outbox -- would otherwise apply
+                # "successfully" (rowcount 1) while leaving the row FULLY
+                # LIVE AND VISIBLE forever: exactly the category delete
+                # branch's own `deleted_at_utc = p.get(...) or datetime.now(
+                # ...)` fallback, and this is precisely the bug that fallback
+                # exists to prevent, reached here by the same route the
+                # category branch's own comment describes.
                 raw_row_version = p.get("row_version")
                 insert_row_version = raw_row_version if raw_row_version is not None else 1
+                deleted_at_utc = p.get("deleted_at_utc") or datetime.now(timezone.utc).isoformat()
                 cur = conn.execute(
-                    "UPDATE products SET status='inactive', deleted_at_utc=?, "
+                    "UPDATE products SET deleted_at_utc=?, "
                     "row_version=MAX(row_version, ?), updated_at_utc=? "
                     "WHERE id=? AND (? IS NULL OR ? > row_version)",
-                    (p.get("deleted_at_utc"), insert_row_version, p.get("updated_at_utc"), p.get("id"),
+                    (deleted_at_utc, insert_row_version, p.get("updated_at_utc"), p.get("id"),
                      raw_row_version, raw_row_version),
                 )
                 if cur.rowcount == 0:
@@ -1286,21 +1308,33 @@ class SyncService:
                 # decisive test targets: a customer PATCH that only touches
                 # `phone` must not revert an `address` edit some other
                 # device made concurrently.
+                #
+                # launch-readiness Phase 6 stage 6b-iii-a: `deleted_at_utc`
+                # added to the DELTA-GATED column list -- see the product
+                # branch's identical comment above for the full reasoning.
+                # NOTE: `update_customer` (retail_api.py) has no restore path
+                # today (its `allowed` PATCH fields omit `status` entirely,
+                # a pre-existing asymmetry with product/supplier), so nothing
+                # yet EMITS a customer `_changed_fields` naming
+                # `deleted_at_utc` -- this column is added here for parity
+                # with the other two branches and so a future restore route
+                # (6b-iii-b) needs no apply-side change, but it is inert
+                # until that route exists.
                 changed_fields = p.get("_changed_fields")
                 delta_frag, delta_binds = self._delta_set_clause(
-                    "customers", ["name", "phone", "email", "address", "status"], changed_fields)
+                    "customers", ["name", "phone", "email", "address", "status", "deleted_at_utc"], changed_fields)
                 raw_row_version = p.get("row_version")
                 insert_row_version = raw_row_version if raw_row_version is not None else 1
                 cur = conn.execute(
                     "INSERT INTO customers (id, company_id, name, phone, email, address, status, "
-                    "row_version, updated_at_utc) "
-                    "VALUES (?,?,?,?,?,?,?,?,?) "
+                    "deleted_at_utc, row_version, updated_at_utc) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET " + delta_frag + ", "
                     "row_version=MAX(customers.row_version, excluded.row_version), "
                     "updated_at_utc=excluded.updated_at_utc "
                     "WHERE ? IS NULL OR ? > customers.row_version",
                     (p.get("id"), local_company_id, p.get("name"), p.get("phone", ""),
-                     p.get("email", ""), p.get("address", ""), p.get("status", "active"),
+                     p.get("email", ""), p.get("address", ""), p.get("status", "active"), p.get("deleted_at_utc"),
                      insert_row_version, p.get("updated_at_utc"),
                      *delta_binds,
                      raw_row_version, raw_row_version),
@@ -1320,17 +1354,23 @@ class SyncService:
                 # 6a-ii gates it the identical way: NULL-tolerant WHERE,
                 # `MAX`-protected row_version, `_local_row_version`
                 # disambiguating "stale" from "no local row".
-                # launch-readiness Phase 6 stage 6b-ii (tombstones): see the
-                # product delete branch's comment above -- identical
-                # `deleted_at_utc` carry-through, identical reason `status`
-                # stays written.
+                # launch-readiness Phase 6 stage 6b-ii (tombstones):
+                # `deleted_at_utc` carried through.
+                #
+                # launch-readiness Phase 6 stage 6b-iii-a: `status='inactive'`
+                # REMOVED (see the product delete branch's comment above for
+                # the full reasoning), and `deleted_at_utc` GAINS the same
+                # `now()` fallback for the same "legacy payload with no
+                # deleted_at_utc key must not leave the row fully live and
+                # visible forever" reason.
                 raw_row_version = p.get("row_version")
                 insert_row_version = raw_row_version if raw_row_version is not None else 1
+                deleted_at_utc = p.get("deleted_at_utc") or datetime.now(timezone.utc).isoformat()
                 cur = conn.execute(
-                    "UPDATE customers SET status='inactive', deleted_at_utc=?, "
+                    "UPDATE customers SET deleted_at_utc=?, "
                     "row_version=MAX(row_version, ?), updated_at_utc=? "
                     "WHERE id=? AND (? IS NULL OR ? > row_version)",
-                    (p.get("deleted_at_utc"), insert_row_version, p.get("updated_at_utc"), p.get("id"),
+                    (deleted_at_utc, insert_row_version, p.get("updated_at_utc"), p.get("id"),
                      raw_row_version, raw_row_version),
                 )
                 if cur.rowcount == 0:
@@ -1359,21 +1399,29 @@ class SyncService:
                 # DO UPDATE now writes only the columns `_changed_fields`
                 # names -- see the category branch's comment above for the
                 # full reasoning.
+                #
+                # launch-readiness Phase 6 stage 6b-iii-a: `deleted_at_utc`
+                # added to the DELTA-GATED column list -- see the product
+                # branch's identical comment above for the full reasoning.
+                # `update_supplier`'s restore path (retail_api.py) names
+                # `deleted_at_utc` in `_changed_fields` when it clears the
+                # tombstone, so this is what makes that restore actually
+                # reach a receiving device.
                 changed_fields = p.get("_changed_fields")
                 delta_frag, delta_binds = self._delta_set_clause(
-                    "suppliers", ["name", "phone", "email", "address", "status"], changed_fields)
+                    "suppliers", ["name", "phone", "email", "address", "status", "deleted_at_utc"], changed_fields)
                 raw_row_version = p.get("row_version")
                 insert_row_version = raw_row_version if raw_row_version is not None else 1
                 cur = conn.execute(
                     "INSERT INTO suppliers (id, company_id, name, phone, email, address, status, "
-                    "row_version, updated_at_utc) "
-                    "VALUES (?,?,?,?,?,?,?,?,?) "
+                    "deleted_at_utc, row_version, updated_at_utc) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET " + delta_frag + ", "
                     "row_version=MAX(suppliers.row_version, excluded.row_version), "
                     "updated_at_utc=excluded.updated_at_utc "
                     "WHERE ? IS NULL OR ? > suppliers.row_version",
                     (p.get("id"), local_company_id, p.get("name"), p.get("phone", ""),
-                     p.get("email", ""), p.get("address", ""), p.get("status", "active"),
+                     p.get("email", ""), p.get("address", ""), p.get("status", "active"), p.get("deleted_at_utc"),
                      insert_row_version, p.get("updated_at_utc"),
                      *delta_binds,
                      raw_row_version, raw_row_version),
@@ -1391,17 +1439,21 @@ class SyncService:
                 # See the product delete branch's comment above -- a delete
                 # event carries row_version/updated_at_utc too, gated the
                 # identical NULL-tolerant, `MAX`-protected way.
-                # launch-readiness Phase 6 stage 6b-ii (tombstones): see the
-                # product delete branch's comment above -- identical
-                # `deleted_at_utc` carry-through, identical reason `status`
-                # stays written.
+                # launch-readiness Phase 6 stage 6b-ii (tombstones):
+                # `deleted_at_utc` carried through.
+                #
+                # launch-readiness Phase 6 stage 6b-iii-a: `status='inactive'`
+                # REMOVED, `deleted_at_utc` GAINS the `now()` fallback -- see
+                # the product delete branch's comment above for the full
+                # reasoning, identical here.
                 raw_row_version = p.get("row_version")
                 insert_row_version = raw_row_version if raw_row_version is not None else 1
+                deleted_at_utc = p.get("deleted_at_utc") or datetime.now(timezone.utc).isoformat()
                 cur = conn.execute(
-                    "UPDATE suppliers SET status='inactive', deleted_at_utc=?, "
+                    "UPDATE suppliers SET deleted_at_utc=?, "
                     "row_version=MAX(row_version, ?), updated_at_utc=? "
                     "WHERE id=? AND (? IS NULL OR ? > row_version)",
-                    (p.get("deleted_at_utc"), insert_row_version, p.get("updated_at_utc"), p.get("id"),
+                    (deleted_at_utc, insert_row_version, p.get("updated_at_utc"), p.get("id"),
                      raw_row_version, raw_row_version),
                 )
                 if cur.rowcount == 0:

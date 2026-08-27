@@ -123,8 +123,14 @@ def test_delete_customer_is_always_a_soft_delete(client, db_conn):
     resp = client.delete(f'/api/sub/retail/customers/{cust_id}')
     assert resp.status_code == 200
 
-    row = db_conn.execute("SELECT status FROM customers WHERE id=?", (cust_id,)).fetchone()
-    assert row is not None and row['status'] == 'inactive'  # row still exists, never hard-deleted
+    # launch-readiness Phase 6 stage 6b-iii-a (deletion stops overloading
+    # `status`): `delete_customer` no longer writes `status='inactive'` --
+    # `deleted_at_utc` alone is now the tombstone (row still exists, never
+    # hard-deleted, exactly as before -- just via a different column now).
+    row = db_conn.execute("SELECT status, deleted_at_utc FROM customers WHERE id=?", (cust_id,)).fetchone()
+    assert row is not None
+    assert row['status'] == 'active'
+    assert row['deleted_at_utc'] is not None
 
     outbox = db_conn.execute(
         "SELECT event_type FROM sync_outbox WHERE entity_type='customer' AND entity_id=? ORDER BY created_at DESC LIMIT 1",
@@ -151,10 +157,12 @@ def test_pulled_customer_delete_soft_deletes_and_never_touches_a_row_this_device
         -- of silently diverging), and this hand-built minimal fixture
         -- predates that.
         -- launch-readiness Phase 6 stage 6b-ii (tombstones): deleted_at_utc
-        -- added too -- the customer delete branch now stamps it (alongside
-        -- the unchanged status='inactive'; see retail_api.py's
-        -- delete_customer comment for why both are written), and this
-        -- fixture predates that the same way it predated row_version.
+        -- added too -- the customer delete branch now stamps it.
+        -- launch-readiness Phase 6 stage 6b-iii-a: `status='inactive'` was
+        -- ALSO written here between 6b-ii and this stage; it no longer is --
+        -- `deleted_at_utc` alone is now the tombstone (see retail_api.py's
+        -- delete_customer comment), and this fixture predates that the same
+        -- way it predated row_version.
         CREATE TABLE customers (id TEXT PRIMARY KEY, company_id INTEGER, name TEXT, phone TEXT, email TEXT, address TEXT, status TEXT DEFAULT 'active',
             row_version INTEGER NOT NULL DEFAULT 1, updated_at_utc TEXT, deleted_at_utc TEXT);
         CREATE TABLE sales (id INTEGER PRIMARY KEY, company_id INTEGER, customer_id TEXT, total REAL);
@@ -193,6 +201,9 @@ def test_pulled_customer_delete_soft_deletes_and_never_touches_a_row_this_device
     })
     conn.commit()
 
-    row = conn.execute("SELECT status FROM customers WHERE id='c-1'").fetchone()
-    assert row['status'] == 'inactive'  # never DELETE FROM -- sales row is untouched, no FK ever fires
+    row = conn.execute("SELECT status, deleted_at_utc FROM customers WHERE id='c-1'").fetchone()
+    # launch-readiness Phase 6 stage 6b-iii-a: `status` no longer flips to
+    # 'inactive' on delete -- `deleted_at_utc` is the tombstone now.
+    assert row['status'] == 'active'  # never DELETE FROM -- sales row is untouched, no FK ever fires
+    assert row['deleted_at_utc'] is not None
     assert conn.execute("SELECT COUNT(*) c FROM sales").fetchone()['c'] == 1

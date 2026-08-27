@@ -121,8 +121,15 @@ def test_delete_product_is_always_a_soft_delete_even_with_no_sales_history(clien
     resp = client.delete(f'/api/sub/retail/products/{pid}')
     assert resp.status_code == 200
 
-    row = db_conn.execute("SELECT status FROM products WHERE id=?", (pid,)).fetchone()
-    assert row is not None and row['status'] == 'inactive'  # row still exists, never hard-deleted
+    # launch-readiness Phase 6 stage 6b-iii-a (deletion stops overloading
+    # `status`): `delete_product` no longer writes `status='inactive'` --
+    # `deleted_at_utc` alone is now the tombstone, and `status` stays
+    # 'active' (row still exists, never hard-deleted, exactly as this test's
+    # name still says -- just via a different column now).
+    row = db_conn.execute("SELECT status, deleted_at_utc FROM products WHERE id=?", (pid,)).fetchone()
+    assert row is not None
+    assert row['status'] == 'active'
+    assert row['deleted_at_utc'] is not None
 
     outbox = db_conn.execute(
         "SELECT event_type FROM sync_outbox WHERE entity_type='product' AND entity_id=? ORDER BY created_at DESC LIMIT 1",
@@ -145,10 +152,12 @@ def test_pulled_product_delete_soft_deletes_and_never_touches_a_row_this_device_
         -- of silently diverging), and this hand-built minimal fixture
         -- predates that.
         -- launch-readiness Phase 6 stage 6b-ii (tombstones): deleted_at_utc
-        -- added too -- the product delete branch now stamps it (alongside
-        -- the unchanged status='inactive'; see retail_api.py's
-        -- delete_product comment for why both are written), and this
-        -- fixture predates that the same way it predated row_version.
+        -- added too -- the product delete branch now stamps it.
+        -- launch-readiness Phase 6 stage 6b-iii-a: `status='inactive'` was
+        -- ALSO written here between 6b-ii and this stage; it no longer is --
+        -- `deleted_at_utc` alone is now the tombstone (see retail_api.py's
+        -- delete_product comment), and this fixture predates that the same
+        -- way it predated row_version.
         CREATE TABLE products (id TEXT PRIMARY KEY, company_id INTEGER, sku TEXT, name TEXT, status TEXT DEFAULT 'active',
             row_version INTEGER NOT NULL DEFAULT 1, updated_at_utc TEXT, deleted_at_utc TEXT);
         CREATE TABLE sale_items (id INTEGER PRIMARY KEY, sale_id INTEGER, product_id TEXT, quantity REAL, unit_price REAL, line_total REAL);
@@ -180,6 +189,9 @@ def test_pulled_product_delete_soft_deletes_and_never_touches_a_row_this_device_
     })
     conn.commit()
 
-    row = conn.execute("SELECT status FROM products WHERE id='p-1'").fetchone()
-    assert row['status'] == 'inactive'  # never DELETE FROM -- sale_items row is untouched, no FK ever fires
+    row = conn.execute("SELECT status, deleted_at_utc FROM products WHERE id='p-1'").fetchone()
+    # launch-readiness Phase 6 stage 6b-iii-a: `status` no longer flips to
+    # 'inactive' on delete -- `deleted_at_utc` is the tombstone now.
+    assert row['status'] == 'active'  # never DELETE FROM -- sale_items row is untouched, no FK ever fires
+    assert row['deleted_at_utc'] is not None
     assert conn.execute("SELECT COUNT(*) c FROM sale_items").fetchone()['c'] == 1
