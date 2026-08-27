@@ -62,13 +62,22 @@ _SCHEMA = """
 -- counters converge instead of silently diverging), and this hand-built
 -- minimal fixture predates that. test_internal_routes.py mirrors this same
 -- shape for its own `categories` table -- keep the two in step.
+--
+-- launch-readiness Phase 6 stage 6b-ii (tombstones): `deleted_at_utc` added
+-- to categories/products/customers/suppliers (NOT reorder_requests -- there
+-- is no reorder_request delete event type at all, see this module's own
+-- comment on that branch) -- the SAME "this fixture predates the new
+-- column" update this file's own history already made once for row_version/
+-- updated_at_utc above, done again for the identical reason: every delete
+-- branch in `_apply_event` now unconditionally references the column.
 CREATE TABLE categories (
     id TEXT PRIMARY KEY,
     company_id INTEGER DEFAULT 1,
     name TEXT NOT NULL,
     description TEXT,
     row_version INTEGER NOT NULL DEFAULT 1,
-    updated_at_utc TEXT
+    updated_at_utc TEXT,
+    deleted_at_utc TEXT
 );
 CREATE TABLE products (
     id TEXT PRIMARY KEY,
@@ -86,7 +95,8 @@ CREATE TABLE products (
     reorder_method TEXT DEFAULT 'none',
     status TEXT DEFAULT 'active',
     row_version INTEGER NOT NULL DEFAULT 1,
-    updated_at_utc TEXT
+    updated_at_utc TEXT,
+    deleted_at_utc TEXT
 );
 CREATE TABLE customers (
     id TEXT PRIMARY KEY,
@@ -97,7 +107,8 @@ CREATE TABLE customers (
     address TEXT,
     status TEXT DEFAULT 'active',
     row_version INTEGER NOT NULL DEFAULT 1,
-    updated_at_utc TEXT
+    updated_at_utc TEXT,
+    deleted_at_utc TEXT
 );
 CREATE TABLE suppliers (
     id TEXT PRIMARY KEY,
@@ -108,7 +119,8 @@ CREATE TABLE suppliers (
     address TEXT,
     status TEXT DEFAULT 'active',
     row_version INTEGER NOT NULL DEFAULT 1,
-    updated_at_utc TEXT
+    updated_at_utc TEXT,
+    deleted_at_utc TEXT
 );
 CREATE TABLE reorder_requests (
     id TEXT PRIMARY KEY,
@@ -708,7 +720,20 @@ def test_pull_once_upserts_on_update_overwriting_existing_row(get_conn):
     assert _cursor(get_conn) == 2
 
 
-def test_pull_once_hard_deletes_on_delete(get_conn):
+# launch-readiness Phase 6 stage 6b-ii (tombstones, phase6b-decisions.md
+# "Decision A"): RENAMED from `test_pull_once_hard_deletes_on_delete` and its
+# one outdated assertion CHANGED -- category delete is no longer a hard
+# `DELETE` (see `_apply_event`'s category branch, and
+# retail_category_delete_fk_sync_test.py's module docstring for the full
+# history of why the old hard delete existed and why it was replaced). What
+# this test could ONLY ever prove either way -- that a `delete` event applies
+# and the cursor advances past it -- is unchanged and still asserted below;
+# only the SHAPE of "applied" changes, from "the row is gone" to "the row is
+# tombstoned and invisible to reads" (the read-path filters this device
+# would need to prove that are exercised by retail_tombstone_test.py, not
+# here -- this file has no `deleted_at_utc IS NULL` read-path queries at
+# all, hand-built minimal fixture that it is).
+def test_pull_once_soft_deletes_on_delete(get_conn):
     cat_id = str(uuid.uuid4())
     create_event = _pull_event(cat_id, "create", {"id": cat_id, "company_id": 1, "name": "Gone Soon", "description": ""})
     delete_event = _pull_event(cat_id, "delete", {"id": cat_id})
@@ -719,7 +744,10 @@ def test_pull_once_hard_deletes_on_delete(get_conn):
     assert len(_categories(get_conn)) == 1
     service.pull_once()
 
-    assert _categories(get_conn) == []
+    rows = _categories(get_conn)
+    assert len(rows) == 1, "tombstoning must not remove the row"
+    assert rows[0]["id"] == cat_id
+    assert rows[0]["deleted_at_utc"] is not None, "the category must be tombstoned, not merely untouched"
     assert _cursor(get_conn) == 2
 
 
@@ -1020,15 +1048,77 @@ def test_pull_once_without_a_company_id_provider_raises_instead_of_silently_misf
     assert _cursor(get_conn) == 0
 
 
-def test_pull_once_delete_only_batch_never_needs_a_company_id_provider(get_conn):
-    """A delete is keyed by categories.id alone (a client-generated UUID,
-    globally unique -- see schema.py's v1->v2 migration note) and never
-    writes a company_id, so a batch containing only deletes must apply
-    cleanly even with no local_company_id_provider configured."""
+# launch-readiness Phase 6 stage 6b-ii (tombstones): SPLIT IN TWO from
+# `test_pull_once_delete_only_batch_never_needs_a_company_id_provider`. The
+# claim is unchanged and still holds for both entity types -- no delete-only
+# batch needs a provider -- but category now reaches that outcome by a
+# different route (its cascade derives the tenant from the tombstoned row),
+# so the two halves are worth asserting separately rather than leaving
+# category's harder guarantee riding on a test named for the easy case. See
+# the category test immediately below for the full reasoning, including the
+# wedge this arrangement exists to avoid.
+def test_pull_once_a_product_delete_only_batch_never_needs_a_company_id_provider(get_conn):
+    """A product delete is keyed by products.id alone (a client-generated
+    UUID, globally unique) and never writes a company_id, so a batch
+    containing only product deletes must apply cleanly even with no
+    local_company_id_provider configured."""
+    pid = str(uuid.uuid4())
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO products (id, company_id, sku, name) VALUES (?,?,?,?)",
+        (pid, "company-B", "SKU-NOPROV", "Pre-existing"))
+    conn.commit()
+    conn.close()
+
+    delete_event = _pull_event_of("product", pid, "delete", {"id": pid})
+    client = FakeRelayClient(pull_responses=[{"events": [delete_event], "cursor": 1}])
+    service = SyncService(lambda: client, get_conn)  # no local_company_id_provider
+
+    service.pull_once()  # must not raise
+
+    rows = _products(get_conn)
+    assert len(rows) == 1
+    assert rows[0]["status"] == "inactive"
+    # Unlike category (see the test below), product/customer/supplier get NO
+    # `deleted_at_utc` fallback for a legacy-shaped payload with no
+    # timestamp at all -- `status='inactive'` is unconditionally written and
+    # is what actually hides this row on every read path (retail_api.py's
+    # delete_product comment), so `deleted_at_utc` honestly stays NULL here,
+    # the same "not known from the wire" posture `updated_at_utc` already
+    # has. This is not a gap: category has no `status` column to fall back
+    # on, which is precisely why ONLY its delete branch needed the fallback.
+    assert rows[0]["deleted_at_utc"] is None
+
+
+def test_pull_once_a_category_delete_only_batch_never_needs_a_company_id_provider_and_still_cascades(get_conn):
+    """The category half of the same guarantee, and the harder one, because
+    stage 6b-ii's cascade (`UPDATE products SET category_id=NULL ...`) needs
+    a tenant to scope by and a delete-only batch has no provider to ask.
+
+    This test exists because the first cut of that cascade took the tenant
+    from `local_company_id`, which quietly made a category-delete-only batch
+    -- the common real-world shape, a delete pushed on its own -- the FIRST
+    delete batch in this system's history to require a provider.
+    `_get_local_company_id` RAISES when none is wired or when onboarding has
+    not finished, so that put a throw into the apply loop, and a throw in the
+    apply loop aborts before the cursor advances while `run_once` swallows
+    it: precisely the silent, permanent, whole-device sync wedge that
+    `retail_category_delete_fk_sync_test.py`'s module docstring exists to
+    record. Trading a hard-delete wedge for a no-provider wedge would have
+    been no fix at all.
+
+    The cascade derives the tenant from the tombstoned category row instead,
+    which is guaranteed to still be there precisely because a tombstone is
+    not a `DELETE`. So this asserts BOTH halves at once: no raise, and the
+    cascade genuinely ran anyway."""
     cat_id = str(uuid.uuid4())
+    pid = str(uuid.uuid4())
     conn = get_conn()
     conn.execute("INSERT INTO categories (id, company_id, name, description) VALUES (?,?,?,?)",
                  (cat_id, "company-B", "Pre-existing", ""))
+    conn.execute(
+        "INSERT INTO products (id, company_id, sku, name, category_id) VALUES (?,?,?,?,?)",
+        (pid, "company-B", "SKU-CASCADE", "Assigned", cat_id))
     conn.commit()
     conn.close()
 
@@ -1038,7 +1128,15 @@ def test_pull_once_delete_only_batch_never_needs_a_company_id_provider(get_conn)
 
     service.pull_once()  # must not raise
 
-    assert _categories(get_conn) == []
+    rows = _categories(get_conn)
+    assert len(rows) == 1, "a tombstone must not remove the row"
+    assert rows[0]["deleted_at_utc"] is not None, "the tombstone must be stamped"
+    # The half that proves the tenant was resolved: with `company_id` bound
+    # NULL the cascade would match nothing (SQL never equates NULL), so this
+    # assertion is what actually fails if the scoping regresses.
+    assert _products(get_conn)[0]["category_id"] is None, (
+        "the cascade must run without a provider, not silently no-op")
+    assert _cursor(get_conn) == 1, "the cursor must advance -- no wedge"
 
 
 def test_pull_once_ignores_unknown_entity_types(get_conn):

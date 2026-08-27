@@ -21,6 +21,60 @@ factory -- not a hand-written test schema -- because the bug only exists at
 all when `PRAGMA foreign_keys=ON` meets the real declared FK. A test that
 stubbed either of those would pass against the broken schema too.
 
+launch-readiness Phase 6 stage 6b-ii (tombstones, phase6b-decisions.md
+"Decision A"): `delete_category` and `SyncService._apply_event`'s category
+branch no longer run a `DELETE` at all -- a category delete is now a gated
+soft-delete (`deleted_at_utc` stamped, `row_version` bumped, rejected as
+stale exactly like every other catalogue delete), with the SAME
+`products.category_id=NULL` walk performed explicitly, by hand, in the same
+transaction (see `delete_category`'s own comment in retail_api.py for the
+full reasoning -- this is the derived-cascade replacement for the FK
+`ON DELETE SET NULL` this file exists to pin).
+
+What this file can STILL catch, unchanged: `products.category_id` becomes
+NULL, on both the local delete path and the cross-device pulled-delete path
+(`test_local_category_delete_unassigns_its_products_instead_of_failing`,
+`test_pulled_delete_of_a_category_this_device_has_a_product_in_applies_
+cleanly`), and a device stays able to receive later events after a category
+delete (`test_a_later_batch_still_applies_after_a_delete_of_a_linked_
+category`) -- the anti-wedge half, and the most valuable half of this file.
+
+What this file can NO LONGER catch, stated plainly per ENGINEERING.md: since
+no `DELETE` statement runs against `categories` on the apply path anymore,
+the specific historical failure this file is named for --
+`IntegrityError: FOREIGN KEY constraint failed` escaping `_apply_event` and
+aborting `apply_pull_result` BEFORE `sync_cursor` advances -- is now
+STRUCTURALLY IMPOSSIBLE to reproduce through that path, for ANY schema,
+including the genuinely broken pre-v3 one `_build_v2_database` builds below.
+That cost one test, and the loss is recorded rather than absorbed silently.
+`test_the_old_v2_schema_really_did_wedge_on_this_exact_event` pinned the
+historical failure by running the real `_apply_event` against a hand-built
+v2-shaped database predating `deleted_at_utc` (and `row_version`/
+`updated_at_utc`) entirely, asserting `sqlite3.IntegrityError`. Against
+6b-ii's code that call raises `sqlite3.OperationalError: no such column:
+deleted_at_utc` instead -- the tombstone UPDATE's own column reference,
+checked before any FK is ever touched -- because no `DELETE` runs any more
+and so no FK can be violated by this path, for any schema.
+
+It is now
+`test_a_schema_too_old_to_apply_a_category_delete_fails_loudly_without_
+advancing_the_cursor`, asserting the same structure (it raises, the cursor
+stays 0) for the reason that still exists. **What that can no longer catch:
+the pre-v3 FK reproduction itself. Nothing in this file exercises the broken
+FK against a delete any more, and that is permanent.** The anti-vacuity job
+it was really doing is carried by two tests that never depended on the
+delete path at all -- `test_foreign_keys_are_actually_enforced_on_a_real_
+connection` (proves `PRAGMA foreign_keys` is genuinely ON) and
+`test_local_category_delete_unassigns_its_products_instead_of_failing`
+(still issues a raw `DELETE FROM categories`, so the `ON DELETE SET NULL`
+rebuild is still proven intact).
+
+The other two cases this file's docstring predicted becoming false
+(Decision A, phase6b-decisions.md) did NOT: only `COUNT(*) FROM categories
+WHERE id=?` changes, from 0 to 1 (tombstoned, not gone) -- `category_id IS
+NULL` and every cursor-advance assertion elsewhere in this file hold exactly
+as before, proven by running the suite, not assumed.
+
 Run:
     pytest products/retail/tests/retail_category_delete_fk_sync_test.py -v
 """
@@ -224,7 +278,11 @@ def test_pulled_delete_of_a_category_this_device_has_a_product_in_applies_cleanl
     Asserts the three things that were ALL broken before v3, not merely that
     no exception escaped:
       1. B's product survives, with `category_id` set to NULL.
-      2. The category row is genuinely gone locally.
+      2. The category row is TOMBSTONED locally (launch-readiness Phase 6
+         stage 6b-ii: `deleted_at_utc` set, the row itself still exists --
+         see this file's module docstring for why "genuinely gone" is no
+         longer the right assertion, and it is the ONE assertion this stage
+         changes in this file).
       3. B's sync cursor advances to Owner's returned value -- i.e. B keeps
          receiving every later event from every device, which is precisely
          what the FK failure used to stop forever.
@@ -258,7 +316,17 @@ def test_pulled_delete_of_a_category_this_device_has_a_product_in_applies_cleanl
         product = conn.execute("SELECT name, category_id FROM products WHERE sku='SKU-FK-1'").fetchone()
         assert product is not None, "the pulled delete must not remove this device's product"
         assert product["category_id"] is None, "the product must simply be unassigned"
-        assert conn.execute("SELECT COUNT(*) FROM categories WHERE id=?", (cat_id,)).fetchone()[0] == 0
+        # launch-readiness Phase 6 stage 6b-ii: CHANGED from
+        # `COUNT(*) ... == 0` (the row is gone) to "the row exists AND is
+        # tombstoned" -- strictly more precise, per phase6b-decisions.md
+        # "Decision A": a hard DELETE would have made this row unrecoverable
+        # and left `category_id` dangling everywhere without the LEFT JOIN
+        # mitigation; a tombstone keeps the row (recoverable, auditable) and
+        # relies on `deleted_at_utc IS NULL` read filters instead.
+        cat_row = conn.execute(
+            "SELECT deleted_at_utc FROM categories WHERE id=?", (cat_id,)).fetchone()
+        assert cat_row is not None, "tombstoning must not remove the row"
+        assert cat_row["deleted_at_utc"] is not None, "the category must be tombstoned, not merely untouched"
         assert conn.execute("SELECT last_seq FROM sync_cursor WHERE id=1").fetchone()[0] == 42
     finally:
         conn.close()
@@ -369,11 +437,41 @@ def _build_v2_database(path):
     conn.close()
 
 
-def test_the_old_v2_schema_really_did_wedge_on_this_exact_event(tmp_path):
-    """Pins the bug itself, so this file can never quietly become a test that
-    would also pass against the broken schema. Same `_apply_event` call, same
-    `PRAGMA foreign_keys=ON`, only the pre-v3 FK definition -- and it raises,
-    leaving the cursor un-advanced (the permanent wedge)."""
+def test_a_schema_too_old_to_apply_a_category_delete_fails_loudly_without_advancing_the_cursor(tmp_path):
+    """Was `test_the_old_v2_schema_really_did_wedge_on_this_exact_event`.
+
+    WHAT IT USED TO PIN, and what it can no longer catch. It ran this exact
+    event against the pre-v3 FK definition and asserted `sqlite3.IntegrityError`
+    -- the original bug, reproduced on demand, so this file could never
+    quietly become one that would also pass against the broken schema.
+
+    Stage 6b-ii made that specific demonstration structurally impossible: the
+    category delete path no longer issues a `DELETE` at all, it stamps a
+    tombstone, so `products.category_id`'s FK can never be violated by it and
+    no `IntegrityError` can arise however old the FK definition is. The v2-FK
+    reproduction is now historical record rather than live coverage, and
+    nothing in this file still exercises the pre-v3 FK against a delete.
+
+    Two OTHER tests carry the anti-vacuity job it was really doing, and
+    neither depends on the delete path:
+    `test_foreign_keys_are_actually_enforced_on_a_real_connection` proves
+    `PRAGMA foreign_keys` is genuinely ON, and
+    `test_local_category_delete_unassigns_its_products_instead_of_failing`
+    still runs a raw `DELETE FROM categories` and proves the `ON DELETE SET
+    NULL` rebuild itself is intact.
+
+    WHAT IT PINS NOW, which is the same guarantee in its surviving form: a
+    device whose schema is too old to hold a tombstone (`deleted_at_utc`
+    arrived in v13) must fail LOUDLY and leave the cursor un-advanced, so
+    `run_once` retries the batch after the migration lands. The exception type
+    changes from `IntegrityError` to `OperationalError` -- the column is
+    missing rather than the constraint violated -- but the property that
+    actually protects a shop is identical and unchanged: an event this device
+    cannot apply must never be silently skipped past.
+
+    That property is the whole reason this file exists. See the module
+    docstring: the original failure was not the exception, it was the cursor
+    advancing (or not) around it."""
     path = tmp_path / "retail.db"
     _build_v2_database(path)
     conn = sqlite3.connect(str(path))
@@ -396,7 +494,12 @@ def test_the_old_v2_schema_really_did_wedge_on_this_exact_event(tmp_path):
     service = SyncService(client_factory=lambda: None, get_conn=lambda: conn,
                           local_company_id_provider=lambda: "7")
     try:
-        with pytest.raises(sqlite3.IntegrityError):
+        # OperationalError, not IntegrityError -- see this test's docstring.
+        # `deleted_at_utc` does not exist on a pre-v13 schema, so the
+        # tombstone UPDATE cannot even be prepared. What matters is unchanged:
+        # it raises rather than silently succeeding, and the cursor below is
+        # still 0.
+        with pytest.raises(sqlite3.OperationalError):
             service.apply_pull_result(conn, {
                 "events": [{"entity_type": "category", "entity_id": "cat-1",
                             "event_type": "delete", "payload": {"id": "cat-1"}}],

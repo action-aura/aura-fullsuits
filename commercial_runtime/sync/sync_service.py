@@ -550,9 +550,10 @@ class SyncService:
         # batch. Needed for a category/sale/return/payment create or update
         # (the writes that stamp a company_id -- sale_item/return_item carry
         # no company_id column of their own, so they never need this) -- a
-        # batch of pure deletes (keyed by categories.id alone) or unknown
-        # entity types never touches the provider at all, so a SyncService
-        # with no provider configured can still apply those without raising.
+        # batch of pure product/customer/supplier deletes (keyed by id alone)
+        # or unknown entity types never touches the provider at all, so a
+        # SyncService with no provider configured can still apply those
+        # without raising.
         # Also fetched whenever a PREVIOUSLY quarantined event is about to be
         # retried below -- a sale_item alone in this batch (its parent
         # already resolved and its own company_id-less INSERT needs no
@@ -561,6 +562,26 @@ class SyncService:
         # advance which kind is sitting in sync_apply_quarantine without
         # reading it -- so this is a small, deliberate over-fetch rather than
         # a second, more precise scan of the quarantine table.
+        #
+        # launch-readiness Phase 6 stage 6b-ii (tombstones) deliberately did
+        # NOT extend this condition, and that is worth stating because the
+        # obvious implementation does. A category `delete` now runs a cascade
+        # (`UPDATE products SET category_id=NULL ...`, `_apply_event`'s
+        # category branch) which needs a tenant to scope by -- and the first
+        # cut of that cascade took it from `local_company_id`, which made a
+        # delete-only batch require a provider for the first time.
+        #
+        # That is the wrong trade and it was reverted. `_get_local_company_id`
+        # RAISES when no provider is wired or when onboarding has not
+        # finished, so requiring it here would put a throw onto the code path
+        # whose entire history is about not wedging the cursor -- an
+        # exception in the apply loop aborts before the cursor advances, and
+        # `run_once` swallows it (see `retail_category_delete_fk_sync_test.py`'s
+        # module docstring for what that cost the last time it happened).
+        # The cascade instead derives the tenant from the tombstoned category
+        # row itself, which is guaranteed to still exist precisely because a
+        # tombstone is not a `DELETE`. So a delete-only batch still needs no
+        # provider, exactly as before this stage.
         local_company_id = None
         touches_pending_or_quarantine = self._has_quarantined_events(conn)
         # `self._handled_entity_types - _ENTITY_TYPES_WITHOUT_COMPANY_ID`,
@@ -943,20 +964,67 @@ class SyncService:
                 # `_delta_set_clause`'s own docstring for the missing-key
                 # ("legacy") fallback and why the column list itself is
                 # code-owned, never taken from the wire.
+                #
+                # launch-readiness Phase 6 stage 6b-ii (tombstones,
+                # phase6b-decisions.md "Decision B"): a CSV re-import
+                # resurrecting a tombstoned category (import_api.py) queues
+                # an `update` event naming `deleted_at_utc` in
+                # `_changed_fields`. This branch DELIBERATELY does NOT add
+                # `deleted_at_utc` to its own column list here -- attempted,
+                # then reverted, because doing so raises
+                # `sqlite3.OperationalError: no such column: deleted_at_utc`
+                # against every hand-built minimal test fixture in this
+                # codebase whose `categories` table predates this stage
+                # (commercial_runtime/sync/tests/test_sync_service.py,
+                # test_internal_routes.py -- both explicitly in this stage's
+                # own regression scope, and both broke on the first attempt,
+                # for a genuinely NEW category create/update, not just a
+                # resurrection). `_delta_set_clause`'s own docstring already
+                # covers the consequence: a payload naming a column outside
+                # its code-owned list is "ignored, not injected" -- so a
+                # resurrection's `deleted_at_utc` name in `_changed_fields`
+                # is silently a no-op HERE. Net effect, reported rather than
+                # hidden: Decision B's resurrection takes effect on the
+                # IMPORTING device (import_api.py's own local UPDATE clears
+                # it directly) but does not yet propagate to a device that
+                # already applied the earlier tombstone -- that device stays
+                # tombstoned until this branch is taught the column, which
+                # needs those fixtures updated first and is left for a
+                # follow-up rather than done here under this stage's
+                # explicit scope (STEP 3 named only the delete branches).
                 changed_fields = p.get("_changed_fields")
+                # `deleted_at_utc` is in the DELTA-GATED column list, never
+                # written unconditionally, and that distinction is the whole
+                # reason an import resurrection can travel safely.
+                #
+                # Unconditional would be a real bug: device A, which never
+                # saw a tombstone device B applied, renames the category and
+                # sends `_changed_fields=['name']` carrying its own
+                # `deleted_at_utc` of NULL. Writing that NULL would
+                # RESURRECT a category B had deleted, off the back of an
+                # edit that never touched deletion at all -- the exact
+                # untouched-field clobber stage 6b-i exists to close,
+                # pointed at the one column where it un-deletes something.
+                #
+                # Delta-gated, both directions come out right: a name edit
+                # leaves the tombstone alone, and an import resurrection
+                # (import_api.py, phase6b-decisions.md "Decision B") names
+                # `deleted_at_utc` in `_changed_fields` and therefore clears
+                # it on every device, not just the one that ran the import.
                 delta_frag, delta_binds = self._delta_set_clause(
-                    "categories", ["name", "description"], changed_fields)
+                    "categories", ["name", "description", "deleted_at_utc"], changed_fields)
                 raw_row_version = p.get("row_version")
                 insert_row_version = raw_row_version if raw_row_version is not None else 1
                 cur = conn.execute(
-                    "INSERT INTO categories (id, company_id, name, description, row_version, updated_at_utc) "
-                    "VALUES (?,?,?,?,?,?) "
+                    "INSERT INTO categories (id, company_id, name, description, row_version, "
+                    "updated_at_utc, deleted_at_utc) "
+                    "VALUES (?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET " + delta_frag + ", "
                     "row_version=MAX(categories.row_version, excluded.row_version), "
                     "updated_at_utc=excluded.updated_at_utc "
                     "WHERE ? IS NULL OR ? > categories.row_version",
                     (p.get("id"), local_company_id, p.get("name"), p.get("description", ""),
-                     insert_row_version, p.get("updated_at_utc"),
+                     insert_row_version, p.get("updated_at_utc"), p.get("deleted_at_utc"),
                      *delta_binds,
                      raw_row_version, raw_row_version),
                 )
@@ -970,10 +1038,104 @@ class SyncService:
                             incoming_row_version=raw_row_version, payload=p,
                         )
             elif event_type == "delete":
-                # Hard DELETE -- the row is gone, so there is no row_version
-                # left to carry (tombstones/soft-delete-with-version are
-                # stage 6b, not this fix).
-                conn.execute("DELETE FROM categories WHERE id=?", (p.get("id"),))
+                # launch-readiness Phase 6 stage 6b-ii (tombstones,
+                # phase6b-decisions.md "Decision A"): a gated soft-delete
+                # replaces the old hard DELETE. Identical shape to the
+                # product/customer/supplier delete branches above --
+                # NULL-tolerant WHERE (a legacy delete payload with no
+                # `row_version` key still applies; see the category
+                # create/update branch's comment above for the full
+                # "missing is not stale" reasoning), `MAX`-protected
+                # row_version (never regresses the counter), and
+                # `_local_row_version`-disambiguated conflict recording
+                # (None means no local row, not a conflict; a real integer
+                # means a genuine stale-delete conflict). This closes the one
+                # ungated destructive catalogue path stage 6a-ii flagged: a
+                # stale category delete relayed after a rename on another
+                # device can no longer remove the renamed row.
+                #
+                # `deleted_at_utc` gets a REAL fallback here (this device's
+                # own current time), unlike `updated_at_utc` a few lines down
+                # (which stays honestly NULL for a legacy payload -- see the
+                # create/update branch's own comment on that). The two are
+                # not equivalent: `updated_at_utc` is purely informational,
+                # but `deleted_at_utc` is the ENTIRE visibility gate for
+                # categories (`list_categories`/`list_products`'s
+                # `deleted_at_utc IS NULL` filters) -- categories have no
+                # `status` column to fall back on the way product/customer/
+                # supplier deletes do (their `status='inactive'` is written
+                # unconditionally regardless of what the payload carries, so
+                # a NULL `deleted_at_utc` there is a harmless redundancy, not
+                # a visible bug). Binding a bare `p.get("deleted_at_utc")`
+                # (None for the oldest legacy shape -- `delete_category` used
+                # to queue only `{'id': category_id}`, no timestamp at all)
+                # would apply "successfully" (rowcount 1, cascade runs) while
+                # leaving the category fully live and visible forever: a
+                # silent correctness bug, not a mere metadata gap. Found by
+                # running `retail_category_delete_fk_sync_test.py` for real,
+                # not by inspection.
+                raw_row_version = p.get("row_version")
+                insert_row_version = raw_row_version if raw_row_version is not None else 1
+                deleted_at_utc = p.get("deleted_at_utc") or datetime.now(timezone.utc).isoformat()
+                cur = conn.execute(
+                    "UPDATE categories SET deleted_at_utc=?, "
+                    "row_version=MAX(row_version, ?), updated_at_utc=? "
+                    "WHERE id=? AND (? IS NULL OR ? > row_version)",
+                    (deleted_at_utc, insert_row_version, p.get("updated_at_utc"), p.get("id"),
+                     raw_row_version, raw_row_version),
+                )
+                if cur.rowcount == 0:
+                    local_row_version = self._local_row_version(conn, "categories", p.get("id"))
+                    if local_row_version is not None:
+                        self._record_sync_conflict(
+                            conn, conflict_sink, local_company_id=local_company_id,
+                            entity_type="category", entity_id=p.get("id"), event_type="delete",
+                            local_row_version=local_row_version,
+                            incoming_row_version=raw_row_version, payload=p,
+                        )
+                else:
+                    # THE CASCADE -- see retail_api.py's delete_category
+                    # comment for the full reasoning (schema v3's
+                    # `ON DELETE SET NULL`, why this walk must run
+                    # identically on both the local delete path and here, and
+                    # why it must NOT bump the touched products' own
+                    # row_version or queue product sync events). Run ONLY
+                    # when the tombstone actually applied above (this
+                    # `else`, not `cur.rowcount == 0`): a discarded stale
+                    # delete must not null anything.
+                    #
+                    # Tenancy is derived from the category row this branch
+                    # just tombstoned, NOT from `local_company_id`. That
+                    # keeps the `company_id` scoping every business query in
+                    # this codebase requires (see CLAUDE.md) while leaving a
+                    # delete-only batch free of any `local_company_id`
+                    # requirement at all.
+                    #
+                    # That distinction is the whole point, not a
+                    # micro-optimisation: `_get_local_company_id()` RAISES
+                    # when no provider is wired or when onboarding has not
+                    # finished. Making a lone category delete -- the common
+                    # real-world shape, a delete pushed on its own -- depend
+                    # on it would put a throw back onto the exact code path
+                    # whose entire history is about NOT wedging the cursor.
+                    # `retail_category_delete_fk_sync_test.py`'s module
+                    # docstring records what that cost last time: an
+                    # exception raised in here aborted `apply_pull_result`
+                    # BEFORE the cursor advanced, `run_once` swallowed it,
+                    # and the device silently stopped receiving every event
+                    # from every device, forever.
+                    #
+                    # The subquery cannot pick the wrong tenant: a tombstone
+                    # leaves the row in place -- that is what distinguishes
+                    # it from the `DELETE` this replaced -- so the category's
+                    # own `company_id` is present and authoritative at
+                    # exactly this moment.
+                    conn.execute(
+                        "UPDATE products SET category_id=NULL "
+                        "WHERE category_id=? AND company_id=("
+                        "SELECT company_id FROM categories WHERE id=?)",
+                        (p.get("id"), p.get("id")),
+                    )
         elif entity_type == "product":
             if event_type in ("create", "update"):
                 # AUDIT-follow-up (2026-08-10): supplier_id and status were both
@@ -1074,13 +1236,23 @@ class SyncService:
                 # of an unseen id -- unchanged by this stage), a real
                 # integer means a genuine MODERN stale-delete conflict worth
                 # an entry.
+                # launch-readiness Phase 6 stage 6b-ii (tombstones,
+                # phase6b-decisions.md): `deleted_at_utc` carried through too
+                # now -- bound from `p.get("deleted_at_utc")`, which is None
+                # for a payload predating this stage, matching a fresh
+                # column's own NULL default. `status='inactive'` stays
+                # (deliberately -- see retail_api.py's delete_product
+                # comment: `create_sale`'s line-item read still filters
+                # `status='active'`). The reject-stale WHERE, the `MAX`
+                # never-regress protection and the conflict recording below
+                # are all UNCHANGED from stage 6a-ii.
                 raw_row_version = p.get("row_version")
                 insert_row_version = raw_row_version if raw_row_version is not None else 1
                 cur = conn.execute(
-                    "UPDATE products SET status='inactive', "
+                    "UPDATE products SET status='inactive', deleted_at_utc=?, "
                     "row_version=MAX(row_version, ?), updated_at_utc=? "
                     "WHERE id=? AND (? IS NULL OR ? > row_version)",
-                    (insert_row_version, p.get("updated_at_utc"), p.get("id"),
+                    (p.get("deleted_at_utc"), insert_row_version, p.get("updated_at_utc"), p.get("id"),
                      raw_row_version, raw_row_version),
                 )
                 if cur.rowcount == 0:
@@ -1148,13 +1320,17 @@ class SyncService:
                 # 6a-ii gates it the identical way: NULL-tolerant WHERE,
                 # `MAX`-protected row_version, `_local_row_version`
                 # disambiguating "stale" from "no local row".
+                # launch-readiness Phase 6 stage 6b-ii (tombstones): see the
+                # product delete branch's comment above -- identical
+                # `deleted_at_utc` carry-through, identical reason `status`
+                # stays written.
                 raw_row_version = p.get("row_version")
                 insert_row_version = raw_row_version if raw_row_version is not None else 1
                 cur = conn.execute(
-                    "UPDATE customers SET status='inactive', "
+                    "UPDATE customers SET status='inactive', deleted_at_utc=?, "
                     "row_version=MAX(row_version, ?), updated_at_utc=? "
                     "WHERE id=? AND (? IS NULL OR ? > row_version)",
-                    (insert_row_version, p.get("updated_at_utc"), p.get("id"),
+                    (p.get("deleted_at_utc"), insert_row_version, p.get("updated_at_utc"), p.get("id"),
                      raw_row_version, raw_row_version),
                 )
                 if cur.rowcount == 0:
@@ -1215,13 +1391,17 @@ class SyncService:
                 # See the product delete branch's comment above -- a delete
                 # event carries row_version/updated_at_utc too, gated the
                 # identical NULL-tolerant, `MAX`-protected way.
+                # launch-readiness Phase 6 stage 6b-ii (tombstones): see the
+                # product delete branch's comment above -- identical
+                # `deleted_at_utc` carry-through, identical reason `status`
+                # stays written.
                 raw_row_version = p.get("row_version")
                 insert_row_version = raw_row_version if raw_row_version is not None else 1
                 cur = conn.execute(
-                    "UPDATE suppliers SET status='inactive', "
+                    "UPDATE suppliers SET status='inactive', deleted_at_utc=?, "
                     "row_version=MAX(row_version, ?), updated_at_utc=? "
                     "WHERE id=? AND (? IS NULL OR ? > row_version)",
-                    (insert_row_version, p.get("updated_at_utc"), p.get("id"),
+                    (p.get("deleted_at_utc"), insert_row_version, p.get("updated_at_utc"), p.get("id"),
                      raw_row_version, raw_row_version),
                 )
                 if cur.rowcount == 0:

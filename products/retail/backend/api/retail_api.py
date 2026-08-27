@@ -1035,10 +1035,14 @@ def dashboard_stats():
 def list_categories():
     cid = _cid()
     conn = get_retail_conn()
+    # launch-readiness Phase 6 stage 6b-ii (tombstones): `c.deleted_at_utc IS
+    # NULL` added to the WHERE -- `c` is the main FROM table here (not the
+    # LEFT JOIN side), so this is a plain "only live categories" filter, not
+    # the LEFT-JOIN-in-WHERE trap that would silently drop unrelated rows.
     rows = conn.execute(
         "SELECT c.*, COUNT(p.id) as product_count FROM categories c "
         "LEFT JOIN products p ON p.category_id=c.id AND p.status='active' "
-        "WHERE c.company_id=? GROUP BY c.id ORDER BY c.name", (cid,)
+        "WHERE c.company_id=? AND c.deleted_at_utc IS NULL GROUP BY c.id ORDER BY c.name", (cid,)
     ).fetchall()
     conn.close()
     return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
@@ -1159,10 +1163,58 @@ def delete_category(category_id):
     # real message the UI can show, and a connection that is always closed.
     try:
         cur = conn.cursor()
-        cur.execute("DELETE FROM categories WHERE id=? AND company_id=?", (category_id, cid))
+        # launch-readiness Phase 6 stage 6b-ii (tombstones,
+        # phase6b-decisions.md "Decision A"): a gated soft-delete replaces
+        # the old hard DELETE. The old `DELETE FROM categories WHERE id=?`
+        # carried no `row_version` at all on its sync event -- stage 6a-ii
+        # flagged this as the one catalogue destructive path it could not
+        # gate, because there was no version to compare. This UPDATE is a
+        # real gated write like every other catalogue delete in this file:
+        # `AND deleted_at_utc IS NULL` makes a repeat delete of an
+        # already-tombstoned category a no-op 404 (below), not a re-stamp.
+        now = now_utc_iso()
+        cur.execute(
+            "UPDATE categories SET deleted_at_utc=?, row_version=row_version+1, updated_at_utc=? "
+            "WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
+            (now, now, category_id, cid))
         if cur.rowcount == 0:
             return jsonify({'status': 'error', 'message': 'Category not found'}), 404
-        _queue_sync_event(cur, 'category', category_id, 'delete', {'id': category_id})
+        # THE CASCADE. Schema v3 made `products.category_id`
+        # `ON DELETE SET NULL` because a hard delete arriving at a device
+        # that still held products raised `IntegrityError` inside
+        # `_apply_event`, which aborted `apply_pull_result` BEFORE the
+        # cursor advanced -- `run_once` swallowed it, and that device
+        # silently stopped receiving every event from every device, forever
+        # (see retail_category_delete_fk_sync_test.py's module docstring
+        # for the full history). Tombstoning removes the `DELETE`, so the FK
+        # cascade never fires and that self-healing is gone; this explicit
+        # walk reproduces the same outcome by hand.
+        #
+        # Deliberately does NOT bump `row_version` on the products it
+        # touches, and does NOT queue a product sync event for any of them.
+        # `SyncService._apply_event`'s category branch (sync_service.py)
+        # performs this IDENTICAL walk locally when it applies the category
+        # tombstone, so every device reaches the same end state from the
+        # SAME single category event. Emitting per-product events here would
+        # turn one category delete into N product updates AND would advance
+        # those products' `row_version` on THIS device only -- a genuine
+        # concurrent product edit made on another till would then arrive
+        # with a LOWER version than this phantom bump and be rejected as
+        # stale. That is stage 6a-i's loyalty-accumulator trap, reached by a
+        # third route. See phase6b-decisions.md "Decision A" for the one
+        # residual divergence this cannot close (a product concurrently
+        # re-pointed AT the doomed category survives with a dangling id on
+        # the device that applied that edit) and why it is an accepted,
+        # cosmetically-invisible trade -- every categories join in this
+        # codebase is a LEFT JOIN.
+        cur.execute(
+            "UPDATE products SET category_id=NULL WHERE category_id=? AND company_id=?",
+            (category_id, cid))
+        row = conn.execute("SELECT row_version FROM categories WHERE id=?", (category_id,)).fetchone()
+        _queue_sync_event(cur, 'category', category_id, 'delete', {
+            'id': category_id, 'deleted_at_utc': now, 'row_version': row['row_version'],
+            'updated_at_utc': now, '_changed_fields': ['deleted_at_utc'],
+        })
         conn.commit()
     except sqlite3.IntegrityError as exc:
         conn.rollback()
@@ -1188,11 +1240,24 @@ def delete_category(category_id):
 def list_products():
     cid = _cid()
     conn = get_retail_conn()
+    # launch-readiness Phase 6 stage 6b-ii (tombstones): `AND c.deleted_at_utc
+    # IS NULL` added to the categories JOIN CONDITION, deliberately NOT to
+    # the WHERE clause -- this is a LEFT JOIN, and a product with no category
+    # at all (category_id IS NULL) must still be returned. Putting the
+    # filter in WHERE would silently drop every uncategorised product; in
+    # the JOIN condition it only blanks a dangling/tombstoned category's
+    # name, exactly like this codebase's existing behaviour for category_id
+    # NULL (this is also the residual divergence phase6b-decisions.md
+    # "Decision A" names: cosmetically invisible either way). Note `p.*`
+    # itself needs NO new filter here -- `p.status='active'` already hides a
+    # tombstoned PRODUCT (deletion still writes `status='inactive'` this
+    # stage, see delete_product's comment), which is why this file's
+    # product-row reads are unchanged.
     rows = conn.execute("""
         SELECT p.*, c.name as category_name,
                COALESCE(SUM(b.quantity_on_hand), 0) as total_stock
         FROM products p
-        LEFT JOIN categories c ON p.category_id=c.id
+        LEFT JOIN categories c ON p.category_id=c.id AND c.deleted_at_utc IS NULL
         LEFT JOIN inventory_balances b ON p.id=b.product_id AND b.company_id=p.company_id
         WHERE p.company_id=? AND p.status='active'
         GROUP BY p.id ORDER BY p.name
@@ -1375,17 +1440,34 @@ def delete_product(pid):
         # launch-readiness Phase 6 stage 6a-i: `status` is a synced product
         # field (sync_service.py's product upsert), so this soft-delete
         # bumps row_version in the SAME UPDATE, same as every other site.
+        #
+        # launch-readiness Phase 6 stage 6b-ii (tombstones,
+        # phase6b-decisions.md): `deleted_at_utc` is now ALSO stamped here,
+        # in the SAME statement -- but `status='inactive'` is deliberately
+        # KEPT, not replaced. `create_sale`'s line-item read filters
+        # `status='active'`; the moment deletion stopped touching `status`,
+        # a tombstoned product would stay `active` there and remain
+        # SELLABLE until every read path had a `deleted_at_utc IS NULL`
+        # filter. Writing both means a read path this stage did not touch
+        # degrades to exactly today's behaviour instead of selling deleted
+        # stock. Freeing `status` from deletion meaning is a separate later
+        # cleanup, after the read filters are proven -- not done here.
+        # `AND deleted_at_utc IS NULL` makes deleting an already-tombstoned
+        # row a no-op that still returns the existing 404 below, rather than
+        # re-stamping a new deletion time over the original one.
         now = now_utc_iso()
         cur.execute(
-            "UPDATE products SET status='inactive', row_version=row_version+1, updated_at_utc=? "
-            "WHERE id=? AND company_id=?",
-            (now, pid, cid))
+            "UPDATE products SET status='inactive', deleted_at_utc=?, "
+            "row_version=row_version+1, updated_at_utc=? "
+            "WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
+            (now, now, pid, cid))
         if cur.rowcount == 0:
             return jsonify({'status': 'error', 'message': 'Product not found'}), 404
         _audit(conn, 'PRODUCT_DELETED', 'product', pid, 'Product deactivated')
         row = conn.execute("SELECT row_version FROM products WHERE id=?", (pid,)).fetchone()
         _queue_sync_event(cur, 'product', pid, 'delete', {
             'id': pid, 'row_version': row['row_version'], 'updated_at_utc': now,
+            'deleted_at_utc': now, '_changed_fields': ['deleted_at_utc', 'status'],
         })
         conn.commit()
     except sqlite3.IntegrityError as exc:
@@ -1706,17 +1788,27 @@ def delete_customer(cust_id):
         cur = conn.cursor()
         # launch-readiness Phase 6 stage 6a-i: `status` is a synced customer
         # field, so this soft-delete bumps row_version in the SAME UPDATE.
+        #
+        # launch-readiness Phase 6 stage 6b-ii (tombstones,
+        # phase6b-decisions.md): `deleted_at_utc` stamped here too, in the
+        # SAME statement, with `status='inactive'` deliberately KEPT rather
+        # than replaced -- see delete_product's identical comment above for
+        # the full reasoning (create_sale's `status='active'` read path is
+        # the reason). `AND deleted_at_utc IS NULL` makes a repeat delete of
+        # an already-tombstoned row a no-op 404, not a re-stamp.
         now = now_utc_iso()
         cur.execute(
-            "UPDATE customers SET status='inactive', row_version=row_version+1, updated_at_utc=? "
-            "WHERE id=? AND company_id=?",
-            (now, cust_id, cid))
+            "UPDATE customers SET status='inactive', deleted_at_utc=?, "
+            "row_version=row_version+1, updated_at_utc=? "
+            "WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
+            (now, now, cust_id, cid))
         if cur.rowcount == 0:
             return jsonify({'status': 'error', 'message': 'Customer not found'}), 404
         _audit(conn, 'CUSTOMER_DELETED', 'customer', cust_id, 'Customer deactivated')
         row = conn.execute("SELECT row_version FROM customers WHERE id=?", (cust_id,)).fetchone()
         _queue_sync_event(cur, 'customer', cust_id, 'delete', {
             'id': cust_id, 'row_version': row['row_version'], 'updated_at_utc': now,
+            'deleted_at_utc': now, '_changed_fields': ['deleted_at_utc', 'status'],
         })
         conn.commit()
     except sqlite3.IntegrityError as exc:
@@ -1881,17 +1973,27 @@ def delete_supplier(sid):
         cur = conn.cursor()
         # launch-readiness Phase 6 stage 6a-i: `status` is a synced supplier
         # field, so this soft-delete bumps row_version in the SAME UPDATE.
+        #
+        # launch-readiness Phase 6 stage 6b-ii (tombstones,
+        # phase6b-decisions.md): `deleted_at_utc` stamped here too, in the
+        # SAME statement, with `status='inactive'` deliberately KEPT rather
+        # than replaced -- see delete_product's identical comment above for
+        # the full reasoning (create_sale's `status='active'` read path is
+        # the reason). `AND deleted_at_utc IS NULL` makes a repeat delete of
+        # an already-tombstoned row a no-op 404, not a re-stamp.
         now = now_utc_iso()
         cur.execute(
-            "UPDATE suppliers SET status='inactive', row_version=row_version+1, updated_at_utc=? "
-            "WHERE id=? AND company_id=?",
-            (now, sid, cid))
+            "UPDATE suppliers SET status='inactive', deleted_at_utc=?, "
+            "row_version=row_version+1, updated_at_utc=? "
+            "WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
+            (now, now, sid, cid))
         if cur.rowcount == 0:
             return jsonify({'status': 'error', 'message': 'Supplier not found'}), 404
         _audit(conn, 'SUPPLIER_DELETED', 'supplier', sid, 'Supplier deactivated')
         row = conn.execute("SELECT row_version FROM suppliers WHERE id=?", (sid,)).fetchone()
         _queue_sync_event(cur, 'supplier', sid, 'delete', {
             'id': sid, 'row_version': row['row_version'], 'updated_at_utc': now,
+            'deleted_at_utc': now, '_changed_fields': ['deleted_at_utc', 'status'],
         })
         conn.commit()
     except sqlite3.IntegrityError as exc:

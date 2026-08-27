@@ -179,8 +179,13 @@ def test_pulled_supplier_delete_soft_deletes_and_never_touches_a_row_this_device
         -- the sender's row_version through, so two devices' counters
         -- converge instead of silently diverging), and this hand-built
         -- minimal fixture predates that.
+        -- launch-readiness Phase 6 stage 6b-ii (tombstones): deleted_at_utc
+        -- added too -- the supplier delete branch now stamps it (alongside
+        -- the unchanged status='inactive'; see retail_api.py's
+        -- delete_supplier comment for why both are written), and this
+        -- fixture predates that the same way it predated row_version.
         CREATE TABLE suppliers (id TEXT PRIMARY KEY, company_id INTEGER, name TEXT, phone TEXT, email TEXT, address TEXT, status TEXT DEFAULT 'active',
-            row_version INTEGER NOT NULL DEFAULT 1, updated_at_utc TEXT);
+            row_version INTEGER NOT NULL DEFAULT 1, updated_at_utc TEXT, deleted_at_utc TEXT);
         CREATE TABLE purchase_orders (id INTEGER PRIMARY KEY, company_id INTEGER, supplier_id TEXT, total REAL,
             FOREIGN KEY (supplier_id) REFERENCES suppliers(id));
         CREATE TABLE sync_cursor (id INTEGER PRIMARY KEY CHECK (id=1), last_seq INTEGER NOT NULL DEFAULT 0);
@@ -230,8 +235,13 @@ def test_pulled_supplier_create_stamps_the_receiving_devices_own_company_id():
         -- the sender's row_version through, so two devices' counters
         -- converge instead of silently diverging), and this hand-built
         -- minimal fixture predates that.
+        -- launch-readiness Phase 6 stage 6b-ii (tombstones): deleted_at_utc
+        -- added too -- the supplier delete branch now stamps it (alongside
+        -- the unchanged status='inactive'; see retail_api.py's
+        -- delete_supplier comment for why both are written), and this
+        -- fixture predates that the same way it predated row_version.
         CREATE TABLE suppliers (id TEXT PRIMARY KEY, company_id INTEGER, name TEXT, phone TEXT, email TEXT, address TEXT, status TEXT DEFAULT 'active',
-            row_version INTEGER NOT NULL DEFAULT 1, updated_at_utc TEXT);
+            row_version INTEGER NOT NULL DEFAULT 1, updated_at_utc TEXT, deleted_at_utc TEXT);
         CREATE TABLE sync_cursor (id INTEGER PRIMARY KEY CHECK (id=1), last_seq INTEGER NOT NULL DEFAULT 0);
         INSERT INTO sync_cursor (id, last_seq) VALUES (1, 0);
     """)

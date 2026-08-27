@@ -30,7 +30,13 @@ CREATE TABLE categories (
     name TEXT NOT NULL,
     description TEXT,
     row_version INTEGER NOT NULL DEFAULT 1,
-    updated_at_utc TEXT
+    updated_at_utc TEXT,
+    -- launch-readiness Phase 6 stage 6b-ii: the real schema has carried this
+    -- since v13; the category apply branch now reads and writes it (a
+    -- tombstone, and an import resurrection clearing one), so a fixture
+    -- without it fails on the column, not on anything this file tests.
+    -- Column added to match the real schema; no assertion changed.
+    deleted_at_utc TEXT
 );
 CREATE TABLE sync_outbox (
     id TEXT PRIMARY KEY,

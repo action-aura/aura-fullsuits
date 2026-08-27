@@ -1332,7 +1332,9 @@ def _handle_retail_products(records):
         cat_id   = None
         if cat_name:
             if cat_name not in cat_cache:
-                row = conn.execute("SELECT id FROM categories WHERE company_id=? AND name=?", (cid, cat_name)).fetchone()
+                row = conn.execute(
+                    "SELECT id, deleted_at_utc FROM categories WHERE company_id=? AND name=?",
+                    (cid, cat_name)).fetchone()
                 if not row:
                     new_cat_id = str(_uuid.uuid4())
                     # launch-readiness Phase 6 stage 6a-i: stamped at
@@ -1355,6 +1357,54 @@ def _handle_retail_products(records):
                         'row_version': 1, 'updated_at_utc': utc_now,
                     })
                     cat_cache[cat_name] = new_cat_id
+                elif row['deleted_at_utc'] is not None:
+                    # launch-readiness Phase 6 stage 6b-ii, Decision B
+                    # (phase6b-decisions.md): a sheet naming this category is
+                    # an operator UNAMBIGUOUSLY asserting "this category
+                    # exists, and here are its values" -- leaving it
+                    # tombstoned while quietly assigning imported products to
+                    # its now-invisible id would fail exactly as silently as
+                    # the pre-existing product-SKU dedupe bug that decision
+                    # documents (a re-import of a soft-deleted SKU updated
+                    # the dead row and left it invisible). Clear the
+                    # tombstone, bump row_version in the SAME statement, and
+                    # queue an `update` naming only `deleted_at_utc` as
+                    # changed. Categories have no `status` column at all, so
+                    # unlike a product/customer/supplier restore there is
+                    # nothing else to bring back.
+                    cur.execute(
+                        "UPDATE categories SET deleted_at_utc=NULL, row_version=row_version+1, "
+                        "updated_at_utc=? WHERE id=?",
+                        (utc_now, row['id']))
+                    rrow = conn.execute(
+                        "SELECT name, description, deleted_at_utc, row_version FROM categories WHERE id=?",
+                        (row['id'],)).fetchone()
+                    # `deleted_at_utc` (now NULL, re-read rather than
+                    # assumed) travels in the payload itself AND is named in
+                    # `_changed_fields`. Both halves are load-bearing.
+                    #
+                    # `SyncService._apply_event`'s category create/update
+                    # branch carries the column DELTA-GATED, never
+                    # unconditionally, which is what makes this resurrection
+                    # safe to broadcast: naming it here clears the tombstone
+                    # on every device, while an ordinary rename from a device
+                    # that never saw the delete leaves that tombstone alone,
+                    # because its own `_changed_fields` says `['name']`.
+                    # Written unconditionally instead, that rename's NULL
+                    # would un-delete a category somebody else deleted.
+                    #
+                    # Both directions are pinned by
+                    # `retail_tombstone_test.py`'s
+                    # `test_an_import_resurrection_of_a_tombstoned_category_reaches_the_other_device`
+                    # and
+                    # `test_a_name_edit_from_a_device_that_never_saw_the_delete_does_not_resurrect_the_category`.
+                    _queue_sync_event(cur, 'category', row['id'], 'update', {
+                        'id': row['id'], 'name': rrow['name'], 'description': rrow['description'],
+                        'deleted_at_utc': rrow['deleted_at_utc'],
+                        'row_version': rrow['row_version'], 'updated_at_utc': utc_now,
+                        '_changed_fields': ['deleted_at_utc'],
+                    })
+                    cat_cache[cat_name] = row['id']
                 else:
                     cat_cache[cat_name] = row['id']
             cat_id = cat_cache[cat_name]
