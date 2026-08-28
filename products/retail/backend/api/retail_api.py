@@ -2223,8 +2223,24 @@ def create_supplier_contact(sid):
         # supplier must not break), the same "write gates refuse a
         # tombstoned row, reads of historical/in-flight records do not
         # filter" rule this stage applies everywhere else.
+        #
+        # `AND status='active'` added alongside it (ROADMAP.md's "2026-08-28
+        # -- Gaps surfaced by Phase 6b" entry): two deleted populations exist
+        # here. A row deleted BEFORE tombstones existed carries
+        # `status='inactive'` with `deleted_at_utc` still NULL -- the
+        # deliberate no-backfill posture pinned by
+        # `test_a_legacy_row_deleted_before_tombstones_is_still_hidden` --
+        # while one deleted AFTER carries `status='active'` with the
+        # tombstone set instead. Every catalogue READ already filters on
+        # BOTH conditions for exactly this reason (drop either and the OTHER
+        # population reappears); this WRITE gate now matches that rule
+        # rather than catching only the newer half of it. Same pairing, same
+        # reason, on `create_purchase_order`, `preview_po_split`,
+        # `accept_reorder_request`, create_sale's credit-customer lookup,
+        # and reorder_hook.py's product re-fetch -- not repeated in full at
+        # each of those.
         sup = conn.execute(
-            "SELECT id FROM suppliers WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
+            "SELECT id FROM suppliers WHERE id=? AND company_id=? AND status='active' AND deleted_at_utc IS NULL",
             (sid, cid)).fetchone()
         if not sup:
             return jsonify({'status': 'error', 'message': 'Supplier not found'}), 404
@@ -2430,11 +2446,17 @@ def create_purchase_order():
     # 6b-iii-a established for a pending reorder request against a deleted
     # product; see reorder_hook.py's own comment for the write-side half of
     # that same rule).
+    #
+    # `status='active'` joins the tombstone check for the two-population
+    # reason `create_supplier_contact`'s comment (above, this file) spells
+    # out in full -- a product deleted before tombstones existed never got a
+    # `deleted_at_utc` stamp, so the tombstone filter alone would miss it and
+    # let it straight back onto a brand-new PO.
     po_product_ids = {item['product_id'] for item in items}
     if po_product_ids:
         placeholders = ','.join('?' * len(po_product_ids))
         valid_rows = conn.execute(
-            f"SELECT id FROM products WHERE company_id=? AND deleted_at_utc IS NULL AND id IN ({placeholders})",
+            f"SELECT id FROM products WHERE company_id=? AND status='active' AND deleted_at_utc IS NULL AND id IN ({placeholders})",
             [cid, *po_product_ids]
         ).fetchall()
         missing_ids = po_product_ids - {r['id'] for r in valid_rows}
@@ -2641,10 +2663,16 @@ def preview_po_split():
         # tombstoned product must fall out of `products_by_id` below and hit
         # the existing "Unknown product_id" 400 exactly like an id that never
         # existed.
+        #
+        # `status='active'` joins it for the same two-population reason
+        # `create_supplier_contact`'s comment (this file) spells out in
+        # full -- a legacy-deleted product (`status='inactive'`,
+        # `deleted_at_utc` NULL) needs the `status` half to fall out here
+        # too, not just the tombstone half.
         placeholders = ','.join('?' * len(product_ids))
         prod_rows = conn.execute(
             f"SELECT id, name, sku, supplier_id, cost_price FROM products "
-            f"WHERE company_id=? AND deleted_at_utc IS NULL AND id IN ({placeholders})",
+            f"WHERE company_id=? AND status='active' AND deleted_at_utc IS NULL AND id IN ({placeholders})",
             [cid, *product_ids]
         ).fetchall()
         products_by_id = {r['id']: dict(r) for r in prod_rows}
@@ -2790,9 +2818,15 @@ def accept_reorder_request(rid):
         # falls into the existing "Product no longer exists" 404 below,
         # exactly like a hard-deleted id already did, so the request can be
         # declined but never accepted.
+        #
+        # `status='active'` joins the tombstone check for the same
+        # two-population reason `create_supplier_contact`'s comment (this
+        # file) spells out in full -- a product deleted before tombstones
+        # existed never got a `deleted_at_utc` stamp, so it would otherwise
+        # slip past this gate and get accepted onto a new PO.
         product = conn.execute(
             "SELECT id, name, supplier_id, cost_price, reorder_level FROM products "
-            "WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
+            "WHERE id=? AND company_id=? AND status='active' AND deleted_at_utc IS NULL",
             (req['product_id'], cid),
         ).fetchone()
         if not product:
@@ -3153,9 +3187,16 @@ def create_sale():
             # reads as "not found" and hits this SAME pre-existing 404,
             # exactly like an id that never existed -- a deleted customer
             # cannot be extended credit.
+            #
+            # `status='active'` joins the tombstone check for the same
+            # two-population reason `create_supplier_contact`'s comment
+            # (this file) spells out in full -- a customer deleted before
+            # tombstones existed never got a `deleted_at_utc` stamp, so the
+            # tombstone filter alone would let them straight back onto
+            # credit.
             cust = cur.execute(
                 "SELECT credit_mode,credit_limit,credit_balance FROM customers "
-                "WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
+                "WHERE id=? AND company_id=? AND status='active' AND deleted_at_utc IS NULL",
                 (customer_id, cid)).fetchone()
             if not cust:
                 conn.rollback(); conn.close()

@@ -106,9 +106,16 @@ def _maybe_create_request_for_product(conn, company_id, branch_id, product_id) -
         # CREATE path here is gated. A missing/tombstoned product simply
         # reads as `not product` below, exactly like an id that never
         # existed.
+        #
+        # `status='active'` joins the tombstone check for the same
+        # two-population reason retail_api.py's `create_supplier_contact`
+        # comment spells out in full -- a product deleted before tombstones
+        # existed never got a `deleted_at_utc` stamp, so the tombstone
+        # filter alone would miss it and let a new reorder request raise
+        # against it.
         product = conn.execute(
             "SELECT name, reorder_method, reorder_level FROM products "
-            "WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
+            "WHERE id=? AND company_id=? AND status='active' AND deleted_at_utc IS NULL",
             (product_id, company_id),
         ).fetchone()
         if not product or (product['reorder_method'] or 'none') == 'none':

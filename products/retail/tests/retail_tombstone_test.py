@@ -1310,6 +1310,97 @@ def test_a_new_purchase_order_cannot_be_raised_for_a_deleted_product(client, a_c
     assert count == 0, "the refused PO must not have been created"
 
 
+# ── 23b. Write gate 1c, the LEGACY half -- ROADMAP.md's "2026-08-28 -- Gaps
+#       surfaced by Phase 6b" entry: the write gate above (test 23) was
+#       added filtering `deleted_at_utc IS NULL` alone, so a row deleted
+#       BEFORE tombstones existed (`status='inactive'`, `deleted_at_utc`
+#       NULL -- the exact legacy shape test 14 reproduces) passed straight
+#       through it and could still be put on a brand-new PO. Fixed by
+#       adding `status='active'` alongside the tombstone check in
+#       `create_purchase_order`, matching the two-condition filter every
+#       catalogue READ path already uses (test 14's own reasoning) --
+#       dropping either condition lets one of the two deleted populations
+#       back through. The deny half below is only half the proof: a gate
+#       rewritten to refuse everything would pass it too while breaking
+#       every purchase order in the shop, which is exactly what the ALLOW
+#       half right after it exists to catch. ───────────────────────────────
+
+def test_a_legacy_deleted_product_cannot_be_put_on_a_new_purchase_order(client, a_conn):
+    create = client.post('/api/sub/retail/products', json={
+        'name': 'Legacy PO Refused Widget', 'sku': f'TOMB-PONEWLEGACY-{uuid.uuid4().hex[:8]}',
+        'cost_price': 5,
+    })
+    assert create.status_code == 200
+    pid = create.get_json()['data']['id']
+
+    # Bypass the route entirely -- reproduces the LEGACY shape by hand,
+    # exactly as test 14 above does: status flipped, deleted_at_utc left
+    # NULL, as it would sit in a database soft-deleted before 6b-ii ever ran.
+    a_conn.execute("UPDATE products SET status='inactive' WHERE id=?", (pid,))
+    a_conn.commit()
+    seed = dict(a_conn.execute(
+        "SELECT status, deleted_at_utc FROM products WHERE id=?", (pid,)).fetchone())
+    assert seed == {'status': 'inactive', 'deleted_at_utc': None}, "must reproduce the exact legacy shape"
+
+    po = client.post('/api/sub/retail/purchase-orders', json={
+        'items': [{'product_id': pid, 'quantity': 5, 'unit_cost': 5}],
+    })
+    assert po.status_code == 400, "a legacy-deleted product must not be put on a new PO either"
+
+    count = a_conn.execute(
+        "SELECT COUNT(*) c FROM purchase_orders WHERE company_id=?", (client.company_id,)
+    ).fetchone()['c']
+    assert count == 0, "the refused PO must not have been created"
+
+
+def test_a_live_product_can_still_be_put_on_a_new_purchase_order(client, a_conn):
+    """The ALLOW half, mandatory alongside the deny test above: a gate
+    tightened to refuse everything (e.g. an always-false WHERE clause)
+    would pass the deny test while breaking every purchase order in the
+    shop -- this is the test that would actually catch that.
+
+    Seeds `doc_sequences` with a random starting point for this test's OWN
+    company before hitting the route -- found while writing this test, not
+    assumed: `purchase_orders.po_number` is globally UNIQUE (schema.py),
+    while `_next_ref` numbers it per-company starting at 1, so two
+    different companies' FIRST purchase order both mint 'PO-000001' and
+    collide against this file's single shared retail.db (every test here
+    gets a fresh company, but they all write the same on-disk database).
+    That collision is a real, pre-existing gap unrelated to the tombstone
+    gate this test exists to prove -- out of scope to fix here -- but left
+    untreated it raises an uncaught IntegrityError inside the route (no
+    try/except wraps this INSERT) that leaks this test's connection and
+    wedges every test that runs after it in this file with "database is
+    locked". Sidestepped rather than silently tripped over."""
+    a_conn.execute(
+        "CREATE TABLE IF NOT EXISTS doc_sequences ("
+        "company_id INTEGER, doc_type TEXT, last_no INTEGER DEFAULT 0, "
+        "PRIMARY KEY (company_id, doc_type))"
+    )
+    a_conn.execute(
+        "INSERT OR REPLACE INTO doc_sequences (company_id, doc_type, last_no) VALUES (?, 'po', ?)",
+        (client.company_id, uuid.uuid4().int % 900000),
+    )
+    a_conn.commit()
+
+    create = client.post('/api/sub/retail/products', json={
+        'name': 'Live PO Widget', 'sku': f'TOMB-POLIVE-{uuid.uuid4().hex[:8]}',
+        'cost_price': 5,
+    })
+    assert create.status_code == 200
+    pid = create.get_json()['data']['id']
+
+    po = client.post('/api/sub/retail/purchase-orders', json={
+        'items': [{'product_id': pid, 'quantity': 5, 'unit_cost': 5}],
+    })
+    assert po.status_code == 200, po.get_json()
+
+    count = a_conn.execute(
+        "SELECT COUNT(*) c FROM purchase_orders WHERE company_id=?", (client.company_id,)
+    ).fetchone()['c']
+    assert count == 1, "a live product's PO must still be created"
+
+
 # ── 24. Decision B, products -- the local half AND the cross-device half
 #       together, matching the category precedent's own two-test split but
 #       proven here in one test since the local half is now trivial ────────
