@@ -369,3 +369,86 @@ of them achieves nothing.
 `never_synced` (added in 7a) needs its own wording rather than a timestamp: a
 configured install that has never completed a first sync has no "offline since"
 instant to render, and "Offline since never" is not a sentence.
+
+---
+
+# Correcting §5's offline block list, before building 7c (2026-08-28)
+
+§5 says these are blocked offline with a plain reason: create/edit product,
+category, customer, supplier or employee; change a role; receive a PO; approve
+a cash variance; stocktake.
+
+**That list was written before Phase 6 existed, and most of it is now wrong.**
+Implementing it literally would discard the machinery Phase 6 was built to
+provide and make the product worse offline than it needs to be. Checked item by
+item against the code:
+
+## Do NOT block: catalogue and party edits
+
+Product, category, customer and supplier edits are exactly what Phase 6 made
+safe offline. They carry `row_version`, reject-stale gating, changed-field
+deltas so an untouched field is never clobbered, and tombstones instead of hard
+deletes. Two devices editing different fields of the same product now converge;
+two editing the same field resolve deterministically and record the loser in
+`sync_conflicts`.
+
+Blocking them offline would mean building all of that and then refusing to use
+it. A shop whose relay is down for an afternoon could not correct a mistyped
+price.
+
+The honest residual: a rejected stale edit is DISCARDED, and `sync_conflicts`
+has no UI, so the operator who made it is never told. That is real — but it
+requires a concurrent edit to the same row on another device, and the remedy is
+a conflicts screen, not a blanket refusal to work. **Rare-and-recorded beats
+always-blocked.** The missing conflicts UI is recorded in ROADMAP.md.
+
+## Do NOT block: employee and role changes
+
+Wave B2 syncs `user` and `user_permission` with the same `row_version` gating,
+plus `session_version` that never regresses. Same reasoning.
+
+## Do NOT block: cash-variance approval
+
+Phase 4 made the drawer terminal-bound: a cash session belongs to one terminal,
+and its variance is approved on that terminal. There is no second device to
+diverge from, so being offline changes nothing about it.
+
+## Does not exist: stocktake
+
+Grepped: there is no stocktake feature in this product. `adjust_stock` exists
+and is a different thing. Blocking it would be blocking nothing.
+
+## DO block: receiving a purchase order
+
+The one item on §5's list that survives scrutiny, and it survives it for a
+reason the design itself gets wrong.
+
+`multi-device-design.md` §8 states, as part of the justification for not
+syncing purchase orders, that "receiving is admin-device-gated". **It is not.**
+`receive_purchase_order`'s guards are `mt_login_required`,
+`mt_require_subsystem`, `require_license_capability` and
+`mt_require_capability(CAP_STOCK_ADJUST)`. There is no `_is_admin_device`
+check on it — that predicate is used on exactly one route in the whole file,
+the audit log.
+
+So two devices whose users both hold `retail.stock.adjust` can both receive the
+same PO. The route's own double-receive guard is a conditional UPDATE on
+`status='pending'`, which is per-device-local, and **PO status does not sync at
+all** (§8 keeps it deliberately device-local). The guard therefore cannot see
+the other device's receipt, online or offline. Each device writes its own
+`purchase_in` movement with its own `uid`, both survive the merge because
+movements are additive by design, and the stock is double-counted.
+
+Blocking receipt while behind is a partial mitigation of a hazard that is
+**pre-existing and wider than offline** — recorded in ROADMAP.md separately,
+because the real fix is either syncing PO status or moving the guard somewhere
+that sees both devices.
+
+## Resulting scope
+
+7c blocks exactly one write — PO receipt — and only when sync is configured and
+this device is behind. Everything else on §5's list is either already safe
+(Phase 6, wave B2, Phase 4) or does not exist.
+
+Both silence rules from 7b apply unchanged: nothing blocks on an install where
+sync is not configured, and `never_synced` is not "behind".
