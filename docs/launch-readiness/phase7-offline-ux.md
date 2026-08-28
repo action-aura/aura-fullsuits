@@ -452,3 +452,40 @@ this device is behind. Everything else on §5's list is either already safe
 
 Both silence rules from 7b apply unchanged: nothing blocks on an install where
 sync is not configured, and `never_synced` is not "behind".
+
+## And the logout/exit block is not built at all
+
+FINDING 2 above established that §5's "block logout while `sync_outbox` is
+non-empty" would brick every install that does not sync, and prescribed two
+conditions plus a logged override to make it safe.
+
+Checking what the block would actually protect, before building that machinery,
+answers a prior question: **nothing.**
+
+    @auth_bp.route('/api/auth/logout', methods=['POST'])
+    def logout():
+        session.clear()
+        return jsonify({'success': True})
+
+Logout clears the session and touches no data. `sync_outbox` is a table in a
+SQLite file on disk. It survives logout, app exit and reboot, and the sync loop
+drains it on the next launch. §5 cites Shopify losing offline orders, but that
+failure mode is losing a queue held in volatile memory; this queue is not.
+
+So the cost is real and the benefit is zero:
+
+* it would block **shift handover** — a cashier logging out at the end of a
+  shift is a normal, frequent operation, not an edge case;
+* `logout` lives in `commercial_runtime/identity/auth_routes.py`, which Clinic
+  also registers, and Clinic is out of scope for features;
+* per FINDING 2 it would need configured-gating AND a logged override merely to
+  avoid bricking installs — elaborate machinery guarding nothing.
+
+The genuine residual is a device retired or uninstalled while still holding
+unsent events, and a logout block does not prevent either. What helps there is
+telling the operator the count, which **7b's banner already does**. That is the
+right amount of intervention.
+
+**So §5's block list, after all three corrections, is exactly one item:
+receiving a purchase order.** The rest is either already safe (Phase 6, wave
+B2, Phase 4), does not exist (stocktake), or protects nothing (logout/exit).
