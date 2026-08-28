@@ -382,7 +382,31 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # `ON CONFLICT(id) DO UPDATE` last-write-wins posture for all five catalogue
 # types until the bump has been proven live. Switching it to reject-stale is
 # stage 6a-ii and does not happen here.
-RETAIL_SCHEMA_VERSION = 17
+#
+# v17 -> v18 (launch-readiness Phase 7, "offline UX", stage 7a; docs/
+# launch-readiness/phase7-offline-ux.md "FINDING 1"; ROADMAP.md's
+# 2026-08-28 "retail schema v18 CLAIMED for Phase 7" entry): ONE new
+# single-row table, `sync_freshness` -- see _migrate_add_sync_freshness
+# below for the full reasoning. In short: `SyncService`'s
+# `self._health[...]["last_success_at"]` (commercial_runtime/sync/
+# sync_service.py, `_fresh_half_health`) has always been in-memory only, so
+# it resets to None on every app restart -- and every Phase 7 rule that
+# measures elapsed time since the last successful sync (30-minute
+# stale-stock hiding, the 24-hour warning, the 72-hour hard stop) is
+# defined against that clock. A till restarted every morning -- the normal
+# way a shop opens -- would never accumulate enough in-memory elapsed time
+# for any of those to fire; the hard stop in particular would never fire at
+# all. This table gives the clock a durable home.
+#
+# `stock_exceptions` (stage 7d, the oversell exception queue) also claims
+# v18 per the same ROADMAP.md entry, but is DELIBERATELY NOT created by
+# this stage -- same reasoning as v17's own `stock_exceptions` note above:
+# nothing in stage 7a writes it, and a shipped table with no writer
+# misleads the next reader into assuming the feature exists. Whoever
+# implements 7d appends its own migration step to this same v18 chain
+# (_migrate_retail_schema below), the same way this stage appends after
+# v17's.
+RETAIL_SCHEMA_VERSION = 18
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -1282,6 +1306,11 @@ def _migrate_retail_schema(conn):
     # comment for what this does and, just as importantly, what it does NOT
     # do -- the apply side is untouched this stage, on purpose.
     _migrate_add_sync_conflicts_and_drop_quantity_reserved(conn)
+    # v17 -> v18 (launch-readiness Phase 7, stage 7a): appended LAST, same
+    # convention as every step above. See the RETAIL_SCHEMA_VERSION v18
+    # comment for what this does and _migrate_add_sync_freshness's own
+    # docstring for the full reasoning.
+    _migrate_add_sync_freshness(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -4222,6 +4251,105 @@ def _migrate_add_sync_conflicts_and_drop_quantity_reserved(conn):
         cols = {row[1] for row in conn.execute('PRAGMA table_info(inventory_balances)').fetchall()}
         if 'quantity_reserved' in cols:
             conn.execute('ALTER TABLE inventory_balances DROP COLUMN quantity_reserved')
+
+
+def _migrate_add_sync_freshness(conn):
+    """One-time migration (schema v17 -> v18): launch-readiness Phase 7,
+    stage 7a (persisted sync freshness). See the RETAIL_SCHEMA_VERSION v18
+    comment above and docs/launch-readiness/phase7-offline-ux.md "FINDING
+    1" for the full reasoning; this function is deliberately small because
+    the actual weight of stage 7a is in SyncService itself (loading this
+    table at construction and writing through to it on every recorded
+    success -- commercial_runtime/sync/sync_service.py), not here.
+
+    `sync_freshness` -- ONE row (id=1), two nullable columns,
+    `last_push_success_at` / `last_pull_success_at`. Both start NULL: a
+    fresh install has never synced successfully, and NULL is what lets a
+    reader (SyncFreshnessStore.load / SyncService.get_health) tell "never
+    synced" apart from "synced a long time ago" -- collapsing the former
+    into a huge elapsed number would trip the 72-hour hard stop stage 7c
+    builds on top of this on a shop's very first day, before it has done
+    anything wrong.
+
+    A SEPARATE table, deliberately NOT two new columns on `sync_cursor`,
+    even though the two live in the same database and are conceptually
+    "sync device state": `sync_cursor` means one specific thing -- how far
+    THIS device has pulled -- and it has wedge history (see
+    retail_category_delete_fk_sync_test.py's module docstring for the
+    FK-vs-cursor-advance story this codebase already lived through once,
+    where a bug in what ran on the apply path silently stopped a device's
+    cursor from ever advancing again). Widening `sync_cursor`'s meaning
+    with unrelated columns risks that logic for a change that doesn't need
+    to touch it at all; a same-shaped, separate single-row table costs
+    nothing extra to migrate or query and cannot interact with that history.
+
+    Single-row shape mirrors `sync_cursor`'s own convention exactly --
+    `id INTEGER PRIMARY KEY CHECK (id = 1)` -- for the same reason:
+    exactly one freshness record per device, not company-scoped (this is
+    local device state, not tenant data, like `sync_cursor` itself).
+
+    Idempotent: CREATE TABLE IF NOT EXISTS + INSERT OR IGNORE, exactly like
+    `sync_cursor`'s own bootstrap in `_init_retail` -- a retried run (the
+    normal case after any interrupted migration, since
+    `ensure_schema_version` leaves `user_version` un-advanced on failure)
+    is a clean no-op both times.
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sync_freshness (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            last_push_success_at TEXT,
+            last_pull_success_at TEXT
+        )
+    """)
+    conn.execute(
+        "INSERT OR IGNORE INTO sync_freshness (id, last_push_success_at, last_pull_success_at) "
+        "VALUES (1, NULL, NULL)"
+    )
+
+
+def load_sync_freshness(conn) -> dict:
+    """Reads the single `sync_freshness` row -- the concrete `load` half of
+    the `SyncFreshnessStore` collaborator `SyncService` is constructed with
+    (see that NamedTuple's docstring in commercial_runtime/sync/
+    sync_service.py). Called once, at `SyncService.__init__`, to seed
+    `self._health`'s in-memory cache with whatever THIS device last durably
+    recorded, so a restarted process reports the same `last_success_at` the
+    previous one did instead of resetting to None.
+
+    Returns `{'push': None, 'pull': None}` both when the row genuinely
+    holds NULL/NULL (a fresh install that has never synced successfully --
+    the normal post-migration state `_migrate_add_sync_freshness` seeds)
+    and, defensively, when no row exists at all (should not happen on any
+    v18+ database, since the migration always seeds it, but "no row" and "a
+    row of NULLs" mean the identical thing to every caller of this
+    function, so there is no reason to raise here instead of returning the
+    same shape either way).
+    """
+    row = conn.execute(
+        'SELECT last_push_success_at, last_pull_success_at FROM sync_freshness WHERE id = 1'
+    ).fetchone()
+    if row is None:
+        return {'push': None, 'pull': None}
+    return {'push': row['last_push_success_at'], 'pull': row['last_pull_success_at']}
+
+
+def record_sync_freshness(conn, half: str, when: str) -> None:
+    """Writes one half's last-success timestamp -- the concrete `record`
+    half of the `SyncFreshnessStore` collaborator, called from
+    `SyncService._record_sync_success` on every successful push or pull,
+    inside the same `_health_lock` that updates the in-memory cache (see
+    that method's own comment for why this write-through belongs inside
+    that lock rather than after it).
+
+    `half` is always exactly `'push'` or `'pull'` -- `SyncService`'s own
+    vocabulary (`run_once`'s two try/except blocks) -- so the column name
+    is derived from it rather than accepting an arbitrary column name from
+    the caller. Does not commit; the caller (`_record_sync_success`) owns
+    the transaction boundary on the connection it opened, exactly like
+    `_ensure_credit_schema`'s callers own theirs for `local_ensure_schema`.
+    """
+    column = 'last_push_success_at' if half == 'push' else 'last_pull_success_at'
+    conn.execute(f'UPDATE sync_freshness SET {column} = ? WHERE id = 1', (when,))
 
 
 def _v16_rebind_orphaned_open_drawers(conn):

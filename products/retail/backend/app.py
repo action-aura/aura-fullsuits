@@ -131,7 +131,13 @@ def _index():
 from commercial_runtime.identity.auth_routes import auth_bp
 from commercial_runtime.identity.onboarding_routes import onboarding_bp
 from commercial_runtime.identity.registry_db import init_registry_db
-from database.schema import get_retail_conn, init_retail, rebind_company_id_after_activation
+from database.schema import (
+    get_retail_conn,
+    init_retail,
+    load_sync_freshness,
+    record_sync_freshness,
+    rebind_company_id_after_activation,
+)
 # Launch-readiness Phase 5 prerequisite #1 (registry v4) -- the identity-side
 # half of the company_id rebind. Aliased because the retail-side function
 # just above shares the exact same name by design (mirrored dialect, see
@@ -482,6 +488,7 @@ if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':
     from commercial_runtime.sync.relay_client import SyncRelayClient
     from commercial_runtime.sync.sync_service import (
         REGISTRY_SYNC_ENTITY_TYPES,
+        SyncFreshnessStore,
         SyncService,
         local_company_id_from_registry,
         register_active_service,
@@ -523,8 +530,20 @@ if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':
     # triggered migration `sales.due_date`/`payments`'s AR-AP columns depend
     # on, which the sync background loop's own timer can reach before any
     # HTTP route ever has on a brand-new device).
+    #
+    # `_retail_sync_freshness_store` (Launch-readiness Phase 7 stage 7a,
+    # docs/launch-readiness/phase7-offline-ux.md "FINDING 1"): SyncService's
+    # `local_freshness_store` hook -- see `SyncFreshnessStore`'s own
+    # docstring for the full reasoning. `load_sync_freshness`/
+    # `record_sync_freshness` (database/schema.py) read and write the
+    # `sync_freshness` table (schema v18), which exists ONLY in retail.db --
+    # this instance's own database via `_sync_get_conn` above -- so it is
+    # passed here, and deliberately NOT to `_registry_sync_service` below,
+    # whose database has no such table.
+    _retail_sync_freshness_store = SyncFreshnessStore(load=load_sync_freshness, record=record_sync_freshness)
     _sync_service = SyncService(_build_sync_client, _sync_get_conn, local_company_id_from_registry,
-                                local_ensure_schema=_ensure_credit_schema)
+                                local_ensure_schema=_ensure_credit_schema,
+                                local_freshness_store=_retail_sync_freshness_store)
     register_active_service(_sync_service)
 
     # Phase 5 wave B2, Decision 6 (docs/launch-readiness/
@@ -542,6 +561,12 @@ if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':
     # `local_ensure_schema` is intentionally omitted: that hook only ever
     # exists for retail's lazy, route-triggered AR/AP migration
     # (`_ensure_credit_schema`), which has nothing to do with `users`.
+    # `local_freshness_store` is intentionally omitted too, for the same
+    # shape of reason: `sync_freshness` (schema v18) is a retail.db table,
+    # and registry.db is at its own, independent schema version -- see
+    # `SyncFreshnessStore`'s own docstring. This instance therefore persists
+    # no freshness at all; its `get_health()` behaves exactly as it always
+    # has, pre-Phase-7.
     #
     # Deliberately NEVER passed to `register_active_service` -- that global
     # slot is what `nudge()` (called from retail_api.py after every
@@ -584,7 +609,11 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
     # SyncCoordinator has its own short-interval timer instead of relying on
     # the shared retail_api.py nudge() call sites.
     from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
-    from commercial_runtime.sync.sync_service import SyncService, local_company_id_from_registry
+    from commercial_runtime.sync.sync_service import (
+        SyncFreshnessStore,
+        SyncService,
+        local_company_id_from_registry,
+    )
     from commercial_runtime.sync.internal_routes import make_sync_internal_blueprint
 
     _sync_state_repository = LicenseStateRepository(Path(DATABASE_DIR) / 'subsystems' / 'licensing.db')
@@ -599,8 +628,16 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
     # fix (Kotlin's own pull loop can reach this route before any other
     # request has, on a brand-new Android install, exactly like the Windows
     # timer can).
+    #
+    # local_freshness_store: same reasoning as the Windows branch above --
+    # this instance's `_sync_get_conn` is retail.db too (Android has no
+    # separate registry-stream SyncService of its own), so it carries the
+    # `sync_freshness` table (schema v18) exactly like the Windows instance
+    # does, and gets the same collaborator.
+    _android_sync_freshness_store = SyncFreshnessStore(load=load_sync_freshness, record=record_sync_freshness)
     _android_sync_service = SyncService(None, _sync_get_conn, local_company_id_from_registry,
-                                        local_ensure_schema=_ensure_credit_schema)  # client_factory never used -- see comment above
+                                        local_ensure_schema=_ensure_credit_schema,
+                                        local_freshness_store=_android_sync_freshness_store)  # client_factory never used -- see comment above
     app.register_blueprint(make_sync_internal_blueprint(
         sync_service=_android_sync_service,
         get_conn=_sync_get_conn,

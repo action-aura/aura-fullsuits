@@ -217,7 +217,7 @@ import sqlite3
 import threading
 import uuid
 from datetime import datetime, timezone
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable, NamedTuple, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -323,6 +323,41 @@ def local_company_id_from_registry() -> Optional[str]:
         conn.close()
 
 
+class SyncFreshnessStore(NamedTuple):
+    """Optional `SyncService` collaborator (launch-readiness Phase 7 stage
+    7a, docs/launch-readiness/phase7-offline-ux.md "FINDING 1"): persists
+    `last_success_at` for both halves so the elapsed-since-last-sync clock
+    survives an app restart, instead of resetting to None every launch the
+    way `self._health` always has (`_fresh_half_health`).
+
+    Optional and a no-op when absent -- default `None` on `SyncService.
+    __init__`'s `local_freshness_store` parameter, checked explicitly,
+    exactly like `local_ensure_schema` -- and deliberately NOT implemented
+    as a try/except around a missing table. `SyncService` is constructed
+    more than once in products/retail/backend/app.py (a retail.db instance
+    and a registry.db instance; Android wires a second retail.db instance
+    too), and only retail.db carries the `sync_freshness` table
+    (products/retail/backend/database/schema.py, v18) -- the registry
+    database is at its own schema version and out of scope for this table.
+    Catching `sqlite3.OperationalError: no such table` to mean "not
+    configured here" would be indistinguishable from catching a REAL schema
+    fault on a retail database that failed to migrate -- ENGINEERING.md's
+    rule against error sentinels that can also arrive legitimately applies
+    here exactly as it does everywhere else in this codebase. So absence is
+    expressed by passing `None` for this parameter (which the registry
+    construction site does), never inferred from a caught exception.
+
+    Both callables receive a connection `SyncService` already opened via
+    its own `get_conn` -- exactly like `local_ensure_schema` receives one
+    instead of opening its own -- so this collaborator never manages a
+    connection of its own. `load` is called once, at construction, to seed
+    `self._health` with whatever was last durably recorded; `record` is
+    called from `_record_sync_success` on every recorded success, with
+    `half` always exactly `'push'` or `'pull'`."""
+    load: Callable[[sqlite3.Connection], dict]
+    record: Callable[[sqlite3.Connection, str, str], None]
+
+
 class SyncService:
     def __init__(
         self,
@@ -331,6 +366,7 @@ class SyncService:
         local_company_id_provider: Optional[Callable[[], Optional[str]]] = None,
         local_ensure_schema: Optional[Callable[["sqlite3.Connection"], None]] = None,
         handled_entity_types: Optional[Iterable[str]] = None,
+        local_freshness_store: Optional[SyncFreshnessStore] = None,
     ):
         """`client_factory` is called fresh on every push_once()/pull_once()
         attempt, not once at construction time -- deliberately, mirroring
@@ -392,11 +428,53 @@ class SyncService:
         instances) needs to change. Stored as a `frozenset` regardless of
         what iterable was passed in, so membership checks in the hot apply
         path below are O(1) and the set can never be mutated out from under
-        a running instance after construction."""
+        a running instance after construction.
+
+        `local_freshness_store`: see `SyncFreshnessStore`'s own docstring
+        just above this class for the full reasoning (why it exists, why it
+        is optional, why absence must never be inferred from a caught
+        exception). In short: when supplied, its persisted values are
+        loaded into `self._health` LAZILY, on first use (see
+        `_ensure_freshness_loaded`, called from `get_health()` and
+        `_record_sync_success()`), so a restarted process reports the SAME
+        `last_success_at` the previous one recorded instead of resetting to
+        None; and `_record_sync_success` writes through to it on every
+        recorded success. `None` (the default) reproduces this class's
+        entire pre-Phase-7 behavior exactly: in-memory only, reset on every
+        restart -- which is what the registry `SyncService` construction
+        site still gets, deliberately, since registry.db has no
+        `sync_freshness` table.
+
+        Deliberately NOT loaded here, inside `__init__`, even though that
+        is where it conceptually belongs: `SyncService` is constructed at
+        products/retail/backend/app.py's MODULE IMPORT time (the module-
+        level `if _SYNC_RELAY_URL_IS_USABLE ...:` block), which runs BEFORE
+        `init_app()` -- defined later in the same file -- ever calls
+        `init_retail()`, the migration that creates `sync_freshness` on a
+        fresh install. Reading the table inside `__init__` therefore raises
+        `sqlite3.OperationalError: no such table: sync_freshness` on every
+        fresh install, reproduced against a real app boot
+        (retail_sync_starts_when_configured_test.py), not found by
+        inspection -- the exact same shape of trap `local_ensure_schema`
+        above already exists to design around for a different table, just
+        arriving here even earlier (at construction, not first pull tick).
+        Deferring the load to first USE, after `init_app()` has certainly
+        run (`get_health()` is only ever reached by a live Flask route;
+        `_record_sync_success` only ever runs from `run_once()`, itself
+        only reachable via the timer `.start()` schedules inside
+        `init_app()`, AFTER `init_retail()`), sidesteps the ordering problem
+        without resorting to a try/except around the missing table -- which
+        would be indistinguishable from swallowing a real migration
+        failure, the exact error-sentinel shape ENGINEERING.md warns
+        against."""
         self._client_factory = client_factory
         self._get_conn = get_conn
         self._local_company_id_provider = local_company_id_provider
         self._local_ensure_schema = local_ensure_schema
+        self._local_freshness_store = local_freshness_store
+        # See _ensure_freshness_loaded's own docstring for why this is a
+        # lazy, first-use flag rather than work done inline below.
+        self._freshness_loaded = False
         self._handled_entity_types = (
             frozenset(handled_entity_types) if handled_entity_types is not None
             else RETAIL_SYNC_ENTITY_TYPES
@@ -2400,12 +2478,70 @@ class SyncService:
         subclasses already carry the exact reason_code Owner returned."""
         return getattr(exc, "reason_code", None) or type(exc).__name__
 
+    def _ensure_freshness_loaded(self) -> None:
+        """Lazily loads `local_freshness_store`'s persisted values into
+        `self._health` on first use -- called from `get_health()` and
+        `_record_sync_success()`, never from `__init__` (see
+        `local_freshness_store`'s own constructor-parameter docstring for
+        why: `SyncService` is constructed at module-import time in
+        products/retail/backend/app.py, before `init_app()` has run
+        `init_retail()`, so `sync_freshness` does not exist yet at
+        construction time on a fresh install).
+
+        The DB read happens OUTSIDE `self._health_lock` (a query is not
+        instant, and this lock guards a Flask request thread's
+        `get_health()` from blocking on slow work -- the same reasoning
+        `_pending_outbox_count` above already follows). Only the resulting
+        dict update is taken under the lock, with `self._freshness_loaded`
+        re-checked inside it: two threads racing to be "first use" both
+        read the database (harmless -- it is a read), but only the first
+        one to reach the lock actually applies its result, so a second
+        thread's slightly-later read can never clobber a `_record_sync_
+        success` write that happened in between. Idempotent after the
+        first successful call -- `self._freshness_loaded` short-circuits
+        every call after that with no DB access at all -- and a no-op
+        immediately when `local_freshness_store` is None (the registry
+        construction site)."""
+        if self._freshness_loaded or self._local_freshness_store is None:
+            return
+        conn = self._get_conn()
+        try:
+            persisted = self._local_freshness_store.load(conn)
+        finally:
+            conn.close()
+        with self._health_lock:
+            if not self._freshness_loaded:
+                self._health["push"]["last_success_at"] = persisted.get("push")
+                self._health["pull"]["last_success_at"] = persisted.get("pull")
+                self._freshness_loaded = True
+
     def _record_sync_success(self, half: str) -> None:
+        self._ensure_freshness_loaded()
         with self._health_lock:
             h = self._health[half]
             h["healthy"] = True
             h["consecutive_failures"] = 0
-            h["last_success_at"] = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(timezone.utc).isoformat()
+            h["last_success_at"] = now
+            # Launch-readiness Phase 7 stage 7a: write-through to the
+            # database INSIDE this same health_lock block, deliberately --
+            # not queued for after it. Unlike self._lock (held across an
+            # entire network round-trip; see that lock's own comment in
+            # __init__), local_freshness_store.record is one short local
+            # sqlite write, so the cost of holding health_lock across it is
+            # small -- and the alternative (writing after releasing the
+            # lock) would let a concurrent get_health() observe the
+            # in-memory "just synced" state while the value that actually
+            # survives a restart is still the OLD one, for however long the
+            # write takes to land. A no-op when local_freshness_store is
+            # None (the registry construction site).
+            if self._local_freshness_store is not None:
+                conn = self._get_conn()
+                try:
+                    self._local_freshness_store.record(conn, half, now)
+                    conn.commit()
+                finally:
+                    conn.close()
 
     def _record_sync_failure(self, half: str, exc: BaseException) -> int:
         with self._health_lock:
@@ -2436,9 +2572,11 @@ class SyncService:
             conn.close()
 
     def get_health(self) -> dict:
+        self._ensure_freshness_loaded()
         with self._health_lock:
             push = dict(self._health["push"])
             pull = dict(self._health["pull"])
+        never_synced, seconds_since_last_success = self._elapsed_since_last_success(push, pull)
         return {
             "configured": True,
             "running": self._timer is not None and not self._stopped.is_set(),
@@ -2452,9 +2590,50 @@ class SyncService:
             # is the other half of the calm-state label; read fresh on every
             # call (not cached) so it's always current as of this request.
             "pending_count": self._pending_outbox_count(),
+            # Launch-readiness Phase 7 stage 7a (docs/launch-readiness/
+            # phase7-offline-ux.md "FINDING 1"): the elapsed-offline figure
+            # 7b (stale-stock hiding) and 7c (24h warning, 72h hard stop)
+            # consume. `never_synced` and `seconds_since_last_success` are
+            # kept as TWO fields, not collapsed into one, so a fresh install
+            # that has never synced successfully cannot be misread as "a
+            # very long time offline" (which would wrongly trip 7c's
+            # 72-hour hard stop on day one, before the shop has done
+            # anything wrong) and cannot be misread as "perfectly fresh"
+            # either (a fabricated zero would silently claim health that
+            # was never actually observed). No policy lives here: no
+            # thresholds, no blocking -- this stage reports facts only, and
+            # 7b/7c are what turn `seconds_since_last_success` into a
+            # decision.
+            "never_synced": never_synced,
+            "seconds_since_last_success": seconds_since_last_success,
             "push": push,
             "pull": pull,
         }
+
+    @staticmethod
+    def _elapsed_since_last_success(push: dict, pull: dict) -> tuple:
+        """Returns `(never_synced, seconds_since_last_success)` from the
+        push/pull health snapshots `get_health` just took. `never_synced`
+        is True only when NEITHER half has ever recorded a success --
+        exactly the fresh-install state `sync_freshness`'s seeded NULL/NULL
+        row represents (`_migrate_add_sync_freshness`). Whenever at least
+        one half has succeeded at least once, `seconds_since_last_success`
+        is measured from the MORE RECENT of the two -- a device can easily
+        have pushed successfully more recently than it last pulled, or vice
+        versa (an empty outbox still counts as a push success; see
+        run_once()'s own comment), and "elapsed since last sync" should
+        mean the freshest evidence this device has that it can still talk
+        to the relay at all, not whichever half happens to be listed
+        first."""
+        timestamps = [
+            ts for ts in (push["last_success_at"], pull["last_success_at"])
+            if ts is not None
+        ]
+        if not timestamps:
+            return True, None
+        most_recent = max(datetime.fromisoformat(ts) for ts in timestamps)
+        elapsed = (datetime.now(timezone.utc) - most_recent).total_seconds()
+        return False, elapsed
 
     def _next_interval_seconds(self) -> float:
         with self._health_lock:
