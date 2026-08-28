@@ -683,3 +683,38 @@ halves to be read separately when the whole point is that they are compared.
 
 Anyone else adding a retail migration before 7c-ii lands should re-derive the
 head first and add their own claim — this records a moment, not live state.
+
+## 2026-08-28 — retail schema v20 CLAIMED for Phase 7 stage 7d-i
+
+Same discipline as the v18 and v19 claims above; written before dispatch.
+
+**CLAIMED: retail v20, by `feat/launch-readiness`, for one table —**
+`stock_exceptions`, the oversell queue.
+
+Reserved alongside `sync_conflicts` back in v17 and deliberately NOT created
+then, because nothing in that phase would have written it and a shipped table
+with no writer misleads the next reader into thinking the feature exists. This
+is the stage that writes it.
+
+**It has a genuine writer from day one, without relaxing anything.** A negative
+balance is already reachable in shipped code: `create_sale` refuses
+`qty > on_hand` against THIS device's own balance, so two tills each holding
+the last unit each pass their own check and each sell it — and
+`_apply_event`'s `inventory_movement` branch adds the merged quantity with no
+floor at zero (`quantity_on_hand = quantity_on_hand + excluded.quantity_on_hand`).
+Both devices land at −1. `compute_drift` surfaces the discrepancy today;
+nothing records it as a business exception anyone can act on.
+
+So 7d-i is detection and recording only: the table, the writer at the apply
+site, and a read path. It changes no refusal and relaxes no guard.
+
+**Deliberately NOT written from the local sale path.** A local sale cannot
+drive its own balance negative — that check still stands — so the only way a
+balance goes below zero is a merge. Writing from both places would invent a
+second source for the same fact.
+
+Resolution (writing an `inventory_movement` through the existing paths, gated
+`CAP_STOCK_ADJUST`, never auto-resolved — Decision 4 in
+`docs/launch-readiness/phase7-offline-ux.md`) is stage 7d-ii, and so is the
+Decision 1 correction's relaxation of `create_sale`'s refusal when the device
+is behind. Neither lands until there is a queue to record the result in.
