@@ -536,3 +536,39 @@ correctness one.
   folded into 6b-iii-b is that it is a behaviour change to a legacy population
   and deserves its own commit and its own proof, not a quiet ride-along at the
   end of a long stage.
+
+## 2026-08-28 — retail schema v18 CLAIMED for Phase 7
+
+`RETAIL_SCHEMA_VERSION` is a single-writer resource, and this project has
+already had two branches silently claim the same version — nothing objected,
+because the migration gated on live shape rather than on the number. So the
+claim is written down before any agent is dispatched, not after.
+
+**CLAIMED: retail v18, by `feat/launch-readiness`, covering exactly two things:**
+
+1. **Persisted sync freshness.** `SyncService`'s `last_success_at` is in-memory
+   only (`_fresh_half_health`, `sync_service.py:2389`), so it resets to `None`
+   on every app start. Phase 7's 30-minute stale-stock hiding, 24-hour warning
+   and **72-hour hard stop on new sales are all defined in elapsed time since
+   the last successful sync**, so on a till that is restarted each morning —
+   the normal way a shop opens — none of them can ever fire. The 72h stop would
+   appear built, pass any test written against a single long-lived process, and
+   be inert in the field. Stored as device state (one row), not as a column on
+   a business table.
+
+2. **`stock_exceptions`** — the oversell queue, deliberately NOT created in v17
+   because a shipped table with no writer misleads the next reader into
+   thinking the feature exists. Phase 7 stage 7d is what writes it.
+
+Anyone else adding a retail migration before Phase 7 lands should re-derive the
+head first and add their own claim here — this records a moment, not live state.
+
+See `docs/launch-readiness/phase7-offline-ux.md` for both findings in full,
+including the second one, which is not a schema matter: implemented literally,
+**"block logout while `sync_outbox` is non-empty" would make every install that
+does not sync unable to log out, permanently, from its first sale.**
+`_queue_sync_event` writes to the outbox unconditionally; what is inert on an
+unconfigured install is the SERVICE, not the queueing. The block must be
+conditional on sync actually being configured, and must carry a logged operator
+override for the case where the outbox genuinely cannot drain (relay down,
+licence lapsed, or the poison-event jam already tracked above).
