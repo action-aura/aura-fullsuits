@@ -602,6 +602,12 @@ test database to create a PO, and six later tests in the same file cascaded into
 per-test starting sequence, documented inline — the PRODUCTION defect is
 untouched and still live.
 
-Fixing it means touching `schema.py`/`_next_ref`, i.e. a schema-version claim,
-so it needs its own commit and its own coordination — see the v18 claim above
-before taking a version number.
+**FIXED 2026-08-28.** And the sentence that stood here was wrong, so it is
+corrected rather than deleted: it said fixing this "means touching
+`schema.py`/`_next_ref`, i.e. a schema-version claim". It did not. `po_number`
+stays `TEXT UNIQUE` and `_next_ref` is untouched — the shared helper must keep
+its format for every other document type. The fix is entirely in how the two
+mint sites in `retail_api.py` COMPOSE the string, exactly as AUDIT-032B already
+did for `sale_number`/`return_number`: sequential part + per-company fragment +
+per-device fragment. **No schema version was taken.** Anyone reading the
+original claim would have burned a version number for nothing.

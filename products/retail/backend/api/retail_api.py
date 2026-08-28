@@ -2429,69 +2429,118 @@ def create_purchase_order():
 
     conn = get_retail_conn()
     _ensure_credit_schema(conn)
-    cur  = conn.cursor()
-    # launch-readiness Phase 6 stage 6b-iii-b: this route had NO product
-    # existence check at all before this stage -- `purchase_order_items` was
-    # inserted straight from the request's `product_id`s with no read of
-    # `products` in between. `preview_po_split` just below in this file
-    # already gained a `company_id=? AND deleted_at_utc IS NULL` product read
-    # at stage 6b-iii-a for the identical reason (it is a WRITE gate that
-    # plans a PO a caller may go on to actually create, not a display list);
-    # this is that same read, added here so a NEW PO cannot be raised for a
-    # deleted product either. `list_purchase_orders`/`get_purchase_order`/
-    # `receive_purchase_order` deliberately do NOT gain this filter -- a PO
-    # already raised for a since-deleted product must stay receivable, or
-    # stock already in transit becomes permanently unreceivable (same
-    # "existing pending/in-flight documents do not filter" rule stage
-    # 6b-iii-a established for a pending reorder request against a deleted
-    # product; see reorder_hook.py's own comment for the write-side half of
-    # that same rule).
+    # 2026-08-28: defense-in-depth error containment, same shape and same
+    # reasoning as delete_category's own Fix 4 comment (above, this file).
+    # `purchase_orders.po_number` carries a bare (not per-company, not
+    # per-device) UNIQUE constraint (database/schema.py), and before the
+    # company+device fragments added to po_number below, two companies on
+    # one install minting their FIRST purchase order both generated
+    # "PO-000001" and collided on it. This route had NO try/except around
+    # that INSERT at all: the resulting sqlite3.IntegrityError escaped
+    # straight into Flask's default 500 handler, WITH the connection never
+    # closed on that path -- leaked for the rest of the process, holding
+    # the WAL write lock it took on its first write, so every OTHER write
+    # anywhere in this database then failed with "database is locked". One
+    # colliding PO took the whole install down, not just that request (see
+    # ROADMAP.md's 2026-08-28 "po_number collides across companies" entry).
     #
-    # `status='active'` joins the tombstone check for the two-population
-    # reason `create_supplier_contact`'s comment (above, this file) spells
-    # out in full -- a product deleted before tombstones existed never got a
-    # `deleted_at_utc` stamp, so the tombstone filter alone would miss it and
-    # let it straight back onto a brand-new PO.
-    po_product_ids = {item['product_id'] for item in items}
-    if po_product_ids:
-        placeholders = ','.join('?' * len(po_product_ids))
-        valid_rows = conn.execute(
-            f"SELECT id FROM products WHERE company_id=? AND status='active' AND deleted_at_utc IS NULL AND id IN ({placeholders})",
-            [cid, *po_product_ids]
-        ).fetchall()
-        missing_ids = po_product_ids - {r['id'] for r in valid_rows}
-        if missing_ids:
-            conn.close()
-            return jsonify({'status': 'error',
-                             'message': f'Unknown product_id: {sorted(missing_ids)[0]}'}), 400
-    po_number = _next_ref(conn, cid, 'po')
-    total = _money(sum(float(i.get('unit_cost', 0)) * float(i.get('quantity', 0)) for i in items))
-    supplier_id = data.get('supplier_id')
-    payment_status = 'paid' if amount_paid >= total - 0.005 else ('partial' if amount_paid > 0.005 else 'unpaid')
-    cur.execute("""
-        INSERT INTO purchase_orders (company_id,po_number,supplier_id,branch_id,status,subtotal,total,notes,ordered_at,
-                                     amount_paid,payment_status,due_date)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (cid, po_number, supplier_id, data.get('branch_id') or _default_branch(conn, cid),
-          'pending', total, total, data.get('notes',''),
-          datetime.now().strftime('%Y-%m-%d'), amount_paid, payment_status, data.get('due_date')))
-    po_id = cur.lastrowid
-    for item in items:
-        line = float(item.get('unit_cost',0)) * float(item.get('quantity',0))
+    # The fragments below make that SPECIFIC collision unreachable in
+    # practice, but the containment stays regardless and is not redundant
+    # with it: this is what stops the NEXT constraint added anywhere near
+    # this table from reintroducing the exact same install-wide outage,
+    # exactly as delete_category's own comment already argues for that
+    # route.
+    try:
+        cur = conn.cursor()
+        # launch-readiness Phase 6 stage 6b-iii-b: this route had NO product
+        # existence check at all before this stage -- `purchase_order_items` was
+        # inserted straight from the request's `product_id`s with no read of
+        # `products` in between. `preview_po_split` just below in this file
+        # already gained a `company_id=? AND deleted_at_utc IS NULL` product read
+        # at stage 6b-iii-a for the identical reason (it is a WRITE gate that
+        # plans a PO a caller may go on to actually create, not a display list);
+        # this is that same read, added here so a NEW PO cannot be raised for a
+        # deleted product either. `list_purchase_orders`/`get_purchase_order`/
+        # `receive_purchase_order` deliberately do NOT gain this filter -- a PO
+        # already raised for a since-deleted product must stay receivable, or
+        # stock already in transit becomes permanently unreceivable (same
+        # "existing pending/in-flight documents do not filter" rule stage
+        # 6b-iii-a established for a pending reorder request against a deleted
+        # product; see reorder_hook.py's own comment for the write-side half of
+        # that same rule).
+        #
+        # `status='active'` joins the tombstone check for the two-population
+        # reason `create_supplier_contact`'s comment (above, this file) spells
+        # out in full -- a product deleted before tombstones existed never got a
+        # `deleted_at_utc` stamp, so the tombstone filter alone would miss it and
+        # let it straight back onto a brand-new PO.
+        po_product_ids = {item['product_id'] for item in items}
+        if po_product_ids:
+            placeholders = ','.join('?' * len(po_product_ids))
+            valid_rows = conn.execute(
+                f"SELECT id FROM products WHERE company_id=? AND status='active' AND deleted_at_utc IS NULL AND id IN ({placeholders})",
+                [cid, *po_product_ids]
+            ).fetchall()
+            missing_ids = po_product_ids - {r['id'] for r in valid_rows}
+            if missing_ids:
+                return jsonify({'status': 'error',
+                                 'message': f'Unknown product_id: {sorted(missing_ids)[0]}'}), 400
+        # purchase_orders.po_number carries a bare (not company-scoped, not
+        # device-scoped) UNIQUE constraint, but _next_ref()'s counter resets
+        # per company AND is a per-DEVICE table (`doc_sequences` is never
+        # synced -- see _device_doc_discriminator's docstring). Two
+        # different companies' first PO would otherwise both generate
+        # "PO-000001" and collide in this shared multi-tenant database
+        # (fixed first, appending a company fragment); two DEVICES on the
+        # SAME company would independently generate the identical
+        # "PO-000001-<cid8>" and collide the moment sync relayed both to a
+        # third device -- the same AUDIT-032B wedge-sync failure chain
+        # create_sale's identical fix closes (see
+        # _device_doc_discriminator's docstring). Appending both fragments
+        # keeps the sequential part human-readable/searchable while
+        # guaranteeing global uniqueness without altering the shared
+        # _next_ref helper or its format for other doc types.
+        po_number = f"{_next_ref(conn, cid, 'po')}-{str(cid)[:8]}-{_device_doc_discriminator()}"
+        total = _money(sum(float(i.get('unit_cost', 0)) * float(i.get('quantity', 0)) for i in items))
+        supplier_id = data.get('supplier_id')
+        payment_status = 'paid' if amount_paid >= total - 0.005 else ('partial' if amount_paid > 0.005 else 'unpaid')
         cur.execute("""
-            INSERT INTO purchase_order_items (po_id,product_id,quantity,unit_cost,total)
-            VALUES (?,?,?,?,?)
-        """, (po_id, item['product_id'], item['quantity'], item.get('unit_cost',0), line))
-    # AP ledger: record any down-payment now; push the unpaid balance onto supplier AP.
-    if amount_paid > 0.005:
-        _record_payment(conn, cid, 'supplier', supplier_id, 'out', amount_paid,
-                        method=data.get('method', 'cash'), related_type='po', related_id=po_id,
-                        doc_type='supplier_payment')
-    balance = _money(total - amount_paid)
-    if balance > 0.005 and supplier_id:
-        _adjust_credit(conn, 'suppliers', supplier_id, cid, balance)
-    _audit(conn, 'PO_CREATED', 'purchase_order', po_id, po_number)
-    conn.commit(); conn.close()
+            INSERT INTO purchase_orders (company_id,po_number,supplier_id,branch_id,status,subtotal,total,notes,ordered_at,
+                                         amount_paid,payment_status,due_date)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (cid, po_number, supplier_id, data.get('branch_id') or _default_branch(conn, cid),
+              'pending', total, total, data.get('notes',''),
+              datetime.now().strftime('%Y-%m-%d'), amount_paid, payment_status, data.get('due_date')))
+        po_id = cur.lastrowid
+        for item in items:
+            line = float(item.get('unit_cost',0)) * float(item.get('quantity',0))
+            cur.execute("""
+                INSERT INTO purchase_order_items (po_id,product_id,quantity,unit_cost,total)
+                VALUES (?,?,?,?,?)
+            """, (po_id, item['product_id'], item['quantity'], item.get('unit_cost',0), line))
+        # AP ledger: record any down-payment now; push the unpaid balance onto supplier AP.
+        if amount_paid > 0.005:
+            _record_payment(conn, cid, 'supplier', supplier_id, 'out', amount_paid,
+                            method=data.get('method', 'cash'), related_type='po', related_id=po_id,
+                            doc_type='supplier_payment')
+        balance = _money(total - amount_paid)
+        if balance > 0.005 and supplier_id:
+            _adjust_credit(conn, 'suppliers', supplier_id, cid, balance)
+        _audit(conn, 'PO_CREATED', 'purchase_order', po_id, po_number)
+        conn.commit()
+    except sqlite3.IntegrityError as exc:
+        conn.rollback()
+        current_app.logger.warning("create_purchase_order failed on a database constraint: %s", exc)
+        return jsonify({
+            'status': 'error',
+            'message': 'This purchase order could not be created because of a conflicting record. Please try again.',
+        }), 409
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("create_purchase_order failed: %s", exc)
+        return jsonify({'status': 'error', 'message': 'Could not create this purchase order.'}), 400
+    finally:
+        conn.close()
     _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py (only queues an event when amount_paid > 0)
     return jsonify({'status': 'success', 'data': {'id': po_id, 'po_number': po_number, 'payment_status': payment_status}})
 
@@ -2844,7 +2893,17 @@ def accept_reorder_request(rid):
         supplier_id = product['supplier_id']
         branch_id = req['branch_id'] or _default_branch(conn, cid)
 
-        po_number = _next_ref(conn, cid, 'po')
+        # Identical AUDIT-032B treatment as create_purchase_order above (see
+        # that route's comment for the full company-vs-company,
+        # device-vs-device collision argument, and
+        # _device_doc_discriminator's docstring for the wedge-sync failure
+        # chain it closes) -- this route drafts a purchase_orders row from
+        # the SAME _next_ref(conn, cid, 'po') call, so it carries the
+        # identical bare-UNIQUE collision risk on po_number and needs the
+        # identical fix. Fixing only the obvious mint site above and
+        # missing this one would leave the bug fully live through the
+        # reorder-accept path (2026-08-28 ROADMAP entry).
+        po_number = f"{_next_ref(conn, cid, 'po')}-{str(cid)[:8]}-{_device_doc_discriminator()}"
         cur.execute("""
             INSERT INTO purchase_orders (company_id,po_number,supplier_id,branch_id,status,subtotal,total,notes,
                                          ordered_at,amount_paid,payment_status)
