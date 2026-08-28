@@ -135,7 +135,9 @@ def _service(sch, with_freshness=True):
     apply_pull_result()."""
     store = None
     if with_freshness:
-        store = SyncFreshnessStore(load=sch.load_sync_freshness, record=sch.record_sync_freshness)
+        store = SyncFreshnessStore(
+            load=sch.load_sync_freshness, record=sch.record_sync_freshness,
+            record_override=sch.record_offline_override)
     return SyncService(None, sch.get_retail_conn, None, local_freshness_store=store)
 
 

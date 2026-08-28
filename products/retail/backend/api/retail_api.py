@@ -38,6 +38,12 @@ from commercial_runtime.licensing_contracts.flask_guard import make_capability_g
 from commercial_runtime.sync.sync_service import nudge as _sync_nudge
 from commercial_runtime.sync.sync_service import get_active_health as _sync_get_active_health
 from commercial_runtime.sync.sync_service import SYNC_STALE_THRESHOLD_SECONDS as _SYNC_STALE_THRESHOLD_SECONDS
+from commercial_runtime.sync.sync_service import (
+    SYNC_SALES_STOP_THRESHOLD_SECONDS as _SYNC_SALES_STOP_THRESHOLD_SECONDS,
+)
+from commercial_runtime.sync.sync_service import (
+    record_offline_override as _sync_record_offline_override,
+)
 from commercial_runtime.notifications import settings as _notification_settings
 from commercial_runtime.notifications.outbox import EmailOutboxRepository as _EmailOutboxRepository
 from commercial_runtime.notifications import whatsapp_settings as _whatsapp_settings
@@ -2596,6 +2602,66 @@ def _is_device_behind_on_sync():
     return isinstance(secs, (int, float)) and secs > _SYNC_STALE_THRESHOLD_SECONDS
 
 
+def _evaluate_offline_sales_stop():
+    """Launch-readiness Phase 7 stage 7c-ii (docs/launch-readiness/
+    phase7-offline-ux.md "Decision 2"; ROADMAP.md's 2026-08-28 "retail
+    schema v19" entry): the 72-hour hard stop on NEW SALES, behind a
+    manager override -- the last behavioural piece of Phase 7, and "the
+    only change in the whole programme that can refuse a sale" (this
+    stage's own design note).
+
+    Returns `(blocked, health)` rather than a bare bool: `create_sale`'s
+    refusal message must state BOTH facts Decision 2 requires -- how long
+    this device has been behind, and how many events are unsent -- and
+    both live in the SAME `get_active_health()` snapshot this function
+    already had to read to decide `blocked` in the first place. A second,
+    separate call from the route to build the message could observe a
+    different instant (a background timer tick landing in between) and
+    describe a refusal that no longer matches the one just issued.
+
+    Reached through the SAME module-level seam `_is_device_behind_on_sync`
+    above already uses -- never a second sync service reference -- and it
+    is a BLOCK, not the PO-receipt route's guard: the 30-minute
+    `_SYNC_STALE_THRESHOLD_SECONDS` above governs a different, narrower
+    hazard (this device cannot see a receipt already applied elsewhere);
+    this one governs `_SYNC_SALES_STOP_THRESHOLD_SECONDS` (72 hours), a
+    separate, wider constant on purpose -- see that constant's own comment
+    in sync_service.py for why the two must never be collapsed into one.
+
+    An install is blocked if and only if ALL of:
+      * sync is CONFIGURED for this device;
+      * this device HAS synced before (`never_synced` is False);
+      * it has been behind by more than `_SYNC_SALES_STOP_THRESHOLD_SECONDS`;
+      * there is NO valid manager override recorded
+        (`health['offline_override_valid']`, computed by SyncService's own
+        `_offline_override_valid` -- Step 2's "validated by comparison,
+        never by expiry" rule).
+
+    The first two are the SAME two silence rules `_is_device_behind_on_sync`
+    already enforces, and they matter MOST here of anywhere in this file:
+    most installs never turn sync on, and blocking their sales would be
+    catastrophic and completely unjustified -- they have no second device
+    to be out of step with, so `configured is False` must never block.
+    A device that has never completed a first sync has no basis for
+    claiming it has drifted, so `never_synced is True` must never block
+    either -- collapsing that into "behind by a huge number" would trip
+    this stop on a shop's very first day, before it has done anything
+    wrong (the exact trap `get_health()`'s own `never_synced` field exists
+    to prevent, stage 7a).
+    """
+    health = _sync_get_active_health()
+    if not health.get('configured'):
+        return False, health
+    if health.get('never_synced'):
+        return False, health
+    secs = health.get('seconds_since_last_success')
+    if not (isinstance(secs, (int, float)) and secs > _SYNC_SALES_STOP_THRESHOLD_SECONDS):
+        return False, health
+    if health.get('offline_override_valid'):
+        return False, health
+    return True, health
+
+
 @retail_bp.route('/purchase-orders/<int:po_id>/receive', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -3135,6 +3201,35 @@ def create_sale():
         if wants_discount and not session_has_capability(CAP_DISCOUNT):
             conn.close()
             return jsonify({'status': 'error', 'message': DISCOUNT_DENIED_MESSAGE}), 403
+
+        # ── Launch-readiness Phase 7 stage 7c-ii: the 72-hour offline stop ───
+        # "It is a block with an override, NOT an absolute refusal." (design
+        # note, docs/launch-readiness/phase7-offline-ux.md "Decision 2") --
+        # refuses to take money, the most severe thing this application can
+        # do to a business, so it is checked here: BEFORE BEGIN IMMEDIATE
+        # (same reasoning as the discount check just above -- a refusal must
+        # never take the write lock) and before any row of this sale is
+        # written, so the refusal is total rather than partial. See
+        # _evaluate_offline_sales_stop's own docstring for the full
+        # four-condition guard (configured, ever-synced, past the
+        # threshold, no valid override) and STEP 6 mutation proofs in
+        # products/retail/tests/retail_offline_sales_stop_test.py for why
+        # each condition is checked independently.
+        blocked, _offline_health = _evaluate_offline_sales_stop()
+        if blocked:
+            conn.close()
+            hours_offline = (_offline_health.get('seconds_since_last_success') or 0) / 3600.0
+            pending_count = _offline_health.get('pending_count')
+            return jsonify({
+                'status': 'error',
+                'message': (
+                    f'This device has been offline for about {hours_offline:.1f} hours, '
+                    f'with {pending_count} event(s) still waiting to sync. New sales are '
+                    'blocked until a manager approves selling offline, or this device '
+                    'reconnects and syncs.'
+                ),
+                'data': {'hours_offline': hours_offline, 'pending_count': pending_count},
+            }), 403
 
         # ── v13 attribution stamp ────────────────────────────────────────────
         # Resolved ONCE per sale, then shared by the `sales` row and every
@@ -7217,6 +7312,93 @@ def sync_health():
     NOT an error: SYNC_RELAY_BASE_URL unset (the default -- most installs
     never turn sync on), and Android (Kotlin's SyncCoordinator owns that
     loop). The frontend banner must stay completely silent on it."""
+    return jsonify({'status': 'success', 'data': _sync_get_active_health()})
+
+
+@retail_bp.route('/sync/offline-override', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+# No @require_license_capability here: this route is not in docs/licensing/
+# phase7/retail-restriction-capability-matrix.md, which predates
+# launch-readiness Phase 7 (offline UX) entirely and does not cover ANY
+# sync route -- /sync/health just above carries none either. Adding one
+# here would also be moot in practice: a restricted/expired licence already
+# blocks retail.sale.create outright (that matrix's own "Always blocked"
+# section), so gating this route on licensing state could never deny a
+# sale a restricted install was not already refusing.
+#
+# CAP_CASH_APPROVE, not CAP_STOCK_ADJUST -- Decision 2 in docs/launch-
+# readiness/phase7-offline-ux.md: this is already this codebase's "a
+# manager accepts an anomaly rather than the system refusing" authority
+# (it is what approves a cash variance, approve_cash_variance above).
+# CAP_STOCK_ADJUST is master-data editing, a different kind of permission
+# that happens to be held by the same people. Reusing an existing code is
+# deliberate, not a shortcut: CAPABILITY_CODES (user_accounts.py) is a
+# fixed tuple of exactly eight, and that tuple IS the seeding contract --
+# a ninth code means a registry migration and a re-seed of every existing
+# account, which this stage does not need and was told explicitly not to
+# invent.
+@mt_require_capability(CAP_CASH_APPROVE)
+def sync_offline_override():
+    """Launch-readiness Phase 7 stage 7c-ii (docs/launch-readiness/
+    phase7-offline-ux.md "Decision 2"; ROADMAP.md's 2026-08-28 "retail
+    schema v19" entry): a manager's approval to keep selling past the
+    72-hour hard stop `_evaluate_offline_sales_stop` (create_sale, above)
+    enforces.
+
+    Records "now" unconditionally whenever sync is configured -- there is
+    no precondition that this device must currently BE past the 72-hour
+    threshold to record one; a manager who overrides pre-emptively is
+    harmless, since Step 2's validity rule (`offline_override_at >
+    the most recent successful sync instant`) means the override simply
+    does nothing until create_sale's guard would otherwise have blocked,
+    and is silently invalidated the moment this device syncs again.
+
+    `{"configured": false}` -- sync not configured on this device -- is
+    refused with 400 rather than silently accepted: there is nothing to
+    override (create_sale's guard can never block a device with no active
+    SyncService), and accepting the call anyway would let a manager
+    believe they had granted an approval that governs nothing.
+
+    Every use is logged via `_audit`, carrying the elapsed offline time
+    and the unsent count AT THE MOMENT OF APPROVAL -- read from the SAME
+    `get_active_health()` snapshot used to decide whether to accept the
+    call at all, for the identical single-snapshot reasoning
+    `_evaluate_offline_sales_stop` documents on its own `(blocked, health)`
+    return shape. An override that left no trace of what was accepted
+    would be a bypass, not an approval.
+    """
+    health = _sync_get_active_health()
+    if not health.get('configured'):
+        return jsonify({
+            'status': 'error',
+            'message': 'Sync is not configured on this device; there is nothing to override.',
+        }), 400
+
+    hours_offline = (health.get('seconds_since_last_success') or 0) / 3600.0
+    pending_count = health.get('pending_count')
+    accepted = _sync_record_offline_override()
+    if not accepted:
+        # Defensive only -- unreachable in practice, since `configured`
+        # being True above means `get_active_health()` read a real
+        # registered SyncService, and `_sync_record_offline_override` (the
+        # module-level dispatcher) consults the identical `_active_service`
+        # global. Refused rather than silently swallowed, matching this
+        # file's "no error sentinel that can also arrive legitimately"
+        # discipline: a caught-but-unexplained failure here would report
+        # success on an override that was never actually persisted.
+        return jsonify({
+            'status': 'error',
+            'message': 'Sync is not configured on this device; there is nothing to override.',
+        }), 400
+
+    conn = get_retail_conn()
+    try:
+        _audit(conn, 'OFFLINE_SALES_OVERRIDE', 'sync_freshness', None,
+               f'hours_offline={hours_offline:.1f} pending_count={pending_count} approved_by={_uid()}')
+        conn.commit()
+    finally:
+        conn.close()
     return jsonify({'status': 'success', 'data': _sync_get_active_health()})
 
 

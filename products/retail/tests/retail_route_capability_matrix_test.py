@@ -162,14 +162,23 @@ EXPECTED_MUTATION_CAPABILITIES = {
     # unverified) without it, 'closed' with it.
     'close_cash_session': CAP_CASH_CLOSE,
 
-    # ── Accepting a cash variance: retail.cash.approve ───────────────────────
-    # The first and only route to carry this code. It is withheld from every
-    # role that holds retail.cash.close, manager included, so that no role can
-    # count its own drawer and sign off its own shortfall -- AUDIT-032. The
-    # pairing is asserted behaviourally by
+    # ── Accepting a cash variance / an anomaly: retail.cash.approve ──────────
+    # approve_cash_variance was the first and, until launch-readiness Phase 7
+    # stage 7c-ii, the only route to carry this code. It is withheld from
+    # every role that holds retail.cash.close, manager included, so that no
+    # role can count its own drawer and sign off its own shortfall --
+    # AUDIT-032. The pairing is asserted behaviourally by
     # test_nobody_who_can_close_a_drawer_gets_variance_approval_by_default
     # below, which is what makes this line more than a label.
     'approve_cash_variance': CAP_CASH_APPROVE,
+    # sync_offline_override (docs/launch-readiness/phase7-offline-ux.md
+    # "Decision 2"): the manager override for the 72-hour offline-sales
+    # stop. Reuses this SAME code deliberately, not CAP_STOCK -- it is
+    # already this codebase's "a manager accepts an anomaly rather than
+    # the system refusing" authority, and CAPABILITY_CODES is a fixed
+    # eight-tuple that is also the account-seeding contract (user_accounts.py),
+    # so a ninth code was explicitly ruled out rather than merely avoided.
+    'sync_offline_override': CAP_CASH_APPROVE,
 
     # ── Sending or generating the shop's numbers: retail.reports ─────────────
     'report_summary_email': CAP_REPORTS,

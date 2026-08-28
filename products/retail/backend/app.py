@@ -136,6 +136,7 @@ from database.schema import (
     init_retail,
     load_sync_freshness,
     record_sync_freshness,
+    record_offline_override,
     rebind_company_id_after_activation,
 )
 # Launch-readiness Phase 5 prerequisite #1 (registry v4) -- the identity-side
@@ -540,7 +541,13 @@ if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':
     # this instance's own database via `_sync_get_conn` above -- so it is
     # passed here, and deliberately NOT to `_registry_sync_service` below,
     # whose database has no such table.
-    _retail_sync_freshness_store = SyncFreshnessStore(load=load_sync_freshness, record=record_sync_freshness)
+    #
+    # `record_offline_override` (schema v19, stage 7c-ii): the SAME table's
+    # third column, wired the same way for the same reason -- see
+    # SyncFreshnessStore's own docstring on why this rides the existing
+    # collaborator instead of a second one.
+    _retail_sync_freshness_store = SyncFreshnessStore(
+        load=load_sync_freshness, record=record_sync_freshness, record_override=record_offline_override)
     _sync_service = SyncService(_build_sync_client, _sync_get_conn, local_company_id_from_registry,
                                 local_ensure_schema=_ensure_credit_schema,
                                 local_freshness_store=_retail_sync_freshness_store)
@@ -633,8 +640,10 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
     # this instance's `_sync_get_conn` is retail.db too (Android has no
     # separate registry-stream SyncService of its own), so it carries the
     # `sync_freshness` table (schema v18) exactly like the Windows instance
-    # does, and gets the same collaborator.
-    _android_sync_freshness_store = SyncFreshnessStore(load=load_sync_freshness, record=record_sync_freshness)
+    # does, and gets the same collaborator -- including `record_offline_
+    # override` (schema v19, stage 7c-ii; see the Windows branch above).
+    _android_sync_freshness_store = SyncFreshnessStore(
+        load=load_sync_freshness, record=record_sync_freshness, record_override=record_offline_override)
     _android_sync_service = SyncService(None, _sync_get_conn, local_company_id_from_registry,
                                         local_ensure_schema=_ensure_credit_schema,
                                         local_freshness_store=_android_sync_freshness_store)  # client_factory never used -- see comment above

@@ -406,7 +406,20 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # implements 7d appends its own migration step to this same v18 chain
 # (_migrate_retail_schema below), the same way this stage appends after
 # v17's.
-RETAIL_SCHEMA_VERSION = 18
+#
+# v18 -> v19 (launch-readiness Phase 7, "offline UX", stage 7c-ii; docs/
+# launch-readiness/phase7-offline-ux.md "Decision 2"; ROADMAP.md's
+# 2026-08-28 "retail schema v19 CLAIMED for Phase 7 stage 7c-ii" entry):
+# ONE nullable column on the existing v18 single-row `sync_freshness`
+# table -- `offline_override_at TEXT`. See _migrate_add_offline_override
+# below for the full reasoning. In short: stage 7c-ii blocks NEW SALES once
+# this device has been behind for more than 72 hours, behind a manager
+# override gated on CAP_CASH_APPROVE. The override has to survive a
+# restart for the identical reason v18's `last_*_success_at` clock does --
+# a till restarted every morning would otherwise re-prompt a manager on the
+# first sale of every day -- so it lands in the same durable, single-row
+# device-state table rather than in-memory or in a new table of its own.
+RETAIL_SCHEMA_VERSION = 19
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -1311,6 +1324,13 @@ def _migrate_retail_schema(conn):
     # comment for what this does and _migrate_add_sync_freshness's own
     # docstring for the full reasoning.
     _migrate_add_sync_freshness(conn)
+    # v18 -> v19 (launch-readiness Phase 7, stage 7c-ii): appended LAST,
+    # same convention as every step above, and it must stay AFTER
+    # _migrate_add_sync_freshness specifically -- not merely by the
+    # "new steps go last" convention -- because it ALTERs the table that
+    # step just created. See the RETAIL_SCHEMA_VERSION v19 comment and
+    # _migrate_add_offline_override's own docstring for the full reasoning.
+    _migrate_add_offline_override(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -4307,6 +4327,49 @@ def _migrate_add_sync_freshness(conn):
     )
 
 
+def _migrate_add_offline_override(conn):
+    """One-time migration (schema v18 -> v19): launch-readiness Phase 7,
+    stage 7c-ii (72-hour hard stop on new sales, behind a manager
+    override). See the RETAIL_SCHEMA_VERSION v19 comment above and docs/
+    launch-readiness/phase7-offline-ux.md "Decision 2" for the full
+    reasoning.
+
+    ONE nullable column, `offline_override_at TEXT`, added to the EXISTING
+    v18 `sync_freshness` table -- not a new table, and not two new columns
+    the way `sync_freshness` itself carries `last_push_success_at` /
+    `last_pull_success_at` as a pair. This is deliberate: the override is
+    validated by COMPARISON against the most recent successful-sync
+    instant (`offline_override_at IS NOT NULL AND offline_override_at >
+    last_<x>_success_at`), never by expiry, so the two facts have to live
+    in the same row a single query can read together. Splitting the
+    override into its own table would invite a reader to fetch the two
+    halves separately and compare them out of sync with each other -- the
+    exact hazard ROADMAP.md's v19 claim entry names as the reason NOT to
+    split it out.
+
+    NULL means "no standing override" -- the ordinary state for every
+    install that has never been behind by 72 hours, and the state a
+    successful sync silently returns to (no expiry job, no cleanup path,
+    nothing writes NULL back in explicitly; the comparison rule alone is
+    what makes a stale override stop validating once a fresher sync
+    succeeds).
+
+    Guarded by `PRAGMA table_info` so a second run (the normal retry shape
+    after any interrupted migration -- `ensure_schema_version` leaves
+    `user_version` un-advanced on failure) is a clean no-op, matching
+    every other single-column ALTER in this file (e.g. the `session_id`
+    additions in `_migrate_add_shift_cash_drawer` above). `sync_freshness`
+    itself is guaranteed to already exist by the time this function runs:
+    `_migrate_add_sync_freshness` (v17 -> v18) is called immediately
+    before this step, unconditionally, in `_migrate_retail_schema`'s own
+    chain, every pass -- so no existence check is needed for the TABLE,
+    only for the column.
+    """
+    cols = {row[1] for row in conn.execute('PRAGMA table_info(sync_freshness)').fetchall()}
+    if 'offline_override_at' not in cols:
+        conn.execute('ALTER TABLE sync_freshness ADD COLUMN offline_override_at TEXT')
+
+
 def load_sync_freshness(conn) -> dict:
     """Reads the single `sync_freshness` row -- the concrete `load` half of
     the `SyncFreshnessStore` collaborator `SyncService` is constructed with
@@ -4316,21 +4379,53 @@ def load_sync_freshness(conn) -> dict:
     recorded, so a restarted process reports the same `last_success_at` the
     previous one did instead of resetting to None.
 
-    Returns `{'push': None, 'pull': None}` both when the row genuinely
-    holds NULL/NULL (a fresh install that has never synced successfully --
-    the normal post-migration state `_migrate_add_sync_freshness` seeds)
-    and, defensively, when no row exists at all (should not happen on any
-    v18+ database, since the migration always seeds it, but "no row" and "a
-    row of NULLs" mean the identical thing to every caller of this
-    function, so there is no reason to raise here instead of returning the
-    same shape either way).
+    Returns `{'push': None, 'pull': None, 'override_at': None}` both when
+    the row genuinely holds NULLs (a fresh install that has never synced
+    successfully and has no standing offline-sales override -- the normal
+    post-migration state `_migrate_add_sync_freshness` /
+    `_migrate_add_offline_override` seed) and, defensively, when no row
+    exists at all (should not happen on any v18+ database, since the
+    migration always seeds it, but "no row" and "a row of NULLs" mean the
+    identical thing to every caller of this function, so there is no
+    reason to raise here instead of returning the same shape either way).
+
+    `override_at` (schema v19, stage 7c-ii) added as a THIRD key on the
+    SAME dict this function has always returned, not a second lookup --
+    `SyncService._ensure_freshness_loaded` reads all three off one call,
+    which is what keeps the offline-sales-stop comparison (Decision 2)
+    from ever observing the override and the success clocks from two
+    different moments in time.
     """
     row = conn.execute(
-        'SELECT last_push_success_at, last_pull_success_at FROM sync_freshness WHERE id = 1'
+        'SELECT last_push_success_at, last_pull_success_at, offline_override_at '
+        'FROM sync_freshness WHERE id = 1'
     ).fetchone()
     if row is None:
-        return {'push': None, 'pull': None}
-    return {'push': row['last_push_success_at'], 'pull': row['last_pull_success_at']}
+        return {'push': None, 'pull': None, 'override_at': None}
+    return {
+        'push': row['last_push_success_at'],
+        'pull': row['last_pull_success_at'],
+        'override_at': row['offline_override_at'],
+    }
+
+
+def record_offline_override(conn, when: str) -> None:
+    """Writes the manager's offline-sales-stop override timestamp -- the
+    concrete `record_override` half of the extended `SyncFreshnessStore`
+    collaborator (commercial_runtime/sync/sync_service.py), called from
+    `SyncService.record_offline_override` when the /sync/offline-override
+    route (retail_api.py) accepts a manager's approval to keep selling past
+    the 72-hour hard stop.
+
+    Mirrors `record_sync_freshness` exactly: does not commit (the caller
+    owns the transaction boundary on the connection it opened, and holds
+    the same `_health_lock` this write-through happens inside of, for the
+    identical reason `record_sync_freshness` is called from inside that
+    lock in `_record_sync_success`), and writes a single column on the
+    same single-row (`id = 1`) table rather than opening a connection of
+    its own.
+    """
+    conn.execute('UPDATE sync_freshness SET offline_override_at = ? WHERE id = 1', (when,))
 
 
 def record_sync_freshness(conn, half: str, when: str) -> None:

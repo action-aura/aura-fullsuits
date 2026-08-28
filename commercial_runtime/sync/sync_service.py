@@ -245,6 +245,24 @@ _BACKOFF_MAX_EXPONENT = 32
 # staleness decision imports THIS constant.
 SYNC_STALE_THRESHOLD_SECONDS = 30 * 60
 
+# Launch-readiness Phase 7 stage 7c-ii (docs/launch-readiness/
+# phase7-offline-ux.md "Decision 2"; ROADMAP.md's 2026-08-28 "retail schema
+# v19" entry): the threshold beyond which `create_sale` (retail_api.py)
+# blocks NEW SALES behind a manager override, gated on CAP_CASH_APPROVE.
+#
+# BACKEND-ONLY, unlike SYNC_STALE_THRESHOLD_SECONDS just above -- there is
+# deliberately no frontend counterpart and no entry added to
+# retail_sync_threshold_parity_test.py for this constant. Decision 3
+# ("enforced in the handler, explained in the UI") means the Flask route
+# handler is the sole authority here; the UI only has to render whatever
+# plain-language refusal the handler already returns, and needs no local
+# copy of 72 hours to decide anything client-side the way the frontend's
+# own SYNC_STALE_THRESHOLD_SECONDS decides when the POS tile stops stating
+# a stock figure. If a client-side pre-emptive warning is ever added ahead
+# of this constant's own frontend counterpart, extend that parity test to
+# cover it too -- do not let a second silent copy of "72 hours" exist.
+SYNC_SALES_STOP_THRESHOLD_SECONDS = 72 * 60 * 60
+
 # Upper bound on how many events a single push request may carry. Owner's
 # relay hard-rejects any batch above its own `_MAX_PUSH_BATCH = 200`
 # (owner/app/sync/routes.py) with INVALID_BATCH -- and that rejection is
@@ -366,15 +384,27 @@ class SyncFreshnessStore(NamedTuple):
     expressed by passing `None` for this parameter (which the registry
     construction site does), never inferred from a caught exception.
 
-    Both callables receive a connection `SyncService` already opened via
+    Every callable receives a connection `SyncService` already opened via
     its own `get_conn` -- exactly like `local_ensure_schema` receives one
     instead of opening its own -- so this collaborator never manages a
     connection of its own. `load` is called once, at construction, to seed
     `self._health` with whatever was last durably recorded; `record` is
     called from `_record_sync_success` on every recorded success, with
-    `half` always exactly `'push'` or `'pull'`."""
+    `half` always exactly `'push'` or `'pull'`.
+
+    `record_override` (launch-readiness Phase 7 stage 7c-ii, schema v19,
+    docs/launch-readiness/phase7-offline-ux.md "Decision 2") -- persists a
+    manager's approval to keep selling past the 72-hour hard stop, called
+    from `record_offline_override` below when the /sync/offline-override
+    route (retail_api.py) accepts one. Extends this SAME collaborator
+    rather than opening a second one, for the identical reason `load`
+    already returns `override_at` alongside `push`/`pull` instead of a
+    separate lookup: the validity rule compares the override timestamp
+    against the most recent success timestamp, and both live in the ONE
+    `sync_freshness` row a single connection reads and writes."""
     load: Callable[[sqlite3.Connection], dict]
     record: Callable[[sqlite3.Connection, str, str], None]
+    record_override: Callable[[sqlite3.Connection, str], None]
 
 
 class SyncService:
@@ -519,6 +549,15 @@ class SyncService:
         self._health = {
             "push": self._fresh_half_health(),
             "pull": self._fresh_half_health(),
+            # Launch-readiness Phase 7 stage 7c-ii: a sibling of "push"/
+            # "pull", not nested under either -- the override is a single
+            # device-level fact, not a per-half one. None here means "no
+            # standing override", the correct default before
+            # _ensure_freshness_loaded has ever run and the correct
+            # permanent value for a SyncService with no freshness store
+            # (the registry construction site), matching that site's
+            # existing "last_success_at stays None forever" behaviour.
+            "offline_override_at": None,
         }
 
     def push_once(self) -> None:
@@ -2532,6 +2571,12 @@ class SyncService:
             if not self._freshness_loaded:
                 self._health["push"]["last_success_at"] = persisted.get("push")
                 self._health["pull"]["last_success_at"] = persisted.get("pull")
+                # Stage 7c-ii: the standing override, if any, loaded the
+                # same way and at the same time as the two success clocks
+                # it will be compared against -- see SyncFreshnessStore's
+                # own docstring for why `load` returns all three from one
+                # query rather than a second lookup.
+                self._health["offline_override_at"] = persisted.get("override_at")
                 self._freshness_loaded = True
 
     def _record_sync_success(self, half: str) -> None:
@@ -2558,6 +2603,40 @@ class SyncService:
                 conn = self._get_conn()
                 try:
                     self._local_freshness_store.record(conn, half, now)
+                    conn.commit()
+                finally:
+                    conn.close()
+
+    def record_offline_override(self) -> None:
+        """Launch-readiness Phase 7 stage 7c-ii (docs/launch-readiness/
+        phase7-offline-ux.md "Decision 2"): records a manager's approval,
+        RIGHT NOW, to keep selling past the 72-hour hard stop. The ONE
+        caller is the module-level `record_offline_override()` function
+        below, itself the ONE thing retail_api.py's /sync/offline-override
+        route calls.
+
+        Mirrors `_record_sync_success` exactly, for the identical reason:
+        the write-through to the database happens INSIDE this same
+        `_health_lock` block, not queued for after it, so a concurrent
+        `get_health()` can never observe the in-memory override while the
+        value that actually survives a restart is still the old one. A
+        no-op write-through when `local_freshness_store` is None (the
+        registry construction site) -- the in-memory value is still set,
+        exactly like `_record_sync_success`'s identical branch, but there
+        is nothing to persist and nothing ever will read it back, since
+        the registry SyncService is never the one create_sale's guard
+        consults (retail.db's `_active_service`, not registry.db's, is
+        what `get_active_health()` returns -- see app.py's own comment on
+        why only the retail instance is given a freshness store at all).
+        """
+        self._ensure_freshness_loaded()
+        with self._health_lock:
+            now = datetime.now(timezone.utc).isoformat()
+            self._health["offline_override_at"] = now
+            if self._local_freshness_store is not None:
+                conn = self._get_conn()
+                try:
+                    self._local_freshness_store.record_override(conn, now)
                     conn.commit()
                 finally:
                     conn.close()
@@ -2595,6 +2674,7 @@ class SyncService:
         with self._health_lock:
             push = dict(self._health["push"])
             pull = dict(self._health["pull"])
+            offline_override_at = self._health["offline_override_at"]
         never_synced, seconds_since_last_success = self._elapsed_since_last_success(push, pull)
         return {
             "configured": True,
@@ -2625,9 +2705,57 @@ class SyncService:
             # decision.
             "never_synced": never_synced,
             "seconds_since_last_success": seconds_since_last_success,
+            # Launch-readiness Phase 7 stage 7c-ii (docs/launch-readiness/
+            # phase7-offline-ux.md "Decision 2"): the two facts create_sale's
+            # 72-hour block consults. `offline_override_at` is the raw
+            # persisted value (or None -- no standing override), included
+            # for callers that want the instant itself (the audit trail,
+            # a future UI); `offline_override_valid` is the ALREADY-
+            # EVALUATED Step 2 comparison (`offline_override_at IS NOT
+            # NULL AND offline_override_at > the most recent successful
+            # sync instant`), computed here once so create_sale and any
+            # other consumer can never each re-derive the comparison
+            # slightly differently. Validated by comparison, never by
+            # expiry -- see _offline_override_valid's own docstring.
+            "offline_override_at": offline_override_at,
+            "offline_override_valid": self._offline_override_valid(offline_override_at, push, pull),
             "push": push,
             "pull": pull,
         }
+
+    @staticmethod
+    def _offline_override_valid(override_at, push: dict, pull: dict) -> bool:
+        """The Step 2 validity rule, and the whole point of storing the
+        override next to the two success clocks it is compared against:
+
+            valid  <=>  override_at IS NOT NULL
+                        AND override_at > (the most recent successful sync instant)
+
+        Reuses the exact "most recent of push/pull" reasoning
+        `_elapsed_since_last_success` already applies to the SAME two
+        timestamps, so the two can never disagree about which sync half
+        was more recent.
+
+        No timestamps at all (neither half has ever succeeded) returns
+        True rather than False when `override_at` is set -- there is no
+        successful sync instant an override could be stale AGAINST yet, so
+        an override recorded in that state cannot be "invalidated by
+        nothing". This branch is unreachable from create_sale's own guard
+        in practice (STEP 3's `never_synced is False` precondition already
+        means at least one success exists whenever this comparison runs),
+        but a comparison function that raises or silently mis-answers on
+        an input its only real caller happens never to send is exactly the
+        kind of guard ENGINEERING.md warns is proven by nothing."""
+        if override_at is None:
+            return False
+        timestamps = [
+            ts for ts in (push["last_success_at"], pull["last_success_at"])
+            if ts is not None
+        ]
+        if not timestamps:
+            return True
+        most_recent = max(datetime.fromisoformat(ts) for ts in timestamps)
+        return datetime.fromisoformat(override_at) > most_recent
 
     @staticmethod
     def _elapsed_since_last_success(push: dict, pull: dict) -> tuple:
@@ -2736,6 +2864,25 @@ def get_active_health() -> dict:
     if service is None:
         return {"configured": False}
     return service.get_health()
+
+
+def record_offline_override() -> bool:
+    """Records a manager's offline-sales-stop override (launch-readiness
+    Phase 7 stage 7c-ii) on the currently registered SyncService, or is a
+    no-op returning False when none is registered -- mirroring
+    `get_active_health()`'s / `nudge()`'s own "inert without a registered
+    service" precedent exactly. The ONE caller is retail_api.py's
+    /sync/offline-override route, and it never reaches this function
+    without first confirming `get_active_health()['configured']` is True
+    (there is nothing to override on an install with no active service --
+    Android, or SYNC_RELAY_BASE_URL unset), so the False branch here is a
+    defensive backstop rather than a path any real request is expected to
+    take."""
+    service = _active_service
+    if service is None:
+        return False
+    service.record_offline_override()
+    return True
 
 
 def nudge() -> None:

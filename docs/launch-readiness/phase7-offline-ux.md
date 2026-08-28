@@ -489,3 +489,42 @@ right amount of intervention.
 **So §5's block list, after all three corrections, is exactly one item:
 receiving a purchase order.** The rest is either already safe (Phase 6, wave
 B2, Phase 4), does not exist (stocktake), or protects nothing (logout/exit).
+
+## Consequence of Decision 2's capability choice, recorded after building 7c-ii
+
+Decision 2 gates the 72-hour override on `CAP_CASH_APPROVE`. Reading
+`user_accounts.py`'s `ROLE_CAPABILITIES` after the fact shows what that means
+in practice, and it is narrower than the decision implied:
+
+    ROLE_ADMIN:   every code
+    ROLE_MANAGER: every code EXCEPT CAP_EMPLOYEES and CAP_CASH_APPROVE
+    ROLE_CASHIER: sell, refund, cash.close
+
+**Only the owner can lift the stop.** Managers are denied `CAP_CASH_APPROVE`
+deliberately — a role holding it alongside `CAP_CASH_CLOSE` could count its own
+drawer and sign off its own shortfall, which is the self-approval hole
+AUDIT-032 closed. And the per-user permissions route that could grant it has
+**no screen anywhere in the product**, so those role defaults are not a
+starting point an owner can tune; they are the access every account actually
+has.
+
+That sits awkwardly with the reason the override exists at all — Decision 2
+rejected an absolute stop precisely so a shop whose internet is down for three
+days is not closed by its own software.
+
+**Kept as-is, and the resolving argument is the override's lifetime.** It is
+validated by comparison against the last successful sync, not by expiry, so one
+approval covers the entire outage — it is once per outage, not once per sale.
+Three days is ample time to reach an owner by phone, and "this shop will trade
+without synced data indefinitely" is genuinely an owner's decision rather than
+a shift manager's.
+
+What would change this: if the stop ever fired on a shorter horizon, or if the
+override became per-sale, owner-only would stop being defensible and the right
+answer would be a per-user grant with a real screen — not a weaker capability.
+`CAP_STOCK_ADJUST` is the obvious tempting substitute and is the wrong one: it
+is master-data authority, and reusing it would let anyone who can edit a
+product overrule a trading halt.
+
+Recorded because a future reader hitting "manager cannot clear the stop" should
+find the reasoning here rather than assuming it is an oversight.
