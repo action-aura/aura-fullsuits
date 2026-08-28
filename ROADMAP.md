@@ -572,3 +572,36 @@ unconfigured install is the SERVICE, not the queueing. The block must be
 conditional on sync actually being configured, and must carry a logged operator
 override for the case where the outbox genuinely cannot drain (relay down,
 licence lapsed, or the poison-event jam already tracked above).
+
+## 2026-08-28 — `po_number` collides across companies, and the failure is not contained
+
+Found 2026-08-28 while adding a purchase-order test; **not fixed** — recorded
+because it is a real production bug on a multi-company install, not a test
+artefact.
+
+`purchase_orders.po_number` is declared globally `UNIQUE` in `schema.py`, but
+`_next_ref` numbers it **per company**, starting at 1. So two different
+companies on one install both mint `PO-000001` for their first purchase order,
+and the second one raises `IntegrityError`.
+
+Two things make it worse than a failed insert:
+
+* **`create_purchase_order` has no `try/except` around that INSERT**, so the
+  exception escapes with the connection never closed — it leaks, holding a WAL
+  lock, and every later write on that database fails with `database is locked`.
+  A single colliding PO therefore takes the install down, not just that request.
+  This is the identical containment gap `delete_category`'s own comment records
+  being fixed there for exactly this reason.
+* It is the **same bug class AUDIT-032B already fixed** for `sale_number` and
+  `return_number`, using a per-device discriminator. That fix was never applied
+  to `po_number`.
+
+How it surfaced: a new allow-half test became the second company in a shared
+test database to create a PO, and six later tests in the same file cascaded into
+`database is locked`. The test was made robust by seeding `doc_sequences` with a
+per-test starting sequence, documented inline — the PRODUCTION defect is
+untouched and still live.
+
+Fixing it means touching `schema.py`/`_next_ref`, i.e. a schema-version claim,
+so it needs its own commit and its own coordination — see the v18 claim above
+before taking a version number.
