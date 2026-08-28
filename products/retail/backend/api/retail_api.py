@@ -7298,6 +7298,72 @@ def repair_inventory_reconciliation():
     }})
 
 
+# ── Stock exceptions (oversell queue) ───────────────────────────────────────
+#
+# Launch-readiness Phase 7 stage 7d-i (docs/launch-readiness/
+# phase7-offline-ux.md "Decision 4"). READ-ONLY: this stage writes
+# `stock_exceptions` from exactly one place, the sync apply site
+# (commercial_runtime/sync/sync_service.py's `_record_or_refresh_stock_
+# exception`), never from an HTTP route. Resolving an exception (stage
+# 7d-ii, writing an ordinary `inventory_movement` and gated CAP_STOCK_
+# ADJUST per Decision 4) has no route yet -- this is the list only.
+#
+# Gated CAP_REPORTS with no company-admin requirement, matching the
+# majority of this file's other read-only reports (dashboard_stats,
+# report_summary, daily_cash, aging_report, ...), NOT `inventory_
+# reconciliation`'s stricter admin-only pairing: that pair is gated to the
+# owner because its response is an UNPAGINATED DUMP OF THE WHOLE CATALOGUE
+# AND STOCK POSITION. This route discloses only the (typically small) set
+# of products currently oversold -- an operational report a manager acts
+# on, the same tier as every other CAP_REPORTS read below.
+@retail_bp.route('/inventory/stock-exceptions', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
+def list_stock_exceptions():
+    """Every OPEN oversell exception for this company, most recently
+    detected first, with the context an owner needs to act on one: which
+    product, which branch, how negative, and when it was detected.
+
+    Resolved rows (`resolved_at_utc IS NOT NULL`) are never returned here --
+    stage 7d-i writes no resolution path at all (Decision 4: resolving one
+    is a stock-movement-writing act for stage 7d-ii), so every row this
+    route can ever see today is open by construction; the filter is kept
+    explicit anyway so this route's contract does not silently change the
+    day 7d-ii starts writing `resolved_at_utc`.
+
+    LEFT JOIN, not an inner join, on both `products` and `branches`: an
+    exception must stay visible even if the product it names is later
+    tombstoned or the branch renamed away -- the oversell already happened
+    and hiding the record because a foreign row moved would be exactly the
+    kind of silent drop this queue exists to replace.
+    """
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        rows = conn.execute(
+            "SELECT se.id AS id, se.product_id AS product_id, p.name AS product_name, "
+            "p.sku AS sku, se.branch_id AS branch_id, br.name AS branch_name, "
+            "se.observed_quantity_on_hand AS observed_quantity_on_hand, "
+            "se.detected_at_utc AS detected_at_utc "
+            "FROM stock_exceptions se "
+            "LEFT JOIN products p ON p.id = se.product_id AND p.company_id = ? "
+            "LEFT JOIN branches br ON br.id = se.branch_id AND br.company_id = ? "
+            "WHERE se.company_id = ? AND se.resolved_at_utc IS NULL "
+            "ORDER BY se.detected_at_utc DESC",
+            (cid, cid, cid),
+        ).fetchall()
+    except sqlite3.DatabaseError as exc:
+        current_app.logger.exception("list_stock_exceptions failed: %s", exc)
+        return jsonify({'status': 'error', 'message': 'Could not list stock exceptions.'}), 400
+    finally:
+        conn.close()
+    return jsonify({'status': 'success', 'data': {
+        'exceptions': [dict(r) for r in rows],
+        'count': len(rows),
+    }})
+
+
 # ── Sync health ───────────────────────────────────────────────────────────────
 
 @retail_bp.route('/sync/health', methods=['GET'])

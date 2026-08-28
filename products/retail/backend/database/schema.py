@@ -402,10 +402,18 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # v18 per the same ROADMAP.md entry, but is DELIBERATELY NOT created by
 # this stage -- same reasoning as v17's own `stock_exceptions` note above:
 # nothing in stage 7a writes it, and a shipped table with no writer
-# misleads the next reader into assuming the feature exists. Whoever
-# implements 7d appends its own migration step to this same v18 chain
-# (_migrate_retail_schema below), the same way this stage appends after
-# v17's.
+# misleads the next reader into assuming the feature exists.
+#
+# CORRECTION: the paragraph above said "whoever implements 7d appends its
+# own migration step to this same v18 chain" -- that aged into being wrong
+# the moment stage 7c-ii claimed v19 for `sync_freshness.offline_override_
+# at` (see the v18 -> v19 paragraph immediately below, and ROADMAP.md's
+# 2026-08-28 "retail schema v19 CLAIMED" entry). `stock_exceptions` landed
+# two versions later than this paragraph originally said it would, at v20
+# (see the v19 -> v20 paragraph below), not v18. Corrected rather than
+# silently fixed, matching this file's own convention elsewhere (see the
+# v13 duplicate-uid story) of writing down reasoning that turned out to be
+# wrong instead of erasing it.
 #
 # v18 -> v19 (launch-readiness Phase 7, "offline UX", stage 7c-ii; docs/
 # launch-readiness/phase7-offline-ux.md "Decision 2"; ROADMAP.md's
@@ -419,7 +427,31 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # a till restarted every morning would otherwise re-prompt a manager on the
 # first sale of every day -- so it lands in the same durable, single-row
 # device-state table rather than in-memory or in a new table of its own.
-RETAIL_SCHEMA_VERSION = 19
+#
+# v19 -> v20 (launch-readiness Phase 7, "offline UX", stage 7d-i; docs/
+# launch-readiness/phase7-offline-ux.md "Decision 4" and its 7d scope note;
+# ROADMAP.md's 2026-08-28 "retail schema v20 CLAIMED for Phase 7 stage
+# 7d-i" entry): ONE new table, `stock_exceptions` -- the oversell exception
+# queue reserved back at v17 alongside `sync_conflicts` and deliberately
+# left uncreated through v17, v18 AND v19, because nothing in any of those
+# three stages would have written it. See _migrate_add_stock_exceptions
+# below for the full reasoning; in short:
+#
+# A negative balance is already reachable in shipped code with NOTHING
+# relaxed to get there: `create_sale` refuses `qty > on_hand` against only
+# THIS device's own local balance, so two tills that each hold the last
+# unit each pass their own check and each sell it. `_apply_event`'s
+# `inventory_movement` branch then merges both movements onto whichever
+# device applies the other's event, adding the incoming signed quantity to
+# the cached balance with no floor at zero -- both devices land at -1.
+# `compute_drift` (Phase 3) already surfaces the resulting discrepancy;
+# nothing before this stage records it as a business exception a human can
+# act on. Stage 7d-i is DETECTION AND RECORDING ONLY -- the table, a writer
+# at the apply site, and a read path. It changes no refusal, relaxes no
+# guard, and resolves nothing automatically; see the migration function's
+# own docstring for the partial-unique-index shape that keeps one open row
+# per (company, product, branch) rather than one row per sync tick.
+RETAIL_SCHEMA_VERSION = 20
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -1331,6 +1363,13 @@ def _migrate_retail_schema(conn):
     # step just created. See the RETAIL_SCHEMA_VERSION v19 comment and
     # _migrate_add_offline_override's own docstring for the full reasoning.
     _migrate_add_offline_override(conn)
+    # v19 -> v20 (launch-readiness Phase 7, stage 7d-i): appended LAST, same
+    # convention as every step above. See the RETAIL_SCHEMA_VERSION v20
+    # comment for what this does and, just as importantly, what it does
+    # NOT do -- no refusal changes and no guard relaxes this stage, on
+    # purpose. _migrate_add_stock_exceptions's own docstring has the full
+    # reasoning, including the partial-unique-index shape.
+    _migrate_add_stock_exceptions(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -4368,6 +4407,92 @@ def _migrate_add_offline_override(conn):
     cols = {row[1] for row in conn.execute('PRAGMA table_info(sync_freshness)').fetchall()}
     if 'offline_override_at' not in cols:
         conn.execute('ALTER TABLE sync_freshness ADD COLUMN offline_override_at TEXT')
+
+
+def _migrate_add_stock_exceptions(conn):
+    """One-time migration (schema v19 -> v20): launch-readiness Phase 7,
+    stage 7d-i (the oversell exception queue). See the RETAIL_SCHEMA_
+    VERSION v20 comment above and docs/launch-readiness/phase7-offline-ux.md
+    "Decision 4" for the full reasoning; this function is deliberately
+    small because the actual weight of stage 7d-i is in the WRITER
+    (commercial_runtime/sync/sync_service.py's `inventory_movement` apply
+    branch), not here -- identical division of labour to v17's
+    `sync_conflicts` (empty at creation, filled in by stage 6a-ii) and
+    v18's `sync_freshness` (seeded with NULLs, written by SyncService).
+
+    `stock_exceptions` -- one row per OPEN oversell, closest sibling in
+    shape and purpose to `sync_conflicts` (v17): both are "a visible queue
+    instead of a silent drop" for something a human has to see, both are
+    company-scoped like every other business table in this database (see
+    CLAUDE.md), and both store the full context a human needs to act
+    rather than a bare count. Columns: `company_id` / `product_id` (a real
+    FOREIGN KEY to `products(id)`, matching `inventory_movements`' own --
+    the apply site only ever calls this after `_row_exists(conn, "products",
+    ...)` has already confirmed the row exists, so the FK can never be the
+    reason an exception fails to record) / `branch_id` (NOT NULL, no FK --
+    matching `inventory_movements.branch_id`'s own "no FOREIGN KEY at all"
+    shape, since this table is only ever written with an already-resolved
+    local branch id, never a raw payload value) / `observed_quantity_on_
+    hand` (the negative balance AT DETECTION TIME, REAL like `inventory_
+    balances.quantity_on_hand` itself) / `detected_at_utc` (when THIS
+    device's apply site noticed, not the originating movement's own
+    timestamp -- identical convention to `sync_conflicts.detected_at_utc`)
+    / `resolved_at_utc` (nullable; NULL means open). Deliberately no writer
+    for `resolved_at_utc` anywhere in this stage -- Decision 4 is explicit
+    that resolving one is a stock-movement-writing act for a later stage
+    (7d-ii), gated `CAP_STOCK_ADJUST`, and that nothing in 7d-i may
+    auto-resolve or silently drop a row.
+
+    ONE OPEN ROW PER (company_id, product_id, branch_id) -- enforced by a
+    REAL constraint, `idx_stock_exceptions_open`, not application logic
+    alone: a shop with one genuinely oversold product that keeps merging
+    further negative on every later sync tick must UPDATE the same open
+    row (refreshed quantity, refreshed detected_at_utc), never append a
+    second one, or the queue becomes unusable noise indistinguishable from
+    one new exception per product. The index is PARTIAL --
+    `WHERE resolved_at_utc IS NULL` -- exactly the `idx_reorder_requests_
+    open` / `idx_po_idempotency` shape already in this file (grep this
+    module for `WHERE uid IS NOT NULL` and its siblings): a RESOLVED
+    exception for the same key must never block a fresh one from opening
+    later, which a non-partial UNIQUE(company_id, product_id, branch_id)
+    would do the moment the first oversell on that product was ever
+    resolved. The writer's `INSERT ... ON CONFLICT(company_id, product_id,
+    branch_id) WHERE resolved_at_utc IS NULL DO UPDATE ...` MUST repeat
+    this exact WHERE clause verbatim to target this index at all --
+    omitting it does not fall back to matching the index, it raises
+    `OperationalError` on every apply, exactly as sync_service.py's own
+    module docstring already warns for `ON CONFLICT(uid) WHERE uid IS NOT
+    NULL` -- this project has been bitten by precisely that mismatch
+    before.
+
+    Idempotent: CREATE TABLE/INDEX IF NOT EXISTS only, no ALTER -- a
+    retried run (the normal case after any interrupted migration, since
+    `ensure_schema_version` leaves `user_version` un-advanced on failure)
+    is a clean no-op.
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS stock_exceptions (
+            id TEXT PRIMARY KEY,
+            company_id INTEGER,
+            product_id INTEGER NOT NULL REFERENCES products(id),
+            branch_id INTEGER NOT NULL,
+            observed_quantity_on_hand REAL NOT NULL,
+            detected_at_utc TEXT NOT NULL,
+            resolved_at_utc TEXT
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_stock_exceptions_company "
+        "ON stock_exceptions(company_id, resolved_at_utc)"
+    )
+    # The uniqueness guarantee itself -- see the docstring above for why it
+    # must be PARTIAL (open rows only) and why the writer's ON CONFLICT
+    # must repeat this WHERE clause verbatim.
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_exceptions_open "
+        "ON stock_exceptions(company_id, product_id, branch_id) "
+        "WHERE resolved_at_utc IS NULL"
+    )
 
 
 def load_sync_freshness(conn) -> dict:

@@ -92,7 +92,13 @@ another device:
     `DO NOTHING` no-op is a silent stock-doubling bug with no error). The
     balance row is created via upsert when it does not yet exist -- a
     receiver that has never stocked this product at this branch must not
-    silently drop the movement's effect.
+    silently drop the movement's effect. Since launch-readiness Phase 7
+    stage 7d-i (retail v20, `stock_exceptions`), the SAME `if cur.rowcount:`
+    block also checks the resulting balance and records/refreshes an OPEN
+    `stock_exceptions` row when it is negative -- detection only, nothing
+    here relaxes `create_sale`'s own oversell refusal or auto-resolves an
+    exception once recorded. See `_record_or_refresh_stock_exception` and
+    that branch's own comment.
   * `branch` is a MUTABLE record, like the five original catalogue types
     (category/product/customer/supplier/reorder_request) -- a branch renamed
     on one device should converge on every other, so `ON CONFLICT(uid)
@@ -913,6 +919,61 @@ class SyncService:
         )
         if conflict_sink is not None:
             conflict_sink.append((entity_type, entity_id))
+
+    @staticmethod
+    def _record_or_refresh_stock_exception(conn, *, local_company_id, product_id, branch_id,
+                                            observed_quantity_on_hand) -> None:
+        """Writes or refreshes ONE visible `stock_exceptions` row for a
+        (company, product, branch) balance the `inventory_movement` apply
+        branch just found negative -- launch-readiness Phase 7 stage 7d-i
+        (docs/launch-readiness/phase7-offline-ux.md "Decision 4";
+        database/schema.py's `_migrate_add_stock_exceptions`, retail v20).
+
+        Called ONLY from the `inventory_movement` branch's `if cur.rowcount:`
+        block, and only when the resulting balance is negative -- see that
+        branch's own comment for why both conditions matter (a replayed
+        apply must not re-stamp `detected_at_utc`; a healthy merge that
+        never goes negative must never record anything at all). Never
+        called from `create_sale` or any other local write site: a local
+        sale cannot drive its own balance negative (its own `qty > on_hand`
+        refusal still stands), so the only route below zero is a merge
+        applied here, and writing from two places would invent a second
+        source for one fact.
+
+        `INSERT ... ON CONFLICT(company_id, product_id, branch_id) WHERE
+        resolved_at_utc IS NULL DO UPDATE SET observed_quantity_on_hand=...,
+        detected_at_utc=...` -- the WHERE clause repeats `idx_stock_
+        exceptions_open`'s own partial-index predicate VERBATIM, which
+        SQLite's UPSERT syntax requires to match a partial index at all
+        (omitting it does not fall back to matching the index; it raises
+        `OperationalError` on every apply -- this project has been bitten by
+        exactly that mismatch before, see the migration function's own
+        docstring). A row that already exists and is OPEN is refreshed in
+        place -- same id, updated quantity, updated detected_at_utc -- so a
+        product that keeps merging further negative on every sync tick
+        accumulates ONE row, not one per tick. A row that exists but is
+        RESOLVED does not satisfy the partial index's predicate, so it is
+        invisible to this ON CONFLICT and a fresh open row is inserted
+        instead -- exactly the behaviour Decision 4 requires: a past
+        resolution must never block a new oversell on the same product from
+        being recorded.
+
+        Never resolves, never deletes, never called for any reason other
+        than a negative balance just observed at this apply site -- Decision
+        4 is explicit that an exception is resolved by a human (stage 7d-ii,
+        gated CAP_STOCK_ADJUST) or stays open, and nothing in this stage
+        may auto-resolve one when the balance later recovers.
+        """
+        conn.execute(
+            "INSERT INTO stock_exceptions (id, company_id, product_id, branch_id, "
+            "observed_quantity_on_hand, detected_at_utc, resolved_at_utc) "
+            "VALUES (?,?,?,?,?,?,NULL) "
+            "ON CONFLICT(company_id, product_id, branch_id) WHERE resolved_at_utc IS NULL "
+            "DO UPDATE SET observed_quantity_on_hand=excluded.observed_quantity_on_hand, "
+            "detected_at_utc=excluded.detected_at_utc",
+            (str(uuid.uuid4()), local_company_id, product_id, branch_id,
+             observed_quantity_on_hand, datetime.now(timezone.utc).isoformat()),
+        )
 
     @staticmethod
     def _log_sync_conflict_summary(conflicts: list) -> None:
@@ -1959,6 +2020,51 @@ class SyncService:
                     "DO UPDATE SET quantity_on_hand = quantity_on_hand + excluded.quantity_on_hand",
                     (local_company_id, p.get("product_id"), resolved_branch_id, p.get("quantity")),
                 )
+                # STOCK EXCEPTIONS (launch-readiness Phase 7 stage 7d-i,
+                # docs/launch-readiness/phase7-offline-ux.md "Decision 4";
+                # ROADMAP.md's 2026-08-28 "retail schema v20 CLAIMED"
+                # entry). Detection and recording only -- this stage
+                # relaxes no guard and refuses nothing new; `create_sale`'s
+                # `qty > on_hand` check upstream is untouched.
+                #
+                # Deliberately INSIDE the `if cur.rowcount:` block, not
+                # after it, for the identical reason HAZARD 1 above gates
+                # the balance update itself on the same condition: a
+                # `DO NOTHING` conflict (a replayed batch, a re-pulled
+                # cursor range, a retried quarantine row that resolved on
+                # an earlier pass) means this movement's effect on the
+                # balance was ALREADY accounted for by whichever earlier
+                # apply actually inserted it. Re-checking the balance and
+                # re-recording/refreshing an exception on a replay would
+                # re-stamp `detected_at_utc` with the CURRENT wall-clock
+                # time even though nothing about the shop's stock changed
+                # this call -- an exception that appears to keep
+                # rediscovering itself on every retried pull tick, which
+                # is worse than not detecting it promptly, because it
+                # teaches an owner to stop trusting the timestamp.
+                #
+                # Read back rather than derived from `p.get("quantity")`
+                # here: the upsert above ADDS a signed delta to whatever
+                # was already in the row, so the resulting balance is a
+                # fact about the row, not about this one movement.
+                new_balance = conn.execute(
+                    "SELECT quantity_on_hand FROM inventory_balances "
+                    "WHERE company_id=? AND product_id=? AND branch_id=?",
+                    (local_company_id, p.get("product_id"), resolved_branch_id),
+                ).fetchone()[0]
+                if new_balance < 0:
+                    self._record_or_refresh_stock_exception(
+                        conn, local_company_id=local_company_id,
+                        product_id=p.get("product_id"), branch_id=resolved_branch_id,
+                        observed_quantity_on_hand=new_balance,
+                    )
+                # No `else` branch that clears an exception when the
+                # balance is >= 0 -- Decision 4 is explicit that nothing in
+                # this stage may auto-resolve or delete one. A balance that
+                # recovers (a later merge, a manual correction, a
+                # replenishment) leaves any already-open row exactly as it
+                # was: still open, still visible, until a human resolves it
+                # (stage 7d-ii, gated CAP_STOCK_ADJUST).
         elif entity_type == "branch":
             # Wave B. Mutable, like the five original catalogue types -- a
             # branch renamed on the device that owns it should converge on

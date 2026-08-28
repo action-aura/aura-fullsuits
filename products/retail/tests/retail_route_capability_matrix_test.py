@@ -231,6 +231,14 @@ EXPECTED_READ_CAPABILITIES = {
     'supplier_statement': CAP_REPORTS,
     'list_audit_log': CAP_REPORTS,
     'inventory_reconciliation': CAP_REPORTS,
+    # Stage 7d-i oversell queue (docs/launch-readiness/phase7-offline-ux.md
+    # "Decision 4"). Deliberately NOT paired with inventory_reconciliation
+    # in EXPECTED_COMPANY_ADMIN_ROUTES below -- that pair is owner-only
+    # because it discloses the WHOLE catalogue and stock position
+    # unpaginated; this route discloses only the (typically small) set of
+    # currently-open oversells, the same disclosure tier as every other
+    # CAP_REPORTS-only read in this table.
+    'list_stock_exceptions': CAP_REPORTS,
 
     # ── The drawer's own numbers: retail.cash.close, NOT retail.reports ──────
     # An X report is the full money picture of one till shift: cash sales,
