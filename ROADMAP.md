@@ -647,3 +647,39 @@ rejected offline edit is discarded and its author is never told. Blocking would
 trade a rare, recorded loss for a guaranteed inability to work, which is the
 worse deal — but the missing screen is what makes the rare case invisible, and
 it should be built.
+
+## 2026-08-28 — retail schema v19 CLAIMED for Phase 7 stage 7c-ii
+
+Same single-writer discipline as the v18 claim above: written down before any
+agent is dispatched, because this project has already had two branches silently
+claim the same version and nothing objected.
+
+**CLAIMED: retail v19, by `feat/launch-readiness`, for exactly one column —**
+`sync_freshness.offline_override_at TEXT`.
+
+Stage 7c-ii blocks NEW SALES once a device has been behind for 72 hours, behind
+a manager override (`CAP_CASH_APPROVE`, per Decision 2 in
+`docs/launch-readiness/phase7-offline-ux.md`). The override has to survive a
+restart for the same reason the freshness clock did — a till restarted each
+morning would otherwise re-prompt a manager on the first sale of every day.
+
+**The override is validated by comparison, not by expiry**, which is why one
+nullable timestamp is the whole schema change:
+
+    valid  <=>  offline_override_at IS NOT NULL
+                AND offline_override_at > last_<x>_success_at
+
+A successful sync therefore invalidates a standing override automatically, with
+no expiry job, no cleanup path, and no second state to get wrong. It also gives
+the right behaviour on the case that matters: a shop that overrides, reconnects,
+and later goes offline for another 72 hours is blocked again rather than
+silently riding the old approval — because that approval now predates the last
+success.
+
+It goes on `sync_freshness` (the v18 single-row device-state table) rather than
+a new table: it is device state with exactly the same lifetime as the
+timestamps it is compared against, and splitting it out would invite the two
+halves to be read separately when the whole point is that they are compared.
+
+Anyone else adding a retail migration before 7c-ii lands should re-derive the
+head first and add their own claim — this records a moment, not live state.
