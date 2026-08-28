@@ -95,8 +95,20 @@ def _maybe_create_request_for_product(conn, company_id, branch_id, product_id) -
     """
     conn.execute("BEGIN IMMEDIATE")
     try:
+        # launch-readiness Phase 6 stage 6b-iii-b: `AND deleted_at_utc IS
+        # NULL` added -- this is the WRITE gate for a NEW reorder request, so
+        # a tombstoned product must raise none, exactly like create_purchase_
+        # order's own product read (retail_api.py). This is deliberately NOT
+        # the same rule as an EXISTING pending request for a product that is
+        # deleted AFTER the request was raised -- see phase6b-decisions.md /
+        # this stage's own docs for why that one stays visible and declinable
+        # (list_reorder_requests's INNER JOIN is untouched) while only the
+        # CREATE path here is gated. A missing/tombstoned product simply
+        # reads as `not product` below, exactly like an id that never
+        # existed.
         product = conn.execute(
-            "SELECT name, reorder_method, reorder_level FROM products WHERE id=? AND company_id=?",
+            "SELECT name, reorder_method, reorder_level FROM products "
+            "WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
             (product_id, company_id),
         ).fetchone()
         if not product or (product['reorder_method'] or 'none') == 'none':

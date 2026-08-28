@@ -1413,8 +1413,17 @@ def _handle_retail_products(records):
         if not sku:
             skipped += 1; continue
 
-        existing = conn.execute("SELECT id FROM products WHERE company_id=? AND sku=?", (cid, sku)).fetchone()
+        # launch-readiness Phase 6 stage 6b-iii-b: `deleted_at_utc` added to
+        # this SELECT -- Decision B (phase6b-decisions.md) says an import row
+        # naming a tombstoned SKU resurrects it, and this dedupe key already
+        # matches a tombstoned row today (no `deleted_at_utc` filter on the
+        # lookup itself -- unchanged, on purpose: filtering it out here would
+        # make the importer treat the SKU as brand-new and INSERT a second,
+        # duplicate row instead of resurrecting the one that already exists).
+        existing = conn.execute(
+            "SELECT id, deleted_at_utc FROM products WHERE company_id=? AND sku=?", (cid, sku)).fetchone()
         if existing:
+            resurrecting = existing['deleted_at_utc'] is not None
             # launch-readiness Phase 6 stage 6a-i: every column this
             # statement sets (name/barcode/category_id/cost_price/
             # sell_price/tax_rate/unit/reorder_level) is a synced product
@@ -1422,38 +1431,70 @@ def _handle_retail_products(records):
             # "unconditional overwrite always counts as a change" reasoning
             # as retail_api.py's update_category), so this always bumps, in
             # the SAME UPDATE. `utc_now` is this run's one resolved instant.
-            cur.execute("""
-                UPDATE products SET name=?, barcode=?, category_id=?, cost_price=?,
-                    sell_price=?, tax_rate=?, unit=?, reorder_level=?,
-                    row_version=row_version+1, updated_at_utc=?
-                WHERE company_id=? AND sku=?
-            """, (rec.get('name',''), rec.get('barcode',''), cat_id,
-                  rec.get('cost_price') or 0, rec.get('sell_price') or 0,
-                  rec.get('tax_rate') or 0, rec.get('unit','pcs') or 'pcs',
-                  rec.get('reorder_level') or 5, utc_now,
-                  cid, sku))
+            #
+            # stage 6b-iii-b: `deleted_at_utc=NULL` appended to the SAME
+            # UPDATE, ONLY when `resurrecting` -- an operator naming this SKU
+            # in a sheet is asserting "this product exists" (Decision B), the
+            # same reasoning delete_product's own restore-clears-tombstone
+            # comment uses.
+            set_clause = ("name=?, barcode=?, category_id=?, cost_price=?, "
+                          "sell_price=?, tax_rate=?, unit=?, reorder_level=?, "
+                          "row_version=row_version+1, updated_at_utc=?")
+            if resurrecting:
+                set_clause += ", deleted_at_utc=NULL"
+            cur.execute(
+                f"UPDATE products SET {set_clause} WHERE company_id=? AND sku=?",
+                (rec.get('name',''), rec.get('barcode',''), cat_id,
+                 rec.get('cost_price') or 0, rec.get('sell_price') or 0,
+                 rec.get('tax_rate') or 0, rec.get('unit','pcs') or 'pcs',
+                 rec.get('reorder_level') or 5, utc_now,
+                 cid, sku))
             pid = existing['id']
             # Same full-current-row 'update' payload update_product queues
-            # (re-SELECTed after the UPDATE, status included) -- an imported
-            # price/name change must reach other devices exactly like a
-            # PATCH would.
+            # (re-SELECTed after the UPDATE, status/deleted_at_utc included)
+            # -- an imported price/name change must reach other devices
+            # exactly like a PATCH would.
             #
-            # launch-readiness Phase 6 stage 6b-i: this site deliberately
-            # queues NO `_changed_fields` key, and that is a decision, not an
-            # oversight. An absent key means "every column changed" on the
-            # apply side (sync_service.py's `_delta_set_clause`), which is
-            # exactly right here: unlike a PATCH, the UPDATE above writes all
-            # eight synced columns unconditionally from the sheet's values,
-            # whether or not the sheet actually differs from the stored row --
-            # the same reasoning already recorded in this block's stage 6a-i
-            # comment for why an import always bumps `row_version`. Naming a
-            # narrower set would UNDER-state what this write really touched
-            # and would leave the other device holding stale values for the
-            # columns it omitted.
+            # launch-readiness Phase 6 stage 6b-i: `_changed_fields` names
+            # exactly the eight columns the UPDATE above ALWAYS writes --
+            # unlike a PATCH, this write applies all eight unconditionally
+            # from the sheet's values, whether or not the sheet actually
+            # differs from the stored row (same reasoning already recorded in
+            # this block's stage 6a-i comment for why an import always bumps
+            # `row_version`).
+            #
+            # stage 6b-iii-b (CORRECTION to the previous, pre-tombstone
+            # version of this comment, which is why it is being replaced
+            # rather than left to rot): this site used to queue NO
+            # `_changed_fields` key at all, reasoning that an absent key
+            # ("every column changed" on the apply side, see `_delta_set_
+            # clause`'s docstring) was harmless because every column this
+            # write touches was always applied anyway. That stopped being
+            # true the moment `deleted_at_utc` joined the apply-side
+            # DELTA-GATED column list (stage 6b-iii-a) -- `deleted_at_utc`
+            # was NEVER in this SELECT or this payload, so an absent
+            # `_changed_fields` key meant the apply side read
+            # `p.get("deleted_at_utc")` as None and, being told "every column
+            # changed", wrote that None onto EVERY receiving device on EVERY
+            # ordinary import edit -- silently un-deleting any product a
+            # receiving device had independently tombstoned, off the back of
+            # a price change that never touched deletion at all. The exact
+            # untouched-field clobber stage 6b-i exists to close, reached
+            # here by a route stage 6b-i never touched. An explicit list
+            # naming only the eight columns this UPDATE actually always
+            # writes -- plus `deleted_at_utc`, ONLY when `resurrecting` --
+            # closes it: supplier_id/reorder_method/status (which this write
+            # never touches either) are also no longer falsely claimed as
+            # changed, for the identical reason.
+            changed = {'name', 'barcode', 'category_id', 'cost_price',
+                       'sell_price', 'tax_rate', 'unit', 'reorder_level'}
+            if resurrecting:
+                changed.add('deleted_at_utc')
             prow = conn.execute(
-                "SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,reorder_level,reorder_method,status,row_version,updated_at_utc "
+                "SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,reorder_level,reorder_method,status,deleted_at_utc,row_version,updated_at_utc "
                 "FROM products WHERE id=?", (pid,)).fetchone()
-            _queue_sync_event(cur, 'product', pid, 'update', dict(prow) | {'id': pid})
+            _queue_sync_event(cur, 'product', pid, 'update',
+                               dict(prow) | {'id': pid, '_changed_fields': sorted(changed)})
             dupes += 1
         else:
             pid = str(_uuid.uuid4())
@@ -1661,14 +1702,25 @@ def _handle_retail_customers(records):
         name = (rec.get('name') or '').strip()
         if not name: continue
         email = (rec.get('email') or '').strip().lower()
+        # launch-readiness Phase 6 stage 6b-iii-b: `deleted_at_utc` added to
+        # this SELECT -- Decision B applied to customers. Dedupe stays
+        # email-only-when-non-empty, UNCHANGED (see this function's own
+        # limitation, pinned by retail_tombstone_test.py's `test_
+        # reimporting_a_customer_with_no_email_does_not_match_an_existing_
+        # one`): a customer with no email on file is never matched and is
+        # always inserted as new, so re-import can never resurrect one --
+        # widening the dedupe key to fix that would silently MERGE two
+        # distinct same-named customers, a far worse failure than the gap it
+        # would close.
         existing = conn.execute(
-            "SELECT id FROM customers WHERE company_id=? AND (email=? AND email!='')",
+            "SELECT id, deleted_at_utc FROM customers WHERE company_id=? AND (email=? AND email!='')",
             (cid, email)).fetchone() if email else None
         lp = rec.get('loyalty_points')
         lp = float(lp) if lp is not None else 0
         ts = rec.get('total_spent')
         ts = float(ts) if ts is not None else 0
         if existing:
+            resurrecting = existing['deleted_at_utc'] is not None
             # `name`/`phone`/`address` are unconditionally written every
             # time (name is required above), so this always changes a
             # SYNCED field (SYNCED_CUSTOMER_FIELDS, retail_api.py) and
@@ -1676,17 +1728,46 @@ def _handle_retail_customers(records):
             # total_spent ride along in the same UPDATE but are NOT what
             # triggers the bump; see the loyalty-accumulator comment on
             # create_sale for why those two never gate a bump on their own.
+            #
+            # stage 6b-iii-b: `deleted_at_utc=NULL` appended to the SAME
+            # UPDATE, ONLY when `resurrecting` -- same reasoning as the
+            # product branch above. `status` is deliberately NOT touched
+            # here at all (not in the SET clause, not in `changed` below):
+            # this route must not silently reactivate a LEGACY
+            # `status='inactive'` row with `deleted_at_utc` still NULL (the
+            # backfill posture phase6b-decisions.md pins) off the back of an
+            # unrelated contact-detail re-import -- only a genuine
+            # `deleted_at_utc` tombstone is resurrected here.
+            set_clause = "name=?,phone=?,address=?,loyalty_points=?,total_spent=?,row_version=row_version+1,updated_at_utc=?"
+            if resurrecting:
+                set_clause += ",deleted_at_utc=NULL"
             cur.execute(
-                "UPDATE customers SET name=?,phone=?,address=?,loyalty_points=?,total_spent=?,"
-                "row_version=row_version+1,updated_at_utc=? WHERE id=?",
+                f"UPDATE customers SET {set_clause} WHERE id=?",
                 (name, rec.get('phone',''), rec.get('address',''), lp, ts, utc_now, existing['id']))
             # Same re-SELECTed payload update_customer queues. loyalty_points/
             # total_spent stay local-only (not in the normal route's payload
             # either -- the apply side never writes them).
+            #
+            # `_changed_fields` names exactly `name`/`phone`/`address` (the
+            # SYNCED_CUSTOMER_FIELDS members this UPDATE actually always
+            # writes) -- deliberately NOT `email` (the dedupe key, never
+            # written here) and deliberately NOT `status` (see the comment
+            # on the UPDATE above) -- plus `deleted_at_utc`, only when
+            # `resurrecting`. An absent key would mean "every column
+            # changed" on the apply side (`_delta_set_clause`'s docstring),
+            # which would carry this device's own NULL `deleted_at_utc` (this
+            # SELECT never touches it when not resurrecting) onto every
+            # receiving device unconditionally -- exactly the untouched-field
+            # clobber the product branch's own stage 6b-iii-b comment
+            # describes, reproduced here for customers.
             crow = conn.execute(
-                "SELECT name,phone,email,address,row_version,updated_at_utc FROM customers WHERE id=?",
+                "SELECT name,phone,email,address,deleted_at_utc,row_version,updated_at_utc FROM customers WHERE id=?",
                 (existing['id'],)).fetchone()
-            _queue_sync_event(cur, 'customer', existing['id'], 'update', dict(crow) | {'id': existing['id']})
+            changed = {'name', 'phone', 'address'}
+            if resurrecting:
+                changed.add('deleted_at_utc')
+            _queue_sync_event(cur, 'customer', existing['id'], 'update',
+                               dict(crow) | {'id': existing['id'], '_changed_fields': sorted(changed)})
             updated += 1
         else:
             nid = str(_uuid.uuid4())
@@ -1719,8 +1800,39 @@ def _handle_retail_suppliers(records):
     for rec in records:
         name = (rec.get('name') or '').strip()
         if not name: continue
-        existing = conn.execute("SELECT id FROM suppliers WHERE company_id=? AND name=?", (cid, name)).fetchone()
-        if existing: continue
+        existing = conn.execute(
+            "SELECT id, deleted_at_utc FROM suppliers WHERE company_id=? AND name=?", (cid, name)).fetchone()
+        if existing:
+            # launch-readiness Phase 6 stage 6b-iii-b, Decision B applied to
+            # suppliers: before this stage a matched supplier was skipped
+            # unconditionally (`if existing: continue`), so a re-import of a
+            # soft-deleted supplier did nothing at all -- the operator
+            # re-imports their supplier list and the supplier silently stays
+            # gone, the exact pre-existing failure Decision B's own write-up
+            # describes for products. RESURRECTION ONLY: unlike products/
+            # customers, nothing else in this branch changes -- no
+            # name/phone/email/address UPDATE is added here, deliberately,
+            # because turning this into a general supplier UPDATE-on-reimport
+            # is a separate behaviour change nobody asked for. A LIVE
+            # (non-tombstoned) match still falls straight through to
+            # `continue` below, byte-identical to before this stage.
+            if existing['deleted_at_utc'] is not None:
+                cur.execute(
+                    "UPDATE suppliers SET deleted_at_utc=NULL, row_version=row_version+1, "
+                    "updated_at_utc=? WHERE id=?",
+                    (utc_now, existing['id']))
+                srow = conn.execute(
+                    "SELECT name,phone,email,address,status,deleted_at_utc,row_version,updated_at_utc "
+                    "FROM suppliers WHERE id=?", (existing['id'],)).fetchone()
+                # `_changed_fields` names only `deleted_at_utc` -- same shape
+                # as the category resurrect path (import_api.py's own
+                # products handler above, ~line 1335) and for the identical
+                # reason: nothing else about this row changed, so naming
+                # anything else would be a lie the apply side's delta gate
+                # would act on.
+                _queue_sync_event(cur, 'supplier', existing['id'], 'update',
+                                   dict(srow) | {'id': existing['id'], '_changed_fields': ['deleted_at_utc']})
+            continue
         nid = str(_uuid.uuid4())
         cur.execute(
             "INSERT INTO suppliers (id,company_id,name,phone,email,address,row_version,updated_at_utc) "

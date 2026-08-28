@@ -198,6 +198,18 @@ CREDIT_TERMS_DENIED_MESSAGE = 'You do not have permission to change credit terms
 #: of this pass; report the exact English to whoever owns
 #: products/retail/frontend/locales/{en,ar}.json before this ships.
 SUPPLIER_PAYMENT_DENIED_MESSAGE = 'You do not have permission to record a payment to a supplier.'
+#: launch-readiness Phase 6 stage 6b-iii-b -- a FOURTH field-level check, same
+#: shape as the three above. `update_customer`'s route decorator floor is
+#: retail.sell (a cashier-level default, so the till can still correct a
+#: mistyped phone/address), but `delete_customer` -- the action a `status`
+#: PATCH can undo -- is gated retail.stock.adjust (manager-level, "master-
+#: data retirement", see that route's own comment). Without this separate
+#: check, adding `status` to `update_customer`'s allowed fields would let any
+#: cashier reverse a manager's deletion, a weaker path to the exact effect
+#: deleting already requires the stronger capability for. Not yet a catalog
+#: key as of this pass; report the exact English to whoever owns
+#: products/retail/frontend/locales/{en,ar}.json before this ships.
+CUSTOMER_RESTORE_DENIED_MESSAGE = 'You do not have permission to restore a deleted customer.'
 
 #: Largest page GET /sales/recent will serve a caller who does NOT hold
 #: retail.reports. 200 is not arbitrary: it is exactly what the returns flow
@@ -1704,7 +1716,20 @@ def adjust_stock(pid):
 # and emit a sync event at all -- see that route for why "bump only when a
 # SYNCED field actually changes" applies here exactly as it does to the
 # loyalty-accumulator trap this phase is built around.
-SYNCED_CUSTOMER_FIELDS = frozenset({'name', 'phone', 'email', 'address'})
+#
+# `status` ADDED (stage 6b-iii-b): `update_customer` gains a restore path
+# this stage (mirroring update_product/update_supplier), and the apply-side
+# customer branch's DELTA-GATED column list (sync_service.py) has carried
+# `status` since stage 6a-i and `deleted_at_utc` since 6b-iii-a -- both were
+# already there, ready to receive this, but INERT until something actually
+# emitted a customer `_changed_fields` naming either (that branch's own
+# comment says so verbatim). Leaving `status` out of THIS set here would
+# have meant a status-only restore PATCH computes `touches_synced=False`
+# below and bumps/emits NOTHING -- the restore would apply locally and never
+# reach the wire, exactly the way an update to a purely local-only field
+# (credit_mode/credit_limit) correctly does today. `status` is not
+# local-only, so it cannot be treated the same way.
+SYNCED_CUSTOMER_FIELDS = frozenset({'name', 'phone', 'email', 'address', 'status'})
 
 @retail_bp.route('/customers', methods=['GET'])
 @mt_login_required
@@ -1781,11 +1806,18 @@ def create_customer():
 def update_customer(cust_id):
     data = request.json or {}
     cid  = _cid()
-    fields = {k: v for k, v in data.items() if k in ['name','phone','email','address','credit_mode','credit_limit']}
+    # `status` ADDED (stage 6b-iii-b, Part 3 of the tombstone rule's
+    # completion): the read-path pass found `update_customer` had NO restore
+    # path at all -- product/supplier PATCH both accept `status` and clearing
+    # it back to 'active' also clears `deleted_at_utc` (stage 6b-iii-a); this
+    # route omitted `status` entirely, so a deleted customer had no way back.
+    # See the capability gate immediately below for why this field alone,
+    # unlike the other five, needs its OWN check.
+    fields = {k: v for k, v in data.items() if k in ['name','phone','email','address','credit_mode','credit_limit','status']}
     if not fields:
         return jsonify({'status': 'error', 'message': 'No valid fields'}), 400
 
-    # ── retail.discount, on two of the six writable fields ───────────────────
+    # ── retail.discount, on two of the seven writable fields ─────────────────
     # The route is gated on retail.sell because the till legitimately edits a
     # customer: correcting a mistyped phone number is part of ringing a named
     # sale. But two of the fields this same handler accepts are not contact
@@ -1796,12 +1828,39 @@ def update_customer(cust_id):
     # credit sale in two requests. That is the same authority as a discount --
     # value handed over with no matching payment, only spread over time -- so
     # it takes the same code, and only that half of the payload is refused.
+    #
+    # `status` is NOT in that class -- widening this existing check to cover
+    # it too would be wrong, it authorises nothing about money -- so it gets
+    # its OWN separate check just below, not folded into this one.
     if ('credit_mode' in fields or 'credit_limit' in fields) and not session_has_capability(CAP_DISCOUNT):
         return jsonify({'status': 'error', 'message': CREDIT_TERMS_DENIED_MESSAGE}), 403
+    # ── retail.stock.adjust, on `status` alone ────────────────────────────────
+    # `delete_customer` (this file) is gated retail.stock.adjust -- explicitly
+    # NOT retail.sell, on purpose: "master-data retirement, not selling" (see
+    # that route's own comment). This route's floor is retail.sell, so
+    # without a check here, adding `status` to `allowed` above would let any
+    # cashier PATCH `status: 'active'` and undo a manager's deletion -- a
+    # strictly WEAKER path to the same effect delete_customer already
+    # requires the stronger capability for, i.e. a privilege escalation.
+    # Gated at the SAME capability the deletion it reverses requires, the
+    # same "field-level check on top of a broader route floor" shape as the
+    # credit_mode/credit_limit check above.
+    if 'status' in fields and not session_has_capability(CAP_STOCK_ADJUST):
+        return jsonify({'status': 'error', 'message': CUSTOMER_RESTORE_DENIED_MESSAGE}), 403
     conn = get_retail_conn()
     cur = conn.cursor()
     sets = ', '.join(f'{k}=?' for k in fields)
     params = list(fields.values())
+    # launch-readiness Phase 6 stage 6b-iii-a (Step 3, restore paths must
+    # clear the tombstone): same rule as update_product's/update_supplier's
+    # identical comment -- `status` no longer marks deletion, so setting it
+    # to 'active' must ALSO clear `deleted_at_utc`, in the SAME UPDATE.
+    # `restoring` implies `touches_synced` below (`status` is now a member of
+    # SYNCED_CUSTOMER_FIELDS), so this can never fire on a credit-only PATCH
+    # that bumps nothing.
+    restoring = fields.get('status') == 'active'
+    if restoring:
+        sets += ', deleted_at_utc=NULL'
     # launch-readiness Phase 6 stage 6a-i, THE loyalty-accumulator rule
     # applied to a second site: `fields` here can be entirely credit_mode/
     # credit_limit, which are local-only credit-terms columns with no
@@ -1827,8 +1886,12 @@ def update_customer(cust_id):
         return jsonify({'status': 'error', 'message': 'Customer not found'}), 404
     _audit(conn, 'CUSTOMER_UPDATED', 'customer', cust_id)
     if touches_synced:
+        # `deleted_at_utc` added to this SELECT (stage 6b-iii-b): the payload
+        # must carry the CURRENT (now NULL, if `restoring`) value -- same
+        # "re-read after the UPDATE rather than trust the request" pattern
+        # update_product/update_supplier already use for their own restore.
         row = conn.execute(
-            "SELECT name,phone,email,address,row_version,updated_at_utc FROM customers WHERE id=?",
+            "SELECT name,phone,email,address,deleted_at_utc,row_version,updated_at_utc FROM customers WHERE id=?",
             (cust_id,)).fetchone()
         # launch-readiness Phase 6 stage 6b-i (changed-field deltas):
         # `_changed_fields` is `SYNCED_CUSTOMER_FIELDS & fields.keys()`, NOT
@@ -1840,8 +1903,16 @@ def update_customer(cust_id):
         # column list (`_delta_set_clause`'s docstring) -- but misleading:
         # a field that has no synced column is not a "changed field" in any
         # sense the receiving device understands.
+        #
+        # stage 6b-iii-b: `deleted_at_utc` added to the changed set ONLY when
+        # `restoring` -- an ordinary status-untouched (or contact-detail-only)
+        # PATCH must not claim `deleted_at_utc` changed, or the apply side's
+        # delta gate on that column (sync_service.py's customer branch) would
+        # clear a tombstone this PATCH never touched -- same rule as
+        # update_supplier's identical guard.
+        changed = (SYNCED_CUSTOMER_FIELDS & fields.keys()) | ({'deleted_at_utc'} if restoring else set())
         _queue_sync_event(cur, 'customer', cust_id, 'update',
-                           dict(row) | {'id': cust_id, '_changed_fields': sorted(SYNCED_CUSTOMER_FIELDS & fields.keys())})
+                           dict(row) | {'id': cust_id, '_changed_fields': sorted(changed)})
     conn.commit(); conn.close()
     _sync_nudge()
     return jsonify({'status': 'success'})
@@ -2145,7 +2216,16 @@ def create_supplier_contact(sid):
     cid = _cid()
     conn = get_retail_conn()
     try:
-        sup = conn.execute("SELECT id FROM suppliers WHERE id=? AND company_id=?", (sid, cid)).fetchone()
+        # launch-readiness Phase 6 stage 6b-iii-b: `AND deleted_at_utc IS
+        # NULL` added -- no NEW contact may be attached to a deleted
+        # supplier. `list_supplier_contacts` just above deliberately does
+        # NOT gain this filter (reading EXISTING contacts of a since-deleted
+        # supplier must not break), the same "write gates refuse a
+        # tombstoned row, reads of historical/in-flight records do not
+        # filter" rule this stage applies everywhere else.
+        sup = conn.execute(
+            "SELECT id FROM suppliers WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
+            (sid, cid)).fetchone()
         if not sup:
             return jsonify({'status': 'error', 'message': 'Supplier not found'}), 404
         role = data.get('role') or 'orders'
@@ -2334,6 +2414,34 @@ def create_purchase_order():
     conn = get_retail_conn()
     _ensure_credit_schema(conn)
     cur  = conn.cursor()
+    # launch-readiness Phase 6 stage 6b-iii-b: this route had NO product
+    # existence check at all before this stage -- `purchase_order_items` was
+    # inserted straight from the request's `product_id`s with no read of
+    # `products` in between. `preview_po_split` just below in this file
+    # already gained a `company_id=? AND deleted_at_utc IS NULL` product read
+    # at stage 6b-iii-a for the identical reason (it is a WRITE gate that
+    # plans a PO a caller may go on to actually create, not a display list);
+    # this is that same read, added here so a NEW PO cannot be raised for a
+    # deleted product either. `list_purchase_orders`/`get_purchase_order`/
+    # `receive_purchase_order` deliberately do NOT gain this filter -- a PO
+    # already raised for a since-deleted product must stay receivable, or
+    # stock already in transit becomes permanently unreceivable (same
+    # "existing pending/in-flight documents do not filter" rule stage
+    # 6b-iii-a established for a pending reorder request against a deleted
+    # product; see reorder_hook.py's own comment for the write-side half of
+    # that same rule).
+    po_product_ids = {item['product_id'] for item in items}
+    if po_product_ids:
+        placeholders = ','.join('?' * len(po_product_ids))
+        valid_rows = conn.execute(
+            f"SELECT id FROM products WHERE company_id=? AND deleted_at_utc IS NULL AND id IN ({placeholders})",
+            [cid, *po_product_ids]
+        ).fetchall()
+        missing_ids = po_product_ids - {r['id'] for r in valid_rows}
+        if missing_ids:
+            conn.close()
+            return jsonify({'status': 'error',
+                             'message': f'Unknown product_id: {sorted(missing_ids)[0]}'}), 400
     po_number = _next_ref(conn, cid, 'po')
     total = _money(sum(float(i.get('unit_cost', 0)) * float(i.get('quantity', 0)) for i in items))
     supplier_id = data.get('supplier_id')
@@ -3034,8 +3142,21 @@ def create_sale():
             if not customer_id:
                 conn.rollback(); conn.close()
                 return jsonify({'status': 'error', 'message': 'Credit sales require a customer (walk-in not allowed).'}), 400
-            cust = cur.execute("SELECT credit_mode,credit_limit,credit_balance FROM customers WHERE id=? AND company_id=?",
-                               (customer_id, cid)).fetchone()
+            # launch-readiness Phase 6 stage 6b-iii-b: `AND deleted_at_utc IS
+            # NULL` added. Read carefully BEFORE this stage's edit: this
+            # lookup already REFUSES outright (404 'Customer not found.')
+            # when `customer_id` does not resolve -- it does not degrade to
+            # a cash sale (create_sale already required a customer_id for
+            # any credit sale, checked just above; a customer_id that
+            # resolves to nothing is a hard error here, not a fallback path).
+            # A tombstoned customer therefore needs no new branch: it simply
+            # reads as "not found" and hits this SAME pre-existing 404,
+            # exactly like an id that never existed -- a deleted customer
+            # cannot be extended credit.
+            cust = cur.execute(
+                "SELECT credit_mode,credit_limit,credit_balance FROM customers "
+                "WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
+                (customer_id, cid)).fetchone()
             if not cust:
                 conn.rollback(); conn.close()
                 return jsonify({'status': 'error', 'message': 'Customer not found.'}), 404

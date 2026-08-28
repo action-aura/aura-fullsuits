@@ -476,3 +476,63 @@ and walking `down_revision` to root: chain length 30, one root
 written by a single writer, in that order.** Anyone else adding an Owner
 migration before Phase 5 should re-derive the head first — do not trust this
 line, it records a moment, not live state — and add a row here.
+
+## 2026-08-28 — Gaps surfaced by Phase 6b (tombstones), unscheduled
+
+Found while building `deleted_at_utc` into a real tombstone across the
+catalogue. None is a regression; each is a pre-existing gap that only became
+visible — and worth naming — once deletion stopped being an overloaded `status`
+flag. Recorded rather than fixed, because each is a product decision, not a
+correctness one.
+
+- **No restore UI exists anywhere in the app, for any entity.** Undelete for
+  products and suppliers is reachable only by a raw `PATCH` with
+  `status: 'active'`; customers gained the equivalent in stage 6b-iii-b. No
+  screen in `products/retail/frontend/` offers any of them — grepped, not
+  assumed. So an operator who deletes something by mistake has no in-app way
+  back, and the sync machinery that carries a restore between devices is
+  currently exercised only by tests and by re-import. Whoever schedules this
+  should decide whether restore belongs on the list screens, behind a "show
+  deleted" toggle, or nowhere.
+
+- **A customer with no email on file can never be resurrected by re-import.**
+  `_handle_retail_customers` dedupes on email, and only when non-empty, so a
+  customer without one is always inserted as a NEW row rather than matched.
+  Deliberately not "fixed" by widening the dedupe key: matching on name would
+  silently merge distinct same-named customers, which is a far worse failure
+  than a missing undelete. Pinned by
+  `test_reimporting_a_customer_with_no_email_does_not_match_an_existing_one`
+  so it stays a known, deliberate gap rather than a surprise.
+
+- **`create_purchase_order` still has no cross-tenant validation on
+  `supplier_id`.** Stage 6b-iii-b added the product existence + tombstone +
+  company scoping check that route had never had at all, which closes the
+  product half of the pre-existing cross-tenant PO gap that route's own comment
+  already acknowledges. The supplier half is untouched and remains open.
+
+- **Legacy rows deleted before tombstones keep `status='inactive'` and a NULL
+  `deleted_at_utc`, permanently.** This is the deliberate backfill posture from
+  `docs/launch-readiness/phase6b-decisions.md` — we do not fabricate a deletion
+  time nobody recorded. The consequence is that every catalogue read filters on
+  BOTH conditions and must keep doing so; `test_a_legacy_row_deleted_before_
+  tombstones_is_still_hidden` fails if anyone "simplifies" the pair. If a future
+  cleanup wants to retire the `status` half, it needs a real backfill decision
+  first, not a refactor.
+
+- **The new write gates check the tombstone only; the read paths check both
+  conditions.** Every catalogue READ filters `status='active' AND
+  deleted_at_utc IS NULL` (the two-population rule above). The write gates added
+  in stages 6b-iii-a/b — `accept_reorder_request`, `create_purchase_order`,
+  `reorder_hook`, `create_supplier_contact`, `create_sale`'s credit-customer
+  lookup — filter `deleted_at_utc IS NULL` alone. So a row deleted BEFORE
+  tombstones existed (`status='inactive'`, NULL tombstone) is hidden from every
+  list yet can still be put on a NEW purchase order or reorder request.
+
+  Not a regression: those routes had no deletion check whatsoever before, and
+  `create_purchase_order` had no product validation at all. But it is exactly
+  the "filter present on one path, absent on another" shape this codebase has
+  shipped before, so it is written down rather than left to be rediscovered.
+  The fix is one extra condition per gate plus a test; the reason it was not
+  folded into 6b-iii-b is that it is a behaviour change to a legacy population
+  and deserves its own commit and its own proof, not a quiet ride-along at the
+  end of a long stage.

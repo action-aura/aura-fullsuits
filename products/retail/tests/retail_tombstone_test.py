@@ -1166,3 +1166,504 @@ def test_a_name_edit_from_a_device_that_never_saw_the_delete_does_not_resurrect_
     assert b_after['row_version'] == 3
     assert b_after['deleted_at_utc'] is not None, \
         "a name-only edit from a device that never saw the delete must not resurrect B's tombstone"
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# launch-readiness Phase 6 stage 6b-iii-b -- the four write gates 6b-iii-a's
+# own enumeration surfaced but deliberately left alone (reorder_hook.py's
+# product re-fetch, create_sale's credit-customer lookup, create_purchase_
+# order's product read, the supplier-contacts create route's supplier
+# check), plus completing Decision B's resurrection-on-reimport for
+# products/customers/suppliers (6b-ii only did categories) and closing the
+# customer-restore gap Part 3 of phase6b-decisions.md left owed. See
+# docs/launch-readiness/phase6b-decisions.md.
+# ═════════════════════════════════════════════════════════════════════════
+
+# ── 20. Write gate 1a -- reorder_hook.py's own product re-fetch ────────────
+
+def test_a_deleted_product_raises_no_new_reorder_request(client, a_conn):
+    """`maybe_trigger_reorder` runs on its OWN connection, AFTER the sale
+    that triggered it has already committed (see reorder_hook.py's own
+    module docstring) -- a real window in which the product could have been
+    deleted in between. Exercised directly, not through create_sale, because
+    create_sale already refuses to sell a tombstoned product at all
+    (`test_a_deleted_product_is_not_sellable` above) -- the race this test
+    pins is the hook's OWN re-fetch, not the sale's line-item read."""
+    import core.retail.reorder_hook as reorder_hook
+
+    create = client.post('/api/sub/retail/products', json={
+        'name': 'Reorder Race Widget', 'sku': f'TOMB-REORDERGATE-{uuid.uuid4().hex[:8]}',
+        'reorder_level': 5, 'reorder_method': 'whatsapp',
+    })
+    assert create.status_code == 200
+    pid = create.get_json()['data']['id']
+    cid = client.company_id
+
+    delete = client.delete(f'/api/sub/retail/products/{pid}')
+    assert delete.status_code == 200
+
+    branch = a_conn.execute("SELECT id FROM branches WHERE company_id=? LIMIT 1", (cid,)).fetchone()
+    bid = branch['id']
+
+    # on_hand defaults to 0 (no inventory_balances row at all), which is
+    # <= reorder_level=5 -- the low-stock condition is satisfied WITHOUT
+    # this test needing to sell anything, isolating the write gate itself
+    # (removing the gate's `deleted_at_utc IS NULL` filter would find this
+    # tombstoned row anyway and, with on_hand 0 <= 5, create a request).
+    created = reorder_hook.maybe_trigger_reorder(
+        get_retail_conn, company_id=cid, branch_id=bid, product_ids=[pid])
+    assert created == [], "a deleted product must raise no NEW reorder request"
+
+    count = a_conn.execute(
+        "SELECT COUNT(*) c FROM reorder_requests WHERE company_id=? AND product_id=?",
+        (cid, pid)).fetchone()['c']
+    assert count == 0
+
+
+# ── 21. Write gate 1b -- create_sale's credit-customer lookup. The
+#       established behaviour (read carefully before this stage's edit) is
+#       REFUSE, not degrade: a customer_id that does not resolve already hit
+#       a pre-existing 404 'Customer not found.' before this stage even for
+#       an id that never existed -- a tombstoned customer now reads as
+#       exactly that, through the SAME pre-existing 404, not a new branch ──
+
+def test_a_deleted_customer_cannot_be_sold_to_on_credit(client, a_conn):
+    create_cust = client.post('/api/sub/retail/customers', json={'name': 'Credit Widget Co'})
+    assert create_cust.status_code == 200
+    cust_id = create_cust.get_json()['data']['id']
+
+    create_prod = client.post('/api/sub/retail/products', json={
+        'name': 'Credit Sale Widget', 'sku': f'TOMB-CREDIT-{uuid.uuid4().hex[:8]}',
+        'sell_price': 20, 'initial_stock': 10,
+    })
+    assert create_prod.status_code == 200
+    pid = create_prod.get_json()['data']['id']
+
+    delete = client.delete(f'/api/sub/retail/customers/{cust_id}')
+    assert delete.status_code == 200
+
+    sale = client.post('/api/sub/retail/sales', json={
+        'items': [{'product_id': pid, 'quantity': 1}],
+        'customer_id': cust_id, 'payment_method': 'credit',
+    })
+    assert sale.status_code == 404, "a deleted customer must not be extended credit"
+    assert 'not found' in sale.get_json()['message'].lower()
+
+    remaining = a_conn.execute(
+        "SELECT COUNT(*) c FROM sales WHERE company_id=?", (client.company_id,)
+    ).fetchone()['c']
+    assert remaining == 0, "the refused credit sale must not have written a sales row"
+
+
+# ── 22/23. Write gate 1c, BOTH halves together -- a PO already raised for a
+#       since-deleted product must stay receivable (the must-NOT half, which
+#       a "consistency" pass would break), a NEW PO cannot be raised for a
+#       deleted product (the write-gate half) ──────────────────────────────
+
+def test_a_purchase_order_for_a_since_deleted_product_can_still_be_received(client, a_conn):
+    create = client.post('/api/sub/retail/products', json={
+        'name': 'PO In Transit Widget', 'sku': f'TOMB-PORECV-{uuid.uuid4().hex[:8]}',
+        'cost_price': 5,
+    })
+    assert create.status_code == 200
+    pid = create.get_json()['data']['id']
+
+    po = client.post('/api/sub/retail/purchase-orders', json={
+        'items': [{'product_id': pid, 'quantity': 10, 'unit_cost': 5}],
+    })
+    assert po.status_code == 200, po.get_json()
+    po_id = po.get_json()['data']['id']
+
+    delete = client.delete(f'/api/sub/retail/products/{pid}')
+    assert delete.status_code == 200
+
+    receive = client.post(f'/api/sub/retail/purchase-orders/{po_id}/receive')
+    assert receive.status_code == 200, \
+        "a PO already raised for a since-deleted product must stay receivable, or stock already " \
+        "in transit becomes permanently unreceivable"
+
+    balance = a_conn.execute(
+        "SELECT quantity_on_hand FROM inventory_balances WHERE company_id=? AND product_id=?",
+        (client.company_id, pid)).fetchone()
+    assert balance is not None and float(balance['quantity_on_hand']) == 10
+
+
+def test_a_new_purchase_order_cannot_be_raised_for_a_deleted_product(client, a_conn):
+    create = client.post('/api/sub/retail/products', json={
+        'name': 'PO Refused Widget', 'sku': f'TOMB-PONEW-{uuid.uuid4().hex[:8]}',
+        'cost_price': 5,
+    })
+    assert create.status_code == 200
+    pid = create.get_json()['data']['id']
+
+    delete = client.delete(f'/api/sub/retail/products/{pid}')
+    assert delete.status_code == 200
+
+    po = client.post('/api/sub/retail/purchase-orders', json={
+        'items': [{'product_id': pid, 'quantity': 5, 'unit_cost': 5}],
+    })
+    assert po.status_code == 400, "a new PO must not be raised for a deleted product"
+
+    count = a_conn.execute(
+        "SELECT COUNT(*) c FROM purchase_orders WHERE company_id=?", (client.company_id,)
+    ).fetchone()['c']
+    assert count == 0, "the refused PO must not have been created"
+
+
+# ── 24. Decision B, products -- the local half AND the cross-device half
+#       together, matching the category precedent's own two-test split but
+#       proven here in one test since the local half is now trivial ────────
+
+def test_reimporting_a_deleted_product_brings_it_back(
+        client, a_conn, service_a, service_b, install_b):
+    sku = f'TOMB-PRODIMPORT-{uuid.uuid4().hex[:8]}'
+    create = client.post('/api/sub/retail/products', json={
+        'name': 'Reimport Me Widget', 'sku': sku, 'sell_price': 12,
+    })
+    assert create.status_code == 200
+    pid = create.get_json()['data']['id']
+    service_a.push_once()
+    service_b.pull_once()
+
+    def _b_row():
+        b_conn = install_b()
+        row = b_conn.execute(
+            "SELECT deleted_at_utc, row_version FROM products WHERE id=?", (pid,)).fetchone()
+        b_conn.close()
+        return dict(row) if row else None
+
+    assert _b_row() == {'deleted_at_utc': None, 'row_version': 1}
+
+    delete = client.delete(f'/api/sub/retail/products/{pid}')
+    assert delete.status_code == 200
+    service_a.push_once()
+    service_b.pull_once()
+    assert _b_row()['deleted_at_utc'] is not None, "the delete must have reached B first"
+
+    before = dict(a_conn.execute(
+        "SELECT deleted_at_utc, row_version FROM products WHERE id=?", (pid,)).fetchone())
+    assert before['deleted_at_utc'] is not None
+
+    mapping = {"name": "Product Name", "sku": "SKU", "sell_price": "Selling Price"}
+    headers = ['Product Name', 'SKU', 'Selling Price']
+    result = _import(client, 'products', mapping,
+                      [{'Product Name': 'Reimported Widget', 'SKU': sku, 'Selling Price': '15'}], headers)
+    assert result['updated'] == 1
+
+    after = dict(a_conn.execute(
+        "SELECT deleted_at_utc, row_version FROM products WHERE id=?", (pid,)).fetchone())
+    assert after['deleted_at_utc'] is None, "re-importing a deleted product's SKU must resurrect it locally"
+    assert after['row_version'] > before['row_version']
+
+    products = client.get('/api/sub/retail/products').get_json()['data']
+    assert pid in {p['id'] for p in products}, "the resurrected product must reappear in the product list"
+
+    # THE cross-device half -- the local resurrection above proves nothing
+    # about whether it actually reaches B; that needs the apply-side
+    # `deleted_at_utc` DELTA-GATED column list this stage's own
+    # `_changed_fields` addition feeds.
+    service_a.push_once()
+    service_b.pull_once()
+    assert _b_row()['deleted_at_utc'] is None, "the import resurrection must reach the OTHER device too"
+
+
+# ── 25. Decision B, suppliers -- the `continue`-to-resurrect change ────────
+
+def test_reimporting_a_deleted_supplier_brings_it_back(client, a_conn):
+    name = f'Reimport Supplier {uuid.uuid4().hex[:6]}'
+    create = client.post('/api/sub/retail/suppliers', json={'name': name})
+    assert create.status_code == 200
+    sid = create.get_json()['data']['id']
+
+    delete = client.delete(f'/api/sub/retail/suppliers/{sid}')
+    assert delete.status_code == 200
+    before = dict(a_conn.execute(
+        "SELECT deleted_at_utc, row_version FROM suppliers WHERE id=?", (sid,)).fetchone())
+    assert before['deleted_at_utc'] is not None
+
+    mapping = {"name": "Company Name", "phone": "Phone Number"}
+    headers = ['Company Name', 'Phone Number']
+    result = _import(client, 'suppliers', mapping,
+                      [{'Company Name': name, 'Phone Number': '+1-555-0003'}], headers)
+    assert result['imported'] == 0, "a resurrection is not a new import"
+
+    after = dict(a_conn.execute(
+        "SELECT deleted_at_utc, row_version FROM suppliers WHERE id=?", (sid,)).fetchone())
+    assert after['deleted_at_utc'] is None, "re-importing a deleted supplier's name must resurrect it"
+    assert after['row_version'] > before['row_version']
+
+    suppliers = client.get('/api/sub/retail/suppliers').get_json()['data']
+    assert sid in {s['id'] for s in suppliers}, "the resurrected supplier must reappear in the supplier list"
+
+    events = a_conn.execute(
+        "SELECT event_type, payload FROM sync_outbox WHERE entity_type='supplier' AND entity_id=? "
+        "ORDER BY created_at", (sid,)).fetchall()
+    resurrection_payload = json.loads(events[-1]['payload'])
+    assert events[-1]['event_type'] == 'update'
+    assert resurrection_payload['_changed_fields'] == ['deleted_at_utc']
+    assert resurrection_payload['deleted_at_utc'] is None
+
+
+# ── 26. The documented limitation, pinned so it stays a deliberate gap
+#       rather than a surprise -- an empty-email customer can never be
+#       matched by re-import, so it can never be resurrected by one either ─
+
+def test_reimporting_a_customer_with_no_email_does_not_match_an_existing_one(client, a_conn):
+    name = f'No Email Customer {uuid.uuid4().hex[:6]}'
+    create = client.post('/api/sub/retail/customers', json={'name': name})
+    assert create.status_code == 200
+
+    mapping = {"name": "Customer Name"}
+    headers = ['Customer Name']
+    result = _import(client, 'customers', mapping, [{'Customer Name': name}], headers)
+    assert result['imported'] == 1, \
+        "a customer sheet row with no email is never matched against an existing row -- it is always inserted as new"
+    assert result['updated'] == 0
+
+    rows = a_conn.execute(
+        "SELECT id FROM customers WHERE company_id=? AND name=?", (client.company_id, name)
+    ).fetchall()
+    assert len(rows) == 2, \
+        "the original and the re-imported row must BOTH exist -- this is the documented limitation " \
+        "(phase6b-decisions.md), not a bug: widening the dedupe key to fix it would silently merge " \
+        "two distinct same-named customers"
+
+
+# ── 27. Part 3 -- the customer restore gap, closed. Mirrors test 16
+#       (`test_restoring_a_product_clears_the_tombstone_on_both_devices`)
+#       exactly, for customer ──────────────────────────────────────────────
+
+def test_restoring_a_deleted_customer_clears_the_tombstone_on_both_devices(
+        client, a_conn, service_a, service_b, install_b):
+    create = client.post('/api/sub/retail/customers', json={'name': 'Restorable Customer Co'})
+    assert create.status_code == 200
+    cust_id = create.get_json()['data']['id']
+    service_a.push_once()
+    service_b.pull_once()
+
+    def _b_row():
+        b_conn = install_b()
+        row = b_conn.execute(
+            "SELECT status, deleted_at_utc FROM customers WHERE id=?", (cust_id,)).fetchone()
+        b_conn.close()
+        return dict(row) if row else None
+
+    assert _b_row() == {'status': 'active', 'deleted_at_utc': None}
+
+    delete = client.delete(f'/api/sub/retail/customers/{cust_id}')
+    assert delete.status_code == 200
+    service_a.push_once()
+    service_b.pull_once()
+
+    b_after_delete = _b_row()
+    assert b_after_delete['deleted_at_utc'] is not None, "the delete must have reached B"
+
+    # This PATCH is also the proof that update_customer's own capability
+    # gate on `status` does not block the SAME admin account that already
+    # holds retail.stock.adjust (this file's `client` fixture is 'admin',
+    # which holds every capability) -- a cashier-only account is deliberately
+    # NOT exercised here; that is a capability-matrix concern, not a
+    # tombstone-correctness one, and this file is the latter.
+    restore = client.patch(f'/api/sub/retail/customers/{cust_id}', json={'status': 'active'})
+    assert restore.status_code == 200
+
+    a_row = dict(a_conn.execute(
+        "SELECT status, deleted_at_utc FROM customers WHERE id=?", (cust_id,)).fetchone())
+    assert a_row == {'status': 'active', 'deleted_at_utc': None}, \
+        "the restore must clear the tombstone LOCALLY too, in the SAME UPDATE that sets status='active'"
+
+    service_a.push_once()
+    service_b.pull_once()
+
+    assert _b_row() == {'status': 'active', 'deleted_at_utc': None}, \
+        "the restore must clear the tombstone on the RECEIVING device too, via the delta-gated deleted_at_utc column"
+
+    listing = client.get('/api/sub/retail/customers').get_json()['data']
+    assert cust_id in {c['id'] for c in listing}, "a restored customer must reappear in the customer list"
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# launch-readiness Phase 6 stage 6b-iii-a real regression, closed but never
+# pinned until now: `_handle_retail_products`'/`_handle_retail_customers`'
+# EXISTING-ROW import branches (import_api.py) used to queue their `update`
+# sync event with NO `_changed_fields` key at all, and their payload SELECTs
+# never included `deleted_at_utc`. An absent `_changed_fields` key means
+# "every column changed" on the apply side (`_delta_set_clause`'s own
+# docstring, commercial_runtime/sync/sync_service.py) -- so the receiving
+# device read the missing `deleted_at_utc` as None, was told every column
+# changed, and wrote that None: silently un-deleting any product or customer
+# the receiving device had tombstoned, on every ORDINARY re-import, off the
+# back of a price/contact edit that never touched deletion at all. Suppliers
+# were never affected -- that import branch skips existing rows entirely and
+# only ever emits `create`.
+#
+# The fix gives both branches an explicit `_changed_fields` list (see stage
+# 6b-iii-b's own comment on each emission site). These two tests pin it, so
+# nobody can revert to an absent key and stay green. Both mirror `test_a_
+# name_edit_from_a_device_that_never_saw_the_delete_does_not_resurrect_the_
+# category`/`_product` above exactly -- same two-device composition, same
+# row_version arithmetic, same reasoning for why the edit must be applied
+# TWICE -- but drive the edit through the import route instead of a PATCH,
+# because the import route is the code path stage 6b-iii-b actually touched
+# and PATCH/`update_product`/`update_customer` already carried an explicit
+# `_changed_fields` list before this stage ever started.
+# ═════════════════════════════════════════════════════════════════════════
+
+def test_an_ordinary_reimport_does_not_resurrect_a_product_deleted_on_another_device(
+        client, a_conn, service_a, service_b, install_b):
+    sku = f'TOMB-REIMPORT-{uuid.uuid4().hex[:8]}'
+    create = client.post('/api/sub/retail/products', json={
+        'name': 'Reimport Deny Widget', 'sku': sku, 'sell_price': 12,
+    })
+    assert create.status_code == 200
+    pid = create.get_json()['data']['id']
+    service_a.push_once()
+    service_b.pull_once()
+
+    def _b_row():
+        b_conn = install_b()
+        row = b_conn.execute(
+            "SELECT sell_price, row_version, deleted_at_utc FROM products WHERE id=?", (pid,)).fetchone()
+        b_conn.close()
+        return dict(row) if row else None
+
+    assert _b_row() == {'sell_price': 12.0, 'row_version': 1, 'deleted_at_utc': None}
+
+    # 2. B tombstones it LOCALLY -- raw SQL matching delete_product's own
+    #    UPDATE exactly (deleted_at_utc stamped, row_version bumped in the
+    #    SAME statement). B never pushes this anywhere: A must never learn
+    #    about the delete, or A's own copy would ALSO read as tombstoned and
+    #    its import would take the RESURRECT branch instead -- a different
+    #    code path that proves nothing about this bug.
+    b_now = "2026-08-27T00:03:00+00:00"
+    b_conn = install_b()
+    b_conn.execute(
+        "UPDATE products SET deleted_at_utc=?, row_version=row_version+1, updated_at_utc=? WHERE id=?",
+        (b_now, b_now, pid))
+    b_conn.commit()
+    b_conn.close()
+    assert _b_row() == {'sell_price': 12.0, 'row_version': 2, 'deleted_at_utc': b_now}
+
+    # 3. A, oblivious to B's delete (never pulls in between), re-imports a
+    #    CSV naming P with an ordinary price change -- TWICE, through the
+    #    REAL import endpoint. One import would only reach row_version=2 --
+    #    a TIE with B's tombstone, which 6a-ii's own reject-stale gate would
+    #    already discard for a reason that has nothing to do with THIS
+    #    stage's delta gating, proving nothing about it. Two imports land A
+    #    on row_version=3, genuinely higher than B's 2, so the reject-stale
+    #    gate lets the event through and ONLY the delta gating on
+    #    `deleted_at_utc` can still protect the tombstone.
+    mapping = {"name": "Product Name", "sku": "SKU", "sell_price": "Selling Price"}
+    headers = ['Product Name', 'SKU', 'Selling Price']
+    r1 = _import(client, 'products', mapping,
+                 [{'Product Name': 'Reimport Deny Widget', 'SKU': sku, 'Selling Price': '19'}], headers)
+    assert r1['updated'] == 1
+    r2 = _import(client, 'products', mapping,
+                 [{'Product Name': 'Reimport Deny Widget', 'SKU': sku, 'Selling Price': '25'}], headers)
+    assert r2['updated'] == 1
+
+    a_after = dict(a_conn.execute(
+        "SELECT sell_price, row_version, deleted_at_utc FROM products WHERE id=?", (pid,)).fetchone())
+    assert a_after == {'sell_price': 25.0, 'row_version': 3, 'deleted_at_utc': None}, \
+        "A's own copy must never have been touched by B's delete -- if it had, this import would take " \
+        "the RESURRECT branch instead, a different code path that proves nothing about this bug"
+
+    # 4. A pushes both queued events; B pulls. The first (row_version=2) is
+    #    a tie against B's local 2 and is discarded as stale (harmless,
+    #    unrelated to this test's assertions); the second (row_version=3) is
+    #    genuinely newer, so 6a-ii's reject-stale gate lets it through and
+    #    ONLY the delta gating on `deleted_at_utc` decides whether B's
+    #    tombstone survives it.
+    service_a.push_once()
+    service_b.pull_once()
+
+    b_after = _b_row()
+    assert b_after['sell_price'] == 25.0, \
+        "the imported price change must have landed on B -- otherwise this test would pass vacuously " \
+        "even if the event never applied at all"
+    assert b_after['row_version'] == 3
+    assert b_after['deleted_at_utc'] is not None, \
+        "an ordinary re-import (a price change that never touched deletion) must not resurrect a " \
+        "product B tombstoned on its own, off the back of an absent `_changed_fields` key"
+
+
+def test_an_ordinary_reimport_does_not_resurrect_a_customer_deleted_on_another_device(
+        client, a_conn, service_a, service_b, install_b):
+    """Same regression as the product test above, for `_handle_retail_
+    customers`'s existing-row branch. Customer import dedupes on EMAIL and
+    only when non-empty (see `test_reimporting_a_customer_with_no_email_
+    does_not_match_an_existing_one` above) -- the customer created here MUST
+    carry an email, or the re-import below would insert a second, unrelated
+    row instead of matching this one, proving nothing about this bug."""
+    email = f'reimport-{uuid.uuid4().hex[:8]}@test.local'
+    create = client.post('/api/sub/retail/customers', json={
+        'name': 'Reimport Deny Co', 'email': email, 'phone': '+1-555-0100',
+    })
+    assert create.status_code == 200
+    cust_id = create.get_json()['data']['id']
+    service_a.push_once()
+    service_b.pull_once()
+
+    def _b_row():
+        b_conn = install_b()
+        row = b_conn.execute(
+            "SELECT phone, row_version, deleted_at_utc FROM customers WHERE id=?", (cust_id,)).fetchone()
+        b_conn.close()
+        return dict(row) if row else None
+
+    assert _b_row() == {'phone': '+1-555-0100', 'row_version': 1, 'deleted_at_utc': None}
+
+    # 2. B tombstones it LOCALLY -- raw SQL matching delete_customer's own
+    #    UPDATE exactly. B never pushes this anywhere: A must never learn
+    #    about the delete, or A's own copy would ALSO read as tombstoned and
+    #    its import would take the RESURRECT branch instead -- a different
+    #    code path that proves nothing about this bug.
+    b_now = "2026-08-27T00:04:00+00:00"
+    b_conn = install_b()
+    b_conn.execute(
+        "UPDATE customers SET deleted_at_utc=?, row_version=row_version+1, updated_at_utc=? WHERE id=?",
+        (b_now, b_now, cust_id))
+    b_conn.commit()
+    b_conn.close()
+    assert _b_row() == {'phone': '+1-555-0100', 'row_version': 2, 'deleted_at_utc': b_now}
+
+    # 3. A, oblivious to B's delete, re-imports a CSV naming C (matched by
+    #    email) with an ordinary phone-number change -- TWICE, through the
+    #    REAL import endpoint. One import would only reach row_version=2 --
+    #    a TIE with B's tombstone, discarded as stale by 6a-ii's own gate for
+    #    a reason unrelated to this bug, proving nothing about it. Two
+    #    imports land A on row_version=3, genuinely higher than B's 2, so the
+    #    reject-stale gate lets the event through and ONLY the delta gating
+    #    on `deleted_at_utc` can still protect the tombstone.
+    mapping = {"name": "Customer Name", "email": "Email", "phone": "Phone"}
+    headers = ['Customer Name', 'Email', 'Phone']
+    r1 = _import(client, 'customers', mapping,
+                 [{'Customer Name': 'Reimport Deny Co', 'Email': email, 'Phone': '+1-555-0199'}], headers)
+    assert r1['updated'] == 1
+    r2 = _import(client, 'customers', mapping,
+                 [{'Customer Name': 'Reimport Deny Co', 'Email': email, 'Phone': '+1-555-0200'}], headers)
+    assert r2['updated'] == 1
+
+    a_after = dict(a_conn.execute(
+        "SELECT phone, row_version, deleted_at_utc FROM customers WHERE id=?", (cust_id,)).fetchone())
+    assert a_after == {'phone': '+1-555-0200', 'row_version': 3, 'deleted_at_utc': None}, \
+        "A's own copy must never have been touched by B's delete -- if it had, this import would take " \
+        "the RESURRECT branch instead, a different code path that proves nothing about this bug"
+
+    # 4. A pushes both queued events; B pulls. The first (row_version=2) is
+    #    a tie against B's local 2 and is discarded as stale (harmless,
+    #    unrelated to this test's assertions); the second (row_version=3) is
+    #    genuinely newer, so 6a-ii's reject-stale gate lets it through and
+    #    ONLY the delta gating on `deleted_at_utc` decides whether B's
+    #    tombstone survives it.
+    service_a.push_once()
+    service_b.pull_once()
+
+    b_after = _b_row()
+    assert b_after['phone'] == '+1-555-0200', \
+        "the imported phone change must have landed on B -- otherwise this test would pass vacuously " \
+        "even if the event never applied at all"
+    assert b_after['row_version'] == 3
+    assert b_after['deleted_at_utc'] is not None, \
+        "an ordinary re-import (a phone change that never touched deletion) must not resurrect a " \
+        "customer B tombstoned on its own, off the back of an absent `_changed_fields` key"

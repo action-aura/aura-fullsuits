@@ -1781,3 +1781,85 @@ def test_the_x_report_gate_is_real_and_a_cashier_can_still_close_a_drawer(shop):
 def test_an_anonymous_x_report_request_is_401_not_403(shop):
     anon = app.test_client()
     assert anon.get('/api/sub/retail/cash-sessions/whatever/x-report').status_code == 401
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# stage 6b-iii-b: update_customer's field-level retail.stock.adjust check
+#
+# `update_customer` is gated CAP_SELL at the route -- the till legitimately
+# edits a customer's contact details while ringing a sale. But `status` is
+# `delete_customer`'s own tombstone field, and `delete_customer` is gated the
+# STRONGER CAP_STOCK_ADJUST (master-data retirement, not selling -- see that
+# route's comment). Without a check on `status` specifically, any cashier
+# could PATCH `{'status': 'active'}` and undo a manager's deletion through a
+# strictly weaker path than delete_customer itself requires -- a privilege
+# escalation. `retail_api.py` closes this with an in-handler
+# `session_has_capability(CAP_STOCK_ADJUST)` check immediately above the
+# UPDATE, the same shape as the retail.discount check on credit_mode/
+# credit_limit two blocks above it in the same function.
+#
+# This field-level check is invisible to the AST sweep at the top of this
+# file -- that sweep only sees `@mt_require_capability` DECORATORS on route
+# functions, and this check lives inside the handler body, gating one field
+# of a payload rather than the whole route. Nothing else in this suite (or
+# anywhere else in the test tree) exercised it before these two tests: it is
+# a real security guard that shipped with zero coverage.
+#
+# Both halves are required (ENGINEERING.md's "prove both directions of
+# anything that both denies and allows"): a gate mutated to deny everyone
+# unconditionally would still pass the DENY half alone, and would silently
+# make customer restore impossible for every role, including the manager who
+# is supposed to have it.
+
+def _seed_deleted_customer(admin, company_id):
+    """A real customer, tombstoned through the real DELETE route -- never a
+    raw UPDATE -- so both tests below start from the exact row shape
+    delete_customer actually produces."""
+    cust_id = _create_customer(admin)
+    r = admin.delete(f'/api/sub/retail/customers/{cust_id}')
+    assert r.status_code == 200, r.get_json()
+    return cust_id
+
+
+def _customer_deleted_at(company_id, cust_id):
+    conn = get_retail_conn()
+    row = conn.execute(
+        "SELECT deleted_at_utc FROM customers WHERE id=? AND company_id=?",
+        (cust_id, company_id)).fetchone()
+    conn.close()
+    return row['deleted_at_utc'] if row else None
+
+
+def test_a_cashier_cannot_restore_a_deleted_customer(shop):
+    """DENY half. A cashier holds retail.sell (this route's own decorator
+    floor) but not retail.stock.adjust -- the field-level check must refuse
+    the restore, and asserting only the 403 would not prove the write never
+    happened, so the database is checked too (same discipline as
+    test_a_cashier_cannot_adjust_stock above)."""
+    admin, company_id, _product_id = shop
+    cust_id = _seed_deleted_customer(admin, company_id)
+    assert _customer_deleted_at(company_id, cust_id) is not None
+
+    cashier, _, _ = _make_user('cashier', company_id=company_id)
+    r = cashier.patch(f'/api/sub/retail/customers/{cust_id}', json={'status': 'active'})
+    assert r.status_code == 403, r.get_json()
+    assert r.get_json()['message'] == retail_api_module.CUSTOMER_RESTORE_DENIED_MESSAGE
+
+    assert _customer_deleted_at(company_id, cust_id) is not None, \
+        "the refused restore must not have cleared the tombstone -- a 403 that writes anyway is not a gate"
+
+
+def test_a_manager_can_restore_a_deleted_customer(shop):
+    """ALLOW half. A manager holds retail.stock.adjust, the same capability
+    delete_customer itself requires. Without this test, a gate mutated to
+    fire unconditionally (refusing everyone, manager included) would still
+    pass the DENY test above -- for the wrong reason."""
+    admin, company_id, _product_id = shop
+    cust_id = _seed_deleted_customer(admin, company_id)
+
+    manager, _, _ = _make_user('manager', company_id=company_id)
+    r = manager.patch(f'/api/sub/retail/customers/{cust_id}', json={'status': 'active'})
+    assert r.status_code == 200, r.get_json()
+
+    assert _customer_deleted_at(company_id, cust_id) is None, \
+        "a manager's restore must clear deleted_at_utc"
