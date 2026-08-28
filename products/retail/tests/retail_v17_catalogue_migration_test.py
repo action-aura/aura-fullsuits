@@ -215,7 +215,7 @@ def test_v17_migration_is_idempotent_a_second_pass_is_a_clean_noop():
     finally:
         conn.close()
 
-    assert _user_version(db_path) == 17
+    assert _user_version(db_path) == sch.RETAIL_SCHEMA_VERSION
     assert _integrity_ok(db_path)
 
     after = _open(db_path)
@@ -233,8 +233,13 @@ def test_v17_migration_is_idempotent_a_second_pass_is_a_clean_noop():
 
 def test_v17_reaches_head_with_integrity_ok_on_a_fresh_install():
     sch, db_path = _install()
-    assert sch.RETAIL_SCHEMA_VERSION == 17
-    assert _user_version(db_path) == 17
+    # `>=`, not `==`: this asserts v17 has not been REVERTED, which is what it
+    # is really for. Pinned to `== 17` it instead asserted "the head is 17",
+    # which stops being true the moment any later migration lands and says
+    # nothing about whether v17 itself still works. Matches the sibling v15
+    # file's own `>= 15`, and the `_assert_landed_on_head` convention.
+    assert sch.RETAIL_SCHEMA_VERSION >= 17
+    assert _user_version(db_path) == sch.RETAIL_SCHEMA_VERSION
     assert _integrity_ok(db_path)
 
 
@@ -312,7 +317,7 @@ def test_upgrading_a_real_v16_shaped_database_with_the_column_present_drops_it()
     finally:
         conn.close()
 
-    assert _user_version(db_path) == 17
+    assert _user_version(db_path) == sch.RETAIL_SCHEMA_VERSION
     assert _integrity_ok(db_path)
     conn = _open(db_path)
     try:
@@ -369,7 +374,7 @@ def test_compute_drift_is_zero_after_v17_migration_on_a_realistic_shop_with_real
     finally:
         conn.close()
 
-    assert _user_version(db_path) == 17
+    assert _user_version(db_path) == sch.RETAIL_SCHEMA_VERSION
     drift_after = _drift(db_path, company_id)
     assert drift_after == [], (
         f'compute_drift must still be zero after the v17 migration; got {drift_after}')
