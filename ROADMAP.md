@@ -611,3 +611,39 @@ mint sites in `retail_api.py` COMPOSE the string, exactly as AUDIT-032B already
 did for `sale_number`/`return_number`: sequential part + per-company fragment +
 per-device fragment. **No schema version was taken.** Anyone reading the
 original claim would have burned a version number for nothing.
+
+## 2026-08-28 — two gaps Phase 7 stage 7c surfaced, neither fixed
+
+**1. Two devices can both receive the same purchase order, and stock is
+double-counted.** Found while narrowing §5's offline block list.
+
+`multi-device-design.md` §8 justifies not syncing purchase orders partly on
+"receiving is admin-device-gated". That is **not true in the code**:
+`receive_purchase_order` carries `mt_login_required`, `mt_require_subsystem`,
+`require_license_capability` and `mt_require_capability(CAP_STOCK_ADJUST)`, and
+no `_is_admin_device` check — that predicate guards exactly one route in
+`retail_api.py`, the audit log.
+
+So any two users holding `retail.stock.adjust`, on two devices, can each
+receive the same PO. The route's double-receive guard is a conditional UPDATE
+on `status='pending'`, which is per-device-local, and PO status is deliberately
+never synced (§8), so the guard structurally cannot see the other device's
+receipt — **online or offline**. Each writes its own `purchase_in` movement
+with its own `uid`; both survive the merge because movements are additive by
+design; the delivery lands twice.
+
+Stage 7c blocks receipt while a device is behind, which is a partial mitigation
+only. The real fix is either syncing PO status or moving the guard somewhere
+that can see both devices, and it needs its own decision — note that §8's
+reason for not syncing PO status was that only status was device-local and
+stock was already correct, which this finding contradicts.
+
+**2. `sync_conflicts` has no UI.** Phase 6 stage 6a-ii writes a row every time
+an incoming catalogue edit is discarded as stale, precisely so a rejection is
+visible rather than a silent drop. Nothing renders that table.
+
+This is why stage 7c deliberately does NOT block catalogue edits offline: a
+rejected offline edit is discarded and its author is never told. Blocking would
+trade a rare, recorded loss for a guaranteed inability to work, which is the
+worse deal — but the missing screen is what makes the rare case invisible, and
+it should be built.
