@@ -7301,12 +7301,12 @@ def repair_inventory_reconciliation():
 # ── Stock exceptions (oversell queue) ───────────────────────────────────────
 #
 # Launch-readiness Phase 7 stage 7d-i (docs/launch-readiness/
-# phase7-offline-ux.md "Decision 4"). READ-ONLY: this stage writes
-# `stock_exceptions` from exactly one place, the sync apply site
-# (commercial_runtime/sync/sync_service.py's `_record_or_refresh_stock_
-# exception`), never from an HTTP route. Resolving an exception (stage
-# 7d-ii, writing an ordinary `inventory_movement` and gated CAP_STOCK_
-# ADJUST per Decision 4) has no route yet -- this is the list only.
+# phase7-offline-ux.md "Decision 4"). `stock_exceptions` is written from
+# exactly one place, the sync apply site (commercial_runtime/sync/
+# sync_service.py's `_record_or_refresh_stock_exception`), never from an
+# HTTP route -- that stays true after stage 7d-ii below: resolving a row
+# never inserts, refreshes or reopens one, it only stamps `resolved_at_utc`
+# on a row this apply site already wrote.
 #
 # Gated CAP_REPORTS with no company-admin requirement, matching the
 # majority of this file's other read-only reports (dashboard_stats,
@@ -7362,6 +7362,179 @@ def list_stock_exceptions():
         'exceptions': [dict(r) for r in rows],
         'count': len(rows),
     }})
+
+
+# Stage 7d-ii: a human decision closes ONE open exception. Modelled on
+# `adjust_stock` immediately above -- same pair of gates (Decision 4: this is
+# a ledger write, not an acknowledgement, so it needs `retail.stock.adjust`
+# even though the LIST route above only needs `retail.reports` to read the
+# queue), same BEGIN IMMEDIATE + read-balance-then-write-movement shape when
+# a count is supplied, same containment shape as delete_category/
+# create_purchase_order (IntegrityError -> 409, other DatabaseError -> 400,
+# connection always closed).
+@retail_bp.route('/inventory/stock-exceptions/<string:exception_id>/resolve', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.stock.adjust", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def resolve_stock_exception(exception_id):
+    """Resolves ONE open `stock_exceptions` row with a human decision --
+    launch-readiness Phase 7 stage 7d-ii (docs/launch-readiness/
+    phase7-offline-ux.md "Decision 4").
+
+    Two independent things this route can do, controlled by whether the
+    caller supplies `counted_quantity`:
+
+    1. COUNTED. A human counted the shelf and the true figure differs from
+       what THIS device's ledger currently shows. The correction is written
+       through the EXACT SAME machinery `adjust_stock` uses two routes above
+       -- a real `inventory_movement` (stock_in/stock_out, signed by the
+       delta between the balance read HERE, fresh, inside this transaction,
+       and the count) plus the matching `inventory_balances` UPDATE, emitted
+       to `sync_outbox` like any other movement. Never a direct balance
+       write: `compute_drift` has to keep agreeing with the ledger, and
+       every other device only ever learns about this correction because it
+       is an ordinary movement event, not a special case they would need
+       their own code to understand.
+
+       The delta is computed against the CURRENT balance, not the
+       exception's own stale `observed_quantity_on_hand` -- other movements
+       (a further oversold merge, a delivery, an unrelated adjustment) may
+       have landed against this product/branch in the time between
+       detection and resolution, and a physical count is a statement about
+       the shelf right now, not about what the queue recorded then. If the
+       count already matches the live balance (within the same epsilon
+       tolerance `adjust_stock` and the reconciler use), no movement is
+       written -- there is nothing to correct, and a zero-quantity movement
+       would be noise in the ledger for no reason.
+
+    2. UNCOUNTED (backorder). Decision 4's own §5 resolutions are backorder,
+       substitute and refund, and a backorder legitimately leaves the
+       balance negative until the delivery lands -- so a count can never be
+       mandatory. `counted_quantity` is simply omitted and no movement is
+       written; the row still closes.
+
+    Either way a note is REQUIRED, carried into `_audit` (never onto the
+    `stock_exceptions` row itself -- the table gained no new column in this
+    stage; schema is frozen here, see database/schema.py's v20 comment). An
+    exception resolved with no note is indistinguishable from someone
+    clearing the queue to make it go away, which is exactly what Decision 4
+    says this route must never allow.
+
+    Re-resolving an already-closed row is refused with 409 and writes
+    NOTHING -- no second movement, no re-stamped `resolved_at_utc`.
+    `resolved_at_utc IS NULL` is checked once on read and enforced again in
+    the closing UPDATE's own WHERE clause, both inside the SAME BEGIN
+    IMMEDIATE transaction, so two concurrent resolutions of the same row can
+    never both succeed.
+    """
+    data = request.json or {}
+    cid = _cid()
+    note = (data.get('note') or '').strip()
+    if not note:
+        return jsonify({'status': 'error', 'message': 'A note explaining the resolution is required.'}), 400
+
+    raw_qty = data.get('counted_quantity')
+    counted_quantity = None
+    if raw_qty not in (None, ''):
+        try:
+            counted_quantity = float(raw_qty)
+        except (TypeError, ValueError):
+            return jsonify({'status': 'error', 'message': 'Invalid counted_quantity'}), 400
+
+    conn = get_retail_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        exception_row = conn.execute(
+            "SELECT id, product_id, branch_id, resolved_at_utc FROM stock_exceptions "
+            "WHERE id=? AND company_id=?",
+            (exception_id, cid)
+        ).fetchone()
+        if not exception_row:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'Exception not found'}), 404
+        if exception_row['resolved_at_utc'] is not None:
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'This exception was already resolved.'}), 409
+
+        pid, bid = exception_row['product_id'], exception_row['branch_id']
+        new_qty = None
+        movement_uid = None
+        if counted_quantity is not None:
+            conn.execute("""
+                INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
+                VALUES (?,?,?,0)
+            """, (cid, pid, bid))
+            current = conn.execute(
+                "SELECT quantity_on_hand FROM inventory_balances WHERE company_id=? AND product_id=? AND branch_id=?",
+                (cid, pid, bid)
+            ).fetchone()
+            on_hand = float(current['quantity_on_hand'] or 0) if current else 0.0
+            delta = counted_quantity - on_hand
+            # Same epsilon tolerance adjust_stock and the reconciler compare
+            # with (stock_reconciliation.py) -- quantity_on_hand is REAL and
+            # accumulated, so a fractional-unit product can sit a hair off
+            # an exact integer count without a real discrepancy existing.
+            if abs(delta) > stock_reconciliation.DEFAULT_TOLERANCE:
+                conn.execute("""
+                    UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand + ?
+                    WHERE company_id=? AND product_id=? AND branch_id=?
+                """, (delta, cid, pid, bid))
+                actor, terminal, utc_now = _stamp()
+                movement_type = 'stock_in' if delta > 0 else 'stock_out'
+                movement_uid = _new_uid()
+                conn.execute("""
+                    INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,notes,created_by,
+                                                     uid,actor_user_uid,terminal_id,created_at_utc)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (cid, pid, bid,
+                      movement_type,
+                      delta, 'EXCEPTION_RESOLVE', note, _uid(),
+                      movement_uid, actor, terminal, utc_now))
+                # Wave B shape, identical to adjust_stock's own emission just
+                # above: the correction is only useful if it travels.
+                _queue_sync_event(conn.cursor(), 'inventory_movement', movement_uid, 'create', {
+                    'uid': movement_uid, 'product_id': pid, 'branch_id': bid, 'branch_uid': _branch_uid(conn, bid),
+                    'movement_type': movement_type, 'quantity': delta, 'unit_cost': 0,
+                    'reference': 'EXCEPTION_RESOLVE', 'notes': note, 'created_by': _uid(),
+                    'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
+                })
+            new_row = conn.execute(
+                "SELECT quantity_on_hand FROM inventory_balances WHERE company_id=? AND product_id=? AND branch_id=?",
+                (cid, pid, bid)
+            ).fetchone()
+            new_qty = float(new_row['quantity_on_hand']) if new_row else None
+
+        now = now_utc_iso()
+        close = conn.execute(
+            "UPDATE stock_exceptions SET resolved_at_utc=? WHERE id=? AND company_id=? AND resolved_at_utc IS NULL",
+            (now, exception_id, cid)
+        )
+        if close.rowcount == 0:
+            # Only reachable if another transaction closed this exact row
+            # between the SELECT above and here -- BEGIN IMMEDIATE's write
+            # lock should make that impossible on SQLite, but the WHERE
+            # clause is kept as the same defense-in-depth belt-and-braces
+            # every gated UPDATE in this file carries (see delete_product,
+            # delete_category): fail closed rather than trust the earlier
+            # read alone.
+            conn.rollback()
+            return jsonify({'status': 'error', 'message': 'This exception was already resolved.'}), 409
+
+        _audit(conn, 'STOCK_EXCEPTION_RESOLVED', 'stock_exception', exception_id,
+               f'product={pid}, branch={bid}, counted_quantity={counted_quantity}, note={note}')
+        conn.commit()
+    except sqlite3.IntegrityError as exc:
+        conn.rollback()
+        current_app.logger.warning("resolve_stock_exception(%s) failed on a database constraint: %s", exception_id, exc)
+        return jsonify({'status': 'error', 'message': 'This exception could not be resolved.'}), 409
+    except sqlite3.DatabaseError as exc:
+        conn.rollback()
+        current_app.logger.exception("resolve_stock_exception(%s) failed: %s", exception_id, exc)
+        return jsonify({'status': 'error', 'message': 'Could not resolve this exception.'}), 400
+    finally:
+        conn.close()
+    return jsonify({'status': 'success', 'new_stock': new_qty, 'branch_id': bid, 'movement_uid': movement_uid})
 
 
 # ── Sync health ───────────────────────────────────────────────────────────────

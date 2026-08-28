@@ -35,6 +35,18 @@ that first action, which logs in as part of creating the company):
                     -> {"status_code":.., "body": {...}}
   adjust_stock     {"op": "adjust_stock", "product_id":.., "quantity":.., "reason":.., "branch_id": optional}
                     -> {"status_code":.., "body": {...}}
+  resolve_exception {"op": "resolve_exception", "exception_id":.., "note":..,
+                     "counted_quantity": optional}
+                    -> {"status_code":.., "body": {...}}
+                    (launch-readiness Phase 7 stage 7d-ii, POST .../inventory/
+                    stock-exceptions/<id>/resolve -- see retail_api.py's
+                    `resolve_stock_exception`. `body["movement_uid"]`, when a
+                    counted_quantity was supplied and actually changed the
+                    balance, is the SAME uid `movement_count_by_uid` below can
+                    look for on the OTHER device once it pulls -- the direct,
+                    id-based proof that a specific correction travelled,
+                    rather than an inference from a balance number that could
+                    coincidentally match for the wrong reason.)
   create_branch    {"op": "create_branch", "name":.., "address":.., "phone":..}
                     -> {"status_code":.., "body": {...}, "branch_id":.., "branch_uid":..}
                     (branch_id/branch_uid are looked up from `branches` after
@@ -64,6 +76,14 @@ drives `SyncService` methods directly rather than through a route):
                     a company that only ever self-healed or synced ONE
                     physical branch must show exactly 1, never 2.)
   movement_count_by_uid {"op": "movement_count_by_uid", "uid":..} -> {"count": int}
+  open_exception_id {"op": "open_exception_id", "company_id":.., "product_id":..}
+                    -> {"id": str|None}
+                    (the OPEN (resolved_at_utc IS NULL) stock_exceptions row's
+                    own id for this company/product, or None if there isn't
+                    one -- `stock_exceptions` is never itself a synced table
+                    (each device's apply site writes its own rows from what
+                    IT observes), so this reads the local row directly rather
+                    than resolving it through any HTTP route.)
   outbox_delete_entity_type {"op": "outbox_delete_entity_type", "entity_type":..} -> {"deleted": int}
   cash_session_open {"op": "cash_session_open", "branch_id":.., "terminal_id":..}
                     -> {"status_code":.., "body": {...}}
@@ -231,6 +251,13 @@ def main() -> None:
             r = client.post(f"{API}/products/{action['product_id']}/stock-adjust", json=body)
             results.append({"status_code": r.status_code, "body": r.get_json()})
 
+        elif op == "resolve_exception":
+            body = {"note": action["note"]}
+            if action.get("counted_quantity") is not None:
+                body["counted_quantity"] = action["counted_quantity"]
+            r = client.post(f"{API}/inventory/stock-exceptions/{action['exception_id']}/resolve", json=body)
+            results.append({"status_code": r.status_code, "body": r.get_json()})
+
         elif op == "create_branch":
             r = client.post(f"{API}/branches", json={
                 "name": action["name"], "address": action.get("address", ""), "phone": action.get("phone", ""),
@@ -311,6 +338,18 @@ def main() -> None:
             finally:
                 conn.close()
             results.append({"count": n})
+
+        elif op == "open_exception_id":
+            conn = get_retail_conn()
+            try:
+                row = conn.execute(
+                    "SELECT id FROM stock_exceptions WHERE company_id=? AND product_id=? "
+                    "AND resolved_at_utc IS NULL",
+                    (action["company_id"], action["product_id"]),
+                ).fetchone()
+            finally:
+                conn.close()
+            results.append({"id": row["id"] if row else None})
 
         elif op == "outbox_delete_entity_type":
             conn = get_retail_conn()

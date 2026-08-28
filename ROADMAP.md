@@ -718,3 +718,30 @@ Resolution (writing an `inventory_movement` through the existing paths, gated
 `docs/launch-readiness/phase7-offline-ux.md`) is stage 7d-ii, and so is the
 Decision 1 correction's relaxation of `create_sale`'s refusal when the device
 is behind. Neither lands until there is a queue to record the result in.
+
+### Correction to the v20 claim above (2026-08-29)
+
+That entry says stage 7d-ii bundles resolution AND the Decision 1 relaxation of
+`create_sale`'s refusal. **It was split when dispatched, and the split is the
+right shape:** 7d-ii is resolution only; the relaxation is 7d-iii.
+
+The reason matters, and it is a consequence of 7d-i's own design rather than a
+preference. 7d-i records exceptions ONLY from the sync apply site, justified by
+"a local sale cannot drive its own balance negative, because its own
+`qty > on_hand` check still stands". Relaxing that check makes the local sale
+path a NEW source of negative balances — so 7d-iii must also make it a
+recorder, or a relaxed local oversell would go entirely unrecorded and the
+queue would silently under-report.
+
+That is a real behavioural coupling and it deserves its own commit and its own
+proof, not a ride-along on a stage whose whole job is letting a human close a
+row.
+
+**Also recorded, a limitation of 7d-ii as shipped:** the required resolution
+note has no column on `stock_exceptions` — the schema was frozen at v20 for
+this stage — so it lives only in the audit log, reachable through
+`list_audit_log` (itself admin-device gated). The exception row records THAT it
+was resolved and when, not WHY. Whoever builds the queue's UI should either
+surface the audit entry alongside the row or add the column in a later version;
+a resolution whose reason is one join away from the screen showing it is a gap
+worth closing deliberately rather than discovering.

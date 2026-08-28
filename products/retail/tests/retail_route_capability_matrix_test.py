@@ -135,6 +135,15 @@ EXPECTED_MUTATION_CAPABILITIES = {
     # Retiring a customer is master-data maintenance, not selling -- see the
     # comment on the route for why it splits from its create/update siblings.
     'delete_customer': CAP_STOCK,
+    # Stage 7d-ii (docs/launch-readiness/phase7-offline-ux.md "Decision 4"):
+    # resolving an oversell exception writes an ordinary inventory_movement
+    # through the SAME machinery adjust_stock uses, so it needs the SAME
+    # authority -- a ledger write, not an acknowledgement. Deliberately NOT
+    # paired with list_stock_exceptions' CAP_REPORTS in
+    # EXPECTED_READ_CAPABILITIES below: reading the queue and writing a
+    # correction to it are different tiers of authority, exactly like the
+    # Stock accuracy screen's report/repair pair just above.
+    'resolve_stock_exception': CAP_STOCK,
 
     # ── The till: retail.sell ────────────────────────────────────────────────
     'create_sale': CAP_SELL,
