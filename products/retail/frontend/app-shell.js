@@ -2144,7 +2144,17 @@ const SubsystemApp = {
     // that has never completed its first sync gets its OWN wording via the
     // calm pill's existing "Waiting for first sync" fallback (below), not
     // "behind by N" -- there is no "last synced" instant to report yet.
+    //
+    // Phase 7 stage 7c-i adds a FOURTH tier, checked BEFORE the plain
+    // "behind" tier since it is the more specific (and more severe) of the
+    // two: still behind, but by more than RetailSystem.
+    // SYNC_STALE_WARNING_THRESHOLD_SECONDS (24h). Purely an escalation of
+    // the SAME "behind" state's presentation -- it carries the identical
+    // facts (last-sync clock time, unsynced count) the plain "behind" tier
+    // does, just rendered more strongly, and still informs rather than
+    // blocks (Decision 2).
     if (pushBad || pullBad) this._renderSyncAlarmState(data, pushBad, pullBad);
+    else if (!data.never_synced && this._isSyncBehindWarningThreshold(data)) this._renderSyncBehindWarningState(data);
     else if (!data.never_synced && this._isSyncBehindThreshold(data)) this._renderSyncBehindState(data);
     else this._renderSyncCalmState(data);
   },
@@ -2158,6 +2168,17 @@ const SubsystemApp = {
   // (defaults to "not behind" -- the calm pill -- rather than throwing).
   _isSyncBehindThreshold(data) {
     const threshold = window.RetailSystem && window.RetailSystem.SYNC_STALE_THRESHOLD_SECONDS;
+    const secs = data.seconds_since_last_success;
+    return typeof threshold === 'number' && typeof secs === 'number' && secs > threshold;
+  },
+
+  // Phase 7 stage 7c-i: the 24-hour escalation of _isSyncBehindThreshold
+  // just above -- identical shape, reading RetailSystem.
+  // SYNC_STALE_WARNING_THRESHOLD_SECONDS instead of RetailSystem.
+  // SYNC_STALE_THRESHOLD_SECONDS, and the same "not behind" default when
+  // RetailSystem isn't loaded.
+  _isSyncBehindWarningThreshold(data) {
+    const threshold = window.RetailSystem && window.RetailSystem.SYNC_STALE_WARNING_THRESHOLD_SECONDS;
     const secs = data.seconds_since_last_success;
     return typeof threshold === 'number' && typeof secs === 'number' && secs > threshold;
   },
@@ -2191,6 +2212,41 @@ const SubsystemApp = {
       + 'line-height:1.45;text-align:center;z-index:99998;'
       + 'box-shadow:0 4px 18px rgba(0,0,0,.35);';
     el.innerHTML = '<span style="color:#60a5fa;font-weight:700;">⏳ ' + headline + '</span>';
+  },
+
+  // State 5, Phase 7 stage 7c-i (docs/launch-readiness/phase7-offline-ux.md,
+  // "PART 2 -- the 24-hour soft warning"): the SAME two facts
+  // _renderSyncBehindState carries (last-sync clock time, unsynced count),
+  // escalated once the device has been behind for more than RetailSystem.
+  // SYNC_STALE_WARNING_THRESHOLD_SECONDS (24h). Visibly stronger than the
+  // plain "behind" tier -- red instead of blue, a heavier border and
+  // font-weight, a distinct ⚠ icon, and an explanatory detail sentence the
+  // plain tier does not carry -- but still informational only: no
+  // capability is checked, and nothing here refuses any write (Decision 2:
+  // "The 24-hour soft warning needs no capability: it informs, it does not
+  // block").
+  _renderSyncBehindWarningState(data) {
+    const el = this._syncBannerEl;
+    const lastSuccess = this._mostRecentSyncIso(data.push.last_success_at, data.pull.last_success_at);
+    const pending = Number.isFinite(data.pending_count) ? data.pending_count : 0;
+    const clock = (window.RetailSystem && window.RetailSystem._formatClockTime)
+      ? window.RetailSystem._formatClockTime(lastSuccess)
+      : null;
+    // lastSuccess is guaranteed non-null here (_renderSyncBanner only routes
+    // here when !data.never_synced), same fallback discipline as the plain
+    // "behind" tier just above.
+    const when = clock || this._formatRelativeTime(lastSuccess) || '';
+    const headline = t('Still offline since') + ' ' + this._esc(when) + ' — ' +
+      this._esc(String(pending)) + ' ' + t('unsynced');
+    const detail = t("This device has not synced with your other devices in over 24 hours. Reconnect it as soon as you can.");
+
+    el.title = '';
+    el.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#1e1e2e;'
+      + 'border-bottom:3px solid #ef4444;color:white;padding:9px 18px;font-size:13px;'
+      + 'line-height:1.45;text-align:center;z-index:99998;'
+      + 'box-shadow:0 4px 18px rgba(0,0,0,.35);';
+    el.innerHTML = '<span style="color:#ef4444;font-weight:800;">⚠ ' + headline + '</span>'
+      + '<span style="opacity:.85;margin-left:10px;">' + detail + '</span>';
   },
 
   // The original failure-only banner, unchanged in look and behavior: full-

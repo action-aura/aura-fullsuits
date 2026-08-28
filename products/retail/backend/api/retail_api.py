@@ -37,6 +37,7 @@ from commercial_runtime.identity.registry_db import get_conn as _registry_conn
 from commercial_runtime.licensing_contracts.flask_guard import make_capability_guard
 from commercial_runtime.sync.sync_service import nudge as _sync_nudge
 from commercial_runtime.sync.sync_service import get_active_health as _sync_get_active_health
+from commercial_runtime.sync.sync_service import SYNC_STALE_THRESHOLD_SECONDS as _SYNC_STALE_THRESHOLD_SECONDS
 from commercial_runtime.notifications import settings as _notification_settings
 from commercial_runtime.notifications.outbox import EmailOutboxRepository as _EmailOutboxRepository
 from commercial_runtime.notifications import whatsapp_settings as _whatsapp_settings
@@ -2561,6 +2562,40 @@ def get_purchase_order(po_id):
     conn.close()
     return jsonify({'status': 'success', 'data': {'po': dict(po), 'items': [dict(i) for i in items]}})
 
+def _is_device_behind_on_sync():
+    """True only when sync is CONFIGURED for this device AND this device is
+    behind `_SYNC_STALE_THRESHOLD_SECONDS`. Launch-readiness Phase 7 stage
+    7c-i (docs/launch-readiness/phase7-offline-ux.md, "DO block: receiving
+    a purchase order"): the ONLY caller today is receive_purchase_order's
+    guard below, but this is factored out as its own predicate because the
+    two silence rules it enforces are not specific to that one route.
+
+    Reached through the SAME module-level seam sync_health() itself uses
+    (`_sync_get_active_health()`, imported at the top of this file) --
+    never by reaching into app.py's own `_sync_service` variable, which
+    would bypass the exact "configured vs not" distinction this function
+    exists to make.
+
+    Both silence rules from stage 7b apply here too, and matter MORE here
+    because this one refuses work rather than merely rendering a banner:
+
+      * `configured is False` -> never behind. Most installs never turn
+        sync on (SYNC_RELAY_BASE_URL unset) and Android's SyncCoordinator
+        owns its own loop -- neither has a second device to double-receive
+        with, so there is nothing this guard would protect.
+      * `never_synced is True` -> never behind. A device that has not
+        completed a first sync has no basis for claiming it has drifted;
+        there is nothing to have drifted FROM yet.
+    """
+    health = _sync_get_active_health()
+    if not health.get('configured'):
+        return False
+    if health.get('never_synced'):
+        return False
+    secs = health.get('seconds_since_last_success')
+    return isinstance(secs, (int, float)) and secs > _SYNC_STALE_THRESHOLD_SECONDS
+
+
 @retail_bp.route('/purchase-orders/<int:po_id>/receive', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -2593,7 +2628,32 @@ def receive_purchase_order(po_id):
         that somehow reaches this code without the lock still cannot
         double-apply, because the row it needs to flip is no longer there
         to flip.
+
+    Launch-readiness Phase 7 stage 7c-i adds a SECOND, wider guard in front
+    of both of the above: `status='pending'` is read from THIS device's own
+    database, and PO status is never synced (multi-device-design.md §8
+    keeps it deliberately device-local), so the two guards above cannot see
+    a receipt already applied by a DIFFERENT device -- only by a second
+    request against the SAME device. Two devices whose users both hold
+    `retail.stock.adjust` can each receive the same PO once each, and both
+    additive `purchase_in` movements survive the sync merge, so the
+    delivery is double-counted. `_is_device_behind_on_sync()` blocks the
+    one case that hazard is actually preventable in today's design: this
+    device knowing it is behind. It is NOT a general fix for the hazard
+    (recorded separately in ROADMAP.md) -- a device that is fully caught up
+    can still race a second device that receives in the same window.
     """
+    if _is_device_behind_on_sync():
+        return jsonify({
+            'status': 'error',
+            'message': (
+                "This device hasn't synced in a while, so it can't confirm whether "
+                "another device already received this purchase order. Receiving it "
+                "now could add this delivery's stock twice. Reconnect this device to "
+                "sync, then try again."
+            ),
+        }), 409
+
     cid  = _cid()
     conn = get_retail_conn()
     try:

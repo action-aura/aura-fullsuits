@@ -220,6 +220,8 @@
   "d ago": "d ago",
   "Offline since": "Offline since",
   "unsynced": "unsynced",
+  "Still offline since": "Still offline since",
+  "This device has not synced with your other devices in over 24 hours. Reconnect it as soon as you can.": "This device has not synced with your other devices in over 24 hours. Reconnect it as soon as you can.",
   "Stock at": "Stock at",
   "Authentication required": "Authentication required",
   "Session expired or revoked. Please log in again.": "Session expired or revoked. Please log in again.",

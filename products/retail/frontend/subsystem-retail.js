@@ -2054,6 +2054,20 @@ const RetailSystem = {
   // means.
   SYNC_STALE_THRESHOLD_SECONDS: 30 * 60,
 
+  // Phase 7 stage 7c-i (docs/launch-readiness/phase7-offline-ux.md, "PART 2
+  // -- the 24-hour soft warning"): a SECOND, longer threshold on the SAME
+  // seconds_since_last_success figure above -- an escalation of the
+  // ordinary "behind" banner into a visibly stronger one once a device has
+  // been out of contact for more than a day. Lives right next to the
+  // 30-minute threshold for the identical reason that one does: app-
+  // shell.js reads RetailSystem.SYNC_STALE_WARNING_THRESHOLD_SECONDS
+  // rather than declaring its own copy, so the two files can never
+  // disagree about what "behind by a day" means. Purely informational --
+  // it informs, it does not block (Decision 2: "The 24-hour soft warning
+  // needs no capability"), unlike the SEPARATE 30-minute-threshold PO-
+  // receive guard added server-side this same stage.
+  SYNC_STALE_WARNING_THRESHOLD_SECONDS: 24 * 60 * 60,
+
   // Populated by app-shell.js's _pollSyncHealth(); null until the first poll
   // resolves (or forever, on an install with no `document`/fetch wiring --
   // e.g. these standalone node tests -- which is exactly the safe default:

@@ -39,6 +39,14 @@ it down:
  8. The reconciliation REPORT dumps every product name, SKU, branch and
     quantity in the company and carried only login + subsystem, while its
     repair twin required company-admin. Test 15.
+ 9. Launch-readiness Phase 7 stage 7c-i (docs/launch-readiness/
+    phase7-offline-ux.md, "DO block: receiving a purchase order"): test 1
+    above fixed the SAME-device race, but PO status never syncs, so that
+    guard structurally cannot see a receipt already applied by a DIFFERENT
+    device. receive_purchase_order now refuses to receive when sync is
+    configured AND this device is behind the shared staleness threshold --
+    but never when sync isn't configured (most installs) or this device has
+    never synced (no basis to claim drift). Tests 16-20.
 
 Self-contained bootstrap, matching every other file in this directory (no
 shared conftest.py exists here): own temp app-data dir, own license seed,
@@ -877,3 +885,146 @@ def test_reconciliation_report_requires_a_company_admin(company):
     allowed = client.get("/api/sub/retail/inventory/reconciliation")
     assert allowed.status_code == 200, allowed.get_json()
     assert allowed.get_json()["data"]["drift_count"] == 1
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# 16-20. Phase 7 stage 7c-i: PO receipt blocked when this device is behind
+# ═════════════════════════════════════════════════════════════════════════
+#
+# docs/launch-readiness/phase7-offline-ux.md, "DO block: receiving a
+# purchase order": receive_purchase_order's OWN double-receive guard (test 1
+# above) is per-device-local -- it reads `status` from THIS device's own
+# database, and PO status never syncs (multi-device-design.md §8 keeps it
+# deliberately device-local), so it structurally cannot see a receipt
+# already applied by a DIFFERENT device. `_is_device_behind_on_sync()`
+# blocks the one case that hazard is actually preventable in today's
+# design: this device KNOWING it is behind.
+#
+# `_sync_get_active_health` is monkeypatched directly on the `_retail_api`
+# module -- the SAME module-level seam receive_purchase_order itself reads
+# (`from commercial_runtime.sync.sync_service import get_active_health as
+# _sync_get_active_health`, never app.py's own `_sync_service` variable) --
+# so these tests exercise the real handler code path, not a stand-in.
+
+def _po_for_receipt(client, supplier_name=None):
+    """A single pending 10-unit PO for one fresh product, ready to receive."""
+    pid, _sku = _create_product(client, initial_stock=0)
+    sup = client.post("/api/sub/retail/suppliers", json={
+        "name": supplier_name or f"7c-i Supplier {uuid.uuid4().hex[:8]}"})
+    assert sup.status_code == 200, sup.get_json()
+    po = client.post("/api/sub/retail/purchase-orders", json={
+        "supplier_id": sup.get_json()["data"]["id"],
+        "items": [{"product_id": pid, "quantity": 10, "unit_cost": 5}],
+    })
+    assert po.status_code == 200, po.get_json()
+    return po.get_json()["data"]["id"], pid
+
+
+def test_receiving_a_po_is_blocked_when_this_device_is_behind(company, monkeypatch):
+    """The block itself: sync configured AND behind the shared threshold."""
+    company_id, client = company
+    po_id, _pid = _po_for_receipt(client)
+
+    monkeypatch.setattr(_retail_api, '_sync_get_active_health', lambda: {
+        'configured': True, 'never_synced': False,
+        'seconds_since_last_success': _retail_api._SYNC_STALE_THRESHOLD_SECONDS + 1,
+    })
+
+    r = client.post(f"/api/sub/retail/purchase-orders/{po_id}/receive", json={})
+    assert r.status_code == 409, r.get_json()
+    assert 'sync' in r.get_json()['message'].lower()
+
+
+def test_receiving_a_po_is_allowed_when_sync_is_not_configured(company, monkeypatch):
+    """The majority install: sync was never turned on for this device. Without
+    this test, an implementation that blocks unconditionally would pass the
+    block test above while bricking receiving for every single-device shop.
+
+    `seconds_since_last_success` is deliberately set to a huge STALE-looking
+    figure alongside `configured: False`, rather than mocking the minimal
+    real `{"configured": False}` shape get_active_health() actually returns.
+    A minimal mock would pass this test even if the `configured` guard were
+    deleted outright, because the OTHER guard (`isinstance(secs, ...)`)
+    would coincidentally also return "not behind" on missing keys -- this
+    fixture proves the `configured` check itself is load-bearing, not an
+    accident of which keys happen to be present."""
+    company_id, client = company
+    po_id, pid = _po_for_receipt(client)
+
+    monkeypatch.setattr(_retail_api, '_sync_get_active_health', lambda: {
+        'configured': False, 'never_synced': False,
+        'seconds_since_last_success': _retail_api._SYNC_STALE_THRESHOLD_SECONDS * 100,
+    })
+
+    r = client.post(f"/api/sub/retail/purchase-orders/{po_id}/receive", json={})
+    assert r.status_code == 200, r.get_json()
+    assert _balance(company_id, pid) == 10.0
+
+
+def test_receiving_a_po_is_allowed_when_the_device_has_never_synced(company, monkeypatch):
+    """Configured, but no completed first sync yet -- no basis for claiming
+    this device has drifted from anything.
+
+    `seconds_since_last_success` is deliberately set to a huge STALE-looking
+    figure alongside `never_synced: True`, rather than the real (mutually
+    consistent) `None` get_active_health() actually pairs it with. A mock
+    using `None` would pass this test even if the `never_synced` guard were
+    deleted outright, because the OTHER guard (`isinstance(secs, ...)`)
+    would coincidentally also return "not behind" on a None value -- this
+    fixture proves the `never_synced` check itself is load-bearing."""
+    company_id, client = company
+    po_id, pid = _po_for_receipt(client)
+
+    monkeypatch.setattr(_retail_api, '_sync_get_active_health', lambda: {
+        'configured': True, 'never_synced': True,
+        'seconds_since_last_success': _retail_api._SYNC_STALE_THRESHOLD_SECONDS * 100,
+    })
+
+    r = client.post(f"/api/sub/retail/purchase-orders/{po_id}/receive", json={})
+    assert r.status_code == 200, r.get_json()
+    assert _balance(company_id, pid) == 10.0
+
+
+def test_receiving_a_po_is_allowed_when_recently_synced(company, monkeypatch):
+    """The plain allow half: configured, synced before, comfortably inside
+    the threshold -- a healthy till still receives normally."""
+    company_id, client = company
+    po_id, pid = _po_for_receipt(client)
+
+    monkeypatch.setattr(_retail_api, '_sync_get_active_health', lambda: {
+        'configured': True, 'never_synced': False, 'seconds_since_last_success': 5.0,
+    })
+
+    r = client.post(f"/api/sub/retail/purchase-orders/{po_id}/receive", json={})
+    assert r.status_code == 200, r.get_json()
+    assert _balance(company_id, pid) == 10.0
+
+
+def test_a_blocked_receive_does_not_change_stock(company, monkeypatch):
+    """Asserts the CHECK RAN, not merely that a 4xx came back -- a refusal
+    that still wrote the movement would satisfy a status-code assertion
+    while doing the exact damage the block exists to prevent. Reads stock
+    (and the PO's own status) before and after and requires them unchanged."""
+    company_id, client = company
+    po_id, pid = _po_for_receipt(client)
+    before_balance = _balance(company_id, pid)
+    before_movements = len(_movements(company_id, pid))
+    assert before_balance == 0.0 and before_movements == 0
+
+    monkeypatch.setattr(_retail_api, '_sync_get_active_health', lambda: {
+        'configured': True, 'never_synced': False,
+        'seconds_since_last_success': _retail_api._SYNC_STALE_THRESHOLD_SECONDS * 10,
+    })
+
+    r = client.post(f"/api/sub/retail/purchase-orders/{po_id}/receive", json={})
+    assert r.status_code == 409, r.get_json()
+
+    assert _balance(company_id, pid) == 0.0, "a blocked receive must not touch inventory_balances"
+    assert len(_movements(company_id, pid)) == 0, "a blocked receive must not write a purchase_in movement"
+
+    conn = get_retail_conn()
+    try:
+        status = conn.execute("SELECT status FROM purchase_orders WHERE id=?", (po_id,)).fetchone()["status"]
+    finally:
+        conn.close()
+    assert status == 'pending', "a blocked receive must not flip the PO's own status either"

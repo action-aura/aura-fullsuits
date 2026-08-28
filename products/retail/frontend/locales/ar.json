@@ -220,6 +220,8 @@
   "d ago": " يوم مضت",
   "Offline since": "غير متصل منذ",
   "unsynced": "غير متزامن",
+  "Still offline since": "لا يزال غير متصل منذ",
+  "This device has not synced with your other devices in over 24 hours. Reconnect it as soon as you can.": "لم تتم مزامنة هذا الجهاز مع أجهزتك الأخرى منذ أكثر من 24 ساعة. أعد توصيله بأسرع وقت ممكن.",
   "Stock at": "المخزون في",
   "Authentication required": "مطلوب تسجيل الدخول",
   "Session expired or revoked. Please log in again.": "انتهت الجلسة أو تم إلغاؤها. يرجى تسجيل الدخول مرة أخرى.",

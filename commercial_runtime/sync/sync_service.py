@@ -226,6 +226,25 @@ _BACKOFF_MAX_SECONDS = 300.0
 _BACKOFF_JITTER_FRACTION = 0.2
 _BACKOFF_MAX_EXPONENT = 32
 
+# Launch-readiness Phase 7 stage 7c-i (docs/launch-readiness/
+# phase7-offline-ux.md, "DO block: receiving a purchase order"): the ONE
+# server-side value for "how stale is too stale to trust a locally-scoped
+# guard" -- receive_purchase_order's double-receive check reads `status`
+# from THIS device's own database, and PO status is never synced, so once
+# this device has been behind by more than this many seconds it can no
+# longer see whether another device already received the same PO.
+#
+# Deliberately the SAME NUMBER as the frontend's own single source of truth
+# (products/retail/frontend/subsystem-retail.js's
+# RetailSystem.SYNC_STALE_THRESHOLD_SECONDS, which stage 7b already uses to
+# decide when the POS tile's stock figure is stale). There is no shared
+# runtime between this Flask/Python backend and the vanilla-JS frontend to
+# hold one literal for both languages, so this is the Python half of that
+# one conceptual threshold -- change both together if it ever moves, and
+# never let a second Python copy of this number exist; every server-side
+# staleness decision imports THIS constant.
+SYNC_STALE_THRESHOLD_SECONDS = 30 * 60
+
 # Upper bound on how many events a single push request may carry. Owner's
 # relay hard-rejects any batch above its own `_MAX_PUSH_BATCH = 200`
 # (owner/app/sync/routes.py) with INVALID_BATCH -- and that rejection is
