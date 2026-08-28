@@ -2052,6 +2052,14 @@ const SubsystemApp = {
       if (!res.ok) return;                        // transient -- leave the banner as-is
       data = (await res.json()).data;
     } catch (e) { return; }                       // never let a poll break the app
+    // Phase 7 stage 7b (docs/launch-readiness/phase7-offline-ux.md): the POS
+    // tile's stale-stock treatment (subsystem-retail.js's _isStockStale())
+    // reads this SAME snapshot rather than running a second poller -- this
+    // fetch already runs every SYNC_POLL_MS. Stashed even on the
+    // {configured:false} branch below (and on a null/malformed response),
+    // so the tile learns "sync isn't on for this install" too and applies
+    // its own silence rule instead of defaulting to "unknown -> stale".
+    if (window.RetailSystem) window.RetailSystem._syncHealth = data;
     if (!data || data.configured !== true) {
       // Sync was never turned on for this install. Stop polling entirely --
       // app.py builds _sync_service at import time, so this can never flip
@@ -2124,8 +2132,65 @@ const SubsystemApp = {
       this._syncBannerEl = el;
     }
 
+    // Phase 7 stage 7b adds a THIRD tier between "actively failing" (above,
+    // keyed off LIVE consecutive_failures) and the calm pill (below): synced
+    // before, but the PERSISTED last-success clock (stage 7a) is older than
+    // RetailSystem.SYNC_STALE_THRESHOLD_SECONDS. Deliberately a SEPARATE
+    // signal from consecutive_failures -- that counter resets to 0 on a
+    // single lucky retry (or on an app restart, since it is in-memory only),
+    // so a connection that is silently bad for hours but occasionally
+    // reconnects could sit in the calm pill forever under the old two-way
+    // split alone. never_synced is excluded here on purpose: a fresh install
+    // that has never completed its first sync gets its OWN wording via the
+    // calm pill's existing "Waiting for first sync" fallback (below), not
+    // "behind by N" -- there is no "last synced" instant to report yet.
     if (pushBad || pullBad) this._renderSyncAlarmState(data, pushBad, pullBad);
+    else if (!data.never_synced && this._isSyncBehindThreshold(data)) this._renderSyncBehindState(data);
     else this._renderSyncCalmState(data);
+  },
+
+  // See _renderSyncBanner's comment just above for why this is a distinct
+  // signal from consecutive_failures. RetailSystem.SYNC_STALE_THRESHOLD_
+  // SECONDS is read rather than declared a second time here, so the banner
+  // and the POS tile's own staleness check (subsystem-retail.js) can never
+  // disagree about what "stale" means (docs/launch-readiness/
+  // phase7-offline-ux.md). Guarded against RetailSystem not being loaded
+  // (defaults to "not behind" -- the calm pill -- rather than throwing).
+  _isSyncBehindThreshold(data) {
+    const threshold = window.RetailSystem && window.RetailSystem.SYNC_STALE_THRESHOLD_SECONDS;
+    const secs = data.seconds_since_last_success;
+    return typeof threshold === 'number' && typeof secs === 'number' && secs > threshold;
+  },
+
+  // State 4 (docs/launch-readiness/phase7-offline-ux.md, stage decomposition:
+  // "Offline since 14:20 -- 412 unsynced"). Full-width and hard to miss, like
+  // the alarm state above -- this is meant to be SEEN, not ambient -- but
+  // visually distinct (no red/amber) since nothing is actively erroring
+  // right now; the device just hasn't reached the relay in a while.
+  _renderSyncBehindState(data) {
+    const el = this._syncBannerEl;
+    const lastSuccess = this._mostRecentSyncIso(data.push.last_success_at, data.pull.last_success_at);
+    const pending = Number.isFinite(data.pending_count) ? data.pending_count : 0;
+    // Clock time ("14:20"), not "45m ago" -- matches the POS tile's own
+    // dated figure (subsystem-retail.js's _formatClockTime, reused rather
+    // than re-implemented here) and, unlike a relative label, does not go
+    // stale on screen itself the next time someone glances at it.
+    const clock = (window.RetailSystem && window.RetailSystem._formatClockTime)
+      ? window.RetailSystem._formatClockTime(lastSuccess)
+      : null;
+    // lastSuccess is guaranteed non-null here (_renderSyncBanner only routes
+    // here when !data.never_synced), but fall back rather than ever render a
+    // blank "Offline since" if the clock formatter can't be reached.
+    const when = clock || this._formatRelativeTime(lastSuccess) || '';
+    const headline = t('Offline since') + ' ' + this._esc(when) + ' — ' +
+      this._esc(String(pending)) + ' ' + t('unsynced');
+
+    el.title = '';
+    el.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#1e1e2e;'
+      + 'border-bottom:2px solid #60a5fa;color:white;padding:9px 18px;font-size:13px;'
+      + 'line-height:1.45;text-align:center;z-index:99998;'
+      + 'box-shadow:0 4px 18px rgba(0,0,0,.35);';
+    el.innerHTML = '<span style="color:#60a5fa;font-weight:700;">⏳ ' + headline + '</span>';
   },
 
   // The original failure-only banner, unchanged in look and behavior: full-

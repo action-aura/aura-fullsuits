@@ -1720,6 +1720,13 @@ const RetailSystem = {
         .pos-card-stock { font-size:11px;color:var(--text-dim); }
         .pos-card-stock.is-low { color:var(--state-warning-text, var(--text-dim));font-weight:600; }
         .pos-card-stock.is-out { color:var(--state-danger-text, var(--text-dim));font-weight:700; }
+        /* Phase 7 stage 7b: a stale figure gets no urgency colour at all --
+           an amber "low stock" or red "out of stock" IS a confident claim,
+           the exact thing dating the number exists to stop making. Italic +
+           the palette's faintest text step reads as "this is a fact about
+           the past", not a fact about right now. See _isStockStale() /
+           _staleStockLabel() below. */
+        .pos-card-stock.is-stale { color:var(--text-tertiary, var(--text-dim));font-style:italic;font-weight:400; }
 
         /* ── Cart lines ──────────────────────────────────────────────────── */
         .pos-cart-items { flex:1;overflow-y:auto;padding-block:4px;padding-inline:14px;min-block-size:0; }
@@ -2032,6 +2039,77 @@ const RetailSystem = {
   // escapes this exact field (this._esc(p.name)) on the Products table --
   // this makes the POS-side rendering consistent with that existing
   // convention instead of trusting the same field raw.
+  // ── Phase 7 stage 7b: telling the truth about being offline ────────────────
+  // docs/launch-readiness/phase7-offline-ux.md, "Correction to Decision 1" +
+  // "Two silence rules 7b must honour". `_syncHealth` is stashed here by
+  // app-shell.js's EXISTING _pollSyncHealth() (which already polls
+  // GET /api/sub/retail/sync/health every SYNC_POLL_MS to drive the offline
+  // banner) -- this tile does not run a second poller, it just reads the
+  // same snapshot app-shell.js already fetched.
+  //
+  // The 30-minute threshold lives HERE, not duplicated in app-shell.js: the
+  // banner's own "behind" state (SubsystemApp._renderSyncBehindState) reads
+  // RetailSystem.SYNC_STALE_THRESHOLD_SECONDS rather than declaring its own
+  // copy, so the banner and the tile can never disagree about what "stale"
+  // means.
+  SYNC_STALE_THRESHOLD_SECONDS: 30 * 60,
+
+  // Populated by app-shell.js's _pollSyncHealth(); null until the first poll
+  // resolves (or forever, on an install with no `document`/fetch wiring --
+  // e.g. these standalone node tests -- which is exactly the safe default:
+  // no health data means "treat as not stale", never the reverse).
+  _syncHealth: null,
+
+  // Both silence rules from the doc apply here, not just to the banner:
+  //   - unconfigured ({configured:false}, or no health fetched yet at all)
+  //     -> never stale. A single-device install's local balance is not a
+  //     stale copy of anything; it is the only ledger there is, exactly as
+  //     authoritative 30 minutes after a sync as during one.
+  //   - never_synced -> never stale. A configured install that has not
+  //     completed its first sync has no basis for claiming the figure has
+  //     drifted -- there is nothing to have drifted FROM yet.
+  _isStockStale() {
+    const health = this._syncHealth;
+    if (!health || health.configured !== true) return false;
+    if (health.never_synced) return false;
+    const secs = health.seconds_since_last_success;
+    return typeof secs === 'number' && secs > this.SYNC_STALE_THRESHOLD_SECONDS;
+  },
+
+  // Mirrors app-shell.js's _mostRecentSyncIso -- duplicated rather than
+  // shared (this file has no module system; see _esc() just above for the
+  // same established per-file-duplication convention). Whichever half
+  // synced more recently is the true "last known" instant.
+  _mostRecentSyncSuccess(health) {
+    const a = health && health.push && health.push.last_success_at;
+    const b = health && health.pull && health.pull.last_success_at;
+    if (!a) return b || null;
+    if (!b) return a;
+    return new Date(a).getTime() >= new Date(b).getTime() ? a : b;
+  },
+
+  // HH:MM in local time -- deliberately NOT "45m ago". A relative label
+  // goes stale on the SCREEN the moment the cashier glances back at the
+  // same tile a few minutes later; a clock time does not.
+  _formatClockTime(isoString) {
+    if (!isoString) return null;
+    const d = new Date(isoString);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  },
+
+  // Corrected scope for 7b (see the doc section named above): the figure is
+  // KEPT, dated, not blanked -- a bare "no number" removes the only
+  // information the cashier had. Escapes p.unit for the same reason
+  // _renderPOSGrid already escapes it on the fresh path below: unit is
+  // catalog data (CSV import / any logged-in user), not this file's own
+  // hand-typed strings.
+  _staleStockLabel(p) {
+    const clock = this._formatClockTime(this._mostRecentSyncSuccess(this._syncHealth));
+    const qty = `${p.total_stock} ${this._esc(p.unit || '')}`;
+    return clock ? `${t('Stock at')} ${this._esc(clock)}: ${qty}` : `${t('Stock')}: ${qty}`;
+  },
+
   _renderPOSGrid(filter = '') {
     const grid = document.getElementById('pos-product-grid');
     if (!grid) return;
@@ -2051,12 +2129,29 @@ const RetailSystem = {
     grid.innerHTML = visible.map(p => {
       const outOfStock = p.total_stock <= 0;
       const icon = _ICONS[p.category_name] || _ICONS.Default;
+      // Phase 7 stage 7b: stale is checked for in-stock tiles only. The
+      // out-of-stock branch (text, class, aria-disabled, click handler) is
+      // untouched by this stage on purpose -- see the "Correction to
+      // Decision 1" section of docs/launch-readiness/phase7-offline-ux.md.
+      // That correction changed 7b's scope to "hide and date THE NUMBER,
+      // change no enforcement": create_sale's server-side check reads the
+      // same local balance _addToCart/_updateQty's max_stock cap does, so
+      // suspending only the client half would not let a cashier sell past a
+      // stale figure -- it would just move the refusal to a less-clear 400
+      // from the server. That relaxation is stage 7d's job (the oversell
+      // queue that can actually record the result), not this one's.
+      const stale = !outOfStock && this._isStockStale();
       // Stock state is carried by a CLASS, not an inline colour: the class
       // picks up --warn / --danger from the token layer, and the state is
       // still legible as a word ("Out of stock") when colour is unavailable.
       // The old inline `style="color:#ef4444"` both hardcoded a hex and made
       // low-stock indistinguishable from out-of-stock without colour vision.
-      const stockCls = outOfStock ? ' is-out' : (p.total_stock <= (p.reorder_level || 0) ? ' is-low' : '');
+      // A stale figure gets NEITHER of those colours (see .is-stale's own
+      // comment above) -- is-low/is-out are presentational only and carry
+      // no enforcement of their own, but an amber/red urgency colour on a
+      // number that might be half an hour wrong is exactly the "confident
+      // lie" this stage exists to stop telling.
+      const stockCls = stale ? ' is-stale' : (outOfStock ? ' is-out' : (p.total_stock <= (p.reorder_level || 0) ? ' is-low' : ''));
       // A REAL <button>, not a <div> with a click handler.
       //
       // This tile is the single most-used control on the whole product, and as
@@ -2094,7 +2189,7 @@ const RetailSystem = {
         <span class="pos-card-name" title="${this._esc(p.name)}">${this._esc(p.name)}</span>
         <span class="pos-card-price">${this._money(p.sell_price)}</span>
         <span class="pos-card-stock${stockCls}">
-          ${outOfStock ? t('Out of stock') : `${t('Stock')}: ${p.total_stock} ${this._esc(p.unit||'')}`}
+          ${outOfStock ? t('Out of stock') : (stale ? this._staleStockLabel(p) : `${t('Stock')}: ${p.total_stock} ${this._esc(p.unit||'')}`)}
         </span>
       </button>`;
     }).join('');
