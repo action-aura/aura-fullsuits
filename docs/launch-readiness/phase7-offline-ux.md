@@ -299,3 +299,73 @@ Left deliberately unanswered, because it needs the owner's input rather than
 the code's: whether an unresolved oversell should ever *block* anything (it
 should not, on the same "refused sale" principle), and how long resolved
 exceptions are retained.
+
+---
+
+# Correction to Decision 1, made before building 7b (2026-08-28)
+
+Decision 1 above says that when stock is stale, all three behaviours driven by
+`total_stock` suspend together: the tile label, the `is-out` state, and the
+`max_stock` cart cap. **The third of those is wrong, and this is the correction.**
+
+`create_sale` enforces the SAME rule server-side, and always has
+(`retail_api.py:~3193`):
+
+    on_hand = float(balance['quantity_on_hand']) if balance else 0.0
+    if qty > on_hand:
+        return 'Insufficient stock for "..." (have N, requested M).', 400
+
+Both the client cap and the server check read the same local
+`inventory_balances` row. Suspending only the client half therefore does not
+let the cashier sell anything — it just moves the refusal from a clean toast at
+the cart to a 400 from the server after the sale is attempted. **Strictly worse
+for the cashier, with no benefit.** A stale cache would still refuse the sale;
+the operator would simply be told later and less clearly.
+
+To actually let a cashier sell past a stale figure, the SERVER check has to
+relax, and that is a money-path change: it is the difference between "this
+device's ledger says no" and "sell it anyway and record an exception". That
+belongs with **stage 7d**, not here, and the two are inseparable in the right
+order — an oversell queue with nothing able to put anything in it is a table
+with no writer, which is exactly what v17 refused to ship for
+`stock_exceptions`.
+
+**Corrected scope for 7b: hide and date the number. Change no enforcement.**
+The confident lie is removed from the display, which is the complaint §5
+actually names, and nothing about what the till will or will not accept changes
+until 7d makes the oversell recordable.
+
+What this does NOT change: the cross-device oversell in §5 still happens
+exactly as designed. Each device checks its OWN local balance, so when two
+devices each believe they hold the last unit, both sales genuinely succeed and
+the merged ledger goes negative. That model was never in question; my error was
+about the single-device path, where client and server agree and suspending one
+of them achieves nothing.
+
+# Two silence rules 7b must honour, or it harms the majority install
+
+`sync_health`'s own docstring already states the first, and it is not optional:
+
+> `{"configured": false}` is the honest answer on two real installs and is NOT
+> an error: `SYNC_RELAY_BASE_URL` unset (the default — most installs never turn
+> sync on), and Android (Kotlin's `SyncCoordinator` owns that loop). **The
+> frontend banner must stay completely silent on it.**
+
+1. **No banner when sync is not configured.** Most installs are single-device
+   and never enable sync. A permanent "offline" banner about a feature they do
+   not use is noise that trains people to ignore banners, and it is the same
+   class of mistake as FINDING 2's logout block.
+
+2. **No stale-stock hiding when sync is not configured either.** This one is
+   not in the existing docstring and matters more. On a single-device install
+   the local balance is not a stale copy of anything — it is the only ledger
+   there is, and it is exactly as authoritative thirty minutes after a sync as
+   it was during one. Hiding it would remove correct information from the
+   till's most-used screen to protect against a divergence that cannot occur.
+
+   The freshness clock only means "how far behind other devices might I be",
+   so with no other devices it means nothing at all.
+
+`never_synced` (added in 7a) needs its own wording rather than a timestamp: a
+configured install that has never completed a first sync has no "offline since"
+instant to render, and "Offline since never" is not a sentence.
