@@ -187,3 +187,115 @@ first and add their own claim; this line records a moment, not live state.
   (backorder / substitute / refund, per §5) — and whether resolving one writes
   a stock movement, which would make it a money-adjacent path needing its own
   capability gate.
+
+---
+
+# The four open decisions, answered 2026-08-28
+
+Answered by reading the code each one depends on. One of them changed
+materially once the code was read, and it is the first.
+
+## Decision 1 (7b) — hiding the stock number means suspending TWO derived behaviours, not relabelling one
+
+The spec says the POS tile hides the on-hand number once the last sync is older
+than 30 minutes, rather than show a confident wrong one.
+
+Read what `total_stock` actually feeds in `subsystem-retail.js`, and it is
+**three** things, not one:
+
+1. the tile label `Stock: N` (`:2097`);
+2. the `is-low` / `is-out` visual state, including rendering the words
+   **"Out of stock"** in place of the number (`:2059`, `:2097`);
+3. **`max_stock` on the cart line (`:2123`)**, which `_updateQty` enforces as a
+   hard refusal: `if (newQty > item.max_stock) { showToast('Max stock: …');
+   return; }` (`:2136`).
+
+So hiding only the label would leave the two behaviours that *act* on the stale
+figure fully live. A till that has been offline for an hour would still refuse
+to add a fourth unit to the cart because its hour-old cache says three, and
+would still tell the cashier "Out of stock" about something sitting on the
+shelf in front of them.
+
+That is the confident-wrong behaviour moved somewhere worse: from a number the
+cashier can disbelieve to a refusal they cannot override. And it contradicts
+this programme's own stated principle in `multi-device-design.md` §8 — *a
+refused sale is worse than an oversell*, which is precisely why we build no
+reservations.
+
+**Decision: when stock is stale, suspend all three together.** The tile shows
+the last known figure explicitly timestamped and de-emphasised rather than a
+bare number — "Stock at 14:20" — so the cashier gets a *dated* fact instead of
+either a confident lie or a useless blank. The `is-out` state and the
+`max_stock` cap both stop being enforced while stale; the cashier's eyes are a
+better sensor than an hour-old cache. Anything that goes negative as a result
+lands in the 7d oversell queue, which is exactly what that queue is for.
+
+This makes 7b depend on 7d being at least designed, and is the reason the tile
+must not simply be blanked: "no number" removes the lie but also removes the
+only information the cashier had.
+
+## Decision 2 (7c) — the 72-hour stop is a manager-overridable block, not an absolute refusal
+
+Two facts constrain this.
+
+**A new capability code is expensive.** `CAPABILITY_CODES`
+(`user_accounts.py:159`) is a fixed tuple of exactly eight, and its comment
+records that the tuple IS the seeding contract: every account gets a row for
+every code, so "never provisioned" and "explicitly denied" stay
+distinguishable. Adding a ninth means a registry migration and a re-seed of
+every existing account. Reuse an existing code.
+
+**An absolute stop contradicts the programme's own principle.** §8 says a
+refused sale is worse than an oversell, and that is the stated reason we build
+no reservations. A hard stop at 72 hours refuses *every* sale — for a shop whose
+internet has been down for three days, the application would close the shop.
+That is the most severe thing this software can do to a business, and it would
+be done on the basis of a locally-measured clock the design itself does not
+trust (§9 risk 3).
+
+**Decision: at 72 hours new sales are blocked behind a manager override**, not
+refused outright. The block states elapsed offline time and unsent event count;
+the override is gated on **`CAP_CASH_APPROVE`** and every use is logged with
+both figures.
+
+`CAP_CASH_APPROVE` rather than `CAP_STOCK_ADJUST` because it is already this
+codebase's "a manager accepts an anomaly instead of the system refusing"
+authority — it is what approves a cash variance. `CAP_STOCK_ADJUST` is
+master-data editing, a different kind of permission that happens to be held by
+the same people.
+
+The 24-hour soft warning needs no capability: it informs, it does not block.
+
+## Decision 3 (7c) — enforced in the handler, explained in the UI
+
+Enforce in the Flask route handlers; surface the plain reason in the UI. A
+UI-only block is a suggestion, and this codebase already treats that
+distinction as settled — `retail_route_capability_matrix_test.py` exists to
+assert every mutating route carries its own server-side gate.
+
+Worth stating because it is easy to get backwards: "offline" here is a **local
+policy decision, not an unreachable server**. The Flask backend runs on the
+device, so the handler is always reachable; what is unreachable is the relay.
+The handler therefore asks the persisted freshness from 7a, not the network.
+
+## Decision 4 (7d) — resolving an oversell writes a stock movement, so it is gated like one
+
+§5's resolutions are backorder, substitute and refund. Every one of them
+changes stock, money, or both, so resolving an exception is not an
+acknowledgement — it is a write on the ledger this entire programme exists to
+keep honest.
+
+**Decision: resolution writes an ordinary `inventory_movement` through the
+existing paths and is gated on `CAP_STOCK_ADJUST`**, the same capability every
+other movement-writing path already requires. No new code, no separate ledger,
+and `compute_drift` keeps working because the correction is a movement like any
+other rather than a silent balance edit.
+
+**An exception is never auto-resolved and never silently dropped**, matching
+the posture already required of quarantined sync events in `ROADMAP.md`. It is
+resolved by a human or it stays open and visible.
+
+Left deliberately unanswered, because it needs the owner's input rather than
+the code's: whether an unresolved oversell should ever *block* anything (it
+should not, on the same "refused sale" principle), and how long resolved
+exceptions are retained.
