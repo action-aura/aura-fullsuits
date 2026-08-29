@@ -1345,6 +1345,40 @@ def create_product():
             if existing_barcode:
                 conn.close()
                 return jsonify({'status': 'error', 'message': 'Barcode already exists'}), 409
+        # `supplier_id` arrived straight from the request body with no check of
+        # any kind -- not existence, not tenancy, not tombstone -- so a caller
+        # could file a product against ANOTHER company's supplier. Same
+        # unvalidated-foreign-key shape `create_purchase_order` carried until
+        # `6b79b5a`, on a different table, and validated here the same way.
+        #
+        # Severity stated honestly, because it is lower than it first looks and
+        # the next reader deserves the real reason this exists: nothing in this
+        # codebase currently reads supplier DETAILS through a product. Every
+        # join to `suppliers` was enumerated (there are exactly two, both in the
+        # purchase-order routes, both company-scoped since `6b79b5a`), and
+        # `list_products` returns `p.*` -- the raw `supplier_id`, never a
+        # supplier name. So a poisoned value is a dangling cross-tenant
+        # reference today, not a live data leak.
+        #
+        # It is fixed anyway because it is ONE JOIN away from being one. The
+        # moment anyone puts a supplier name on the products list -- an obvious
+        # feature -- that id starts rendering another tenant's data, and whoever
+        # adds the join has no reason to suspect the id is untrusted. CLAUDE.md
+        # treats an unscoped business query as a bug rather than a
+        # simplification; an unvalidated FK write is the same class.
+        #
+        # `supplier_id` stays OPTIONAL: a product with no supplier is a real,
+        # exercised state, so only a supplied value is checked.
+        supplier_id = data.get('supplier_id')
+        if supplier_id:
+            valid_supplier = conn.execute(
+                "SELECT id FROM suppliers WHERE id=? AND company_id=? AND status='active' AND deleted_at_utc IS NULL",
+                (supplier_id, cid)
+            ).fetchone()
+            if not valid_supplier:
+                conn.close()
+                return jsonify({'status': 'error',
+                                 'message': f'Unknown supplier_id: {supplier_id}'}), 400
         cur = conn.cursor()
         pid = str(_uuid.uuid4())
         # launch-readiness Phase 6 stage 6a-i: row_version/updated_at_utc
@@ -1438,6 +1472,27 @@ def update_product(pid):
         if existing_barcode:
             conn.close()
             return jsonify({'status': 'error', 'message': 'Barcode already exists'}), 409
+    # Same unvalidated-foreign-key fix as create_product above -- `supplier_id`
+    # is in this route's `allowed` list, so a PATCH could re-point an existing
+    # product at ANOTHER company's supplier even though creating it that way
+    # was blocked. Fixing only the create path would leave the identical hole
+    # one request later, which is the "present on one path, absent on another"
+    # shape this codebase has shipped before.
+    #
+    # `'supplier_id' in fields` rather than a truthiness check: clearing the
+    # supplier by PATCHing an explicit null is legitimate and must stay
+    # allowed, so only a non-empty supplied value is validated. See
+    # create_product's comment for why this is worth fixing at all when
+    # nothing currently reads supplier details through a product.
+    if fields.get('supplier_id'):
+        valid_supplier = conn.execute(
+            "SELECT id FROM suppliers WHERE id=? AND company_id=? AND status='active' AND deleted_at_utc IS NULL",
+            (fields['supplier_id'], cid)
+        ).fetchone()
+        if not valid_supplier:
+            conn.close()
+            return jsonify({'status': 'error',
+                             'message': f'Unknown supplier_id: {fields["supplier_id"]}'}), 400
     cur = conn.cursor()
     sets = ', '.join(f'{k}=?' for k in fields)
     values = list(fields.values())
