@@ -808,3 +808,46 @@ filter — and neither is individually pinned. Disabling either alone leaves
 disabling both reproduces the original bug. A future refactor could delete one
 believing it redundant, and no test would object. Worth an isolation probe for
 each, the way stage 7c-ii and 7d-iii ended up needing one.
+
+## 2026-08-29 — the two exception queues both need ONE screen, not two
+
+Refining the "`sync_conflicts` has no UI" entry above, after checking what
+actually exists.
+
+It is worse than recorded: `sync_conflicts` has **no read route at all**. Grep
+finds zero references in `retail_api.py` and zero in the frontend. Phase 6
+stage 6a-ii writes a row every time an incoming catalogue edit is discarded as
+stale — precisely so a rejection is visible rather than a silent drop — and
+nothing can read it back through any interface.
+
+`stock_exceptions` (Phase 7 stage 7d-i) is one step further along: it has a
+read route and a resolve route, but still no screen.
+
+**These are the same feature and should be built as one surface, not two.**
+Both answer "something happened that the software could not resolve on its own
+and a human must decide". A shop owner does not want two places to look, and
+two half-built queues is how one of them ends up permanently unvisited.
+
+What a combined screen needs:
+* a read route for `sync_conflicts`, mirroring `list_stock_exceptions`
+  (7d-i) — the smaller half, and a prerequisite;
+* one page listing both kinds, each row carrying enough context to act:
+  which product/record, which device, when, and what was discarded;
+* the resolve action `stock_exceptions` already has, and for
+  `sync_conflicts` an equivalent acknowledgement — a discarded edit cannot be
+  "re-applied" (the newer value legitimately won), so the honest action there
+  is "seen", not "fix".
+
+Two related gaps that belong on the same page rather than separately:
+* **the resolution note has no column** on `stock_exceptions` — it lives only
+  in the audit log, so the row records THAT it was resolved, not WHY. Surface
+  the audit entry beside the row, or add the column;
+* **no restore UI exists for any entity** — a deleted product, supplier or
+  customer can only be restored by a raw API call. A "deleted records" view
+  belongs in the same neighbourhood as the exception queues: both are
+  "things needing an owner's attention that no screen currently shows".
+
+Deliberately NOT started as an API-only route in isolation: `stock_exceptions`
+already demonstrates that a queue with a route and no screen is invisible in
+practice, and adding a second one would double the invisible surface without
+closing the gap either was recorded for.

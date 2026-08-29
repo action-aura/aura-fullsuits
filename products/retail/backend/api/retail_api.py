@@ -2378,9 +2378,22 @@ def delete_supplier_contact(sid, contact_id):
 def list_purchase_orders():
     cid = _cid()
     conn = get_retail_conn()
+    # Cross-tenant leak fix, 2026-08-29: `AND s.company_id=po.company_id`
+    # added to the JOIN CONDITION, deliberately NOT to the WHERE clause --
+    # same reasoning as list_products's categories-join comment (above,
+    # this file). This is a LEFT JOIN and a PO with no supplier at all
+    # (supplier_id IS NULL, a legitimate PO) must still be returned; a
+    # condition in WHERE would silently drop every supplier-less PO from
+    # this list instead of just blanking its supplier_name. Before this
+    # fix, a purchase_orders row carrying another company's supplier_id
+    # (create_purchase_order accepted one with no validation until this
+    # same fix) joined straight across the tenant boundary and handed this
+    # company that OTHER company's supplier NAME. Mirrors the existing
+    # reverse-direction join in `list_suppliers` (above, this file):
+    # `ON po.supplier_id=s.id AND po.company_id=s.company_id`.
     rows = conn.execute("""
         SELECT po.*, s.name as supplier_name
-        FROM purchase_orders po LEFT JOIN suppliers s ON po.supplier_id=s.id
+        FROM purchase_orders po LEFT JOIN suppliers s ON po.supplier_id=s.id AND s.company_id=po.company_id
         WHERE po.company_id=? ORDER BY po.created_at DESC LIMIT 100
     """, (cid,)).fetchall()
     conn.close()
@@ -2499,6 +2512,42 @@ def create_purchase_order():
             if missing_ids:
                 return jsonify({'status': 'error',
                                  'message': f'Unknown product_id: {sorted(missing_ids)[0]}'}), 400
+
+        # Cross-tenant leak fix, 2026-08-29 (ROADMAP.md's "create_purchase_
+        # order still has no cross-tenant validation on supplier_id" entry):
+        # `supplier_id` carried NO validation of any kind before this block
+        # -- not existence, not company ownership, not tombstone. A caller
+        # in company A could pass company B's supplier_id straight through;
+        # the INSERT below has no FK enforcing a company_id match, so the
+        # row landed cleanly, and `list_purchase_orders`/`get_purchase_order`
+        # (below in this file) joined suppliers with no company condition on
+        # the join either, so the very next read handed company A company
+        # B's supplier NAME. This closes the WRITE half; the join fix on
+        # those two read routes closes the READ half -- neither is
+        # sufficient alone, since validation here does nothing for rows
+        # already written, and the join fix alone would still let a bad row
+        # be written (and would silently blank its supplier name on read
+        # rather than refuse the write).
+        #
+        # `supplier_id` stays OPTIONAL: `if supplier_id:` guards this
+        # exactly like every other `if supplier_id:` branch already in this
+        # function (the AP-ledger credit adjustment below) -- a PO with no
+        # supplier at all is legitimate and must not be refused. Same
+        # shape, same error style, same status code as the product check
+        # immediately above: 400, with the offending id named rather than a
+        # generic "invalid" message. `status='active' AND deleted_at_utc IS
+        # NULL` is the same tombstone/legacy-delete pairing
+        # `create_supplier_contact`'s comment (above, this file) explains in
+        # full.
+        supplier_id = data.get('supplier_id')
+        if supplier_id:
+            valid_supplier = conn.execute(
+                "SELECT id FROM suppliers WHERE id=? AND company_id=? AND status='active' AND deleted_at_utc IS NULL",
+                (supplier_id, cid)
+            ).fetchone()
+            if not valid_supplier:
+                return jsonify({'status': 'error',
+                                 'message': f'Unknown supplier_id: {supplier_id}'}), 400
         # purchase_orders.po_number carries a bare (not company-scoped, not
         # device-scoped) UNIQUE constraint, but _next_ref()'s counter resets
         # per company AND is a per-DEVICE table (`doc_sequences` is never
@@ -2516,7 +2565,7 @@ def create_purchase_order():
         # _next_ref helper or its format for other doc types.
         po_number = f"{_next_ref(conn, cid, 'po')}-{str(cid)[:8]}-{_device_doc_discriminator()}"
         total = _money(sum(float(i.get('unit_cost', 0)) * float(i.get('quantity', 0)) for i in items))
-        supplier_id = data.get('supplier_id')
+        # supplier_id was already resolved and validated above.
         payment_status = 'paid' if amount_paid >= total - 0.005 else ('partial' if amount_paid > 0.005 else 'unpaid')
         cur.execute("""
             INSERT INTO purchase_orders (company_id,po_number,supplier_id,branch_id,status,subtotal,total,notes,ordered_at,
@@ -2564,7 +2613,12 @@ def create_purchase_order():
 def get_purchase_order(po_id):
     cid = _cid()
     conn = get_retail_conn()
-    po   = conn.execute("SELECT po.*,s.name as supplier_name FROM purchase_orders po LEFT JOIN suppliers s ON po.supplier_id=s.id WHERE po.id=? AND po.company_id=?", (po_id, cid)).fetchone()
+    # Cross-tenant leak fix, 2026-08-29: same join-condition fix (and same
+    # reasoning) as list_purchase_orders's identical comment above -- the
+    # company condition belongs on the JOIN, not the WHERE, or a
+    # supplier-less PO (a legitimate row) would 404 here instead of
+    # returning with a blank supplier_name.
+    po   = conn.execute("SELECT po.*,s.name as supplier_name FROM purchase_orders po LEFT JOIN suppliers s ON po.supplier_id=s.id AND s.company_id=po.company_id WHERE po.id=? AND po.company_id=?", (po_id, cid)).fetchone()
     if not po:
         conn.close(); return jsonify({'status': 'error', 'message': 'Not found'}), 404
     items = conn.execute("""
