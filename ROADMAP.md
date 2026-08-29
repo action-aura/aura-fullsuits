@@ -851,3 +851,44 @@ Deliberately NOT started as an API-only route in isolation: `stock_exceptions`
 already demonstrates that a queue with a route and no screen is invisible in
 practice, and adding a second one would double the invisible surface without
 closing the gap either was recorded for.
+
+## 2026-08-29 — the same unvalidated-supplier hole exists on the PRODUCT routes
+
+Found while fixing the purchase-order cross-tenant leak (`6b79b5a`), and
+deliberately left unfixed there to keep that change's mutation proofs
+unambiguous.
+
+`create_product` (~line 1360) and `update_product` (~line 1423) write
+`data.get('supplier_id')` straight through with **no validation at all** — no
+existence check, no `company_id` match, no tombstone check. Identical bug class
+to the one just fixed on `create_purchase_order`, on a different table.
+
+**What is already contained, and what is not.** The PO fix scoped the supplier
+joins in `list_purchase_orders` and `get_purchase_order`, so a poisoned
+`products.supplier_id` cannot leak a foreign supplier NAME through purchase-order
+reads. `accept_reorder_request` is also safe on its own account: it reads
+`supplier_id` off the products row rather than from request data, and that row is
+read scoped to company, active status and tombstone.
+
+What has NOT been checked, and must be before this is called contained: every
+other read that joins `suppliers` through `products.supplier_id`. If any is
+unscoped the same name-leak applies by a different route, and the fix is the
+same two halves — validate on write, scope the join.
+
+The write half should mirror `create_purchase_order`'s new check exactly, and
+`supplier_id` must stay OPTIONAL there too: a product with no supplier is a real
+and exercised state.
+
+### Two stale comments to correct when this is fixed
+
+Both now describe the purchase-order bug as unfixed, and were accurate when
+written:
+
+* `preview_po_split`'s own comment — "unlike `create_purchase_order` above (a
+  real, pre-existing bug ... OUT OF SCOPE for this route to fix)";
+* `retail_po_split_route_test.py::test_split_preview_rejects_cross_tenant_product_id`'s
+  docstring — "a real, pre-existing, deliberately NOT-fixed-here bug".
+
+This repo corrects stale comments in place rather than letting them rot, and a
+comment asserting a live bug that no longer exists will send the next reader
+looking for it.
