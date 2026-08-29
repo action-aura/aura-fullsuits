@@ -892,3 +892,40 @@ written:
 This repo corrects stale comments in place rather than letting them rot, and a
 comment asserting a live bug that no longer exists will send the next reader
 looking for it.
+
+### Checked 2026-08-29 — that product-route hole is real but currently NON-LEAKING
+
+The entry above says every read joining `suppliers` through
+`products.supplier_id` must be checked before the product-route hole is called
+contained. Checked, and the answer is better than assumed.
+
+**No such read exists.** Every read of the `suppliers` table in
+`products/retail/backend` and `commercial_runtime` was enumerated, not just the
+joins:
+
+* exactly TWO joins exist, both in the purchase-order routes, both scoped by
+  `6b79b5a`;
+* `list_suppliers`' own query is company-scoped in its WHERE;
+* every other read is either an existence check carrying
+  `AND company_id=?`, or a read-back by id immediately after a company-scoped
+  UPDATE (so the row is already proven to be this tenant's);
+* nothing anywhere fetches supplier DETAILS via a product's `supplier_id`.
+
+`list_products` returns `p.*`, which carries the raw `supplier_id` but no
+supplier name, so a poisoned value exposes an opaque foreign identifier and
+nothing else.
+
+**So this is a dangling cross-tenant reference, not an active data leak** — a
+correction to the severity implied above, which was written before the check.
+
+Still worth fixing, for two reasons that are not "it leaks today":
+1. CLAUDE.md's rule is that a business query skipping `company_id` scoping is a
+   bug rather than a simplification, and an unvalidated FK write is the same
+   class;
+2. it is one added join away from becoming a real leak. The moment anyone puts
+   a supplier name on the products list — an obvious, likely feature — the
+   poisoned id starts rendering another tenant's data, and whoever adds that
+   join will have no reason to suspect the id is untrusted.
+
+Priority accordingly: real, worth doing, not urgent. The write-side validation
+should mirror `create_purchase_order`'s, and `supplier_id` must stay optional.
