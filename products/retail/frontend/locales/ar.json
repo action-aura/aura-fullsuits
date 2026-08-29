@@ -569,5 +569,8 @@
   "Resolving…": "جارٍ الحلّ…",
   "Exception resolved.": "تم حلّ الاستثناء.",
   "Could not resolve this exception.": "تعذّر حلّ هذا الاستثناء.",
-  "A note explaining the resolution is required.": "يلزم إدخال ملاحظة توضح سبب الحلّ."
+  "A note explaining the resolution is required.": "يلزم إدخال ملاحظة توضح سبب الحلّ.",
+  "Sell": "المبيعات",
+  "Insight": "التحليلات",
+  "Admin": "الإدارة"
 }

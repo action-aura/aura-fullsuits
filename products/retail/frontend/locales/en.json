@@ -569,5 +569,8 @@
   "Resolving…": "Resolving…",
   "Exception resolved.": "Exception resolved.",
   "Could not resolve this exception.": "Could not resolve this exception.",
-  "A note explaining the resolution is required.": "A note explaining the resolution is required."
+  "A note explaining the resolution is required.": "A note explaining the resolution is required.",
+  "Sell": "Sell",
+  "Insight": "Insight",
+  "Admin": "Admin"
 }

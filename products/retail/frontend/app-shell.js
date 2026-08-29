@@ -315,6 +315,25 @@ const SubsystemApp = {
     return this.capabilities.includes(code);
   },
 
+  // The exact per-item visibility rule _renderShell's nav used to inline in
+  // its filter(). Pulled out to its own method so the sidebar-grouping pass
+  // (launch-readiness 2026-08-29) can apply it once per item and reuse the
+  // result for both the ungrouped Dashboard entry and every sys.navGroups
+  // bucket, without re-deriving it or changing what it decides. Every axis
+  // stays exactly as it was: `roles` (canClinic), `desktopOnly` (this
+  // platform), `adminOnly` (this DEVICE, this.isAdminDevice), `ownerOnly`
+  // (this USER's role) and `capability` (this user's per-grant list via
+  // hasCapability). retail_employee_management_test.py greps app-shell.js's
+  // SOURCE for the literal fragment `!item.ownerOnly || this.role === 'admin'`
+  // -- keep that exact text if this method is ever touched.
+  _isNavItemVisible(item) {
+    return (!item.roles || this.canClinic(...item.roles)) &&
+      (!item.desktopOnly || !/Android/i.test(navigator.userAgent || '')) &&
+      (!item.adminOnly || this.isAdminDevice) &&
+      (!item.ownerOnly || this.role === 'admin') &&
+      (!item.capability || this.hasCapability(item.capability));
+  },
+
   // Resolve `this.capabilities` from a GET /api/auth/session body.
   //
   // Extracted from init() into its own named method for one reason: it is the
@@ -652,7 +671,46 @@ const SubsystemApp = {
         // _renderExceptions, not here, because that authority varies by
         // ROW section, not by whether the screen is reachable at all.
         { id: 'exceptions', label: 'Exceptions', icon: '⚠️', capability: 'retail.reports' },
-      ]
+      ],
+
+      // Sidebar section grouping (launch-readiness 2026-08-29: "the left
+      // panel needs reorganizing -- it's so much stuff on the left you get
+      // distracted"). This is a RENDER-TIME arrangement ONLY -- it does not
+      // gate anything and must never change WHO sees WHICH entry, only how
+      // the entries an owner already sees are laid out. `nav` above is left
+      // completely untouched: it stays the flat, per-item source of truth
+      // every capability/adminOnly/ownerOnly/desktopOnly check already reads
+      // (via _isNavItemVisible), and the exact shape
+      // retail_employee_management_test.py and
+      // retail_reports_capability_gate_test.js both assert against with a
+      // regex/render probe -- it cannot become a nested structure.
+      //
+      // Dashboard is deliberately absent from every group here: it is the
+      // home screen, not a member of a category, and _renderShell renders it
+      // before walking this list.
+      //
+      // Grouped by what a shopkeeper is DOING, not by what the data model
+      // calls things: Customers sits under Sell because you reach for a
+      // customer mid-sale, not while managing inventory; Purchase Orders
+      // sits under Stock because it is how stock arrives.
+      //
+      // Every id below must name exactly one entry in `nav` above (other
+      // than 'dashboard'), and every non-dashboard `nav` entry must appear in
+      // exactly one group -- retail_nav_groups_test.js's
+      // testAllFifteenDestinationsReachableForOwner and
+      // testGroupsRenderInSpecifiedOrderWithMembers pin both directions, so a
+      // future nav entry that forgets a group fails loudly instead of
+      // silently vanishing from the sidebar.
+      //
+      // A group whose every item is filtered out by _isNavItemVisible must
+      // render NO header at all -- see _renderShell's groupsHTML below. An
+      // empty section header is worse than the flat list this replaces.
+      navGroups: [
+        { label: 'Sell',    items: ['pos', 'returns', 'scanner', 'customers'] },
+        { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases'] },
+        { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
+        { label: 'Admin',   items: ['employees', 'admin-center'] },
+      ],
     },
   },
 
@@ -1788,8 +1846,37 @@ const SubsystemApp = {
   _renderShell(sys, systemId) {
     const shell = document.getElementById('subsystem-shell');
     if (!shell) return;
-    
+
     const hasAI = this.activeModules && (this.activeModules.includes('all') || this.activeModules.includes('ai_agent'));
+
+    // ── Sidebar nav: Dashboard ungrouped, then sys.navGroups ────────────────
+    // See the long comment on systems.retail.navGroups for why this stays a
+    // separate render-time arrangement over the untouched flat `nav` array
+    // rather than a nested nav structure.
+    const navItemHTML = (item) => `
+            <a class="sub-nav-item ${item.id === 'dashboard' ? 'active' : ''}"
+               data-section="${item.id}"
+               onclick="SubsystemApp._navigate('${item.id}')">
+              <span class="sub-nav-icon">${window.AuraIcons ? AuraIcons.render(item.icon, 17) : item.icon}</span>
+              <span class="sub-nav-label">${t(item.label)}</span>
+            </a>
+          `;
+    const byId = new Map(sys.nav.map((item) => [item.id, item]));
+    const dashboardItem = byId.get('dashboard');
+    const dashboardHTML = (dashboardItem && this._isNavItemVisible(dashboardItem)) ? navItemHTML(dashboardItem) : '';
+    const groupsHTML = (sys.navGroups || []).map((group) => {
+      const visibleItems = group.items
+        .map((id) => byId.get(id))
+        .filter((item) => item && this._isNavItemVisible(item));
+      // THE EMPTY-GROUP RULE: no visible members means no header and no box
+      // at all, not an empty section. See the mutation proof on this line in
+      // retail_nav_groups_test.js -- rendering the header unconditionally
+      // here is exactly the bug that test exists to catch.
+      if (!visibleItems.length) return '';
+      return `
+          <div class="sub-nav-group-label">${t(group.label)}</div>
+          ${visibleItems.map(navItemHTML).join('')}`;
+    }).join('');
 
     shell.innerHTML = `
       <!-- Subsystem Sidebar -->
@@ -1803,14 +1890,7 @@ const SubsystemApp = {
         </div>
 
         <nav class="sub-nav" id="sub-nav">
-          ${sys.nav.filter(item => (!item.roles || this.canClinic(...item.roles)) && (!item.desktopOnly || !/Android/i.test(navigator.userAgent || '')) && (!item.adminOnly || this.isAdminDevice) && (!item.ownerOnly || this.role === 'admin') && (!item.capability || this.hasCapability(item.capability))).map(item => `
-            <a class="sub-nav-item ${item.id === 'dashboard' ? 'active' : ''}"
-               data-section="${item.id}"
-               onclick="SubsystemApp._navigate('${item.id}')">
-              <span class="sub-nav-icon">${window.AuraIcons ? AuraIcons.render(item.icon, 17) : item.icon}</span>
-              <span class="sub-nav-label">${t(item.label)}</span>
-            </a>
-          `).join('')}
+          ${dashboardHTML}${groupsHTML}
         </nav>
 
         <div class="sub-sidebar-bottom">

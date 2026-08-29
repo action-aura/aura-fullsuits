@@ -2273,6 +2273,23 @@ html[data-theme="light"] {
 .sub-nav-icon { font-size: 16px; }
 .sub-nav-label { font-size: 13px; }
 
+/* Sidebar section headers (launch-readiness 2026-08-29 declutter pass). Quiet
+   on purpose -- small, muted, uppercase, clearly subordinate to the nav items
+   under it, not a second layer of chrome. Never carries a :hover/:focus rule:
+   it is inert text, not a control, so it is deliberately absent from
+   retail_design_focus_test.js's hoverable-control scan. margin-block/
+   padding-inline are logical, not left/right, per retail_design_rtl_test.js. */
+.sub-nav-group-label {
+  margin-block: 14px 4px;
+  padding-inline: 12px;
+  font-size: var(--text-size-micro);
+  font-weight: var(--text-weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  user-select: none;
+}
+
 .sub-sidebar-bottom {
   padding: 14px 10px;
   border-top: 1px solid var(--border-hairline);
