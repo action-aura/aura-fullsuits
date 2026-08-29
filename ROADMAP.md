@@ -1059,3 +1059,50 @@ is pure query change, no migration.
 Deliberately NOT in this claim: promotions, variants, open-item AR allocation,
 LAN relay. Each is real and recorded separately; none needs a schema version
 yet.
+
+## 2026-08-29 — the case-insensitive lookup is only PARTLY case-insensitive
+
+Found while verifying the parallel Android/backend work, and measured rather
+than argued.
+
+`lookup_product` was made "case-insensitive" by building a fixed set of
+variants of the TYPED code — as-typed, `.upper()`, `.lower()` — and matching
+with `IN (...)`. The reasoning given is sound as far as it goes: neither
+`COLLATE NOCASE` on the column nor `LOWER(col)` may be used, because wrapping
+the column is non-sargable and would destroy the v21 indexes.
+
+**But three variants of the INPUT cannot match a mixed-case STORED value.**
+Measured, in-memory SQLite, one row `sku = 'AbC-123'`, typed `abc-123`:
+
+    variants: ['ABC-123', 'abc-123']      match: None
+
+Android's `findProductByCode` used `equals(ignoreCase = true)`, which matches.
+So for any catalogue with mixed-case SKUs this is a REGRESSION against the
+behaviour the endpoint was explicitly changed to preserve. Barcodes are
+usually numeric and unaffected; SKUs are where it bites.
+
+**The correct fix is a NOCASE-collated INDEX, and it is fully sargable** —
+the premise that case-insensitivity costs the index is wrong. The collation
+lives in the index, not in a function wrapping the column:
+
+    CREATE INDEX idx_x ON products(company_id, sku COLLATE NOCASE)
+    SELECT ... WHERE company_id=? AND sku=? COLLATE NOCASE
+
+    PLAN:  SEARCH products USING COVERING INDEX idx_nocase (company_id=? AND sku=?)
+    match: ('AbC-123',)
+
+Both measured in the same probe. So the right change is:
+
+* a new schema version adding NOCASE-collated indexes on
+  `products(company_id, barcode)` and `products(company_id, sku)` — these are
+  ADDITIONAL to the v21 plain ones, which still serve exact-match callers;
+* the lookup query using `= ? COLLATE NOCASE` and dropping the variant set.
+
+Not done immediately only because another agent held `retail_api.py` when this
+was found. It needs its own version claim; v21 is committed and cannot absorb
+it.
+
+**Worth keeping as a lesson:** the variant trick looked like a clever way to
+stay sargable, and its own docstring explains the reasoning convincingly. It
+was wrong, and the only thing that showed it was running the query against a
+mixed-case row. A plausible explanation in a comment is not evidence.
