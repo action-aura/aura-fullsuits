@@ -135,6 +135,7 @@ const RetailSystem = {
     if (!c) return;
     this._section = sectionId;     // remembered so the scanner can route scans
     this._initScanner();           // idempotent; desktop-only HID listener
+    this._initShortcuts();         // idempotent; keyboard shortcuts, all platforms
     switch (sectionId) {
       case 'dashboard': return this._renderDashboard(c);
       case 'pos':       return this._renderPOS(c);
@@ -1634,6 +1635,20 @@ const RetailSystem = {
         .pos-scan-field:focus-within + .pos-scan-lamp::before {
           background:var(--text-money-positive, currentColor);transform:scale(1.5); }
 
+        /* ── Keyboard shortcut hints (discoverability) ───────────────────── */
+        /* A senior review found this screen had no keyboard shortcuts at
+           all. This strip is the only place they are documented -- quiet,
+           always visible (not hover-only, not buried behind a "?"), reusing
+           the same faint/dim tokens .pos-empty-hint already uses so it reads
+           as a caption, not another control competing for attention. */
+        .pos-kbd-hints { display:flex;flex-wrap:wrap;align-items:center;gap:5px 14px;
+          padding-block:8px 2px;padding-inline:16px;color:var(--text-faint);font-size:11px; }
+        .pos-kbd-item { display:inline-flex;align-items:center;gap:5px;white-space:nowrap; }
+        .pos-kbd { display:inline-block;min-inline-size:20px;padding-block:1px;padding-inline:5px;
+          border:1px solid var(--border-mid);border-radius:5px;background:var(--surface-soft);
+          color:var(--text-dim);font-size:10px;font-weight:700;font-family:inherit;
+          text-align:center;line-height:1.5; }
+
         /* ── Category rail ───────────────────────────────────────────────── */
         .pos-cat-bar { display:flex;gap:8px;padding-block:10px;padding-inline:16px;border-block-end:1px solid var(--border-soft);overflow-x:auto;flex-shrink:0; }
         .pos-cat-btn { min-block-size:var(--touch-target-min, 44px);padding-inline:18px;border-radius:var(--radius-pill, 22px);font-size:14px;font-weight:600;
@@ -1887,6 +1902,14 @@ const RetailSystem = {
             </div>
             <span class="pos-scan-lamp">${t('Ready to scan')}</span>
           </div>
+          <div class="pos-kbd-hints" title="${this._esc(t('Keyboard shortcuts'))}" aria-label="${this._esc(t('Keyboard shortcuts'))}">
+            <span class="pos-kbd-item"><kbd class="pos-kbd">${t('Enter')}</kbd> ${t('Charge')}</span>
+            <span class="pos-kbd-item"><kbd class="pos-kbd">${t('N*')}</kbd> ${t('Quantity')}</span>
+            <span class="pos-kbd-item"><kbd class="pos-kbd">X</kbd> ${t('Exact cash')}</span>
+            <span class="pos-kbd-item"><kbd class="pos-kbd">/</kbd> ${t('Search')}</span>
+            <span class="pos-kbd-item"><kbd class="pos-kbd">${t('Del')}</kbd> ${t('Remove line')}</span>
+            <span class="pos-kbd-item"><kbd class="pos-kbd">${t('Esc')}</kbd> ${t('Cancel')}</span>
+          </div>
           <div class="pos-pane-hdr" onmousedown="RetailSystem._keepScanFocus(event)">
             <h3 class="pos-pane-title">${t('Products')}</h3>
             <button class="ret-btn ret-btn-ghost ret-btn-sm" id="pos-held-btn" onclick="RetailSystem._openHeldSalesModal()"
@@ -1961,6 +1984,11 @@ const RetailSystem = {
     this._cart = [];
     this._paymentMethod = 'cash';
     this._activeCat = null;
+    // A multiplier armed on a screen the cashier has since navigated away
+    // from is a stale trap, not a convenience -- clear it on every (re)mount.
+    this._pendingQty = null;
+    this._qtyKeyBuffer = '';
+    this._qtyKeyLastAt = 0;
     this._loadPOSData();
     // The barcode scanner engine is initialised globally in render(); nothing to do here.
     // Put the caret where the next barcode is going to land, so the very first
@@ -2304,8 +2332,15 @@ const RetailSystem = {
     const p = (this._products || []).find(x => x.id === productId) ||
               (this._productsById && this._productsById[productId]);
     if (!p) return;
+    // Consumes and clears the pending keyboard-shortcut quantity multiplier
+    // (see _onPOSShortcut / "3*") in the SAME step it is read, so it can
+    // never survive to apply to a later, unrelated add -- e.g. "3*" meant
+    // for one product silently multiplying the next unrelated scan too.
+    // Defaults to 1, so a plain tap/scan with no multiplier armed is
+    // byte-for-byte the old behaviour.
+    const qty = this._consumePendingQty();
     const existing = this._cart.find(i => i.product_id === productId);
-    const newQty = existing ? existing.quantity + 1 : 1;
+    const newQty = existing ? existing.quantity + qty : qty;
     if (newQty > p.total_stock) {
       SubsystemApp.showToast(`Only ${p.total_stock} in stock`, 'error');
       return;
@@ -2315,9 +2350,9 @@ const RetailSystem = {
       existing.line_total = newQty * existing.unit_price;
     } else {
       this._cart.push({
-        product_id: p.id, name: p.name, quantity: 1,
+        product_id: p.id, name: p.name, quantity: qty,
         unit_price: p.sell_price, tax_rate: p.tax_rate || 0,
-        line_total: p.sell_price, max_stock: p.total_stock
+        line_total: qty * p.sell_price, max_stock: p.total_stock
       });
     }
     // Presentational: mark which row _renderCart should animate in. Only the
@@ -2325,6 +2360,16 @@ const RetailSystem = {
     // reads as flicker at real cashier speed.
     this._lastAddedId = productId;
     this._renderCart();
+  },
+
+  // See _onPOSShortcut for how _pendingQty is armed ("3*"). Reset happens
+  // HERE, not in the keydown handler -- consuming and clearing are the same
+  // operation, so there is no window where a second caller could read a
+  // value that has already been "spent."
+  _consumePendingQty() {
+    const n = this._pendingQty;
+    this._pendingQty = null;
+    return (n && n > 0) ? n : 1;
   },
 
   _updateQty(idx, delta) {
@@ -2696,6 +2741,17 @@ const RetailSystem = {
   _scannerDefaults: { enabled: true, inputMode: 'auto', timeoutMs: 50, minLength: 3, prefix: '', suffix: '', sound: true },
   _scan: { buffer: '', firstAt: 0, lastAt: 0, lastScanAt: 0, lastScanCode: '', capture: null },
 
+  // ── Keyboard shortcuts state ────────────────────────────────────────────
+  // _pendingQty: set by "<digits>*" (see _onPOSShortcut) and consumed by the
+  // very next _addToCart -- see _consumePendingQty(). _qtyKeyBuffer is the
+  // digits typed so far, waiting for either "*" (commit) or any other key
+  // (discard); it never survives past the keystroke that resolves it.
+  // _qtyKeyLastAt: this layer's OWN inter-digit timestamp, independent of
+  // the scanner's -- see the digit branch of _onPOSShortcut for why.
+  _pendingQty: null,
+  _qtyKeyBuffer: '',
+  _qtyKeyLastAt: 0,
+
   _isDesktopScanner() { return !/Android/i.test(navigator.userAgent || ''); },
 
   scannerCfg() {
@@ -2939,6 +2995,205 @@ const RetailSystem = {
     setTimeout(() => {
       if (btn && btn.disabled) { btn.textContent = '📷 Scan'; btn.disabled = false; this.cancelCapture(); }
     }, 15000);
+  },
+
+  // ══ KEYBOARD SHORTCUTS (POS) ═════════════════════════════════════════════
+  // A senior review found this screen had NO keyboard shortcuts at all:
+  // every sale required a mouse end to end (tap tiles, click Tendered, click
+  // a payment method, click Charge). This layer drives the EXISTING flow
+  // faster -- it changes no pricing, payment, or totals logic, only how fast
+  // the cashier can reach it.
+  //
+  // Unlike _initScanner (desktop-only HID wedge), this runs on every
+  // platform: a keyboard behaves the same in the packaged desktop app, a
+  // browser tab, or via a Bluetooth keyboard paired to an Android till.
+  //
+  // Keys, all chosen to be scanner-safe (see _scannerBusy) and OS-safe (none
+  // of them ever requires a modifier, so none of this can shadow a
+  // Ctrl/Cmd/Alt combo the OS or browser owns):
+  //   Enter          charge the sale (existing _checkout(), unchanged)
+  //   <digits> *     quantity multiplier -- "3*" before a scan or a tile tap
+  //                  sets the NEXT _addToCart's quantity (see
+  //                  _consumePendingQty). A hypermarket cashier ringing 12
+  //                  identical items presses 1, 2, *, then scans once --
+  //                  four keys, not twelve taps.
+  //   X              exact-cash pay -- tender = total, method = cash,
+  //                  charge, all in one key. The single most common
+  //                  transaction in a shop.
+  //   /              focus the search box (the GitHub/Slack convention).
+  //   Delete         void the most recently touched cart line.
+  //   Escape         cancel a pending quantity multiplier.
+  //
+  // Init once, on first render of any retail section -- mirrors _initScanner.
+  _initShortcuts() {
+    if (this._shortcutsBound) return;
+    this._shortcutsBound = true;
+    // Bubble phase (no `true` third argument): _onScannerKey is registered
+    // on the CAPTURE phase above, so for any single keydown it ALWAYS runs
+    // first -- capture unconditionally precedes bubble for the same
+    // dispatch. When it completes a real scan it calls stopPropagation(),
+    // which aborts the event before it ever reaches this bubble-phase
+    // listener, so a genuine scan can structurally never also be read as a
+    // shortcut. The reverse direction (a shortcut keystroke landing inside
+    // an in-progress scan burst) is guarded separately -- see
+    // _scannerBusy().
+    document.addEventListener('keydown', (e) => this._onPOSShortcut(e));
+  },
+
+  // True while the wedge listener DEFINITELY owns this keystroke, with no
+  // ambiguity left to resolve: either an explicit capture is armed (Scanner
+  // Settings "Test Scanner", or a barcode field's own Scan button -- see
+  // captureNextScan), or the scan buffer already held a character BEFORE
+  // this one (buffer.length > 1 means _onScannerKey, which always runs
+  // first, just appended THIS keydown onto an accumulation that did not
+  // start empty -- i.e. this is the 2nd-or-later character of a burst,
+  // never a fresh isolated press).
+  //
+  // What this does NOT catch, on purpose: the very FIRST character of a
+  // burst leaves the scan buffer at exactly length 1 -- structurally
+  // identical to an isolated deliberate keypress, since both start from an
+  // empty buffer. That one-character ambiguity cannot be resolved by buffer
+  // state at all; the digit branch of _onPOSShortcut resolves it instead
+  // with its own inter-keystroke timing check, the same signal
+  // _onScannerKey itself uses to tell a burst from a human.
+  _scannerBusy() {
+    const st = this._scan;
+    if (!st) return false;
+    if (st.capture) return true;
+    return !!(st.buffer && st.buffer.length > 1);
+  },
+
+  _onPOSShortcut(e) {
+    if (!(window.SubsystemApp && SubsystemApp.active === 'retail')) return;
+    if (this._section !== 'pos') return;               // this is the till, not every screen
+    if (e.ctrlKey || e.metaKey || e.altKey) return;      // never shadow a browser/OS combo
+
+    if (this._scannerBusy()) { this._qtyKeyBuffer = ''; return; }
+
+    const isDigit = e.key.length === 1 && e.key >= '0' && e.key <= '9';
+
+    if (e.key === '*') {
+      // Real barcodes (EAN/UPC, the format this till's own Scanner Settings
+      // and _findByCode target) are numeric-only and never contain "*", so
+      // its arrival is unambiguous regardless of timing -- the digits that
+      // led up to it are what need to have been trustworthy, and the digit
+      // branch below is what keeps them that way.
+      const n = parseInt(this._qtyKeyBuffer, 10);
+      this._qtyKeyBuffer = '';
+      if (n > 0) {
+        this._pendingQty = n;
+        SubsystemApp.showToast(`×${n} — next item added at this quantity`, 'info');
+      }
+      return;
+    }
+
+    if (isDigit) {
+      // The one-character ambiguity _scannerBusy() cannot resolve (see its
+      // comment): the FIRST digit of a fresh scan burst and an isolated
+      // deliberate digit press are indistinguishable from buffer state
+      // alone. Resolved here with an independent timing check, mirroring
+      // _onScannerKey's own reset-window logic but tracked separately so
+      // this layer never reads (or races) the scanner's timestamps: a
+      // digit arriving at scanner speed relative to the PREVIOUS digit this
+      // layer saw is almost certainly a barcode character, not the start of
+      // a deliberate "N*", so the run is discarded rather than trusted.
+      const cfg = this.scannerCfg();
+      const now = (window.performance && performance.now) ? performance.now() : Date.now();
+      const burstWindow = cfg.enabled ? ((cfg.inputMode === 'keyboard' ? cfg.timeoutMs * 3 : cfg.timeoutMs) || 50) : 0;
+      const gap = now - this._qtyKeyLastAt;
+      this._qtyKeyLastAt = now;
+      if (cfg.enabled && gap <= burstWindow) { this._qtyKeyBuffer = ''; return; }
+      // Capped at 4 digits (max 9999) -- long enough for any real
+      // hypermarket multiplier, short enough that a runaway buffer can't
+      // parse into something absurd.
+      if (this._qtyKeyBuffer.length < 4) this._qtyKeyBuffer += e.key;
+      return;
+    }
+
+    // Any other key ends a digit run that never reached "*", so a stray
+    // earlier digit can never bleed into a later, unrelated "*". Everything
+    // from here down is a real shortcut, not multiplier entry.
+    this._qtyKeyBuffer = '';
+
+    if (e.key === 'Escape') {
+      // "cancel the current entry state" -- the only entry state this layer
+      // introduces is a pending quantity multiplier. Deliberately not
+      // gated on focus location: cancelling a stray "3" is always safe.
+      this._pendingQty = null;
+      return;
+    }
+
+    const el = document.activeElement;
+    const tag = el ? el.tagName : '';
+    const inTextField = tag === 'INPUT' || tag === 'TEXTAREA' || (el && el.isContentEditable);
+    // Conservative on purpose, with NO exception for #pos-search (unlike
+    // _onScannerKey's isSearchBox carve-out): a cashier who types a manual
+    // search term and hits Enter out of habit must never accidentally
+    // charge whatever is already sitting in the cart. Every shortcut below
+    // shares this one guard.
+    if (inTextField) return;
+
+    if (e.key === 'Enter') {
+      if (!this._cart.length) return;
+      const btn = document.getElementById('pos-checkout-btn');
+      if (btn && btn.disabled) return;   // a charge is already in flight
+      e.preventDefault();
+      this._checkout();
+      return;
+    }
+
+    if (e.key === 'x' || e.key === 'X') {
+      if (!this._cart.length) return;
+      const btn = document.getElementById('pos-checkout-btn');
+      if (btn && btn.disabled) return;
+      e.preventDefault();
+      this._exactCashCharge();
+      return;
+    }
+
+    if (e.key === '/') {
+      e.preventDefault();
+      this._refocusScan(true);
+      return;
+    }
+
+    if (e.key === 'Delete') {
+      e.preventDefault();
+      this._voidLastLine();
+      return;
+    }
+  },
+
+  // Tender = total, method = cash, charge -- the single most common
+  // transaction in a shop, on one key. Mirrors _resumeHeldSale's own
+  // pattern for syncing the tender buttons to a payment method set
+  // programmatically (there is no clicked `btn` element here for
+  // _setPayment's signature, which requires one).
+  _exactCashCharge() {
+    if (!this._cart.length) return;
+    this._paymentMethod = 'cash';
+    document.querySelectorAll('.pos-pay-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset && b.dataset.method === 'cash');
+    });
+    const tenderedField = document.getElementById('pos-tendered');
+    const total = this._currentTotals.total || 0;
+    if (tenderedField) tenderedField.value = String(total);
+    this._calcChange();
+    this._checkout();
+  },
+
+  // "Clear/void the current line" -- the most recently touched row, exactly
+  // what _renderCart's own entrance animation already tracks via
+  // _lastAddedId. Falls back to the last line in the cart if nothing has
+  // been "touched" yet this render (e.g. the cart was restored from a held
+  // sale). Reuses _removeLine, so this is exactly what pressing the row's
+  // own ✕ button does -- no new removal logic.
+  _voidLastLine() {
+    if (!this._cart.length) return;
+    const idx = this._lastAddedId != null
+      ? this._cart.findIndex(i => i.product_id === this._lastAddedId)
+      : this._cart.length - 1;
+    this._removeLine(idx >= 0 ? idx : this._cart.length - 1);
   },
 
   // Mirrors the server's own stock decrement locally instead of re-fetching
