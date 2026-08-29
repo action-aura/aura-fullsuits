@@ -202,6 +202,17 @@ EXPECTED_MUTATION_CAPABILITIES = {
     # counted on. Same authority as its two settings siblings, and arguably
     # the most consequential of the three.
     'business_day_settings_set': CAP_EMPLOYEES,
+    # Branding (launch-readiness, "make the system be brandable of whatever
+    # institute or coop or foundation bought it"). Same authority as its
+    # settings siblings above -- business name/address/tax number/receipt
+    # text and the logo are all owner-administered shop identity, not a
+    # cashier's call. The READ side (branding_settings_get,
+    # branding_logo_get) is deliberately NOT in this table -- printing a
+    # receipt is not an admin-only action, so those two carry no
+    # @mt_require_capability at all (see their docstrings in retail_api.py).
+    'branding_settings_set': CAP_EMPLOYEES,
+    'branding_logo_set': CAP_EMPLOYEES,
+    'branding_logo_delete': CAP_EMPLOYEES,
     'payment_methods_add': CAP_EMPLOYEES,
     'supplier_payment': CAP_EMPLOYEES,
     'pay_purchase_order': CAP_EMPLOYEES,
@@ -235,6 +246,15 @@ EXPECTED_READ_CAPABILITIES = {
     'report_by_employee': CAP_REPORTS,
     'daily_cash': CAP_REPORTS,
     'aging_report': CAP_REPORTS,
+    # The accounting CSV exports (launch-readiness "no journal export, no CSV
+    # dump" fix): same disclosure tier as every other report route in this
+    # table -- they are the SAME sales/payments/cash-session figures
+    # report_summary/daily_cash/list_cash_sessions already hand back as
+    # JSON, reshaped for a finance department's ERP or auditor rather than
+    # for this product's own screens.
+    'export_sales_csv': CAP_REPORTS,
+    'export_payments_csv': CAP_REPORTS,
+    'export_cash_sessions_csv': CAP_REPORTS,
     'customers_receivables': CAP_REPORTS,
     'suppliers_payables': CAP_REPORTS,
     'supplier_statement': CAP_REPORTS,

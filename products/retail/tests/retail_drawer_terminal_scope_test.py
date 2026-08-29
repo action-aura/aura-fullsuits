@@ -532,6 +532,21 @@ DRAWER_ROUTE_SCOPE = {
     # APPROVAL is deliberately NOT terminal-scoped: the whole point is that
     # somebody who is not standing at the till accepts what the till recorded.
     'approve_cash_variance': 'any-terminal-by-design',
+    # EXPORT is deliberately NOT terminal-scoped either, for the same shape of
+    # reason as approval and a different purpose. This is the accounting
+    # hand-off -- a finance department reconciling the shop's books needs EVERY
+    # till's closing Z-report for the period, and an export that silently
+    # returned only the drawer of whichever terminal happened to run it would
+    # be worse than no export: the numbers would look complete and be short by
+    # however many tills were not asked.
+    #
+    # It is safe to widen here precisely because it cannot write and cannot
+    # reach a LIVE drawer: the query is filtered to `closed_at IS NOT NULL`,
+    # so it reads settled history rather than a session somebody is standing
+    # at. It carries CAP_REPORTS, which is the same authority
+    # `get_cash_session` and `cash_session_x_report` already require to look
+    # past their own terminal.
+    'export_cash_sessions_csv': 'any-terminal-by-design',
 }
 
 

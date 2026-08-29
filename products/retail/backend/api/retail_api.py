@@ -8,6 +8,8 @@ api/subsystems/retail_api.py -- see docs/migration/retail-extraction-report.md.
 """
 import os
 import re
+import csv
+import io
 import time
 import json
 import logging
@@ -1391,6 +1393,32 @@ def lookup_product():
     both a barcode on one product and a different product's SKU resolves
     to the barcode match.
 
+    CASE-INSENSITIVE ON BOTH COLUMNS, matching Android's ProductLookup.kt
+    (`it.barcode?.equals(code, ignoreCase = true)`) -- Android is about to
+    be switched onto this endpoint, and an exact-match server would
+    silently regress scanning for any shop whose SKUs are mixed-case.
+
+    NOT `COLLATE NOCASE` and NOT `LOWER(p.barcode)` -- either wraps the
+    COLUMN in a function, which is non-sargable and throws away idx_
+    products_company_barcode / idx_products_company_sku exactly the way
+    schema v21's own commit message documents for the date predicates it
+    fixed. Instead, a small FIXED set of case variants of the INPUT is
+    built in Python -- `code`, `code.upper()`, `code.lower()`, deduplicated
+    -- and matched with `IN (...)`: still a plain equality test per
+    candidate, so SQLite plans it as repeated index seeks, never a scan
+    (proven with real `EXPLAIN QUERY PLAN` output in retail_accounting_
+    export_test.py).
+
+    HONEST LIMIT, not a general case-fold: this resolves a lowercase code
+    against an uppercase-stored value and vice versa -- the two shapes the
+    test file above actually pins, and the ones a barcode/SKU written in
+    ONE consistent case (the real-world convention) ever needs. It does
+    NOT resolve arbitrary-mixed-case storage against arbitrary-mixed-case
+    input (stored 'AbC-1' found by searching 'aBc-1'): that would need
+    every case permutation of the input, which is unbounded for a long
+    code, or a `COLLATE NOCASE` index -- a schema change, and schema
+    changes are not this route's call to make unilaterally.
+
     404 (not 200 with a null payload) when nothing matches -- a scan that
     finds nothing is a normal, expected outcome for a till, and the
     frontend needs to tell "no product" apart from a transport error.
@@ -1399,19 +1427,21 @@ def lookup_product():
     code = request.args.get('code', '').strip()
     if not code:
         return jsonify({'status': 'error', 'message': 'code is required'}), 400
+    code_variants = list({code, code.upper(), code.lower()})
+    placeholders = ','.join('?' * len(code_variants))
     select = (
         "SELECT p.*, c.name as category_name, "
         "COALESCE(SUM(b.quantity_on_hand), 0) as total_stock "
         "FROM products p "
         "LEFT JOIN categories c ON p.category_id=c.id AND c.deleted_at_utc IS NULL "
         "LEFT JOIN inventory_balances b ON p.id=b.product_id AND b.company_id=p.company_id "
-        "WHERE p.company_id=? AND p.status='active' AND p.deleted_at_utc IS NULL AND p.{col}=? "
+        f"WHERE p.company_id=? AND p.status='active' AND p.deleted_at_utc IS NULL AND p.{{col}} IN ({placeholders}) "
         "GROUP BY p.id"
     )
     conn = get_retail_conn()
-    row = conn.execute(select.format(col='barcode'), (cid, code)).fetchone()
+    row = conn.execute(select.format(col='barcode'), (cid, *code_variants)).fetchone()
     if row is None:
-        row = conn.execute(select.format(col='sku'), (cid, code)).fetchone()
+        row = conn.execute(select.format(col='sku'), (cid, *code_variants)).fetchone()
     conn.close()
     if row is None:
         return jsonify({'status': 'error', 'message': 'Product not found'}), 404
@@ -7369,6 +7399,267 @@ def aging_report():
         buckets[key] += bal
     conn.close()
     return jsonify({'status': 'success', 'type': kind, 'data': {k: _money(v) for k, v in buckets.items()}})
+
+# ── Accounting export -- CSV, for a finance department's own ERP/auditor ──────
+#
+# The ledger (sales/payments/cash drawer) has always been correct; there was
+# never a way to HAND it to anyone outside this product. A senior review named
+# exactly this -- "no journal export, no CSV dump" -- as the kind of gap that
+# loses a hypermarket deal: the numbers are right, but a finance department
+# cannot get them into whatever system their auditor actually reads.
+#
+# Three exports, all CAP_REPORTS (the same authority every other route that
+# discloses the shop's financial position already needs -- report_summary,
+# daily_cash, aging_report, all immediately above), all company-scoped, all
+# date-ranged on the SAME half-open bounds `recent_sales` uses (`col >=
+# date(?) AND col < date(?, '+1 day')`, schema v21's "the POS scale fix") so
+# the predicate stays sargable and never re-wraps the column in `date(...)`.
+#
+# STREAMED, not built as one string. A year of hypermarket sales is hundreds
+# of thousands of rows across sales+sale_items -- the largest join in this
+# database -- and this is exactly the endpoint most likely to be pointed at
+# the whole thing at once. `conn.execute(...)` + `cursor.fetchmany(...)` in a
+# loop, one CSV chunk yielded per batch, so memory stays bounded at one batch
+# regardless of how many rows match.
+
+#: Rows fetched from the cursor per CSV chunk yielded. Small enough that a
+#: slow client never holds a huge buffer server-side, large enough that this
+#: isn't one round trip to sqlite per output row.
+_EXPORT_CSV_BATCH_SIZE = 500
+
+
+def _export_money(value):
+    """Format one exported money cell with the SAME rounding rule the ledger
+    itself is written with -- core/retail/pricing.py's `_money`, imported
+    here as `tax_engine._money`, NOT a second hand-rolled implementation.
+    (This file also carries its OWN `_money` a few thousand lines up, for
+    header-level credit/payment figures -- functionally identical, same
+    Decimal/ROUND_HALF_UP/2dp rule, but the task that produced this export
+    named core/retail/pricing.py specifically, and an export that quietly
+    used a different rounding function than the one it was told to is
+    exactly the kind of drift that makes an export disagree with the books
+    by a cent.) `None` -- an unset closing figure, a payments column an
+    older install never populated -- is left blank rather than coerced into
+    a false "0.00"; a blank cell tells a bookkeeper "no value", a zero tells
+    them "value was zero", and those are not the same claim.
+    """
+    if value is None:
+        return ''
+    return tax_engine._money(Decimal(str(value)))
+
+
+def _export_date_range():
+    """Both `date_from` and `date_to` are REQUIRED for every export below,
+    unlike `recent_sales` (where either bound alone is meaningful for a
+    till's own lookup). An accounting export has no equivalent "just the
+    last page" use -- an unbounded request against the largest tables in
+    the database is not an export, it is an outage -- so there is no
+    default range to fall back to.
+
+    Returns `(date_from, date_to, None)` on success, or `(None, None,
+    error_response)` on failure, so a caller can `if err: return err` in one
+    line rather than repeating the validation and the 400 body three times.
+    """
+    date_from = request.args.get('date_from', '').strip()
+    date_to = request.args.get('date_to', '').strip()
+    if not date_from or not date_to:
+        return None, None, (
+            jsonify({'status': 'error', 'message': 'date_from and date_to are required'}), 400
+        )
+    return date_from, date_to, None
+
+
+def _stream_csv_export(conn, sql, params, header, money_columns, filename):
+    """Turn one company-scoped, date-ranged SELECT into a streamed CSV
+    response. `money_columns` names the header columns (by label, not
+    index, so a route's own column order can change without silently
+    formatting the wrong cell) that get `_export_money`'s rounding; every
+    other cell is written through unchanged.
+
+    `conn` is owned by this function from here on -- opened by the caller,
+    closed in the generator's `finally` so it lives exactly as long as the
+    response takes to stream, the same connection lifetime every other
+    route in this file gives its own per-request connection.
+    """
+    money_idx = [header.index(c) for c in money_columns]
+
+    def _generate():
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(header)
+        yield buf.getvalue()
+        buf.seek(0)
+        buf.truncate(0)
+        try:
+            cursor = conn.execute(sql, params)
+            while True:
+                batch = cursor.fetchmany(_EXPORT_CSV_BATCH_SIZE)
+                if not batch:
+                    break
+                for row in batch:
+                    values = list(row)
+                    for idx in money_idx:
+                        values[idx] = _export_money(values[idx])
+                    writer.writerow(values)
+                yield buf.getvalue()
+                buf.seek(0)
+                buf.truncate(0)
+        finally:
+            conn.close()
+
+    return Response(
+        stream_with_context(_generate()),
+        content_type='text/csv; charset=utf-8',
+        headers={
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Cache-Control': 'no-store',
+        },
+    )
+
+
+@retail_bp.route('/reports/export/sales', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
+def export_sales_csv():
+    """One CSV row per SOLD LINE ITEM (not per sale) -- an auditor or an ERP
+    import wants the same granularity the till itself recorded, and a sale
+    total with no line detail behind it is a number nobody can reconcile
+    against inventory. Sale-level figures (subtotal/discount/tax/total/
+    amount_paid) are repeated on every line of a multi-item sale rather than
+    written once, matching how a flat accounting export is meant to be
+    read -- one row is one complete, self-contained fact.
+
+    Company-scoped through `s.company_id` alone: `sale_items` carries no
+    company_id of its own, but every row it returns is reached by joining
+    FROM an already company-filtered `sales` row via `si.sale_id=s.id`, so
+    no other tenant's line item can appear no matter what `si` contains.
+    """
+    cid = _cid()
+    date_from, date_to, err = _export_date_range()
+    if err:
+        return err
+    header = [
+        'sale_id', 'sale_number', 'created_at', 'branch_id', 'customer_id', 'customer_name',
+        'cashier', 'payment_method', 'sale_status', 'product_id', 'product_name', 'sku',
+        'quantity', 'unit_price', 'discount_pct', 'tax_rate', 'line_total',
+        'sale_subtotal', 'sale_discount_amount', 'sale_tax_amount', 'sale_total', 'sale_amount_paid',
+    ]
+    money_columns = [
+        'unit_price', 'line_total',
+        'sale_subtotal', 'sale_discount_amount', 'sale_tax_amount', 'sale_total', 'sale_amount_paid',
+    ]
+    sql = (
+        "SELECT s.id, s.sale_number, s.created_at, s.branch_id, s.customer_id, "
+        "COALESCE(c.name,'Walk-in'), s.cashier, s.payment_method, s.status, "
+        "si.product_id, p.name, p.sku, "
+        "si.quantity, si.unit_price, si.discount_pct, si.tax_rate, si.line_total, "
+        "s.subtotal, s.discount_amount, s.tax_amount, s.total, s.amount_paid "
+        "FROM sales s "
+        "JOIN sale_items si ON si.sale_id = s.id "
+        "LEFT JOIN customers c ON s.customer_id = c.id "
+        "LEFT JOIN products p ON si.product_id = p.id "
+        "WHERE s.company_id=? AND s.created_at >= date(?) AND s.created_at < date(?, '+1 day') "
+        "ORDER BY s.id, si.id"
+    )
+    conn = get_retail_conn()
+    return _stream_csv_export(
+        conn, sql, (cid, date_from, date_to), header, money_columns,
+        f'sales_export_{date_from}_{date_to}.csv',
+    )
+
+
+@retail_bp.route('/reports/export/payments', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
+def export_payments_csv():
+    """One CSV row per payment ledger entry -- every direction, every method,
+    both till receipts (`sale_id` set) and standalone AR/AP payments
+    (`party_type`/`party_id` set, `related_type`/`related_id` naming what it
+    settled).
+
+    `_ensure_credit_schema(conn)` runs first, matching every other route in
+    this file that reads `direction`/`party_type`/`party_id`/`notes` --
+    those four are added lazily by that function rather than living in
+    `payments`' base CREATE TABLE (see that function's own docstring), so a
+    brand-new install that has never touched a credit/payment route needs
+    it called here too or this query raises `no such column`.
+    """
+    cid = _cid()
+    date_from, date_to, err = _export_date_range()
+    if err:
+        return err
+    conn = get_retail_conn()
+    _ensure_credit_schema(conn)
+    header = [
+        'payment_id', 'created_at', 'direction', 'method', 'amount', 'currency',
+        'party_type', 'party_id', 'sale_id', 'related_type', 'related_id',
+        'reference', 'status', 'notes',
+    ]
+    money_columns = ['amount']
+    sql = (
+        "SELECT id, created_at, direction, method, amount, currency, "
+        "party_type, party_id, sale_id, related_type, related_id, "
+        "reference, status, notes "
+        "FROM payments "
+        "WHERE company_id=? AND created_at >= date(?) AND created_at < date(?, '+1 day') "
+        "ORDER BY id"
+    )
+    return _stream_csv_export(
+        conn, sql, (cid, date_from, date_to), header, money_columns,
+        f'payments_export_{date_from}_{date_to}.csv',
+    )
+
+
+@retail_bp.route('/reports/export/cash-sessions', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
+def export_cash_sessions_csv():
+    """One CSV row per CLOSED drawer -- a Z report, the persisted CLOSING
+    figures (`opening_float`/`closing_float_counted`/`closing_float_
+    expected`/`variance`), not a re-derived live X report.
+
+    Deliberately NOT built on `_cash_session_report` (the function behind
+    `cash_session_x_report`): that recomputes a LIVE picture for one session
+    by re-summing its cash sales, refunds and movements at read time.
+    Re-running that per historical row for a year of shifts would mean
+    re-summing every sale and refund this company ever recorded, once per
+    session, on every export. `cash_sessions` already stores the closing
+    figures the moment a drawer closes (`close_cash_session`) -- that IS
+    what a Z report is: the numbers as they stood the moment the drawer
+    closed, not the numbers as they'd compute today. Filtered to
+    `closed_at IS NOT NULL` so an open drawer (no closing figures yet)
+    never appears with blank money columns pretending to be a report.
+
+    Date-ranged on `closed_at`, not `opened_at` -- a Z report belongs to the
+    accounting period the shift ENDED in, matching how every other
+    period-close document in this file (sales, payments) is ranged on the
+    timestamp that makes it final.
+    """
+    cid = _cid()
+    date_from, date_to, err = _export_date_range()
+    if err:
+        return err
+    header = [
+        'session_id', 'branch_id', 'opened_by', 'opened_at', 'closed_by', 'closed_at',
+        'opening_float', 'closing_float_counted', 'closing_float_expected', 'variance', 'status',
+    ]
+    money_columns = ['opening_float', 'closing_float_counted', 'closing_float_expected', 'variance']
+    sql = (
+        "SELECT id, branch_id, opened_by, opened_at, closed_by, closed_at, "
+        "opening_float, closing_float_counted, closing_float_expected, variance, status "
+        "FROM cash_sessions "
+        "WHERE company_id=? AND closed_at IS NOT NULL "
+        "AND closed_at >= date(?) AND closed_at < date(?, '+1 day') "
+        "ORDER BY closed_at"
+    )
+    conn = get_retail_conn()
+    return _stream_csv_export(
+        conn, sql, (cid, date_from, date_to), header, money_columns,
+        f'cash_session_zreports_{date_from}_{date_to}.csv',
+    )
 
 # ── Void (immutability: never edit/delete, only reverse) ──────────────────────
 @retail_bp.route('/payments/<int:pid>/void', methods=['POST'])
