@@ -1168,7 +1168,13 @@ KNOWN_UNTRANSLATED_BASELINE = frozenset({
     'Manage WhatsApp Reports',
     'No audit entries match these filters.',
     'No pending reorder requests.',
-    'Note',
+    # 'Note' was here and is deliberately gone. The combined exceptions screen
+    # (`fa5a89b`) put it in both catalogs with real Arabic -- it labels the
+    # REQUIRED explanation an owner writes when resolving an oversell, which is
+    # the one field on that form the server refuses without. The ratchet caught
+    # this on the full sweep, not on any targeted run: adding the key was what
+    # made the baseline stale, and nothing in the exceptions work would have
+    # noticed. An entry may leave this list, never rejoin it.
     'Page',
     'Purchase order drafted',
     'Request accepted',
