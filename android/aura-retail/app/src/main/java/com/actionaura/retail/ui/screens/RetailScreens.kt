@@ -134,12 +134,28 @@ fun PosScreen(snackbar: SnackbarHostState) {
         val event = com.actionaura.retail.barcode.HidScanBus.lastScan ?: return@LaunchedEffect
         if (!com.actionaura.retail.barcode.isUnconsumedScan(event, lastConsumedScanSeq)) return@LaunchedEffect
         lastConsumedScanSeq = event.seq
-        val p = com.actionaura.retail.barcode.findProductByCode(products, event.code)
-        if (p != null) {
-            lastScanned = if (addOne(p)) "✓ ${p.name}"
-                          else "✗ ${p.name}: " + tr("Only %s in stock").format(fmtQty(p.total_stock))
-        } else {
-            lastScanned = "✗ " + tr("Not found:") + " ${event.code}"
+        // Launch-readiness "the POS scale fix": resolves against the server
+        // (one indexed row) instead of linear-scanning the fully fetched
+        // `products` list -- see barcode/ProductLookup.kt's
+        // lookupProductByCode. Already inside this LaunchedEffect's suspend
+        // scope, so the suspend call is awaited directly, off the main
+        // thread the same way load()/loadCustomers()/loadMethods() above are.
+        when (val result = com.actionaura.retail.barcode.lookupProductByCode(ApiClient.get(), event.code)) {
+            is com.actionaura.retail.barcode.ProductLookupResult.Found -> {
+                val p = result.product
+                lastScanned = if (addOne(p)) "✓ ${p.name}"
+                              else "✗ ${p.name}: " + tr("Only %s in stock").format(fmtQty(p.total_stock))
+            }
+            is com.actionaura.retail.barcode.ProductLookupResult.NotFound ->
+                lastScanned = "✗ " + tr("Not found:") + " ${event.code}"
+            // Distinct from NotFound on purpose: the lookup itself failed
+            // (offline, a non-404 server error), so telling the cashier this
+            // item doesn't exist would blame the product for a network
+            // problem. apiErrorMessage gives an honest, specific reason
+            // (including the licensing-block case) instead of a bare
+            // "not found" -- same mapping every other screen's catch block uses.
+            is com.actionaura.retail.barcode.ProductLookupResult.Failed ->
+                lastScanned = "✗ " + apiErrorMessage(result.cause)
         }
     }
 
@@ -473,12 +489,23 @@ fun PosScreen(snackbar: SnackbarHostState) {
             continuous = true,
             statusText = scanStatus,
             onResult = { code ->
-                val p = com.actionaura.retail.barcode.findProductByCode(products, code)
-                if (p != null) {
-                    lastScanned = if (addOne(p)) "✓ ${p.name}"
-                                  else "✗ ${p.name}: " + tr("Only %s in stock").format(fmtQty(p.total_stock))
-                } else {
-                    lastScanned = "✗ " + tr("Not found:") + " $code"
+                // onResult is a plain (String) -> Unit callback (CameraX's ML Kit
+                // analyzer, dispatched via ContextCompat.getMainExecutor -- see
+                // BarcodeScanner.kt), not a suspend lambda, so the lookup goes
+                // through the screen's existing rememberCoroutineScope() the same
+                // way the stock-limit snackbar above already does.
+                scope.launch {
+                    when (val result = com.actionaura.retail.barcode.lookupProductByCode(ApiClient.get(), code)) {
+                        is com.actionaura.retail.barcode.ProductLookupResult.Found -> {
+                            val p = result.product
+                            lastScanned = if (addOne(p)) "✓ ${p.name}"
+                                          else "✗ ${p.name}: " + tr("Only %s in stock").format(fmtQty(p.total_stock))
+                        }
+                        is com.actionaura.retail.barcode.ProductLookupResult.NotFound ->
+                            lastScanned = "✗ " + tr("Not found:") + " $code"
+                        is com.actionaura.retail.barcode.ProductLookupResult.Failed ->
+                            lastScanned = "✗ " + apiErrorMessage(result.cause)
+                    }
                 }
             },
             onDismiss = {

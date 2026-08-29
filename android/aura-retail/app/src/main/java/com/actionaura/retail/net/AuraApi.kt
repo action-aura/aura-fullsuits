@@ -109,6 +109,18 @@ interface AuraApi {
     @GET("api/sub/retail/products")
     suspend fun products(): ProductsResponse
 
+    // Launch-readiness "the POS scale fix" -- resolves ONE product by
+    // barcode then SKU, company-scoped and index-backed (retail_api.py's
+    // lookup_product(), schema v21), instead of fetching the whole
+    // products() catalogue just to linear-scan it client-side. Mirrors the
+    // desktop/web fix (dfc0ef0/17efa5b) for the Android half of the fleet --
+    // see barcode/ProductLookup.kt's lookupProductByCode for the caller.
+    // 404 (retrofit2.HttpException) when nothing matches; never a 200 with
+    // a null payload, so a genuine "no such product" is distinguishable
+    // from every other failure this suspend call can throw.
+    @GET("api/sub/retail/products/lookup")
+    suspend fun productLookup(@Query("code") code: String): ProductLookupResponse
+
     // Categories (multi-device sync foundation, Task 9 wiring -- see Models.kt)
     @GET("api/sub/retail/categories")
     suspend fun categories(): CategoriesResponse

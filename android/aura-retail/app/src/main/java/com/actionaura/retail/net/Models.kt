@@ -272,6 +272,15 @@ data class Product(
 )
 data class ProductsResponse(val status: String = "", val data: List<Product> = emptyList())
 
+// Single-product resolve (GET /products/lookup?code=) -- the AuraApi.productLookup()
+// success envelope. A 404 (no match) never reaches this class at all: Retrofit
+// throws retrofit2.HttpException before any body here gets deserialized, which is
+// exactly how barcode/ProductLookup.kt's lookupProductByCode tells "not found"
+// apart from every other failure. `data` is still nullable/defaulted (never trust
+// a 200 to carry a body) rather than assumed non-null on the strength of the
+// status code alone.
+data class ProductLookupResponse(val status: String = "", val data: Product? = null)
+
 // Categories -- multi-device sync foundation (2026-08-06), Task 9 wiring:
 // GET/POST /api/sub/retail/categories, PUT /categories/{id}. Category
 // create/update is the only entity type Task 4's sync_outbox wiring

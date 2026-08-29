@@ -6,7 +6,16 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 /** Phase 4F: unit tests for the exact barcode/SKU lookup logic PosScreen's
- * scanner result handler calls (extracted, not reimplemented). */
+ * scanner result handler calls (extracted, not reimplemented).
+ *
+ * RETIRED COVERAGE (launch-readiness, "the POS scale fix"): PosScreen's scan
+ * handlers no longer call [findProductByCode] -- see that function's own doc
+ * comment in ProductLookup.kt. These tests are kept exactly as they were and
+ * still pass, but they now prove only that this now-unused pure matcher's
+ * case-insensitive barcode/SKU semantics are correct in isolation. They can
+ * NO LONGER prove anything about what a live scan resolves to, or that the
+ * scan path even reaches the network; that guarantee belongs to
+ * ProductLookupResultTest, against [lookupProductByCode]. */
 class ProductLookupTest {
 
     private val catalog = listOf(
