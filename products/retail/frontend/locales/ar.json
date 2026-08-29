@@ -345,6 +345,7 @@
   "Stock": "المخزون",
   "No products found.": "لم يتم العثور على منتجات.",
   "Failed to load products.": "تعذّر تحميل المنتجات.",
+  "Showing the first 200 matches. Type to narrow the search.": "أول 200 نتيجة معروضة. اكتب لتضييق البحث.",
   "Remove line": "حذف السطر",
   "Increase quantity": "زيادة الكمية",
   "Decrease quantity": "إنقاص الكمية",

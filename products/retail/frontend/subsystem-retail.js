@@ -1976,16 +1976,56 @@ const RetailSystem = {
     if (window.CashDrawer) CashDrawer.mount(c);
   },
 
+  // ── launch-readiness "the POS scale fix" (ROADMAP.md 2026-08-29 v21) ──────
+  // This screen used to fetch the ENTIRE product catalogue on every mount,
+  // and again after every single sale (see _checkout below) -- at 50,000
+  // SKUs that is ~25MB re-sent over the wire per sale just to reflect a
+  // stock decrement the server already applied, and a 50,000-button
+  // innerHTML rebuild on every keystroke in the search box.
+  //
+  // POS_GRID_PAGE_SIZE bounds the first page and every search page --
+  // matches PRODUCTS_LIST_DEFAULT_LIMIT in retail_api.py, so an unfiltered
+  // page 1 here is exactly the server's own default page. Every fetch below
+  // asks for POS_GRID_PAGE_SIZE+1 rows, never exactly the cap -- the extra
+  // row is how the client tells "the server genuinely has no more" (<= cap
+  // rows came back) apart from "there are more than we asked for" (cap+1
+  // came back), with no truncation flag needed from the backend. See
+  // _renderPOSGrid, which is where the cap and the truncation notice are
+  // actually decided.
+  POS_GRID_PAGE_SIZE: 200,
+  // Long enough that a hand-typed/mis-detected 4-6 character barcode lands
+  // as ONE request; short enough a cashier deliberately searching never
+  // feels the lag.
+  POS_SEARCH_DEBOUNCE_MS: 220,
+
+  // Additive by-id lookup cache. this._products only ever holds ONE page --
+  // page 1 or the latest search's results, capped at POS_GRID_PAGE_SIZE (see
+  // _renderPOSGrid) -- so it is the wrong place to look up a product that
+  // arrived a DIFFERENT way: a scan hit (_findByCode) or a search result for
+  // a product outside page 1. Every product this device has seen from the
+  // server this mount lands here BY ID as well, additively; _addToCart and
+  // the post-checkout stock decrement below both fall back to this after
+  // checking this._products.
+  _cacheProduct(p) {
+    if (!p || p.id == null) return;
+    if (!this._productsById) this._productsById = Object.create(null);
+    this._productsById[p.id] = p;
+  },
+
   async _loadPOSData() {
     try {
       const [prods, cats, custs, taxSettings, held] = await Promise.all([
-        this._get('/api/sub/retail/products'),
+        this._get(`/api/sub/retail/products?limit=${this.POS_GRID_PAGE_SIZE + 1}`),
         this._get('/api/sub/retail/categories'),
         this._get('/api/sub/retail/customers'),
         this._get('/api/sub/retail/settings/tax').catch(() => null),
         this._get('/api/sub/retail/held-sales').catch(() => null),
       ]);
       this._products   = prods.data || [];
+      // Snapshot of "page 1", restored instantly (no round trip) whenever the
+      // search box is cleared -- see _filterPOS.
+      this._posInitialPage = this._products;
+      this._products.forEach(p => this._cacheProduct(p));
       this._categories = cats.data  || [];
       this._customers  = custs.data || [];
       // Company's configured tax-calculation policy (core/retail/pricing.py
@@ -2130,23 +2170,34 @@ const RetailSystem = {
     return clock ? `${t('Stock at')} ${this._esc(clock)}: ${qty}` : `${t('Stock')}: ${qty}`;
   },
 
-  _renderPOSGrid(filter = '') {
+  _renderPOSGrid() {
     const grid = document.getElementById('pos-product-grid');
     if (!grid) return;
-    const term = filter.toLowerCase();
     const _ICONS = { Electronics:'💻', Clothing:'👕', 'Food & Beverages':'🍔', Beverages:'🥤',
       Groceries:'🛒', Accessories:'💍', Footwear:'👟', Sports:'⚽', Beauty:'💄', Default:'📦' };
-    const visible = this._products.filter(p => {
-      if (this._activeCat && p.category_id !== this._activeCat) return false;
-      if (term && !p.name.toLowerCase().includes(term) && !p.sku.toLowerCase().includes(term) &&
-          !(p.barcode||'').toLowerCase().includes(term)) return false;
-      return true;
-    });
-    if (!visible.length) {
+    // Text search moved server-side (_filterPOS/_runPOSSearch below) --
+    // this._products IS the current result set already. Category is the
+    // one filter the backend does not offer, so it still happens here,
+    // client-side, over whatever page/search batch is loaded.
+    const matches = (this._products || []).filter(p =>
+      !this._activeCat || p.category_id === this._activeCat);
+    if (!matches.length) {
       grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;color:var(--text-dim);padding:40px">${t('No products found.')}</div>`;
       return;
     }
-    grid.innerHTML = visible.map(p => {
+    // The cap is enforced HERE, not merely trusted to already be true of
+    // this._products -- _loadPOSData/_runPOSSearch both ask the server for
+    // one row MORE than this, specifically so this line can tell "exactly
+    // the cap came back" (truncated -- there is more) apart from "fewer
+    // than the cap came back" (everything that matches is already on
+    // screen), with no flag needed from the backend.
+    const truncated = matches.length > this.POS_GRID_PAGE_SIZE;
+    const visible = truncated ? matches.slice(0, this.POS_GRID_PAGE_SIZE) : matches;
+    // Silently showing a subset would be worse than saying it is one.
+    const notice = truncated
+      ? `<div class="pos-grid-note" style="grid-column:1/-1;text-align:center;color:var(--text-dim);font-size:12px;padding-block:8px">${t('Showing the first 200 matches. Type to narrow the search.')}</div>`
+      : '';
+    grid.innerHTML = notice + visible.map(p => {
       const outOfStock = p.total_stock <= 0;
       const icon = _ICONS[p.category_name] || _ICONS.Default;
       // Phase 7 stage 7b: stale is checked for in-stock tiles only. The
@@ -2215,12 +2266,43 @@ const RetailSystem = {
     }).join('');
   },
 
+  // Debounced: a search now reaches the server (below), so firing on every
+  // keystroke would turn a 4-character hand-typed code into four requests.
   _filterPOS() {
-    this._renderPOSGrid(document.getElementById('pos-search')?.value || '');
+    clearTimeout(this._posSearchTimer);
+    const term = (document.getElementById('pos-search')?.value || '').trim();
+    if (!term) {
+      // Box cleared: restore page 1 from what _loadPOSData already cached --
+      // no debounce, no round trip needed for "show me everything again".
+      this._products = this._posInitialPage || [];
+      this._renderPOSGrid();
+      return;
+    }
+    this._posSearchTimer = setTimeout(() => this._runPOSSearch(term), this.POS_SEARCH_DEBOUNCE_MS);
+  },
+
+  // The debounced half of _filterPOS -- one request per pause in typing,
+  // never one per keystroke.
+  async _runPOSSearch(term) {
+    try {
+      const res = await this._get(`/api/sub/retail/products?q=${encodeURIComponent(term)}&limit=${this.POS_GRID_PAGE_SIZE + 1}`);
+      this._products = res.data || [];
+      this._products.forEach(p => this._cacheProduct(p));
+      this._renderPOSGrid();
+    } catch (e) {
+      // A failed search must not blank an otherwise-working till -- leave
+      // whatever is already on screen; the cashier can retry or clear the box.
+    }
   },
 
   _addToCart(productId) {
-    const p = this._products.find(x => x.id === productId);
+    // this._products is only ever ONE page/search batch (see
+    // _renderPOSGrid), so a product reached by SCAN -- or a search result
+    // for a product outside that batch -- may not be in it. _productsById
+    // is the additive fallback every server response feeds (_cacheProduct):
+    // page loads, search results, and single-product scan lookups alike.
+    const p = (this._products || []).find(x => x.id === productId) ||
+              (this._productsById && this._productsById[productId]);
     if (!p) return;
     const existing = this._cart.find(i => i.product_id === productId);
     const newQty = existing ? existing.quantity + 1 : 1;
@@ -2724,11 +2806,33 @@ const RetailSystem = {
     }
   },
 
-  // Lookup helper shared by every scan handler.
-  _findByCode(code) {
-    const c = (code || '').toLowerCase();
-    return (this._products || []).find(x =>
-      (x.barcode || '').toLowerCase() === c || (x.sku || '').toLowerCase() === c);
+  // Lookup helper shared by every scan handler. Used to be a linear scan
+  // over this._products (the client's local catalogue array) -- that broke
+  // the moment the POS stopped loading the whole catalogue (see the page-1
+  // fix above): a code for a product outside the loaded page could never
+  // resolve, silently. This now asks the server directly for the one row it
+  // needs (GET /products/lookup, retail_api.py -- company-scoped,
+  // index-backed as of schema v21).
+  //
+  // Returns { product, error } rather than a bare value, because a scan
+  // handler has to tell THREE outcomes apart, not two:
+  //   - product set             -> a real match.
+  //   - product null, no error  -> the server said "no such product" (404),
+  //     a normal outcome for a till -- see _showScanNotFound.
+  //   - error set                -> the lookup itself failed (offline, a
+  //     non-401 server error, a malformed body). Telling a cashier "not
+  //     found" here would blame the product for a network problem.
+  async _findByCode(code) {
+    try {
+      const res = await this._get(`/api/sub/retail/products/lookup?code=${encodeURIComponent(code)}`);
+      if (res && res.status === 'success' && res.data) {
+        this._cacheProduct(res.data);
+        return { product: res.data, error: null };
+      }
+      return { product: null, error: null };
+    } catch (e) {
+      return { product: null, error: e };
+    }
   },
 
   // Register a one-shot handler for the next scan (field capture / test box).
@@ -2752,32 +2856,42 @@ const RetailSystem = {
   },
 
   // ── Per-screen scan handlers ──────────────────────────────────────────────
-  _posScan(code) {
+  async _posScan(code) {
     const search = document.getElementById('pos-search');
     if (search) { search.value = ''; this._filterPOS(); }
-    const p = this._findByCode(code);
-    if (p) {
-      this._addToCart(p.id);              // reuses existing stock checks + cart merge
-      SubsystemApp.showToast(`Added: ${p.name}`, 'success');
+    const { product, error } = await this._findByCode(code);
+    if (product) {
+      this._addToCart(product.id);              // reuses existing stock checks + cart merge
+      SubsystemApp.showToast(`Added: ${product.name}`, 'success');
+    } else if (error) {
+      // Distinct from "not found": the lookup itself failed, so telling the
+      // cashier this product doesn't exist would be a lie about why the
+      // scan didn't resolve. Same phrasing _checkout's own network-failure
+      // toast already uses.
+      SubsystemApp.showToast('Scan failed — check the connection and try again', 'error');
     } else {
       this._showScanNotFound(code);
     }
   },
 
-  _productsScan(code) {
+  async _productsScan(code) {
     const inp = document.getElementById('prod-search');
     if (inp) { inp.value = code; this._filterProducts(); }
-    const p = this._findByCode(code);
-    SubsystemApp.showToast(p ? `Found: ${p.name}` : `No product matches ${code}`, p ? 'success' : 'error');
+    const { product, error } = await this._findByCode(code);
+    if (error) { SubsystemApp.showToast('Scan failed — check the connection and try again', 'error'); return; }
+    SubsystemApp.showToast(product ? `Found: ${product.name}` : `No product matches ${code}`, product ? 'success' : 'error');
   },
 
-  _poScan(code) {
-    const p = this._findByCode(code);
-    if (!p) { SubsystemApp.showToast(`No product matches ${code}`, 'error'); return; }
+  async _poScan(code) {
+    const { product, error } = await this._findByCode(code);
+    if (!product) {
+      SubsystemApp.showToast(error ? 'Scan failed — check the connection and try again' : `No product matches ${code}`, 'error');
+      return;
+    }
     const sel = document.getElementById('po-item-prod');
-    if (sel) { sel.value = String(p.id); sel.dispatchEvent(new Event('change')); }
+    if (sel) { sel.value = String(product.id); sel.dispatchEvent(new Event('change')); }
     document.getElementById('po-item-qty')?.focus();
-    SubsystemApp.showToast(`Scanned: ${p.name}`, 'success');
+    SubsystemApp.showToast(`Scanned: ${product.name}`, 'success');
   },
 
   // "Product not found" prompt — Add New Product / Scan Again / Cancel.
@@ -2825,6 +2939,22 @@ const RetailSystem = {
     setTimeout(() => {
       if (btn && btn.disabled) { btn.textContent = '📷 Scan'; btn.disabled = false; this.cancelCapture(); }
     }, 15000);
+  },
+
+  // Mirrors the server's own stock decrement locally instead of re-fetching
+  // the whole catalogue to observe it -- see _checkout below. Looks a
+  // product up the SAME way _addToCart does (this._products first, then the
+  // by-id cache), so a line for a product reached only via scan still gets
+  // its cached stock corrected, not just whatever was on the loaded page.
+  _applyLocalStockDecrement(lines) {
+    (lines || []).forEach(line => {
+      const p = (this._products || []).find(x => x.id === line.product_id) ||
+                (this._productsById && this._productsById[line.product_id]);
+      if (p && typeof p.total_stock === 'number') {
+        p.total_stock = Math.max(0, p.total_stock - (line.quantity || 0));
+      }
+    });
+    this._renderPOSGrid();
   },
 
   async _checkout() {
@@ -2880,9 +3010,23 @@ const RetailSystem = {
       const data = await this._post('/api/sub/retail/sales', payload);
       if (data.status === 'success') {
         // Reset the cart/button FIRST so the till is ready for the next sale even
-        // if the receipt modal hiccups — then show the receipt + refresh.
+        // if the receipt modal hiccups — then show the receipt.
         this._clearCart();
-        this._loadPOSData();
+        // AUDIT [launch-readiness "the POS scale fix"]: this used to call
+        // _loadPOSData() here, re-fetching the ENTIRE product catalogue
+        // after every single sale -- at 50,000 SKUs that's ~25MB re-sent
+        // over the wire once per transaction, just to reflect a stock
+        // decrement the server already applied. The sale response already
+        // carries exactly what changed (`lines`: product_id + quantity per
+        // line -- see create_sale's response_data in retail_api.py), so the
+        // same decrement is applied locally instead of re-fetched -- see
+        // _applyLocalStockDecrement. Any drift from a sale rung on ANOTHER
+        // device is corrected by the next real _loadPOSData() (a category
+        // switch, a search, or the next POS mount) -- and the stale-stock UI
+        // (_isStockStale/_staleStockLabel, stage 7b) already dates the
+        // figure once this device falls behind on sync, so a client-side
+        // decrement is never presented as more certain than it actually is.
+        this._applyLocalStockDecrement(data.data && data.data.lines);
         this._showReceipt(data.data);
       } else {
         SubsystemApp.showToast(data.message || 'Checkout failed', 'error');
