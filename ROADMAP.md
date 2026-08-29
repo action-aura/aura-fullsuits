@@ -745,3 +745,30 @@ was resolved and when, not WHY. Whoever builds the queue's UI should either
 surface the audit entry alongside the row or add the column in a later version;
 a resolution whose reason is one join away from the screen showing it is a gap
 worth closing deliberately rather than discovering.
+
+## 2026-08-29 — two lines for the SAME product in one sale can jointly exceed stock
+
+Found while building Phase 7 stage 7d-iii; **pre-existing, not introduced or
+worsened by it, and not fixed.**
+
+`create_sale`'s validation loop checks each line's `qty > on_hand` against the
+SAME un-decremented balance. So a single sale containing two lines for the same
+product — 3 units on one line and 3 on another, against 5 on hand — passes both
+checks individually and commits 6.
+
+This is independent of Phase 7 entirely: it happens on a device that is fully
+synced, on an install with sync switched off, on any device at all. It is the
+classic check-then-act shape this file has already fixed twice elsewhere
+(`receive_purchase_order`'s double-receive race, and `create_sale`'s own
+`BEGIN IMMEDIATE`), just applied within one request rather than across two.
+
+The fix is to accumulate per-product demand across the line loop and check the
+total, not each line in isolation. Deliberately not bundled into 7d-iii: that
+stage changes when the refusal applies, and folding in a change to WHAT the
+refusal computes would have made its mutation proofs ambiguous about which
+behaviour they were pinning.
+
+Worth noting the interaction: after 7d-iii a device that IS behind records a
+`stock_exceptions` row when a sale drives the balance negative, so this bug is
+now at least *visible* on a behind device. On a fully-synced device it still
+passes silently, which is the case worth fixing.
