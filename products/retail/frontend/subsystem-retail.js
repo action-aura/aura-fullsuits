@@ -160,6 +160,12 @@ const RetailSystem = {
       // see _renderStockAccuracy for the gating and for why the repair on it
       // is never automatic.
       case 'stock-accuracy': return this._renderStockAccuracy(c);
+      // Launch-readiness 2026-08-29 ("the two exception queues both need
+      // ONE screen, not two"): stock_exceptions (Phase 7) and
+      // sync_conflicts (Phase 6) on one surface -- see _renderExceptions
+      // for the gating and for why the discarded-edits section carries no
+      // action button.
+      case 'exceptions': return this._renderExceptions(c);
       default:
         c.innerHTML = `<div style="text-align:center;padding:80px;color:var(--text-muted)"><h2>${sectionId}</h2><p>Coming soon.</p></div>`;
     }
@@ -5264,6 +5270,428 @@ const RetailSystem = {
       </div>`;
   },
 
+  // ── EXCEPTIONS (the two exception queues, one screen) ───────────────────────
+  //
+  // Launch-readiness 2026-08-29 ("the two exception queues both need ONE
+  // screen, not two", ROADMAP.md). Both queues answer "something happened
+  // that the software could not resolve on its own and a human must
+  // decide":
+  //
+  //   * OVERSOLD STOCK -- `stock_exceptions` (Phase 7 stage 7d-i/ii). A sale
+  //     merged in from another device pushed the balance negative. Carries
+  //     the resolve action the API already has (GET .../inventory/
+  //     stock-exceptions, POST .../inventory/stock-exceptions/<id>/resolve).
+  //   * DISCARDED CATALOGUE EDITS -- `sync_conflicts` (Phase 6 stage
+  //     6a-ii). An incoming catalogue write lost the reject-stale race. GET
+  //     .../inventory/sync-conflicts (list_sync_conflicts, retail_api.py).
+  //     INFORMATIONAL ONLY -- see that route's own docstring for why there
+  //     is no honest "fix" action: the newer value already won, so nothing
+  //     here can be re-applied. The remedy this section states in words is
+  //     the only remedy that exists -- redo the edit, on a device that is
+  //     caught up.
+  //
+  // Two independent state machines (`this._exceptionQueue.stock` /
+  // `.conflicts`), each `checking` / `failed` / `empty` / `rows`, so one
+  // queue's fetch failing can never blank the other's -- the same reason
+  // Stock Accuracy's own load/paint split exists just above.
+
+  async _renderExceptions(c) {
+    this._injectStyles();
+
+    // retail.reports -- the SAME capability both read routes carry
+    // (list_stock_exceptions and list_sync_conflicts, both
+    // @mt_require_capability(CAP_REPORTS), NEITHER with a company-admin
+    // requirement). Deliberately not owner-only, unlike Stock Accuracy:
+    // neither route discloses an unpaginated whole-catalogue dump.
+    if (window.SubsystemApp && !SubsystemApp.hasCapability('retail.reports')) {
+      return this._renderCapabilityRestricted(c, {
+        icon: '⚠️',
+        title: t('Exceptions'),
+        message: t('The exception queues are limited to managers and the store owner. Open the till to start ringing sales.'),
+      });
+    }
+
+    // 'checking' from the very first paint for BOTH sections, never
+    // 'empty' -- the same reasoning _renderStockAccuracy's own comment
+    // gives: an unfilled region between the frame and the first response
+    // is indistinguishable from "found nothing", which is the failure this
+    // screen exists to refuse.
+    this._exceptionQueue = {
+      stock: { state: 'checking', rows: [], error: '' },
+      conflicts: { state: 'checking', rows: [], error: '' },
+    };
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <h2 class="ret-title">${t('Exceptions')}</h2>
+      </div>
+      <p style="color:var(--text-muted);font-size:13px;margin:0 0 22px;max-width:780px;line-height:1.7">
+        ${t('Two queues for things the software could not resolve on its own. A human decides what happens next.')}
+      </p>
+      <section aria-labelledby="exq-stock-heading" style="margin-bottom:28px">
+        <h3 id="exq-stock-heading" class="sub-chart-title" style="margin:0 0 6px">${t('Oversold Stock')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 14px;line-height:1.7;max-width:760px">
+          ${t('A sale recorded on another device merged in after this one had already sold the same stock, and the balance went negative. Resolving one writes a real stock correction, so it needs stock-adjust authority.')}
+        </p>
+        <div id="exq-stock-body">${this._exqStockPanel()}</div>
+      </section>
+      <section aria-labelledby="exq-conflicts-heading">
+        <h3 id="exq-conflicts-heading" class="sub-chart-title" style="margin:0 0 6px">${t('Discarded Catalogue Edits')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 14px;line-height:1.7;max-width:760px">
+          ${t('An edit arrived from another device but was discarded because a newer version of the same record had already been saved here. The newer value is the one in use now -- there is nothing to re-apply. If this edit still matters, make it again.')}
+        </p>
+        <div id="exq-conflicts-body">${this._exqConflictsPanel()}</div>
+      </section>`;
+    await Promise.all([this._loadExceptionStock(), this._loadExceptionConflicts()]);
+  },
+
+  // ── Loading (one pair per section, mirroring _loadStockAccuracy) ──────────
+
+  async _loadExceptionStock() {
+    const eq = this._exceptionQueue || (this._exceptionQueue = {});
+    const s = eq.stock || (eq.stock = { state: 'checking', rows: [], error: '' });
+    s.state = 'checking';
+    s.error = '';
+    this._paintExceptionStock();
+    try {
+      const res = await this._get('/api/sub/retail/inventory/stock-exceptions');
+      if (!res || res.status !== 'success' || !res.data) {
+        s.state = 'failed';
+        s.rows = [];
+        s.error = (res && (res.message || res.error)) || t('Could not check for oversold stock.');
+      } else {
+        const rows = Array.isArray(res.data.exceptions) ? res.data.exceptions : [];
+        s.rows = rows;
+        s.error = '';
+        s.state = rows.length ? 'rows' : 'empty';
+      }
+    } catch (e) {
+      console.error('Exceptions: oversold-stock load failed', e);
+      s.state = 'failed';
+      s.rows = [];
+      s.error = t('Could not check for oversold stock.');
+    }
+    this._paintExceptionStock();
+  },
+
+  _paintExceptionStock() {
+    const host = document.getElementById('exq-stock-body');
+    if (!host) return;
+    host.innerHTML = this._exqStockPanel();
+  },
+
+  async _loadExceptionConflicts() {
+    const eq = this._exceptionQueue || (this._exceptionQueue = {});
+    const s = eq.conflicts || (eq.conflicts = { state: 'checking', rows: [], error: '' });
+    s.state = 'checking';
+    s.error = '';
+    this._paintExceptionConflicts();
+    try {
+      const res = await this._get('/api/sub/retail/inventory/sync-conflicts');
+      if (!res || res.status !== 'success' || !res.data) {
+        s.state = 'failed';
+        s.rows = [];
+        s.error = (res && (res.message || res.error)) || t('Could not check for discarded catalogue edits.');
+      } else {
+        const rows = Array.isArray(res.data.conflicts) ? res.data.conflicts : [];
+        s.rows = rows;
+        s.error = '';
+        s.state = rows.length ? 'rows' : 'empty';
+      }
+    } catch (e) {
+      console.error('Exceptions: sync-conflict load failed', e);
+      s.state = 'failed';
+      s.rows = [];
+      s.error = t('Could not check for discarded catalogue edits.');
+    }
+    this._paintExceptionConflicts();
+  },
+
+  _paintExceptionConflicts() {
+    const host = document.getElementById('exq-conflicts-body');
+    if (!host) return;
+    host.innerHTML = this._exqConflictsPanel();
+  },
+
+  // ── Shared per-state panels (checking / failed / empty), one instance
+  //    parameterised by copy rather than duplicated per section ───────────
+
+  _exqChecking(message) {
+    return `
+      <div class="sub-chart-card" data-exq-state="checking" style="text-align:center;padding:40px 32px">
+        <div style="font-size:30px;margin-bottom:10px" aria-hidden="true">⏳</div>
+        <p style="color:var(--text-muted);font-size:13px;margin:0;line-height:1.7">${message}</p>
+      </div>`;
+  },
+
+  _exqFailed(errorText, retryCall) {
+    return `
+      <div class="sub-chart-card" data-exq-state="failed" style="text-align:center;padding:40px 32px;border:1px solid var(--state-danger-border)">
+        <div style="font-size:30px;margin-bottom:10px" aria-hidden="true">⚠️</div>
+        <p style="color:var(--state-danger-text);font-size:13px;margin:0 0 14px;line-height:1.7">${this._esc(errorText)}</p>
+        <button class="ret-btn ret-btn-ghost" onclick="${retryCall}">${t('Try again')}</button>
+      </div>`;
+  },
+
+  // An empty queue is the NORMAL, HEALTHY case -- the same ✅ treatment
+  // _stkaClean() gives a reconciled shop, so this reads as "nothing needs
+  // attention" rather than as a blank/broken section.
+  _exqEmpty(title, message) {
+    return `
+      <div class="sub-chart-card" data-exq-state="empty" style="text-align:center;padding:40px 32px">
+        <div style="font-size:30px;margin-bottom:10px" aria-hidden="true">✅</div>
+        <h3 style="color:var(--text);margin:0 0 6px;font-size:15px">${title}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0;line-height:1.7">${message}</p>
+      </div>`;
+  },
+
+  _exqUnknownState(state) {
+    return `
+      <div class="sub-chart-card" data-exq-state="unknown" style="text-align:center;padding:40px 32px;border:1px solid var(--state-danger-border)">
+        <div style="font-size:30px;margin-bottom:10px" aria-hidden="true">⚠️</div>
+        <h3 style="color:var(--state-danger-text);margin:0 0 8px;font-size:15px">${t('This screen lost track of what it was showing.')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0;line-height:1.7"><bdi dir="ltr">${this._esc(String(state))}</bdi></p>
+      </div>`;
+  },
+
+  // Local timestamp formatting -- `detected_at_utc` is a timezone-aware ISO
+  // string ('...+00:00', see commercial_runtime's `now_utc_iso()`/
+  // `_now_iso()`), which `new Date()` parses directly. Deliberately NOT
+  // `_auditTimestamp()`: that helper appends a literal 'Z' after replacing
+  // the FIRST space with 'T', which assumes a naive 'YYYY-MM-DD HH:MM:SS'
+  // input (audit_log.timestamp's own shape) -- feeding it an
+  // already-offset ISO string here would corrupt the parse.
+  _exqTimestamp(ts) {
+    if (!ts) return '—';
+    const d = new Date(String(ts));
+    if (isNaN(d.getTime())) return this._esc(ts);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+           `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  },
+
+  // ── Section 1: Oversold Stock ────────────────────────────────────────────
+
+  _exqStockPanel() {
+    const s = (this._exceptionQueue && this._exceptionQueue.stock) || { state: 'checking' };
+    switch (s.state) {
+      case 'checking': return this._exqChecking(t('Checking for oversold stock…'));
+      case 'failed':   return this._exqFailed(s.error || t('Could not check for oversold stock.'), 'RetailSystem._loadExceptionStock()');
+      case 'empty':    return this._exqEmpty(t('Nothing needs attention.'), t('No oversold product is currently open.'));
+      case 'rows':     return this._exqStockRows(s.rows);
+      default:         return this._exqUnknownState(s.state);
+    }
+  },
+
+  // The resolve control is capability-gated PER ROW, not by hiding the
+  // whole section -- a viewer who holds retail.reports but not
+  // retail.stock.adjust must still see every open exception, just without
+  // a button that would only 403. Same `SubsystemApp.hasCapability(...)`
+  // mechanism the shell already uses to hide a control it cannot grant
+  // (see `_mayBrowseTheSalesBook`'s identical shape for retail.reports),
+  // computed ONCE per render rather than per row: the grant cannot change
+  // mid-render, and repeating the check per row would just be the same
+  // answer asked N times.
+  _exqStockRows(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    const canResolve = !window.SubsystemApp || SubsystemApp.hasCapability('retail.stock.adjust');
+    return `
+      <div data-exq-state="rows">
+        <div class="sub-chart-card">
+          <div style="overflow-x:auto">
+            <table class="ret-table" id="exq-stock-table">
+              <thead><tr>
+                <th>${t('Product')}</th>
+                <th>${t('SKU')}</th>
+                <th>${t('Branch')}</th>
+                <th style="text-align:right">${t('Balance')}</th>
+                <th>${t('Detected')}</th>
+                ${canResolve ? '<th></th>' : ''}
+              </tr></thead>
+              <tbody>${list.map(r => this._exqStockRow(r, canResolve)).join('')}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>`;
+  },
+
+  _exqStockRow(r, canResolve) {
+    const row = r || {};
+    // product_name is a LEFT JOIN and can be null -- same reasoning as
+    // _stkaRow()'s own product cell, below in this file (Stock Accuracy):
+    // the oversell already happened, and hiding the row because a foreign
+    // name is gone would be exactly the silent-drop failure this queue
+    // exists to replace.
+    //
+    // `productLabel`, not `name` -- deliberately a different local variable
+    // (and therefore a different literal `<td>...</td>` line) than
+    // `_stkaRow()`'s own `name`, so this row's markup can never collide
+    // with that screen's own mutation-proof anchor text and make ITS
+    // "occurs exactly once" check fail the moment both screens render.
+    const productLabel = row.product_name
+      ? this._esc(row.product_name)
+      : `<span>${t('Product no longer in the catalogue')}</span> ${this._bdi(String(row.product_id == null ? '' : row.product_id))}`;
+    const sku = row.sku ? this._bdi(row.sku) : '—';
+    const branch = row.branch_name
+      ? this._esc(row.branch_name)
+      : (row.branch_id != null ? this._bdi('#' + String(row.branch_id)) : '—');
+    const resolveCell = canResolve
+      ? `<td><button class="ret-btn ret-btn-primary ret-btn-sm" data-exq-resolve-id="${this._esc(row.id)}"
+           onclick="RetailSystem._openResolveException('${this._esc(row.id)}')">${t('Resolve')}</button></td>`
+      : '';
+    return `<tr>
+      <td>${productLabel}</td>
+      <td style="font-family:monospace;font-size:12px">${sku}</td>
+      <td>${branch}</td>
+      <td style="text-align:right">${this._stkaNum(this._signedQty(row.observed_quantity_on_hand))}</td>
+      <td>${this._bdi(this._exqTimestamp(row.detected_at_utc))}</td>
+      ${resolveCell}
+    </tr>`;
+  },
+
+  // The ONE way into resolving an exception -- looks the row up from the
+  // already-fetched list rather than re-fetching it, matching
+  // _openStockAdjust's own modal shape elsewhere in this file.
+  _openResolveException(id) {
+    const s = this._exceptionQueue && this._exceptionQueue.stock;
+    const row = ((s && Array.isArray(s.rows)) ? s.rows : []).find(r => String(r.id) === String(id));
+    if (!row) return;
+    const name = row.product_name || t('Product no longer in the catalogue');
+    const overlay = document.createElement('div');
+    overlay.className = 'ret-modal-overlay';
+    overlay.id = 'exq-resolve-modal';
+    overlay.innerHTML = `
+      <div class="ret-modal" style="width:420px">
+        <h3>${t('Resolve Exception')} — ${this._esc(name)}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 18px;line-height:1.7">
+          ${t('The recorded balance is')} <strong style="color:var(--text-primary)">${this._esc(this._signedQty(row.observed_quantity_on_hand))}</strong>.
+          ${t('Count the shelf if you can, or leave the count blank for a backorder that stays negative until the delivery lands.')}
+        </p>
+        <div class="ret-field"><label>${t('Counted Quantity (optional)')}</label>
+          <input type="number" id="exq-resolve-qty" step="any" placeholder="${t('Leave blank if not counted')}" /></div>
+        <div class="ret-field"><label>${t('Note')} *</label>
+          <textarea id="exq-resolve-note" rows="3" placeholder="${t('Required -- explain the decision')}"></textarea>
+          <p style="color:var(--text-faint);font-size:11.5px;margin:4px 0 0">${t('A note is required. The server refuses to resolve without one.')}</p>
+        </div>
+        <div class="ret-modal-footer">
+          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('exq-resolve-modal').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-primary" id="exq-resolve-btn" onclick="RetailSystem._saveResolveException('${this._esc(id)}')">${t('Resolve')}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    document.getElementById('exq-resolve-note')?.focus();
+  },
+
+  async _saveResolveException(id) {
+    const noteEl = document.getElementById('exq-resolve-note');
+    const note = (noteEl?.value || '').trim();
+    // Client-side gate BEFORE the request, not just after -- the server
+    // refuses a resolution with no note (resolve_stock_exception's own
+    // 400), and letting someone submit only to be told that afterwards is
+    // worse than a form that says so up front.
+    if (!note) {
+      SubsystemApp.showToast(t('A note explaining the resolution is required.'), 'error');
+      noteEl?.focus();
+      return;
+    }
+    const qtyRaw = document.getElementById('exq-resolve-qty')?.value;
+    const body = { note };
+    if (qtyRaw !== '' && qtyRaw != null) body.counted_quantity = parseFloat(qtyRaw);
+    const btn = document.getElementById('exq-resolve-btn');
+    if (btn) { btn.disabled = true; btn.textContent = t('Resolving…'); }
+    try {
+      const res = await this._post(`/api/sub/retail/inventory/stock-exceptions/${encodeURIComponent(id)}/resolve`, body);
+      if (res && res.status === 'success') {
+        SubsystemApp.showToast(t('Exception resolved.'), 'success');
+        document.getElementById('exq-resolve-modal')?.remove();
+        await this._loadExceptionStock();
+      } else {
+        SubsystemApp.showToast((res && res.message) || t('Could not resolve this exception.'), 'error');
+        if (btn) { btn.disabled = false; btn.textContent = t('Resolve'); }
+      }
+    } catch (e) {
+      SubsystemApp.showToast(t('Could not resolve this exception.'), 'error');
+      if (btn) { btn.disabled = false; btn.textContent = t('Resolve'); }
+    }
+  },
+
+  // ── Section 2: Discarded Catalogue Edits ─────────────────────────────────
+  //
+  // INFORMATIONAL ONLY -- no action button anywhere in this section, on
+  // purpose. list_sync_conflicts' own docstring (retail_api.py) is the
+  // authority: a discarded edit already lost to a newer one, so there is
+  // no honest "fix" to offer here -- only the words above the table saying
+  // so, and the remedy (redo the edit) in the section's own intro text.
+
+  _exqConflictsPanel() {
+    const s = (this._exceptionQueue && this._exceptionQueue.conflicts) || { state: 'checking' };
+    switch (s.state) {
+      case 'checking': return this._exqChecking(t('Checking for discarded edits…'));
+      case 'failed':   return this._exqFailed(s.error || t('Could not check for discarded catalogue edits.'), 'RetailSystem._loadExceptionConflicts()');
+      case 'empty':    return this._exqEmpty(t('Nothing needs attention.'), t('No catalogue edit has been discarded as stale.'));
+      case 'rows':     return this._exqConflictsRows(s.rows);
+      default:         return this._exqUnknownState(s.state);
+    }
+  },
+
+  _exqConflictsRows(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    return `
+      <div data-exq-state="rows">
+        <div class="sub-chart-card">
+          <div style="overflow-x:auto">
+            <table class="ret-table" id="exq-conflicts-table">
+              <thead><tr>
+                <th>${t('Record')}</th>
+                <th>${t('Change')}</th>
+                <th>${t('Fields')}</th>
+                <th style="text-align:right">${t('Local version')}</th>
+                <th style="text-align:right">${t('Incoming version')}</th>
+                <th>${t('Detected')}</th>
+              </tr></thead>
+              <tbody>${list.map(r => this._exqConflictRow(r)).join('')}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>`;
+  },
+
+  _exqConflictRow(r) {
+    const row = r || {};
+    const entity = `${this._esc(this._exqEntityLabel(row.entity_type))} ${this._bdi(String(row.entity_id == null ? '' : row.entity_id))}`;
+    // `changed_fields` is the summary list_sync_conflicts computes SERVER
+    // SIDE (field NAMES only, from `_changed_fields`/the payload's own
+    // keys) -- this table never sees `incoming_payload` at all, raw or
+    // otherwise, because the route never sends it. See that route's own
+    // docstring for why: the payload is arbitrary operator-entered data
+    // from a DIFFERENT device, the exact trust boundary
+    // retail_pos_name_xss_test.js / retail_customer_modal_xss_test.js
+    // already guard on this device's own catalogue.
+    const fields = Array.isArray(row.changed_fields) ? row.changed_fields : [];
+    const fieldsText = fields.length ? fields.map(f => this._esc(f)).join(', ') : '—';
+    return `<tr>
+      <td>${entity}</td>
+      <td>${this._esc(this._exqEventLabel(row.event_type))}</td>
+      <td>${fieldsText}</td>
+      <td style="text-align:right">${this._stkaNum(this._qty(row.local_row_version))}</td>
+      <td style="text-align:right">${this._stkaNum(this._qty(row.incoming_row_version))}</td>
+      <td>${this._bdi(this._exqTimestamp(row.detected_at_utc))}</td>
+    </tr>`;
+  },
+
+  _exqEntityLabel(type) {
+    const labels = {
+      category: t('Category'), product: t('Product'), customer: t('Customer'),
+      supplier: t('Supplier'), reorder_request: t('Reorder request'),
+    };
+    return labels[type] || (type || t('Record'));
+  },
+
+  _exqEventLabel(type) {
+    const labels = { create: t('Create'), update: t('Update'), delete: t('Delete') };
+    return labels[type] || (type || '—');
+  },
+
   // ══ STOCK ACCURACY ════════════════════════════════════════════════════════
   //
   // The screen that answers "the stock is not accurate" by turning it into a
@@ -5793,6 +6221,7 @@ const RetailSystem = {
         <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._loadStockAccuracy()">${t('Try the check again')}</button>
       </div>`;
   },
+
 
   // ── SALES BY EMPLOYEE ─────────────────────────────────────────────────────
   //

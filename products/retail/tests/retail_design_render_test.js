@@ -1384,6 +1384,19 @@ const ROUTE_EXCLUSIONS = {
     'the "Loading…" single-cell placeholder — the empty state ' +
     'testCorpusRendersRealScreens explicitly refuses to accept as a rendered ' +
     'list. Adding it needs a fixture route, not just a render call.',
+  exceptions:
+    'Launch-readiness 2026-08-29 ("the two exception queues both need ONE ' +
+    'screen, not two"). _renderExceptions() fetches TWO endpoints this ' +
+    'corpus fixture does not route — GET .../inventory/stock-exceptions and ' +
+    'GET .../inventory/sync-conflicts — so apiResponseFor() falls through to ' +
+    'its STATS catch-all (no `exceptions`/`conflicts` key) for both, and both ' +
+    'sections render their empty state, which testCorpusRendersRealScreens ' +
+    'explicitly refuses to accept as a rendered list for a screen that owns a ' +
+    'table. Its own coverage is retail_exceptions_screen_test.js (real rows, ' +
+    'both empty states, the capability-gated resolve control in both ' +
+    'directions, and XSS escaping). Adding it here needs two fixture routes ' +
+    'plus a corpus entry, not just a render call — the same shape as the ' +
+    'admin-center exclusion immediately above.',
 };
 
 /** Every `case '<id>':` in RetailSystem.render(), read out of the product. */

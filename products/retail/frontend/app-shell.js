@@ -636,6 +636,22 @@ const SubsystemApp = {
         // because AuraRouter replays the last section out of the URL hash and
         // reaches this screen with no nav click in between.
         { id: 'stock-accuracy', label: 'Stock Accuracy', icon: '⚖️', ownerOnly: true, capability: 'retail.reports' },
+        // Launch-readiness 2026-08-29 ("the two exception queues both need
+        // ONE screen, not two"): the oversell queue (stock_exceptions,
+        // Phase 7 stage 7d-i/ii) and the discarded-catalogue-edit queue
+        // (sync_conflicts, Phase 6 stage 6a-ii) as one surface.
+        //
+        // `capability` only, matching BOTH read routes
+        // (list_stock_exceptions / list_sync_conflicts, both gated
+        // CAP_REPORTS with no company-admin requirement) -- deliberately
+        // NOT `ownerOnly`, unlike Stock Accuracy immediately above. Neither
+        // route discloses an unpaginated whole-catalogue dump; both are the
+        // same operational disclosure tier as Reports/Audit Log. The
+        // per-row RESOLVE action inside the screen needs a stricter
+        // capability of its own (retail.stock.adjust) -- gated inside
+        // _renderExceptions, not here, because that authority varies by
+        // ROW section, not by whether the screen is reachable at all.
+        { id: 'exceptions', label: 'Exceptions', icon: '⚠️', capability: 'retail.reports' },
       ]
     },
   },
