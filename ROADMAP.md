@@ -772,3 +772,39 @@ Worth noting the interaction: after 7d-iii a device that IS behind records a
 `stock_exceptions` row when a sale drives the balance negative, so this bug is
 now at least *visible* on a behind device. On a fully-synced device it still
 passes silently, which is the case worth fixing.
+
+### RETRACTED 2026-08-29 — the PO double-receive entry above is WRONG
+
+The entry "two devices can both receive the same purchase order" is false, and
+the stage 7c-i guard built on it has been removed. Left in place rather than
+deleted, because the mistake is the useful part.
+
+**Purchase orders never sync.** `sync_service.py:195` says `purchase_orders`
+"stays local-only and is never pushed through this outbox at all";
+`accept_reorder_request` carries an explicit "Deliberately NOT
+`_queue_sync_event(...)` for this PO"; and a grep for a `purchase_order` sync
+emission returns zero matches anywhere in the codebase. `receive_purchase_order`
+emits only `inventory_movement` events.
+
+So a purchase order exists on exactly ONE device — the one that created it. A
+second device cannot receive it because it does not have it. **The cross-device
+double-receive is unreachable.**
+
+What went wrong in the original analysis: it correctly established that PO
+*status* is never synced, and then reasoned as if the PO itself were present on
+both devices. The narrower fact was true; the conclusion drawn from it was not.
+A guard was then built, shipped, and justified in three places on that
+conclusion — and it did real harm, refusing to book in a delivery that had
+physically arrived, on a device that happened to be behind.
+
+The genuine same-device race — a double-clicked Receive button, or two requests
+against one shared database — was already fixed before Phase 7 touched it, by
+`BEGIN IMMEDIATE` plus a conditional UPDATE, and is untouched by the removal.
+
+**A real finding from proving that:** the same-device race is defended TWICE
+over — an early `status == 'received'` check AND the conditional UPDATE's own
+filter — and neither is individually pinned. Disabling either alone leaves
+`test_double_submitted_po_receive_adds_stock_exactly_once` green; only
+disabling both reproduces the original bug. A future refactor could delete one
+believing it redundant, and no test would object. Worth an isolation probe for
+each, the way stage 7c-ii and 7d-iii ended up needing one.

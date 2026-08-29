@@ -528,3 +528,73 @@ product overrule a trading halt.
 
 Recorded because a future reader hitting "manager cannot clear the stop" should
 find the reasoning here rather than assuming it is an oversight.
+
+---
+
+# RETRACTION (2026-08-29): the PO-receipt block was built on a false premise
+
+"Correcting §5's offline block list" above concluded that exactly one item
+survived scrutiny — receiving a purchase order — and stage 7c-i shipped a guard
+refusing it while the device is behind.
+
+**That conclusion was wrong, and the guard has been removed.** The section is
+left standing rather than rewritten, because the shape of the error is worth
+more than a tidy document.
+
+## What was true, and what was wrongly drawn from it
+
+TRUE, and still true: `multi-device-design.md` §8's claim that "receiving is
+admin-device-gated" is false — `receive_purchase_order` carries login,
+subsystem, licence and `CAP_STOCK_ADJUST`, and no `_is_admin_device` check.
+TRUE: PO *status* is never synced, so the route's own guard cannot see another
+device's receipt.
+
+WRONGLY DRAWN: that two devices could therefore each receive the same PO. That
+requires both devices to HAVE the PO — and they cannot. **Purchase orders
+themselves are never synced at all**, not merely their status:
+
+* `sync_service.py:195` — `purchase_orders` "stays local-only and is never
+  pushed through this outbox at all";
+* `accept_reorder_request` — "Deliberately NOT `_queue_sync_event(...)` for
+  this PO";
+* zero `purchase_order` sync emissions exist anywhere.
+
+A PO lives on exactly one device. The cross-device double-receive is
+unreachable, so the guard prevented nothing — while refusing to book in a
+delivery that had physically arrived, on any device that happened to be behind.
+
+## The reasoning failure, named
+
+The analysis established a narrow fact (status does not sync) and then reasoned
+about a broader one (the PO is present on both devices) without checking it. It
+is the same shape as asserting an outcome where the check should be asserted:
+the evidence supported a smaller claim than the conclusion drawn from it.
+
+It survived because it was checked against the design document, which is also
+wrong on this point, rather than against the code. §8's own justification for
+not syncing POs is that "the `purchase_in` movement syncs, so *stock* is right
+on both devices; only PO status is phone-invisible" — a sentence that already
+says POs are not synced, read three times without registering.
+
+**What would have caught it in seconds, and what caught it eventually:** a grep
+for a `purchase_order` sync emission. Applied before writing the guard, that is
+the whole refutation. It was finally run only when stage 7e went to build PO
+sync and needed to know what already existed.
+
+## What stands unchanged
+
+The same-device race — a double-clicked Receive, or two requests against one
+shared database — was fixed before Phase 7 and is untouched: `BEGIN IMMEDIATE`
+plus a conditional UPDATE. Its test still passes and was verified mid-removal,
+not merely afterwards.
+
+`_is_device_behind_on_sync()` itself remains, with exactly one caller:
+`create_sale`'s stage 7d-iii oversell relaxation, which is correct and verified.
+
+## Consequence for stage 7e
+
+7e was scoped as "PO partial receipt and PO sync". Its correctness
+justification — closing a double-receive hazard — does not exist. What remains
+is a genuine product feature (partial receipts, PO visibility across devices)
+with no correctness pressure behind it, which is precisely the posture §8 chose
+deliberately and which this retraction restores.

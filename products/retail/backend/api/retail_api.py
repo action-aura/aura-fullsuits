@@ -2702,31 +2702,42 @@ def receive_purchase_order(po_id):
         double-apply, because the row it needs to flip is no longer there
         to flip.
 
-    Launch-readiness Phase 7 stage 7c-i adds a SECOND, wider guard in front
+    Launch-readiness Phase 7 stage 7c-i added a SECOND, wider guard in front
     of both of the above: `status='pending'` is read from THIS device's own
     database, and PO status is never synced (multi-device-design.md §8
-    keeps it deliberately device-local), so the two guards above cannot see
-    a receipt already applied by a DIFFERENT device -- only by a second
-    request against the SAME device. Two devices whose users both hold
-    `retail.stock.adjust` can each receive the same PO once each, and both
-    additive `purchase_in` movements survive the sync merge, so the
-    delivery is double-counted. `_is_device_behind_on_sync()` blocks the
-    one case that hazard is actually preventable in today's design: this
-    device knowing it is behind. It is NOT a general fix for the hazard
-    (recorded separately in ROADMAP.md) -- a device that is fully caught up
-    can still race a second device that receives in the same window.
-    """
-    if _is_device_behind_on_sync():
-        return jsonify({
-            'status': 'error',
-            'message': (
-                "This device hasn't synced in a while, so it can't confirm whether "
-                "another device already received this purchase order. Receiving it "
-                "now could add this delivery's stock twice. Reconnect this device to "
-                "sync, then try again."
-            ),
-        }), 409
+    keeps it deliberately device-local), so -- the stage's reasoning went --
+    the two guards above cannot see a receipt already applied by a
+    DIFFERENT device, and two devices whose users both hold
+    `retail.stock.adjust` could each receive the same PO once each, with
+    both additive `purchase_in` movements surviving the sync merge, so the
+    delivery would be double-counted. `_is_device_behind_on_sync()` blocked
+    receipt whenever this device was behind, as the one case that hazard
+    was thought to be preventable in.
 
+    RETRACTED (2026-08-29): that premise is false, and the code already
+    said so. `purchase_orders` does not merely fail to sync its `status`
+    column -- the WHOLE TABLE is local-only and never queued to the sync
+    outbox at all (see sync_service.py's module docstring: "`purchase_orders`
+    ... stays local-only and is never pushed through this outbox at all";
+    accept_reorder_request's docstring above says the identical thing for
+    every PO created through this same route). A purchase order therefore
+    exists on exactly ONE device: the one that created it. There is no
+    second device holding a copy of it to double-receive ON, so the
+    cross-device hazard this guard blocked was unreachable -- and blocking
+    it anyway meant a shop whose device was simply behind on sync for
+    something else entirely (a product edit, another sale) could not book
+    in a delivery that had physically arrived. The guard has been removed.
+    `_is_device_behind_on_sync()` itself is untouched and still guards
+    create_sale's stage 7d-iii oversell relaxation, where the hazard IS
+    real -- balances, unlike purchase orders, do sync.
+
+    The two guards immediately above -- BEGIN IMMEDIATE plus the
+    conditional `status<>'received'` UPDATE -- are the guards that were
+    ever real for THIS route, and they are untouched: they still stop the
+    one race that is actually reachable, a double-clicked Receive button or
+    two requests against the SAME shared database, regardless of this
+    device's sync state.
+    """
     cid  = _cid()
     conn = get_retail_conn()
     try:

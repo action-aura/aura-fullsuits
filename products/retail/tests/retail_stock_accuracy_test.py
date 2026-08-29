@@ -40,13 +40,21 @@ it down:
     quantity in the company and carried only login + subsystem, while its
     repair twin required company-admin. Test 15.
  9. Launch-readiness Phase 7 stage 7c-i (docs/launch-readiness/
-    phase7-offline-ux.md, "DO block: receiving a purchase order"): test 1
-    above fixed the SAME-device race, but PO status never syncs, so that
-    guard structurally cannot see a receipt already applied by a DIFFERENT
-    device. receive_purchase_order now refuses to receive when sync is
-    configured AND this device is behind the shared staleness threshold --
-    but never when sync isn't configured (most installs) or this device has
-    never synced (no basis to claim drift). Tests 16-20.
+    phase7-offline-ux.md, "DO block: receiving a purchase order") added a
+    guard refusing receipt whenever this device was behind the shared
+    staleness threshold, reasoning that PO status never syncs so a stale
+    device could not tell whether another device had already received the
+    same PO. RETRACTED (2026-08-29): that premise is false. It is not just
+    `status` that never syncs -- the WHOLE `purchase_orders` table is
+    local-only and never queued to the sync outbox at all (sync_service.py's
+    module docstring; accept_reorder_request's docstring in retail_api.py
+    says the same for every PO this route ever creates). A PO exists on
+    exactly ONE device, so there is no second device to double-receive it
+    on, and the guard blocked a hazard that could not occur while refusing
+    real deliveries on a shop's own device the moment it fell behind on
+    sync for something unrelated. The guard is removed; test 1 above (the
+    real, reachable same-device race -- BEGIN IMMEDIATE plus the
+    conditional status UPDATE) is untouched and still passes. Tests 16-20.
 
 Self-contained bootstrap, matching every other file in this directory (no
 shared conftest.py exists here): own temp app-data dir, own license seed,
@@ -888,23 +896,42 @@ def test_reconciliation_report_requires_a_company_admin(company):
 
 
 # ═════════════════════════════════════════════════════════════════════════
-# 16-20. Phase 7 stage 7c-i: PO receipt blocked when this device is behind
+# 16-20. Phase 7 stage 7c-i's PO-receipt sync guard -- RETRACTED
 # ═════════════════════════════════════════════════════════════════════════
 #
 # docs/launch-readiness/phase7-offline-ux.md, "DO block: receiving a
-# purchase order": receive_purchase_order's OWN double-receive guard (test 1
-# above) is per-device-local -- it reads `status` from THIS device's own
-# database, and PO status never syncs (multi-device-design.md §8 keeps it
-# deliberately device-local), so it structurally cannot see a receipt
-# already applied by a DIFFERENT device. `_is_device_behind_on_sync()`
-# blocks the one case that hazard is actually preventable in today's
-# design: this device KNOWING it is behind.
+# purchase order" argued that receive_purchase_order's OWN double-receive
+# guard (test 1 above) is per-device-local -- it reads `status` from THIS
+# device's own database, and PO status never syncs (multi-device-design.md
+# §8 keeps it deliberately device-local) -- so it structurally cannot see a
+# receipt already applied by a DIFFERENT device, and added
+# `_is_device_behind_on_sync()` to block receipt whenever this device knew
+# it was behind.
 #
-# `_sync_get_active_health` is monkeypatched directly on the `_retail_api`
-# module -- the SAME module-level seam receive_purchase_order itself reads
-# (`from commercial_runtime.sync.sync_service import get_active_health as
-# _sync_get_active_health`, never app.py's own `_sync_service` variable) --
-# so these tests exercise the real handler code path, not a stand-in.
+# RETRACTED (2026-08-29): `purchase_orders` is not merely un-synced on its
+# `status` column -- the WHOLE TABLE is local-only and never queued to the
+# sync outbox at all (sync_service.py's module docstring; retail_api.py's
+# accept_reorder_request docstring says the same for every PO this route
+# ever creates). A PO exists on exactly ONE device -- the one that created
+# it -- so there is no second device to double-receive it on, and the
+# cross-device hazard this guard blocked was unreachable. The guard has
+# been removed from receive_purchase_order. `_is_device_behind_on_sync()`
+# itself is untouched -- it still guards create_sale's stage 7d-iii
+# oversell relaxation, a genuine cross-device hazard (balances DO sync).
+#
+# The five tests below are updated to match: test 16 now asserts the
+# CORRECTED behaviour (a behind device CAN receive), tests 17-19 (allowed
+# when unconfigured / never-synced / recently-synced) were already true and
+# stay true -- receiving was never blocked in those states and still isn't
+# -- with their comments no longer describing a cross-device hazard that
+# does not exist. Test 20 now asserts a receive on a behind device DOES
+# write the stock, the property that actually matters post-retraction.
+#
+# `_sync_get_active_health` is still monkeypatched directly on the
+# `_retail_api` module in each test below, even though receive_purchase_order
+# no longer reads it -- this documents, in the test itself, that the route's
+# behaviour is now independent of this device's sync health, and keeps the
+# fixture available if a future guard ever needs it again.
 
 def _po_for_receipt(client, supplier_name=None):
     """A single pending 10-unit PO for one fresh product, ready to receive."""
@@ -920,10 +947,19 @@ def _po_for_receipt(client, supplier_name=None):
     return po.get_json()["data"]["id"], pid
 
 
-def test_receiving_a_po_is_blocked_when_this_device_is_behind(company, monkeypatch):
-    """The block itself: sync configured AND behind the shared threshold."""
+def test_receiving_a_po_is_allowed_when_this_device_is_behind(company, monkeypatch):
+    """The corrected behaviour, post-retraction: sync configured AND behind
+    the shared threshold no longer blocks receipt. This is the test that
+    replaces the old `..._is_blocked_when_this_device_is_behind` -- 7c-i's
+    guard assumed a second device could hold a copy of this PO to have
+    already received it, but `purchase_orders` never syncs at all (see this
+    file's header comment, item 9, and receive_purchase_order's own
+    docstring), so no second device can ever be in that state. A behind
+    device is exactly as entitled to book in a delivery that physically
+    arrived as a fully-synced one is -- this test exists so nobody
+    re-adds the block without first making a failing test explain why not."""
     company_id, client = company
-    po_id, _pid = _po_for_receipt(client)
+    po_id, pid = _po_for_receipt(client)
 
     monkeypatch.setattr(_retail_api, '_sync_get_active_health', lambda: {
         'configured': True, 'never_synced': False,
@@ -931,23 +967,20 @@ def test_receiving_a_po_is_blocked_when_this_device_is_behind(company, monkeypat
     })
 
     r = client.post(f"/api/sub/retail/purchase-orders/{po_id}/receive", json={})
-    assert r.status_code == 409, r.get_json()
-    assert 'sync' in r.get_json()['message'].lower()
+    assert r.status_code == 200, r.get_json()
+    assert _balance(company_id, pid) == 10.0
 
 
 def test_receiving_a_po_is_allowed_when_sync_is_not_configured(company, monkeypatch):
-    """The majority install: sync was never turned on for this device. Without
-    this test, an implementation that blocks unconditionally would pass the
-    block test above while bricking receiving for every single-device shop.
-
-    `seconds_since_last_success` is deliberately set to a huge STALE-looking
-    figure alongside `configured: False`, rather than mocking the minimal
-    real `{"configured": False}` shape get_active_health() actually returns.
-    A minimal mock would pass this test even if the `configured` guard were
-    deleted outright, because the OTHER guard (`isinstance(secs, ...)`)
-    would coincidentally also return "not behind" on missing keys -- this
-    fixture proves the `configured` check itself is load-bearing, not an
-    accident of which keys happen to be present."""
+    """The majority install: sync was never turned on for this device.
+    Originally written against 7c-i's now-retracted guard (this file's
+    header comment, item 9) to prove its `configured` check didn't brick
+    receiving for every single-device shop. Kept as a plain regression now
+    that the guard is gone: receipt succeeds in this health state exactly
+    as it does in every other, because receive_purchase_order no longer
+    reads `_sync_get_active_health` at all -- the mock below is left in
+    place only to document that fact for a reader comparing this test
+    against tests 18-19."""
     company_id, client = company
     po_id, pid = _po_for_receipt(client)
 
@@ -962,16 +995,14 @@ def test_receiving_a_po_is_allowed_when_sync_is_not_configured(company, monkeypa
 
 
 def test_receiving_a_po_is_allowed_when_the_device_has_never_synced(company, monkeypatch):
-    """Configured, but no completed first sync yet -- no basis for claiming
-    this device has drifted from anything.
-
-    `seconds_since_last_success` is deliberately set to a huge STALE-looking
-    figure alongside `never_synced: True`, rather than the real (mutually
-    consistent) `None` get_active_health() actually pairs it with. A mock
-    using `None` would pass this test even if the `never_synced` guard were
-    deleted outright, because the OTHER guard (`isinstance(secs, ...)`)
-    would coincidentally also return "not behind" on a None value -- this
-    fixture proves the `never_synced` check itself is load-bearing."""
+    """Configured, but no completed first sync yet. Originally written
+    against 7c-i's now-retracted guard (item 9 above) to prove its
+    `never_synced` check didn't trip a shop's very first day. Kept as a
+    plain regression now that the guard is gone: receipt succeeds in this
+    health state exactly as it does in every other, because
+    receive_purchase_order no longer reads `_sync_get_active_health` at
+    all -- the mock below is left in place only to document that fact for
+    a reader comparing this test against tests 17 and 19."""
     company_id, client = company
     po_id, pid = _po_for_receipt(client)
 
@@ -986,8 +1017,11 @@ def test_receiving_a_po_is_allowed_when_the_device_has_never_synced(company, mon
 
 
 def test_receiving_a_po_is_allowed_when_recently_synced(company, monkeypatch):
-    """The plain allow half: configured, synced before, comfortably inside
-    the threshold -- a healthy till still receives normally."""
+    """A healthy till: configured, synced before, comfortably inside the
+    threshold. Never depended on the now-retracted 7c-i guard (item 9
+    above) to pass -- a healthy till always received normally -- kept
+    alongside tests 17-18 so all three health states this route is
+    indifferent to post-retraction are pinned in one place."""
     company_id, client = company
     po_id, pid = _po_for_receipt(client)
 
@@ -1000,11 +1034,17 @@ def test_receiving_a_po_is_allowed_when_recently_synced(company, monkeypatch):
     assert _balance(company_id, pid) == 10.0
 
 
-def test_a_blocked_receive_does_not_change_stock(company, monkeypatch):
-    """Asserts the CHECK RAN, not merely that a 4xx came back -- a refusal
-    that still wrote the movement would satisfy a status-code assertion
-    while doing the exact damage the block exists to prevent. Reads stock
-    (and the PO's own status) before and after and requires them unchanged."""
+def test_a_receive_on_a_behind_device_writes_the_stock(company, monkeypatch):
+    """Replaces the old `..._a_blocked_receive_does_not_change_stock`, which
+    asserted the CHECK RAN by requiring a refusal to leave stock untouched
+    -- there is no refusal left to check post-retraction (item 9 above), so
+    the property that actually matters now is its mirror image: a behind
+    device's receive must ACTUALLY WRITE the stock and the ledger row, not
+    merely return 200 while silently doing nothing. Reads stock and the
+    movement count before and after and requires both to reflect the
+    delivery, with sync deliberately reported as badly behind throughout --
+    proving receipt is unconditional on this device's sync health, not just
+    unblocked in the specific health states tests 17-19 happen to cover."""
     company_id, client = company
     po_id, pid = _po_for_receipt(client)
     before_balance = _balance(company_id, pid)
@@ -1017,14 +1057,15 @@ def test_a_blocked_receive_does_not_change_stock(company, monkeypatch):
     })
 
     r = client.post(f"/api/sub/retail/purchase-orders/{po_id}/receive", json={})
-    assert r.status_code == 409, r.get_json()
+    assert r.status_code == 200, r.get_json()
 
-    assert _balance(company_id, pid) == 0.0, "a blocked receive must not touch inventory_balances"
-    assert len(_movements(company_id, pid)) == 0, "a blocked receive must not write a purchase_in movement"
+    assert _balance(company_id, pid) == 10.0, "a behind device's receive must still update inventory_balances"
+    movements = [m for m in _movements(company_id, pid) if m["movement_type"] == "purchase_in"]
+    assert len(movements) == 1, "a behind device's receive must still write a purchase_in movement"
 
     conn = get_retail_conn()
     try:
         status = conn.execute("SELECT status FROM purchase_orders WHERE id=?", (po_id,)).fetchone()["status"]
     finally:
         conn.close()
-    assert status == 'pending', "a blocked receive must not flip the PO's own status either"
+    assert status == 'received', "a behind device's receive must still flip the PO's own status too"
