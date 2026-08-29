@@ -969,3 +969,55 @@ value rather than trying to prove a redundancy is not redundant.
 Recorded rather than built because it needs a way to reach the closing UPDATE
 without the early read, and inventing a test-only seam into a money path to
 prove a defensive guard is a trade worth making deliberately, not in passing.
+
+## 2026-08-29 — the outbox growth gap, quantified, and why it needs the owner's call
+
+The entry above records that `sync_outbox` has no retention policy on installs
+with no drain path. Quantified now, because "no retention policy" understates it
+and because the obvious fix trades away data.
+
+**Rate, measured not estimated:** `create_sale` queues **11 events per sale**
+(the sale, its items, the stock movements, the payment). A shop ringing 200
+sales a day writes on the order of 2,000 outbox rows daily, each carrying a
+full-row JSON payload, plus catalogue edits on top. Over a year that is
+comfortably half a million rows in a SQLite file sitting on a till, and nothing
+ever deletes one.
+
+**The accumulation is DELIBERATE, which is what makes this hard.**
+`multi-device-design.md` §6 states the intent plainly: a single-device install
+"migrates with zero loss and no user action, and its **backfilled history pushes
+once on first sync**, bounded by the existing 200-event chunking." Queueing while
+sync is unconfigured is what preserves that history for a shop that enables sync
+later. It is not an oversight.
+
+**So the fix is not "stop queueing when unconfigured".** That silently discards
+the very history the design promises to deliver on first sync, and the shop that
+enables sync in year two would arrive with no past — the failure being
+invisible, which is the worst kind.
+
+**And a retention policy cannot distinguish the two cases.** "Never going to
+sync" and "has not synced yet" are the same state on disk. Any pruning rule
+therefore chooses, on the shop's behalf, between an unbounded file and a
+truncated history — and there is no signal in the data that says which the shop
+would want.
+
+**Deliberately NOT decided unilaterally.** The plausible options each give
+something up, and the trade belongs to whoever owns the product:
+
+* **Age-based pruning** (drop rows older than N months when sync has never been
+  configured) — bounds growth, and a late-enabling shop silently starts from N
+  months ago rather than from the beginning.
+* **Cap with a warning** — keep everything up to a row count, then surface "sync
+  has never been configured and N events are queued; enable it or they will be
+  discarded". Honest, but needs a surface to say it on, and the exceptions
+  screen (`fa5a89b`) is now a plausible home.
+* **Prune only what is already durable elsewhere** — sales and movements are in
+  their own tables and the outbox row is a wire copy, so pruning loses the
+  ability to REPLAY history to a new device, not the history itself. This is
+  probably the most defensible option and the one worth pricing first.
+* **Do nothing and document it** — a till with a 500 MB database still works;
+  SQLite does not care. The cost is backup size and restore time.
+
+What is NOT in doubt: nothing today bounds it, and no install is told. Recorded
+with the measurement so the decision can be made on numbers rather than a
+feeling about "some rows".
