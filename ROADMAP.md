@@ -1021,3 +1021,41 @@ something up, and the trade belongs to whoever owns the product:
 What is NOT in doubt: nothing today bounds it, and no install is told. Recorded
 with the measurement so the decision can be made on numbers rather than a
 feeling about "some rows".
+
+## 2026-08-29 — retail schema v21 CLAIMED for the POS scale fix
+
+Same single-writer discipline as v18/v19/v20. Claimed before dispatch.
+
+**CLAIMED: retail v21, by `feat/launch-readiness`, for lookup indexes only.**
+
+A senior systems/finance review confirmed and deepened a suspected blocker:
+`list_products` returns EVERY active product for the company with no `LIMIT`
+and no search parameter, `_findByCode` filters that array client-side for POS
+scan / product search / PO scan, `_loadPOSData()` re-fetches the whole
+catalogue **after every completed sale**, `_renderPOSGrid` renders every match
+as inline HTML with no cap, and the search input rebuilds that grid on every
+keystroke with no debounce. Android's `ProductLookup.kt` repeats the
+client-side scan over a fully-fetched list.
+
+Estimated payload per POS load AND per sale: ~250 KB at 500 SKUs, ~2.5 MB at
+5,000, ~25 MB at 50,000 — with 50,000 DOM buttons built from one innerHTML
+string.
+
+The index half of the fix, and the only part needing a version:
+
+* `products(company_id, barcode)` and `products(company_id, sku)` — the scan
+  path has NO index today;
+* `sale_items(sale_id)`, `sales(customer_id)`, `payments(party_type, party_id)`
+  — none exist either, and `recent_sales`, `customer_statement` and the returns
+  lookup all scan without them.
+
+**A second, separate finding to fix WITHOUT a version:** every date filter is
+wrapped in `date(...)` — `date(s.created_at)` in `recent_sales`, and
+`metrics.py` builds `f'date({...})'` predicates literally. That is
+non-sargable, so the `idx_*_created_at_utc` indexes v13 already created **can
+never be used**. Rewriting those to half-open range bounds computed in Python
+is pure query change, no migration.
+
+Deliberately NOT in this claim: promotions, variants, open-item AR allocation,
+LAN relay. Each is real and recorded separately; none needs a schema version
+yet.
