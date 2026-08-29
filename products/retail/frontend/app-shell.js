@@ -881,10 +881,33 @@ const SubsystemApp = {
       }
     }
 
+    // Whatever institute/co-op/foundation is running this install, read
+    // once here (best-effort, same fail-open shape as activeModules above)
+    // so document.title and the sidebar wordmark below can use it from the
+    // very first render. `this.branding` defaults to {} on any failure --
+    // every read of it below falls back to the current product name, never
+    // to a blank string.
+    await this._loadBranding();
+
     // Single-product build: there is only ever one system, so skip the
     // multi-subsystem chooser entirely and launch straight into it.
     this.launch('retail', 'dashboard');
     this._maybeOfferAdminDeviceClaim();
+  },
+
+  // See the comment on the call site above. Reads the same
+  // GET /settings/branding route subsystem-retail.js's receipt printer
+  // reads -- one company-scoped source for "what does this shop call
+  // itself", never a second copy of the business name kept only in this file.
+  async _loadBranding() {
+    try {
+      const resp = await fetch('/api/sub/retail/settings/branding', { credentials: 'include', cache: 'no-store' })
+        .then(r => r.json());
+      this.branding = (resp && resp.status === 'success' && resp.data) ? resp.data : {};
+    } catch (e) {
+      this.branding = {};
+    }
+    document.title = (this.branding && this.branding.branding_business_name) || 'Aura Retail';
   },
 
   // ── Admin-device claim prompt ───────────────────────────────────────────────
@@ -1884,7 +1907,14 @@ const SubsystemApp = {
         <div class="sub-sidebar-brand aura-logo" title="Return to Home">
           <div class="sub-brand-icon">${window.AuraIcons ? AuraIcons.render(sys.icon, 22) : sys.icon}</div>
           <div class="sub-brand-text">
-            <span class="sub-system-name">${t(sys.name)}</span>
+            <!-- Configured business name (whatever institute/co-op/foundation
+                 bought this install) when one is set, falling back to the
+                 current product name (sys.name) exactly as it always has --
+                 this.branding is loaded once in init() (_loadBranding) and
+                 is operator-entered text, so it is escaped like every other
+                 shop-typed string this file interpolates (see _esc's own
+                 comment). -->
+            <span class="sub-system-name">${(this.branding && this.branding.branding_business_name) ? this._esc(this.branding.branding_business_name) : t(sys.name)}</span>
             <span class="logo-name" style="font-size:11px;color:var(--text-muted)">Action<strong>Aura</strong></span>
           </div>
         </div>

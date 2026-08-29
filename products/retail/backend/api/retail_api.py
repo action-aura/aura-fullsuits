@@ -6508,9 +6508,31 @@ _DEFAULT_SETTINGS = {
     # 'after_discount' (default) | 'before_discount' -- see core/retail/pricing.py,
     # the single source of truth for what these two modes mean and compute.
     'tax_calculation_mode': tax_engine.DEFAULT_MODE,
+    # ── Branding ("make the system be brandable of whatever institute or
+    # coop or foundation bought it") -- short text only. See
+    # _SETTINGS_BLOB_PREFIX below for the ONE branding value (the logo) that
+    # deliberately does NOT live here.
+    'branding_business_name': '',
+    'branding_address': '',
+    'branding_phone': '',
+    'branding_tax_number': '',
+    'branding_receipt_header': '',
+    'branding_receipt_footer': '',
 }
 _DEFAULT_METHODS = [('Cash', 'cash'), ('Card', 'card'), ('Bank Transfer', 'bank'),
                     ('Mobile Wallet', 'wallet'), ('Check', 'check')]
+
+# `_settings()` below is called from inside create_sale() (for base_currency)
+# MULTIPLE times per sale -- see that function and _record_payment(). A
+# settings value that can grow to hundreds of KB (the branding logo, stored
+# as a data-URI image -- see branding_logo_set below) would therefore be
+# read out of SQLite, added to this dict, and immediately discarded, on
+# EVERY sale, which would silently undo the POS performance work in
+# dfc0ef0/17efa5b. Any settings key that can hold more than a short string
+# MUST be written under this prefix so _settings() skips it, and read back
+# through its own dedicated endpoint instead -- never through this dict.
+_SETTINGS_BLOB_PREFIX = 'blob_'
+_BRANDING_LOGO_KEY = _SETTINGS_BLOB_PREFIX + 'branding_logo'
 
 _CREDIT_SCHEMA_READY = False
 def _ensure_credit_schema(conn):
@@ -6582,6 +6604,13 @@ def _ensure_credit_schema(conn):
 def _settings(conn, cid):
     s = dict(_DEFAULT_SETTINGS)
     for r in conn.execute("SELECT skey,svalue FROM retail_settings WHERE company_id=?", (cid,)).fetchall():
+        # See _SETTINGS_BLOB_PREFIX's comment above -- this dict is rebuilt
+        # on every call, including several times per create_sale(), so a
+        # blob-shaped value (the branding logo) must never reach it. Any
+        # future settings key that can hold more than a short string needs
+        # the same prefix, not just this one.
+        if r['skey'].startswith(_SETTINGS_BLOB_PREFIX):
+            continue
         s[r['skey']] = r['svalue']
     return s
 
@@ -6908,6 +6937,175 @@ def business_day_settings_set():
     except Exception:
         pass
     return jsonify({'status': 'success', 'data': effective})
+
+# ── Settings (branding) ───────────────────────────────────────────────────────
+# The product owner's ask, verbatim: "Make the system be brandable of
+# whatever institute or coop or foundation bought it -- for the invoice and
+# the other stuff that you see suitable." subsystem-retail.js used to print
+# the literal string "Aura Retail" on every receipt, with no shop name,
+# address or tax number anywhere on it -- a fresh install could not print a
+# receipt legally adequate for its OWN shop, let alone a co-op's brand.
+# retail_settings is already a per-company key/value table (_DEFAULT_SETTINGS
+# above), so this is new keys, never a schema change.
+_BRANDING_TEXT_KEYS = (
+    'branding_business_name', 'branding_address', 'branding_phone',
+    'branding_tax_number', 'branding_receipt_header', 'branding_receipt_footer',
+)
+
+@retail_bp.route('/settings/branding', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def branding_settings_get():
+    """No @mt_require_capability -- matches tax_settings_get, not
+    credit_settings_set's write-side gate. A cashier who is not the admin
+    device still has to print a branded receipt, so the READ side of
+    branding cannot sit behind the Admin Center's device gate even though
+    writing it does (see branding_settings_set below)."""
+    cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn)
+    s = _settings(conn, cid)
+    has_logo = conn.execute(
+        "SELECT 1 FROM retail_settings WHERE company_id=? AND skey=?",
+        (cid, _BRANDING_LOGO_KEY),
+    ).fetchone() is not None
+    # E-invoicing seller identity -- READ-ONLY, DISPLAY ONLY. Never written,
+    # never reconciled with branding_business_name/branding_tax_number above.
+    # commercial_runtime/einvoicing/settings.py's seller_name/seller_tin are
+    # a SECOND source of truth for "the shop's name and tax number" -- the
+    # identity JoFotara actually submits to the Jordanian tax authority --
+    # and two of them silently disagreeing is a compliance question for the
+    # shop to resolve deliberately, not a sync bug for this route to paper
+    # over. Shown only once the company has actually started configuring it
+    # (either field non-empty); an install that has never touched
+    # e-invoicing gets no block at all. This is a plain read through that
+    # module's own public get_setting() -- the same retail_conn, since
+    # products/retail/backend/app.py wires einvoicing's conn_factory to
+    # get_retail_conn -- never a write, never a touch of that module itself.
+    einvoicing_seller = None
+    try:
+        from commercial_runtime.einvoicing import settings as _einvoicing_settings
+        seller_name = _einvoicing_settings.get_setting(conn, cid, 'seller_name')
+        seller_tin = _einvoicing_settings.get_setting(conn, cid, 'seller_tin')
+        if seller_name or seller_tin:
+            einvoicing_seller = {'seller_name': seller_name, 'seller_tin': seller_tin}
+    except Exception:
+        # Best-effort only, same discipline as the frontend's own
+        # _einvoiceReceiptBlock try/except: a broken read of an OPTIONAL,
+        # OFF-BY-DEFAULT feature's settings must never break the branding
+        # screen or a receipt for every shop that has never touched
+        # e-invoicing.
+        einvoicing_seller = None
+    conn.close()
+    data = {k: s[k] for k in _BRANDING_TEXT_KEYS}
+    data['has_logo'] = has_logo
+    data['einvoicing_seller'] = einvoicing_seller
+    return jsonify({'status': 'success', 'data': data})
+
+@retail_bp.route('/settings/branding', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def branding_settings_set():
+    cid = _cid(); data = request.json or {}
+    conn = get_retail_conn(); _ensure_credit_schema(conn)
+    for k in _BRANDING_TEXT_KEYS:
+        if k in data:
+            conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
+                         "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",
+                         (cid, k, str(data[k] or '')))
+    conn.commit(); s = _settings(conn, cid); conn.close()
+    try:
+        from commercial_runtime.security.audit import record as _sec_audit
+        _sec_audit(cid, _uid(), 'RETAIL_BRANDING_UPDATED', entity_type='SETTINGS',
+                   context={k: s.get(k, '') for k in _BRANDING_TEXT_KEYS})
+    except Exception:
+        pass
+    return jsonify({'status': 'success', 'data': {k: s[k] for k in _BRANDING_TEXT_KEYS}})
+
+# ── Settings (branding logo) ────────────────────────────────────────────────
+# Deliberately its own endpoint, never folded into branding_settings_get/set
+# above -- see _SETTINGS_BLOB_PREFIX's comment on _settings(). Read only when
+# the shell renders the sidebar or a receipt actually prints, never as a
+# side effect of any other settings read.
+#
+# 300KB decoded is generous for a receipt/thermal-printer logo (typically
+# rendered under 25mm wide) and small enough that a shop pasting in a
+# multi-megabyte photo gets told so in plain language, rather than the
+# receipt silently failing to print or the settings screen hanging on a
+# giant payload.
+_MAX_LOGO_BYTES = 300 * 1024
+
+# Anchored, and restricted to the base64 alphabet plus '=' padding --
+# deliberately stricter than "starts with data:image/ and contains
+# ;base64,". A logo is operator-entered content that later gets embedded in
+# an <img src="..."> on the printed receipt; a looser check would let a
+# crafted value break out of that attribute (e.g. a subtype string carrying
+# a literal `"`) and this repo has XSS tests specifically because a name
+# once reached the page unescaped. Restricting the whole value to a known
+# image MIME subtype and the base64 alphabet makes that a non-issue at the
+# source, on top of subsystem-retail.js still escaping it before it reaches
+# innerHTML.
+_LOGO_DATA_URI_RE = re.compile(r'^data:image/(png|jpe?g|gif|webp);base64,([A-Za-z0-9+/]+={0,2})$')
+
+def _decoded_logo_size(logo):
+    """Decoded byte length of a validated `data:image/...;base64,<payload>`
+    string, or None if `logo` doesn't match that shape at all."""
+    m = _LOGO_DATA_URI_RE.match(logo)
+    if not m:
+        return None
+    payload = m.group(2)
+    return (len(payload) * 3 // 4) - payload.count('=')
+
+@retail_bp.route('/settings/branding/logo', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def branding_logo_get():
+    """Same read-side reasoning as branding_settings_get: any logged-in
+    retail user, not just an admin device -- printing a receipt is not an
+    admin-only action."""
+    cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn)
+    row = conn.execute(
+        "SELECT svalue FROM retail_settings WHERE company_id=? AND skey=?",
+        (cid, _BRANDING_LOGO_KEY),
+    ).fetchone()
+    conn.close()
+    return jsonify({'status': 'success', 'data': {'logo': row['svalue'] if row else None}})
+
+@retail_bp.route('/settings/branding/logo', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def branding_logo_set():
+    cid = _cid(); data = request.json or {}
+    logo = (data.get('logo') or '').strip()
+    if not logo:
+        return jsonify({'status': 'error', 'message': 'No logo image provided.'}), 400
+    size = _decoded_logo_size(logo)
+    if size is None:
+        return jsonify({'status': 'error', 'message':
+                         'Logo must be a PNG, JPEG, GIF or WebP image (as a data URL).'}), 400
+    if size > _MAX_LOGO_BYTES:
+        return jsonify({'status': 'error', 'message': (
+            f'This logo is {size // 1024}KB, over the {_MAX_LOGO_BYTES // 1024}KB limit. '
+            f'Choose a smaller image.')}), 400
+    conn = get_retail_conn(); _ensure_credit_schema(conn)
+    conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
+                 "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",
+                 (cid, _BRANDING_LOGO_KEY, logo))
+    conn.commit(); conn.close()
+    return jsonify({'status': 'success', 'data': {'has_logo': True}})
+
+@retail_bp.route('/settings/branding/logo', methods=['DELETE'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def branding_logo_delete():
+    cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn)
+    conn.execute("DELETE FROM retail_settings WHERE company_id=? AND skey=?", (cid, _BRANDING_LOGO_KEY))
+    conn.commit(); conn.close()
+    return jsonify({'status': 'success', 'data': {'has_logo': False}})
 
 # ── Configurable payment methods ──────────────────────────────────────────────
 @retail_bp.route('/payment-methods', methods=['GET'])

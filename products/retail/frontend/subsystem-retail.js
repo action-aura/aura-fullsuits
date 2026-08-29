@@ -3133,6 +3133,57 @@ const RetailSystem = {
       <div class="rcpt-center" style="font-size:9px">Jordan e-invoice: pending government clearance</div>`;
   },
 
+  // Best-effort fetch of the company's receipt branding (business name,
+  // address, phone, tax number, header/footer lines) -- read through its
+  // OWN endpoint (GET /settings/branding), never through the general
+  // settings dict tax/credit settings use. See retail_api.py's
+  // _SETTINGS_BLOB_PREFIX comment for why the logo specifically must never
+  // ride along on a hot settings read; this is the render-time-only path
+  // that comment describes, and printing a receipt is exactly that --
+  // never called from create_sale or any per-sale hot path, only from a
+  // human clicking Print. A failed/unreachable fetch falls back to {}, so
+  // _brandingReceiptBlock below renders the same unbranded receipt this
+  // build always has.
+  async _receiptBranding() {
+    try {
+      const resp = await this._get('/api/sub/retail/settings/branding');
+      return (resp && resp.status === 'success' && resp.data) ? resp.data : {};
+    } catch (e) { return {}; }
+  },
+
+  // Separate fetch, separate endpoint, fetched only when the settings call
+  // above says a logo actually exists -- the whole point of keeping the
+  // logo out of _settings()/branding_settings_get is that nothing pays for
+  // it unless it is actually going to be drawn.
+  async _receiptLogoDataUri(branding) {
+    if (!branding || !branding.has_logo) return '';
+    try {
+      const resp = await this._get('/api/sub/retail/settings/branding/logo');
+      return (resp && resp.data && resp.data.logo) || '';
+    } catch (e) { return ''; }
+  },
+
+  // The identity block at the top of the receipt: logo, business name
+  // (falling back to the product name so an unbranded install still prints
+  // a legible receipt, never a blank header), address, phone, tax number,
+  // and an optional custom header line. Every operator-entered value goes
+  // through this._esc -- these are shop-typed strings landing in
+  // doc.write()'d HTML, the same trust boundary this file already escapes
+  // category/customer/reorder-request text for.
+  _brandingReceiptBlock(branding, logoDataUri) {
+    const b = branding || {};
+    const rows = [];
+    if (logoDataUri) {
+      rows.push(`<div class="rcpt-center"><img src="${this._esc(logoDataUri)}" style="max-width:100%;max-height:20mm;margin-bottom:4px" /></div>`);
+    }
+    rows.push(`<div class="rcpt-center rcpt-bold">${this._esc(b.branding_business_name || 'Aura Retail')}</div>`);
+    if (b.branding_address) rows.push(`<div class="rcpt-center" style="font-size:11px">${this._esc(b.branding_address)}</div>`);
+    if (b.branding_phone) rows.push(`<div class="rcpt-center" style="font-size:11px">${this._esc(b.branding_phone)}</div>`);
+    if (b.branding_tax_number) rows.push(`<div class="rcpt-center" style="font-size:11px">Tax #: ${this._esc(b.branding_tax_number)}</div>`);
+    if (b.branding_receipt_header) rows.push(`<div class="rcpt-center" style="font-size:11px">${this._esc(b.branding_receipt_header)}</div>`);
+    return rows.join('\n      ');
+  },
+
   async _printReceipt(saleData) {
     const cfg = this._printerCfg();
     const widthMm = cfg.paperWidth === '58mm' ? 58 : 80;
@@ -3142,6 +3193,11 @@ const RetailSystem = {
         <span>${this._fmt(i.line_total)}</span>
       </div>`).join('');
     const einvoiceBlock = await this._einvoiceReceiptBlock(saleData);
+    const branding = await this._receiptBranding();
+    const logoDataUri = await this._receiptLogoDataUri(branding);
+    const brandingBlock = this._brandingReceiptBlock(branding, logoDataUri);
+    const footerLine = branding.branding_receipt_footer
+      ? `<div class="rcpt-center" style="font-size:11px">${this._esc(branding.branding_receipt_footer)}</div>` : '';
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>Receipt ${saleData.sale_number}</title>
       <style>
         @page { size: ${widthMm}mm auto; margin: 2mm; }
@@ -3151,7 +3207,7 @@ const RetailSystem = {
         .rcpt-hr { border-top: 1px dashed #000; margin: 6px 0; }
         .rcpt-bold { font-weight: bold; }
       </style></head><body>
-      <div class="rcpt-center rcpt-bold">Aura Retail</div>
+      ${brandingBlock}
       <div class="rcpt-center">Receipt #${saleData.sale_number}</div>
       <div class="rcpt-center">${saleData.created_at || new Date().toLocaleString()}</div>
       <div class="rcpt-hr"></div>
@@ -3165,6 +3221,7 @@ const RetailSystem = {
       ${saleData.change > 0 ? `<div class="rcpt-line"><span>Change</span><span>${this._fmt(saleData.change)}</span></div>` : ''}
       <div class="rcpt-hr"></div>
       <div class="rcpt-center">Thank you</div>
+      ${footerLine}
       ${einvoiceBlock}
       </body></html>`;
 
@@ -4432,6 +4489,45 @@ const RetailSystem = {
       <div class="ret-hdr">
         <h2 class="ret-title">${t('Settings')}</h2>
       </div>
+      <div class="sub-chart-card" id="branding-card">
+        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Branding')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
+          ${t('Shown on printed receipts and the app sidebar. Configure this once for whatever shop, co-op or foundation is running this install.')}
+        </p>
+        <div class="ret-field-row" style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+          <div class="ret-field" style="margin:0"><label>${t('Business Name')}</label>
+            <input type="text" id="brand-name" maxlength="120" /></div>
+          <div class="ret-field" style="margin:0"><label>${t('Tax / Registration Number')}</label>
+            <input type="text" id="brand-tax" maxlength="60" /></div>
+        </div>
+        <div class="ret-field-row" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:12px">
+          <div class="ret-field" style="margin:0"><label>${t('Address')}</label>
+            <input type="text" id="brand-address" maxlength="200" /></div>
+          <div class="ret-field" style="margin:0"><label>${t('Phone')}</label>
+            <input type="text" id="brand-phone" maxlength="40" /></div>
+        </div>
+        <div class="ret-field" style="margin-top:12px"><label>${t('Receipt Header')}</label>
+          <input type="text" id="brand-header" maxlength="120" /></div>
+        <div class="ret-field" style="margin-top:12px"><label>${t('Receipt Footer')}</label>
+          <input type="text" id="brand-footer" maxlength="120" /></div>
+        <div class="ret-field" style="margin-top:12px">
+          <label>${t('Logo')}</label>
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <img id="brand-logo-preview" alt="" style="display:none;max-height:48px;max-width:160px;border-radius:6px;border:1px solid var(--border-default)" />
+            <input type="file" id="brand-logo-file" accept="image/png,image/jpeg,image/gif,image/webp" />
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" id="brand-logo-remove" style="display:none" onclick="RetailSystem._removeBrandingLogo()">${t('Remove')}</button>
+          </div>
+          <p style="color:var(--text-muted);font-size:11px;margin:6px 0 0">${t('PNG, JPEG, GIF or WebP, under 300KB.')}</p>
+        </div>
+        <div id="branding-einvoice-block" style="display:none;margin-top:16px;padding:12px;border-radius:10px;background:var(--surface-sunken)">
+          <h4 style="color:var(--text-primary);margin:0 0 6px;font-size:13px">${t('E-Invoicing Seller Identity (read-only)')}</h4>
+          <p style="color:var(--text-muted);font-size:12px;margin:0 0 8px">
+            ${t('This is the name and tax number submitted on Jordan e-invoices, configured separately under E-Invoicing. It is shown here for comparison only and is never changed from this screen. If it differs from your receipt branding above, update the one you mean to change.')}
+          </p>
+          <div id="branding-einvoice-values" style="color:var(--text-secondary);font-size:12px"></div>
+        </div>
+        <button class="ret-btn ret-btn-primary" style="margin-top:16px" onclick="RetailSystem._saveBranding()">${t('Save')}</button>
+      </div>
       <div class="sub-chart-card">
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Low-Stock Reorder Requests')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
@@ -4452,6 +4548,113 @@ const RetailSystem = {
         <button class="ret-btn ret-btn-primary" onclick="location.href='/static/whatsapp.html'">${t('Manage WhatsApp Reports')}</button>
       </div>`;
     await this._loadReorderRequests();
+    await this._loadBrandingForm();
+  },
+
+  // ── Branding (Admin Center) ─────────────────────────────────────────────
+  async _loadBrandingForm() {
+    try {
+      const resp = await this._get('/api/sub/retail/settings/branding');
+      const b = (resp && resp.data) || {};
+      this._brandingLoaded = b;
+      const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+      setVal('brand-name', b.branding_business_name);
+      setVal('brand-tax', b.branding_tax_number);
+      setVal('brand-address', b.branding_address);
+      setVal('brand-phone', b.branding_phone);
+      setVal('brand-header', b.branding_receipt_header);
+      setVal('brand-footer', b.branding_receipt_footer);
+
+      const preview = document.getElementById('brand-logo-preview');
+      const removeBtn = document.getElementById('brand-logo-remove');
+      if (b.has_logo) {
+        if (removeBtn) removeBtn.style.display = '';
+        try {
+          const logoResp = await this._get('/api/sub/retail/settings/branding/logo');
+          const uri = logoResp && logoResp.data && logoResp.data.logo;
+          if (uri && preview) { preview.src = uri; preview.style.display = ''; }
+        } catch (e) { /* best-effort preview only -- the save button below still works */ }
+      }
+
+      const einvoiceBlock = document.getElementById('branding-einvoice-block');
+      const einvoiceValues = document.getElementById('branding-einvoice-values');
+      if (b.einvoicing_seller && einvoiceBlock && einvoiceValues) {
+        einvoiceBlock.style.display = '';
+        einvoiceValues.innerHTML =
+          `<div>${t('Seller name')}: ${this._esc(b.einvoicing_seller.seller_name || '—')}</div>` +
+          `<div>${t('Seller TIN')}: ${this._esc(b.einvoicing_seller.seller_tin || '—')}</div>`;
+      }
+    } catch (e) { console.error(e); }
+  },
+
+  async _saveBranding() {
+    const val = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+    const payload = {
+      branding_business_name: val('brand-name'),
+      branding_address: val('brand-address'),
+      branding_phone: val('brand-phone'),
+      branding_tax_number: val('brand-tax'),
+      branding_receipt_header: val('brand-header'),
+      branding_receipt_footer: val('brand-footer'),
+    };
+    try {
+      const resp = await this._post('/api/sub/retail/settings/branding', payload);
+      if (!resp || resp.status !== 'success') {
+        SubsystemApp.showToast((resp && resp.message) || t('Could not save branding.'), 'error');
+        return;
+      }
+      const fileInput = document.getElementById('brand-logo-file');
+      if (fileInput && fileInput.files && fileInput.files[0]) {
+        await this._uploadBrandingLogo(fileInput.files[0]);
+      }
+      SubsystemApp.showToast(t('Branding saved.'), 'success');
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not save branding.'), 'error');
+    }
+  },
+
+  _readFileAsDataURL(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  },
+
+  async _uploadBrandingLogo(file) {
+    try {
+      const dataUri = await this._readFileAsDataURL(file);
+      const resp = await this._post('/api/sub/retail/settings/branding/logo', { logo: dataUri });
+      if (!resp || resp.status !== 'success') {
+        SubsystemApp.showToast((resp && resp.message) || t('Could not save the logo.'), 'error');
+      }
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not save the logo.'), 'error');
+    }
+  },
+
+  async _removeBrandingLogo() {
+    if (!confirm(t('Remove the receipt logo?'))) return;
+    try {
+      const resp = await this._del('/api/sub/retail/settings/branding/logo');
+      if (resp && resp.status === 'success') {
+        const preview = document.getElementById('brand-logo-preview');
+        const removeBtn = document.getElementById('brand-logo-remove');
+        const fileInput = document.getElementById('brand-logo-file');
+        if (preview) { preview.style.display = 'none'; preview.src = ''; }
+        if (removeBtn) removeBtn.style.display = 'none';
+        if (fileInput) fileInput.value = '';
+        SubsystemApp.showToast(t('Logo removed.'), 'success');
+      } else {
+        SubsystemApp.showToast((resp && resp.message) || t('Could not remove the logo.'), 'error');
+      }
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not remove the logo.'), 'error');
+    }
   },
 
   async _loadReorderRequests() {
