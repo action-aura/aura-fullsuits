@@ -282,6 +282,19 @@ def clamp_page_limit(raw, default, ceiling):
 #: capability rather than left lying in a response a cashier can read.
 SALES_ROW_IDENTITY_COLUMNS = ('actor_user_uid', 'uid')
 
+#: Default and hard ceiling for GET /products' new, OPTIONAL `?limit=`
+#: (launch-readiness "the POS scale fix", ROADMAP.md's 2026-08-29 v21
+#: entry). Unlike SALES_HISTORY_MAX_LIMIT/TILL_SALES_LOOKUP_MAX_LIMIT above,
+#: these are never applied unless the caller's query string literally
+#: contains `limit=` -- list_products' no-parameter path must stay
+#: byte-compatible with today (the whole catalogue, no LIMIT clause at
+#: all), since the frontend still calls it that way until the client-side
+#: rewrite lands. DEFAULT only matters for an unparseable value
+#: (`?limit=abc`); MAX is the ceiling `clamp_page_limit` enforces against
+#: `?limit=-1`/`?limit=100000` the same way it already does for sales.
+PRODUCTS_LIST_DEFAULT_LIMIT = 200
+PRODUCTS_LIST_MAX_LIMIT = 1000
+
 # ── Session helpers ────────────────────────────────────────────────────────────
 def _cid():
     return session.get('company_id') or session.get('mt_company_id', 1)
@@ -1300,17 +1313,109 @@ def list_products():
     # codebase for this filter -- `_findByCode` (subsystem-retail.js) filters
     # CLIENT-SIDE over the exact array this query returns, backing POS scan,
     # product search and PO scan alike.
-    rows = conn.execute("""
-        SELECT p.*, c.name as category_name,
-               COALESCE(SUM(b.quantity_on_hand), 0) as total_stock
-        FROM products p
-        LEFT JOIN categories c ON p.category_id=c.id AND c.deleted_at_utc IS NULL
-        LEFT JOIN inventory_balances b ON p.id=b.product_id AND b.company_id=p.company_id
-        WHERE p.company_id=? AND p.status='active' AND p.deleted_at_utc IS NULL
-        GROUP BY p.id ORDER BY p.name
-    """, (cid,)).fetchall()
+    #
+    # launch-readiness "the POS scale fix" (ROADMAP.md's 2026-08-29 v21
+    # entry): `?q=` and `?limit=` added, BOTH OPTIONAL and BOTH OFF BY
+    # DEFAULT, because the frontend still calls this route with no
+    # parameters at all and expects the full array back -- it keeps doing
+    # that until the client-side rewrite (a separate, later change) lands.
+    # So the no-parameter path below is untouched byte-for-byte: same three
+    # WHERE conditions in the same order, same GROUP BY/ORDER BY, and
+    # critically NO `LIMIT` clause is ever appended unless the caller's
+    # query string literally contains `limit=` -- `request.args.get('limit')`
+    # returns None rather than a default when the key is absent, and that is
+    # the branch this route relies on to stay byte-compatible. A caller that
+    # explicitly opts in gets a search filter and a capped, indexed page
+    # instead of the whole catalogue -- see GET /products/lookup just below
+    # for the single-row counterpart the scan path is meant to move onto.
+    q = request.args.get('q', '').strip()
+    raw_limit = request.args.get('limit')
+    conditions = ["p.company_id=?", "p.status='active'", "p.deleted_at_utc IS NULL"]
+    params = [cid]
+    if q:
+        conditions.append("(p.name LIKE ? OR p.sku LIKE ? OR p.barcode LIKE ?)")
+        like = f'%{q}%'
+        params.extend([like, like, like])
+    sql = (
+        "SELECT p.*, c.name as category_name, "
+        "COALESCE(SUM(b.quantity_on_hand), 0) as total_stock "
+        "FROM products p "
+        "LEFT JOIN categories c ON p.category_id=c.id AND c.deleted_at_utc IS NULL "
+        "LEFT JOIN inventory_balances b ON p.id=b.product_id AND b.company_id=p.company_id "
+        f"WHERE {' AND '.join(conditions)} "
+        "GROUP BY p.id ORDER BY p.name"
+    )
+    if raw_limit is not None:
+        limit = clamp_page_limit(raw_limit, PRODUCTS_LIST_DEFAULT_LIMIT, PRODUCTS_LIST_MAX_LIMIT)
+        sql += " LIMIT ?"
+        params.append(limit)
+    rows = conn.execute(sql, params).fetchall()
     conn.close()
     return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
+
+# Launch-readiness "the POS scale fix" (ROADMAP.md's 2026-08-29 v21 entry).
+# The server-side counterpart to the client-side scan `_findByCode`
+# (subsystem-retail.js) performs today over list_products' entire payload --
+# POS scan, product search and PO scan all resolve one code against the
+# whole array; Android's ProductLookup.kt repeats the identical client-side
+# scan. Wiring either client onto this route is a separate, later change
+# (backend only here); this route exists so that change has something to
+# call.
+#
+# No @mt_require_capability, matching list_products immediately above: a
+# till has to be able to resolve a scanned barcode to ring a sale, and that
+# is exactly the authority list_products itself already grants any
+# authenticated retail user with no capability decorator at all.
+@retail_bp.route('/products/lookup', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def lookup_product():
+    """Resolve ONE product by barcode or SKU, company-scoped, returning the
+    same row shape a POS tile needs -- category_name and total_stock
+    included, identical to list_products' own SELECT.
+
+    SAME visibility rules as list_products, matched exactly rather than
+    approximated: `status='active'` AND `deleted_at_utc IS NULL`. Both
+    conditions exist because of real, previously-shipped bugs (launch-
+    readiness Phase 6/7 -- see list_products' own comment for the legacy-
+    vs-new-delete story); a new query is exactly how a fixed bug comes
+    back, so this route re-derives its WHERE clause from that one rather
+    than writing a fresh one from memory.
+
+    `code` is checked against `barcode` first, then `sku` -- two separate,
+    fully-indexed point lookups (idx_products_company_barcode / idx_
+    products_company_sku, schema v21) rather than one query with an OR,
+    so each branch's plan is unambiguous and provably indexed. Barcode is
+    checked first because this route's primary caller is the scan path,
+    where barcode is the natural key; a code that happens to collide with
+    both a barcode on one product and a different product's SKU resolves
+    to the barcode match.
+
+    404 (not 200 with a null payload) when nothing matches -- a scan that
+    finds nothing is a normal, expected outcome for a till, and the
+    frontend needs to tell "no product" apart from a transport error.
+    """
+    cid = _cid()
+    code = request.args.get('code', '').strip()
+    if not code:
+        return jsonify({'status': 'error', 'message': 'code is required'}), 400
+    select = (
+        "SELECT p.*, c.name as category_name, "
+        "COALESCE(SUM(b.quantity_on_hand), 0) as total_stock "
+        "FROM products p "
+        "LEFT JOIN categories c ON p.category_id=c.id AND c.deleted_at_utc IS NULL "
+        "LEFT JOIN inventory_balances b ON p.id=b.product_id AND b.company_id=p.company_id "
+        "WHERE p.company_id=? AND p.status='active' AND p.deleted_at_utc IS NULL AND p.{col}=? "
+        "GROUP BY p.id"
+    )
+    conn = get_retail_conn()
+    row = conn.execute(select.format(col='barcode'), (cid, code)).fetchone()
+    if row is None:
+        row = conn.execute(select.format(col='sku'), (cid, code)).fetchone()
+    conn.close()
+    if row is None:
+        return jsonify({'status': 'error', 'message': 'Product not found'}), 404
+    return jsonify({'status': 'success', 'data': dict(row)})
 
 @retail_bp.route('/products', methods=['POST'])
 @mt_login_required
@@ -3967,9 +4072,13 @@ def recent_sales():
     behavior unchanged), with:
       - q: LIKE search on sale_number OR customer name, same convention as
         list_customers() above.
-      - date_from/date_to: inclusive date(created_at) range, same
-        date(...) comparison convention already used by the /reports/*
-        endpoints below (report_sales_trend, report_payment_methods).
+      - date_from/date_to: inclusive `created_at` range, both ends still
+        inclusive of the given calendar date -- see the conditions block
+        below for why this is now a half-open range on the bare column
+        rather than `date(created_at)` (schema v21, "the POS scale fix";
+        the /reports/* endpoints below still use core/retail/metrics.py's
+        own date(...) convention, deliberately left as-is -- see that
+        module's own docstring for why it cannot be fixed the same way).
     No offset/page param was added -- this codebase's other list endpoints
     (products, customers, suppliers) all use the same "big LIMIT, no
     pagination" convention rather than true offset pagination, so q/date
@@ -4040,11 +4149,39 @@ def recent_sales():
     if q:
         conditions.append("(s.sale_number LIKE ? OR c.name LIKE ?)")
         params.extend([f'%{q}%', f'%{q}%'])
+    # launch-readiness "the POS scale fix" (ROADMAP.md's 2026-08-29 v21
+    # entry): rewritten from `date(s.created_at) >= date(?)` /
+    # `date(s.created_at) <= date(?)` to a half-open range so the predicate
+    # is SARGABLE -- wrapping the COLUMN in `date(...)` (the old form) means
+    # SQLite must evaluate that function on every row before it can compare,
+    # which no index can serve. Wrapping the PARAMETER instead (`date(?)` /
+    # `date(?, '+1 day')` below) costs nothing per row -- SQLite computes
+    # each bound once, then compares the bare column against it -- and is
+    # deliberately NOT re-parsed in Python: `date()`'s own tolerance for
+    # every legal SQLite date/datetime spelling is preserved exactly rather
+    # than re-implemented, so a value the old form accepted is still
+    # accepted and a value it rejected (date() returns NULL, so the
+    # comparison is false and matches nothing) still is.
+    #
+    # SAME inclusive-both-ends semantics as before, restated as a half-open
+    # range: start <= business day of the row <= end becomes
+    # `created_at >= date(start) AND created_at < date(end, '+1 day')` --
+    # the exclusive upper bound is midnight of the day AFTER `date_to`, so
+    # every timestamp anywhere inside `date_to`'s calendar day still
+    # matches, exactly as `date(s.created_at) <= date(date_to)` did.
+    #
+    # NOTE (see this change's own report): no index currently exists on
+    # `sales.created_at` -- schema v13's `idx_sales_created_at_utc` covers
+    # the DIFFERENT `created_at_utc` column, not this one -- so this rewrite
+    # is sargable but not yet index-backed; EXPLAIN QUERY PLAN still shows
+    # `SCAN s` today. It is still worth doing: it is no longer the reason an
+    # index can't help, and a future `idx_sales_created_at` would apply to
+    # this predicate with no further query change.
     if date_from:
-        conditions.append("date(s.created_at) >= date(?)")
+        conditions.append("s.created_at >= date(?)")
         params.append(date_from)
     if date_to:
-        conditions.append("date(s.created_at) <= date(?)")
+        conditions.append("s.created_at < date(?, '+1 day')")
         params.append(date_to)
     params.append(limit)
 
@@ -6410,6 +6547,17 @@ def _ensure_credit_schema(conn):
         ('created_by', "TEXT"), ('device', "TEXT"),
     ]:
         addcol('payments', col, decl)
+    # schema.py v21 (_migrate_add_lookup_indexes) carries the identical
+    # CREATE INDEX for every install that already has these two columns by
+    # the time it runs. A BRAND NEW install does not -- this file's
+    # migration chain runs before this function is ever called, so
+    # party_type/party_id do not exist yet at that point -- and this is the
+    # only place that catches that case, immediately after the ADD COLUMN
+    # pair just above created them. IF NOT EXISTS, so whichever of the two
+    # sites runs first wins and the other is a no-op.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_payments_party ON payments(party_type, party_id)"
+    )
     addcol('customers', 'credit_mode', "TEXT DEFAULT 'none'")   # none | limited | unlimited
     addcol('customers', 'credit_limit', "REAL DEFAULT 0")
     addcol('customers', 'credit_balance', "REAL DEFAULT 0")

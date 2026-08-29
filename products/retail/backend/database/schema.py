@@ -451,7 +451,23 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # guard, and resolves nothing automatically; see the migration function's
 # own docstring for the partial-unique-index shape that keeps one open row
 # per (company, product, branch) rather than one row per sync tick.
-RETAIL_SCHEMA_VERSION = 20
+#
+# v20 -> v21 (launch-readiness, "the POS scale fix"; ROADMAP.md's 2026-08-29
+# "retail schema v21 CLAIMED for the POS scale fix" entry): five indexes,
+# no table or column changes -- see _migrate_add_lookup_indexes below for
+# the full reasoning, including why payments(party_type, party_id) needs a
+# guard the other four don't. In short: `list_products` (retail_api.py)
+# returns every active product for the company with no LIMIT and no search
+# parameter, and the frontend/Android both filter that whole array
+# CLIENT-SIDE for POS scan, product search and PO scan -- ~2.5 MB at 5,000
+# SKUs, ~25 MB at 50,000, re-fetched after every completed sale. This
+# version adds the indexes the new server-side lookup endpoint and the
+# existing scan/report queries need; it does not itself change any query.
+# The companion finding -- every date filter wrapped in `date(...)`, making
+# the v13 `idx_*_created_at_utc` indexes unusable -- needs no version at
+# all, since rewriting a predicate to a sargable range is a pure query
+# change (see recent_sales and core/retail/metrics.py).
+RETAIL_SCHEMA_VERSION = 21
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -1370,6 +1386,14 @@ def _migrate_retail_schema(conn):
     # purpose. _migrate_add_stock_exceptions's own docstring has the full
     # reasoning, including the partial-unique-index shape.
     _migrate_add_stock_exceptions(conn)
+    # v20 -> v21 (launch-readiness, "the POS scale fix"): appended LAST, same
+    # convention as every step above. Pure index additions, so ordering
+    # relative to the steps above it does not matter functionally -- it is
+    # placed last only to keep following the chain's own convention. See the
+    # RETAIL_SCHEMA_VERSION v21 comment above and _migrate_add_lookup_
+    # indexes's own docstring for the full reasoning, including the
+    # payments(party_type, party_id) guard.
+    _migrate_add_lookup_indexes(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -4493,6 +4517,147 @@ def _migrate_add_stock_exceptions(conn):
         "ON stock_exceptions(company_id, product_id, branch_id) "
         "WHERE resolved_at_utc IS NULL"
     )
+
+
+def _migrate_add_lookup_indexes(conn):
+    """One-time migration (schema v20 -> v21): launch-readiness "the POS
+    scale fix" (ROADMAP.md's 2026-08-29 "retail schema v21 CLAIMED" entry).
+    Five indexes, no table or column changes -- see the RETAIL_SCHEMA_
+    VERSION v21 comment above for the full measurement (`list_products`
+    with no LIMIT and no search parameter, ~2.5 MB at 5,000 SKUs / ~25 MB at
+    50,000, re-fetched after every completed sale, filtered client-side for
+    POS scan / product search / PO scan by both the web frontend and
+    Android's `ProductLookup.kt`).
+
+    Confirmed genuinely absent by reading this file (grep `CREATE INDEX`)
+    before adding any of them: `idx_products_supplier` is the only existing
+    index on `products` (on `supplier_id`, from `_migrate_products_add_
+    supplier_fk`), and nothing at all pre-existed on `sale_items`, `sales`,
+    or `payments` beyond the row-version/actor-tables loop's single-column
+    `idx_{table}_created_at_utc` / `idx_{table}_live` indexes above (neither
+    of which covers any of the five columns below):
+
+      * `products(company_id, barcode)` -- the scan path (the new `GET
+        /products/lookup` this version backs, and the client-side scan it
+        is meant to replace) has NO index today.
+      * `products(company_id, sku)` -- same scan path, the SKU branch.
+      * `sale_items(sale_id)` -- `recent_sales` LEFT JOINs this per request.
+      * `sales(customer_id)` -- `customer_statement` scans by it.
+      * `payments(party_type, party_id)` -- see the guard below.
+
+    Deliberately NOT a UNIQUE index on `products(company_id, barcode)`:
+    uniqueness there is enforced only at the application layer today
+    (`create_product`'s 409 check, see that route's own AUDIT comment).
+    Blank barcodes are explicitly exempt from that check, and a
+    sync-applied row could already violate uniqueness on a real install --
+    a UNIQUE index would fail THIS migration on exactly the installs it is
+    meant to help. Whether to tighten that is a separate product decision,
+    not a side effect of an index migration; recorded, not silently taken.
+
+    `payments(party_type, party_id)` is guarded on column existence,
+    unlike the four indexes above -- those two columns are NOT part of
+    `payments`' base `CREATE TABLE` (see `_init_retail`'s DDL: no
+    `party_type`/`party_id` there at all). They are added lazily, at
+    request time, by `api/retail_api.py`'s `_ensure_credit_schema()` --
+    which every install that has ever touched a credit/payment route has
+    long since run, but a BRAND NEW install has NOT: `_init_retail` runs
+    this entire migration chain, including this function, before any
+    request has ever reached `_ensure_credit_schema`. Creating this index
+    unconditionally would raise `OperationalError: no such column:
+    party_type` on every fresh install, every time, since the column
+    genuinely does not exist yet at this point in that install's timeline.
+    So this function only creates the index when the columns already
+    exist (an existing install upgrading to v21, where `_ensure_credit_
+    schema` fired long ago); `_ensure_credit_schema` itself carries the
+    identical `CREATE INDEX IF NOT EXISTS`, placed immediately after the
+    loop that adds those two columns, for the brand-new-install path this
+    migration cannot reach. Both are `IF NOT EXISTS`, so whichever runs
+    first wins and the other is a clean no-op -- the same shape
+    `idx_products_supplier` already uses by living outside its own ADD
+    COLUMN guard (see that migration's own docstring).
+
+    All five: `CREATE INDEX IF NOT EXISTS` only, no `ALTER`, no data
+    touched -- a retried run (the normal case after any interrupted
+    migration, since `ensure_schema_version` leaves `user_version`
+    un-advanced on failure) is a clean no-op.
+
+    EACH TABLE IS ALSO GUARDED ON EXISTENCE, the same `live_tables` check
+    `_migrate_add_identity_and_attribution_columns`'s own RETAIL_ACTOR_
+    TABLES/RETAIL_ROW_VERSION_TABLES loops already use above -- found the
+    hard way, by running this suite rather than by inspection alone:
+    retail_category_delete_fk_sync_test.py's `_build_v2_database` hand-
+    builds a genuinely old, minimal schema (`categories`/`products`/
+    `inventory_movements` ONLY, `PRAGMA user_version = 2`) to prove the
+    full migration chain still behaves on a device this old --
+    `ensure_schema_version` runs every step in one pass on such a device
+    (it only knows "behind", never "behind by exactly one version", see
+    `_migrate_retail_schema`'s own docstring), so this function reached
+    `sale_items`/`sales` on a database that has neither and raised
+    `OperationalError: no such table: main.sale_items` unconditionally,
+    failing three tests that have nothing to do with this change. Every
+    REAL install always has all four base tables (`products`, `sale_
+    items`, `sales`, `payments` are all in `_init_retail`'s own DDL, which
+    runs before ANY migration), so this guard is a no-op there; it only
+    matters for a synthetic fixture proving this exact chain-robustness
+    property, which is precisely the case it exists to keep passing.
+    """
+    live_tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if 'products' in live_tables:
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_products_company_barcode '
+            'ON products(company_id, barcode)'
+        )
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_products_company_sku '
+            'ON products(company_id, sku)'
+        )
+    if 'sale_items' in live_tables:
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_sale_items_sale_id '
+            'ON sale_items(sale_id)'
+        )
+    if 'sales' in live_tables:
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_sales_customer_id '
+            'ON sales(customer_id)'
+        )
+        # `created_at`, NOT `created_at_utc`. Schema v13 already created
+        # `idx_sales_created_at_utc`, and it is useless to `recent_sales`
+        # because that route filters the OTHER column -- a distinction found
+        # only by reading `EXPLAIN QUERY PLAN`, which reported `SCAN s` both
+        # before and after the date predicate was made sargable. Rewriting the
+        # predicate was necessary and not sufficient: a sargable filter with no
+        # index on its column still scans.
+        #
+        # This is the Sales History / returns-lookup hot path. On a hypermarket
+        # doing ~500k sales a year, `_findSaleForReturn` fetching `?limit=200`
+        # through an unindexed date scan is a multi-second wait at the returns
+        # counter with a customer standing there.
+        #
+        # Deliberately NOT a replacement for `created_at_utc`. Both columns are
+        # real and both are read: `created_at` is the local wall clock this
+        # route filters on, `created_at_utc` is the device-independent instant
+        # Phase 2 added for cross-device ordering. Indexing one says nothing
+        # about the other.
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_sales_created_at '
+            'ON sales(created_at)'
+        )
+    # Guarded on TABLE existence (this block) AND on the two columns' own
+    # existence (below) -- see the docstring above for why the columns
+    # cannot be assumed present at schema-migration time the way the other
+    # four indexes' columns can.
+    if 'payments' in live_tables:
+        payments_cols = {row[1] for row in conn.execute('PRAGMA table_info(payments)').fetchall()}
+        if 'party_type' in payments_cols and 'party_id' in payments_cols:
+            conn.execute(
+                'CREATE INDEX IF NOT EXISTS idx_payments_party '
+                'ON payments(party_type, party_id)'
+            )
 
 
 def load_sync_freshness(conn) -> dict:
