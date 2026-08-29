@@ -3342,6 +3342,23 @@ def create_sale():
         # `_evaluate_offline_sales_stop` above is: every line of one sale is
         # judged against the SAME snapshot of "is this device behind".
         behind_on_sync = _is_device_behind_on_sync()
+        # Launch-readiness Phase 7 stage 7d-iii follow-up (two-lines-same-
+        # product oversell fix, 2026-08-29): `inventory_balances` is NOT
+        # decremented until the SEPARATE write loop further down (`for line
+        # in resolved_lines:`, below) -- every iteration of the validation
+        # loop below reads the exact same, still-untouched on-hand figure.
+        # Comparing one line's own `qty` against that shared figure let two
+        # lines for the SAME product each pass individually while their SUM
+        # exceeded stock. Keyed on (product_id, branch_id) -- the exact key
+        # `inventory_balances` itself is scoped by, alongside `company_id`,
+        # which is constant for this whole request/loop (one `cid`; `bid`
+        # is resolved ONCE above, before this loop -- this route accepts no
+        # per-line branch_id, see `bid`'s own comment) -- so two lines for
+        # the same product at genuinely different branches are never
+        # conflated, and running demand is compared instead of one line in
+        # isolation. See the balance check inside the loop below for where
+        # this is read and updated.
+        demand_by_product_branch = {}
         for item in items_in:
             pid = item.get('product_id')
             # launch-readiness Phase 6 stage 6b-iii-a (deletion stops
@@ -3381,7 +3398,13 @@ def create_sale():
                 (cid, pid, bid)
             ).fetchone()
             on_hand = float(balance['quantity_on_hand']) if balance else 0.0
-            if qty > on_hand:
+            # Accumulate demand for this (product_id, branch_id) across the
+            # whole loop -- see the comment above `demand_by_product_branch`'s
+            # initialization for why this key and why now, not `qty` alone.
+            demand_key = (pid, bid)
+            requested_so_far = demand_by_product_branch.get(demand_key, 0.0) + qty
+            demand_by_product_branch[demand_key] = requested_so_far
+            if requested_so_far > on_hand:
                 # Launch-readiness Phase 7 stage 7d-iii (docs/launch-
                 # readiness/phase7-offline-ux.md "Correction to Decision
                 # 1"). This refusal is CORRECT and stays exactly as it has
@@ -3395,10 +3418,16 @@ def create_sale():
                 # identically, for the identical reason -- both silence
                 # rules live inside `_is_device_behind_on_sync()` itself,
                 # never re-derived here.
+                #
+                # `requested_so_far` (the running total for this product/
+                # branch across this whole sale), not `qty` (one line's own
+                # quantity) -- WHAT is compared to `on_hand` is what changed
+                # here; WHEN this refuses vs. relaxes is untouched, still
+                # gated purely on `behind_on_sync` below.
                 if not behind_on_sync:
                     conn.rollback(); conn.close()
                     return jsonify({'status': 'error',
-                                     'message': f'Insufficient stock for "{product["name"]}" (have {on_hand}, requested {qty}).'}), 400
+                                     'message': f'Insufficient stock for "{product["name"]}" (have {on_hand}, requested {requested_so_far}).'}), 400
                 # This device IS behind: its on-hand figure can be
                 # stale-LOW rather than accurate -- another till may have
                 # received stock or taken a return this device has not
@@ -3415,6 +3444,15 @@ def create_sale():
                 # exceptions` records it (see the write loop's own comment
                 # for why the check happens AFTER the write, and why
                 # "negative", not merely "relaxed", gates the record).
+                #
+                # Set from the SAME accumulated comparison as the refusal
+                # just above, not re-derived from `qty` alone -- a relaxed
+                # multi-line oversell (each line individually within stock,
+                # their SUM past it) must still be flagged, or a resulting
+                # negative balance would go unflagged and therefore unrecorded
+                # by the write loop's gate below (see
+                # products/retail/tests/retail_multiline_stock_test.py's
+                # mutation proof 4).
                 sale_oversold_past_recorded_stock = True
 
             discount_pct = tax_engine.clamp_discount_pct(item.get('discount_pct', 0))
