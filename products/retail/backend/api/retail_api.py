@@ -56,6 +56,13 @@ from database.schema import (
     # it is reading. Same discipline as `now_utc_iso` above.
     CASH_SESSION_STATUS_OPEN, CASH_SESSION_STATUS_ENDED, CASH_SESSION_STATUS_CLOSED,
     V16_UNVERIFIED_END_REASONS,
+    # Launch-readiness Phase 7 stage 7d-iii: THE canonical `stock_exceptions`
+    # upsert -- see its own docstring in schema.py. Imported and called
+    # directly (unlike commercial_runtime/sync/sync_service.py's own use of
+    # the SAME function, which reaches it through an injected constructor
+    # collaborator instead): retail_api.py already lives in this module's
+    # own product, so there is no layering concern importing it here.
+    record_or_refresh_stock_exception,
 )
 from datetime import datetime, timedelta, timezone
 from core.retail import pricing as tax_engine
@@ -3305,7 +3312,25 @@ def create_sale():
         # from the product row; only quantity and discount_pct are accepted
         # as client-submitted commercial intent, and discount_pct is clamped.
         resolved_lines = []
+        # Launch-readiness Phase 7 stage 7d-iii (docs/launch-readiness/
+        # phase7-offline-ux.md "Correction to Decision 1"). True once AT
+        # LEAST ONE line in this sale was sold past its recorded on-hand
+        # figure -- feeds both `response_data['oversold_past_recorded_
+        # stock']` below AND the write loop's gate for re-checking a
+        # resulting balance against `stock_exceptions` (see that loop's own
+        # comment for why the gate is SALE-level, not per-line).
+        sale_oversold_past_recorded_stock = False
         subtotal = discount = tax = total = Decimal('0')
+        # Resolved ONCE, before the item loop -- reuses the SAME predicate
+        # stage 7c-i already built (`_is_device_behind_on_sync`, above),
+        # never a second staleness check, so the two silence rules that
+        # predicate already enforces (never behind when sync is
+        # unconfigured; never behind on a device that has never synced)
+        # protect the refusal below too, automatically. Resolved once for
+        # the whole sale, not re-read per line, for the identical reason
+        # `_evaluate_offline_sales_stop` above is: every line of one sale is
+        # judged against the SAME snapshot of "is this device behind".
+        behind_on_sync = _is_device_behind_on_sync()
         for item in items_in:
             pid = item.get('product_id')
             # launch-readiness Phase 6 stage 6b-iii-a (deletion stops
@@ -3346,9 +3371,40 @@ def create_sale():
             ).fetchone()
             on_hand = float(balance['quantity_on_hand']) if balance else 0.0
             if qty > on_hand:
-                conn.rollback(); conn.close()
-                return jsonify({'status': 'error',
-                                 'message': f'Insufficient stock for "{product["name"]}" (have {on_hand}, requested {qty}).'}), 400
+                # Launch-readiness Phase 7 stage 7d-iii (docs/launch-
+                # readiness/phase7-offline-ux.md "Correction to Decision
+                # 1"). This refusal is CORRECT and stays exactly as it has
+                # always been UNLESS `behind_on_sync` -- an install with
+                # sync switched off (the MAJORITY install) keeps the hard
+                # refusal forever, because its own balance is the ONLY
+                # ledger there is: there is no "another device already sold
+                # it" story that could make this figure stale-LOW, so
+                # relaxing here would just let the till sell stock it does
+                # not have. A device that has never synced is treated
+                # identically, for the identical reason -- both silence
+                # rules live inside `_is_device_behind_on_sync()` itself,
+                # never re-derived here.
+                if not behind_on_sync:
+                    conn.rollback(); conn.close()
+                    return jsonify({'status': 'error',
+                                     'message': f'Insufficient stock for "{product["name"]}" (have {on_hand}, requested {qty}).'}), 400
+                # This device IS behind: its on-hand figure can be
+                # stale-LOW rather than accurate -- another till may have
+                # received stock or taken a return this device has not
+                # pulled yet -- so refusing a sale the cashier can see with
+                # their own eyes is worse than the oversell it might cause
+                # (the same "a refused sale is worse than an oversell"
+                # principle multi-device-design.md §8 already states for
+                # the cross-device merge case; this is the single-device
+                # instance of it). The sale is allowed past the recorded
+                # figure. Not silent: `sale_oversold_past_recorded_stock`
+                # feeds the success response below, and -- if a resulting
+                # balance in this sale actually lands negative once its
+                # stock movement is written further down -- `stock_
+                # exceptions` records it (see the write loop's own comment
+                # for why the check happens AFTER the write, and why
+                # "negative", not merely "relaxed", gates the record).
+                sale_oversold_past_recorded_stock = True
 
             discount_pct = tax_engine.clamp_discount_pct(item.get('discount_pct', 0))
             unit_price = float(product['sell_price'])
@@ -3559,6 +3615,56 @@ def create_sale():
                 UPDATE inventory_balances SET quantity_on_hand = quantity_on_hand - ?
                 WHERE company_id=? AND product_id=? AND branch_id=?
             """, (qty, cid, pid, bid))
+            # Launch-readiness Phase 7 stage 7d-iii (docs/launch-readiness/
+            # phase7-offline-ux.md "Correction to Decision 1"; ROADMAP.md's
+            # 2026-08-29 "Correction to the v20 claim" entry). Gated on
+            # `sale_oversold_past_recorded_stock` -- the SALE-level flag, not
+            # a per-line one -- deliberately: `qty > on_hand` is exactly the
+            # condition that triggered the relaxation above, so the line
+            # that actually got relaxed can ONLY ever land its own resulting
+            # balance strictly negative (on_hand minus a qty that already
+            # exceeded it is always < 0) -- checking ITS balance against `< 0`
+            # would never observe anything else. What the sign check
+            # actually needs to catch is a DIFFERENT line in the SAME sale
+            # (a different product, unrelated to the one that got relaxed)
+            # whose own write is perfectly ordinary and could legitimately
+            # land on exactly zero -- Decision 4's "hitting exactly zero is
+            # not an oversell" line must hold for THAT line too, which is
+            # why the `< 0` filter below, not the gate, is what decides
+            # whether to actually record. A sale with NO relaxed line at all
+            # never pays the cost of the extra SELECT: `sale_oversold_past_
+            # recorded_stock` stays False for the fully ordinary case,
+            # including an ordinary sale rung on a device that merely
+            # HAPPENS to be behind (test_a_behind_device_still_sells_
+            # normally_when_stock_covers_the_sale).
+            #
+            # Read back rather than derived from `qty` -- same reasoning as
+            # sync_service.py's `inventory_movement` apply branch: the
+            # UPDATE above is a delta against whatever was already in the
+            # row, so the resulting balance is a fact about the ROW, not
+            # about this one line, and a second line of the SAME product
+            # earlier in this very loop can already have moved it.
+            #
+            # `< 0`, not `<= 0` -- landing exactly on zero is not an
+            # oversell (Decision 4's own "hitting exactly zero is not an
+            # oversell" line), and recording one anyway would mean every
+            # behind-sale that merely uses up the last unit gets flagged as
+            # a business exception it never was.
+            if sale_oversold_past_recorded_stock:
+                new_balance = cur.execute(
+                    "SELECT quantity_on_hand FROM inventory_balances "
+                    "WHERE company_id=? AND product_id=? AND branch_id=?",
+                    (cid, pid, bid),
+                ).fetchone()[0]
+                if new_balance < 0:
+                    record_or_refresh_stock_exception(
+                        conn, company_id=cid, product_id=pid, branch_id=bid,
+                        observed_quantity_on_hand=new_balance,
+                    )
+                # No `else` branch that clears an exception when the
+                # balance is >= 0 -- same posture as sync_service.py's own
+                # apply-branch comment: nothing in this stage may
+                # auto-resolve or delete a row (Decision 4).
 
         # Update customer total spent & loyalty points
         #
@@ -3628,6 +3734,19 @@ def create_sale():
             'change': round(change, 2), 'total': round(total, 2),
             'amount_paid': paid, 'balance_due': balance_due, 'warning': warning,
             'lines': resolved_lines, 'calculation_version': tax_engine.CALCULATION_VERSION,
+            # Launch-readiness Phase 7 stage 7d-iii: NEVER silent. True only
+            # when at least one line was allowed past its recorded on-hand
+            # figure because this device is behind on sync (see the item
+            # loop's own comment above) -- always present, not a
+            # conditionally-added key like 'einvoice' below, so a future UI
+            # stage can read this field unconditionally with no API-shape
+            # change of its own. Whether the sale actually landed a balance
+            # negative (and therefore whether `stock_exceptions` gained or
+            # refreshed a row) is a SEPARATE fact this flag does not carry
+            # -- a behind-sale that used exactly the last unit relaxes this
+            # refusal without ever going negative, and Decision 4 is
+            # explicit that landing on zero is not an oversell.
+            'oversold_past_recorded_stock': sale_oversold_past_recorded_stock,
         }
 
         # docs/einvoicing/phase1/ -- best-effort, never blocks or fails the

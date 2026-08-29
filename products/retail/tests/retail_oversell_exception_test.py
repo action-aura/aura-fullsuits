@@ -206,12 +206,35 @@ def _apply_incoming_movement(company_id, product_id, branch_uid, quantity, movem
     the REAL sync apply path -- SyncService._apply_event, the one and only
     site stage 7d-i's writer lives in. This is the "merge" half of every
     two-tills scenario below; the "local" half is always _sale() above,
-    never this function -- writing the exception from both places would
-    invent a second source for one fact (Decision 4)."""
+    never this function.
+
+    CORRECTION (stage 7d-iii, ROADMAP.md's 2026-08-29 "Correction to the
+    v20 claim" entry), left in place rather than silently rewritten: this
+    docstring used to say writing the exception from both places would
+    invent a SECOND SOURCE for one fact. Stage 7d-iii made `create_sale`'s
+    own local path a genuine second writer (when the device is behind and
+    its refusal relaxes) -- but not a second SOURCE: both callers reach
+    the exact same `database/schema.py::record_or_refresh_stock_exception`
+    upsert, `create_sale` directly and this apply path through the
+    injected `stock_exception_recorder` collaborator wired below, so there
+    is still only ONE implementation of the fact being recorded. See
+    products/retail/tests/retail_oversell_relaxation_test.py for that
+    stage's own coverage of the local path; this file's own scope stays
+    exactly what its module docstring says -- the merge path only.
+
+    `stock_exception_recorder=sch.record_or_refresh_stock_exception`
+    wired explicitly, exactly like `local_freshness_store` is wired in
+    retail_offline_sales_stop_test.py's own `_real_sync_service` --
+    without it this bare SyncService's `_stock_exception_recorder` stays
+    the constructor default of None, and every apply in this file would
+    silently record nothing (`_record_or_refresh_stock_exception` no-ops
+    when the collaborator is absent, by design -- see that method's own
+    docstring)."""
     conn = get_retail_conn()
     try:
         service = SyncService(client_factory=lambda: None, get_conn=get_retail_conn,
-                               local_company_id_provider=lambda: company_id)
+                               local_company_id_provider=lambda: company_id,
+                               stock_exception_recorder=sch.record_or_refresh_stock_exception)
         service._apply_event(conn, _movement_event(product_id, branch_uid, quantity, movement_type),
                               local_company_id=company_id)
         conn.commit()
@@ -379,8 +402,12 @@ def test_a_replayed_movement_does_not_record_a_second_exception(company):
     bid, buid = _branch_info(company_id)
     assert _sale(client, product_id).status_code == 200
 
+    # stock_exception_recorder wired explicitly -- see _apply_incoming_
+    # movement's own docstring above for why a bare SyncService without it
+    # silently records nothing as of stage 7d-iii.
     service = SyncService(client_factory=lambda: None, get_conn=get_retail_conn,
-                           local_company_id_provider=lambda: company_id)
+                           local_company_id_provider=lambda: company_id,
+                           stock_exception_recorder=sch.record_or_refresh_stock_exception)
     ev = _movement_event(product_id, buid, quantity=-1)  # ONE event, applied twice below
 
     conn = get_retail_conn()

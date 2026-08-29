@@ -95,10 +95,15 @@ another device:
     silently drop the movement's effect. Since launch-readiness Phase 7
     stage 7d-i (retail v20, `stock_exceptions`), the SAME `if cur.rowcount:`
     block also checks the resulting balance and records/refreshes an OPEN
-    `stock_exceptions` row when it is negative -- detection only, nothing
-    here relaxes `create_sale`'s own oversell refusal or auto-resolves an
-    exception once recorded. See `_record_or_refresh_stock_exception` and
-    that branch's own comment.
+    `stock_exceptions` row when it is negative -- detection only for THIS
+    branch: nothing here relaxes `create_sale`'s own oversell refusal or
+    auto-resolves an exception once recorded. (Stage 7d-iii later made
+    `create_sale`'s OWN refusal conditional and gave it its own writer into
+    the same table -- see `_record_or_refresh_stock_exception`'s own
+    CORRECTION paragraph and products/retail/backend/database/schema.py's
+    `record_or_refresh_stock_exception` for the full split; this branch's
+    behaviour is unchanged by that.) See `_record_or_refresh_stock_
+    exception` and that branch's own comment.
   * `branch` is a MUTABLE record, like the five original catalogue types
     (category/product/customer/supplier/reorder_request) -- a branch renamed
     on one device should converge on every other, so `ON CONFLICT(uid)
@@ -422,6 +427,7 @@ class SyncService:
         local_ensure_schema: Optional[Callable[["sqlite3.Connection"], None]] = None,
         handled_entity_types: Optional[Iterable[str]] = None,
         local_freshness_store: Optional[SyncFreshnessStore] = None,
+        stock_exception_recorder: Optional[Callable[..., None]] = None,
     ):
         """`client_factory` is called fresh on every push_once()/pull_once()
         attempt, not once at construction time -- deliberately, mirroring
@@ -500,6 +506,33 @@ class SyncService:
         site still gets, deliberately, since registry.db has no
         `sync_freshness` table.
 
+        `stock_exception_recorder`, when supplied, is called from the
+        `inventory_movement` apply branch's `_record_or_refresh_stock_
+        exception` (below) the moment a MERGED balance lands negative --
+        launch-readiness Phase 7 stage 7d-i (retail v20, `stock_
+        exceptions`; docs/launch-readiness/phase7-offline-ux.md "Decision
+        4"). Shaped like `local_ensure_schema` above, not like
+        `local_freshness_store`: a single bare callable, not a NamedTuple
+        of several, because there is only ever one operation here (upsert
+        the one open row for this key) rather than a load/record pair.
+        Deliberately a CONSTRUCTOR HOOK, not a hardcoded import of
+        anything under `products/retail` -- this module is shared with
+        Clinic, and `stock_exceptions` is a retail-only table (exactly the
+        same reasoning `local_ensure_schema`'s own paragraph above gives
+        for not hardcoding retail's lazy-migration function by name).
+        Optional and a no-op when absent, checked explicitly at the call
+        site, NEVER inferred from a caught exception -- identical rule to
+        `local_freshness_store`'s own paragraph above, for the identical
+        reason. `None` in production only at the registry `SyncService`
+        construction site (products/retail/backend/app.py), which is safe
+        by construction rather than by luck: `inventory_movement` is not
+        in `REGISTRY_SYNC_ENTITY_TYPES`, so that instance's apply loop
+        never reaches the branch that would call this at all. The retail
+        and Android construction sites both pass products/retail/backend/
+        database/schema.py's `record_or_refresh_stock_exception` -- see
+        that function's own docstring for the full upsert reasoning and
+        for its SECOND caller (stage 7d-iii, `create_sale` itself).
+
         Deliberately NOT loaded here, inside `__init__`, even though that
         is where it conceptually belongs: `SyncService` is constructed at
         products/retail/backend/app.py's MODULE IMPORT time (the module-
@@ -527,6 +560,7 @@ class SyncService:
         self._local_company_id_provider = local_company_id_provider
         self._local_ensure_schema = local_ensure_schema
         self._local_freshness_store = local_freshness_store
+        self._stock_exception_recorder = stock_exception_recorder
         # See _ensure_freshness_loaded's own docstring for why this is a
         # lazy, first-use flag rather than work done inline below.
         self._freshness_loaded = False
@@ -920,59 +954,66 @@ class SyncService:
         if conflict_sink is not None:
             conflict_sink.append((entity_type, entity_id))
 
-    @staticmethod
-    def _record_or_refresh_stock_exception(conn, *, local_company_id, product_id, branch_id,
+    def _record_or_refresh_stock_exception(self, conn, *, local_company_id, product_id, branch_id,
                                             observed_quantity_on_hand) -> None:
-        """Writes or refreshes ONE visible `stock_exceptions` row for a
-        (company, product, branch) balance the `inventory_movement` apply
-        branch just found negative -- launch-readiness Phase 7 stage 7d-i
-        (docs/launch-readiness/phase7-offline-ux.md "Decision 4";
-        database/schema.py's `_migrate_add_stock_exceptions`, retail v20).
+        """Forwards to the OPTIONAL `stock_exception_recorder` collaborator
+        (see `SyncService.__init__`'s own docstring for that parameter) --
+        launch-readiness Phase 7 stage 7d-i (docs/launch-readiness/
+        phase7-offline-ux.md "Decision 4"; database/schema.py's
+        `_migrate_add_stock_exceptions`, retail v20).
+
+        NO LONGER the canonical implementation. The upsert itself moved to
+        products/retail/backend/database/schema.py's `record_or_refresh_
+        stock_exception` in stage 7d-iii (ROADMAP.md's 2026-08-29
+        "Correction to the v20 claim" entry) -- see that function's own
+        docstring for the full upsert reasoning (why the ON CONFLICT's
+        WHERE clause must repeat the partial index's predicate verbatim,
+        why a RESOLVED row never blocks a fresh one). This module MUST NOT
+        import that module directly: `sync_service.py` is shared with
+        Clinic, and importing anything under `products/retail` from here
+        would be a layering violation. So the collaborator is threaded
+        through the constructor instead, exactly like `local_ensure_
+        schema`/`local_freshness_store` above -- `None` by default, checked
+        explicitly here, and NEVER inferred from a caught exception
+        (ENGINEERING.md's rule against error sentinels that can also
+        arrive legitimately: a genuine schema fault would look identical
+        to "not wired" if this caught one instead of checking for None).
+        `None` in production only at the registry `SyncService`
+        construction site, which never reaches this method at all --
+        `inventory_movement` is not in `REGISTRY_SYNC_ENTITY_TYPES`.
 
         Called ONLY from the `inventory_movement` branch's `if cur.rowcount:`
         block, and only when the resulting balance is negative -- see that
         branch's own comment for why both conditions matter (a replayed
         apply must not re-stamp `detected_at_utc`; a healthy merge that
-        never goes negative must never record anything at all). Never
-        called from `create_sale` or any other local write site: a local
-        sale cannot drive its own balance negative (its own `qty > on_hand`
-        refusal still stands), so the only route below zero is a merge
-        applied here, and writing from two places would invent a second
-        source for one fact.
+        never goes negative must never record anything at all).
 
-        `INSERT ... ON CONFLICT(company_id, product_id, branch_id) WHERE
-        resolved_at_utc IS NULL DO UPDATE SET observed_quantity_on_hand=...,
-        detected_at_utc=...` -- the WHERE clause repeats `idx_stock_
-        exceptions_open`'s own partial-index predicate VERBATIM, which
-        SQLite's UPSERT syntax requires to match a partial index at all
-        (omitting it does not fall back to matching the index; it raises
-        `OperationalError` on every apply -- this project has been bitten by
-        exactly that mismatch before, see the migration function's own
-        docstring). A row that already exists and is OPEN is refreshed in
-        place -- same id, updated quantity, updated detected_at_utc -- so a
-        product that keeps merging further negative on every sync tick
-        accumulates ONE row, not one per tick. A row that exists but is
-        RESOLVED does not satisfy the partial index's predicate, so it is
-        invisible to this ON CONFLICT and a fresh open row is inserted
-        instead -- exactly the behaviour Decision 4 requires: a past
-        resolution must never block a new oversell on the same product from
-        being recorded.
-
-        Never resolves, never deletes, never called for any reason other
-        than a negative balance just observed at this apply site -- Decision
-        4 is explicit that an exception is resolved by a human (stage 7d-ii,
-        gated CAP_STOCK_ADJUST) or stays open, and nothing in this stage
-        may auto-resolve one when the balance later recovers.
+        CORRECTION (stage 7d-iii), recorded here rather than silently
+        rewritten -- matching this project's own convention (see
+        schema.py's "CORRECTION:" note on the v18 migration comment for
+        the precedent). This docstring used to say, at this exact spot,
+        that this apply branch was the ONLY writer, because "a local sale
+        cannot drive its own balance negative -- its own `qty > on_hand`
+        refusal still stands," and that writing from two places would
+        invent a second source for one fact. That stopped being true the
+        moment stage 7d-iii made `create_sale`'s refusal CONDITIONAL on the
+        device being behind on sync (docs/launch-readiness/
+        phase7-offline-ux.md "Correction to Decision 1"): a local sale
+        allowed past a stale-LOW figure is now a SECOND genuine route to a
+        negative balance, not a duplicate source for the same one -- the
+        cross-device merge this branch handles and a same-device oversold
+        sale are two different events that can each independently put a
+        balance below zero. `create_sale` now records its own case through
+        the exact same `record_or_refresh_stock_exception` function this
+        method forwards to, which is why "two places, one shared
+        implementation" was the right fix rather than "two places, two
+        copies of the SQL."
         """
-        conn.execute(
-            "INSERT INTO stock_exceptions (id, company_id, product_id, branch_id, "
-            "observed_quantity_on_hand, detected_at_utc, resolved_at_utc) "
-            "VALUES (?,?,?,?,?,?,NULL) "
-            "ON CONFLICT(company_id, product_id, branch_id) WHERE resolved_at_utc IS NULL "
-            "DO UPDATE SET observed_quantity_on_hand=excluded.observed_quantity_on_hand, "
-            "detected_at_utc=excluded.detected_at_utc",
-            (str(uuid.uuid4()), local_company_id, product_id, branch_id,
-             observed_quantity_on_hand, datetime.now(timezone.utc).isoformat()),
+        if self._stock_exception_recorder is None:
+            return
+        self._stock_exception_recorder(
+            conn, company_id=local_company_id, product_id=product_id,
+            branch_id=branch_id, observed_quantity_on_hand=observed_quantity_on_hand,
         )
 
     @staticmethod

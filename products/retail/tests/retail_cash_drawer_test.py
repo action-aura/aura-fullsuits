@@ -50,10 +50,18 @@ def teardown_module(module):
 # Frozen literal -- captured live from the real app, identical to
 # retail_reorder_hook_regression_test.py's own SALE_RESPONSE_KEYS. Cash-
 # drawer linkage NEVER adds a key to the checkout response, same contract.
+#
+# `oversold_past_recorded_stock` added launch-readiness Phase 7 stage
+# 7d-iii (docs/launch-readiness/phase7-offline-ux.md "Correction to
+# Decision 1") -- a REAL, deliberate checkout-response contract change
+# (create_sale now always reports whether a sale was allowed past its
+# recorded on-hand figure), not a reason to "fix" this test by editing it
+# away. Cash-drawer state still never affects its value -- the equality
+# loop below covers it like every other key.
 SALE_RESPONSE_KEYS = [
     'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
-    'discount_amount', 'id', 'idempotency_key', 'lines', 'sale_number',
-    'subtotal', 'tax_amount', 'total', 'warning',
+    'discount_amount', 'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
+    'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
 ]
 RETURN_RESPONSE_KEYS = [
     'calculation_version', 'id', 'idempotency_key', 'items', 'refund_amount',

@@ -60,10 +60,16 @@ def teardown_module(module):
 # it fires, so this list is IDENTICAL to that file's own SALE_RESPONSE_KEYS
 # on purpose. If this ever needs to change, that is a real, deliberate
 # checkout-response contract change -- not a reason to "fix" this test.
+#
+# `oversold_past_recorded_stock` added launch-readiness Phase 7 stage
+# 7d-iii (docs/launch-readiness/phase7-offline-ux.md "Correction to
+# Decision 1") -- exactly the "real, deliberate checkout-response contract
+# change" this comment already anticipated. Reorder automation still never
+# adds a key; that claim is unaffected.
 SALE_RESPONSE_KEYS = [
     'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
-    'discount_amount', 'id', 'idempotency_key', 'lines', 'sale_number',
-    'subtotal', 'tax_amount', 'total', 'warning',
+    'discount_amount', 'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
+    'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
 ]
 
 

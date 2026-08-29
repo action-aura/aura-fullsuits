@@ -4572,6 +4572,92 @@ def record_sync_freshness(conn, half: str, when: str) -> None:
     conn.execute(f'UPDATE sync_freshness SET {column} = ? WHERE id = 1', (when,))
 
 
+def record_or_refresh_stock_exception(conn, *, company_id, product_id, branch_id,
+                                       observed_quantity_on_hand) -> None:
+    """Writes or refreshes ONE visible `stock_exceptions` row for a
+    (company, product, branch) balance a caller just found negative --
+    launch-readiness Phase 7, `stock_exceptions` (schema v20, stage 7d-i;
+    docs/launch-readiness/phase7-offline-ux.md "Decision 4"). THE canonical
+    implementation of this upsert -- do not add a second copy anywhere. See
+    `_migrate_add_stock_exceptions` above for the full table-shape
+    reasoning (why `idx_stock_exceptions_open` is PARTIAL, why the ON
+    CONFLICT below must repeat its WHERE clause verbatim).
+
+    TWO callers, as of launch-readiness Phase 7 stage 7d-iii (ROADMAP.md's
+    2026-08-29 "Correction to the v20 claim" entry):
+
+      * commercial_runtime/sync/sync_service.py's `_apply_event`
+        `inventory_movement` branch, when a MERGED balance lands negative
+        -- the original 7d-i writer, reached through the OPTIONAL
+        `stock_exception_recorder` collaborator threaded through
+        `SyncService.__init__` (mirrors `SyncFreshnessStore`: `None` by
+        default, checked explicitly, wired at the retail/Android
+        construction sites in products/retail/backend/app.py). Reached
+        this way, rather than a direct import, because `sync_service.py`
+        is shared with Clinic and importing anything under
+        `products/retail` from `commercial_runtime` would be a layering
+        violation -- absence of the collaborator must never be inferred
+        from a caught exception, the identical rule `SyncFreshnessStore`'s
+        own docstring states for the identical reason.
+      * `create_sale` (products/retail/backend/api/retail_api.py), when a
+        LOCAL sale is allowed past a stale-LOW on-hand figure -- stage
+        7d-iii's relaxation of the `qty > on_hand` refusal, gated on
+        `_is_device_behind_on_sync()`. Called directly; retail_api.py is
+        already this module's own product, so there is no layering
+        concern for this caller the way there is for sync_service.py.
+
+    7d-i's original writer docstring said a local sale could never drive
+    its own balance negative, "because its own `qty > on_hand` refusal
+    still stands" -- true before 7d-iii, false after: that refusal is now
+    conditional on the device being behind on sync, so a local sale is a
+    SECOND genuine route to a negative balance, not just the cross-device
+    merge 7d-i was written for. This function existing as ONE shared
+    implementation, rather than two copies of the same upsert, is exactly
+    why that change needed no change to the SQL itself, only a second
+    caller -- see sync_service.py's `_record_or_refresh_stock_exception`
+    for that correction recorded at its own original location.
+
+    `INSERT ... ON CONFLICT(company_id, product_id, branch_id) WHERE
+    resolved_at_utc IS NULL DO UPDATE SET observed_quantity_on_hand=...,
+    detected_at_utc=...` -- the WHERE clause repeats `idx_stock_exceptions_
+    open`'s own partial-index predicate VERBATIM, which SQLite's UPSERT
+    syntax requires to match a partial index at all (omitting it does not
+    fall back to matching the index; it raises `OperationalError` on every
+    call -- this project has been bitten by exactly that mismatch before,
+    see `_migrate_add_stock_exceptions`'s own docstring). An OPEN row for
+    the same key is refreshed in place (same id, updated quantity, updated
+    `detected_at_utc`) so a product that keeps going further negative --
+    on repeated merges, or repeated behind-sales -- accumulates ONE row,
+    not one per call. A RESOLVED row does not satisfy the partial index's
+    predicate, so it is invisible to this ON CONFLICT and a fresh open row
+    is inserted instead -- a past resolution must never block a new
+    oversell on the same product from being recorded.
+
+    Never resolves, never deletes, and takes no position on WHETHER to
+    record -- that decision (is the balance actually negative right now?
+    has this exact write already been accounted for?) belongs entirely to
+    the caller, which is why this function has no guard of its own beyond
+    the upsert's own idempotency. Both current callers only call this
+    AFTER their own balance write, re-reading the resulting balance rather
+    than deriving it, and only when that reread is negative -- landing
+    exactly on zero is not an oversell (see each caller's own comment).
+    Does not commit -- matches `record_sync_freshness`/`record_offline_
+    override` immediately above: the caller owns the transaction boundary
+    on the connection it opened.
+    """
+    import uuid as _uuid
+    conn.execute(
+        "INSERT INTO stock_exceptions (id, company_id, product_id, branch_id, "
+        "observed_quantity_on_hand, detected_at_utc, resolved_at_utc) "
+        "VALUES (?,?,?,?,?,?,NULL) "
+        "ON CONFLICT(company_id, product_id, branch_id) WHERE resolved_at_utc IS NULL "
+        "DO UPDATE SET observed_quantity_on_hand=excluded.observed_quantity_on_hand, "
+        "detected_at_utc=excluded.detected_at_utc",
+        (str(_uuid.uuid4()), company_id, product_id, branch_id,
+         observed_quantity_on_hand, datetime.now(timezone.utc).isoformat()),
+    )
+
+
 def _v16_rebind_orphaned_open_drawers(conn):
     """Boot-time, NOT version-gated: bind any OPEN drawer still carrying a
     NULL `terminal_id` to this device, the moment this device is able to name

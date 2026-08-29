@@ -61,11 +61,18 @@ def teardown_module(module):
 # ─── Frozen literals -- captured live from the real app before any
 # e-invoicing code existed. Do not "fix" a failing assertion by editing these
 # without confirming the underlying behavior change was deliberate. ─────────
+#
+# `oversold_past_recorded_stock` added launch-readiness Phase 7 stage
+# 7d-iii (docs/launch-readiness/phase7-offline-ux.md "Correction to
+# Decision 1") -- confirmed deliberate: create_sale now always reports
+# whether a sale was allowed past its recorded on-hand figure. E-invoicing
+# still only conditionally adds its own 'einvoice' key; that claim is
+# unaffected.
 
 SALE_RESPONSE_KEYS = [
     'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
-    'discount_amount', 'id', 'idempotency_key', 'lines', 'sale_number',
-    'subtotal', 'tax_amount', 'total', 'warning',
+    'discount_amount', 'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
+    'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
 ]
 RETURN_RESPONSE_KEYS = [
     'calculation_version', 'id', 'idempotency_key', 'items', 'refund_amount',

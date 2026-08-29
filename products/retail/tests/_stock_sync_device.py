@@ -131,22 +131,30 @@ def main() -> None:
     from commercial_runtime.security.passwords import hash_password
     from commercial_runtime.sync.sync_service import SyncService, local_company_id_from_registry
     from core.retail import stock_reconciliation
-    from database.schema import get_retail_conn
+    from database.schema import get_retail_conn, record_or_refresh_stock_exception
 
     from _stock_sync_harness import FileRelay
 
     relay = FileRelay(relay_db_path)
-    # Mirrors app.py's OWN production wiring exactly (both local_company_id_
-    # provider and local_ensure_schema) -- see that file's own SyncService
-    # construction comment. Using anything narrower here would let this
-    # harness silently dodge the exact lazy-schema bug that comment
-    # describes rather than prove this device survives it like a real one
-    # does.
+    # Mirrors app.py's OWN production wiring exactly (local_company_id_
+    # provider, local_ensure_schema, AND -- launch-readiness Phase 7 stage
+    # 7d-i, extended to a second caller in 7d-iii -- stock_exception_
+    # recorder) -- see that file's own SyncService construction comment.
+    # Using anything narrower here would let this harness silently dodge
+    # either the lazy-schema bug that comment describes OR the "the
+    # resolution movement crosses devices" proof this file's own
+    # test_a_resolution_movement_reaches_the_other_device (in
+    # retail_oversell_exception_test.py) depends on this device actually
+    # recording an exception via `open_exception_id` below -- a bare
+    # SyncService with no `stock_exception_recorder` silently records
+    # nothing, by design (see `_record_or_refresh_stock_exception`'s own
+    # docstring in sync_service.py).
     service = SyncService(
         client_factory=lambda: relay,
         get_conn=get_retail_conn,
         local_company_id_provider=local_company_id_from_registry,
         local_ensure_schema=_ensure_credit_schema,
+        stock_exception_recorder=record_or_refresh_stock_exception,
     )
 
     API = "/api/sub/retail"

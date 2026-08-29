@@ -244,10 +244,15 @@ def test_sale_response_is_unaffected_by_email_queueing(client, monkeypatch):
     pid = _make_product(client, reorder_level=5, initial_stock=6)
     data = _sell(client, pid, 2)
 
+    # 'oversold_past_recorded_stock' added launch-readiness Phase 7 stage
+    # 7d-iii (docs/launch-readiness/phase7-offline-ux.md "Correction to
+    # Decision 1") -- a real, deliberate checkout-response contract change,
+    # matching every other frozen SALE_RESPONSE_KEYS literal in this suite
+    # (see retail_cash_drawer_test.py's own comment on its copy).
     assert sorted(data.keys()) == sorted([
         'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
-        'discount_amount', 'id', 'idempotency_key', 'lines', 'sale_number',
-        'subtotal', 'tax_amount', 'total', 'warning',
+        'discount_amount', 'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
+        'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
     ])
 
 

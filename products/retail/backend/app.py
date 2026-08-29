@@ -137,6 +137,7 @@ from database.schema import (
     load_sync_freshness,
     record_sync_freshness,
     record_offline_override,
+    record_or_refresh_stock_exception,
     rebind_company_id_after_activation,
 )
 # Launch-readiness Phase 5 prerequisite #1 (registry v4) -- the identity-side
@@ -546,11 +547,24 @@ if _SYNC_RELAY_URL_IS_USABLE and LICENSING_PLATFORM != 'ANDROID':
     # third column, wired the same way for the same reason -- see
     # SyncFreshnessStore's own docstring on why this rides the existing
     # collaborator instead of a second one.
+    #
+    # `record_or_refresh_stock_exception` (schema v20, stage 7d-i; extended
+    # to a SECOND caller in stage 7d-iii): SyncService's own
+    # `stock_exception_recorder` hook -- see that constructor parameter's
+    # docstring for the full reasoning. Same shape of wiring as `local_
+    # ensure_schema` above (a bare optional callable, not a NamedTuple):
+    # `stock_exceptions` (schema v20) is a retail.db table, exactly like
+    # `sync_freshness` above, so it is passed here and deliberately NOT to
+    # `_registry_sync_service` below, whose database has no such table --
+    # and whose apply loop never reaches the branch that would call it
+    # anyway, since `inventory_movement` is not in
+    # `REGISTRY_SYNC_ENTITY_TYPES`.
     _retail_sync_freshness_store = SyncFreshnessStore(
         load=load_sync_freshness, record=record_sync_freshness, record_override=record_offline_override)
     _sync_service = SyncService(_build_sync_client, _sync_get_conn, local_company_id_from_registry,
                                 local_ensure_schema=_ensure_credit_schema,
-                                local_freshness_store=_retail_sync_freshness_store)
+                                local_freshness_store=_retail_sync_freshness_store,
+                                stock_exception_recorder=record_or_refresh_stock_exception)
     register_active_service(_sync_service)
 
     # Phase 5 wave B2, Decision 6 (docs/launch-readiness/
@@ -642,11 +656,16 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
     # `sync_freshness` table (schema v18) exactly like the Windows instance
     # does, and gets the same collaborator -- including `record_offline_
     # override` (schema v19, stage 7c-ii; see the Windows branch above).
+    # stock_exception_recorder: same reasoning as the Windows branch above
+    # -- this instance's `_sync_get_conn` is retail.db too, so it carries
+    # `stock_exceptions` (schema v20) exactly like the Windows instance
+    # does, and gets the same collaborator.
     _android_sync_freshness_store = SyncFreshnessStore(
         load=load_sync_freshness, record=record_sync_freshness, record_override=record_offline_override)
     _android_sync_service = SyncService(None, _sync_get_conn, local_company_id_from_registry,
                                         local_ensure_schema=_ensure_credit_schema,
-                                        local_freshness_store=_android_sync_freshness_store)  # client_factory never used -- see comment above
+                                        local_freshness_store=_android_sync_freshness_store,
+                                        stock_exception_recorder=record_or_refresh_stock_exception)  # client_factory never used -- see comment above
     app.register_blueprint(make_sync_internal_blueprint(
         sync_service=_android_sync_service,
         get_conn=_sync_get_conn,
