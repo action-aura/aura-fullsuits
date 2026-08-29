@@ -248,6 +248,14 @@ EXPECTED_READ_CAPABILITIES = {
     # currently-open oversells, the same disclosure tier as every other
     # CAP_REPORTS-only read in this table.
     'list_stock_exceptions': CAP_REPORTS,
+    # Phase 6 stage 6a-ii's discarded-catalogue-edit queue, launch-readiness
+    # 2026-08-29 ("the two exception queues both need ONE screen, not two").
+    # Same disclosure tier as list_stock_exceptions immediately above -- a
+    # small, operational set of recently-discarded catalogue edits, not
+    # inventory_reconciliation's unpaginated whole-catalogue dump -- and
+    # deliberately READ-ONLY: see the route's own docstring for why no
+    # resolve/acknowledge action exists for this table.
+    'list_sync_conflicts': CAP_REPORTS,
 
     # ── The drawer's own numbers: retail.cash.close, NOT retail.reports ──────
     # An X report is the full money picture of one till shift: cash sales,

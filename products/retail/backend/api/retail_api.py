@@ -7759,6 +7759,146 @@ def resolve_stock_exception(exception_id):
     return jsonify({'status': 'success', 'new_stock': new_qty, 'branch_id': bid, 'movement_uid': movement_uid})
 
 
+# ── Sync conflicts (discarded catalogue edits) ──────────────────────────────
+#
+# Launch-readiness Phase 6 stage 6a-ii (docs/launch-readiness/
+# phase6-catalogue-correctness.md Task B; database/schema.py's
+# `_migrate_add_sync_conflicts_and_drop_quantity_reserved`, retail v17) writes
+# a `sync_conflicts` row every time an incoming catalogue write is discarded
+# as stale, instead of the silent drop design §6 explicitly forbids. Until
+# now nothing could read it back at all -- ROADMAP.md's 2026-08-29 "the two
+# exception queues both need ONE screen, not two" entry: grep found zero
+# references in this file and zero in the frontend -- so a rejection that
+# was deliberately made visible in the database was invisible through every
+# interface that exists. This route closes that half.
+#
+# Gated CAP_REPORTS with no company-admin requirement, mirroring
+# list_stock_exceptions above verbatim: same read-only disclosure tier (a
+# small, operational set of recently-discarded catalogue edits, not
+# inventory_reconciliation's unpaginated whole-catalogue dump), same
+# reasoning for why owner-only would be the wrong axis to gate on.
+
+# Bookkeeping keys every catalogue payload carries that no operator ever
+# typed -- see list_sync_conflicts' own docstring below for why the payload
+# is safe to INSPECT (never a credential) and never safe to RETURN verbatim.
+_SYNC_CONFLICT_PAYLOAD_METADATA_KEYS = frozenset({
+    'id', 'company_id', 'row_version', 'updated_at_utc', 'deleted_at_utc',
+})
+
+
+def _sync_conflict_changed_fields(payload):
+    """Which FIELD NAMES a discarded catalogue edit would have changed --
+    never the values (list_sync_conflicts never returns those). Every
+    catalogue write site that can lose a reject-stale race (update_category/
+    update_product/update_customer/update_supplier/accept_reorder_request
+    and their delete siblings; see each one's own `_queue_sync_event` call)
+    already stamps its own outbox payload with `_changed_fields`, a list of
+    column names -- so this reads THAT list back rather than computing a
+    second one that could disagree with it.
+
+    A `create` event's payload (create_product et al.) carries no such key
+    -- a create overwrites the row wholesale, so every business key the
+    payload sets IS what "changed". Falls back to the payload's own keys,
+    minus the bookkeeping ones above, for that case and for any payload old
+    enough on the wire to predate `_changed_fields` entirely."""
+    changed = payload.get('_changed_fields')
+    if isinstance(changed, list) and changed:
+        return sorted(str(f) for f in changed)
+    return sorted(
+        k for k in payload.keys()
+        if k not in _SYNC_CONFLICT_PAYLOAD_METADATA_KEYS and k != '_changed_fields'
+    )
+
+
+@retail_bp.route('/inventory/sync-conflicts', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
+def list_sync_conflicts():
+    """Every `sync_conflicts` row for this company, most recently detected
+    first -- the context a person needs to decide whether a rejected edit
+    still matters: which record, what kind of write was discarded, the
+    version comparison that caused the rejection, when, and which fields
+    the discarded edit would have changed.
+
+    NEVER `incoming_payload` RAW. That column is the whole discarded record
+    as JSON, written verbatim by `_record_sync_conflict`
+    (commercial_runtime/sync/sync_service.py) precisely because none of the
+    five catalogue types ever carries a credential -- but "safe to store" is
+    not "safe to render". It is arbitrary operator-entered data (a product
+    name, a customer address, a supplier's notes) from a DIFFERENT device,
+    which is exactly the trust boundary retail_pos_name_xss_test.js and
+    retail_customer_modal_xss_test.js exist to guard on this device's OWN
+    catalogue -- dumping a second device's unvalidated payload straight into
+    a page would reopen the identical hole one hop upstream. What is
+    actually useful to a human deciding whether to redo an edit is WHICH
+    FIELDS it touched, not the values -- so `_sync_conflict_changed_fields`
+    above reads the field NAMES back out of the payload (a fixed vocabulary
+    of column names no operator ever typed) and nothing else leaves this
+    function.
+
+    READ-ONLY, deliberately -- there is no resolve/acknowledge route for
+    this table and none should be added without deciding the point below on
+    purpose:
+
+    `sync_conflicts` carries no `resolved_at_utc` (or equivalent) column,
+    unlike `stock_exceptions` -- adding one would be a schema version for a
+    queue that does not need it. More fundamentally, there is no honest
+    "fix" action to offer. A `stock_exceptions` row names a real, unresolved
+    problem (a negative balance) that a human decision closes. A
+    `sync_conflicts` row names an edit that ALREADY LOST to a newer one --
+    the incoming `row_version` was not strictly greater than the local
+    row's, so the local value is, by this system's own conflict rule, the
+    more current one. There is nothing here to re-apply: replaying the
+    discarded payload over the value that legitimately won would be
+    reintroducing the stale write the reject-stale gate was built to
+    refuse. The operator's real option, if the discarded edit still
+    matters, is to make the edit again on a device that is caught up --
+    which is an ordinary catalogue write through the ordinary routes, not a
+    special action this route would need to expose.
+    """
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, entity_type, entity_id, event_type, local_row_version, "
+            "incoming_row_version, incoming_payload, detected_at_utc "
+            "FROM sync_conflicts WHERE company_id = ? ORDER BY detected_at_utc DESC",
+            (cid,),
+        ).fetchall()
+    except sqlite3.DatabaseError as exc:
+        current_app.logger.exception("list_sync_conflicts failed: %s", exc)
+        return jsonify({'status': 'error', 'message': 'Could not list sync conflicts.'}), 400
+    finally:
+        conn.close()
+
+    conflicts = []
+    for r in rows:
+        try:
+            payload = json.loads(r['incoming_payload']) or {}
+        except (TypeError, ValueError):
+            # A row whose payload somehow failed to parse still names a
+            # real conflict -- the entity/version/when facts below are
+            # known from their own columns, independent of the payload.
+            # Only the changed-fields summary degrades, to an empty list,
+            # rather than the whole row vanishing from the queue.
+            payload = {}
+        conflicts.append({
+            'id': r['id'],
+            'entity_type': r['entity_type'],
+            'entity_id': r['entity_id'],
+            'event_type': r['event_type'],
+            'local_row_version': r['local_row_version'],
+            'incoming_row_version': r['incoming_row_version'],
+            'detected_at_utc': r['detected_at_utc'],
+            'changed_fields': _sync_conflict_changed_fields(payload),
+        })
+    return jsonify({'status': 'success', 'data': {
+        'conflicts': conflicts,
+        'count': len(conflicts),
+    }})
+
+
 # ── Sync health ───────────────────────────────────────────────────────────────
 
 @retail_bp.route('/sync/health', methods=['GET'])

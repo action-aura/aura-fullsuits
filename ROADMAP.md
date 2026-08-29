@@ -929,3 +929,43 @@ Still worth fixing, for two reasons that are not "it leaks today":
 
 Priority accordingly: real, worth doing, not urgent. The write-side validation
 should mirror `create_purchase_order`'s, and `supplier_id` must stay optional.
+
+### Corrected 2026-08-29 — those "isolation probes" cannot be written, and should not be
+
+The retraction entry above ends by saying the two PO double-receive guards each
+want an isolation probe, "the way stage 7c-ii and 7d-iii ended up needing one".
+**That was wrong, and following it would have sent someone chasing a test that
+cannot exist.**
+
+The two guards are:
+1. an early `if po['status'] == 'received': return 409`;
+2. the closing `UPDATE ... WHERE status <> 'received'` and its rowcount check.
+
+Under `BEGIN IMMEDIATE`, request B only reads the PO after request A commits.
+At that point B sees `'received'` and guard 1 fires — and guard 2 would fire
+too, since the row it needs to flip is already flipped. **Each guard alone is
+genuinely sufficient for the only race the route can actually experience.** So
+a test that fails when exactly one is removed cannot be written, because
+removing one does not break anything.
+
+That is the crucial difference from the 7c-ii and 7d-iii cases. There, two
+conditions overlapped by accident and one was carrying the other, so a mutation
+passing green was hiding a guard nobody had verified. Here the second guard is
+deliberate, and the route's own docstring says so:
+
+    Belt and braces: even a future caller that somehow reaches this code
+    without the lock still cannot double-apply, because the row it needs to
+    flip is no longer there to flip.
+
+Its purpose is a caller that BYPASSES the lock — a future refactor, a new entry
+point — which is a scenario the current code cannot reach and therefore cannot
+be provoked by driving the route normally.
+
+**What IS worth testing, and is not written today:** that belt-and-braces
+property itself — drive the inner path in a way that skips the early check, and
+assert the conditional UPDATE still refuses. That pins the backstop's actual
+value rather than trying to prove a redundancy is not redundant.
+
+Recorded rather than built because it needs a way to reach the closing UPDATE
+without the early read, and inventing a test-only seam into a money path to
+prove a defensive guard is a trade worth making deliberately, not in passing.
