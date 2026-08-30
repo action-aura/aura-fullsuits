@@ -78,7 +78,14 @@ DB_PATH = os.path.join(_db_dir, 'registry.db')
 # helper writes unconditionally to `sync_apply_quarantine` on WHATEVER
 # connection it is called with. See registry_quarantine_schema.py and
 # docs/launch-readiness/phase5-waveb2-user-sync.md §Decision 4.
-REGISTRY_SCHEMA_VERSION = 6
+# v7: `users` gains ONE nullable column, `branch_scope_uid` -- ROADMAP.md's
+# 2026-08-30 "registry schema v7 CLAIMED for branch-scoped users" entry and
+# docs/launch-readiness/account-hierarchy-design.md §3.3/§6. NULL (every
+# existing row, on both products) means "every branch"; a non-NULL value is
+# a `branches.uid` a Retail account is scoped to. See
+# branch_scope_schema.py's own module docstring for the full "why nullable
+# with no default is what keeps Clinic byte-identical" reasoning.
+REGISTRY_SCHEMA_VERSION = 7
 
 
 def _migrate_registry_schema(conn):
@@ -112,19 +119,26 @@ def _migrate_registry_schema(conn):
 
     v6 (registry_quarantine_schema.py) has the identical "no ordering
     dependency, appended last anyway" shape as v5 -- one more brand-new
-    table (`sync_apply_quarantine`) nothing before it touches or reads."""
+    table (`sync_apply_quarantine`) nothing before it touches or reads.
+
+    v7 (branch_scope_schema.py) is a single `ALTER TABLE users ADD COLUMN`,
+    same shape as v3's own column additions -- appended last per the same
+    convention, and with no ordering dependency on v1-v6: it only ever adds
+    a column nothing before it reads or writes."""
     from commercial_runtime.identity.device_registry import apply_identity_device_schema
     from commercial_runtime.identity.verification_schema import apply_email_verification_schema
     from commercial_runtime.identity.account_schema import apply_account_schema
     from commercial_runtime.identity.company_rebind import _migrate_rebind_registry_company_id_to_owner_issued
     from commercial_runtime.identity.registry_sync_schema import apply_registry_sync_schema
     from commercial_runtime.identity.registry_quarantine_schema import apply_registry_quarantine_schema
+    from commercial_runtime.identity.branch_scope_schema import apply_branch_scope_schema
     apply_identity_device_schema(conn)
     apply_email_verification_schema(conn)
     apply_account_schema(conn)
     _migrate_rebind_registry_company_id_to_owner_issued(conn)
     apply_registry_sync_schema(conn)
     apply_registry_quarantine_schema(conn)
+    apply_branch_scope_schema(conn)
 
 
 def get_conn():

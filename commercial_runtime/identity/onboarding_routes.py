@@ -666,8 +666,18 @@ def get_employees():
         # column is a PBKDF2 digest of a four-digit secret, so a keyspace of
         # 10,000 is small enough that handing the hash to any client at all is
         # handing them the PIN; only the boolean is anyone's business.
+        # `branch_scope_uid` (registry v7) added to the SELECT so the
+        # employees screen can render each row's current scope without a
+        # second round trip -- an opaque `branches.uid` string or NULL
+        # ("every branch"), read back verbatim; this route does not resolve
+        # it to a branch NAME, because `branches` lives in retail.db and
+        # this identity-layer route must stay product-agnostic (see
+        # branch_scope_schema.py's module docstring). The frontend already
+        # fetches /api/sub/retail/branches for the scope picker and does
+        # the uid-to-name lookup client-side.
         emps = conn.execute(
             "SELECT id, employee_id, email, role, clinic_role, status, created_at, "
+            "       branch_scope_uid, "
             "       (pin_hash IS NOT NULL) AS has_pin "
             "FROM users WHERE company_id=?",
             (session['company_id'],)
@@ -871,6 +881,104 @@ def update_status(user_id):
             (str(uuid.uuid4()), session['company_id'], session['mt_user_id'], 'UPDATE_STATUS', 'USER', str(user_id), json.dumps({'status': status})))
         conn.commit()
         return jsonify({'success': True})
+    finally:
+        conn.close()
+
+
+@onboarding_bp.route('/api/admin/employees/<string:user_id>/branch-scope', methods=['PUT'])
+@mt_login_required
+def update_branch_scope(user_id):
+    """D5 (launch-readiness account-hierarchy design §3.3/§4.2) -- sets or
+    clears an employee's `branch_scope_uid` (registry v7). NULL (a missing
+    key, JSON `null`, or a blank string in the request body) means "every
+    branch"; anything else is a `branches.uid` string, stored VERBATIM and
+    OPAQUELY.
+
+    THIS ROUTE NEVER VALIDATES THE UID AGAINST A `branches` ROW, on
+    purpose. `branches` lives in retail.db, a different product's database
+    from this one (registry.db) -- `commercial_runtime.identity` is shared
+    by Retail AND Clinic and must stay product-agnostic, so it cannot import
+    a retail-only table without breaking that layering. See
+    branch_scope_schema.py's own module docstring for the full reasoning.
+    What keeps a LEGITIMATE request honest is the retail-facing caller: the
+    employees screen (products/retail/frontend/employees.js) only ever
+    offers this company's real branches in its picker, so nothing an owner
+    can actually click can name a uid this route would have refused anyway.
+    A hand-made request naming a nonexistent uid is stored as given and
+    simply matches no branch anywhere it is later compared -- inert, not
+    dangerous, since D7's data-plane enforcement (retail_api.py) resolves a
+    scope back to a LOCAL branch id and treats "resolves to nothing" as "no
+    branch", never as "every branch".
+
+    ADMIN ONLY, and refuses the admin's OWN row -- the owner is never
+    scoped, structurally (design §3.3). Guarded by
+    `normalize_role(row['role']) == ROLE_ADMIN`, the identical check
+    `update_status`/`update_role` already use for their own owner bars,
+    rather than an id comparison against the caller's session -- there is
+    exactly one admin per install, so the two are equivalent in practice,
+    but the role check is what every sibling route in this file reads for
+    the same purpose, and it also refuses a request naming the owner's row
+    by a stale/guessed id rather than the caller's own session id.
+
+    Bumps `session_version` (so a session already open on this account
+    re-reads its scope on its very next request -- design §4.1 G6: "the
+    delegated gate resolves the creator's role, scope... at request time...
+    never from the session cookie") and `row_version` +
+    `_queue_user_sync_event`, inline, in the SAME transaction, exactly like
+    every sibling write in this file (`update_status`, `update_role`,
+    `update_perms`, `update_clinic_role`).
+    """
+    if session.get('mt_role') != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+
+    data = request.json or {}
+    raw = data.get('branch_scope_uid')
+    # Any non-empty string is stored as-is (trimmed); a missing key, JSON
+    # `null`, an empty string, or whitespace-only all clear the scope -- the
+    # route's own "null clears" contract, generalised to every shape a
+    # hand-made request could plausibly send instead of a strict `is None`
+    # check that a bare `''` would silently slip past.
+    scope_uid = raw.strip() if isinstance(raw, str) and raw.strip() else None
+
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, role FROM users WHERE id=? AND company_id=?",
+            (user_id, session['company_id']),
+        ).fetchone()
+        if not row:
+            return jsonify({'error': 'User not found.'}), 404
+
+        # The owner is never scoped -- structurally, not merely by
+        # convention. 409, matching update_role's own "conflict with a
+        # standing invariant" status for the identical owner-row refusal,
+        # rather than 400 (this is not malformed input).
+        if _accounts.normalize_role(row['role']) == _accounts.ROLE_ADMIN:
+            return jsonify({'error': 'The owner account is never scoped to a branch.'}), 409
+
+        conn.execute(
+            "UPDATE users SET branch_scope_uid=?, session_version=session_version+1, "
+            "row_version=COALESCE(row_version, 1)+1, updated_at_utc=? "
+            "WHERE id=? AND company_id=?",
+            (scope_uid, _accounts.now_utc_iso(), user_id, session['company_id']),
+        )
+        # Phase 5 wave B2 stage 2b's pattern, extended to branch_scope_uid
+        # (registry v7): a scope change must reach every other till, or a
+        # peer holding this user's OLD (or no) scope keeps enforcing it --
+        # `session_version` above already forces re-login there; without
+        # this queue call the account's stale branch_scope_uid would still
+        # be what a second device's own copy of the row says.
+        _accounts._queue_user_sync_event(conn, user_id, 'update')
+        try:
+            conn.execute(
+                "INSERT INTO audit_logs (id, company_id, user_id, action, entity_type, entity_id, new_value_json) VALUES (?,?,?,?,?,?,?)",
+                (str(uuid.uuid4()), session['company_id'], session['mt_user_id'],
+                 'UPDATE_BRANCH_SCOPE', 'USER', user_id, json.dumps({'branch_scope_uid': scope_uid})),
+            )
+        except Exception:
+            pass
+        conn.commit()
+        return jsonify({'success': True, 'branch_scope_uid': scope_uid})
     finally:
         conn.close()
 

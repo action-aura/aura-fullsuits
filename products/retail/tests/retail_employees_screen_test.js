@@ -82,7 +82,17 @@ function load(opts) {
   const overlays = [];
   const content = makeElementStub();
 
-  const respond = (url) => ({ success: true, employees: options.employees || [] });
+  // URL-aware: _load() now ALSO fetches /api/sub/retail/branches (launch-
+  // readiness account-hierarchy design §3.3/§4.2 D9, the branch-scope
+  // picker) alongside the employee list -- a generic responder would have
+  // handed that call `{employees: [...]}` too, silently masking the
+  // `.data` shape the branch fetch actually expects.
+  const respond = (url) => {
+    if (String(url).includes('/api/sub/retail/branches')) {
+      return { status: 'success', data: options.branches || [] };
+    }
+    return { success: true, employees: options.employees || [] };
+  };
 
   const RetailSystemStub = {
     _injectStyles() {},
@@ -191,8 +201,13 @@ async function testOwnerSeesTheTableAndItLoads() {
   const { screen, calls, content } = load({ role: 'admin', employees: [CASHIER_ROW] });
   await screen.render(content);
   assert.ok(content.innerHTML.includes('<table'), 'the owner was not shown the table');
-  assert.deepStrictEqual(calls, [['GET', '/api/admin/employees']]);
-  console.log('PASS: the owner gets the table and exactly one list call');
+  // _load() now fetches the branch list FIRST (for the scope picker/badge --
+  // design §3.3/§4.2 D9), then the employee list -- two calls, not one.
+  assert.deepStrictEqual(calls, [
+    ['GET', '/api/sub/retail/branches'],
+    ['GET', '/api/admin/employees'],
+  ]);
+  console.log('PASS: the owner gets the table and both list calls');
 }
 
 // ── 2. The owner row offers no role or status control ────────────────────────

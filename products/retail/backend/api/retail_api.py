@@ -21,6 +21,11 @@ from flask import Blueprint, request, jsonify, session, current_app, Response, s
 from commercial_runtime.identity.mt_auth import (
     mt_login_required, mt_require_subsystem, mt_require_capability, session_has_capability,
     CAPABILITY_DENIED_MESSAGE,
+    # Launch-readiness account-hierarchy design §3.3/§4.2 D6/D7 -- the
+    # branch-scope read helper and its fail-closed lookup error. See
+    # _resolve_working_branch (mutations) and _coerce_branch_id_for_scope
+    # (reads) below for where each is actually consumed.
+    session_branch_scope, BranchScopeLookupError,
 )
 from commercial_runtime.identity.user_accounts import (
     CAP_SELL, CAP_REFUND, CAP_DISCOUNT, CAP_STOCK_ADJUST, CAP_REPORTS,
@@ -780,13 +785,39 @@ def _resolve_working_branch(conn, cid, explicit_branch_id=None):
     """
     if explicit_branch_id not in (None, ''):
         row = conn.execute(
-            "SELECT id FROM branches WHERE id=? AND company_id=?",
+            "SELECT id, uid FROM branches WHERE id=? AND company_id=?",
             (explicit_branch_id, cid),
         ).fetchone()
         if not row:
             return None, (jsonify({
                 'status': 'error', 'message': f'Unknown branch_id: {explicit_branch_id}',
             }), 400)
+        # Launch-readiness account-hierarchy design §3.3/§4.2 D7 -- a scoped
+        # caller's MUTATIONS are refused for a foreign branch_id (reads are
+        # COERCED instead; see _coerce_branch_id_for_scope below, used at
+        # the report routes). This is the one convergence point every
+        # branch-dimensioned WRITE in this file already resolves its branch
+        # through (see the module-level call sites), so the refusal lives
+        # here rather than being scattered across nine call sites.
+        #
+        # Fail CLOSED on a registry read failure, matching
+        # `session_branch_scope()`'s own posture (it raises rather than
+        # defaulting to None -- see that function's docstring for why None
+        # would be a fail-OPEN default here, not a safe one): a caller
+        # whose scope cannot even be determined must not be allowed to
+        # write to an explicitly-named branch on the strength of "well, it
+        # was at least a real branch of this company".
+        try:
+            scope_uid = session_branch_scope()
+        except BranchScopeLookupError:
+            return None, (jsonify({
+                'status': 'error',
+                'message': 'Could not verify your branch access. Try again.',
+            }), 403)
+        if scope_uid is not None and row['uid'] != scope_uid:
+            return None, (jsonify({
+                'status': 'error', 'message': 'You may only write to your own branch.',
+            }), 403)
         return row['id'], None
 
     pinned_uid = _onboarding_get_device_branch_uid()
@@ -801,6 +832,54 @@ def _resolve_working_branch(conn, cid, explicit_branch_id=None):
                f"this device's pinned branch_uid={pinned_uid!r} did not resolve to a local "
                f"branch; filed under this device's default branch id={bid} instead.")
     return bid, None
+
+
+def _coerce_branch_id_for_scope(conn, cid, raw_branch_id):
+    """Server-side READ coercion for a scoped caller's `?branch_id=` --
+    launch-readiness account-hierarchy design §3.3/§4.2 D7's other half
+    (`_resolve_working_branch` above is the MUTATION half). Used by the
+    reports/metrics routes that accept an optional `?branch_id=` filter
+    (dashboard_stats, sales-trend, top-products, payment-methods,
+    by-employee, summary).
+
+    A scoped caller (`session_branch_scope()` returns a non-None
+    `branch_scope_uid`) gets THEIR OWN branch back, REGARDLESS of what --
+    if anything -- the query string named. Per design §3.3: "a scoped user
+    asking for `?branch_id=` someone else's branch gets their own, not an
+    error -- they must not be able to probe" which branches exist by
+    fishing for a 400/403 on each guess. An unscoped caller (`None` -- the
+    owner, or a manager the owner never scoped) is untouched entirely:
+    `raw_branch_id` passes straight through exactly as every report route
+    already handled it, byte for byte, before this wave existed.
+
+    Returns `(branch_id_to_use, error_response)`, matching
+    `_resolve_working_branch`'s own contract -- `error_response` is `None`
+    on success; callers `return` it directly.
+
+    FAIL CLOSED on a registry read failure, for the identical reason
+    `_resolve_working_branch`'s own explicit-id refusal does:
+    `session_branch_scope()` raises rather than defaulting to `None`
+    specifically so this can never fall through to "treat as unscoped" on
+    an error (see that function's own docstring).
+    """
+    try:
+        scope_uid = session_branch_scope()
+    except BranchScopeLookupError:
+        return None, (jsonify({
+            'status': 'error',
+            'message': 'Could not verify your branch access. Try again.',
+        }), 403)
+    if scope_uid is None:
+        return raw_branch_id, None
+    row = conn.execute(
+        "SELECT id FROM branches WHERE uid=? AND company_id=?", (scope_uid, cid),
+    ).fetchone()
+    # A scope that does not resolve to a LOCAL branch (not yet synced to
+    # this device, or a stale uid) must not silently fall back to "every
+    # branch" -- that would undo the entire point of coercion. -1 matches
+    # no real branch_id, so every report query below returns an honest,
+    # empty answer for this device rather than a wrong or overly broad one.
+    return (row['id'] if row else -1), None
 
 
 #: "the caller did not pass this argument", distinct from "the caller passed
@@ -1013,6 +1092,14 @@ def dashboard_stats():
     cid = _cid()
     branch_id = request.args.get('branch_id')
     conn = get_retail_conn()
+    # Launch-readiness account-hierarchy design §4.2 D7 -- a scoped
+    # caller's branch_id is COERCED server-side to their own branch,
+    # regardless of what the query string named; an unscoped caller (the
+    # owner, or a manager the owner never scoped) is untouched.
+    branch_id, _scope_err = _coerce_branch_id_for_scope(conn, cid, branch_id)
+    if _scope_err:
+        conn.close()
+        return _scope_err
 
     def q(sql, *params):
         return conn.execute(sql, params).fetchone()[0] or 0
@@ -6550,6 +6637,12 @@ def report_sales_trend():
     days      = int(request.args.get('days', 14))
     branch_id = request.args.get('branch_id')
     conn = get_retail_conn()
+    # D7 -- coerce a scoped caller's filter to their own branch; see
+    # _coerce_branch_id_for_scope's own docstring.
+    branch_id, _scope_err = _coerce_branch_id_for_scope(conn, cid, branch_id)
+    if _scope_err:
+        conn.close()
+        return _scope_err
     rows = metrics.revenue_by_day(conn, cid, metrics.period_days(days, metrics.business_now(conn, cid, datetime.now())), branch_id)
     conn.close()
     return jsonify({'success': True,
@@ -6576,6 +6669,12 @@ def report_top_products():
     limit     = int(request.args.get('limit', 10))
     branch_id = request.args.get('branch_id')
     conn  = get_retail_conn()
+    # D7 -- coerce a scoped caller's filter to their own branch; see
+    # _coerce_branch_id_for_scope's own docstring.
+    branch_id, _scope_err = _coerce_branch_id_for_scope(conn, cid, branch_id)
+    if _scope_err:
+        conn.close()
+        return _scope_err
     rows = metrics.top_products(
         conn, cid,
         metrics.period_days(days, metrics.business_now(conn, cid, datetime.now())),
@@ -6599,6 +6698,12 @@ def report_payment_methods():
     days      = int(request.args.get('days', 30))
     branch_id = request.args.get('branch_id')
     conn = get_retail_conn()
+    # D7 -- coerce a scoped caller's filter to their own branch; see
+    # _coerce_branch_id_for_scope's own docstring.
+    branch_id, _scope_err = _coerce_branch_id_for_scope(conn, cid, branch_id)
+    if _scope_err:
+        conn.close()
+        return _scope_err
     rows = metrics.revenue_by_payment_method(
         conn, cid,
         metrics.period_days(days, metrics.business_now(conn, cid, datetime.now())),
@@ -6661,6 +6766,12 @@ def report_by_employee():
     branch_id = request.args.get('branch_id')
 
     conn = get_retail_conn()
+    # D7 -- coerce a scoped caller's filter to their own branch; see
+    # _coerce_branch_id_for_scope's own docstring.
+    branch_id, _scope_err = _coerce_branch_id_for_scope(conn, cid, branch_id)
+    if _scope_err:
+        conn.close()
+        return _scope_err
     # `datetime.now()` INLINE, exactly as every sibling above -- see this
     # section's header comment. metrics imports no `datetime` at all, so a
     # frozen-clock test freezes THIS name or it proves nothing. And it is
@@ -6729,6 +6840,18 @@ def report_summary():
     days      = int(request.args.get('days', 30))
     branch_id = request.args.get('branch_id')
     conn = get_retail_conn()
+    # D7 -- coerce a scoped caller's filter to their own branch; see
+    # _coerce_branch_id_for_scope's own docstring. Deliberately applied HERE,
+    # at the route, and not inside `_compute_report_summary` itself: that
+    # helper is also called by the emailed daily report and the WhatsApp
+    # summary sender (below), both of which run with no live Flask request
+    # (and therefore no session) at all -- `session_branch_scope()` would
+    # raise outside a request context, which those background senders must
+    # never see.
+    branch_id, _scope_err = _coerce_branch_id_for_scope(conn, cid, branch_id)
+    if _scope_err:
+        conn.close()
+        return _scope_err
     data = _compute_report_summary(conn, cid, days, branch_id)
     conn.close()
     return jsonify({'success': True, 'data': data})

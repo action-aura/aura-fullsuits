@@ -538,6 +538,91 @@ def session_has_capability(code: str) -> bool:
         return False
 
 
+#: The branch a scoped user is confined to -- launch-readiness account-
+#: hierarchy design §3.3/§4.2 D6. Placed here, next to `_read_capability`, on
+#: purpose: it is that function's sibling, not its replacement -- a
+#: capability answers "may this account do X at all"; scope answers "over
+#: which company DATA".
+
+
+class BranchScopeLookupError(RuntimeError):
+    """The registry could not be consulted, so this caller's branch scope is
+    UNKNOWN -- deliberately never swallowed into a return value the way
+    `session_has_capability` swallows `CapabilityLookupError` into `False`.
+
+    `False` is a safe default for a capability (an unknown grant reads as
+    "not granted"). `None` is NOT a safe default for a scope: `None` is the
+    single MOST PERMISSIVE value `session_branch_scope()` can return -- it
+    means "every branch". A caller that could not determine scope and
+    quietly defaulted to `None` would fail OPEN at exactly the moment it
+    needed to fail closed, handing a scoped account every branch's data the
+    instant the registry hiccups. So this raises, matching `_read_capability`
+    (which also raises rather than defaulting) -- NOT
+    `session_has_capability` (which is the right shape for a boolean, and
+    the wrong one here). Every caller (D7's data-plane enforcement in
+    `products/retail/backend/api/retail_api.py`) must treat this as "refuse
+    the request", never as "treat as unscoped".
+    """
+
+
+def session_branch_scope():
+    """The branch this session is confined to, or `None` for "every branch".
+
+    - The owner (`mt_role == 'admin'`) is NEVER scoped -- always `None`,
+      regardless of whatever (if anything) is stored on the admin's own row.
+      Structural, matching D5's refusal to let anyone set the admin's own
+      `branch_scope_uid` in the first place -- see design §3.3 ("branch_
+      scope_uid... admin is always effectively NULL") and onboarding_
+      routes.py's `update_branch_scope`.
+    - A demo session reads the same way as admin, matching every other
+      admin-shaped bypass already in this module
+      (`session_has_capability`, `mt_require_capability`) -- a walkthrough
+      must not appear to be the one account in the whole product that is
+      always scoped.
+    - Everyone else resolves to their stored `users.branch_scope_uid`, read
+      FRESH from the registry on every call -- never from the session
+      cookie, which carries no scope field and must not grow one (design §4.1
+      G6: "the delegated gate resolves the creator's role, scope... at
+      request time... never from the session cookie").
+
+    Raises `BranchScopeLookupError` on a registry read failure or a missing
+    user row. Does NOT catch and default to `None` -- see that class's
+    docstring for why `None` is never a safe fallback here. Callers must
+    handle the exception themselves and refuse (reads: coerce to a value
+    that matches nothing; mutations: refuse the write) rather than let a
+    lookup failure silently read as "unscoped".
+    """
+    if session.get('is_demo_mode'):
+        return None
+    if session.get('mt_role') == 'admin':
+        return None
+    user_id = session.get('mt_user_id')
+    if not user_id:
+        # No identified caller at all -- reachable only ahead of
+        # mt_login_required (a caller-ordering bug, not a registry fault).
+        # Still not `None`: an unidentified caller must never be handed
+        # "every branch" by default.
+        raise BranchScopeLookupError('session_branch_scope: no mt_user_id in session')
+    try:
+        conn = _get_registry_conn()
+        try:
+            row = conn.execute(
+                "SELECT branch_scope_uid FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception as exc:
+        raise BranchScopeLookupError(str(exc)) from exc
+    if row is None:
+        # The row this session names is gone (or the registry answered
+        # something malformed). `mt_login_required` will refuse this
+        # session's very next request once it re-reads the same missing
+        # row, but THIS function must not paper over the gap by reading it
+        # as "unscoped" in the meantime.
+        raise BranchScopeLookupError(f'session_branch_scope: no such user {user_id!r}')
+    return row['branch_scope_uid']
+
+
 def mt_require_capability(code):
     """Require one capability code (design §3) on this route.
 

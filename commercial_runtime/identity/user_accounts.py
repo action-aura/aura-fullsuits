@@ -94,10 +94,20 @@ from commercial_runtime.security.passwords import (
 #: them -- but this constant is the SECOND place, not just the first, that
 #: has to know the boundary, and it is named once here rather than repeated
 #: at every call site.
+#:
+#: `branch_scope_uid` (registry v7, launch-readiness account-hierarchy
+#: design §9 item 7) joins the allowlist deliberately: a scope set on one
+#: device (the owner's) must reach every other device, or a peer till would
+#: keep enforcing a stale (or no) scope for that account. The one
+#: non-response-byte difference this makes for Clinic, named rather than
+#: hidden: the `user` events Clinic already queues (and never drains -- the
+#: recorded ROADMAP posture) now carry one extra, always-NULL
+#: `branch_scope_uid` key in their JSON payloads. No Clinic behaviour,
+#: response, or test observes outbox payload bytes.
 _SYNCED_USER_COLUMNS = (
     "uid", "email", "employee_id", "role", "status", "require_password_change",
     "language", "password_hash", "pin_hash", "row_version", "updated_at_utc",
-    "session_version",
+    "session_version", "branch_scope_uid",
 )
 
 # ── Roles ────────────────────────────────────────────────────────────────────

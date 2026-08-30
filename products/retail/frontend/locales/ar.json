@@ -624,5 +624,10 @@
   "No branch is pinned to this device. Fine for a single-branch shop -- but on a chain, every sale here files under the company's first branch until you pin one.": "لم يتم تثبيت أي فرع لهذا الجهاز. هذا مناسب لمتجر ذي فرع واحد -- لكن في سلسلة متاجر، ستُسجَّل كل عملية بيع هنا تحت الفرع الأول للشركة إلى أن تقوم بتثبيت فرع.",
   "Unpinned": "غير مثبَّت",
   "Device branch saved.": "تم حفظ فرع الجهاز.",
-  "Could not save this device's branch.": "تعذّر حفظ فرع هذا الجهاز."
+  "Could not save this device's branch.": "تعذّر حفظ فرع هذا الجهاز.",
+  "Change Branch": "تغيير الفرع",
+  "Unknown branch": "فرع غير معروف",
+  "A branch-scoped account only sees and can act on that branch data. Choose All branches to give this account access across every branch, the same as the owner.": "الحساب المحدَّد بفرع يرى بيانات ذلك الفرع فقط ويمكنه العمل عليها. اختر كل الفروع لمنح هذا الحساب صلاحية الوصول عبر جميع الفروع، تمامًا مثل المالك.",
+  "Branch updated": "تم تحديث الفرع",
+  "Could not change the branch.": "تعذّر تغيير الفرع."
 }

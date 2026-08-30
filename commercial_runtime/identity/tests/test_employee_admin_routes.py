@@ -660,3 +660,159 @@ def test_session_endpoint_refuses_a_disabled_accounts_stale_cookie(app, admin, d
     r = staff.get('/api/auth/session')
     assert r.status_code == 401, \
         "a disabled account's browser must not keep believing it is authenticated"
+
+
+# ── Branch scope (launch-readiness account-hierarchy design §3.3/§4.2 D5) ───
+#
+# `PUT /api/admin/employees/<id>/branch-scope` -- sets or clears
+# `users.branch_scope_uid` (registry v7). NULL means "every branch"; a
+# non-empty string is stored opaquely (identity code never validates it
+# against a `branches` row -- see branch_scope_schema.py's own docstring).
+
+def _outbox_rows_for_uid(db_path, uid):
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM sync_outbox WHERE entity_type='user' AND entity_id=? ORDER BY created_at",
+            (uid,),
+        ).fetchall()]
+    finally:
+        conn.close()
+
+
+def test_admin_can_set_and_clear_an_employees_branch_scope(admin, db_path):
+    user_id, _ = _make_employee(admin, 'manager')
+
+    r = admin.put(f'/api/admin/employees/{user_id}/branch-scope',
+                  json={'branch_scope_uid': 'branch-uid-abc'})
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['branch_scope_uid'] == 'branch-uid-abc'
+    assert _user(db_path, user_id)['branch_scope_uid'] == 'branch-uid-abc'
+
+    # `null` clears it back to "every branch".
+    r = admin.put(f'/api/admin/employees/{user_id}/branch-scope',
+                  json={'branch_scope_uid': None})
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()['branch_scope_uid'] is None
+    assert _user(db_path, user_id)['branch_scope_uid'] is None
+
+
+def test_setting_scope_round_trips_through_the_employee_list(admin, db_path):
+    """D5 writes it, get_employees reads it back -- the whole point of
+    exposing `branch_scope_uid` on that route's SELECT."""
+    user_id, _ = _make_employee(admin, 'cashier')
+    assert admin.put(f'/api/admin/employees/{user_id}/branch-scope',
+                     json={'branch_scope_uid': 'branch-xyz'}).status_code == 200
+
+    rows = admin.get('/api/admin/employees').get_json()['employees']
+    row = next(e for e in rows if e['id'] == user_id)
+    assert row['branch_scope_uid'] == 'branch-xyz'
+
+
+# ── (7) admin only ───────────────────────────────────────────────────────────
+
+def test_branch_scope_setter_is_admin_only(app, admin, db_path):
+    """A logged-in NON-admin gets 403 -- distinct from the 401 an anonymous
+    caller gets (test_branch_scope_setter_requires_login below), matching
+    every sibling route's own admin-only gate in this file."""
+    target_id, _ = _make_employee(admin, 'cashier')
+    manager_id, _ = _make_employee(admin, 'manager')
+
+    manager = _login_as(app, db_path, manager_id)
+    r = manager.put(f'/api/admin/employees/{target_id}/branch-scope',
+                    json={'branch_scope_uid': 'branch-uid-should-not-land'})
+
+    assert r.status_code == 403, r.get_json()
+    assert _user(db_path, target_id)['branch_scope_uid'] is None, \
+        "a refused scope change must change nothing"
+
+
+def test_branch_scope_setter_requires_login(app, admin, db_path):
+    user_id, _ = _make_employee(admin, 'cashier')
+    anonymous = app.test_client()
+    r = anonymous.put(f'/api/admin/employees/{user_id}/branch-scope',
+                      json={'branch_scope_uid': 'x'})
+    assert r.status_code == 401
+    assert _user(db_path, user_id)['branch_scope_uid'] is None
+
+
+# ── (8) refuses the admin's own row ──────────────────────────────────────────
+
+def test_branch_scope_setter_refuses_the_admins_own_row(admin, db_path):
+    owner_id = next(e['id'] for e in admin.get('/api/admin/employees').get_json()['employees']
+                    if e['effective_role'] == 'admin')
+
+    r = admin.put(f'/api/admin/employees/{owner_id}/branch-scope',
+                  json={'branch_scope_uid': 'branch-uid-nope'})
+
+    assert r.status_code == 409, r.get_json()
+    assert _user(db_path, owner_id)['branch_scope_uid'] is None
+
+
+# ── (9) session_version + row_version + sync event, in the same write ───────
+
+def test_setting_scope_bumps_session_version_and_row_version_and_queues_a_sync_event(admin, db_path):
+    user_id, _ = _make_employee(admin, 'cashier')
+    before = _user(db_path, user_id)
+    before_outbox = len(_outbox_rows_for_uid(db_path, before['uid']))
+
+    r = admin.put(f'/api/admin/employees/{user_id}/branch-scope',
+                  json={'branch_scope_uid': 'branch-uid-version-check'})
+    assert r.status_code == 200, r.get_json()
+
+    after = _user(db_path, user_id)
+    assert after['session_version'] == before['session_version'] + 1, \
+        "a scope change must revoke a live session the same way role/status/perm changes already do"
+    assert after['row_version'] == before['row_version'] + 1
+    assert after['updated_at_utc'] > before['updated_at_utc']
+
+    after_outbox = _outbox_rows_for_uid(db_path, before['uid'])
+    assert len(after_outbox) == before_outbox + 1, \
+        "_queue_user_sync_event must be called inline, in the same transaction, like every sibling write"
+    assert after_outbox[-1]['event_type'] == 'update'
+    import json as _json
+    payload = _json.loads(after_outbox[-1]['payload'])
+    assert payload['branch_scope_uid'] == 'branch-uid-version-check', \
+        "the queued event's payload must actually carry the new scope"
+
+
+def test_a_scope_change_revokes_the_employees_live_session(app, admin, db_path):
+    """Mirrors test_a_role_change_revokes_the_employees_live_session's own
+    proof for role changes -- design §4.1 G6: a scope change is only a real
+    revocation if `session_version` actually forces re-login on the account's
+    OTHER live sessions."""
+    user_id, _ = _make_employee(admin, 'cashier')
+    staff = _login_as(app, db_path, user_id)
+    assert staff.get('/api/auth/session').status_code == 200
+
+    assert admin.put(f'/api/admin/employees/{user_id}/branch-scope',
+                     json={'branch_scope_uid': 'branch-uid-revoke-check'}).status_code == 200
+
+    assert staff.get('/api/auth/session').status_code == 401, \
+        "a scope change that only takes effect at next login is not a real revocation"
+
+
+def test_branch_scope_setter_404s_for_an_unknown_user(admin, db_path):
+    ghost = str(uuid.uuid4())
+    r = admin.put(f'/api/admin/employees/{ghost}/branch-scope',
+                  json={'branch_scope_uid': 'x'})
+    assert r.status_code == 404, r.get_json()
+
+
+def test_branch_scope_setter_cannot_reach_another_tenants_row(admin, db_path):
+    """Scoped by company_id like every sibling route (update_role,
+    update_status, update_perms) -- a guessed id from another tenant is
+    indistinguishable from one that does not exist."""
+    conn = sqlite3.connect(str(db_path))
+    other = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO users (id, company_id, employee_id, email, password_hash, role, status) "
+        "VALUES (?, 'other-company', 'EMP-9999', 'other-scope@elsewhere.local', 'x', 'cashier', 'active')",
+        (other,))
+    conn.commit()
+    conn.close()
+
+    r = admin.put(f'/api/admin/employees/{other}/branch-scope', json={'branch_scope_uid': 'x'})
+    assert r.status_code == 404
+    assert _user(db_path, other)['branch_scope_uid'] is None

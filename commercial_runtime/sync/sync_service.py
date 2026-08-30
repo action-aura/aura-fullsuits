@@ -2215,25 +2215,39 @@ class SyncService:
             # always supplies one. `local_company_id` is this receiving
             # device's own, never the payload's -- identical reasoning to
             # every other entity type in this file.
+            #
+            # `branch_scope_uid` (registry v7, account-hierarchy design §9
+            # item 7) IS in the plain allowlist and DOES get a plain
+            # `excluded.branch_scope_uid` -- unlike `session_version`, there
+            # is no MAX/ordering subtlety here: it is an ordinary field that
+            # moves with `row_version` like `role`/`status`/every other
+            # column in this list, so a scope set (or cleared) on the
+            # owner's device reaches every other till within the sync
+            # cadence, the same way a role change already does. A payload
+            # from a pre-v7 emitter simply omits the key -- `p.get(...)`
+            # then supplies `None`, which is exactly what NULL already
+            # means ("every branch"), so an old sender can never force a
+            # scope onto a receiver that only understands NULL.
             uid = p.get("uid")
             try:
                 conn.execute(
                     "INSERT INTO users (id, company_id, uid, employee_id, email, role, status, "
                     "require_password_change, language, password_hash, pin_hash, row_version, "
-                    "updated_at_utc, session_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "updated_at_utc, session_version, branch_scope_uid) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(uid) WHERE uid IS NOT NULL DO UPDATE SET "
                     "email=excluded.email, employee_id=excluded.employee_id, role=excluded.role, "
                     "status=excluded.status, require_password_change=excluded.require_password_change, "
                     "language=excluded.language, password_hash=excluded.password_hash, "
                     "pin_hash=excluded.pin_hash, row_version=excluded.row_version, "
                     "updated_at_utc=excluded.updated_at_utc, "
-                    "session_version=MAX(COALESCE(users.session_version,0), COALESCE(excluded.session_version,0)) "
+                    "session_version=MAX(COALESCE(users.session_version,0), COALESCE(excluded.session_version,0)), "
+                    "branch_scope_uid=excluded.branch_scope_uid "
                     "WHERE excluded.row_version > users.row_version",
                     (str(uuid.uuid4()), local_company_id, uid, p.get("employee_id"), p.get("email"),
                      p.get("role", "cashier"), p.get("status", "active"),
                      p.get("require_password_change", 1), p.get("language", "en"),
                      p.get("password_hash"), p.get("pin_hash"), p.get("row_version", 1),
-                     p.get("updated_at_utc"), p.get("session_version", 1)),
+                     p.get("updated_at_utc"), p.get("session_version", 1), p.get("branch_scope_uid")),
                 )
             except sqlite3.IntegrityError as exc:
                 # Decision 4 -- THE defect that stopped all sync from all

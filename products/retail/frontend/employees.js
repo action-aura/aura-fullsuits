@@ -63,6 +63,15 @@ const RetailEmployees = {
   //: Populated by _load(). Rows come straight from GET /api/admin/employees.
   _rows: [],
 
+  //: Populated by _load(). This company's real branches (GET
+  //: /api/sub/retail/branches) -- launch-readiness account-hierarchy design
+  //: §3.3/§4.2 D5/D9. The ONLY source the branch-scope picker below ever
+  //: offers: identity code (commercial_runtime/identity/) never validates a
+  //: branch_scope_uid against a `branches` row (that table lives in
+  //: retail.db, a different product's database), so this screen offering
+  //: only real branches is what keeps a legitimate request honest.
+  _branches: [],
+
   // Delegated rather than reimplemented -- same shape cash-drawer.js uses, so
   // the 401 -> re-login handling in RetailSystem._fetch covers this screen too
   // instead of every feature file inventing its own session behaviour.
@@ -155,11 +164,12 @@ const RetailEmployees = {
             <thead><tr>
               <th>${t('Employee')}</th>
               <th>${t('Role')}</th>
+              <th>${t('Branch')}</th>
               <th>${t('Status')}</th>
               <th>${t('PIN')}</th>
               <th>${t('Actions')}</th>
             </tr></thead>
-            <tbody><tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
+            <tbody><tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
           </table>
         </div>
       </div>`;
@@ -174,6 +184,18 @@ const RetailEmployees = {
 
   async _load() {
     const tbody = document.querySelector('#emp-table tbody');
+    // Fetched separately from the employee list, and deliberately allowed
+    // to fail on its own: the branch picker degrades to just showing every
+    // row's raw scope state (All branches / a name it cannot resolve) --
+    // a company whose branches happen not to load must not lose the whole
+    // employee screen over it.
+    try {
+      const br = await this._get('/api/sub/retail/branches');
+      this._branches = (br && br.data) || [];
+    } catch (err) {
+      console.error('Branch list load failed', err);
+      this._branches = [];
+    }
     try {
       const res = await this._get('/api/admin/employees');
       // These routes answer {'error': ...} with a 403 rather than the
@@ -182,7 +204,7 @@ const RetailEmployees = {
       // no staff" when it actually means "you were refused".
       if (!res || !res.success) {
         const reason = (res && res.error) ? t(res.error) : t('Could not load the employee list.');
-        if (tbody) tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#ef4444;padding:30px">${this._esc(reason)}</td></tr>`;
+        if (tbody) tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#ef4444;padding:30px">${this._esc(reason)}</td></tr>`;
         return;
       }
       // Owner first, then by employee code, so the list has a stable order
@@ -193,13 +215,13 @@ const RetailEmployees = {
       });
       if (!tbody) return;
       if (!this._rows.length) {
-        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:30px">${t('No staff accounts yet. Add one to get started.')}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">${t('No staff accounts yet. Add one to get started.')}</td></tr>`;
         return;
       }
       tbody.innerHTML = this._rows.map(e => this._row(e)).join('');
     } catch (err) {
       console.error('Employee list load failed', err);
-      if (tbody) tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#ef4444;padding:30px">${t('Could not load the employee list.')}</td></tr>`;
+      if (tbody) tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#ef4444;padding:30px">${t('Could not load the employee list.')}</td></tr>`;
     }
   },
 
@@ -222,6 +244,33 @@ const RetailEmployees = {
   // ever as attribute DATA (`btn.dataset.id`), never as a second parse of
   // JS source, removes the gap by construction instead of relying on a
   // uuid4 never containing a quote.
+  // Launch-readiness account-hierarchy design §3.3/§4.2 D5/D9 -- the
+  // opaque `branch_scope_uid` a row carries, resolved to a NAME purely for
+  // display. `this._branches` is the SAME list the scope picker below
+  // offers, so "resolves to a name" and "is a real, selectable branch" are
+  // the same question asked twice rather than two answers that could drift.
+  _branchName(uid) {
+    const b = (this._branches || []).find(x => x.uid === uid);
+    return b ? b.name : null;
+  },
+
+  // NULL/absent `branch_scope_uid` means "every branch" (registry v7's own
+  // contract -- see branch_scope_schema.py) -- rendered as an explicit
+  // badge rather than a blank cell, so an owner scanning the column can
+  // tell "unscoped, on purpose" from "the branch failed to load".
+  _branchBadge(e) {
+    if (!e.branch_scope_uid) return RetailSystem._badge(t('All branches'), 'blue');
+    const name = this._branchName(e.branch_scope_uid);
+    // A scope that does not resolve locally is shown rather than hidden --
+    // this device's own branch list has not synced it yet, or the row was
+    // written on a device this one has not caught up with. The account IS
+    // still scoped (D7 enforcement does not care whether THIS screen can
+    // name it), so silently rendering "All branches" here would be a lie.
+    return name
+      ? RetailSystem._badge(this._esc(name), 'purple')
+      : RetailSystem._badge(t('Unknown branch'), 'red');
+  },
+
   _row(e) {
     const id = this._esc(e.id);
     const owner = this._isOwnerRow(e);
@@ -231,6 +280,7 @@ const RetailEmployees = {
         <div style="font-size:11px;color:var(--text-muted);font-family:monospace">${this._esc(e.employee_id || '')}</div>
       </td>
       <td>${this._roleBadge(e)}</td>
+      <td>${this._branchBadge(e)}</td>
       <td>${this._statusBadge(e)}</td>
       <td>${e.has_pin
             ? `<span style="color:#10b981;font-size:12px">● ${t('Set')}</span>`
@@ -238,6 +288,7 @@ const RetailEmployees = {
       <td>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           ${owner ? '' : `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="role" data-id="${id}">${t('Change Role')}</button>`}
+          ${owner ? '' : `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="branch" data-id="${id}">${t('Change Branch')}</button>`}
           <button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="pin" data-id="${id}">${e.has_pin ? t('Reset PIN') : t('Set PIN')}</button>
           ${owner ? '' : (e.status === 'disabled'
               ? `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="status" data-status="active" data-id="${id}">${t('Reactivate')}</button>`
@@ -260,6 +311,7 @@ const RetailEmployees = {
     const id = btn.dataset.id;
     const action = btn.dataset.action;
     if (action === 'role') this._openRole(id);
+    else if (action === 'branch') this._openBranchScope(id);
     else if (action === 'pin') this._openPin(id);
     else if (action === 'status') this._setStatus(id, btn.dataset.status);
   },
@@ -467,6 +519,72 @@ const RetailEmployees = {
     } catch (err) {
       console.error('Role change failed', err);
       SubsystemApp.showToast(t('Could not change the role.'), 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = t('Save'); }
+    }
+  },
+
+  // ── Branch scope (launch-readiness account-hierarchy design §3.3/§4.2 D5/D9) ─
+  //
+  // "All branches" in the picker is the NULL wire value -- registry v7's own
+  // contract (branch_scope_schema.py): every account is unscoped by default,
+  // exactly as it was before this control existed, and choosing it here is
+  // what CLEARS a scope that was previously set rather than leaving it
+  // untouched.
+
+  _openBranchScope(id) {
+    const emp = this._find(id);
+    if (!emp) return;
+    const current = emp.branch_scope_uid || '';
+    const options = (this._branches || [])
+      .map(b => `<option value="${this._esc(b.uid)}"${b.uid === current ? ' selected' : ''}>${this._esc(b.name)}</option>`)
+      .join('');
+    this._modal('emp-branch-modal', `
+      <h3>${t('Change Branch')}</h3>
+      <p style="color:var(--text-muted);font-size:13px;margin:-14px 0 20px">${this._esc(emp.email)}</p>
+      <div class="ret-field">
+        <label>${t('Branch')}</label>
+        <select id="emp-branch-select">
+          <option value=""${current ? '' : ' selected'}>${t('All branches')}</option>
+          ${options}
+        </select>
+      </div>
+      <div style="background:rgba(56,189,248,0.10);border:1px solid rgba(56,189,248,0.28);border-radius:10px;padding:12px 14px">
+        <div style="color:var(--text-muted);font-size:12px;line-height:1.6">
+          ${t('A branch-scoped account only sees and can act on that branch data. Choose All branches to give this account access across every branch, the same as the owner.')}
+        </div>
+      </div>
+      <div class="ret-modal-footer">
+        <button class="ret-btn ret-btn-ghost" onclick="RetailEmployees._closeModal('emp-branch-modal')">${t('Cancel')}</button>
+        <button class="ret-btn ret-btn-primary" id="emp-branch-btn">${t('Save')}</button>
+      </div>`);
+    // Closure over `id`, same reasoning as _openRole's Save button above.
+    document.getElementById('emp-branch-btn')?.addEventListener('click', () => this._saveBranchScope(id));
+  },
+
+  async _saveBranchScope(id) {
+    const value = document.getElementById('emp-branch-select')?.value || '';
+    const btn = document.getElementById('emp-branch-btn');
+    if (btn) { btn.disabled = true; btn.textContent = t('Working…'); }
+    try {
+      // An empty selection sends `branch_scope_uid: null`, not `''` -- the
+      // server route's own "null clears" contract (D5), so an owner
+      // choosing "All branches" actually clears a previously-set scope
+      // rather than storing an empty string nobody's read path treats the
+      // same way NULL is treated.
+      const res = await this._put(`/api/admin/employees/${id}/branch-scope`, {
+        branch_scope_uid: value || null,
+      });
+      if (res && res.success) {
+        this._closeModal('emp-branch-modal');
+        SubsystemApp.showToast(t('Branch updated'), 'success');
+        this._load();
+        return;
+      }
+      this._fail(res, t('Could not change the branch.'));
+    } catch (err) {
+      console.error('Branch scope change failed', err);
+      SubsystemApp.showToast(t('Could not change the branch.'), 'error');
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = t('Save'); }
     }
