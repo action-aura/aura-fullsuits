@@ -10,8 +10,30 @@
 # Build (from the aura-fullsuits repo root):
 #   pyinstaller products/retail/packaging/aura_retail.spec --noconfirm
 #
-# NOT YET BUILD-VERIFIED in this environment (no PyInstaller/Windows build
-# toolchain run as part of this extraction) -- see docs/migration/retail-extraction-report.md.
+# BUILD-VERIFIED 2026-08-30. This comment previously read "NOT YET BUILD-VERIFIED
+# in this environment (no PyInstaller/Windows build toolchain run as part of this
+# extraction)", which was true when written and had since become the most
+# load-bearing stale claim in the repo -- it was read as "the desktop product may
+# not package at all", which materially affected how close to sellable this suite
+# looked.
+#
+# Measured, not assumed. PyInstaller 6.21.0 on Python 3.14, Windows, from the repo
+# root exactly as the command above prescribes:
+#
+#     Building EXE from EXE-00.toc completed successfully.
+#     Building COLLECT COLLECT-00.toc completed successfully.
+#     Build complete!            -> dist/AuraRetail/AuraRetail.exe, 10.6 MB, exit 0
+#
+# What that does and does NOT establish, stated so the next reader does not
+# over-read it the way the old comment was under-read:
+#   * ESTABLISHED: the spec is valid, every hidden import and data file it names
+#     resolves, and a complete one-folder distribution is produced.
+#   * NOT established: that the exe RUNS correctly on a clean machine. It was not
+#     launched here, and a dev box carries state a customer's will not. That is
+#     step 2.2 of docs/release/go-live-runbook.md and it stays owed.
+#   * NOT established: the Inno Setup installer (aura_retail_setup.iss). Inno Setup
+#     is not installed on this dev machine, so setup.exe remains unbuilt and
+#     unverified -- see the runbook.
 
 import os
 
