@@ -1453,3 +1453,25 @@ already produced three stale "missing feature" claims and one stale "products ar
 not synced" comment contradicted by live code.
 
 Branch pricing therefore remains genuinely unanswered, and is not blocking.
+
+## 2026-08-30 — device fee DECIDED: 50 JOD, ONE TIME
+
+Answered directly by the product owner: the 50 JOD per additional device is a
+**one-time** charge, not per year. Recorded because it is a pricing call nobody
+else may make, and because the design that proposed it recommended the opposite.
+
+`docs/owner/packages-and-issuance-design.md` recommended per-year on the grounds
+that device fees fund the relay bandwidth and support those devices generate.
+The owner chose one-time. His call, taken with the trade-off stated.
+
+**The consequence, written down rather than discovered later:** all recurring
+revenue now comes from the annual plan alone. A 20-till hypermarket pays
+900 JOD once for its extra devices plus 420/year thereafter, while generating
+relay traffic and support load proportional to twenty devices forever. If margin
+on large installs ever looks wrong, this is the first place to look — it is a
+pricing decision, not a bug, and it can be revisited per-plan in the catalog
+without any code change.
+
+Nothing in the product enforces or cares about the billing period; the meter is
+`max_devices`, already enforced server-side at activation. One-time versus
+annual is entirely an Owner catalog value.
