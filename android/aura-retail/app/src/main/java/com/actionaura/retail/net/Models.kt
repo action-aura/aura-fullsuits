@@ -492,6 +492,52 @@ data class AgingBuckets(
 )
 data class AgingResponse(val status: String = "", val type: String = "", val data: AgingBuckets? = null)
 
+// ── Retail: branches + this device's branch pin (Wave C1) ────────────────────
+// The dc22b04 fix (see retail_api.py's `_resolve_working_branch`) resolves
+// every write's branch as: explicit request branch_id -> THIS DEVICE'S pinned
+// branch_uid -> `_default_branch`. This client sends no `branch_id` anywhere
+// (grep confirms it), so on a chain sharing one licence -- where sync
+// converges every branch row onto every device -- an unpinned Android till
+// silently falls through to the company's default branch and every sale it
+// rings is filed there. This is the only place that pin can be set from this
+// app; see ui/screens/SettingsScreen.kt.
+
+// One row of `branches`, as GET /branches returns it (`dict(r) for r in
+// rows`, retail_api.py::list_branches). `id`: Int, NOT a UUID-migrated entity
+// like Product/Customer/Supplier (branches never went through that
+// migration), so there is no Gson NumberFormatException risk here. `uid` is
+// the cross-device identity POST /device/branch actually pins -- `id` is
+// local-database-only and this screen never sends it back.
+data class Branch(
+    val id: Int = 0, val uid: String? = null, val name: String? = null,
+    val address: String? = null, val phone: String? = null, val status: String? = null,
+)
+data class BranchesResponse(val status: String = "", val data: List<Branch> = emptyList())
+
+// GET/POST /api/sub/retail/device/branch's shared payload shape
+// (retail_api.py::get_device_branch/set_device_branch). `branch_uid` null
+// means unpinned -- the state that produces silently wrong data on a chain,
+// see SettingsScreen.kt for how that is surfaced. `branch_id`/`branch_name`
+// are that uid resolved AGAINST THIS DEVICE'S OWN branches table -- both null
+// when unpinned, and also both null (with `branch_uid` still non-null) when
+// the pin does not resolve locally yet. The route documents this
+// deliberately: a read must not self-heal a branch as a side effect of
+// merely loading a screen, so a pin this device hasn't synced yet must still
+// be reported as pinned, not shown as unpinned.
+data class DeviceBranch(
+    val branch_uid: String? = null, val branch_id: Int? = null, val branch_name: String? = null,
+)
+// `data` nullable for the same Gson-explicit-null reason every other response
+// model in this file is (see CreatedResponse/ByEmployeeResponse's doc
+// comments) -- a malformed 200 must fail the same way every other failure
+// does, not crash past this screen's try/catch.
+data class DeviceBranchResponse(val status: String = "", val message: String? = null, val data: DeviceBranch? = null)
+
+// POST body. `branch_uid` null (or, after the server's own strip, an empty
+// string) clears the pin -- set_device_branch's own contract. An unknown uid
+// for this company comes back a 400, never silently ignored.
+data class SetDeviceBranchRequest(val branch_uid: String? = null)
+
 // ── Retail: reports (period-selectable stats) ────────────────────────────────
 // NOTE: these endpoints wrap their payload as {"success": true, "data": ...}.
 data class ReportSummary(

@@ -496,6 +496,31 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     " — coming soon" to " — قريبًا",
     "Choose language" to "اختر اللغة",
 
+    // ── Settings → this device's branch (Wave C1) ────────────────────────────
+    // The Android half of the dc22b04 fix -- see net/Models.kt's Branch/
+    // DeviceBranch doc comments and ui/screens/SettingsScreen.kt for the full
+    // "why". "Loading…" is used generically enough to belong here rather than
+    // scoped to one screen.
+    "Loading…" to "جارٍ التحميل…",
+    "This Device's Branch" to "فرع هذا الجهاز",
+    "Couldn't load this device's branch" to "تعذّر تحميل فرع هذا الجهاز",
+    "No branch pinned" to "لا يوجد فرع مثبَّت",
+    "Sales on this till file under the company's default branch. Worth checking on a multi-branch chain." to
+        "تُسجَّل مبيعات هذا الصندوق تحت الفرع الافتراضي للشركة. يستحق التحقق في سلسلة متعددة الفروع.",
+    "Sales rung on this till are filed under this branch." to
+        "تُسجَّل المبيعات التي تتم على هذا الصندوق تحت هذا الفرع.",
+    "Only the owner can change which branch this device is pinned to. Ask the owner to make the change on their account." to
+        "يمكن للمالك فقط تغيير الفرع الذي يُثبَّت عليه هذا الجهاز. اطلب من المالك إجراء التغيير من حسابه.",
+    "This device's branch" to "فرع هذا الجهاز",
+    "Choose which branch sales rung on this till are filed under." to
+        "اختر الفرع الذي تُسجَّل تحته مبيعات هذا الصندوق.",
+    "Falls back to the company's default branch" to "يعود إلى الفرع الافتراضي للشركة",
+    "Save" to "حفظ",
+    "This device is now pinned to %s" to "أصبح هذا الجهاز الآن مثبَّتًا على %s",
+    "Branch pin cleared" to "تم إلغاء تثبيت الفرع",
+    "Only the owner can change this device's branch. Ask the owner to make the change on their account." to
+        "يمكن للمالك فقط تغيير فرع هذا الجهاز. اطلب من المالك إجراء التغيير من حسابه.",
+
     // ── Backup & restore (Wave 1A / Part G) ─────────────────────────────────────
     "Create backup" to "إنشاء نسخة احتياطية",
     "Restore backup" to "استعادة نسخة احتياطية",

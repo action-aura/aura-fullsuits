@@ -229,6 +229,24 @@ interface AuraApi {
     @POST("api/sub/retail/payment-methods")
     suspend fun addPayMethod(@Body body: CreatePayMethodRequest): CreatedResponse
 
+    // This device's branch pin (Wave C1 -- see Models.kt's Branch/DeviceBranch
+    // doc comments for the full "why"). GET requires only CAP_SELL (a cashier
+    // needs to see whether this till is unpinned, the state that silently
+    // produces wrong data on a chain); POST requires CAP_EMPLOYEES (pinning a
+    // till is an administrative act) -- see ui/screens/SettingsScreen.kt for
+    // how a 403 on the POST is handled as a designed state, not a failure.
+    @GET("api/sub/retail/device/branch")
+    suspend fun deviceBranch(): DeviceBranchResponse
+
+    @POST("api/sub/retail/device/branch")
+    suspend fun setDeviceBranch(@Body body: SetDeviceBranchRequest): DeviceBranchResponse
+
+    // The company's branches, to populate the picker above. No capability
+    // gate server-side beyond being signed in to this subsystem -- any
+    // signed-in retail user may see the list, same as list_active_promotions.
+    @GET("api/sub/retail/branches")
+    suspend fun branches(): BranchesResponse
+
     // Returns / refunds
     @GET("api/sub/retail/returns")
     suspend fun returns(): ReturnsResponse

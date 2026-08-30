@@ -34,6 +34,21 @@ fun isAdminUser(user: User?): Boolean = user?.role == "admin"
 const val CAP_REPORTS = "retail.reports"
 
 /**
+ * "Create, disable or reconfigure an employee account, its till PIN, or this
+ * device's branch pin" -- the owner-only capability every route under
+ * `/api/admin/employees` and `POST /api/sub/retail/device/branch` gates on
+ * server-side (`commercial_runtime/identity/user_accounts.py::CAP_EMPLOYEES`).
+ * Deliberately excluded from `ROLE_MANAGER`'s grant set in that module: both
+ * managing accounts and pinning a till are owner-only administrative acts,
+ * not something a manager's role includes by default.
+ *
+ * Spelled here as a constant for the same reason [CAP_REPORTS] is: a
+ * capability code that has drifted from the server's does not fail loudly --
+ * it silently hides a control from the wrong role, or shows it to everybody.
+ */
+const val CAP_EMPLOYEES = "retail.employees"
+
+/**
  * True if `capabilities` grants `code`.
  *
  * RENDERING ADVICE ONLY, and a deliberate mirror of app-shell.js's
