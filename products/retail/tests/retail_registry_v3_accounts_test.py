@@ -434,6 +434,7 @@ def test_a_fresh_v0_database_reaches_v3_in_one_pass(tmp_path):
 @pytest.fixture
 def pin_conn(migrated):
     from commercial_runtime.identity.registry_sync_schema import apply_registry_sync_schema
+    from commercial_runtime.identity.branch_scope_schema import apply_branch_scope_schema
 
     conn, _ = migrated
     # `set_user_pin`/`clear_user_pin` queue a `user` sync event as of wave B2
@@ -461,6 +462,15 @@ def pin_conn(migrated):
     # the emission itself is separately pinned by
     # `commercial_runtime/identity/tests/test_user_sync_emission_write_sites.py`.
     apply_registry_sync_schema(conn)
+    # registry v7 (launch-readiness account-hierarchy design §6) adds
+    # `users.branch_scope_uid`, and `_SYNCED_USER_COLUMNS` -- read by
+    # `_queue_user_sync_event`, which `_touch_user` calls on every PIN write
+    # via `set_user_pin`/`clear_user_pin` -- now names that column
+    # unconditionally. Same reasoning as the sync-schema call immediately
+    # above, one version later: a v3-only fixture is a state no running
+    # install is ever in, because `init_registry_db()` always reaches the
+    # CURRENT version before any production write function runs.
+    apply_branch_scope_schema(conn)
     return conn
 
 
