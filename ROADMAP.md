@@ -1303,3 +1303,94 @@ and licensing enforcement already hold to.
 The device's LOCAL clock decides whether a promotion is live. Sales are
 explicitly designed to continue while the network is down, so there is no
 authoritative remote clock to consult at the moment it matters.
+
+## 2026-08-30 — registry schema v7 CLAIMED for branch-scoped users
+
+Same single-writer discipline as retail v18–v23, and claimed BEFORE dispatch
+this time — the v23 entry above records what happened when that slipped.
+
+**CLAIMED: registry v7, by `feat/launch-readiness`, for ONE nullable column.**
+
+    ALTER TABLE users ADD COLUMN branch_scope_uid TEXT   -- NULL = every branch
+
+Backing the chain-oversight ask: a chain of five stores needs a branch manager
+who sees only their own store and a head office that sees all of them. Today
+the capability model has no branch dimension at all — `?branch_id=` on a report
+is a free parameter for anyone holding `retail.reports`, and mutations accept
+any branch id.
+
+**Deliberately NOT a new capability code.** `CAPABILITY_CODES` is a FIXED
+eight-tuple and it is the seeding contract: every account gets a row for every
+code, so "never provisioned" and "explicitly denied" stay distinguishable.
+Adding a ninth code changes that contract for every existing account on every
+install. A scope column answers "which branches" without touching "which
+powers", which are genuinely different questions — a branch manager and a head
+office manager hold the SAME capabilities over DIFFERENT data.
+
+### Why this is safe for Clinic, which shares registry.db
+
+`users` lives in `registry.db`, shared by Retail and Clinic. The owner's
+instruction is not to work on Clinic, so:
+
+* the column is **nullable with no default**, so every existing row means
+  "every branch" — i.e. exactly today's behaviour, for both products;
+* nothing in Clinic's code path reads it;
+* enforcement lives in Retail's branch-taking routes only.
+
+Clinic's behaviour is byte-identical before and after. That is a property to
+TEST, not to assert — the migration test must prove a Clinic-shaped database
+migrates and behaves unchanged.
+
+### Ordering constraint, stated because it is easy to get wrong
+
+This must land AFTER the seat-entitlement wave's edits to
+`commercial_runtime/identity/` (both touch `user_accounts.py` /
+`onboarding_routes.py`), and its enforcement needs device→branch pinning to
+exist first — otherwise there is nothing meaningful to scope against, because
+every till currently resolves to the company's FIRST branch (see below).
+
+---
+
+## 2026-08-30 — the multi-branch capture defect, recorded before it is fixed
+
+**Not a schema claim. A live defect, written down so it is not rediscovered.**
+
+`_default_branch(conn, cid)` (retail_api.py:616) resolves a company's working
+branch as `SELECT id FROM branches WHERE company_id=? ORDER BY id LIMIT 1` —
+the company's FIRST branch. `create_sale` uses `data.get('branch_id') or
+_default_branch(...)`, and **the POS client sends no `branch_id` at all** in its
+sale payload (verified by reading the payload literal in subsystem-retail.js).
+Nothing anywhere pins a device to the branch it physically stands in.
+
+For a single-branch shop this is invisible and always correct, which is why it
+has never surfaced. For the chain case it is severe: sync converges every
+device on one licence into one dataset, so all five stores' branch rows exist on
+every till, and every till picks the first one. **Five stores would file every
+sale under store 1 and decrement store 1's stock**, regardless of where the sale
+happened. The resolved branch drives both attribution and the inventory
+movement.
+
+So a head-office comparison screen built today would report confident, wrong
+numbers — the most expensive kind. Device→branch pinning must land BEFORE any
+chain reporting work, and it needs no schema version: the pin belongs in the
+existing device-local `config.json` (`onboarding_routes._read_config` /
+`_write_config`), which is deliberately never synced — exactly the property
+required, since "which branch is this till standing in" is the one fact that
+must NOT be shared between devices.
+
+`_default_branch` stays as the last-resort self-heal, with its existing
+comment intact; the resolution order becomes pinned branch → explicit request
+value → `_default_branch`.
+
+---
+
+## 2026-08-30 — retail v24 RESERVED BY NAME (not claimed) for inter-branch transfers
+
+Confirmed absent: `transfer` appears nowhere in retail's schema or API. It is a
+real gap for a chain — branches exist, stock is branch-scoped, and there is no
+way to move stock between them.
+
+Reserved by NAME only, deliberately. Nobody is building it today, and a claim
+that sits open invites a second branch to assume it is dead and take the number.
+When it is scheduled it gets a full claim entry like the ones above, at whatever
+the next free version is at that time — this note does not hold v24 hostage.
