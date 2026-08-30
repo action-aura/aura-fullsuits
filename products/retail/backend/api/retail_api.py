@@ -1384,40 +1384,62 @@ def lookup_product():
     back, so this route re-derives its WHERE clause from that one rather
     than writing a fresh one from memory.
 
-    `code` is checked against `barcode` first, then `sku` -- two separate,
-    fully-indexed point lookups (idx_products_company_barcode / idx_
-    products_company_sku, schema v21) rather than one query with an OR,
-    so each branch's plan is unambiguous and provably indexed. Barcode is
-    checked first because this route's primary caller is the scan path,
-    where barcode is the natural key; a code that happens to collide with
-    both a barcode on one product and a different product's SKU resolves
-    to the barcode match.
+    `code` is checked against `barcode` first, then `sku` -- separate,
+    fully-indexed point lookups (see the four-rung ladder below) rather
+    than one query with an OR, so each rung's plan is unambiguous and
+    provably indexed. Barcode is checked first because this route's
+    primary caller is the scan path, where barcode is the natural key; a
+    code that happens to collide with both a barcode on one product and a
+    different product's SKU resolves to the barcode match.
 
     CASE-INSENSITIVE ON BOTH COLUMNS, matching Android's ProductLookup.kt
     (`it.barcode?.equals(code, ignoreCase = true)`) -- Android is about to
     be switched onto this endpoint, and an exact-match server would
     silently regress scanning for any shop whose SKUs are mixed-case.
 
-    NOT `COLLATE NOCASE` and NOT `LOWER(p.barcode)` -- either wraps the
-    COLUMN in a function, which is non-sargable and throws away idx_
-    products_company_barcode / idx_products_company_sku exactly the way
-    schema v21's own commit message documents for the date predicates it
-    fixed. Instead, a small FIXED set of case variants of the INPUT is
-    built in Python -- `code`, `code.upper()`, `code.lower()`, deduplicated
-    -- and matched with `IN (...)`: still a plain equality test per
-    candidate, so SQLite plans it as repeated index seeks, never a scan
-    (proven with real `EXPLAIN QUERY PLAN` output in retail_accounting_
-    export_test.py).
+    CORRECTED (schema v22, ROADMAP.md's 2026-08-30 "retail schema v22
+    CLAIMED for the case-fold lookup" entry): this route used to build a
+    small FIXED set of case variants of the INPUT (`code`, `code.upper()`,
+    `code.lower()`) and match them with `IN (...)`, on the reasoning that
+    `COLLATE NOCASE` / `LOWER(p.barcode)` wraps the COLUMN in a function
+    and is non-sargable. That reasoning is TRUE of wrapping the column at
+    query time, but the conclusion drawn from it was wrong: three variants
+    of the INPUT cannot match a value STORED mixed-case. A row with
+    `sku = 'AbC-123'` and a typed `abc-123` produces none of `['ABC-123',
+    'abc-123']`, so the lookup silently missed a product that was
+    genuinely there -- measured, not assumed (see ROADMAP.md's 2026-08-29
+    "the case-insensitive lookup is only PARTLY case-insensitive" entry).
+    Left here so the next reader does not re-derive the same wrong
+    conclusion from the same plausible-looking argument.
 
-    HONEST LIMIT, not a general case-fold: this resolves a lowercase code
-    against an uppercase-stored value and vice versa -- the two shapes the
-    test file above actually pins, and the ones a barcode/SKU written in
-    ONE consistent case (the real-world convention) ever needs. It does
-    NOT resolve arbitrary-mixed-case storage against arbitrary-mixed-case
-    input (stored 'AbC-1' found by searching 'aBc-1'): that would need
-    every case permutation of the input, which is unbounded for a long
-    code, or a `COLLATE NOCASE` index -- a schema change, and schema
-    changes are not this route's call to make unilaterally.
+    The fix is a NOCASE-collated INDEX, not a NOCASE-collated column
+    expression: the collation lives in the index (`products(company_id,
+    barcode COLLATE NOCASE)` / `..., sku COLLATE NOCASE)`, schema v22,
+    `_migrate_add_nocase_lookup_indexes`), and `WHERE company_id=? AND
+    barcode=? COLLATE NOCASE` against that index plans as `SEARCH ...
+    USING COVERING INDEX idx_products_company_barcode_nocase`, never a
+    scan. Fully sargable -- proven with real `EXPLAIN QUERY PLAN` output
+    in retail_product_lookup_test.py.
+
+    FOUR-RUNG LADDER, first hit wins, rather than one NOCASE-only query:
+
+        1. barcode exact   (idx_products_company_barcode, v21)
+        2. barcode NOCASE  (idx_products_company_barcode_nocase, v22)
+        3. sku exact       (idx_products_company_sku, v21)
+        4. sku NOCASE      (idx_products_company_sku_nocase, v22)
+
+    A legacy install may ALREADY hold case-duplicates created before this
+    change (e.g. both `abc` and `ABC` stored as two different products'
+    barcodes) -- a bare NOCASE match against such an install would resolve
+    to an arbitrary one of the two, which is exactly the "scanning
+    silently resolves to the wrong item" failure AUDIT (2026-08-14) closed,
+    through a different door. Trying the exact match FIRST makes
+    resolution deterministic: an exact hit always wins over a same-code
+    case-fold, and only when no exact match exists does the NOCASE rung
+    run. Column precedence (barcode before sku) is unchanged from the
+    shipped route; exactness wins within a column before falling through
+    to the next column. Every rung is a single indexed point lookup, and
+    the common case -- an exact barcode scan -- returns on the first.
 
     404 (not 200 with a null payload) when nothing matches -- a scan that
     finds nothing is a normal, expected outcome for a till, and the
@@ -1427,21 +1449,27 @@ def lookup_product():
     code = request.args.get('code', '').strip()
     if not code:
         return jsonify({'status': 'error', 'message': 'code is required'}), 400
-    code_variants = list({code, code.upper(), code.lower()})
-    placeholders = ','.join('?' * len(code_variants))
     select = (
         "SELECT p.*, c.name as category_name, "
         "COALESCE(SUM(b.quantity_on_hand), 0) as total_stock "
         "FROM products p "
         "LEFT JOIN categories c ON p.category_id=c.id AND c.deleted_at_utc IS NULL "
         "LEFT JOIN inventory_balances b ON p.id=b.product_id AND b.company_id=p.company_id "
-        f"WHERE p.company_id=? AND p.status='active' AND p.deleted_at_utc IS NULL AND p.{{col}} IN ({placeholders}) "
+        "WHERE p.company_id=? AND p.status='active' AND p.deleted_at_utc IS NULL "
+        "AND p.{col}=?{collate} "
         "GROUP BY p.id"
     )
     conn = get_retail_conn()
-    row = conn.execute(select.format(col='barcode'), (cid, *code_variants)).fetchone()
-    if row is None:
-        row = conn.execute(select.format(col='sku'), (cid, *code_variants)).fetchone()
+    row = None
+    for col, collate in (
+        ('barcode', ''),
+        ('barcode', ' COLLATE NOCASE'),
+        ('sku', ''),
+        ('sku', ' COLLATE NOCASE'),
+    ):
+        row = conn.execute(select.format(col=col, collate=collate), (cid, code)).fetchone()
+        if row is not None:
+            break
     conn.close()
     if row is None:
         return jsonify({'status': 'error', 'message': 'Product not found'}), 404
@@ -1459,7 +1487,14 @@ def create_product():
         return jsonify({'status': 'error', 'message': 'Name and SKU are required'}), 400
     conn = get_retail_conn()
     try:
-        existing = conn.execute("SELECT id FROM products WHERE company_id=? AND sku=?",
+        # COLLATE NOCASE (schema v22): lookup_product now resolves a scanned
+        # code case-insensitively (idx_products_company_sku_nocase), so this
+        # guard has to agree on what "the same SKU" means or two products
+        # ('abc' and 'ABC') could both be created and the case-folding scan
+        # would resolve to an arbitrary one of them -- the read and the
+        # write must use the same definition of "duplicate", or the write
+        # guard is decorative.
+        existing = conn.execute("SELECT id FROM products WHERE company_id=? AND sku=? COLLATE NOCASE",
                                 (cid, data['sku'])).fetchone()
         if existing:
             conn.close()
@@ -1473,8 +1508,15 @@ def create_product():
         # the cashier. Blank barcodes are exempt (most products never get one) and
         # deactivated products still count, matching the SKU check's own behavior.
         if data.get('barcode'):
+            # COLLATE NOCASE (schema v22): same reasoning as the SKU check
+            # above -- lookup_product resolves a scanned barcode case-
+            # insensitively (idx_products_company_barcode_nocase), so this
+            # guard must fold case the same way or a case-folding scan can
+            # resolve to an arbitrary one of two "different" stored codes,
+            # which is exactly the AUDIT (2026-08-14) failure this check
+            # exists to prevent, reopened through a different door.
             existing_barcode = conn.execute(
-                "SELECT id FROM products WHERE company_id=? AND barcode=?",
+                "SELECT id FROM products WHERE company_id=? AND barcode=? COLLATE NOCASE",
                 (cid, data['barcode'])
             ).fetchone()
             if existing_barcode:
@@ -1600,8 +1642,14 @@ def update_product(pid):
     # blank-exempt rule as create; excludes this product's own row so re-saving
     # an unchanged barcode doesn't false-positive against itself.
     if fields.get('barcode'):
+        # COLLATE NOCASE (schema v22): same reasoning as create_product's
+        # matching check -- lookup_product resolves case-insensitively now,
+        # so this guard must agree or a PATCH can (re)introduce the exact
+        # case-duplicate the read side was fixed to disambiguate. `id<>?`
+        # self-exclusion is untouched: re-saving this product's own
+        # unchanged barcode must still succeed.
         existing_barcode = conn.execute(
-            "SELECT id FROM products WHERE company_id=? AND barcode=? AND id<>?",
+            "SELECT id FROM products WHERE company_id=? AND barcode=? COLLATE NOCASE AND id<>?",
             (cid, fields['barcode'], pid)
         ).fetchone()
         if existing_barcode:

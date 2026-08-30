@@ -1,7 +1,8 @@
 """
-Aura Retail -- schema v21 / "the POS scale fix" regression coverage
-(ROADMAP.md's 2026-08-29 "retail schema v21 CLAIMED for the POS scale fix"
-entry).
+Aura Retail -- schema v21 / "the POS scale fix" AND schema v22 / "the
+case-fold lookup" regression coverage (ROADMAP.md's 2026-08-29 "retail
+schema v21 CLAIMED for the POS scale fix" entry and 2026-08-30 "retail
+schema v22 CLAIMED for the case-fold lookup" entry).
 
 WHAT THIS FILE PROVES, in order:
 
@@ -47,11 +48,30 @@ WHAT THIS FILE PROVES, in order:
    same route, is the part that genuinely is index-backed: its
    `sale_items` LEFT JOIN uses the new `idx_sale_items_sale_id`.
 
+5. Schema v22 (database/schema.py::_migrate_add_nocase_lookup_indexes) adds
+   two NOCASE-collated indexes, idempotent and version-checked the same way
+   v21 is above, and the barcode/sku NOCASE rungs of `lookup_product`'s
+   four-rung ladder are proven index-backed by NAME in section 4's EXPLAIN
+   QUERY PLAN block, not merely "not a scan".
+
+   The BEHAVIOUR half of v22 -- the mixed-case-stored gap actually closing,
+   determinism against a legacy case-duplicate, and the three write doors
+   (create_product's SKU/barcode checks, update_product's barcode check,
+   import_api's CSV upsert key) agreeing with the read side, both the deny
+   half AND the allow half -- lives in the sibling file
+   retail_product_lookup_nocase_test.py, split out purely to stay under
+   this codebase's 800-line file guideline (see that file's own module
+   docstring). See this change's own report for why the allow half is not
+   optional there: a "deny everything" mutation of any of those checks
+   passes every deny test and would silently destroy the ability to add or
+   import products at all.
+
 Self-contained bootstrap, matching retail_page_limit_clamp_test.py and
 retail_route_capability_matrix_test.py (no shared conftest.py exists here).
 
 Run:
     pytest products/retail/tests/retail_product_lookup_test.py -v
+    pytest products/retail/tests/retail_product_lookup_nocase_test.py -v
 """
 import os
 import shutil
@@ -419,6 +439,50 @@ def test_explain_query_plan_lookup_by_sku_uses_the_new_index():
     assert not products_line.startswith('SCAN'), lines
 
 
+# The exact SELECT lookup_product() issues for the two NOCASE rungs (schema
+# v22) -- {col} is either 'barcode' or 'sku', same shape as _LOOKUP_SELECT
+# above with ` COLLATE NOCASE` appended, matching that route's own
+# select.format(col=..., collate=' COLLATE NOCASE').
+_LOOKUP_SELECT_NOCASE = (
+    "SELECT p.*, c.name as category_name, "
+    "COALESCE(SUM(b.quantity_on_hand), 0) as total_stock "
+    "FROM products p "
+    "LEFT JOIN categories c ON p.category_id=c.id AND c.deleted_at_utc IS NULL "
+    "LEFT JOIN inventory_balances b ON p.id=b.product_id AND b.company_id=p.company_id "
+    "WHERE p.company_id=? AND p.status='active' AND p.deleted_at_utc IS NULL AND p.{col}=? COLLATE NOCASE "
+    "GROUP BY p.id"
+)
+
+
+def test_explain_query_plan_lookup_by_barcode_nocase_uses_the_nocase_index():
+    """PLAN PROOF (schema v22), the barcode NOCASE rung. Asserts on the
+    INDEX NAME, not merely 'not SCAN' -- 'not SCAN' alone would also pass if
+    this fell back to the v21 PLAIN index, which cannot serve a COLLATE
+    NOCASE comparison (SQLite will not use an index whose collation differs
+    from the comparison's), so the name is the only thing that actually
+    proves this rung is backed by the RIGHT index. See this change's
+    mutation proof #6, which drops idx_products_company_sku_nocase from the
+    migration and turns the sku half of this pair red with a plan showing
+    SCAN or a different index."""
+    conn = sch.get_retail_conn()
+    lines = _plan_lines(conn, _LOOKUP_SELECT_NOCASE.format(col='barcode'), (1, 'ABC'))
+    conn.close()
+    products_line = next(l for l in lines if l.split()[1] == 'p')
+    assert 'idx_products_company_barcode_nocase' in products_line, lines
+    assert not products_line.startswith('SCAN'), lines
+
+
+def test_explain_query_plan_lookup_by_sku_nocase_uses_the_nocase_index():
+    """Same proof as the barcode NOCASE rung above, for sku. See this
+    change's mutation proof #6."""
+    conn = sch.get_retail_conn()
+    lines = _plan_lines(conn, _LOOKUP_SELECT_NOCASE.format(col='sku'), (1, 'ABC'))
+    conn.close()
+    products_line = next(l for l in lines if l.split()[1] == 'p')
+    assert 'idx_products_company_sku_nocase' in products_line, lines
+    assert not products_line.startswith('SCAN'), lines
+
+
 # The exact SELECT recent_sales() issues (api/retail_api.py), rewritten date
 # predicate included -- matched to that route's own SQL shape.
 _RECENT_SALES_SELECT = (
@@ -461,3 +525,42 @@ def test_explain_query_plan_recent_sales_date_predicate_is_sargable_but_not_inde
         f'index, update the report/docstring above: sargability alone was '
         f'not expected to change this without a matching index.'
     )
+
+
+# ── 5. Schema v22 -- the case-fold lookup ───────────────────────────────────
+
+def test_v22_migration_lands_on_head_and_is_idempotent():
+    """Same shape as test_v21_migration_lands_on_head_and_is_idempotent
+    above, for the two NOCASE indexes. RETAIL_SCHEMA_VERSION is read from
+    the live module, never frozen into this file as a literal 22."""
+    conn = sch.get_retail_conn()
+    assert sch.RETAIL_SCHEMA_VERSION >= 22, (
+        f'RETAIL_SCHEMA_VERSION went BACKWARDS to {sch.RETAIL_SCHEMA_VERSION}: '
+        f'the v22 nocase-lookup-indexes step has been lost from the chain')
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    assert version == sch.RETAIL_SCHEMA_VERSION, (
+        f'expected a fresh install to land on the current schema head '
+        f'({sch.RETAIL_SCHEMA_VERSION}), got {version}')
+
+    def _index_names():
+        return {row[1] for row in conn.execute('PRAGMA index_list("products")').fetchall()}
+
+    before = _index_names()
+    # Re-run directly, twice, against the SAME already-migrated connection --
+    # the normal case after any interrupted migration, since
+    # ensure_schema_version leaves user_version un-advanced on failure.
+    sch._migrate_add_nocase_lookup_indexes(conn)
+    sch._migrate_add_nocase_lookup_indexes(conn)
+    after = _index_names()
+    assert before == after, 'a retried migration changed the index set -- not idempotent'
+    for expected in ('idx_products_company_barcode_nocase', 'idx_products_company_sku_nocase'):
+        assert expected in after, after
+    conn.close()
+
+
+# The case-fold BEHAVIOUR coverage (the gap closed, determinism against a
+# legacy case-duplicate, the three write-side dup-check doors -- deny half
+# AND allow half, blank exemption, tenancy, and the import upsert-key
+# change) lives in the sibling file retail_product_lookup_nocase_test.py,
+# split out purely to stay under this codebase's 800-line file guideline --
+# see that file's own module docstring.

@@ -467,7 +467,38 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # the v13 `idx_*_created_at_utc` indexes unusable -- needs no version at
 # all, since rewriting a predicate to a sargable range is a pure query
 # change (see recent_sales and core/retail/metrics.py).
-RETAIL_SCHEMA_VERSION = 21
+#
+# v21 -> v22 (launch-readiness, "the case-fold lookup"; ROADMAP.md's
+# 2026-08-30 "retail schema v22 CLAIMED for the case-fold lookup" entry):
+# two indexes, no table or column changes -- see _migrate_add_nocase_lookup_
+# indexes below for the full reasoning. In short: the v21 lookup endpoint
+# was made "case-insensitive" by building a fixed set of variants of the
+# TYPED code (as-typed, `.upper()`, `.lower()`) and matching with `IN
+# (...)`. That cannot match a value STORED mixed-case -- three variants of
+# the input never touch a row stored as `AbC-123` when the input is
+# `abc-123` -- and Android's `equals(ignoreCase = true)` never had that
+# gap, so this was a regression against the behaviour the endpoint was
+# explicitly changed to preserve. Measured in ROADMAP.md's 2026-08-29
+# "the case-insensitive lookup is only PARTLY case-insensitive" entry.
+#
+# The correct fix is a NOCASE-collated INDEX, and it IS fully sargable --
+# the collation lives in the index, not in a function wrapping the column,
+# so `WHERE company_id=? AND sku=? COLLATE NOCASE` against
+# `products(company_id, sku COLLATE NOCASE)` plans as a `SEARCH ... USING
+# COVERING INDEX`, not a scan. The premise that case-insensitivity costs
+# the index -- the reasoning the v21 variant trick relied on -- was wrong.
+#
+# The v21 plain indexes (`idx_products_company_barcode`, `idx_products_
+# company_sku`) are KEPT, not replaced. A NOCASE-collated index cannot
+# serve a BINARY equality: SQLite will not use an index whose collation
+# differs from the comparison's, so an exact-match caller against the
+# plain index and a case-folding caller against the NOCASE index need BOTH
+# indexes to exist side by side. This is exactly why the lookup route below
+# uses a 4-rung ladder (barcode exact -> barcode NOCASE -> sku exact -> sku
+# NOCASE) rather than a single NOCASE-only query: each rung is a single
+# indexed point lookup against whichever of the two indexes matches its
+# collation.
+RETAIL_SCHEMA_VERSION = 22
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -1394,6 +1425,13 @@ def _migrate_retail_schema(conn):
     # indexes's own docstring for the full reasoning, including the
     # payments(party_type, party_id) guard.
     _migrate_add_lookup_indexes(conn)
+    # v21 -> v22 (launch-readiness, "the case-fold lookup"): appended LAST,
+    # same convention as every step above. Pure index additions, so ordering
+    # relative to the steps above it does not matter functionally -- it is
+    # placed last only to keep following the chain's own convention. See the
+    # RETAIL_SCHEMA_VERSION v22 comment above and _migrate_add_nocase_
+    # lookup_indexes's own docstring for the full reasoning.
+    _migrate_add_nocase_lookup_indexes(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -4658,6 +4696,80 @@ def _migrate_add_lookup_indexes(conn):
                 'CREATE INDEX IF NOT EXISTS idx_payments_party '
                 'ON payments(party_type, party_id)'
             )
+
+
+def _migrate_add_nocase_lookup_indexes(conn):
+    """One-time migration (schema v21 -> v22): launch-readiness "the
+    case-fold lookup" (ROADMAP.md's 2026-08-30 "retail schema v22 CLAIMED"
+    entry). Two indexes, no table or column changes -- see the RETAIL_
+    SCHEMA_VERSION v22 comment above for the full measurement and the
+    2026-08-29 "the case-insensitive lookup is only PARTLY case-insensitive"
+    ROADMAP.md entry this migration closes.
+
+    `GET /products/lookup` (retail_api.py's `lookup_product`) was made
+    "case-insensitive" at v21 by building a fixed set of variants of the
+    TYPED code -- as-typed, `.upper()`, `.lower()` -- and matching with
+    `IN (...)`. Three variants of the INPUT cannot match a value STORED
+    mixed-case: a row with `sku = 'AbC-123'` and a typed `abc-123` produces
+    none of `['ABC-123', 'abc-123']` and the lookup misses a product that is
+    genuinely there. Measured, not assumed -- see the ROADMAP.md entry above.
+
+    A NOCASE-collated INDEX is the correct fix, and it IS fully sargable.
+    The reasoning that ruled it out (COLLATE NOCASE / LOWER() on the COLUMN
+    is non-sargable and would destroy the v21 indexes) is true of wrapping
+    the COLUMN in a function or collation at query time, but the collation
+    here lives in the INDEX definition instead:
+
+        CREATE INDEX idx_x ON products(company_id, sku COLLATE NOCASE)
+        SELECT ... WHERE company_id=? AND sku=? COLLATE NOCASE
+
+    plans as `SEARCH products USING COVERING INDEX idx_x (company_id=? AND
+    sku=?)`, not a scan. Measured in the same probe as the ROADMAP.md entry.
+
+    NON-UNIQUE, deliberately, same reasoning as the v21 plain indexes'
+    docstring above: a UNIQUE nocase index would FAIL this migration on any
+    install that already holds case-duplicates (e.g. both `abc` and `ABC`
+    already stored) -- which is exactly the install this change exists to
+    help, not one it can afford to break at migration time. Whether to
+    tighten unique-ness is a separate product decision, not a side effect
+    of an index migration; the three write-side dup checks this same change
+    makes case-insensitive (retail_api.py `create_product`/`update_product`,
+    import_api.py's CSV upsert) narrow how much NEW duplication can form
+    going forward, without touching what a legacy install already has on
+    disk.
+
+    These are ADDITIONAL to the v21 plain indexes on the same two columns,
+    which are KEPT, not replaced: a NOCASE-collated index cannot serve a
+    BINARY equality (SQLite will not use an index whose collation differs
+    from the comparison's), so an exact-match lookup still needs the plain
+    index and a case-folding lookup needs this one. Together they back the
+    4-rung ladder in `lookup_product` (barcode exact -> barcode NOCASE ->
+    sku exact -> sku NOCASE) -- every rung a single indexed point lookup.
+
+    `live_tables` guard copied verbatim from `_migrate_add_lookup_indexes`
+    immediately above: a synthetic old-database fixture
+    (retail_category_delete_fk_sync_test.py's `_build_v2_database`) runs the
+    ENTIRE migration chain in one pass against a hand-built schema that
+    predates `products` existing in its final shape, and `ensure_schema_
+    version` cannot tell "behind by one version" from "behind by many" --
+    it just runs every step. Without this guard this function would raise
+    `OperationalError: no such table: main.products` on that fixture, same
+    failure mode `_migrate_add_lookup_indexes` already documents.
+    """
+    live_tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if 'products' in live_tables:
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_products_company_barcode_nocase '
+            'ON products(company_id, barcode COLLATE NOCASE)'
+        )
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_products_company_sku_nocase '
+            'ON products(company_id, sku COLLATE NOCASE)'
+        )
 
 
 def load_sync_freshness(conn) -> dict:

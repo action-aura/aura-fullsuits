@@ -1420,8 +1420,20 @@ def _handle_retail_products(records):
         # lookup itself -- unchanged, on purpose: filtering it out here would
         # make the importer treat the SKU as brand-new and INSERT a second,
         # duplicate row instead of resurrecting the one that already exists).
+        # COLLATE NOCASE (schema v22): this is the upsert key an import
+        # onboards a whole catalogue through, and at hypermarket volume it
+        # is the write door most likely to manufacture a case-duplicate --
+        # retail_api.py's create_product/update_product SKU checks were
+        # made case-insensitive for the identical reason lookup_product's
+        # scan was: the read and the writes have to agree on what "the
+        # same SKU" means, or a case-folding scan resolves to an arbitrary
+        # one of two rows. This IS a deliberate behaviour change: importing
+        # SKU 'abc' when 'ABC' already exists now UPDATES that product
+        # instead of inserting a second one (pinned by
+        # retail_product_lookup_nocase_test.py; recorded in ROADMAP.md's
+        # 2026-08-30 "retail schema v22 CLAIMED" entry).
         existing = conn.execute(
-            "SELECT id, deleted_at_utc FROM products WHERE company_id=? AND sku=?", (cid, sku)).fetchone()
+            "SELECT id, deleted_at_utc FROM products WHERE company_id=? AND sku=? COLLATE NOCASE", (cid, sku)).fetchone()
         if existing:
             resurrecting = existing['deleted_at_utc'] is not None
             # launch-readiness Phase 6 stage 6a-i: every column this
@@ -1442,8 +1454,12 @@ def _handle_retail_products(records):
                           "row_version=row_version+1, updated_at_utc=?")
             if resurrecting:
                 set_clause += ", deleted_at_utc=NULL"
+            # COLLATE NOCASE here too, matching the SELECT above -- must key
+            # on the SAME set of rows the SELECT resolved `existing` from,
+            # or an 'abc'-vs-'ABC' mismatch selects one row and updates a
+            # different (or zero) rows underneath it.
             cur.execute(
-                f"UPDATE products SET {set_clause} WHERE company_id=? AND sku=?",
+                f"UPDATE products SET {set_clause} WHERE company_id=? AND sku=? COLLATE NOCASE",
                 (rec.get('name',''), rec.get('barcode',''), cat_id,
                  rec.get('cost_price') or 0, rec.get('sell_price') or 0,
                  rec.get('tax_rate') or 0, rec.get('unit','pcs') or 'pcs',
