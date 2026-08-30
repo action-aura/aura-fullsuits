@@ -71,8 +71,16 @@ function makeElementStub() {
 
 /**
  * @param {object} opts
- *   role      -- SubsystemApp.role, i.e. session['mt_role']
- *   employees -- rows GET /api/admin/employees would return
+ *   role           -- SubsystemApp.role, i.e. session['mt_role']
+ *   employees      -- rows GET /api/admin/employees would return on success
+ *   currentUserId  -- SubsystemApp.currentUser.id, i.e. sess.user.id from
+ *                     /api/auth/session -- the id render()'s branch-manager
+ *                     arm matches against its own roster row's `id`
+ *   employeesResult -- when present, the EXACT response object
+ *                     GET /api/admin/employees returns (success or 403),
+ *                     overriding the `{success:true, employees}` default --
+ *                     lets a test simulate the server's outright refusal of
+ *                     a 'manager' role that is not currently delegated
  * Returns { screen, calls, toasts, overlays, content }
  */
 function load(opts) {
@@ -90,6 +98,9 @@ function load(opts) {
   const respond = (url) => {
     if (String(url).includes('/api/sub/retail/branches')) {
       return { status: 'success', data: options.branches || [] };
+    }
+    if (String(url).includes('/api/admin/employees') && 'employeesResult' in options) {
+      return options.employeesResult;
     }
     return { success: true, employees: options.employees || [] };
   };
@@ -119,6 +130,7 @@ function load(opts) {
       // cases below is precisely "role is undefined", and the looser test
       // would silently hand it the 'admin' default and assert nothing.
       role: 'role' in options ? options.role : 'admin',
+      currentUser: { id: 'currentUserId' in options ? options.currentUserId : undefined },
       showToast(msg, type) { toasts.push([msg, type]); },
     },
     document: {
@@ -161,6 +173,21 @@ const LEGACY_ROW = {
   id: 'u-legacy', employee_id: 'EMP-0003', email: 'legacy@shop.local',
   role: 'employee', effective_role: 'cashier', status: 'disabled', has_pin: false,
 };
+// A delegated branch manager's OWN roster row (launch-readiness account-
+// hierarchy design §10 item 3) -- role='manager', a real branch scope, and
+// `can_manage_staff: true`, exactly the shape GET /api/admin/employees
+// returns for a session commit 93cef8c's server-side gate actually accepts.
+const BM_SELF_ROW = {
+  id: 'u-bm', employee_id: 'EMP-BM01', email: 'manager@shop.local',
+  role: 'manager', effective_role: 'manager', branch_scope_uid: 'br-1',
+  status: 'active', has_pin: true, can_manage_staff: true,
+};
+// A cashier the same branch manager's roster also contains.
+const BM_STAFF_ROW = {
+  id: 'u-bm-staff', employee_id: 'EMP-BM02', email: 'cashier2@shop.local',
+  role: 'cashier', effective_role: 'cashier', branch_scope_uid: 'br-1',
+  status: 'active', has_pin: false, can_manage_staff: false,
+};
 
 // ── 1. Honest degradation ────────────────────────────────────────────────────
 
@@ -187,14 +214,20 @@ async function testNonOwnerIsRefusedWithoutTouchingTheNetwork() {
 
 async function testAnEmptyRoleIsTreatedAsNotTheOwner() {
   // SubsystemApp.role is '' until GET /api/auth/session resolves. Fail closed.
-  for (const role of ['', undefined, null, 'manager']) {
+  // 'manager' is NOT in this list (any more): a manager role IS now allowed
+  // to reach the network (see the branch-manager section below) because it
+  // is the only non-owner role the server's delegation gate can ever accept
+  // -- this loop instead covers every role that can never be delegated,
+  // for which render() must still short-circuit with zero calls exactly as
+  // before this screen had a branch-manager arm at all.
+  for (const role of ['', undefined, null, 'cashier', 'employee']) {
     const { screen, calls, content } = load({ role });
     await screen.render(content);
     assert.deepStrictEqual(calls, [], `role=${JSON.stringify(role)} reached the API`);
     assert.ok(content.innerHTML.includes('store owner only.'),
       `role=${JSON.stringify(role)} was treated as the owner`);
   }
-  console.log('PASS: every non-admin role value fails closed');
+  console.log('PASS: every role that can never be delegated fails closed with zero calls');
 }
 
 async function testOwnerSeesTheTableAndItLoads() {
@@ -208,6 +241,185 @@ async function testOwnerSeesTheTableAndItLoads() {
     ['GET', '/api/admin/employees'],
   ]);
   console.log('PASS: the owner gets the table and both list calls');
+}
+
+// ── 1b. The branch-manager reduced screen (launch-readiness account-
+//        hierarchy design §10 item 3; commit 93cef8c's own "KNOWN GAP") ──────
+
+async function testBranchManagerWithDelegationSeesTheReducedScreen() {
+  const { screen, calls, content } = load({
+    role: 'manager',
+    currentUserId: BM_SELF_ROW.id,
+    employees: [BM_SELF_ROW, BM_STAFF_ROW],
+  });
+  await screen.render(content);
+
+  assert.deepStrictEqual(calls, [
+    ['GET', '/api/admin/employees'],
+    ['GET', '/api/sub/retail/branches'],
+  ], 'a delegated branch manager must probe the roster once (to learn ' +
+     'can_manage_staff on their own row) and then load branches -- and ' +
+     'must not fetch the roster a second time via _load(). Got: ' + JSON.stringify(calls));
+  assert.strictEqual(screen._reduced, true, 'render() did not set reduced mode for a delegated branch manager');
+  assert.ok(content.innerHTML.includes('<table'), 'the branch manager was not shown the table');
+  assert.ok(content.innerHTML.includes('Add Cashier'),
+    'the branch-manager header must offer to add a cashier');
+  assert.ok(!content.innerHTML.includes('Add Employee'),
+    "the branch-manager header must not show the owner's wording");
+  console.log('PASS: a delegated branch manager sees the reduced screen, probing the roster exactly once');
+}
+
+// Requirement (1): a branch manager sees create/disable/PIN and does NOT
+// see role, permissions, branch-scope or re-enable controls.
+async function testBranchManagerRowOffersOnlyCreateDisablePinNeverOwnerControls() {
+  const { screen, content } = load({
+    role: 'manager', currentUserId: BM_SELF_ROW.id, employees: [BM_SELF_ROW, BM_STAFF_ROW],
+  });
+  await screen.render(content);
+
+  const activeHtml = screen._row(BM_STAFF_ROW);
+  assert.ok(!activeHtml.includes('data-action="role"'),
+    'a branch manager must not see a role control -- role changes are owner-only');
+  assert.ok(!activeHtml.includes('data-action="branch"'),
+    'a branch manager must not see a branch-scope control -- branch changes are owner-only');
+  assert.ok(!activeHtml.includes('Allow to Manage Branch Staff') && !activeHtml.includes('Revoke Staff Management'),
+    'a branch manager must not see the delegation (permissions) toggle -- that lever is owner-only');
+  assert.ok(activeHtml.includes('data-action="pin"'),
+    'a branch manager must still be able to set/reset a cashier PIN');
+  assert.ok(activeHtml.includes('data-action="status" data-status="disabled"'),
+    'a branch manager must be able to disable a cashier at their own branch');
+  assert.ok(!activeHtml.includes('data-action="status" data-status="active"'),
+    'an active row must not offer a re-enable control to a branch manager');
+
+  const disabledHtml = screen._row(Object.assign({}, BM_STAFF_ROW, { status: 'disabled' }));
+  assert.ok(!disabledHtml.includes('data-action="status"'),
+    'a branch manager must not see ANY status control on an already-disabled row -- ' +
+    're-enable is owner-only (commit 93cef8c: disable is the safety action, re-enable is the trust action)');
+  console.log('PASS: a branch manager row offers only create/disable/PIN, never role, branch, delegation or re-enable');
+}
+
+// Requirement (2): an owner/admin sees the full screen, completely
+// unchanged by the branch-manager addition.
+async function testOwnerScreenIsUnchangedByTheBranchManagerAddition() {
+  const { screen, content } = load({ role: 'admin', employees: [CASHIER_ROW] });
+  await screen.render(content);
+  assert.strictEqual(screen._reduced, false, 'an owner render must never set reduced mode');
+  assert.ok(content.innerHTML.includes('Add Employee'), 'the owner header wording must be unchanged');
+  assert.ok(!content.innerHTML.includes('Add Cashier'), 'the owner must not see the branch-manager wording');
+  const html = screen._row(CASHIER_ROW);
+  assert.ok(html.includes('data-action="role"') && html.includes('data-action="branch"'),
+    'an owner-viewed row must still offer role and branch controls, unchanged');
+  console.log('PASS: the owner screen is unchanged by the branch-manager addition');
+}
+
+// Requirement (3): a plain cashier (no can_manage_staff) sees no staff-
+// management UI at all. role='cashier' is already proved by
+// testNonOwnerIsRefusedWithoutTouchingTheNetwork above (zero calls, no
+// table); this covers the OTHER shape of "no delegation" -- a 'manager'
+// role the server does not currently accept as delegated, which must land
+// on the identical refusal, never a half-shown reduced screen.
+async function testManagerRoleWithoutLiveDelegationIsRefusedNotShownTheReducedScreen() {
+  // (a) The server refuses outright (no scope, or the grant predates this
+  //     session) -- the delegated arm of get_employees answers exactly this.
+  {
+    const { screen, calls, content } = load({
+      role: 'manager', currentUserId: 'u-bm',
+      employeesResult: { error: 'Admin only' },
+    });
+    await screen.render(content);
+    assert.deepStrictEqual(calls, [['GET', '/api/admin/employees']],
+      'a 403 from the roster probe must not go on to fetch branches. Got: ' + JSON.stringify(calls));
+    assert.ok(content.innerHTML.includes('store owner only.'), 'the 403 case must show the refusal panel');
+    assert.ok(!content.innerHTML.includes('<table'), 'the 403 case must not show a table');
+  }
+  // (b) The server answers 200, but this session's own row is simply not in
+  //     it (e.g. testing artefact / a row list that omits it) -- fail
+  //     closed rather than assume delegation.
+  {
+    const { screen, content } = load({
+      role: 'manager', currentUserId: 'u-bm', employees: [BM_STAFF_ROW],
+    });
+    await screen.render(content);
+    assert.ok(content.innerHTML.includes('store owner only.'),
+      "a manager whose own row is missing from the roster must be refused");
+  }
+  console.log('PASS: a manager role without live server-side delegation is refused, never shown the reduced screen');
+}
+
+// Requirement (5): the screen renders from can_manage_staff and does not
+// re-derive the branch-manager rule from role/scope client-side.
+async function testReducedModeIsDrivenByCanManageStaffNotByRoleOrScope() {
+  // Identical role ('manager') and identical branch_scope_uid in both
+  // cases below -- the two client-visible facts a re-derived rule would
+  // key off -- with ONLY can_manage_staff flipped. A client-side
+  // recomputation of "role==='manager' && branch_scope_uid" would render
+  // the two cases identically; trusting the server's own field does not.
+  const scoped = {
+    id: 'u-bm', employee_id: 'EMP-BM', email: 'bm@shop.local',
+    role: 'manager', effective_role: 'manager', branch_scope_uid: 'br-1',
+    status: 'active', has_pin: true,
+  };
+
+  const granted = load({
+    role: 'manager', currentUserId: 'u-bm',
+    employees: [Object.assign({}, scoped, { can_manage_staff: true })],
+  });
+  await granted.screen.render(granted.content);
+  assert.ok(granted.content.innerHTML.includes('<table'),
+    'can_manage_staff:true must show the reduced table');
+
+  const revoked = load({
+    role: 'manager', currentUserId: 'u-bm',
+    employees: [Object.assign({}, scoped, { can_manage_staff: false })],
+  });
+  await revoked.screen.render(revoked.content);
+  assert.ok(!revoked.content.innerHTML.includes('<table'),
+    'can_manage_staff:false must be refused even though role and branch_scope_uid are ' +
+    'identical to the granted case above -- proves the decision is not re-derived from them');
+
+  console.log('PASS: the reduced screen is driven by can_manage_staff alone, not by re-derived role/scope');
+}
+
+// The invite modal offered to a branch manager has no role selector at all
+// (create_employee forces role=cashier server-side for a delegated create;
+// offering a dropdown whose "Manager" choice would be silently overridden
+// is the exact "screen does something other than what it showed" failure
+// shape this reduced view exists to avoid).
+function testBranchManagerInviteModalHasNoRoleSelector() {
+  const ctx = load({ role: 'manager', currentUserId: BM_SELF_ROW.id });
+  ctx.screen._openInvite(true);
+  const overlay = ctx.overlays[ctx.overlays.length - 1];
+  assert.ok(overlay, 'the branch-manager invite modal was never created');
+  assert.ok(!overlay.innerHTML.includes('id="emp-inv-role"'),
+    'a branch manager must not be offered a role selector in the invite modal');
+  assert.ok(overlay.innerHTML.includes('always cashiers'),
+    'the branch-manager invite modal must say new staff are always cashiers');
+  console.log('PASS: the branch-manager invite modal offers no role selector');
+}
+
+async function testBranchManagerInviteSendsRoleCashierWithoutReadingASelector() {
+  const ctx = load({ role: 'manager', currentUserId: BM_SELF_ROW.id });
+  ctx.screen._openInvite(true);
+  ctx.doc.getElementById('emp-inv-email').value = 'new-cashier@shop.local';
+  await ctx.screen._submitInvite(true);
+
+  // Field-by-field rather than a single deepStrictEqual on the whole tuple:
+  // `body` was built by employees.js running inside this file's `vm`
+  // context, so it is a cross-realm plain object -- deepStrictEqual on it
+  // throws "same structure but not reference-equal" (differing
+  // Object.prototype per realm) for reasons that have nothing to do with
+  // what this test is actually checking.
+  const posts = ctx.calls.filter(c => c[0] === 'POST');
+  assert.strictEqual(posts.length, 1,
+    'expected exactly one POST call. Got: ' + JSON.stringify(ctx.calls));
+  assert.strictEqual(posts[0][1], '/api/admin/employees');
+  assert.strictEqual(posts[0][2].email, 'new-cashier@shop.local');
+  assert.strictEqual(posts[0][2].role, 'cashier');
+  // No stray `permissions` (or anything else) riding along -- that dict is
+  // exactly the escalation channel create_employee's server-side guard
+  // refuses with 403 (commit 93cef8c); this screen must never even try.
+  assert.deepStrictEqual(Object.keys(posts[0][2]).sort(), ['email', 'role']);
+  console.log('PASS: a branch-manager invite sends role:"cashier" without reading a nonexistent selector');
 }
 
 // ── 2. The owner row offers no role or status control ────────────────────────
@@ -315,6 +527,19 @@ function testInviteDialogStatesTheLinkTerms() {
     'the link input must be forced LTR -- rtl.css right-aligns every input, ' +
     'which renders a URL visually reordered and impossible to transcribe');
   console.log('PASS: the invite dialog shows the link and states its terms');
+}
+
+// design §10's copy detail: update_role's reset semantics mean
+// demote-then-repromote drops the branch-manager delegation toggle -- the
+// role modal (owner-only) must say so next to the role control.
+function testRoleModalStatesTheDelegationDropCopyDetail() {
+  const ctx = load({});
+  ctx.screen._rows = [CASHIER_ROW];
+  ctx.screen._openRole(CASHIER_ROW.id);
+  const html = ctx.overlays[ctx.overlays.length - 1].innerHTML;
+  assert.ok(html.includes('changing its role away and back removes that permission'),
+    'the role modal does not warn that demote-then-repromote drops the branch-manager toggle. Got: ' + html);
+  console.log('PASS: the role modal states the demote-then-repromote copy detail');
 }
 
 async function testAnEmptyEmailIsRefusedBeforeTheRequest() {
@@ -485,6 +710,13 @@ async function main() {
   await testNonOwnerIsRefusedWithoutTouchingTheNetwork();
   await testAnEmptyRoleIsTreatedAsNotTheOwner();
   await testOwnerSeesTheTableAndItLoads();
+  await testBranchManagerWithDelegationSeesTheReducedScreen();
+  await testBranchManagerRowOffersOnlyCreateDisablePinNeverOwnerControls();
+  await testOwnerScreenIsUnchangedByTheBranchManagerAddition();
+  await testManagerRoleWithoutLiveDelegationIsRefusedNotShownTheReducedScreen();
+  await testReducedModeIsDrivenByCanManageStaffNotByRoleOrScope();
+  testBranchManagerInviteModalHasNoRoleSelector();
+  await testBranchManagerInviteSendsRoleCashierWithoutReadingASelector();
   testOwnerRowHasNoRoleOrDeactivateControl();
   testEmployeeRowHasEveryControl();
   testDisabledRowOffersReactivation();
@@ -492,6 +724,7 @@ async function main() {
   testRowEscapesTheEmail();
   testModalsEscapeTheEmail();
   testInviteDialogStatesTheLinkTerms();
+  testRoleModalStatesTheDelegationDropCopyDetail();
   await testAnEmptyEmailIsRefusedBeforeTheRequest();
   testPinDialogStatesTheRuleAndAcceptsNonAsciiDigits();
   testPinDialogOffersNoRemovalWhenThereIsNoPin();

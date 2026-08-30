@@ -58,6 +58,21 @@
  * who would then be 403'd by every button on it. Hence the separate
  * `ownerOnly` flag in the nav, and the role check in render() below for the
  * case where somebody reaches the section without the nav.
+ *
+ * ── THE BRANCH-MANAGER REDUCED SCREEN (launch-readiness account-hierarchy
+ *    design §10 item 3) ─────────────────────────────────────────────────
+ * Commit 93cef8c shipped delegation server-side -- a branch manager
+ * (role=manager AND a branch scope AND holding retail.employees) may
+ * create a cashier at their own branch, disable one, and set/clear a PIN,
+ * all via API -- and flagged in its own commit message that this screen
+ * had no UI path onto any of it. render() below is that path: a non-owner
+ * whose session role is 'manager' gets asked of GET /api/admin/employees
+ * whether their OWN roster row currently carries `can_manage_staff`
+ * (never recomputed from role/scope here -- see render()'s comment), and
+ * if so gets `_reduced = true` for the rest of that render: create-cashier,
+ * disable, and PIN only, in `_row()` and `_openInvite()` below. An
+ * owner/admin session never sets `_reduced` and is byte-for-byte what this
+ * screen has always rendered.
  */
 const RetailEmployees = {
   //: Populated by _load(). Rows come straight from GET /api/admin/employees.
@@ -71,6 +86,15 @@ const RetailEmployees = {
   //: retail.db, a different product's database), so this screen offering
   //: only real branches is what keeps a legitimate request honest.
   _branches: [],
+
+  // True while the CURRENT render() is the branch-manager reduced screen
+  // (launch-readiness account-hierarchy design §10 item 3 -- the BM-facing
+  // arm this file was missing per commit 93cef8c's own "KNOWN GAP" note).
+  // Read by _row() to decide which action buttons a row offers; set only by
+  // render(), once per render() call, from the server's own answer (see
+  // render()'s branch-manager arm below) -- never flipped anywhere else, so
+  // there is exactly one place that can put this screen into reduced mode.
+  _reduced: false,
 
   // Delegated rather than reimplemented -- same shape cash-drawer.js uses, so
   // the 401 -> re-login handling in RetailSystem._fetch covers this screen too
@@ -132,32 +156,114 @@ const RetailEmployees = {
     if (!c) return;
     RetailSystem._injectStyles();
 
-    // Degrade HONESTLY: refuse up front with a reason rather than painting a
-    // table and then filling it with a 403. A non-owner never sees this nav
-    // entry, but the section id can still be reached (a restored hash, a
-    // stale tab, a role that changed under a live session), and "empty table,
-    // no explanation" is the worst of the available answers.
-    if (!this._isOwner()) {
+    if (this._isOwner()) {
+      this._reduced = false;
       c.innerHTML = `
-        <div class="ret-hdr"><h2 class="ret-title">${t('Employees')}</h2></div>
-        <div class="sub-chart-card" style="text-align:center;padding:48px 32px">
-          <div style="font-size:40px;margin-bottom:14px">🔒</div>
-          <h3 style="color:var(--text);margin:0 0 10px;font-size:17px">${t('Employee management is available to the store owner only.')}</h3>
-          <p style="color:var(--text-muted);font-size:13px;margin:0;line-height:1.7">
-            ${t('You are signed in with an employee account. Ask the store owner to add or change staff accounts.')}
+        <div class="ret-hdr">
+          <h2 class="ret-title">${t('Employees')}</h2>
+          <button class="sub-btn-primary" onclick="RetailEmployees._openInvite()">+ ${t('Add Employee')}</button>
+        </div>
+        <div class="sub-chart-card">
+          <p style="color:var(--text-muted);font-size:13px;margin:0 0 18px;line-height:1.7">
+            ${t('Every account is identified by its email address. This product does not store a separate display name.')}
           </p>
+          <div style="overflow-x:auto">
+            <table class="ret-table" id="emp-table">
+              <thead><tr>
+                <th>${t('Employee')}</th>
+                <th>${t('Role')}</th>
+                <th>${t('Branch')}</th>
+                <th>${t('Status')}</th>
+                <th>${t('PIN')}</th>
+                <th>${t('Actions')}</th>
+              </tr></thead>
+              <tbody><tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
+            </table>
+          </div>
         </div>`;
+      // Delegated click handler for the table's action buttons (C6, see
+      // _onTableClick above). One listener per render() call: render()
+      // rebuilds this whole innerHTML block -- and with it a brand-new
+      // #emp-table element -- every time it runs, so there is nothing left
+      // over from a previous render() for a second listener to pile onto.
+      document.getElementById('emp-table')?.addEventListener('click', ev => this._onTableClick(ev));
+      await this._load();
+      return;
+    }
+
+    // Not the owner. Two real possibilities and one fake one:
+    //   - an ordinary cashier/other non-owner, who has no path onto this
+    //     screen at all;
+    //   - a DELEGATED BRANCH MANAGER (launch-readiness account-hierarchy
+    //     design §10 item 3) -- role='manager' AND a branch scope AND
+    //     holding retail.employees, all read fresh server-side -- who gets
+    //     a reduced screen: create cashier, disable, set/clear PIN, nothing
+    //     else (commit 93cef8c shipped the delegation server-side and
+    //     flagged this exact screen as the missing piece).
+    //   - the fake one: a role that merely SAYS 'manager' this session but
+    //     is not currently delegated (no scope, or the toggle was revoked
+    //     since login). `SubsystemApp.role` decides nothing here -- it is
+    //     rendering advice only, the same posture app-shell.js's
+    //     hasCapability() already documents, and re-deriving the actual
+    //     predicate from role+scope client-side is exactly what
+    //     _isDelegationEligible below does for the OWNER's OWN grant/revoke
+    //     button, which is allowed to be a rendering shortcut only because a
+    //     wrong guess there just mis-renders one button the server still
+    //     gates. Getting this screen's whole identity wrong is a bigger
+    //     mistake, so the only source of truth is the same roster route the
+    //     owner's screen already trusts: GET /api/admin/employees answers
+    //     `can_manage_staff` on THIS session's own row, computed from the
+    //     live grant, not from anything cached in this session's login.
+    //
+    // `role !== 'manager'` still short-circuits before any network call --
+    // a cashier can never pass the server's role half of the delegation
+    // predicate either way (the same "a stray hand-granted retail.employees
+    // on a cashier row is inert" reasoning create_employee's own commit
+    // message gives), so there is nothing to gain by asking, and every
+    // existing non-owner refuses-with-zero-calls test keeps passing for
+    // every role except the one that can actually be delegated.
+    if (!(window.SubsystemApp && SubsystemApp.role === 'manager')) {
+      c.innerHTML = this._refusalHtml();
       return;
     }
 
     c.innerHTML = `
+      <div class="ret-hdr"><h2 class="ret-title">${t('Employees')}</h2></div>
+      <div class="sub-chart-card" style="text-align:center;padding:48px 32px">
+        <p style="color:var(--text-muted);font-size:13px;margin:0">${t('Loading…')}</p>
+      </div>`;
+
+    let probe = null;
+    try {
+      probe = await this._get('/api/admin/employees');
+    } catch (err) {
+      console.error('Branch-manager roster check failed', err);
+    }
+    const myId = window.SubsystemApp && SubsystemApp.currentUser && SubsystemApp.currentUser.id;
+    // My own row is always present when the request was accepted: the
+    // delegated arm of get_employees filters to
+    // `branch_scope_uid = <creator's own scope> AND role != 'admin'`, and a
+    // branch manager's own row matches that by construction (their own
+    // scope, their own non-admin role). Not finding it is therefore treated
+    // exactly like "not delegated" -- fail closed, never fail open.
+    const myRow = (probe && probe.success)
+      ? (probe.employees || []).find(e => String(e.id) === String(myId))
+      : null;
+
+    if (!myRow || !myRow.can_manage_staff) {
+      c.innerHTML = this._refusalHtml();
+      return;
+    }
+
+    this._reduced = true;
+    c.innerHTML = `
       <div class="ret-hdr">
         <h2 class="ret-title">${t('Employees')}</h2>
-        <button class="sub-btn-primary" onclick="RetailEmployees._openInvite()">+ ${t('Add Employee')}</button>
+        <button class="sub-btn-primary" onclick="RetailEmployees._openInvite(true)">+ ${t('Add Cashier')}</button>
       </div>
       <div class="sub-chart-card">
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 18px;line-height:1.7">
-          ${t('Every account is identified by its email address. This product does not store a separate display name.')}
+          ${t('You can add, disable and reset the PIN for cashiers at your own branch. Role, branch and permission changes are made by the store owner.')}
         </p>
         <div style="overflow-x:auto">
           <table class="ret-table" id="emp-table">
@@ -173,16 +279,39 @@ const RetailEmployees = {
           </table>
         </div>
       </div>`;
-    // Delegated click handler for the table's action buttons (C6, see
-    // _onTableClick above). One listener per render() call: render() rebuilds
-    // this whole innerHTML block -- and with it a brand-new #emp-table
-    // element -- every time it runs, so there is nothing left over from a
-    // previous render() for a second listener to pile onto.
     document.getElementById('emp-table')?.addEventListener('click', ev => this._onTableClick(ev));
-    await this._load();
+    // `probe` already IS the roster this session may see -- passed through
+    // rather than fetched a second time, so a branch manager's render costs
+    // exactly two requests (this probe + _load()'s own branch-list fetch),
+    // not three.
+    await this._load(probe);
   },
 
-  async _load() {
+  // Degrade HONESTLY: refuse with a reason rather than painting a table and
+  // then filling it with a 403. Shared by both non-owner exits above (an
+  // ordinary employee, and a 'manager' role the server did not accept as
+  // currently delegated) so there is exactly one refusal screen to keep
+  // translated and exactly one place to update its wording.
+  _refusalHtml() {
+    return `
+      <div class="ret-hdr"><h2 class="ret-title">${t('Employees')}</h2></div>
+      <div class="sub-chart-card" style="text-align:center;padding:48px 32px">
+        <div style="font-size:40px;margin-bottom:14px">🔒</div>
+        <h3 style="color:var(--text);margin:0 0 10px;font-size:17px">${t('Employee management is available to the store owner only.')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0;line-height:1.7">
+          ${t('You are signed in with an employee account. Ask the store owner to add or change staff accounts.')}
+        </p>
+      </div>`;
+  },
+
+  // `preloadedRes` -- optional, and only ever passed by render()'s
+  // branch-manager arm above, which already had to call
+  // GET /api/admin/employees once to decide whether to show the reduced
+  // screen at all. Reusing that answer instead of fetching it again keeps a
+  // branch manager's render at two requests total (the probe + the branch
+  // list just below) rather than three; the owner path never passes this,
+  // so its call sequence -- branches, then employees -- is unchanged.
+  async _load(preloadedRes) {
     const tbody = document.querySelector('#emp-table tbody');
     // Fetched separately from the employee list, and deliberately allowed
     // to fail on its own: the branch picker degrades to just showing every
@@ -197,7 +326,7 @@ const RetailEmployees = {
       this._branches = [];
     }
     try {
-      const res = await this._get('/api/admin/employees');
+      const res = preloadedRes || await this._get('/api/admin/employees');
       // These routes answer {'error': ...} with a 403 rather than the
       // {status:'success'} envelope the retail API uses -- surface the real
       // message instead of an empty list, which would read as "this shop has
@@ -274,6 +403,17 @@ const RetailEmployees = {
   _row(e) {
     const id = this._esc(e.id);
     const owner = this._isOwnerRow(e);
+    // Branch-manager reduced screen (design §10 item 3): a delegated
+    // manager gets create-cashier, disable, and set/clear-PIN ONLY. Role,
+    // branch-scope, and the delegation toggle itself are owner-only levers
+    // -- rendering them here would be a control that simply 403s the
+    // moment it is clicked, which is worse than not offering it at all.
+    // RE-ENABLE is asymmetric on purpose (commit 93cef8c): disable is the
+    // safety action a manager needs at 9pm with nobody to call; re-enable
+    // is the trust action the OWNER alone grants back, so a disabled row
+    // offers nothing further here rather than a Reactivate button that
+    // would also just 403.
+    const reduced = this._reduced;
     return `<tr>
       <td>
         <div style="font-weight:600;color:var(--text)">${this._esc(e.email)}</div>
@@ -287,12 +427,12 @@ const RetailEmployees = {
             : `<span style="color:var(--text-muted);font-size:12px">○ ${t('Not set')}</span>`}</td>
       <td>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
-          ${owner ? '' : `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="role" data-id="${id}">${t('Change Role')}</button>`}
-          ${owner ? '' : `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="branch" data-id="${id}">${t('Change Branch')}</button>`}
-          ${this._delegationButton(e)}
+          ${(owner || reduced) ? '' : `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="role" data-id="${id}">${t('Change Role')}</button>`}
+          ${(owner || reduced) ? '' : `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="branch" data-id="${id}">${t('Change Branch')}</button>`}
+          ${reduced ? '' : this._delegationButton(e)}
           <button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="pin" data-id="${id}">${e.has_pin ? t('Reset PIN') : t('Set PIN')}</button>
           ${owner ? '' : (e.status === 'disabled'
-              ? `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="status" data-status="active" data-id="${id}">${t('Reactivate')}</button>`
+              ? (reduced ? '' : `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="status" data-status="active" data-id="${id}">${t('Reactivate')}</button>`)
               : `<button class="ret-btn ret-btn-danger ret-btn-sm" data-action="status" data-status="disabled" data-id="${id}">${t('Deactivate')}</button>`)}
         </div>
       </td>
@@ -408,9 +548,34 @@ const RetailEmployees = {
 
   // ── Invite a new employee ─────────────────────────────────────────────────
 
-  _openInvite() {
+  // `reduced` -- true only when opened from the branch-manager screen
+  // (design §10 item 3). A branch manager's create is ALWAYS a cashier at
+  // their own branch (create_employee forces the role and stamps the
+  // scope server-side, commit 93cef8c); this modal therefore offers no
+  // role select at all in that mode rather than a dropdown whose "Manager"
+  // option would be silently overridden by the server -- the exact
+  // "screen does something other than what it showed" failure shape the
+  // reduced view exists to avoid.
+  _openInvite(reduced) {
+    const roleField = reduced
+      ? `<div class="ret-field">
+          <label>${t('Role')}</label>
+          <p style="color:var(--text-muted);font-size:12px;margin:6px 0 0;line-height:1.6">
+            ${t('New staff you add here are always cashiers at your own branch.')}
+          </p>
+        </div>`
+      : `<div class="ret-field">
+          <label>${t('Role')}</label>
+          <select id="emp-inv-role">
+            <option value="cashier">${t('Cashier')}</option>
+            <option value="manager">${t('Manager')}</option>
+          </select>
+          <p style="color:var(--text-muted);font-size:12px;margin:8px 0 0;line-height:1.6">
+            ${t('A cashier can sell, refund against a sale, and close their own drawer. A manager can also discount, adjust stock and read reports.')}
+          </p>
+        </div>`;
     this._modal('emp-invite-modal', `
-      <h3>👤 ${t('Invite an employee')}</h3>
+      <h3>👤 ${reduced ? t('Invite a cashier') : t('Invite an employee')}</h3>
       <p style="color:var(--text-muted);font-size:13px;margin:-14px 0 20px;line-height:1.7">
         ${t('They receive a one-time setup link and choose their own password. No password is set for them here.')}
       </p>
@@ -423,26 +588,21 @@ const RetailEmployees = {
              honestly do. i18n.js never sweeps input elements anyway. -->
         <input id="emp-inv-email" type="email" autocomplete="off" placeholder="name@example.com" />
       </div>
-      <div class="ret-field">
-        <label>${t('Role')}</label>
-        <select id="emp-inv-role">
-          <option value="cashier">${t('Cashier')}</option>
-          <option value="manager">${t('Manager')}</option>
-        </select>
-        <p style="color:var(--text-muted);font-size:12px;margin:8px 0 0;line-height:1.6">
-          ${t('A cashier can sell, refund against a sale, and close their own drawer. A manager can also discount, adjust stock and read reports.')}
-        </p>
-      </div>
+      ${roleField}
       <div class="ret-modal-footer">
         <button class="ret-btn ret-btn-ghost" onclick="RetailEmployees._closeModal('emp-invite-modal')">${t('Cancel')}</button>
-        <button class="ret-btn ret-btn-primary" id="emp-inv-btn" onclick="RetailEmployees._submitInvite()">${t('Create Invite')}</button>
+        <button class="ret-btn ret-btn-primary" id="emp-inv-btn" onclick="RetailEmployees._submitInvite(${reduced ? 'true' : 'false'})">${reduced ? t('Add Cashier') : t('Create Invite')}</button>
       </div>`);
     document.getElementById('emp-inv-email')?.focus();
   },
 
-  async _submitInvite() {
+  async _submitInvite(reduced) {
     const email = (document.getElementById('emp-inv-email')?.value || '').trim();
-    const role  = document.getElementById('emp-inv-role')?.value || 'cashier';
+    // Reduced mode sends 'cashier' directly rather than reading a select
+    // that does not exist in this mode's markup -- see _openInvite's
+    // comment above for why that select is absent rather than merely
+    // disabled.
+    const role = reduced ? 'cashier' : (document.getElementById('emp-inv-role')?.value || 'cashier');
     if (!email) { SubsystemApp.showToast(t('Enter an email address.'), 'error'); return; }
 
     const btn = document.getElementById('emp-inv-btn');
@@ -463,7 +623,7 @@ const RetailEmployees = {
       console.error('Employee invite failed', err);
       SubsystemApp.showToast(t('Could not create this employee.'), 'error');
     } finally {
-      if (btn) { btn.disabled = false; btn.textContent = t('Create Invite'); }
+      if (btn) { btn.disabled = false; btn.textContent = reduced ? t('Add Cashier') : t('Create Invite'); }
     }
   },
 
@@ -543,6 +703,14 @@ const RetailEmployees = {
       <div style="background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.30);border-radius:10px;padding:12px 14px">
         <div style="color:var(--text-muted);font-size:12px;line-height:1.6">
           ${t('Changing the role replaces this account permissions with the defaults for the new role, and signs the person out of any session they have open.')}
+        </div>
+        <!-- design §10's copy detail: update_role's reset semantics mean
+             demote-then-repromote drops the branch-manager delegation
+             toggle (_delegationButton below) -- it is not restored when the
+             role comes back to manager, and this is the one place an owner
+             is about to trigger exactly that. -->
+        <div style="color:var(--text-muted);font-size:12px;line-height:1.6;margin-top:8px">
+          ${t('If this account currently has permission to manage branch staff, changing its role away and back removes that permission. Grant it again afterward if needed.')}
         </div>
       </div>
       <div class="ret-modal-footer">
