@@ -20,9 +20,26 @@ returns **401, not a connection failure**. The service is healthy.
 Models present: `phi3.5:3.8b` (2.2 GB) and `phi3:mini` (2.2 GB).
 
 The bearer token is in `/etc/caddy/Caddyfile` on that droplet. It must match
-`AURA_AI_BEARER_TOKEN`, which is baked into the APK at build time via
-`-PaiBearerToken`. Nothing in the build currently passes it, so a rebuilt APK
-gets 401 → 503 regardless of the app code being correct.
+`AURA_AI_BEARER_TOKEN`, which is baked into the APK at build time.
+
+**Correction, 2026-08-30.** This paragraph used to end: *"Nothing in the build
+currently passes it, so a rebuilt APK gets 401 → 503 regardless of the app code
+being correct."* That is no longer true, and it was the most alarming sentence
+in this document, so it should not be left standing. `android/aura-retail/app/
+build.gradle` now resolves the secret three ways — `-PaiBearerToken=…` on the
+command line, `aiBearerToken=…` in `local.properties`, or the
+`AURA_AI_BEARER_TOKEN` environment variable (the CI-secret path) — and when it
+resolves to nothing the build prints a banner naming the exact consequence:
+the assistant renders, accepts a question, and always fails with "AI assistant
+is temporarily unavailable."
+
+So the failure mode is now LOUD rather than silent. It is still a real failure:
+a build with no token produces an APK whose assistant cannot work. The banner
+means nobody ships one without having been told, which is the difference that
+matters. The same mechanism covers the licensing and sync secrets, each with
+its own consequence text — the licensing one is worth reading, because a blank
+there does not weaken licensing, it removes it, and the resulting APK is the
+product given away.
 
 ## Cost — and a correction
 
@@ -48,6 +65,69 @@ shipping installs, or not at all.
 Recommendation: leave it at 8 GB until launch traffic is understood. The saving
 is small relative to the risk of the assistant becoming the thing that is
 "not working" again.
+
+## Model choice — the "better LLM, no more resources" question
+
+Asked directly by the product owner: is there a better model that does not cost
+more resources? Three separate questions hide in that one, and they have
+different answers.
+
+**Stated up front, because this document's own convention is to separate
+measured from believed: none of the model-quality claims below were measured on
+this hardware.** Everything about droplet sizing, memory and cost above WAS
+measured on the live hosts. The comparison below is a recommendation to test,
+not a result. It would be settled by an afternoon: pull the candidate
+alongside the incumbent on the same box, run the same twenty real questions
+through both — including Arabic ones — and compare.
+
+### 1. A same-footprint swap
+
+The incumbent is `phi3.5:3.8b` (2.2 GB quantised). Several 3B-class instruct
+models released since occupy the same ~2 GB and are generally stronger at
+instruction-following and, specifically, **substantially stronger at Arabic** —
+the phi family's weakest area, and the one that matters most here, because this
+product ships an Arabic/RTL interface for the Jordanian market. A shopkeeper
+asking the assistant a question in Arabic is not an edge case for this product,
+it is the main case.
+
+This is the answer to the question as asked: same droplet, same memory, same
+$0 additional cost, `ollama pull` and a config change. **It is also the only
+option on this page that does not require a decision from anyone about data
+leaving the shop.** If only one thing is done, do this one.
+
+### 2. The latency problem is not a model problem
+
+`aura-llm-demo` has 4 vCPU and no GPU, so every token is generated on CPU.
+Roughly 30 seconds to a full answer is a property of that, not of which 3B
+model is loaded — a better 3B will answer better in about the same time. Nobody
+waits 30 seconds at a till. Whatever else happens, the assistant should not sit
+in any path a cashier is blocked on.
+
+### 3. Hosted, and why it is a decision rather than an optimisation
+
+A small hosted model would answer in one to three seconds instead of thirty,
+cost fractions of a cent per question, and remove the $48/month that the 8 GB
+droplet exists to pay for — cheaper AND faster AND better, on every axis this
+document can measure.
+
+**The axis it cannot measure is the one that decides it.** The assistant is
+retrieval-augmented: answering "how did we do last week" means sending real
+sales figures off the premises. For some buyers that is unremarkable. For a
+co-operative, a foundation, or any institution with a data-residency rule, it
+is disqualifying — and those are named buyers for this product.
+
+So it cannot be a default. It can be a per-company opt-in, off unless switched
+on, exactly the shape e-invoicing and licensing enforcement already use: an
+install that never enables it must not pay a byte for it. That also makes the
+two options above complementary rather than competing — the local model stays
+the floor for shops that will not send data out, and the hosted one is the
+upgrade for shops that will.
+
+**What this does NOT change:** downsizing or replacing the droplet still moves
+its IP, which still breaks the `sslip.io` hostname baked into `config.py` and
+therefore every already-installed client. That is a coordinated change, not a
+slider drag — the same caveat the cost section above records, and it applies
+just as much to switching the assistant off a droplet as to shrinking one.
 
 ## Redundant deployments worth reconciling
 
