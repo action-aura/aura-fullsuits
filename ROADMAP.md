@@ -1394,3 +1394,62 @@ Reserved by NAME only, deliberately. Nobody is building it today, and a claim
 that sits open invites a second branch to assume it is dead and take the number.
 When it is scheduled it gets a full claim entry like the ones above, at whatever
 the next free version is at that time — this note does not hold v24 hostage.
+
+## 2026-08-30 — commercial model DECIDED by the owner (devices, not seats)
+
+Answers given directly by the product owner, recorded here because they are
+pricing calls nobody else may make, and because the design work dispatched
+against them must not silently drift from what he actually said.
+
+1. **The paid meter is DEVICES.** Two devices included, **50 JOD per additional
+   device**. This accepts the recommendation in
+   `docs/launch-readiness/seats-and-chain-design.md` §1.2 over his own opening
+   framing ("more than 2 users must pay 50 JOD"), on the argument that users are
+   rows a customer's own admin creates offline, so a per-head charge is
+   enforceable only against honest customers — and the dishonest response
+   (one shared "Cashier" login) destroys the attribution machinery (PINs, audit
+   trail, cash-variance separation) that is the product's own value.
+
+   Devices are the hard axis: Ed25519 device-bound, enforced server-side at
+   activation (`DEVICE_LIMIT_REACHED`), and unmintable offline.
+
+2. **The owner's own account counts inside the included allowance.** Marketing
+   reads "owner plus one included", not "owner plus two".
+
+3. **The 50 JOD is per additional device.** Whether it is one-time or per
+   subscription term was not separated in his answer; the add-on machinery
+   supports either and it is an Owner-side catalog value, so it does not block
+   any product-side work. Flagged, not guessed.
+
+4. **Clinic: not yet.** Seat/device entitlement work stays off Clinic until he
+   says otherwise. Anything landing in shared runtime must leave Clinic
+   byte-identical, and prove it by test rather than assert it.
+
+### What this changes about the work already claimed
+
+`max_users` drops from "the revenue mechanism" to "an optional anti-abuse
+backstop", and is no longer on the critical path. **The device limit it would
+have duplicated already exists and is already enforced** — so the honest
+consequence of this decision is that the single largest piece of the seat design
+may not need building at all. That is being re-examined rather than built by
+momentum.
+
+The chain work (device→branch pinning, branch-scoped users, head-office view) is
+UNAFFECTED by the metering decision and remains the real work.
+
+### A fifth answer that was not a pricing answer
+
+Asked whether branches should be priced, the owner instead described a
+requirement: *"i want to be able to have an owner account that creates admins for
+managers for the branches and employees for the workers in these branches."*
+
+That is an account-hierarchy requirement, not a price, and it collides with a
+deliberate architectural constraint: `ROLE_MANAGER` excludes `CAP_EMPLOYEES` on
+purpose, because `users` is an admin-device single-writer table and a manager
+minting accounts would be writing to a table their device is not the writer for
+(see the comment in `user_accounts.py`). Whether that constraint is real today or
+a stale comment is being verified rather than assumed — this codebase has
+already produced three stale "missing feature" claims and one stale "products are
+not synced" comment contradicted by live code.
+
+Branch pricing therefore remains genuinely unanswered, and is not blocking.
