@@ -427,8 +427,8 @@ const RetailEmployees = {
             : `<span style="color:var(--text-muted);font-size:12px">○ ${t('Not set')}</span>`}</td>
       <td>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
-          ${(owner || reduced) ? '' : `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="role" data-id="${id}">${t('Change Role')}</button>`}
-          ${(owner || reduced) ? '' : `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="branch" data-id="${id}">${t('Change Branch')}</button>`}
+          ${reduced ? '' : (owner ? '' : `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="role" data-id="${id}">${t('Change Role')}</button>`)}
+          ${reduced ? '' : (owner ? '' : `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="branch" data-id="${id}">${t('Change Branch')}</button>`)}
           ${reduced ? '' : this._delegationButton(e)}
           <button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="pin" data-id="${id}">${e.has_pin ? t('Reset PIN') : t('Set PIN')}</button>
           ${owner ? '' : (e.status === 'disabled'
