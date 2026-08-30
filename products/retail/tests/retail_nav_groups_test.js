@@ -8,10 +8,18 @@
  * grouped replacement:
  *
  *     (ungrouped)  Dashboard
- *     Sell         Point of Sale, Returns, Barcode Scanner, Customers
+ *     Sell         Point of Sale, Returns, Barcode Scanner, Customers, Promotions
  *     Stock        Products, Categories, Suppliers, Purchase Orders
  *     Insight      Reports, Stock Accuracy, Exceptions, Audit Log
  *     Admin        Employees, Settings
+ *
+ * UPDATED 2026-08-30 (ROADMAP.md "retail schema v23", promotions wave 1):
+ * Promotions is a 16th destination, appended to Sell -- it is a per-product/
+ * per-category discount rule the till resolves automatically, the same
+ * authority as typing a manual discount at checkout (capability
+ * retail.discount, same code a manager/admin already holds). ALL_FIFTEEN
+ * below is renamed ALL_DESTINATIONS rather than bumped to a new hardcoded
+ * name, so the NEXT nav addition does not have to rename it again.
  *
  * WHAT THIS FILE DOES NOT RE-TEST
  * The per-item visibility rule itself (capability / adminOnly / ownerOnly /
@@ -42,12 +50,12 @@ const SHELL_FILE = path.join(FRONTEND_DIR, 'app-shell.js');
 // against the SAME expectation rather than five ad-hoc lists that could drift
 // from each other.
 const GROUPS = [
-  { label: 'Sell', items: ['pos', 'returns', 'scanner', 'customers'] },
+  { label: 'Sell', items: ['pos', 'returns', 'scanner', 'customers', 'promotions'] },
   { label: 'Stock', items: ['products', 'categories', 'suppliers', 'purchases'] },
   { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
   { label: 'Admin', items: ['employees', 'admin-center'] },
 ];
-const ALL_FIFTEEN = ['dashboard', ...GROUPS.flatMap((g) => g.items)];
+const ALL_DESTINATIONS = ['dashboard', ...GROUPS.flatMap((g) => g.items)];
 
 // The real grant sets a role actually resolves to, copied from
 // commercial_runtime/identity/user_accounts.py's ROLE_CAPABILITIES (same
@@ -164,12 +172,12 @@ function ownerEverythingVisibleHTML() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 1 — every one of the 15 destinations is still reachable for an owner
+// 1 — every one of the 16 destinations is still reachable for an owner
 // ═════════════════════════════════════════════════════════════════════════════
 
-function testAllFifteenDestinationsReachableForOwner() {
+function testAllDestinationsReachableForOwner() {
   const html = ownerEverythingVisibleHTML();
-  const missing = ALL_FIFTEEN.filter((id) => !new RegExp(`_navigate\\('${id}'\\)`).test(html));
+  const missing = ALL_DESTINATIONS.filter((id) => !new RegExp(`_navigate\\('${id}'\\)`).test(html));
   assert.deepStrictEqual(
     missing, [],
     `${missing.length} destination(s) unreachable for an owner after grouping: ${missing.join(', ')}. ` +
@@ -177,7 +185,7 @@ function testAllFifteenDestinationsReachableForOwner() {
     'Every id in systems.retail.navGroups must resolve to a real nav entry, and ' +
     'every non-dashboard nav entry must be listed in exactly one group.'
   );
-  assert.strictEqual(missing.length === 0 && ALL_FIFTEEN.length, 15, 'sanity: this file\'s own expectation list drifted from 15 destinations');
+  assert.strictEqual(missing.length === 0 && ALL_DESTINATIONS.length, 16, 'sanity: this file\'s own expectation list drifted from 16 destinations');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -288,7 +296,7 @@ function testDashboardRendersOutsideAnyGroup() {
 // its own name -- see retail_reports_capability_gate_test.js for why a flat
 // sequence that aborts on the first throw is the wrong shape here.
 const CASES = [
-  testAllFifteenDestinationsReachableForOwner,
+  testAllDestinationsReachableForOwner,
   testGroupsRenderInSpecifiedOrderWithMembers,
   testCashierSeesNoInsightNoAdminHeader,
   testGroupSurvivesWhenExactlyOneMemberIsGatedOut,

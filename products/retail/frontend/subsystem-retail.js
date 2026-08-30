@@ -142,6 +142,9 @@ const RetailSystem = {
       case 'products':  return this._renderProducts(c);
       case 'categories':return this._renderCategories(c);
       case 'customers': return this._renderCustomers(c);
+      // Launch-readiness 2026-08-30 (ROADMAP.md "retail schema v23",
+      // promotions wave 1). See _renderPromotions for the capability guard.
+      case 'promotions':return this._renderPromotions(c);
       case 'suppliers': return this._renderSuppliers(c);
       case 'purchases': return this._renderPurchases(c);
       case 'returns':   return this._renderReturns(c);
@@ -1761,6 +1764,16 @@ const RetailSystem = {
         .pos-line-main { flex:1;min-inline-size:0; }
         .pos-item-name { color:var(--text);font-size:14px;font-weight:600;line-height:1.35;overflow:hidden;text-overflow:ellipsis; }
         .pos-item-meta { color:var(--text-dim);font-size:12px;margin-block-start:2px; }
+        /* Promotions wave 1 (ROADMAP.md "retail schema v23"). Only rendered
+           when _bestPromoFor resolves a promotion for the line (see
+           _renderCart) -- with none, .pos-item-meta is untouched from before
+           this wave. The struck-through original price carries the same
+           muted step .pos-card-outofstock already uses for a de-emphasised
+           figure; the promo tag uses the success-state token because it is,
+           for the customer, unambiguously good news, matching how a "you
+           saved" figure reads anywhere else money is shown positive. */
+        .pos-price-orig { text-decoration:line-through;color:var(--text-tertiary, var(--text-dim));margin-inline-end:4px; }
+        .pos-promo-tag { display:flex;align-items:center;gap:4px;color:var(--state-success-text);font-size:11px;font-weight:600;margin-block-start:2px; }
         /* High-frequency zone: quantity stepper + the line's money. */
         .pos-line-freq { display:flex;align-items:center;gap:12px;flex-shrink:0; }
         .pos-qty-wrap { display:flex;align-items:center;background:var(--input-bg);border:1px solid var(--border-mid);border-radius:10px;overflow:hidden; }
@@ -1984,6 +1997,15 @@ const RetailSystem = {
     this._cart = [];
     this._paymentMethod = 'cash';
     this._activeCat = null;
+    // Promotions wave 1 (ROADMAP.md "retail schema v23"). Reset synchronously
+    // at mount, same as _cart above -- _loadPOSData()'s fetch is async and a
+    // render that happens before it resolves (or a test that drives _addToCart
+    // straight after this call, before awaiting) must see an empty array, not
+    // undefined. _recalc/_renderCart/_bestPromoFor all read this defensively
+    // too (`this._promotions || []`), because several existing test harnesses
+    // exercise _addToCart/_recalc directly without ever calling _renderPOS at
+    // all -- this reset is a courtesy for the ones that do, not the only guard.
+    this._promotions = [];
     // A multiplier armed on a screen the cashier has since navigated away
     // from is a stale trap, not a convenience -- clear it on every (re)mount.
     this._pendingQty = null;
@@ -2042,14 +2064,31 @@ const RetailSystem = {
 
   async _loadPOSData() {
     try {
-      const [prods, cats, custs, taxSettings, held] = await Promise.all([
+      const [prods, cats, custs, taxSettings, held, promos] = await Promise.all([
         this._get(`/api/sub/retail/products?limit=${this.POS_GRID_PAGE_SIZE + 1}`),
         this._get('/api/sub/retail/categories'),
         this._get('/api/sub/retail/customers'),
         this._get('/api/sub/retail/settings/tax').catch(() => null),
         this._get('/api/sub/retail/held-sales').catch(() => null),
+        // Promotions wave 1 (ROADMAP.md "retail schema v23"). `.catch(() =>
+        // null)`, same as taxSettings/held immediately above -- a promotions
+        // fetch failing (offline, a 500, an install with no branch context)
+        // must never block the OTHER three from resolving and must never stop
+        // the till from selling. No branch_id is sent: the POS has no
+        // "current branch" concept anywhere client-side today (nothing else
+        // in this file tracks one), so this asks for whatever the server
+        // resolves with no branch filter rather than inventing new client
+        // state to guess one.
+        this._get('/api/sub/retail/promotions/active').catch(() => null),
       ]);
       this._products   = prods.data || [];
+      // Defensive Array.isArray, not just `promos.data || []`: a non-2xx/
+      // malformed response can still resolve with a `data` that is not an
+      // array (several test fixtures in this suite answer an unmocked GET
+      // with an unrelated stats OBJECT), and iterating that would throw
+      // inside _bestPromoFor on every cart render rather than just showing
+      // no promotions.
+      this._promotions = (promos && Array.isArray(promos.data)) ? promos.data : [];
       // Snapshot of "page 1", restored instantly (no round trip) whenever the
       // search box is cleared -- see _filterPOS.
       this._posInitialPage = this._products;
@@ -2352,7 +2391,13 @@ const RetailSystem = {
       this._cart.push({
         product_id: p.id, name: p.name, quantity: qty,
         unit_price: p.sell_price, tax_rate: p.tax_rate || 0,
-        line_total: qty * p.sell_price, max_stock: p.total_stock
+        line_total: qty * p.sell_price, max_stock: p.total_stock,
+        // Promotions wave 1: category_id travels with the line so a
+        // category-scoped promotion can resolve against it later (see
+        // _bestPromoFor) without re-looking the product up. Not sent to the
+        // server -- _checkout's payload is untouched, see that function's
+        // own comment for why.
+        category_id: p.category_id != null ? p.category_id : null,
       });
     }
     // Presentational: mark which row _renderCart should animate in. Only the
@@ -2619,11 +2664,36 @@ const RetailSystem = {
     const decLabel = this._esc(t('Decrease quantity'));
     const incLabel = this._esc(t('Increase quantity'));
     const remLabel = this._esc(t('Remove line'));
-    container.innerHTML = this._cart.map((item, i) => `
+    // Promotions wave 1 (ROADMAP.md "retail schema v23"). Same clamp as
+    // _recalc below -- read once here rather than per line, matching how
+    // _recalc itself only reads #pos-disc once per pass.
+    const manualFrac = Math.min(100, Math.max(0, parseFloat(document.getElementById('pos-disc')?.value || 0))) / 100;
+    container.innerHTML = this._cart.map((item, i) => {
+      const promo = this._bestPromoFor(item);
+      // A promotion tag/price is shown whenever a promotion RESOLVES for this
+      // line, even on the sale where the manual discount happens to already
+      // beat it -- the cashier still gets told why a promo is in play, per
+      // Task 1(e). BEST PRICE WINS decides the CHARGE (see _recalc); this only
+      // decides what price is shown for that promoted line.
+      const promoFrac = promo ? (promo.discount_pct || 0) / 100 : 0;
+      const lineFrac = Math.max(manualFrac, promoFrac);
+      const metaHTML = promo
+        ? `<span class="pos-price-orig">${this._money(item.unit_price)}</span> ${this._money(item.unit_price * (1 - lineFrac))} × ${item.quantity}`
+        : `${this._money(item.unit_price)} × ${item.quantity}`;
+      // Icon and name are DELIBERATELY separate text nodes (see
+      // retail_surface_i18n_test.js's "no translatable string shares a node
+      // with an emoji" rule) -- promo.name is shop-authored data, like a
+      // product or category name elsewhere in this file, so it is escaped,
+      // never passed through t().
+      const promoTagHTML = promo
+        ? `<div class="pos-promo-tag" title="${this._esc(promo.name)}"><span aria-hidden="true">🏷️</span><span>${this._esc(t('Promo'))}: ${this._esc(promo.name)}</span></div>`
+        : '';
+      return `
       <div class="pos-cart-row${item.product_id === newId ? ' pos-row-new' : ''}">
         <div class="pos-line-main">
           <div class="pos-item-name" title="${this._esc(item.name)}">${this._esc(item.name)}</div>
-          <div class="pos-item-meta">${this._money(item.unit_price)} × ${item.quantity}</div>
+          <div class="pos-item-meta">${metaHTML}</div>
+          ${promoTagHTML}
         </div>
         <div class="pos-line-freq">
           <div class="pos-qty-wrap">
@@ -2637,7 +2707,8 @@ const RetailSystem = {
         <div class="pos-line-danger">
           <button class="pos-remove-btn" onclick="RetailSystem._removeLine(${i})" title="${remLabel}" aria-label="${remLabel}">✕</button>
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
     this._recalc();
     // A tap on a cart control is exactly the "interaction that should not
     // steal focus" case: the next thing that happens is almost always another
@@ -2654,6 +2725,35 @@ const RetailSystem = {
     this._renderCart();
   },
 
+  // Promotions wave 1 (ROADMAP.md "retail schema v23"). Resolves the single
+  // best-priced ACTIVE promotion for one cart line, or null.
+  //
+  //   * product_id XOR category_id is set per the frozen API contract, so a
+  //     promotion is either a product match or a category match, never both.
+  //   * A product-specific promotion beats a category one on the same
+  //     product, even if the category promotion's discount_pct is higher --
+  //     the more specific rule wins, not the bigger number.
+  //   * Among ties within the same specificity (two product promos on the
+  //     same product, or two category promos on the same category), the
+  //     highest discount_pct wins.
+  //
+  // Reads `this._promotions || []` rather than assuming it is set: several
+  // existing test harnesses in products/retail/tests/ drive _addToCart/
+  // _recalc directly without ever calling _renderPOS (which is what
+  // initialises it), so undefined must resolve to "no promotions", not throw.
+  _bestPromoFor(item) {
+    const promos = this._promotions || [];
+    let productMatch = null, categoryMatch = null;
+    promos.forEach(p => {
+      if (p.product_id != null && String(p.product_id) === String(item.product_id)) {
+        if (!productMatch || (p.discount_pct || 0) > (productMatch.discount_pct || 0)) productMatch = p;
+      } else if (p.category_id != null && item.category_id != null && String(p.category_id) === String(item.category_id)) {
+        if (!categoryMatch || (p.discount_pct || 0) > (categoryMatch.discount_pct || 0)) categoryMatch = p;
+      }
+    });
+    return productMatch || categoryMatch || null;
+  },
+
   // Mirrors core/retail/pricing.py's calculate_line() EXACTLY, mode for
   // mode — that Python module is this codebase's documented single source
   // of truth for the tax/discount formula; if either side changes, both
@@ -2666,6 +2766,23 @@ const RetailSystem = {
   // Either way, discount is subtracted once at the subtotal level and tax is
   // added once at the end, so `total = subtotal - discAmt + tax` holds for
   // both modes — only what the tax is computed ON changes.
+  //
+  // Promotions wave 1 (ROADMAP.md "retail schema v23"): the single uniform
+  // discFrac above became a PER-LINE lineFrac = max(manualFrac, promoFrac) --
+  // BEST PRICE WINS, never summed (a 60% promotion plus a 50% manual discount
+  // must charge 60%, not 110%). The aggregate discount below is written as
+  // "the manual invoice-level discount on everything, plus whatever a
+  // promotion adds ON TOP for lines where it beats the manual rate" rather
+  // than a flat per-line sum, specifically so that with ZERO promotions
+  // `promoExtra` never leaves its initial 0 and `discAmt` collapses to EXACTLY
+  // `subtotal * manualFrac` -- the original formula, bit for bit. Summing
+  // `line_total * frac` per line instead is algebraically equal but NOT
+  // numerically identical in IEEE754 (measured ~33% divergence at full
+  // precision against `subtotal * frac` across 300k realistic fixtures),
+  // which would silently change this screen's own numbers on every sale with
+  // no promotions configured -- exactly the regression
+  // retail_promotions_ui_test.js's no-promotions-equivalence case exists to
+  // catch. See that test for the mutation proof.
   _recalc() {
     // AUDIT-fix: the #pos-disc input's min/max=0/100 is decorative HTML
     // only -- a typed value outside that range still reaches parseFloat
@@ -2675,15 +2792,19 @@ const RetailSystem = {
     // risk -- this was a client display bug only, fixed at the source read
     // so every downstream use (subtotal/tax/total/change) is consistent.
     const discPct = Math.min(100, Math.max(0, parseFloat(document.getElementById('pos-disc')?.value || 0)));
-    const discFrac = discPct / 100;
+    const manualFrac = discPct / 100;
     const beforeDiscount = this._taxMode === 'before_discount';
-    let subtotal = 0, tax = 0;
+    let subtotal = 0, promoExtra = 0, tax = 0;
     this._cart.forEach(i => {
       subtotal += i.line_total;
-      const taxableBase = beforeDiscount ? i.line_total : (i.line_total * (1 - discFrac));
+      const promo = this._bestPromoFor(i);
+      const promoFrac = promo ? (promo.discount_pct || 0) / 100 : 0;
+      const lineFrac = Math.max(manualFrac, promoFrac);
+      if (lineFrac > manualFrac) promoExtra += i.line_total * (lineFrac - manualFrac);
+      const taxableBase = beforeDiscount ? i.line_total : (i.line_total * (1 - lineFrac));
       tax += taxableBase * (i.tax_rate / 100);
     });
-    const discAmt = subtotal * discFrac;
+    const discAmt = subtotal * manualFrac + promoExtra;
     const total   = subtotal - discAmt + tax;
     this._currentTotals = { subtotal, discount: discAmt, tax, total };
     // All three spans already carry `.money` in the POS template, so the amount
@@ -4061,6 +4182,253 @@ const RetailSystem = {
         </tr>`).join('')}</tbody>
       </table>`;
     } catch(e) {}
+  },
+
+  // ── PROMOTIONS (ROADMAP.md "retail schema v23", promotions wave 1) ────────
+  //
+  // CRUD against the frozen contract: GET/POST /api/sub/retail/promotions,
+  // PATCH/DELETE /api/sub/retail/promotions/<id> (DELETE deactivates, it does
+  // not remove the row -- see _deletePromotion). Structure mirrors
+  // _renderCategories/_loadCategories/_showCategoryModal/_saveCategory/
+  // _deleteCategory above: same table shell, same modal-overlay pattern, same
+  // save/delete error handling. Deliberately NOT the same array as the POS's
+  // own `this._promotions` (the /promotions/active cache _loadPOSData reads
+  // for the checkout preview) -- this screen lists EVERY promotion, active or
+  // not, and overwriting the till's active-only cache with that would let an
+  // expired or inactive rule silently apply again the next time a cashier's
+  // cart re-renders while this admin screen happens to be open on another
+  // tab/session of the same device.
+  async _renderPromotions(c) {
+    this._injectStyles();
+    // Capability gate, same mechanism and reasoning as _renderReports above --
+    // read that comment first. retail.discount is CAP_DISCOUNT
+    // (commercial_runtime/identity/user_accounts.py), the SAME code a manual
+    // discount at checkout already requires -- reused rather than minted,
+    // because configuring a standing discount is the same authority as typing
+    // one in by hand. Hiding the nav entry (app-shell.js) is not the
+    // enforcement; this guard is the second, real one, for the same reason
+    // AuraRouter can replay this section from the URL hash with no nav click
+    // in between.
+    if (window.SubsystemApp && !SubsystemApp.hasCapability('retail.discount')) {
+      return this._renderPromotionsRestricted(c);
+    }
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <h2 class="ret-title">${t('Promotions')}</h2>
+        <div style="display:flex;gap:10px">
+          <button class="sub-btn-primary" onclick="RetailSystem._openAddPromotion()">+ ${t('Add Promotion')}</button>
+        </div>
+      </div>
+      <div class="sub-chart-card">
+        <div style="overflow-x:auto">
+          <table class="ret-table" id="prm-table">
+            <thead><tr>
+              <th>${t('Name')}</th><th>${t('Discount %')}</th><th>${t('Applies To')}</th>
+              <th>${t('Branch')}</th><th>${t('Status')}</th><th>${t('Actions')}</th>
+            </tr></thead>
+            <tbody><tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
+          </table>
+        </div>
+      </div>`;
+    await this._loadPromotions();
+  },
+
+  // What a user without `retail.discount` gets instead of a screen every
+  // button on which would 403. Same shape/wording pattern as
+  // _renderReportsRestricted above, via the shared _renderCapabilityRestricted.
+  _renderPromotionsRestricted(c) {
+    this._renderCapabilityRestricted(c, {
+      icon: '🎁',
+      title: t('Promotions'),
+      message: t('Configuring promotions is limited to managers and the store owner. Open the till to start ringing sales.'),
+    });
+  },
+
+  async _loadPromotions() {
+    try {
+      const [promos, prods, cats, branches] = await Promise.all([
+        this._get('/api/sub/retail/promotions'),
+        this._get('/api/sub/retail/products'),
+        this._get('/api/sub/retail/categories'),
+        this._get('/api/sub/retail/branches').catch(() => null),
+      ]);
+      // `_promotionsList`, not `_promotions` -- see the block comment above
+      // _renderPromotions for why the two must never be the same array.
+      this._promotionsList  = promos.data || [];
+      this._promoProducts   = prods.data  || [];
+      this._promoCategories = cats.data   || [];
+      this._promoBranches   = (branches && branches.data) || [];
+      const tbody = document.querySelector('#prm-table tbody');
+      if (!tbody) return;
+      if (!this._promotionsList.length) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">${t('No promotions found.')}</td></tr>`;
+        return;
+      }
+      // Every interpolated value is escaped (see this._esc) -- a promotion
+      // name can have been authored on a DIFFERENT device and relayed in via
+      // sync, the same untrusted-input reasoning _loadCategories states for
+      // category names. Edit/Deactivate pass only the id; the row's own data
+      // is looked up back out of this._promotionsList, so no remote-authored
+      // string is ever spliced into an inline event-handler attribute.
+      tbody.innerHTML = this._promotionsList.map(p => {
+        const prod = this._promoProducts.find(x => String(x.id) === String(p.product_id));
+        const cat  = this._promoCategories.find(x => String(x.id) === String(p.category_id));
+        const target = prod ? prod.name : (cat ? cat.name : '—');
+        const branch = this._promoBranches.find(x => String(x.id) === String(p.branch_id));
+        const isActive = p.status === 'active';
+        return `<tr>
+          <td style="font-weight:600">${this._esc(p.name)}</td>
+          <td style="font-weight:700;color:var(--text-money)">${this._esc(p.discount_pct)}%</td>
+          <td style="color:var(--text-muted)">${this._esc(target)}</td>
+          <td style="color:var(--text-muted)">${branch ? this._esc(branch.name) : t('All branches')}</td>
+          <td>${this._badge(isActive ? t('Active') : t('Inactive'), isActive ? 'green' : 'red')}</td>
+          <td>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditPromotion('${this._esc(p.id)}')">${t('Edit')}</button>
+            <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._deletePromotion('${this._esc(p.id)}')">${t('Deactivate')}</button>
+          </td>
+        </tr>`;
+      }).join('');
+    } catch(e) { console.error(e); }
+  },
+
+  _openAddPromotion() {
+    const prodOpts = (this._promoProducts||[]).map(x => `<option value="${this._esc(x.id)}">${this._esc(x.name)}</option>`).join('');
+    const catOpts  = (this._promoCategories||[]).map(x => `<option value="${this._esc(x.id)}">${this._esc(x.name)}</option>`).join('');
+    const branchOpts = (this._promoBranches||[]).map(x => `<option value="${this._esc(x.id)}">${this._esc(x.name)}</option>`).join('');
+    this._showPromotionModal({}, prodOpts, catOpts, branchOpts);
+  },
+
+  _openEditPromotion(id) {
+    const promo = (this._promotionsList||[]).find(x => String(x.id) === String(id));
+    if (!promo) return;
+    const prodOpts = (this._promoProducts||[]).map(x =>
+      `<option value="${this._esc(x.id)}" ${String(x.id)===String(promo.product_id)?'selected':''}>${this._esc(x.name)}</option>`).join('');
+    const catOpts  = (this._promoCategories||[]).map(x =>
+      `<option value="${this._esc(x.id)}" ${String(x.id)===String(promo.category_id)?'selected':''}>${this._esc(x.name)}</option>`).join('');
+    const branchOpts = (this._promoBranches||[]).map(x =>
+      `<option value="${this._esc(x.id)}" ${String(x.id)===String(promo.branch_id)?'selected':''}>${this._esc(x.name)}</option>`).join('');
+    this._showPromotionModal(promo, prodOpts, catOpts, branchOpts);
+  },
+
+  // Shows/hides the product-vs-category field pair when the radio toggle
+  // changes -- the frozen contract is product_id XOR category_id, so the form
+  // never lets both selects be live at once. See _savePromotion, which reads
+  // ONLY the visible one via the checked radio, not both selects' values.
+  _togglePromoTarget(kind) {
+    const prodEl = document.getElementById('prm-target-product');
+    const catEl  = document.getElementById('prm-target-category');
+    if (prodEl) prodEl.style.display = kind === 'product'  ? '' : 'none';
+    if (catEl)  catEl.style.display  = kind === 'category' ? '' : 'none';
+  },
+
+  _showPromotionModal(promo, prodOpts, catOpts, branchOpts) {
+    const isEdit = !!promo.id;
+    // A promotion editing FROM a category default shows the category picker
+    // first; everything else (including a brand-new Add) defaults to product,
+    // matching product_id being the first-listed field in the frozen contract.
+    const startsCategory = promo.category_id != null;
+    const overlay = document.createElement('div');
+    overlay.className = 'ret-modal-overlay';
+    overlay.id = 'ret-prm-modal';
+    overlay.innerHTML = `
+      <div class="ret-modal" style="width:480px">
+        <h3>${isEdit ? '✏️ '+t('Edit Promotion') : '🎁 '+t('Add Promotion')}</h3>
+        <div class="ret-field-row">
+          <div class="ret-field"><label>${t('Promotion Name')} *</label><input id="prm-name" value="${this._esc(promo.name||'')}" /></div>
+          <div class="ret-field"><label>${t('Discount %')} *</label><input type="number" id="prm-disc" value="${promo.discount_pct||0}" min="0" max="100" step="0.1" /></div>
+        </div>
+        <div class="ret-field">
+          <label>${t('Applies To')} *</label>
+          <div style="display:flex;gap:16px;margin-block-start:4px">
+            <label style="display:flex;align-items:center;gap:6px;font-weight:400">
+              <input type="radio" name="prm-target-type" value="product" ${startsCategory?'':'checked'} onchange="RetailSystem._togglePromoTarget('product')" /> ${t('Product')}
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-weight:400">
+              <input type="radio" name="prm-target-type" value="category" ${startsCategory?'checked':''} onchange="RetailSystem._togglePromoTarget('category')" /> ${t('Category')}
+            </label>
+          </div>
+        </div>
+        <div class="ret-field" id="prm-target-product" style="${startsCategory?'display:none':''}">
+          <label>${t('Product')}</label><select id="prm-product"><option value="">${t('None')}</option>${prodOpts}</select>
+        </div>
+        <div class="ret-field" id="prm-target-category" style="${startsCategory?'':'display:none'}">
+          <label>${t('Category')}</label><select id="prm-category"><option value="">${t('None')}</option>${catOpts}</select>
+        </div>
+        <div class="ret-field"><label>${t('Branch')}</label><select id="prm-branch"><option value="">${t('All branches')}</option>${branchOpts}</select></div>
+        <div class="ret-field-row">
+          <div class="ret-field"><label>${t('Start Date')}</label><input type="date" id="prm-start" value="${promo.starts_at ? this._esc(String(promo.starts_at).slice(0,10)) : ''}" /></div>
+          <div class="ret-field"><label>${t('End Date')}</label><input type="date" id="prm-end" value="${promo.ends_at ? this._esc(String(promo.ends_at).slice(0,10)) : ''}" /></div>
+        </div>
+        <div class="ret-modal-footer">
+          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-prm-modal').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-primary" id="prm-save-btn" onclick="RetailSystem._savePromotion(${isEdit ? `'${this._esc(promo.id)}'` : 'null'})">${isEdit ? t('Save') : t('Add Promotion')}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+    document.getElementById('prm-name')?.focus();
+  },
+
+  async _savePromotion(pid) {
+    const name = document.getElementById('prm-name')?.value.trim();
+    if (!name) { SubsystemApp.showToast(t('Name required'), 'error'); return; }
+    const discount_pct = Math.min(100, Math.max(0, +document.getElementById('prm-disc')?.value || 0));
+    const targetType = document.querySelector('input[name="prm-target-type"]:checked')?.value || 'product';
+    // Frozen contract: product_id XOR category_id. Reading only the RADIO-
+    // selected field (not both selects' raw values) is what keeps that
+    // exclusive even if the hidden select still carries a stale selection
+    // from before the cashier toggled the radio.
+    const productId  = targetType === 'product'  ? (document.getElementById('prm-product')?.value  || '') : '';
+    const categoryId = targetType === 'category' ? (document.getElementById('prm-category')?.value || '') : '';
+    if (!productId && !categoryId) {
+      SubsystemApp.showToast(t('Choose a product or a category'), 'error');
+      return;
+    }
+    const btn = document.getElementById('prm-save-btn');
+    if (btn) { btn.disabled = true; btn.textContent = t('Saving…'); }
+    const payload = {
+      name, discount_pct,
+      product_id:  productId  || null,
+      category_id: categoryId || null,
+      branch_id:   document.getElementById('prm-branch')?.value || null,
+      starts_at:   document.getElementById('prm-start')?.value  || null,
+      ends_at:     document.getElementById('prm-end')?.value    || null,
+    };
+    try {
+      const d = pid
+        ? await this._patch(`/api/sub/retail/promotions/${pid}`, payload)
+        : await this._post('/api/sub/retail/promotions', payload);
+      if (d.status === 'success') {
+        SubsystemApp.showToast(pid ? t('Promotion updated') : t('Promotion added'), 'success');
+        document.getElementById('ret-prm-modal')?.remove();
+        this._loadPromotions();
+      } else {
+        SubsystemApp.showToast(d.message || t('Error'), 'error');
+        if (btn) { btn.disabled = false; btn.textContent = t('Save'); }
+      }
+    } catch(e) { if (btn) { btn.disabled = false; btn.textContent = t('Save'); } }
+  },
+
+  // The frozen contract's DELETE deactivates -- it does not remove the row
+  // (see the block comment above _renderPromotions) -- so this confirms and
+  // labels the action as what it actually does, rather than reusing
+  // _deleteCategory's "Delete" wording for a route that does something else.
+  async _deletePromotion(pid) {
+    const promo = (this._promotionsList || []).find(x => String(x.id) === String(pid));
+    const name = (promo && promo.name) || '';
+    if (!confirm(`${t('Deactivate')} "${name}"?`)) return;
+    try {
+      const d = await this._del(`/api/sub/retail/promotions/${pid}`);
+      if (d && d.status === 'success') {
+        SubsystemApp.showToast(d.message || t('Promotion deactivated'), 'success');
+      } else {
+        SubsystemApp.showToast((d && d.message) || t('Could not deactivate this promotion.'), 'error');
+      }
+      this._loadPromotions();
+    } catch(e) {
+      console.error('Promotion deactivate failed', e);
+      SubsystemApp.showToast(t('Could not deactivate this promotion.'), 'error');
+    }
   },
 
   // ── SUPPLIERS ─────────────────────────────────────────────────────────────

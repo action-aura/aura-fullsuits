@@ -573,6 +573,18 @@ const SubsystemApp = {
         { id: 'products',   label: 'Products',          icon: '📦' },
         { id: 'categories', label: 'Categories',        icon: '🏷️' },
         { id: 'customers',  label: 'Customers',         icon: '👥' },
+        // Launch-readiness 2026-08-30 (ROADMAP.md "retail schema v23"):
+        // promotions wave 1 -- per-product/per-category discount rules the
+        // POS resolves automatically at checkout. `capability: 'retail.discount'`
+        // reuses the EXISTING CAP_DISCOUNT code (commercial_runtime/identity/
+        // user_accounts.py) rather than inventing a new one: configuring a
+        // promotion is the same authority as typing a manual discount at the
+        // till, and ROLE_CAPABILITIES already grants it to manager/admin and
+        // withholds it from a cashier by default. Same mechanism as the
+        // Reports entry above -- hiding the nav entry is not the enforcement,
+        // just the invitation not to walk into a screen every button on which
+        // will 403.
+        { id: 'promotions', label: 'Promotions',        icon: '🎁', capability: 'retail.discount' },
         { id: 'suppliers',  label: 'Suppliers',         icon: '🏭' },
         { id: 'purchases',  label: 'Purchase Orders',   icon: '📋' },
         { id: 'returns',    label: 'Returns',           icon: '↩️' },
@@ -706,7 +718,7 @@ const SubsystemApp = {
       // render NO header at all -- see _renderShell's groupsHTML below. An
       // empty section header is worse than the flat list this replaces.
       navGroups: [
-        { label: 'Sell',    items: ['pos', 'returns', 'scanner', 'customers'] },
+        { label: 'Sell',    items: ['pos', 'returns', 'scanner', 'customers', 'promotions'] },
         { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases'] },
         { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
         { label: 'Admin',   items: ['employees', 'admin-center'] },

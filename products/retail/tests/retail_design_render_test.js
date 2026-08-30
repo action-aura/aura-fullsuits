@@ -1397,6 +1397,23 @@ const ROUTE_EXCLUSIONS = {
     'directions, and XSS escaping). Adding it here needs two fixture routes ' +
     'plus a corpus entry, not just a render call — the same shape as the ' +
     'admin-center exclusion immediately above.',
+  // Launch-readiness 2026-08-30 (ROADMAP.md "retail schema v23", promotions
+  // wave 1). Same shape as `exceptions` immediately above: the fixture below
+  // does not route GET .../promotions, so apiResponseFor() falls through to
+  // its STATS catch-all (no array) and the screen renders its "No
+  // promotions found." empty state, which testCorpusRendersRealScreens
+  // explicitly refuses to accept as a rendered list for a screen that owns a
+  // table. Its own coverage is retail_promotions_ui_test.js. Adding it here
+  // needs a fixture route plus a corpus entry, not just a render call.
+  promotions:
+    '_renderPromotions() fetches GET .../promotions, which this corpus fixture ' +
+    'does not route — apiResponseFor() falls through to its STATS catch-all ' +
+    '(no array), so the screen renders its "No promotions found." empty ' +
+    'state, which testCorpusRendersRealScreens explicitly refuses to accept ' +
+    'as a rendered list for a screen that owns a table. Its own coverage is ' +
+    'retail_promotions_ui_test.js. Adding it here needs a fixture route plus ' +
+    'a corpus entry, not just a render call — the same shape as the ' +
+    'exceptions exclusion above.',
 };
 
 /** Every `case '<id>':` in RetailSystem.render(), read out of the product. */

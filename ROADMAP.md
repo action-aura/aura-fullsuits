@@ -1170,3 +1170,136 @@ and the common case — an exact barcode scan — returns on the first.
 Deliberately NOT in this claim: promotions, variants/modifiers, kitchen
 tickets, split tender, LAN relay. Each is real, each is recorded separately,
 and none needs a schema version reserved today.
+
+## 2026-08-30 — retail schema v23 CLAIMED for promotions, wave 1
+
+Same single-writer discipline as v18–v22 — with one honest exception recorded
+below rather than hidden.
+
+**This claim was written before dispatch and then not committed with the rest.**
+It was held back from ROADMAP.md to avoid colliding with an agent that held the
+file, and never appended. Commit f4fed95 nevertheless carried a message stating
+the v23 claim had been made, so for a stretch the message overstated its own
+diff. Caught by the frontend agent, which was told to read this section as its
+spec, went looking, and reported that it did not exist instead of inventing one.
+
+Worth recording because the entire value of claiming a schema version in writing
+is that the claim is IN THE REPO where another branch can see it. A claim that
+exists only in a commit message and a scratch file is exactly the collision this
+discipline was adopted to prevent. The frontend work was unaffected — its
+prompt carried the full frozen contract directly.
+
+**CLAIMED: retail v23, by `feat/launch-readiness`, for two tables and two
+indexes.** No change to any existing table, and no change to `pricing.py`.
+
+A senior review named the missing promotions engine as a hypermarket blocker,
+and re-verification confirms it: a MANUAL per-line `discount_pct` exists,
+clamped server-side and gated behind `CAP_DISCOUNT`, but nothing automatic —
+no rules, no date windows, no scoping, nothing in schema. A shop that runs a
+weekend offer has to have every cashier type it by hand on every line.
+
+    CREATE TABLE promotions (
+      id, company_id, name, discount_pct,
+      product_id, category_id,     -- exactly one of the two
+      branch_id,                   -- NULL = every branch
+      starts_at, ends_at,          -- NULL = unbounded on that side
+      status, created_at)
+    CREATE TABLE sale_item_promotions (
+      id, company_id, sale_item_id, promotion_id,
+      name_snapshot, discount_pct_snapshot, discount_amount_snapshot)
+
+    idx_promotions_company_live      ON promotions(company_id, status)
+    idx_sale_item_promotions_item    ON sale_item_promotions(sale_item_id)
+
+Both new tables carry `company_id` even though `sale_items` itself does not.
+`sale_items` inherits tenancy through `sale_id`, which predates the rule
+CLAUDE.md now states; a new table has no reason to repeat that, and it lets a
+promotion-performance report scope itself without a three-table join.
+
+### Why it resolves to a PERCENTAGE, and what that costs
+
+A promotion resolves to an effective `discount_pct` on the line and is then fed
+through the existing `pricing.calculate_line`. That is the whole integration:
+**`pricing.py` is not modified.** It is documented as the only module allowed
+to compute a persisted financial total, and both tax modes
+(TAX_AFTER_DISCOUNT / TAX_BEFORE_DISCOUNT) already interact with a line
+discount correctly, so expressing promotions in the units it already speaks
+makes the tax interaction correct by construction rather than by a second
+implementation that has to be kept in agreement.
+
+**The cost, stated rather than discovered: wave 1 has no fixed-amount
+promotion** ("2 JOD off"). A fixed amount can only enter this path as
+`amount / gross * 100`, and converting amount to percentage and back can land
+a cent away from the amount the shop advertised. A promotion that prints 1.99
+off when the poster says 2.00 is worse than not having the feature. Doing it
+properly means giving `calculate_line` a real per-line discount AMOUNT, which
+is a change to the financial core and deserves its own wave and its own
+mutation proofs.
+
+Also NOT in wave 1, each deferred deliberately: buy-X-get-Y and any other
+basket-level rule (needs a cross-line engine, not a per-line resolver),
+mix-and-match, customer-group pricing, coupon codes, loyalty.
+
+### The two rules most likely to be got wrong
+
+**1. Best price wins; discounts do not stack.** If a line carries an automatic
+promotion of P% and the cashier also types a manual M%, the line takes
+`max(P, M)`, never `P + M`. Summing is how a 60% promotion plus a 50% manual
+discount becomes 110%, clamps to 100, and hands the item over for nothing.
+
+**2. The `CAP_DISCOUNT` gate is judged on the MANUAL component only.** Today
+`create_sale` refuses a discounted sale from a cashier lacking `CAP_DISCOUNT`.
+If that check starts seeing the promotion's percentage, then a cashier without
+the capability can no longer sell a promoted item at all — the shop's own
+weekend offer locks out its own till. Configuring a promotion, by contrast,
+DOES require `CAP_DISCOUNT`: deciding to give value away at scale is exactly
+the authority that code names. Both halves get tested; the allow-half (a
+cashier with no `CAP_DISCOUNT` successfully selling a promoted line) is the one
+that a "deny everything" mutation would otherwise pass.
+
+### Snapshot, because a receipt is read later than it is printed
+
+`sale_item_promotions` stores the promotion's name, percentage and resulting
+amount AS APPLIED. A receipt reprinted next year, and a return processed
+against it, must show what the customer was actually charged — not what that
+promotion's row says today, and not what it says after someone edits it. Same
+discipline the e-invoicing sequence and the cash-session closing figures
+already follow.
+
+**Returns need no change, and that is a consequence of the design rather than
+luck.** `create_return` already ignores every client-sent figure and recomputes
+the refund from the original `sale_items` row, proportionally to the quantity
+coming back, so tax and discount reverse correctly. A promotion IS that row's
+`discount_pct`, so a promoted line refunds the price actually paid without the
+returns path knowing promotions exist. Had promotions been modelled as a
+separate amount hanging off the line, returns would have had to learn about
+them or would have silently refunded list price on every promoted item.
+
+Pinned by a test anyway: return one unit of a promoted line, assert the refund
+matches what was paid for one unit and not the list price.
+
+### The cart must show the promoted price BEFORE the customer pays
+
+Applying promotions server-side only would mean the POS cart displays list
+price, the customer agrees to it, and the receipt then charges less — the
+total changing after checkout. In a shop that reads as the till being wrong,
+even when it is wrong in the customer's favour.
+
+So `GET /promotions/active` returns the currently-live rules (a small list,
+loaded once per POS mount alongside the bounded first page), and the cart
+applies the same best-price-wins rule client-side. This is NOT a second
+authority: it is exactly the arrangement `pricing.py`'s own module docstring
+already documents for `_recalc` — a deliberately exact mirror for INSTANT
+DISPLAY ONLY, with `create_sale` recomputing everything server-side regardless
+of what the client displayed or submitted. A disagreement produces a wrong
+preview followed by a correct charge, never a wrong charge.
+
+### Invisible unless opted in
+
+Zero promotion rows must mean byte-identical behaviour on the sale path, and
+that is pinned by a test rather than assumed — the same contract e-invoicing
+and licensing enforcement already hold to.
+
+The device's LOCAL clock decides whether a promotion is live. Sales are
+explicitly designed to continue while the network is down, so there is no
+authoritative remote clock to consult at the moment it matters.
