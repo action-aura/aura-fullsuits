@@ -618,5 +618,11 @@
   "Could not save the logo.": "Could not save the logo.",
   "Remove the receipt logo?": "Remove the receipt logo?",
   "Logo removed.": "Logo removed.",
-  "Could not remove the logo.": "Could not remove the logo."
+  "Could not remove the logo.": "Could not remove the logo.",
+  "This Device's Branch": "This Device's Branch",
+  "Which physical store this till stands in. Sales and stock ring up under this branch instead of the company-wide default -- set this once per device on a chain with more than one store.": "Which physical store this till stands in. Sales and stock ring up under this branch instead of the company-wide default -- set this once per device on a chain with more than one store.",
+  "No branch is pinned to this device. Fine for a single-branch shop -- but on a chain, every sale here files under the company's first branch until you pin one.": "No branch is pinned to this device. Fine for a single-branch shop -- but on a chain, every sale here files under the company's first branch until you pin one.",
+  "Unpinned": "Unpinned",
+  "Device branch saved.": "Device branch saved.",
+  "Could not save this device's branch.": "Could not save this device's branch."
 }

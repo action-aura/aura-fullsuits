@@ -46,6 +46,19 @@ from commercial_runtime.sync.sync_service import (
 from commercial_runtime.sync.sync_service import (
     record_offline_override as _sync_record_offline_override,
 )
+# Launch-readiness chain wave C1 (ROADMAP.md's 2026-08-30 "the multi-branch
+# capture defect" entry; docs/launch-readiness/seats-and-chain-design.md
+# §5.2 gap 1). `SyncService._resolve_branch_id`/`_log_branch_fallback_summary`
+# are reused rather than duplicated -- see `_resolve_working_branch` below
+# (right after `_default_branch`) for why a static method on this class is
+# still "cleanly importable": Python does not restrict attribute access by a
+# leading underscore, and this module already imports several other names
+# out of sync_service.py above.
+from commercial_runtime.sync.sync_service import SyncService as _SyncService
+from commercial_runtime.identity.onboarding_routes import (
+    get_device_branch_uid as _onboarding_get_device_branch_uid,
+    set_device_branch_uid as _onboarding_set_device_branch_uid,
+)
 from commercial_runtime.notifications import settings as _notification_settings
 from commercial_runtime.notifications.outbox import EmailOutboxRepository as _EmailOutboxRepository
 from commercial_runtime.notifications import whatsapp_settings as _whatsapp_settings
@@ -702,6 +715,93 @@ def _branch_uid(conn, branch_id):
     handled identically by the apply side's `_resolve_branch_id` fallback."""
     row = conn.execute("SELECT uid FROM branches WHERE id=?", (branch_id,)).fetchone()
     return row['uid'] if row else None
+
+
+def _resolve_working_branch(conn, cid, explicit_branch_id=None):
+    """Resolves which branch a WRITE files under -- launch-readiness chain
+    wave C1 (ROADMAP.md's 2026-08-30 "the multi-branch capture defect"
+    entry; docs/launch-readiness/seats-and-chain-design.md §5.2 gap 1).
+
+    Three tiers, in order:
+
+      1. `explicit_branch_id`, IF the caller passed one -- validated
+         against THIS company first. An unvalidated branch id is the same
+         cross-tenant shape as the supplier_id leak this codebase already
+         shipped once (see create_purchase_order's own "Cross-tenant leak
+         fix" comment) -- a caller in company A could otherwise silently
+         address company B's branch.
+      2. This DEVICE's pinned `branch_uid` (onboarding_routes.py's
+         get_device_branch_uid / config.json, deliberately device-local
+         and never synced -- see that function's own docstring for why a
+         DB row would be wrong here), resolved to THIS device's own local
+         `branches.id`. Deliberately a UID lookup, never an integer one:
+         `branches.id` is a plain per-device autoincrement, so the SAME
+         physical branch carries a DIFFERENT id on every device that has
+         ever self-healed or re-seeded one (see `_default_branch`'s own
+         docstring) -- pinning the integer would break on exactly the
+         device this fix exists for.
+      3. `_default_branch(conn, cid)` -- UNCHANGED, the company's first
+         branch, self-healing one if none exists. Called directly (not
+         through any pin-aware path) when this device carries no pin at
+         all, so an install that never sets one -- nearly every install
+         today -- behaves IDENTICALLY to before this fix landed, not just
+         equivalently: same function, same code path it always was.
+
+    Returns `(branch_id, error_response)`. `error_response` is `None` on
+    success; otherwise it is a ready-to-return Flask response
+    (`(jsonify(...), 400)`) naming the invalid `explicit_branch_id` --
+    callers `return` it directly, rolling back/closing their own
+    connection first exactly as they already do for every other
+    validation refusal in their own function.
+
+    Tier 2's resolution and its self-heal (tier 3 duplicated as tier 2's
+    own fallback) are NOT re-derived here: `SyncService._resolve_branch_id`
+    (commercial_runtime/sync/sync_service.py) already does precisely
+    this -- uid lookup, then this device's own default/self-heal -- for
+    the identical problem on the sync-apply side, and reuses cleanly as a
+    static method import (see the module-level import comment above). A
+    PIN THAT DOES NOT RESOLVE (the branch row has not synced to this
+    device yet) must not silently fall through to branch 1 -- that
+    reproduces the exact defect this fix closes -- so the fallback is
+    made VISIBLE: `_resolve_branch_id`'s own `fallback_sink` mechanism
+    (built for exactly this) is reused to detect the fallback, and both
+    established, schema-free surfacing mechanisms this codebase already
+    has for "an anomaly happened, a human should be able to see it" are
+    used together -- `_log_branch_fallback_summary` (the same WARNING-log
+    format the sync-apply path already produces for this exact condition)
+    and `_audit` (the same generic, already-visible-in-the-audit-log
+    mechanism `sync_offline_override` uses for its own "manager approved
+    an anomaly" record). Neither needs a new table or a schema version:
+    `stock_exceptions`/`sync_conflicts` were considered and rejected --
+    both are dedicated tables for a DIFFERENT kind of anomaly (an open
+    business problem a human resolves), and inventing a third such table,
+    or repurposing either of theirs, for a device-configuration condition
+    would be exactly the new schema version this fix does not need.
+    """
+    if explicit_branch_id not in (None, ''):
+        row = conn.execute(
+            "SELECT id FROM branches WHERE id=? AND company_id=?",
+            (explicit_branch_id, cid),
+        ).fetchone()
+        if not row:
+            return None, (jsonify({
+                'status': 'error', 'message': f'Unknown branch_id: {explicit_branch_id}',
+            }), 400)
+        return row['id'], None
+
+    pinned_uid = _onboarding_get_device_branch_uid()
+    if not pinned_uid:
+        return _default_branch(conn, cid), None
+
+    fallback_sink = []
+    bid = _SyncService._resolve_branch_id(conn, cid, pinned_uid, fallback_sink=fallback_sink)
+    if fallback_sink:
+        _SyncService._log_branch_fallback_summary(fallback_sink)
+        _audit(conn, 'BRANCH_PIN_UNRESOLVED', 'branch', bid,
+               f"this device's pinned branch_uid={pinned_uid!r} did not resolve to a local "
+               f"branch; filed under this device's default branch id={bid} instead.")
+    return bid, None
+
 
 #: "the caller did not pass this argument", distinct from "the caller passed
 #: None". None is a MEANINGFUL terminal value here (an unidentified till), so
@@ -1578,9 +1678,12 @@ def create_product():
               data.get('tax_rate',0), data.get('unit','pcs'), data.get('reorder_level',5),
               data.get('reorder_method','none'), 1, now))
         # File opening stock under the company's working branch — the SAME branch that
-        # sales/returns/adjustments resolve to (via _default_branch), so a sale always
-        # decrements the row this created. Self-heals a branch on fresh/standalone installs.
-        bid = _default_branch(conn, cid)
+        # sales/returns/adjustments resolve to (via _resolve_working_branch), so a sale
+        # always decrements the row this created. Self-heals a branch on fresh/standalone
+        # installs. Launch-readiness chain wave C1: consults this device's pinned
+        # branch_uid before the self-heal -- create_product takes no branch_id from the
+        # client, so there is only the pin/default tiers here, never the explicit one.
+        bid, _ = _resolve_working_branch(conn, cid)
         conn.execute("""
             INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
             VALUES (?,?,?,?)
@@ -1885,7 +1988,11 @@ def adjust_stock(pid):
 
         requested_bid = data.get('branch_id')
         if requested_bid in (None, ''):
-            bid = _default_branch(conn, cid)
+            # Launch-readiness chain wave C1: pinned-branch-aware fallback,
+            # in place of the bare self-heal -- see _resolve_working_branch's
+            # own docstring. The explicit-branch validation just below is
+            # untouched; this route already had it before this fix.
+            bid, _ = _resolve_working_branch(conn, cid)
         else:
             branch = conn.execute(
                 "SELECT id FROM branches WHERE id=? AND company_id=?", (requested_bid, cid)
@@ -2792,6 +2899,18 @@ def create_purchase_order():
             if not valid_supplier:
                 return jsonify({'status': 'error',
                                  'message': f'Unknown supplier_id: {supplier_id}'}), 400
+
+        # Launch-readiness chain wave C1 (ROADMAP.md's 2026-08-30 "the
+        # multi-branch capture defect" entry): same cross-tenant leak shape
+        # as supplier_id immediately above -- `data.get('branch_id')` was
+        # never validated, so a caller in company A could silently address
+        # company B's branch. Resolved through _resolve_working_branch (see
+        # its own docstring for the explicit -> pinned -> self-heal order);
+        # a NEW PO now takes this device's pinned branch, not just
+        # create_sale, when the caller sends no branch_id at all.
+        branch_id, branch_err = _resolve_working_branch(conn, cid, data.get('branch_id'))
+        if branch_err:
+            return branch_err
         # purchase_orders.po_number carries a bare (not company-scoped, not
         # device-scoped) UNIQUE constraint, but _next_ref()'s counter resets
         # per company AND is a per-DEVICE table (`doc_sequences` is never
@@ -2815,7 +2934,7 @@ def create_purchase_order():
             INSERT INTO purchase_orders (company_id,po_number,supplier_id,branch_id,status,subtotal,total,notes,ordered_at,
                                          amount_paid,payment_status,due_date)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (cid, po_number, supplier_id, data.get('branch_id') or _default_branch(conn, cid),
+        """, (cid, po_number, supplier_id, branch_id,
               'pending', total, total, data.get('notes',''),
               datetime.now().strftime('%Y-%m-%d'), amount_paid, payment_status, data.get('due_date')))
         po_id = cur.lastrowid
@@ -3050,7 +3169,14 @@ def receive_purchase_order(po_id):
             return jsonify({'status': 'error', 'message': 'PO already received'}), 409
 
         items = cur.execute("SELECT * FROM purchase_order_items WHERE po_id=?", (po_id,)).fetchall()
-        bid   = po['branch_id'] or _default_branch(conn, cid)
+        # `po['branch_id']` is a trusted value from THIS company's own PO row
+        # (fetched WHERE company_id=? above) -- always set for a PO created
+        # after this fix (create_purchase_order now resolves one via
+        # _resolve_working_branch), so this fallback exists only for
+        # legacy/pre-migration rows with a NULL branch_id. Launch-readiness
+        # chain wave C1: that fallback is now pin-aware too, same reasoning
+        # as every other _default_branch call site in this file.
+        bid   = po['branch_id'] or _resolve_working_branch(conn, cid)[0]
         # v13 stamp, resolved once for the whole receipt: every line of one
         # delivery was received by one person at one terminal at one moment,
         # and re-resolving per line would let them claim otherwise.
@@ -3333,7 +3459,12 @@ def accept_reorder_request(rid):
         unit_cost = float(product['cost_price'] or 0)
         total = _money(unit_cost * qty)
         supplier_id = product['supplier_id']
-        branch_id = req['branch_id'] or _default_branch(conn, cid)
+        # `req['branch_id']` is a trusted value from THIS company's own
+        # reorder_requests row -- the fallback below only applies to a
+        # legacy row with no branch_id at all. Launch-readiness chain wave
+        # C1: pin-aware, same reasoning as every other _default_branch call
+        # site in this file.
+        branch_id = req['branch_id'] or _resolve_working_branch(conn, cid)[0]
 
         # Identical AUDIT-032B treatment as create_purchase_order above (see
         # that route's comment for the full company-vs-company,
@@ -3589,7 +3720,19 @@ def create_sale():
         # filter by local date — keeping them consistent avoids late-night sales
         # falling on the wrong day).
         now_local = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        bid = int(data.get('branch_id') or _default_branch(conn, cid))
+        # Launch-readiness chain wave C1 (ROADMAP.md's 2026-08-30 "the
+        # multi-branch capture defect" entry; docs/launch-readiness/
+        # seats-and-chain-design.md §5.2 gap 1) -- THE defect this fix
+        # closes. The POS client sends no branch_id at all, so this used to
+        # resolve unconditionally to _default_branch(conn, cid) -- the
+        # company's FIRST branch -- filing every sale on every till of a
+        # chain under store 1. See _resolve_working_branch's own docstring
+        # for the explicit -> this device's pinned branch -> self-heal
+        # order that replaces it.
+        bid, branch_err = _resolve_working_branch(conn, cid, data.get('branch_id'))
+        if branch_err:
+            conn.rollback(); conn.close()
+            return branch_err
         # AUDIT-032C fix (DEFECT 3): `branches.id` is a plain per-device
         # autoincrement -- `branches` is in RETAIL_UID_TABLES for its `uid`
         # column alone, but `branch` is NOT one of Phase 5's five synced
@@ -4770,7 +4913,12 @@ def hold_sale():
     _ensure_credit_schema(conn)
     cur = conn.cursor()
     try:
-        bid = int(data.get('branch_id') or _default_branch(conn, cid))
+        # Launch-readiness chain wave C1: pin-aware + validated, same order
+        # as create_sale (this is part of the same sales flow -- a held
+        # cart is a paused sale).
+        bid, branch_err = _resolve_working_branch(conn, cid, data.get('branch_id'))
+        if branch_err:
+            return branch_err
         customer_id = data.get('customer_id') or None
         label = (data.get('label') or '').strip()[:200]
         discount_pct = tax_engine.clamp_discount_pct(data.get('discount_pct', 0))
@@ -4955,7 +5103,22 @@ def create_return():
         # BEGIN IMMEDIATE: two returns against the same sale+product racing each
         # other must not both read the same "remaining returnable" snapshot.
         conn.execute("BEGIN IMMEDIATE")
-        bid = sale['branch_id'] or data.get('branch_id') or _default_branch(conn, cid)
+        # `sale['branch_id']` -- the ORIGINAL sale's own branch -- wins
+        # unconditionally: a return belongs at the branch the sale it
+        # reverses happened at, not wherever this till is pinned. That tier
+        # is untouched. Only the fallback used when a legacy sale carries no
+        # branch_id at all is in scope for launch-readiness chain wave C1,
+        # and `data.get('branch_id')` was UNVALIDATED there before this fix
+        # -- the same cross-tenant leak shape create_purchase_order's
+        # supplier_id comment describes -- so it now goes through
+        # _resolve_working_branch instead of being trusted directly.
+        if sale['branch_id']:
+            bid = sale['branch_id']
+        else:
+            bid, branch_err = _resolve_working_branch(conn, cid, data.get('branch_id'))
+            if branch_err:
+                conn.rollback(); conn.close()
+                return branch_err
         # AUDIT-032C fix (DEFECT 3) -- identical reasoning to create_sale's
         # own `branch_uid` resolution above (see that comment for the full
         # explanation of why the raw integer `bid` alone is unsafe to carry
@@ -5640,7 +5803,13 @@ def open_cash_session():
     cid = _cid()
     conn = get_retail_conn()
     try:
-        bid = int(data.get('branch_id') or _default_branch(conn, cid))
+        # Launch-readiness chain wave C1: pin-aware + validated, same order
+        # as create_sale -- which branch's drawer this open belongs to must
+        # follow the same till-identity rule a sale does.
+        bid, branch_err = _resolve_working_branch(conn, cid, data.get('branch_id'))
+        if branch_err:
+            conn.close()
+            return branch_err
         try:
             opening_float = _money(data.get('opening_float', 0))
         except Exception:
@@ -7209,6 +7378,84 @@ def tax_settings_set():
     except Exception:
         pass
     return jsonify({'status': 'success', 'data': {'tax_calculation_mode': mode}})
+
+# ── Settings (this device's branch pin) ────────────────────────────────────────
+# Launch-readiness chain wave C1 (ROADMAP.md's 2026-08-30 "the multi-branch
+# capture defect" entry; docs/launch-readiness/seats-and-chain-design.md
+# §5.2 gap 1). Which branch a till physically stands in is not a company-wide
+# setting -- it is a fact about THIS device, so it is stored in config.json
+# (see onboarding_routes.get_device_branch_uid/set_device_branch_uid), never
+# in `retail_settings` (company-scoped, and would converge across every
+# device on the licence the moment sync ran).
+
+@retail_bp.route('/device/branch', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_SELL)
+def get_device_branch():
+    """The till's own read -- CAP_SELL, matching list_active_promotions'
+    identical reasoning: a cashier needs to see which branch this till is
+    pinned to (or that it is UNPINNED, the state that silently produces
+    wrong data on a chain -- see _resolve_working_branch's own docstring)
+    even without CAP_EMPLOYEES. No @require_license_capability, matching
+    list_active_promotions/list_products: a plain read the till needs to
+    function, not a mutation."""
+    cid = _cid()
+    conn = get_retail_conn()
+    branch_uid = _onboarding_get_device_branch_uid()
+    row = None
+    if branch_uid:
+        row = conn.execute(
+            "SELECT id, name FROM branches WHERE uid=? AND company_id=?",
+            (branch_uid, cid),
+        ).fetchone()
+    conn.close()
+    # `row` is None both when unpinned and when the pin does not (yet)
+    # resolve locally -- in the second case the pin is still reported back
+    # so the settings screen can show "pinned to a branch not seen on this
+    # device yet" rather than silently looking unpinned (this route never
+    # falls back to _resolve_working_branch/_default_branch; a read must
+    # not self-heal a branch as a side effect of merely loading a screen).
+    return jsonify({'status': 'success', 'data': {
+        'branch_uid': branch_uid,
+        'branch_id': row['id'] if row else None,
+        'branch_name': row['name'] if row else None,
+    }})
+
+
+@retail_bp.route('/device/branch', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def set_device_branch():
+    """Pins (or, given a null/empty `branch_uid`, clears) this device's
+    working branch. Administrative act -- CAP_EMPLOYEES, matching
+    tax_settings_set/credit_settings_set's identical settings-write gate --
+    validates the uid belongs to a branch of THIS company before writing,
+    the same cross-tenant guard _resolve_working_branch applies to every
+    other by-id write in this file."""
+    data = request.json or {}
+    uid = (data.get('branch_uid') or '').strip() or None
+    cid = _cid()
+    conn = get_retail_conn()
+    try:
+        branch_row = None
+        if uid:
+            branch_row = conn.execute(
+                "SELECT id, name FROM branches WHERE uid=? AND company_id=?",
+                (uid, cid),
+            ).fetchone()
+            if not branch_row:
+                return jsonify({'status': 'error', 'message': f'Unknown branch_uid: {uid}'}), 400
+        _onboarding_set_device_branch_uid(uid)
+        _audit(conn, 'DEVICE_BRANCH_PINNED' if uid else 'DEVICE_BRANCH_UNPINNED',
+               'branch', branch_row['id'] if branch_row else None,
+               f"branch_uid={uid!r}" + (f" name={branch_row['name']!r}" if branch_row else ""))
+        conn.commit()
+    finally:
+        conn.close()
+    return get_device_branch()
 
 # ── Settings (the shop's own clock) ───────────────────────────────────────────
 #

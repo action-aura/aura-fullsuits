@@ -198,6 +198,11 @@ EXPECTED_MUTATION_CAPABILITIES = {
     'create_branch': CAP_EMPLOYEES,
     'credit_settings_set': CAP_EMPLOYEES,
     'tax_settings_set': CAP_EMPLOYEES,
+    # Launch-readiness chain wave C1 (ROADMAP.md's 2026-08-30 "the
+    # multi-branch capture defect" entry): pinning which branch THIS device
+    # stands in is an administrative act, same authority as its settings
+    # siblings immediately above -- see set_device_branch's own docstring.
+    'set_device_branch': CAP_EMPLOYEES,
     # The shop's own clock -- which trading DAY every figure in the history is
     # counted on. Same authority as its two settings siblings, and arguably
     # the most consequential of the three.
@@ -347,6 +352,12 @@ EXPECTED_READ_CAPABILITIES = {
     # promoted item at all). This is the FIRST read route in this table gated
     # on retail.sell rather than retail.reports/retail.cash.close.
     'list_active_promotions': CAP_SELL,
+
+    # Launch-readiness chain wave C1: the till's own read of which branch
+    # it is pinned to -- same reasoning as list_active_promotions
+    # immediately above, a cashier needs this to sell even without
+    # CAP_EMPLOYEES (see get_device_branch's own docstring).
+    'get_device_branch': CAP_SELL,
 }
 
 #: Read routes that DISCLOSE money and deliberately carry no capability, each

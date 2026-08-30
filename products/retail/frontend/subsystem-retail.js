@@ -5151,6 +5151,19 @@ const RetailSystem = {
         </div>
         <button class="ret-btn ret-btn-primary" style="margin-top:16px" onclick="RetailSystem._saveBranding()">${t('Save')}</button>
       </div>
+      <div class="sub-chart-card" id="device-branch-card">
+        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('This Device\'s Branch')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
+          ${t('Which physical store this till stands in. Sales and stock ring up under this branch instead of the company-wide default -- set this once per device on a chain with more than one store.')}
+        </p>
+        <div id="device-branch-unpinned-warning" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;background:var(--state-warning-surface);color:var(--state-warning-text);font-size:12px;border:1px solid var(--border-default)">
+          ${t('No branch is pinned to this device. Fine for a single-branch shop -- but on a chain, every sale here files under the company\'s first branch until you pin one.')}
+        </div>
+        <div class="ret-field" style="margin:0"><label>${t('Branch')}</label>
+          <select id="device-branch-select"><option value="">${t('Unpinned')}</option></select>
+        </div>
+        <button class="ret-btn ret-btn-primary" style="margin-top:12px" onclick="RetailSystem._saveDeviceBranch()">${t('Save')}</button>
+      </div>
       <div class="sub-chart-card">
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Low-Stock Reorder Requests')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
@@ -5172,6 +5185,7 @@ const RetailSystem = {
       </div>`;
     await this._loadReorderRequests();
     await this._loadBrandingForm();
+    await this._loadDeviceBranchForm();
   },
 
   // ── Branding (Admin Center) ─────────────────────────────────────────────
@@ -5234,6 +5248,50 @@ const RetailSystem = {
     } catch (e) {
       console.error(e);
       SubsystemApp.showToast(t('Could not save branding.'), 'error');
+    }
+  },
+
+  // ── This device's branch pin (Admin Center) ─────────────────────────────
+  // Launch-readiness chain wave C1 (ROADMAP.md's 2026-08-30 "the
+  // multi-branch capture defect" entry). Device-local, never company-wide
+  // -- see api/retail_api.py's get_device_branch/set_device_branch and
+  // onboarding_routes.py's get_device_branch_uid/set_device_branch_uid for
+  // why this is a uid, not an id, and why it lives in config.json.
+  async _loadDeviceBranchForm() {
+    try {
+      const [branchesResp, pinResp] = await Promise.all([
+        this._get('/api/sub/retail/branches'),
+        this._get('/api/sub/retail/device/branch'),
+      ]);
+      const branches = (branchesResp && branchesResp.data) || [];
+      const pin = (pinResp && pinResp.data) || {};
+      const opts = branches.map(b =>
+        `<option value="${this._esc(b.uid)}" ${b.uid === pin.branch_uid ? 'selected' : ''}>${this._esc(b.name)}</option>`
+      ).join('');
+      const select = document.getElementById('device-branch-select');
+      if (select) select.innerHTML = `<option value="">${t('Unpinned')}</option>${opts}`;
+      const warning = document.getElementById('device-branch-unpinned-warning');
+      // Obvious when NO branch is pinned -- that is the state that
+      // silently produces wrong data for a chain (see this card's own
+      // intro paragraph).
+      if (warning) warning.style.display = pin.branch_uid ? 'none' : '';
+    } catch (e) { console.error(e); }
+  },
+
+  async _saveDeviceBranch() {
+    const select = document.getElementById('device-branch-select');
+    const uid = select ? select.value : '';
+    try {
+      const resp = await this._post('/api/sub/retail/device/branch', { branch_uid: uid || null });
+      if (!resp || resp.status !== 'success') {
+        SubsystemApp.showToast((resp && resp.message) || t('Could not save this device\'s branch.'), 'error');
+        return;
+      }
+      SubsystemApp.showToast(t('Device branch saved.'), 'success');
+      await this._loadDeviceBranchForm();
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not save this device\'s branch.'), 'error');
     }
   },
 

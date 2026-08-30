@@ -69,6 +69,53 @@ def _write_config(data: dict):
         json.dump(existing, f, indent=4)
 
 
+def get_device_branch_uid():
+    """Which branch THIS device is pinned to -- launch-readiness chain wave
+    C1 (ROADMAP.md's 2026-08-30 "the multi-branch capture defect" entry;
+    docs/launch-readiness/seats-and-chain-design.md §5.2 gap 1). Returns the
+    `branches.uid` string, or `None` when unset.
+
+    Deliberately a UID, never `branches.id`. `id` is a plain per-device
+    autoincrement -- the SAME physical branch carries a DIFFERENT integer id
+    on every device that has ever self-healed or re-seeded one (see
+    `_default_branch`'s own docstring in retail_api.py), so pinning the
+    integer would break on exactly the device this fix exists for, the
+    moment that device is re-seeded or the row arrives in a different
+    order. `uid` is the one identity that means the same thing everywhere.
+
+    Deliberately `config.json` (this module's own `_read_config`), never a
+    database row. `config.json` is device-local by construction -- it lives
+    outside every table `sync_outbox` ever touches, so it is never synced --
+    which is EXACTLY the property "which branch is this till standing in"
+    needs: a DB row would converge across every device on the licence the
+    moment sync ran, reproducing the exact defect this fix closes.
+
+    Shared runtime: Clinic imports this module too but calls neither this
+    function nor `set_device_branch_uid` anywhere, so a Clinic install's
+    `config.json` is untouched by this pair existing -- see
+    retail_device_branch_pin_test.py's
+    test_config_without_branch_uid_key_round_trips_unchanged for the proof
+    that a config with no `branch_uid` key, and every OTHER key in one that
+    has some, is unaffected.
+    """
+    return _read_config().get('branch_uid') or None
+
+
+def set_device_branch_uid(uid):
+    """Pins (`uid` a non-empty string) or clears (`uid` `None`/`''`) this
+    device's working branch -- see `get_device_branch_uid`'s docstring for
+    why this is a uid, not an id, and why it lives in `config.json` rather
+    than the database.
+
+    A thin wrapper over `_write_config`, which already does a full
+    read-modify-write: this call touches ONLY the `branch_uid` key, and
+    every other key already in `config.json` is left exactly as
+    `_write_config`'s own `existing.update(data)` already guarantees --
+    nothing about this function is special-cased beyond the one key name.
+    """
+    _write_config({'branch_uid': (uid or None)})
+
+
 # ── Onboarding ─────────────────────────────────────────────────────────────────
 
 @onboarding_bp.route('/api/onboarding/status', methods=['GET'])

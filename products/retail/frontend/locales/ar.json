@@ -618,5 +618,11 @@
   "Could not save the logo.": "تعذّر حفظ الشعار.",
   "Remove the receipt logo?": "هل تريد إزالة شعار الإيصال؟",
   "Logo removed.": "تمت إزالة الشعار.",
-  "Could not remove the logo.": "تعذّر إزالة الشعار."
+  "Could not remove the logo.": "تعذّر إزالة الشعار.",
+  "This Device's Branch": "فرع هذا الجهاز",
+  "Which physical store this till stands in. Sales and stock ring up under this branch instead of the company-wide default -- set this once per device on a chain with more than one store.": "المتجر الفعلي الذي يقف فيه هذا الجهاز. تُسجَّل المبيعات والمخزون ضمن هذا الفرع بدلاً من الفرع الافتراضي على مستوى الشركة -- اضبط هذا مرة واحدة لكل جهاز في سلسلة متاجر تضم أكثر من فرع.",
+  "No branch is pinned to this device. Fine for a single-branch shop -- but on a chain, every sale here files under the company's first branch until you pin one.": "لم يتم تثبيت أي فرع لهذا الجهاز. هذا مناسب لمتجر ذي فرع واحد -- لكن في سلسلة متاجر، ستُسجَّل كل عملية بيع هنا تحت الفرع الأول للشركة إلى أن تقوم بتثبيت فرع.",
+  "Unpinned": "غير مثبَّت",
+  "Device branch saved.": "تم حفظ فرع الجهاز.",
+  "Could not save this device's branch.": "تعذّر حفظ فرع هذا الجهاز."
 }
