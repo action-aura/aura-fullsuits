@@ -9378,6 +9378,94 @@ def list_sync_conflicts():
     }})
 
 
+# ── Account quarantine (delegated-HR sync collisions) ───────────────────────
+#
+# Launch-readiness account-hierarchy design §2.4/§4.2 -- "the quarantine
+# screen is a PREREQUISITE, not a nice-to-have": registry.db's OWN
+# `sync_apply_quarantine` (v6, registry_quarantine_schema.py) parks `user`/
+# `user_permission` events the registry-configured SyncService instance's
+# `_apply_event` could not apply -- `duplicate_email`/`duplicate_employee_id`
+# (design §2.2's silent-fork failure: two devices minting the same person, or
+# genuinely two different people whose employee_id allocators collided) and
+# `missing_parent:user` (a `user_permission` event that outran its owning
+# `user` create). Wave D's delegation manufactures the first two from
+# routine HR work -- an owner and a branch manager independently inviting the
+# same real person -- so this queue stops being a rare owner-on-two-tills
+# curiosity and starts being something an owner needs to SEE, per design's
+# minimum bar: "the registry quarantine gets a read route and its rows
+# appear on the existing combined exceptions screen."
+#
+# NO company_id FILTER, deliberately, not an oversight: `sync_apply_
+# quarantine` (registry_quarantine_schema.py's CREATE TABLE) carries no such
+# column, and adding one would be a registry schema version -- this route
+# does not claim one. Safe without it because registry.db is structurally
+# single-company per install: `create_admin` (above in this same product's
+# identity layer) gates on `SELECT ... WHERE role='admin'` with NO
+# company_id predicate at all -- "no valid admin exists YET" means globally
+# across the whole registry.db, not per company -- so exactly one company_id
+# is ever active in a given install's registry.db through this product's
+# real onboarding flow. This route leans on that same fact rather than
+# inventing a second reasoning for it.
+#
+# NEVER selects the `payload` column. Unlike `sync_conflicts` (which stores
+# a whole discarded record and has to summarise it defensively, see
+# `list_sync_conflicts` above), `sync_apply_quarantine.detail` is already a
+# pre-formatted, scrubbed string written by `SyncService._quarantine_apply_
+# event`'s own callers (sync_service.py) -- it names the colliding
+# email/employee_id/user_uid for a human to act on and is explicitly NEVER
+# `password_hash`/`pin_hash` by construction (see that call site's own
+# comment). Omitting `payload` from the SELECT entirely, rather than
+# selecting and then filtering it, means there is no code path in this
+# route that could ever leak it.
+
+@retail_bp.route('/account-quarantine', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_REPORTS)
+def list_account_quarantine():
+    """Every registry-side `user`/`user_permission` quarantine row, most
+    recently parked first -- the same read-only, informational disclosure
+    tier as `list_sync_conflicts` (CAP_REPORTS, no company-admin
+    requirement): a branch manager who can see the roster can see why a
+    hire is stuck, without needing the owner's own login.
+
+    READ-ONLY. There is no resolve/retry action offered here, on purpose:
+    `SyncService._retry_quarantined_events` already re-attempts every
+    parked row on its own, every `apply_pull_result()` -- the two things
+    that actually clear a row are the sync cadence (a `missing_parent:user`
+    row resolves itself once the owning account finishes arriving) and a
+    human decision made OUTSIDE this route (renaming a clashing email or
+    employee code is an ordinary account edit, not a special "fix" action
+    this queue would need to expose).
+    """
+    conn = _registry_conn()
+    try:
+        rows = conn.execute(
+            "SELECT entity_type, entity_id, event_type, reason, detail, quarantined_at "
+            "FROM sync_apply_quarantine "
+            "WHERE entity_type IN ('user', 'user_permission') "
+            "ORDER BY quarantined_at DESC"
+        ).fetchall()
+    except sqlite3.DatabaseError as exc:
+        current_app.logger.exception("list_account_quarantine failed: %s", exc)
+        return jsonify({'status': 'error', 'message': 'Could not list account quarantine.'}), 400
+    finally:
+        conn.close()
+
+    items = [{
+        'entity_type': r['entity_type'],
+        'entity_id': r['entity_id'],
+        'event_type': r['event_type'],
+        'reason': r['reason'],
+        'detail': r['detail'],
+        'quarantined_at': r['quarantined_at'],
+    } for r in rows]
+    return jsonify({'status': 'success', 'data': {
+        'items': items,
+        'count': len(items),
+    }})
+
+
 # ── Sync health ───────────────────────────────────────────────────────────────
 
 @retail_bp.route('/sync/health', methods=['GET'])

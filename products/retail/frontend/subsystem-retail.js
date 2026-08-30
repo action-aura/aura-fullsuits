@@ -6347,13 +6347,14 @@ const RetailSystem = {
     this._exceptionQueue = {
       stock: { state: 'checking', rows: [], error: '' },
       conflicts: { state: 'checking', rows: [], error: '' },
+      registry: { state: 'checking', rows: [], error: '' },
     };
     c.innerHTML = `
       <div class="ret-hdr">
         <h2 class="ret-title">${t('Exceptions')}</h2>
       </div>
       <p style="color:var(--text-muted);font-size:13px;margin:0 0 22px;max-width:780px;line-height:1.7">
-        ${t('Two queues for things the software could not resolve on its own. A human decides what happens next.')}
+        ${t('Three queues for things the software could not resolve on its own. A human decides what happens next.')}
       </p>
       <section aria-labelledby="exq-stock-heading" style="margin-bottom:28px">
         <h3 id="exq-stock-heading" class="sub-chart-title" style="margin:0 0 6px">${t('Oversold Stock')}</h3>
@@ -6362,14 +6363,23 @@ const RetailSystem = {
         </p>
         <div id="exq-stock-body">${this._exqStockPanel()}</div>
       </section>
-      <section aria-labelledby="exq-conflicts-heading">
+      <section aria-labelledby="exq-conflicts-heading" style="margin-bottom:28px">
         <h3 id="exq-conflicts-heading" class="sub-chart-title" style="margin:0 0 6px">${t('Discarded Catalogue Edits')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 14px;line-height:1.7;max-width:760px">
           ${t('An edit arrived from another device but was discarded because a newer version of the same record had already been saved here. The newer value is the one in use now -- there is nothing to re-apply. If this edit still matters, make it again.')}
         </p>
         <div id="exq-conflicts-body">${this._exqConflictsPanel()}</div>
+      </section>
+      <section aria-labelledby="exq-registry-heading">
+        <h3 id="exq-registry-heading" class="sub-chart-title" style="margin:0 0 6px">${t('Staff Account Conflicts')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 14px;line-height:1.7;max-width:760px">
+          ${t('A staff account created on two devices at the same time can collide here instead of disappearing silently. A duplicate needs a human decision; a permission grant waiting on its account will resolve itself once that account finishes syncing.')}
+        </p>
+        <div id="exq-registry-body">${this._exqRegistryPanel()}</div>
       </section>`;
-    await Promise.all([this._loadExceptionStock(), this._loadExceptionConflicts()]);
+    await Promise.all([
+      this._loadExceptionStock(), this._loadExceptionConflicts(), this._loadExceptionRegistry(),
+    ]);
   },
 
   // ── Loading (one pair per section, mirroring _loadStockAccuracy) ──────────
@@ -6718,6 +6728,117 @@ const RetailSystem = {
   _exqEventLabel(type) {
     const labels = { create: t('Create'), update: t('Update'), delete: t('Delete') };
     return labels[type] || (type || '—');
+  },
+
+  // ── Section 3: Staff Account Conflicts (launch-readiness account-
+  //    hierarchy design §2.4/§4.2 -- "the quarantine screen is a
+  //    PREREQUISITE, not a nice-to-have") ─────────────────────────────────
+  //
+  // registry.db's OWN `sync_apply_quarantine` (v6), read through
+  // GET /api/sub/retail/account-quarantine (retail_api.py::list_account_
+  // quarantine) -- the `user`/`user_permission` sync-apply collisions
+  // wave D's delegation manufactures from routine HR work (an owner and a
+  // branch manager independently inviting the same real person). Same
+  // read-only, INFORMATIONAL treatment as Section 2 above -- no resolve
+  // control anywhere in this section, for the identical reason: the fix
+  // for a duplicate is a human decision made through an ordinary account
+  // edit (rename the clashing email/employee code), not a special action
+  // this queue would need to expose, and a `missing_parent:user` row
+  // resolves itself once the owning account finishes arriving.
+
+  async _loadExceptionRegistry() {
+    const eq = this._exceptionQueue || (this._exceptionQueue = {});
+    const s = eq.registry || (eq.registry = { state: 'checking', rows: [], error: '' });
+    s.state = 'checking';
+    s.error = '';
+    this._paintExceptionRegistry();
+    try {
+      const res = await this._get('/api/sub/retail/account-quarantine');
+      if (!res || res.status !== 'success' || !res.data) {
+        s.state = 'failed';
+        s.rows = [];
+        s.error = (res && (res.message || res.error)) || t('Could not check for account sync issues.');
+      } else {
+        const rows = Array.isArray(res.data.items) ? res.data.items : [];
+        s.rows = rows;
+        s.error = '';
+        s.state = rows.length ? 'rows' : 'empty';
+      }
+    } catch (e) {
+      console.error('Exceptions: account-quarantine load failed', e);
+      s.state = 'failed';
+      s.rows = [];
+      s.error = t('Could not check for account sync issues.');
+    }
+    this._paintExceptionRegistry();
+  },
+
+  _paintExceptionRegistry() {
+    const host = document.getElementById('exq-registry-body');
+    if (!host) return;
+    host.innerHTML = this._exqRegistryPanel();
+  },
+
+  _exqRegistryPanel() {
+    const s = (this._exceptionQueue && this._exceptionQueue.registry) || { state: 'checking' };
+    switch (s.state) {
+      case 'checking': return this._exqChecking(t('Checking for account sync issues…'));
+      case 'failed':   return this._exqFailed(s.error || t('Could not check for account sync issues.'), 'RetailSystem._loadExceptionRegistry()');
+      case 'empty':    return this._exqEmpty(t('Nothing needs attention.'), t('No staff account is stuck waiting to sync.'));
+      case 'rows':     return this._exqRegistryRows(s.rows);
+      default:         return this._exqUnknownState(s.state);
+    }
+  },
+
+  _exqRegistryRows(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    return `
+      <div data-exq-state="rows">
+        <div class="sub-chart-card">
+          <div style="overflow-x:auto">
+            <table class="ret-table" id="exq-registry-table">
+              <thead><tr>
+                <th>${t('Record')}</th>
+                <th>${t('Change')}</th>
+                <th>${t('Reason')}</th>
+                <th>${t('Detail')}</th>
+                <th>${t('Detected')}</th>
+              </tr></thead>
+              <tbody>${list.map(r => this._exqRegistryRow(r)).join('')}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>`;
+  },
+
+  _exqRegistryRow(r) {
+    const row = r || {};
+    return `<tr>
+      <td>${this._exqRegistryEntityLabel(row.entity_type)}</td>
+      <td>${this._esc(this._exqEventLabel(row.event_type))}</td>
+      <td>${this._esc(this._exqRegistryReasonLabel(row.reason))}</td>
+      <td>${row.detail ? this._esc(row.detail) : '—'}</td>
+      <td>${this._bdi(this._exqTimestamp(row.quarantined_at))}</td>
+    </tr>`;
+  },
+
+  _exqRegistryEntityLabel(type) {
+    const labels = { user: t('Staff account'), user_permission: t('Permission grant') };
+    return this._esc(labels[type] || (type || t('Record')));
+  },
+
+  // `detail` (registry_api's own docstring) is a pre-formatted, SCRUBBED
+  // string -- never a credential -- but it also carries identifiers
+  // (email/employee_id) this table already shows structured elsewhere,
+  // so the REASON cell stays a short, translated label rather than
+  // echoing that free text twice.
+  _exqRegistryReasonLabel(reason) {
+    const labels = {
+      duplicate_email: t('Duplicate email address'),
+      duplicate_employee_id: t('Duplicate employee code'),
+      'missing_parent:user': t('Waiting for the linked account to sync'),
+    };
+    return labels[reason] || (reason || '—');
   },
 
   // ══ STOCK ACCURACY ════════════════════════════════════════════════════════

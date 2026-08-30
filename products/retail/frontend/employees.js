@@ -289,6 +289,7 @@ const RetailEmployees = {
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           ${owner ? '' : `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="role" data-id="${id}">${t('Change Role')}</button>`}
           ${owner ? '' : `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="branch" data-id="${id}">${t('Change Branch')}</button>`}
+          ${this._delegationButton(e)}
           <button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="pin" data-id="${id}">${e.has_pin ? t('Reset PIN') : t('Set PIN')}</button>
           ${owner ? '' : (e.status === 'disabled'
               ? `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="status" data-status="active" data-id="${id}">${t('Reactivate')}</button>`
@@ -296,6 +297,57 @@ const RetailEmployees = {
         </div>
       </td>
     </tr>`;
+  },
+
+  // ── Delegation toggle (launch-readiness account-hierarchy design §3.4/
+  //    §4.2/§10 D9) ──────────────────────────────────────────────────────
+  //
+  // The ONE owner-facing lever this wave ships -- deliberately narrower
+  // than the full 8-code permissions matrix screen (design §10 explains
+  // why one toggle suffices: `retail.employees` is the only code any
+  // delegated route -- create_employee/update_status/update_pin/
+  // get_employees in onboarding_routes.py -- ever consults). Wired to the
+  // existing, UNCHANGED `update_perms` route
+  // (subsystem='retail.employees', access_level='full'|'none'); no new
+  // server-side surface backs this control.
+  //
+  // Rendered only on a manager row that ALSO carries a branch scope: an
+  // unscoped manager can never pass the delegated gate's own
+  // `branch_scope_uid IS NOT NULL` half (G1/D1), so offering the toggle
+  // there would be a control that only ever 403s.
+  _isDelegationEligible(emp) {
+    return emp && emp.effective_role === 'manager' && !!emp.branch_scope_uid;
+  },
+
+  _delegationButton(emp) {
+    if (this._isOwnerRow(emp) || !this._isDelegationEligible(emp)) return '';
+    const id = this._esc(emp.id);
+    return emp.can_manage_staff
+      ? `<button class="ret-btn ret-btn-ghost ret-btn-sm" data-action="delegation" data-delegate="revoke" data-id="${id}">${t('Revoke Staff Management')}</button>`
+      : `<button class="ret-btn ret-btn-primary ret-btn-sm" data-action="delegation" data-delegate="grant" data-id="${id}">${t('Allow to Manage Branch Staff')}</button>`;
+  },
+
+  async _toggleDelegation(id, grant) {
+    const emp = this._find(id);
+    if (!emp) return;
+    const question = grant
+      ? t('Allow this branch manager to create and manage cashiers at their own branch?')
+      : t('Revoke this manager ability to create and manage staff at their branch?');
+    if (!confirm(question)) return;
+    try {
+      const res = await this._post(`/api/admin/employees/${id}/permissions`, {
+        subsystem: 'retail.employees', access_level: grant ? 'full' : 'none',
+      });
+      if (res && res.success) {
+        SubsystemApp.showToast(grant ? t('Staff management granted.') : t('Staff management revoked.'), 'success');
+        this._load();
+        return;
+      }
+      this._fail(res, t('Could not change staff-management delegation.'));
+    } catch (err) {
+      console.error('Delegation toggle failed', err);
+      SubsystemApp.showToast(t('Could not change staff-management delegation.'), 'error');
+    }
   },
 
   // Delegated handler for every action button _row() renders (C6). Reading
@@ -314,6 +366,7 @@ const RetailEmployees = {
     else if (action === 'branch') this._openBranchScope(id);
     else if (action === 'pin') this._openPin(id);
     else if (action === 'status') this._setStatus(id, btn.dataset.status);
+    else if (action === 'delegation') this._toggleDelegation(id, btn.dataset.delegate === 'grant');
   },
 
   // `effective_role` rather than `role`: get_employees keeps `role` byte-for

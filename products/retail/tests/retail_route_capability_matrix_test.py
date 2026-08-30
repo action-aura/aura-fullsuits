@@ -292,6 +292,13 @@ EXPECTED_READ_CAPABILITIES = {
     # deliberately READ-ONLY: see the route's own docstring for why no
     # resolve/acknowledge action exists for this table.
     'list_sync_conflicts': CAP_REPORTS,
+    # Launch-readiness account-hierarchy design §2.4/§4.2, wave D: registry.
+    # db's OWN `sync_apply_quarantine` (user/user_permission sync-apply
+    # collisions), read back for the same combined exceptions screen as the
+    # two rows immediately above. Same disclosure tier, same reasoning --
+    # and also deliberately READ-ONLY (see list_account_quarantine's own
+    # docstring).
+    'list_account_quarantine': CAP_REPORTS,
 
     # ── The drawer's own numbers: retail.cash.close, NOT retail.reports ──────
     # An X report is the full money picture of one till shift: cash sales,

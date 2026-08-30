@@ -31,6 +31,12 @@ from commercial_runtime.identity.registry_db import get_conn
 from commercial_runtime.identity.mt_auth import create_session, mt_login_required
 from commercial_runtime.identity import user_accounts as _accounts
 from commercial_runtime.identity import verification as _verification
+# Launch-readiness account-hierarchy design §2.4/§4.2 D1 -- the install-
+# stable device UUID `EMP-<dev4>-NNNN` derives its fragment from. Imported
+# at module scope (unlike mt_auth.py's deferred `user_accounts` import):
+# device_context has no import chain of its own worth deferring, and this
+# file already imports several other leaf modules the same way.
+from commercial_runtime.identity.device_context import peek_local_device_uuid
 from commercial_runtime.security.passwords import hash_password
 from commercial_runtime.security.audit import record as _security_audit, ADMIN_CREATED
 
@@ -658,10 +664,43 @@ def get_session():
 @onboarding_bp.route('/api/admin/employees', methods=['GET'])
 @mt_login_required
 def get_employees():
-    if session.get('mt_role') != 'admin':
-        return jsonify({'error': 'Admin only'}), 403
+    """Launch-readiness account-hierarchy design §4.1/§4.2 D4 -- two arms.
+
+    ADMIN: unchanged -- every row, this company, full stop.
+
+    DELEGATED (a branch manager, same predicate `create_employee` uses --
+    role='manager' AND holding retail.employees AND a non-NULL
+    branch_scope_uid, read fresh from registry.db per G6): sees ONLY
+    `WHERE branch_scope_uid = <creator's own scope> AND role != 'admin'`.
+    A NULL-scope cashier (head office) is outside every branch manager's
+    reach here for the identical reason it is outside their reach in
+    `update_status`/`update_pin` -- NULL matches nothing in a
+    `branch_scope_uid = ?` comparison.
+
+    Everyone else falls through to the SAME 'Admin only' 403 a non-admin
+    gets today -- unreachable from Clinic for the identical reason
+    `create_employee`'s docstring gives (§9 point 2/4).
+    """
+    is_admin = session.get('mt_role') == 'admin'
     conn = get_conn()
     try:
+        scope_uid = None
+        if not is_admin:
+            creator_id = session.get('mt_user_id')
+            creator = conn.execute(
+                "SELECT role, branch_scope_uid FROM users WHERE id=? AND company_id=?",
+                (creator_id, session.get('company_id')),
+            ).fetchone()
+            is_branch_manager = (
+                creator is not None
+                and _accounts.normalize_role(creator['role']) == _accounts.ROLE_MANAGER
+                and creator['branch_scope_uid'] is not None
+                and _accounts.user_has_capability(conn, creator_id, _accounts.CAP_EMPLOYEES)
+            )
+            if not is_branch_manager:
+                return jsonify({'error': 'Admin only'}), 403
+            scope_uid = creator['branch_scope_uid']
+
         # `pin_hash IS NOT NULL` -- the PRESENCE of a PIN, never the hash. The
         # column is a PBKDF2 digest of a four-digit secret, so a keyspace of
         # 10,000 is small enough that handing the hash to any client at all is
@@ -675,13 +714,34 @@ def get_employees():
         # branch_scope_schema.py's module docstring). The frontend already
         # fetches /api/sub/retail/branches for the scope picker and does
         # the uid-to-name lookup client-side.
-        emps = conn.execute(
-            "SELECT id, employee_id, email, role, clinic_role, status, created_at, "
-            "       branch_scope_uid, "
-            "       (pin_hash IS NOT NULL) AS has_pin "
-            "FROM users WHERE company_id=?",
-            (session['company_id'],)
-        ).fetchall()
+        #
+        # `can_manage_staff` (design §10 D9) -- ADDITIVE, same posture as
+        # `branch_scope_uid`/`has_pin` above: the one piece of state the
+        # owner-facing delegation toggle (employees.js) needs to render
+        # "grant" vs. "revoke" correctly, without a second route to read
+        # one user's permission grants (none exists). LEFT JOIN so a user
+        # with no retail.employees row at all reads as NOT delegated
+        # rather than vanishing from the result.
+        if is_admin:
+            emps = conn.execute(
+                "SELECT u.id, u.employee_id, u.email, u.role, u.clinic_role, u.status, u.created_at, "
+                "       u.branch_scope_uid, (u.pin_hash IS NOT NULL) AS has_pin, "
+                "       (p.access_level = ?) AS can_manage_staff "
+                "FROM users u LEFT JOIN user_permissions p "
+                "  ON p.user_id = u.id AND p.subsystem = ? "
+                "WHERE u.company_id=?",
+                (_accounts.ACCESS_FULL, _accounts.CAP_EMPLOYEES, session['company_id'])
+            ).fetchall()
+        else:
+            emps = conn.execute(
+                "SELECT u.id, u.employee_id, u.email, u.role, u.clinic_role, u.status, u.created_at, "
+                "       u.branch_scope_uid, (u.pin_hash IS NOT NULL) AS has_pin, "
+                "       (p.access_level = ?) AS can_manage_staff "
+                "FROM users u LEFT JOIN user_permissions p "
+                "  ON p.user_id = u.id AND p.subsystem = ? "
+                "WHERE u.company_id=? AND u.branch_scope_uid = ? AND u.role != 'admin'",
+                (_accounts.ACCESS_FULL, _accounts.CAP_EMPLOYEES, session['company_id'], scope_uid)
+            ).fetchall()
         rows = []
         for e in emps:
             row = dict(e)
@@ -695,17 +755,95 @@ def get_employees():
             # legacy spelling.
             row['effective_role'] = _accounts.normalize_role(row.get('role'))
             row['has_pin'] = bool(row.get('has_pin'))
+            row['can_manage_staff'] = bool(row.get('can_manage_staff'))
             rows.append(row)
         return jsonify({'success': True, 'employees': rows})
     finally:
         conn.close()
 
 
+def _delegated_employee_id_fragment():
+    """`dev4` for `EMP-<dev4>-NNNN` -- design §2.4, AUDIT-032B's pattern,
+    third application after `sale_number`/`return_number`/`po_number`'s
+    own `_device_doc_discriminator()` (retail_api.py). NOT reused directly:
+    that helper lives in retail_api.py and reads a SEPARATE, retail-only
+    persisted discriminator file (`peek_doc_discriminator`); this file is
+    shared with Clinic and identity-layer code, so design §2.4 names the
+    source explicitly as `device_context.py::peek_local_device_uuid()` --
+    the install-stable device UUID that already exists inside THIS
+    package, which `local_terminal_id()` (retail's schema.py) itself
+    wraps.
+
+    Read-only: `peek_local_device_uuid()` never CREATES device identity as
+    a side effect of minting an employee id (unlike its writing twin,
+    `local_device_uuid()`) -- an authorization-adjacent id mint has no
+    business manufacturing identity state as a side effect of being asked
+    for a fragment.
+
+    Never raises. A device whose UUID was never generated (a fresh
+    install, pre-activation) AND a corrupt local_device.json (raises
+    `LocalDeviceStateCorruptError`, per that function's own docstring)
+    both fall back to a random 4-hex fragment -- never a shared constant,
+    which would silently collide across every such install the exact way
+    the bug this function exists to fix does.
+    """
+    try:
+        value = peek_local_device_uuid()
+    except Exception:
+        value = None
+    if not value:
+        return uuid.uuid4().hex[:4]
+    return str(value)[:4]
+
+
 @onboarding_bp.route('/api/admin/employees', methods=['POST'])
 @mt_login_required
 def create_employee():
-    if session.get('mt_role') != 'admin':
-        return jsonify({'error': 'Admin only'}), 403
+    """Launch-readiness account-hierarchy design §4.1/§4.2 D1 -- two arms.
+
+    ADMIN: today's path, byte-for-byte (§9 point 2/3) -- same gate
+    (`session['mt_role'] == 'admin'`), same `EMP-{count+1:04d}` allocator,
+    same INSERT, same response shape. Every id Clinic (or any existing
+    Retail install) ever mints through this route is unchanged.
+
+    DELEGATED (a branch manager -- `role='manager'` AND holding
+    `retail.employees` AND a non-NULL `branch_scope_uid`, ALL read fresh
+    from registry.db inside this transaction, never from the session
+    cookie -- G6): may create exactly one thing, a cashier at their own
+    branch, and nothing else.
+      G1 role ceiling  -- normalize_role(requested role) must resolve to
+                          'cashier'; anything else is refused, never
+                          silently downgraded.
+      G2 grant channel -- a non-empty `permissions` dict is REFUSED (403),
+                          never silently dropped (design §0.2/§4.1 G2): an
+                          unrefused dict is the widest escalation path on
+                          the board here -- a branch manager could
+                          otherwise mint a cashier holding
+                          retail.cash.approve, or even retail.employees
+                          itself (recursive delegation).
+      G3 scope stamp   -- the new row's `branch_scope_uid` is the
+                          CREATOR's own, read fresh below -- never from
+                          the request body, which carries no scope field
+                          on this path at all.
+    Everything else (a cashier, a plain manager, a demoted/unscoped
+    manager, anyone with no session) falls through to the SAME 'Admin
+    only' 403 a non-admin gets today -- the identical, byte-for-byte
+    refusal that keeps Clinic (whose only account-creating actor is its
+    own admin) provably unreachable through this arm (§9 point 2).
+
+    D0 (design §2.4): the whole body runs under BEGIN IMMEDIATE -- closes
+    the same-device double-submit race on the email-uniqueness check and
+    the employee_id counter, admin or delegated, regardless of
+    delegation. The delegated arm ALSO mints `EMP-<dev4>-NNNN` rather than
+    `EMP-NNNN` (`_delegated_employee_id_fragment()` above) -- two DEVICES
+    creating from the same local COUNT would otherwise mint the identical
+    id and collide on sync (design §2.2's silent-fork failure), which
+    delegation turns from a rare owner-on-two-tills accident into a
+    routine event. The admin arm's id format is UNTOUCHED: that residual
+    race is today's status quo, accepted rather than fixed here (design
+    §2.4) -- fixing it too would mean Clinic's ids stop being
+    byte-identical (§9 point 3).
+    """
     data = request.json or {}
     email = (data.get('email') or '').strip().lower()
     perms = data.get('permissions', {})
@@ -737,24 +875,91 @@ def create_employee():
         # accepted for API compatibility but is not a choice any UI offers.
         return jsonify({'error': 'Role must be manager or cashier.'}), 400
 
+    is_admin = session.get('mt_role') == 'admin'
+
     conn = get_conn()
     try:
+        # D0: takes the write lock before either the email check or the
+        # employee_id counter below is read -- see this route's own
+        # docstring.
+        conn.execute("BEGIN IMMEDIATE")
+
+        scope_uid = None
+        if not is_admin:
+            # ── D1 delegated gate (design §4.1 G1/G2/G3/G6) ────────────────
+            # G6: read fresh, from registry.db, inside this transaction --
+            # never session['mt_role']/anything else cached at login. A
+            # manager just demoted or descoped by the owner must not keep
+            # minting on a session that has not yet re-read its own row --
+            # the owner's own edit already bumped session_version, so the
+            # NEXT request from that session dies in mt_login_required; this
+            # is the belt for the same-request window.
+            creator_id = session.get('mt_user_id')
+            creator = conn.execute(
+                "SELECT role, branch_scope_uid FROM users WHERE id=? AND company_id=?",
+                (creator_id, session.get('company_id')),
+            ).fetchone()
+            is_branch_manager = (
+                creator is not None
+                and _accounts.normalize_role(creator['role']) == _accounts.ROLE_MANAGER
+                and creator['branch_scope_uid'] is not None
+                # Deliberately redundant with the role check above (design
+                # §4.2 D1): the pair keeps a stray hand-granted
+                # retail.employees row on a CASHIER inert, since a cashier
+                # can never pass the role half either way.
+                and _accounts.user_has_capability(conn, creator_id, _accounts.CAP_EMPLOYEES)
+            )
+            if not is_branch_manager:
+                conn.rollback()
+                # The SAME 'Admin only' 403 a plain non-admin gets today --
+                # not a different message -- so Clinic (whose non-admin
+                # actors can never satisfy is_branch_manager, see this
+                # route's own docstring, §9 point 2) falls through to a
+                # byte-identical refusal.
+                return jsonify({'error': 'Admin only'}), 403
+
+            # G1 -- role ceiling. normalize_role(), never a raw string
+            # equality: the legacy 'employee' alias must not slip a naive
+            # == 'cashier' check.
+            if _accounts.normalize_role(role) != _accounts.ROLE_CASHIER:
+                conn.rollback()
+                return jsonify({'error': 'A branch manager may only create cashiers.'}), 403
+            role = _accounts.ROLE_CASHIER
+
+            # G2 -- the escalation channel. REFUSED, never silently dropped
+            # -- see this route's own docstring and design §0.2/§4.1 G2.
+            if perms:
+                conn.rollback()
+                return jsonify({'error': 'A branch manager may not grant permissions directly.'}), 403
+
+            # G3 -- scope stamping, from the creator's OWN row read above --
+            # never from the request body, which carries no scope field on
+            # this path at all.
+            scope_uid = creator['branch_scope_uid']
+
         existing = conn.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
         if existing:
+            conn.rollback()
             return jsonify({'error': 'Email already registered.'}), 400
 
         company_id = session.get('company_id', 'local')
         user_id = str(uuid.uuid4())
         count = conn.execute("SELECT COUNT(*) FROM users WHERE company_id=?", (company_id,)).fetchone()[0]
-        emp_id = f"EMP-{count + 1:04d}"
+        # D0 (design §2.4): the admin arm's format is UNTOUCHED --
+        # `EMP-{count+1:04d}`, byte-for-byte, so Clinic and every existing
+        # Retail install keep minting the identical id (§9 point 3). Only
+        # the delegated arm gains the device fragment.
+        emp_id = (f"EMP-{count + 1:04d}" if is_admin
+                  else f"EMP-{_delegated_employee_id_fragment()}-{count + 1:04d}")
 
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO users (id, company_id, employee_id, email, password_hash, role, status,
-                               require_password_change, clinic_role, uid, row_version, updated_at_utc)
-            VALUES (?, ?, ?, ?, ?, ?, 'pending_setup', 0, ?, ?, 1, ?)
+                               require_password_change, clinic_role, uid, row_version, updated_at_utc,
+                               branch_scope_uid)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending_setup', 0, ?, ?, 1, ?, ?)
         """, (user_id, company_id, emp_id, email, 'PENDING', role, clinic_role,
-              str(uuid.uuid4()), _accounts.now_utc_iso()))
+              str(uuid.uuid4()), _accounts.now_utc_iso(), scope_uid))
 
         # Phase 5 wave B2 stage 2b. `conn`, never `cur` -- `cur` is reused
         # below for the permission rows, the secure_links insert and the
@@ -839,9 +1044,31 @@ def update_status(user_id):
     `needs_setup=false` and `create-admin` keeps answering 409, while
     `authenticate_registry_user` refuses the login -- and every route that
     could undo it sits behind the admin session nobody can obtain any more.
+
+    Launch-readiness account-hierarchy design §4.1/§4.2 D2 -- two arms.
+
+    ADMIN: untouched, including the 409 owner-disable bar above.
+
+    DELEGATED (a branch manager, same predicate `create_employee` uses,
+    read fresh from registry.db per G6): G4 target rule -- the target's
+    `normalize_role` must be 'cashier', its `branch_scope_uid` must equal
+    the creator's OWN scope (a NULL-scope/head-office cashier matches
+    nothing here), and the target must not be the caller. ONLY
+    `status='disabled'` is accepted -- the ENABLE direction is refused
+    with 403 for a delegated caller (design §3.4: re-enable is
+    owner-only, asymmetrically to disable. Disable is the SAFETY action a
+    branch manager needs at 9pm without phoning the owner; re-enable is
+    the TRUST action that must never be quietly available to a
+    sympathetic or complicit manager -- a worker the OWNER disabled for
+    suspected theft must not be reactivated by anyone else).
+
+    The branch-manager check runs BEFORE the target row is even looked
+    up, matching the admin arm's own shape (its gate runs before any
+    connection is opened at all) -- a caller who is not privileged at all
+    must not learn whether a given id exists in this company via the
+    404-vs-403 distinction.
     """
-    if session.get('mt_role') != 'admin':
-        return jsonify({'error': 'Admin only'}), 403
+    is_admin = session.get('mt_role') == 'admin'
 
     status = (request.json or {}).get('status')
     # The real domain this specific control writes: the frontend's own
@@ -854,19 +1081,58 @@ def update_status(user_id):
 
     conn = get_conn()
     try:
+        # D0: BEGIN IMMEDIATE closes the same-device double-submit race on
+        # the row read below, admin or delegated.
+        conn.execute("BEGIN IMMEDIATE")
+
+        creator = None
+        if not is_admin:
+            # ── D2 delegated gate, part 1 (design §4.1 G6) ──────────────────
+            creator_id = session.get('mt_user_id')
+            creator = conn.execute(
+                "SELECT role, branch_scope_uid FROM users WHERE id=? AND company_id=?",
+                (creator_id, session.get('company_id')),
+            ).fetchone()
+            is_branch_manager = (
+                creator is not None
+                and _accounts.normalize_role(creator['role']) == _accounts.ROLE_MANAGER
+                and creator['branch_scope_uid'] is not None
+                and _accounts.user_has_capability(conn, creator_id, _accounts.CAP_EMPLOYEES)
+            )
+            if not is_branch_manager:
+                conn.rollback()
+                return jsonify({'error': 'Admin only'}), 403
+            if status != 'disabled':
+                conn.rollback()
+                return jsonify({'error': 'A branch manager may not reactivate an account.'}), 403
+
         row = conn.execute(
-            "SELECT id, role FROM users WHERE id=? AND company_id=?",
+            "SELECT id, role, branch_scope_uid FROM users WHERE id=? AND company_id=?",
             (user_id, session['company_id']),
         ).fetchone()
         if not row:
+            conn.rollback()
             return jsonify({'error': 'User not found.'}), 404
 
-        # One admin per install (`create_admin` is gated on "no valid admin
-        # exists yet") and no way to mint a second -- refuse only the
-        # DISABLE direction; re-affirming an already-active owner as
-        # 'active' is a harmless no-op and stays allowed.
-        if status == 'disabled' and _accounts.normalize_role(row['role']) == _accounts.ROLE_ADMIN:
-            return jsonify({'error': 'You cannot disable the owner account.'}), 409
+        if is_admin:
+            # One admin per install (`create_admin` is gated on "no valid admin
+            # exists yet") and no way to mint a second -- refuse only the
+            # DISABLE direction; re-affirming an already-active owner as
+            # 'active' is a harmless no-op and stays allowed.
+            if status == 'disabled' and _accounts.normalize_role(row['role']) == _accounts.ROLE_ADMIN:
+                conn.rollback()
+                return jsonify({'error': 'You cannot disable the owner account.'}), 409
+        else:
+            # ── D2 delegated gate, part 2 (design §4.1 G4) ──────────────────
+            target_is_own_branch_cashier = (
+                str(user_id) != str(session.get('mt_user_id'))
+                and _accounts.normalize_role(row['role']) == _accounts.ROLE_CASHIER
+                and row['branch_scope_uid'] is not None
+                and row['branch_scope_uid'] == creator['branch_scope_uid']
+            )
+            if not target_is_own_branch_cashier:
+                conn.rollback()
+                return jsonify({'error': 'You may only manage cashiers at your own branch.'}), 403
 
         conn.execute("UPDATE users SET status=?, session_version=session_version+1, "
                      "row_version=COALESCE(row_version, 1)+1, updated_at_utc=? "
@@ -1139,18 +1405,54 @@ def update_pin(user_id):
 
     The PIN is never echoed back, never logged, and never written to the audit
     row -- only the fact that it changed.
+
+    Launch-readiness account-hierarchy design §4.1/§4.2 D3 -- the SAME
+    non-admin gate as D2 (`update_status`): G4 target rule (own-branch
+    cashiers only, never self) plus G6 (fresh read, from registry.db,
+    inside this request). Applies to BOTH directions (PUT sets, DELETE
+    clears) -- a branch manager may reset or clear a cashier's PIN at
+    their own branch either way; `SET_PIN`/`CLEAR_PIN` audit rows already
+    name the actor, which is the frame-up deterrent design §12 relies on
+    for this exact lever.
     """
-    if session.get('mt_role') != 'admin':
-        return jsonify({'error': 'Admin only'}), 403
+    is_admin = session.get('mt_role') == 'admin'
 
     conn = get_conn()
     try:
+        creator = None
+        if not is_admin:
+            # ── D3 delegated gate, part 1 (design §4.1 G6) ──────────────────
+            creator_id = session.get('mt_user_id')
+            creator = conn.execute(
+                "SELECT role, branch_scope_uid FROM users WHERE id=? AND company_id=?",
+                (creator_id, session.get('company_id')),
+            ).fetchone()
+            is_branch_manager = (
+                creator is not None
+                and _accounts.normalize_role(creator['role']) == _accounts.ROLE_MANAGER
+                and creator['branch_scope_uid'] is not None
+                and _accounts.user_has_capability(conn, creator_id, _accounts.CAP_EMPLOYEES)
+            )
+            if not is_branch_manager:
+                return jsonify({'error': 'Admin only'}), 403
+
         row = conn.execute(
-            "SELECT id FROM users WHERE id=? AND company_id=?",
+            "SELECT id, role, branch_scope_uid FROM users WHERE id=? AND company_id=?",
             (user_id, session['company_id']),
         ).fetchone()
         if not row:
             return jsonify({'error': 'User not found.'}), 404
+
+        if not is_admin:
+            # ── D3 delegated gate, part 2 (design §4.1 G4) ──────────────────
+            target_is_own_branch_cashier = (
+                str(user_id) != str(session.get('mt_user_id'))
+                and _accounts.normalize_role(row['role']) == _accounts.ROLE_CASHIER
+                and row['branch_scope_uid'] is not None
+                and row['branch_scope_uid'] == creator['branch_scope_uid']
+            )
+            if not target_is_own_branch_cashier:
+                return jsonify({'error': 'You may only manage cashiers at your own branch.'}), 403
 
         if request.method == 'DELETE':
             _accounts.clear_user_pin(conn, user_id)
