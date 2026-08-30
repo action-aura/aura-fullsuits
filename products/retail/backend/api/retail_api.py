@@ -80,6 +80,12 @@ from core.retail import metrics
 # inventory_balances is a cache, the ledger is the truth.
 from core.retail import stock_reconciliation
 from core.retail import whatsapp_hook as _whatsapp_hook
+# Promotions resolver (schema v23, launch-readiness "promotions, wave 1").
+# Aliased, not `from ... import promotions`, so it cannot collide with the
+# `promotions` local variable name inside create_sale/list routes below --
+# same discipline `tax_engine` (core.retail.pricing) already uses on this
+# import block for the identical reason.
+from core.retail import promotions as promo_engine
 from config import (
     DATABASE_DIR, AURA_AI_ENDPOINT_URL, AURA_AI_BEARER_TOKEN, AURA_AI_TIMEOUT_SECONDS,
     AURA_AI_MODEL_NAME,
@@ -3651,6 +3657,21 @@ def create_sale():
         # isolation. See the balance check inside the loop below for where
         # this is read and updated.
         demand_by_product_branch = {}
+
+        # Launch-readiness "promotions, wave 1" (schema v23, ROADMAP.md's
+        # 2026-08-30 "retail schema v23 CLAIMED" entry). Loaded ONCE for the
+        # whole sale, exactly like `behind_on_sync` above and for the same
+        # reason -- every line of one sale is judged against the SAME
+        # snapshot, and there will be tens of active rules in a real shop,
+        # not thousands, so re-querying per line would be pure waste (see
+        # core.retail.promotions.load_active_promotions's own docstring).
+        # `now_local`, NOT a fresh `datetime.now()` call -- reuses the
+        # EXACT value already computed above for this sale's own
+        # `created_at`. A till is explicitly built to keep selling while
+        # offline, so this device's own clock is the only clock available
+        # at the moment a promotion's live-ness actually needs deciding.
+        active_promotions = promo_engine.load_active_promotions(conn, cid, bid, now_local)
+
         for item in items_in:
             pid = item.get('product_id')
             # launch-readiness Phase 6 stage 6b-iii-a (deletion stops
@@ -3664,8 +3685,12 @@ def create_sale():
             # and remain SELLABLE forever. A tombstoned id now falls through
             # to the same "Product {pid} not found." 400 below as an id that
             # never existed at all.
+            # `category_id` added to this SELECT for promotions, wave 1
+            # (schema v23) -- `resolve_line_discount_pct` below needs it to
+            # match a category-scoped promotion against this line; nothing
+            # before this stage ever read it here.
             product = cur.execute(
-                "SELECT id, name, sell_price, tax_rate, status FROM products "
+                "SELECT id, name, sell_price, tax_rate, status, category_id FROM products "
                 "WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
                 (pid, cid)
             ).fetchone()
@@ -3747,15 +3772,44 @@ def create_sale():
                 # mutation proof 4).
                 sale_oversold_past_recorded_stock = True
 
-            discount_pct = tax_engine.clamp_discount_pct(item.get('discount_pct', 0))
+            # `manual_discount_pct` -- the CLIENT-SUBMITTED, clamped value.
+            # This is the SAME value `wants_discount` (above, before BEGIN
+            # IMMEDIATE) already judged the CAP_DISCOUNT gate on -- promotion
+            # resolution happens AFTER that gate and must never feed back
+            # into it. Feeding the PROMOTION-INFLATED `effective_discount_pct`
+            # into that gate instead would mean a cashier without
+            # CAP_DISCOUNT could no longer sell a PROMOTED item at all -- the
+            # shop's own weekend offer would lock its own till. See the
+            # RETAIL_SCHEMA_VERSION v23 comment in database/schema.py.
+            manual_discount_pct = tax_engine.clamp_discount_pct(item.get('discount_pct', 0))
+            # BEST PRICE WINS, never summed -- core.retail.promotions'
+            # `resolve_line_discount_pct` returns max(promo_pct,
+            # manual_discount_pct), never their sum. `applied_promotion` is
+            # None when the manual discount won (including a tie) or no
+            # promotion matched at all -- see that function's own docstring.
+            effective_discount_pct, applied_promotion = promo_engine.resolve_line_discount_pct(
+                active_promotions, pid, product['category_id'], manual_discount_pct
+            )
             unit_price = float(product['sell_price'])
             tax_rate = float(product['tax_rate'])
-            calc = tax_engine.calculate_line(unit_price, qty, discount_pct, tax_rate, mode=mode)
+            # `effective_discount_pct`, not the raw manual value -- this is
+            # the ONLY place a promotion actually changes what a sale
+            # charges, and it goes through the EXISTING calculate_line the
+            # same way a manual discount always has. pricing.py is
+            # unmodified by this change.
+            calc = tax_engine.calculate_line(unit_price, qty, effective_discount_pct, tax_rate, mode=mode)
 
             resolved_lines.append({
                 'product_id': pid, 'quantity': qty, 'unit_price': unit_price,
-                'discount_pct': discount_pct, 'tax_rate': tax_rate,
+                'discount_pct': effective_discount_pct, 'tax_rate': tax_rate,
                 'line_total': calc['taxable_amount'], 'branch_id': bid,
+                # Carried through to the sale_items write loop below so a
+                # winning promotion can be snapshotted into
+                # sale_item_promotions -- `discount_amount` is calc's OWN
+                # output (never re-derived), matching the "snapshot what was
+                # actually applied" rule the RETAIL_SCHEMA_VERSION v23
+                # comment states.
+                'applied_promotion': applied_promotion, 'discount_amount': calc['discount_amount'],
             })
             subtotal += Decimal(str(calc['gross']))
             discount += Decimal(str(calc['discount_amount']))
@@ -3914,6 +3968,17 @@ def create_sale():
                 VALUES (?,?,?,?,?,?,?,?)
             """, (sale_id, pid, qty, line['unit_price'], line['discount_pct'], line['tax_rate'],
                   line['line_total'], item_uid))
+            # `cur.lastrowid` captured IMMEDIATELY after the INSERT it
+            # describes and before any other `cur.execute()` runs -- same
+            # discipline `_default_branch`'s own comment states in full:
+            # sqlite3's `Cursor.lastrowid` reflects whichever INSERT the
+            # cursor last executed, and `_queue_sync_event` two lines below
+            # is itself an INSERT (into sync_outbox) that would overwrite it.
+            # Needed for promotions, wave 1 (schema v23): `sale_item_
+            # promotions.sale_item_id` references this row's own
+            # autoincrement id, which exists nowhere else once this INSERT
+            # has run.
+            sale_item_id = cur.lastrowid
             # `sale_uid`, not `sale_id` -- the local autoincrement id means
             # nothing on another device. The receiving side resolves this
             # line's parent by looking up `sales.uid = sale_uid` locally (see
@@ -3925,6 +3990,31 @@ def create_sale():
                 'unit_price': line['unit_price'], 'discount_pct': line['discount_pct'],
                 'tax_rate': line['tax_rate'], 'line_total': line['line_total'],
             })
+            # Promotions, wave 1 (schema v23): snapshot the WINNING
+            # promotion, if any, onto this line. `applied_promotion` is None
+            # whenever the manual discount won (including a tie) or nothing
+            # matched -- see core.retail.promotions.resolve_line_discount_pct
+            # -- so most sales write nothing here at all, matching the
+            # "invisible unless opted in" contract. `discount_amount_
+            # snapshot` is `calc['discount_amount']` from the SAME
+            # calculate_line call that produced this line's own
+            # `line_total`/`discount_pct` above (line['discount_amount']),
+            # never re-derived -- a receipt reprinted next year, and a
+            # return processed against it, must show what was ACTUALLY
+            # charged, not a figure recomputed from whatever the promotion
+            # row says today. No sync event: promotions/sale_item_
+            # promotions are not one of Phase 5's synced entity types (see
+            # database/schema.py's `_migrate_add_promotions` docstring),
+            # so there is nothing to queue here.
+            applied_promotion = line.get('applied_promotion')
+            if applied_promotion:
+                cur.execute("""
+                    INSERT INTO sale_item_promotions
+                        (company_id, sale_item_id, promotion_id, name_snapshot,
+                         discount_pct_snapshot, discount_amount_snapshot)
+                    VALUES (?,?,?,?,?,?)
+                """, (cid, sale_item_id, applied_promotion['id'], applied_promotion['name'],
+                      applied_promotion['discount_pct'], line['discount_amount']))
             movement_uid = _new_uid()
             cur.execute("""
                 INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,created_by,
@@ -4135,6 +4225,285 @@ def create_sale():
         return jsonify({'status': 'error', 'message': str(e)}), 500
     finally:
         conn.close()
+
+# ── Promotions (schema v23, launch-readiness "promotions, wave 1") ─────────
+#
+# Configuring a promotion (list/create/update/deactivate) is CAP_DISCOUNT:
+# deciding to give value away at scale is exactly that authority. The one
+# read a TILL needs (`/promotions/active`) is CAP_SELL instead -- a cashier
+# has to be able to load it to ring a sale, and it is licensing-ungated for
+# the same reason list_products/list_categories above are: a plain read the
+# till needs to function, not a mutation. See the RETAIL_SCHEMA_VERSION v23
+# comment in database/schema.py for the full design.
+
+def _promotion_target_error(conn, cid, fields):
+    """Shared tenancy validation for create_promotion/update_promotion: a
+    non-empty product_id/category_id/branch_id must belong to THIS company,
+    or return the error message to send back. Returns None when everything
+    supplied checks out (including when nothing needing a check was
+    supplied at all -- a PATCH that never touches these fields must not be
+    forced to re-validate a value it did not send).
+
+    AUDIT-032C's supplier_id lesson, repeated verbatim: an unvalidated FK
+    here is the cross-tenant leak this codebase has already shipped once
+    (create_purchase_order's supplier_id, before `6b79b5a`) -- a caller
+    could otherwise file a promotion against ANOTHER company's product,
+    category or branch. No literal FOREIGN KEY enforces this (see
+    _migrate_add_promotions's own docstring for why); this company-scoped
+    SELECT is the entire guard.
+    """
+    if fields.get('product_id'):
+        row = conn.execute(
+            "SELECT id FROM products WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
+            (fields['product_id'], cid)
+        ).fetchone()
+        if not row:
+            return f'Unknown product_id: {fields["product_id"]}'
+    if fields.get('category_id'):
+        row = conn.execute(
+            "SELECT id FROM categories WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
+            (fields['category_id'], cid)
+        ).fetchone()
+        if not row:
+            return f'Unknown category_id: {fields["category_id"]}'
+    if fields.get('branch_id'):
+        # `branches` carries no `deleted_at_utc` of its own (see
+        # `_default_branch` above, which checks none either) -- matched here
+        # rather than inventing a check this table has never had.
+        row = conn.execute(
+            "SELECT id FROM branches WHERE id=? AND company_id=?",
+            (fields['branch_id'], cid)
+        ).fetchone()
+        if not row:
+            return f'Unknown branch_id: {fields["branch_id"]}'
+    return None
+
+
+@retail_bp.route('/promotions', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_DISCOUNT)
+def list_promotions():
+    """Every promotion this company has ever configured (active AND
+    deactivated) -- the management screen's own list, not the till's. See
+    `list_active_promotions` (/promotions/active) for the till-facing,
+    currently-live-only read."""
+    cid = _cid()
+    conn = get_retail_conn()
+    rows = conn.execute(
+        "SELECT id, name, discount_pct, product_id, category_id, branch_id, "
+        "starts_at, ends_at, status, created_at FROM promotions "
+        "WHERE company_id=? ORDER BY created_at DESC", (cid,)
+    ).fetchall()
+    conn.close()
+    return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
+
+
+@retail_bp.route('/promotions', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.promotion.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_DISCOUNT)
+def create_promotion():
+    data = request.json or {}
+    cid = _cid()
+
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'status': 'error', 'message': 'Promotion name required.'}), 400
+
+    product_id = data.get('product_id')
+    category_id = data.get('category_id')
+    # EXACTLY one of product_id / category_id -- both present or both absent
+    # are the same failure (`bool(x) == bool(y)` catches both: True==True
+    # and False==False), matching database/schema.py's promotions table
+    # comment ("product_id, category_id -- exactly one of the two").
+    if bool(product_id) == bool(category_id):
+        return jsonify({'status': 'error',
+                         'message': 'A promotion must target exactly one of product_id or category_id.'}), 400
+
+    try:
+        discount_pct = float(data.get('discount_pct'))
+    except (TypeError, ValueError):
+        return jsonify({'status': 'error', 'message': 'Invalid discount_pct.'}), 400
+    # (0, 100] -- a promotion of exactly 0% gives nothing away and is not a
+    # promotion; MAX_DISCOUNT_PCT=100 is core.retail.pricing's own ceiling
+    # (clamp_discount_pct), matched here rather than re-derived.
+    if not (0 < discount_pct <= 100):
+        return jsonify({'status': 'error',
+                         'message': 'discount_pct must be greater than 0 and at most 100.'}), 400
+
+    branch_id = data.get('branch_id')
+    starts_at = data.get('starts_at')
+    ends_at = data.get('ends_at')
+    if starts_at and ends_at and ends_at < starts_at:
+        return jsonify({'status': 'error', 'message': 'ends_at cannot be before starts_at.'}), 400
+
+    conn = get_retail_conn()
+    target_error = _promotion_target_error(conn, cid, {
+        'product_id': product_id, 'category_id': category_id, 'branch_id': branch_id,
+    })
+    if target_error:
+        conn.close()
+        return jsonify({'status': 'error', 'message': target_error}), 400
+
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO promotions
+            (company_id, name, discount_pct, product_id, category_id, branch_id,
+             starts_at, ends_at, status)
+        VALUES (?,?,?,?,?,?,?,?, 'active')
+    """, (cid, name, discount_pct, product_id, category_id, branch_id, starts_at, ends_at))
+    new_id = cur.lastrowid
+    conn.commit(); conn.close()
+    return jsonify({'status': 'success', 'data': {'id': new_id}})
+
+
+@retail_bp.route('/promotions/<int:promotion_id>', methods=['PATCH'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.promotion.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_DISCOUNT)
+def update_promotion(promotion_id):
+    data = request.json or {}
+    cid = _cid()
+    conn = get_retail_conn()
+    existing = conn.execute(
+        "SELECT * FROM promotions WHERE id=? AND company_id=?", (promotion_id, cid)
+    ).fetchone()
+    if not existing:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Promotion not found.'}), 404
+
+    allowed = ['name', 'discount_pct', 'product_id', 'category_id', 'branch_id',
+               'starts_at', 'ends_at', 'status']
+    fields = {k: v for k, v in data.items() if k in allowed}
+    if not fields:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'No valid fields.'}), 400
+
+    if 'name' in fields:
+        fields['name'] = (fields['name'] or '').strip()
+        if not fields['name']:
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'Promotion name required.'}), 400
+
+    if 'discount_pct' in fields:
+        try:
+            fields['discount_pct'] = float(fields['discount_pct'])
+        except (TypeError, ValueError):
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'Invalid discount_pct.'}), 400
+        if not (0 < fields['discount_pct'] <= 100):
+            conn.close()
+            return jsonify({'status': 'error',
+                             'message': 'discount_pct must be greater than 0 and at most 100.'}), 400
+
+    # Validated against the RESULTING row (existing merged with this PATCH's
+    # fields), not the PATCHed fields in isolation -- a PATCH that only
+    # changes discount_pct must still be checked against this promotion's
+    # EXISTING product_id/category_id exclusivity, and a PATCH that only
+    # changes product_id must be checked against the EXISTING category_id it
+    # did not touch. Matching update_product's own "read the row after
+    # write" discipline, applied here before the write instead.
+    merged = dict(existing)
+    merged.update(fields)
+    if bool(merged.get('product_id')) == bool(merged.get('category_id')):
+        conn.close()
+        return jsonify({'status': 'error',
+                         'message': 'A promotion must target exactly one of product_id or category_id.'}), 400
+    starts_at = merged.get('starts_at')
+    ends_at = merged.get('ends_at')
+    if starts_at and ends_at and ends_at < starts_at:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'ends_at cannot be before starts_at.'}), 400
+
+    target_error = _promotion_target_error(conn, cid, fields)
+    if target_error:
+        conn.close()
+        return jsonify({'status': 'error', 'message': target_error}), 400
+
+    cur = conn.cursor()
+    sets = ', '.join(f'{k}=?' for k in fields)
+    cur.execute(
+        f"UPDATE promotions SET {sets} WHERE id=? AND company_id=?",
+        list(fields.values()) + [promotion_id, cid]
+    )
+    conn.commit(); conn.close()
+    return jsonify({'status': 'success'})
+
+
+@retail_bp.route('/promotions/<int:promotion_id>', methods=['DELETE'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.promotion.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_DISCOUNT)
+def delete_promotion(promotion_id):
+    """Deactivate, not delete -- a status flip (active -> inactive), same
+    shape as delete_category's tombstone above rather than a hard DELETE.
+    `sale_item_promotions` rows already snapshot everything a past sale
+    needs (see database/schema.py's RETAIL_SCHEMA_VERSION v23 comment), so a
+    hard delete here would not even corrupt history the way it would on a
+    table without a snapshot -- this is a design preference (an owner can
+    see and reactivate a past promotion) rather than a correctness
+    requirement."""
+    cid = _cid()
+    conn = get_retail_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE promotions SET status='inactive' WHERE id=? AND company_id=? AND status='active'",
+        (promotion_id, cid)
+    )
+    if cur.rowcount == 0:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Promotion not found.'}), 404
+    conn.commit(); conn.close()
+    return jsonify({'status': 'success'})
+
+
+@retail_bp.route('/promotions/active', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_SELL)
+def list_active_promotions():
+    """The till's own read -- CAP_SELL, not CAP_DISCOUNT, and no
+    @require_license_capability (matches list_products/list_categories
+    above: a plain read the till needs to function, not a mutation).
+
+    BRANCH SCOPE -- settled, do not re-decide (ROADMAP.md's 2026-08-30
+    "retail schema v23 CLAIMED" entry). The shipped frontend
+    (products/retail/frontend/subsystem-retail.js, commit 3096bc4) calls
+    this route with NO branch_id, because the POS has no client-side
+    "current branch" concept and the frontend agent correctly declined to
+    invent one. So `branch_id` is an OPTIONAL query parameter: when absent,
+    the branch is resolved SERVER-SIDE via the SAME `_default_branch` helper
+    create_sale itself uses. Which branch a till belongs to is not a
+    client-supplied fact, and a client that could name any branch could ask
+    for another branch's pricing -- so a SUPPLIED branch_id is validated
+    against this company before use, exactly like create_promotion/
+    update_promotion validate one on write.
+    """
+    cid = _cid()
+    conn = get_retail_conn()
+    raw_branch_id = request.args.get('branch_id')
+    if raw_branch_id:
+        row = conn.execute(
+            "SELECT id FROM branches WHERE id=? AND company_id=?", (raw_branch_id, cid)
+        ).fetchone()
+        if not row:
+            conn.close()
+            return jsonify({'status': 'error', 'message': f'Unknown branch_id: {raw_branch_id}'}), 400
+        bid = int(raw_branch_id)
+    else:
+        bid = _default_branch(conn, cid)
+    # Local wall clock, matching create_sale's own `now_local` -- a till is
+    # explicitly built to keep selling (and, here, keep PREVIEWING prices)
+    # while offline, so this device's own clock is the only one available.
+    now_local = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    rows = promo_engine.load_active_promotions(conn, cid, bid, now_local)
+    conn.close()
+    return jsonify({'status': 'success', 'data': rows})
+
 
 @retail_bp.route('/sales/recent', methods=['GET'])
 @mt_login_required

@@ -230,6 +230,17 @@ EXPECTED_MUTATION_CAPABILITIES = {
     'smart_execute': CAP_STOCK,
     'clean_preview': CAP_STOCK,
     'execute_import': CAP_STOCK,
+
+    # ── Promotions, wave 1 (schema v23): retail.discount ─────────────────────
+    # Configuring a promotion is the FIRST route-level use of retail.discount
+    # -- until now the code had "no route of its own" (see the
+    # CAPABILITY GATING header comment above) and was checked only
+    # field-level, inside create_sale, via session_has_capability(). Deciding
+    # to give value away AT SCALE (a rule that applies to every matching sale
+    # until someone turns it off) is exactly the authority that code names.
+    'create_promotion': CAP_DISCOUNT,
+    'update_promotion': CAP_DISCOUNT,
+    'delete_promotion': CAP_DISCOUNT,
 }
 
 #: Read routes that deliberately DO carry a capability. Reads are not required
@@ -321,6 +332,21 @@ EXPECTED_READ_CAPABILITIES = {
     'current_cash_session': CAP_CASH_CLOSE,
     'list_cash_sessions': CAP_CASH_CLOSE,
     'get_cash_session': CAP_CASH_CLOSE,
+
+    # ── Promotions, wave 1 (schema v23) ───────────────────────────────────────
+    # `list_promotions` (GET /promotions) is the management screen's own list
+    # -- same authority as configuring one, retail.discount, because seeing
+    # what rules exist is part of deciding what to change.
+    'list_promotions': CAP_DISCOUNT,
+    # `list_active_promotions` (GET /promotions/active) is the TILL's read --
+    # retail.sell, not retail.discount, because a cashier with no discount
+    # authority still has to be able to load live promotions to ring a
+    # promoted sale (see create_sale's own CAP_DISCOUNT-gate comment: judging
+    # that gate on the promotion-inflated percentage, instead of the manual
+    # one, would lock a cashier without retail.discount out of selling a
+    # promoted item at all). This is the FIRST read route in this table gated
+    # on retail.sell rather than retail.reports/retail.cash.close.
+    'list_active_promotions': CAP_SELL,
 }
 
 #: Read routes that DISCLOSE money and deliberately carry no capability, each

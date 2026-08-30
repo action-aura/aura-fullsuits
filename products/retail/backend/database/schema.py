@@ -498,7 +498,63 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # NOCASE) rather than a single NOCASE-only query: each rung is a single
 # indexed point lookup against whichever of the two indexes matches its
 # collation.
-RETAIL_SCHEMA_VERSION = 22
+#
+# v22 -> v23 (launch-readiness, "promotions, wave 1"; ROADMAP.md's
+# 2026-08-30 "retail schema v23 CLAIMED for promotions, wave 1" entry): two
+# new tables, `promotions` and `sale_item_promotions`, and two indexes --
+# no change to any existing table, and no change to `pricing.py`. See
+# _migrate_add_promotions below for the full reasoning.
+#
+# A promotion resolves to an effective `discount_pct` on the line and is
+# then fed through the EXISTING `pricing.calculate_line` -- that is the
+# whole integration. `pricing.py` is documented as the only module allowed
+# to compute a persisted financial total, and both tax modes already
+# interact with a line discount correctly, so expressing promotions in the
+# units that module already speaks makes the tax interaction correct by
+# construction rather than by a second implementation kept in agreement by
+# hand.
+#
+# THE RULE MOST LIKELY TO BE GOT WRONG: best price wins, discounts do not
+# stack. A line carrying an automatic promotion of P% and a manual discount
+# of M% takes `max(P, M)`, never `P + M` -- summing is how a 60% promotion
+# plus a 50% manual discount becomes 110%, clamps to 100, and hands the
+# item over for nothing. See core/retail/promotions.py's
+# `resolve_line_discount_pct`.
+#
+# THE OTHER RULE MOST LIKELY TO BE GOT WRONG: the existing `CAP_DISCOUNT`
+# gate in `create_sale` is judged on the MANUAL component ONLY, before
+# promotions are resolved. If that check started seeing the promotion's
+# percentage instead, a cashier without `CAP_DISCOUNT` could no longer sell
+# a promoted item at all -- the shop's own weekend offer would lock out its
+# own till. Configuring a promotion, by contrast, DOES require
+# `CAP_DISCOUNT`: deciding to give value away at scale is exactly that
+# authority.
+#
+# `sale_item_promotions` snapshots the promotion's name/pct/amount AS
+# APPLIED, because a receipt reprinted next year, and a return processed
+# against it, must show what the customer was actually charged -- not what
+# that promotion's row says today, and not what it says after someone
+# edits it. Same discipline the e-invoicing sequence and the cash-session
+# closing figures already follow. `create_return` needs no change as a
+# consequence of this design: it already recomputes the refund from the
+# original `sale_items` row, and a promoted line's `discount_pct` IS that
+# row's `discount_pct`, so a promoted line refunds the price actually paid
+# with the returns path never learning promotions exist.
+#
+# Both new tables carry `company_id` even though `sale_items` itself does
+# not -- `sale_items` inherits tenancy through `sale_id`, which predates
+# the rule CLAUDE.md now states, and a new table has no reason to repeat
+# that; it also lets a promotion-performance report scope itself without a
+# three-table join.
+#
+# NOT in wave 1, deliberately: a fixed-amount promotion ("2 JOD off") --
+# only reachable through this design as `amount / gross * 100`, and
+# converting amount to percentage and back can land a cent away from the
+# amount the shop advertised, which is worse than not having the feature.
+# Also deferred: buy-X-get-Y and any other basket-level rule (needs a
+# cross-line engine, not a per-line resolver), mix-and-match,
+# customer-group pricing, coupon codes, loyalty.
+RETAIL_SCHEMA_VERSION = 23
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -1432,6 +1488,13 @@ def _migrate_retail_schema(conn):
     # RETAIL_SCHEMA_VERSION v22 comment above and _migrate_add_nocase_
     # lookup_indexes's own docstring for the full reasoning.
     _migrate_add_nocase_lookup_indexes(conn)
+    # v22 -> v23 (launch-readiness, "promotions, wave 1"): appended LAST,
+    # same convention as every step above. Two new, self-contained tables
+    # and two indexes -- no existing table is ALTERed, read, or written, so
+    # ordering relative to the steps above it does not matter functionally.
+    # See the RETAIL_SCHEMA_VERSION v23 comment above and
+    # _migrate_add_promotions's own docstring for the full reasoning.
+    _migrate_add_promotions(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -4769,6 +4832,114 @@ def _migrate_add_nocase_lookup_indexes(conn):
         conn.execute(
             'CREATE INDEX IF NOT EXISTS idx_products_company_sku_nocase '
             'ON products(company_id, sku COLLATE NOCASE)'
+        )
+
+
+def _migrate_add_promotions(conn):
+    """One-time migration (schema v22 -> v23): launch-readiness "promotions,
+    wave 1" (ROADMAP.md's 2026-08-30 "retail schema v23 CLAIMED for
+    promotions, wave 1" entry). Two new tables, two indexes -- see the
+    RETAIL_SCHEMA_VERSION v23 comment above for the full reasoning; this
+    docstring covers the migration shape.
+
+    `promotions` -- one row per rule. `product_id`/`category_id` are both
+    nullable and API-validated (create_promotion/update_promotion,
+    api/retail_api.py) to hold EXACTLY ONE of the two; `branch_id` NULL
+    means every branch. Neither column carries a literal FOREIGN KEY --
+    deliberately, matching this table's own dynamic values: `product_id`/
+    `category_id` hold the SAME TEXT UUIDs `products.id`/`categories.id`
+    have held since the v13 identity migration, stored into a column
+    declared with INTEGER affinity for exactly the same reason
+    `company_id INTEGER DEFAULT 1` already does on `branches`/`categories`/
+    `products` themselves -- SQLite affinity is a storage hint, not an
+    enforced type, and a value that cannot be losslessly converted (a UUID
+    is never a well-formed integer literal) is stored and compared as TEXT
+    regardless of the column's declared affinity. A real FOREIGN KEY would
+    additionally be enforced (`PRAGMA foreign_keys=ON` on every connection,
+    Wave 0 / AUDIT-016, `_conn()` above) and is deliberately left off both
+    new tables here, so that a promotion whose target product/category was
+    later deleted cannot raise mid-sale; ownership is instead validated at
+    write time by the API layer (company-scoped SELECT against
+    products/categories/branches), which is where the cross-tenant leak
+    this guards against actually needs catching -- see the create/update
+    routes' own comments for the supplier_id precedent this repeats.
+
+    `sale_item_promotions` -- one row per sale LINE a promotion actually
+    won, snapshotting the promotion's name/pct/resulting amount AS APPLIED
+    (never re-read from `promotions` later -- see the RETAIL_SCHEMA_VERSION
+    v23 comment above for why). `sale_item_id`/`promotion_id` are real
+    INTEGER autoincrement ids on both sides (`sale_items.id`, this
+    migration's own `promotions.id`), so no affinity mismatch applies to
+    them the way it does to `promotions.product_id`/`category_id` above --
+    still no literal FOREIGN KEY, for the identical "never block a sale on
+    a referential-integrity technicality" reasoning.
+
+    Both tables carry `company_id` directly rather than inheriting tenancy
+    through a join, unlike `sale_items` (which inherits through `sale_id`)
+    -- see the RETAIL_SCHEMA_VERSION v23 comment above for why that is a
+    deliberate difference, not an inconsistency.
+
+    `live_tables` guard copied verbatim from `_migrate_add_nocase_lookup_
+    indexes` immediately above, for the SAME synthetic old-database fixture
+    (retail_category_delete_fk_sync_test.py's `_build_v2_database`, which
+    runs the ENTIRE migration chain in one pass against a hand-built schema
+    holding only categories/products/inventory_movements plus a few sync
+    tables -- no `branches`, no `sales`, no `sale_items`). Honestly:
+    UNLIKE that function, this migration's `CREATE TABLE IF NOT EXISTS`
+    statements cannot actually fail against that fixture or any other --
+    `promotions` and `sale_item_promotions` are brand-new, self-contained
+    tables with no FOREIGN KEY on any column (see above), so there is no
+    pre-existing table either CREATE TABLE depends on to succeed. The guard
+    is kept anyway, gating the two CREATE INDEX statements below, for one
+    reason: it costs nothing, and it keeps this step visually consistent
+    with every neighbour in this chain that checks before it creates,
+    rather than being the one step a future reader has to double back to
+    and ask why it skips the check everything around it makes. If either
+    table ever grows a real FOREIGN KEY in a later migration, this guard is
+    already sitting here ready to earn its keep instead of needing to be
+    invented from scratch under time pressure.
+    """
+    live_tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS promotions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            discount_pct REAL NOT NULL,
+            product_id INTEGER,
+            category_id INTEGER,
+            branch_id INTEGER,
+            starts_at TEXT,
+            ends_at TEXT,
+            status TEXT DEFAULT 'active',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sale_item_promotions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER NOT NULL,
+            sale_item_id INTEGER NOT NULL,
+            promotion_id INTEGER NOT NULL,
+            name_snapshot TEXT NOT NULL,
+            discount_pct_snapshot REAL NOT NULL,
+            discount_amount_snapshot REAL NOT NULL
+        )
+    """)
+    live_tables = live_tables | {'promotions', 'sale_item_promotions'}
+    if 'promotions' in live_tables:
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_promotions_company_live '
+            'ON promotions(company_id, status)'
+        )
+    if 'sale_item_promotions' in live_tables:
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_sale_item_promotions_item '
+            'ON sale_item_promotions(sale_item_id)'
         )
 
 
