@@ -190,16 +190,58 @@ multi-branch data model, Jordan e-invoicing, multi-device sync design
 (outbox + UUID migration, correct eventual-consistency approach), Windows +
 Android builds.
 
-## What's genuinely missing (verified by reading the code, not assumed)
+## What's genuinely missing
 
-- No notification infrastructure at all — no SMS, WhatsApp, email, or push.
-  Zero, not partial.
-- No real RBAC — only a bare `role` string, no permission matrix.
-- No shift/cash-drawer management (float in/out, X/Z reports).
-- No promotions/discounts/loyalty engine — nothing in schema.
-- No inter-branch stock transfer workflow (branches exist, transfers don't).
-- No product variants (flat SKU/barcode only, no size/color grouping).
-- iOS build requires a macOS host that doesn't exist in this dev environment yet.
+Re-verified 2026-08-30 by grepping for each claim. **Three of the bullets this
+list used to carry were false**, under a heading that said it had been verified
+by reading the code. They are corrected below rather than quietly deleted,
+because a wrong "missing" list is the most expensive kind of error in this
+document: it is exactly what makes a session build a second copy of something
+that already ships, or propose as new work something a colleague finished.
+
+Genuinely absent, each confirmed by a search that returned nothing:
+
+- **No promotions engine and no loyalty.** Careful with this one: a MANUAL
+  per-line `discount_pct` DOES exist, is clamped server-side, and is gated
+  behind `CAP_DISCOUNT` (`create_sale`, retail_api.py). What is missing is
+  everything automatic — no rules, no date windows, no buy-X-get-Y, no
+  customer-group pricing, no coupons, nothing in schema.
+- **No product variants.** `products` is a flat SKU/barcode row: no
+  `parent_product_id`, no variant/option columns anywhere in schema.py. No
+  size/colour grouping, and no restaurant-style modifiers either.
+- **No inter-branch stock transfer workflow.** `branches` exist and stock is
+  branch-scoped, but the word `transfer` does not appear in retail's schema or
+  API at all.
+- **No SMS and no push.** See the correction below — WhatsApp and email do
+  exist, so this is now a narrow gap rather than a blanket one.
+- **iOS build requires a macOS host** that does not exist in this dev
+  environment yet. Environment gap, not a code gap.
+
+### Corrections — three things this list wrongly called missing
+
+- **Notification infrastructure EXISTS.** The old text said "no SMS, WhatsApp,
+  email, or push. Zero, not partial." In fact `commercial_runtime/
+  notifications/` carries WhatsApp settings, recipients and an **outbox**, plus
+  an SMTP client for email, and `core/retail/whatsapp_hook.py` wires four real
+  trigger points (low stock, shift close, daily sales summary, AR overdue).
+  Schema migrations for it are in the chain (`_migrate_add_notifications_
+  foundation`). It follows the e-invoicing outbox pattern, as this document
+  recommends for new async features — because it is one of the things that
+  established it.
+- **RBAC EXISTS.** The old text said "only a bare `role` string, no permission
+  matrix." There is a fixed capability tuple (`CAPABILITY_CODES`) and named
+  roles in `commercial_runtime/identity/user_accounts.py`, enforced by
+  decorators on the routes, with a whole-surface test
+  (`retail_route_capability_matrix_test.py`) that fails when a new route is
+  added without declaring its capability. `ROLE_MANAGER` deliberately excludes
+  `CAP_EMPLOYEES` and `CAP_CASH_APPROVE` — see AUDIT-032, self-approval.
+- **Shift / cash-drawer management EXISTS.** The old text said there was none,
+  including "float in/out, X/Z reports." `cash_sessions` carries
+  `opening_float` and `variance`, there is an X-report route
+  (`cash_session_x_report`), a Z-report on close, a variance-approval route
+  behind `CAP_CASH_APPROVE`, and Phase 4 bound the drawer to a TERMINAL rather
+  than a branch. A ratchet test refuses any new cash-session route that has not
+  declared its terminal scope.
 
 ## How to give a good suggestion here
 

@@ -1106,3 +1106,67 @@ it.
 stay sargable, and its own docstring explains the reasoning convincingly. It
 was wrong, and the only thing that showed it was running the query against a
 mixed-case row. A plausible explanation in a comment is not evidence.
+
+## 2026-08-30 — retail schema v22 CLAIMED for the case-fold lookup
+
+Same single-writer discipline as v18/v19/v20/v21. Claimed before dispatch.
+
+**CLAIMED: retail v22, by `feat/launch-readiness`, for two NOCASE-collated
+indexes only.** No table, no column, no data migration.
+
+This closes the gap the entry above measured: the three-variant `IN (...)`
+trick cannot match a mixed-case STORED value, and a NOCASE-collated index is
+fully sargable, so the reasoning that ruled it out was wrong.
+
+    CREATE INDEX idx_products_company_barcode_nocase
+      ON products(company_id, barcode COLLATE NOCASE)
+    CREATE INDEX idx_products_company_sku_nocase
+      ON products(company_id, sku COLLATE NOCASE)
+
+The v21 plain indexes are KEPT, not replaced. They are what makes the
+exact-match rung of the lookup ladder below provably indexed, and a NOCASE
+index cannot serve a BINARY equality (SQLite will not use an index whose
+collation differs from the comparison's).
+
+### The part that is not just an index: three doors, not one
+
+Making the READ case-insensitive without making the WRITES case-insensitive
+re-opens the duplicate-barcode scanning bug `AUDIT (2026-08-14)` closed,
+through a different door. If `abc` and `ABC` can both be stored, a case-folding
+scan resolves to an arbitrary one of two different products — which is exactly
+the "scanning silently resolves to the wrong item" failure that audit names.
+
+Three writers can currently create that state, and all three are in scope:
+
+1. `create_product` — `WHERE company_id=? AND barcode=?` (retail_api.py:1477)
+   and the SKU check above it (:1462);
+2. `update_product` — `WHERE company_id=? AND barcode=? AND id<>?` (:1604);
+3. **`import_api.py:1424` — the CSV product upsert keys on `sku=?`.** This one
+   was not on the original list and is the one that matters most at scale: a
+   hypermarket onboards its catalogue by import, so the import door is the one
+   most likely to manufacture the duplicates at volume.
+
+All three become case-insensitive.
+
+**What import can no longer do, stated rather than discovered:** importing SKU
+`abc` when `ABC` exists now UPDATES that product instead of inserting a second
+one. A shop deliberately using case to distinguish two products loses that.
+Judged correct — it is the same rule the scan now follows, and the alternative
+is an import that builds rows the till cannot disambiguate — but it is a
+behaviour change on a shipped path, so it is pinned by a test rather than left
+to be found.
+
+### Lookup resolution order (deterministic, and it matters)
+
+Legacy installs may ALREADY hold case-duplicates, created before this change.
+The lookup must not pick between them arbitrarily. Four rungs, first hit wins:
+
+    barcode exact  ->  barcode NOCASE  ->  sku exact  ->  sku NOCASE
+
+Column precedence (barcode before sku) is unchanged from the shipped route;
+exactness wins within a column. Every rung is a single indexed point lookup,
+and the common case — an exact barcode scan — returns on the first.
+
+Deliberately NOT in this claim: promotions, variants/modifiers, kitchen
+tickets, split tender, LAN relay. Each is real, each is recorded separately,
+and none needs a schema version reserved today.
