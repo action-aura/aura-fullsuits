@@ -108,7 +108,12 @@ def fulfill_order(
             raise CommercialSalesError("IDEMPOTENCY_CONFLICT")
         # Duplicate idempotency key, identical payload (item #5): same
         # key, same order -- returns the original result, no re-execution.
-        return {"subscription_id": replayed.id, "order_id": order.id, "replayed": True}
+        # AUDIT-NNN: the license key was already revealed once, on the
+        # original (non-replayed) call -- a replay legitimately has no key
+        # to show. This is reported as "already issued" by the caller
+        # (never re-derivable, ADR-9), not treated as an error and not
+        # left to render as a blank/empty key.
+        return {"subscription_id": replayed.id, "order_id": order.id, "replayed": True, "license_key": None}
 
     # Real concurrency guard (item #3): SELECT ... FOR UPDATE on the order
     # row serializes two concurrent fulfillment attempts for the SAME
@@ -202,8 +207,21 @@ def fulfill_order(
         # or writes key fields directly (app/licensing/services.py). Its
         # own idempotency ledger (LicenseKeyIssuanceEvent) already makes
         # this call itself safely retryable.
+        #
+        # AUDIT-NNN: the plaintext key `issue_license_key` returns here used
+        # to be discarded -- a licence fulfilled through this pipeline was
+        # issued to a customer who could never read the key to activate it.
+        # The full key exists only in this return value (ADR-9: never
+        # persisted, never logged, never re-derivable), so it is captured
+        # and threaded through fulfill_order's own return value, to be
+        # revealed once by the caller exactly the way
+        # licensing/routes.py::issue renders `revealed_key` for the direct
+        # path. `license_key` stays None when this call resumes a retry
+        # whose license was already ISSUED by an earlier attempt (the key
+        # was shown once, then, and is equally unrecoverable now).
+        license_key = None
         if license_row.status == "DRAFT":
-            issue_license_key(license_row, license_pepper, f"{idempotency_key}-license", actor_staff_user_id)
+            license_row, license_key = issue_license_key(license_row, license_pepper, f"{idempotency_key}-license", actor_staff_user_id)
 
         order.status = "FULFILLED"
         order.fulfilled_at = utcnow()
@@ -228,4 +246,7 @@ def fulfill_order(
         entity_type="sales_order", entity_public_id=str(order.id),
         after_state={"subscription_id": str(subscription.id), "license_id": str(license_row.id)},
     )
-    return {"subscription_id": subscription.id, "license_id": license_row.id, "order_id": order.id, "replayed": False}
+    return {
+        "subscription_id": subscription.id, "license_id": license_row.id, "order_id": order.id,
+        "replayed": False, "license_key": license_key,
+    }

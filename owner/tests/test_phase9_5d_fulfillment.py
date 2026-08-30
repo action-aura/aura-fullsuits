@@ -503,6 +503,111 @@ def test_no_installation_created_by_fulfillment(app, seeded):
         assert db_session.query(Installation).count() == 0
 
 
+def test_fulfill_order_yields_retrievable_license_key(app, seeded):
+    """AUDIT-NNN: a licence fulfilled through the quote->order->invoice->
+    payment->fulfill pipeline must yield a key the operator can actually
+    read back. `issue_license_key()`'s plaintext return value used to be
+    discarded here (fulfillment.py just called it for effect) -- producing
+    a licence the customer could never activate, with `replace_license`
+    the only recovery. The full key is captured and returned once, the
+    same ADR-9 discipline `licensing/routes.py::issue` already uses for
+    the direct path."""
+    staff_id, profile_id = _seed_sales_employee(app, "fulfillkey_a@example.com")
+    finance_id, _ = _seed_sales_employee(app, "fulfillkey_b@example.com", role_codes=["FINANCE"])
+    customer_id = _seed_customer(app, staff_id)
+    plan_id = _seed_plan(app, "FK_PLAN")
+    with app.app_context():
+        from app.commercial_sales.fulfillment import fulfill_order
+        from app.extensions import db_session
+        from app.models.licensing import License, LicenseKeyIssuanceEvent
+        from app.security.license_keys import verify_license_key
+
+        order, invoice = _make_paid_order(app, staff_id, profile_id, customer_id, plan_id, finance_id)
+        result = fulfill_order(
+            order, actor_staff_user_id=finance_id, license_pepper=app.config["LICENSE_PEPPER"], idempotency_key=str(uuid.uuid4())
+        )
+
+        assert result["license_key"], "fulfillment must surface the plaintext key, not discard it"
+        license_row = db_session.get(License, result["license_id"])
+        # The returned key really is the one this license was issued with --
+        # verified against the persisted HMAC, the only thing actually stored.
+        assert verify_license_key(result["license_key"], app.config["LICENSE_PEPPER"], license_row.key_secret_hmac)
+
+        # Not persisted anywhere new: the stored HMAC is not the plaintext,
+        # and the prefix (the only plaintext fragment ever stored) is a
+        # strict prefix of the key, never the whole thing.
+        assert license_row.key_secret_hmac != result["license_key"]
+        assert result["license_key"].startswith(license_row.key_prefix)
+        assert license_row.key_prefix != result["license_key"]
+
+        events = db_session.query(LicenseKeyIssuanceEvent).filter_by(license_id=license_row.id).all()
+        assert len(events) == 1
+        assert events[0].key_prefix == license_row.key_prefix
+
+
+def test_fulfill_order_replay_reports_already_issued_not_blank_or_error(app, seeded):
+    """A REPLAY (the exact same idempotency key reused for the same order)
+    must not raise and must not present a blank key as if nothing had
+    happened -- a key really was issued, on the first call, and shown
+    once then. The second call must say so explicitly (`license_key`
+    populated on the first call, `None` -- not an exception -- on the
+    replay), never silently, and never by re-issuing."""
+    staff_id, profile_id = _seed_sales_employee(app, "fulfillkey_c@example.com")
+    finance_id, _ = _seed_sales_employee(app, "fulfillkey_d@example.com", role_codes=["FINANCE"])
+    customer_id = _seed_customer(app, staff_id)
+    plan_id = _seed_plan(app, "FK2_PLAN")
+    with app.app_context():
+        from app.commercial_sales.fulfillment import fulfill_order
+        from app.extensions import db_session
+        from app.models.licensing import LicenseKeyIssuanceEvent
+
+        order, invoice = _make_paid_order(app, staff_id, profile_id, customer_id, plan_id, finance_id)
+        key = str(uuid.uuid4())
+        first = fulfill_order(order, actor_staff_user_id=finance_id, license_pepper=app.config["LICENSE_PEPPER"], idempotency_key=key)
+        second = fulfill_order(order, actor_staff_user_id=finance_id, license_pepper=app.config["LICENSE_PEPPER"], idempotency_key=key)
+
+        assert first["license_key"]  # the real, once-shown key
+        assert second["replayed"] is True
+        assert second["license_key"] is None  # explicitly reported as absent, never an exception, never re-derived
+        assert second["subscription_id"] == first["subscription_id"]
+
+        # The replay never re-issues -- exactly one issuance event for this license.
+        events = db_session.query(LicenseKeyIssuanceEvent).filter_by(license_id=first["license_id"]).all()
+        assert len(events) == 1
+
+
+def test_fulfill_order_key_issuance_audited_without_plaintext(app, seeded):
+    """The audit trail this pipeline already relies on
+    (`LICENSE_KEY_ISSUED`, written by `issue_license_key` itself) is
+    unchanged by capturing the key here -- it still records only the
+    prefix/masked-suffix metadata, never the plaintext."""
+    staff_id, profile_id = _seed_sales_employee(app, "fulfillkey_e@example.com")
+    finance_id, _ = _seed_sales_employee(app, "fulfillkey_f@example.com", role_codes=["FINANCE"])
+    customer_id = _seed_customer(app, staff_id)
+    plan_id = _seed_plan(app, "FK3_PLAN")
+    with app.app_context():
+        import json
+
+        from sqlalchemy import select
+
+        from app.commercial_sales.fulfillment import fulfill_order
+        from app.extensions import db_session
+        from app.models.audit import AuditLog
+
+        order, invoice = _make_paid_order(app, staff_id, profile_id, customer_id, plan_id, finance_id)
+        result = fulfill_order(
+            order, actor_staff_user_id=finance_id, license_pepper=app.config["LICENSE_PEPPER"], idempotency_key=str(uuid.uuid4())
+        )
+
+        audit_row = db_session.execute(
+            select(AuditLog).where(
+                AuditLog.action_code == "LICENSE_KEY_ISSUED", AuditLog.entity_public_id == str(result["license_id"])
+            )
+        ).scalars().first()
+        assert audit_row is not None
+        assert result["license_key"] not in json.dumps(audit_row.after_state_redacted)
+
+
 def test_fulfillment_module_never_constructs_subscription_or_license_directly():
     """Structural proof, matching Phase 9.5C's own verification method for
     leads/conversion.py: grep the actual source for a direct model

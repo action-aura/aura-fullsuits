@@ -3,6 +3,19 @@
 {% block title %}{{ order.order_number }}{% endblock %}
 {% block content %}
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
+{% if fulfillment_result %}
+  {% if fulfillment_result.license_key %}
+  <div class="card card--critical">
+    <h2>{{ _("License key -- shown once") }}</h2>
+    <p><strong>{{ _("Copy this now. It will never be displayed again.") }}</strong></p>
+    <p><code class="masked" dir="ltr">{{ fulfillment_result.license_key }}</code></p>
+  </div>
+  {% else %}
+  <div class="card">
+    <p>{{ _("This order was already fulfilled and a license was already issued. The key was shown once at that time and cannot be retrieved again.") }}</p>
+  </div>
+  {% endif %}
+{% endif %}
 <div class="card">
   <h2><bdi dir="ltr">{{ order.order_number }}</bdi> <span class="badge {{ order_badge_class(order.status) }}">{{ sales_order_status_label(order.status) }}</span></h2>
 

@@ -410,10 +410,24 @@ def fulfill_order_route(order_id):
     if order is None:
         return render_template("commercial_sales/not_found.html"), 404
     try:
-        fulfill_order(order, actor_staff_user_id=staff.id, license_pepper=current_app.config["LICENSE_PEPPER"], idempotency_key=str(uuid.uuid4()))
+        result = fulfill_order(order, actor_staff_user_id=staff.id, license_pepper=current_app.config["LICENSE_PEPPER"], idempotency_key=str(uuid.uuid4()))
     except CommercialSalesError as exc:
         return redirect(url_for("commercial_sales_web.order_detail", order_id=order_id, error=exc.code))
-    return redirect(url_for("commercial_sales_web.order_detail", order_id=order_id))
+    # AUDIT-NNN: rendered inline, never redirected -- a redirect would lose
+    # the once-shown plaintext key (ADR-9) exactly the way
+    # licensing/routes.py::issue renders inline instead of
+    # redirect()-ing after a successful issuance, for the same reason.
+    codes = get_staff_permission_codes(staff)
+    lines = db_session.execute(select(SalesOrderLine).where(SalesOrderLine.sales_order_id == order.id).order_by(SalesOrderLine.sort_order)).scalars().all()
+    invoice = db_session.execute(select(CommercialInvoice).where(CommercialInvoice.sales_order_id == order.id, CommercialInvoice.status != "VOID")).scalars().first()
+    quote = db_session.get(Quote, order.quote_id) if order.quote_id else None
+    customer = db_session.get(Customer, order.customer_id)
+    return render_template(
+        "commercial_sales/order_detail.html", order=order, lines=lines, invoice=invoice, quote=quote, customer=customer,
+        can_approve=("orders.approve" in codes), error=None,
+        created_by_name=_employee_profile_name(order.created_by_employee_profile_id),
+        fulfillment_result=result,
+    )
 
 
 # -------------------------------------------------------------- Invoices --
