@@ -1666,3 +1666,73 @@ wave, depends on it) plus split tender and tips (~0.75-1, independent; the
 payments ledger already supports multi-row tender, the gap is create_sale and the
 POS screen). Stated so the owner sequences with his eyes open rather than
 discovering it after this lands.
+
+## 2026-08-31 — the restaurant roadmap, DECIDED by the owner (planned, not scheduled)
+
+Three decisions from him, recorded together because each one changes the next.
+
+**1. Same product, two EDITIONS — retail and restaurant.** Confirms the
+recommendation in `docs/launch-readiness/restaurant-edition-plan.md`. Not a
+separate product code: the launcher refuses anything that does not answer
+`AURA_RETAIL`, and the assertion verifier raises `ASSERTION_PRODUCT_MISMATCH` per
+check-in, so a distinct SKU code would mean a forked build that gates nothing.
+An edition is a per-install setting (defaults, visibility, demo preset) plus an
+Owner catalog plan row -- deliberately NOT entitlement wiring, since
+`required_entitlement` has zero production callers and the owner's model has no
+tiers.
+
+**2. LAN-local operation.** Tablets, tills and kitchen on one shop wifi, still
+serving when the internet is gone. Designed in
+`docs/launch-readiness/lan-restaurant-design.md`: a site relay on the main till
+speaking the existing push/pull contract, QR pairing with a key pin, an
+Owner-signed device roster, and a forwarder to the cloud when it returns. Every
+device stays a FULL install, so hub-down means convergence pauses and nobody
+stops selling.
+
+**3. Waiter tablets take table orders through to the kitchen.** This is the one
+that moves the roadmap. Asked explicitly, answered yes.
+
+### What decision 3 costs, stated plainly
+
+The table / open-order lifecycle moves from "maybe after pilots" to **committed**.
+It is the deepest piece in the restaurant programme and the one most likely to be
+underestimated.
+
+In a shop, paying IS the sale: `create_sale` writes a completed transaction. In a
+restaurant an order exists FIRST, grows for an hour, moves between tables, splits
+across payers, and settles at the end. Nothing today models that:
+
+* `held_sales` is real and works, but is deliberately LOCAL-ONLY (not a synced
+  entity type) -- a waiter's tablet and the kitchen cannot share a held sale;
+* a credit sale needs a named customer, which a walk-in table does not have;
+* the money path assumes one settle event per sale.
+
+So this is a new synced entity with its own lifecycle, not an extension of
+`held_sales`. It also depends on LAN sync existing first, because a table order
+that only lives on one tablet is useless.
+
+### The sequence, as it now stands
+
+    go-live work still owed  (clean-machine test, droplet setup)   <- gates everything
+    R1  counter service      modifiers (v26, in flight) + kitchen tickets
+                             + split tender/tips + takeaway tag
+    R-LAN                    site relay, roster, pairing, forwarder,
+                             AND roster-aware pruning on the Owner side
+    R2  table service        synced open orders, the committed piece above
+    ---
+    inter-branch transfers   (v24, reserved by name) after the above
+    Aura Clubs               still deferred
+
+Rough shape: R1 is about 1.5-2 waves after modifiers lands; R-LAN is 3-4; R2 adds
+2-3. Restaurants outrank transfers because the investor model already counts
+restaurants and cafes inside Aura Retail's 1,725 year-one licences at 250 JOD per
+device -- this defends planned revenue rather than adding a line to the plan.
+
+### Still open, and only the owner can answer
+
+Tips policy (blocks the split-tender wave's drawer and Z-report design); whether
+a kitchen DISPLAY device pays its own 50 JOD once it exists (the printed ticket in
+R1 does not); and the recurring-cost question from
+`docs/owner/one-time-pricing-design.md`, which gets sharper here -- a LAN
+restaurant may never touch the cloud, and it is the heaviest device count under
+lifetime pricing.
