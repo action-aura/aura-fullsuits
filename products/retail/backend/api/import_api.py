@@ -134,6 +134,29 @@ STOCK_COLUMN_HELP = (
 STOCK_DECLARATION_BELOW_LEDGER = 'Declared less than has already been sold or moved'
 STOCK_DECLARATION_NEGATIVE = 'Opening quantity cannot be negative'
 
+# Operator-facing contract for the products sheet's optional `parent_sku`
+# column -- launch-readiness "product variants" follow-up (design doc
+# section 3.6.3's deferred CSV round-trip, now closed; schema v25 is
+# unchanged, `parent_sku` maps onto the existing `parent_product_id`
+# column). Localized like STOCK_COLUMN_HELP above, for the identical reason:
+# this column's behaviour (two-pass forward-reference resolve, per-row
+# refusal rather than a silent orphan) is not obvious from its name alone.
+PARENT_SKU_COLUMN_HELP = (
+    'Optional. The SKU of the PARENT product, when this row is a variant '
+    '(for example, Red / L under T-Shirt). The parent may appear anywhere in '
+    'the file, before or after its variants. A parent SKU that matches '
+    'nothing in this file or your existing catalogue is reported as a row '
+    'error, and that row still imports -- never silently as a standalone product.'
+)
+
+# Refusal reasons a row's `parent_sku` can attach when the LINK cannot be
+# made -- the product row itself (name/price/category/stock) still lands;
+# only the parent_product_id relationship is refused. Same fixed-sentence-
+# plus-untranslatable-SKU shape as STOCK_DECLARATION_* above.
+PARENT_SKU_NOT_FOUND = 'Parent SKU not found in this file or your catalogue'
+PARENT_SKU_IS_VARIANT = 'Parent SKU is itself a variant -- variants cannot have variants'
+PARENT_SKU_SELF = 'A product cannot be its own parent'
+
 
 # ── Retail entity schemas ─────────────────────────────────────────────────────
 SCHEMAS = {
@@ -161,6 +184,14 @@ SCHEMAS = {
                 # catalogs -- import-wizard.js renders them through t().
                 {'key': 'initial_stock', 'label': 'Opening Stock Qty',     'required': False, 'type': 'number',  'example': '50',
                  'help': STOCK_COLUMN_HELP},
+                # launch-readiness "product variants" follow-up (design doc
+                # section 3.6.3, now closed): the ONLY way a CSV can say
+                # "this row is a variant of that row" -- see
+                # _handle_retail_products' two-pass resolve below. Optional
+                # and last, so a sheet with no such column maps nothing here
+                # and behaves byte-identically to before this field existed.
+                {'key': 'parent_sku',    'label': 'Parent SKU (for variants)', 'required': False, 'type': 'text',
+                 'example': 'TSH-BASE', 'help': PARENT_SKU_COLUMN_HELP},
             ]
         },
         'customers': {
@@ -378,6 +409,15 @@ FIELD_ALIASES = {
                           'gtin', 'barcodenum', 'barcodenumber', 'scancode', 'scannedcode',
                           'variantbarcode', 'upccode', 'gtincode', 'upca', 'upce',
                           'productbarcode', 'itembarcode', 'ean8', 'scanbarcode'],
+    # launch-readiness "product variants" follow-up: the CSV-side alias for
+    # `products.parent_product_id` (schema v25, unchanged -- this maps an
+    # existing column, it does not add one). Deliberately a SEPARATE key
+    # from 'sku' above (never merged into that alias list) -- a header
+    # literally named "Parent SKU"/"Parent Code" must map to THIS field, not
+    # silently steal the row's own 'sku' mapping.
+    'parent_sku':        ['parentsku', 'parentcode', 'parentproductcode', 'parentitemcode',
+                          'parentproduct', 'parentproductsku', 'variantparent', 'groupsku',
+                          'parentarticle', 'basesku', 'baseproductsku', 'parentitemno'],
     'tax_rate':          ['taxrate', 'tax', 'vat', 'gst', 'hst', 'vatrate', 'gstrate',
                           'taxpct', 'taxpercent', 'taxpercentage', 'vatpercent', 'taxcode',
                           'gstcode', 'vatcode', 'taxclass', 'vatclass', 'salestax',
@@ -1106,11 +1146,13 @@ def execute_import():
     landed = result.get('imported', 0) + result.get('updated', 0)
     if landed == 0:
         result['status'] = 'none'
-    elif result['skipped'] > 0 or result.get('stock_errors'):
-        # A refused stock declaration is NOT a clean import, even when every
-        # catalogue row landed: the operator asked for a stock figure and did
-        # not get it. Reporting 'ok' here would put a green tick on exactly
-        # the silent-discard this branch exists to end.
+    elif result['skipped'] > 0 or result.get('stock_errors') or result.get('parent_errors'):
+        # A refused stock declaration -- or, launch-readiness "product
+        # variants" follow-up, a refused parent_sku link -- is NOT a clean
+        # import, even when every catalogue row landed: the operator asked
+        # for a stock figure, or a variant relationship, and did not get it.
+        # Reporting 'ok' here would put a green tick on exactly the
+        # silent-discard this branch (and mutation proof M1) exists to end.
         result['status'] = 'partial'
     else:
         result['status'] = 'ok'
@@ -1290,6 +1332,13 @@ def _handle_retail_products(records):
     # text node whose FULL text is a dictionary key -- an f-string with a SKU
     # baked in could never be localized.
     stock_errors = []
+    # launch-readiness "product variants" follow-up (design section 3.6.3):
+    # one entry per row this run wrote, `{pid, sku, parent_sku}` -- built
+    # during the main record loop below (pass 1, unchanged) and consumed
+    # AFTER it (pass 2, new) to resolve `parent_sku` -> `parent_product_id`.
+    # See the pass-2 block below the loop for why this needs its own pass
+    # rather than resolving inline.
+    record_meta = []
 
     # Resolved once, before the record loop -- see _stamp()'s docstring.
     actor, terminal, utc_now = _stamp()
@@ -1510,13 +1559,18 @@ def _handle_retail_products(records):
             # v25, launch-readiness "product variants, wave 1") for the same
             # full-row-payload reason every other column here is read fresh
             # rather than reconstructed -- NOT added to `changed` above,
-            # because a CSV re-import never touches either column (wave 1
-            # import has no `parent_sku` column at all; see
-            # docs/launch-readiness/variants-and-modifiers-design.md section
-            # 3.6.3 for the deferred round-trip). Whatever this row's current
-            # value is (NULL for every import-created product today) rides
-            # along unclaimed, matching update_product's own "full row +
-            # explicit changed set" shape.
+            # because THIS UPDATE (pass 1 of two -- see record_meta's own
+            # comment near the top of this function) never writes
+            # parent_product_id, whether or not the row's `parent_sku` cell
+            # is mapped. `parent_sku` resolution is a SEPARATE pass 2, after
+            # this whole record loop, which issues its OWN additive 'update'
+            # event naming `_changed_fields=['parent_product_id']` only when
+            # the link actually changes -- see that block for why a second
+            # pass, not this one, is where a CSV's parent_sku column round-
+            # trips onto the wire (design doc section 3.6.3, now closed).
+            # Whatever this row's current value is rides along unclaimed
+            # here, matching update_product's own "full row + explicit
+            # changed set" shape.
             prow = conn.execute(
                 "SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,"
                 "reorder_level,reorder_method,status,deleted_at_utc,parent_product_id,variant_label,"
@@ -1543,13 +1597,20 @@ def _handle_retail_products(records):
             # the column default applies) -- both still on the wire so the
             # receiving upsert sees the same shape a route-created product
             # sends. `parent_product_id`/`variant_label` (schema v25) are
-            # likewise None -- wave 1's CSV import has no `parent_sku`
-            # column (deferred, see design section 3.6.3) -- but the KEYS
-            # still ride the wire for the identical key-for-key reason:
-            # retail_import_sync_test.py's parity check compares payload key
-            # SETS between this route and create_product, and a receiving
-            # device's apply branch must not be able to tell an imported
-            # product from a route-created one structurally.
+            # ALWAYS None in THIS event -- not because `parent_sku` is
+            # unsupported (the follow-up closing design section 3.6.3's
+            # deferred round-trip means it now IS: see the pass-2 block
+            # after this loop), but because pass 1 (this loop) intentionally
+            # never writes parent_product_id at all, for either a new INSERT
+            # or an existing-row UPDATE -- see record_meta's own comment
+            # above for why. A row whose `parent_sku` resolves gets a
+            # SECOND, additive 'update' sync event from pass 2, exactly like
+            # a PATCH would. The KEYS still ride the wire here regardless,
+            # for the identical key-for-key reason: retail_import_sync_
+            # test.py's parity check compares payload key SETS between this
+            # route and create_product, and a receiving device's apply
+            # branch must not be able to tell an imported product from a
+            # route-created one structurally.
             _queue_sync_event(cur, 'product', pid, 'create', {
                 'id': pid, 'sku': sku, 'barcode': rec.get('barcode', ''), 'name': rec.get('name', ''),
                 'category_id': cat_id, 'supplier_id': None,
@@ -1561,6 +1622,17 @@ def _handle_retail_products(records):
                 'row_version': 1, 'updated_at_utc': utc_now,
             })
             imported += 1
+
+        # launch-readiness "product variants" follow-up: recorded for EVERY
+        # row pass 1 touched (new or existing), whether or not this row's
+        # `parent_sku` cell is populated -- pass 2 below skips a blank one
+        # cheaply, and this is also what lets a LATER row in the same file
+        # resolve a parent_sku naming THIS row's own sku (forward and
+        # backward references both go through the same map).
+        record_meta.append({
+            'pid': pid, 'sku': sku,
+            'parent_sku': (rec.get('parent_sku') or '').strip(),
+        })
 
         # ── Stock: a DECLARED OPENING figure, applied as a FLOORED DELTA ──
         # Never an absolute SET, and never below zero. See BLANK vs ZERO and
@@ -1716,10 +1788,123 @@ def _handle_retail_products(records):
                     'actor_user_uid': actor, 'terminal_id': terminal, 'created_at_utc': utc_now,
                 })
 
+    # ── Pass 2: parent_sku -> parent_product_id ───────────────────────────
+    # launch-readiness "product variants" follow-up, closing design doc
+    # section 3.6.3's deferred CSV round-trip. A SECOND pass over the SAME
+    # rows, deliberately, not resolved inline in the loop above:
+    #
+    # A CSV commonly lists a variant's PARENT after its variants (a
+    # hypermarket sheet sorted by SKU puts "TSH-BASE" after "TSH-BASE-RED",
+    # alphabetically), or in no particular order at all. Resolving inline,
+    # top-to-bottom, would fail every forward reference -- the parent row
+    # simply would not exist yet when its first variant's line runs. A
+    # second pass, run only after EVERY row in the file has already been
+    # written (pass 1 above, completely unchanged by this feature), sees
+    # the whole file's SKUs at once and cannot fail on ordering.
+    #
+    # Pass 1 never writes `parent_product_id` for ANY row, new or existing
+    # (see the SET clause and the two INSERT/create-event comments above) --
+    # so every row's parent link, whatever it was before this run, is
+    # exactly where pass 1 left it. That is what makes it SAFE to resolve
+    # here off this same `conn`/`cur`: a plain `SELECT ... WHERE sku=?
+    # COLLATE NOCASE` sees this run's own just-written rows (same
+    # connection, same open transaction -- sqlite3 reads its own
+    # uncommitted writes) exactly as if they had always been there, so ONE
+    # lookup path serves both "the parent is earlier in this file" and "the
+    # parent is a pre-existing catalogue row this file never touched" --
+    # no separate in-memory forward-reference index is needed for that half.
+    # `by_sku_this_run` below exists only to skip a redundant DB round trip
+    # for the (common) case where the parent IS a row from this same file.
+    parent_errors = []
+    linked = 0
+    if any(m['parent_sku'] for m in record_meta):
+        by_sku_this_run = {m['sku'].lower(): m['pid'] for m in record_meta}
+        for m in record_meta:
+            parent_sku = m['parent_sku']
+            if not parent_sku:
+                continue
+            # Same rule create_product/update_product's own PATCH refuses
+            # (retail_api.py's `_validate_parent_product`, self-reference
+            # refusal) -- checked BEFORE any lookup, because a fresh row's
+            # OWN parent_product_id is NULL, so without this check a
+            # self-naming row would sail through the "not a variant already"
+            # guard below and quietly become its own parent.
+            if parent_sku.lower() == m['sku'].lower():
+                parent_errors.append({'sku': m['sku'], 'parent_sku': parent_sku,
+                                      'reason': PARENT_SKU_SELF})
+                continue
+            parent_pid = by_sku_this_run.get(parent_sku.lower())
+            if parent_pid is not None:
+                prow = conn.execute(
+                    "SELECT parent_product_id FROM products WHERE id=?", (parent_pid,)
+                ).fetchone()
+            else:
+                # Not a row this run touched -- fall back to the existing
+                # catalogue. COLLATE NOCASE (schema v22): the SAME rule the
+                # SKU upsert key above already applies to THIS file's own
+                # rows -- `parent_sku` matching must agree with what "the
+                # same SKU" means everywhere else on this write door, or a
+                # case-folding scan here resolves to an arbitrary row while
+                # the upsert above resolved to a different one.
+                # `status='active' AND deleted_at_utc IS NULL`, matching
+                # `_validate_parent_product`'s own first refusal -- a
+                # tombstoned/inactive parent is refused outright rather than
+                # merely "not found", same reasoning as that function's
+                # docstring.
+                prow_full = conn.execute(
+                    "SELECT id, parent_product_id FROM products "
+                    "WHERE company_id=? AND sku=? COLLATE NOCASE "
+                    "AND status='active' AND deleted_at_utc IS NULL",
+                    (cid, parent_sku)
+                ).fetchone()
+                parent_pid = prow_full['id'] if prow_full else None
+                prow = prow_full
+            if parent_pid is None:
+                # NEVER silently unlinked. The product row itself already
+                # landed (catalogue fields + stock, both above) -- only the
+                # variant relationship the operator asked for is missing,
+                # and that must be visible, or this row becomes exactly the
+                # orphan-product state the variants work exists to prevent.
+                # See mutation proof M1.
+                parent_errors.append({'sku': m['sku'], 'parent_sku': parent_sku,
+                                      'reason': PARENT_SKU_NOT_FOUND})
+                continue
+            if prow['parent_product_id'] is not None:
+                # No grandchildren -- same rule create_product/update_product
+                # enforce via `_validate_parent_product` (retail_api.py).
+                parent_errors.append({'sku': m['sku'], 'parent_sku': parent_sku,
+                                      'reason': PARENT_SKU_IS_VARIANT})
+                continue
+            # launch-readiness Phase 6 stage 6a-i: row_version/updated_at_utc
+            # bumped in the SAME UPDATE as the field change, same convention
+            # every other write in this function follows.
+            cur.execute(
+                "UPDATE products SET parent_product_id=?, row_version=row_version+1, "
+                "updated_at_utc=? WHERE id=?",
+                (parent_pid, utc_now, m['pid']))
+            # A SECOND, additive sync event for this pid (the first, from
+            # pass 1 above, already queued a 'create' or 'update' with
+            # parent_product_id=None/unclaimed) -- exactly how a PATCH that
+            # only touches parent_product_id queues its own single 'update'
+            # event in retail_api.py's update_product. Full current row
+            # (same column list update_product's own SELECT uses), so a
+            # device seeing this id for the first time still gets a
+            # complete row; `_changed_fields` names only what THIS write
+            # touched, matching update_product's own delta-allowlist
+            # convention.
+            prow2 = conn.execute(
+                "SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,"
+                "reorder_level,reorder_method,status,deleted_at_utc,parent_product_id,variant_label,"
+                "row_version,updated_at_utc FROM products WHERE id=?", (m['pid'],)).fetchone()
+            _queue_sync_event(cur, 'product', m['pid'], 'update',
+                               dict(prow2) | {'id': m['pid'], '_changed_fields': ['parent_product_id']})
+            linked += 1
+
     conn.commit(); conn.close()
     _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return {'imported': imported, 'updated': dupes, 'skipped': skipped,
             'stock_errors': stock_errors,
+            'parent_errors': parent_errors, 'linked': linked,
             'message': f'{imported} new products, {dupes} updated.'}
 
 

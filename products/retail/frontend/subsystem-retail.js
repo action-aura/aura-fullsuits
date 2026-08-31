@@ -2492,6 +2492,15 @@ const RetailSystem = {
         // server -- _checkout's payload is untouched, see that function's
         // own comment for why.
         category_id: p.category_id != null ? p.category_id : null,
+        // launch-readiness "product variants" parent-tier promotions (schema
+        // v25's parent_product_id column; this wave adds the PARENT TIER to
+        // core/retail/promotions.py's resolve_line_discount_pct). Travels
+        // with the line for the identical reason category_id does one line
+        // up -- so _bestPromoFor can resolve a promotion configured on this
+        // variant's PARENT product without re-looking the product up, and so
+        // this preview mirrors the server's tier order EXACTLY. Same rule:
+        // not sent to the server, _checkout's payload untouched.
+        parent_product_id: p.parent_product_id != null ? p.parent_product_id : null,
       });
     }
     // Presentational: mark which row _renderCart should animate in. Only the
@@ -2823,13 +2832,22 @@ const RetailSystem = {
   // best-priced ACTIVE promotion for one cart line, or null.
   //
   //   * product_id XOR category_id is set per the frozen API contract, so a
-  //     promotion is either a product match or a category match, never both.
-  //   * A product-specific promotion beats a category one on the same
-  //     product, even if the category promotion's discount_pct is higher --
-  //     the more specific rule wins, not the bigger number.
+  //     given promotion is either a product match or a category match, never
+  //     both -- and since a product can never be its own parent, one promo
+  //     can also never be BOTH a product match and a parent match for the
+  //     same line (see _validate_parent_product's self-reference refusal,
+  //     retail_api.py). So each promo lands in exactly one of the three
+  //     buckets below, never two.
+  //   * A product-specific promotion beats a PARENT promotion (one
+  //     configured on this line's parent_product_id -- launch-readiness
+  //     "product variants" follow-up, mirroring
+  //     core/retail/promotions.py's resolve_line_discount_pct EXACTLY, tier
+  //     for tier), which in turn beats a category one on the same line, even
+  //     if the lower tier's discount_pct is higher -- the more specific rule
+  //     wins at every step, not the bigger number.
   //   * Among ties within the same specificity (two product promos on the
-  //     same product, or two category promos on the same category), the
-  //     highest discount_pct wins.
+  //     same product, two parent promos on the same parent, or two category
+  //     promos on the same category), the highest discount_pct wins.
   //
   // Reads `this._promotions || []` rather than assuming it is set: several
   // existing test harnesses in products/retail/tests/ drive _addToCart/
@@ -2837,15 +2855,17 @@ const RetailSystem = {
   // initialises it), so undefined must resolve to "no promotions", not throw.
   _bestPromoFor(item) {
     const promos = this._promotions || [];
-    let productMatch = null, categoryMatch = null;
+    let productMatch = null, parentMatch = null, categoryMatch = null;
     promos.forEach(p => {
       if (p.product_id != null && String(p.product_id) === String(item.product_id)) {
         if (!productMatch || (p.discount_pct || 0) > (productMatch.discount_pct || 0)) productMatch = p;
+      } else if (p.product_id != null && item.parent_product_id != null && String(p.product_id) === String(item.parent_product_id)) {
+        if (!parentMatch || (p.discount_pct || 0) > (parentMatch.discount_pct || 0)) parentMatch = p;
       } else if (p.category_id != null && item.category_id != null && String(p.category_id) === String(item.category_id)) {
         if (!categoryMatch || (p.discount_pct || 0) > (categoryMatch.discount_pct || 0)) categoryMatch = p;
       }
     });
-    return productMatch || categoryMatch || null;
+    return productMatch || parentMatch || categoryMatch || null;
   },
 
   // Mirrors core/retail/pricing.py's calculate_line() EXACTLY, mode for

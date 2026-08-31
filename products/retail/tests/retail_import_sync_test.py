@@ -21,6 +21,19 @@ This file follows the same self-contained bootstrap convention as
 conftest.py exists for products/retail/tests/): its own temp app-data dir,
 its own license seed, its own Flask app boot.
 
+SECTION 3 (below) covers a separate, later addition: launch-readiness
+"product variants" follow-up -- the `parent_sku` CSV column alias onto
+`products.parent_product_id` (design doc section 3.6.3's deferred round-
+trip, now closed; schema v25 is unchanged, no schema of its own). A
+hypermarket onboards its catalogue by CSV, not by typing products one at a
+time, so variants were unusable at real volume until a CSV could say which
+row is the parent. Proves: both import orders resolve (parent-first and the
+forward-reference parent-last case), matching is case-insensitive like
+every other v22 SKU write door, an unresolvable parent is a clear per-row
+error rather than a silently orphaned product, a parent that is itself a
+variant is refused (no grandchildren, same rule create_product enforces),
+and a CSV with no `parent_sku` column at all is untouched.
+
 Run:
     pytest products/retail/tests/retail_import_sync_test.py -v
 """
@@ -275,3 +288,174 @@ def test_reimporting_an_existing_sku_queues_an_update_event(client):
     # Full-row payload like update_product's, so a soft-delete/restore state
     # is always carried too.
     assert 'status' in upd_event['payload']
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 3. `parent_sku` CSV import -- launch-readiness "product variants" follow-up
+#    (design doc section 3.6.3's deferred round-trip, now closed)
+# ═════════════════════════════════════════════════════════════════════════════
+
+_PARENT_SKU_HEADERS = ['Product Name', 'SKU', 'Selling Price', 'Parent SKU']
+_PARENT_SKU_MAPPING = {"name": "Product Name", "sku": "SKU", "sell_price": "Selling Price",
+                       "parent_sku": "Parent SKU"}
+
+
+def _product_row(sku):
+    conn = get_retail_conn()
+    row = conn.execute("SELECT id, parent_product_id FROM products WHERE sku=?", (sku,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def test_csv_listing_a_parent_and_its_variants_links_them_in_either_order(client):
+    """Requirement (1). A hypermarket sheet commonly lists a variant's
+    PARENT after its variants (sorted by SKU, "TSH-BASE" sorts after
+    "TSH-BASE-RED"), or before -- both orders must resolve, proving the
+    two-pass resolve genuinely handles the forward-reference case and not
+    just the easy one."""
+    # ── Parent FIRST, variant second ──────────────────────────────────────
+    parent_sku = f"TSH-{uuid.uuid4().hex[:8]}"
+    variant_sku = f"TSHV-{uuid.uuid4().hex[:8]}"
+    rows_parent_first = [
+        {'Product Name': 'T-Shirt', 'SKU': parent_sku, 'Selling Price': '20', 'Parent SKU': ''},
+        {'Product Name': 'T-Shirt Red L', 'SKU': variant_sku, 'Selling Price': '20', 'Parent SKU': parent_sku},
+    ]
+    result = _import(client, 'products', _PARENT_SKU_MAPPING, rows_parent_first, _PARENT_SKU_HEADERS)
+    assert result['imported'] == 2, result
+    assert result.get('parent_errors') == [], result
+    assert result.get('linked') == 1, result
+
+    parent_row = _product_row(parent_sku)
+    variant_row = _product_row(variant_sku)
+    assert variant_row['parent_product_id'] == parent_row['id']
+    assert parent_row['parent_product_id'] is None
+
+    # ── Parent LAST, variant first -- the forward-reference case ──────────
+    parent_sku2 = f"CAP-{uuid.uuid4().hex[:8]}"
+    variant_sku2 = f"CAPV-{uuid.uuid4().hex[:8]}"
+    rows_parent_last = [
+        {'Product Name': 'Cap Red', 'SKU': variant_sku2, 'Selling Price': '15', 'Parent SKU': parent_sku2},
+        {'Product Name': 'Cap', 'SKU': parent_sku2, 'Selling Price': '15', 'Parent SKU': ''},
+    ]
+    result2 = _import(client, 'products', _PARENT_SKU_MAPPING, rows_parent_last, _PARENT_SKU_HEADERS)
+    assert result2['imported'] == 2, result2
+    assert result2.get('parent_errors') == [], result2
+    assert result2.get('linked') == 1, result2
+
+    parent_row2 = _product_row(parent_sku2)
+    variant_row2 = _product_row(variant_sku2)
+    assert variant_row2['parent_product_id'] == parent_row2['id'], (
+        "a parent listed AFTER its variant in the same file must still resolve -- "
+        "the forward-reference case a single top-to-bottom pass cannot handle.")
+    assert parent_row2['parent_product_id'] is None
+
+
+def test_parent_sku_matching_is_case_insensitive_like_every_other_v22_sku_write_door(client):
+    """Requirement (2), mutation proof M2. Schema v22 made SKU matching
+    case-insensitive on read AND on every write door, including this
+    import's own upsert key (see the COLLATE NOCASE comment on the SKU
+    dedupe SELECT/UPDATE above) -- `parent_sku` must agree, or a case-
+    folding scan resolves to an arbitrary row while the upsert above
+    resolved to a different one. The parent here is a PRE-EXISTING
+    catalogue row from a separate call, not a row in this same file, so
+    this specifically exercises the DB-fallback lookup's own
+    `COLLATE NOCASE`, not the in-file forward-reference map."""
+    parent_sku = f"BASE-{uuid.uuid4().hex[:8]}".upper()
+    r = client.post('/api/sub/retail/products', json={
+        'name': 'Base Product', 'sku': parent_sku, 'sell_price': 10,
+    })
+    assert r.status_code == 200, r.get_json()
+    parent_id = r.get_json()['data']['id']
+
+    variant_sku = f"VAR-{uuid.uuid4().hex[:8]}"
+    rows = [{'Product Name': 'Variant', 'SKU': variant_sku, 'Selling Price': '10',
+             'Parent SKU': parent_sku.lower()}]  # deliberately the OPPOSITE case
+    result = _import(client, 'products', _PARENT_SKU_MAPPING, rows, _PARENT_SKU_HEADERS)
+    assert result.get('parent_errors') == [], result
+    assert result.get('linked') == 1, result
+
+    variant_row = _product_row(variant_sku)
+    assert variant_row['parent_product_id'] == parent_id
+
+
+def test_a_parent_sku_that_exists_nowhere_is_a_clear_row_error_not_a_silent_orphan(client):
+    """Requirement (3), mutation proof M1. A `parent_sku` matching nothing
+    in this file OR the database must be REPORTED -- and the product row
+    itself must still land, WITHOUT the link -- never silently imported as
+    an ordinary, unlinked product with no trace that a link was even asked
+    for. That is exactly the orphan-variant state the variants work exists
+    to prevent."""
+    sku = f"ORPHAN-{uuid.uuid4().hex[:8]}"
+    ghost_parent = f"GHOST-{uuid.uuid4().hex[:8]}"
+    rows = [{'Product Name': 'Orphan', 'SKU': sku, 'Selling Price': '10', 'Parent SKU': ghost_parent}]
+    result = _import(client, 'products', _PARENT_SKU_MAPPING, rows, _PARENT_SKU_HEADERS)
+
+    assert result['imported'] == 1, result  # the catalogue row itself still lands
+    errors = result.get('parent_errors') or []
+    assert len(errors) == 1, result
+    assert errors[0]['sku'] == sku
+    assert errors[0]['parent_sku'] == ghost_parent
+    assert errors[0]['reason'], errors[0]
+    assert result['status'] == 'partial', (
+        f"a refused parent link is not a clean import, even though the catalogue row landed. Got {result}")
+
+    row = _product_row(sku)
+    assert row['parent_product_id'] is None, (
+        "an unresolvable parent_sku must NEVER be silently dropped as if this row were an ordinary, "
+        "non-variant product -- see mutation proof M1.")
+
+
+def test_a_parent_that_is_itself_a_variant_is_refused(client):
+    """Requirement (4). Same 'no grandchildren' rule create_product/
+    update_product enforce via `_validate_parent_product` -- a variant of a
+    variant is a data model nobody asked for and cannot be displayed."""
+    grandparent_sku = f"GP-{uuid.uuid4().hex[:8]}"
+    parent_sku = f"P-{uuid.uuid4().hex[:8]}"
+    r1 = client.post('/api/sub/retail/products', json={'name': 'Grandparent', 'sku': grandparent_sku, 'sell_price': 10})
+    assert r1.status_code == 200, r1.get_json()
+    gp_id = r1.get_json()['data']['id']
+    r2 = client.post('/api/sub/retail/products', json={
+        'name': 'Parent (already a variant)', 'sku': parent_sku, 'sell_price': 10, 'parent_product_id': gp_id,
+    })
+    assert r2.status_code == 200, r2.get_json()
+
+    child_sku = f"C-{uuid.uuid4().hex[:8]}"
+    rows = [{'Product Name': 'Would-be grandchild', 'SKU': child_sku, 'Selling Price': '10', 'Parent SKU': parent_sku}]
+    result = _import(client, 'products', _PARENT_SKU_MAPPING, rows, _PARENT_SKU_HEADERS)
+
+    errors = result.get('parent_errors') or []
+    assert len(errors) == 1, result
+    assert errors[0]['sku'] == child_sku
+    assert errors[0]['parent_sku'] == parent_sku
+
+    row = _product_row(child_sku)
+    assert row['parent_product_id'] is None, "a grandchild link must never be written, even refused-and-recorded"
+
+
+def test_csv_with_no_parent_sku_column_behaves_exactly_as_before(client):
+    """Requirement (5) -- the invisible-unless-used contract this whole
+    codebase's opt-in features share. A CSV that never mentions
+    `parent_sku` at all must produce the SAME response shape and the SAME
+    sync payload as before this feature existed: no row's
+    parent_product_id touched, `parent_errors` empty, status 'ok' (never
+    'partial'), and the create event's key set unchanged (already pinned
+    broadly by test_imported_product_queues_the_same_create_event_as_the_
+    normal_route above; re-affirmed narrowly here for the specific case
+    this task closes)."""
+    sku = f"PLAIN-{uuid.uuid4().hex[:8]}"
+    headers = ['Product Name', 'SKU', 'Selling Price']
+    mapping = {"name": "Product Name", "sku": "SKU", "sell_price": "Selling Price"}
+    rows = [{'Product Name': 'Plain Product', 'SKU': sku, 'Selling Price': '10'}]
+    result = _import(client, 'products', mapping, rows, headers)
+
+    assert result['imported'] == 1, result
+    assert result.get('parent_errors') == [], result
+    assert result.get('linked', 0) == 0, result
+    assert result['status'] == 'ok', result
+
+    row = _product_row(sku)
+    assert row['parent_product_id'] is None
+
+    create_event = _event_for('product', 'create', sku=sku)
+    assert create_event['payload']['parent_product_id'] is None
+    assert create_event['payload']['variant_label'] is None

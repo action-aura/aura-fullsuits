@@ -26,6 +26,14 @@ report):
      creating a promotion against another company's product/category/
      branch is refused.
  11. Schema v23 lands on head and is idempotent.
+ 12. PARENT TIER (launch-readiness "product variants" follow-up, one of the
+     two things the variants commit named as deliberately deferred rather
+     than missed -- schema v25, no schema of its own): a promotion
+     configured on a variant's PARENT product discounts the variant's sale
+     line; an exact-variant promotion beats a parent one, and a parent one
+     beats a category one, in both cases regardless of which percentage is
+     larger -- resolve_line_discount_pct's new middle tier, exercised here
+     the same way section 4 exercises the original two.
 
 Self-contained bootstrap, matching retail_product_lookup_nocase_test.py and
 the rest of this suite (no shared conftest.py exists here). CRITICAL:
@@ -140,7 +148,8 @@ def shop():
     return _new_shop()
 
 
-def _create_product(client, name=None, sku=None, category_id=None, sell_price=100.0, tax_rate=0):
+def _create_product(client, name=None, sku=None, category_id=None, sell_price=100.0, tax_rate=0,
+                     parent_product_id=None, variant_label=None):
     tag = uuid.uuid4().hex[:8]
     payload = {
         'name': name or f'Promo test item {tag}',
@@ -150,6 +159,14 @@ def _create_product(client, name=None, sku=None, category_id=None, sell_price=10
     }
     if category_id is not None:
         payload['category_id'] = category_id
+    # launch-readiness "product variants" follow-up (schema v25, section 12
+    # below): lets this file's own helper build a variant -- a product whose
+    # `parent_product_id` names another product -- the same way
+    # retail_product_variants_test.py's own `_create_product` does.
+    if parent_product_id is not None:
+        payload['parent_product_id'] = parent_product_id
+    if variant_label is not None:
+        payload['variant_label'] = variant_label
     r = client.post(f'{API}/products', json=payload)
     assert r.status_code == 200, r.get_json()
     return r.get_json()['data']['id']
@@ -301,6 +318,104 @@ def test_product_specific_beats_category_regardless_of_percentage(shop):
     assert line['discount_pct'] == 10, (
         f"product-specific (10%) must beat category (50%). Got {line['discount_pct']}%")
     assert line['line_total'] == 90.0
+
+
+# ── 12. PARENT TIER (launch-readiness "product variants" follow-up) ─────────
+#
+# resolve_line_discount_pct's new middle tier: exact-variant > parent >
+# category. `_create_product(..., parent_product_id=parent)` builds a variant
+# exactly like retail_product_variants_test.py's own helper does -- a product
+# whose `parent_product_id` names another product, schema v25, no new schema
+# added by THIS wave.
+
+def test_a_promotion_on_the_parent_discounts_a_variants_sale_line(shop):
+    """Requirement (6). A shop running "20% off T-Shirts" configures ONE
+    promotion on the parent ("T-Shirt") and it must discount a variant's
+    sale line ("T-Shirt -- Red / L") with no promotion configured on the
+    variant itself -- see mutation proof M6 (a parent tier that never
+    matches anything would fail this)."""
+    cid, client = shop
+    parent = _create_product(client, name='T-Shirt', sell_price=100.0)
+    variant = _create_product(client, name='T-Shirt', sell_price=100.0,
+                               parent_product_id=parent, variant_label='Red / L')
+    _create_promotion(client, discount_pct=20, product_id=parent)
+
+    r = _sale(client, [{'product_id': variant, 'quantity': 1}])
+    assert r.status_code == 200, r.get_json()
+    line = r.get_json()['data']['lines'][0]
+    assert line['discount_pct'] == 20, (
+        f"a promotion on the PARENT must discount the variant's line. Got {line}")
+    assert line['line_total'] == 80.0
+
+
+def test_exact_variant_promotion_beats_parent_promotion_even_when_parents_pct_is_higher(shop):
+    """Requirement (7). Specificity wins over size, exactly like section 4's
+    product-vs-category proof -- the parent's own rule is the BIGGER
+    percentage (60%) and must still lose to the exact-variant rule (5%).
+    See mutation proof M3."""
+    cid, client = shop
+    parent = _create_product(client, name='T-Shirt', sell_price=100.0)
+    variant = _create_product(client, name='T-Shirt', sell_price=100.0,
+                               parent_product_id=parent, variant_label='Red / L')
+    _create_promotion(client, discount_pct=60, product_id=parent)
+    _create_promotion(client, discount_pct=5, product_id=variant)
+
+    r = _sale(client, [{'product_id': variant, 'quantity': 1}])
+    assert r.status_code == 200, r.get_json()
+    line = r.get_json()['data']['lines'][0]
+    assert line['discount_pct'] == 5, (
+        f"exact-variant (5%) must beat parent (60%), regardless of which percentage is larger. Got {line}")
+    assert line['line_total'] == 95.0
+
+
+def test_a_parent_promotion_beats_a_category_promotion_even_when_categorys_pct_is_higher(shop):
+    """Requirement (8). The category rule is the BIGGER percentage (40%)
+    and must still lose to the parent rule (15%) -- see mutation proofs M4
+    (category allowed to beat parent) and M6 (parent tier never matches, so
+    category wins by default)."""
+    cid, client = shop
+    cat = _create_category(client)
+    parent = _create_product(client, name='T-Shirt', category_id=cat, sell_price=100.0)
+    variant = _create_product(client, name='T-Shirt', category_id=cat, sell_price=100.0,
+                               parent_product_id=parent, variant_label='Red / L')
+    _create_promotion(client, discount_pct=40, category_id=cat)
+    _create_promotion(client, discount_pct=15, product_id=parent)
+
+    r = _sale(client, [{'product_id': variant, 'quantity': 1}])
+    assert r.status_code == 200, r.get_json()
+    line = r.get_json()['data']['lines'][0]
+    assert line['discount_pct'] == 15, (
+        f"parent (15%) must beat category (40%), regardless of which percentage is larger. Got {line}")
+    assert line['line_total'] == 85.0
+
+
+def test_with_no_parent_promotions_resolution_is_byte_identical_to_before_the_parent_tier(shop):
+    """Requirement (9). A variant line with NO promotion on its parent (only
+    a category promotion, exactly like section 4's non-variant fixture)
+    must resolve identically to a plain, non-variant product -- the parent
+    tier is invisible when it has nothing to match. `parent_id=None` on an
+    ordinary product and `parent_id=<real id, no promo there>` on a variant
+    must produce the SAME number when the only other rule in play is a
+    category promotion."""
+    cid, client = shop
+    cat = _create_category(client)
+    parent = _create_product(client, name='T-Shirt', category_id=cat, sell_price=100.0)
+    variant = _create_product(client, name='T-Shirt', category_id=cat, sell_price=100.0,
+                               parent_product_id=parent, variant_label='Red / L')
+    plain = _create_product(client, category_id=cat, sell_price=100.0)
+    _create_promotion(client, discount_pct=30, category_id=cat)
+
+    r = _sale(client, [
+        {'product_id': variant, 'quantity': 1},
+        {'product_id': plain, 'quantity': 1},
+    ])
+    assert r.status_code == 200, r.get_json()
+    by_pid = {l['product_id']: l for l in r.get_json()['data']['lines']}
+    assert by_pid[variant]['discount_pct'] == 30
+    assert by_pid[plain]['discount_pct'] == 30
+    assert by_pid[variant]['discount_pct'] == by_pid[plain]['discount_pct'], (
+        "a variant with no PARENT promotion must resolve the category tier exactly like an "
+        f"ordinary non-variant product. Got {by_pid}")
 
 
 # ── 5. BEST PRICE WINS -- never summed ───────────────────────────────────────

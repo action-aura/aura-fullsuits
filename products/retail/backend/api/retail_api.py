@@ -4201,8 +4201,17 @@ def create_sale():
             # manual_discount_pct), never their sum. `applied_promotion` is
             # None when the manual discount won (including a tie) or no
             # promotion matched at all -- see that function's own docstring.
+            #
+            # `product['parent_product_id']` (schema v25, already selected
+            # above for the parent-guard/has_variants check) threaded through
+            # as the new PARENT TIER argument -- launch-readiness "product
+            # variants" follow-up, design section 3.3 point 2. An ordinary
+            # non-variant product's `parent_product_id` is None, which
+            # `resolve_line_discount_pct` treats as "no parent tier" --
+            # byte-identical resolution for every install that has never
+            # created a variant.
             effective_discount_pct, applied_promotion = promo_engine.resolve_line_discount_pct(
-                active_promotions, pid, product['category_id'], manual_discount_pct
+                active_promotions, pid, product['parent_product_id'], product['category_id'], manual_discount_pct
             )
             unit_price = float(product['sell_price'])
             tax_rate = float(product['tax_rate'])

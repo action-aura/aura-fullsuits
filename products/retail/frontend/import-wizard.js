@@ -210,6 +210,12 @@ const ImportWizard = {
               <b>${this._esc(e.sku)}</b> — ${this._esc(this._t(e.reason))} (${this._esc(e.declared)}${e.would_be == null ? '' : ' → ' + this._esc(e.would_be)}, ${this._esc(this._t('currently on hand'))} ${this._esc(e.on_hand)})
             </div>`).join('')}
           </div>` : ''}
+          ${(r.parent_errors || []).length ? `<div style="margin-top:4px">
+            <div style="color:#fca5a5;font-size:12px;font-weight:600">${this._esc(this._t('Parent SKU link could not be made for these products:'))}</div>
+            ${r.parent_errors.map(e => `<div style="color:#fca5a5;font-size:12px;margin:2px 0">
+              <b>${this._esc(e.sku)}</b> → <b>${this._esc(e.parent_sku)}</b>: ${this._esc(this._t(e.reason))}
+            </div>`).join('')}
+          </div>` : ''}
         </div>`).join('');
         el.innerHTML = `<div style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);border-radius:10px;padding:14px">
           <div style="color:#fff;font-weight:700;margin-bottom:8px">✅ Imported ${data.total_imported} records across ${data.results.length} function(s)</div>${rowsHtml}</div>`;
@@ -756,6 +762,19 @@ const ImportWizard = {
             <div style="color:#fca5a5;font-size:13px;font-weight:600;margin-bottom:6px">${this._esc(this._t('Stock was left unchanged for these products:'))}</div>
             ${stockErrors.map(e => `<div style="color:#fca5a5;font-size:12px;margin:3px 0">
               <b>${this._esc(e.sku)}</b> — ${this._esc(this._t(e.reason))} (${this._esc(e.declared)}${e.would_be == null ? '' : ' → ' + this._esc(e.would_be)}, ${this._esc(this._t('currently on hand'))} ${this._esc(e.on_hand)})
+            </div>`).join('')}
+          </div>`;
+        }
+        // launch-readiness "product variants" follow-up: a `parent_sku` that
+        // could not be linked (unresolvable anywhere, or itself a variant)
+        // -- same "the catalogue row still landed, only the relationship
+        // didn't" shape as stockErrors just above, never a silent drop.
+        const parentErrors = data.parent_errors || [];
+        if (parentErrors.length) {
+          resultEl.innerHTML += `<div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:10px;padding:12px;margin-top:10px">
+            <div style="color:#fca5a5;font-size:13px;font-weight:600;margin-bottom:6px">${this._esc(this._t('Parent SKU link could not be made for these products:'))}</div>
+            ${parentErrors.map(e => `<div style="color:#fca5a5;font-size:12px;margin:3px 0">
+              <b>${this._esc(e.sku)}</b> → <b>${this._esc(e.parent_sku)}</b>: ${this._esc(this._t(e.reason))}
             </div>`).join('')}
           </div>`;
         }

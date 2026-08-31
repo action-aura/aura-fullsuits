@@ -450,6 +450,98 @@ function testRenderedLinePriceAlsoTakesBestPriceNotSum() {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// (8) PARENT TIER -- launch-readiness "product variants" follow-up (design
+//     doc section 3.3 point 2). A promotion configured on a variant's PARENT
+//     product ("20% off T-Shirts" set on the grouping product) must reach
+//     the variant's cart line, mirroring core/retail/promotions.py's
+//     resolve_line_discount_pct's new parent tier EXACTLY: exact-variant >
+//     parent > category, specificity beats size at every step.
+//
+//     WHY THIS EXISTS AS ITS OWN CASE, SEPARATE FROM THE BACKEND'S OWN
+//     COVERAGE (retail_promotions_test.py): _bestPromoFor is a SEPARATE
+//     reimplementation of the server's tier order in JavaScript, for the
+//     cart PREVIEW -- what the cashier and the customer see before Charge is
+//     pressed. The server (create_sale) resolves independently and is what
+//     actually gets charged. Nothing keeps the two in sync except both
+//     being hand-maintained correctly; if this file skipped the parent tier
+//     while the server had it, the till would preview one price and charge
+//     another -- see mutation proof M5. And a parent tier that COMPILES but
+//     never actually matches anything (M6) would pass every "not over-
+//     discounted" assertion by construction, which is why
+//     testParentPromotionAppliesToVariantLinePreview asserts a promotion
+//     DOES resolve, not just that it never over-resolves.
+// ═══════════════════════════════════════════════════════════════════════════
+
+function testParentPromotionAppliesToVariantLinePreview() {
+  const { RetailSystem, els } = loadRetailSystem();
+  const item = widget({ product_id: 'variant1', parent_product_id: 'parent1', category_id: 'c1' });
+  RetailSystem._cart = [item];
+  RetailSystem._promotions = [
+    { id: 1, name: 'Parent Promo', discount_pct: 15, product_id: 'parent1', category_id: null },
+  ];
+  RetailSystem._taxMode = 'after_discount';
+
+  const resolved = RetailSystem._bestPromoFor(item);
+  assert.ok(resolved, "_bestPromoFor must resolve a promotion configured on this line's PARENT product (parent_product_id), not just its own product_id or category_id.");
+  assert.strictEqual(resolved.name, 'Parent Promo', `Got: ${JSON.stringify(resolved)}`);
+
+  RetailSystem._renderCart();
+  const cartHTML = els['pos-cart'].innerHTML;
+  assert.ok(
+    cartHTML.includes('$85.00'),
+    `The parent-tier discount (15% off $100 = $85.00) must appear in the RENDERED cart line -- the exact ` +
+    `preview-vs-charge defect a mutation caught during the promotions wave. Got:\n${cartHTML}`
+  );
+
+  RetailSystem._recalc();
+  assertClose(RetailSystem._currentTotals.discount, 15, 'The previewed TOTAL must also reflect the 15% parent-tier discount.');
+}
+
+function testExactVariantPromotionBeatsParentPromotionInPreview() {
+  const { RetailSystem } = loadRetailSystem();
+  const item = widget({ product_id: 'variant1', parent_product_id: 'parent1', category_id: 'c1' });
+  RetailSystem._cart = [item];
+  RetailSystem._promotions = [
+    // The parent's own rule is the BIGGER number -- specificity must still win.
+    { id: 1, name: 'Parent Promo', discount_pct: 60, product_id: 'parent1', category_id: null },
+    { id: 2, name: 'Variant Special', discount_pct: 5, product_id: 'variant1', category_id: null },
+  ];
+  RetailSystem._taxMode = 'after_discount';
+
+  const resolved = RetailSystem._bestPromoFor(item);
+  assert.strictEqual(
+    resolved.name, 'Variant Special',
+    `The exact-variant promotion (5%) must beat the parent promotion (60%), REGARDLESS of which percentage ` +
+    `is larger -- mirrors core/retail/promotions.py's tier order exactly (mutation proof M3). Got: ${JSON.stringify(resolved)}`
+  );
+
+  RetailSystem._recalc();
+  assertClose(RetailSystem._currentTotals.discount, 5, 'The previewed total must follow the exact-variant rule (5%), never the higher parent rate (60%).');
+}
+
+function testParentPromotionBeatsCategoryPromotionInPreview() {
+  const { RetailSystem } = loadRetailSystem();
+  const item = widget({ product_id: 'variant1', parent_product_id: 'parent1', category_id: 'c1' });
+  RetailSystem._cart = [item];
+  RetailSystem._promotions = [
+    // The category rule is the BIGGER number -- specificity must still win.
+    { id: 1, name: 'Category Blowout', discount_pct: 50, product_id: null, category_id: 'c1' },
+    { id: 2, name: 'Parent Promo', discount_pct: 15, product_id: 'parent1', category_id: null },
+  ];
+  RetailSystem._taxMode = 'after_discount';
+
+  const resolved = RetailSystem._bestPromoFor(item);
+  assert.strictEqual(
+    resolved.name, 'Parent Promo',
+    `The parent-tier promotion (15%) must beat the category one (50%), REGARDLESS of which percentage is ` +
+    `larger -- mirrors core/retail/promotions.py's tier order exactly (mutation proof M4). Got: ${JSON.stringify(resolved)}`
+  );
+
+  RetailSystem._recalc();
+  assertClose(RetailSystem._currentTotals.discount, 15, 'The previewed total must follow the parent rule (15%), never the higher category rate (50%).');
+}
+
 const CASES = [
   ['a promoted line previews the discounted price and shows the promotion name', testPromotedLinePreviewsDiscountAndName],
   ['BEST PRICE WINS -- never summed', testBestPriceWinsNeverSums],
@@ -458,6 +550,9 @@ const CASES = [
   ['a failed promotions fetch leaves the till selling normally', testFailedPromotionsFetchDoesNotBlockSelling],
   ['THE WIRE IS UNCHANGED: _checkout sends the manual discount_pct, not the promoted one', testCheckoutWireSendsManualDiscountNotPromoted],
   ['BEST PRICE WINS IN THE RENDERED LINE, not just the totals', testRenderedLinePriceAlsoTakesBestPriceNotSum],
+  ['PARENT TIER: a promotion on the parent previews and charges the discount on a variant line', testParentPromotionAppliesToVariantLinePreview],
+  ['PARENT TIER: an exact-variant promotion beats a parent promotion in the preview', testExactVariantPromotionBeatsParentPromotionInPreview],
+  ['PARENT TIER: a parent promotion beats a category promotion in the preview', testParentPromotionBeatsCategoryPromotionInPreview],
 ];
 
 async function main() {

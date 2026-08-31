@@ -21,6 +21,15 @@ NEVER the sum -- summing is how a 60% promotion plus a 50% manual discount
 becomes 110%, clamps to 100 downstream, and hands the item over for
 nothing. See that function's own docstring and
 products/retail/tests/retail_promotions_test.py's mutation proof M1.
+
+PARENT TIER (launch-readiness "product variants" follow-up, one of the two
+things the variants commit named as deliberately deferred rather than
+missed -- design doc section 3.3, point 2 -- schema v25, no new schema of
+its own): `resolve_line_discount_pct` gained a THIRD tier, between the
+exact-product and category tiers, so a promotion configured on a variant's
+PARENT product reaches every one of its variants. See that function's own
+docstring for the full three-tier order and
+products/retail/tests/retail_promotions_test.py's mutation proofs M3/M4/M6.
 """
 from __future__ import annotations
 
@@ -78,7 +87,7 @@ def load_active_promotions(conn, company_id, branch_id, now_local):
     return [dict(row) for row in rows]
 
 
-def resolve_line_discount_pct(promotions, product_id, category_id, manual_pct):
+def resolve_line_discount_pct(promotions, product_id, parent_id, category_id, manual_pct):
     """Resolve ONE sale line's effective discount percentage against the
     promotions already loaded for this sale (`load_active_promotions`,
     above) and the MANUAL per-line discount the cashier typed.
@@ -86,16 +95,27 @@ def resolve_line_discount_pct(promotions, product_id, category_id, manual_pct):
     Returns `(effective_pct, applied_promotion_or_None)`.
 
     RESOLUTION ORDER, matching ROADMAP.md's "two rules most likely to be
-    got wrong" exactly:
+    got wrong" exactly, PLUS the parent tier added for launch-readiness
+    "product variants" (design doc section 3.3, point 2 -- a promotion
+    configured on a variant's PARENT, e.g. "20% off T-Shirts" set on the
+    grouping product, must reach every one of its variants without the
+    shop having to create one promotion per colour/size):
 
     1. TIER: a product-specific promotion (`promo['product_id'] ==
-       product_id`) beats a category promotion (`promo['category_id'] ==
-       category_id`, only when `category_id` is not None) on the SAME
-       product, regardless of which percentage is larger -- a 10%
-       product-specific rule wins over a 50% category-wide one. Every
-       promotion row holds exactly one of `product_id`/`category_id` (API-
-       validated at create/update time), so a row can only ever land in
-       one tier, never both.
+       product_id`, i.e. a promotion naming THIS exact line -- a variant's
+       own promotion if the line is a variant) beats a PARENT promotion
+       (`promo['product_id'] == parent_id`, only when `parent_id` is not
+       None), which in turn beats a category promotion (`promo['category_id']
+       == category_id`, only when `category_id` is not None) on the SAME
+       line, regardless of which percentage is larger -- a 10% exact-product
+       rule wins over a 50% parent rule, and a 10% parent rule wins over a
+       50% category rule. Specificity wins over size at EVERY step of this
+       chain, not just the first. Every promotion row holds exactly one of
+       `product_id`/`category_id` (API-validated at create/update time), and
+       a row's `product_id` cannot equal both `product_id` and `parent_id`
+       for the same line (a product can never be its own parent -- see
+       `_validate_parent_product`'s self-reference refusal), so a row can
+       only ever land in ONE of these three tiers, never two.
     2. Within a tier, the HIGHEST `discount_pct` wins -- covers the (rare,
        but not forbidden) case of two overlapping rules at the same tier.
     3. BEST PRICE WINS, ACROSS THE MANUAL/PROMO SPLIT: the winning tier's
@@ -107,13 +127,26 @@ def resolve_line_discount_pct(promotions, product_id, category_id, manual_pct):
        price beyond what the cashier already typed gave nothing away, and
        must not be snapshotted (`sale_item_promotions`) as if it had. It
        is also None, trivially, when no promotion matched at all.
+
+    `parent_id` is the line's `products.parent_product_id` (None for an
+    ordinary, non-variant product) -- the caller (`create_sale`) already
+    reads it off the same product row `category_id` comes from, so this
+    never triggers an extra query. An install that has never created a
+    variant passes `parent_id=None` on every line, `parent_matches` is
+    always `[]`, and resolution is BYTE-IDENTICAL to pre-parent-tier
+    behaviour -- the same "invisible unless opted in" contract every other
+    piece of the variants/promotions work keeps.
     """
     product_matches = [p for p in promotions if p.get('product_id') == product_id]
-    category_matches = (
-        [p for p in promotions if category_id is not None and p.get('category_id') == category_id]
+    parent_matches = (
+        [p for p in promotions if parent_id is not None and p.get('product_id') == parent_id]
         if not product_matches else []
     )
-    tier = product_matches or category_matches
+    category_matches = (
+        [p for p in promotions if category_id is not None and p.get('category_id') == category_id]
+        if not product_matches and not parent_matches else []
+    )
+    tier = product_matches or parent_matches or category_matches
 
     best_promo = max(tier, key=lambda p: p['discount_pct']) if tier else None
     promo_pct = best_promo['discount_pct'] if best_promo else 0
