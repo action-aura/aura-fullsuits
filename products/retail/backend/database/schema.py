@@ -554,7 +554,32 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # Also deferred: buy-X-get-Y and any other basket-level rule (needs a
 # cross-line engine, not a per-line resolver), mix-and-match,
 # customer-group pricing, coupon codes, loyalty.
-RETAIL_SCHEMA_VERSION = 23
+#
+# v23 -> v25 (launch-readiness, "product variants, wave 1"; ROADMAP.md's
+# 2026-08-31 "retail schema v25 CLAIMED for product variants" entry). v24 is
+# DELIBERATELY SKIPPED: it stays reserved BY NAME for inter-branch transfers
+# per ROADMAP.md's 2026-08-30 entry, and this chain already has a blessed
+# precedent for a deliberate version-number gap rather than silently taking
+# a number another branch has already claimed (the v10 gap, this file's own
+# comment a few hundred lines above). `ensure_schema_version` only compares
+# integers -- it never requires that every integer up to the target was used
+# by this lineage -- so a database stepping 23 -> 25 in one pass is fine.
+#
+# Two new nullable columns on `products`, no default, no data touched:
+#
+#   parent_product_id TEXT  -- another products.id (a UUID); NULL means "not
+#                              a variant", which is every existing row
+#   variant_label      TEXT -- e.g. 'Red / L'; NULL on non-variants
+#
+# See docs/launch-readiness/variants-and-modifiers-design.md section 3 for
+# the full design; the short version: a variant ("Red / L") is modelled as a
+# PRODUCT with a parent pointer, not as a new table with its own stock, so it
+# reuses the entire existing inventory subsystem (balances, movements, the
+# v22 four-rung scan ladder, sale lines, reporting) for free -- and, because
+# `product` is already a synced entity type whose wire identity IS its UUID
+# `id`, the parent pointer syncs across devices with no new sync machinery
+# either. See _migrate_add_product_variants below for the migration shape.
+RETAIL_SCHEMA_VERSION = 25
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -1495,6 +1520,14 @@ def _migrate_retail_schema(conn):
     # See the RETAIL_SCHEMA_VERSION v23 comment above and
     # _migrate_add_promotions's own docstring for the full reasoning.
     _migrate_add_promotions(conn)
+    # v23 -> v25 (launch-readiness, "product variants, wave 1"): appended
+    # LAST, same convention as every step above. Two additive columns and
+    # one partial index on `products` -- no other table is touched, so
+    # ordering relative to the steps above it does not matter functionally.
+    # v24 is deliberately never called here -- it is a named gap, not a
+    # missing step -- see the RETAIL_SCHEMA_VERSION v25 comment above and
+    # _migrate_add_product_variants's own docstring for the full reasoning.
+    _migrate_add_product_variants(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -4943,6 +4976,84 @@ def _migrate_add_promotions(conn):
         )
 
 
+def _migrate_add_product_variants(conn):
+    """One-time migration (schema v23 -> v25): launch-readiness "product
+    variants, wave 1" (ROADMAP.md's 2026-08-31 "retail schema v25 CLAIMED
+    for product variants" entry). v24 is deliberately SKIPPED -- it stays
+    reserved BY NAME for inter-branch transfers per ROADMAP.md's 2026-08-30
+    entry, and this chain has a blessed precedent for a deliberate
+    version-number gap (the v10 gap, this file's own RETAIL_SCHEMA_VERSION
+    comment above) rather than silently taking a number another branch has
+    already claimed.
+
+    Two nullable columns on `products`, no default, no data touched:
+
+        parent_product_id TEXT  -- another products.id (a UUID); NULL means
+                                    "not a variant", which is every existing
+                                    row
+        variant_label      TEXT -- e.g. 'Red / L'; NULL on non-variants
+
+    See docs/launch-readiness/variants-and-modifiers-design.md section 3 for
+    the full design. Deliberately NO declared FOREIGN KEY on
+    `parent_product_id` -- the SAME two reasons `promotions.product_id` has
+    none (see `_migrate_add_promotions` immediately above): (a) never block
+    a sale or a sync apply on a referential technicality; (b) sync arrival
+    order -- a variant's `product` event can apply on a peer device before
+    its parent's own `product` event does (delta updates and quarantine
+    retries can reorder past outbox order), and a declared FK would abort
+    the WHOLE pull batch rather than just this one row. Ownership is
+    validated at API write time instead (create_product/update_product in
+    retail_api.py): a `parent_product_id` must resolve to a same-company,
+    non-tombstoned, ACTIVE product that is not itself a variant -- no
+    grandchildren, matching the flat, one-level label model.
+
+    The partial index (`WHERE parent_product_id IS NOT NULL`) costs nothing
+    on an install that never uses variants -- an empty index to probe, same
+    "invisible unless opted in" posture v23's `load_active_promotions`
+    already established for a no-promotions install -- and backs both the
+    parent-guard EXISTS probe in create_sale and `GET /products/<id>/
+    variants`.
+
+    `live_tables` guard copied verbatim from `_migrate_add_promotions`
+    immediately above, for the SAME synthetic old-database fixture
+    (retail_category_delete_fk_sync_test.py's `_build_v2_database`, which
+    runs the ENTIRE migration chain in one pass against a hand-built schema
+    holding only categories/products/inventory_movements plus a couple of
+    sync tables). That fixture's `products` table survives every migration
+    ahead of this one intact under its own name (none of them drop it
+    without immediately recreating it), so this guard is a no-op there too
+    -- kept anyway for the identical reason `_migrate_add_promotions` keeps
+    its own: it costs nothing, and it keeps this step visually consistent
+    with every neighbour in this chain that checks before it writes, rather
+    than being the one step that quietly skips the check everything around
+    it makes.
+
+    Idempotent: the ADD COLUMN pair is independently guarded by a
+    `PRAGMA table_info` check, the same shape
+    `_migrate_products_add_supplier_fk` above uses (SQLite has no `ADD
+    COLUMN IF NOT EXISTS`), and the index is `CREATE INDEX IF NOT EXISTS` --
+    so a retried run after any interrupted migration (the normal case,
+    since `ensure_schema_version` leaves `user_version` un-advanced on
+    failure) is a clean no-op either way.
+    """
+    live_tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if 'products' in live_tables:
+        cols = {row[1] for row in conn.execute('PRAGMA table_info(products)').fetchall()}
+        if 'parent_product_id' not in cols:
+            conn.execute('ALTER TABLE products ADD COLUMN parent_product_id TEXT')
+        if 'variant_label' not in cols:
+            conn.execute('ALTER TABLE products ADD COLUMN variant_label TEXT')
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_products_parent '
+            'ON products(company_id, parent_product_id) '
+            'WHERE parent_product_id IS NOT NULL'
+        )
+
+
 def load_sync_freshness(conn) -> dict:
     """Reads the single `sync_freshness` row -- the concrete `load` half of
     the `SyncFreshnessStore` collaborator `SyncService` is constructed with
@@ -5365,6 +5476,15 @@ def _init_retail(conn):
         reorder_level INTEGER DEFAULT 5,
         status TEXT DEFAULT 'active',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        -- launch-readiness "product variants, wave 1" (schema v25) --
+        -- included here too so a brand-new install gets v25 shape directly
+        -- without ever running _migrate_add_product_variants, same
+        -- convention as supplier_contacts/min_order_value above. NULL on
+        -- both means "not a variant", which is every row a fresh install
+        -- ever creates until something opts in. See that migration's own
+        -- docstring for the full reasoning (no FOREIGN KEY, one level only).
+        parent_product_id TEXT,
+        variant_label TEXT,
         -- ON DELETE SET NULL, not a bare REFERENCES: a category delete
         -- relayed in from ANOTHER device must never be able to fail against
         -- this device's own product links (products are not synced, so two

@@ -2246,8 +2246,27 @@ const RetailSystem = {
     // this._products IS the current result set already. Category is the
     // one filter the backend does not offer, so it still happens here,
     // client-side, over whatever page/search batch is loaded.
+    //
+    // launch-readiness "product variants, wave 1" (design section 3.7):
+    // variant rows are excluded from the tile grid -- `parent_product_id`
+    // set means "this is a child, not its own tile". The GROUPING product
+    // (the parent) gets ONE tile with an "N options" badge (below) that
+    // opens a variant picker instead of adding straight to the cart; the
+    // scan path is untouched -- a variant's OWN barcode still resolves
+    // straight through _posScan/_addToCart, this filter only affects the
+    // browsed grid.
     const matches = (this._products || []).filter(p =>
-      !this._activeCat || p.category_id === this._activeCat);
+      !p.parent_product_id && (!this._activeCat || p.category_id === this._activeCat));
+    // How many live variants each parent in THIS batch has -- from
+    // this._products (the whole loaded page/search batch), not `matches`,
+    // so a variant that happens to sort outside the current category filter
+    // still counts toward its parent's badge.
+    const variantCountByParent = Object.create(null);
+    (this._products || []).forEach(x => {
+      if (x.parent_product_id) {
+        variantCountByParent[x.parent_product_id] = (variantCountByParent[x.parent_product_id] || 0) + 1;
+      }
+    });
     if (!matches.length) {
       grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;color:var(--text-dim);padding:40px">${t('No products found.')}</div>`;
       return;
@@ -2320,15 +2339,90 @@ const RetailSystem = {
       // stock") from exactly the operator least able to infer it from a 45%
       // opacity wash. aria-disabled announces "unavailable" while keeping the
       // tile focusable and keeping its existing explain-why toast.
-      return `<button type="button" class="pos-card${outOfStock?' pos-card-outofstock':''}"
-          ${outOfStock ? 'aria-disabled="true"' : ''}
-          onclick="${outOfStock ? `SubsystemApp.showToast('${this._esc(t('Out of stock'))}','error')` : `RetailSystem._addToCart('${this._esc(p.id)}')`}">
+      // launch-readiness "product variants, wave 1": a parent tile (one
+      // with live children) opens the variant picker on tap/scan-of-its-
+      // own-barcode instead of adding straight to the cart -- create_sale
+      // would refuse the grouping product outright (that route's own
+      // `has_variants` guard), so adding it here first would only move the
+      // refusal to checkout. Out-of-stock gating is SKIPPED for a parent
+      // tile: `p.total_stock` is the PARENT's own balance, which is not a
+      // meaningful "can this be sold" signal once its real stock lives on
+      // each variant -- the picker shows each variant's own figure instead.
+      const variantCount = variantCountByParent[p.id] || 0;
+      const clickAction = variantCount
+        ? `RetailSystem._openVariantPicker('${this._esc(p.id)}')`
+        : (outOfStock ? `SubsystemApp.showToast('${this._esc(t('Out of stock'))}','error')` : `RetailSystem._addToCart('${this._esc(p.id)}')`);
+      return `<button type="button" class="pos-card${(outOfStock && !variantCount)?' pos-card-outofstock':''}"
+          ${(outOfStock && !variantCount) ? 'aria-disabled="true"' : ''}
+          onclick="${clickAction}">
         <span class="pos-card-icon" aria-hidden="true">${icon}</span>
         <span class="pos-card-name" title="${this._esc(p.name)}">${this._esc(p.name)}</span>
         <span class="pos-card-price">${this._money(p.sell_price)}</span>
-        <span class="pos-card-stock${stockCls}">
+        ${variantCount ? `<span class="pos-card-stock" style="color:var(--text-muted)">${variantCount} ${t('options')}</span>` : `<span class="pos-card-stock${stockCls}">
           ${outOfStock ? t('Out of stock') : (stale ? this._staleStockLabel(p) : `${t('Stock')}: ${p.total_stock} ${this._esc(p.unit||'')}`)}
-        </span>
+        </span>`}
+      </button>`;
+    }).join('');
+  },
+
+  // launch-readiness "product variants, wave 1" (design section 3.7): a
+  // flat grid of one parent's children -- label, price, per-variant stock,
+  // one tap to add. Opened from a parent tile's "N options" badge or from
+  // scanning the PARENT's own barcode (see _posScan's has_variants branch).
+  //
+  // Variants are looked up from this._products FIRST (the already-loaded
+  // POS batch/search result the grid itself is built from) -- no round trip
+  // for the common case, since a parent tile only shows the badge when its
+  // children are already in that same batch. Only falls back to
+  // `GET /products/<id>/variants` when they are not (a category filter or a
+  // narrow search hid them from THIS batch even though the parent matched),
+  // so the picker never opens empty just because of pagination.
+  async _openVariantPicker(parentId) {
+    document.getElementById('ret-variant-picker')?.remove();
+    const parent = (this._products || []).find(x => x.id === parentId) ||
+                   (this._productsById && this._productsById[parentId]);
+    const overlay = document.createElement('div');
+    overlay.className = 'ret-modal-overlay';
+    overlay.id = 'ret-variant-picker';
+    overlay.innerHTML = `
+      <div class="ret-modal" style="width:420px">
+        <h3>${this._esc(t('Choose a variant'))}${parent ? ` — ${this._esc(parent.name)}` : ''}</h3>
+        <div id="ret-variant-picker-list" style="display:flex;flex-direction:column;gap:8px;max-height:50vh;overflow-y:auto">
+          <div style="text-align:center;color:var(--text-muted);padding:20px">${this._esc(t('Loading…'))}</div>
+        </div>
+        <div class="ret-modal-footer">
+          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-variant-picker').remove()">${this._esc(t('Cancel'))}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+    let variants = (this._products || []).filter(x => x.parent_product_id === parentId);
+    if (!variants.length) {
+      try {
+        const res = await this._get(`/api/sub/retail/products/${encodeURIComponent(parentId)}/variants`);
+        variants = res.data || [];
+        variants.forEach(v => this._cacheProduct(v));
+      } catch (e) { variants = []; }
+    }
+    // The picker may already be closed by the time an awaited fetch
+    // resolves (the cashier gave up and dismissed it) -- write into a live
+    // DOM node or not at all, never into a detached one nobody sees.
+    const list = document.getElementById('ret-variant-picker-list');
+    if (!list) return;
+    if (!variants.length) {
+      list.innerHTML = `<div style="text-align:center;color:var(--text-muted);padding:20px">${this._esc(t('No variants found.'))}</div>`;
+      return;
+    }
+    list.innerHTML = variants.map(v => {
+      const outOfStock = v.total_stock <= 0;
+      return `<button type="button" class="ret-btn ret-btn-ghost" style="display:flex;justify-content:space-between;width:100%"
+          ${outOfStock ? 'aria-disabled="true"' : ''}
+          onclick="${outOfStock
+            ? `SubsystemApp.showToast('${this._esc(t('Out of stock'))}','error')`
+            : `RetailSystem._addToCart('${this._esc(v.id)}');document.getElementById('ret-variant-picker')?.remove()`}">
+        <span>${this._esc(v.variant_label || v.name)}</span>
+        <span>${this._money(v.sell_price)} · ${outOfStock ? this._esc(t('Out of stock')) : `${v.total_stock} ${this._esc(v.unit||'')}`}</span>
       </button>`;
     }).join('');
   },
@@ -3037,7 +3131,14 @@ const RetailSystem = {
     const search = document.getElementById('pos-search');
     if (search) { search.value = ''; this._filterPOS(); }
     const { product, error } = await this._findByCode(code);
-    if (product) {
+    if (product && product.has_variants) {
+      // launch-readiness "product variants, wave 1": scanning the PARENT's
+      // own barcode (parents may keep one) opens the picker instead of
+      // adding the grouping product straight to the cart -- create_sale's
+      // own `has_variants` guard would refuse it at checkout anyway, so
+      // resolving here avoids a scan that "worked" only to fail later.
+      this._openVariantPicker(product.id);
+    } else if (product) {
       this._addToCart(product.id);              // reuses existing stock checks + cart merge
       SubsystemApp.showToast(`Added: ${product.name}`, 'success');
     } else if (error) {
@@ -3098,7 +3199,7 @@ const RetailSystem = {
   _addProductFromScan(code) {
     document.getElementById('ret-scan-nf')?.remove();
     const catOpts = (this._categories || []).map(c => `<option value="${this._esc(c.id)}">${this._esc(c.name)}</option>`).join('');
-    this._showProductModal({ barcode: code }, catOpts);
+    this._showProductModal({ barcode: code }, catOpts, '', this._eligibleParentOpts(null, null));
   },
 
   // Explicit one-shot capture from the product modal's "Scan" button.
@@ -3678,11 +3779,31 @@ const RetailSystem = {
       tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:30px">No products found.</td></tr>';
       return;
     }
+    // launch-readiness "product variants, wave 1": built from this._products
+    // (the FULL catalogue), not `prods` (the current search/filter result)
+    // -- a search that matches only a parent must still show how many of
+    // ITS variants exist, even when none of them individually match.
+    const parentNameById = Object.create(null);
+    const variantCountByParent = Object.create(null);
+    (this._products || []).forEach(x => {
+      if (x.parent_product_id) {
+        variantCountByParent[x.parent_product_id] = (variantCountByParent[x.parent_product_id] || 0) + 1;
+      } else {
+        parentNameById[x.id] = x.name;
+      }
+    });
     tbody.innerHTML = prods.map(p => {
       const lowStock = p.total_stock <= (p.reorder_level||0);
+      const variantCount = variantCountByParent[p.id] || 0;
+      const variantOfLine = p.parent_product_id
+        ? `<div style="font-size:10px;color:var(--text-muted)">${this._esc(t('Variant of'))} ${this._esc(parentNameById[p.parent_product_id] || p.parent_product_id)}${p.variant_label ? ' · ' + this._esc(p.variant_label) : ''}</div>`
+        : '';
+      const variantCountBadge = variantCount
+        ? ` <span style="font-size:10px;color:var(--text-muted)">(${variantCount} ${this._esc(t('variants'))})</span>`
+        : '';
       return `<tr>
         <td style="font-family:monospace;color:var(--sub-accent)">${this._esc(p.sku)}</td>
-        <td style="font-weight:600">${this._esc(p.name)}${p.barcode?`<div style="font-size:10px;color:var(--text-muted);font-family:monospace">${this._esc(p.barcode)}</div>`:''}</td>
+        <td style="font-weight:600">${this._esc(p.name)}${variantCountBadge}${p.barcode?`<div style="font-size:10px;color:var(--text-muted);font-family:monospace">${this._esc(p.barcode)}</div>`:''}${variantOfLine}</td>
         <td style="color:var(--text-muted)">${p.category_name?this._esc(p.category_name):'—'}</td>
         <td>${this._fmt(p.cost_price)}</td>
         <!-- AUDIT -- these two cells carried style="color:#10b981" / "#ef4444"
@@ -3716,10 +3837,24 @@ const RetailSystem = {
     }).join('');
   },
 
+  // launch-readiness "product variants, wave 1" (design section 3.1's "no
+  // grandchildren" rule): eligible parents are products that are NOT
+  // themselves a variant -- offering a variant as a parent option would let
+  // the modal build a request _validate_parent_product refuses anyway, so
+  // it is filtered out here rather than left for the server 400 to explain.
+  // `excludeId` drops the product being edited from its own parent list.
+  _eligibleParentOpts(selectedParentId, excludeId) {
+    return (this._products || [])
+      .filter(x => !x.parent_product_id && x.id !== excludeId)
+      .map(x => `<option value="${this._esc(x.id)}" ${x.id===selectedParentId?'selected':''}>${this._esc(x.name)}</option>`)
+      .join('');
+  },
+
   _openAddProduct() {
     const catOpts = this._categories.map(c => `<option value="${this._esc(c.id)}">${this._esc(c.name)}</option>`).join('');
     const supOpts = (this._suppliers||[]).map(s => `<option value="${this._esc(s.id)}">${this._esc(s.name)}</option>`).join('');
-    this._showProductModal({}, catOpts, supOpts);
+    const parentOpts = this._eligibleParentOpts(null, null);
+    this._showProductModal({}, catOpts, supOpts, parentOpts);
   },
 
   _openEditProduct(pid) {
@@ -3729,10 +3864,11 @@ const RetailSystem = {
       `<option value="${this._esc(c.id)}" ${c.id===p.category_id?'selected':''}>${this._esc(c.name)}</option>`).join('');
     const supOpts = (this._suppliers||[]).map(s =>
       `<option value="${this._esc(s.id)}" ${s.id===p.supplier_id?'selected':''}>${this._esc(s.name)}</option>`).join('');
-    this._showProductModal(p, catOpts, supOpts);
+    const parentOpts = this._eligibleParentOpts(p.parent_product_id, p.id);
+    this._showProductModal(p, catOpts, supOpts, parentOpts);
   },
 
-  _showProductModal(p, catOpts, supOpts) {
+  _showProductModal(p, catOpts, supOpts, parentOpts) {
     const isEdit = !!p.id;
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
@@ -3768,6 +3904,20 @@ const RetailSystem = {
           <div class="ret-field"><label>Reorder Level</label><input type="number" id="pm-reorder" value="${p.reorder_level||5}" min="0" /></div>
         </div>
         ${!isEdit ? `<div class="ret-field"><label>Initial Stock</label><input type="number" id="pm-stock" value="0" min="0" /></div>` : ''}
+        <!-- launch-readiness "product variants, wave 1" (design section 3.1):
+             a variant is created by reusing THIS SAME form -- pick a parent,
+             give it a label ("Red / L"), everything else (SKU, barcode,
+             price, stock) is a normal product field because a variant IS a
+             product. Only non-variant products are offered as a parent
+             (_eligibleParentOpts) -- one level only, no grandchildren. -->
+        <div class="ret-field-row">
+          <div class="ret-field"><label>${this._esc(t('Variant of'))}</label>
+            <select id="pm-parent"><option value="">${this._esc(t('None — a standalone product'))}</option>${parentOpts||''}</select>
+          </div>
+          <div class="ret-field"><label>${this._esc(t('Variant label'))}</label>
+            <input id="pm-variant-label" value="${p.variant_label||''}" placeholder="${this._esc(t('e.g. Red / L'))}" />
+          </div>
+        </div>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-prod-modal').remove()">Cancel</button>
           <button class="ret-btn ret-btn-primary" id="pm-save-btn" onclick="RetailSystem._saveProduct(${isEdit ? `'${this._esc(p.id)}'` : 'null'})">${isEdit?'Save Changes':'Add Product'}</button>
@@ -3795,6 +3945,12 @@ const RetailSystem = {
       unit:         document.getElementById('pm-unit')?.value  || 'pcs',
       reorder_level:+document.getElementById('pm-reorder')?.value || 5,
       initial_stock:+document.getElementById('pm-stock')?.value  || 0,
+      // launch-readiness "product variants, wave 1": both null when the
+      // Parent field is left at "None" -- the server's own validation
+      // (create_product/update_product's _validate_parent_product) is the
+      // real gate; this is just intent.
+      parent_product_id: document.getElementById('pm-parent')?.value || null,
+      variant_label:     document.getElementById('pm-variant-label')?.value || null,
     };
     try {
       const d = pid

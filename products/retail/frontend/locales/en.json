@@ -558,7 +558,6 @@
   "Variance accepted.": "Variance accepted.",
   "Failed to accept the variance": "Failed to accept the variance",
   "Close": "Close",
-
   "Exceptions": "Exceptions",
   "Two queues for things the software could not resolve on its own. A human decides what happens next.": "Two queues for things the software could not resolve on its own. A human decides what happens next.",
   "Oversold Stock": "Oversold Stock",
@@ -653,5 +652,13 @@
   "Permission grant": "Permission grant",
   "Duplicate email address": "Duplicate email address",
   "Duplicate employee code": "Duplicate employee code",
-  "Waiting for the linked account to sync": "Waiting for the linked account to sync"
+  "Waiting for the linked account to sync": "Waiting for the linked account to sync",
+  "Choose a variant": "Choose a variant",
+  "No variants found.": "No variants found.",
+  "options": "options",
+  "Variant of": "Variant of",
+  "None — a standalone product": "None — a standalone product",
+  "variants": "variants",
+  "Variant label": "Variant label",
+  "e.g. Red / L": "e.g. Red / L"
 }

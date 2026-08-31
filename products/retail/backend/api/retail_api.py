@@ -1644,7 +1644,20 @@ def lookup_product():
         return jsonify({'status': 'error', 'message': 'code is required'}), 400
     select = (
         "SELECT p.*, c.name as category_name, "
-        "COALESCE(SUM(b.quantity_on_hand), 0) as total_stock "
+        "COALESCE(SUM(b.quantity_on_hand), 0) as total_stock, "
+        # launch-readiness "product variants, wave 1" (schema v25, design
+        # section 3.5): one additive response field, no rung changes. A
+        # scan that resolves to a VARIANT's own barcode/SKU needs nothing
+        # extra -- it is an ordinary sellable row. A scan that resolves to
+        # the PARENT's own barcode (parents may keep one) now tells the
+        # caller so -- the POS can open a variant picker instead of adding
+        # the ungrouped parent straight to the cart, which create_sale
+        # would refuse anyway (see that route's own `has_variants` guard).
+        "EXISTS("
+        "  SELECT 1 FROM products c2 WHERE c2.parent_product_id = p.id "
+        "  AND c2.company_id = p.company_id AND c2.deleted_at_utc IS NULL "
+        "  AND c2.status='active'"
+        ") AS has_variants "
         "FROM products p "
         "LEFT JOIN categories c ON p.category_id=c.id AND c.deleted_at_utc IS NULL "
         "LEFT JOIN inventory_balances b ON p.id=b.product_id AND b.company_id=p.company_id "
@@ -1667,6 +1680,52 @@ def lookup_product():
     if row is None:
         return jsonify({'status': 'error', 'message': 'Product not found'}), 404
     return jsonify({'status': 'success', 'data': dict(row)})
+
+def _validate_parent_product(conn, cid, parent_product_id, self_id=None):
+    """Validates a `parent_product_id` a create/update product request wants
+    to write, launch-readiness "product variants, wave 1" (schema v25).
+
+    Returns None when the value is acceptable (including falsy -- clearing
+    or never setting a parent is always allowed), or an error message string
+    when it must be refused. Callers turn a non-None return into a 400,
+    exactly the same shape create_product/update_product already use for
+    `supplier_id` immediately below/above this function -- the same
+    unvalidated-foreign-key hazard (an id taken straight from the request
+    body with no existence/tenancy check is the same cross-tenant leak shape
+    this codebase already shipped once, the supplier_id AUDIT) validated the
+    same way.
+
+    Three refusals, each named so the 400 tells the caller which one fired:
+
+      1. UNKNOWN / cross-tenant / tombstoned / inactive -- the parent must
+         resolve to a real, active, non-deleted product OF THIS COMPANY. A
+         tombstoned/inactive parent is refused outright rather than merely
+         "not found", so a later restore of that row cannot silently make a
+         dangling parent link valid again with no re-validation.
+      2. GRANDCHILDREN -- the candidate parent must not itself already carry
+         a `parent_product_id`. One level only: a variant of a variant is a
+         data model nobody asked for and cannot be displayed (design
+         section 3.1/3.2's "no grandparents" rule).
+      3. SELF-REFERENCE -- a product cannot be its own parent. Only reachable
+         on update (create has no id yet); listed for completeness rather
+         than because a real shop is likely to hit it.
+    """
+    if not parent_product_id:
+        return None
+    if self_id is not None and parent_product_id == self_id:
+        return 'A product cannot be its own parent.'
+    parent = conn.execute(
+        "SELECT parent_product_id FROM products "
+        "WHERE id=? AND company_id=? AND status='active' AND deleted_at_utc IS NULL",
+        (parent_product_id, cid)
+    ).fetchone()
+    if not parent:
+        return f'Unknown parent_product_id: {parent_product_id}'
+    if parent['parent_product_id'] is not None:
+        return ('parent_product_id points at a variant -- variants cannot '
+                'have variants (no grandchildren).')
+    return None
+
 
 @retail_bp.route('/products', methods=['POST'])
 @mt_login_required
@@ -1749,6 +1808,23 @@ def create_product():
                 conn.close()
                 return jsonify({'status': 'error',
                                  'message': f'Unknown supplier_id: {supplier_id}'}), 400
+        # launch-readiness "product variants, wave 1" (schema v25): a variant
+        # is a product whose `parent_product_id` names another product of
+        # this company -- see _validate_parent_product's own docstring for
+        # the three refusals (unknown/cross-tenant/tombstoned, grandchildren,
+        # self-reference). `variant_label` ("Red / L") carries no validation
+        # of its own -- it is free text, exactly like the design specifies
+        # (no normalized option matrix in wave 1) -- and is meaningless
+        # without a parent, but is not refused when sent alone: a caller that
+        # sets a label with no parent gets an ordinary, non-variant product
+        # with a label nobody reads, which is harmless rather than worth a
+        # 400 for.
+        parent_product_id = data.get('parent_product_id')
+        variant_label = data.get('variant_label')
+        parent_error = _validate_parent_product(conn, cid, parent_product_id)
+        if parent_error:
+            conn.close()
+            return jsonify({'status': 'error', 'message': parent_error}), 400
         cur = conn.cursor()
         pid = str(_uuid.uuid4())
         # launch-readiness Phase 6 stage 6a-i: row_version/updated_at_utc
@@ -1758,12 +1834,13 @@ def create_product():
         cur.execute("""
             INSERT INTO products (id,company_id,sku,barcode,name,category_id,supplier_id,cost_price,
                                   sell_price,tax_rate,unit,reorder_level,reorder_method,status,
+                                  parent_product_id,variant_label,
                                   row_version,updated_at_utc)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?)
         """, (pid, cid, data['sku'], data.get('barcode',''), data['name'],
               data.get('category_id'), data.get('supplier_id'), data.get('cost_price',0), data.get('sell_price',0),
               data.get('tax_rate',0), data.get('unit','pcs'), data.get('reorder_level',5),
-              data.get('reorder_method','none'), 1, now))
+              data.get('reorder_method','none'), parent_product_id, variant_label, 1, now))
         # File opening stock under the company's working branch — the SAME branch that
         # sales/returns/adjustments resolve to (via _resolve_working_branch), so a sale
         # always decrements the row this created. Self-heals a branch on fresh/standalone
@@ -1809,6 +1886,15 @@ def create_product():
             # a second device's SyncService._apply_event product upsert
             # picks it up too -- see that function's product branch.
             'reorder_method': data.get('reorder_method', 'none'),
+            # launch-readiness "product variants, wave 1" (schema v25): THE
+            # site named in ROADMAP.md's own warning -- miss this and a
+            # variant arrives on a peer device as an orphan standalone
+            # product, silently, with no error. Must also be added to
+            # sync_service.py's product apply-branch INSERT column list AND
+            # its `_delta_set_clause` allowlist (see that file's product
+            # branch), or this half alone still loses the link on the
+            # receiving end.
+            'parent_product_id': parent_product_id, 'variant_label': variant_label,
             'row_version': 1, 'updated_at_utc': now,
         })
         conn.commit(); conn.close()
@@ -1827,7 +1913,15 @@ def create_product():
 def update_product(pid):
     data = request.json or {}
     cid  = _cid()
-    allowed = ['name','barcode','category_id','supplier_id','cost_price','sell_price','tax_rate','unit','reorder_level','reorder_method','status']
+    # launch-readiness "product variants, wave 1" (schema v25): parent_product_id/
+    # variant_label added to `allowed` -- this list doubles as the changed-field
+    # delta ALLOWLIST for sync (see the row_version comment below), so a PATCH
+    # that only ever touches these two columns still reaches sync_service.py's
+    # `_delta_set_clause` gate on the wire. Without this a variant's label or
+    # parent link could be edited locally forever without ever leaving this
+    # device.
+    allowed = ['name','barcode','category_id','supplier_id','cost_price','sell_price','tax_rate','unit',
+               'reorder_level','reorder_method','status','parent_product_id','variant_label']
     fields = {k: v for k, v in data.items() if k in allowed}
     if not fields:
         return jsonify({'status': 'error', 'message': 'No valid fields'}), 400
@@ -1872,6 +1966,16 @@ def update_product(pid):
             conn.close()
             return jsonify({'status': 'error',
                              'message': f'Unknown supplier_id: {fields["supplier_id"]}'}), 400
+    # Same shape again for `parent_product_id` -- see _validate_parent_product's
+    # own docstring for the three refusals. `'parent_product_id' in fields`
+    # rather than truthiness alone, mirroring supplier_id just above: PATCHing
+    # an explicit null to detach a variant from its parent is legitimate and
+    # must stay allowed with no validation call at all.
+    if fields.get('parent_product_id'):
+        parent_error = _validate_parent_product(conn, cid, fields['parent_product_id'], self_id=pid)
+        if parent_error:
+            conn.close()
+            return jsonify({'status': 'error', 'message': parent_error}), 400
     cur = conn.cursor()
     sets = ', '.join(f'{k}=?' for k in fields)
     values = list(fields.values())
@@ -1915,7 +2019,18 @@ def update_product(pid):
     # one `data` never even carried -- exactly the same "re-read after the
     # UPDATE rather than trust the request" pattern update_category already
     # uses for its own restore-adjacent fields.
-    row = conn.execute("SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,reorder_level,reorder_method,status,deleted_at_utc,row_version,updated_at_utc FROM products WHERE id=?", (pid,)).fetchone()
+    # `parent_product_id,variant_label` added to this SELECT (schema v25):
+    # THE other site named in ROADMAP.md's own warning for the update path --
+    # see the matching comment on create_product's sync payload for the full
+    # three-site checklist (payload / apply-branch column list / delta
+    # allowlist). Without these two here, a PATCH that changes a variant's
+    # label or re-parents it would upsert a full row on a device seeing this
+    # id for the first time with BOTH columns silently NULL.
+    row = conn.execute(
+        "SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,"
+        "reorder_level,reorder_method,status,deleted_at_utc,parent_product_id,variant_label,"
+        "row_version,updated_at_utc FROM products WHERE id=?", (pid,)
+    ).fetchone()
     # launch-readiness Phase 6 stage 6b-i (changed-field deltas): the payload
     # still carries the full row (the apply-side INSERT half needs it for a
     # device that has never seen this id), but `_changed_fields` now names
@@ -2001,6 +2116,52 @@ def delete_product(pid):
         conn.close()
     _sync_nudge()
     return jsonify({'status': 'success', 'message': 'Product deactivated'})
+
+# Launch-readiness "product variants, wave 1" (schema v25, design section
+# 3.7 "Data"). `list_products` already returns every row -- variants
+# included, since a variant IS a product -- and a caller who groups by
+# `parent_product_id` client-side can already build this list from that one
+# response. This route exists for the same reason `GET /products/lookup`
+# (v21) exists beside the unfiltered list: at catalogue scale, a picker that
+# needs only ONE parent's children should not have to hold the whole
+# catalogue in memory to find them -- one indexed SELECT on
+# idx_products_parent instead.
+#
+# No @mt_require_capability, matching list_products/lookup_product
+# immediately above: a till has to be able to browse a parent's variants to
+# ring one, exactly the authority list_products itself already grants any
+# authenticated retail user with no capability decorator at all.
+@retail_bp.route('/products/<string:pid>/variants', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+def list_product_variants(pid):
+    """Every live, active variant of ONE parent product, company-scoped.
+
+    Same row shape as list_products/lookup_product (category_name and
+    total_stock included) so a picker built against either of those needs no
+    special-casing for this response. Deliberately does NOT require the
+    parent itself to exist/still be a parent -- an empty result for an
+    unknown or now-childless id is a normal, expected outcome for a picker,
+    not an error; `list_products`/`lookup_product` make the identical call
+    for "no rows matched" (empty array, 200), and this route matches that
+    posture rather than inventing a 404 for a case that is not actually
+    exceptional.
+    """
+    cid = _cid()
+    conn = get_retail_conn()
+    rows = conn.execute(
+        "SELECT p.*, c.name as category_name, "
+        "COALESCE(SUM(b.quantity_on_hand), 0) as total_stock "
+        "FROM products p "
+        "LEFT JOIN categories c ON p.category_id=c.id AND c.deleted_at_utc IS NULL "
+        "LEFT JOIN inventory_balances b ON p.id=b.product_id AND b.company_id=p.company_id "
+        "WHERE p.company_id=? AND p.parent_product_id=? "
+        "AND p.status='active' AND p.deleted_at_utc IS NULL "
+        "GROUP BY p.id ORDER BY p.variant_label, p.name",
+        (cid, pid)
+    ).fetchall()
+    conn.close()
+    return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
 
 @retail_bp.route('/products/<string:pid>/stock-adjust', methods=['POST'])
 @mt_login_required
@@ -3919,9 +4080,28 @@ def create_sale():
             # (schema v23) -- `resolve_line_discount_pct` below needs it to
             # match a category-scoped promotion against this line; nothing
             # before this stage ever read it here.
+            #
+            # `has_variants` added for launch-readiness "product variants,
+            # wave 1" (schema v25, design section 3.3 "the parent guard").
+            # Derived from LIVE data (an EXISTS probe against
+            # idx_products_parent) rather than a second `status` value --
+            # Phase 6 already paid for overloading `status` once (the
+            # tombstone saga), and a second flag here could drift from the
+            # rows it claims to describe. Selling the abstract grouping
+            # product itself ("Polo Shirt", with no size/colour chosen)
+            # would decrement STOCK ON THE WRONG ROW -- the parent has no
+            # inventory_balances row of its own that means anything, every
+            # unit actually on the shelf is counted under a variant -- so
+            # it is refused below rather than allowed to silently misfile a
+            # sale onto a product nobody can restock against.
             product = cur.execute(
-                "SELECT id, name, sell_price, tax_rate, status, category_id FROM products "
-                "WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
+                "SELECT p.id, p.name, p.sell_price, p.tax_rate, p.status, p.category_id, "
+                "p.parent_product_id, EXISTS("
+                "  SELECT 1 FROM products c WHERE c.parent_product_id = p.id "
+                "  AND c.company_id = p.company_id AND c.deleted_at_utc IS NULL "
+                "  AND c.status='active'"
+                ") AS has_variants "
+                "FROM products p WHERE p.id=? AND p.company_id=? AND p.deleted_at_utc IS NULL",
                 (pid, cid)
             ).fetchone()
             if not product:
@@ -3930,6 +4110,10 @@ def create_sale():
             if product['status'] != 'active':
                 conn.rollback(); conn.close()
                 return jsonify({'status': 'error', 'message': f'Product "{product["name"]}" is not available for sale.'}), 400
+            if product['has_variants']:
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error',
+                                 'message': f'"{product["name"]}" has variants -- choose a specific variant to sell.'}), 400
 
             try:
                 qty = float(item.get('quantity'))

@@ -1506,9 +1506,21 @@ def _handle_retail_products(records):
                        'sell_price', 'tax_rate', 'unit', 'reorder_level'}
             if resurrecting:
                 changed.add('deleted_at_utc')
+            # `parent_product_id,variant_label` added to this SELECT (schema
+            # v25, launch-readiness "product variants, wave 1") for the same
+            # full-row-payload reason every other column here is read fresh
+            # rather than reconstructed -- NOT added to `changed` above,
+            # because a CSV re-import never touches either column (wave 1
+            # import has no `parent_sku` column at all; see
+            # docs/launch-readiness/variants-and-modifiers-design.md section
+            # 3.6.3 for the deferred round-trip). Whatever this row's current
+            # value is (NULL for every import-created product today) rides
+            # along unclaimed, matching update_product's own "full row +
+            # explicit changed set" shape.
             prow = conn.execute(
-                "SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,reorder_level,reorder_method,status,deleted_at_utc,row_version,updated_at_utc "
-                "FROM products WHERE id=?", (pid,)).fetchone()
+                "SELECT sku,barcode,name,category_id,supplier_id,cost_price,sell_price,tax_rate,unit,"
+                "reorder_level,reorder_method,status,deleted_at_utc,parent_product_id,variant_label,"
+                "row_version,updated_at_utc FROM products WHERE id=?", (pid,)).fetchone()
             _queue_sync_event(cur, 'product', pid, 'update',
                                dict(prow) | {'id': pid, '_changed_fields': sorted(changed)})
             dupes += 1
@@ -1530,7 +1542,14 @@ def _handle_retail_products(records):
             # reorder_method is 'none' (the INSERT above never sets it, so
             # the column default applies) -- both still on the wire so the
             # receiving upsert sees the same shape a route-created product
-            # sends.
+            # sends. `parent_product_id`/`variant_label` (schema v25) are
+            # likewise None -- wave 1's CSV import has no `parent_sku`
+            # column (deferred, see design section 3.6.3) -- but the KEYS
+            # still ride the wire for the identical key-for-key reason:
+            # retail_import_sync_test.py's parity check compares payload key
+            # SETS between this route and create_product, and a receiving
+            # device's apply branch must not be able to tell an imported
+            # product from a route-created one structurally.
             _queue_sync_event(cur, 'product', pid, 'create', {
                 'id': pid, 'sku': sku, 'barcode': rec.get('barcode', ''), 'name': rec.get('name', ''),
                 'category_id': cat_id, 'supplier_id': None,
@@ -1538,6 +1557,7 @@ def _handle_retail_products(records):
                 'sell_price': rec.get('sell_price') or 0, 'tax_rate': rec.get('tax_rate') or 0,
                 'unit': rec.get('unit', 'pcs') or 'pcs', 'reorder_level': rec.get('reorder_level') or 5,
                 'reorder_method': 'none',
+                'parent_product_id': None, 'variant_label': None,
                 'row_version': 1, 'updated_at_utc': utc_now,
             })
             imported += 1

@@ -558,7 +558,6 @@
   "Variance accepted.": "تم اعتماد الفرق.",
   "Failed to accept the variance": "تعذّر اعتماد الفرق",
   "Close": "إغلاق",
-
   "Exceptions": "الاستثناءات",
   "Two queues for things the software could not resolve on its own. A human decides what happens next.": "طابوران لأمور لم يستطع البرنامج حلّها بمفرده. شخص من المتجر يقرر الخطوة التالية.",
   "Oversold Stock": "مخزون مُباع بأكثر من المتوفر",
@@ -653,5 +652,13 @@
   "Permission grant": "منح صلاحية",
   "Duplicate email address": "بريد إلكتروني مكرر",
   "Duplicate employee code": "رمز موظف مكرر",
-  "Waiting for the linked account to sync": "بانتظار مزامنة الحساب المرتبط"
+  "Waiting for the linked account to sync": "بانتظار مزامنة الحساب المرتبط",
+  "Choose a variant": "اختر متغيرًا",
+  "No variants found.": "لم يتم العثور على متغيرات.",
+  "options": "خيارات",
+  "Variant of": "متغير من",
+  "None — a standalone product": "بدون — منتج مستقل",
+  "variants": "متغيرات",
+  "Variant label": "تسمية المتغير",
+  "e.g. Red / L": "مثال: أحمر / كبير"
 }

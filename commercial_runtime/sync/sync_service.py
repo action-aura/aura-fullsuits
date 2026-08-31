@@ -1412,20 +1412,36 @@ class SyncService:
                 # names `deleted_at_utc` in `_changed_fields` only when it
                 # actually cleared it, so this only ever un-deletes a row on
                 # the genuine restore path.
+                # launch-readiness "product variants, wave 1" (schema v25):
+                # `parent_product_id`/`variant_label` added to BOTH the
+                # delta-gated column list below AND the INSERT column list a
+                # few lines down. This is THE site ROADMAP.md's own warning
+                # names -- miss either half here (or the create/update
+                # payload emission in retail_api.py) and a variant arrives on
+                # a peer device as an orphan standalone product: it scans and
+                # sells fine (it is still an ordinary row with its own
+                # barcode/stock), but its grouping under the parent silently
+                # never crosses the wire. `p.get("parent_product_id")`/
+                # `p.get("variant_label")` default to `None` -- the correct
+                # reading for a payload from a pre-v25 emitter (an older
+                # device's queued outbox entry): "this row is not a variant",
+                # which is exactly what NULL already means for every existing
+                # product, so an old payload changes nothing about how it
+                # applies.
                 changed_fields = p.get("_changed_fields")
                 delta_frag, delta_binds = self._delta_set_clause(
                     "products",
                     ["sku", "barcode", "name", "category_id", "supplier_id", "cost_price",
                      "sell_price", "tax_rate", "unit", "reorder_level", "reorder_method", "status",
-                     "deleted_at_utc"],
+                     "deleted_at_utc", "parent_product_id", "variant_label"],
                     changed_fields)
                 raw_row_version = p.get("row_version")
                 insert_row_version = raw_row_version if raw_row_version is not None else 1
                 cur = conn.execute(
                     "INSERT INTO products (id, company_id, sku, barcode, name, category_id, supplier_id, "
                     "cost_price, sell_price, tax_rate, unit, reorder_level, reorder_method, status, "
-                    "deleted_at_utc, row_version, updated_at_utc) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "deleted_at_utc, parent_product_id, variant_label, row_version, updated_at_utc) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET " + delta_frag + ", "
                     "row_version=MAX(products.row_version, excluded.row_version), "
                     "updated_at_utc=excluded.updated_at_utc "
@@ -1434,6 +1450,7 @@ class SyncService:
                      p.get("category_id"), p.get("supplier_id"), p.get("cost_price", 0), p.get("sell_price", 0),
                      p.get("tax_rate", 0), p.get("unit", "pcs"), p.get("reorder_level", 5),
                      p.get("reorder_method", "none"), p.get("status", "active"), p.get("deleted_at_utc"),
+                     p.get("parent_product_id"), p.get("variant_label"),
                      insert_row_version, p.get("updated_at_utc"),
                      *delta_binds,
                      raw_row_version, raw_row_version),
