@@ -104,6 +104,11 @@ from core.retail import whatsapp_hook as _whatsapp_hook
 # same discipline `tax_engine` (core.retail.pricing) already uses on this
 # import block for the identical reason.
 from core.retail import promotions as promo_engine
+# Modifiers resolver (schema v26, launch-readiness "restaurant modifiers,
+# wave 1"). Aliased for the identical reason `promo_engine` immediately
+# above is: it cannot collide with a `modifiers`/`modifier` local variable
+# name inside create_sale below.
+from core.retail import modifiers as modifier_engine
 from config import (
     DATABASE_DIR, AURA_AI_ENDPOINT_URL, AURA_AI_BEARER_TOKEN, AURA_AI_TIMEOUT_SECONDS,
     AURA_AI_MODEL_NAME,
@@ -4215,11 +4220,54 @@ def create_sale():
             )
             unit_price = float(product['sell_price'])
             tax_rate = float(product['tax_rate'])
+
+            # Launch-readiness "restaurant modifiers, wave 1" (schema v26,
+            # design doc docs/launch-readiness/variants-and-modifiers-
+            # design.md section 4.3). Resolved here, BEFORE calculate_line,
+            # and it REPLACES `unit_price` -- the modifier-inclusive price
+            # is what calculate_line prices below AND what
+            # `effective_discount_pct` (whichever discount won) applies
+            # against. That is the load-bearing decision the design doc
+            # calls "Finding C": returns, top_products and the sale_item
+            # sync payload all re-read `sale_items.unit_price` verbatim, so
+            # folding modifier deltas into THIS ONE VALUE is what keeps all
+            # three correct with zero changes of their own. It is also why
+            # a percentage promotion discounts the modifier-inclusive price
+            # (design doc section 4.7) -- that falls out of feeding this
+            # SAME resolved `unit_price` through the SAME calculate_line
+            # call below, not from any modifier/promotion interaction code.
+            #
+            # `item.get('modifier_option_ids')` is CLIENT-SUBMITTED INTENT
+            # ONLY -- an id list, never a price (AUDIT-002/003's "server is
+            # the sole financial authority" contract, unchanged). Groups
+            # are loaded PER LINE (not hoisted once per sale like
+            # `active_promotions` above) because attachment is scoped to
+            # this one product -- see load_product_modifier_groups's own
+            # docstring for why that is still cheap. An install that has
+            # never attached a modifier group to this product gets
+            # `groups == []` back, resolves to `(unit_price, [])` unchanged,
+            # and this whole block costs one empty indexed probe -- the
+            # "invisible unless opted in" contract (design doc section
+            # 4.11). Checked BEFORE calculate_line and rolled back like
+            # every other line refusal above (product not found,
+            # insufficient stock, no variants sold directly) -- REFUSED,
+            # never silently dropped: a "no peanuts" modifier the server
+            # could not resolve is a safety bug, not a pricing one.
+            product_modifier_groups = modifier_engine.load_product_modifier_groups(conn, cid, pid)
+            try:
+                unit_price, modifier_snapshots = modifier_engine.resolve_line_modifiers(
+                    unit_price, product_modifier_groups, item.get('modifier_option_ids')
+                )
+            except modifier_engine.ModifierValidationError as mve:
+                conn.rollback(); conn.close()
+                return jsonify({'status': 'error', 'message': mve.message}), 400
+
             # `effective_discount_pct`, not the raw manual value -- this is
             # the ONLY place a promotion actually changes what a sale
             # charges, and it goes through the EXISTING calculate_line the
             # same way a manual discount always has. pricing.py is
-            # unmodified by this change.
+            # unmodified by this change. `unit_price` here already carries
+            # any modifier price deltas resolved immediately above.
             calc = tax_engine.calculate_line(unit_price, qty, effective_discount_pct, tax_rate, mode=mode)
 
             resolved_lines.append({
@@ -4233,6 +4281,10 @@ def create_sale():
                 # actually applied" rule the RETAIL_SCHEMA_VERSION v23
                 # comment states.
                 'applied_promotion': applied_promotion, 'discount_amount': calc['discount_amount'],
+                # Same snapshot discipline, one version later (schema v26):
+                # written into sale_item_modifiers in the write loop below,
+                # AS APPLIED -- never re-read from modifier_options later.
+                'modifier_snapshots': modifier_snapshots,
             })
             subtotal += Decimal(str(calc['gross']))
             discount += Decimal(str(calc['discount_amount']))
@@ -4438,6 +4490,34 @@ def create_sale():
                     VALUES (?,?,?,?,?,?)
                 """, (cid, sale_item_id, applied_promotion['id'], applied_promotion['name'],
                       applied_promotion['discount_pct'], line['discount_amount']))
+
+            # Restaurant modifiers, wave 1 (schema v26): snapshot every
+            # modifier actually applied to this line, AS APPLIED -- same
+            # discipline as sale_item_promotions immediately above, and the
+            # reason it exists is identical: a receipt reprinted next year,
+            # and a return processed against it, must show what the
+            # customer was actually charged, not what modifier_options says
+            # today. `modifier_option_id` is provenance only and must NEVER
+            # be re-read for money (see core/retail/modifiers.py's module
+            # docstring and products/retail/tests/retail_modifiers_test.py's
+            # mutation proof M2). Most sales write nothing here at all --
+            # `modifier_snapshots` is `[]` on any line with no attached
+            # groups or no selections -- matching the "invisible unless
+            # opted in" contract. No sync event: sale_item_modifiers is not
+            # one of Phase 5's synced entity types in wave 1 (see database/
+            # schema.py's `_migrate_add_modifiers` docstring) -- it carries
+            # a `uid` under a partial unique index anyway so a LATER wave
+            # can add one without a further migration.
+            for snap in line.get('modifier_snapshots') or []:
+                snap_uid = _new_uid()
+                cur.execute("""
+                    INSERT INTO sale_item_modifiers
+                        (company_id, sale_item_id, modifier_option_id, group_name_snapshot,
+                         name_snapshot, price_delta_snapshot, cost_delta_snapshot, uid)
+                    VALUES (?,?,?,?,?,?,?,?)
+                """, (cid, sale_item_id, snap['modifier_option_id'], snap['group_name'],
+                      snap['name'], snap['price_delta'], snap['cost_delta'], snap_uid))
+
             movement_uid = _new_uid()
             cur.execute("""
                 INSERT INTO inventory_movements (company_id,product_id,branch_id,movement_type,quantity,reference,created_by,
@@ -5323,17 +5403,32 @@ def list_returns():
 def create_return():
     """Server-authoritative return creation (Wave 0 correction, AUDIT-004).
 
-    The client sends only sale_id + {product_id, quantity} per line. unit_price/
-    discount_pct/tax_rate/line_total, if sent, are IGNORED -- refund figures are
-    always recomputed from the ORIGINAL sale_items row for that sale+product,
-    proportionally to the quantity actually being returned, so tax and discount
-    reverse correctly (previously the return's own refund_amount silently
-    excluded tax entirely -- see docs/audit/03-retail-financial-audit.md and
+    The client sends sale_id + {product_id, quantity, sale_item_id?} per line.
+    unit_price/discount_pct/tax_rate/line_total, if sent, are IGNORED -- refund
+    figures are always recomputed from the ORIGINAL sale_items row, proportionally
+    to the quantity actually being returned, so tax and discount reverse correctly
+    (previously the return's own refund_amount silently excluded tax entirely --
+    see docs/audit/03-retail-financial-audit.md and
     docs/corrections/wave0/retail-return-correction.md for the resulting,
     intentional refund_amount semantics change and the tests updated to match).
     Every return must reference a real sale belonging to this company, and the
     requested quantity (net of anything already returned against that same
-    sale+product) may never exceed what was actually sold.
+    line/product) may never exceed what was actually sold.
+
+    `sale_item_id` (schema v26, launch-readiness "restaurant modifiers, wave
+    1", design doc docs/launch-readiness/variants-and-modifiers-design.md
+    section 4.4) -- OPTIONAL, and this is the whole fix: a sale can hold TWO
+    `sale_items` rows for the SAME product at DIFFERENT prices (a modified
+    line and a plain one), and resolving "the" line for that product by
+    `(sale_id, product_id)` alone is then ambiguous. Naming `sale_item_id`
+    resolves that EXACT line, unambiguously, and its remaining-returnable is
+    tracked per line. Omitting it reproduces the historic behaviour exactly
+    -- correct whenever the sale holds only one line for that product, which
+    is every sale ever created before this wave and every sale a non-modifier
+    install will ever create -- EXCEPT that a sale which genuinely holds more
+    than one line for the product is now REFUSED (400) rather than resolved
+    by guessing. See the validation loop below for the full reasoning and
+    products/retail/tests/retail_modifiers_test.py's mutation proof M1.
     """
     data   = request.json or {}
     cid    = _cid()
@@ -5434,21 +5529,102 @@ def create_return():
                 conn.rollback(); conn.close()
                 return jsonify({'status': 'error', 'message': 'Return quantity must be greater than zero.'}), 400
 
-            sold = cur.execute(
-                "SELECT quantity, unit_price, discount_pct, tax_rate FROM sale_items "
-                "WHERE sale_id=? AND product_id=?", (sale_id, pid)
-            ).fetchone()
-            if not sold:
-                conn.rollback(); conn.close()
-                return jsonify({'status': 'error', 'message': f'Product {pid} was not part of sale {sale_id}.'}), 400
+            # ── THE MONEY-PATH FIX (schema v26, launch-readiness
+            # "restaurant modifiers, wave 1", design doc docs/launch-
+            # readiness/variants-and-modifiers-design.md section 4.4) ──────
+            # This route used to resolve the original line with a bare
+            #     SELECT ... FROM sale_items WHERE sale_id=? AND product_id=?
+            # `fetchone()`. That was safe ONLY because the POS cart merges
+            # same-product adds into one line -- an invariant nothing in
+            # this API ever enforced or documented. Modifiers make
+            # duplicate-product lines the COMMON case: a burger with cheese
+            # and a burger without are one product, two `sale_items` rows,
+            # two different prices. Against a sale like that, the old
+            # fetchone() picked an ARBITRARY row and refunded ITS price --
+            # a real money defect. See
+            # products/retail/tests/retail_modifiers_test.py's mutation
+            # proof M1 for the reproduction (resolving by fetchone() again
+            # must turn the ambiguous-refusal test red).
+            #
+            # `sale_item_id` (schema v26, `return_items.sale_item_id`,
+            # nullable): when the client names one, THAT row is resolved
+            # directly, `sale_id`-scoped so a line from a DIFFERENT sale
+            # can never be addressed even if it belongs to this company,
+            # and remaining-returnable is computed PER LINE
+            # (`return_items.sale_item_id = ?`) rather than per product.
+            # When it is absent, this falls back to the OLD behaviour --
+            # UNCHANGED -- for the case every existing sale and every
+            # non-modifier install is in forever: a sale that holds exactly
+            # ONE `sale_items` row for this product. The one new thing the
+            # absent-id path gains is the GUARD: if the sale holds MORE
+            # than one line for this product and the request did not
+            # address one, it is REFUSED (400, naming the ambiguity)
+            # rather than resolved by guessing -- a loud refusal beats a
+            # silent wrong-price refund.
+            sale_item_id = item.get('sale_item_id')
+            if sale_item_id is not None:
+                sold = cur.execute(
+                    "SELECT id, product_id, quantity, unit_price, discount_pct, tax_rate "
+                    "FROM sale_items WHERE id=? AND sale_id=?", (sale_item_id, sale_id)
+                ).fetchone()
+                if not sold:
+                    conn.rollback(); conn.close()
+                    return jsonify({'status': 'error', 'message':
+                        f'sale_item_id {sale_item_id} is not part of sale {sale_id}.'}), 400
+                if pid is not None and str(sold['product_id']) != str(pid):
+                    conn.rollback(); conn.close()
+                    return jsonify({'status': 'error', 'message':
+                        f'sale_item_id {sale_item_id} belongs to product {sold["product_id"]}, '
+                        f'not {pid}.'}), 400
+                pid = sold['product_id']
+                # Remaining-returnable computed strictly PER LINE -- never
+                # per product -- which is the entire point of naming a
+                # sale_item_id: two sibling lines of the same product must
+                # never share one "already returned" figure.
+                already_returned = cur.execute(
+                    "SELECT COALESCE(SUM(ri.quantity),0) FROM return_items ri "
+                    "JOIN returns r ON ri.return_id = r.id "
+                    "WHERE r.sale_id=? AND ri.sale_item_id=? AND r.company_id=?",
+                    (sale_id, sale_item_id, cid)
+                ).fetchone()[0]
+                claim_key = ('item', sale_item_id)
+            else:
+                sale_lines_for_product = cur.execute(
+                    "SELECT id, quantity, unit_price, discount_pct, tax_rate "
+                    "FROM sale_items WHERE sale_id=? AND product_id=?", (sale_id, pid)
+                ).fetchall()
+                if not sale_lines_for_product:
+                    conn.rollback(); conn.close()
+                    return jsonify({'status': 'error', 'message':
+                        f'Product {pid} was not part of sale {sale_id}.'}), 400
+                if len(sale_lines_for_product) > 1:
+                    # THE REFUSAL. Two (or more) sale_items rows exist for
+                    # this product on this sale -- almost certainly
+                    # different modifier selections at different prices --
+                    # and the request did not say which one is being
+                    # returned. Refusing here, rather than guessing, is the
+                    # fix; see this block's own header comment.
+                    conn.rollback(); conn.close()
+                    return jsonify({'status': 'error', 'message':
+                        f'Sale {sale_id} holds more than one line for product {pid} '
+                        f'(likely different modifiers or prices) -- this return must '
+                        f'name the sale_item_id of the specific line being returned.'}), 400
+                sold = sale_lines_for_product[0]
+                # Unambiguous -- exactly one line exists for this product on
+                # this sale -- so it is safe to record which one even
+                # though the client did not name it. This does not change
+                # any refund figure computed below; it only improves the
+                # provenance a FUTURE return against this same row can use.
+                sale_item_id = sold['id']
+                already_returned = cur.execute(
+                    "SELECT COALESCE(SUM(ri.quantity),0) FROM return_items ri "
+                    "JOIN returns r ON ri.return_id = r.id "
+                    "WHERE r.sale_id=? AND ri.product_id=? AND r.company_id=?",
+                    (sale_id, pid, cid)
+                ).fetchone()[0]
+                claim_key = ('product', pid)
 
-            already_returned = cur.execute(
-                "SELECT COALESCE(SUM(ri.quantity),0) FROM return_items ri "
-                "JOIN returns r ON ri.return_id = r.id "
-                "WHERE r.sale_id=? AND ri.product_id=? AND r.company_id=?",
-                (sale_id, pid, cid)
-            ).fetchone()[0]
-            already_claimed = claimed_this_request.get(pid, 0.0)
+            already_claimed = claimed_this_request.get(claim_key, 0.0)
             remaining = float(sold['quantity']) - float(already_returned or 0) - already_claimed
             if qty > remaining + 0.0001:
                 conn.rollback(); conn.close()
@@ -5456,13 +5632,14 @@ def create_return():
                     f'Cannot return {qty} of product {pid}: only {remaining} remain returnable '
                     f'(sold {sold["quantity"]}, already returned {already_returned}, '
                     f'already claimed earlier in this request {already_claimed}).'}), 400
-            claimed_this_request[pid] = already_claimed + qty
+            claimed_this_request[claim_key] = already_claimed + qty
 
             calc = tax_engine.calculate_line(
                 float(sold['unit_price']), qty, float(sold['discount_pct'] or 0),
                 float(sold['tax_rate'] or 0), mode=mode)
             resolved_items.append({
-                'product_id': pid, 'quantity': qty, 'unit_price': float(sold['unit_price']),
+                'product_id': pid, 'sale_item_id': sale_item_id, 'quantity': qty,
+                'unit_price': float(sold['unit_price']),
                 'discount_amount': calc['discount_amount'], 'tax_amount': calc['tax'],
                 'line_total': calc['total'],
             })
@@ -5526,15 +5703,40 @@ def create_return():
             # Fresh uid per line -- see the identical note in create_sale's
             # sale_items write about the partial UNIQUE index on uid.
             item_uid = _new_uid()
+            # schema v26 (restaurant modifiers, wave 1): `sale_item_id` is
+            # ALWAYS resolved by this point -- either the client named it,
+            # or the validation loop above resolved it unambiguously
+            # (exactly one line for this product) -- so it is recorded
+            # regardless of whether the client sent it. See the validation
+            # loop's own comment for why this is safe and never changes a
+            # refund figure.
             cur.execute("""
-                INSERT INTO return_items (return_id,product_id,quantity,unit_price,line_total,uid)
-                VALUES (?,?,?,?,?,?)
-            """, (ret_id, pid, qty, line['unit_price'], line['line_total'], item_uid))
+                INSERT INTO return_items (return_id,product_id,quantity,unit_price,line_total,uid,sale_item_id)
+                VALUES (?,?,?,?,?,?,?)
+            """, (ret_id, pid, qty, line['unit_price'], line['line_total'], item_uid, line.get('sale_item_id')))
             # `return_uid`, not `return_id` -- see the identical note on
-            # sale_item's `sale_uid` above.
+            # sale_item's `sale_uid` above. `sale_item_uid` (schema v26,
+            # design doc section 4.4 point 4): the addressed LINE's own
+            # wire identity, resolved here best-effort so a later sync wave
+            # can resolve it back to a local sale_items.id on the receiving
+            # device via the same `_local_id_by_uid` helper the `sale_item`
+            # parent lookup already uses -- NOT consumed by the apply
+            # branch yet (sync_service.py's `return_item` branch is
+            # untouched by this wave; it reads only the keys it already
+            # knew about and ignores the rest). Money is unaffected either
+            # way: the refund figures already live on this row, and the
+            # line link is attribution, not money -- unresolvable on the
+            # receiving side is meant to stay NULL, never quarantined.
+            sale_item_uid = None
+            if line.get('sale_item_id') is not None:
+                _si = cur.execute(
+                    "SELECT uid FROM sale_items WHERE id=?", (line['sale_item_id'],)
+                ).fetchone()
+                sale_item_uid = _si['uid'] if _si else None
             _queue_sync_event(cur, 'return_item', item_uid, 'create', {
                 'uid': item_uid, 'return_uid': ret_uid, 'product_id': pid, 'quantity': qty,
                 'unit_price': line['unit_price'], 'line_total': line['line_total'],
+                'sale_item_uid': sale_item_uid,
             })
             cur.execute("""
                 INSERT OR IGNORE INTO inventory_balances (company_id,product_id,branch_id,quantity_on_hand)
@@ -5613,6 +5815,438 @@ def create_return():
         # exactly as they were rather than restructured -- this adds the one
         # guarantee that was missing without touching any working path.
         conn.close()
+
+# ── Modifiers (schema v26, launch-readiness "restaurant modifiers, wave 1") ──
+#
+# Restaurant modifiers -- "no onion", "extra cheese +0.50", "choice of
+# side". Configuring a group/option, or attaching one to a product, is
+# CAP_STOCK_ADJUST -- the SAME authority create_product/create_category
+# already require: this is catalogue/master-data management, not selling.
+# The one read the TILL needs (`GET /products/<id>/modifier-groups`) is
+# CAP_SELL instead, and licensing-ungated, for the identical reason
+# `list_active_promotions` above is -- a plain read a cashier needs to ring
+# a configured item, not a mutation. See core/retail/modifiers.py's module
+# docstring and database/schema.py's RETAIL_SCHEMA_VERSION v26 comment for
+# the full design.
+
+
+def _modifier_group_row(conn, cid, group_id):
+    """Shared lookup for update_modifier_group / delete guards / create_
+    modifier_option / attach_product_modifier_group -- company-scoped and
+    tombstone-filtered, matching _promotion_target_error's own tenancy
+    discipline above (AUDIT-032C's supplier_id lesson: an id taken straight
+    from a request body must never be trusted without this check)."""
+    return conn.execute(
+        "SELECT id, name, min_select, max_select, status, row_version "
+        "FROM modifier_groups WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
+        (group_id, cid)
+    ).fetchone()
+
+
+@retail_bp.route('/modifier-groups', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_STOCK_ADJUST)
+def list_modifier_groups():
+    """The management screen's own list -- every group this company has
+    configured (active AND deactivated), each carrying its own live
+    options. NOT the till's read; see get_product_modifier_groups below for
+    that (CAP_SELL, scoped to one product)."""
+    cid = _cid()
+    conn = get_retail_conn()
+    groups = conn.execute(
+        "SELECT id, name, min_select, max_select, status, row_version, created_at "
+        "FROM modifier_groups WHERE company_id=? AND deleted_at_utc IS NULL "
+        "ORDER BY created_at DESC",
+        (cid,)
+    ).fetchall()
+    data = []
+    for g in groups:
+        options = conn.execute(
+            "SELECT id, name, price_delta, cost_delta, is_default, sort_order, status, row_version "
+            "FROM modifier_options WHERE company_id=? AND group_id=? AND deleted_at_utc IS NULL "
+            "ORDER BY sort_order, name",
+            (cid, g['id'])
+        ).fetchall()
+        row = dict(g)
+        row['options'] = [dict(o) for o in options]
+        data.append(row)
+    conn.close()
+    return jsonify({'status': 'success', 'data': data})
+
+
+@retail_bp.route('/modifier-groups', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.modifier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def create_modifier_group():
+    """min_select>=1 makes a group REQUIRED wherever it is attached;
+    max_select=None (omitted/null) means unlimited. Validated min<=max at
+    write time, same posture create_promotion validates starts_at<=ends_at
+    -- bad config is refused here, not discovered mid-sale."""
+    data = request.json or {}
+    cid = _cid()
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'status': 'error', 'message': 'Modifier group name required.'}), 400
+    try:
+        min_select = int(data.get('min_select', 0) or 0)
+    except (TypeError, ValueError):
+        return jsonify({'status': 'error', 'message': 'Invalid min_select.'}), 400
+    if min_select < 0:
+        return jsonify({'status': 'error', 'message': 'min_select cannot be negative.'}), 400
+    max_select = data.get('max_select')
+    if max_select is not None:
+        try:
+            max_select = int(max_select)
+        except (TypeError, ValueError):
+            return jsonify({'status': 'error', 'message': 'Invalid max_select.'}), 400
+        if max_select < 1:
+            return jsonify({'status': 'error', 'message': 'max_select must be at least 1.'}), 400
+        if max_select < min_select:
+            return jsonify({'status': 'error', 'message': 'max_select cannot be less than min_select.'}), 400
+
+    conn = get_retail_conn()
+    cur = conn.cursor()
+    group_id = str(_uuid.uuid4())
+    now = now_utc_iso()
+    cur.execute("""
+        INSERT INTO modifier_groups (id, company_id, name, min_select, max_select, status, row_version, updated_at_utc)
+        VALUES (?,?,?,?,?, 'active', 1, ?)
+    """, (group_id, cid, name, min_select, max_select, now))
+    conn.commit(); conn.close()
+    return jsonify({'status': 'success', 'data': {'id': group_id}})
+
+
+@retail_bp.route('/modifier-groups/<string:group_id>', methods=['PATCH'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.modifier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def update_modifier_group(group_id):
+    data = request.json or {}
+    cid = _cid()
+    conn = get_retail_conn()
+    existing = _modifier_group_row(conn, cid, group_id)
+    if not existing:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Modifier group not found.'}), 404
+
+    allowed = ['name', 'min_select', 'max_select', 'status']
+    fields = {k: v for k, v in data.items() if k in allowed}
+    if not fields:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'No valid fields.'}), 400
+
+    if 'name' in fields:
+        fields['name'] = (fields['name'] or '').strip()
+        if not fields['name']:
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'Modifier group name required.'}), 400
+
+    # Validated against the RESULTING row, same discipline update_promotion
+    # uses above -- a PATCH that only changes min_select must still be
+    # checked against this group's EXISTING max_select, and vice versa.
+    merged = dict(existing)
+    merged.update(fields)
+    try:
+        merged_min = int(merged.get('min_select') or 0)
+    except (TypeError, ValueError):
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Invalid min_select.'}), 400
+    if merged_min < 0:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'min_select cannot be negative.'}), 400
+    merged_max = merged.get('max_select')
+    if merged_max is not None:
+        try:
+            merged_max = int(merged_max)
+        except (TypeError, ValueError):
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'Invalid max_select.'}), 400
+        if merged_max < merged_min:
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'max_select cannot be less than min_select.'}), 400
+
+    fields['row_version'] = int(existing['row_version'] or 1) + 1
+    fields['updated_at_utc'] = now_utc_iso()
+    cur = conn.cursor()
+    sets = ', '.join(f'{k}=?' for k in fields)
+    cur.execute(
+        f"UPDATE modifier_groups SET {sets} WHERE id=? AND company_id=?",
+        list(fields.values()) + [group_id, cid]
+    )
+    conn.commit(); conn.close()
+    return jsonify({'status': 'success'})
+
+
+@retail_bp.route('/modifier-groups/<string:group_id>', methods=['DELETE'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.modifier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def delete_modifier_group(group_id):
+    """Deactivate, not delete -- a status flip (active -> inactive), same
+    shape as delete_promotion above. `sale_item_modifiers` rows already
+    snapshot everything a past sale needs (AS APPLIED, never re-read), so a
+    hard delete here would not even corrupt history the way it would on a
+    table without a snapshot -- this is a design preference, not a
+    correctness requirement. A deactivated group's options simply stop
+    being returned by load_product_modifier_groups (status='active'
+    filter), so it silently drops out of the till without ever needing
+    every product it was attached to edited."""
+    cid = _cid()
+    conn = get_retail_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE modifier_groups SET status='inactive', row_version=row_version+1, updated_at_utc=? "
+        "WHERE id=? AND company_id=? AND status='active'",
+        (now_utc_iso(), group_id, cid)
+    )
+    if cur.rowcount == 0:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Modifier group not found.'}), 404
+    conn.commit(); conn.close()
+    return jsonify({'status': 'success'})
+
+
+@retail_bp.route('/modifier-groups/<string:group_id>/options', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.modifier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def create_modifier_option(group_id):
+    """`price_delta` may be negative (design doc section 4.3, "small
+    -0.30") -- accepted here with no floor of its own; the FLOOR is applied
+    per LINE, not per option, at sale time (see core/retail/modifiers.py's
+    `resolve_line_modifiers`, `max(0, base + sum(deltas))`), because a
+    negative option is only ever a problem in combination with everything
+    else on the line, never in isolation."""
+    data = request.json or {}
+    cid = _cid()
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'status': 'error', 'message': 'Modifier option name required.'}), 400
+    try:
+        price_delta = float(data.get('price_delta', 0) or 0)
+    except (TypeError, ValueError):
+        return jsonify({'status': 'error', 'message': 'Invalid price_delta.'}), 400
+    try:
+        cost_delta = float(data.get('cost_delta', 0) or 0)
+    except (TypeError, ValueError):
+        return jsonify({'status': 'error', 'message': 'Invalid cost_delta.'}), 400
+
+    conn = get_retail_conn()
+    group = _modifier_group_row(conn, cid, group_id)
+    if not group or group['status'] != 'active':
+        conn.close()
+        return jsonify({'status': 'error', 'message': f'Unknown group_id: {group_id}'}), 400
+
+    cur = conn.cursor()
+    option_id = str(_uuid.uuid4())
+    now = now_utc_iso()
+    cur.execute("""
+        INSERT INTO modifier_options
+            (id, company_id, group_id, name, price_delta, cost_delta, is_default,
+             sort_order, status, row_version, updated_at_utc)
+        VALUES (?,?,?,?,?,?,?,?, 'active', 1, ?)
+    """, (option_id, cid, group_id, name, price_delta, cost_delta,
+          1 if data.get('is_default') else 0, int(data.get('sort_order', 0) or 0), now))
+    conn.commit(); conn.close()
+    return jsonify({'status': 'success', 'data': {'id': option_id}})
+
+
+@retail_bp.route('/modifier-options/<string:option_id>', methods=['PATCH'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.modifier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def update_modifier_option(option_id):
+    """Editing an option's price/cost/name here NEVER changes what a past
+    sale charged or recorded -- `sale_item_modifiers` snapshots
+    name/price_delta/cost_delta AS APPLIED at sale time, and nothing in
+    this route (or anywhere else) re-reads `modifier_options` for a
+    completed line. See products/retail/tests/retail_modifiers_test.py's
+    mutation proof M2, which edits an option after the fact and asserts the
+    past sale's own figures are unchanged."""
+    data = request.json or {}
+    cid = _cid()
+    conn = get_retail_conn()
+    existing = conn.execute(
+        "SELECT * FROM modifier_options WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
+        (option_id, cid)
+    ).fetchone()
+    if not existing:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Modifier option not found.'}), 404
+
+    allowed = ['name', 'price_delta', 'cost_delta', 'is_default', 'sort_order', 'status']
+    fields = {k: v for k, v in data.items() if k in allowed}
+    if not fields:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'No valid fields.'}), 400
+    if 'name' in fields:
+        fields['name'] = (fields['name'] or '').strip()
+        if not fields['name']:
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'Modifier option name required.'}), 400
+    if 'price_delta' in fields:
+        try:
+            fields['price_delta'] = float(fields['price_delta'])
+        except (TypeError, ValueError):
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'Invalid price_delta.'}), 400
+    if 'cost_delta' in fields:
+        try:
+            fields['cost_delta'] = float(fields['cost_delta'])
+        except (TypeError, ValueError):
+            conn.close()
+            return jsonify({'status': 'error', 'message': 'Invalid cost_delta.'}), 400
+    if 'is_default' in fields:
+        fields['is_default'] = 1 if fields['is_default'] else 0
+
+    fields['row_version'] = int(existing['row_version'] or 1) + 1
+    fields['updated_at_utc'] = now_utc_iso()
+    cur = conn.cursor()
+    sets = ', '.join(f'{k}=?' for k in fields)
+    cur.execute(
+        f"UPDATE modifier_options SET {sets} WHERE id=? AND company_id=?",
+        list(fields.values()) + [option_id, cid]
+    )
+    conn.commit(); conn.close()
+    return jsonify({'status': 'success'})
+
+
+@retail_bp.route('/modifier-options/<string:option_id>', methods=['DELETE'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.modifier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def delete_modifier_option(option_id):
+    """Deactivate, not delete -- same reasoning as delete_modifier_group."""
+    cid = _cid()
+    conn = get_retail_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE modifier_options SET status='inactive', row_version=row_version+1, updated_at_utc=? "
+        "WHERE id=? AND company_id=? AND status='active'",
+        (now_utc_iso(), option_id, cid)
+    )
+    if cur.rowcount == 0:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Modifier option not found.'}), 404
+    conn.commit(); conn.close()
+    return jsonify({'status': 'success'})
+
+
+@retail_bp.route('/products/<string:pid>/modifier-groups', methods=['GET'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@mt_require_capability(CAP_SELL)
+def get_product_modifier_groups(pid):
+    """The TILL's own read -- CAP_SELL, not CAP_STOCK_ADJUST, and no
+    @require_license_capability (matches list_active_promotions above: a
+    plain read the till needs to ring a configured item, not a mutation).
+    Returns EXACTLY what create_sale itself resolves against server-side
+    (core.retail.modifiers.load_product_modifier_groups) -- the picker and
+    the server can never disagree about what is attached, because they call
+    the same function."""
+    cid = _cid()
+    conn = get_retail_conn()
+    groups = modifier_engine.load_product_modifier_groups(conn, cid, pid)
+    conn.close()
+    return jsonify({'status': 'success', 'data': groups})
+
+
+@retail_bp.route('/products/<string:pid>/modifier-groups', methods=['POST'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.modifier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def attach_product_modifier_group(pid):
+    """Attach a modifier group to a product. `group_id` is required and
+    validated same-company/active -- the identical AUDIT-032C-lesson
+    tenancy guard `_validate_parent_product` already applies to
+    products.parent_product_id, applied here to the identical hazard (an
+    unvalidated FK taken straight from the request body).
+
+    Re-attaching a PREVIOUSLY DETACHED (soft-deleted) pair reuses that same
+    row rather than inserting a second one -- `product_modifier_groups`
+    carries a table-wide `UNIQUE(company_id, product_id, group_id)` (schema
+    v26), deliberately NOT a partial index, so this route is the only place
+    that constraint could ever be violated; reusing the row is what makes
+    attach/detach/re-attach idempotent under it instead of erroring on the
+    second attach."""
+    data = request.json or {}
+    cid = _cid()
+    group_id = data.get('group_id')
+    if not group_id:
+        return jsonify({'status': 'error', 'message': 'group_id required.'}), 400
+
+    conn = get_retail_conn()
+    product = conn.execute(
+        "SELECT id FROM products WHERE id=? AND company_id=? AND deleted_at_utc IS NULL",
+        (pid, cid)
+    ).fetchone()
+    if not product:
+        conn.close()
+        return jsonify({'status': 'error', 'message': f'Unknown product_id: {pid}'}), 400
+    group = _modifier_group_row(conn, cid, group_id)
+    if not group or group['status'] != 'active':
+        conn.close()
+        return jsonify({'status': 'error', 'message': f'Unknown group_id: {group_id}'}), 400
+
+    cur = conn.cursor()
+    now = now_utc_iso()
+    sort_order = int(data.get('sort_order', 0) or 0)
+    existing = conn.execute(
+        "SELECT id, deleted_at_utc FROM product_modifier_groups "
+        "WHERE company_id=? AND product_id=? AND group_id=?",
+        (cid, pid, group_id)
+    ).fetchone()
+    if existing:
+        if existing['deleted_at_utc'] is None:
+            conn.close()
+            return jsonify({'status': 'success', 'data': {'id': existing['id']}})
+        cur.execute(
+            "UPDATE product_modifier_groups SET deleted_at_utc=NULL, sort_order=?, "
+            "row_version=row_version+1, updated_at_utc=? WHERE id=?",
+            (sort_order, now, existing['id'])
+        )
+        conn.commit(); conn.close()
+        return jsonify({'status': 'success', 'data': {'id': existing['id']}})
+
+    link_id = str(_uuid.uuid4())
+    cur.execute("""
+        INSERT INTO product_modifier_groups
+            (id, company_id, product_id, group_id, sort_order, row_version, updated_at_utc)
+        VALUES (?,?,?,?,?,1,?)
+    """, (link_id, cid, pid, group_id, sort_order, now))
+    conn.commit(); conn.close()
+    return jsonify({'status': 'success', 'data': {'id': link_id}})
+
+
+@retail_bp.route('/products/<string:pid>/modifier-groups/<string:group_id>', methods=['DELETE'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.modifier.manage", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_STOCK_ADJUST)
+def detach_product_modifier_group(pid, group_id):
+    cid = _cid()
+    conn = get_retail_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE product_modifier_groups SET deleted_at_utc=?, row_version=row_version+1 "
+        "WHERE company_id=? AND product_id=? AND group_id=? AND deleted_at_utc IS NULL",
+        (now_utc_iso(), cid, pid, group_id)
+    )
+    if cur.rowcount == 0:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Attachment not found.'}), 404
+    conn.commit(); conn.close()
+    return jsonify({'status': 'success'})
+
 
 # ── Cash Drawer / Shift Management (feat/shift-cash-drawer, schema v10) ────────
 # Real cash-drawer management: opening float, mid-shift float in/out (and

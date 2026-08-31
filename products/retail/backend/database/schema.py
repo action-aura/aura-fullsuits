@@ -579,7 +579,60 @@ SUBSYS_DIR = os.path.join(BASE_DIR, 'subsystems')
 # `product` is already a synced entity type whose wire identity IS its UUID
 # `id`, the parent pointer syncs across devices with no new sync machinery
 # either. See _migrate_add_product_variants below for the migration shape.
-RETAIL_SCHEMA_VERSION = 25
+#
+# v25 -> v26 (launch-readiness, "restaurant modifiers, wave 1"; ROADMAP.md's
+# 2026-08-31 "retail schema v26 CLAIMED for restaurant modifiers, wave 1"
+# entry). Immediately after variants, no gap of its own -- v24 stays the
+# ONLY deliberate gap in this chain, reserved by name for inter-branch
+# transfers, exactly as the v25 comment above already states.
+#
+# Four new, self-contained tables plus one nullable column on an existing
+# money table -- see docs/launch-readiness/variants-and-modifiers-design.md
+# section 4 for the full design, and _migrate_add_modifiers below for the
+# migration shape and the full reasoning behind every choice made here:
+#
+#   modifier_groups           -- "Size", "Extras" -- min_select/max_select
+#   modifier_options          -- "Extra cheese" +0.50 -- price_delta/cost_delta
+#   product_modifier_groups   -- attaches a group to a product
+#   sale_item_modifiers       -- the SNAPSHOT, sale_item_promotions' sibling
+#   return_items.sale_item_id -- nullable; lets a return address ONE LINE
+#
+# A modifier is NOT a variant and the two do not share a mechanism (design
+# doc section 2): a variant ("Red / L") has its own SKU, barcode, price and
+# STOCK -- a thing you COUNT, so it is a product with a parent (v25) and
+# reuses the inventory subsystem. A modifier ("no onion", "extra cheese
+# +0.50") has NO stock -- it is a thing you SAY ABOUT an item, resolved to
+# an EFFECTIVE UNIT PRICE and fed through the EXISTING `pricing.
+# calculate_line`, the same integration shape promotions (v23) already
+# established. `pricing.py` is untouched by this migration, for the third
+# wave running.
+#
+# THE MONEY-PATH FIX THIS MIGRATION ACTIVATES, stated here because it is
+# the part most tempting to cut under time pressure and the one that
+# silently refunds the wrong amount if it is: `create_return` resolves a
+# returned line by `(sale_id, product_id)` with a bare `fetchone()`
+# (api/retail_api.py) -- safe today only because the POS cart merges
+# same-product lines, an invariant nothing enforces and modifiers break by
+# design (a plain burger and an extra-cheese burger are one product, two
+# `sale_items` rows, two different prices). `return_items.sale_item_id`
+# lets a return name the exact line it reverses; a return that does not,
+# against a sale holding more than one line for that product, is REFUSED
+# rather than resolved by guessing. Nullable because every existing
+# `return_items` row legitimately predates it, and the single-line-per-
+# product case -- every install that has never used modifiers -- is
+# byte-identical to today.
+#
+# UUID ids + row_version from day one on the three CONFIG tables --
+# deliberately UNLIKE `promotions`/`sale_item_promotions` two versions
+# above, whose autoincrement ids permanently lock them out of ever becoming
+# a synced entity type without an id-retrofit migration of their own. This
+# wave does NOT turn sync on for them (design doc section 4.8) -- it only
+# avoids boxing a later wave into a second migration to add the id shape
+# sync would need, cheap insurance given restaurants are multi-till by
+# default. `sale_item_modifiers` carries a `uid` under a partial unique
+# index for the identical reason, the v13 convention every
+# RETAIL_UID_TABLES member already uses.
+RETAIL_SCHEMA_VERSION = 26
 
 # ── v13: which table gets which group of columns ────────────────────────────
 # Kept as module constants rather than inlined into the migration so the
@@ -1528,6 +1581,14 @@ def _migrate_retail_schema(conn):
     # missing step -- see the RETAIL_SCHEMA_VERSION v25 comment above and
     # _migrate_add_product_variants's own docstring for the full reasoning.
     _migrate_add_product_variants(conn)
+    # v25 -> v26 (launch-readiness, "restaurant modifiers, wave 1"): appended
+    # LAST, same convention as every step above. Four new, self-contained
+    # tables and one nullable column on `return_items` -- no other existing
+    # table is touched, so ordering relative to the steps above it does not
+    # matter functionally. See the RETAIL_SCHEMA_VERSION v26 comment above
+    # and _migrate_add_modifiers's own docstring for the full reasoning,
+    # including the money-path fix this step activates in create_return.
+    _migrate_add_modifiers(conn)
 
 
 def _migrate_products_add_supplier_fk(conn):
@@ -5054,6 +5115,190 @@ def _migrate_add_product_variants(conn):
         )
 
 
+def _migrate_add_modifiers(conn):
+    """One-time migration (schema v25 -> v26): launch-readiness "restaurant
+    modifiers, wave 1" (ROADMAP.md's 2026-08-31 "retail schema v26 CLAIMED
+    for restaurant modifiers, wave 1" entry). Appended immediately after
+    `_migrate_add_product_variants` -- v24 is the only deliberate gap in
+    this chain (reserved by name for inter-branch transfers), so this step
+    is a plain 25 -> 26, no gap of its own.
+
+    Four new, self-contained tables plus one nullable column on an existing
+    money table -- all additive (CREATE TABLE IF NOT EXISTS / ALTER TABLE
+    ADD COLUMN / CREATE INDEX IF NOT EXISTS only):
+
+        modifier_groups           -- "Size", "Extras" -- min_select/max_select
+        modifier_options          -- "Extra cheese" +0.50 -- price_delta/cost_delta
+        product_modifier_groups   -- attaches a group to a product
+        sale_item_modifiers       -- the SNAPSHOT, sale_item_promotions' sibling
+        return_items.sale_item_id -- nullable; lets a return address ONE LINE
+
+    See docs/launch-readiness/variants-and-modifiers-design.md section 4 for
+    the full design; the short version is in the RETAIL_SCHEMA_VERSION v26
+    comment above.
+
+    WHY THE THREE CONFIG TABLES DIVERGE FROM v23's OWN PRECEDENT:
+    `modifier_groups`/`modifier_options`/`product_modifier_groups` carry
+    client-generated TEXT UUID ids and row_version/updated_at_utc/
+    deleted_at_utc from day one -- deliberately UNLIKE `promotions`/
+    `sale_item_promotions` two migrations above, whose autoincrement ids
+    permanently lock them out of ever becoming a synced entity type without
+    an id-retrofit migration of their own. This wave does NOT turn sync on
+    for them -- no emission site, no apply branch, no entry in
+    RETAIL_SYNC_ENTITY_TYPES (sync_service.py) -- it only avoids boxing a
+    later wave into a second migration to add the id shape sync would need.
+    Restaurants are multi-till by default (design doc section 4.8), so that
+    later wave is not speculative.
+
+    `sale_item_modifiers` is the exception, by design: it is a SNAPSHOT
+    table, the modifier equivalent of `sale_item_promotions`, and its
+    parent `sale_item_id` is a real INTEGER autoincrement id
+    (`sale_items.id`) -- matching THAT table's id shape, not the three
+    config tables' UUIDs. It carries a `uid` column under a partial UNIQUE
+    index anyway (the v13 convention every RETAIL_UID_TABLES member uses),
+    so a later wave can ride it beside `sale_item` as an immutable
+    `ON CONFLICT(uid) DO NOTHING` sync type without an id migration either
+    -- the same insurance as the three config tables, cheap here because
+    the shape already exists.
+
+    THE MONEY-PATH FIX THIS MIGRATION ACTIVATES: `return_items.
+    sale_item_id` (nullable INTEGER, `sale_items.id`) lets a return name
+    the EXACT line it reverses. `create_return` (api/retail_api.py)
+    resolves a returned line by `(sale_id, product_id)` with a bare
+    `fetchone()` -- safe only because the POS cart merges same-product
+    lines, an invariant modifiers break on purpose (a plain burger and an
+    extra-cheese burger are one product, two lines, two prices). See
+    create_return's own comment at that SELECT for the fix this column
+    enables: a request naming a `sale_item_id` refunds THAT line's own
+    figures; a request that does not, against a sale holding more than one
+    line for that product, is REFUSED rather than resolved by guessing.
+    Nullable because every existing `return_items` row legitimately
+    predates this column and stays valid forever -- the single-line-per-
+    product case (every install that has never used modifiers) is
+    unaffected.
+
+    NO DECLARED FOREIGN KEY anywhere in this migration, matching
+    `_migrate_add_promotions` / `_migrate_add_product_variants` immediately
+    above for the identical two reasons: (a) never block a sale, a return,
+    or (for the three config tables, in a later sync wave) a sync apply on
+    a referential technicality; (b) `product_modifier_groups.product_id`
+    and `modifier_options.group_id` both point at rows this app itself
+    always writes through its own API, which validates tenancy and
+    existence at write time instead (see create_modifier_option /
+    attach_product_modifier_group in retail_api.py).
+
+    `live_tables` guard copied verbatim from `_migrate_add_promotions` /
+    `_migrate_add_product_variants` immediately above, for the SAME
+    synthetic old-database fixture (retail_category_delete_fk_sync_test.py's
+    `_build_v2_database`, which runs the ENTIRE migration chain in one pass
+    against a hand-built schema holding only categories/products/
+    inventory_movements plus a few sync tables -- no `sales`, no
+    `sale_items`, no `return_items`). The four CREATE TABLE statements below
+    cannot actually fail against that fixture or any other -- none of the
+    four carries a FOREIGN KEY (see above) -- so, exactly like
+    `_migrate_add_promotions`, the guard is kept anyway for visual
+    consistency with every neighbour in this chain that checks before it
+    writes. It is also what makes the `return_items.sale_item_id` ALTER
+    below safe against that fixture and any other where `return_items`
+    happens not to exist yet: it is skipped entirely rather than raised
+    against a missing table.
+
+    Idempotent: every CREATE TABLE / CREATE INDEX is IF NOT EXISTS; the
+    `return_items.sale_item_id` ADD COLUMN is independently guarded by a
+    `PRAGMA table_info` check, the same shape
+    `_migrate_add_product_variants` uses immediately above (SQLite has no
+    `ADD COLUMN IF NOT EXISTS`) -- so a retried run after any interrupted
+    migration (the normal case, since `ensure_schema_version` leaves
+    `user_version` un-advanced on failure) is a clean no-op either way.
+    """
+    live_tables = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS modifier_groups (
+            id TEXT PRIMARY KEY,                 -- client-generated UUID
+            company_id INTEGER NOT NULL,
+            name TEXT NOT NULL,                  -- "Size", "Extras", "Cook level"
+            min_select INTEGER NOT NULL DEFAULT 0,   -- >=1 means required
+            max_select INTEGER,                  -- NULL = unlimited
+            status TEXT DEFAULT 'active',
+            row_version INTEGER NOT NULL DEFAULT 1,
+            updated_at_utc TEXT, deleted_at_utc TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS modifier_options (
+            id TEXT PRIMARY KEY,
+            company_id INTEGER NOT NULL,
+            group_id TEXT NOT NULL,              -- modifier_groups.id; NO literal FK (v23 precedent)
+            name TEXT NOT NULL,                  -- "Extra cheese", "No onion"
+            price_delta REAL NOT NULL DEFAULT 0, -- may be negative; clamped at apply time (design 4.3)
+            cost_delta  REAL NOT NULL DEFAULT 0, -- margin reporting only; see design 4.6
+            is_default INTEGER NOT NULL DEFAULT 0,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            status TEXT DEFAULT 'active',
+            row_version INTEGER NOT NULL DEFAULT 1,
+            updated_at_utc TEXT, deleted_at_utc TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS product_modifier_groups (   -- attach a group to a product
+            id TEXT PRIMARY KEY,
+            company_id INTEGER NOT NULL,
+            product_id TEXT NOT NULL,            -- products.id; a PARENT product may be attached too,
+            group_id TEXT NOT NULL,              --   but attachment is per concrete product in wave 1
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            row_version INTEGER NOT NULL DEFAULT 1,
+            updated_at_utc TEXT, deleted_at_utc TEXT,
+            UNIQUE(company_id, product_id, group_id)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sale_item_modifiers (       -- the snapshot; sale_item_promotions' sibling
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER NOT NULL,
+            sale_item_id INTEGER NOT NULL,       -- sale_items.id (local autoincrement, like v23)
+            modifier_option_id TEXT,             -- provenance only; NEVER re-read for money
+            group_name_snapshot TEXT NOT NULL,
+            name_snapshot TEXT NOT NULL,
+            price_delta_snapshot REAL NOT NULL,  -- AS APPLIED, per unit
+            cost_delta_snapshot REAL NOT NULL DEFAULT 0,
+            uid TEXT                             -- v13 convention; partial-unique-indexed, sync-ready
+        )
+    """)
+    live_tables = live_tables | {
+        'modifier_groups', 'modifier_options', 'product_modifier_groups',
+        'sale_item_modifiers',
+    }
+    if 'modifier_options' in live_tables:
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_modifier_options_group '
+            'ON modifier_options(company_id, group_id)'
+        )
+    if 'product_modifier_groups' in live_tables:
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_product_modifier_groups_product '
+            'ON product_modifier_groups(company_id, product_id)'
+        )
+    if 'sale_item_modifiers' in live_tables:
+        conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_sale_item_modifiers_item '
+            'ON sale_item_modifiers(sale_item_id)'
+        )
+        conn.execute(
+            'CREATE UNIQUE INDEX IF NOT EXISTS idx_sale_item_modifiers_uid '
+            'ON sale_item_modifiers(uid) WHERE uid IS NOT NULL'
+        )
+    if 'return_items' in live_tables:
+        cols = {row[1] for row in conn.execute('PRAGMA table_info(return_items)').fetchall()}
+        if 'sale_item_id' not in cols:
+            conn.execute('ALTER TABLE return_items ADD COLUMN sale_item_id INTEGER')
+
+
 def load_sync_freshness(conn) -> dict:
     """Reads the single `sync_freshness` row -- the concrete `load` half of
     the `SyncFreshnessStore` collaborator `SyncService` is constructed with
@@ -5637,6 +5882,15 @@ def _init_retail(conn):
         quantity REAL NOT NULL,
         unit_price REAL NOT NULL,
         line_total REAL NOT NULL,
+        -- launch-readiness "restaurant modifiers, wave 1" (schema v26) --
+        -- included here too so a brand-new install gets v26 shape directly
+        -- without ever running _migrate_add_modifiers, same convention as
+        -- products.parent_product_id/variant_label above. NULL means
+        -- "this return did not name a line", which is every return an
+        -- install with no modifiers ever creates. See _migrate_add_
+        -- modifiers's own docstring for the full money-path reasoning
+        -- (create_return's ambiguous-line refusal).
+        sale_item_id INTEGER,
         FOREIGN KEY (return_id) REFERENCES returns(id),
         FOREIGN KEY (product_id) REFERENCES products(id)
     );

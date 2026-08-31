@@ -246,6 +246,21 @@ EXPECTED_MUTATION_CAPABILITIES = {
     'create_promotion': CAP_DISCOUNT,
     'update_promotion': CAP_DISCOUNT,
     'delete_promotion': CAP_DISCOUNT,
+
+    # ── Modifiers, wave 1 (schema v26): retail.stock.adjust ──────────────────
+    # Configuring a modifier group/option, or attaching one to a product, is
+    # catalogue/master-data management -- the SAME authority create_product/
+    # create_category already require -- not selling. The till's OWN read
+    # (get_product_modifier_groups) is retail.sell instead; see
+    # EXPECTED_READ_CAPABILITIES below.
+    'create_modifier_group': CAP_STOCK,
+    'update_modifier_group': CAP_STOCK,
+    'delete_modifier_group': CAP_STOCK,
+    'create_modifier_option': CAP_STOCK,
+    'update_modifier_option': CAP_STOCK,
+    'delete_modifier_option': CAP_STOCK,
+    'attach_product_modifier_group': CAP_STOCK,
+    'detach_product_modifier_group': CAP_STOCK,
 }
 
 #: Read routes that deliberately DO carry a capability. Reads are not required
@@ -365,6 +380,18 @@ EXPECTED_READ_CAPABILITIES = {
     # immediately above, a cashier needs this to sell even without
     # CAP_EMPLOYEES (see get_device_branch's own docstring).
     'get_device_branch': CAP_SELL,
+
+    # ── Modifiers, wave 1 (schema v26) ───────────────────────────────────────
+    # `list_modifier_groups` (GET /modifier-groups) is the management screen's
+    # own list -- same authority as configuring one, retail.stock.adjust,
+    # matching list_promotions' identical reasoning above.
+    'list_modifier_groups': CAP_STOCK,
+    # `get_product_modifier_groups` (GET /products/<id>/modifier-groups) is
+    # the TILL's read -- retail.sell, not retail.stock.adjust, because a
+    # cashier with no catalogue-management authority still has to be able to
+    # load a product's modifiers to ring a configured item (matches
+    # list_active_promotions' identical reasoning above).
+    'get_product_modifier_groups': CAP_SELL,
 }
 
 #: Read routes that DISCLOSE money and deliberately carry no capability, each

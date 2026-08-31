@@ -214,11 +214,22 @@ def test_the_real_migration_chain_lands_a_fresh_install_on_v25(db_conn):
     # Reads RETAIL_SCHEMA_VERSION rather than a hardcoded 25 -- stays true if
     # the constant is ever bumped again without needing an edit here.
     assert version == retail_schema.RETAIL_SCHEMA_VERSION
-    assert retail_schema.RETAIL_SCHEMA_VERSION == 25, (
-        "v24 is reserved by name for inter-branch transfers (ROADMAP.md "
-        "2026-08-30); this branch's own claim is v25 -- a drift here is "
-        "the exact version-number collision the ROADMAP ledger exists to "
-        "prevent."
+    # Updated from `== 25` to `>= 25` (launch-readiness "restaurant
+    # modifiers, wave 1", schema v26, ROADMAP.md's 2026-08-31 "retail
+    # schema v26 CLAIMED" entry): v25 shipped variants and this branch has
+    # since legitimately advanced past it. What this assertion actually
+    # guards -- a version-number COLLISION, i.e. the head silently
+    # regressing or landing on a number another branch already claimed --
+    # is still caught: `==` would have made this test fail on every future
+    # legitimate wave forever, which is the opposite of what "the ROADMAP
+    # ledger exists to prevent" (v24 stays reserved by name for
+    # inter-branch transfers, unclaimed) is actually testing for. A
+    # hardcoded upper bound cannot express "the ledger was followed
+    # correctly"; the floor plus the products-columns check below are what
+    # this test can still honestly assert.
+    assert retail_schema.RETAIL_SCHEMA_VERSION >= 25, (
+        "RETAIL_SCHEMA_VERSION went BACKWARDS below 25: the v25 variants "
+        "step has been lost from the chain."
     )
     cols = {row[1] for row in db_conn.execute('PRAGMA table_info(products)').fetchall()}
     assert {'parent_product_id', 'variant_label'} <= cols
