@@ -1524,3 +1524,62 @@ production callers -- machinery that exists and does nothing.
 The rule both halves teach: **"the code exists" and "the behaviour exists" are
 different claims, and neither implies the other.** Check the callers, not just
 the definition; check the screen, not just the route.
+
+## 2026-08-31 — retail schema v25 CLAIMED for product variants
+
+Claimed BEFORE dispatch, and committed before dispatch — the discipline slipped
+once on v23 (the claim sat in a scratch file while a commit message asserted it
+existed) and that is not repeating.
+
+**CLAIMED: retail v25, by `feat/launch-readiness`, for two columns on `products`.**
+v24 stays RESERVED BY NAME for inter-branch transfers and is deliberately skipped.
+
+    ALTER TABLE products ADD COLUMN parent_product_id TEXT   -- NULL = not a variant
+    ALTER TABLE products ADD COLUMN variant_label     TEXT   -- 'Red / Large'
+
+### A variant is a PRODUCT, not a new table
+
+Design: `docs/launch-readiness/variants-and-modifiers-design.md`.
+
+A variant has its own SKU, its own barcode, its own price and **its own stock**.
+It is a thing you COUNT. So it is a product with a parent, and that reuses the
+entire existing inventory subsystem -- balances, movements, the v22 four-rung
+scan ladder, sale lines, reporting -- for free. A separate `product_variants`
+table carrying its own stock would duplicate the inventory subsystem, which is
+the wrong call in a codebase that already has one that works.
+
+The argument came out STRONGER than the prior that motivated it: `product` is
+already a SYNCED entity whose UUID id is its wire identity, so the parent pointer
+syncs across devices with no new machinery at all.
+
+**Corrects a stale comment while we are here:** the base DDL says products are
+not synced; `sync_service.py`'s live `product` apply branch says otherwise. Trust
+the code.
+
+### What must not be got wrong
+
+**The sync payload.** The two new columns must be added to the product sync
+payload, the apply-branch column list, AND the changed-field delta allowlist. Miss
+any one and variants arrive on peer devices as ORPHAN STANDALONE PRODUCTS --
+silently, with no error, on exactly the multi-device installs this product is
+built for. That is the single most likely defect in this wave and it gets its own
+test.
+
+### What rides free, and is pinned rather than assumed
+
+`pricing.py` untouched. Returns unchanged -- `create_return` recomputes from the
+original `sale_items` row and a variant IS a product_id, so nothing there learns
+a new concept. The scan ladder unchanged -- a variant's barcode is a barcode.
+Stock, movements and reports unchanged.
+
+**And the latent refund bug does NOT activate here.** `create_return` matches by
+`(sale_id, product_id)` with `fetchone()`, which is ambiguous only when ONE sale
+holds two lines with the SAME product_id at different prices. Two variants of one
+parent are two DIFFERENT product_ids, so a variant sale cannot produce that
+ambiguity. Modifiers can, and that fix stays scheduled with them -- stated here
+so the two are not conflated.
+
+Deliberately NOT in this claim: modifiers (their own wave, own version, own
+tables with UUID ids and row_version from day one), a size x colour matrix
+generator (the owner has not said whether per-variant manual creation suffices),
+and variant-aware purchase ordering.
