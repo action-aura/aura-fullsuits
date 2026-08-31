@@ -1736,3 +1736,29 @@ R1 does not); and the recurring-cost question from
 `docs/owner/one-time-pricing-design.md`, which gets sharper here -- a LAN
 restaurant may never touch the cloud, and it is the heaviest device count under
 lifetime pricing.
+
+## 2026-08-31 — the restaurant programme is DEFERRED WHOLESALE
+
+The owner, directly: *"for the restaurant's version we will decide everything
+later like the pricing the how the when just keep in mind."*
+
+So every restaurant decision is deferred — pricing, sequencing, timing, and the
+open questions the designs above raise (tips policy, whether a kitchen display
+pays its own device fee, the recurring-cost question). **Do not re-raise them
+unprompted.** They are recorded where they can be found when he wants them.
+
+What the three design documents remain good for: they are REFERENCE, not a
+schedule. Nothing in them is committed work, and no schema version is claimed for
+any restaurant wave beyond v26 (modifiers), which is in flight and is useful to
+retail on its own — a shop selling coffee with a choice of milk needs modifiers
+just as much as a cafe does.
+
+The technical shape stands and does not need re-deriving when it comes back up:
+same product in two editions, LAN site relay on the main till, every device a
+full install, table orders as a new synced entity after LAN. Those were
+established against the code, not assumed, and the verification is in the
+documents.
+
+**What is NOT deferred**, and remains the actual gate on revenue: the
+clean-machine test and the droplet setup in `docs/release/go-live-runbook.md`.
+Nothing in the restaurant programme matters until an install can be sold at all.
