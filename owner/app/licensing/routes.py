@@ -8,6 +8,8 @@ from flask import Blueprint, current_app, jsonify, redirect, render_template, re
 from sqlalchemy import select
 
 from app.auth.session import has_recent_auth, load_current_staff
+from app.commercial_ops.device_slot_ops import DeviceSlotError
+from app.commercial_ops.device_slot_ops import add_devices as add_license_devices
 from app.extensions import db_session
 from app.licensing import list_queries
 from app.licensing.services import (
@@ -80,6 +82,7 @@ def detail(license_id):
     return render_template(
         "licensing/detail.html", license=license_row, revealed_key=None,
         allowed_transitions=allowed_transitions, issue_idempotency_key=str(uuid.uuid4()),
+        add_devices_idempotency_key=str(uuid.uuid4()),
         recent_auth_ok=has_recent_auth(),
     )
 
@@ -105,6 +108,32 @@ def issue(license_id):
         "licensing/detail.html", license=license_row, revealed_key=full_key,
         allowed_transitions=allowed_transitions, recent_auth_ok=has_recent_auth(),
     )
+
+
+@bp.route("/<uuid:license_id>/add-devices", methods=["POST"])
+@require_permission("subscriptions.renew")
+@require_recent_auth
+def add_devices_route(license_id):
+    # Same permission as the renewal pipeline (`subscriptions.renew`) --
+    # this is a fast-path alternative for the exact same commercial field
+    # (`subscription.device_allowance`), not a new authority.
+    actor = load_current_staff()
+    license_row = db_session.get(License, license_id)
+    if license_row is None:
+        return jsonify({"error": "not_found"}), 404
+    try:
+        additional_devices = int(request.form["additional_devices"])
+    except (KeyError, ValueError):
+        return jsonify({"error": "invalid_additional_devices"}), 400
+    idempotency_key = request.form.get("idempotency_key") or request.headers.get("Idempotency-Key")
+    try:
+        add_license_devices(
+            license_row, additional_devices=additional_devices, reason=request.form.get("reason", ""),
+            actor_staff_user_id=actor.id, idempotency_key=idempotency_key,
+        )
+    except DeviceSlotError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return redirect(url_for("licensing.detail", license_id=license_id))
 
 
 @bp.route("/<uuid:license_id>/transition", methods=["POST"])

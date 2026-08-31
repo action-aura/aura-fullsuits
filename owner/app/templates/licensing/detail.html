@@ -34,6 +34,24 @@
 
   <p><a href="{{ url_for('commercial_ops_ui.license_slot_exceptions', license_id=license.id) }}">{{ _("Device-slot exceptions") }}</a></p>
 
+  <div class="card--action">
+    <h3>{{ _("Add devices") }}</h3>
+    <p>{{ _("Permanently raises this license's device limit and mirrors the new allowance onto its subscription. Requires a fresh MFA confirmation. Never lowers the limit below devices already active.") }}</p>
+    {% if recent_auth_ok %}
+    <form method="post" action="{{ url_for('licensing.add_devices_route', license_id=license.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="idempotency_key" value="{{ add_devices_idempotency_key }}">
+      <label for="licensing-detail-additional-devices">{{ _("Devices to add") }}</label>
+      <input id="licensing-detail-additional-devices" name="additional_devices" type="number" min="1" required>
+      <label for="licensing-detail-add-devices-reason">{{ _("Reason (required)") }}</label>
+      <input id="licensing-detail-add-devices-reason" name="reason" required>
+      <div style="margin-top:0.5rem;"><button type="submit" class="btn--primary-action">{{ _("Add devices (requires recent authentication)") }}</button></div>
+    </form>
+    {% else %}
+    <p><a href="{{ url_for('auth.reauth_form', next=url_for('licensing.detail', license_id=license.id)) }}">{{ _("Add devices (requires recent authentication)") }}</a></p>
+    {% endif %}
+  </div>
+
   {% if license.status == "DRAFT" %}
   <div class="card--action">
     <h3>{{ _("Issue key") }}</h3>

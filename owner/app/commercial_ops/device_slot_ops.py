@@ -27,12 +27,19 @@ from app.extensions import db_session
 from app.installations.services import count_slot_consuming_installations, transition_installation
 from app.models.activation_governance import DeviceSlotException
 from app.models.base import utcnow
+from app.models.commercial_sales import CommercialOperationsIdempotencyKey
 from app.models.installations import Installation
 from app.models.licensing import License
+from app.models.subscriptions import Subscription
 
 MAX_DEVICE_SLOT_EXCEPTION_DAYS = 90
 
 _LICENSE_STATUSES_ELIGIBLE_FOR_SCAN = ("ISSUED", "ACTIVE")
+
+# docs/owner/packages-and-issuance-design.md §C.2 -- shared idempotency
+# ledger convention (CommercialOperationsIdempotencyKey), same operation-code
+# keying as LEAD_CREATION_OPERATION_CODE etc. in leads/services.py.
+ADD_DEVICES_OPERATION_CODE = "LICENSE_ADD_DEVICES"
 
 
 class DeviceSlotError(StableCodeError):
@@ -45,6 +52,14 @@ class DeviceSlotError(StableCodeError):
         "EXCEPTION_EXCEEDS_MAX_DAYS": "Device slot exceptions may not exceed {max_days} days -- temporary means temporary.",
         "INVALID_REVOKE_STATUS": "Cannot revoke a device slot exception in status {status}.",
         "REASON_REQUIRED_TO_REVOKE": "A reason is required to revoke a device slot exception.",
+        "ADDITIONAL_DEVICES_MUST_BE_POSITIVE": "additional_devices must be positive.",
+        "REASON_REQUIRED_TO_ADD_DEVICES": "A reason is required to add devices to a license.",
+        "DEVICE_LIMIT_BELOW_ACTIVE_COUNT": (
+            "Cannot set this license's device limit to {new_limit} -- {active_count} device(s) are "
+            "already active on it. Add enough devices to cover current usage."
+        ),
+        "LICENSE_NOT_FOUND": "License not found.",
+        "SUBSCRIPTION_NOT_FOUND": "Subscription not found for this license.",
     }
 
 
@@ -117,6 +132,105 @@ def revoke_device_slot_exception(exception: DeviceSlotException, *, reason: str,
         after_state={"status": "REVOKED"},
         reason=reason,
     )
+
+
+def add_devices(
+    license_row: License,
+    *,
+    additional_devices: int,
+    reason: str,
+    actor_staff_user_id,
+    idempotency_key: str | None = None,
+) -> License:
+    """Permanently raises a license's device allowance in one act (Phase 8V,
+    docs/owner/packages-and-issuance-design.md §C.2 -- "the single most
+    common paid action... has no first-class path"; §0 finding 6 verified
+    the only prior ways to change `device_limit` were the five-state
+    renewal-request pipeline or a temporary, <=90-day
+    DeviceSlotException). Distinct from `create_device_slot_exception()`
+    above: that grants a TEMPORARY allowance on top of `device_limit`
+    (never writes it); this writes `license_row.device_limit` itself,
+    exactly like `apply_renewal_request()`'s device-allowance mirroring
+    (`commercial_ops/renewal_requests.py`) -- which is this function's
+    deliberate template, including its FOR UPDATE locking. Unlike the
+    renewal pipeline, this is additive-only and has no DRAFT/APPROVED/
+    APPLIED workflow, so a device sale is one staff action, not five.
+
+    Idempotency follows the CommercialOperationsIdempotencyKey convention
+    shared by Quote/Order/Invoice/Payment/Refund/Commission/Lead creation
+    (see `leads/services.py::create_lead()`), not `RenewalRequest`'s own
+    `idempotency_key` column -- this is a single mutation against an
+    existing row, not a persisted multi-state request record, so there is
+    no separate entity to key against.
+
+    Deliberately does NOT inherit `apply_renewal_request()`'s "silently
+    permit a lower device_allowance than currently-active installations"
+    behavior (that function relies on `scan_over_limit_licenses()` to flag
+    the resulting over-limit state later, per its own Phase 8V-P2 comment).
+    This action refuses outright instead: "Add devices" must never leave a
+    license persisted below what is already deployed on it.
+    """
+    if idempotency_key is not None:
+        existing_key = db_session.execute(
+            select(CommercialOperationsIdempotencyKey).where(
+                CommercialOperationsIdempotencyKey.idempotency_key == idempotency_key,
+                CommercialOperationsIdempotencyKey.operation_code == ADD_DEVICES_OPERATION_CODE,
+            )
+        ).scalars().first()
+        if existing_key is not None:
+            return db_session.get(License, existing_key.result_reference_id)
+
+    if additional_devices <= 0:
+        raise DeviceSlotError("ADDITIONAL_DEVICES_MUST_BE_POSITIVE")
+    if not reason or not reason.strip():
+        raise DeviceSlotError("REASON_REQUIRED_TO_ADD_DEVICES")
+
+    # Re-select FOR UPDATE, exactly like apply_renewal_request()'s License
+    # lock -- a concurrent activation attempt against this exact license
+    # (activation.py's own SELECT ... FOR UPDATE) serializes against this
+    # write rather than racing it.
+    locked_license = db_session.execute(
+        select(License).where(License.id == license_row.id).with_for_update()
+    ).scalars().first()
+    if locked_license is None:
+        raise DeviceSlotError("LICENSE_NOT_FOUND")
+
+    subscription = db_session.execute(
+        select(Subscription).where(Subscription.id == locked_license.subscription_id).with_for_update()
+    ).scalars().first()
+    if subscription is None:
+        raise DeviceSlotError("SUBSCRIPTION_NOT_FOUND")
+
+    active_count = count_slot_consuming_installations(locked_license.id)
+    previous_device_limit = locked_license.device_limit
+    new_device_limit = previous_device_limit + additional_devices
+
+    if new_device_limit < active_count:
+        raise DeviceSlotError("DEVICE_LIMIT_BELOW_ACTIVE_COUNT", new_limit=new_device_limit, active_count=active_count)
+
+    locked_license.device_limit = new_device_limit
+    subscription.device_allowance = new_device_limit
+
+    if idempotency_key is not None:
+        db_session.add(
+            CommercialOperationsIdempotencyKey(
+                idempotency_key=idempotency_key,
+                operation_code=ADD_DEVICES_OPERATION_CODE,
+                result_reference_id=locked_license.id,
+            )
+        )
+    db_session.commit()
+    audit_record(
+        actor_staff_user_id=actor_staff_user_id,
+        actor_role_snapshot=None,
+        action_code="LICENSE_DEVICES_ADDED",
+        entity_type="license",
+        entity_public_id=str(locked_license.id),
+        before_state={"device_limit": previous_device_limit},
+        after_state={"device_limit": new_device_limit, "additional_devices": additional_devices},
+        reason=reason,
+    )
+    return locked_license
 
 
 def resolve_effective_device_limit(license_row: License, *, as_of: datetime | None = None) -> int:

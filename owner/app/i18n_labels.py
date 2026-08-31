@@ -428,6 +428,14 @@ def localize_device_slot_error(code: str, **params) -> str:
         "EXCEPTION_EXCEEDS_MAX_DAYS": _("Device slot exceptions may not exceed %(max_days)s days -- temporary means temporary."),
         "INVALID_REVOKE_STATUS": _("Cannot revoke a device slot exception in status %(status)s."),
         "REASON_REQUIRED_TO_REVOKE": _("A reason is required to revoke a device slot exception."),
+        "ADDITIONAL_DEVICES_MUST_BE_POSITIVE": _("Enter a positive number of devices to add."),
+        "REASON_REQUIRED_TO_ADD_DEVICES": _("A reason is required to add devices to a license."),
+        "DEVICE_LIMIT_BELOW_ACTIVE_COUNT": _(
+            "Cannot set this license's device limit to %(new_limit)s -- %(active_count)s device(s) are "
+            "already active on it. Add enough devices to cover current usage."
+        ),
+        "LICENSE_NOT_FOUND": _("License not found."),
+        "SUBSCRIPTION_NOT_FOUND": _("Subscription not found for this license."),
     }
     template = messages.get(code)
     if template is None:
