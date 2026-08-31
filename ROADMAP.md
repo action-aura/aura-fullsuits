@@ -1475,3 +1475,52 @@ without any code change.
 Nothing in the product enforces or cares about the billing period; the meter is
 `max_devices`, already enforced server-side at activation. One-time versus
 annual is entirely an Owner catalog value.
+
+## 2026-08-31 — chain wave C3 was ALREADY BUILT. Verified, not assumed.
+
+`docs/launch-readiness/account-hierarchy-design.md` §5.2 item 4 lists "a
+comparison screen" among what is genuinely missing for a chain of five stores:
+"reports exist per-branch and all-branch, but nothing puts Store A next to
+Store B. Screen work only."
+
+**That is false.** Verified end to end before any work was dispatched:
+
+* `GET /reports/by-branch` exists (`retail_api.py:6997`, `report_by_branch`,
+  CAP_REPORTS-gated) and returns revenue and transactions PER BRANCH. Its own
+  docstring says every active branch appears -- including ones with zero sales
+  in the window -- "which is what makes a comparison chart meaningful (a branch
+  with 0 revenue is a real, visible bar, not a silently missing one)".
+* The Reports page already fetches it, in the same `Promise.all` as the other
+  report widgets, and renders it as `rep-branch-chart`, a BAR chart over
+  `byBranch.labels`.
+* It is deliberately NOT filtered by the page's own `?branch_id=` selector,
+  with a comment explaining why: "compare branches" and "scope to one branch"
+  are contradictory asks for the same chart. That is exactly the head-office
+  semantic, already reasoned about and already implemented.
+
+So the head-office view needed no build at all. Combined with §5's own finding
+that the all-branches view is the ABSENCE of scope coercion rather than a
+feature -- and that head-office staff who are not the owner are simply a
+`manager` with NULL scope, supported by construction -- **chain wave C3 is
+complete and requires no code.**
+
+### The pattern this is the fourth instance of
+
+Stale "missing feature" claims in this repo, all found by checking rather than
+trusting, all in the direction of UNDERSTATING what works:
+
+1. CLAUDE.md's "genuinely missing" list -- wrong on three of seven (notifications,
+   RBAC, and cash-drawer management all exist).
+2. `docs/launch-readiness/infrastructure.md` -- the APK bearer-token blocker was
+   already fixed three ways in the gradle build.
+3. `aura_retail.spec` -- "NOT YET BUILD-VERIFIED" for a build that succeeds
+   (10.6 MB exe, exit 0).
+4. This one.
+
+And its mirror image, twice: `required_entitlement` and
+`requires_password_reprompt` are both complete, tested mechanisms with ZERO
+production callers -- machinery that exists and does nothing.
+
+The rule both halves teach: **"the code exists" and "the behaviour exists" are
+different claims, and neither implies the other.** Check the callers, not just
+the definition; check the screen, not just the route.
