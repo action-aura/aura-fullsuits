@@ -87,6 +87,7 @@ def create_app(config_name: str | None = None) -> Flask:
     from app.customers import bp as customers_bp
     from app.subscriptions import bp as subscriptions_bp
     from app.licensing import bp as licensing_bp
+    from app.licensing.issuance_routes import bp as license_issuance_bp
     from app.installations import bp as installations_bp
     from app.dashboard import bp as dashboard_bp
     from app.audit.routes import bp as audit_bp
@@ -116,6 +117,7 @@ def create_app(config_name: str | None = None) -> Flask:
     app.register_blueprint(customers_bp)
     app.register_blueprint(subscriptions_bp)
     app.register_blueprint(licensing_bp)
+    app.register_blueprint(license_issuance_bp)
     app.register_blueprint(installations_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(audit_bp)
