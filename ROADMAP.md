@@ -1583,3 +1583,86 @@ Deliberately NOT in this claim: modifiers (their own wave, own version, own
 tables with UUID ids and row_version from day one), a size x colour matrix
 generator (the owner has not said whether per-variant manual creation suffices),
 and variant-aware purchase ordering.
+
+## 2026-08-31 — retail schema v26 CLAIMED for restaurant modifiers, wave 1
+
+Claimed AND committed before dispatch. v24 remains reserved by name for
+inter-branch transfers; v25 shipped variants (bd272ca).
+
+**CLAIMED: retail v26, by `feat/launch-readiness`.** Four new tables, one column
+on an existing money table, four indexes. All additive: CREATE TABLE / ADD COLUMN
+/ CREATE INDEX only.
+
+    modifier_groups          -- "Size", "Extras", min_select/max_select
+    modifier_options         -- "Extra cheese" +0.50, price_delta and cost_delta
+    product_modifier_groups  -- attaches a group to a product
+    sale_item_modifiers      -- the SNAPSHOT, sale_item_promotions' sibling
+    ALTER TABLE return_items ADD COLUMN sale_item_id INTEGER  -- nullable
+
+Design: `docs/launch-readiness/variants-and-modifiers-design.md` §4.
+
+### Why this is a different mechanism from variants, not the same one
+
+A variant (Red / Large) has its own SKU, barcode, price and STOCK. It is a thing
+you COUNT, so it is a product with a parent (v25) and it reuses the inventory
+subsystem.
+
+A modifier (no onion, extra cheese +0.50) has NO stock. It adjusts a price and it
+must print on a kitchen ticket. It is a thing you SAY ABOUT an item. Forcing both
+through one mechanism would give half of them a stock ledger that lies.
+
+### UUID ids and row_version from day one — correcting my own v23 work
+
+The three config tables carry client-generated UUID ids and `row_version` from
+the start, deliberately unlike the promotions tables I shipped in v23, whose
+autoincrement ids permanently lock them out of sync without a migration.
+`sale_item_modifiers` carries a `uid` under a partial unique index, the v13
+convention.
+
+Wave 1 does not turn sync ON for them. It makes it possible without a second
+migration, which v23 did not.
+
+### THE MONEY-PATH DEFECT THIS ACTIVATES — and the fix that must not be cut
+
+`create_return` matches a returned line with
+
+    SELECT ... FROM sale_items WHERE sale_id=? AND product_id=?
+
+and `fetchone()` (retail_api.py:5245). If one sale holds TWO lines for the SAME
+product at DIFFERENT prices, that returns an arbitrary one and refunds ITS price.
+
+Safe today only because the POS cart merges same-product lines -- an invariant
+nothing enforces and nothing documents. **Modifiers make duplicate-product lines
+the COMMON case**: a burger with cheese and a burger without are one product, two
+lines, two prices.
+
+So the fix ships WITH this wave, not after it: `return_items.sale_item_id` makes
+a return address a specific LINE, and the resolver must REFUSE an ambiguous
+match rather than guess. Nullable, because every existing return row legitimately
+predates it.
+
+This is the piece most tempting to cut under time pressure and the one that
+silently refunds the wrong amount if it is.
+
+### pricing.py stays untouched, for the third wave running
+
+A line's selected modifiers resolve to an EFFECTIVE UNIT PRICE fed through the
+existing `calculate_line`. Returns, `top_products` and the sale_item sync payload
+all re-read `sale_items.unit_price`, so all three stay correct with no changes.
+Promotions (v23) then discount the modifier-inclusive price, which falls out of
+the composition and is the right answer.
+
+### Decided, not dodged
+
+Modifier cost is a margin-only snapshot with NO stock movement. Depleting
+ingredients is a recipe/BOM engine; doing it for modifiers alone would produce a
+precisely-wrong half-ledger, which is worse than an honestly absent one.
+
+### Deliberately NOT in this wave
+
+Kitchen tickets and split tender/tips. A restaurant is NOT sellable on modifiers
+alone -- restaurant-ready is modifiers plus kitchen tickets (~0.5-0.75 of this
+wave, depends on it) plus split tender and tips (~0.75-1, independent; the
+payments ledger already supports multi-row tender, the gap is create_sale and the
+POS screen). Stated so the owner sequences with his eyes open rather than
+discovering it after this lands.
