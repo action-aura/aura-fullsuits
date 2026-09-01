@@ -14,6 +14,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.security.SecureRandom
@@ -69,7 +70,23 @@ class SyncRelayClientTest {
     @Before
     fun setUp() {
         server = MockWebServer()
-        server.start()
+        // Bind AND address this server by the loopback literal, never via
+        // MockWebServer's own `url()`. `url()` derives its host from
+        // `InetAddress.canonicalHostName` -- a REVERSE DNS lookup -- so on a
+        // machine where anything has claimed the loopback name (a bandwidth
+        // shaper installing a hosts entry that maps 127.0.0.1 to its own
+        // domain is enough) `url()` hands back a URL naming a NON-loopback
+        // host. `requireTransportIsSafe()` then correctly refuses it as
+        // cleartext-to-a-real-host, and the push tests below fail for a
+        // reason that has nothing to do with what they assert.
+        //
+        // That is not hypothetical: both push cases were red from 4c28207
+        // (2026-08-07, which added the TLS scheme rule) until 2026-09-01,
+        // failing with `Refusing to sync over cleartext http:// to
+        // non-loopback host 'netlimiter.com'`. Signed-push and
+        // 400-is-not-retried therefore went unverified for three weeks.
+        // Pinning the literal removes the dependency on developer DNS.
+        server.start(InetAddress.getByName("127.0.0.1"), 0)
         identity = DeviceIdentity(tempFolder.newFolder(), TestKeyWrapper())
         identity.generateNewKey()
     }
@@ -107,13 +124,17 @@ class SyncRelayClientTest {
         return fake
     }
 
+    /** Loopback-literal URL for [server]. Deliberately NOT `server.url()`
+     *  -- see the note in the setup above for why that one is unsafe here. */
+    private fun serverUrl(path: String = "/") = "http://127.0.0.1:${server.port}$path"
+
     // ── push() -- real POST, MockWebServer ──────────────────────────────────
 
     @Test
     fun `push sends signed request with events, nonce, timestamp and signature`() {
         server.enqueue(MockResponse().setResponseCode(200).setBody("""{"result":"SUCCESS"}"""))
 
-        client(server.url("/").toString()).push(
+        client(serverUrl()).push(
             listOf(linkedMapOf<String, Any?>("entity_type" to "category", "event_type" to "create", "seq" to 1L))
         )
 
@@ -134,7 +155,7 @@ class SyncRelayClientTest {
             MockResponse().setResponseCode(400).setBody("""{"result":"REJECTED","reason_code":"INVALID_SIGNATURE"}""")
         )
         try {
-            client(server.url("/").toString()).push(emptyList())
+            client(serverUrl()).push(emptyList())
             throw AssertionError("expected SyncRelayRejected")
         } catch (exc: SyncRelayRejected) {
             assertThat(exc.reasonCode).isEqualTo("INVALID_SIGNATURE")
