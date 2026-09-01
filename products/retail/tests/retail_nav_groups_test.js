@@ -30,6 +30,17 @@
  * the same reasoning Employees (this group's other member) already uses for
  * its own gate.
  *
+ * UPDATED (ci-hardening-w0.3 continuation, "the doorway", second one on this
+ * branch): Email Notifications is an 18th destination, appended to Admin.
+ * GET/POST /api/notifications/{status,settings,outbox,outbox/run-once}
+ * (commercial_runtime/notifications/routes.py) have been complete with
+ * nothing in the frontend ever calling them -- WhatsApp got a settings page;
+ * email never did. `ownerOnly: true`, NOT `adminOnly`, because every
+ * mutating route there reads `session['mt_role'] == 'admin'` (the USER
+ * axis) via `_require_admin`, not `this.isAdminDevice` (the DEVICE axis
+ * `adminOnly` actually means) -- the same reasoning Employees already uses
+ * for its own gate.
+ *
  * WHAT THIS FILE DOES NOT RE-TEST
  * The per-item visibility rule itself (capability / adminOnly / ownerOnly /
  * desktopOnly, and the fail-open/fail-closed contract around it) is already
@@ -62,7 +73,7 @@ const GROUPS = [
   { label: 'Sell', items: ['pos', 'returns', 'scanner', 'customers', 'promotions'] },
   { label: 'Stock', items: ['products', 'categories', 'suppliers', 'purchases'] },
   { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
-  { label: 'Admin', items: ['employees', 'branches', 'admin-center'] },
+  { label: 'Admin', items: ['employees', 'branches', 'admin-center', 'email-notifications'] },
 ];
 const ALL_DESTINATIONS = ['dashboard', ...GROUPS.flatMap((g) => g.items)];
 
@@ -181,7 +192,7 @@ function ownerEverythingVisibleHTML() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 1 — every one of the 17 destinations is still reachable for an owner
+// 1 — every one of the 18 destinations is still reachable for an owner
 // ═════════════════════════════════════════════════════════════════════════════
 
 function testAllDestinationsReachableForOwner() {
@@ -194,7 +205,7 @@ function testAllDestinationsReachableForOwner() {
     'Every id in systems.retail.navGroups must resolve to a real nav entry, and ' +
     'every non-dashboard nav entry must be listed in exactly one group.'
   );
-  assert.strictEqual(missing.length === 0 && ALL_DESTINATIONS.length, 17, 'sanity: this file\'s own expectation list drifted from 17 destinations');
+  assert.strictEqual(missing.length === 0 && ALL_DESTINATIONS.length, 18, 'sanity: this file\'s own expectation list drifted from 18 destinations');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

@@ -1405,6 +1405,26 @@ const ROUTE_EXCLUSIONS = {
     'the "Loading…" single-cell placeholder — the empty state ' +
     'testCorpusRendersRealScreens explicitly refuses to accept as a rendered ' +
     'list. Adding it needs a fixture route, not just a render call.',
+  // ci-hardening-w0.3 continuation ("the doorway", second one on this
+  // branch). _renderEmailNotifications() is a settings page with the same
+  // shape as the admin-center exclusion immediately above: no `.ret-table`
+  // list of its own, and its two data fetches (GET /api/notifications/status,
+  // GET /api/notifications/settings) are not routes this corpus fixture
+  // serves, so apiResponseFor() would fall through to the STATS catch-all for
+  // both and the screen would render on empty/undefined data rather than the
+  // real thing. Its own coverage — including the contents of the SMTP-
+  // unconfigured warning, which is this screen's one behaviour that actually
+  // matters — is retail_email_notifications_test.js, not this corpus. Adding
+  // it here needs two fixture routes plus a corpus entry, not just a render
+  // call, same as admin-center.
+  'email-notifications':
+    '_renderEmailNotifications() is a settings page whose two data sources ' +
+    '(GET /api/notifications/status, GET /api/notifications/settings) are not ' +
+    'routes this corpus fixture serves, so it would render on the STATS ' +
+    'catch-all rather than real settings/outbox data — the same shape as the ' +
+    'admin-center exclusion immediately above. Its own coverage is ' +
+    'retail_email_notifications_test.js. Adding it here needs two fixture ' +
+    'routes plus a corpus entry, not just a render call.',
   exceptions:
     'Launch-readiness 2026-08-29 ("the two exception queues both need ONE ' +
     'screen, not two"). _renderExceptions() fetches TWO endpoints this ' +

@@ -996,8 +996,20 @@ async function testEveryGuardIsProvenByBreakingIt() {
 
   proved.push(await provesMutation(
     'the company-admin gate returns before the request',
-    [["if (window.SubsystemApp && SubsystemApp.role && SubsystemApp.role !== 'admin') {",
-      'if (false) {']],
+    // Anchored past the `if` line itself and into the icon literal right
+    // below it: ci-hardening-w0.3's Email Notifications screen
+    // (_renderEmailNotifications) added a SECOND, textually identical
+    // `SubsystemApp.role !== 'admin'` guard elsewhere in this file (the
+    // same USER-axis check, reused deliberately -- see that screen's own
+    // comment on why `ownerOnly`/this check, not `adminOnly`), so the bare
+    // `if (...)` line alone no longer occurs exactly once. '⚖️' is Stock
+    // Accuracy's own icon and disambiguates this anchor to this screen only.
+    [["if (window.SubsystemApp && SubsystemApp.role && SubsystemApp.role !== 'admin') {\n" +
+      "      return this._renderCapabilityRestricted(c, {\n" +
+      "        icon: '⚖️',",
+      "if (false) {\n" +
+      "      return this._renderCapabilityRestricted(c, {\n" +
+      "        icon: '⚖️',"]],
     testTheGatesReturnBeforeTheRequest));
 
   proved.push(await provesMutation(

@@ -649,6 +649,25 @@ const SubsystemApp = {
         // access is not the gate here, creating a new one is.
         { id: 'branches',     label: 'Branches',        icon: '🏦', capability: 'retail.employees' },
         { id: 'admin-center', label: 'Settings',        icon: '⚙️', adminOnly: true },
+        // ci-hardening-w0.3 continuation: THE DOORWAY, a second one on this
+        // branch. GET/POST /api/notifications/{status,settings,outbox,
+        // outbox/run-once} (commercial_runtime/notifications/routes.py) have
+        // been complete since the outbox/worker/SMTP client shipped, plus a
+        // real trigger already enqueuing into it (low-stock alerts,
+        // core/retail/whatsapp_hook.py's sibling). WhatsApp got a settings
+        // page (whatsapp.html, linked from the Settings card below); email
+        // never did. So SMTP recipients could not be configured by any
+        // user, ever, and the channel was inert in practice.
+        //
+        // `ownerOnly`, NOT `adminOnly` -- the exact distinction the
+        // Employees and Stock Accuracy entries above both spell out. Every
+        // mutating route here (`_require_admin` in routes.py) reads
+        // `session['mt_role'] == 'admin'`, the USER axis; `adminOnly` means
+        // `this.isAdminDevice`, the DEVICE axis Admin Center actually uses.
+        // Picking `adminOnly` here would show this screen to a manager
+        // standing at the admin terminal (whose every mutating click would
+        // 403) while hiding it from the owner working from a second device.
+        { id: 'email-notifications', label: 'Email Notifications', icon: '📧', ownerOnly: true },
         // feat/audit-log-viewer: same adminOnly mechanism as Admin Center
         // above -- refund/void/product-change audit trail carries every
         // user's attribution, not just this device's, so it's gated the
@@ -738,7 +757,7 @@ const SubsystemApp = {
         { label: 'Sell',    items: ['pos', 'returns', 'scanner', 'customers', 'promotions'] },
         { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases'] },
         { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
-        { label: 'Admin',   items: ['employees', 'branches', 'admin-center'] },
+        { label: 'Admin',   items: ['employees', 'branches', 'admin-center', 'email-notifications'] },
       ],
     },
   },

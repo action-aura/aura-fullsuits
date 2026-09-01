@@ -185,6 +185,13 @@ const RetailSystem = {
       // readable in one place.
       case 'employees': return RetailEmployees.render(c);
       case 'admin-center': return this._renderAdminCenter(c);
+      // ci-hardening-w0.3 continuation ("the doorway", second one on this
+      // branch): see app-shell.js's nav entry comment and
+      // _renderEmailNotifications below for the full story --
+      // /api/notifications/{status,settings,outbox,outbox/run-once}
+      // (commercial_runtime/notifications/routes.py) have been complete
+      // with nothing in this file ever calling them.
+      case 'email-notifications': return this._renderEmailNotifications(c);
       case 'audit-log':    return this._renderAuditLog(c);
       // Phase 3 (docs/launch-readiness/phase3-ledger-truth.md). Owner-facing
       // report over the inventory_balances/inventory_movements comparison --
@@ -5791,6 +5798,223 @@ const RetailSystem = {
       console.error('Reorder request decline failed', e);
       SubsystemApp.showToast(t('Could not decline this request.'), 'error');
     }
+  },
+
+  // ── EMAIL NOTIFICATIONS (ci-hardening-w0.3 continuation, "the doorway",
+  //    second one on this branch) ───────────────────────────────────────────
+  // GET/POST /api/notifications/status, /settings, /outbox and
+  // /outbox/run-once (commercial_runtime/notifications/routes.py) have been
+  // complete since the outbox/worker/SMTP client shipped -- an outbox, a
+  // retry worker, an SMTP client and a real trigger (low-stock alerts,
+  // core/retail/whatsapp_hook.py's sibling) all real, all tested, and
+  // reachable by nothing. WhatsApp got a settings page (whatsapp.html,
+  // linked from Admin Center); email never did. So SMTP recipients could
+  // not be configured by any user, ever, and the channel was inert in
+  // practice. See app-shell.js's nav entry for the same story from the
+  // other end.
+  //
+  // Structure mirrors _renderAdminCenter's card layout and _renderBranches'
+  // gate/load/save shape -- both already live in this file, so this is not
+  // a second pattern for the same job. The CONTENT (enable toggle, two
+  // recipient fields, retry settings as a secondary/advanced block, outbox
+  // counts, a manual run-once action, 400s surfaced verbatim) mirrors
+  // whatsapp.js's screen, which solves the identical problem for the
+  // sibling channel.
+  async _renderEmailNotifications(c) {
+    this._injectStyles();
+    // Gated on the USER axis, matching `_require_admin` in routes.py
+    // (`session['mt_role'] == 'admin'`) EXACTLY -- see app-shell.js's nav
+    // entry comment for why this is `ownerOnly`, not `adminOnly`, and
+    // _renderStockAccuracy's identical second check for the precedent.
+    // AuraRouter can replay this section from the URL hash with no nav
+    // click in between, so hiding the nav entry alone is not the
+    // enforcement; this guard is the real one.
+    if (window.SubsystemApp && SubsystemApp.role && SubsystemApp.role !== 'admin') {
+      return this._renderCapabilityRestricted(c, {
+        icon: '📧',
+        title: t('Email Notifications'),
+        message: t('Email notification settings are limited to the store owner. Open the till to start ringing sales.'),
+      });
+    }
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <h2 class="ret-title">${t('Email Notifications')}</h2>
+      </div>
+      <div class="sub-chart-card">
+        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Status')}</h3>
+        <div id="email-smtp-warning"></div>
+        <div id="email-smtp-note" style="color:var(--text-muted);font-size:12px;margin:0 0 14px"></div>
+        <div class="ret-field" style="margin:0;display:flex;align-items:center;gap:10px">
+          <input type="checkbox" id="email-enabled" style="width:auto" />
+          <label for="email-enabled" style="margin:0;text-transform:none;font-size:14px;color:var(--text)">${t('Enable email notifications for this business')}</label>
+        </div>
+      </div>
+      <div class="sub-chart-card">
+        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Recipients')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">${t('Where automatic emails go. Leave blank to skip that kind of email entirely.')}</p>
+        <div class="ret-field-row">
+          <div class="ret-field" style="margin:0"><label>${t('Low-Stock Alert Recipient')}</label>
+            <input type="email" id="email-low-stock" placeholder="owner@example.com" /></div>
+          <div class="ret-field" style="margin:0"><label>${t('Reports Recipient')}</label>
+            <input type="email" id="email-reports" placeholder="owner@example.com" /></div>
+        </div>
+      </div>
+      <div class="sub-chart-card">
+        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Advanced (Retry Settings)')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">${t('For whoever installed this system. A shopkeeper does not need to change these.')}</p>
+        <div class="ret-field-row">
+          <div class="ret-field" style="margin:0"><label>${t('Max Attempts')}</label>
+            <input type="number" min="1" id="email-max-attempts" /></div>
+          <div class="ret-field" style="margin:0"><label>${t('Retry Interval (Seconds)')}</label>
+            <input type="number" min="1" id="email-submit-interval" /></div>
+        </div>
+      </div>
+      <button class="ret-btn ret-btn-primary" id="email-save-btn" onclick="RetailSystem._saveEmailNotifications()">${t('Save')}</button>
+      <div class="sub-chart-card" style="margin-top:20px">
+        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Outbox')}</h3>
+        <div id="email-outbox-counts" style="display:flex;gap:10px;flex-wrap:wrap;margin:0 0 16px"></div>
+        <button class="ret-btn ret-btn-ghost" id="email-run-once-btn" onclick="RetailSystem._runEmailOutboxOnce()">${t('Send Now')}</button>
+      </div>`;
+    await this._loadEmailNotifications();
+  },
+
+  async _loadEmailNotifications() {
+    try {
+      const [statusResp, settingsResp] = await Promise.all([
+        this._get('/api/notifications/status'),
+        this._get('/api/notifications/settings'),
+      ]);
+      const status = (statusResp && statusResp.data) || {};
+      const settings = (settingsResp && settingsResp.data && settingsResp.data.settings) || {};
+      // `settings.enabled` (the RAW, unfolded per-company toggle from
+      // GET /settings) -- deliberately NOT `status.enabled`. is_enabled()
+      // (commercial_runtime/notifications/settings.py) folds
+      // smtp_client.is_configured() INTO its answer, so GET /status's
+      // `enabled` can never read true while SMTP is unconfigured -- it
+      // would always report the OFF state, which is exactly the silence
+      // this screen exists to replace with a plain statement. The raw
+      // toggle is what POST /settings actually persists (routes.py writes
+      // it unconditionally; it only skips STARTING the worker when SMTP
+      // isn't configured), so it is also the only value that can show a
+      // shop what it asked for, correctly, even when the effective answer
+      // differs.
+      const enabledOn = settings.enabled === '1';
+      this._emailSmtpConfigured = status.smtp_configured === true;
+
+      const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = (v === undefined || v === null) ? '' : v; };
+      const enabledCb = document.getElementById('email-enabled');
+      if (enabledCb) enabledCb.checked = enabledOn;
+      setVal('email-low-stock', settings.low_stock_recipient);
+      setVal('email-reports', settings.reports_recipient);
+      setVal('email-max-attempts', settings.max_attempts);
+      setVal('email-submit-interval', settings.submit_interval_seconds);
+
+      // THE MOST IMPORTANT BEHAVIOUR ON THIS SCREEN (ci-hardening-w0.3
+      // brief). AURA_SMTP_HOST is an env var set at INSTALL time -- nothing
+      // in this UI can change it. A shop CAN flip `enabled` on and save
+      // successfully (POST /settings 200s regardless of SMTP configuration;
+      // see routes.py::_post_settings, which only skips starting the worker)
+      // and have nothing ever send. That state is invisible everywhere
+      // else in the product, so it is said here, plainly, not as a subtle
+      // badge -- see retail_email_notifications_test.js's mutation proofs
+      // on both directions of this exact condition.
+      const warning = document.getElementById('email-smtp-warning');
+      if (warning) {
+        warning.innerHTML = (enabledOn && !this._emailSmtpConfigured)
+          ? `<p style="color:var(--state-warning-text);background:var(--state-warning-surface);border:1px solid var(--border-default);border-radius:8px;padding:10px 12px;font-size:13px;margin:0 0 16px">${t('Email is switched on, but this installation has no mail server configured -- nothing will actually send. Ask whoever installed this system to set AURA_SMTP_HOST.')}</p>`
+          : '';
+      }
+      // The other direction: calm, once, ONLY in the healthy state -- never
+      // repeated as a nag once SMTP is configured (brief: "do not nag when
+      // SMTP IS configured. State it once, calmly").
+      const note = document.getElementById('email-smtp-note');
+      if (note) note.textContent = this._emailSmtpConfigured ? t('This installation can send email (a mail server is configured).') : '';
+
+      this._paintEmailOutboxCounts(status.counts_by_state);
+    } catch (e) { console.error(e); }
+  },
+
+  _paintEmailOutboxCounts(counts) {
+    const box = document.getElementById('email-outbox-counts');
+    if (!box) return;
+    const c = counts || {};
+    const badge = (label, n, color) => this._badge(`${this._esc(label)}: ${Number(n || 0)}`, color);
+    box.innerHTML = [
+      badge(t('Queued'), c.QUEUED, 'blue'),
+      badge(t('Sending'), c.SENDING, 'blue'),
+      badge(t('Sent'), c.SENT, 'green'),
+      badge(t('Failed'), c.FAILED_PERMANENT, 'red'),
+      badge(t('Cancelled'), c.CANCELLED, 'purple'),
+    ].join(' ');
+  },
+
+  // /^[^\s@]+@[^\s@]+\.[^\s@]+$/ -- a permissive shape check, not a full
+  // RFC 5322 validator. The server is the real judge (POST /settings 400s
+  // on a value it rejects); this exists only to catch a typo before a
+  // round trip, matching the brief's own framing ("the server 400s, and
+  // sending a user to a 400 for a typo is avoidable").
+  _looksLikeEmail(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v); },
+
+  async _saveEmailNotifications() {
+    const enabledCb = document.getElementById('email-enabled');
+    const lowStock = (document.getElementById('email-low-stock')?.value || '').trim();
+    const reports = (document.getElementById('email-reports')?.value || '').trim();
+
+    // Client-side refusal BEFORE the network call. Empty is allowed (both
+    // recipient keys default to '' -- see settings.py's DEFAULTS -- meaning
+    // "not set", not "invalid"); only a NON-EMPTY value that does not look
+    // like an address is refused here.
+    if (lowStock && !this._looksLikeEmail(lowStock)) {
+      SubsystemApp.showToast(t('That does not look like an email address.'), 'error');
+      return;
+    }
+    if (reports && !this._looksLikeEmail(reports)) {
+      SubsystemApp.showToast(t('That does not look like an email address.'), 'error');
+      return;
+    }
+
+    const btn = document.getElementById('email-save-btn');
+    if (btn) { btn.disabled = true; btn.textContent = t('Saving…'); }
+    const payload = {
+      enabled: (enabledCb && enabledCb.checked) ? '1' : '0',
+      low_stock_recipient: lowStock,
+      reports_recipient: reports,
+      max_attempts: document.getElementById('email-max-attempts')?.value || '',
+      submit_interval_seconds: document.getElementById('email-submit-interval')?.value || '',
+    };
+    try {
+      const d = await this._post('/api/notifications/settings', payload);
+      if (d && d.status === 'success') {
+        SubsystemApp.showToast(t('Email settings saved.'), 'success');
+      } else {
+        // Surfaced VERBATIM -- routes.py's 400 message (e.g. a bad
+        // max_attempts value) is written to be read, not replaced with a
+        // generic failure toast. See requirement (6) / M-proof in
+        // retail_email_notifications_test.js.
+        SubsystemApp.showToast((d && d.message) || t('Error'), 'error');
+      }
+    } catch (e) {
+      SubsystemApp.showToast(t('Error'), 'error');
+    }
+    if (btn) { btn.disabled = false; btn.textContent = t('Save'); }
+    await this._loadEmailNotifications();
+  },
+
+  async _runEmailOutboxOnce() {
+    const btn = document.getElementById('email-run-once-btn');
+    if (btn) { btn.disabled = true; btn.textContent = t('Sending…'); }
+    try {
+      const d = await this._post('/api/notifications/outbox/run-once', {});
+      if (d && d.status === 'success') {
+        SubsystemApp.showToast(t('Outbox processed.'), 'success');
+      } else {
+        SubsystemApp.showToast((d && d.message) || t('Error'), 'error');
+      }
+    } catch (e) {
+      SubsystemApp.showToast(t('Error'), 'error');
+    }
+    if (btn) { btn.disabled = false; btn.textContent = t('Send Now'); }
+    await this._loadEmailNotifications();
   },
 
   // ── AUDIT LOG (read-only viewer, feat/audit-log-viewer) ─────────────────────
