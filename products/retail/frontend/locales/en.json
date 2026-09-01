@@ -732,5 +732,13 @@
   "Day starts at": "Day starts at",
   "Leave the timezone empty to declare nothing. Empty is not the same as choosing UTC -- UTC is a real timezone, and saving it would re-file your trading history.": "Leave the timezone empty to declare nothing. Empty is not the same as choosing UTC -- UTC is a real timezone, and saving it would re-file your trading history.",
   "Business day saved.": "Business day saved.",
-  "Could not save the business day.": "Could not save the business day."
+  "Could not save the business day.": "Could not save the business day.",
+  "Send a Summary Report": "Send a Summary Report",
+  "Queues a sales summary email now. It leaves with the next outbox run -- or press Send Now below to push it straight away. It goes to the Reports Recipient above unless you enter a different address here.": "Queues a sales summary email now. It leaves with the next outbox run -- or press Send Now below to push it straight away. It goes to the Reports Recipient above unless you enter a different address here.",
+  "Period": "Period",
+  "Last 24 hours": "Last 24 hours",
+  "Send To (optional)": "Send To (optional)",
+  "Queue Report Email": "Queue Report Email",
+  "Queuing…": "Queuing…",
+  "Report email queued.": "Report email queued."
 }

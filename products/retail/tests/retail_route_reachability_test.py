@@ -86,10 +86,15 @@ INTENTIONALLY_UNREACHABLE = {
 #: being rediscovered by a customer. Every entry is a promise to fix, or to
 #: consciously downgrade to the list above.
 KNOWN_GAPS = {
-    'reports/email':
-        'Emails a report to a recipient. The email CHANNEL gained a settings '
-        'screen in commit 50dc417, but nothing in the UI yet triggers a report '
-        'email, so the route remains unreachable. Found 2026-09-01; not fixed.',
+    # EMPTY ON PURPOSE, and empty is the goal state -- not an oversight, and
+    # not a reason to delete this dict. It held two entries on 2026-09-01
+    # (settings/business-day and reports/email); both were wired and both
+    # were removed from here only after the guard above failed with "a client
+    # now calls them", which is the evidence that closed each one.
+    #
+    # A new entry belongs here the moment a route is found unreachable and
+    # cannot be fixed in the same change. Leaving the dict in place, empty,
+    # is what keeps that the cheap option.
 }
 
 

@@ -732,5 +732,13 @@
   "Day starts at": "يبدأ اليوم عند",
   "Leave the timezone empty to declare nothing. Empty is not the same as choosing UTC -- UTC is a real timezone, and saving it would re-file your trading history.": "اترك المنطقة الزمنية فارغة لعدم تحديد أي منطقة. والفراغ ليس كاختيار التوقيت العالمي المنسق، فهو منطقة زمنية حقيقية وحفظه يعيد تصنيف سجل مبيعاتك.",
   "Business day saved.": "تم حفظ يوم العمل.",
-  "Could not save the business day.": "تعذر حفظ يوم العمل."
+  "Could not save the business day.": "تعذر حفظ يوم العمل.",
+  "Send a Summary Report": "إرسال تقرير ملخص",
+  "Queues a sales summary email now. It leaves with the next outbox run -- or press Send Now below to push it straight away. It goes to the Reports Recipient above unless you enter a different address here.": "يضع بريد ملخص المبيعات في قائمة الإرسال الآن. سيخرج مع التشغيل التالي لصندوق الصادر، أو اضغط \"إرسال الآن\" أدناه لدفعه فورًا. ويُرسل إلى مستلم التقارير أعلاه ما لم تدخل عنوانًا مختلفًا هنا.",
+  "Period": "الفترة",
+  "Last 24 hours": "آخر 24 ساعة",
+  "Send To (optional)": "إرسال إلى (اختياري)",
+  "Queue Report Email": "إضافة بريد التقرير إلى قائمة الإرسال",
+  "Queuing…": "جارٍ الإضافة…",
+  "Report email queued.": "تمت إضافة بريد التقرير إلى قائمة الإرسال."
 }

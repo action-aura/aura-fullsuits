@@ -5974,6 +5974,24 @@ const RetailSystem = {
             <input type="email" id="email-reports" placeholder="owner@example.com" /></div>
         </div>
       </div>
+      <div class="sub-chart-card" id="email-send-report-card">
+        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Send a Summary Report')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
+          ${t('Queues a sales summary email now. It leaves with the next outbox run -- or press Send Now below to push it straight away. It goes to the Reports Recipient above unless you enter a different address here.')}
+        </p>
+        <div class="ret-field-row">
+          <div class="ret-field" style="margin:0"><label>${t('Period')}</label>
+            <select id="email-report-days">
+              <option value="1">${t('Last 24 hours')}</option>
+              <option value="7">${t('Last 7 days')}</option>
+              <option value="30" selected>${t('Last 30 days')}</option>
+              <option value="90">${t('Last 90 days')}</option>
+            </select></div>
+          <div class="ret-field" style="margin:0"><label>${t('Send To (optional)')}</label>
+            <input type="email" id="email-report-recipient" dir="ltr" placeholder="owner@example.com" /></div>
+        </div>
+        <button class="ret-btn ret-btn-primary" style="margin-top:12px" id="email-send-report-btn" onclick="RetailSystem._sendReportEmail()">${t('Queue Report Email')}</button>
+      </div>
       <div class="sub-chart-card">
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Advanced (Retry Settings)')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">${t('For whoever installed this system. A shopkeeper does not need to change these.')}</p>
@@ -6112,6 +6130,51 @@ const RetailSystem = {
       SubsystemApp.showToast(t('Error'), 'error');
     }
     if (btn) { btn.disabled = false; btn.textContent = t('Save'); }
+    await this._loadEmailNotifications();
+  },
+
+  // On-demand report email -- the trigger POST /reports/email never had.
+  //
+  // The route shipped complete, with its own test file, and no client
+  // called it, so the whole email-report feature was dead on every install
+  // while its WhatsApp sibling (POST /reports/whatsapp, whatsapp.js's
+  // on-demand send) worked. Same control, same job, other channel.
+  //
+  // Nothing here re-implements the route's two refusals. It returns 400
+  // when there is no recipient anywhere and 409 when email notifications
+  // are not enabled for the company -- and `is_enabled()` folds
+  // smtp_client.is_configured() into its own answer, so an install whose
+  // SMTP was never configured is refused by that same 409 rather than by a
+  // second copy of the rule living here that could drift from it. Both
+  // messages are written to be read, so both are surfaced verbatim.
+  async _sendReportEmail() {
+    const btn = document.getElementById('email-send-report-btn');
+    const daysEl = document.getElementById('email-report-days');
+    const toEl = document.getElementById('email-report-recipient');
+
+    const payload = { days: parseInt(daysEl && daysEl.value, 10) || 30 };
+    // An empty override box must leave `recipient` OUT of the payload, so
+    // the route falls back to the configured reports_recipient. Sending an
+    // empty string would work today only because the route coerces it, and
+    // that is the route's tolerance to spend, not this screen's to rely on.
+    const to = toEl ? toEl.value.trim() : '';
+    if (to) payload.recipient = to;
+
+    if (btn) { btn.disabled = true; btn.textContent = t('Queuing…'); }
+    try {
+      const d = await this._post('/api/sub/retail/reports/email', payload);
+      if (d && d.status === 'success') {
+        SubsystemApp.showToast(t('Report email queued.'), 'success');
+        if (toEl) toEl.value = '';
+      } else {
+        SubsystemApp.showToast((d && d.message) || t('Error'), 'error');
+      }
+    } catch (e) {
+      SubsystemApp.showToast(t('Error'), 'error');
+    }
+    if (btn) { btn.disabled = false; btn.textContent = t('Queue Report Email'); }
+    // Refresh so the outbox counts reflect the row just queued -- otherwise
+    // the success toast is the only evidence anything happened.
     await this._loadEmailNotifications();
   },
 
