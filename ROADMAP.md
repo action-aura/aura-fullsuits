@@ -1812,3 +1812,45 @@ carry -- which is a business question.
 **Not touched, on purpose.** `master` lags well behind the owner/ feature
 branches, and a wide edit in their most active file is exactly the collision this
 branch has avoided all week.
+
+## 2026-09-01 — audit-log writes fail silently, by design, with no signal
+
+Found while sweeping for swallowed exceptions. Recorded, not fixed.
+
+`_audit()` (retail_api.py ~1002) and `_sec_audit`'s call sites wrap the INSERT in
+a bare `except Exception: pass`. Nothing is logged, counted or surfaced.
+
+**The trade is defensible and probably right:** a sale must not fail because the
+audit table is full, locked or corrupt. Refusing to sell in order to record that
+you sold is the wrong answer in a shop.
+
+**What is not right is that the failure leaves no trace at all.** Audit exists
+for accountability -- "who changed the price", "who approved that variance", and
+the business-day change whose own comment says "the numbers changed and nobody
+touched a sale has to have an answer". If those writes start failing, the shop
+keeps operating and keeps believing it has a trail. The gap is discovered when
+somebody goes looking for an entry that was never written, which is exactly the
+moment it is most expensive.
+
+The fix is small and does not change the trade: keep swallowing, but log the
+exception, so a silent failure becomes a discoverable one. Anything stronger --
+failing the operation, retrying, queueing -- would be worse for the reason above.
+
+Not fixed here only because retail_api.py was being read by a running full-suite
+sweep at the time. Small, safe, and worth doing.
+
+### For calibration, since sweeping for this class turned up mostly good news
+
+Zero single-line `except: pass` anywhere in the retail backend or
+commercial_runtime. Of the 25 multi-line ones, the sampled majority are
+legitimate -- `except FileNotFoundError: pass` around an idempotent `os.remove`
+and similar. The audit sites are the ones worth acting on.
+
+### And one thing checked that is NOT a defect
+
+`list_customers` caps browsing at 200 (ordered by total spend), which looked at
+first like the same silent-truncation defect found in Owner's dropdowns the same
+day. It is not: the `?q=` branch has NO limit and searches the whole table
+server-side on name, phone and email, so every customer stays findable. Owner's
+dropdowns have no search at all, which is precisely what makes those unreachable.
+Recorded so nobody re-raises it.
