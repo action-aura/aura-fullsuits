@@ -11,7 +11,8 @@
  *     Sell         Point of Sale, Returns, Barcode Scanner, Customers, Promotions
  *     Stock        Products, Categories, Suppliers, Purchase Orders
  *     Insight      Reports, Stock Accuracy, Exceptions, Audit Log
- *     Admin        Employees, Branches, Settings
+ *     Admin        Employees, Branches, Settings, Email Notifications,
+ *                  Backup & Export
  *
  * UPDATED 2026-08-30 (ROADMAP.md "retail schema v23", promotions wave 1):
  * Promotions is a 16th destination, appended to Sell -- it is a per-product/
@@ -40,6 +41,22 @@
  * axis) via `_require_admin`, not `this.isAdminDevice` (the DEVICE axis
  * `adminOnly` actually means) -- the same reasoning Employees already uses
  * for its own gate.
+ *
+ * UPDATED (ci-hardening-w0.3 continuation, "the doorway", third one on this
+ * branch and the one that matters most): Backup & Export is a 19th
+ * destination, appended to Admin. licensing.js promises a customer whose
+ * licence is RESTRICTED/SUSPENDED/EXPIRED/REVOKED that "backup, restore, and
+ * export remain available" -- commercial_runtime/backup/routes.py's four
+ * routes and retail_api.py's three CSV export routes have all been complete
+ * and correctly gated with nothing in the frontend ever calling any of
+ * them, so that promise was false at the UI level. Gated on BOTH axes,
+ * matching Stock Accuracy's precedent exactly: `ownerOnly: true` because
+ * backup/routes.py's `_require_admin()` reads `session['mt_role'] ==
+ * 'admin'` (the USER axis) for all four of its routes, none of which carry
+ * a capability code; `capability: 'retail.reports'` because the three
+ * export routes carry `@mt_require_capability(CAP_REPORTS)`. ROLE_ADMIN
+ * holds every capability including retail.reports, so the stricter
+ * (ownerOnly) axis never costs anyone the export half either.
  *
  * WHAT THIS FILE DOES NOT RE-TEST
  * The per-item visibility rule itself (capability / adminOnly / ownerOnly /
@@ -73,7 +90,7 @@ const GROUPS = [
   { label: 'Sell', items: ['pos', 'returns', 'scanner', 'customers', 'promotions'] },
   { label: 'Stock', items: ['products', 'categories', 'suppliers', 'purchases'] },
   { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
-  { label: 'Admin', items: ['employees', 'branches', 'admin-center', 'email-notifications'] },
+  { label: 'Admin', items: ['employees', 'branches', 'admin-center', 'email-notifications', 'backup-export'] },
 ];
 const ALL_DESTINATIONS = ['dashboard', ...GROUPS.flatMap((g) => g.items)];
 
@@ -192,7 +209,7 @@ function ownerEverythingVisibleHTML() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 1 — every one of the 18 destinations is still reachable for an owner
+// 1 — every one of the 19 destinations is still reachable for an owner
 // ═════════════════════════════════════════════════════════════════════════════
 
 function testAllDestinationsReachableForOwner() {
@@ -205,7 +222,7 @@ function testAllDestinationsReachableForOwner() {
     'Every id in systems.retail.navGroups must resolve to a real nav entry, and ' +
     'every non-dashboard nav entry must be listed in exactly one group.'
   );
-  assert.strictEqual(missing.length === 0 && ALL_DESTINATIONS.length, 18, 'sanity: this file\'s own expectation list drifted from 18 destinations');
+  assert.strictEqual(missing.length === 0 && ALL_DESTINATIONS.length, 19, 'sanity: this file\'s own expectation list drifted from 19 destinations');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

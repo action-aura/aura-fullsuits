@@ -788,6 +788,13 @@ const TABLE_DATA = {
   // list_branches, the same shape testTheCorpusIsClosedAgainstTheRouter
   // requires for every router case -- see the `branches` corpus entry below.
   branches: [{ id: 1, name: 'Main Branch', address: 'Amman', phone: '0790000000', status: 'active' }],
+  // ci-hardening-w0.3 continuation ("the doorway", third one on this
+  // branch): GET /api/backup/list's own shape (commercial_runtime/backup/
+  // routes.py's `_list`) -- {status:'ok', backups:[{filename,size,
+  // modified_at}]}, a DIFFERENT envelope from every retail_api.py route's
+  // {status:'success', data:...}, so apiResponseFor() answers this one
+  // literally rather than through the shared ok() helper below.
+  backups: [{ filename: 'aura-retail-backup-20260201-030000.zip', size: 2097152, modified_at: 1769916000 }],
   customers: [{ id: 'cu1', name: 'Ann Q', phone: '0791111111', email: 'ann@example.co',
     loyalty_points: 120, total_spent: 512.25, order_count: 7 }],
   heldSales: [{ id: 3, hold_number: 'H-0003', label: 'blue jacket', item_count: 2,
@@ -896,6 +903,9 @@ function apiResponseFor(url) {
   if (/\/categories/.test(u)) return ok(TABLE_DATA.categories);
   if (/\/suppliers/.test(u)) return ok(TABLE_DATA.suppliers);
   if (/\/branches/.test(u)) return ok(TABLE_DATA.branches);
+  // Literal, not ok(): see the `backups` entry in TABLE_DATA above for why
+  // this route's envelope is not {status:'success', data:...}.
+  if (/\/api\/backup\/list/.test(u)) return { status: 'ok', backups: TABLE_DATA.backups };
   if (/\/customers/.test(u)) return ok(TABLE_DATA.customers);
   if (/dashboard\/stats/.test(u)) return ok(STATS);
   return ok(STATS);
@@ -1175,6 +1185,21 @@ async function buildCorpus() {
     // table, which testCorpusRendersRealScreens would correctly refuse to
     // accept as a rendered list.
     ['branches', (rs, c) => rs._renderBranches(c)],
+    // ci-hardening-w0.3 continuation ("the doorway", third one on this
+    // branch): commercial_runtime/backup/routes.py's four backup routes and
+    // retail_api.py's three CSV export routes have all been complete and
+    // correctly gated with nothing in the frontend ever calling any of
+    // them -- see licensing.js's "backup, restore, and export remain
+    // available" promise, which was false at the UI level until this
+    // screen existed. Gated on BOTH `retail.reports` (capabilities arg
+    // below) AND `role === 'admin'` (this harness leaves SubsystemApp.role
+    // undefined, which _renderBackupExport's own fail-open-on-unknown
+    // convention treats as unresolved, not denied -- same reasoning
+    // stock-accuracy below relies on). Without 'retail.reports' this
+    // screen renders its capability-restricted panel instead of the
+    // backups table, which testCorpusRendersRealScreens would correctly
+    // refuse to accept as a rendered list.
+    ['backup-export', (rs, c) => rs._renderBackupExport(c)],
     ['scanner', (rs, c) => rs._renderScannerSettings(c)],
     // Phase 3's Stock accuracy screen. Renders into #stka-body by id, so the
     // deferred-write splice above is what puts its table back where the code
@@ -1339,8 +1364,8 @@ function testTokensResolve(h) {
 const DECLARED_SCREENS = [
   'dashboard', 'cashier-landing', 'pos',
   'sales-history', 'returns', 'purchase-orders', 'products', 'customers',
-  'suppliers', 'audit-log', 'reports', 'categories', 'branches', 'scanner',
-  'stock-accuracy',
+  'suppliers', 'audit-log', 'reports', 'categories', 'branches',
+  'backup-export', 'scanner', 'stock-accuracy',
   'customer-modal', 'sale-modal', 'held-sales-modal',
 ];
 
@@ -1381,6 +1406,7 @@ const SCREEN_ROUTES = {
   reports: 'reports',
   categories: 'categories',
   branches: 'branches',
+  'backup-export': 'backup-export',
   scanner: 'scanner',
   'stock-accuracy': 'stock-accuracy',
 };

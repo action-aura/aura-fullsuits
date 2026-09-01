@@ -668,6 +668,39 @@ const SubsystemApp = {
         // standing at the admin terminal (whose every mutating click would
         // 403) while hiding it from the owner working from a second device.
         { id: 'email-notifications', label: 'Email Notifications', icon: '📧', ownerOnly: true },
+        // ci-hardening-w0.3 continuation: THE DOORWAY, a third one on this
+        // branch, and the one that matters most: licensing.js promises a
+        // customer whose licence is RESTRICTED/SUSPENDED/EXPIRED/REVOKED --
+        // the exact moment they are wondering whether they can get their
+        // data out -- "Your existing data is safe and remains viewable;
+        // backup, restore, and export remain available." Four backup routes
+        // (commercial_runtime/backup/routes.py: POST /create, GET /list,
+        // GET /download/<filename>, POST /restore) and three CSV export
+        // routes (retail_api.py: /reports/export/{sales,payments,
+        // cash-sessions}) have all been complete and correctly gated since
+        // before this branch started. Nothing in the frontend ever called
+        // any of them, so the promise above was false at the UI level.
+        //
+        // Both axes, matching _renderStockAccuracy's precedent exactly for
+        // the identical reason: `capability: 'retail.reports'` matches
+        // export_{sales,payments,cash_sessions}_csv's own
+        // @mt_require_capability(CAP_REPORTS) decorator, and `ownerOnly`
+        // matches backup/routes.py's `_require_admin()`, which
+        // reads `session['mt_role'] == 'admin'` (the USER axis) for EVERY
+        // one of its four routes, none of which carry a capability code at
+        // all. ROLE_ADMIN holds every capability including retail.reports
+        // (user_accounts.py's ROLE_CAPABILITIES), so gating the whole
+        // screen on the stricter (admin) axis never costs a manager the
+        // export half either -- it would already 403 on the backup half.
+        //
+        // Deliberately NOT keyed on licence state anywhere: neither
+        // backup/routes.py nor the three export routes carry a
+        // @require_license_capability decorator at all (unlike most of
+        // this file's mutating routes), so this screen is reachable and
+        // fully functional under EVERY licence state, RESTRICTED included
+        // -- the exact state the promise above is made in. See
+        // retail_backup_export_test.js's testWorksUnderRestrictedLicence.
+        { id: 'backup-export', label: 'Backup & Export', icon: '💾', ownerOnly: true, capability: 'retail.reports' },
         // feat/audit-log-viewer: same adminOnly mechanism as Admin Center
         // above -- refund/void/product-change audit trail carries every
         // user's attribution, not just this device's, so it's gated the
@@ -757,7 +790,7 @@ const SubsystemApp = {
         { label: 'Sell',    items: ['pos', 'returns', 'scanner', 'customers', 'promotions'] },
         { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases'] },
         { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
-        { label: 'Admin',   items: ['employees', 'branches', 'admin-center', 'email-notifications'] },
+        { label: 'Admin',   items: ['employees', 'branches', 'admin-center', 'email-notifications', 'backup-export'] },
       ],
     },
   },

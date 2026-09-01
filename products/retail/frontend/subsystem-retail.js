@@ -192,6 +192,13 @@ const RetailSystem = {
       // (commercial_runtime/notifications/routes.py) have been complete
       // with nothing in this file ever calling them.
       case 'email-notifications': return this._renderEmailNotifications(c);
+      // ci-hardening-w0.3 continuation ("the doorway", third one on this
+      // branch, and the one that matters most): see app-shell.js's nav
+      // entry comment and _renderBackupExport below for the full story --
+      // licensing.js promises a customer on a restricted licence that
+      // backup, restore and export remain available, and nothing in this
+      // file ever called any of the seven routes that promise depends on.
+      case 'backup-export': return this._renderBackupExport(c);
       case 'audit-log':    return this._renderAuditLog(c);
       // Phase 3 (docs/launch-readiness/phase3-ledger-truth.md). Owner-facing
       // report over the inventory_balances/inventory_movements comparison --
@@ -8314,6 +8321,266 @@ const RetailSystem = {
         });
       }
     } catch(e) { console.error('Retail reports error:', e); }
+  },
+
+  // ── BACKUP & EXPORT (ci-hardening-w0.3 continuation, "the doorway", third
+  //    one on this branch -- the one that matters most) ───────────────────────
+  // licensing.js tells a customer whose licence is RESTRICTED/SUSPENDED/
+  // EXPIRED/REVOKED -- the moment they are most anxious about whether they
+  // can get their data out -- "Your existing data is safe and remains
+  // viewable; backup, restore, and export remain available." Four backup
+  // routes (commercial_runtime/backup/routes.py: POST /create, GET /list,
+  // GET /download/<filename>, POST /restore) and three CSV export routes
+  // (retail_api.py: /reports/export/{sales,payments,cash-sessions}) have all
+  // been complete, correctly gated and correct all along. Nothing in this
+  // file, or anywhere in the frontend, ever called any of them -- verified,
+  // zero requests to any of the seven. So the promise above was false at the
+  // UI level for exactly the customer it is made to.
+  //
+  // Structure mirrors _renderBranches' list+create shape for the backups
+  // table and _renderEmailNotifications' settings-card shape for the export
+  // controls -- both already live in this file, so this is not a third
+  // pattern for the same job.
+  async _renderBackupExport(c) {
+    this._injectStyles();
+
+    // Capability gate: matches export_sales_csv / export_payments_csv /
+    // export_cash_sessions_csv's own @mt_require_capability(CAP_REPORTS)
+    // decorator (retail_api.py) -- the SAME code Reports/Audit Log/Stock
+    // Accuracy/Exceptions already gate on.
+    if (window.SubsystemApp && !SubsystemApp.hasCapability('retail.reports')) {
+      return this._renderCapabilityRestricted(c, {
+        icon: '💾',
+        title: t('Backup & Export'),
+        message: t('Backups and data exports are limited to managers and the store owner. Open the till to start ringing sales.'),
+      });
+    }
+    // Role gate: matches backup/routes.py's `_require_admin()`, which reads
+    // `session['mt_role'] == 'admin'` -- the USER axis, not the DEVICE axis
+    // `adminOnly` means. Every one of the four backup routes (create, list,
+    // download, restore) requires it, and none of them carry a capability
+    // code at all. Same two-gate shape as _renderStockAccuracy above, for
+    // the same reason: a manager holding retail.reports can already reach
+    // Reports and Exceptions, but every backup button on THIS screen would
+    // 403 for them, so the whole screen -- not just the backup half -- stays
+    // owner-only. ROLE_ADMIN holds every capability code including
+    // retail.reports (user_accounts.py's ROLE_CAPABILITIES), so this gate
+    // never costs anyone the export half either: nobody it lets through was
+    // ever going to be refused retail.reports by the gate above.
+    //
+    // Refuses only when the role is KNOWN and is not admin -- the same
+    // fail-open-on-unknown convention hasCapability() documents and
+    // _renderStockAccuracy's identical check already uses. `SubsystemApp.role`
+    // is '' until /api/auth/session resolves, and that is "unknown", not
+    // "denied".
+    if (window.SubsystemApp && SubsystemApp.role && SubsystemApp.role !== 'admin') {
+      return this._renderCapabilityRestricted(c, {
+        icon: '💾',
+        title: t('Backup & Export'),
+        message: t('Backups and restoring data are limited to the store owner. Open the till to start ringing sales.'),
+      });
+    }
+
+    // Deliberately NOT keyed on licence state anywhere above, and there is
+    // no licence-state field to key on even if that were wanted:
+    // SubsystemApp carries no persisted license/state property at all (see
+    // app-shell.js), and neither backup/routes.py nor the three export
+    // routes carry a @require_license_capability decorator -- unlike most
+    // mutating routes in retail_api.py. So this screen is reachable and
+    // fully functional under EVERY licence state, RESTRICTED included,
+    // which is the exact state licensing.js makes its promise in. See
+    // retail_backup_export_test.js's testWorksUnderRestrictedLicence, the
+    // headline test in this screen's brief.
+    const today = new Date();
+    const monthAgo = new Date(today.getTime() - 29 * 24 * 60 * 60 * 1000);
+    const toISO = (d) => d.toISOString().slice(0, 10);
+
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <h2 class="ret-title">${t('Backup & Export')}</h2>
+      </div>
+      <div class="sub-chart-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <h3 style="color:var(--text-primary);margin:0;font-size:15px">${t('Backups')}</h3>
+          <button class="ret-btn ret-btn-primary" id="bex-create-btn" onclick="RetailSystem._createBackup()">${t('Create Backup')}</button>
+        </div>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">${t('A backup is a full copy of this shop\'s data -- products, sales, customers and settings -- saved as one file on this device.')}</p>
+        <div style="overflow-x:auto">
+          <table class="ret-table" id="bex-backup-table">
+            <thead><tr><th>${t('File')}</th><th>${t('Size')}</th><th>${t('Created')}</th><th>${t('Actions')}</th></tr></thead>
+            <tbody id="bex-backup-tbody"><tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="sub-chart-card" style="margin-top:20px">
+        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Export Data (CSV)')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">${t('Download a spreadsheet of this shop\'s records for the date range below, for accounting or an outside system.')}</p>
+        <div class="ret-field-row" style="grid-template-columns:1fr 1fr;gap:10px;align-items:end;margin-bottom:16px;max-width:420px">
+          <div class="ret-field" style="margin:0"><label>${t('From')}</label>
+            <input type="date" id="bex-date-from" value="${toISO(monthAgo)}" /></div>
+          <div class="ret-field" style="margin:0"><label>${t('To')}</label>
+            <input type="date" id="bex-date-to" value="${toISO(today)}" /></div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._exportCsv('sales')">${t('Sales (Line Items)')}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._exportCsv('payments')">${t('Payments')}</button>
+          <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._exportCsv('cash-sessions')">${t('Cash Sessions (Z Reports)')}</button>
+        </div>
+      </div>`;
+    await this._loadBackups();
+  },
+
+  async _loadBackups() {
+    try {
+      const d = await this._get('/api/backup/list');
+      // commercial_runtime/backup/routes.py answers {status:'ok', backups:
+      // [...]} -- a DIFFERENT envelope from the {status:'success', data:...}
+      // shape every retail_api.py route uses, because it is a different
+      // module with its own convention. Reading `.data` here would silently
+      // render nothing, which is exactly the class of miss this whole task
+      // exists to fix.
+      const list = (d && d.status === 'ok' && Array.isArray(d.backups)) ? d.backups : [];
+      this._backups = list;
+      const tbody = document.getElementById('bex-backup-tbody');
+      if (!tbody) return;
+      if (!list.length) {
+        tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:30px">${t('No backups yet.')}</td></tr>`;
+        return;
+      }
+      // Every interpolated value is escaped even though these filenames are
+      // server-generated (aura-<product>-backup-<timestamp>.zip), matching
+      // this file's own convention of never trusting a value into innerHTML
+      // unescaped regardless of where it happened to originate.
+      tbody.innerHTML = list.map(b => `<tr>
+        <td style="font-weight:600;word-break:break-all">${this._esc(b.filename)}</td>
+        <td style="color:var(--text-muted)">${this._fmtBytes(b.size)}</td>
+        <td style="color:var(--text-muted)">${b.modified_at ? this._bdi(new Date(b.modified_at * 1000).toLocaleString()) : '—'}</td>
+        <td style="white-space:nowrap">
+          <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._downloadUrl('/api/backup/download/${encodeURIComponent(b.filename)}')">${t('Download')}</button>
+          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._openRestoreConfirm('${this._esc(b.filename).replace(/'/g,"\\'")}')">${t('Restore')}</button>
+        </td>
+      </tr>`).join('');
+    } catch (e) { console.error(e); }
+  },
+
+  _fmtBytes(n) {
+    const num = Number(n) || 0;
+    if (num >= 1024 * 1024) return (num / (1024 * 1024)).toFixed(2) + ' MB';
+    if (num >= 1024) return (num / 1024).toFixed(1) + ' KB';
+    return num + ' B';
+  },
+
+  async _createBackup() {
+    const btn = document.getElementById('bex-create-btn');
+    if (btn) { btn.disabled = true; btn.textContent = t('Creating…'); }
+    try {
+      const d = await this._post('/api/backup/create', {});
+      if (d && d.status === 'ok') {
+        SubsystemApp.showToast(t('Backup created.'), 'success');
+      } else {
+        // Surfaced verbatim, same convention _saveEmailNotifications uses --
+        // routes.py's own message (e.g. "Backup creation failed.") is
+        // written to be read, not replaced with a generic failure toast.
+        SubsystemApp.showToast((d && d.message) || t('Error'), 'error');
+      }
+    } catch (e) {
+      SubsystemApp.showToast(t('Error'), 'error');
+    }
+    if (btn) { btn.disabled = false; btn.textContent = t('Create Backup'); }
+    await this._loadBackups();
+  },
+
+  // A same-origin GET carries the session cookie on a plain navigation just
+  // as it would on a fetch with credentials:'include' -- no fetch/blob
+  // round trip needed for a route that already streams
+  // `Content-Disposition: attachment` (backup/routes.py's `_download`,
+  // retail_api.py's `_stream_csv_export`). Reuses the exact <a>+.click()
+  // mechanism import-wizard.js's downloadTemplate() already established in
+  // this frontend, just pointed at a server URL instead of a blob URL --
+  // there is no OTHER download idiom in this codebase to reuse instead.
+  _downloadUrl(url) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  },
+
+  // Three distinct routes, one per CSV -- see retail_backup_export_test.js's
+  // testEachExportHitsItsOwnDistinctRoute and its M4 mutation proof (pointing
+  // two of these at the same route must turn that test red).
+  _exportCsv(kind) {
+    const from = document.getElementById('bex-date-from')?.value;
+    const to = document.getElementById('bex-date-to')?.value;
+    // _export_date_range() (retail_api.py) requires BOTH bounds -- an
+    // accounting export has no "just the last page" fallback, so refusing
+    // client-side before the round trip matches every other client-side
+    // refusal in this file rather than sending the operator to a 400 for an
+    // empty date field.
+    if (!from || !to) {
+      SubsystemApp.showToast(t('Pick a date range first.'), 'error');
+      return;
+    }
+    const routes = {
+      sales: '/api/sub/retail/reports/export/sales',
+      payments: '/api/sub/retail/reports/export/payments',
+      'cash-sessions': '/api/sub/retail/reports/export/cash-sessions',
+    };
+    const path = routes[kind];
+    if (!path) return;
+    const qs = `date_from=${encodeURIComponent(from)}&date_to=${encodeURIComponent(to)}`;
+    this._downloadUrl(`${path}?${qs}`);
+  },
+
+  // Restore OVERWRITES the shop's live data (backup/routes.py's `_restore`
+  // replaces the running databases outright) -- the single most dangerous
+  // action reachable from this screen, and deliberately NOT a one-click
+  // action sitting next to Download. This opens a modal that states the
+  // consequence in plain words; _confirmRestore below, wired to the modal's
+  // OWN button, is the only thing that actually POSTs. A click on the table
+  // row's "Restore" button alone can never fire the request -- see
+  // retail_backup_export_test.js's testRestoreRequiresExplicitConfirmation
+  // and its M3 mutation proof.
+  _openRestoreConfirm(filename) {
+    const overlay = document.createElement('div');
+    overlay.className = 'ret-modal-overlay';
+    overlay.id = 'ret-restore-modal';
+    overlay.innerHTML = `
+      <div class="ret-modal" style="width:460px">
+        <h3>⚠️ ${t('Restore This Backup?')}</h3>
+        <p style="color:var(--text);font-size:14px;line-height:1.7;margin:0 0 14px">
+          ${t('This replaces every product, sale, customer and setting in this shop with what was saved in this backup file. Anything recorded since then is lost, and this cannot be undone from this screen.')}
+        </p>
+        <p style="color:var(--text-muted);font-size:12px;margin:0 0 22px;word-break:break-all">${this._esc(filename)}</p>
+        <div class="ret-modal-footer">
+          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-restore-modal').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-danger" id="bex-restore-confirm-btn" onclick="RetailSystem._confirmRestore('${this._esc(filename).replace(/'/g,"\\'")}')">${t('Yes, Restore & Overwrite')}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  },
+
+  async _confirmRestore(filename) {
+    const btn = document.getElementById('bex-restore-confirm-btn');
+    if (btn) { btn.disabled = true; btn.textContent = t('Restoring…'); }
+    try {
+      const d = await this._post('/api/backup/restore', { filename });
+      if (d && d.status === 'ok') {
+        // The server's own message ("Restore complete. Restart the
+        // application before continuing.") survives verbatim -- restarting
+        // is not optional, and inventing different wording here risks
+        // saying something the server did not mean.
+        SubsystemApp.showToast(d.message || t('Restore complete. Restart the application before continuing.'), 'success');
+      } else {
+        SubsystemApp.showToast((d && d.message) || t('Error'), 'error');
+      }
+    } catch (e) {
+      SubsystemApp.showToast(t('Error'), 'error');
+    }
+    const modal = document.getElementById('ret-restore-modal');
+    if (modal) modal.remove();
   },
 
   // ── SCANNER SETTINGS ──────────────────────────────────────────────────────
