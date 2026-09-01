@@ -784,6 +784,10 @@ const TABLE_DATA = {
   categories: [{ id: 'c1', name: 'Beverages' }],
   suppliers: [{ id: 's1', name: 'Acme Trading', phone: '0790000000', email: 'ops@acme.example',
     address: 'Amman', order_count: 4 }],
+  // ci-hardening-w0.3 continuation ("the doorway"): create_branch's own
+  // list_branches, the same shape testTheCorpusIsClosedAgainstTheRouter
+  // requires for every router case -- see the `branches` corpus entry below.
+  branches: [{ id: 1, name: 'Main Branch', address: 'Amman', phone: '0790000000', status: 'active' }],
   customers: [{ id: 'cu1', name: 'Ann Q', phone: '0791111111', email: 'ann@example.co',
     loyalty_points: 120, total_spent: 512.25, order_count: 7 }],
   heldSales: [{ id: 3, hold_number: 'H-0003', label: 'blue jacket', item_count: 2,
@@ -891,6 +895,7 @@ function apiResponseFor(url) {
   if (/\/products/.test(u)) return ok(TABLE_DATA.products);
   if (/\/categories/.test(u)) return ok(TABLE_DATA.categories);
   if (/\/suppliers/.test(u)) return ok(TABLE_DATA.suppliers);
+  if (/\/branches/.test(u)) return ok(TABLE_DATA.branches);
   if (/\/customers/.test(u)) return ok(TABLE_DATA.customers);
   if (/dashboard\/stats/.test(u)) return ok(STATS);
   return ok(STATS);
@@ -1160,14 +1165,29 @@ async function buildCorpus() {
     // against RetailSystem.render()'s switch.
     ['reports', (rs, c) => rs._renderReports(c)],
     ['categories', (rs, c) => rs._renderCategories(c)],
+    // ci-hardening-w0.3 continuation ("the doorway"): create_branch
+    // (retail_api.py) has been a complete, gated route since Phase 5 wave A
+    // with nothing in the frontend ever calling it. Rendered with
+    // ['retail.employees'] below (loadRetailSystem's capabilities arg),
+    // matching _renderBranches' own gate on the SAME code create_branch's
+    // @mt_require_capability(CAP_EMPLOYEES) decorator requires -- without
+    // it this screen renders its capability-restricted panel instead of the
+    // table, which testCorpusRendersRealScreens would correctly refuse to
+    // accept as a rendered list.
+    ['branches', (rs, c) => rs._renderBranches(c)],
     ['scanner', (rs, c) => rs._renderScannerSettings(c)],
     // Phase 3's Stock accuracy screen. Renders into #stka-body by id, so the
     // deferred-write splice above is what puts its table back where the code
     // put it — same mechanism as every other screen here.
     ['stock-accuracy', (rs, c) => rs._renderStockAccuracy(c)],
   ];
+  // 'retail.employees' added alongside 'retail.reports' for the `branches`
+  // entry above (create_branch's own @mt_require_capability(CAP_EMPLOYEES)
+  // gate) -- every OTHER list screen here only ever checks for
+  // 'retail.reports' being present, never for 'retail.employees' being
+  // absent, so widening this shared grant does not change any of them.
   for (const [name, render] of listScreens) {
-    const ctx = loadRetailSystem(['retail.reports']);
+    const ctx = loadRetailSystem(['retail.reports', 'retail.employees']);
     const content = makeStub();
     await render(ctx.RetailSystem, content);
     await settle();
@@ -1319,7 +1339,7 @@ function testTokensResolve(h) {
 const DECLARED_SCREENS = [
   'dashboard', 'cashier-landing', 'pos',
   'sales-history', 'returns', 'purchase-orders', 'products', 'customers',
-  'suppliers', 'audit-log', 'reports', 'categories', 'scanner',
+  'suppliers', 'audit-log', 'reports', 'categories', 'branches', 'scanner',
   'stock-accuracy',
   'customer-modal', 'sale-modal', 'held-sales-modal',
 ];
@@ -1360,6 +1380,7 @@ const SCREEN_ROUTES = {
   'audit-log': 'audit-log',
   reports: 'reports',
   categories: 'categories',
+  branches: 'branches',
   scanner: 'scanner',
   'stock-accuracy': 'stock-accuracy',
 };

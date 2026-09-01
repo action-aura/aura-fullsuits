@@ -169,6 +169,11 @@ const RetailSystem = {
       case 'promotions':return this._renderPromotions(c);
       case 'suppliers': return this._renderSuppliers(c);
       case 'purchases': return this._renderPurchases(c);
+      // ci-hardening-w0.3 continuation ("the doorway"): see app-shell.js's
+      // nav entry comment and _renderBranches below for the full story --
+      // create_branch (retail_api.py) has been complete and gated since
+      // Phase 5 wave A with nothing in this file ever calling it.
+      case 'branches':  return this._renderBranches(c);
       case 'returns':   return this._renderReturns(c);
       case 'sales':     return this._renderSalesHistory(c);
       case 'reports':   return this._renderReports(c);
@@ -5348,6 +5353,146 @@ const RetailSystem = {
       document.body.appendChild(overlay);
       overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
     } catch(e) {}
+  },
+
+  // ── BRANCHES (ci-hardening-w0.3 continuation, "the doorway") ────────────────
+  // create_branch (retail_api.py:7894) has been a complete, gated route
+  // (CAP_EMPLOYEES + licence guard) since Phase 5 wave A -- nothing in this
+  // file ever called it, so every install self-healed exactly one branch
+  // (_default_branch) and a shop had no way to add a second. Whole features
+  // shipped on top of a second branch existing (device-branch pinning,
+  // branch-scoped accounts, branch managers, the head-office comparison
+  // chart) were real, tested and unreachable. See app-shell.js's nav entry
+  // for the same story from the other end.
+  //
+  // LIST AND CREATE ONLY, deliberately -- that is exactly the API surface
+  // (GET /branches, POST /branches; no PATCH, no DELETE). Rename/deactivate
+  // are NOT built here: a branch carries stock balances, sale history,
+  // scoped user accounts and pinned tills, so "what happens to those" is a
+  // real design question this screen does not answer, not a CRUD gap.
+  async _renderBranches(c) {
+    this._injectStyles();
+    // Capability gate, same mechanism/reasoning as _renderPromotions and
+    // _renderReports above -- read those comments first. 'retail.employees'
+    // is CAP_EMPLOYEES (commercial_runtime/identity/user_accounts.py), the
+    // SAME code create_branch's own @mt_require_capability(CAP_EMPLOYEES)
+    // decorator requires. Hiding the nav entry (app-shell.js) is not the
+    // enforcement; this guard is the real one, for the same reason
+    // AuraRouter can replay this section from the URL hash with no nav
+    // click in between.
+    if (window.SubsystemApp && !SubsystemApp.hasCapability('retail.employees')) {
+      return this._renderCapabilityRestricted(c, {
+        icon: '🏦',
+        title: t('Branches'),
+        message: t('Managing branches is limited to managers and the store owner. Open the till to start ringing sales.'),
+      });
+    }
+    c.innerHTML = `
+      <div class="ret-hdr">
+        <h2 class="ret-title">${t('Branches')}</h2>
+        <div style="display:flex;gap:10px">
+          <button class="sub-btn-primary" onclick="RetailSystem._openAddBranch()">+ ${t('Add Branch')}</button>
+        </div>
+      </div>
+      <div id="branches-pin-notice"></div>
+      <div class="sub-chart-card">
+        <div style="overflow-x:auto">
+          <table class="ret-table" id="branch-table">
+            <thead><tr><th>${t('Branch Name')}</th><th>${t('Address')}</th><th>${t('Phone')}</th><th>${t('Status')}</th></tr></thead>
+            <tbody><tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
+          </table>
+        </div>
+      </div>`;
+    await this._loadBranches();
+  },
+
+  async _loadBranches() {
+    try {
+      const data = (await this._get('/api/sub/retail/branches')).data || [];
+      this._branches = data;
+      const notice = document.getElementById('branches-pin-notice');
+      if (notice) {
+        // The one piece of guidance this screen must carry (ci-hardening-
+        // w0.3 brief): once a SECOND branch exists, an unpinned till files
+        // its sales under the company's FIRST branch, silently -- the exact
+        // defect dc22b04 fixed, and no report looks odd when it happens. A
+        // single-branch shop has no such concept and must not be nagged
+        // about it -- see the mutation proof on this exact condition in
+        // retail_branches_test.js (M3: showing this with ONE branch must
+        // turn that test red).
+        notice.innerHTML = this._branches.length > 1
+          ? `<p class="ret-branch-pin-notice" style="color:var(--state-warning-text);font-size:13px;margin:0 0 16px">${t('Every till now needs its own branch pin, or its sales silently file under your first branch -- set it per device in Settings, under This Device\'s Branch.')}</p>`
+          : '';
+      }
+      const tbody = document.querySelector('#branch-table tbody');
+      if (!tbody) return;
+      if (!data.length) {
+        tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:30px">${t('No branches found.')}</td></tr>`;
+        return;
+      }
+      // Every interpolated value here is escaped (this._esc): `branch` is a
+      // synced entity type (Wave B, sync_service.py) so a row can arrive
+      // from ANOTHER DEVICE over the sync relay -- the same trust boundary
+      // Category/Supplier/Customer already cross.
+      tbody.innerHTML = data.map(b => `<tr>
+        <td style="font-weight:600">${this._esc(b.name)}</td>
+        <td style="color:var(--text-muted)">${b.address ? this._esc(b.address) : '—'}</td>
+        <td style="color:var(--text-muted)">${b.phone ? this._esc(b.phone) : '—'}</td>
+        <td>${this._badge(b.status === 'active' ? t('Active') : t('Inactive'), b.status === 'active' ? 'green' : 'red')}</td>
+      </tr>`).join('');
+    } catch (e) { console.error(e); }
+  },
+
+  _openAddBranch() { this._showBranchModal(); },
+
+  _showBranchModal() {
+    const overlay = document.createElement('div');
+    overlay.className = 'ret-modal-overlay';
+    overlay.id = 'ret-branch-modal';
+    overlay.innerHTML = `
+      <div class="ret-modal" style="width:440px">
+        <h3>🏦 ${t('Add Branch')}</h3>
+        <div class="ret-field"><label>${t('Branch Name')} *</label><input id="brm-name" /></div>
+        <div class="ret-field"><label>${t('Address')}</label><input id="brm-address" /></div>
+        <div class="ret-field"><label>${t('Phone')}</label><input id="brm-phone" /></div>
+        <div class="ret-modal-footer">
+          <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-branch-modal').remove()">${t('Cancel')}</button>
+          <button class="ret-btn ret-btn-primary" id="brm-btn" onclick="RetailSystem._saveBranch()">${t('Add Branch')}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if(e.target===overlay) overlay.remove(); });
+    document.getElementById('brm-name')?.focus();
+  },
+
+  async _saveBranch() {
+    // Client-side refusal BEFORE the network call: create_branch 400s on a
+    // blank name (retail_api.py) -- this guard means the operator sees an
+    // immediate inline refusal instead of a round trip just to be told the
+    // same thing. See the mutation proof on this exact guard in
+    // retail_branches_test.js.
+    const name = document.getElementById('brm-name')?.value.trim();
+    if (!name) { SubsystemApp.showToast(t('Name required'), 'error'); return; }
+    const btn = document.getElementById('brm-btn');
+    if (btn) { btn.disabled = true; btn.textContent = t('Saving…'); }
+    const payload = {
+      name,
+      address: document.getElementById('brm-address')?.value || '',
+      phone: document.getElementById('brm-phone')?.value || '',
+    };
+    try {
+      const d = await this._post('/api/sub/retail/branches', payload);
+      if (d.status === 'success') {
+        SubsystemApp.showToast(t('Branch added'), 'success');
+        document.getElementById('ret-branch-modal')?.remove();
+        this._loadBranches();
+      } else {
+        SubsystemApp.showToast(d.message || t('Error'), 'error');
+        if (btn) { btn.disabled = false; btn.textContent = t('Add Branch'); }
+      }
+    } catch (e) {
+      if (btn) { btn.disabled = false; btn.textContent = t('Add Branch'); }
+    }
   },
 
   // ── ADMIN CENTER (feat/reorder-automation-foundation) ───────────────────────

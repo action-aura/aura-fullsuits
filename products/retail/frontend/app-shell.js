@@ -631,6 +631,23 @@ const SubsystemApp = {
         // admin terminal would be shown a screen every button on which
         // answers 403.
         { id: 'employees',    label: 'Employees',       icon: '👤', ownerOnly: true },
+        // ci-hardening-w0.3 continuation: THE DOORWAY. POST /api/sub/retail/
+        // branches (retail_api.py:7894, create_branch) has been complete and
+        // gated since Phase 5 wave A -- nothing in the frontend ever called
+        // it. Every install therefore self-heals exactly one branch
+        // (_default_branch) and a shop has had no way to add a second, ever,
+        // which left an entire multi-store programme already shipped on top
+        // of it (device-branch pinning dc22b04, branch-scoped accounts
+        // ab6b3c1, branch managers 93cef8c, the head-office comparison
+        // chart) real, tested and unreachable.
+        //
+        // `capability: 'retail.employees'` matches create_branch's own
+        // @mt_require_capability(CAP_EMPLOYEES) decorator exactly, the same
+        // reasoning as every other capability-gated entry in this list: a
+        // cashier must not be shown a screen every button of which would
+        // 403. list_branches (GET) carries no capability of its own -- read
+        // access is not the gate here, creating a new one is.
+        { id: 'branches',     label: 'Branches',        icon: '🏦', capability: 'retail.employees' },
         { id: 'admin-center', label: 'Settings',        icon: '⚙️', adminOnly: true },
         // feat/audit-log-viewer: same adminOnly mechanism as Admin Center
         // above -- refund/void/product-change audit trail carries every
@@ -721,7 +738,7 @@ const SubsystemApp = {
         { label: 'Sell',    items: ['pos', 'returns', 'scanner', 'customers', 'promotions'] },
         { label: 'Stock',   items: ['products', 'categories', 'suppliers', 'purchases'] },
         { label: 'Insight', items: ['reports', 'stock-accuracy', 'exceptions', 'audit-log'] },
-        { label: 'Admin',   items: ['employees', 'admin-center'] },
+        { label: 'Admin',   items: ['employees', 'branches', 'admin-center'] },
       ],
     },
   },

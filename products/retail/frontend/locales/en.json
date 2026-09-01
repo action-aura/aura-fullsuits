@@ -667,5 +667,12 @@
   "variants": "variants",
   "Variant label": "Variant label",
   "e.g. Red / L": "e.g. Red / L",
-  "JD": "JD"
+  "JD": "JD",
+  "Branches": "Branches",
+  "Add Branch": "Add Branch",
+  "Branch Name": "Branch Name",
+  "No branches found.": "No branches found.",
+  "Branch added": "Branch added",
+  "Managing branches is limited to managers and the store owner. Open the till to start ringing sales.": "Managing branches is limited to managers and the store owner. Open the till to start ringing sales.",
+  "Every till now needs its own branch pin, or its sales silently file under your first branch -- set it per device in Settings, under This Device's Branch.": "Every till now needs its own branch pin, or its sales silently file under your first branch -- set it per device in Settings, under This Device's Branch."
 }

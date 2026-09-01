@@ -667,5 +667,12 @@
   "variants": "متغيرات",
   "Variant label": "تسمية المتغير",
   "e.g. Red / L": "مثال: أحمر / كبير",
-  "JD": "د.أ"
+  "JD": "د.أ",
+  "Branches": "الفروع",
+  "Add Branch": "إضافة فرع",
+  "Branch Name": "اسم الفرع",
+  "No branches found.": "لم يتم العثور على فروع.",
+  "Branch added": "تمت إضافة الفرع",
+  "Managing branches is limited to managers and the store owner. Open the till to start ringing sales.": "إدارة الفروع متاحة للمديرين ومالك المتجر فقط. افتح نقطة البيع لبدء تسجيل المبيعات.",
+  "Every till now needs its own branch pin, or its sales silently file under your first branch -- set it per device in Settings, under This Device's Branch.": "أصبح على كل جهاز الآن تثبيت فرعه الخاص، وإلا فستُسجَّل مبيعاته بصمت تحت فرعك الأول -- اضبط ذلك لكل جهاز من الإعدادات، ضمن قسم فرع هذا الجهاز."
 }
