@@ -2290,6 +2290,35 @@ html[data-theme="light"] {
   user-select: none;
 }
 
+/* PHONE: the sidebar collapses to an icon rail roughly 41px wide, and these
+   captions were still being painted into it. Measured on the running app at
+   390px: "STOCK" wants 52px against a 41px client box, "INSIGHT" 59px,
+   "ADMIN" 51px -- every one cut mid-word, on every phone screen, in English
+   and Arabic alike.
+
+   Visually hidden, NOT `display: none`. A caption cut to "STO" is worse than
+   no caption, but the grouping is still real information and a screen reader
+   should keep it; at this width the icons carry the grouping visually. The
+   element also has to stay in the DOM because retail_nav_groups_test.js
+   asserts every group header renders.
+
+   Logical properties throughout -- retail_design_rtl_test.js scans this file
+   for physical left/right, and this rule has to mirror cleanly in Arabic. */
+@media (max-width: 640px) {
+  .sub-nav-group-label {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    margin-block: -1px;
+    margin-inline: -1px;
+    padding-block: 0;
+    padding-inline: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
 .sub-sidebar-bottom {
   padding: 14px 10px;
   border-top: 1px solid var(--border-hairline);
