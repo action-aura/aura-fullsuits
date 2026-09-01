@@ -1010,12 +1010,18 @@ const SubsystemApp = {
 
     const bar = document.createElement('div');
     bar.id = 'aura-admin-device-claim';
-    bar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:24px;z-index:99998;display:flex;align-items:center;gap:14px;max-width:min(680px,92vw);padding:14px 18px;border-radius:14px;background:#1e1e2e;border:1px solid rgba(244,63,94,.45);box-shadow:0 10px 30px rgba(0,0,0,.45);color:#e8e8f0;font-size:13px;line-height:1.5;';
+    bar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:24px;z-index:99998;display:flex;align-items:center;gap:14px;flex-wrap:wrap;max-width:min(680px,92vw);padding:14px 18px;border-radius:14px;background:#1e1e2e;border:1px solid rgba(244,63,94,.45);box-shadow:0 10px 30px rgba(0,0,0,.45);color:#e8e8f0;font-size:13px;line-height:1.5;';
     // textContent (not innerHTML) for the message, and every button built as
     // a real element: nothing here interpolates a server-supplied string
     // into markup.
     const msg = document.createElement('span');
-    msg.style.cssText = 'flex:1;';
+    // flex BASIS, not a bare flex:1. At 390px the two buttons take their
+    // intrinsic width first and left the message about 60px, which wrapped
+    // it to ONE WORD PER LINE and grew this banner to roughly half the
+    // phone screen, burying the till underneath it. With a 220px basis and
+    // flex-wrap on the container, the buttons drop to their own row instead
+    // and the sentence reads normally.
+    msg.style.cssText = 'flex:1 1 220px;min-inline-size:0;';
     msg.textContent = 'This device is not yet your store\'s admin device. Settings and the Audit Log stay hidden until one device is chosen.';
     const claim = document.createElement('button');
     claim.className = 'btn btn-primary';
