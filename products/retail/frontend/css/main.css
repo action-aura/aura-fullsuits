@@ -4296,12 +4296,46 @@ textarea:disabled, .sub-import-btn:disabled, .ai-send-btn:disabled {
 .risk-line.medium      { border-inline-start-color: var(--state-warning-text); }
 .risk-line.low         { border-inline-start-color: var(--state-info-text); }
 
+/* ── ICON SIGNATURE MOTION (icons.js) ─────────────────────────────────────────
+   Two single-shot animations, both under 250ms, both opt-in per render call
+   (icons.js's svg(name, size, {animate:'pop'|'flip'})) -- neither loops and
+   neither is decorative. This is a till: a cashier rings ~300 sales a shift,
+   so anything that repeats on a screen that stays open all day makes the
+   machine feel slower even when it is not.
+
+     .aura-ic-pop   a fresh icon confirming something just happened (e.g. a
+                    success screen's checkmark on mount). Plays once because
+                    @keyframes only plays on the transition into the rule,
+                    i.e. once per element -- and each of these call sites
+                    creates a brand-new <svg> node per paint rather than
+                    reusing one, so "on mount" and "once" are the same thing
+                    here with no JS timer needed.
+     .aura-ic-flip  a STATE icon (sync banner tier, cash-drawer bar, an
+                    Exceptions queue) pulsing because its caller detected the
+                    state actually changed since the last render -- see
+                    app-shell.js's _syncBannerTier, cash-drawer.js's
+                    _lastBarState, subsystem-retail.js's _exqLastState. The
+                    class is only added on that comparison's true branch, so
+                    a repaint with no state change never re-triggers it. */
+@keyframes aura-ic-pop {
+  from { transform: scale(.55); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
+}
+@keyframes aura-ic-flip {
+  0%   { transform: scale(1); }
+  45%  { transform: scale(1.22); }
+  100% { transform: scale(1); }
+}
+.aura-ic-pop  { animation: aura-ic-pop 200ms var(--motion-ease-out, ease-out) both; }
+.aura-ic-flip { animation: aura-ic-flip 220ms var(--motion-ease-out, ease-out) both; }
+
 /* ── MOTION ───────────────────────────────────────────────────────────────────
    Respect the OS setting. A till that animates through a queue is wasting
    everyone's time, and vestibular triggers do not belong in a workplace tool. */
 @media (prefers-reduced-motion: reduce) {
   .money, .btn-primary, .btn-secondary, .sub-btn-primary, .sub-btn-secondary,
-  .nav-item, .sub-nav-item, .kpi-card, .sub-kpi-card {
+  .nav-item, .sub-nav-item, .kpi-card, .sub-kpi-card,
+  .aura-ic-pop, .aura-ic-flip {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
   }

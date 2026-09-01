@@ -1339,7 +1339,7 @@ const SubsystemApp = {
       overlay.id = 'aura-setup-complete-overlay';
       overlay.style.cssText = 'position:fixed;inset:0;background:#020617;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;font-family:Inter,sans-serif;z-index:99999;';
       overlay.innerHTML = `
-        <div style="font-size:56px;margin-bottom:16px;color:var(--sub-accent,#14b8a6)">${AuraIcons.render('circle-check-big', 56)}</div>
+        <div style="font-size:56px;margin-bottom:16px;color:var(--sub-accent,#14b8a6)">${AuraIcons.render('circle-check-big', 56, { animate: 'pop' })}</div>
         <h2 style="font-size:28px;font-weight:800;margin:0 0 8px;">Account Created!</h2>
         <p style="color:#64748b;margin:0;font-size:16px;">Welcome, <strong id="aura-setup-complete-name" style="color:var(--sub-accent,#14b8a6)"></strong>. Loading your platform…</p>`;
       const nameEl = overlay.querySelector('#aura-setup-complete-name');
@@ -1762,7 +1762,7 @@ const SubsystemApp = {
     if (overlay) {
       overlay.querySelector('.auth-card').innerHTML = `
         <div class="auth-head">
-          <div class="auth-icon">${AuraIcons.render('circle-check-big', 32)}</div>
+          <div class="auth-icon">${AuraIcons.render('circle-check-big', 32, { animate: 'pop' })}</div>
           <h2 class="auth-title">${t('Check your email')}</h2>
           <p class="auth-sub">${t('If an account exists for that email, a reset link is on its way.')}</p>
         </div>
@@ -1867,7 +1867,7 @@ const SubsystemApp = {
       if (overlay) {
         overlay.querySelector('.auth-card').innerHTML = `
           <div class="auth-head">
-            <div class="auth-icon">${AuraIcons.render('circle-check-big', 32)}</div>
+            <div class="auth-icon">${AuraIcons.render('circle-check-big', 32, { animate: 'pop' })}</div>
             <h2 class="auth-title">${t('Password updated')}</h2>
             <p class="auth-sub">${t('You can now sign in with your new password.')}</p>
           </div>
@@ -2291,10 +2291,26 @@ const SubsystemApp = {
     // facts (last-sync clock time, unsynced count) the plain "behind" tier
     // does, just rendered more strongly, and still informs rather than
     // blocks (Decision 2).
-    if (pushBad || pullBad) this._renderSyncAlarmState(data, pushBad, pullBad);
-    else if (!data.never_synced && this._isSyncBehindWarningThreshold(data)) this._renderSyncBehindWarningState(data);
-    else if (!data.never_synced && this._isSyncBehindThreshold(data)) this._renderSyncBehindState(data);
-    else this._renderSyncCalmState(data);
+    // Which of the 4 tiers this paint lands in -- computed once here so both
+    // branches below (which tier to draw) and the icon's own motion (whether
+    // to flip) read the SAME classification, rather than each re-deriving it
+    // and risking drift. `changed` is true only when the tier actually
+    // differs from the LAST paint, so the icon's aura-ic-flip animation
+    // fires once on a real transition (e.g. calm -> behind) and never on a
+    // same-tier repaint from the next poll tick -- see icons.js's MOTION
+    // comment: state icons animate on change, not on an idle interval.
+    let tier;
+    if (pushBad || pullBad) tier = 'alarm';
+    else if (!data.never_synced && this._isSyncBehindWarningThreshold(data)) tier = 'behind-warning';
+    else if (!data.never_synced && this._isSyncBehindThreshold(data)) tier = 'behind';
+    else tier = 'calm';
+    const changed = tier !== this._syncBannerTier;
+    this._syncBannerTier = tier;
+
+    if (tier === 'alarm') this._renderSyncAlarmState(data, pushBad, pullBad, changed);
+    else if (tier === 'behind-warning') this._renderSyncBehindWarningState(data, changed);
+    else if (tier === 'behind') this._renderSyncBehindState(data, changed);
+    else this._renderSyncCalmState(data, changed);
   },
 
   // See _renderSyncBanner's comment just above for why this is a distinct
@@ -2321,12 +2337,23 @@ const SubsystemApp = {
     return typeof threshold === 'number' && typeof secs === 'number' && secs > threshold;
   },
 
+  // Renders one of the banner's state icons through icons.js, falling back
+  // to '' when AuraIcons isn't loaded -- several standalone JS test
+  // harnesses (retail_offline_banner_*_test.js) load app-shell.js on its
+  // own without icons.js, matching how the sidebar nav icons at the top of
+  // this file already guard the same call. 'flip' plays only when
+  // _renderSyncBanner already determined the tier changed since the last
+  // paint, never on a same-tier repaint from the next poll tick.
+  _syncIcon(name, changed) {
+    return window.AuraIcons ? AuraIcons.render(name, 15, changed ? { animate: 'flip' } : undefined) : '';
+  },
+
   // State 4 (docs/launch-readiness/phase7-offline-ux.md, stage decomposition:
   // "Offline since 14:20 -- 412 unsynced"). Full-width and hard to miss, like
   // the alarm state above -- this is meant to be SEEN, not ambient -- but
   // visually distinct (no red/amber) since nothing is actively erroring
   // right now; the device just hasn't reached the relay in a while.
-  _renderSyncBehindState(data) {
+  _renderSyncBehindState(data, changed) {
     const el = this._syncBannerEl;
     const lastSuccess = this._mostRecentSyncIso(data.push.last_success_at, data.pull.last_success_at);
     const pending = Number.isFinite(data.pending_count) ? data.pending_count : 0;
@@ -2349,7 +2376,8 @@ const SubsystemApp = {
       + 'border-bottom:2px solid #60a5fa;color:white;padding:9px 18px;font-size:13px;'
       + 'line-height:1.45;text-align:center;z-index:99998;'
       + 'box-shadow:0 4px 18px rgba(0,0,0,.35);';
-    el.innerHTML = '<span style="color:#60a5fa;font-weight:700;">⏳ ' + headline + '</span>';
+    el.innerHTML = '<span style="color:#60a5fa;font-weight:700;display:inline-flex;align-items:center;gap:6px;">'
+      + this._syncIcon('cloud-off', changed) + headline + '</span>';
   },
 
   // State 5, Phase 7 stage 7c-i (docs/launch-readiness/phase7-offline-ux.md,
@@ -2363,7 +2391,7 @@ const SubsystemApp = {
   // capability is checked, and nothing here refuses any write (Decision 2:
   // "The 24-hour soft warning needs no capability: it informs, it does not
   // block").
-  _renderSyncBehindWarningState(data) {
+  _renderSyncBehindWarningState(data, changed) {
     const el = this._syncBannerEl;
     const lastSuccess = this._mostRecentSyncIso(data.push.last_success_at, data.pull.last_success_at);
     const pending = Number.isFinite(data.pending_count) ? data.pending_count : 0;
@@ -2383,7 +2411,8 @@ const SubsystemApp = {
       + 'border-bottom:3px solid #ef4444;color:white;padding:9px 18px;font-size:13px;'
       + 'line-height:1.45;text-align:center;z-index:99998;'
       + 'box-shadow:0 4px 18px rgba(0,0,0,.35);';
-    el.innerHTML = '<span style="color:#ef4444;font-weight:800;">⚠ ' + headline + '</span>'
+    el.innerHTML = '<span style="color:#ef4444;font-weight:800;display:inline-flex;align-items:center;gap:6px;">'
+      + this._syncIcon('triangle-alert', changed) + headline + '</span>'
       + '<span style="opacity:.85;margin-left:10px;">' + detail + '</span>';
   },
 
@@ -2391,7 +2420,7 @@ const SubsystemApp = {
   // width, top of page, impossible to miss. Reached only once either half
   // has failed SYNC_DEGRADED_THRESHOLD times in a row -- a single blip
   // never triggers it (see sync_service.py's run_once()/per-tick retry).
-  _renderSyncAlarmState(data, pushBad, pullBad) {
+  _renderSyncAlarmState(data, pushBad, pullBad, changed) {
     const el = this._syncBannerEl;
     let headline;
     if (pushBad && pullBad) headline = t("Not syncing with your other devices right now");
@@ -2408,7 +2437,8 @@ const SubsystemApp = {
     const reason = (pushBad ? data.push.last_failure_reason : data.pull.last_failure_reason) || '';
     el.title = reason ? ('Sync detail: ' + reason) : '';
     el.innerHTML =
-      '<span style="color:#fbbf24;font-weight:700;">⚠ ' + headline + '</span>'
+      '<span style="color:#fbbf24;font-weight:700;display:inline-flex;align-items:center;gap:6px;">'
+      + this._syncIcon('triangle-alert', changed) + headline + '</span>'
       + '<span style="opacity:.8;margin-left:10px;">' + detail + '</span>';
   },
 
@@ -2416,8 +2446,12 @@ const SubsystemApp = {
   // confirmation that sync is alive, not an alert. This is the whole point
   // of the freshness indicator: previously NOTHING rendered here while sync
   // was working normally. pointer-events:none so it never sits in the way
-  // of whatever's underneath it in that corner.
-  _renderSyncCalmState(data) {
+  // of whatever's underneath it in that corner. The dot (not an icon) is
+  // deliberate here -- see icons.js's module comment: "calm" is the one tier
+  // that stays untouched by the redesign, since a plain status dot already
+  // reads as calm/ambient and swapping in an icon would just be motion for
+  // its own sake on the one tier that should feel like nothing is happening.
+  _renderSyncCalmState(data, changed) {
     const el = this._syncBannerEl;
     el.style.cssText = 'position:fixed;bottom:14px;right:14px;display:inline-flex;'
       + 'align-items:center;gap:7px;padding:6px 12px;border-radius:20px;'

@@ -293,9 +293,16 @@ const CashDrawer = {
   _renderBar() {
     const bar = document.getElementById('cash-drawer-bar');
     if (!bar) return;
+    // Same "flip only on a real transition" discipline as app-shell.js's
+    // sync banner (_syncBannerTier) and subsystem-retail.js's Exceptions
+    // panels (_exqLastState): open/closed is a live state a cashier watches
+    // all shift, so its icon should mark the MOMENT it flips, not pulse on
+    // every poll that finds it unchanged.
+    const changed = this._state !== this._lastBarState;
+    this._lastBarState = this._state;
     const renderers = {
-      open: () => this._barOpen(),
-      none: () => this._barNone(),
+      open: () => this._barOpen(changed),
+      none: () => this._barNone(changed),
       denied: () => this._barDenied(),
       error: () => this._barError(),
     };
@@ -304,7 +311,14 @@ const CashDrawer = {
     bar.innerHTML = html;
   },
 
-  _barOpen() {
+  // Renders the drawer-state icon through icons.js, falling back to '' when
+  // AuraIcons isn't loaded (retail_drawer_screen_test.js's vm sandbox loads
+  // this file standalone, without icons.js).
+  _stateIcon(name, changed) {
+    return window.AuraIcons ? AuraIcons.render(name, 15, changed ? { animate: 'flip' } : undefined) : '';
+  },
+
+  _barOpen(changed) {
     const s = this._session;
     const opened = String(s.opened_at || '').slice(0, 16).replace('T', ' ');
     // Two facts, in this order: WHICH till, then since when. The till comes
@@ -314,6 +328,7 @@ const CashDrawer = {
       cls: 'cd-bar-open',
       html: `
         <span>
+          ${this._stateIcon('lock-open', changed)}
           <span class="cd-terminal cd-terminal-mine">${this._terminalLabel(s)}</span>
           ${t('Drawer open since')} <b>${this._bdi(opened)}</b>
           &middot; ${t('Opening float')} ${this._money(s.opening_float)}
@@ -327,7 +342,7 @@ const CashDrawer = {
     };
   },
 
-  _barNone() {
+  _barNone(changed) {
     // "...and two other tills ARE trading" is materially different from "the
     // shop is shut". It is what tells a cashier that they, specifically, are
     // about to sell into nothing while everyone else is counted.
@@ -338,6 +353,7 @@ const CashDrawer = {
       cls: 'cd-bar-warn',
       html: `
         <span>
+          ${this._stateIcon('lock', changed)}
           <span class="cd-terminal">${this._thisTerminalLabel()}</span>
           ${t('No cash drawer is open on this terminal. Sales still work normally, but will not be attributed to a drawer count.')}
           ${others}

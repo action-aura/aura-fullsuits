@@ -6705,39 +6705,63 @@ const RetailSystem = {
   // ── Shared per-state panels (checking / failed / empty), one instance
   //    parameterised by copy rather than duplicated per section ───────────
 
-  _exqChecking(message) {
+  // True the first time THIS section's rendered state differs from the last
+  // one this tracker saw -- lets the shared per-state panels just below flip
+  // their icon (opts.animate:'flip') only on a real transition (checking ->
+  // empty, empty -> failed, ...), never on a same-state repaint from a
+  // retry or a re-open of the screen. The three queues (stock/conflicts/
+  // registry) share this one tracker, keyed by section, so one queue's
+  // history can never be mistaken for another's.
+  _exqStateChanged(sectionKey, state) {
+    const last = (this._exqLastPaintedState || (this._exqLastPaintedState = {}))[sectionKey];
+    this._exqLastPaintedState[sectionKey] = state;
+    return state !== last;
+  },
+
+  // Renders one of the shared per-state icons through icons.js, falling
+  // back to '' when AuraIcons isn't loaded (retail_exceptions_screen_test.js
+  // loads this file standalone, without icons.js).
+  _exqIcon(name, changed) {
+    return window.AuraIcons ? AuraIcons.render(name, 28, changed ? { animate: 'flip' } : undefined) : '';
+  },
+
+  _exqChecking(message, sectionKey) {
+    const changed = this._exqStateChanged(sectionKey, 'checking');
     return `
       <div class="sub-chart-card" data-exq-state="checking" style="text-align:center;padding:40px 32px">
-        <div style="font-size:30px;margin-bottom:10px" aria-hidden="true">⏳</div>
+        <div style="margin-bottom:10px" aria-hidden="true">${this._exqIcon('timer', changed)}</div>
         <p style="color:var(--text-muted);font-size:13px;margin:0;line-height:1.7">${message}</p>
       </div>`;
   },
 
-  _exqFailed(errorText, retryCall) {
+  _exqFailed(errorText, retryCall, sectionKey) {
+    const changed = this._exqStateChanged(sectionKey, 'failed');
     return `
       <div class="sub-chart-card" data-exq-state="failed" style="text-align:center;padding:40px 32px;border:1px solid var(--state-danger-border)">
-        <div style="font-size:30px;margin-bottom:10px" aria-hidden="true">⚠️</div>
+        <div style="margin-bottom:10px" aria-hidden="true">${this._exqIcon('triangle-alert', changed)}</div>
         <p style="color:var(--state-danger-text);font-size:13px;margin:0 0 14px;line-height:1.7">${this._esc(errorText)}</p>
         <button class="ret-btn ret-btn-ghost" onclick="${retryCall}">${t('Try again')}</button>
       </div>`;
   },
 
-  // An empty queue is the NORMAL, HEALTHY case -- the same ✅ treatment
-  // _stkaClean() gives a reconciled shop, so this reads as "nothing needs
-  // attention" rather than as a blank/broken section.
-  _exqEmpty(title, message) {
+  // An empty queue is the NORMAL, HEALTHY case -- the same circle-check-big
+  // treatment _stkaClean() gives a reconciled shop, so this reads as
+  // "nothing needs attention" rather than as a blank/broken section.
+  _exqEmpty(title, message, sectionKey) {
+    const changed = this._exqStateChanged(sectionKey, 'empty');
     return `
       <div class="sub-chart-card" data-exq-state="empty" style="text-align:center;padding:40px 32px">
-        <div style="font-size:30px;margin-bottom:10px" aria-hidden="true">✅</div>
+        <div style="margin-bottom:10px;color:var(--state-success-text)" aria-hidden="true">${this._exqIcon('circle-check-big', changed)}</div>
         <h3 style="color:var(--text);margin:0 0 6px;font-size:15px">${title}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0;line-height:1.7">${message}</p>
       </div>`;
   },
 
-  _exqUnknownState(state) {
+  _exqUnknownState(state, sectionKey) {
+    const changed = this._exqStateChanged(sectionKey, 'unknown:' + state);
     return `
       <div class="sub-chart-card" data-exq-state="unknown" style="text-align:center;padding:40px 32px;border:1px solid var(--state-danger-border)">
-        <div style="font-size:30px;margin-bottom:10px" aria-hidden="true">⚠️</div>
+        <div style="margin-bottom:10px" aria-hidden="true">${this._exqIcon('triangle-alert', changed)}</div>
         <h3 style="color:var(--state-danger-text);margin:0 0 8px;font-size:15px">${t('This screen lost track of what it was showing.')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0;line-height:1.7"><bdi dir="ltr">${this._esc(String(state))}</bdi></p>
       </div>`;
@@ -6764,11 +6788,11 @@ const RetailSystem = {
   _exqStockPanel() {
     const s = (this._exceptionQueue && this._exceptionQueue.stock) || { state: 'checking' };
     switch (s.state) {
-      case 'checking': return this._exqChecking(t('Checking for oversold stock…'));
-      case 'failed':   return this._exqFailed(s.error || t('Could not check for oversold stock.'), 'RetailSystem._loadExceptionStock()');
-      case 'empty':    return this._exqEmpty(t('Nothing needs attention.'), t('No oversold product is currently open.'));
+      case 'checking': return this._exqChecking(t('Checking for oversold stock…'), 'stock');
+      case 'failed':   return this._exqFailed(s.error || t('Could not check for oversold stock.'), 'RetailSystem._loadExceptionStock()', 'stock');
+      case 'empty':    return this._exqEmpty(t('Nothing needs attention.'), t('No oversold product is currently open.'), 'stock');
       case 'rows':     return this._exqStockRows(s.rows);
-      default:         return this._exqUnknownState(s.state);
+      default:         return this._exqUnknownState(s.state, 'stock');
     }
   },
 
@@ -6916,11 +6940,11 @@ const RetailSystem = {
   _exqConflictsPanel() {
     const s = (this._exceptionQueue && this._exceptionQueue.conflicts) || { state: 'checking' };
     switch (s.state) {
-      case 'checking': return this._exqChecking(t('Checking for discarded edits…'));
-      case 'failed':   return this._exqFailed(s.error || t('Could not check for discarded catalogue edits.'), 'RetailSystem._loadExceptionConflicts()');
-      case 'empty':    return this._exqEmpty(t('Nothing needs attention.'), t('No catalogue edit has been discarded as stale.'));
+      case 'checking': return this._exqChecking(t('Checking for discarded edits…'), 'conflicts');
+      case 'failed':   return this._exqFailed(s.error || t('Could not check for discarded catalogue edits.'), 'RetailSystem._loadExceptionConflicts()', 'conflicts');
+      case 'empty':    return this._exqEmpty(t('Nothing needs attention.'), t('No catalogue edit has been discarded as stale.'), 'conflicts');
       case 'rows':     return this._exqConflictsRows(s.rows);
-      default:         return this._exqUnknownState(s.state);
+      default:         return this._exqUnknownState(s.state, 'conflicts');
     }
   },
 
@@ -7034,11 +7058,11 @@ const RetailSystem = {
   _exqRegistryPanel() {
     const s = (this._exceptionQueue && this._exceptionQueue.registry) || { state: 'checking' };
     switch (s.state) {
-      case 'checking': return this._exqChecking(t('Checking for account sync issues…'));
-      case 'failed':   return this._exqFailed(s.error || t('Could not check for account sync issues.'), 'RetailSystem._loadExceptionRegistry()');
-      case 'empty':    return this._exqEmpty(t('Nothing needs attention.'), t('No staff account is stuck waiting to sync.'));
+      case 'checking': return this._exqChecking(t('Checking for account sync issues…'), 'registry');
+      case 'failed':   return this._exqFailed(s.error || t('Could not check for account sync issues.'), 'RetailSystem._loadExceptionRegistry()', 'registry');
+      case 'empty':    return this._exqEmpty(t('Nothing needs attention.'), t('No staff account is stuck waiting to sync.'), 'registry');
       case 'rows':     return this._exqRegistryRows(s.rows);
-      default:         return this._exqUnknownState(s.state);
+      default:         return this._exqUnknownState(s.state, 'registry');
     }
   },
 

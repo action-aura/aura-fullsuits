@@ -549,7 +549,7 @@ async function testEveryGuardIsProvenByBreakingIt() {
 
   proved.push(await provesMutation(
     "3. the oversold-stock 'empty' branch is dropped from the switch",
-    [["      case 'empty':    return this._exqEmpty(t('Nothing needs attention.'), t('No oversold product is currently open.'));\n",
+    [["      case 'empty':    return this._exqEmpty(t('Nothing needs attention.'), t('No oversold product is currently open.'), 'stock');\n",
       '']],
     testEachEmptyQueueRendersItsOwnEmptyState));
 

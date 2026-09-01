@@ -92,3 +92,20 @@ body.rtl .anomaly-item,
 body.rtl .risk-line,
 body.rtl .crm-note-item,
 body.rtl .toast { border-left-color: transparent; }
+
+/* --- Directional icons mirror under RTL; non-directional ones must not
+       (2026-08-26) ---------------------------------------------------------
+   icons.js renders every icon from the SAME 24px viewBox/path data
+   regardless of direction -- flipping the wrong ones (or all of them) is a
+   real, distinct failure from flipping none: a clock or a padlock mirrored
+   is simply wrong, not "more correct in Arabic".
+
+   Rather than hardcode a class list here (the exact pattern this file's own
+   history warns against -- see the accent-bar comment above), icons.js marks
+   the handful of icons whose MEANING is reading-direction-dependent (today:
+   only undo-2, "return") with data-aura-dir="mirror" on the rendered <svg>
+   itself. This rule reads that attribute, so a future directional icon only
+   needs the flag set at the source of truth (icons.js's ICONS table) and
+   never needs a matching edit here, and a non-directional icon can never be
+   mirrored by a stale/duplicated selector. */
+body.rtl .aura-ic[data-aura-dir="mirror"] { transform: scaleX(-1); }
