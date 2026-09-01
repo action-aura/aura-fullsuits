@@ -233,8 +233,12 @@ interface AuraApi {
     // doc comments for the full "why"). GET requires only CAP_SELL (a cashier
     // needs to see whether this till is unpinned, the state that silently
     // produces wrong data on a chain); POST requires CAP_EMPLOYEES (pinning a
-    // till is an administrative act) -- see ui/screens/SettingsScreen.kt for
-    // how a 403 on the POST is handled as a designed state, not a failure.
+    // till is an administrative act) -- see RetailSettingsScreen in
+    // ui/screens/RetailExtraScreens.kt for how a 403 on the POST is handled
+    // as a designed state, not a failure. (It lived in ui/screens/
+    // SettingsScreen.kt originally, a file that was never wired into any nav
+    // route and so never rendered for a single user -- moved here and that
+    // file deleted for exactly that reason.)
     @GET("api/sub/retail/device/branch")
     suspend fun deviceBranch(): DeviceBranchResponse
 

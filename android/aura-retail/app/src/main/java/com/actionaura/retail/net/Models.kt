@@ -500,7 +500,7 @@ data class AgingResponse(val status: String = "", val type: String = "", val dat
 // converges every branch row onto every device -- an unpinned Android till
 // silently falls through to the company's default branch and every sale it
 // rings is filed there. This is the only place that pin can be set from this
-// app; see ui/screens/SettingsScreen.kt.
+// app; see RetailSettingsScreen in ui/screens/RetailExtraScreens.kt.
 
 // One row of `branches`, as GET /branches returns it (`dict(r) for r in
 // rows`, retail_api.py::list_branches). `id`: Int, NOT a UUID-migrated entity
@@ -537,7 +537,8 @@ data class TaxSettingsResponse(val status: String = "", val data: TaxSettings? =
 // GET/POST /api/sub/retail/device/branch's shared payload shape
 // (retail_api.py::get_device_branch/set_device_branch). `branch_uid` null
 // means unpinned -- the state that produces silently wrong data on a chain,
-// see SettingsScreen.kt for how that is surfaced. `branch_id`/`branch_name`
+// see RetailSettingsScreen in ui/screens/RetailExtraScreens.kt for how that
+// is surfaced. `branch_id`/`branch_name`
 // are that uid resolved AGAINST THIS DEVICE'S OWN branches table -- both null
 // when unpinned, and also both null (with `branch_uid` still non-null) when
 // the pin does not resolve locally yet. The route documents this

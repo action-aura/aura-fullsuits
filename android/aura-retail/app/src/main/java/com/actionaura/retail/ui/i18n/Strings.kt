@@ -498,9 +498,9 @@ private val AR_STRINGS: Map<String, String> = mapOf(
 
     // ── Settings → this device's branch (Wave C1) ────────────────────────────
     // The Android half of the dc22b04 fix -- see net/Models.kt's Branch/
-    // DeviceBranch doc comments and ui/screens/SettingsScreen.kt for the full
-    // "why". "Loading…" is used generically enough to belong here rather than
-    // scoped to one screen.
+    // DeviceBranch doc comments and RetailSettingsScreen in
+    // ui/screens/RetailExtraScreens.kt for the full "why". "Loading…" is used
+    // generically enough to belong here rather than scoped to one screen.
     "Loading…" to "جارٍ التحميل…",
     "This Device's Branch" to "فرع هذا الجهاز",
     "Couldn't load this device's branch" to "تعذّر تحميل فرع هذا الجهاز",

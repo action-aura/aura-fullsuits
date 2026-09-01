@@ -28,6 +28,8 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -48,12 +50,14 @@ import com.actionaura.retail.ui.i18n.AppLocale
 import com.actionaura.retail.ui.i18n.fmtQty
 import com.actionaura.retail.ui.i18n.parseNum
 import com.actionaura.retail.ui.i18n.tr
+import com.actionaura.retail.ui.CAP_EMPLOYEES
 import com.actionaura.retail.ui.CAP_REPORTS
 import com.actionaura.retail.ui.RetailSession
 import com.actionaura.retail.ui.theme.Info
 import com.actionaura.retail.ui.theme.Success
 import com.actionaura.retail.ui.theme.Warning
 import kotlinx.coroutines.launch
+import retrofit2.HttpException
 import java.util.UUID
 
 // Delegates to the ONE formatter (ui/i18n/Num.kt). This was a second, private
@@ -1196,6 +1200,16 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
     // in SettingsScreen.kt, a file never wired to any nav route (this
     // RetailSettingsScreen, in this file, is the real routed "retail_settings"
     // screen). Mirrors Clinic's working SettingsScreen.kt picker.
+    //
+    // The "This Device's Branch" section a few lines below made the identical
+    // trip for the identical reason: commit 0c6c3ea wrote it into that same
+    // never-routed SettingsScreen.kt, so it also never rendered for a single
+    // user. Moved here rather than fixed in place, and SettingsScreen.kt has
+    // since been deleted -- once both real controls had left it, nothing
+    // unique about it remained, only "coming soon" stubs and a hardcoded
+    // version string RetailSettingsScreen already read live from
+    // BuildConfig.VERSION_NAME. See BranchPinWiringContractTest for the
+    // reachability guard this history earned.
     val ctx = LocalContext.current
     var showLanguage by remember { mutableStateOf(false) }
     var s by remember { mutableStateOf(CreditSettings()) }
@@ -1206,6 +1220,44 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
     var enforceMenu by remember { mutableStateOf(false) }
     var modeMenu by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    // ── This device's branch pin (Wave C1 -- see net/Models.kt's Branch/
+    // DeviceBranch doc comments for the dc22b04 defect this closes on
+    // Android). Loaded through its OWN LaunchedEffect and its OWN
+    // loading/error state, deliberately separate from `loading` above: a
+    // failed or slow branch load must not hold Credit policy/Payment
+    // methods/Backup/Licensing behind the `if (loading) return` gate below,
+    // and a failed credit-settings load must not blank the branch section
+    // either.
+    var branchLoading by remember { mutableStateOf(true) }
+    var branchLoadError by remember { mutableStateOf<String?>(null) }
+    var pinnedBranchUid by remember { mutableStateOf<String?>(null) }
+    var pinnedBranchName by remember { mutableStateOf<String?>(null) }
+    // Flips true only if the POST itself comes back 403 -- a defensive net
+    // for the moment RetailSession.capabilities is still null (fails open,
+    // see holdsCapability's doc comment) and this row briefly rendered as
+    // editable for an account that turns out not to hold CAP_EMPLOYEES.
+    var branchForbidden by remember { mutableStateOf(false) }
+    var showBranchPicker by remember { mutableStateOf(false) }
+
+    suspend fun loadDeviceBranch() {
+        try {
+            val d = ApiClient.get().deviceBranch().data
+            pinnedBranchUid = d?.branch_uid
+            pinnedBranchName = d?.branch_name
+            branchLoadError = null
+        } catch (e: Exception) {
+            branchLoadError = apiErrorMessage(e)
+        }
+    }
+    LaunchedEffect(Unit) { branchLoading = true; loadDeviceBranch(); branchLoading = false }
+    // A cashier holds CAP_SELL but not CAP_EMPLOYEES (see RetailSession.kt's
+    // CAP_EMPLOYEES doc comment) -- this decides whether the row below is a
+    // picker or a read-only fact with an explanation, BEFORE the POST is ever
+    // attempted, so the common case never needs to hit a 403 to know its own
+    // state.
+    val canManageBranch = RetailSession.hasCapability(CAP_EMPLOYEES) && !branchForbidden
+
     suspend fun loadMethods() { methods = try { ApiClient.get().payMethods().data } catch (e: Exception) { emptyList() } }
     LaunchedEffect(Unit) {
         s = try { ApiClient.get().creditSettingsGet().data ?: CreditSettings() } catch (e: Exception) { CreditSettings() }
@@ -1228,6 +1280,89 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
                 Text(AppLocale.lang.nativeName, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.width(8.dp))
                 Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        SectionHeader(tr("This Device's Branch"))
+        when {
+            branchLoading -> GlowCard(Modifier.fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Storefront, null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(12.dp))
+                    Text(tr("Loading…"))
+                }
+            }
+            branchLoadError != null -> GlowCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Storefront, null, tint = MaterialTheme.colorScheme.error)
+                        Spacer(Modifier.width(12.dp))
+                        Text(tr("Couldn't load this device's branch"), Modifier.weight(1f), fontWeight = FontWeight.Medium)
+                    }
+                    Text(branchLoadError!!, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = { scope.launch { branchLoading = true; loadDeviceBranch(); branchLoading = false } }) {
+                        Text(tr("Try again"))
+                    }
+                }
+            }
+            else -> {
+                // Unpinned is the state that silently files every sale on this
+                // till under the company's default branch -- worth noticing on
+                // a chain, but not an error on the single-branch shop this same
+                // install might be. So: colored and iconed like the rest of
+                // this app's Warning states (EmployeesScreen.statusLabel's
+                // "pending_setup" is the same idiom), never Danger/red.
+                val unpinned = pinnedBranchName == null
+                GlowCard(Modifier.fillMaxWidth()) {
+                    Column {
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .let { if (canManageBranch) it.clickable { showBranchPicker = true } else it }
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Default.Storefront, null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        pinnedBranchName ?: tr("No branch pinned"),
+                                        fontWeight = FontWeight.Medium,
+                                        color = if (unpinned) Warning else MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    if (unpinned) {
+                                        Spacer(Modifier.width(6.dp))
+                                        Icon(Icons.Default.WarningAmber, null, tint = Warning,
+                                            modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                                Text(
+                                    if (unpinned)
+                                        tr("Sales on this till file under the company's default branch. Worth checking on a multi-branch chain.")
+                                    else tr("Sales rung on this till are filed under this branch."),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (unpinned) Warning else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (canManageBranch) {
+                                Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        // Never a silent no-op: a cashier or manager sees exactly
+                        // why the row doesn't open, without having to tap it
+                        // first to find out. Matches EmployeesScreen's owner-gate
+                        // explanation in tone.
+                        if (!canManageBranch) {
+                            Text(
+                                tr("Only the owner can change which branch this device is pinned to. Ask the owner to make the change on their account."),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -1350,6 +1485,165 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
             },
         )
     }
+
+    if (showBranchPicker) {
+        BranchPickerDialog(
+            currentUid = pinnedBranchUid,
+            onDismiss = { showBranchPicker = false },
+            onSaved = { uid, name ->
+                pinnedBranchUid = uid
+                pinnedBranchName = name
+                showBranchPicker = false
+            },
+            onForbidden = {
+                branchForbidden = true
+                showBranchPicker = false
+            },
+            snackbar = snackbar,
+        )
+    }
+}
+
+// ── This device's branch picker (Wave C1) ───────────────────────────────────
+/**
+ * Only ever shown to an account `canManageBranch` in [RetailSettingsScreen]
+ * above already judged able to save. The POST is still wrapped in its own 403
+ * check here regardless, because that client-side judgment can be stale (a
+ * role changed elsewhere, or `RetailSession.capabilities` had not resolved
+ * yet) and the server's refusal is the one that actually matters;
+ * [onForbidden] is how this dialog reports that back so the row behind it can
+ * drop into its read-only explanation instead of silently reopening the same
+ * way next time.
+ */
+@Composable
+private fun BranchPickerDialog(
+    currentUid: String?,
+    onDismiss: () -> Unit,
+    onSaved: (uid: String?, name: String?) -> Unit,
+    onForbidden: () -> Unit,
+    snackbar: SnackbarHostState,
+) {
+    var loading by remember { mutableStateOf(true) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+    var branches by remember { mutableStateOf<List<Branch>>(emptyList()) }
+    var selected by remember { mutableStateOf(currentUid) }
+    var saving by remember { mutableStateOf(false) }
+    var saveError by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        try {
+            branches = ApiClient.get().branches().data
+            loadError = null
+        } catch (e: Exception) {
+            loadError = apiErrorMessage(e)
+        }
+        loading = false
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!saving) onDismiss() },
+        title = { Text(tr("This device's branch")) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    tr("Choose which branch sales rung on this till are filed under."),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                when {
+                    loading -> Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
+                    }
+                    loadError != null -> Text(loadError!!, color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall)
+                    else -> Column {
+                        // The explicit "clear the pin" option -- always first,
+                        // and never omitted just because the company happens
+                        // to have branches: unpinning is a real, reachable
+                        // choice, not only an initial default.
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .selectable(selected = selected == null, onClick = { selected = null })
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = selected == null, onClick = { selected = null })
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text(tr("No branch pinned"), style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    tr("Falls back to the company's default branch"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        if (branches.isNotEmpty()) HorizontalDivider()
+                        branches.forEach { b ->
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .selectable(selected = selected == b.uid, onClick = { selected = b.uid })
+                                    .padding(vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(selected = selected == b.uid, onClick = { selected = b.uid })
+                                Spacer(Modifier.width(8.dp))
+                                Text(b.name ?: "—", style = MaterialTheme.typography.bodyLarge)
+                            }
+                        }
+                    }
+                }
+                saveError?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = !saving && !loading && loadError == null,
+                onClick = {
+                    saving = true; saveError = null
+                    scope.launch {
+                        try {
+                            val r = ApiClient.get().setDeviceBranch(SetDeviceBranchRequest(selected))
+                            saving = false
+                            val name = r.data?.branch_name
+                            onSaved(r.data?.branch_uid, name)
+                            snackbar.showSnackbar(
+                                if (name != null) tr("This device is now pinned to %s").format(name)
+                                else tr("Branch pin cleared")
+                            )
+                        } catch (e: Exception) {
+                            saving = false
+                            // A cashier's client-side gate can be stale (see
+                            // this dialog's own doc comment) -- the server's
+                            // CAP_EMPLOYEES refusal is what actually decides,
+                            // and it gets its own honest explanation rather
+                            // than falling through to apiErrorMessage's
+                            // generic "Blocked by your subscription/license"
+                            // wording, which would misname a role problem as
+                            // a licensing one.
+                            if (e is HttpException && e.code() == 403) {
+                                onForbidden()
+                                snackbar.showSnackbar(
+                                    tr("Only the owner can change this device's branch. Ask the owner to make the change on their account.")
+                                )
+                            } else {
+                                saveError = apiErrorMessage(e)
+                            }
+                        }
+                    }
+                },
+            ) {
+                if (saving) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                else Text(tr("Save"))
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !saving) { Text(tr("Cancel")) } },
+    )
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
