@@ -169,11 +169,17 @@ line from the log is enough.
 
 ## Known gaps you will meet, so they are not surprises
 
-* **Restaurants cannot use this yet** — no modifiers, no kitchen tickets, no
-  split tender. Do not pilot in a restaurant.
+* **Restaurants cannot use this yet** — no kitchen tickets, no split tender,
+  and no modifier PICKER at the till. The modifier schema and config API did
+  ship (retail v26), but the POS picker and the cart merge-key rework were
+  deliberately cut to protect the money path, so a modifier can be configured
+  and never sold. Do not pilot in a restaurant.
 * **No inter-branch stock transfers.** Branches exist and stock is
-  branch-scoped, but there is no way to move stock between them.
-* **No product variants** — flat SKU/barcode only, no size/colour grouping.
+  branch-scoped, but there is no way to move stock between them. (Verified
+  2026-09-01: zero `transfer` routes in retail_api.py.)
+* **Loyalty accrues but cannot be spent.** `customers.loyalty_points` goes up
+  on every sale and nothing in the product can redeem it. Do not promise a
+  customer a points scheme.
 * **`POST /api/admin/employees` carries no licence guard**, so staff can be
   created on a restricted licence. Logged as an audit item, not yet fixed.
 * **iOS needs a macOS host** that does not exist in this environment.

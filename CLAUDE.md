@@ -199,16 +199,22 @@ because a wrong "missing" list is the most expensive kind of error in this
 document: it is exactly what makes a session build a second copy of something
 that already ships, or propose as new work something a colleague finished.
 
-Genuinely absent, each confirmed by a search that returned nothing:
+Genuinely missing — or, in the first case, genuinely HALF-BUILT, which needs
+saying differently because "absent" would send a reader to write code that
+already half-exists. Each re-verified 2026-09-01 against schema.py and
+retail_api.py, not from memory:
 
-- **No promotions engine and no loyalty.** Careful with this one: a MANUAL
-  per-line `discount_pct` DOES exist, is clamped server-side, and is gated
-  behind `CAP_DISCOUNT` (`create_sale`, retail_api.py). What is missing is
-  everything automatic — no rules, no date windows, no buy-X-get-Y, no
-  customer-group pricing, no coupons, nothing in schema.
-- **No product variants.** `products` is a flat SKU/barcode row: no
-  `parent_product_id`, no variant/option columns anywhere in schema.py. No
-  size/colour grouping, and no restaurant-style modifiers either.
+- **Loyalty is ACCRUAL-ONLY, which is worse than absent.**
+  `customers.loyalty_points` is incremented on every sale (`create_sale`'s
+  accumulator UPDATE, retail_api.py) and **nothing anywhere can ever spend
+  it**: zero redemption routes, zero `redeem` in the whole backend, zero in
+  the frontend. So a shop accumulates a number that does nothing, and a
+  customer who asks what their points are worth has no answer. Treat this as
+  a half-feature to finish or hide, not as a gap to fill from scratch.
+- **No coupons, no customer-group pricing, no buy-X-get-Y.** These are the
+  parts of "promotions" that are genuinely still missing — see the correction
+  below, because the promotions ENGINE itself now exists and this bullet used
+  to deny it.
 - **No inter-branch stock transfer workflow.** `branches` exist and stock is
   branch-scoped, but the word `transfer` does not appear in retail's schema or
   API at all.
@@ -216,6 +222,35 @@ Genuinely absent, each confirmed by a search that returned nothing:
   exist, so this is now a narrow gap rather than a blanket one.
 - **iOS build requires a macOS host** that does not exist in this dev
   environment yet. Environment gap, not a code gap.
+
+### Corrections (round 2, 2026-09-01) — two MORE things it wrongly called missing
+
+Re-verified by grepping schema.py and retail_api.py, the same way the round-1
+corrections below were. Both bullets removed above had been true when written
+and were shipped afterwards without the list being updated, which is precisely
+the failure mode this section exists to catch — and it has now happened twice,
+so treat any claim in this document older than the code as unverified.
+
+- **The promotions ENGINE exists.** The old text said "no rules, no date
+  windows, no buy-X-get-Y, no customer-group pricing, no coupons, nothing in
+  schema". In fact retail schema **v23** landed promotions wave 1: 51
+  references in schema.py, 47 in retail_api.py, and five routes including
+  `GET /promotions/active`, which the POS resolves at checkout. There is a
+  `promotions` nav entry gated on `CAP_DISCOUNT` (app-shell.js), reusing that
+  existing capability deliberately rather than minting a new one — configuring
+  a promotion is the same authority as typing a manual discount at the till.
+  Still genuinely absent: coupons, customer-group pricing, buy-X-get-Y.
+- **Product variants exist.** The old text said "`products` is a flat
+  SKU/barcode row: no `parent_product_id`, no variant/option columns anywhere
+  in schema.py". There is a `parent_product_id` column (schema.py:5052) with a
+  partial index, a `variant_label`, a `GET /products/<pid>/variants` route, and
+  a POS guard that refuses to sell a parent outright ("has variants — choose a
+  specific variant to sell"). Retail schema **v25**.
+  Restaurant-style **modifiers** are a separate matter: schema and the config
+  API both shipped (**v26**), but the POS picker screen and the cart merge-key
+  rework were deliberately cut to protect the money path, and the two modifier
+  routes are parked in `retail_route_reachability_test.py`'s
+  `INTENTIONALLY_UNREACHABLE` with that reason in writing.
 
 ### Corrections — three things this list wrongly called missing
 
