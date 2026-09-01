@@ -1762,3 +1762,53 @@ documents.
 **What is NOT deferred**, and remains the actual gate on revenue: the
 clean-machine test and the droplet setup in `docs/release/go-live-runbook.md`.
 Nothing in the restaurant programme matters until an install can be sold at all.
+
+## 2026-09-01 — Owner: the customer dropdown silently caps at 200, and one of them takes money
+
+**Found, verified, NOT fixed. It is the collaborator's file and the right fix is
+a judgement call about scale, not a mechanical change.**
+
+Three customer pickers in `owner/app/commercial_sales/routes.py` are built with
+
+    select(Customer).order_by(Customer.legal_name).limit(200)
+
+at lines 147 (`new_quote_form`), 165 (`create_quote_route`) and 572
+(`new_payment_form`).
+
+Past 200 customers, each dropdown silently shows only the first 200
+ALPHABETICALLY. There is no message, no truncation notice, and no search. The
+operator simply cannot find the customer, and the natural conclusion is that the
+customer does not exist.
+
+**`new_payment_form` is the one that matters.** A customer whose legal name sorts
+after the 200th pays, and the operator cannot record it against them. Money
+arrives that cannot be booked. On a plan of 2,750 licences in year one, 200
+customers is months away, not years.
+
+### Why this is NOT already fixed
+
+`commercial_sales/list_queries.py` exists precisely to kill this pattern and its
+docstring says so -- it replaced the unconditional `.limit(200)` with real
+pagination across the seven commercial-sales LIST screens.
+
+But a list and a dropdown are different problems: you cannot paginate a
+`<select>`. These three sites were not part of that fix and cannot be fixed the
+same way, which is exactly why they survived it. A fix that made them paginated
+would still leave the operator unable to reach customer 201.
+
+### The options, none of them mechanical
+
+* A searchable / typeahead customer input, which is the real answer and the
+  largest change.
+* Keep a bounded list but make truncation VISIBLE and add a search fallback --
+  a shop that cannot find a customer must at least be told the list is partial.
+* Remove the cap. Simplest, and adequate for a long time at this business's
+  scale, but it moves the problem rather than solving it and gets slower quietly.
+
+Deliberately not chosen here. It belongs to whoever owns `owner/`, and the right
+answer depends on how many customers they expect a single Owner instance to
+carry -- which is a business question.
+
+**Not touched, on purpose.** `master` lags well behind the owner/ feature
+branches, and a wide edit in their most active file is exactly the collision this
+branch has avoided all week.
