@@ -63,8 +63,58 @@ TAX_BEFORE_DISCOUNT = "before_discount"
 VALID_MODES = (TAX_AFTER_DISCOUNT, TAX_BEFORE_DISCOUNT)
 DEFAULT_MODE = TAX_AFTER_DISCOUNT
 
+#: The 2-decimal default, kept under its original names because other modules
+#: import them. NOTHING about their meaning changes: they remain "what a
+#: currency with no entry in the table below rounds to", which is what every
+#: caller that never passes a currency still gets.
 CURRENCY_DECIMALS = 2
 CURRENCY_QUANT = Decimal('0.01')
+
+#: Minor-unit digits per ISO 4217 code, for the currencies that are NOT 2.
+#:
+#: This exists because the product's home market is Jordan, and the dinar has
+#: THREE decimal places (1000 fils). Rounding JOD to 2 was not a display bug --
+#: it silently changed persisted money. Measured, with the real 16% VAT rate:
+#:
+#:     2.375 JOD + VAT = 2.755  ->  quantized at 0.01 -> 2.76   (+5 fils)
+#:     3.150 JOD + VAT = 3.654  ->  quantized at 0.01 -> 3.65   (-4 fils)
+#:
+#: Every line item could be wrong by up to 5 fils in EITHER direction, on the
+#: receipt the customer holds and in the totals submitted to the tax authority.
+#:
+#: A TABLE, not a currency library: this codebase has no such dependency and
+#: CLAUDE.md forbids adding one casually. Only the exceptions are listed --
+#: the Gulf 3-decimal currencies and the 0-decimal yen -- because enumerating
+#: all ~180 ISO codes would be a maintenance burden that buys nothing. Anything
+#: absent means 2, which is correct for the overwhelming majority.
+CURRENCY_MINOR_UNITS = {
+    'JOD': 3,   # Jordanian dinar -- the home market
+    'KWD': 3,   # Kuwaiti dinar
+    'BHD': 3,   # Bahraini dinar
+    'OMR': 3,   # Omani rial
+    'TND': 3,   # Tunisian dinar
+    'LYD': 3,   # Libyan dinar
+    'IQD': 3,   # Iraqi dinar
+    'JPY': 0,   # yen -- no minor unit at all
+    'KRW': 0,
+}
+
+
+def currency_quantum(currency=None) -> Decimal:
+    """The Decimal quantum to round to for `currency` (an ISO 4217 code).
+
+    An unknown, missing, malformed or non-string code falls back to the
+    2-decimal default and NEVER raises. That is deliberate and matches
+    `normalize_mode`/`clamp_discount_pct`'s posture in this same module: a bad
+    stored setting must degrade to a sane default, never block a sale. A till
+    that refuses to ring because someone typoed a currency code in settings
+    would be a far worse defect than rounding to the wrong precision.
+    """
+    try:
+        digits = CURRENCY_MINOR_UNITS.get((currency or '').strip().upper(), CURRENCY_DECIMALS)
+    except (AttributeError, TypeError):
+        digits = CURRENCY_DECIMALS
+    return Decimal(1).scaleb(-digits)
 
 MAX_DISCOUNT_PCT = 100
 MIN_DISCOUNT_PCT = 0
@@ -80,8 +130,21 @@ def _d(x) -> Decimal:
     return Decimal(str(x if x is not None else 0))
 
 
-def _money(x: Decimal) -> float:
-    return float(x.quantize(CURRENCY_QUANT, rounding=ROUND_HALF_UP))
+def _money(x: Decimal, quant: Decimal = CURRENCY_QUANT) -> float:
+    """Round one figure to a currency's minor unit, ROUND_HALF_UP.
+
+    `quant` defaults to the 2-decimal quantum, so every pre-existing caller --
+    and every test written against them -- behaves EXACTLY as it did before
+    currency awareness existed. Only a caller that passes a currency through
+    gets different arithmetic, which is what makes this change safe to land on
+    a module that computes every persisted total in the product.
+
+    ROUND_HALF_UP is unchanged and deliberate (AUDIT-006): Python's built-in
+    round() is banker's rounding and disagreed with api/retail_api.py's own
+    _money() at exact half-cent boundaries. Only the QUANTUM is now variable;
+    the rounding RULE is not.
+    """
+    return float(x.quantize(quant, rounding=ROUND_HALF_UP))
 
 
 def normalize_mode(value) -> str:
@@ -107,7 +170,8 @@ def clamp_discount_pct(value) -> float:
 
 
 def calculate_line(unit_price: float, quantity: float, discount_pct: float = 0,
-                    tax_rate: float = 0, mode: str = DEFAULT_MODE) -> dict:
+                    tax_rate: float = 0, mode: str = DEFAULT_MODE,
+                    currency: str = None) -> dict:
     """Compute one cart/sale line's figures under the given tax mode.
 
     `discount_pct` and `tax_rate` are percentages (0-100), matching the
@@ -140,17 +204,18 @@ def calculate_line(unit_price: float, quantity: float, discount_pct: float = 0,
         tax = taxable_amount * (rate / Decimal(100))
         total = taxable_amount + tax
 
+    q = currency_quantum(currency)
     return {
-        "gross": _money(gross),
-        "discount_amount": _money(discount_amount),
-        "taxable_amount": _money(taxable_amount),
-        "tax": _money(tax),
-        "total": _money(total),
+        "gross": _money(gross, q),
+        "discount_amount": _money(discount_amount, q),
+        "taxable_amount": _money(taxable_amount, q),
+        "tax": _money(tax, q),
+        "total": _money(total, q),
     }
 
 
 def calculate_invoice(subtotal: float, discount_amount: float, tax_rate_pct: float,
-                       mode: str = DEFAULT_MODE) -> dict:
+                       mode: str = DEFAULT_MODE, currency: str = None) -> dict:
     """Invoice/cart-level aggregate variant: `discount_amount` is already a
     currency amount (not a percentage) -- this mirrors the POS cart's
     invoice-level discount model (a single discount % applied to the whole
@@ -178,9 +243,10 @@ def calculate_invoice(subtotal: float, discount_amount: float, tax_rate_pct: flo
         tax = taxable_amount * (rate / Decimal(100))
         total = taxable_amount + tax
 
+    q = currency_quantum(currency)
     return {
-        "discount_amount": _money(disc),
-        "taxable_amount": _money(taxable_amount),
-        "tax": _money(tax),
-        "total": _money(total),
+        "discount_amount": _money(disc, q),
+        "taxable_amount": _money(taxable_amount, q),
+        "tax": _money(tax, q),
+        "total": _money(total, q),
     }

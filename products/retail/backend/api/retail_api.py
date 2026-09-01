@@ -4003,7 +4003,15 @@ def create_sale():
         # warning -- to that device's own default branch when it cannot).
         branch_uid_row = conn.execute("SELECT uid FROM branches WHERE id=?", (bid,)).fetchone()
         branch_uid = branch_uid_row['uid'] if branch_uid_row else None
-        mode = _settings(conn, cid).get('tax_calculation_mode', tax_engine.DEFAULT_MODE)
+        _s = _settings(conn, cid)
+        mode = _s.get('tax_calculation_mode', tax_engine.DEFAULT_MODE)
+        # The company's own currency drives ROUNDING PRECISION, not just the
+        # symbol on screen. JOD has three decimal places (fils); rounding it to
+        # two silently moved persisted money by up to 5 fils per line, on the
+        # receipt AND in what is filed with the tax authority. Read from the
+        # same _settings() call the mode already uses, so this costs no extra
+        # query. See core/retail/pricing.py::currency_quantum.
+        currency = _s.get('base_currency')
         # feat/shift-cash-drawer (schema v10): best-effort stamp of the
         # currently open cash session, if any -- see _open_cash_session_id's
         # own docstring. NULL (an install that never opens a cash session)
@@ -4268,7 +4276,7 @@ def create_sale():
             # same way a manual discount always has. pricing.py is
             # unmodified by this change. `unit_price` here already carries
             # any modifier price deltas resolved immediately above.
-            calc = tax_engine.calculate_line(unit_price, qty, effective_discount_pct, tax_rate, mode=mode)
+            calc = tax_engine.calculate_line(unit_price, qty, effective_discount_pct, tax_rate, mode=mode, currency=currency)
 
             resolved_lines.append({
                 'product_id': pid, 'quantity': qty, 'unit_price': unit_price,
@@ -5500,7 +5508,15 @@ def create_return():
         # onto a pulled row).
         branch_uid_row = conn.execute("SELECT uid FROM branches WHERE id=?", (bid,)).fetchone()
         branch_uid = branch_uid_row['uid'] if branch_uid_row else None
-        mode = _settings(conn, cid).get('tax_calculation_mode', tax_engine.DEFAULT_MODE)
+        _s = _settings(conn, cid)
+        mode = _s.get('tax_calculation_mode', tax_engine.DEFAULT_MODE)
+        # The company's own currency drives ROUNDING PRECISION, not just the
+        # symbol on screen. JOD has three decimal places (fils); rounding it to
+        # two silently moved persisted money by up to 5 fils per line, on the
+        # receipt AND in what is filed with the tax authority. Read from the
+        # same _settings() call the mode already uses, so this costs no extra
+        # query. See core/retail/pricing.py::currency_quantum.
+        currency = _s.get('base_currency')
         # feat/shift-cash-drawer (schema v10): same best-effort session stamp
         # as create_sale above -- see _open_cash_session_id's docstring.
         cash_session_id = _open_cash_session_id(conn, cid, bid)
@@ -5636,7 +5652,7 @@ def create_return():
 
             calc = tax_engine.calculate_line(
                 float(sold['unit_price']), qty, float(sold['discount_pct'] or 0),
-                float(sold['tax_rate'] or 0), mode=mode)
+                float(sold['tax_rate'] or 0), mode=mode, currency=currency)
             resolved_items.append({
                 'product_id': pid, 'sale_item_id': sale_item_id, 'quantity': qty,
                 'unit_price': float(sold['unit_price']),
@@ -8067,7 +8083,13 @@ def _device_doc_discriminator():
     return str(value)[:_DOC_DISCRIMINATOR_WIDTH]
 
 _DEFAULT_SETTINGS = {
-    'base_currency': 'USD',
+    # JOD, not USD. This product is sold in Jordan; a Jordanian shop opening
+    # a fresh install and finding its money labelled in dollars -- and, worse,
+    # ROUNDED to two decimals when the dinar has three (fils) -- is not a
+    # default anyone would choose deliberately. A shop selling in another
+    # currency sets this once in settings and both the symbol and the rounding
+    # precision follow it (core/retail/pricing.py::currency_quantum).
+    'base_currency': 'JOD',
     'default_credit_mode': 'none',      # none | limited | unlimited
     'default_credit_limit': '0',
     'enforce_credit_limit': 'warn',     # warn | block
