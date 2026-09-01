@@ -68,11 +68,34 @@ function retailPaymentChartConfig(labels, values, tickColor) {
       scales: {
         // beginAtZero keeps the zero line on the axis so a negative bar is
         // visibly on the other side of it rather than merely shorter.
-        x: { beginAtZero: true, ticks: { color: tickColor, callback: v => '$' + v },
+        x: { beginAtZero: true, ticks: { color: tickColor, callback: v => axisMoney(v) },
              grid: { color: 'rgba(255,255,255,0.05)' } },
         y: { ticks: { color: tickColor }, grid: { display: false } },
       } },
   };
+}
+
+// Chart axis ticks, in the SHOP's currency rather than a hardcoded dollar.
+//
+// All three chart builders in this file wrote `v => '$' + v`, so every axis
+// in the product read dollars regardless of the configured currency -- found
+// by screenshotting the running dashboard, where the Revenue-Today axis said
+// $1 / $0.8 while the figure directly above it said JD 0.000. Unit tests
+// could not see it: the axis callback is data Chart.js owns, never a value
+// this file renders into the DOM itself.
+//
+// Reads RetailSystem lazily (and defensively) because one caller is the
+// module-level chart builder above, where `this` is not the system object,
+// and because a chart can be built before the first /settings/tax response
+// has set the mark. Falling back to the bare number is right there: an
+// unmarked axis is ambiguous, an axis marked with the WRONG currency is a
+// misread.
+function axisMoney(v) {
+  try {
+    return RetailSystem._currencyPrefix() + v;
+  } catch (e) {
+    return String(v);
+  }
 }
 
 const RetailSystem = {
@@ -1488,7 +1511,7 @@ const RetailSystem = {
               borderRadius: 3 }] },
             options: { responsive:true, maintainAspectRatio:false,
               plugins:{ legend:{display:false} },
-              scales:{ y:{grid:{color:gridClr},ticks:{color:tickClr,callback:v=>'$'+v}},
+              scales:{ y:{grid:{color:gridClr},ticks:{color:tickClr,callback:v=>axisMoney(v)}},
                        x:{grid:{display:false},ticks:{color:tickClr}} } }
           });
         } else if (hCtx) {
@@ -2043,7 +2066,7 @@ const RetailSystem = {
               title="${this._esc(t('Void the whole sale'))}">${t('Void Sale')}</button>
           </div>
           <div class="pos-summary">
-            <div class="pos-sum-row"><span>${t('Subtotal')}</span><span class="pos-sum-val money" id="pos-sub">$0.00</span></div>
+            <div class="pos-sum-row"><span>${t('Subtotal')}</span><span class="pos-sum-val money" id="pos-sub">${this._esc(this._moneyDigits(0))}</span></div>
             <div class="pos-sum-row">
               <span>${t('Discount')}</span>
               <span style="display:flex;gap:6px;align-items:center">
@@ -2053,14 +2076,14 @@ const RetailSystem = {
                   oninput="RetailSystem._recalc()" /> %
               </span>
             </div>
-            <div class="pos-sum-row"><span>${t('Tax')}</span><span class="pos-sum-val money" id="pos-tax">$0.00</span></div>
+            <div class="pos-sum-row"><span>${t('Tax')}</span><span class="pos-sum-val money" id="pos-tax">${this._esc(this._moneyDigits(0))}</span></div>
             <div class="pos-total-band">
               <span class="pos-grand-label">${t('Total')}</span>
-              <span class="pos-grand-value money" id="pos-total">$0.00</span>
+              <span class="pos-grand-value money" id="pos-total">${this._esc(this._moneyDigits(0))}</span>
             </div>
             <div class="pos-sum-row">
               <span>${t('Cash Tendered')}</span>
-              <input type="number" id="pos-tendered" placeholder="0.00" min="0" step="0.01"
+              <input type="number" id="pos-tendered" placeholder="${(0).toFixed(this._currencyDp())}" min="0" step="${(1 / Math.pow(10, this._currencyDp())).toFixed(this._currencyDp())}"
                 class="pos-mini-input" style="inline-size:112px;padding-inline:12px;font-size:15px"
                 aria-label="${this._esc(t('Cash Tendered'))}"
                 oninput="RetailSystem._calcChange()" />
@@ -8461,7 +8484,7 @@ const RetailSystem = {
             ]},
             opts:{ responsive:true, maintainAspectRatio:false,
               plugins:{ legend:{labels:{color:'#94a3b8'}} },
-              scales:{ y:{ticks:{color:'#94a3b8',callback:v=>'$'+v},grid:{color:'rgba(255,255,255,0.05)'}},
+              scales:{ y:{ticks:{color:'#94a3b8',callback:v=>axisMoney(v)},grid:{color:'rgba(255,255,255,0.05)'}},
                 y1:{position:'right',ticks:{color:'#a855f7'},grid:{display:false}},
                 x:{ticks:{color:'#94a3b8'},grid:{display:false}} } }
           }],
@@ -8493,7 +8516,7 @@ const RetailSystem = {
             ]},
             opts:{ responsive:true, maintainAspectRatio:false,
               plugins:{ legend:{labels:{color:'#94a3b8'}} },
-              scales:{ y:{ticks:{color:'#94a3b8',callback:v=>'$'+v},grid:{color:'rgba(255,255,255,0.05)'}},
+              scales:{ y:{ticks:{color:'#94a3b8',callback:v=>axisMoney(v)},grid:{color:'rgba(255,255,255,0.05)'}},
                 y1:{position:'right',ticks:{color:'#a855f7'},grid:{display:false}},
                 x:{ticks:{color:'#94a3b8'},grid:{display:false}} } }
           }],
