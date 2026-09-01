@@ -1854,3 +1854,59 @@ day. It is not: the `?q=` branch has NO limit and searches the whole table
 server-side on name, phone and email, so every customer stays findable. Owner's
 dropdowns have no search at all, which is precisely what makes those unreachable.
 Recorded so nobody re-raises it.
+
+## 2026-09-01 — the unreachable-feature list reaches zero
+
+`KNOWN_GAPS` in `retail_route_reachability_test.py` is now **empty**. It is kept
+in place, empty and commented, so filing the next one stays the cheap option.
+
+Six complete-backend-no-doorway defects were found and closed this cycle. All
+six had the same shape: a route written, validated, capability-gated, in several
+cases audited and covered by its own test file — and no client anywhere that
+could call it. None of them was findable by reading the backend, because nothing
+about the backend was wrong.
+
+The two closed today:
+
+* **`settings/business-day`.** The boundary every report, the dashboard and the
+  shift Z-report group by. With no client able to set it, every install ran on
+  `UNCONFIGURED_BUSINESS_DAY`, which is **not** midnight UTC — it buckets each
+  row on the clock of whichever DEVICE wrote it. Defensible for one till; wrong
+  the moment a second device syncs, because two terminals whose clocks disagree
+  file the same evening under different days. A shop trading past midnight could
+  not move its boundary at all. Now a card in Admin Center.
+* **`reports/email`.** Queues a summary report. Its WhatsApp twin
+  (`reports/whatsapp`) had an on-demand trigger in `whatsapp.js` all along; the
+  email side had a full settings screen — recipients, retry policy, an outbox
+  drainer — and nothing that could queue a report. Now a card on Email
+  Notifications.
+
+### The guard earned its keep twice, in opposite directions
+
+Both closures were confirmed by `retail_route_reachability_test.py` FAILING with
+"these routes are listed as unreachable but a client now calls them". That is
+the guard working, and it is independent evidence the wiring is real rather than
+a claim in a commit message.
+
+It also caught a defect in its own sibling. The first version of the business-day
+render check asserted `html.includes('business-day-card')` — which
+`'business-day-card-REMOVED'` satisfies as a substring. It went green against a
+card that had been renamed *and* hidden, and only mutation testing found it. A
+reachability guard that cannot tell "present" from "present-ish" certifies the
+exact bug it exists to catch. Both guards now match the whole `id` attribute and
+reject a card rendered with `display:none`.
+
+### One defect was introduced and caught in the same day
+
+The business-day card shipped green, with seven passing cases, and was wrong.
+On an install with no `tzdata` the timezone field renders disabled — correct —
+but Save still posted `business_timezone: null`, which the route treats as
+CLEARING the key. So an owner opening Settings to change the *hour* would wipe a
+declared timezone they were never shown, surfacing much later as "the reports
+moved". Fixed by omitting the key entirely while the field is disabled; the route
+accepts a partial payload, so the hour is still savable.
+
+Found by re-reading the change after it was committed and green — not by a test
+and not by running it. None of the seven cases had any reason to model an install
+whose `tzdata` went missing *after* a zone was declared, which is the only state
+where the bug lives. Recorded because "the tests passed" was, again, not evidence.
