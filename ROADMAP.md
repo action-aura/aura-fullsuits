@@ -1962,3 +1962,72 @@ the maintenance burden that turns a guard into noise.
 
 Recorded as a measurement, not a mechanism. Worth re-running by hand if the
 client ever starts constructing paths more dynamically than it does today.
+
+## 2026-09-01 — the product was photographed for the first time, and it was wrong
+
+Everything in this repo had been verified by reading code or running tests.
+Nobody had ever looked at the running product. Playwright was installed on this
+machine the whole time.
+
+The first sweep found four defects in about an hour, while **43 JS suites, 113
+Python files and 238 Android tests were green**. Harness kept at
+`scripts/ui-sweep/`, because the tool that finds this class of bug is worth more
+than the individual fixes.
+
+### Retail — fixed
+
+* **The till showed dollars in a dinar shop.** `#pos-sub`/`#pos-tax`/`#pos-total`
+  were seeded with the literal `"$0.00"` and only corrected by `_recalc()`, which
+  runs on cart mutations. An empty cart never mutates — so the POS **at rest**,
+  what a cashier looks at all day between sales, read `$0.00` beside a button
+  reading `Charge — JD 0.000`. Measured, both states, on the running app.
+* **All four chart axes hardcoded `'$' + v`.** The dashboard's Revenue-Today axis
+  read `$1 / $0.8` directly under a `JD 0.000` headline. Now one shared
+  `axisMoney()` that degrades to the bare number when the currency is not
+  resolved yet — an unmarked axis is ambiguous, a wrongly-marked one is a misread.
+* **`step="0.01"` on cash tendered**, which makes a fils amount a step mismatch
+  on a three-decimal currency.
+* **The admin-device banner filled ~45% of a 390px screen**, wrapping to one word
+  per line over the till, because `flex:1` gave the message a 0% basis.
+
+`retail_currency_surface_test.js` now asserts on what the SCREEN renders rather
+than on what the formatter returns. Six mutations, all caught, two of which
+restore the shipped bugs verbatim.
+
+**Why none of this was caught:** the currency formatter was correct and
+unit-tested throughout. The bugs lived in an initial-HTML literal, in a callback
+Chart.js owns, in an input attribute, and in a flex basis. A money surface is not
+covered because the money function is covered.
+
+### Owner — measured, NOT fixed
+
+`owner/` belongs to the other collaborator's active branches, so these are
+recorded rather than changed.
+
+* **Eight KPI labels each render TWICE on the dashboard**, counted rather than
+  eyeballed: Active customers, Active subscriptions, Expiring in 30 days, Open
+  items awaiting action, Active licences, Active installations, Renewals awaiting
+  finance approval, Activations pending manual review. Plus a duplicated
+  "Overview" heading and "New subscription" action. This is the concrete version
+  of the owner's own complaint that Owner carries "a bunch of useless stuff" —
+  with real data those are eight numbers a reader must reconcile against
+  themselves.
+* **The "Show" control overflows the password field** on the login page, clipped
+  at the right edge.
+* **The login page is very sparse** next to Retail's first-run screen — flat,
+  utilitarian, a large empty area below a small card. Functional, not finished.
+
+### Owner — what is genuinely good, and should not be "simplified" away
+
+* MFA enrolment is **mandatory on first login with no skip**, and hands off to a
+  recovery-codes page before the app. Correct posture; it is also a hard gate for
+  any automation, which is the point.
+* The server is fast: `GET /auth/login` answers in ~125ms. An early report that
+  login "hung" was the harness posting to `/` (405) and then calling
+  `page.content()` mid-navigation — not Owner.
+* Grouped dark sidebar, Ctrl+K search, quick actions, Light/Dark/System, EN/عربي,
+  and a seven-step first-run tour.
+
+### Still unphotographed
+
+The Android app. Same treatment is owed to it.
