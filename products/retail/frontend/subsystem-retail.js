@@ -5792,9 +5792,27 @@ const RetailSystem = {
     const tzInput = document.getElementById('business-day-tz');
     const hourSelect = document.getElementById('business-day-hour');
     const tz = tzInput ? tzInput.value.trim() : '';
-    // Empty sends explicit null, which the route treats as CLEARING the key
-    // -- deliberately not the empty string, and deliberately not 'UTC'.
-    const payload = { business_timezone: tz || null };
+    const payload = {};
+
+    // An install with no timezone database renders this field DISABLED, and
+    // in that state the key is left out of the payload entirely rather than
+    // sent as null.
+    //
+    // Sending null would CLEAR the stored zone, and that is a silent
+    // data-loss path: the shop's declared zone is still in the table, the
+    // screen simply cannot resolve or display it without tzdata, so an owner
+    // who opened Settings to change the HOUR and pressed Save would wipe a
+    // timezone they were never shown and did not choose to remove. It would
+    // come back as "the reports moved" long after anyone connected it to
+    // this click. The route accepts a partial payload (it requires only one
+    // known key), so updating just the hour is a first-class request.
+    if (!(tzInput && tzInput.disabled)) {
+      // Empty sends explicit null, which the route treats as CLEARING the
+      // key -- deliberately not the empty string, and deliberately not
+      // 'UTC': UTC is a real zone, and writing it to mean "unset" would
+      // re-file the shop's trading history.
+      payload.business_timezone = tz || null;
+    }
     if (hourSelect) payload.business_day_start_hour = parseInt(hourSelect.value, 10) || 0;
     try {
       const resp = await this._post('/api/sub/retail/settings/business-day', payload);

@@ -306,15 +306,45 @@ async function testAServerRefusalIsShownInTheServersOwnWords() {
     'a refused save must never also claim success');
 }
 
+async function testSavingWithNoTimezoneDatabaseCannotWipeTheStoredZone() {
+  const calls = [];
+  const { RetailSystem, els } = loadRetailSystem(
+    makeFetch({ business_timezone: null, business_day_start_hour: 5,
+                timezone_database_available: false }, calls));
+  await RetailSystem._renderAdminCenter(makeElementStub('content'));
+
+  // Precondition: this is the state that disables the field.
+  assert.strictEqual(els.get('business-day-tz').disabled, true);
+
+  els.get('business-day-hour').value = '5';
+  calls.length = 0;
+  await RetailSystem._saveBusinessDay();
+
+  const post = calls.find(c => c.url.includes('/settings/business-day') && c.method === 'POST');
+  assert.ok(post, 'changing the hour must still be savable');
+  const body = JSON.parse(post.body);
+
+  assert.ok(!('business_timezone' in body),
+    'with no timezone database the key must be OMITTED, not sent as null. ' +
+    'The shop\'s declared zone is still in the table -- this install simply ' +
+    'cannot resolve it to display -- so sending null would wipe a timezone ' +
+    'the owner was never shown and did not choose to remove, while they were ' +
+    'only trying to change the hour. It would surface later as "the reports ' +
+    'moved", long after anyone could connect it to this click.');
+  assert.strictEqual(body.business_day_start_hour, 5,
+    'the hour must still be sent -- the route accepts a partial payload');
+}
+
 async function main() {
   await testCardIsRenderedIntoAdminCenter();
   await testUndeclaredTimezoneIsCalledOut();
   await testMissingTimezoneDatabaseIsReportedAsAnInstallProblem();
   await testDeclaredValuesArePopulatedAndWarningsCleared();
   await testEmptyTimezoneClearsRatherThanWritingUTC();
+  await testSavingWithNoTimezoneDatabaseCannotWipeTheStoredZone();
   await testATypedTimezoneIsSentVerbatim();
   await testAServerRefusalIsShownInTheServersOwnWords();
-  console.log('PASS: retail_business_day_settings_test.js (7 cases)');
+  console.log('PASS: retail_business_day_settings_test.js (8 cases)');
 }
 
 main().catch((err) => {
