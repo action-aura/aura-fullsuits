@@ -42,11 +42,57 @@ fun parseNum(s: String?): Double? {
 /** Parse user-entered text into an Int (e.g. reorder level), Arabic-digit tolerant. */
 fun parseIntFlexible(s: String?): Int? = parseNum(s)?.let { if (it.isFinite()) it.toInt() else null }
 
-/** Currency: "$1234.50" — Western digits / '.' decimal, device-locale independent. */
-fun money(v: Double): String = String.format(Locale.US, "$%.2f", v)
+/**
+ * The shop's currency, as resolved by the SERVER.
+ *
+ * Set once from `GET /settings/tax`, which returns the mark and the decimal
+ * count already resolved by `core/retail/pricing.py` -- the single source of
+ * truth for both. The phone deliberately holds no table of its own: the number
+ * of decimal places is not cosmetic (the Jordanian dinar has THREE, 1000 fils,
+ * and persisted money is rounded to exactly that), so a second copy here could
+ * drift and the symptom would be the till DISPLAYING a different number from
+ * the one it charges.
+ *
+ * Defaults are the Jordanian ones, matching the server's own default, so a
+ * screen that renders money before the first settings response still shows
+ * something correct for the home market rather than dollars.
+ */
+object Currency {
+    @Volatile var symbol: String = "JD"
+    @Volatile var decimals: Int = 3
 
-/** Bare 2-decimal amount, locale independent. */
-fun amount(v: Double): String = String.format(Locale.US, "%.2f", v)
+    /** Apply a settings response. Ignores nulls so a partial or older payload
+     *  leaves the working defaults standing rather than blanking the mark. */
+    fun apply(symbol: String?, decimals: Int?) {
+        symbol?.let { this.symbol = it }
+        decimals?.let { if (it in 0..4) this.decimals = it }
+    }
+}
+
+/**
+ * Currency for display: "JD 1234.500", "$1234.50".
+ *
+ * Western digits and '.' decimal, device-locale independent -- unchanged and
+ * deliberate, so a phone set to an Arabic locale does not render Arabic-Indic
+ * digits into a figure the shopkeeper is comparing against a printed receipt.
+ *
+ * A single-character mark hugs its digits, a multi-letter one takes a space,
+ * matching the web till's rule exactly (subsystem-retail.js::_currencyPrefix).
+ * The rule is on LENGTH rather than a per-currency list so it is right for
+ * currencies nobody has added yet.
+ */
+fun money(v: Double): String {
+    val body = String.format(Locale.US, "%.${Currency.decimals}f", v)
+    val sym = Currency.symbol
+    return when {
+        sym.isEmpty() -> body
+        sym.length == 1 -> sym + body
+        else -> "$sym $body"
+    }
+}
+
+/** Bare amount with no mark, at the shop's currency precision. */
+fun amount(v: Double): String = String.format(Locale.US, "%.${Currency.decimals}f", v)
 
 /** Length of a till PIN. Mirrors user_accounts.PIN_LENGTH. */
 const val PIN_LENGTH = 4

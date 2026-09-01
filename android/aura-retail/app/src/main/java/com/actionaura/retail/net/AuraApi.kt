@@ -247,6 +247,12 @@ interface AuraApi {
     @GET("api/sub/retail/branches")
     suspend fun branches(): BranchesResponse
 
+    // Read once at boot, for how to format money and nothing else. Same gating
+    // as branches() above: any signed-in retail user may read it, because a
+    // cashier's till cannot render a single price without it.
+    @GET("api/sub/retail/settings/tax")
+    suspend fun taxSettings(): TaxSettingsResponse
+
     // Returns / refunds
     @GET("api/sub/retail/returns")
     suspend fun returns(): ReturnsResponse

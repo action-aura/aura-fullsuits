@@ -514,6 +514,26 @@ data class Branch(
 )
 data class BranchesResponse(val status: String = "", val data: List<Branch> = emptyList())
 
+// GET /settings/tax. The phone reads it for ONE thing: how to format money.
+//
+// `currency_decimals` arrives already resolved by core/retail/pricing.py rather
+// than being looked up here, because the decimal count is not cosmetic -- the
+// Jordanian dinar has three (1000 fils) and persisted money is rounded to
+// exactly that. A second copy of that table on the phone could drift, and the
+// symptom would be a till DISPLAYING a different number from the one the server
+// charges.
+//
+// Every field is nullable with a default: this response predates the currency
+// fields, so a newer phone talking to an older backend during a staged rollout
+// must fall back to its own defaults rather than blanking the currency mark.
+data class TaxSettings(
+    val tax_calculation_mode: String? = null,
+    val base_currency: String? = null,
+    val currency_symbol: String? = null,
+    val currency_decimals: Int? = null,
+)
+data class TaxSettingsResponse(val status: String = "", val data: TaxSettings? = null)
+
 // GET/POST /api/sub/retail/device/branch's shared payload shape
 // (retail_api.py::get_device_branch/set_device_branch). `branch_uid` null
 // means unpinned -- the state that produces silently wrong data on a chain,

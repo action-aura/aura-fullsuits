@@ -93,6 +93,16 @@ private suspend fun adoptSession(): SessionResponse? {
     if (session != null) RetailSession.adopt(session)
     if (session?.authenticated == true) {
         TerminalIdentity.establish { ApiClient.get().myDevice() }
+        // How to format money, from the server (see ui/i18n/Num.kt::Currency).
+        // Best-effort like everything else in this function and for the same
+        // reason: a dropped packet must not stop the app booting. On failure
+        // the Jordanian defaults stand, which is the right answer for the home
+        // market -- unlike the hard-coded dollar sign this replaced, which was
+        // the wrong answer everywhere the product is actually sold.
+        try {
+            val tax = ApiClient.get().taxSettings().data
+            com.actionaura.retail.ui.i18n.Currency.apply(tax?.currency_symbol, tax?.currency_decimals)
+        } catch (e: Exception) { /* keep the defaults */ }
     }
     return session
 }

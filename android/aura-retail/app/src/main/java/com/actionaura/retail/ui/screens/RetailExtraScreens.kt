@@ -56,7 +56,14 @@ import com.actionaura.retail.ui.theme.Warning
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-private fun money(v: Double) = String.format(java.util.Locale.US, "$%.2f", v)
+// Delegates to the ONE formatter (ui/i18n/Num.kt). This was a second, private
+// copy that hard-coded a dollar sign and two decimals -- so every amount on
+// every screen in this file said "$" and dropped the third decimal the
+// Jordanian dinar needs, independently of the shared helper and invisibly to
+// anyone fixing that helper. A duplicate of money-formatting logic is exactly
+// the kind that drifts without anyone noticing, because both halves look right
+// on their own.
+private fun money(v: Double) = com.actionaura.retail.ui.i18n.money(v)
 private fun shortDate(s: String?) = (s ?: "").replace("T", " ").take(16)
 
 // ══════════════════════════════════════════════════════════════════════════════
