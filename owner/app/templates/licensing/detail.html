@@ -6,7 +6,12 @@
 <div class="card card--critical">
   <h2>{{ _("License key -- shown once") }}</h2>
   <p><strong>{{ _("Copy this now. It will never be displayed again.") }}</strong></p>
-  <p><code class="masked" dir="ltr">{{ revealed_key }}</code></p>
+  <p>
+    <code class="masked" dir="ltr" id="licensing-detail-revealed-key">{{ revealed_key }}</code>
+    <button type="button" class="secondary" data-copy-target="licensing-detail-revealed-key"
+            data-copy-label="{{ _('Copy key') }}" data-copy-success-label="{{ _('Copied') }}"
+            data-copy-fallback-label="{{ _('Selected -- press Ctrl+C') }}">{{ _("Copy key") }}</button>
+  </p>
 </div>
 {% endif %}
 

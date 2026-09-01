@@ -335,3 +335,145 @@ def test_extra_devices_beyond_plan_maximum_rejected(app, seeded):
                 customer_id=customer_id, plan_id=plan_id, extra_devices=5,  # 2 + 5 = 7 > max 3
                 idempotency_key=str(uuid.uuid4()), actor_staff_user_id=staff_id, license_pepper="test-pepper",
             )
+
+
+# -- Copy-to-clipboard + form-vs-JSON validation (owner AI-context DEFECT 1/2) --
+#
+# DEFECT 1: at ~11 issuances/day, hand-selecting a long key or WhatsApp
+# message out of a <code>/<textarea> element was a routine way to lose it
+# forever (no re-reveal, only replace_license). Fixed with a CSP-compatible
+# (script-src 'self') copy control -- static/js/copy-to-clipboard.js,
+# following the same external-file + data-*-attribute mechanism as
+# confirm.js/auto-submit.js/password-toggle.js.
+#
+# DEFECT 2: a validation failure on this form used to return a raw JSON
+# error body that the browser rendered as-is, discarding everything the
+# operator had typed. Fixed by re-rendering the form in place with the
+# error shown and request.form preserved verbatim -- scoped to this
+# issuance path only, not the ~dozen other JSON-error sites in
+# app/licensing/routes.py (that file belongs to the collaborator working
+# the rest of licensing right now; see this test file's report).
+
+def test_issuance_key_reveal_carries_copy_control(app, client, seeded):
+    """(1) The issued-key page carries a copy control bound to the key via
+    the data-attribute mechanism, not a second, invented one."""
+    plan_id = _seed_package(app, "COPY_KEY_PLAN", billing_model="MONTHLY", billing_interval_months=1)
+    staff_id = make_staff(app, "issue11@example.com", super_admin=True, mfa=True)
+    customer_id = _seed_customer(app, staff_id)
+    login_and_verify_mfa(client, "issue11@example.com")
+    page = client.get("/licenses/issuance/new")
+    csrf = get_csrf(page.get_data(as_text=True))
+    resp = client.post(
+        "/licenses/issuance",
+        data={
+            "csrf_token": csrf, "idempotency_key": str(uuid.uuid4()),
+            "customer_id": str(customer_id), "plan_id": str(plan_id), "extra_devices": "0",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "AURA-" in body
+    assert 'id="issuance-revealed-key"' in body
+    assert 'data-copy-target="issuance-revealed-key"' in body
+
+
+def test_issuance_whatsapp_message_carries_copy_control(app, client, seeded):
+    """(2) The pre-composed WhatsApp message also gets a copy control -- it
+    is even more painful to hand-select correctly than the key."""
+    plan_id = _seed_package(app, "COPY_WA_PLAN", billing_model="MONTHLY", billing_interval_months=1)
+    staff_id = make_staff(app, "issue12@example.com", super_admin=True, mfa=True)
+    customer_id = _seed_customer(app, staff_id)
+    login_and_verify_mfa(client, "issue12@example.com")
+    page = client.get("/licenses/issuance/new")
+    csrf = get_csrf(page.get_data(as_text=True))
+    resp = client.post(
+        "/licenses/issuance",
+        data={
+            "csrf_token": csrf, "idempotency_key": str(uuid.uuid4()),
+            "customer_id": str(customer_id), "plan_id": str(plan_id), "extra_devices": "0",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert 'id="issuance-whatsapp-message"' in body
+    assert 'data-copy-target="issuance-whatsapp-message"' in body
+
+
+def test_invalid_extra_devices_rerenders_form_with_message_not_json(app, client, seeded):
+    """(3) A validation failure on the issuance form re-renders the FORM
+    with the message visible -- not a raw JSON body."""
+    plan_id = _seed_package(app, "BADFORM_PLAN", billing_model="MONTHLY", billing_interval_months=1)
+    staff_id = make_staff(app, "issue13@example.com", super_admin=True, mfa=True)
+    customer_id = _seed_customer(app, staff_id)
+    login_and_verify_mfa(client, "issue13@example.com")
+    page = client.get("/licenses/issuance/new")
+    csrf = get_csrf(page.get_data(as_text=True))
+    resp = client.post(
+        "/licenses/issuance",
+        data={
+            "csrf_token": csrf, "idempotency_key": str(uuid.uuid4()),
+            "customer_id": str(customer_id), "plan_id": str(plan_id), "extra_devices": "not-a-number",
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.content_type.startswith("text/html")
+    body = resp.get_data(as_text=True)
+    assert '{"error"' not in body  # never a raw JSON error body rendered as text
+    assert "Extra devices must be a whole number." in body
+    assert 'action="/licenses/issuance"' in body  # the form itself, re-rendered
+
+
+def test_business_rule_failure_rerenders_form_preserving_typed_values(app, client, seeded):
+    """(3)+(4): a LicenseIssuanceError (extra devices beyond the plan's max)
+    also re-renders the form -- not JSON -- and preserves exactly what the
+    operator typed: customer selection, plan selection, extra_devices."""
+    plan_id = _seed_package(
+        app, "CAPPED_FORM_PLAN", billing_model="MONTHLY", billing_interval_months=1,
+        included_device_count=2, max_device_count=3,
+    )
+    staff_id = make_staff(app, "issue14@example.com", super_admin=True, mfa=True)
+    customer_id = _seed_customer(app, staff_id, "Preserve Me Trading Co")
+    login_and_verify_mfa(client, "issue14@example.com")
+    page = client.get("/licenses/issuance/new")
+    csrf = get_csrf(page.get_data(as_text=True))
+    resp = client.post(
+        "/licenses/issuance",
+        data={
+            "csrf_token": csrf, "idempotency_key": str(uuid.uuid4()),
+            "customer_id": str(customer_id), "plan_id": str(plan_id), "extra_devices": "5",  # 2 + 5 = 7 > max 3
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.content_type.startswith("text/html")
+    body = resp.get_data(as_text=True)
+    assert "AURA-" not in body  # no key was ever issued on this failed attempt
+    # exactly what the operator typed must still be selected/present, not reset
+    assert f'value="{customer_id}" selected' in body
+    assert f'value="{plan_id}" selected' in body
+    assert 'name="extra_devices" type="number" value="5"' in body
+
+
+def test_reload_after_issuance_never_reveals_key_again(app, client, seeded):
+    """(5) The key is still shown only once -- this is the security property
+    that must survive the copy-control and form-rerender changes above.
+    Returning to the issuance 'new' screen after a successful issuance must
+    not re-reveal it."""
+    plan_id = _seed_package(app, "RELOAD_PLAN", billing_model="MONTHLY", billing_interval_months=1)
+    staff_id = make_staff(app, "issue15@example.com", super_admin=True, mfa=True)
+    customer_id = _seed_customer(app, staff_id)
+    login_and_verify_mfa(client, "issue15@example.com")
+    page = client.get("/licenses/issuance/new")
+    csrf = get_csrf(page.get_data(as_text=True))
+    resp = client.post(
+        "/licenses/issuance",
+        data={
+            "csrf_token": csrf, "idempotency_key": str(uuid.uuid4()),
+            "customer_id": str(customer_id), "plan_id": str(plan_id), "extra_devices": "0",
+        },
+    )
+    body = resp.get_data(as_text=True)
+    assert "AURA-" in body
+
+    reload_page = client.get("/licenses/issuance/new")
+    reload_body = reload_page.get_data(as_text=True)
+    assert "AURA-" not in reload_body

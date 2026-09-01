@@ -6,9 +6,19 @@
   <h2>{{ _("License key -- shown once") }}</h2>
   <p><strong>{{ _("Copy this now. It will never be displayed again.") }}</strong></p>
   {% if result.full_key %}
-  <p><code class="masked" dir="ltr">{{ result.full_key }}</code></p>
+  <p>
+    <code class="masked" dir="ltr" id="issuance-revealed-key">{{ result.full_key }}</code>
+    <button type="button" class="secondary" data-copy-target="issuance-revealed-key"
+            data-copy-label="{{ _('Copy key') }}" data-copy-success-label="{{ _('Copied') }}"
+            data-copy-fallback-label="{{ _('Selected -- press Ctrl+C') }}">{{ _("Copy key") }}</button>
+  </p>
   <label for="issuance-whatsapp-message">{{ _("Pre-composed WhatsApp message (English + Arabic)") }}</label>
   <textarea id="issuance-whatsapp-message" rows="10" readonly style="width:100%;">{{ result.whatsapp_message }}</textarea>
+  <p>
+    <button type="button" class="secondary" data-copy-target="issuance-whatsapp-message"
+            data-copy-label="{{ _('Copy message') }}" data-copy-success-label="{{ _('Copied') }}"
+            data-copy-fallback-label="{{ _('Selected -- press Ctrl+C') }}">{{ _("Copy message") }}</button>
+  </p>
   {% else %}
   <p>{{ _("This idempotency key was already used -- the license was already issued and its key was shown once, then. It cannot be shown again.") }}</p>
   {% endif %}
@@ -29,6 +39,11 @@
   <h2>{{ _("Issue license") }}</h2>
   <p>{{ _("Three acts: pick or create the customer, pick the package and any extra devices, then press Issue. The key is revealed once, with a ready-to-send WhatsApp message.") }}</p>
 
+  {% set fv = form_values or {} %}
+  {% if error %}
+  <p class="error" role="alert">{{ error }}</p>
+  {% endif %}
+
   {% if recent_auth_ok %}
   <form method="post" action="{{ url_for('license_issuance.create') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -38,16 +53,16 @@
     <label for="issuance-customer-id">{{ _("Existing customer") }}</label>
     <select id="issuance-customer-id" name="customer_id">
       <option value="">{{ _("-- New customer --") }}</option>
-      {% for c in customers %}<option value="{{ c.id }}">{{ c.legal_name }}</option>{% endfor %}
+      {% for c in customers %}<option value="{{ c.id }}" {% if fv.get("customer_id") == c.id|string %}selected{% endif %}>{{ c.legal_name }}</option>{% endfor %}
     </select>
     <label for="issuance-new-customer-name">{{ _("Or: legal name of a new customer") }}</label>
-    <input id="issuance-new-customer-name" name="new_customer_legal_name" placeholder="{{ _("Only used when no existing customer is selected above") }}">
+    <input id="issuance-new-customer-name" name="new_customer_legal_name" value="{{ fv.get("new_customer_legal_name", "") }}" placeholder="{{ _("Only used when no existing customer is selected above") }}">
 
     <h3>{{ _("2. Package") }}</h3>
     <label for="issuance-plan-id">{{ _("Package") }}</label>
     <select id="issuance-plan-id" name="plan_id" required>
       {% for pkg in packages %}
-      <option value="{{ pkg.plan_id }}">{{ pkg.name }} -- {{ pkg.billing_model }} -- {{ pkg.unit_price }} {{ pkg.currency }} ({{ pkg.included_device_count }} {{ _("devices included") }})</option>
+      <option value="{{ pkg.plan_id }}" {% if fv.get("plan_id") == pkg.plan_id|string %}selected{% endif %}>{{ pkg.name }} -- {{ pkg.billing_model }} -- {{ pkg.unit_price }} {{ pkg.currency }} ({{ pkg.included_device_count }} {{ _("devices included") }})</option>
       {% else %}
       <option value="" disabled>{{ _("No sellable packages yet -- set an effective date and current price on a plan first.") }}</option>
       {% endfor %}
@@ -56,7 +71,7 @@
       {{ _("Term is set automatically from the package: ONE_TIME is perpetual (no expiry), ANNUAL/MONTHLY get a term from the package's billing interval, PILOT gets a 30-day trial.") }}
     </p>
     <label for="issuance-extra-devices">{{ _("Extra devices beyond the package's included count") }}</label>
-    <input id="issuance-extra-devices" name="extra_devices" type="number" value="0" min="0">
+    <input id="issuance-extra-devices" name="extra_devices" type="number" value="{{ fv.get("extra_devices", "0") }}" min="0">
 
     <h3>{{ _("3. Issue") }}</h3>
     <div style="margin-top:0.5rem;"><button type="submit" class="btn--primary-action">{{ _("Issue license key (requires recent authentication)") }}</button></div>

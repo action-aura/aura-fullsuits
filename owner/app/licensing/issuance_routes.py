@@ -20,6 +20,7 @@ from __future__ import annotations
 import uuid
 
 from flask import Blueprint, current_app, jsonify, render_template, request
+from flask_babel import gettext as _
 from sqlalchemy import select
 
 from app.auth.session import has_recent_auth, load_current_staff
@@ -49,17 +50,57 @@ def _sellable_packages() -> list[dict]:
     return packages
 
 
+def _customers_for_form() -> list[Customer]:
+    return db_session.execute(
+        select(Customer).where(Customer.archived_at.is_(None)).order_by(Customer.legal_name)
+    ).scalars().all()
+
+
+def _wants_json_error() -> bool:
+    """True only for a genuine API caller -- a JSON request body, or an
+    Accept header that asks for JSON and explicitly not HTML. False for
+    this screen's own HTML form, which is the ONLY caller of this route
+    today (verified by grepping owner/ for 'license_issuance.create' and
+    '/licenses/issuance' -- nothing outside issuance.html and this module
+    references it). A normal browser form POST always sends an Accept
+    header that includes text/html, so it never gets misrouted into a raw
+    JSON body here."""
+    if request.is_json:
+        return True
+    return request.accept_mimetypes.accept_json and not request.accept_mimetypes.accept_html
+
+
+def _render_issuance_form(*, error: str | None, idempotency_key: str, status: int = 200):
+    """Re-renders the issuance form in place, error (if any) visible inline
+    and everything the operator already typed preserved verbatim in
+    `request.form` -- instead of the raw JSON error body the route used to
+    return on a form POST, which the browser rendered as-is and which threw
+    away every field the operator had just filled in. customers/packages
+    must be re-fetched here: the success/JSON path never needed them
+    (result is truthy there), but the form branch of the template always
+    iterates them to build the two <select> lists."""
+    return render_template(
+        "licensing/issuance.html",
+        customers=_customers_for_form(),
+        packages=_sellable_packages(),
+        result=None,
+        error=error,
+        form_values=request.form,
+        issue_idempotency_key=idempotency_key,
+        recent_auth_ok=has_recent_auth(),
+    ), status
+
+
 @bp.route("/new", methods=["GET"])
 @require_permission("licenses.issue")
 def new_form():
-    customers = db_session.execute(
-        select(Customer).where(Customer.archived_at.is_(None)).order_by(Customer.legal_name)
-    ).scalars().all()
     return render_template(
         "licensing/issuance.html",
-        customers=customers,
+        customers=_customers_for_form(),
         packages=_sellable_packages(),
         result=None,
+        error=None,
+        form_values=None,
         issue_idempotency_key=str(uuid.uuid4()),
         recent_auth_ok=has_recent_auth(),
     )
@@ -72,11 +113,23 @@ def create():
     actor = load_current_staff()
     idempotency_key = request.form.get("idempotency_key") or request.headers.get("Idempotency-Key")
     if not idempotency_key:
-        return jsonify({"error": "idempotency_key_required"}), 400
+        if _wants_json_error():
+            return jsonify({"error": "idempotency_key_required"}), 400
+        # Nothing was submitted to key a retry on -- give the re-rendered
+        # form a fresh token rather than an empty hidden field.
+        return _render_issuance_form(
+            error=_("An idempotency key is required to issue a license."),
+            idempotency_key=str(uuid.uuid4()), status=400,
+        )
     try:
         extra_devices = int(request.form.get("extra_devices") or "0")
     except ValueError:
-        return jsonify({"error": "invalid_extra_devices"}), 400
+        if _wants_json_error():
+            return jsonify({"error": "invalid_extra_devices"}), 400
+        return _render_issuance_form(
+            error=_("Extra devices must be a whole number."),
+            idempotency_key=idempotency_key, status=400,
+        )
 
     try:
         result = issue_license_direct(
@@ -89,7 +142,12 @@ def create():
             license_pepper=current_app.config["LICENSE_PEPPER"],
         )
     except LicenseIssuanceError as exc:
-        return jsonify({"error": str(exc)}), 400
+        if _wants_json_error():
+            return jsonify({"error": str(exc)}), 400
+        # exc's message is already a full, operator-facing sentence (see
+        # LicenseIssuanceError's own docstring) -- safe to show as-is,
+        # exactly like the JSON path already did with str(exc).
+        return _render_issuance_form(error=str(exc), idempotency_key=idempotency_key, status=400)
 
     # full_key/whatsapp_message are shown exactly once, in this response
     # only -- there is no detail-style GET for this screen that could ever
@@ -100,6 +158,8 @@ def create():
         customers=[],
         packages=[],
         result=result,
+        error=None,
+        form_values=None,
         issue_idempotency_key=str(uuid.uuid4()),
         recent_auth_ok=has_recent_auth(),
     )

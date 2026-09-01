@@ -148,3 +148,41 @@ def test_issuance_route_redirects_to_reauth_without_recent_mfa(app, client, seed
     resp = client.post(f"/licenses/{license_id}/issue", data={"csrf_token": csrf, "idempotency_key": "xyz"})
     assert resp.status_code == 302
     assert "reauth" in resp.headers["Location"]
+
+
+def test_issue_key_reveal_carries_copy_control_and_reload_never_reveals_again(app, client, seeded):
+    """owner AI-context DEFECT 1: the one-time reveal on this detail page
+    must carry a copy-to-clipboard control bound to the key via the
+    data-attribute mechanism (static/js/copy-to-clipboard.js) -- and (5)
+    the security property that reload never re-shows the key must survive
+    adding it."""
+    staff_id = make_staff(app, "lic7@example.com", super_admin=True, mfa=True)
+    with app.app_context():
+        license_row = _make_license(app, staff_id)
+        license_id = license_row.id
+    login_and_verify_mfa(client, "lic7@example.com")
+    page = client.get(f"/licenses/{license_id}")
+    csrf = get_csrf(page.get_data(as_text=True))
+    resp = client.post(
+        f"/licenses/{license_id}/issue",
+        data={"csrf_token": csrf, "idempotency_key": str(uuid.uuid4())},
+    )
+    body = resp.get_data(as_text=True)
+    assert "AURA-" in body
+    assert 'id="licensing-detail-revealed-key"' in body
+    assert 'data-copy-target="licensing-detail-revealed-key"' in body
+
+    import re
+
+    # Extract the FULL revealed key -- the always-visible masked key
+    # elsewhere on this same page (e.g. "AURA-CLN-1-...****A7W5") also
+    # contains "AURA-", so the reload assertion below must check for the
+    # exact secret, not that generic substring.
+    match = re.search(r'id="licensing-detail-revealed-key">([^<]+)<', body)
+    assert match is not None
+    full_key = match.group(1)
+    assert full_key.count("-") >= 7  # a real full key, not just the masked prefix
+
+    reload_page = client.get(f"/licenses/{license_id}")
+    reload_body = reload_page.get_data(as_text=True)
+    assert full_key not in reload_body
