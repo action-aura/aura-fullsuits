@@ -88,6 +88,28 @@ const RetailSystem = {
   // _recalc() below before changing either side.
   _taxMode: 'after_discount',
 
+  // ── Currency, resolved by the SERVER ─────────────────────────────────────
+  //
+  // Loaded from GET /settings/tax alongside the tax mode, in the same round
+  // trip _loadPOSData() already makes. The till holds NO opinion of its own
+  // about how money looks: both the mark and the decimal count arrive
+  // pre-resolved from core/retail/pricing.py, which is the single source of
+  // truth for both.
+  //
+  // WHY NOT a lookup table in this file: the number of decimal places is not
+  // cosmetic. The Jordanian dinar has THREE (1000 fils), and pricing.py rounds
+  // persisted money to exactly that. A second copy of that knowledge here
+  // could drift, and the symptom of drift would be the till DISPLAYING a
+  // different number from the one it charges -- the precise defect a mutation
+  // caught twice during the promotions work.
+  //
+  // The defaults below are the Jordanian ones, matching _DEFAULT_SETTINGS
+  // server-side, so a till that somehow renders money before its first
+  // settings response still shows something correct for the home market
+  // rather than dollars.
+  _currencySymbol: 'JD',
+  _currencyDecimals: 3,
+
   // ── Auth-aware fetch ──────────────────────────────────────────────────────
   async _fetch(url, opts = {}) {
     opts.credentials = 'include';
@@ -465,9 +487,51 @@ const RetailSystem = {
   // rather than hidden/clamped.
   _fmt(n) {
     const v = +(n || 0);
-    return (v < 0 ? '-$' : '$') + Math.abs(v).toFixed(2);
+    // The mark and the decimal count both come from the server (see
+    // _currencySymbol above). This used to be a hard-coded '$' and toFixed(2),
+    // which meant a Jordanian shop -- the product's home market -- saw its
+    // dinars labelled in dollars AND truncated to two decimals, losing the
+    // fils. A non-negotiable fix: it is the first thing visible in a demo.
+    //
+    return (v < 0 ? '-' : '') + this._currencyPrefix() + Math.abs(v).toFixed(this._currencyDp());
   },
   _fmtNum(n) { return (+(n||0)).toLocaleString(); },
+
+  // ── The two currency helpers _fmt and _moneyDigits share ─────────────────
+  //
+  // In ONE place so the plain-string formatter and the styled-element one can
+  // never disagree about what money looks like — the same reasoning the
+  // U+2212 note below gives for the minus glyph.
+
+  //: Decimal places, from the server. Falls back to 2 only if a response
+  //: somehow arrived without the field; the constructor default is 3 (JOD).
+  _currencyDp() {
+    const d = this._currencyDecimals;
+    return d == null ? 2 : d;
+  },
+
+  //: The mark plus its separator. A SINGLE-CHARACTER mark hugs its digits
+  //: ($100.00, €9.50) because that is the universal convention for symbol
+  //: currencies; a multi-letter mark takes a space (JD 100.000, SEK 120.00)
+  //: because "JD100.000" reads as one token and is genuinely hard to scan at a
+  //: glance on a till.
+  //:
+  //: The rule is on LENGTH rather than a per-currency list deliberately: it
+  //: gets every currency right, including ones nobody has added yet, and there
+  //: is no table to forget to update. It is also why the existing dollar-based
+  //: tests keep passing untouched — the format for $ is unchanged.
+  _currencyPrefix() {
+    const raw = this._currencySymbol || '';
+    if (!raw) return '';
+    // Through t(): a currency MARK is a user-visible string like any other.
+    // 'JD' is what a Jordanian shop prints in English; the Arabic form is
+    // د.أ, and a till running in Arabic that still said 'JD' would be the
+    // same half-translated feel the surface i18n ratchet exists to prevent.
+    // t() returns its input unchanged for anything not in the catalogues, so
+    // an unlisted currency degrades to its own mark rather than to blank.
+    const sym = (typeof t === 'function') ? t(raw) : raw;
+    return sym.length === 1 ? sym : sym + ' ';
+  },
 
   // The digits, in ONE place, so _money() and _setMoney() can never disagree
   // about the glyph. U+2212 MINUS SIGN, not U+002D HYPHEN: it is wider, sits on
@@ -481,7 +545,11 @@ const RetailSystem = {
   // prints.
   _moneyDigits(n) {
     const v = +(n || 0);
-    return (v < 0 ? '−' : '') + '$' + Math.abs(v).toFixed(2);
+    // Currency-aware, same server-resolved source as _fmt (see
+    // _currencySymbol). The U+2212 minus above is unchanged and deliberate --
+    // only the MARK and the DECIMAL COUNT vary by currency, never the glyph
+    // this function exists to standardise.
+    return (v < 0 ? '−' : '') + this._currencyPrefix() + Math.abs(v).toFixed(this._currencyDp());
   },
 
   // Read a design token's resolved value for the one consumer that cannot use
@@ -2098,6 +2166,14 @@ const RetailSystem = {
       // Company's configured tax-calculation policy (core/retail/pricing.py
       // is the authoritative spec for what these two modes compute).
       this._taxMode = (taxSettings && taxSettings.data && taxSettings.data.tax_calculation_mode) || 'after_discount';
+      // Currency rides on the same response (see _currencySymbol's own note).
+      // Guarded rather than assigned blindly: a response that predates this
+      // field -- an older backend behind a newer till during a staged rollout
+      // -- must leave the Jordanian defaults standing rather than blanking the
+      // mark and silently rendering bare numbers.
+      const _ts = (taxSettings && taxSettings.data) || {};
+      if (_ts.currency_symbol != null) this._currencySymbol = _ts.currency_symbol;
+      if (_ts.currency_decimals != null) this._currencyDecimals = _ts.currency_decimals;
       const heldCountEl = document.getElementById('pos-held-count');
       if (heldCountEl) heldCountEl.textContent = (held && held.data || []).length;
 

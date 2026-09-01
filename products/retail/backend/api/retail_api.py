@@ -8321,11 +8321,28 @@ def credit_settings_set():
 @mt_require_subsystem('retail')
 def tax_settings_get():
     cid = _cid(); conn = get_retail_conn(); _ensure_credit_schema(conn)
-    mode = _settings(conn, cid).get('tax_calculation_mode', tax_engine.DEFAULT_MODE)
+    _s = _settings(conn, cid)
+    mode = _s.get('tax_calculation_mode', tax_engine.DEFAULT_MODE)
+    currency = _s.get('base_currency') or 'JOD'
     conn.close()
+    # The CURRENCY rides on the tax-settings response because this is the
+    # money-settings endpoint the POS already calls once per mount for the tax
+    # mode -- so the till learns how to FORMAT money in the same round trip it
+    # already makes, with no second request and no new route to keep gated.
+    #
+    # `decimals` is sent RESOLVED by the server rather than left for the client
+    # to look up. The browser must never hold its own opinion about how many
+    # decimal places a currency has: pricing.py is the single source of truth
+    # for that, and a client-side copy of the table would be one more thing to
+    # drift. If the two ever disagreed, the till would DISPLAY a different
+    # number from the one it charges -- the exact class of defect a mutation
+    # caught twice during the promotions work.
     return jsonify({'status': 'success', 'data': {
         'tax_calculation_mode': tax_engine.normalize_mode(mode),
         'available_modes': list(tax_engine.VALID_MODES),
+        'base_currency': currency,
+        'currency_decimals': -tax_engine.currency_quantum(currency).as_tuple().exponent,
+        'currency_symbol': tax_engine.currency_symbol(currency),
     }})
 
 @retail_bp.route('/settings/tax', methods=['POST'])

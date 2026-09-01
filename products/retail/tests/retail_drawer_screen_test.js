@@ -155,6 +155,20 @@ function loadDrawer(routes) {
   assert.ok(sandbox.RetailSystem, 'subsystem-retail.js did not expose window.RetailSystem');
   assert.ok(sandbox.CashDrawer, 'cash-drawer.js did not expose window.CashDrawer');
 
+  // Pin the currency this file formats in. These cases are about the DRAWER --
+  // variance wording, which cells carry .money, whether an uncounted drawer
+  // renders an amount at all -- and none of them is about currency. Money
+  // formatting used to be hard-coded to dollars, so the money-detecting
+  // patterns below silently depended on that; when the default became JOD the
+  // scrape matched nothing and the suite correctly reported "the scrape is
+  // broken" rather than passing vacuously.
+  //
+  // Pinning keeps the assertions exactly as they were and keeps this file
+  // focused. Currency behaviour is proved where it belongs, in
+  // retail_currency_precision_test.py.
+  sandbox.RetailSystem._currencySymbol = '$';
+  sandbox.RetailSystem._currencyDecimals = 2;
+
   const CashDrawer = sandbox.CashDrawer;
   // The ONLY thing replaced is the transport. Every render path below is the
   // product's own.

@@ -116,6 +116,48 @@ def currency_quantum(currency=None) -> Decimal:
         digits = CURRENCY_DECIMALS
     return Decimal(1).scaleb(-digits)
 
+#: What to PRINT in front of an amount, per ISO 4217 code.
+#:
+#: Deliberately short, and deliberately falling back to the CODE ITSELF rather
+#: than to any symbol. "SEK 120.00" is honest and unambiguous; guessing a symbol
+#: for a currency nobody entered is how a Swedish shop ends up displaying
+#: dollars. The fallback is the feature, not a gap.
+#:
+#: JOD renders as "JD" -- the form Jordanian shops actually print in English.
+#: The Arabic form is a translation concern and belongs in the locale
+#: catalogues, not here: this table is what the SERVER knows about money, and
+#: the server has no opinion about which language the till is showing.
+CURRENCY_SYMBOLS = {
+    'JOD': 'JD',
+    'USD': '$',
+    'EUR': '€',
+    'GBP': '£',
+    'SAR': 'SR',
+    'AED': 'AED',
+    'KWD': 'KD',
+    'BHD': 'BD',
+    'OMR': 'OMR',
+    'QAR': 'QR',
+    'EGP': 'EGP',
+    'ILS': '₪',
+    'TRY': '₺',
+    'JPY': '¥',
+}
+
+
+def currency_symbol(currency=None) -> str:
+    """The display mark for `currency`, falling back to the uppercased code.
+
+    Same never-raise posture as `currency_quantum`: a malformed setting must
+    degrade to something a cashier can still read, never break the screen.
+    """
+    try:
+        code = (currency or '').strip().upper()
+    except (AttributeError, TypeError):
+        return ''
+    return CURRENCY_SYMBOLS.get(code, code)
+
+
 MAX_DISCOUNT_PCT = 100
 MIN_DISCOUNT_PCT = 0
 

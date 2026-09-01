@@ -119,6 +119,21 @@ function loadRetailSystem(opts) {
   vm.createContext(sandbox);
   vm.runInContext(SOURCE, sandbox, { filename: FRONTEND_FILE });
   assert.ok(sandbox.RetailSystem, 'subsystem-retail.js did not expose window.RetailSystem');
+
+  // Pin the currency this file formats in. These cases are about PRICING and
+  // the WIRE -- which discount wins, what reaches _checkout -- and nothing
+  // here is about currency. Before money became currency-aware the format was
+  // hard-coded to dollars, so these assertions silently depended on that; when
+  // the default became JOD (three decimals, the home market) every expected
+  // string broke for a reason that had nothing to do with promotions.
+  //
+  // Pinning it makes the dependency explicit and keeps this file focused: a
+  // future currency change cannot break promotion tests again, and the
+  // currency behaviour itself is proved where it belongs, in
+  // retail_currency_precision_test.py.
+  sandbox.RetailSystem._currencySymbol = '$';
+  sandbox.RetailSystem._currencyDecimals = 2;
+
   return { RetailSystem: sandbox.RetailSystem, els, getEl, toasts, posts };
 }
 

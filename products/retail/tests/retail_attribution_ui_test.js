@@ -156,6 +156,14 @@ function loadRetail(opts) {
   vm.createContext(sandbox);
   vm.runInContext(code, sandbox, { filename: FRONTEND_FILE });
   assert.ok(sandbox.RetailSystem, 'subsystem-retail.js did not expose window.RetailSystem');
+  // Currency pinned: these cases are about ATTRIBUTION -- whose figure is
+  // rendered, whether a negative is shown, whether an absent value prints as
+  // zero -- and none is about currency. Money formatting was hard-coded to
+  // dollars when they were written, so the expected strings depended on that
+  // silently; the JOD default made them fail for a reason unrelated to what
+  // they test. Currency itself is proved in retail_currency_precision_test.py.
+  sandbox.RetailSystem._currencySymbol = '$';
+  sandbox.RetailSystem._currencyDecimals = 2;
   return { RetailSystem: sandbox.RetailSystem, calls, appended };
 }
 
@@ -1125,6 +1133,14 @@ async function loadArabicRetail(capabilities, lang) {
   sandbox.document.body = makeElementStub();
   vm.runInContext(fs.readFileSync(FRONTEND_FILE, 'utf8'), sandbox, { filename: FRONTEND_FILE });
   assert.ok(sandbox.RetailSystem, 'subsystem-retail.js did not expose window.RetailSystem');
+  // Currency pinned: these cases are about ATTRIBUTION -- whose figure is
+  // rendered, whether a negative is shown, whether an absent value prints as
+  // zero -- and none is about currency. Money formatting was hard-coded to
+  // dollars when they were written, so the expected strings depended on that
+  // silently; the JOD default made them fail for a reason unrelated to what
+  // they test. Currency itself is proved in retail_currency_precision_test.py.
+  sandbox.RetailSystem._currencySymbol = '$';
+  sandbox.RetailSystem._currencyDecimals = 2;
   return sandbox;
 }
 
