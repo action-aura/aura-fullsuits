@@ -447,6 +447,13 @@ const RetailSystem = {
       .ret-input:focus { border-color:var(--sub-accent);box-shadow:0 0 0 3px rgba(var(--sub-accent-rgb),0.18); }
       .ret-kpi-grid { display:grid;grid-template-columns:repeat(5,1fr);gap:16px;margin-bottom:22px; }
       @media(max-width:1300px){ .ret-kpi-grid{grid-template-columns:repeat(3,1fr);} }
+      /* Below 1300px the grid stopped adapting, so a 390px phone still got
+         THREE columns: measured on the running app, each card had a 21px
+         content box while .ret-kpi-value is 28px type, so the reports screen
+         clipped its own money values (#rep-rev, #rep-profit). auto-fit with a
+         150px floor never squeezes a card below a readable amount -- it drops
+         to two columns, then one, instead of shrinking past the text. */
+      @media(max-width:640px){ .ret-kpi-grid{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;} }
       .ret-kpi { background:var(--surface-card);border:1px solid var(--border-soft);border-radius:14px;padding:20px;position:relative;overflow:hidden; }
       .ret-kpi::before { content:'';position:absolute;inset:0;background:radial-gradient(circle at 80% 20%,var(--sub-accent),transparent 65%);opacity:.1; }
       .ret-kpi-label { color:var(--text-faint);font-size:11px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px; }
@@ -4435,7 +4442,7 @@ const RetailSystem = {
           <h3 style="margin:0">${this._esc(cu.name)}</h3>
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()">✕ Close</button>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:14px;margin-bottom:20px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:20px">
           <div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:14px;text-align:center">
             <div style="color:var(--text-muted);font-size:11px;text-transform:uppercase;margin-bottom:6px">Total Spent</div>
             <div style="color:var(--text-money);font-size:22px;font-weight:700">${this._fmt(cu.total_spent)}</div>
@@ -7041,7 +7048,7 @@ const RetailSystem = {
           </select>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:16px;margin-bottom:8px" id="rep-kpis">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px;margin-bottom:8px" id="rep-kpis">
         <div class="ret-kpi"><div class="ret-kpi-label">Revenue</div><div class="ret-kpi-value" id="rep-rev">—</div></div>
         <div class="ret-kpi"><div class="ret-kpi-label">Transactions</div><div class="ret-kpi-value" id="rep-txn">—</div></div>
         <div class="ret-kpi"><div class="ret-kpi-label">Gross Profit</div><div class="ret-kpi-value" id="rep-profit" style="color:var(--text-money-positive)">—</div></div>
