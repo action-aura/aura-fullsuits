@@ -1005,7 +1005,32 @@ def _audit(conn, action, entity, entity_id, details=''):
             (_cid(), _uid(), action, entity, entity_id, str(details))
         )
     except Exception:
-        pass
+        # STILL SWALLOWED, deliberately: a sale must not fail because the
+        # audit table is full, locked or corrupt. Refusing to sell in order
+        # to record that you sold is the wrong answer in a shop, and
+        # anything stronger here -- raising, retrying, queueing -- buys
+        # accountability with the till, which is a bad trade.
+        #
+        # But it must not be INVISIBLE, which it was until now. Audit exists
+        # for accountability: who changed the price, who approved that
+        # variance, who moved the business day. If these writes start
+        # failing, the shop keeps operating and keeps believing it has a
+        # trail; the gap is then found by somebody looking for an entry that
+        # was never written, which is the most expensive possible moment to
+        # find it. A line in the log turns a silent failure into a
+        # discoverable one and costs nothing.
+        #
+        # log.exception, not log.warning: the traceback is what separates a
+        # locked database from schema drift, and those need different
+        # answers from different people.
+        #
+        # `details` is deliberately NOT logged. It carries business content
+        # (prices, customer identifiers, variance amounts) and the log has a
+        # wider audience and a longer life than the audit table it was bound
+        # for. Action/entity/id are enough to find the missing row.
+        log.exception(
+            'audit write FAILED and was swallowed: action=%r entity=%r entity_id=%r',
+            action, entity, entity_id)
 
 # feat/audit-log-viewer: server-side half of the same admin-device gate
 # app-shell.js already uses to hide the Admin Center nav entry (GET
@@ -8365,7 +8390,10 @@ def tax_settings_set():
         _sec_audit(cid, _uid(), 'RETAIL_TAX_MODE_CHANGED', entity_type='SETTINGS',
                    context={'tax_calculation_mode': mode})
     except Exception:
-        pass
+        # Swallowed so a settings save cannot fail on its audit trail, but
+        # logged so the missing trail is discoverable -- see _audit().
+        log.exception('security audit write FAILED and was swallowed: %s',
+                      'RETAIL_TAX_MODE_CHANGED')
     return jsonify({'status': 'success', 'data': {'tax_calculation_mode': mode}})
 
 # ── Settings (this device's branch pin) ────────────────────────────────────────
@@ -8618,7 +8646,13 @@ def business_day_settings_set():
         _sec_audit(cid, _uid(), 'RETAIL_BUSINESS_DAY_CHANGED', entity_type='SETTINGS',
                    context=dict(effective))
     except Exception:
-        pass
+        # This one matters most of the three, by its own comment above: the
+        # business day decides which trading day every figure in the shop's
+        # history is counted on. If the record of who moved it can vanish
+        # silently, "the numbers changed and nobody touched a sale" has no
+        # answer -- which is the exact question that comment exists for.
+        log.exception('security audit write FAILED and was swallowed: %s',
+                      'RETAIL_BUSINESS_DAY_CHANGED')
     return jsonify({'status': 'success', 'data': effective})
 
 # ── Settings (branding) ───────────────────────────────────────────────────────
@@ -8702,7 +8736,10 @@ def branding_settings_set():
         _sec_audit(cid, _uid(), 'RETAIL_BRANDING_UPDATED', entity_type='SETTINGS',
                    context={k: s.get(k, '') for k in _BRANDING_TEXT_KEYS})
     except Exception:
-        pass
+        # Branding is what a customer sees on the receipt (business name,
+        # tax number), so who changed it is a real accountability question.
+        log.exception('security audit write FAILED and was swallowed: %s',
+                      'RETAIL_BRANDING_UPDATED')
     return jsonify({'status': 'success', 'data': {k: s[k] for k in _BRANDING_TEXT_KEYS}})
 
 # ── Settings (branding logo) ────────────────────────────────────────────────
