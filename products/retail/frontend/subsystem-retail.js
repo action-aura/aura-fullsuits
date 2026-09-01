@@ -5575,6 +5575,43 @@ const RetailSystem = {
         </div>
         <button class="ret-btn ret-btn-primary" style="margin-top:12px" onclick="RetailSystem._saveDeviceBranch()">${t('Save')}</button>
       </div>
+      <div class="sub-chart-card" id="business-day-card">
+        <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Business Day')}</h3>
+        <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
+          ${t('When your trading day starts, and on whose clock. Every report, the dashboard and the shift Z-report group sales by this. A shop that trades past midnight needs it, and on a chain every till must agree on it.')}
+        </p>
+        <div id="business-day-tzdata-warning" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;background:var(--state-warning-surface);color:var(--state-warning-text);font-size:12px;border:1px solid var(--border-default)">
+          ${t('This installation has no timezone database, so no timezone can be saved here. That is an environment problem on this machine, not a problem with what you type -- the tzdata package needs installing.')}
+        </div>
+        <div id="business-day-undeclared-warning" style="display:none;margin-bottom:12px;padding:10px 12px;border-radius:8px;background:var(--state-warning-surface);color:var(--state-warning-text);font-size:12px;border:1px solid var(--border-default)">
+          ${t('No timezone is declared. Until you set one, each device files sales on its own clock -- so two tills whose clocks differ can put the same evening on different days.')}
+        </div>
+        <div class="ret-field-row" style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+          <div class="ret-field" style="margin:0"><label>${t('Timezone')}</label>
+            <input type="text" id="business-day-tz" dir="ltr" list="business-day-tz-list" maxlength="64" placeholder="Asia/Amman" />
+            <datalist id="business-day-tz-list">
+              <option value="Asia/Amman"></option>
+              <option value="Asia/Riyadh"></option>
+              <option value="Asia/Dubai"></option>
+              <option value="Asia/Baghdad"></option>
+              <option value="Asia/Beirut"></option>
+              <option value="Asia/Jerusalem"></option>
+              <option value="Asia/Kuwait"></option>
+              <option value="Asia/Qatar"></option>
+              <option value="Africa/Cairo"></option>
+              <option value="Europe/Istanbul"></option>
+              <option value="Europe/London"></option>
+              <option value="UTC"></option>
+            </datalist>
+          </div>
+          <div class="ret-field" style="margin:0"><label>${t('Day starts at')}</label>
+            <select id="business-day-hour" dir="ltr"></select></div>
+        </div>
+        <p style="color:var(--text-muted);font-size:11px;margin:8px 0 0">
+          ${t('Leave the timezone empty to declare nothing. Empty is not the same as choosing UTC -- UTC is a real timezone, and saving it would re-file your trading history.')}
+        </p>
+        <button class="ret-btn ret-btn-primary" style="margin-top:16px" onclick="RetailSystem._saveBusinessDay()">${t('Save')}</button>
+      </div>
       <div class="sub-chart-card">
         <h3 style="color:var(--text-primary);margin:0 0 14px;font-size:15px">${t('Low-Stock Reorder Requests')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 16px">
@@ -5597,6 +5634,7 @@ const RetailSystem = {
     await this._loadReorderRequests();
     await this._loadBrandingForm();
     await this._loadDeviceBranchForm();
+    await this._loadBusinessDayForm();
   },
 
   // ── Branding (Admin Center) ─────────────────────────────────────────────
@@ -5703,6 +5741,76 @@ const RetailSystem = {
     } catch (e) {
       console.error(e);
       SubsystemApp.showToast(t('Could not save this device\'s branch.'), 'error');
+    }
+  },
+
+  // ── Business day (Admin Center) ─────────────────────────────────────────
+  //
+  // The boundary every report, the dashboard and the Z-report group by
+  // (core/retail/metrics.py::business_day). Both routes existed and were
+  // audited long before this card did, and nothing shipped could reach
+  // them, so every install ran on the unconfigured default: bucket on the
+  // clock of whichever DEVICE wrote the row, at midnight. That is a
+  // defensible default for one till and a wrong one the moment a second
+  // device syncs, which is why this card exists now rather than later.
+  //
+  // The hour options are built here rather than in the template so the 24
+  // labels stay out of both locale catalogs: "HH:00" is digits, and digits
+  // do not get translated. `dir="ltr"` on the control is the same call the
+  // rest of this file makes for definitionally-Latin values (see the <bdi>
+  // note above _attrib).
+  async _loadBusinessDayForm() {
+    const hourSelect = document.getElementById('business-day-hour');
+    if (hourSelect && !hourSelect.options.length) {
+      hourSelect.innerHTML = Array.from({ length: 24 }, (_, h) =>
+        `<option value="${h}">${String(h).padStart(2, '0')}:00</option>`).join('');
+    }
+    try {
+      const resp = await this._get('/api/sub/retail/settings/business-day');
+      const d = (resp && resp.data) || {};
+      const tzInput = document.getElementById('business-day-tz');
+      if (tzInput) tzInput.value = d.business_timezone || '';
+      if (hourSelect) hourSelect.value = String(d.business_day_start_hour || 0);
+
+      // Two DIFFERENT causes of "no timezone", never conflated: the install
+      // cannot validate one at all, or nobody has declared one yet. The
+      // route returns `timezone_database_available` for exactly this, so
+      // the screen can name the real cause instead of offering a field that
+      // silently cannot save.
+      const noTzdb = d.timezone_database_available === false;
+      const tzdataWarn = document.getElementById('business-day-tzdata-warning');
+      if (tzdataWarn) tzdataWarn.style.display = noTzdb ? '' : 'none';
+      if (tzInput) tzInput.disabled = noTzdb;
+      const undeclaredWarn = document.getElementById('business-day-undeclared-warning');
+      if (undeclaredWarn) {
+        undeclaredWarn.style.display = (!noTzdb && !d.business_timezone) ? '' : 'none';
+      }
+    } catch (e) { console.error(e); }
+  },
+
+  async _saveBusinessDay() {
+    const tzInput = document.getElementById('business-day-tz');
+    const hourSelect = document.getElementById('business-day-hour');
+    const tz = tzInput ? tzInput.value.trim() : '';
+    // Empty sends explicit null, which the route treats as CLEARING the key
+    // -- deliberately not the empty string, and deliberately not 'UTC'.
+    const payload = { business_timezone: tz || null };
+    if (hourSelect) payload.business_day_start_hour = parseInt(hourSelect.value, 10) || 0;
+    try {
+      const resp = await this._post('/api/sub/retail/settings/business-day', payload);
+      if (!resp || resp.status !== 'success') {
+        // The route's own message is preferred over a generic one: it
+        // distinguishes an unrecognised zone (400) from an install with no
+        // timezone database (503), and those need different actions from
+        // different people.
+        SubsystemApp.showToast((resp && resp.message) || t('Could not save the business day.'), 'error');
+        return;
+      }
+      SubsystemApp.showToast(t('Business day saved.'), 'success');
+      await this._loadBusinessDayForm();
+    } catch (e) {
+      console.error(e);
+      SubsystemApp.showToast(t('Could not save the business day.'), 'error');
     }
   },
 

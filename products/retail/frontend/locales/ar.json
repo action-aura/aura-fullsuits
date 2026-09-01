@@ -723,5 +723,14 @@
   "This replaces every product, sale, customer and setting in this shop with what was saved in this backup file. Anything recorded since then is lost, and this cannot be undone from this screen.": "سيستبدل هذا كل منتج ومبيعة وعميل وإعداد في هذا المتجر بما كان محفوظًا في ملف النسخة الاحتياطية هذا. سيُفقد كل ما سُجِّل منذ ذلك الحين، ولا يمكن التراجع عن هذا من هذه الشاشة.",
   "Yes, Restore & Overwrite": "نعم، استعادة والاستبدال",
   "Restoring…": "جارٍ الاستعادة…",
-  "Restore complete. Restart the application before continuing.": "اكتملت الاستعادة. أعد تشغيل التطبيق قبل المتابعة."
+  "Restore complete. Restart the application before continuing.": "اكتملت الاستعادة. أعد تشغيل التطبيق قبل المتابعة.",
+  "Business Day": "يوم العمل",
+  "When your trading day starts, and on whose clock. Every report, the dashboard and the shift Z-report group sales by this. A shop that trades past midnight needs it, and on a chain every till must agree on it.": "متى يبدأ يوم عملك، وعلى ساعة أي منطقة زمنية. كل التقارير ولوحة المعلومات وتقرير إغلاق الوردية تجمّع المبيعات على هذا الأساس. المتجر الذي يعمل بعد منتصف الليل يحتاج إلى ضبطه، وفي سلسلة المتاجر يجب أن تتفق جميع نقاط البيع عليه.",
+  "This installation has no timezone database, so no timezone can be saved here. That is an environment problem on this machine, not a problem with what you type -- the tzdata package needs installing.": "لا تحتوي هذه النسخة على قاعدة بيانات المناطق الزمنية، لذلك لا يمكن حفظ أي منطقة زمنية هنا. هذه مشكلة في إعداد هذا الجهاز وليست مشكلة فيما تكتبه، إذ يلزم تثبيت حزمة tzdata.",
+  "No timezone is declared. Until you set one, each device files sales on its own clock -- so two tills whose clocks differ can put the same evening on different days.": "لم يتم تحديد أي منطقة زمنية. وإلى أن تحدد واحدة، يسجل كل جهاز المبيعات على ساعته الخاصة، لذا قد تسجل نقطتا بيع تختلف ساعتاهما المساء نفسه في يومين مختلفين.",
+  "Timezone": "المنطقة الزمنية",
+  "Day starts at": "يبدأ اليوم عند",
+  "Leave the timezone empty to declare nothing. Empty is not the same as choosing UTC -- UTC is a real timezone, and saving it would re-file your trading history.": "اترك المنطقة الزمنية فارغة لعدم تحديد أي منطقة. والفراغ ليس كاختيار التوقيت العالمي المنسق، فهو منطقة زمنية حقيقية وحفظه يعيد تصنيف سجل مبيعاتك.",
+  "Business day saved.": "تم حفظ يوم العمل.",
+  "Could not save the business day.": "تعذر حفظ يوم العمل."
 }

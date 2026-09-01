@@ -723,5 +723,14 @@
   "This replaces every product, sale, customer and setting in this shop with what was saved in this backup file. Anything recorded since then is lost, and this cannot be undone from this screen.": "This replaces every product, sale, customer and setting in this shop with what was saved in this backup file. Anything recorded since then is lost, and this cannot be undone from this screen.",
   "Yes, Restore & Overwrite": "Yes, Restore & Overwrite",
   "Restoring…": "Restoring…",
-  "Restore complete. Restart the application before continuing.": "Restore complete. Restart the application before continuing."
+  "Restore complete. Restart the application before continuing.": "Restore complete. Restart the application before continuing.",
+  "Business Day": "Business Day",
+  "When your trading day starts, and on whose clock. Every report, the dashboard and the shift Z-report group sales by this. A shop that trades past midnight needs it, and on a chain every till must agree on it.": "When your trading day starts, and on whose clock. Every report, the dashboard and the shift Z-report group sales by this. A shop that trades past midnight needs it, and on a chain every till must agree on it.",
+  "This installation has no timezone database, so no timezone can be saved here. That is an environment problem on this machine, not a problem with what you type -- the tzdata package needs installing.": "This installation has no timezone database, so no timezone can be saved here. That is an environment problem on this machine, not a problem with what you type -- the tzdata package needs installing.",
+  "No timezone is declared. Until you set one, each device files sales on its own clock -- so two tills whose clocks differ can put the same evening on different days.": "No timezone is declared. Until you set one, each device files sales on its own clock -- so two tills whose clocks differ can put the same evening on different days.",
+  "Timezone": "Timezone",
+  "Day starts at": "Day starts at",
+  "Leave the timezone empty to declare nothing. Empty is not the same as choosing UTC -- UTC is a real timezone, and saving it would re-file your trading history.": "Leave the timezone empty to declare nothing. Empty is not the same as choosing UTC -- UTC is a real timezone, and saving it would re-file your trading history.",
+  "Business day saved.": "Business day saved.",
+  "Could not save the business day.": "Could not save the business day."
 }

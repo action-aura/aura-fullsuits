@@ -86,11 +86,6 @@ INTENTIONALLY_UNREACHABLE = {
 #: being rediscovered by a customer. Every entry is a promise to fix, or to
 #: consciously downgrade to the list above.
 KNOWN_GAPS = {
-    'settings/business-day':
-        'The business-day boundary scopes EVERY report and the dashboard '
-        '(metrics.business_day). No shipped client can change it, so every '
-        'install is silently pinned to the default clock and a shop whose day '
-        'ends at 2am cannot say so. Found 2026-09-01; not yet fixed.',
     'reports/email':
         'Emails a report to a recipient. The email CHANNEL gained a settings '
         'screen in commit 50dc417, but nothing in the UI yet triggers a report '
