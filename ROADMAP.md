@@ -1815,7 +1815,8 @@ branch has avoided all week.
 
 ## 2026-09-01 — audit-log writes fail silently, by design, with no signal
 
-Found while sweeping for swallowed exceptions. Recorded, not fixed.
+Found while sweeping for swallowed exceptions. Recorded, then **FIXED the
+same day** — see "Fixed" at the end of this section.
 
 `_audit()` (retail_api.py ~1002) and `_sec_audit`'s call sites wrap the INSERT in
 a bare `except Exception: pass`. Nothing is logged, counted or surfaced.
@@ -1854,6 +1855,29 @@ day. It is not: the `?q=` branch has NO limit and searches the whole table
 server-side on name, phone and email, so every customer stays findable. Owner's
 dropdowns have no search at all, which is precisely what makes those unreachable.
 Recorded so nobody re-raises it.
+
+### Fixed
+
+`log.exception` before the swallow, at `_audit()` and the three `_sec_audit`
+sites that swallowed (tax mode, business day, branding). The fourth `_sec_audit`
+site (~9640, demo-wipe) was deliberately left alone: it sits inside an error
+handler that already returns 500, so it swallows nothing.
+
+The trade is unchanged — the write still cannot fail a sale. Only the silence is
+gone.
+
+`details` is deliberately **not** logged: it carries prices, customer
+identifiers and variance amounts, and the log has a wider audience and a longer
+life than the audit table that value was bound for. Action/entity/id are enough
+to find the missing row.
+
+`retail_audit_write_failure_test.py` pins both directions, which is the part
+worth keeping. A test that only proves "a failure gets logged" is satisfied by an
+implementation that logs unconditionally, or by one that *raises* — so the
+success half is pinned too: an ordinary write must land its row **and** stay
+silent. Measured 2 failed / 2 passed before the fix and 4 passed after, with five
+mutations all caught, including "stops swallowing — raises instead", which is the
+half that would actually cost money and the half a failure-only test cannot see.
 
 ## 2026-09-01 — the unreachable-feature list reaches zero
 
@@ -1910,3 +1934,31 @@ Found by re-reading the change after it was committed and green — not by a tes
 and not by running it. None of the seven cases had any reason to model an install
 whose `tzdata` went missing *after* a zone was declared, which is the only state
 where the bug lives. Recorded because "the tests passed" was, again, not evidence.
+
+### The reverse direction, checked once and deliberately NOT made a test
+
+`retail_route_reachability_test.py` proves every route has a caller. It says
+nothing about the opposite failure: a client calling an endpoint that does not
+exist, which is a button that 404s and which nothing in the suite would notice.
+
+Checked by hand on 2026-09-01, across every shipped client (the desktop frontend
+JS and Android's network layer) against every retail-side blueprint:
+
+    routes discovered                         133 distinct signatures
+    distinct /api/ literals in the clients    130
+    calls with no matching route                0
+
+The only two that survived the matcher were `/api/sub/${systemId}/ai/chat` and
+`/api/sub/${active}/demo-wipe`, both assembled at runtime; `systemId` resolves to
+`retail`, and both routes exist (`retail_api.py:10825` and `:9621`).
+
+**Not committed as a guard, on purpose.** The matcher needed three rounds of
+correction — an incomplete blueprint list, then a too-narrow decorator regex,
+then a missing set of URL prefixes — and each round produced a screenful of
+confident false alarms. A guard that cries wolf gets suppressed, and a suppressed
+guard is worse than none; that is this repo's own stated principle, in this very
+file's forward guard. Keeping every mount prefix registered by hand is exactly
+the maintenance burden that turns a guard into noise.
+
+Recorded as a measurement, not a mechanism. Worth re-running by hand if the
+client ever starts constructing paths more dynamically than it does today.
