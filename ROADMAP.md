@@ -2031,3 +2031,86 @@ recorded rather than changed.
 ### Still unphotographed
 
 The Android app. Same treatment is owed to it.
+
+## 2026-09-02 — the phone till QUOTES a different number than it CHARGES
+
+Found while auditing the Android app against a screen recording from a real
+device. Recorded, **not fixed**, because what number a cashier should be shown
+is a product decision rather than a code one.
+
+### What is fine
+
+The Android POS sends only line items — `SaleItemReq(id, qty)`, no prices, no
+total (`RetailScreens.kt`, `createSale`) — and takes the backend's response as
+authoritative. That is deliberate and correct (Wave 0, AUDIT-002/003,
+`docs/architecture/financial-authority-contracts.md`). **No money is lost, and
+nothing is mischarged.**
+
+### What is not
+
+The on-screen PREVIEW is a naive sum:
+
+```kotlin
+val total = cart.entries.sumOf { (id, qty) -> (byId[id]?.sell_price ?: 0.0) * qty }
+```
+
+No tax. No manual discount. **No promotions.** And that number is what the
+Charge button shows: `tr("Charge") + "  " + money(total)`.
+
+Meanwhile `create_sale` (retail_api.py:4251) runs
+`promo_engine.resolve_line_discount_pct` for every line, and applies tax.
+
+So on any shop with VAT configured or a promotion running — i.e. the normal
+case once schema v23 shipped — **the cashier reads one price to the customer
+and the receipt prints another.** The desktop till does not have this problem:
+`_recalc()` mirrors the server's promotion and tax rules client-side, so its
+preview matches.
+
+The existing code comment even names half of this ("previewTotal never
+included tax or a server-validated discount at all") but treats it as closed
+because the *result* is now authoritative. The result is. The *quote* is not.
+
+### Why this was not just fixed
+
+Three options, and the cheap one is wrong:
+
+1. **Mirror the pricing rules in Kotlin.** This is what the web does. It would
+   be a THIRD copy of `resolve_line_discount_pct` + tax-mode logic, and the
+   web's own comment says its copy must match the server "EXACTLY". Three
+   copies of money logic is how this project got a till that showed dollars in
+   a dinar shop. Rejected.
+2. **Ask the server for the quote.** Architecturally right, and it would serve
+   both clients. But a round-trip per cart change is poor at a till and fails
+   outright when the shop is offline, which is precisely when a phone till
+   earns its keep. Needs a real decision about offline behaviour.
+3. **Make the preview honest** — present it as a pre-tax, pre-discount
+   subtotal and stop putting an exact figure on the Charge button. Cheapest,
+   removes the false promise, and makes the screen tell the truth. But it also
+   makes the phone worse at the one thing a cashier wants: knowing what to
+   ask for.
+
+Owner's call. Recorded here rather than guessed at.
+
+## 2026-09-02 — Android is missing seven desktop features
+
+Counted, not estimated: the Android nav graph registers 20 routes; the web
+shell offers 19 nav destinations, and they are **not the same set**.
+
+Present on desktop, absent from the phone entirely:
+
+* **WhatsApp reports** — no screen, no route, no API call
+* **Email notifications** — same
+* **Promotions** (schema v23) — one incidental reference in `AuraApi.kt` and
+  nothing in the POS or cart; see the entry above for the money consequence
+* **Branches management** — only the per-device branch PIN inside Settings
+* **Audit log**
+* **Stock accuracy**
+* **Exceptions queue**
+
+Two things the owner believed were missing are actually present and were
+probably invisible for another reason: **Employees** is a real route, gated on
+`RetailSession.isAdmin`, and **Settings** has always been in the More list.
+Their APK also predates the Android currency fix, which is why the recording
+shows "$4.00" — current source calls `money(p.sell_price)` with
+`Currency.apply()` wired from `/settings/tax` (`AppRoot.kt:104`), so a fresh
+build renders `JD 4.000`. Unverified on a device.
