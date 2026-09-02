@@ -76,3 +76,51 @@ paid off immediately:
   running animation otherwise photographs nothing at all.
 * Owner's login form posts to `/auth/login`; `GET /` only 302s there.
 * Do not call `page.content()` while a navigation is in flight.
+
+## Android — ATTEMPTED 2026-09-02, NOT obtained
+
+The Android app remains the one surface in this repo with **no usable visual
+evidence**. This is written down so the next attempt starts from where this one
+stopped instead of rediscovering the same walls.
+
+What worked:
+
+```sh
+F:/Android/Sdk/emulator/emulator.exe -avd Aura_Retail_x86_64 \
+    -no-snapshot-load -no-boot-anim -gpu host -memory 3072
+./gradlew.bat :app:assembleDebug           # from android/aura-retail
+adb install -r -t app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -W -n com.actionaura.retail.debug/com.actionaura.retail.MainActivity
+```
+
+The app installs, launches, becomes `topResumedActivity`, and renders its
+first-run screen ("Welcome to Action Aura / Create your administrator
+account"). `am start -W` reported `WaitTime: 12710` — a ~12.7s cold launch,
+though an emulator under load inflates that and it is NOT a measurement of the
+app on real hardware.
+
+What blocked it: the emulator's own **SystemUI** ANRed continuously
+("System UI isn't responding", and earlier "Process system isn't responding"),
+on both `-gpu swiftshader_indirect` and `-gpu host`, and could not be dismissed
+by tap or by `KEYCODE_BACK`. This machine was simultaneously running Postgres,
+Gradle and browser sweeps.
+
+**Why no conclusions were drawn from the screenshots anyway.** The ANR dialog
+paints a dimming **scrim** over the whole screen. Every captured frame has it.
+The app's first-run screen therefore *appears* very dark, with a dark red
+heading and barely-visible field outlines — but that appearance cannot be
+separated from the scrim, so it is NOT reported as a finding. Judging a colour
+scheme through a modal dim would be exactly the kind of confident-but-wrong
+claim the rest of this README exists to prevent.
+
+Two shell traps cost time and are worth keeping:
+
+* `adb exec-out screencap -p > file.png` produced **0 bytes** through Git Bash.
+  Use `adb shell screencap -p /sdcard/x.png` then `adb pull`.
+* Git Bash rewrites a leading `/sdcard/...` into `C:/Program Files/Git/sdcard/...`
+  (MSYS path conversion). Export `MSYS_NO_PATHCONV=1` and
+  `MSYS2_ARG_CONV_EXCL="*"` before any `adb` call that takes a device path.
+
+Next attempt should use a **physical device over USB** (`adb devices` with the
+phone plugged in), or an otherwise-idle machine. The SDK is at `F:/Android/Sdk`
+per `android/aura-retail/local.properties`; the AVD is `Aura_Retail_x86_64`.
