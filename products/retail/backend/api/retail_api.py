@@ -98,6 +98,7 @@ from core.retail import metrics
 # inventory_balances is a cache, the ledger is the truth.
 from core.retail import stock_reconciliation
 from core.retail import whatsapp_hook as _whatsapp_hook
+from core.retail import email_hook as _email_hook
 # Promotions resolver (schema v23, launch-readiness "promotions, wave 1").
 # Aliased, not `from ... import promotions`, so it cannot collide with the
 # `promotions` local variable name inside create_sale/list routes below --
@@ -6766,7 +6767,9 @@ def open_cash_session():
             conn.close()
             return branch_err
         try:
-            opening_float = _money(data.get('opening_float', 0))
+            # The shop's own currency, not cents: a JOD drawer counts fils.
+            opening_float = _money(data.get('opening_float', 0),
+                                   _company_currency(conn, cid))
         except Exception:
             conn.close()
             return jsonify({'status': 'error', 'message': 'Invalid opening float.'}), 400
@@ -7232,7 +7235,8 @@ def close_cash_session(session_id):
             return jsonify({'status': 'error', 'message': 'Cash session is already closed.'}), 409
 
         try:
-            counted = _money(data.get('closing_float_counted'))
+            counted = _money(data.get('closing_float_counted'),
+                             _company_currency(conn, cid))
         except Exception:
             conn.rollback(); conn.close()
             return jsonify({'status': 'error', 'message': 'Invalid closing float counted.'}), 400
@@ -7242,7 +7246,11 @@ def close_cash_session(session_id):
 
         report = _cash_session_report(conn, cid, sess)
         expected = report['expected_cash']
-        variance = _money(counted - expected)
+        # Same precision as the two figures it is the difference of --
+        # a variance rounded coarser than its own inputs can report a
+        # drawer as balanced when it is not.
+        variance = _money(counted - expected,
+                          _company_currency(conn, cid))
         now_local = _now()
         new_status = CASH_SESSION_STATUS_CLOSED if may_approve else CASH_SESSION_STATUS_ENDED
         actor_uid = _uid()
@@ -7314,6 +7322,27 @@ def close_cash_session(session_id):
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(f"WhatsApp shift-close report enqueue failed: {e}")
+
+        # EMAIL shift-close report. Separate try/except from the WhatsApp one
+        # above ON PURPOSE: these are two independent channels, and a shop that
+        # chose email must still get its Z-report when WhatsApp is misconfigured
+        # (or vice versa). Sharing one guard would let either channel's failure
+        # silently swallow the other -- the same coupling that let a broken
+        # WhatsApp template stop an unrelated notification once before.
+        #
+        # Until this existed, email had exactly ONE automatic trigger
+        # (low-stock, in reorder_hook) while WhatsApp had two, so an
+        # email-only shop got nothing at all when a till was closed and
+        # counted. A gated no-op when notifications are off or no reports
+        # recipient is set, like every other notification in this product.
+        try:
+            _email_hook.queue_shift_close_email(
+                get_retail_conn, company_id=cid,
+                branch_name=(branch_row['name'] if branch_row else None), report=report,
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Email shift-close report enqueue failed: {e}")
 
         return jsonify({'status': 'success',
                         'data': {'session': _cash_session_public(sess), 'report': report}})
@@ -7959,9 +7988,47 @@ def create_branch():
 #    forcing the UI now.
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _money(x):
+def _company_currency(conn, company_id):
+    """This company's currency code, or None when it has never been set.
+
+    Deliberately NOT _settings(): that helper has preconditions (it can raise
+    on a database whose settings table is not ready), and every drawer call
+    site below sits inside a narrow try whose except means "the client sent a
+    bad number". A settings failure landing in there reported "Invalid
+    opening float" for an entirely unrelated cause -- which is exactly what
+    happened when this was first written, across 40 drawer tests.
+
+    Never raises. A shop with no currency set gets None, which _money treats
+    as "use the historical 2dp default".
+    """
     try:
-        return float(Decimal(str(x or 0)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+        row = conn.execute(
+            "SELECT svalue FROM retail_settings WHERE company_id=? AND skey='base_currency'",
+            (company_id,)).fetchone()
+        return row[0] if row and row[0] else None
+    except Exception:
+        return None
+
+
+def _money(x, currency=None):
+    """Coerce a client-supplied amount to the currency's real precision.
+
+    `currency` is OPTIONAL and defaults to None, which reproduces the old
+    hardcoded 2-decimal behaviour byte for byte. That default is not
+    laziness -- it is what makes this change safe: every call site that has
+    not been audited keeps exactly the behaviour it had, and the ones that
+    have been are switched over explicitly and one at a time.
+
+    Why it matters where it IS passed: the Jordanian dinar has THREE decimal
+    places (1000 fils). Quantizing a drawer count or a payment to 0.01 moves
+    real money by up to 5 fils and, worse, does it silently. create_sale
+    already reads the company's currency for exactly this reason (see its own
+    comment near `_s.get('base_currency')`); this is the same rule reaching
+    the money that create_sale does not own.
+    """
+    try:
+        quant = tax_engine.currency_quantum(currency) if currency else Decimal('0.01')
+        return float(Decimal(str(x or 0)).quantize(quant, rounding=ROUND_HALF_UP))
     except Exception:
         return 0.0
 
