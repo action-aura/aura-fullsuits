@@ -6,28 +6,39 @@
   <title>Aura Retail</title>
   <link rel="icon" href="data:,">
   <script>
-    // OPERATIONAL CALM: light is the only theme, and this line FORCES it rather
-    // than reading a saved preference.
+    // OPERATIONAL CALM: two sanctioned themes, and this boot line VALIDATES the
+    // saved choice instead of trusting it. Runs before main.css so first paint
+    // is already in the right theme (no flash).
     //
-    // It used to read localStorage('aura_theme'). That is now a live hazard, not
-    // a preference: the token layer points :root and html[data-theme="light"] at
-    // the SAME light palette, while the large compatibility layer in main.css is
-    // still scoped to [data-theme="light"]. So a document carrying
-    // data-theme="dark" gets light surfaces WITHOUT that layer, and the dark
-    // theme's white literals that subsystem-retail.js injects then render
-    // white-on-white -- measured at 1.00:1 on .ret-table, taking the products,
-    // customers, sales-history and dashboard grids with it.
+    // HISTORY -- read before "simplifying" this. The first dark theme was
+    // killed here for cause: the compatibility layer in main.css was scoped to
+    // [data-theme="light"] while dark was white literals injected from JS, so a
+    // document carrying data-theme="dark" rendered .ret-table white-on-white at
+    // 1.00:1 -- and because the choice was PERSISTED under 'aura_theme', any
+    // terminal where anyone had ever tapped the toggle booted straight into
+    // that on upgrade day. For a while this line therefore FORCED light.
     //
-    // Because the old value is PERSISTED, any terminal where anyone ever tapped
-    // the toggle would boot straight into that on upgrade day, having touched
-    // nothing. Forcing the attribute is what makes those installs self-heal.
+    // Dark v2 (owner request, 2026-09) is token-value-only -- see the
+    // html[data-theme="dark"] block in main.css for why the old failure mode is
+    // no longer expressible -- so a persisted choice is safe to honour again,
+    // under three guards that make the upgrade path safe BY VALUE, not by hope:
     //
-    // The stale key is removed too. Not required for correctness -- nothing
-    // reads it any more -- but leaving a key named "aura_theme" lying in every
-    // shop's browser storage invites someone to wire it back up without finding
-    // this comment first.
+    //   1. A NEW KEY. 'aura_theme_v2' has never held a value written by the
+    //      broken era, so nothing stale can be misread as a choice.
+    //   2. EXACT-MATCH VALIDATION. Only the exact string 'dark' produces dark.
+    //      Any other value -- absent, corrupt, or a leftover the old accent
+    //      picker's vocabulary ('midnight', 'carbon', ...) could ever leak in --
+    //      resolves to light, the base palette.
+    //   3. THE OLD KEY STAYS BANISHED. 'aura_theme' is still REMOVED, never
+    //      read: a dark preference from the broken era must not resurrect
+    //      itself; the user re-opts-in once through the picker, deliberately.
+    //
+    // retail_design_theme_safety_test.js pins all three guards by name.
     try {
-      document.documentElement.setAttribute('data-theme', 'light');
+      var savedTheme = null;
+      try { savedTheme = localStorage.getItem('aura_theme_v2'); } catch (e) {}
+      document.documentElement.setAttribute('data-theme',
+        savedTheme === 'dark' ? 'dark' : 'light');
       localStorage.removeItem('aura_theme');
     } catch(e) {}
     // This build only ever serves Retail — the shell skips the multi-subsystem

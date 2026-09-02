@@ -580,31 +580,22 @@ const SubsystemApp = {
     return (Date.now() - at) <= this.PENDING_ACTIVATION_MAX_AGE_MS;
   },
 
-  // OPERATIONAL CALM: there is one theme, and this is deliberately a no-op that
-  // repairs rather than a toggle that switches.
+  // A real toggle again -- but only because the work its previous comment
+  // demanded actually happened. For one era this was deliberately a no-op that
+  // forced light: the first dark theme rendered white-on-white at 1.00:1
+  // because the compatibility layer was scoped to [data-theme="light"] while
+  // dark was injected literals, and "restoring a dark theme is real work, not
+  // a flag flip" was written right here. Dark v2 IS that work: a full palette
+  // solved to the same AA/AAA bar (html[data-theme="dark"] in main.css), the
+  // compatibility layer made theme-agnostic, and the injected chrome fully
+  // tokenised. Delegating to ThemeEngine keeps every data-theme write behind
+  // its one sanitizer -- this method cannot produce a value the engine would
+  // not.
   //
-  // It used to flip data-theme and persist the choice. Under the token layer
-  // that is no longer a preference, it is a way to break the app: :root and
-  // html[data-theme="light"] now resolve to the SAME light palette, while the
-  // compatibility layer in main.css is still scoped to [data-theme="light"].
-  // A document set to "dark" therefore gets light surfaces WITHOUT that layer,
-  // and the dark theme's white literals injected by subsystem-retail.js render
-  // white-on-white -- measured at 1.00:1 on .ret-table, which takes the
-  // products, customers, sales-history and dashboard grids with it.
-  //
-  // Kept as a function rather than deleted because it was a documented public
-  // entry point (#15) and something outside this file may still call it. A
-  // missing method would throw; this one puts the document back into the only
-  // state that renders correctly, which is the useful thing for a stale caller
-  // to do.
-  //
-  // Restoring a dark theme is real work, not a flag flip: it needs its own
-  // palette solved to the same AA/AAA contrast bar as the light one, and the
-  // compatibility layer either duplicated or made theme-agnostic. Worth doing
-  // deliberately, if ever; not worth half-doing, which is what caused this.
+  // Kept as a method (rather than pointing callers at ThemeEngine) because it
+  // was a documented public entry point (#15) and stale callers may remain.
   toggleTheme() {
-    document.documentElement.setAttribute('data-theme', 'light');
-    try { localStorage.removeItem('aura_theme'); } catch (e) {}
+    ThemeEngine.toggle();
   },
 
   systems: {
@@ -2107,7 +2098,7 @@ const SubsystemApp = {
           <button class="sub-exit-btn" onclick="SubsystemApp.openLicensing()" title="Device license activation and status">
             <span>🔑</span> <span>${t('License')}</span>
           </button>
-          <button class="sub-exit-btn" onclick="SubsystemApp.logout()" style="background:rgba(239,68,68,0.1);border-color:rgba(239,68,68,0.25);color:#f87171;margin-top:4px;">
+          <button class="sub-exit-btn" onclick="SubsystemApp.logout()" style="background:var(--state-danger-surface);border-color:var(--state-danger-border);color:var(--state-danger-text);margin-top:4px;">
             <span>⏻</span> <span>${t('Log Out')}</span>
           </button>
         </div>
@@ -2122,15 +2113,16 @@ const SubsystemApp = {
           </div>
           <div class="sub-header-right">
             <button class="sub-header-btn" id="aura-lang-toggle" onclick="AuraI18n.toggle()" title="Language / اللغة" style="font-size:13px;font-weight:700;">${window.AuraI18n && AuraI18n.current === 'ar' ? 'EN' : 'ع'}</button>
-            <!-- The light/dark toggle lived here. Removed with the dark theme:
-                 selecting dark produced light surfaces without the
-                 [data-theme="light"] compatibility layer, rendering .ret-table
-                 white-on-white at 1.00:1. See SubsystemApp.toggleTheme's comment
-                 for what restoring a dark theme would actually require. The
-                 palette picker beside this (ThemeEngine) still works -- it
-                 chooses an ACCENT, which is a different thing. -->
+            <!-- Theme control. ThemeEngine is the light/dark switch now (the
+                 old accent-palette picker it replaced is documented on the
+                 engine itself); dark v2 is token-value-only, so this can no
+                 longer produce the historical white-on-white state -- see
+                 index.html's boot comment for that postmortem. -->
             <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="Change UI theme" style="font-size:15px;">🎨</button>
-            <div class="sub-header-badge" style="background:rgba(${sys.accentRgb},0.15);border-color:${sys.accent};color:${sys.accent}">
+            <!-- Rides the semantic accent tokens, not sys.accent (#f43f5e, a
+                 rose the token layer retired): the literal was ~3.3:1 on the
+                 light header and would not flip with the theme at all. -->
+            <div class="sub-header-badge" style="background:rgba(var(--sub-accent-rgb),0.15);border-color:var(--sub-accent);color:var(--accent-action)">
               ${window.AuraIcons ? AuraIcons.render(sys.icon, 14) : sys.icon} ${t(sys.name)}
             </div>
             ${hasAI ? `<button class="sub-header-btn" onclick="SubAI.open('${systemId}')" title="AI Assistant">🤖</button>` : ''}
@@ -2250,9 +2242,9 @@ const SubsystemApp = {
         if (c) c.innerHTML = `
           <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:60px;text-align:center;">
             <div style="font-size:48px;margin-bottom:20px;">⚠️</div>
-            <h3 style="color:#f87171;margin-bottom:12px;font-size:20px;">Failed to load ${sectionId}</h3>
-            <p style="color:#64748b;max-width:500px;line-height:1.6;font-size:14px;">${err.message || 'An unexpected error occurred.'}</p>
-            <button onclick="SubsystemApp._navigate('${sectionId}')" style="margin-top:24px;padding:10px 24px;background:#3b82f6;border:none;border-radius:8px;color:white;font-weight:600;cursor:pointer;font-size:14px;">↻ Retry</button>
+            <h3 style="color:var(--state-danger-text);margin-bottom:12px;font-size:20px;">Failed to load ${sectionId}</h3>
+            <p style="color:var(--text-secondary);max-width:500px;line-height:1.6;font-size:14px;">${err.message || 'An unexpected error occurred.'}</p>
+            <button onclick="SubsystemApp._navigate('${sectionId}')" style="margin-top:24px;padding:10px 24px;background:var(--accent-action);border:none;border-radius:8px;color:var(--text-on-accent);font-weight:600;cursor:pointer;font-size:14px;">↻ Retry</button>
           </div>`;
         console.error('[SubsystemApp] Error in ' + this.active + '/' + sectionId + ':', err);
       }
@@ -2748,12 +2740,16 @@ const SubsystemApp = {
     const el = this._syncBannerEl;
     el.style.cssText = 'position:fixed;bottom:14px;right:14px;display:inline-flex;'
       + 'align-items:center;gap:7px;padding:6px 12px;border-radius:20px;'
-      + 'background:rgba(16,185,129,0.10);border:1px solid rgba(16,185,129,0.28);'
-      + 'color:#a7f3d0;font-size:12px;font-weight:500;letter-spacing:.2px;'
+      // State tokens, not the old HUD mint (#a7f3d0 on a 10% green tint was
+      // ~1.5:1 over the light shell). An opaque state pair is self-contained,
+      // so the pill reads the same over whatever corner it floats on, in
+      // either theme.
+      + 'background:var(--state-success-surface);border:1px solid var(--state-success-border);'
+      + 'color:var(--state-success-text);font-size:12px;font-weight:500;letter-spacing:.2px;'
       + 'z-index:99997;box-shadow:0 4px 14px rgba(0,0,0,.25);pointer-events:none;';
     el.title = '';
     el.innerHTML =
-      '<span style="width:6px;height:6px;border-radius:50%;background:#10b981;display:inline-block;flex-shrink:0;"></span>'
+      '<span style="width:6px;height:6px;border-radius:50%;background:var(--state-success-text);display:inline-block;flex-shrink:0;"></span>'
       + '<span>' + this._syncIndicatorText(data) + '</span>';
   },
 

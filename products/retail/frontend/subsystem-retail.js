@@ -69,7 +69,14 @@ function retailPaymentChartConfig(labels, values, tickColor) {
         // beginAtZero keeps the zero line on the axis so a negative bar is
         // visibly on the other side of it rather than merely shorter.
         x: { beginAtZero: true, ticks: { color: tickColor, callback: v => axisMoney(v) },
-             grid: { color: 'rgba(255,255,255,0.05)' } },
+             // Token, not the old white-alpha literal: white at 5% is a HUD
+             // leftover that is invisible over the light card and would have
+             // been the one un-themed line left on this chart in dark. Read
+             // lazily (module-level function, `this` is not RetailSystem);
+             // the fallback only fires with no DOM/an ancient cached css.
+             grid: { color: (window.RetailSystem && RetailSystem._cssToken)
+               ? RetailSystem._cssToken('--border-hairline', 'rgba(255,255,255,0.05)')
+               : 'rgba(255,255,255,0.05)' } },
         y: { ticks: { color: tickColor }, grid: { display: false } },
       } },
   };
@@ -4443,19 +4450,19 @@ const RetailSystem = {
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="this.closest('.ret-modal-overlay').remove()">✕ Close</button>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:20px">
-          <div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:14px;text-align:center">
+          <div style="background:var(--surface-sunken);border-radius:10px;padding:14px;text-align:center">
             <div style="color:var(--text-muted);font-size:11px;text-transform:uppercase;margin-bottom:6px">Total Spent</div>
             <div style="color:var(--text-money);font-size:22px;font-weight:700">${this._fmt(cu.total_spent)}</div>
           </div>
-          <div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:14px;text-align:center">
+          <div style="background:var(--surface-sunken);border-radius:10px;padding:14px;text-align:center">
             <div style="color:var(--text-muted);font-size:11px;text-transform:uppercase;margin-bottom:6px">Orders</div>
             <div style="color:var(--text-primary);font-size:22px;font-weight:700">${cu.order_count||0}</div>
           </div>
-          <div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:14px;text-align:center">
+          <div style="background:var(--surface-sunken);border-radius:10px;padding:14px;text-align:center">
             <div style="color:var(--text-muted);font-size:11px;text-transform:uppercase;margin-bottom:6px">Loyalty Points</div>
             <div style="color:var(--text-primary);font-size:22px;font-weight:700">${cu.loyalty_points||0}</div>
           </div>
-          <div style="background:rgba(255,255,255,0.04);border-radius:10px;padding:14px;text-align:center">
+          <div style="background:var(--surface-sunken);border-radius:10px;padding:14px;text-align:center">
             <div style="color:var(--text-muted);font-size:11px;text-transform:uppercase;margin-bottom:6px">Phone</div>
             <div style="color:var(--text-primary);font-size:16px;font-weight:600">${cu.phone?this._esc(cu.phone):'—'}</div>
           </div>

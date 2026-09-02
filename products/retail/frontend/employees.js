@@ -333,7 +333,7 @@ const RetailEmployees = {
       // no staff" when it actually means "you were refused".
       if (!res || !res.success) {
         const reason = (res && res.error) ? t(res.error) : t('Could not load the employee list.');
-        if (tbody) tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#ef4444;padding:30px">${this._esc(reason)}</td></tr>`;
+        if (tbody) tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--state-danger-text);padding:30px">${this._esc(reason)}</td></tr>`;
         return;
       }
       // Owner first, then by employee code, so the list has a stable order
@@ -350,7 +350,7 @@ const RetailEmployees = {
       tbody.innerHTML = this._rows.map(e => this._row(e)).join('');
     } catch (err) {
       console.error('Employee list load failed', err);
-      if (tbody) tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#ef4444;padding:30px">${t('Could not load the employee list.')}</td></tr>`;
+      if (tbody) tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--state-danger-text);padding:30px">${t('Could not load the employee list.')}</td></tr>`;
     }
   },
 
@@ -423,7 +423,7 @@ const RetailEmployees = {
       <td>${this._branchBadge(e)}</td>
       <td>${this._statusBadge(e)}</td>
       <td>${e.has_pin
-            ? `<span style="color:#10b981;font-size:12px">● ${t('Set')}</span>`
+            ? `<span style="color:var(--state-success-text);font-size:12px">● ${t('Set')}</span>`
             : `<span style="color:var(--text-muted);font-size:12px">○ ${t('Not set')}</span>`}</td>
       <td>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -642,8 +642,8 @@ const RetailEmployees = {
         <input id="emp-link-input" readonly value="${this._esc(link)}"
                style="font-family:monospace;font-size:12px;direction:ltr;text-align:left" />
       </div>
-      <div style="background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.30);border-radius:10px;padding:12px 14px;margin-bottom:6px">
-        <div style="color:#fbbf24;font-size:12px;font-weight:700;margin-bottom:4px">${t('This link works once and expires in 7 days.')}</div>
+      <div style="background:var(--state-warning-surface);border:1px solid var(--state-warning-border);border-radius:10px;padding:12px 14px;margin-bottom:6px">
+        <div style="color:var(--state-warning-text);font-size:12px;font-weight:700;margin-bottom:4px">${t('This link works once and expires in 7 days.')}</div>
         <div style="color:var(--text-muted);font-size:12px;line-height:1.6">${t('It is shown only now. If you close this window without copying it, issue a new invite.')}</div>
       </div>
       <div class="ret-modal-footer">
@@ -700,7 +700,7 @@ const RetailEmployees = {
           <option value="manager"${current === 'manager' ? ' selected' : ''}>${t('Manager')}</option>
         </select>
       </div>
-      <div style="background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.30);border-radius:10px;padding:12px 14px">
+      <div style="background:var(--state-warning-surface);border:1px solid var(--state-warning-border);border-radius:10px;padding:12px 14px">
         <div style="color:var(--text-muted);font-size:12px;line-height:1.6">
           ${t('Changing the role replaces this account permissions with the defaults for the new role, and signs the person out of any session they have open.')}
         </div>
@@ -770,7 +770,7 @@ const RetailEmployees = {
           ${options}
         </select>
       </div>
-      <div style="background:rgba(56,189,248,0.10);border:1px solid rgba(56,189,248,0.28);border-radius:10px;padding:12px 14px">
+      <div style="background:var(--state-info-surface);border:1px solid var(--state-info-border);border-radius:10px;padding:12px 14px">
         <div style="color:var(--text-muted);font-size:12px;line-height:1.6">
           ${t('A branch-scoped account only sees and can act on that branch data. Choose All branches to give this account access across every branch, the same as the owner.')}
         </div>
@@ -819,8 +819,8 @@ const RetailEmployees = {
     this._modal('emp-pin-modal', `
       <h3>${emp.has_pin ? t('Reset PIN') : t('Set PIN')}</h3>
       <p style="color:var(--text-muted);font-size:13px;margin:-14px 0 18px">${this._esc(emp.email)}</p>
-      <div style="background:rgba(56,189,248,0.10);border:1px solid rgba(56,189,248,0.28);border-radius:10px;padding:12px 14px;margin-bottom:18px">
-        <div style="color:#38bdf8;font-size:12px;font-weight:700;margin-bottom:4px">${t('A PIN identifies who is acting. It does not grant permission.')}</div>
+      <div style="background:var(--state-info-surface);border:1px solid var(--state-info-border);border-radius:10px;padding:12px 14px;margin-bottom:18px">
+        <div style="color:var(--state-info-text);font-size:12px;font-weight:700;margin-bottom:4px">${t('A PIN identifies who is acting. It does not grant permission.')}</div>
         <div style="color:var(--text-muted);font-size:12px;line-height:1.6">
           ${t('Switching the acting user by PIN is not available yet. Setting a PIN now means this account will be ready to use it as soon as that feature ships.')}
         </div>

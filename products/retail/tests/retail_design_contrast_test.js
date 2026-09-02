@@ -85,6 +85,18 @@
  *     green tree. The ratio is now the assertion; the count stays alongside it,
  *     because "the blind spot grew" is a different fact from any one ratio.
  *
+ *  7. ALL OF IT, AGAIN, IN DARK. Since 2026-09 the product ships a second
+ *     sanctioned theme: the html[data-theme="dark"] block in main.css, token
+ *     VALUES only, zero dark-scoped rules. Property 1 therefore re-runs on the
+ *     merged dark map (same cross-products, same AA/AAA floors), property 2
+ *     re-resolves the ENTIRE rendered corpus through the dark values (sound
+ *     because the rule table and cascade winners are theme-independent by
+ *     construction -- only the map changes, exactly as in the browser), the
+ *     badge self-containment re-checks with dark state pairs, and a polarity
+ *     check refuses the one cheap green: a "dark" block that is a paste of the
+ *     light values. The first dark theme died of a failure no token scan could
+ *     see; the dark rendered tier is the check that would have caught it.
+ *
  * ANTI-VACUITY
  * Every assertion here is a loop. A loop over nothing passes. So the palette
  * tier asserts it parsed a realistic number of tokens before asserting they
@@ -256,6 +268,20 @@ const UNEXERCISED_CHROME_BUDGET = 23;
    markers is the palette. Reading the whole file would sweep up the legacy
    bridge aliases (which are var() indirections, not colours) and every
    unrelated literal further down. */
+/* The begin marker lives INSIDE the block's header comment, so a slice taken
+   from the marker starts mid-comment: its `/*` opener is behind the slice, the
+   comment-stripping regex cannot see the body, and the header PROSE leaks into
+   the parse as plain text. That was not cosmetic: a `--name: ...;`-shaped run
+   of prose swallowed the real `--surface-app` declaration behind it, so tier 1
+   crossed 7 surfaces while the palette declares 8 -- silently, for as long as
+   the marker scheme has existed (the anti-vacuity floor is >=5, so nothing
+   objected). Dropping everything up to the header comment's own closer makes
+   the slice start at real CSS. */
+function afterHeaderComment(slice) {
+  const close = slice.indexOf('*/');
+  return close === -1 ? slice : slice.slice(close + 2);
+}
+
 function readTokenBlock() {
   const css = fs.readFileSync(CSS_FILE, 'utf8');
   const start = css.indexOf('[design-tokens:begin]');
@@ -263,7 +289,37 @@ function readTokenBlock() {
   assert.ok(start !== -1, 'main.css is missing the [design-tokens:begin] marker');
   assert.ok(end !== -1, 'main.css is missing the [design-tokens:end] marker');
   assert.ok(end > start, '[design-tokens:end] appears before [design-tokens:begin]');
-  return css.slice(start, end);
+  return afterHeaderComment(css.slice(start, end));
+}
+
+/* The dark theme's whole existence is the html[data-theme="dark"] block between
+   these markers: token VALUES only, no rules, so every check that holds for the
+   light palette must hold for these values on the same rule set. The dark map
+   returned here is light OVERLAID with dark, which is exactly the cascade a
+   dark document resolves -- and it is also what makes a MISSING override
+   self-detecting: a --surface-* the dark block forgot stays light-valued, dark
+   text lands on it, and the AA/AAA cross-products below go red rather than
+   quietly testing a smaller palette. */
+function readDarkTokenBlock() {
+  const css = fs.readFileSync(CSS_FILE, 'utf8');
+  const start = css.indexOf('[design-tokens-dark:begin]');
+  const end = css.indexOf('[design-tokens-dark:end]');
+  assert.ok(start !== -1, 'main.css is missing the [design-tokens-dark:begin] marker — the dark theme has no palette to test');
+  assert.ok(end > start, '[design-tokens-dark:end] is missing or appears before its begin marker');
+  return afterHeaderComment(css.slice(start, end));
+}
+
+function darkTokenMaps(lightTokens) {
+  const overrides = parseTokens(readDarkTokenBlock());
+  assert.ok(
+    overrides.size >= 30,
+    `The dark token block defines only ${overrides.size} tokens. The light palette has ` +
+    'over 30 colour tokens; a dark block this thin means most of the theme still ' +
+    'resolves to light values, i.e. the dark theme is mostly not a theme.'
+  );
+  const merged = new Map(lightTokens);
+  for (const [k, v] of overrides) merged.set(k, v);
+  return { overrides, merged };
 }
 
 function parseTokens(block) {
@@ -346,7 +402,7 @@ function groupTokens(tokens) {
 
 /* ── Tests ─────────────────────────────────────────────────────────────────*/
 
-function testParseFoundARealPalette(groups) {
+function testParseFoundARealPalette(groups, label = 'light') {
   // ANTI-VACUITY GUARD. Every assertion below is a loop over these arrays; if
   // the parse silently returned nothing, those loops would pass without
   // comparing a single colour. Assert the check CAN run before asserting it
@@ -376,13 +432,13 @@ function testParseFoundARealPalette(groups) {
   assert.ok(pairings >= 20, `Expected >= 20 text-on-surface pairings, computed ${pairings}.`);
 
   console.log(
-    `PASS: parsed a real palette — ${groups.textOnSurface.length} text tokens x ` +
+    `PASS: parsed a real ${label} palette — ${groups.textOnSurface.length} text tokens x ` +
     `${groups.surfaces.length} surfaces = ${pairings} pairings, ` +
     `${groups.money.length} money tokens, ${groups.accentFills.length} accent fills`
   );
 }
 
-function testEveryTextOnSurfaceReachesAA(groups) {
+function testEveryTextOnSurfaceReachesAA(groups, label = 'light') {
   const failures = [];
   for (const [tName, tVal] of groups.textOnSurface) {
     for (const [sName, sVal] of groups.surfaces) {
@@ -394,16 +450,16 @@ function testEveryTextOnSurfaceReachesAA(groups) {
   }
   assert.deepStrictEqual(
     failures, [],
-    `${failures.length} text-on-surface pairing(s) fall below WCAG AA (${AA}:1).\n  ` +
+    `${failures.length} ${label}-theme text-on-surface pairing(s) fall below WCAG AA (${AA}:1).\n  ` +
     failures.join('\n  ') +
     '\n\nEvery --text-* token must be legible on every --surface-* token, ' +
     'because the shell composes them freely (a label lands on a card, a card ' +
     'lands on the shell, a row highlights on hover).'
   );
-  console.log(`PASS: all ${groups.textOnSurface.length * groups.surfaces.length} text-on-surface pairings reach WCAG AA (${AA}:1)`);
+  console.log(`PASS: all ${groups.textOnSurface.length * groups.surfaces.length} ${label} text-on-surface pairings reach WCAG AA (${AA}:1)`);
 }
 
-function testMoneyReachesAAA(groups) {
+function testMoneyReachesAAA(groups, label = 'light') {
   const failures = [];
   const worst = { ratio: Infinity, label: '' };
   for (const [tName, tVal] of groups.money) {
@@ -420,18 +476,18 @@ function testMoneyReachesAAA(groups) {
   }
   assert.deepStrictEqual(
     failures, [],
-    `${failures.length} money pairing(s) fall below WCAG AAA (${AAA}:1).\n  ` +
+    `${failures.length} ${label}-theme money pairing(s) fall below WCAG AAA (${AAA}:1).\n  ` +
     failures.join('\n  ') +
     '\n\nMoney is held to AAA, not AA: a misread total is the worst thing a ' +
     'till can do, and amounts get read at a glance and at an angle all shift.'
   );
   console.log(
-    `PASS: all ${groups.money.length * groups.surfaces.length} money pairings reach WCAG AAA (${AAA}:1) ` +
+    `PASS: all ${groups.money.length * groups.surfaces.length} ${label} money pairings reach WCAG AAA (${AAA}:1) ` +
     `— tightest is ${worst.label} at ${worst.ratio.toFixed(2)}:1`
   );
 }
 
-function testTextOnAccentReachesAA(tokens, groups) {
+function testTextOnAccentReachesAA(tokens, groups, label = 'light') {
   const onAccent = tokens.get('--text-on-accent');
   assert.ok(onAccent, 'Expected a --text-on-accent token (the label colour for accent-filled buttons)');
   assert.ok(parseHex(onAccent), `--text-on-accent must be a hex colour, got "${onAccent}"`);
@@ -443,11 +499,52 @@ function testTextOnAccentReachesAA(tokens, groups) {
   }
   assert.deepStrictEqual(
     failures, [],
-    `Accent-filled controls have unreadable labels:\n  ${failures.join('\n  ')}\n\n` +
+    `Accent-filled controls have unreadable labels in the ${label} theme:\n  ${failures.join('\n  ')}\n\n` +
     'These are the primary actions -- "Open POS", "Charge", "Confirm". A ' +
     'primary button nobody can read is worse than no primary button.'
   );
-  console.log(`PASS: --text-on-accent reaches AA on all ${groups.accentFills.length} accent fills`);
+  console.log(`PASS: ${label} --text-on-accent reaches AA on all ${groups.accentFills.length} accent fills`);
+}
+
+/* THE DARK PALETTE MUST ACTUALLY BE DARK. Without this, the one edit that
+   silences a failing dark pairing without design work -- pasting the light
+   values into the dark block -- goes green on every check above: light text
+   values on light surfaces pass AA, the parse floors are satisfied, and "dark
+   mode" is light mode wearing the attribute. Polarity is the property a copy
+   cannot fake: in light the working surface out-luminates its text, in dark
+   the text out-luminates its surface. Both directions are asserted, against
+   the values, not the names. */
+function testDarkPaletteIsActuallyDark(lightTokens, darkMerged) {
+  const lumOf = (map, name) => {
+    const v = map.get(name);
+    assert.ok(v && parseHex(v), `${name} missing or not hex ("${v}")`);
+    return relativeLuminance(parseHex(v));
+  };
+  const lightSurface = lumOf(lightTokens, '--surface-till');
+  const lightText = lumOf(lightTokens, '--text-primary');
+  const darkSurface = lumOf(darkMerged, '--surface-till');
+  const darkText = lumOf(darkMerged, '--text-primary');
+
+  assert.ok(
+    lightSurface > lightText,
+    `The LIGHT working surface (${lightSurface.toFixed(3)}) is darker than its own body text ` +
+    `(${lightText.toFixed(3)}) — the light palette is not light.`
+  );
+  assert.ok(
+    darkText > darkSurface,
+    `The DARK working surface (luminance ${darkSurface.toFixed(3)}) is not darker than its own ` +
+    `body text (${darkText.toFixed(3)}). A dark block whose values render a light screen is ` +
+    'light mode wearing data-theme="dark" — the exact non-theme this check exists to refuse.'
+  );
+  assert.ok(
+    darkSurface < 0.2,
+    `--surface-till resolves to luminance ${darkSurface.toFixed(3)} in dark — that is not a ` +
+    'dark surface (the floor here is generous: 0.2 is already a mid grey).'
+  );
+  console.log(
+    `PASS: the dark palette is genuinely dark (till surface luminance ` +
+    `${darkSurface.toFixed(3)} vs text ${darkText.toFixed(3)}; light is the inverse)`
+  );
 }
 
 function testMoneyNegativeIsNotColourAlone() {
@@ -527,7 +624,7 @@ function describePairing(p) {
     (p.alpha < 1 ? `\n      washed to ${(p.alpha * 100).toFixed(0)}% by ${p.opacityFrom}` : '');
 }
 
-function testEveryRenderedPairingReachesAA(h, rendered) {
+function testEveryRenderedPairingReachesAA(h, rendered, themeLabel = 'light') {
   const { pairings } = rendered;
 
   // ANTI-VACUITY, and it is PER SCREEN on purpose. A corpus-wide floor of 200
@@ -567,7 +664,8 @@ function testEveryRenderedPairingReachesAA(h, rendered) {
   const failures = floored.filter((p) => p.ratio < p.floor).sort((a, b) => a.ratio - b.ratio);
   assert.deepStrictEqual(
     failures.map(describePairing), [],
-    `${failures.length} pairing(s) the till actually RENDERS fall below WCAG AA (${AA}:1):\n  ` +
+    `${failures.length} pairing(s) the till actually RENDERS in the ${themeLabel.toUpperCase()} theme ` +
+    `fall below WCAG AA (${AA}:1):\n  ` +
     failures.map(describePairing).join('\n  ') +
     '\n\nThis tier does not care where a colour came from -- a token, a literal ' +
     'in an injected stylesheet, an inline style attribute, or a perfectly legible ' +
@@ -578,7 +676,7 @@ function testEveryRenderedPairingReachesAA(h, rendered) {
   const worst = floored.reduce((a, b) => (b.ratio < a.ratio ? b : a));
   const washed = pairings.filter((p) => p.alpha < 1).length;
   console.log(
-    `PASS: all ${floored.length} RENDERED pairings across ${h.screens.length} screens ` +
+    `PASS: all ${floored.length} RENDERED ${themeLabel} pairings across ${h.screens.length} screens ` +
     `x ${EVALUATED_STATES.filter((s) => s.floor !== null).length} floored states reach AA (${AA}:1) — tightest is ` +
     `${worst.ratio.toFixed(2)}:1 at ${worst.where.split(' ')[0]}; ${washed} of them ` +
     'measured through an opacity group'
@@ -598,7 +696,7 @@ function testEveryRenderedPairingReachesAA(h, rendered) {
   }
 }
 
-function testNothingResolvesToUnknownInSilence(h, unresolved) {
+function testNothingResolvesToUnknownInSilence(h, unresolved, themeLabel = 'light') {
   // The mandate this file failed once already: a pairing that cannot be
   // resolved statically must be SAID OUT LOUD and counted, never skipped. A
   // skipped pairing is indistinguishable from a passing one, and a population
@@ -610,14 +708,15 @@ function testNothingResolvesToUnknownInSilence(h, unresolved) {
   }
   assert.deepStrictEqual(
     unresolved, [],
-    `${unresolved.length} rendered pairing(s) could not be resolved statically:\n  ` +
+    `${unresolved.length} rendered pairing(s) could not be resolved statically in the ` +
+    `${themeLabel} theme:\n  ` +
     unresolved.join('\n  ') +
     '\n\nEach one is a place where this suite proves nothing. Either make the ' +
     'value resolvable (a token instead of a gradient under text, an opaque ' +
     'surface instead of alpha over an unknown) or teach the resolver the case. ' +
     'Do not let the population grow.'
   );
-  console.log(`PASS: 0 rendered pairings unresolved (${media.length} @media colour rules counted separately as conditional)`);
+  console.log(`PASS: 0 rendered ${themeLabel} pairings unresolved (${media.length} @media colour rules counted separately as conditional)`);
 }
 
 /**
@@ -785,7 +884,7 @@ function testNoColourSemanticIsSilentlyOverridden(h) {
 
 const CHROME_SHEET = 'subsystem-retail.js _injectStyles()';
 
-function testBadgeVariantsAreSelfContained(h) {
+function testBadgeVariantsAreSelfContained(h, themeLabel = 'light') {
   /* A badge is rendered on a white card, on a hovered row, and inside the dark
      `.ret-modal` (see _viewPO / _viewSale) -- three surfaces, one class. The
      originals were a hue over a 15% tint OF THAT SAME HUE, which pins the ratio
@@ -836,12 +935,12 @@ function testBadgeVariantsAreSelfContained(h) {
   }
   assert.deepStrictEqual(
     failures, [],
-    `${failures.length} badge variant(s) are not self-contained:\n  ` + failures.join('\n  ') +
+    `${failures.length} badge variant(s) are not self-contained in the ${themeLabel} theme:\n  ` + failures.join('\n  ') +
     '\n\nThe injected sheet gives every badge an alpha tint of its own text ' +
     'colour, which is unreadable on any surface and unmeasurable on an unknown ' +
     'one. Pair an opaque --state-*-surface with its --state-*-text.'
   );
-  console.log(`PASS: all ${variants.size} .ret-badge-* variants carry a self-contained, opaque, AA-clearing override`);
+  console.log(`PASS: all ${variants.size} .ret-badge-* variants carry a self-contained, opaque, AA-clearing override (${themeLabel})`);
 }
 
 /**
@@ -1131,7 +1230,7 @@ async function runAll(checks) {
    be built EMPTY, at which point runAll() loops over nothing, collects no
    failures and the file exits 0 having compared not one colour. Every other
    guard in this file has an anti-vacuity floor; so does the runner. */
-const EXPECTED_CHECKS = 11;
+const EXPECTED_CHECKS = 19;
 
 async function main() {
   const checks = [];
@@ -1142,7 +1241,7 @@ async function main() {
     console.error('      ' + String((err && err.message) || err).replace(/\n/g, '\n      '));
   };
 
-  // TIER 1 setup. If the token block will not parse, the five palette checks
+  // TIER 1 setup. If the token block will not parse, the palette checks
   // cannot run — but the rendered tiers still can, and used to be lost with it.
   let tokens = null;
   let groups = null;
@@ -1162,12 +1261,39 @@ async function main() {
     );
   }
 
+  // TIER 1, DARK. The dark theme is token values only (html[data-theme="dark"]
+  // in main.css) applied to the identical rule set, so the palette obligations
+  // are identical: the same cross-products, the same AA/AAA floors, on the
+  // merged (light overlaid with dark) map a dark document actually resolves.
+  let darkMerged = null;
+  let darkGroups = null;
+  if (tokens) {
+    try {
+      darkMerged = darkTokenMaps(tokens).merged;
+      darkGroups = groupTokens(darkMerged);
+    } catch (err) {
+      setupFailed('dark token block parse (4 dark palette checks could not run)', err);
+    }
+  } else {
+    setupFailed('dark token block parse (4 dark palette checks could not run)',
+      new Error('light token parse already failed, so the dark overlay has no base'));
+  }
+  if (darkGroups) {
+    checks.push(
+      ['the dark parse found a real palette', () => testParseFoundARealPalette(darkGroups, 'dark')],
+      ['every DARK text-on-surface pairing reaches AA', () => testEveryTextOnSurfaceReachesAA(darkGroups, 'dark')],
+      ['DARK money reaches AAA', () => testMoneyReachesAAA(darkGroups, 'dark')],
+      ['DARK --text-on-accent reaches AA on the dark accent fills', () => testTextOnAccentReachesAA(darkMerged, darkGroups, 'dark')],
+      ['the dark palette is actually dark, not a re-badged light one', () => testDarkPaletteIsActuallyDark(tokens, darkMerged)],
+    );
+  }
+
   // TIER 2-5 setup: the rendered corpus.
   let h = null;
   try {
     h = await render.harness();
   } catch (err) {
-    setupFailed('render.harness() (6 rendered-tier checks could not run)', err);
+    setupFailed('render.harness() (9 rendered-tier checks could not run)', err);
   }
   if (h) {
     // Resolved once and shared, so the two checks that read it are ordinary
@@ -1183,6 +1309,30 @@ async function main() {
       ['badge variants are self-contained', () => testBadgeVariantsAreSelfContained(h)],
       ['unexercised chrome is measured, not assumed fine', () => testUnexercisedChromeIsCountedNotAssumedFine(h)],
     );
+
+    // TIER 2, DARK — the whole rendered corpus again, resolved through the
+    // dark map. This is the tier that would have caught the ORIGINAL dark
+    // theme (whose failure was never in a token block): every element, every
+    // screen, every state, with the values a dark document serves. It is
+    // possible at this cost precisely because the theme difference is token
+    // values only — the rule table, the cascade, and the winners are shared,
+    // so the dark document differs from the light one in nothing but the map
+    // handed to the resolver, exactly as in the browser.
+    if (darkMerged) {
+      const darkTokensObj = Object.assign(Object.create(null), h.tokens);
+      for (const [k, v] of parseTokens(readDarkTokenBlock())) darkTokensObj[k] = v;
+      const hDark = Object.assign({}, h, { tokens: darkTokensObj });
+      let renderedDarkCache = null;
+      const renderedDark = () => (renderedDarkCache || (renderedDarkCache = resolveRenderedPairings(hDark)));
+      checks.push(
+        ['every RENDERED pairing reaches AA in DARK', () => testEveryRenderedPairingReachesAA(hDark, renderedDark(), 'dark')],
+        ['nothing resolves to unknown in silence in DARK', () => testNothingResolvesToUnknownInSilence(hDark, renderedDark().unresolved, 'dark')],
+        ['badge variants are self-contained in DARK', () => testBadgeVariantsAreSelfContained(hDark, 'dark')],
+      );
+    } else {
+      setupFailed('dark rendered tier (3 checks could not run)',
+        new Error('the dark token map failed to build, so the rendered corpus cannot be resolved in dark'));
+    }
   }
 
   const failures = setupFailures.concat(await runAll(checks));

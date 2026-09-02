@@ -300,6 +300,127 @@
   --trans-slow: var(--motion-slow) var(--motion-ease);
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   OPERATIONAL CALM — DARK PALETTE                    [design-tokens-dark:begin]
+   ───────────────────────────────────────────────────────────────────────────
+   The second sanctioned theme, reintroduced deliberately (owner request,
+   2026-09) after the first dark theme was killed for cause. The postmortem of
+   that kill is in index.html's boot comment and the old
+   retail_design_single_theme_test.js header; the short version is that "dark"
+   used to mean "a different set of RULES" -- a compatibility layer scoped to
+   [data-theme="light"] plus white literals injected from JS -- so the two
+   themes could drift apart one rule at a time until dark rendered .ret-table
+   white-on-white at 1.00:1.
+
+   THIS BLOCK IS THE WHOLE DARK THEME, AND THAT IS THE SAFETY ARGUMENT.
+   Dark redefines TOKEN VALUES ONLY. Every rule in the product -- main.css,
+   the JS-injected chrome, the per-screen <style> blocks -- consumes the same
+   tokens in both themes; there is not one `html[data-theme="dark"] .foo`
+   paint rule anywhere. A rule that renders in light renders in dark, so the
+   "whole layer silently stops applying" failure mode is not merely fixed, it
+   is no longer expressible. retail_design_theme_safety_test.js pins this
+   (zero dark-scoped paint rules; every light colour token redefined here),
+   and retail_design_contrast_test.js re-runs BOTH the palette cross-products
+   and the full rendered-corpus sweep with these values.
+
+   DESIGN DIRECTION: same product, lights off -- not the old neon HUD. A shop
+   that runs dark runs it at night or in a dim stockroom, so the ground is a
+   calm blue-grey (never pure black: pure black + light text halates on the
+   cheap high-contrast panels these tills run on), text is off-white (never
+   #fff, same reason), and elevation LIGHTENS the way daylight elevation
+   brightens: the till surface a cashier stares at is the lightest surface,
+   chrome recedes darker, wells sink darkest. One accent, flipped strategy:
+   in light the accent is a dark ink that takes white text; a single dark-mode
+   accent cannot both carry light text (needs L<=0.18) and BE text on these
+   panels (needs L>=0.25) -- the two constraints have no intersection -- so in
+   dark the accent is a light blue and --text-on-accent flips to near-black.
+
+   CONTRAST IS COMPUTED, NOT EYEBALLED, same as the light block: every value
+   below was solved against --surface-active, which in dark is the LIGHTEST
+   text-bearing surface and therefore the worst case (the light theme solves
+   against it as the darkest -- the bound flips with the theme). Body text
+   clears AA (4.5:1) and money clears AAA (7:1) on every surface, verified by
+   retail_design_contrast_test.js's dark tiers; the tightest pairing in the
+   whole block is --text-tertiary on --surface-active at 5.76:1.
+   ═══════════════════════════════════════════════════════════════════════════ */
+html[data-theme="dark"] {
+  /* Native widgets (scrollbars, date pickers, <select> popups) follow. */
+  color-scheme: dark;
+
+  /* ── SURFACES — elevation lightens; the working surface gets the light ── */
+  --surface-app:        #0f1319;
+  --surface-till:       #1a212c;  /* THE working surface: lightest ground   */
+  --surface-panel:      #151a23;  /* sidebar + header chrome                */
+  --surface-sunken:     #0b0f15;  /* wells, inputs -- sink below the panel  */
+  --surface-raised:     #171d27;
+  --surface-hover:      #212936;
+  --surface-active:     #273140;  /* LIGHTEST text-bearing surface -- every
+                                     text and money token is solved on THIS */
+  --surface-scrim:      rgba(2, 6, 12, 0.72);
+
+  /* ── TEXT — off-white, three steps, AA-or-better on every surface ─────── */
+  --text-primary:       #edf2f8;
+  --text-secondary:     #c3cddb;
+  --text-tertiary:      #9fadc0;
+  --text-on-accent:     #0d1b2e;  /* accent fills are LIGHT here, see above */
+
+  /* ── MONEY — AAA on every surface, worst case 7.67:1 on --surface-active.
+     Colour stays the redundant cue: .money--negative keeps its literal minus
+     sign, bold weight and optional accounting parentheses in both themes. ── */
+  --text-money:          #edf2f8;
+  --text-money-positive: #8fe6b3;
+  --text-money-negative: #ffb3a8;
+
+  /* ── SEMANTIC STATE — same four meanings, lifted to read on dark ground.
+     Surfaces/borders are deep opaque tints, so a badge stays self-contained
+     (7.4-8.9:1 internally) whatever panel it lands on -- the property the
+     light theme's badge fix established, preserved here. ── */
+  --state-success-text:   #7bd9a2;
+  --state-warning-text:   #e6c67a;
+  --state-danger-text:    #ff9d94;
+  --state-info-text:      #8ab5f8;
+  --state-success-surface: #12301f;
+  --state-warning-surface: #33270e;
+  --state-danger-surface:  #3d1713;
+  --state-info-surface:    #14243d;
+  --state-success-border:  #1e4d33;
+  --state-warning-border:  #57431a;
+  --state-danger-border:   #66261f;
+  --state-info-border:     #24406b;
+
+  /* ── ACCENT — light fill, dark label (strategy flip documented above) ─── */
+  --accent-action:        #6ea8ff;
+  --accent-action-hover:  #85b7ff;
+  --accent-action-active: #5b9bf8;
+  --surface-accent-soft:  #1c2a44;
+
+  /* ── BORDERS — grey-blue steps that are visible over DARK surfaces; the
+     light theme's greys vanish here exactly the way its comment says white-
+     alpha borders vanished on light. ── */
+  --border-hairline:    #232b37;
+  --border-default:     #2e3947;
+  --border-strong:      #47566a;
+
+  /* ── FOCUS — ring rides the accent (6.07:1 on the darkest chrome it sits
+     over); the white halo is unchanged because its one job is the pre-login
+     canvas, which stays dark in both themes. ── */
+  --focus-ring-color:   #6ea8ff;
+
+  /* ── ELEVATION — deeper, wider shadows: on dark ground a 6% black shadow
+     is invisible, so depth has to be stated louder to exist at all. ── */
+  --elevation-card:  0 1px 2px rgba(0, 0, 0, 0.55), 0 4px 12px rgba(0, 0, 0, 0.45);
+  --elevation-panel: 0 8px 28px rgba(0, 0, 0, 0.55);
+  --elevation-modal: 0 24px 64px rgba(0, 0, 0, 0.70);
+
+  /* ── PHONE CHROME ── */
+  --sheet-scrim: rgba(0, 0, 0, 0.60);
+
+  /* The rgb triplet several rules build rgba(var(--sub-accent-rgb), a) tints
+     from; must track the accent flip or every tint stays ink-blue. */
+  --sub-accent-rgb: 110, 168, 255;
+}
+/*                                                     [design-tokens-dark:end] */
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 
@@ -2212,14 +2333,22 @@ table.aura-table .status-badge { padding: 4px 8px; border-radius: 12px; font-siz
    subsystem-retail.js. They now resolve to the Operational Calm tokens.
 
    WHY BOTH :root AND html[data-theme="light"] ARE DEFINED IDENTICALLY:
-   index.html sets data-theme from localStorage, falling back to "light".
    Previously :root carried a DARK palette and html[data-theme="light"]
    overrode it, so what a shop saw depended on a localStorage key -- and a
    terminal with a stale "dark" value rendered a near-black till while its
-   neighbour rendered a white one. Pointing both at the same tokens makes the
-   direction unconditional: there is one till surface, and no storage key can
-   put a shop back on the old HUD. The light block is retained rather than
-   deleted purely so its higher specificity cannot resurrect a stale value.
+   neighbour rendered a white one. Pointing both at the same tokens keeps
+   light the unconditional BASE: no storage key can put a shop back on the
+   old HUD. The light block is retained rather than deleted purely so its
+   higher specificity cannot resurrect a stale value.
+
+   The sanctioned dark theme (2026-09) does not reopen that hole: it is the
+   token-value-only html[data-theme="dark"] block near the top of this file,
+   reachable ONLY through the validated boot script in index.html (exact
+   string "dark" under the new aura_theme_v2 key; anything else, including
+   every value the old broken era could have persisted, resolves to light).
+   These bridge names are var() indirections, so they follow whichever base
+   palette won without being restated -- except --sub-accent-rgb below, a raw
+   triplet, which the dark block therefore overrides by name.
    ──────────────────────────────────────────────────────────────────────── */
 :root,
 html[data-theme="light"] {
@@ -3414,17 +3543,24 @@ body[data-domain="banking"] {
 [data-app-theme="violet"] .sub-table-card,
 [data-app-theme="violet"] .modern-card                    { background:rgba(14,11,25,0.9)!important; }
 
-/* ── Theme Picker Panel ── */
+/* ── Theme Picker Panel ──
+   Restyled with tokens when ThemeEngine became the light/dark switch: this is
+   the one surface a user is guaranteed to see in BOTH themes (it is how they
+   get from one to the other), so a hardcoded dark gradient here -- the old
+   look, a leftover of the accent-palette picker -- would have been the sole
+   dark island in light mode and vice versa. The swatch DOTS keep literal
+   colours set from JS: a swatch's colour IS its content (see the .theme-swatch
+   exemption in retail_design_tokens_test.js). */
 .theme-picker-backdrop {
   position:fixed; inset:0; z-index:9998;
-  background:var(--surface-app); backdrop-filter:blur(6px);
+  background:var(--surface-scrim); backdrop-filter:blur(3px);
 }
 .theme-picker-panel {
-  position:fixed; top:72px; right:18px; z-index:9999;
-  background:linear-gradient(135deg,#0f172a,#1e1b2e);
-  border:1px solid var(--border-default); border-radius:22px;
-  padding:22px; width:310px;
-  box-shadow:0 24px 60px rgba(0,0,0,0.65),0 0 40px rgba(139,92,246,0.07);
+  position:fixed; inset-block-start:72px; inset-inline-end:18px; z-index:9999;
+  background:var(--surface-panel);
+  border:1px solid var(--border-default); border-radius:var(--radius-panel);
+  padding:22px; width:min(310px, calc(100vw - 24px));
+  box-shadow:var(--elevation-modal);
   animation:tpIn 0.25s cubic-bezier(0.34,1.56,0.64,1);
 }
 @keyframes tpIn { from{opacity:0;transform:translateY(-10px) scale(0.94)} to{opacity:1;transform:none} }
@@ -3433,18 +3569,21 @@ body[data-domain="banking"] {
   color:var(--text-tertiary); margin-bottom:14px;
 }
 .theme-grid {
-  display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:6px;
+  display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin-bottom:6px;
 }
 .theme-swatch {
   cursor:pointer; border-radius:14px; padding:12px 6px;
   display:flex; flex-direction:column; align-items:center; gap:8px;
-  border:2px solid transparent; transition:all 0.2s ease;
-  background:rgba(255,255,255,0.03);
+  border:2px solid var(--border-default); transition:all 0.2s ease;
+  background:var(--surface-raised);
+  min-block-size:var(--touch-target-comfortable);
+  font-family:inherit; /* it is a <button> now; do not let the UA font leak in */
 }
-.theme-swatch:hover  { border-color:rgba(255,255,255,0.2); transform:translateY(-2px); }
-.theme-swatch.active { border-color:var(--sub-accent,#38bdf8); background:rgba(var(--sub-accent-rgb,56,189,248),0.08); }
-.theme-swatch-dot    { width:26px; height:26px; border-radius:50%; border:2px solid rgba(255,255,255,0.12); }
-.theme-swatch-name   { font-size:10px; color:rgba(255,255,255,0.55); font-weight:600; text-align:center; }
+.theme-swatch:hover  { border-color:var(--border-strong); background:var(--surface-hover); transform:translateY(-2px); }
+.theme-swatch.active { border-color:var(--sub-accent); background:var(--surface-accent-soft); }
+.theme-swatch-dot    { width:26px; height:26px; border-radius:50%; border:2px solid var(--border-strong); }
+.theme-swatch-name   { font-size:12px; color:var(--text-secondary); font-weight:600; text-align:center; }
+.theme-swatch.active .theme-swatch-name { color:var(--text-primary); }
 
 /* ── Premium Import Data Button ── */
 .sub-import-btn {
@@ -3552,56 +3691,68 @@ body[data-domain="banking"] {
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   LIGHT THEME — structural re-skin (Wave 3 #15)
-   Scoped to html[data-theme="light"] so dark mode is completely unchanged.
-   Covers the shared subsystem chrome (.sub-*) and the clinic (.cl-*).
-═══════════════════════════════════════════════════════════════════════════ */
-html[data-theme="light"] body { background: var(--app-bg); color: var(--text); }
-html[data-theme="light"] .sub-sidebar { background: var(--surface); border-right-color: var(--border-soft); }
-html[data-theme="light"] .sub-sidebar-brand { border-bottom-color: var(--border-soft); }
-html[data-theme="light"] .sub-brand-icon { background: var(--surface-soft); border-color: var(--border-soft); }
-html[data-theme="light"] .sub-nav-item { color: var(--text-dim); }
-html[data-theme="light"] .sub-nav-item:hover { background: var(--surface-soft); color: var(--text); }
-html[data-theme="light"] .sub-nav-item.active { color: var(--text); }
-html[data-theme="light"] .sub-sidebar-bottom { border-top-color: var(--border-soft); }
-html[data-theme="light"] .sub-exit-btn { background: var(--surface-soft); border-color: var(--border-soft); color: var(--text-dim); }
-html[data-theme="light"] .sub-exit-btn:hover { background: var(--surface-hover); color: var(--text); }
-html[data-theme="light"] .sub-header { background: var(--surface); border-bottom-color: var(--border-soft); }
-html[data-theme="light"] .sub-header-title { color: var(--text); }
-html[data-theme="light"] .sub-header-section { background: var(--surface-soft); color: var(--text-dim); }
-html[data-theme="light"] .sub-header-btn { background: var(--surface-soft); border-color: var(--border-soft); color: var(--text); }
-html[data-theme="light"] .sub-header-btn:hover { background: var(--surface-hover); }
-html[data-theme="light"] .sub-content { background: var(--content-bg); }
-html[data-theme="light"] .sub-section-title { color: var(--text); }
-html[data-theme="light"] .sub-section-sub { color: var(--text-dim); }
-html[data-theme="light"] .sub-kpi-card,
-html[data-theme="light"] .sub-chart-card { background: var(--surface-card); border-color: var(--border-soft); box-shadow: var(--shadow); }
-html[data-theme="light"] .sub-kpi-label { color: var(--text-faint); }
-html[data-theme="light"] .sub-kpi-trend { color: var(--text-faint); }
+   THEMED SHELL — structural re-skin (Wave 3 #15; theme-agnostic since dark v2)
+   Covers the shared subsystem chrome (.sub-*) and the clinic-era classes
+   (.cl-*) still used by retail screens.
+
+   HISTORY, BECAUSE THIS EXACT SCOPING SHIPPED A 1.00:1 BUG ONCE. This layer
+   was `html[data-theme="light"]`, written when "dark" meant the old HUD's own
+   rules. After the HUD died, a document carrying data-theme="dark" got light
+   token values WITHOUT this layer, and the white literals then still injected
+   by subsystem-retail.js rendered white-on-white on five screens. The theme
+   difference now lives ENTIRELY in token values (see the dark block near the
+   top of this file), so these rules are correct under both themes BY
+   CONSTRUCTION and are scoped `html[data-theme]` -- same specificity as the
+   old selector (element+attribute), applied to any themed document. index.html
+   always stamps the attribute before first paint, light or dark, never absent.
+   Do not re-scope any rule here back to a single theme: a rule only one theme
+   gets is the drift this file already paid for once. ═════════════════════════ */
+html[data-theme] body { background: var(--app-bg); color: var(--text); }
+html[data-theme] .sub-sidebar { background: var(--surface); border-right-color: var(--border-soft); }
+html[data-theme] .sub-sidebar-brand { border-bottom-color: var(--border-soft); }
+html[data-theme] .sub-brand-icon { background: var(--surface-soft); border-color: var(--border-soft); }
+html[data-theme] .sub-nav-item { color: var(--text-dim); }
+html[data-theme] .sub-nav-item:hover { background: var(--surface-soft); color: var(--text); }
+html[data-theme] .sub-nav-item.active { color: var(--text); }
+html[data-theme] .sub-sidebar-bottom { border-top-color: var(--border-soft); }
+html[data-theme] .sub-exit-btn { background: var(--surface-soft); border-color: var(--border-soft); color: var(--text-dim); }
+html[data-theme] .sub-exit-btn:hover { background: var(--surface-hover); color: var(--text); }
+html[data-theme] .sub-header { background: var(--surface); border-bottom-color: var(--border-soft); }
+html[data-theme] .sub-header-title { color: var(--text); }
+html[data-theme] .sub-header-section { background: var(--surface-soft); color: var(--text-dim); }
+html[data-theme] .sub-header-btn { background: var(--surface-soft); border-color: var(--border-soft); color: var(--text); }
+html[data-theme] .sub-header-btn:hover { background: var(--surface-hover); }
+html[data-theme] .sub-content { background: var(--content-bg); }
+html[data-theme] .sub-section-title { color: var(--text); }
+html[data-theme] .sub-section-sub { color: var(--text-dim); }
+html[data-theme] .sub-kpi-card,
+html[data-theme] .sub-chart-card { background: var(--surface-card); border-color: var(--border-soft); box-shadow: var(--shadow); }
+html[data-theme] .sub-kpi-label { color: var(--text-faint); }
+html[data-theme] .sub-kpi-trend { color: var(--text-faint); }
 
 /* Clinic subsystem (.cl-*) light re-skin */
-html[data-theme="light"] .cl-section-title { color: var(--text); }
-html[data-theme="light"] .cl-table { color: var(--text); }
-html[data-theme="light"] .cl-table thead th { color: var(--text-dim); border-bottom-color: var(--border-mid); }
-html[data-theme="light"] .cl-table td { border-bottom-color: var(--border-soft); }
-html[data-theme="light"] .cl-table tbody tr:hover { background: var(--surface-soft); }
-html[data-theme="light"] .cl-empty { color: var(--text-faint); }
-html[data-theme="light"] .cl-modal { background: var(--surface); color: var(--text); border: 1px solid var(--border-mid); }
-html[data-theme="light"] .cl-modal h3 { color: var(--text); }
-html[data-theme="light"] .cl-field label { color: var(--text-dim); }
-html[data-theme="light"] .cl-field input,
-html[data-theme="light"] .cl-field select,
-html[data-theme="light"] .cl-field textarea,
-html[data-theme="light"] .cl-search,
-html[data-theme="light"] .sub-content input,
-html[data-theme="light"] .sub-content select,
-html[data-theme="light"] .sub-content textarea { background: var(--input-bg); border: 1px solid var(--border-mid); color: var(--text); }
-html[data-theme="light"] .cl-btn-ghost { background: var(--surface-soft); border-color: var(--border-mid); color: var(--text); }
-html[data-theme="light"] .cl-btn-ghost:hover { background: var(--surface-hover); }
-html[data-theme="light"] .sub-chart-card,
-html[data-theme="light"] .cl-modal { color: var(--text); }
+html[data-theme] .cl-section-title { color: var(--text); }
+html[data-theme] .cl-table { color: var(--text); }
+html[data-theme] .cl-table thead th { color: var(--text-dim); border-bottom-color: var(--border-mid); }
+html[data-theme] .cl-table td { border-bottom-color: var(--border-soft); }
+html[data-theme] .cl-table tbody tr:hover { background: var(--surface-soft); }
+html[data-theme] .cl-empty { color: var(--text-faint); }
+html[data-theme] .cl-modal { background: var(--surface); color: var(--text); border: 1px solid var(--border-mid); }
+html[data-theme] .cl-modal h3 { color: var(--text); }
+html[data-theme] .cl-field label { color: var(--text-dim); }
+html[data-theme] .cl-field input,
+html[data-theme] .cl-field select,
+html[data-theme] .cl-field textarea,
+html[data-theme] .cl-search,
+html[data-theme] .sub-content input,
+html[data-theme] .sub-content select,
+html[data-theme] .sub-content textarea { background: var(--input-bg); border: 1px solid var(--border-mid); color: var(--text); }
+html[data-theme] .cl-btn-ghost { background: var(--surface-soft); border-color: var(--border-mid); color: var(--text); }
+html[data-theme] .cl-btn-ghost:hover { background: var(--surface-hover); }
+html[data-theme] .sub-chart-card,
+html[data-theme] .cl-modal { color: var(--text); }
 /* Generic safety net: cards/panels that use the shared tokens */
-html[data-theme="light"] .sub-spinner { border-color: var(--border-mid); border-top-color: var(--sub-accent); }
+html[data-theme] .sub-spinner { border-color: var(--border-mid); border-top-color: var(--sub-accent); }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    RESPONSIVENESS (Wave 3 #16) — subsystem shell adapts to all screen sizes.
@@ -3637,27 +3788,30 @@ html[data-theme="light"] .sub-spinner { border-color: var(--border-mid); border-
 .cl-table { min-width: 560px; }
 .sub-content table { max-width: 100%; }
 
-/* ── Light theme must beat the data-app-theme accent rules (which use !important).
-   html[data-theme="light"] (element+attr+class) outranks [data-app-theme] (attr+class)
-   among !important declarations, so these win in light mode without touching dark. ── */
-html[data-theme="light"] body,
-html[data-theme="light"] .sub-shell        { background: var(--app-bg) !important; }
-html[data-theme="light"] .sub-sidebar      { background: var(--surface) !important; border-right-color: var(--border-soft) !important; }
-html[data-theme="light"] .sub-header       { background: var(--surface) !important; border-bottom-color: var(--border-soft) !important; }
-html[data-theme="light"] .sub-kpi-card,
-html[data-theme="light"] .sub-chart-card,
-html[data-theme="light"] .sub-table-card,
-html[data-theme="light"] .modern-card      { background: var(--surface-card) !important; border-color: var(--border-soft) !important; }
-html[data-theme="light"] .sub-chart-title,
-html[data-theme="light"] .modern-card *,
-html[data-theme="light"] .sub-chart-card *  { color: inherit; }
-html[data-theme="light"] .sub-chart-title   { color: var(--text) !important; }
+/* ── The themed shell must beat the legacy data-app-theme accent rules (which
+   use !important). html[data-theme] (element+attr) outranks [data-app-theme]
+   (attr) among !important declarations, so these win in BOTH themes. Nothing
+   sets data-app-theme any more (ThemeEngine stopped writing it when it became
+   the light/dark switch), so these are belt-and-braces against a stale cached
+   app-shell.js rather than against live code. ── */
+html[data-theme] body,
+html[data-theme] .sub-shell        { background: var(--app-bg) !important; }
+html[data-theme] .sub-sidebar      { background: var(--surface) !important; border-right-color: var(--border-soft) !important; }
+html[data-theme] .sub-header       { background: var(--surface) !important; border-bottom-color: var(--border-soft) !important; }
+html[data-theme] .sub-kpi-card,
+html[data-theme] .sub-chart-card,
+html[data-theme] .sub-table-card,
+html[data-theme] .modern-card      { background: var(--surface-card) !important; border-color: var(--border-soft) !important; }
+html[data-theme] .sub-chart-title,
+html[data-theme] .modern-card *,
+html[data-theme] .sub-chart-card *  { color: inherit; }
+html[data-theme] .sub-chart-title   { color: var(--text) !important; }
 /* Clinic-specific dashboard cards */
-html[data-theme="light"] .cl-kpi           { background: var(--surface-card) !important; border-color: var(--border-soft) !important; }
-html[data-theme="light"] .cl-kpi-value     { color: var(--text); }
-html[data-theme="light"] .cl-detail-item span { color: var(--text); }
-html[data-theme="light"] .cl-tab:hover:not(.active) { color: var(--text); }
-html[data-theme="light"] .cl-modal h3      { color: var(--text); }
+html[data-theme] .cl-kpi           { background: var(--surface-card) !important; border-color: var(--border-soft) !important; }
+html[data-theme] .cl-kpi-value     { color: var(--text); }
+html[data-theme] .cl-detail-item span { color: var(--text); }
+html[data-theme] .cl-tab:hover:not(.active) { color: var(--text); }
+html[data-theme] .cl-modal h3      { color: var(--text); }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    MOBILE FIT (phones ≤600px) — APK polish. Scoped so desktop is unaffected.
@@ -3777,8 +3931,14 @@ html[data-theme="light"] .cl-modal h3      { color: var(--text); }
       var(--tabbar-block-size) + var(--safe-area-bottom) + var(--space-snug, 12px));
   }
 
-  /* A sheet is modal. A banner floating over it is only in the way. */
-  body.sub-more-sheet-open #aura-admin-device-claim { display: none; }
+  /* A sheet is modal. A banner floating over it is only in the way.
+     !important is required, not decoration: the claim bar's whole paint is an
+     INLINE cssText in app-shell.js (_showAdminClaimBar), including
+     display:flex, and an inline declaration beats any non-!important
+     stylesheet rule. Without it this rule read as correct, matched the
+     element, and hid nothing -- measured on the dark-mode 390px screenshots
+     (2026-09), where the banner sat squarely over the open More sheet. */
+  body.sub-more-sheet-open #aura-admin-device-claim { display: none !important; }
 
   .sub-tabbar {
     display: flex;
@@ -4269,11 +4429,11 @@ html[data-theme="light"] .auth-card { box-shadow: 0 30px 70px rgba(20,32,60,0.18
    keyboard. Listing it here is what makes the ring a property of the control
    rather than of whichever screen happens to contain it. */
 .ret-rowbtn:focus-visible,
-html[data-theme="light"] .sub-nav-item:focus-visible,
-html[data-theme="light"] .sub-exit-btn:focus-visible,
-html[data-theme="light"] .sub-header-btn:focus-visible,
-html[data-theme="light"] .cl-btn-ghost:focus-visible,
-html[data-theme="light"] .cl-tab:not(.active):focus-visible {
+html[data-theme] .sub-nav-item:focus-visible,
+html[data-theme] .sub-exit-btn:focus-visible,
+html[data-theme] .sub-header-btn:focus-visible,
+html[data-theme] .cl-btn-ghost:focus-visible,
+html[data-theme] .cl-tab:not(.active):focus-visible {
   outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: var(--focus-ring-offset);
   border-radius: inherit;
