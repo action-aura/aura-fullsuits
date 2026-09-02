@@ -21,66 +21,25 @@ guards below have to pass -- `is_enabled()` (which folds in "is SMTP
 configured at all") and a configured recipient -- so an install that has done
 neither sees exactly zero behaviour change: no row, no error, no log.
 
-MONEY IS FORMATTED AT THE SHOP'S OWN PRECISION, deliberately. The WhatsApp
-shift-close report renders its figures with `:.2f`, which is wrong for the
-Jordanian dinar -- 1000 fils, three decimal places -- and would print
-JD 12.35 for a drawer holding 12.350. This module reads `base_currency` from
-`retail_settings` and formats to that currency's real minor units, the same
-source `core/retail/pricing.py` uses. See ROADMAP for the WhatsApp side,
-which is recorded rather than changed here: touching a second channel's
-formatting inside a change that adds a third trigger would bury it.
+MONEY IS FORMATTED AT THE SHOP'S OWN PRECISION, deliberately -- and now via
+ONE shared module, `core/retail/money_format.py`, rather than a formatter
+private to this file. The WhatsApp shift-close report used to render its
+figures with a hardcoded `:.2f`, which is wrong for the Jordanian dinar --
+1000 fils, three decimal places -- and printed JD 12.35 for a drawer holding
+12.350, while this channel printed the correct 12.350 for the identical
+close. That was not "WhatsApp is wrong and email is right" so much as "two
+channels reporting the same event in two different precisions", which is
+worse than either being wrong alone: a shop with both channels enabled saw
+its own records disagree with themselves. `money_format.py` now owns both
+`company_currency()` and `format_money()` so email and WhatsApp can no
+longer drift apart the way they did before -- see that module's docstring
+for the full reasoning.
 """
 from __future__ import annotations
 
-import sqlite3
-
 from commercial_runtime.notifications import settings as _notification_settings
 from commercial_runtime.notifications.outbox import EmailOutboxRepository as _EmailOutboxRepository
-from core.retail import pricing as _pricing
-
-#: Same key `api/retail_api.py::_DEFAULT_SETTINGS` uses, read here directly
-#: because core/retail must not import api/ (api/ already imports core/).
-_CURRENCY_SETTING = 'base_currency'
-
-
-def _currency(conn, company_id):
-    """This shop's currency code, falling back to the product default.
-
-    Degrades rather than raising, the same way `metrics.business_day` degrades
-    on a database whose settings table does not exist yet -- a report is not
-    worth a 500, and this is called from a best-effort path.
-
-    It degrades to `pricing.DEFAULT_BASE_CURRENCY`, NOT to None. None would
-    route `_money` below to `pricing.CURRENCY_DECIMALS`, which is 2 -- the
-    fallback for an UNKNOWN currency code, not for an ABSENT one. A shop that
-    has never opened settings is a Jordanian shop selling in dinars, and its
-    Z-report has to print fils. `api/retail_api.py::_company_currency` makes
-    the identical choice for the identical reason; both used to answer None
-    and both were wrong for the most common install there is.
-    """
-    try:
-        row = conn.execute(
-            "SELECT svalue FROM retail_settings WHERE company_id=? AND skey=?",
-            (company_id, _CURRENCY_SETTING)).fetchone()
-    except sqlite3.Error:
-        return _pricing.DEFAULT_BASE_CURRENCY
-    return (row[0] if row and row[0] else None) or _pricing.DEFAULT_BASE_CURRENCY
-
-
-def _money(value, currency):
-    """`JD 12.350`, at the currency's real minor units -- not a hardcoded 2dp."""
-    try:
-        amount = float(value or 0)
-    except (TypeError, ValueError):
-        amount = 0.0
-    digits = _pricing.CURRENCY_MINOR_UNITS.get(
-        (currency or '').strip().upper(), _pricing.CURRENCY_DECIMALS)
-    symbol = _pricing.currency_symbol(currency)
-    body = f"{amount:.{digits}f}"
-    # A single-character mark hugs its digits, a multi-letter one takes a
-    # space -- the same rule the till and the phone already use, so a figure
-    # in an email reads identically to the one on screen.
-    return (symbol + body) if len(symbol) == 1 else f"{symbol} {body}"
+from core.retail import money_format as _money_format
 
 
 def queue_shift_close_email(conn_factory, *, company_id, branch_name, report) -> int:
@@ -106,7 +65,7 @@ def queue_shift_close_email(conn_factory, *, company_id, branch_name, report) ->
         if not recipient:
             return 0
 
-        currency = _currency(conn, company_id)
+        currency = _money_format.company_currency(conn, company_id)
         where = branch_name or 'Main'
         closed_at = str(report.get('window_end') or '')[:16]
         variance = float(report.get('variance') or 0)
@@ -116,9 +75,9 @@ def queue_shift_close_email(conn_factory, *, company_id, branch_name, report) ->
             f"Cash session closed at {where}.",
             "",
             f"Closed at:       {closed_at}",
-            f"Expected cash:   {_money(report.get('expected_cash'), currency)}",
-            f"Counted:         {_money(report.get('closing_float_counted'), currency)}",
-            f"Variance:        {'+' if variance > 0 else ''}{_money(variance, currency)}",
+            f"Expected cash:   {_money_format.format_money(report.get('expected_cash'), currency)}",
+            f"Counted:         {_money_format.format_money(report.get('closing_float_counted'), currency)}",
+            f"Variance:        {'+' if variance > 0 else ''}{_money_format.format_money(variance, currency)}",
         ]
         # A drawer that balanced is the boring case and should read as such;
         # a variance is the whole reason someone opens this email.
