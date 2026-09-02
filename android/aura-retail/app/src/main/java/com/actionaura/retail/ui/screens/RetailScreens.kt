@@ -355,11 +355,34 @@ fun PosScreen(snackbar: SnackbarHostState) {
                 Spacer(Modifier.height(10.dp))
                 HorizontalDivider()
                 Spacer(Modifier.height(10.dp))
+                // SUBTOTAL, not "Total" -- the figure this row shows is the
+                // same local `total` the checkout button below calls, in its
+                // own words, a "pre-tax, pre-discount PREVIEW only" that is
+                // "never persisted/displayed as the sale's actual total".
+                // That last claim was false: this row displayed it under the
+                // label "Total" while the server charged the taxed figure, so
+                // a cashier read one number aloud to the customer and the till
+                // took another.
+                //
+                // Fixed by making the LABEL honest rather than by computing
+                // tax here. A second pricing engine on the client is the exact
+                // drift this product already paid for once (AUDIT-002, the
+                // Android zero-tax defect) and the reason
+                // docs/architecture/financial-authority-contracts.md makes the
+                // server the only authority. The desktop does compute a live
+                // total client-side, but only because retail_pricing_parity_
+                // test.py pins its arithmetic to the server's line by line;
+                // Kotlin has no such harness, and inventing one to win a label
+                // is a far larger and riskier change than telling the truth.
                 Row {
-                    Text(tr("Total"), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    Text(tr("Subtotal"), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                     Text(money(total), style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 }
+                Spacer(Modifier.height(4.dp))
+                Text(tr("Tax and discounts are applied at checkout"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(14.dp))
                 Text(tr("Payment method"), style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -332,6 +332,10 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Couldn't load this transaction." to "تعذّر تحميل هذه المعاملة.",
     "Item" to "صنف",
     "Subtotal" to "المجموع الفرعي",
+    // The cart's honesty line: the figure above it is pre-tax and
+    // pre-discount, and used to be labelled "Total" while the server charged
+    // something else. See PosScreen's cart summary for the full reasoning.
+    "Tax and discounts are applied at checkout" to "تُضاف الضريبة والخصومات عند الدفع",
     "Discount" to "الخصم",
     "Tax" to "الضريبة",
     "Paid" to "المدفوع",
