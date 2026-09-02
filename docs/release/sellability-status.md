@@ -59,7 +59,8 @@ Legend:
 | Android | **RUN** | On a real Mi Note 10. Launch 2.9s. Emulator figures (12.7s) were environment, not the app |
 | Owner Control Center | **RUN** | 26 screenshots of the whole surface; clipped/overflow findings 0 |
 | Desktop and phone read as one product | **IN PROGRESS** | The accent already matches (`#F43F5E` on both). Type, density and surfaces do not yet |
-| Android Sign In contrast | **RUN — DEFECT** | 2.81:1 measured on device, below the 3.0 floor. Cause not isolated; the obvious fix computes worse |
+| Android Sign In contrast | **NEEDS RE-MEASUREMENT** | Was 2.81:1 on device, below the 3.0 floor. The Android theme has since adopted the desktop dark token set, which should have moved it, but that has not been re-measured on hardware and a computed figure is not the same evidence as a screenshot — the original number came from sampling the framebuffer precisely because the declared colours looked fine |
+| Web button contrast, both themes | **TESTED — no defect** | 2026-09-03. A carried-forward report of 2.14:1 on `.ret-btn-primary` in dark mode does not reproduce on this branch: measured 7.18:1 dark, 8.53:1 light, with danger, ghost and the four badges all 7.3:1 or better. The old number was real — mutating the rule's colour to `var(--text-primary)` reproduces `#edf2f8` on `#6ea8ff` at exactly 2.14:1 — but commit `3832af6` fixed it. Now pinned by `retail_btn_primary_contrast_test.js`, mutation-proved |
 
 ## Feature parity
 
