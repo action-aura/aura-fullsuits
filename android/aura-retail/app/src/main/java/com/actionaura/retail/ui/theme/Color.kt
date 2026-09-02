@@ -2,51 +2,66 @@ package com.actionaura.retail.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Brand accent -- was teal/emerald, unified with desktop's rose #f43f5e
-// (see the Aurora constants below for the full rationale). Teal500 is only
-// referenced by the dead LightColors scheme (Theme.kt) and left as-is.
-val Teal500 = Color(0xFF14B8A6)
-val Teal600 = Color(0xFFE11D48)  // rose-600 -- primaryContainer
-val Teal200 = Color(0xFFFECDD3)  // rose-200 -- onPrimaryContainer
+// ─────────────────────────────────────────────────────────────────────────────
+// OPERATIONAL CALM, dark — the phone edition of the desktop till's token layer.
+//
+// The desktop (products/retail/frontend/css/main.css, [design-tokens]) went
+// through a deliberate, contrast-TESTED redesign: one accent used semantically,
+// calm cool-grey surfaces, colour that carries meaning (money in, money out,
+// warning, refusal) — and it explicitly rejected the "near-black HUD + neon
+// accents" look as fatiguing and untrustworthy for software that moves money.
+// This file used to be exactly that rejected look (an "Aurora" nebula: teal
+// glow constants that had silently become rose, tinted shadows, gradient
+// text). Worse, its names had drifted from their values: AuroraTeal was rose,
+// AuroraCyan was rose-400, AuroraViolet was rose-300 — a theme file that lied
+// to whoever read it.
+//
+// These values are the desktop's OWN dark-mode palette (the dark token set
+// solved by the same WCAG math as retail_design_contrast_test.js: every text
+// token AA 4.5:1 against every surface it can land on, accent label 4.5:1 on
+// the accent fill). Owner's requirement, verbatim: "the desktop retail and the
+// phone should look close like basically they supposed to be known for
+// eachother". Same surfaces, same accent, same state colours = same product.
+//
+// NAMING RULE (inherited from the desktop token layer): a token is named for
+// WHAT IT IS FOR, never for what it looks like. If the palette is ever
+// re-themed, these names stay true.
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Light scheme
-val LightBackground = Color(0xFFF5F7FA)
-val LightSurface = Color(0xFFFFFFFF)
-val LightSurfaceVariant = Color(0xFFEEF1F6)
-val LightOnSurface = Color(0xFF1A2230)
-val LightOnSurfaceVariant = Color(0xFF51607A)
-val LightOutline = Color(0xFFD3DAE3)
+// ── SURFACES — ordered by elevation, named by job ────────────────────────────
+val SurfaceApp = Color(0xFF0F1319)     // outermost shell; the window background
+val SurfaceSunken = Color(0xFF0B0F15)  // wells, inputs, anything you type into
+val SurfacePanel = Color(0xFF151A23)   // chrome: top bar, tab bar
+val SurfaceRaised = Color(0xFF171D27)  // cards lifted off the shell
+val SurfaceTill = Color(0xFF1A212C)    // THE working surface: cart, active list
+val SurfaceHover = Color(0xFF212936)   // finger is over it
+val SurfaceActive = Color(0xFF273140)  // pressed / selected row
 
-// Dark scheme
-val DarkBackground = Color(0xFF0B0F14)
-val DarkSurface = Color(0xFF131A22)
-val DarkSurfaceVariant = Color(0xFF1C2530)
-val DarkOnSurface = Color(0xFFE6EAF0)
-val DarkOnSurfaceVariant = Color(0xFF9AA7B8)
-val DarkOutline = Color(0xFF2C3744)
+// ── TEXT — three weights of emphasis, all AA+ on every surface above ─────────
+val TextPrimary = Color(0xFFEDF2F8)    // headings, values, anything load-bearing
+val TextSecondary = Color(0xFFC3CDDB)  // body copy, labels
+val TextTertiary = Color(0xFF9FADC0)   // meta: timestamps, hints, captions
 
-// Status colors (shared)
-val Success = Color(0xFF10B981)
-val Warning = Color(0xFFF59E0B)
-val Danger = Color(0xFFEF4444)
-val Info = Color(0xFF38BDF8)
+// ── ACCENT — ONE accent, and it means "this is the action you take" ──────────
+// Same hue as the desktop's --accent-action, lightened for dark surfaces the
+// way the desktop's own dark set does. Deliberately NOT rose: the previous
+// rose accent sat in the refusal/danger hue, so "act here" and "something is
+// wrong" were the same colour at a glance — on a till, the one ambiguity that
+// costs real money.
+val AccentAction = Color(0xFF6EA8FF)
+val OnAccent = Color(0xFF0D1B2E)       // label on an accent fill (4.5:1+)
+val AccentSoft = Color(0xFF1C2A44)     // tinted BACKDROP (selected tab), not a fill
 
-// ── Aurora (next-gen dark identity) ───────────────────────────────────────────
-val Ink = Color(0xFF070B14)        // background base (deep blue-black)
-val Ink2 = Color(0xFF0C1220)       // background gradient end
-val AuroraSurface = Color(0xFF121A2B)    // frosted panel
-val AuroraSurfaceHi = Color(0xFF1A2436)  // elevated panel
-val AuroraOnSurface = Color(0xFFEAF0FF)
-val AuroraMuted = Color(0xFF9AA7C2)
-val AuroraOutline = Color(0xFF243149)
+// ── BORDERS — named by weight of separation ──────────────────────────────────
+val BorderDefault = Color(0xFF2E3947)  // cards, inputs, the normal case
+val BorderHairline = Color(0xFF222B37) // row rules, dividers
 
-// Brand accent unified with the desktop web app's own single accent color
-// (products/retail/frontend/app-shell.js's per-subsystem --sub-accent for
-// Retail is #f43f5e, injected at runtime into main.css's token system) --
-// these three constants were teal/cyan/violet before, an entirely different
-// brand color from desktop with no shared reference point. Now a
-// monochromatic rose ramp (rose-500/400/300) so the aurora gradient reads
-// as one consistent brand, not three unrelated hues.
-val AuroraTeal = Color(0xFFF43F5E)   // primary glow -- same hex as desktop's --sub-accent
-val AuroraCyan = Color(0xFFFB7185)   // secondary glow (rose-400)
-val AuroraViolet = Color(0xFFFDA4AF) // accent glow (rose-300)
+// ── SEMANTIC STATE — one meaning per colour (desktop dark set) ───────────────
+// *Text* variants: AA on every surface. The *Container* variants are their
+// quiet backdrops (badge fills), each pairing AA with its own text colour.
+val Success = Color(0xFF7BD9A2)
+val Warning = Color(0xFFE6C67A)
+val Danger = Color(0xFFFF9D94)
+val Info = Color(0xFF8AB5F8)
+val SuccessContainer = Color(0xFF12301F)
+val DangerContainer = Color(0xFF3D1713)

@@ -4,11 +4,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Shapes
 import androidx.compose.ui.unit.dp
 
-// Soft, modern corner system (premium SaaS feel).
+// The desktop token layer's radius system: control 8 / card 12 / panel 16,
+// and deliberately NOT uniform — "a control and a panel having the same
+// radius is what makes a UI read as a template" (css/main.css, RADIUS).
+// Mapped onto the M3 slots by what each slot actually dresses:
+//   extraSmall/small -> controls (menus, chips, text fields)
+//   medium           -> cards
+//   large/extraLarge -> panels (sheets, dialogs)
 val AuraShapes = Shapes(
     extraSmall = RoundedCornerShape(8.dp),
-    small = RoundedCornerShape(12.dp),
-    medium = RoundedCornerShape(16.dp),
-    large = RoundedCornerShape(20.dp),
-    extraLarge = RoundedCornerShape(28.dp),
+    small = RoundedCornerShape(8.dp),
+    medium = RoundedCornerShape(12.dp),
+    large = RoundedCornerShape(16.dp),
+    extraLarge = RoundedCornerShape(16.dp),
 )

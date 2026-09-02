@@ -14,10 +14,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.actionaura.retail.net.ApiClient
 import com.actionaura.retail.net.LoginRequest
-import com.actionaura.retail.ui.components.auroraBrush
 import com.actionaura.retail.ui.i18n.tr
-import com.actionaura.retail.ui.components.pulseGlow
-import com.actionaura.retail.ui.theme.AuroraTeal
 import kotlinx.coroutines.launch
 
 @Composable
@@ -52,15 +49,16 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surface,
-                modifier = Modifier.size(72.dp).pulseGlow(AuroraTeal, CircleShape)) {
+            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier.size(72.dp)) {
                 Box(contentAlignment = Alignment.Center) {
-                    Text("A", style = MaterialTheme.typography.headlineMedium.copy(brush = auroraBrush()),
+                    Text("A", style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.ExtraBold)
                 }
             }
             Spacer(Modifier.height(20.dp))
-            Text("Action Aura", style = MaterialTheme.typography.headlineMedium.copy(brush = auroraBrush()),
+            Text("Action Aura", style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.ExtraBold)
             Spacer(Modifier.height(6.dp))
             Text(tr("Sign in to your workspace"), style = MaterialTheme.typography.bodyMedium,

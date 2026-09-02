@@ -47,7 +47,7 @@ import com.actionaura.retail.net.apiErrorMessage
 import com.actionaura.retail.ui.CAP_REPORTS
 import com.actionaura.retail.ui.RetailSession
 import com.actionaura.retail.ui.components.EmptyState
-import com.actionaura.retail.ui.components.GlowCard
+import com.actionaura.retail.ui.components.TillCard
 import com.actionaura.retail.ui.components.SkeletonList
 import com.actionaura.retail.ui.i18n.money
 import com.actionaura.retail.ui.i18n.tr
@@ -351,7 +351,7 @@ fun EmployeeSalesScreen(snackbar: SnackbarHostState) {
 @Composable
 private fun EmployeeSalesRow(row: EmployeeSales) {
     val who = rowAttribution(row)
-    GlowCard(Modifier.fillMaxWidth()) {
+    TillCard(Modifier.fillMaxWidth()) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             if (who != Attribution.NAMED) {
                 Icon(

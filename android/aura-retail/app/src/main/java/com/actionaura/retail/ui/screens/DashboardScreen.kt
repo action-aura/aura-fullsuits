@@ -74,7 +74,7 @@ fun DashboardScreen(onNavigate: (String) -> Unit) {
             Text(tr(greeting), style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(tr("Your store at a glance"),
-                style = MaterialTheme.typography.headlineMedium.copy(brush = auroraBrush()),
+                style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.ExtraBold)
         }
 
@@ -110,7 +110,7 @@ private fun RetailMetrics(s: RetailStats) {
 
 @Composable
 private fun Metric(label: String, value: String, sub: String, accent: Color, modifier: Modifier = Modifier) {
-    GlowCard(modifier = modifier, glow = accent) {
+    TillCard(modifier = modifier, accent = accent) {
         Column(Modifier.padding(16.dp)) {
             Text(label.uppercase(), style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -124,7 +124,7 @@ private fun Metric(label: String, value: String, sub: String, accent: Color, mod
 
 @Composable
 private fun QuickAction(label: String, icon: ImageVector, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    GlowCard(modifier = modifier, glow = MaterialTheme.colorScheme.primary, onClick = onClick) {
+    TillCard(modifier = modifier, accent = MaterialTheme.colorScheme.primary, onClick = onClick) {
         Column(Modifier.padding(vertical = 18.dp, horizontal = 12.dp).fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally) {
             Box(Modifier.size(46.dp).clip(RoundedCornerShape(14.dp))

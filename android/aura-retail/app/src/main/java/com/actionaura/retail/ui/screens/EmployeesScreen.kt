@@ -37,7 +37,7 @@ import com.actionaura.retail.net.apiErrorMessage
 import com.actionaura.retail.ui.RetailSession
 import com.actionaura.retail.ui.components.Avatar
 import com.actionaura.retail.ui.components.EmptyState
-import com.actionaura.retail.ui.components.GlowCard
+import com.actionaura.retail.ui.components.TillCard
 import com.actionaura.retail.ui.components.SkeletonList
 import com.actionaura.retail.ui.i18n.PIN_LENGTH
 import com.actionaura.retail.ui.i18n.normalizePin
@@ -260,7 +260,7 @@ private fun isOwnerRow(e: Employee): Boolean =
 @Composable
 private fun EmployeeRow(e: Employee, onClick: () -> Unit) {
     val owner = isOwnerRow(e)
-    GlowCard(Modifier.fillMaxWidth(), onClick = if (owner) null else onClick) {
+    TillCard(Modifier.fillMaxWidth(), onClick = if (owner) null else onClick) {
         Row(Modifier.padding(14.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Avatar(e.email)
             Spacer(Modifier.width(12.dp))

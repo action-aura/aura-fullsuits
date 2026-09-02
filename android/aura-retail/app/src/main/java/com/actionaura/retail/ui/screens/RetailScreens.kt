@@ -43,8 +43,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.actionaura.retail.net.*
 import com.actionaura.retail.ui.components.EmptyState
-import com.actionaura.retail.ui.components.GlowCard
-import com.actionaura.retail.ui.components.pulseGlow
+import com.actionaura.retail.ui.components.TillCard
+import com.actionaura.retail.ui.theme.Success
+import com.actionaura.retail.ui.theme.SuccessContainer
 import com.actionaura.retail.ui.i18n.amount
 import com.actionaura.retail.ui.i18n.fmtQty
 import com.actionaura.retail.ui.i18n.money
@@ -246,10 +247,13 @@ fun PosScreen(snackbar: SnackbarHostState) {
             exit = slideOutVertically(tween(220)) { it } + fadeOut(),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
+            // Quiet neutral elevation instead of the old infinite pulseGlow
+            // animation -- a floating bar earns its lift with a shadow, not by
+            // breathing forever (and the pulse kept this screen recomposing
+            // whenever the cart had an item; see Components.kt's header note).
             Surface(
-                color = MaterialTheme.colorScheme.primary, shadowElevation = 0.dp,
-                modifier = Modifier.fillMaxWidth().padding(12.dp)
-                    .pulseGlow(MaterialTheme.colorScheme.primary, MaterialTheme.shapes.large),
+                color = MaterialTheme.colorScheme.primary, shadowElevation = 6.dp,
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
                 shape = MaterialTheme.shapes.large,
                 onClick = { showCart = true },
             ) {
@@ -522,7 +526,7 @@ private fun ProductTile(p: Product, inCart: Int, onAdd: () -> Unit) {
     val accent = catColor(p.category_name)
     val stock = p.total_stock
 
-    GlowCard(glow = accent, shape = RoundedCornerShape(16.dp), onClick = onAdd) {
+    TillCard(accent = accent, shape = RoundedCornerShape(16.dp), onClick = onAdd) {
         Box(
             Modifier.fillMaxWidth().height(84.dp)
                 .background(Brush.linearGradient(listOf(accent.copy(alpha = 0.85f), accent.copy(alpha = 0.5f)))),
@@ -578,10 +582,12 @@ private fun PaymentSuccess(sale: com.actionaura.retail.net.SaleResult, onNewSale
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center) {
-            Box(Modifier.size(110.dp).scale(check.value)
-                .pulseGlow(Color(0xFF10B981), CircleShape).clip(CircleShape)
-                .background(Color(0xFF10B981)), contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.Check, null, tint = Color.White, modifier = Modifier.size(60.dp))
+            // Success badge idiom shared with the desktop: state text colour on
+            // its own quiet container, not white-on-bright-green (which failed
+            // contrast) and not a pulsing glow.
+            Box(Modifier.size(110.dp).scale(check.value).clip(CircleShape)
+                .background(SuccessContainer), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.Check, null, tint = Success, modifier = Modifier.size(60.dp))
             }
             Spacer(Modifier.height(24.dp))
             Text(tr("Payment successful"), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)

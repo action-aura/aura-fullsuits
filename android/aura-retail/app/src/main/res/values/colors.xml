@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Splash / brand palette (matches the app's light theme + teal accent). -->
-    <color name="brand_bg">#F5F7FA</color>
-    <color name="brand_on_bg">#1A2230</color>
-    <color name="brand_muted">#8794A8</color>
-    <color name="brand_accent">#14B8A6</color>
+    <!-- The old brand_* splash palette (light grey + teal) died with the dead
+         WebView layout it styled: MainActivity has been pure Compose since the
+         native rewrite and never inflated activity_main.xml, so those colours
+         could only ever describe a screen no user has seen. -->
+    <!-- Pre-compose window background; MUST match ui/theme/Color.kt's
+         SurfaceApp or cold start flashes the wrong colour before the first
+         Compose frame. -->
+    <color name="window_background">#FF0F1319</color>
     <color name="ic_launcher_background">#1A1A1A</color>
 </resources>

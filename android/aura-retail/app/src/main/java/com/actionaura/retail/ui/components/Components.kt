@@ -12,7 +12,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -22,11 +21,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.actionaura.retail.ui.theme.AuroraCyan
-import com.actionaura.retail.ui.theme.AuroraTeal
-import com.actionaura.retail.ui.theme.AuroraViolet
-import com.actionaura.retail.ui.theme.Ink
-import com.actionaura.retail.ui.theme.Ink2
 
 // ── Shimmer skeleton ─────────────────────────────────────────────────────────
 @Composable
@@ -105,7 +99,7 @@ fun EmptyState(
     ) {
         Box(
             Modifier.size(96.dp).clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                .background(MaterialTheme.colorScheme.primaryContainer),
             contentAlignment = Alignment.Center,
         ) {
             Icon(icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(44.dp))
@@ -165,61 +159,50 @@ fun animatedInt(target: Int): Int {
     return v
 }
 
-// ── Aurora next-gen identity ──────────────────────────────────────────────────
-/** Brand gradient for hero text / accents. */
-fun auroraBrush(): Brush = Brush.linearGradient(listOf(AuroraTeal, AuroraCyan, AuroraViolet))
+// ── Operational Calm identity ────────────────────────────────────────────────
+// This section used to be the "Aurora" kit: a nebula backdrop (full-screen
+// gradient + two radial glows redrawn behind every frame), GlowCard (a 16dp
+// TINTED shadow — ambientColor/spotColor — on nearly every card on screen,
+// a materially more expensive Compose render path than a neutral shadow),
+// and pulseGlow (an INFINITE shadow animation that kept the login screen,
+// the POS cart bar and the payment-success screen recomposing forever).
+// All three are gone: the desktop till's design language (css/main.css,
+// "Operational Calm") uses calm flat surfaces, hairline borders and quiet
+// neutral elevation, and the owner's report that the app "feels laggy" made
+// the permanently-animating tinted-shadow look a cost with no defender.
 
-/** Ambient nebula backdrop: deep gradient + two soft color glows. Everything floats on this. */
+/** Flat app backdrop — the desktop's --surface-app. Everything sits on this. */
 @Composable
-fun NebulaBackground(content: @Composable BoxScope.() -> Unit) {
+fun AppBackground(content: @Composable BoxScope.() -> Unit) {
     Box(
-        Modifier.fillMaxSize().drawBehind {
-            drawRect(Brush.verticalGradient(listOf(Ink, Ink2)))
-            drawCircle(
-                brush = Brush.radialGradient(
-                    listOf(AuroraTeal.copy(alpha = 0.16f), Color.Transparent),
-                    center = Offset(size.width * 0.12f, size.height * 0.02f), radius = size.width * 0.75f),
-                radius = size.width * 0.75f, center = Offset(size.width * 0.12f, size.height * 0.02f))
-            drawCircle(
-                brush = Brush.radialGradient(
-                    listOf(AuroraViolet.copy(alpha = 0.15f), Color.Transparent),
-                    center = Offset(size.width * 0.95f, size.height * 0.92f), radius = size.width * 0.8f),
-                radius = size.width * 0.8f, center = Offset(size.width * 0.95f, size.height * 0.92f))
-        },
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
         content = content,
     )
 }
 
-/** Frosted panel with a luminous gradient rim — the signature card. */
+/**
+ * The standard card — the phone's --surface-raised panel. Quiet neutral
+ * elevation, hairline border, card radius from the shared shape scale.
+ *
+ * [accent] tints the border when the card CARRIES STATE (a warning total, an
+ * error panel, a KPI) — the phone equivalent of the desktop's state-border
+ * tokens. Neutral cards pass nothing and stay neutral: colour that means
+ * nothing does not belong (token-layer rule).
+ */
 @Composable
-fun GlowCard(
+fun TillCard(
     modifier: Modifier = Modifier,
-    glow: Color = AuroraTeal,
-    shape: Shape = RoundedCornerShape(20.dp),
+    accent: Color? = null,
+    shape: Shape = MaterialTheme.shapes.medium,
     onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val rim = Modifier
-        .shadow(elevation = 16.dp, shape = shape, clip = false,
-            ambientColor = glow.copy(alpha = 0.35f), spotColor = glow.copy(alpha = 0.45f))
+    val border = accent?.copy(alpha = 0.40f) ?: MaterialTheme.colorScheme.outlineVariant
+    val base = Modifier
+        .shadow(elevation = 2.dp, shape = shape, clip = false)
         .clip(shape)
-        .background(MaterialTheme.colorScheme.surface)
-        .border(
-            width = 1.dp,
-            brush = Brush.linearGradient(listOf(glow.copy(alpha = 0.55f), Color.Transparent, glow.copy(alpha = 0.15f))),
-            shape = shape,
-        )
+        .background(MaterialTheme.colorScheme.surfaceContainerLow)
+        .border(width = 1.dp, color = border, shape = shape)
     val click = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier
-    Column(modifier.then(rim).then(click), content = content)
-}
-
-/** Soft, breathing glow for primary actions (cart bar, CTAs). */
-@Composable
-fun Modifier.pulseGlow(color: Color = AuroraTeal, shape: Shape = RoundedCornerShape(20.dp)): Modifier {
-    val tr = rememberInfiniteTransition(label = "pulse")
-    val a by tr.animateFloat(
-        initialValue = 0.25f, targetValue = 0.6f,
-        animationSpec = infiniteRepeatable(tween(1500), RepeatMode.Reverse), label = "a")
-    return this.shadow(20.dp, shape, clip = false,
-        ambientColor = color.copy(alpha = a), spotColor = color.copy(alpha = a))
+    Column(modifier.then(base).then(click), content = content)
 }

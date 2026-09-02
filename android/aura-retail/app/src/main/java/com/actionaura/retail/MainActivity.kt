@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.view.KeyEvent
 import android.view.inputmethod.InputMethodManager
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import com.actionaura.retail.barcode.HidScanBus
@@ -16,7 +17,15 @@ class MainActivity : ComponentActivity() {
         // Restore the user's chosen language before composing any UI.
         AppLocale.load(this)
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        // The app's identity is fixed-dark (see ui/theme/Theme.kt), so the
+        // system bars must always use LIGHT icons. The no-arg overload picks
+        // icon colour from the SYSTEM theme -- in system light mode that put
+        // dark icons over this app's dark background, an unreadable clock on
+        // every screen.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+        )
         setContent {
             AuraTheme {
                 AppRoot()

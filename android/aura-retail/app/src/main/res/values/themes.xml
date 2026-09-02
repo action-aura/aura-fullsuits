@@ -1,9 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Window theme for the native Compose app (DayNight so the pre-compose window
-         background matches light/dark). Compose draws the actual MD3 UI. -->
-    <style name="Theme.Aura" parent="Theme.AppCompat.DayNight.NoActionBar">
+    <!-- Window theme for the native Compose app. Compose draws the actual MD3 UI.
+
+         Parent is the DARK AppCompat theme, not DayNight, on purpose: the app's
+         Compose identity is fixed-dark (ui/theme/Theme.kt ignores the system
+         setting), so a DayNight parent only ever produced a LIE about this
+         window - in system light mode it declared isLightTheme=true and paved
+         a white pre-compose window background under a dark UI (the cold-start
+         white flash), and it told the renderer this was a light-themed app.
+
+         android:windowBackground matches Compose's own background token so the
+         pre-compose frame and the first rendered frame are the same colour. -->
+    <style name="Theme.Aura" parent="Theme.AppCompat.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@color/window_background</item>
     </style>
 </resources>

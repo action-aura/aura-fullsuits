@@ -43,7 +43,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.actionaura.retail.net.*
 import com.actionaura.retail.ui.components.EmptyState
-import com.actionaura.retail.ui.components.GlowCard
+import com.actionaura.retail.ui.components.TillCard
 import com.actionaura.retail.ui.components.SectionHeader
 import com.actionaura.retail.ui.components.SkeletonList
 import com.actionaura.retail.ui.i18n.AppLang
@@ -124,7 +124,7 @@ fun MoreScreen(onNavigate: (String) -> Unit, onLogout: () -> Unit = {}) {
 
 @Composable
 private fun MoreItem(title: String, subtitle: String, icon: ImageVector, onClick: () -> Unit) {
-    GlowCard(Modifier.fillMaxWidth(), onClick = onClick) {
+    TillCard(Modifier.fillMaxWidth(), onClick = onClick) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.width(14.dp))
@@ -217,7 +217,7 @@ fun ReportsScreen(snackbar: SnackbarHostState, onNavigate: (String) -> Unit) {
 
             if (payments.isNotEmpty()) {
                 SectionHeader(tr("Payment methods"))
-                GlowCard(Modifier.fillMaxWidth()) {
+                TillCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         payments.forEach { pm ->
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -237,7 +237,7 @@ fun ReportsScreen(snackbar: SnackbarHostState, onNavigate: (String) -> Unit) {
 
 @Composable
 private fun StatCard(label: String, value: String, sub: String?, accent: Color, modifier: Modifier = Modifier) {
-    GlowCard(modifier = modifier, glow = accent) {
+    TillCard(modifier = modifier, accent = accent) {
         Column(Modifier.padding(16.dp)) {
             Text(label.uppercase(), style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -282,7 +282,7 @@ fun TransactionsScreen(snackbar: SnackbarHostState) {
 
 @Composable
 private fun SaleRow(s: Sale, onClick: () -> Unit) {
-    GlowCard(Modifier.fillMaxWidth(), onClick = onClick) {
+    TillCard(Modifier.fillMaxWidth(), onClick = onClick) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(s.sale_number ?: "—", fontWeight = FontWeight.Bold)
@@ -418,7 +418,7 @@ fun ReturnsScreen(snackbar: SnackbarHostState) {
 
 @Composable
 private fun ReturnRow(r: Return) {
-    GlowCard(Modifier.fillMaxWidth()) {
+    TillCard(Modifier.fillMaxWidth()) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(r.return_number ?: "—", fontWeight = FontWeight.Bold)
@@ -628,7 +628,7 @@ fun CustomersScreen(snackbar: SnackbarHostState) {
 
 @Composable
 private fun CustomerRow(c: Customer, onClick: () -> Unit) {
-    GlowCard(Modifier.fillMaxWidth(), onClick = onClick) {
+    TillCard(Modifier.fillMaxWidth(), onClick = onClick) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(c.name ?: "—", fontWeight = FontWeight.Bold)
@@ -754,7 +754,7 @@ fun ReceivablesScreen(snackbar: SnackbarHostState) {
             contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
-                GlowCard(Modifier.fillMaxWidth(), glow = Warning) {
+                TillCard(Modifier.fillMaxWidth(), accent = Warning) {
                     Column(Modifier.padding(18.dp)) {
                         Text(tr("TOTAL RECEIVABLE"), style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -765,7 +765,7 @@ fun ReceivablesScreen(snackbar: SnackbarHostState) {
                 }
             }
             items(rows, key = { it.id }) { c ->
-                GlowCard(Modifier.fillMaxWidth(), onClick = { stmtId = c.id }) {
+                TillCard(Modifier.fillMaxWidth(), onClick = { stmtId = c.id }) {
                     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(c.name ?: "—", fontWeight = FontWeight.Bold)
@@ -900,7 +900,7 @@ fun SuppliersScreen(snackbar: SnackbarHostState) {
 
 @Composable
 private fun SupplierRow(s: Supplier) {
-    GlowCard(Modifier.fillMaxWidth()) {
+    TillCard(Modifier.fillMaxWidth()) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(s.name ?: "—", fontWeight = FontWeight.Bold)
@@ -986,7 +986,7 @@ fun PayablesScreen(snackbar: SnackbarHostState) {
             tr("Unpaid purchase orders will appear here."))
         else -> LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
-                GlowCard(Modifier.fillMaxWidth(), glow = MaterialTheme.colorScheme.error) {
+                TillCard(Modifier.fillMaxWidth(), accent = MaterialTheme.colorScheme.error) {
                     Column(Modifier.padding(18.dp)) {
                         Text(tr("TOTAL PAYABLE"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.height(6.dp))
@@ -996,7 +996,7 @@ fun PayablesScreen(snackbar: SnackbarHostState) {
                 }
             }
             items(rows, key = { it.id }) { s ->
-                GlowCard(Modifier.fillMaxWidth(), onClick = { stmtId = s.id }) {
+                TillCard(Modifier.fillMaxWidth(), onClick = { stmtId = s.id }) {
                     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(s.name ?: "—", fontWeight = FontWeight.Bold)
@@ -1123,7 +1123,7 @@ fun DailyCashScreen(snackbar: SnackbarHostState) {
             StatCard(tr("Net Cash"), money(d.net), tr("in − out"), MaterialTheme.colorScheme.primary, Modifier.fillMaxWidth())
             if (d.by_method.isNotEmpty()) {
                 SectionHeader(tr("By method"))
-                GlowCard(Modifier.fillMaxWidth()) {
+                TillCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         d.by_method.forEach { m ->
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1178,7 +1178,7 @@ fun AgingScreen(snackbar: SnackbarHostState) {
                 tr("90+ days") to (b?.d90_plus ?: 0.0))
             val total = rows.sumOf { it.second }
             val accent = if (isAr) Warning else MaterialTheme.colorScheme.error
-            GlowCard(Modifier.fillMaxWidth(), glow = accent) {
+            TillCard(Modifier.fillMaxWidth(), accent = accent) {
                 Column(Modifier.padding(18.dp)) {
                     Text(if (isAr) tr("TOTAL RECEIVABLE") else tr("TOTAL PAYABLE"),
                         style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1187,7 +1187,7 @@ fun AgingScreen(snackbar: SnackbarHostState) {
                         fontWeight = FontWeight.ExtraBold, color = accent)
                 }
             }
-            GlowCard(Modifier.fillMaxWidth()) {
+            TillCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp)) {
                     rows.forEachIndexed { i, (label, amt) ->
                         Row(Modifier.fillMaxWidth().padding(vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1286,7 +1286,7 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)) {
         SectionHeader(tr("Language"))
-        GlowCard(Modifier.fillMaxWidth()) {
+        TillCard(Modifier.fillMaxWidth()) {
             Row(
                 Modifier.fillMaxWidth().clickable { showLanguage = true }.padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1300,14 +1300,14 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
 
         SectionHeader(tr("This Device's Branch"))
         when {
-            branchLoading -> GlowCard(Modifier.fillMaxWidth()) {
+            branchLoading -> TillCard(Modifier.fillMaxWidth()) {
                 Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Storefront, null, tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(12.dp))
                     Text(tr("Loading…"))
                 }
             }
-            branchLoadError != null -> GlowCard(Modifier.fillMaxWidth()) {
+            branchLoadError != null -> TillCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Storefront, null, tint = MaterialTheme.colorScheme.error)
@@ -1329,7 +1329,7 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
                 // this app's Warning states (EmployeesScreen.statusLabel's
                 // "pending_setup" is the same idiom), never Danger/red.
                 val unpinned = pinnedBranchName == null
-                GlowCard(Modifier.fillMaxWidth()) {
+                TillCard(Modifier.fillMaxWidth()) {
                     Column {
                         Row(
                             Modifier.fillMaxWidth()
@@ -1425,7 +1425,7 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
 
         SectionHeader(tr("Payment methods"))
         methods.forEach { m ->
-            GlowCard(Modifier.fillMaxWidth()) {
+            TillCard(Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(m.name ?: "—", Modifier.weight(1f), fontWeight = FontWeight.Medium)
                     Text(m.type ?: "", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1451,7 +1451,7 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
         }
 
         SectionHeader(tr("Licensing"))
-        GlowCard(Modifier.fillMaxWidth()) {
+        TillCard(Modifier.fillMaxWidth()) {
             Row(
                 Modifier.fillMaxWidth().clickable(onClick = onOpenLicensing).padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1462,7 +1462,7 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
         }
 
         SectionHeader(tr("About"))
-        GlowCard(Modifier.fillMaxWidth()) {
+        TillCard(Modifier.fillMaxWidth()) {
             Row(Modifier.padding(16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(tr("Version"), Modifier.weight(1f))
                 Text(com.actionaura.retail.BuildConfig.VERSION_NAME, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1722,7 +1722,7 @@ private fun payStatusColor(status: String?): Color = when (status) {
 
 @Composable
 private fun PoRow(po: PurchaseOrder, onClick: () -> Unit) {
-    GlowCard(Modifier.fillMaxWidth(), onClick = onClick) {
+    TillCard(Modifier.fillMaxWidth(), onClick = onClick) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(po.po_number ?: "—", fontWeight = FontWeight.Bold)

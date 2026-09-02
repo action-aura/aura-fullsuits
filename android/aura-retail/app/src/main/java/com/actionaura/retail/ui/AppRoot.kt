@@ -40,13 +40,10 @@ import com.actionaura.retail.net.TerminalIdentity
 import com.actionaura.retail.net.apiErrorMessage
 import com.actionaura.retail.server.ServerBootstrap
 import com.actionaura.retail.sync.SyncCoordinator
-import com.actionaura.retail.ui.components.NebulaBackground
-import com.actionaura.retail.ui.components.auroraBrush
-import com.actionaura.retail.ui.components.pulseGlow
+import com.actionaura.retail.ui.components.AppBackground
 import com.actionaura.retail.ui.i18n.AppLocale
 import com.actionaura.retail.ui.i18n.tr
 import com.actionaura.retail.ui.screens.*
-import com.actionaura.retail.ui.theme.AuroraTeal
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -185,7 +182,7 @@ fun AppRoot() {
     // here makes the app recompose (and re-mirror) the moment the language is switched.
     val layoutDir = if (AppLocale.isRtl) LayoutDirection.Rtl else LayoutDirection.Ltr
     val scope = rememberCoroutineScope()
-    NebulaBackground {
+    AppBackground {
         // Transparent containers don't resolve a content color, so set the default
         // (light) text color for the whole app — otherwise unstyled text renders black.
         CompositionLocalProvider(
@@ -228,11 +225,12 @@ private fun LoadingScreen() {
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center) {
         Surface(
-            shape = CircleShape, color = MaterialTheme.colorScheme.surface,
-            modifier = Modifier.size(96.dp).pulseGlow(AuroraTeal, CircleShape),
+            shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer,
+            modifier = Modifier.size(96.dp),
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Text("A", style = MaterialTheme.typography.displaySmall.copy(brush = auroraBrush()),
+                Text("A", style = MaterialTheme.typography.displaySmall,
+                    color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.ExtraBold)
             }
         }
@@ -377,8 +375,12 @@ private fun MainShell(onLogout: () -> Unit) {
                 )
             },
             bottomBar = {
+                // Opaque panel chrome (the desktop tab bar is an opaque panel
+                // too) -- the 0.86-alpha frosted look it had only made sense
+                // over the old nebula gradient, and translucent-over-flat is
+                // just a slightly wrong colour.
                 if (isTopLevel) NavigationBar(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.86f),
+                    containerColor = MaterialTheme.colorScheme.surface,
                     tonalElevation = 0.dp,
                 ) {
                     tabs.forEach { d ->
