@@ -4,36 +4,83 @@
  */
 
 // ── Theme Engine ──────────────────────────────────────────────────────────────
+// The light/dark switch. This object used to be something else twice over, and
+// both priors are why it now looks over-careful:
+//
+//   * It was the ACCENT-PALETTE picker: six dark-HUD backgrounds (midnight /
+//     deep-space / carbon / ...) applied by writing --bg-dark / --bg-panel as
+//     INLINE styles on <html> -- near-black literals no stylesheet could
+//     override, applied on EVERY boot because init() defaulted to 'midnight'.
+//     The [data-app-theme] rules in main.css and a set of !important
+//     counter-rules existed purely to fight that. All of that is gone: this
+//     engine moves ONE attribute between two VALIDATED values and never writes
+//     an inline style, so the stylesheet owns every colour in both themes.
+//
+//   * Separately, the first light/dark toggle shipped a 1.00:1 white-on-white
+//     dark mode and was killed (see index.html's boot comment for the full
+//     postmortem). Dark v2 is token-value-only in main.css, which is what makes
+//     a toggle safe to have again -- but the PERSISTENCE discipline from that
+//     postmortem is kept here verbatim: a NEW key that the broken era never
+//     wrote, exact-match validation on read AND write, and the legacy keys
+//     ('aura_theme' in index.html, 'aura_app_theme' here) actively removed so
+//     nothing can quietly wire them back up.
+//
+// retail_design_theme_safety_test.js pins the validation and the key hygiene;
+// retail_design_contrast_test.js proves the palette both of these values land on.
 const ThemeEngine = {
-  current: 'midnight',
+  KEY: 'aura_theme_v2',   // NEVER 'aura_theme' -- that key belongs to the broken era
+  current: 'light',
 
+  // The dot literals are the swatch's CONTENT (each previews its theme's
+  // --surface-app / --surface-panel), not styling -- the same reason the
+  // .theme-swatch exemption exists in retail_design_tokens_test.js.
   themes: {
-    midnight:    { name:'Midnight',   icon:'🌑', dot:'#080810', bg:'#050508',  panel:'#0a0a10', sidebar:'#080810'  },
-    'deep-space':{ name:'Deep Space', icon:'🌌', dot:'#0b1225', bg:'#020617',  panel:'#0f172a', sidebar:'#0b1225'  },
-    carbon:      { name:'Carbon',     icon:'🪨', dot:'#161618', bg:'#111113',  panel:'#1a1a1f', sidebar:'#161618'  },
-    emerald:     { name:'Emerald',    icon:'💚', dot:'#081a14', bg:'#061410',  panel:'#0a2018', sidebar:'#081a14'  },
-    crimson:     { name:'Crimson',    icon:'🔴', dot:'#140808', bg:'#100606',  panel:'#1a0a0a', sidebar:'#140808'  },
-    violet:      { name:'Violet',     icon:'💜', dot:'#0e0b1a', bg:'#08060e',  panel:'#110e1f', sidebar:'#0e0b1a'  },
+    light: { label: 'Light', dot: '#eaeef3', edge: '#b3bfcd' },
+    dark:  { label: 'Dark',  dot: '#0f1319', edge: '#47566a' },
   },
 
+  // THE one sanitizer. Every path that turns a stored/argument value into a
+  // data-theme write goes through here, so "anything but the exact string
+  // 'dark' is light" is a property of the engine, not of each caller's care.
+  _sanitize(name) { return name === 'dark' ? 'dark' : 'light'; },
+
   apply(name) {
-    const t = this.themes[name];
-    if (!t) return;
-    document.documentElement.setAttribute('data-app-theme', name);
-    document.documentElement.style.setProperty('--bg-dark',  t.bg);
-    document.documentElement.style.setProperty('--bg-panel', t.panel);
-    localStorage.setItem('aura_app_theme', name);
-    this.current = name;
+    const theme = this._sanitize(name);
+    const changed = theme !== this.current ||
+      document.documentElement.getAttribute('data-theme') !== theme;
+    document.documentElement.setAttribute('data-theme', theme);
+    try { localStorage.setItem(this.KEY, theme); } catch (e) { /* private mode */ }
+    this.current = theme;
     // Refresh picker active state if open
     document.querySelectorAll('.theme-swatch').forEach(el => {
-      el.classList.toggle('active', el.dataset.theme === name);
+      el.classList.toggle('active', el.dataset.theme === theme);
     });
+    // Canvas charts (Chart.js) read token values at build time via
+    // RetailSystem._cssToken -- CSS cannot restyle pixels already drawn -- so
+    // a theme change re-renders the active section to rebuild them. Guarded:
+    // during boot the shell may not exist yet, and re-rendering an unchanged
+    // theme would just cost a flicker.
+    if (changed && window.SubsystemApp && SubsystemApp.active &&
+        document.getElementById('sub-content')) {
+      try { SubsystemApp._navigate(SubsystemApp.active); } catch (e) { /* mid-boot */ }
+    }
   },
 
   init() {
-    const saved = localStorage.getItem('aura_app_theme') || 'midnight';
-    this.apply(saved);
+    let saved = null;
+    try { saved = localStorage.getItem(this.KEY); } catch (e) {}
+    this.current = this._sanitize(saved);
+    // Re-assert rather than trust: index.html's boot script already stamped
+    // the attribute pre-paint, but the shell can also be booted by hosts with
+    // their own HTML (the Android WebView wrapper), where nothing has.
+    document.documentElement.setAttribute('data-theme', this.current);
+    // The accent-palette era's key. Nothing reads it any more; leaving a key
+    // whose stored value is 'midnight' in every shop's browser storage is an
+    // invitation to wire it back up without reading this file first.
+    try { localStorage.removeItem('aura_app_theme'); } catch (e) {}
   },
+
+  toggle() { this.apply(this.current === 'dark' ? 'light' : 'dark'); },
 
   openPicker() {
     if (document.getElementById('theme-picker-panel')) {
@@ -51,36 +98,35 @@ const ThemeEngine = {
 
     const label = document.createElement('div');
     label.className = 'theme-picker-label';
-    label.textContent = '🎨 App Theme';
+    label.textContent = '🎨 ' + t('Theme');
     panel.appendChild(label);
 
     const grid = document.createElement('div');
     grid.className = 'theme-grid';
-    Object.entries(this.themes).forEach(([key, t]) => {
-      const swatch = document.createElement('div');
+    Object.entries(this.themes).forEach(([key, def]) => {
+      // A <button>, not the old click-wired <div>: Enter/Space and focus come
+      // free, and .theme-swatch:focus-visible in main.css already draws the
+      // ring for it.
+      const swatch = document.createElement('button');
+      swatch.type = 'button';
       swatch.className = 'theme-swatch' + (this.current === key ? ' active' : '');
       swatch.dataset.theme = key;
       swatch.addEventListener('click', () => this.apply(key));
 
       const dot = document.createElement('div');
       dot.className = 'theme-swatch-dot';
-      dot.style.background = t.sidebar;
-      dot.style.boxShadow = 'inset 0 0 0 2px rgba(255,255,255,0.1), 0 0 12px ' + t.sidebar + '88';
+      dot.style.background = def.dot;
+      dot.style.borderColor = def.edge;
 
       const name = document.createElement('div');
       name.className = 'theme-swatch-name';
-      name.textContent = t.name;
+      name.textContent = t(def.label);
 
       swatch.appendChild(dot);
       swatch.appendChild(name);
       grid.appendChild(swatch);
     });
     panel.appendChild(grid);
-
-    const hint = document.createElement('div');
-    hint.style.cssText = 'font-size:10px;color:rgba(255,255,255,0.25);text-align:center;margin-top:4px;';
-    hint.textContent = 'Persists across sessions';
-    panel.appendChild(hint);
 
     document.body.appendChild(panel);
   },
@@ -2198,10 +2244,8 @@ const SubsystemApp = {
         }
 
         // ── Show the live-data badge to confirm real-time mode is active ───────
-        this._updateLiveBadge(true);
 
       } catch (err) {
-        this._updateLiveBadge(false);
         const c = document.getElementById('sub-content');
         if (c) c.innerHTML = `
           <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:60px;text-align:center;">
@@ -2334,25 +2378,23 @@ const SubsystemApp = {
     document.getElementById('sub-more-sheet')?.remove();
   },
 
-  // ── Show/hide a "● LIVE" badge in the header ────────────────────────────────
-  _updateLiveBadge(live) {
-    let badge = document.getElementById('sub-live-badge');
-    if (!live) { badge?.remove(); return; }
-    if (badge) return; // Already shown
-    const hdr = document.getElementById('sub-header-section');
-    if (!hdr) return;
-    badge = document.createElement('span');
-    badge.id = 'sub-live-badge';
-    badge.style.cssText = 'display:inline-flex;align-items:center;gap:5px;margin-left:12px;padding:3px 10px;border-radius:20px;background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);color:#10b981;font-size:11px;font-weight:600;letter-spacing:.5px;vertical-align:middle;';
-    badge.innerHTML = '<span style="width:6px;height:6px;border-radius:50%;background:#10b981;animation:live-pulse 2s infinite;display:inline-block;"></span> LIVE';
-    if (!document.getElementById('live-pulse-style')) {
-      const s = document.createElement('style');
-      s.id = 'live-pulse-style';
-      s.textContent = '@keyframes live-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(1.3)}}';
-      document.head.appendChild(s);
-    }
-    hdr.parentNode?.insertBefore(badge, hdr.nextSibling);
-  },
+  // The "● LIVE" badge that used to live here is DELETED.
+  //
+  // It was set true after a section rendered and false in the catch -- and the
+  // catch immediately replaces the screen with a "Failed to load / Retry"
+  // panel. So it was visible in every state a user could actually observe,
+  // and therefore said nothing.
+  //
+  // It had one honest job once: retail_dashboard_error_propagation_test.js
+  // records that _renderDashboard used to swallow its fetch error, so the
+  // badge lit up over a dashboard frozen on placeholders. Fixing that (by
+  // rethrowing, which that test pins) removed the only condition under which
+  // the badge could disagree with the screen. The guarantee is tested
+  // directly; the badge was residue.
+  //
+  // It also carried costs a dark theme and an Arabic layout would both have
+  // had to pay: `margin-left` (physical), five hardcoded colour literals, an
+  // infinite animation, and header room on a 390px phone.
 
   // ── Multi-device sync health indicator ──────────────────────────────────────
   // Persistent (NOT showToast -- a 3s auto-dismissing toast is the wrong

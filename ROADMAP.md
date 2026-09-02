@@ -2165,3 +2165,76 @@ not a code bug hunt.
 Minor, observed: asked in English to "Say OK", the model replied in Spanish.
 phi3.5 language drift, consistent with the runbook's note about Arabic being
 its weakest case.
+
+## 2026-09-02 — the "LIVE" badge is gone, and a contrast finding I did NOT fix
+
+### The LIVE badge, removed
+
+The owner, looking at the running app: "check the usless stuff and remove them
+like the live thing i dont know for what its there."
+
+They were right and the code agrees. `_updateLiveBadge(true)` fired after a
+section rendered; `(false)` fired only in the catch, which immediately
+replaces the whole screen with a "Failed to load / Retry" panel. So the badge
+was visible in every state a user could actually observe, and said nothing.
+
+It had one honest job once. `retail_dashboard_error_propagation_test.js`
+records the original defect: `_renderDashboard` swallowed its fetch error, so
+the badge lit up over a dashboard frozen on placeholders. Fixing THAT — by
+rethrowing, which that test now pins — removed the only condition under which
+the badge could disagree with the screen. The guarantee is tested directly;
+the badge was residue.
+
+It also carried costs both a dark theme and an Arabic layout would have had to
+pay: `margin-left` (physical, in a product that mirrors), five hardcoded
+colour literals, an infinite CSS animation, and header room on a 390px phone
+whose header is now a single slim row.
+
+### Android: the Sign In button measures 2.81:1 on a real device. NOT fixed.
+
+First usable Android visual evidence — the owner connected a real Mi Note 10
+after the emulator ANRed continuously on this machine. Launch there was
+**2.9 seconds** (`am start -W`, TotalTime 2912), not the ~12.7s the loaded
+emulator reported, so the earlier cold-start figure should not be quoted as an
+app measurement.
+
+Sampling the login screenshot (darkest glyph pixel against the dominant fill,
+51,357 px of it):
+
+    Sign In label vs button fill    2.81 : 1     (WCAG AA needs 3.0 even for
+                                                  large text)
+
+That is the primary action on the first screen, failing.
+
+**Why it is recorded and not fixed.** The obvious change — make the label
+white — computes WORSE, not better:
+
+    theme primary rose-500 (244,63,94)
+      current onPrimary (0,37,31)      4.45 : 1
+      white                            3.67 : 1
+      near-black (11,11,15)            5.35 : 1
+
+Against the theme's DECLARED colours the current on-colour is fine. The
+device rendered the fill as (175,45,67) — about 72% of the declared
+rose-500 — so something in the rendering path is darkening it, and dark text
+on a darker fill is what loses the contrast. Ruled out: no system colour
+filter is enabled on that device (daltonizer off, inversion and night display
+unset), and `screencap` reads the framebuffer so panel brightness is
+irrelevant.
+
+Not isolated, so not fixed. Guessing at a fix here would have made the button
+harder to read, which is the opposite of the request.
+
+Worth noting alongside it: the `Color.kt` names have drifted from their
+values — `AuroraTeal` is `0xFFF43F5E` (rose-500), `AuroraCyan` and
+`AuroraViolet` are rose-400 and rose-300. The palette became crimson and the
+identifiers never followed. The `on*` colours in the dark scheme still carry
+teal/blue/violet-era values, which happen to compute acceptably against rose
+but are not what anyone would choose deliberately.
+
+### The two surfaces have opposite themes
+
+Confirmed on real hardware: the **Android app is dark**. The **web app forces
+light** and deletes any saved preference (`index.html`, and for a documented
+reason — see the 2026-09-02 dark-mode work). Same product, opposite
+identities, on a shop floor where a manager may hold both at once.
