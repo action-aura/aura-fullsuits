@@ -105,6 +105,31 @@ th {
   color: var(--aura-color-danger);
 }
 
+/* A select that also reports state, so a row needs one control instead of a
+   badge and a dropdown showing the same word. Colours are the badge palette
+   above, deliberately -- this replaced a `.badge` and should not introduce a
+   second vocabulary for the same states. */
+.aura-status-select {
+  font-size: var(--aura-font-size-xs);
+  font-weight: 600;
+  padding-block: 0.15rem;
+  padding-inline: 0.5rem;
+  border-radius: var(--aura-radius-full);
+  border: 1px solid transparent;
+  background: var(--aura-color-surface-muted);
+  color: var(--aura-color-text-primary);
+}
+
+.aura-status-select.is-available {
+  background: var(--aura-color-success-soft);
+  color: var(--aura-color-success);
+}
+
+.aura-status-select.is-draft {
+  background: var(--aura-color-warning-soft);
+  color: var(--aura-color-warning);
+}
+
 form.inline { display: inline; }
 
 input, select, textarea {
