@@ -44,20 +44,27 @@ _CURRENCY_SETTING = 'base_currency'
 
 
 def _currency(conn, company_id):
-    """This shop's currency code, or None when it has never been set.
+    """This shop's currency code, falling back to the product default.
 
-    Degrades to None (and therefore to `pricing`'s own default precision)
-    rather than raising, the same way `metrics.business_day` degrades on a
-    database whose settings table does not exist yet -- a report is not worth
-    a 500, and this is called from a best-effort path.
+    Degrades rather than raising, the same way `metrics.business_day` degrades
+    on a database whose settings table does not exist yet -- a report is not
+    worth a 500, and this is called from a best-effort path.
+
+    It degrades to `pricing.DEFAULT_BASE_CURRENCY`, NOT to None. None would
+    route `_money` below to `pricing.CURRENCY_DECIMALS`, which is 2 -- the
+    fallback for an UNKNOWN currency code, not for an ABSENT one. A shop that
+    has never opened settings is a Jordanian shop selling in dinars, and its
+    Z-report has to print fils. `api/retail_api.py::_company_currency` makes
+    the identical choice for the identical reason; both used to answer None
+    and both were wrong for the most common install there is.
     """
     try:
         row = conn.execute(
             "SELECT svalue FROM retail_settings WHERE company_id=? AND skey=?",
             (company_id, _CURRENCY_SETTING)).fetchone()
     except sqlite3.Error:
-        return None
-    return (row[0] if row and row[0] else None)
+        return _pricing.DEFAULT_BASE_CURRENCY
+    return (row[0] if row and row[0] else None) or _pricing.DEFAULT_BASE_CURRENCY
 
 
 def _money(value, currency):

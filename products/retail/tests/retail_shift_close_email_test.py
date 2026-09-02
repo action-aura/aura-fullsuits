@@ -194,6 +194,58 @@ def test_money_is_formatted_at_the_shops_own_precision(client, monkeypatch):
     assert 'JD' in body, "the currency mark should be the shop's, not a bare number"
 
 
+def test_a_shop_that_never_chose_a_currency_still_keeps_its_fils(client, monkeypatch):
+    """THE DEFAULT INSTALL -- the case the first version of this file missed.
+
+    `_set_currency` is deliberately NOT called here. Every other money test in
+    this file writes an explicit `base_currency` row, which manufactures the
+    one state in which both ways of reading that setting agree, and so proved
+    nothing about the state almost every real install is actually in.
+
+    `_settings()` builds from `dict(_DEFAULT_SETTINGS)` and answers 'JOD' for
+    a shop that has never opened the settings screen. The raw SELECT helpers
+    that the drawer and this email use answered None, and None means "use the
+    2-decimal default". So a fresh Jordanian install -- the common case, not
+    an edge case -- kept fils in the sale total and rounded them away in the
+    drawer count and the Z-report.
+
+    Mutation-proved in both directions: make `email_hook._currency` return
+    None again and this test fails while every other test in the file still
+    passes, which is precisely how the defect shipped.
+    """
+    _enable_email(monkeypatch, client.test_company_id)
+    _open_and_close(client, opening=12.345, counted=12.345)
+
+    body = _emails(client.test_company_id)[-1]['body_text']
+    assert '12.345' in body, (
+        "a shop that never opened settings sells in dinars and its Z-report "
+        "must print fils. Body was:\n" + body)
+    assert '12.35' not in body, (
+        "12.35 means the amount was quantized to cents somewhere on the way")
+
+
+def test_the_drawer_itself_stores_fils_for_a_default_install(client, monkeypatch):
+    """The same defect one layer down, where it actually moves money.
+
+    The test above proves the EMAIL prints fils. This one proves the drawer
+    PERSISTED them -- a report can only be as precise as the number it reads,
+    and `_money()` is what coerces the client's figure before it is stored.
+    Asserted on the close response's own echo of the counted float rather
+    than on any email, so it still fails if the email channel is removed
+    entirely.
+    """
+    report = _open_and_close(client, opening=12.345, counted=12.345)['report']
+    assert float(report['expected_cash']) == 12.345, (
+        "expected cash was quantized to cents while the counted float kept "
+        "its fils, which invents a variance out of nothing: expected %r"
+        % (report['expected_cash'],))
+    assert float(report['closing_float_counted']) == 12.345, (
+        "the drawer quantized a default-install (JOD) count to cents: "
+        "stored %r" % (report['closing_float_counted'],))
+    assert float(report['opening_float']) == 12.345, (
+        "same for the opening float: stored %r" % (report['opening_float'],))
+
+
 def test_a_two_decimal_currency_still_gets_two(client, monkeypatch):
     """The allow-half: this must be currency-DRIVEN, not 'always three'."""
     _set_currency(client.test_company_id, 'USD')

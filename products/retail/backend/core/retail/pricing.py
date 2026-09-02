@@ -70,6 +70,26 @@ DEFAULT_MODE = TAX_AFTER_DISCOUNT
 CURRENCY_DECIMALS = 2
 CURRENCY_QUANT = Decimal('0.01')
 
+#: The currency a shop has when it has never chosen one.
+#:
+#: JOD, not USD, and NOT the same thing as `CURRENCY_DECIMALS` above: that is
+#: the fallback for an UNKNOWN code (a shop that stored something this module
+#: has never heard of), whereas this is the fallback for NO code at all. The
+#: two are different questions and conflating them is a money bug: an unknown
+#: code should degrade to the safest generic precision, but a shop that simply
+#: has not opened settings yet is a Jordanian shop, and the dinar has three
+#: decimal places.
+#:
+#: Kept here rather than in api/retail_api.py's `_DEFAULT_SETTINGS` because
+#: core/ must not import api/ (api/ already imports core/), and BOTH sides
+#: need this exact answer -- `_DEFAULT_SETTINGS` reads it, and so do the
+#: helpers that read `base_currency` straight out of `retail_settings`
+#: without going through `_settings()`. Two literals here is how the drawer
+#: came to round a default install's fils to cents while the sale total kept
+#: them: `_settings()` supplied 'JOD' from its defaults dict, a raw SELECT on
+#: the same setting supplied None, and only one of those paths was tested.
+DEFAULT_BASE_CURRENCY = 'JOD'
+
 #: Minor-unit digits per ISO 4217 code, for the currencies that are NOT 2.
 #:
 #: This exists because the product's home market is Jordan, and the dinar has

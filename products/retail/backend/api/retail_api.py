@@ -6676,10 +6676,19 @@ def _cash_session_report(conn, cid, sess):
             movements[r['type']] = float(r['amount'] or 0)
 
     opening_float = float(sess['opening_float'] or 0)
+    # Read ONCE and applied to every figure this report returns. The drawer's
+    # stored floats were taught the shop's real precision before this function
+    # was; the consequence was a Z report whose counted float carried fils and
+    # whose EXPECTED cash had been rounded to cents, so a perfectly balanced
+    # JOD drawer could report a variance of up to 5 fils out of nowhere. Every
+    # figure in one report has to be quantized the same way or their
+    # differences are noise.
+    currency = _company_currency(conn, cid)
     expected = _money(
         opening_float + cash_sales - cash_refunds
         + movements['float_in'] - movements['float_out']
-        + movements['paid_in'] - movements['paid_out']
+        + movements['paid_in'] - movements['paid_out'],
+        currency,
     )
 
     # ── FOREIGN-TERMINAL CONTAMINATION, COUNTED RATHER THAN HIDDEN ───────────
@@ -6732,8 +6741,9 @@ def _cash_session_report(conn, cid, sess):
         'terminal_short': _terminal_short(session_terminal),
         'is_this_terminal': (session_terminal == _this_terminal()),
         'opening_float': opening_float,
-        'cash_sales': _money(cash_sales), 'cash_refunds': _money(cash_refunds),
-        'movements': {k: _money(v) for k, v in movements.items()},
+        'cash_sales': _money(cash_sales, currency),
+        'cash_refunds': _money(cash_refunds, currency),
+        'movements': {k: _money(v, currency) for k, v in movements.items()},
         'expected_cash': expected,
         'foreign_terminal_sales': foreign_sales,
         'unattributed_sales': unattributed_sales,
@@ -7989,7 +7999,7 @@ def create_branch():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _company_currency(conn, company_id):
-    """This company's currency code, or None when it has never been set.
+    """This company's currency code, falling back to the product default.
 
     Deliberately NOT _settings(): that helper has preconditions (it can raise
     on a database whose settings table is not ready), and every drawer call
@@ -7998,16 +8008,27 @@ def _company_currency(conn, company_id):
     opening float" for an entirely unrelated cause -- which is exactly what
     happened when this was first written, across 40 drawer tests.
 
-    Never raises. A shop with no currency set gets None, which _money treats
-    as "use the historical 2dp default".
+    RETURNS THE DEFAULT, NEVER None, when no row exists. This is the whole
+    correctness argument of the function and it was wrong on the first pass:
+    `_settings()` builds itself from `dict(_DEFAULT_SETTINGS)`, so it answers
+    'JOD' for a shop that has never opened settings, while this raw SELECT
+    answered None -- and None routes `_money` to the historical 2dp default.
+    A fresh Jordanian install, which is the COMMON case rather than an edge
+    one, therefore kept fils in the sale total and rounded them away in the
+    drawer count. The first version of the test could not see it because the
+    fixture wrote an explicit currency row every time, manufacturing the one
+    state in which both paths agree.
+
+    Never raises: an unreadable settings table degrades to the same default,
+    matching `_settings()`'s own answer rather than inventing a third.
     """
     try:
         row = conn.execute(
             "SELECT svalue FROM retail_settings WHERE company_id=? AND skey='base_currency'",
             (company_id,)).fetchone()
-        return row[0] if row and row[0] else None
+        return (row[0] if row and row[0] else None) or tax_engine.DEFAULT_BASE_CURRENCY
     except Exception:
-        return None
+        return tax_engine.DEFAULT_BASE_CURRENCY
 
 
 def _money(x, currency=None):
@@ -8181,7 +8202,7 @@ _DEFAULT_SETTINGS = {
     # default anyone would choose deliberately. A shop selling in another
     # currency sets this once in settings and both the symbol and the rounding
     # precision follow it (core/retail/pricing.py::currency_quantum).
-    'base_currency': 'JOD',
+    'base_currency': tax_engine.DEFAULT_BASE_CURRENCY,
     'default_credit_mode': 'none',      # none | limited | unlimited
     'default_credit_limit': '0',
     'enforce_credit_limit': 'warn',     # warn | block
