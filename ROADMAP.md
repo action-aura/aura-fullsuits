@@ -2367,3 +2367,49 @@ Not a one-liner, and not a quick patch worth improvising:
 Until it is built, the honest description of the Android app is
 **single-operator**: it syncs products, sales and customers with the rest of
 the shop, but its logins are local to that device.
+
+## What the desktop has and the phone does not (2026-09-03)
+
+The owner, after using a real build: "there isn't anything like the new
+updates and features we added the admin the employees any thing else like the
+WhatsApp the branches". This is that complaint turned into a checked list, so
+it stops being a feeling and becomes work someone can pick up.
+
+FIRST, WHAT IS NOT WRONG. Every one of the Android app's 21 registered routes
+has a doorway -- checked route by route against `AppRoot.kt`'s `composable(...)`
+registrations and every `onNavigate(...)`/`navigate(...)` call site. There is no
+built-but-unreachable screen on the phone, which is this repo's usual defect
+shape and is worth stating as a negative result rather than leaving someone to
+re-derive it. `employees` also EXISTS on the phone now (admin-gated, in More ->
+Team), so that half of the complaint above is already closed.
+
+The gaps below are genuinely unbuilt, not hidden.
+
+| Desktop nav entry | Android | Note |
+|---|---|---|
+| Promotions | missing | Engine shipped server-side at retail schema v23 and the POS resolves it at checkout, so a promotion CONFIGURED on the desktop does already apply to a phone sale -- the phone simply cannot see or configure one. |
+| Branches | missing | `branches` is core to the data model (every row is branch-scoped) and the phone cannot view or switch them. |
+| Email Notifications | missing | Settings only. The email itself works on the phone -- same backend, same outbox. |
+| WhatsApp settings | missing | Desktop reaches it via `whatsapp.html` off the Settings card, not a nav row. Same situation as email: the sending works, the configuring does not. |
+| Audit Log | missing | adminOnly on desktop. |
+| Stock Accuracy | missing | ownerOnly, reports capability. |
+| Exceptions | missing | reports capability. Pairs with the sync work -- this is where stock exceptions surface. |
+| E-invoicing | missing | `einvoicing.js` exists on desktop; no Android route. Opt-in feature, so this only matters to installs that enabled it. |
+
+Barcode Scanner is deliberately NOT on this list: it is `desktopOnly: true` in
+the desktop nav because the phone has camera and HID scanning built directly
+into its POS screen. That is parity achieved differently, not a gap.
+
+### The shape of the gap, which matters more than the count
+
+Every missing item is CONFIGURATION or REPORTING. Not one is on the money
+path: the phone can ring a sale, take payment, open and close a drawer, handle
+credit, returns, suppliers and purchase orders. So the honest framing is that
+the Android app is a complete TILL and an incomplete BACK OFFICE -- which is a
+defensible product position, and a very different statement from "the phone is
+missing features". If that framing is accepted, the fix for most of the table
+above is to stop implying otherwise rather than to build eight more screens.
+
+Related and recorded separately above: accounts do not sync to the phone, so
+even the back-office screens that DO exist there manage a user list local to
+that device.
