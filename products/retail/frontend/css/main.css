@@ -210,8 +210,43 @@
   --elevation-card:  0 1px 2px rgba(20, 32, 60, 0.06), 0 4px 12px rgba(20, 32, 60, 0.07);
   --elevation-panel: 0 8px 28px rgba(20, 32, 60, 0.10);
   --elevation-modal: 0 24px 64px rgba(20, 32, 60, 0.22);
+
+  /* ── PHONE CHROME (One-Thumb Till) ───────────────────────────────────────
+     docs/design/phone-ui-redesign.md §5. The two fixed bands at the bottom of
+     every phone screen, named so content padding can reserve them without
+     magic numbers. env() covers gesture-nav phones (Android 10+) and iPhone
+     home bars -- 0px on anything else, so the calc()s that consume this are
+     safe unconditionally. */
+  --tabbar-block-size:  64px;                 /* 5 slots >= 72px wide at 390 */
+  --peekbar-block-size: 56px;                 /* POS only (§7 Step 9)       */
+  --safe-area-bottom:   env(safe-area-inset-bottom, 0px);
+
+  /* Bottom-sheet chrome (More sheet now; the POS cart sheet in §7 Step 9
+     shares these). */
+  --sheet-max-block-size: 85dvh;
+  --sheet-scrim: rgba(15, 23, 42, 0.45);
+
+  /* Tab bar type: label under icon. Micro but never smaller -- Arabic labels
+     (المزيد، البيع) are longer than their English counterparts and must not
+     ellipsize (§6 "label budget": ellipsizing a nav label is how the old
+     icon rail got its amputated captions). */
+  --tabbar-label-size: 11px;   /* = --text-size-micro */
+  --tabbar-icon-size:  22px;
 }
 /*                                                          [design-tokens:end] */
+
+/* Phone-only token overrides. 640 is the canonical phone breakpoint, written
+   as a literal everywhere it appears in this file: plain CSS cannot read a
+   custom property inside an @media condition. */
+@media (max-width: 640px) {
+  :root {
+    --text-size-total:   34px;  /* POS grand total: still the largest       */
+    --text-size-display: 26px;  /* dashboard hero money                     */
+    --text-size-title:   20px;
+    --space-section:     32px;  /* section rhythm tightens one step         */
+    --space-roomy:       20px;
+  }
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    LEGACY TOKEN BRIDGE — this is the seam that moves the whole app at once.
@@ -2234,6 +2269,13 @@ html[data-theme="light"] {
   border-right: 1px solid var(--border-hairline);
   display: flex; flex-direction: column;
 }
+/* The phone tab bar (docs/design/phone-ui-redesign.md §2/§7 Step 1) that
+   replaces this sidebar at ≤640px. Hidden here as the DEFAULT, unconditional
+   rule; the ≤640px block below (search "ONE-THUMB TILL") is what turns it
+   on, so desktop/tablet never see it and nothing here has to be undone by a
+   min-width query the way most of this file's phone rules are additive
+   overrides instead. */
+.sub-tabbar { display: none; }
 .sub-sidebar-brand {
   padding: 20px 18px;
   border-bottom: 1px solid var(--border-hairline);
@@ -3686,6 +3728,233 @@ html[data-theme="light"] .cl-modal h3      { color: var(--text); }
     width: 100vw !important; max-width: 100vw !important;
     height: 100vh; max-height: 100vh !important; border-radius: 0 !important;
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ONE-THUMB TILL — PHONE NAVIGATION (≤640px)
+   docs/design/phone-ui-redesign.md, §7 Steps 1-2 ("kill the rail, mount the
+   tab bar" + "the More sheet"), shipped together per the spec's own note
+   that Step 1 alone leaves the More tab a dead stub. Fenced behind
+   @media (max-width:640px) so desktop and tablet (641-920px keeps the
+   existing icon rail, untouched) are unaffected by construction -- this
+   media query is the whole safety argument for "pixel-identical to today"
+   above 640px.
+
+   The <aside class="sub-sidebar"> stays in the DOM, only ever hidden by CSS:
+   retail_nav_groups_test.js renders _renderShell() and asserts on that exact
+   markup, and the sidebar's own group-label visually-hidden rule two
+   sections up already established "hide, never stop rendering" for the
+   identical reason.
+
+   Logical properties throughout -- retail_design_rtl_test.js scans this file
+   for physical left/right, and every surface here has to mirror correctly
+   in Arabic (§6).
+═══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 640px) {
+  .sub-sidebar { display: none; }
+
+  /* Reserve room for the fixed tab bar so the last card/row in any list is
+     never served underneath it. The POS peek bar (§7 Step 9) adds
+     --peekbar-block-size on top of this later; nothing here anticipates
+     that yet. */
+  .sub-content {
+    padding-block-end: calc(var(--tabbar-block-size) + var(--safe-area-bottom) + var(--space-comfy));
+  }
+
+  /* ── Bottom tab bar: 5 fixed slots, identical for every role ─────────────
+     Built from the four ungated nav destinations (dashboard/products/pos/
+     customers -- see _isNavItemVisible, app-shell.js, and §2's "why these
+     five") plus a 5th "More" slot that owns the other 15. Deliberately
+     stable across roles: a bar that gains/loses tabs as capability gates
+     resolve retrains muscle memory on every login. */
+  /* Bottom-anchored overlays (the admin-device claim banner, toasts) are
+     positioned with an INLINE `bottom` in app-shell.js, so a plain rule here
+     could never move them -- they read this property instead. On a phone they
+     have to clear the tab bar; on desktop the 24px fallback in the inline
+     style still applies because this block does not run. */
+  :root {
+    --overlay-inset-block-end: calc(
+      var(--tabbar-block-size) + var(--safe-area-bottom) + var(--space-snug, 12px));
+  }
+
+  /* A sheet is modal. A banner floating over it is only in the way. */
+  body.sub-more-sheet-open #aura-admin-device-claim { display: none; }
+
+  .sub-tabbar {
+    display: flex;
+    align-items: stretch;
+    position: fixed;
+    inset-inline: 0;
+    inset-block-end: 0;
+    z-index: 500;
+    block-size: calc(var(--tabbar-block-size) + var(--safe-area-bottom));
+    padding-block-end: var(--safe-area-bottom);
+    background: var(--surface-panel);
+    border-block-start: 1px solid var(--border-hairline);
+    box-shadow: var(--elevation-panel);
+  }
+  .sub-tab {
+    flex: 1 1 20%;
+    min-inline-size: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-block-size: var(--touch-target-comfortable);
+    background: none;
+    border: none;
+    color: var(--text-tertiary);
+    text-decoration: none;
+    cursor: pointer;
+    user-select: none;
+  }
+  .sub-tab-icon {
+    display: flex;
+    font-size: var(--tabbar-icon-size);
+    line-height: 1;
+  }
+  .sub-tab-icon svg { inline-size: var(--tabbar-icon-size); block-size: var(--tabbar-icon-size); }
+  .sub-tab-label {
+    font-size: var(--tabbar-label-size);
+    font-weight: var(--text-weight-semibold);
+    line-height: 1.15;
+    max-inline-size: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    /* NEVER text-overflow:ellipsis here -- see §6 "label budget": an
+       ellipsized nav label is exactly how the icon rail this bar replaces
+       got its amputated captions ("STO", "INSIGH…"). Each slot has ~20% of
+       390px (~72px) and every chosen label, EN and AR, fits inside it at
+       --tabbar-label-size; the floor is min-inline-size:0 on the slot plus
+       nowrap here, not a truncation rule. */
+  }
+  .sub-tab.active { color: var(--accent-action); }
+  .sub-tab:focus-visible {
+    outline: var(--focus-ring-width) solid var(--focus-ring-color);
+    outline-offset: -2px;
+    border-radius: inherit;
+  }
+
+  /* Till: centred, visually raised -- one thumb-tap from anywhere, always. */
+  .sub-tab-till .sub-tab-icon {
+    inline-size: 44px;
+    block-size: 44px;
+    margin-block-start: -14px;
+    border-radius: var(--radius-pill);
+    background: var(--accent-action);
+    color: var(--text-on-accent);
+    box-shadow: var(--elevation-panel);
+  }
+  .sub-tab-till .sub-tab-icon svg { inline-size: 24px; block-size: 24px; }
+  .sub-tab-till.active .sub-tab-icon { background: var(--accent-action-active); }
+  .sub-tab-till .sub-tab-label { color: var(--text-secondary); }
+  .sub-tab-till.active .sub-tab-label { color: var(--accent-action); font-weight: var(--text-weight-bold); }
+
+  /* ── The More sheet ───────────────────────────────────────────────────── */
+  .sub-more-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 5000;
+    background: var(--sheet-scrim);
+  }
+  .sub-more-sheet {
+    position: fixed;
+    inset-inline: 0;
+    inset-block-end: 0;
+    z-index: 5001;
+    max-block-size: var(--sheet-max-block-size);
+    display: flex;
+    flex-direction: column;
+    background: var(--surface-panel);
+    border-start-start-radius: var(--radius-panel);
+    border-start-end-radius: var(--radius-panel);
+    box-shadow: var(--elevation-modal);
+    /* transform-only, compositor-friendly (§5 "Sheets animate transform
+       only"); the sheet is only ever IN the DOM while open (JS appends it on
+       open, removes it on close), so there is no closed/hidden state to
+       transition from -- it animates in on mount instead. */
+    animation: subMoreSheetIn var(--motion-base) var(--motion-ease-out) both;
+  }
+  @keyframes subMoreSheetIn {
+    from { transform: translateY(100%); }
+    to   { transform: translateY(0); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sub-more-sheet { animation-duration: 0.01ms; }
+  }
+  .sub-more-handle {
+    inline-size: 40px;
+    block-size: 4px;
+    margin: var(--space-snug) auto;
+    border-radius: var(--radius-pill);
+    background: var(--border-strong);
+    flex-shrink: 0;
+  }
+  .sub-more-body {
+    overflow-y: auto;
+    padding-inline: var(--space-comfy);
+    padding-block-end: calc(var(--space-roomy) + var(--safe-area-bottom));
+  }
+  /* Reuse the sidebar's group-label look, un-hidden. The sidebar's own
+     ≤640px rule visually-hides `.sub-nav-group-label` (the icon rail cannot
+     fit the caption -- see that rule's own comment), which would otherwise
+     ALSO hide it here by selector alone since this sheet exists at exactly
+     that width. Scoping the un-hide to `.sub-more-sheet` is simpler and
+     safer than adding a :not() escape hatch to the sidebar's rule -- two
+     classes beats its one regardless of source order, so this wins without
+     touching that rule at all. */
+  .sub-more-sheet .sub-nav-group-label {
+    position: static;
+    inline-size: auto;
+    block-size: auto;
+    margin-block: var(--space-roomy) var(--space-tight);
+    padding-inline: var(--space-tight);
+    overflow: visible;
+    clip-path: none;
+    white-space: normal;
+  }
+  .sub-more-sheet .sub-nav-group-label:first-child { margin-block-start: var(--space-snug); }
+  .sub-more-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-base);
+    inline-size: 100%;
+    min-block-size: var(--touch-target-comfortable);
+    padding-inline: var(--space-tight);
+    border-radius: var(--radius-control);
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    font-size: var(--text-size-body);
+    font-weight: var(--text-weight-medium);
+    font-family: inherit;
+    text-decoration: none;
+    text-align: start;
+    cursor: pointer;
+  }
+  .sub-more-row:hover,
+  .sub-more-row:focus-visible { background: var(--surface-hover); }
+  .sub-more-row:focus-visible {
+    outline: var(--focus-ring-width) solid var(--focus-ring-color);
+    outline-offset: -2px;
+  }
+  .sub-more-row.active {
+    background: var(--surface-accent-soft);
+    color: var(--accent-action);
+    font-weight: var(--text-weight-semibold);
+  }
+  .sub-more-row-icon { display: flex; flex-shrink: 0; font-size: 18px; }
+  .sub-more-row-icon svg { inline-size: 20px; block-size: 20px; }
+  .sub-more-row-value { margin-inline-start: auto; color: var(--text-tertiary); font-size: var(--text-size-meta); }
+  .sub-more-footer {
+    margin-block-start: var(--space-roomy);
+    padding-block-start: var(--space-tight);
+    border-block-start: 1px solid var(--border-hairline);
+  }
+  .sub-more-row.danger { color: var(--state-danger-text); }
+  .sub-more-row.danger:hover,
+  .sub-more-row.danger:focus-visible { background: var(--state-danger-surface); }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

@@ -1010,7 +1010,7 @@ const SubsystemApp = {
 
     const bar = document.createElement('div');
     bar.id = 'aura-admin-device-claim';
-    bar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:24px;z-index:99998;display:flex;align-items:center;gap:14px;flex-wrap:wrap;max-width:min(680px,92vw);padding:14px 18px;border-radius:14px;background:#1e1e2e;border:1px solid rgba(244,63,94,.45);box-shadow:0 10px 30px rgba(0,0,0,.45);color:#e8e8f0;font-size:13px;line-height:1.5;';
+    bar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:var(--overlay-inset-block-end,24px);z-index:99998;display:flex;align-items:center;gap:14px;flex-wrap:wrap;max-width:min(680px,92vw);padding:14px 18px;border-radius:14px;background:#1e1e2e;border:1px solid rgba(244,63,94,.45);box-shadow:0 10px 30px rgba(0,0,0,.45);color:#e8e8f0;font-size:13px;line-height:1.5;';
     // textContent (not innerHTML) for the message, and every button built as
     // a real element: nothing here interpolates a server-supplied string
     // into markup.
@@ -1953,11 +1953,52 @@ const SubsystemApp = {
     }
   },
 
+  // The 5 bottom-tab-bar destinations (docs/design/phone-ui-redesign.md §2):
+  // Home/Stock/Till/Customers map 1:1 to these ids; the 5th slot is the More
+  // sheet, active whenever the current section is none of the four. Shared
+  // between _renderShell (builds the bar) and _navigate (keeps its active
+  // state in sync) so the two lists cannot silently drift apart -- the same
+  // reason the ungated-nav-entry list in the spec's §2 rationale is quoted
+  // once rather than copied.
+  _TAB_BAR_SECTIONS: ['dashboard', 'products', 'pos', 'customers'],
+
   _renderShell(sys, systemId) {
     const shell = document.getElementById('subsystem-shell');
     if (!shell) return;
 
     const hasAI = this.activeModules && (this.activeModules.includes('all') || this.activeModules.includes('ai_agent'));
+
+    // ── Phone tab bar (≤640px, css/main.css) — docs/design/phone-ui-redesign.md
+    // §2/§7 Step 1. Renders unconditionally (like the sidebar it replaces at
+    // that width); the media query is what actually hides it ≥641px, not a
+    // JS branch, so there is nothing here for a resize to get out of sync
+    // with. Stable across every role on purpose -- see the spec's "why these
+    // five" -- so no _isNavItemVisible() gating applies to the four mapped
+    // slots the way it does for the sidebar/More-sheet items.
+    const activeSection = this.currentSection || 'dashboard';
+    const tabIcon = (val) => window.AuraIcons ? AuraIcons.render(val, 22) : val;
+    const tabHTML = (id, emoji, label, extraClass) => `
+            <a class="sub-tab${extraClass ? ' ' + extraClass : ''}${id === activeSection ? ' active' : ''}"
+               data-tab="${id}"
+               onclick="SubsystemApp._navigate('${id}')">
+              <span class="sub-tab-icon">${tabIcon(emoji)}</span>
+              <span class="sub-tab-label">${t(label)}</span>
+            </a>
+          `;
+    const tabBarHTML = `
+      <nav class="sub-tabbar" id="sub-tabbar">
+        ${tabHTML('dashboard', '🏠', 'Home')}
+        ${tabHTML('products', '📦', 'Stock')}
+        ${tabHTML('pos', '🛒', 'Till', 'sub-tab-till')}
+        ${tabHTML('customers', '👥', 'Customers')}
+        <a class="sub-tab${!this._TAB_BAR_SECTIONS.includes(activeSection) ? ' active' : ''}"
+           id="sub-tab-more"
+           onclick="SubsystemApp._openMoreSheet()">
+          <span class="sub-tab-icon">${tabIcon('☰')}</span>
+          <span class="sub-tab-label">${t('More')}</span>
+        </a>
+      </nav>
+    `;
 
     // ── Sidebar nav: Dashboard ungrouped, then sys.navGroups ────────────────
     // See the long comment on systems.retail.navGroups for why this stays a
@@ -2054,6 +2095,7 @@ const SubsystemApp = {
           <div style="text-align:center;padding:80px;color:var(--text-muted)">Loading...</div>
         </main>
       </div>
+      ${tabBarHTML}
     `;
   },
 
@@ -2076,6 +2118,21 @@ const SubsystemApp = {
     document.querySelectorAll('.sub-nav-item').forEach(el => {
       el.classList.toggle('active', el.dataset.section === sectionId);
     });
+
+    // Phone tab bar mirrors the same active-state toggle (§2 of
+    // docs/design/phone-ui-redesign.md): the four mapped slots match by
+    // data-tab, and More is active whenever the section is one of the 15 it
+    // owns rather than one of the four -- so the bar always shows where you
+    // are, even for a destination only the sheet lists.
+    document.querySelectorAll('.sub-tab[data-tab]').forEach(el => {
+      el.classList.toggle('active', el.dataset.tab === sectionId);
+    });
+    document.getElementById('sub-tab-more')?.classList.toggle('active', !this._TAB_BAR_SECTIONS.includes(sectionId));
+
+    // The More sheet never persists across a navigation (§2: "Tapping any
+    // row ... closes the sheet") -- every _navigate() call, whichever tab or
+    // sheet row triggered it, closes it.
+    this._closeMoreSheet();
 
     // Update header
     const sys = this.systems[this.active];
@@ -2156,6 +2213,125 @@ const SubsystemApp = {
         console.error('[SubsystemApp] Error in ' + this.active + '/' + sectionId + ':', err);
       }
     }, 50);
+  },
+
+  // ── The More bottom sheet (docs/design/phone-ui-redesign.md §2, §7 Step 2) ──
+  // Reuses sys.navGroups + _isNavItemVisible exactly as the sidebar does (see
+  // _renderShell's own comment), so WHO sees WHAT stays governed by the one
+  // source of truth -- this is a render-time arrangement over the untouched
+  // flat `nav` array, not a second nav data model.
+  //
+  // Built on document.body, not inside #subsystem-shell, for the same
+  // persistence reason _maybeOfferAdminDeviceClaim's bar is: _renderShell
+  // replaces the shell's innerHTML wholesale on every launch()/language
+  // toggle, which would otherwise destroy an open sheet out from under a tap.
+  _openMoreSheet() {
+    this._closeMoreSheet();
+    const sys = this.systems[this.active];
+    if (!sys) return;
+
+    const hasAI = this.activeModules && (this.activeModules.includes('all') || this.activeModules.includes('ai_agent'));
+    const icon = (val) => window.AuraIcons ? AuraIcons.render(val, 20) : val;
+    const byId = new Map(sys.nav.map((item) => [item.id, item]));
+
+    const rowHTML = (item) => `
+            <a class="sub-more-row${item.id === this.currentSection ? ' active' : ''}"
+               onclick="SubsystemApp._navigate('${item.id}')">
+              <span class="sub-more-row-icon">${icon(item.icon)}</span>
+              <span>${t(item.label)}</span>
+            </a>
+          `;
+    const groupsHTML = (sys.navGroups || []).map((group) => {
+      const visibleItems = group.items
+        .map((id) => byId.get(id))
+        .filter((item) => item && this._isNavItemVisible(item))
+        // A destination that is already a BOTTOM TAB must not also appear in
+        // this sheet. The sheet exists for "the other fifteen"; a row for Till
+        // or Customers teaches two routes to the same place and makes the
+        // sheet longer for nothing.
+        //
+        // Same rule, same reason, as the Android client: its drawer duplicated
+        // Settings, and its bottom bar nearly re-introduced the duplication
+        // when Customers was promoted to a tab while still sitting in More.
+        .filter((item) => !this._TAB_BAR_SECTIONS.includes(item.id));
+      // THE EMPTY-GROUP RULE, same as _renderShell's sidebar (and the same
+      // mutation proof in retail_nav_groups_test.js): a group with nothing
+      // visible in it renders no header, not a header over an empty box.
+      if (!visibleItems.length) return '';
+      return `
+          <div class="sub-nav-group-label">${t(group.label)}</div>
+          ${visibleItems.map(rowHTML).join('')}`;
+    }).join('');
+
+    // Footer: the AI/License/Log-Out trio that used to be three unlabeled
+    // rail-bottom squares (§2's "why this answers the owner's complaints"),
+    // plus Language and Theme, as full-width labeled rows. Every action here
+    // closes the sheet itself first, rather than relying on _navigate()'s
+    // close (none of these five call _navigate) -- AI/Theme open their own
+    // overlay, License/Log Out navigate away, and Language rebuilds the
+    // whole shell (AuraI18n.setLang -> SubsystemApp.launch), so closing
+    // first keeps the sheet from being left open behind any of them.
+    const footerRows = [
+      hasAI ? `
+            <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();SubAI.open('${this.active}')">
+              <span class="sub-more-row-icon">🤖</span>
+              <span>${t('AI Assistant')}</span>
+            </button>` : '',
+      `
+            <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();AuraI18n.toggle()">
+              <span class="sub-more-row-icon">🌐</span>
+              <span>${t('Language')}</span>
+              <span class="sub-more-row-value">${window.AuraI18n && AuraI18n.current === 'ar' ? 'EN' : 'ع'}</span>
+            </button>`,
+      `
+            <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();ThemeEngine.openPicker()">
+              <span class="sub-more-row-icon">🎨</span>
+              <span>${t('Theme')}</span>
+            </button>`,
+      `
+            <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();SubsystemApp.openLicensing()">
+              <span class="sub-more-row-icon">🔑</span>
+              <span>${t('License')}</span>
+            </button>`,
+      `
+            <button class="sub-more-row danger" onclick="SubsystemApp._closeMoreSheet();SubsystemApp.logout()">
+              <span class="sub-more-row-icon">⏻</span>
+              <span>${t('Log Out')}</span>
+            </button>`,
+    ].join('');
+
+    // Lets CSS stand the admin-device claim banner down while this sheet is
+    // up. A sheet is a modal surface; a banner floating over it is purely in
+    // the way, which the 390px screenshots showed plainly.
+    document.body.classList.add('sub-more-sheet-open');
+
+    const scrim = document.createElement('div');
+    scrim.className = 'sub-more-scrim';
+    scrim.id = 'sub-more-scrim';
+    scrim.onclick = () => this._closeMoreSheet();
+
+    const sheet = document.createElement('div');
+    sheet.className = 'sub-more-sheet';
+    sheet.id = 'sub-more-sheet';
+    sheet.setAttribute('role', 'dialog');
+    sheet.setAttribute('aria-modal', 'true');
+    sheet.setAttribute('aria-label', t('More'));
+    sheet.innerHTML = `
+          <div class="sub-more-handle"></div>
+          <div class="sub-more-body">
+            ${groupsHTML}
+            <div class="sub-more-footer">${footerRows}</div>
+          </div>
+        `;
+
+    document.body.appendChild(scrim);
+    document.body.appendChild(sheet);
+  },
+
+  _closeMoreSheet() {
+    document.body.classList.remove('sub-more-sheet-open');
+    document.getElementById('sub-more-scrim')?.remove();
+    document.getElementById('sub-more-sheet')?.remove();
   },
 
   // ── Show/hide a "● LIVE" badge in the header ────────────────────────────────
@@ -2680,7 +2856,7 @@ const SubsystemApp = {
   showToast(msg, type = 'info') {
     const colors = { success: '#34d399', error: '#f87171', info: 'var(--sub-accent)' };
     const toast = document.createElement('div');
-    toast.style.cssText = `position:fixed;bottom:24px;right:24px;background:#1e1e2e;border:1px solid ${colors[type]};color:white;padding:12px 20px;border-radius:10px;font-size:13px;z-index:99999;animation:slideUp .3s ease;box-shadow:0 8px 25px rgba(0,0,0,.4)`;
+    toast.style.cssText = `position:fixed;bottom:var(--overlay-inset-block-end,24px);right:24px;background:#1e1e2e;border:1px solid ${colors[type]};color:white;padding:12px 20px;border-radius:10px;font-size:13px;z-index:99999;animation:slideUp .3s ease;box-shadow:0 8px 25px rgba(0,0,0,.4)`;
     toast.textContent = msg;
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 3000);
