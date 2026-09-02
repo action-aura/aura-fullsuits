@@ -302,7 +302,6 @@ private fun MainShell(onLogout: () -> Unit) {
     val route = backStack?.destination?.route
     val isDetail = false
     val isTopLevel = tabs.any { it.route == route }
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var aiOpen by remember { mutableStateOf(false) }
@@ -324,28 +323,18 @@ private fun MainShell(onLogout: () -> Unit) {
         else -> tabs.firstOrNull { it.route == route }?.label ?: "Action Aura"
     }
 
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        drawerContent = {
-            ModalDrawerSheet {
-                Spacer(Modifier.height(16.dp))
-                Text("  Action Aura", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(16.dp))
-                NavigationDrawerItem(label = { Text(tr("Settings")) }, selected = route == "retail_settings",
-                    icon = { Icon(Icons.Default.Settings, null) },
-                    onClick = { scope.launch { drawerState.close() }; nav.navigate("retail_settings") })
-                NavigationDrawerItem(label = { Text(tr("Log out")) }, selected = false,
-                    icon = { Icon(Icons.Default.ExitToApp, null) },
-                    onClick = {
-                        scope.launch {
-                            drawerState.close()
-                            try { ApiClient.get().logout() } catch (_: Exception) {}
-                            RetailSession.reset()
-                            onLogout()
-                        }
-                    })
-            }
-        },
-    ) {
+    // The ModalNavigationDrawer that used to wrap this Scaffold is GONE.
+    //
+    // It held two entries: Settings -- which MoreScreen already lists under
+    // Finance -- and Log out. So an edge-swipe gesture, a hamburger button
+    // and a full-height panel existed to deliver ONE destination that was
+    // not reachable anywhere else, while giving the app two competing
+    // overflow surfaces. The owner, using it on a real phone: "its
+    // inconvenient to swipe left and there is 2 things and it looks bad."
+    //
+    // Log out now sits in MoreScreen's own Session section, so overflow
+    // navigation lives in exactly one place.
+    run {
         Scaffold(
             topBar = {
                 TopAppBar(
@@ -354,10 +343,12 @@ private fun MainShell(onLogout: () -> Unit) {
                         scrolledContainerColor = Color.Transparent),
                     title = { Text(tr(title), fontWeight = FontWeight.Bold) },
                     navigationIcon = {
+                        // Back on a detail screen; NOTHING on a top-level tab.
+                        // The hamburger used to open a two-item drawer that no
+                        // longer exists -- a menu button that opens nothing is
+                        // worse than no button.
                         if (!isTopLevel) IconButton(onClick = { nav.popBackStack() }) {
                             Icon(Icons.Default.ArrowBack, tr("Back"))
-                        } else IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Icon(Icons.Default.Menu, tr("Menu"))
                         }
                     },
                     actions = {
@@ -399,7 +390,16 @@ private fun MainShell(onLogout: () -> Unit) {
                 popEnterTransition = { fadeIn(tween(260)) },
                 popExitTransition = { fadeOut(tween(180)) + slideOutHorizontally(tween(260)) { it / 14 } },
             ) {
-                retailGraph(this, nav, snackbar)
+                retailGraph(this, nav, snackbar, onLogout = {
+                    scope.launch {
+                        // Exactly the teardown the removed drawer performed:
+                        // end the server session, clear local session state,
+                        // then hand back to the host.
+                        try { ApiClient.get().logout() } catch (_: Exception) {}
+                        RetailSession.reset()
+                        onLogout()
+                    }
+                })
             }
         }
 
@@ -544,12 +544,19 @@ private fun AiTurnBubble(t: AiTurn) {
     }
 }
 
-private fun retailGraph(b: NavGraphBuilder, nav: androidx.navigation.NavController, snackbar: SnackbarHostState) {
+private fun retailGraph(b: NavGraphBuilder, nav: androidx.navigation.NavController, snackbar: SnackbarHostState, onLogout: () -> Unit) {
     b.composable("dashboard") { DashboardScreen(onNavigate = { r -> nav.navigate(r) }) }
     b.composable("pos") { PosScreen(snackbar) }
     b.composable("products") { ProductsScreen(snackbar) }
     b.composable("categories") { CategoriesScreen(snackbar) }
-    b.composable("more") { MoreScreen(onNavigate = { r -> nav.navigate(r) }) }
+    b.composable("more") {
+        MoreScreen(
+            onNavigate = { r -> nav.navigate(r) },
+            // Same teardown the drawer's Log out performed: end the server
+            // session, clear local session state, then hand back to the host.
+            onLogout = onLogout,
+        )
+    }
     b.composable("reports") { ReportsScreen(snackbar, onNavigate = { r -> nav.navigate(r) }) }
     // Takings per employee (retail schema v13 attribution). Registered here
     // AND reached from ReportsScreen's own entry -- both halves are required,

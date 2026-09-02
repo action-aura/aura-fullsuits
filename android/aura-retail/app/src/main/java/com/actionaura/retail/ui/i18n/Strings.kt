@@ -63,6 +63,10 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "More" to "المزيد",
     "Settings" to "الإعدادات",
     "Log out" to "تسجيل الخروج",
+    // Session section in MoreScreen -- added when the two-item navigation
+    // drawer was deleted and Log out moved into the overflow list.
+    "Session" to "الجلسة",
+    "End this session on this device" to "إنهاء الجلسة على هذا الجهاز",
     "Back" to "رجوع",
     "Menu" to "القائمة",
     // The startup-failure screen. The single worst place in the app to fall

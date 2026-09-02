@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AssignmentReturn
@@ -74,7 +75,7 @@ private fun shortDate(s: String?) = (s ?: "").replace("T", " ").take(16)
 //  MORE — hub linking to the records screens
 // ══════════════════════════════════════════════════════════════════════════════
 @Composable
-fun MoreScreen(onNavigate: (String) -> Unit) {
+fun MoreScreen(onNavigate: (String) -> Unit, onLogout: () -> Unit = {}) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -104,6 +105,17 @@ fun MoreScreen(onNavigate: (String) -> Unit) {
             SectionHeader(tr("Team"))
             MoreItem(tr("Employees"), tr("Accounts, roles & till PINs"), Icons.Default.Groups) { onNavigate("employees") }
         }
+        // Log out lives here because the navigation DRAWER that used to hold
+        // it is gone. That drawer carried exactly two entries -- Settings,
+        // which this list already offers under Finance, and Log out -- so it
+        // spent an edge-swipe gesture, a hamburger button and a full-height
+        // panel on ONE destination not reachable anywhere else. The owner's
+        // words after using it on a phone: "its inconvenient to swipe left
+        // and there is 2 things and it looks bad."
+        //
+        // One overflow surface now, not two.
+        SectionHeader(tr("Session"))
+        MoreItem(tr("Log out"), tr("End this session on this device"), Icons.AutoMirrored.Filled.ExitToApp) { onLogout() }
     }
 }
 
