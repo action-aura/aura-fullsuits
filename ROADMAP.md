@@ -2114,3 +2114,54 @@ Their APK also predates the Android currency fix, which is why the recording
 shows "$4.00" — current source calls `money(p.sell_price)` with
 `Currency.apply()` wired from `/settings/tax` (`AppRoot.kt:104`), so a fresh
 build renders `JD 4.000`. Unverified on a device.
+
+## 2026-09-02 — the AI assistant is NOT broken; the APK was just old
+
+The owner, of the app on their phone: "the ai doesn't work obviously". An
+investigation concluded, with a full and otherwise-correct trace through every
+hop, that `AURA_AI_BEARER_TOKEN` is empty in every build, so "every APK --
+debug or release -- ships with a dead assistant."
+
+**That conclusion is wrong, and the way it went wrong is worth keeping.** The
+trace reasoned from `android/aura-retail/local.properties` (which holds only
+`sdk.dir`) and from CI (which never builds Android), and inferred an empty
+token. It never checked the artefact. `build.gradle` resolves the secret from
+three sources, and the third is an environment variable — which IS set on this
+machine. The generated `BuildConfig.java` from a local debug build carries a
+real 64-character token.
+
+Reading the inputs is not the same as measuring the output. Same lesson as the
+KPI grid fix earlier this cycle, which also looked right and did nothing.
+
+### What was then measured, against the live service
+
+Using the exact library and settings the backend uses (`requests.post`, TLS
+verification ON — the route passes no `verify=`, so it verifies):
+
+```
+model phi3.5:3.8b   HTTP 200 in 9.8s      (verified TLS)
+model phi3.5:3.8b   HTTP 200 in 15.4s     (first call; 13s of it model load)
+model llama3        HTTP 404 {"error":"model 'llama3' not found"}
+```
+
+So: host reachable, certificate accepted, bearer token authorised, the
+configured model (`AURA_AI_MODEL_NAME`, default `phi3.5:3.8b`) present and
+answering. The 404 is only what a WRONG model name returns, which is itself
+useful — it proves auth succeeds before model lookup.
+
+**Conclusion: the assistant works. The owner's APK predates the token being
+available in this build environment**, which they had already suspected ("this
+apk is not the newest"). A freshly built APK from this machine embeds it.
+
+### What IS real about the AI
+
+Latency. ~10-15s here for a trivial prompt, and `retail_api.py`'s own comment
+records ~35s uncapped for a realistic one. `docs/release/go-live-runbook.md`
+already lists this as a known gap ("roughly 30 seconds per answer... weakest
+at Arabic"). A cashier will read that as broken even when it is working, so
+the honest fix is either a faster host or a UI that sets the expectation --
+not a code bug hunt.
+
+Minor, observed: asked in English to "Say OK", the model replied in Spanish.
+phi3.5 language drift, consistent with the runbook's note about Arabic being
+its weakest case.
