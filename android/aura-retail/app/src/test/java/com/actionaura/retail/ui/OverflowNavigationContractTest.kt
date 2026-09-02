@@ -91,6 +91,23 @@ class OverflowNavigationContractTest {
     }
 
     @Test
+    fun no_bottom_tab_destination_is_repeated_in_the_more_list() {
+        // The deleted drawer's real sin was duplication: it offered Settings,
+        // which MoreScreen already had. The same trap is open in the other
+        // direction now that the bar has five slots -- a destination promoted
+        // to a tab must not also sit in the overflow list, or the app is once
+        // again teaching two routes to the same place.
+        val tabRoutes = Regex("""Dest\("([a-z_]+)"""")
+            .findAll(codeOnly(appRoot)).map { it.groupValues[1] }.toList()
+        assertThat(tabRoutes).isNotEmpty()
+
+        val body = moreScreenBody
+        for (route in tabRoutes) {
+            assertThat(body).doesNotContain("""onNavigate("$route")""")
+        }
+    }
+
+    @Test
     fun settings_is_not_duplicated_now_that_the_drawer_is_gone() {
         // MoreScreen already offered Settings under Finance; the drawer's copy
         // was the duplicate. Exactly one entry should navigate there.

@@ -85,8 +85,11 @@ fun MoreScreen(onNavigate: (String) -> Unit, onLogout: () -> Unit = {}) {
         MoreItem(tr("Reports"), tr("Sales stats by time period"), Icons.Default.BarChart) { onNavigate("reports") }
         MoreItem(tr("Transactions"), tr("Past sales & invoices"), Icons.Default.ReceiptLong) { onNavigate("transactions") }
         MoreItem(tr("Returns"), tr("Refund items from a sale"), Icons.Default.AssignmentReturn) { onNavigate("returns") }
-        SectionHeader(tr("Customers & credit"))
-        MoreItem(tr("Customers"), tr("Manage customers & credit"), Icons.Default.People) { onNavigate("customers") }
+        // Customers is NOT listed here: it is a bottom-bar tab now. Repeating a
+        // tab destination in the overflow list is the same duplication the
+        // deleted drawer was guilty of with Settings, and OverflowNavigation-
+        // ContractTest fails if any tab route reappears in this list.
+        SectionHeader(tr("Credit"))
         MoreItem(tr("Receivables"), tr("Who owes you & repayments"), Icons.Default.AccountBalanceWallet) { onNavigate("receivables") }
         SectionHeader(tr("Purchasing"))
         MoreItem(tr("Suppliers"), tr("Vendors you buy from"), Icons.Default.LocalShipping) { onNavigate("suppliers") }

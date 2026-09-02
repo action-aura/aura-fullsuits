@@ -286,11 +286,29 @@ private fun StartupErrorScreen(diagnostic: String?, onRetry: () -> Unit) {
 
 private data class Dest(val route: String, val label: String, val icon: ImageVector)
 
+// Five slots, the Material maximum, and deliberately the five destinations
+// that are ungated for every role -- so the bar never rearranges itself
+// between logins the way a capability-filtered bar would.
+//
+// POS sits in the CENTRE because that is the cheapest reach for a thumb on a
+// phone held one-handed, and the till is the screen this app exists for.
+// Dashboard stays FIRST because `tabs.first().route` is the NavHost's start
+// destination; reordering that would change what the app opens on.
+//
+// Icons chosen for meaning, not availability:
+//   * `PointOfSale`, not `ShoppingCart` -- a cart is what a customer pushes.
+//     This screen is a till.
+//   * `Apps`, not `MoreVert` -- the three-dot glyph means "a menu is hidden
+//     here", which is what Android uses it for everywhere else. It is the
+//     wrong thing to put on a tab that IS a destination, and it was the
+//     app's only remaining overflow surface after the drawer was deleted.
+//   * `People` for Customers, matching MoreScreen's own entry for it.
 private val retailTabs = listOf(
     Dest("dashboard", "Dashboard", Icons.Default.Home),
-    Dest("pos", "POS", Icons.Default.ShoppingCart),
     Dest("products", "Products", Icons.Default.Inventory2),
-    Dest("more", "More", Icons.Default.MoreVert),
+    Dest("pos", "POS", Icons.Default.PointOfSale),
+    Dest("customers", "Customers", Icons.Default.People),
+    Dest("more", "More", Icons.Default.Apps),
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
