@@ -2238,3 +2238,132 @@ Confirmed on real hardware: the **Android app is dark**. The **web app forces
 light** and deletes any saved preference (`index.html`, and for a documented
 reason — see the 2026-09-02 dark-mode work). Same product, opposite
 identities, on a shop floor where a manager may hold both at once.
+
+---
+
+## Money precision beyond the cash drawer (2026-09-03)
+
+`_money()` in `products/retail/backend/api/retail_api.py` was hardcoded to
+`Decimal('0.01')` for its whole life. `create_sale` had already been corrected
+to read the company's currency for exactly this reason -- its own comment says
+rounding JOD to two places "silently moved persisted money by up to 5 fils per
+line, on the receipt AND in what is filed with the tax authority" -- but that
+reasoning never reached `_money()`, which is what the cash drawer, customer
+and supplier payments and PO payments all coerce through. So a sale's TOTAL
+kept its fils while the PAYMENT recorded against it did not.
+
+`_money(x, currency=None)` is now currency-aware. The default of None
+reproduces the old behaviour exactly, which is what makes the change safe:
+only the three cash-drawer sites whose defect a test demonstrates
+(`opening_float`, `counted`, `variance`) were switched over.
+
+**Still at hardcoded 2dp, deliberately deferred:** roughly 34 other `_money()`
+call sites, the largest groups being customer payments, supplier payments and
+purchase-order payments. Each needs its own test before it moves, because each
+sits on a different transaction and a different set of preconditions -- and
+`_company_currency()` exists precisely because the obvious `_settings()` read
+throws inside guards that mean something else (it broke 40 drawer tests on the
+first attempt).
+
+Not a silent gap: on a JOD install these round a payment to the nearest
+qirsh. It is the same defect as the drawer's, in the same file, awaiting the
+same treatment one call site at a time.
+
+### WhatsApp's shift-close report formats money with `:.2f`
+
+`core/retail/whatsapp_hook.py` renders its Z-report figures with `:.2f`
+regardless of currency, so a JOD drawer holding 12.350 is reported as 12.35.
+The new email channel (`core/retail/email_hook.py`) reads `base_currency` and
+formats to that currency's real minor units instead; WhatsApp was left alone
+on purpose, because changing a second channel's formatting inside the commit
+that added a third trigger would have buried it. Straightforward to port --
+`email_hook._money()` is the model.
+
+## Automatic email had one trigger; now it has two (2026-09-03)
+
+Recorded because the asymmetry is easy to re-introduce. WhatsApp has four
+report types and two automatic triggers. Email had ONE -- the low-stock alert
+in `reorder_hook._maybe_queue_low_stock_email` -- so a shop that chose email
+instead of WhatsApp got nothing when a till was closed. Shift-close is now
+wired for email too.
+
+**Still WhatsApp-only:** the daily sales summary and the AR-overdue notice.
+Both are `whatsapp_hook` trigger points with no email counterpart, and both
+are the same shape as the shift-close one that was just closed.
+
+## Android sync: the roles are split, and that is deliberate (2026-09-03)
+
+Written down because it looks like a bug twice over and is not.
+
+`android/aura-retail/app/src/main/python/main.py::start()` forwards
+`AURA_OWNER_LICENSING_URL`, `AURA_INTERNAL_SHARED_SECRET`,
+`AURA_AI_BEARER_TOKEN` and both WhatsApp keys into the embedded Python
+environment -- but NOT `AURA_SYNC_RELAY_URL`. That omission is correct. On
+Android the embedded Python never holds the device signing key, so `app.py`
+constructs its `SyncService` with `client_factory=None` and registers only
+`make_sync_internal_blueprint`; Kotlin's `SyncCoordinator` makes every signed
+call. Forwarding a relay URL into Python would not enable anything -- it would
+create a second pusher with no key.
+
+Consequence worth knowing: `/api/sub/retail/sync/health` is served on Android
+but describes a service that never runs there. **Any Android sync UI must read
+`SyncCoordinator.health()`, not that route.**
+
+## Accounts do not sync to the phone (2026-09-03)
+
+**The gap, stated plainly: a cashier created on the desktop cannot log in on
+the Android app, and an account created on the phone never reaches the
+desktop.** Each Android install keeps its own independent user list.
+
+Verified, not assumed:
+
+- Sync is a TWO-STREAM design. `RETAIL_SYNC_ENTITY_TYPES` (category, product,
+  customer, supplier, reorder_request, sale, sale_item, payment, return,
+  return_item, inventory_movement, branch) rides retail.db.
+  `REGISTRY_SYNC_ENTITY_TYPES` = {`user`, `user_permission`} rides
+  registry.db, on a SECOND `SyncService` instance.
+- `products/retail/backend/app.py`'s **Windows** branch builds both:
+  `_sync_service` and `_registry_sync_service`, the latter constructed
+  explicitly with `handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES`.
+- The **Android** branch (`elif LICENSING_PLATFORM == 'ANDROID'`) builds
+  exactly ONE: `_android_sync_service`, over `_sync_get_conn` (retail.db),
+  with no `handled_entity_types` argument -- so it takes the default,
+  `RETAIL_SYNC_ENTITY_TYPES`, which deliberately excludes `user`. A `user`
+  event arriving on Android is dropped by `_apply_event`'s gate.
+- Nothing on the Kotlin side compensates: no file under
+  `android/aura-retail/.../sync/` or `.../licensing/` references `users` or
+  `user_permission` at all, so no activation or onboarding path back-fills
+  accounts either.
+
+So this is not a misconfiguration and not a relay-URL problem. The Android
+registry stream was never built.
+
+Worth reading alongside `REGISTRY_SYNC_ENTITY_TYPES`'s own comment, which
+records the desktop version of this same wound: before stage 3 added
+`user_permission`, "a cashier synced to a second till arrived with NO
+permissions there -- an account that logs in and can do nothing, which read to
+the shop as 'the system is broken'." On Android the account does not arrive at
+all.
+
+### What closing it actually takes
+
+Not a one-liner, and not a quick patch worth improvising:
+
+1. `commercial_runtime/sync/internal_routes.py` --
+   `make_sync_internal_blueprint` hardcodes both the blueprint name
+   (`"sync_internal"`) and the url_prefix (`/api/sync`), so a second
+   registration collides on both. Needs both parameterised, with defaults so
+   the existing caller and Clinic are untouched.
+2. `products/retail/backend/app.py` Android branch -- a second `SyncService`
+   over registry.db with `handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES`,
+   plus a second blueprint registration under its own prefix.
+3. `SyncCoordinator.kt` -- drive BOTH streams, each with its own cursor and
+   its own outbox/ack endpoints. The signing and health plumbing is already
+   there and stream-agnostic; what is not there is any notion of more than
+   one stream.
+4. Tests on both sides, including the allow-half: a `user` event must reach
+   registry.db and must NOT be applied to retail.db.
+
+Until it is built, the honest description of the Android app is
+**single-operator**: it syncs products, sales and customers with the rest of
+the shop, but its logins are local to that device.
