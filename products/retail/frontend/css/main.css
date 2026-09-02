@@ -2345,6 +2345,18 @@ html[data-theme="light"] {
   display: flex; 
   flex-direction: column; 
   flex: 1; 
+
+  /* A flex item defaults to `min-width: auto`, which refuses to shrink below
+     its content intrinsic minimum. Without this, one wide table pushed this
+     column past a 390px viewport and scrolled the whole PAGE sideways --
+     measured at 521px (products), 532px (customers), 435px (employees), in
+     both languages. The tables were already wrapped in `overflow-x: auto`,
+     so it looked handled; it was not, because nothing above them ever
+     constrained the width for that wrapper to work against.
+
+     Logical property: retail_design_rtl_test.js scans this file for physical
+     left/right. */
+  min-inline-size: 0;
 }
 
 .sub-header {
@@ -2381,6 +2393,9 @@ html[data-theme="light"] {
   background: var(--surface-app);
   overflow-y: auto;
   display: block; /* Ensure it is a standard block stacking context */
+  /* Same release valve as .sub-main -- this is itself a flex item of that
+     column, so it needs its own or it re-introduces the floor. */
+  min-inline-size: 0;
 }
 .sub-content::-webkit-scrollbar { width: 5px; }
 .sub-content::-webkit-scrollbar-thumb { background: var(--surface-hover); border-radius: 4px; }
