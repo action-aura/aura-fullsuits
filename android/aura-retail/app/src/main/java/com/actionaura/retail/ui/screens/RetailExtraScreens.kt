@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -116,6 +117,16 @@ fun MoreScreen(onNavigate: (String) -> Unit, onLogout: () -> Unit = {}) {
         // words after using it on a phone: "its inconvenient to swipe left
         // and there is 2 things and it looks bad."
         //
+        // Device section: sync status. `SyncCoordinator.health()` has existed
+        // since the multi-device sync foundation landed, with a doc comment
+        // that read "No UI consumes this yet ... this exists so a failure is
+        // inspectable rather than invisible, and is the seam any future UI
+        // would read." This is that UI's doorway -- a complete backend with
+        // no doorway is the recurring defect class in this codebase (see
+        // EmployeesWiringContractTest, EmployeeSalesWiringContractTest).
+        SectionHeader(tr("Device"))
+        MoreItem(tr("Sync status"), tr("Whether this device is reaching your others"), Icons.Default.Sync) { onNavigate("sync_status") }
+
         // One overflow surface now, not two.
         SectionHeader(tr("Session"))
         MoreItem(tr("Log out"), tr("End this session on this device"), Icons.AutoMirrored.Filled.ExitToApp) { onLogout() }

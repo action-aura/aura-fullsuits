@@ -606,6 +606,7 @@ private fun retailGraph(b: NavGraphBuilder, nav: androidx.navigation.NavControll
     }
     b.composable("backup") { com.actionaura.retail.ui.screens.BackupRestoreScreen(onBack = { nav.popBackStack() }, snackbar = snackbar) }
     b.composable("licensing") { com.actionaura.retail.ui.screens.LicensingScreen(onBack = { nav.popBackStack() }, snackbar = snackbar) }
+    b.composable("sync_status") { com.actionaura.retail.ui.screens.SyncStatusScreen() }
 }
 
 @Composable

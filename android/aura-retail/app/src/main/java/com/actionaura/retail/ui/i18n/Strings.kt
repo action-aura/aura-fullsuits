@@ -642,4 +642,32 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "User not found." to "المستخدم غير موجود.",
     "Admin only" to "للمالك فقط",
     "The owner account's role cannot be changed." to "لا يمكن تغيير دور حساب المالك.",
+
+    // ── Sync status screen ──────────────────────────────────────────────────
+    // MoreScreen's new "Device" section and the screen it opens
+    // (ui/screens/SyncStatusScreen.kt). `SyncCoordinator.health()` existed,
+    // tested, with no reader until this screen -- these are every literal it
+    // introduces. `tr()` falls back to English on a missing key, which is
+    // exactly why this block is not optional: a gap here is silent.
+    "Device" to "الجهاز",
+    "Sync status" to "حالة المزامنة",
+    "Whether this device is reaching your others" to "هل يصل هذا الجهاز إلى أجهزتك الأخرى",
+    "Sync is not set up" to "المزامنة غير مُفعّلة",
+    "This build has no relay address, so this device never sends or receives. Other devices will not see its sales." to
+        "لا يحتوي هذا الإصدار على عنوان مُرحّل، لذا لا يرسل هذا الجهاز أو يستقبل أي بيانات أبدًا. لن تظهر مبيعاته على الأجهزة الأخرى.",
+    "Waiting for first sync" to "بانتظار أول مزامنة",
+    "Set up, but this device has not reached the relay yet." to "تم الإعداد، لكن هذا الجهاز لم يصل إلى المُرحّل بعد.",
+    "Sync is failing" to "المزامنة تفشل",
+    "This device is not reaching your other devices." to "لا يصل هذا الجهاز إلى أجهزتك الأخرى.",
+    "consecutive failures" to "محاولات فاشلة متتالية",
+    "Sync is working" to "المزامنة تعمل",
+    "Last synced" to "آخر مزامنة",
+    "waiting to send" to "بانتظار الإرسال",
+    "Detail" to "التفاصيل",
+    "Sending" to "الإرسال",
+    "Receiving" to "الاستلام",
+    "Healthy" to "سليم",
+    "Failing" to "فاشل",
+    "Last success" to "آخر نجاح",
+    "never" to "أبدًا",
 )

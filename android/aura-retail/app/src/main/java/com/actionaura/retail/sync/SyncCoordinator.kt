@@ -62,6 +62,7 @@ data class SyncHealth(
     val running: Boolean,
     val push: SyncHalfHealth,
     val pull: SyncHalfHealth,
+    val pendingCount: Int = 0,
 ) {
     val healthy: Boolean get() = push.healthy && pull.healthy
 }
@@ -85,6 +86,7 @@ object SyncCoordinator {
     @Volatile private var running = false
     @Volatile private var pushHealth = SyncHalfHealth()
     @Volatile private var pullHealth = SyncHalfHealth()
+    @Volatile private var pendingCount: Int = 0
     private var timer: Timer? = null
     private val lock = Object()
 
@@ -180,6 +182,7 @@ object SyncCoordinator {
     fun health(): SyncHealth = SyncHealth(
         configured = BuildConfig.OWNER_SYNC_BASE_URL.isNotBlank(),
         running = running, push = pushHealth, pull = pullHealth,
+        pendingCount = pendingCount,
     )
 
     private fun nextDelayMillis(): Long {
@@ -250,6 +253,10 @@ object SyncCoordinator {
         val outbox = getLocal("/api/sync/_internal/outbox")
         val installationId = outbox.stringOrNull("installation_id") ?: return
         val events = outbox.getAsJsonArray("events") ?: JsonArray()
+        // The true complete backlog -- SyncService.read_outbox has no LIMIT --
+        // and it is at most one tick (10s) stale, because it is re-read from a
+        // real query at the top of every push attempt.
+        pendingCount = events.size()
         if (events.size() == 0) return
 
         // Chunked to the relay's batch cap (see PUSH_CHUNK_SIZE), each chunk
