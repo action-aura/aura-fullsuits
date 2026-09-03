@@ -241,6 +241,19 @@ def ingest_activation_response(
         subscription_status=verified.evidence.subscription_status,
         entitlements_json=json.dumps(payload.get("entitlements", {})),
         offline_policy_json=json.dumps(payload.get("offline_policy", {})),
+        # Launch-readiness (2026-09-03): stored exactly like
+        # owner_installation_id above -- read straight off the raw
+        # activation `response`, not the signed assertion `payload`. Owner
+        # only ever puts this on the outer response when
+        # OWNER_SYNC_RELAY_PUBLIC_URL is configured for that deploy
+        # (routes.py/_service_config()); .get() returns None when the key
+        # is absent, matching the field's Optional[str] = None default.
+        # Deliberately UNVALIDATED here -- this repository only persists
+        # what Owner said. The one place this value is ever actually
+        # trusted enough to use is products/*/backend/config.py, which runs
+        # it through the exact same validate_sync_relay_url() a typed env
+        # var gets before ever handing it to the sync loop.
+        sync_relay_base_url=response.get("sync_relay_base_url"),
     )
     state_repository.save(record)
 

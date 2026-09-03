@@ -90,7 +90,18 @@ LICENSING_INTERNAL_SHARED_SECRET = os.environ.get('AURA_INTERNAL_SHARED_SECRET')
 # immediately above: empty base URL means the sync loop is never started at
 # all (app.py's init_app() only calls SyncService.start() when this is
 # non-empty), never a hidden default Owner instance.
-SYNC_RELAY_BASE_URL = os.environ.get('AURA_SYNC_RELAY_URL', '')
+#
+# Launch-readiness (2026-09-03): AURA_SYNC_RELAY_URL had no way to reach a
+# customer install at all -- the Inno Setup installer never sets it, there
+# is no screen, no documented step, so a product sold on multi-device sync
+# shipped with sync silently off. SYNC_RELAY_BASE_URL (further down, after
+# validate_sync_relay_url() is defined) now falls back to whatever Owner
+# told this device at activation time when no operator has set the env var
+# -- see _resolve_effective_sync_relay_base_url()'s docstring for the full
+# precedence rule. The env var read here is kept as its own name so that
+# rule can see "was it actually set" separately from "what did we end up
+# using".
+_AURA_SYNC_RELAY_URL_ENV = os.environ.get('AURA_SYNC_RELAY_URL', '')
 SYNC_RELAY_TIMEOUT_SECONDS = float(os.environ.get('AURA_SYNC_RELAY_TIMEOUT_SECONDS', '10'))
 # Same frozen-build TLS-verification floor as OWNER_LICENSING_VERIFY_TLS: a
 # frozen customer build always verifies TLS regardless of this env var; only
@@ -170,6 +181,75 @@ def validate_sync_relay_url(url, insecure_scheme_allowed_hosts=_LOCAL_DEV_HOSTS)
         problems.append("AURA_SYNC_RELAY_URL must not embed a URL fragment.")
     return problems
 
+
+def _discover_persisted_sync_relay_url():
+    """Best-effort read of the sync_relay_base_url Owner handed this device
+    at activation (see commercial_runtime/licensing_contracts/activation.py's
+    ingest_activation_response(), which stores it exactly like
+    owner_installation_id) -- the fallback half of the precedence rule in
+    _resolve_effective_sync_relay_base_url() below.
+
+    Deliberately defensive: config.py is imported at process start, and a
+    truly fresh install -- or one that has simply never activated yet --
+    has no licensing.db, no licensing_state table, or no row at all. None
+    of that is an error; booting the whole app must never depend on
+    licensing.db already existing. Any failure here (missing file, a
+    locked/corrupt DB, a permissions problem) is swallowed and treated the
+    same as "nothing discovered yet": empty string, same as an install
+    that never activated.
+    """
+    try:
+        from pathlib import Path as _Path
+        from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
+        repo = LicenseStateRepository(_Path(DATABASE_DIR) / 'subsystems' / 'licensing.db')
+        record = repo.load()
+        return (record.sync_relay_base_url or '') if record is not None else ''
+    except Exception:
+        return ''
+
+
+def _resolve_effective_sync_relay_base_url(env_value, persisted_value):
+    """Precedence rule for SYNC_RELAY_BASE_URL (launch-readiness, 2026-09-03):
+
+    1. AURA_SYNC_RELAY_URL (an operator's explicit env var) ALWAYS wins
+       when set -- a shop pointed at a private relay must never be
+       silently redirected by whatever Owner said at activation time. This
+       is checked first and short-circuits regardless of whether the env
+       value itself is valid; an invalid explicit value was already
+       surfaced via SYNC_RELAY_URL_PROBLEMS before this change and must
+       keep behaving exactly the same way -- precedence, not validity,
+       decides the winner.
+    2. Otherwise, the value Owner persisted to licensing.db at activation
+       -- but ONLY if it passes the EXACT SAME validate_sync_relay_url()
+       check a typed env var gets. Owner's activation response is
+       untrusted wire data (it travels over the network and is only as
+       trustworthy as the assertion-verification step that accepted it);
+       skipping this check here would let a tampered or simply wrong
+       activation response silently redirect a shop's device-signed sales
+       data to a hostile host with a WEAKER check than a human operator
+       ever gets. A persisted value that fails validation is discarded
+       outright -- sync stays off, exactly as if nothing had ever been
+       configured. It is never surfaced as a "problem" to log either: it
+       was never something an operator typed, so there is nothing for them
+       to go fix.
+    3. Otherwise, empty -- sync stays off, unchanged from every install
+       before this change.
+    """
+    if env_value:
+        return env_value
+    if persisted_value and not validate_sync_relay_url(persisted_value):
+        return persisted_value
+    return ''
+
+
+_PERSISTED_SYNC_RELAY_BASE_URL = _discover_persisted_sync_relay_url()
+# Takes effect on the NEXT LAUNCH, and that is acceptable: config.py is
+# read once at import time and app.py decides at import whether to build
+# the sync service at all -- hot-starting sync mid-session (reacting to an
+# activation that just happened in this same running process) is a larger
+# change and is explicitly out of scope here. An operator who activates
+# while the app is already running must restart it for sync to come on.
+SYNC_RELAY_BASE_URL = _resolve_effective_sync_relay_base_url(_AURA_SYNC_RELAY_URL_ENV, _PERSISTED_SYNC_RELAY_BASE_URL)
 
 SYNC_RELAY_URL_PROBLEMS = validate_sync_relay_url(SYNC_RELAY_BASE_URL)
 

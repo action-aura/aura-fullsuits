@@ -66,6 +66,8 @@ KNOWN_CONFIG_ENV_VARS = frozenset(
         "OWNER_BACKUP_TARGET_URL",
         "OWNER_SCHEDULER_ROLE",
         "OWNER_STRICT_CONFIG",
+        # Launch-readiness (2026-09-03)
+        "OWNER_SYNC_RELAY_PUBLIC_URL",
         # Read directly by other modules (not by this Config class), but
         # still legitimate OWNER_* variables -- must not trip the unknown-key
         # check in strict mode.
@@ -205,6 +207,23 @@ class BaseConfig:
     # (s3://, b2://, https://, etc.), never a bare local filesystem path --
     # a local path defeats the entire point of an external backup.
     BACKUP_TARGET_URL = os.environ.get("OWNER_BACKUP_TARGET_URL", "")
+
+    # Launch-readiness (2026-09-03): the PUBLIC base URL a device should
+    # reach for multi-device sync, handed to it at activation (see
+    # app/licensing_service/activation.py's process_activation() and
+    # app/api_external/routes.py's _service_config()) the same moment it
+    # already learns its server-assigned installation_id. Empty by
+    # default -- an Owner deploy that never sets this must produce a
+    # byte-identical activation response to today's (the field is omitted
+    # entirely, never present-and-empty; see process_activation()). This is
+    # deliberately NOT derived from the inbound request (request.host_url
+    # etc.): Owner may sit behind a reverse proxy, a CDN, or a different
+    # public hostname entirely than whatever the request arrived on, so
+    # only an explicit operator-set config value is trustworthy here.
+    # Changing this is an authorized deployment step, exactly like every
+    # other OWNER_* URL above -- never a value a customer or a client UI
+    # can influence.
+    SYNC_RELAY_PUBLIC_URL = os.environ.get("OWNER_SYNC_RELAY_PUBLIC_URL", "")
     # Exactly one process per environment may own the report-snapshot
     # scheduler (M5). "owner" runs it; "worker" (the default, safe for every
     # Gunicorn worker process) does not. Staging/production must set this

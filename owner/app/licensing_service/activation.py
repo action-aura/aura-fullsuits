@@ -368,6 +368,23 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
         "signing_key_id": envelope["signing_key_id"],
         "assertion_version": envelope["assertion_version"],
     }
+    # Launch-readiness (2026-09-03): tell a device where its shop syncs at
+    # the exact moment it has just proved it holds a valid licence -- see
+    # config.py's SYNC_RELAY_PUBLIC_URL docstring for the full design.
+    # `config` here is the dict api_external/routes.py's _service_config()
+    # builds from current_app.config, exactly like license_pepper/
+    # signing_key_directory above -- .get() rather than a required key so
+    # this function stays backward-compatible with any caller (tests
+    # included) that doesn't pass it. Included ONLY when truthy: an Owner
+    # deploy that never sets OWNER_SYNC_RELAY_PUBLIC_URL must produce a
+    # response with this key OMITTED entirely, not present-and-empty --
+    # that is what makes this change safe to deploy with no client-side
+    # migration. Deliberately NOT added to _pending_review_response() below
+    # -- a PENDING activation has not yet proven anything and signs no
+    # assertion, so it has nothing to tell the device about sync either.
+    sync_relay_base_url = config.get("sync_relay_base_url")
+    if sync_relay_base_url:
+        response["sync_relay_base_url"] = sync_relay_base_url
 
     idempotency.record_idempotency(
         body["idempotency_key"], "ACTIVATION", fingerprint, str(installation.id), "SUCCESS", json.dumps(response)
