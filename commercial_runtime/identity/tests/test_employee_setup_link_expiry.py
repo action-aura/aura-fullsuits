@@ -48,6 +48,8 @@ from commercial_runtime.identity import (
     registry_db,
 )
 from commercial_runtime.identity.onboarding_routes import onboarding_bp
+from commercial_runtime.licensing_contracts import flask_guard
+from commercial_runtime.licensing_contracts.state_repository import LicenseStateRecord
 
 #: The two spellings of "the same instant" that can be sitting in
 #: `secure_links.expires_at`. 'naive' is what every row written before this
@@ -83,6 +85,18 @@ def app(db_path, tmp_path, monkeypatch):
     # @mt_login_required resolves its OWN connection through
     # mt_auth.REGISTRY_DB, not through the get_conn patched above.
     monkeypatch.setattr(mt_auth, "REGISTRY_DB", str(db_path))
+    # `create_employee` -- what mints the setup link this whole file tests
+    # the expiry of -- now carries a licence gate (AUDIT: account
+    # administration had none). Same monkeypatch, same reasoning, as
+    # test_employee_admin_routes.py's own `app` fixture.
+    monkeypatch.setattr(flask_guard.LicenseStateRepository, "__init__", lambda self, db_path: None)
+    monkeypatch.setattr(
+        flask_guard.LicenseStateRepository, "load",
+        lambda self: LicenseStateRecord(
+            licensing_schema_version=1, product_code="AURA_TEST", platform="WINDOWS",
+            current_state="ACTIVE_ONLINE",
+        ),
+    )
 
     flask_app = Flask(__name__)
     flask_app.secret_key = "test-secret"

@@ -39,6 +39,7 @@ from commercial_runtime.identity import verification as _verification
 from commercial_runtime.identity.device_context import peek_local_device_uuid
 from commercial_runtime.security.passwords import hash_password
 from commercial_runtime.security.audit import record as _security_audit, ADMIN_CREATED
+from commercial_runtime.licensing_contracts.flask_guard import make_capability_guard
 
 onboarding_bp = Blueprint('onboarding', __name__)
 
@@ -47,6 +48,69 @@ onboarding_bp = Blueprint('onboarding', __name__)
 #: allowed to render is an identity-layer security event, and an operator
 #: grepping their logs for one should find both halves under one name.
 log = logging.getLogger('aura.security.identity')
+
+# ── Licence gate (AUDIT: account administration had none) ──────────────────
+#
+# `/api/admin/employees` and its siblings below were gated on
+# `@mt_login_required` ONLY -- no licence check anywhere in this file. Every
+# OTHER mutation surface in both products refuses a non-ACTIVE licence
+# (retail_api.py's `require_license_capability(..., restricted_mode_
+# allowlist=RETAIL_RESTRICTED_ALLOWLIST)`, clinic_api.py's identical
+# pattern with CLINIC_RESTRICTED_ALLOWLIST) -- an expired/suspended/revoked/
+# never-activated install could still mint staff accounts, change roles,
+# re-scope branches and grant permissions. This block closes that gap for
+# every mutating route in the "Admin: employee management" section below,
+# plus the company-settings mutation branch further down.
+#
+# `make_capability_guard(app_data_dir)` is normally called once per PRODUCT,
+# at that product's OWN route-module import time, closed over a path built
+# from that product's OWN `config.py::DATABASE_DIR` (see retail_api.py /
+# clinic_api.py). This module has no such product-owned constant to read --
+# it is imported by BOTH apps' app.py (confirmed by grep: Clinic's
+# `products/clinic/backend/app.py` genuinely registers `onboarding_bp`,
+# exactly like Retail's does) -- so it resolves `app_data_dir` the same way
+# `registry_db.py` and `mt_auth.py`, its two siblings in this exact package,
+# already do for their own database paths: `AURA_APP_DATA`, falling back to
+# this package's own parent directory. `licensing.db` and `registry.db`
+# already share one `AURA_APP_DATA/database/` tree (see
+# company_rebind.py's `_licensing_db_path` docstring), so this resolves to
+# the SAME per-install licensing database every other guarded route in
+# whichever product imported this module reads -- never a retail- or
+# clinic-specific path, and no import from either product.
+_APP_DATA_FOR_LICENSING = (
+    os.environ.get('AURA_APP_DATA') or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+require_license_capability = make_capability_guard(_APP_DATA_FOR_LICENSING)
+
+# Empty on purpose. RETAIL_RESTRICTED_ALLOWLIST/CLINIC_RESTRICTED_ALLOWLIST
+# each carve out a handful of capabilities that stay reachable in a
+# restricted-but-data-preserved licence state (returns, debt payments, an
+# already-open clinical encounter) because refusing them is its own harm.
+# Nothing administered by this file is that kind of action: minting a staff
+# account, moving one between roles, disabling/enabling one, resetting a
+# PIN, granting or revoking a capability, and editing company settings are
+# all administrative, not continuity-of-care/business-continuity -- so every
+# route this guards requires a fully ACTIVE licence, with nothing exempted.
+_ACCOUNT_ADMIN_RESTRICTED_ALLOWLIST = frozenset()
+
+# A NEW, product-neutral "identity.*" namespace, not "retail.*"/"clinic.*".
+# This module cannot import either product's own capability vocabulary
+# (retail-restriction-capability-matrix.md / clinic-restriction-capability-
+# matrix.md) without importing something product-specific into
+# commercial_runtime, which the "product-agnostic" rule this package already
+# follows elsewhere (see get_employees'/update_branch_scope's own docstrings
+# on why `branches` is never looked up here) forbids. These two codes are
+# evaluated ONLY against `_ACCOUNT_ADMIN_RESTRICTED_ALLOWLIST` above, in
+# THIS module -- they are not, and do not need to be, registered in either
+# product's own restriction-matrix doc, since neither product owns these
+# routes. Two codes (not one, and not one per route): granular enough that a
+# CAPABILITY_DENIED audit event tells an operator "employee administration"
+# vs. "company settings" apart, without a separate code per HTTP verb the
+# way retail_api.py's finer product-specific vocabulary does -- every route
+# under each code makes the identical allow/deny decision, so a per-route
+# split would add names without adding a distinction.
+_CAP_IDENTITY_EMPLOYEE_MANAGE = "identity.employee.manage"
+_CAP_IDENTITY_COMPANY_SETTINGS_MANAGE = "identity.company.settings.manage"
 
 
 # ── Config helpers ─────────────────────────────────────────────────────────────
@@ -798,6 +862,8 @@ def _delegated_employee_id_fragment():
 
 @onboarding_bp.route('/api/admin/employees', methods=['POST'])
 @mt_login_required
+@require_license_capability(_CAP_IDENTITY_EMPLOYEE_MANAGE,
+                             restricted_mode_allowlist=_ACCOUNT_ADMIN_RESTRICTED_ALLOWLIST)
 def create_employee():
     """Launch-readiness account-hierarchy design §4.1/§4.2 D1 -- two arms.
 
@@ -1034,6 +1100,8 @@ def create_employee():
 
 @onboarding_bp.route('/api/admin/employees/<string:user_id>/status', methods=['PUT'])
 @mt_login_required
+@require_license_capability(_CAP_IDENTITY_EMPLOYEE_MANAGE,
+                             restricted_mode_allowlist=_ACCOUNT_ADMIN_RESTRICTED_ALLOWLIST)
 def update_status(user_id):
     """Enable/disable toggle -- had none of `update_role`'s guards: no 404 for
     an unknown id, no validation of the status string (accepted and stored
@@ -1153,6 +1221,8 @@ def update_status(user_id):
 
 @onboarding_bp.route('/api/admin/employees/<string:user_id>/branch-scope', methods=['PUT'])
 @mt_login_required
+@require_license_capability(_CAP_IDENTITY_EMPLOYEE_MANAGE,
+                             restricted_mode_allowlist=_ACCOUNT_ADMIN_RESTRICTED_ALLOWLIST)
 def update_branch_scope(user_id):
     """D5 (launch-readiness account-hierarchy design §3.3/§4.2) -- sets or
     clears an employee's `branch_scope_uid` (registry v7). NULL (a missing
@@ -1251,6 +1321,8 @@ def update_branch_scope(user_id):
 
 @onboarding_bp.route('/api/admin/employees/<string:user_id>/role', methods=['PUT'])
 @mt_login_required
+@require_license_capability(_CAP_IDENTITY_EMPLOYEE_MANAGE,
+                             restricted_mode_allowlist=_ACCOUNT_ADMIN_RESTRICTED_ALLOWLIST)
 def update_role(user_id):
     """Move an existing employee between the widened roles (design §3).
 
@@ -1384,6 +1456,8 @@ def update_role(user_id):
 
 @onboarding_bp.route('/api/admin/employees/<string:user_id>/pin', methods=['PUT', 'DELETE'])
 @mt_login_required
+@require_license_capability(_CAP_IDENTITY_EMPLOYEE_MANAGE,
+                             restricted_mode_allowlist=_ACCOUNT_ADMIN_RESTRICTED_ALLOWLIST)
 def update_pin(user_id):
     """Set (PUT) or clear (DELETE) an employee's till PIN.
 
@@ -1484,6 +1558,8 @@ def update_pin(user_id):
 
 @onboarding_bp.route('/api/admin/employees/<string:user_id>/clinic-role', methods=['PUT'])
 @mt_login_required
+@require_license_capability(_CAP_IDENTITY_EMPLOYEE_MANAGE,
+                             restricted_mode_allowlist=_ACCOUNT_ADMIN_RESTRICTED_ALLOWLIST)
 def update_clinic_role(user_id):
     """Set or clear a staff member's clinic role (doctor / secretary / none).
     Bumps session_version so the change takes effect on their next request
@@ -1539,6 +1615,8 @@ _LEGACY_SUBSYSTEMS = ('retail', 'clinic')
 
 @onboarding_bp.route('/api/admin/employees/<string:user_id>/permissions', methods=['POST'])
 @mt_login_required
+@require_license_capability(_CAP_IDENTITY_EMPLOYEE_MANAGE,
+                             restricted_mode_allowlist=_ACCOUNT_ADMIN_RESTRICTED_ALLOWLIST)
 def update_perms(user_id):
     """Grant or revoke one capability/subsystem row for an employee.
 
@@ -1731,15 +1809,36 @@ def get_admin_stats():
 @onboarding_bp.route('/api/admin/company/settings', methods=['GET', 'POST'])
 @mt_login_required
 def company_settings():
+    """GET/POST split into two inner functions below rather than one gated
+    view function, on purpose: `@require_license_capability` refuses the
+    whole request it wraps, and the GET branch (reading the shop's own
+    settings) is a READ -- it must stay reachable in every licensing state,
+    exactly like `get_employees`/`get_audit`/`get_admin_stats` above, none
+    of which are gated. Only the POST branch (editing them) is an admin
+    mutation, gated the same way its siblings in this file now are."""
     if session.get('mt_role') != 'admin':
         return jsonify({'error': 'Admin only'}), 403
+    if request.method == 'POST':
+        return _company_settings_update()
+    return _company_settings_view()
+
+
+def _company_settings_view():
     conn = get_conn()
     try:
-        if request.method == 'GET':
-            row = conn.execute(
-                "SELECT * FROM company_settings WHERE company_id=?", (session['company_id'],)
-            ).fetchone()
-            return jsonify({'success': True, 'settings': dict(row) if row else {}})
+        row = conn.execute(
+            "SELECT * FROM company_settings WHERE company_id=?", (session['company_id'],)
+        ).fetchone()
+        return jsonify({'success': True, 'settings': dict(row) if row else {}})
+    finally:
+        conn.close()
+
+
+@require_license_capability(_CAP_IDENTITY_COMPANY_SETTINGS_MANAGE,
+                             restricted_mode_allowlist=_ACCOUNT_ADMIN_RESTRICTED_ALLOWLIST)
+def _company_settings_update():
+    conn = get_conn()
+    try:
         data = request.get_json() or {}
         allowed = ['country', 'timezone', 'currency', 'currency_symbol',
                    'business_type', 'language', 'date_format', 'fiscal_year_start']

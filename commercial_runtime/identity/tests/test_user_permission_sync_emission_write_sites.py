@@ -43,6 +43,8 @@ from commercial_runtime.identity import (
 )
 from commercial_runtime.identity.auth_routes import auth_bp
 from commercial_runtime.identity.onboarding_routes import onboarding_bp
+from commercial_runtime.licensing_contracts import flask_guard
+from commercial_runtime.licensing_contracts.state_repository import LicenseStateRecord
 
 
 @pytest.fixture
@@ -65,6 +67,18 @@ def app(db_path, tmp_path, monkeypatch):
     monkeypatch.setattr(registry_db, "get_conn", _get_conn)
     monkeypatch.setenv("AURA_APP_DATA", str(tmp_path))
     monkeypatch.setattr(mt_auth, "REGISTRY_DB", str(db_path))
+    # The emit sites this file exercises (create_employee/update_role/
+    # update_perms) now carry a licence gate too (AUDIT: account
+    # administration had none). Same monkeypatch, same reasoning, as
+    # test_employee_admin_routes.py's own `app` fixture.
+    monkeypatch.setattr(flask_guard.LicenseStateRepository, "__init__", lambda self, db_path: None)
+    monkeypatch.setattr(
+        flask_guard.LicenseStateRepository, "load",
+        lambda self: LicenseStateRecord(
+            licensing_schema_version=1, product_code="AURA_TEST", platform="WINDOWS",
+            current_state="ACTIVE_ONLINE",
+        ),
+    )
 
     flask_app = Flask(__name__)
     flask_app.secret_key = "test-secret"

@@ -31,6 +31,8 @@ from flask import Flask
 from commercial_runtime.identity import mt_auth, onboarding_routes, registry_db, verification
 from commercial_runtime.identity.onboarding_routes import onboarding_bp
 from commercial_runtime.identity.user_accounts import _queue_user_sync_event, now_utc_iso
+from commercial_runtime.licensing_contracts import flask_guard
+from commercial_runtime.licensing_contracts.state_repository import LicenseStateRecord
 from commercial_runtime.sync.sync_service import REGISTRY_SYNC_ENTITY_TYPES, SyncService
 
 
@@ -110,6 +112,17 @@ def app_a(two_devices, tmp_path, monkeypatch):
     monkeypatch.setattr(onboarding_routes, "get_conn", two_devices["get_conn_a"])
     monkeypatch.setattr(mt_auth, "REGISTRY_DB", two_devices["db_path_a"])
     monkeypatch.setenv("AURA_APP_DATA", str(tmp_path / "device_a"))
+    # create-employee/role/status/etc. on device A now carry a licence gate
+    # too (AUDIT: account administration had none). Same monkeypatch, same
+    # reasoning, as test_employee_admin_routes.py's own `app` fixture.
+    monkeypatch.setattr(flask_guard.LicenseStateRepository, "__init__", lambda self, db_path: None)
+    monkeypatch.setattr(
+        flask_guard.LicenseStateRepository, "load",
+        lambda self: LicenseStateRecord(
+            licensing_schema_version=1, product_code="AURA_TEST", platform="WINDOWS",
+            current_state="ACTIVE_ONLINE",
+        ),
+    )
     flask_app = Flask(__name__)
     flask_app.secret_key = "test-secret"
     flask_app.testing = True

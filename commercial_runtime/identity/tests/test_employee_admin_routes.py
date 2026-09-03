@@ -27,6 +27,8 @@ from flask import Flask
 
 from commercial_runtime.identity import mt_auth, onboarding_routes, registry_db, user_accounts
 from commercial_runtime.identity.onboarding_routes import onboarding_bp
+from commercial_runtime.licensing_contracts import flask_guard
+from commercial_runtime.licensing_contracts.state_repository import LicenseStateRecord
 
 
 @pytest.fixture
@@ -59,6 +61,43 @@ def app(db_path, tmp_path, monkeypatch):
     # path and every request gets refused regardless of session validity (see
     # test_device_routes.py's docstring for the same pattern).
     monkeypatch.setattr(mt_auth, "REGISTRY_DB", str(db_path))
+    # This whole suite predates the licence gate onboarding_routes.py's
+    # employee-management routes now carry (AUDIT: account administration
+    # had none) and exercises role/status/pin/scope/permission behaviour,
+    # not licensing enforcement -- so it needs a licensed install to even
+    # reach the handlers under test, the same way
+    # commercial_runtime.licensing_contracts.test_support.seed_active_license
+    # exists for product functional suites. Monkeypatches
+    # `LicenseStateRepository.load` directly (module-global, matching
+    # retail_route_capability_matrix_test.py's own
+    # test_import_routes_are_blocked_under_a_restricted_license) rather than
+    # writing a real licensing.db at a resolved path: onboarding_routes.py's
+    # `require_license_capability` closure is built once, at this module's
+    # OWN import time (mirrors retail_api.py/clinic_api.py), which happens at
+    # collection -- before this fixture's `monkeypatch.setenv("AURA_APP_DATA", ...)`
+    # above ever runs. Patching `.load()` at the class level sidesteps that
+    # ordering entirely: it returns the fake ACTIVE record regardless of
+    # which `db_path` any given `LicenseStateRepository(...)` instance was
+    # constructed with. Deny-state tests below layer a per-test override on
+    # top of this default.
+    # `__init__` no-op'd too, not just `load` -- the real `__init__` does real
+    # filesystem I/O (mkdir + opens a sqlite connection to create the
+    # `licensing_state` table) against whatever path `onboarding_routes.py`'s
+    # module-level `require_license_capability` resolved AURA_APP_DATA to at
+    # ITS OWN import time (this test file never sets AURA_APP_DATA before
+    # that import happens, unlike retail_route_capability_matrix_test.py,
+    # which deliberately does) -- so left real, every run of this suite
+    # quietly wrote a stray licensing.db under the repo's own
+    # commercial_runtime/database/ (gitignored, but still real disk I/O this
+    # suite has no reason to perform).
+    monkeypatch.setattr(flask_guard.LicenseStateRepository, "__init__", lambda self, db_path: None)
+    monkeypatch.setattr(
+        flask_guard.LicenseStateRepository, "load",
+        lambda self: LicenseStateRecord(
+            licensing_schema_version=1, product_code="AURA_TEST", platform="WINDOWS",
+            current_state="ACTIVE_ONLINE",
+        ),
+    )
 
     flask_app = Flask(__name__)
     flask_app.secret_key = "test-secret"

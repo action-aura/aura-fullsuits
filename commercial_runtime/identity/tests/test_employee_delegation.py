@@ -28,6 +28,8 @@ from flask import Flask
 
 from commercial_runtime.identity import mt_auth, onboarding_routes, registry_db, user_accounts
 from commercial_runtime.identity.onboarding_routes import onboarding_bp
+from commercial_runtime.licensing_contracts import flask_guard
+from commercial_runtime.licensing_contracts.state_repository import LicenseStateRecord
 
 
 # ── Bootstrap (identical to test_employee_admin_routes.py) ─────────────────
@@ -51,6 +53,25 @@ def app(db_path, tmp_path, monkeypatch):
     monkeypatch.setattr(onboarding_routes, "get_conn", _get_conn)
     monkeypatch.setenv("AURA_APP_DATA", str(tmp_path))
     monkeypatch.setattr(mt_auth, "REGISTRY_DB", str(db_path))
+    # D1/D2/D3's routes (create_employee/update_status/update_pin) now carry
+    # the same licence gate every other admin-mutation route in
+    # onboarding_routes.py does (AUDIT: account administration had none) --
+    # this suite tests DELEGATION, not licensing enforcement, so it needs a
+    # licensed install to reach them at all. Same monkeypatch, same reasoning,
+    # as test_employee_admin_routes.py's own `app` fixture -- see that
+    # fixture's comment for why `.load()` is patched directly rather than
+    # writing a real licensing.db at a resolved path.
+    # `__init__` no-op'd too -- see test_employee_admin_routes.py's own `app`
+    # fixture comment: the real `__init__` does real filesystem I/O against a
+    # path this file never isolates via AURA_APP_DATA before import.
+    monkeypatch.setattr(flask_guard.LicenseStateRepository, "__init__", lambda self, db_path: None)
+    monkeypatch.setattr(
+        flask_guard.LicenseStateRepository, "load",
+        lambda self: LicenseStateRecord(
+            licensing_schema_version=1, product_code="AURA_TEST", platform="WINDOWS",
+            current_state="ACTIVE_ONLINE",
+        ),
+    )
 
     flask_app = Flask(__name__)
     flask_app.secret_key = "test-secret"

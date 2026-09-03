@@ -37,6 +37,8 @@ from flask import Flask
 
 from commercial_runtime.identity import mt_auth, onboarding_routes, registry_db
 from commercial_runtime.identity.onboarding_routes import onboarding_bp
+from commercial_runtime.licensing_contracts import flask_guard
+from commercial_runtime.licensing_contracts.state_repository import LicenseStateRecord
 
 
 @pytest.fixture
@@ -67,6 +69,19 @@ def app(db_path, tmp_path, monkeypatch):
     # stale/nonexistent path and every request is refused regardless of
     # session validity (see test_device_routes.py's docstring).
     monkeypatch.setattr(mt_auth, "REGISTRY_DB", str(db_path))
+    # This suite tests the LOGIN/session gate (A2), not licensing -- the
+    # employee-management routes it drives (create_employee et al.) now also
+    # carry a licence gate (AUDIT: account administration had none), so it
+    # needs a licensed install to reach them at all. Same monkeypatch, same
+    # reasoning, as test_employee_admin_routes.py's own `app` fixture.
+    monkeypatch.setattr(flask_guard.LicenseStateRepository, "__init__", lambda self, db_path: None)
+    monkeypatch.setattr(
+        flask_guard.LicenseStateRepository, "load",
+        lambda self: LicenseStateRecord(
+            licensing_schema_version=1, product_code="AURA_TEST", platform="WINDOWS",
+            current_state="ACTIVE_ONLINE",
+        ),
+    )
 
     flask_app = Flask(__name__)
     flask_app.secret_key = "test-secret"
