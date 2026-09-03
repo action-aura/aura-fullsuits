@@ -110,6 +110,11 @@ from core.retail import promotions as promo_engine
 # above is: it cannot collide with a `modifiers`/`modifier` local variable
 # name inside create_sale below.
 from core.retail import modifiers as modifier_engine
+# The ONE shared currency-aware money-STRING renderer (email_hook.py and
+# whatsapp_hook.py already use it for the identical reason -- see its own
+# docstring). Aliased to match this file's own `_whatsapp_hook`/`_email_hook`
+# private-import convention immediately above.
+from core.retail import money_format as _money_format
 from config import (
     DATABASE_DIR, AURA_AI_ENDPOINT_URL, AURA_AI_BEARER_TOKEN, AURA_AI_TIMEOUT_SECONDS,
     AURA_AI_MODEL_NAME,
@@ -4452,8 +4457,17 @@ def create_sale():
             if credit_mode == 'limited' and (cur_bal + balance_due) > limit + 0.005:
                 if settings['enforce_credit_limit'] == 'block':
                     conn.rollback(); conn.close()
+                    # Same class of defect as `_ai_context_sales`/the report
+                    # email: `limit`/`cur_bal`/`balance_due` are already
+                    # currency-quantized (via `_money` above), but this
+                    # SENTENCE used to re-flatten them to `:.2f` regardless
+                    # -- a JOD shop would read "outstanding 12.35" for a
+                    # balance that is actually 12.345.
                     return jsonify({'status': 'error',
-                                    'message': f'Credit limit exceeded. Limit {limit:.2f}, outstanding {cur_bal:.2f}, this sale adds {balance_due:.2f}.'}), 400
+                                    'message': (
+                                        f"Credit limit exceeded. Limit {_money_format.format_money(limit, currency)}, "
+                                        f"outstanding {_money_format.format_money(cur_bal, currency)}, this sale adds "
+                                        f"{_money_format.format_money(balance_due, currency)}.")}), 400
                 warning = 'Credit limit exceeded.'
 
         due_date = data.get('due_date')
@@ -7874,20 +7888,29 @@ def report_summary():
     conn.close()
     return jsonify({'success': True, 'data': data})
 
-def _render_report_email_body(data):
+def _render_report_email_body(data, currency):
     """Plain-text only, no templating engine (matches this whole feature's
     "no templating engine dependency" scope, same restraint
-    smtp_client.py's own docstring names for the transport layer)."""
+    smtp_client.py's own docstring names for the transport layer).
+
+    `currency` used to be absent entirely -- every money figure below
+    hardcoded `:.2f`, the same defect class `money_format.py`'s docstring
+    describes for WhatsApp's old shift-close report: a JOD shop with a
+    12.345 figure would read `12.35` here while the persisted number (and,
+    since email_hook.py's own fix, the Z-report email) already carried the
+    fils. `revenue_change` and `margin_pct` are percentages, not money --
+    they keep their own `:.1f`, currency precision does not apply to them."""
     lines = [
         f"Aura Retail -- {data['period_days']}-day summary report",
         "",
-        f"Revenue: {data['revenue']:.2f} ({data['revenue_change']:+.1f}% vs prior period)",
+        f"Revenue: {_money_format.format_money(data['revenue'], currency)} "
+        f"({data['revenue_change']:+.1f}% vs prior period)",
         f"Transactions: {data['transactions']}",
-        f"Average ticket: {data['avg_ticket']:.2f}",
-        f"COGS: {data['cogs']:.2f}",
-        f"Gross profit: {data['gross_profit']:.2f}",
+        f"Average ticket: {_money_format.format_money(data['avg_ticket'], currency)}",
+        f"COGS: {_money_format.format_money(data['cogs'], currency)}",
+        f"Gross profit: {_money_format.format_money(data['gross_profit'], currency)}",
         f"Margin: {data['margin_pct']:.1f}%",
-        f"Current inventory value: {data['inventory_value']:.2f}",
+        f"Current inventory value: {_money_format.format_money(data['inventory_value'], currency)}",
     ]
     return '\n'.join(lines)
 
@@ -7925,7 +7948,7 @@ def report_summary_email():
         row_id = _EmailOutboxRepository(conn).enqueue(
             company_id=cid, email_type='report_summary', recipient=recipient,
             subject=f"Aura Retail -- {days}-day summary report",
-            body_text=_render_report_email_body(summary),
+            body_text=_render_report_email_body(summary, _company_currency(conn, cid)),
         )
         conn.commit()
         return jsonify({'status': 'success', 'data': {'queued': row_id is not None, 'recipient': recipient}})
@@ -11020,7 +11043,14 @@ def _ai_context_sales(conn, cid):
     revenue = metrics.revenue(conn, cid, today_p, currency=currency)
     txns = metrics.transactions(conn, cid, today_p)
     top = metrics.top_products(conn, cid, metrics.period_all_time(now), limit=3, currency=currency)
-    text = f"Today's sales: {revenue:.2f} total across {txns} transaction(s)."
+    # This SENTENCE used to hardcode `:.2f` regardless of currency -- the
+    # underlying `revenue` figure above was already currency-aware (fils for
+    # a JOD shop), but the assistant would say "12.35" for a drawer that
+    # actually holds 12.345. A user asking a chat box what today's sales are
+    # will believe the sentence over the dashboard card three inches away, so
+    # it has to agree with `money_format`, the one renderer email/WhatsApp
+    # already share (see that module's own docstring).
+    text = f"Today's sales: {_money_format.format_money(revenue, currency)} total across {txns} transaction(s)."
     if top:
         text += " Top-selling products overall: " + ', '.join(
             f"{r['name']} ({r['units_sold']:.0f} sold)" for r in top) + "."

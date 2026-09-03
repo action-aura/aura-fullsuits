@@ -46,11 +46,36 @@ import kotlin.random.Random
  * cashier account created on desktop must still be able to reach this
  * device even on a tick where the retail outbox is jammed, and vice versa.
  *
- * Inert (never starts a timer) when `BuildConfig.OWNER_SYNC_BASE_URL` is
- * unconfigured -- same fail-safe-empty philosophy as
- * `OWNER_LICENSING_BASE_URL` (see that field's own build.gradle comment):
- * an unconfigured build means sync never runs, never a hidden default Owner
- * instance.
+ * Inert (never starts a timer) when neither an explicit build-time relay
+ * nor a persisted, activation-discovered one is available -- same
+ * fail-safe-empty philosophy as `OWNER_LICENSING_BASE_URL` (see that
+ * field's own build.gradle comment): an unconfigured build means sync
+ * never runs, never a hidden default Owner instance.
+ *
+ * Relay URL precedence (launch-readiness, phone-half, 2026-09-03; mirrors
+ * desktop's `_resolve_effective_sync_relay_base_url()` in
+ * products/retail/backend/config.py): `BuildConfig.OWNER_SYNC_BASE_URL`
+ * (an operator's explicit build-time value) ALWAYS wins when non-blank --
+ * see [resolveRelayBaseUrl]. Otherwise [start]'s `persistedRelayBaseUrl`
+ * parameter is used, provided it passes [requireTransportIsSafe] -- the
+ * identical transport-safety check a build-time value is held to at
+ * request time (see `SyncRelayClient.requestJson()`).
+ *
+ * Desktop learns the persisted value by importing `LicenseStateRepository`
+ * and reading `licensing.db` directly (`config.py`'s
+ * `_discover_persisted_sync_relay_url()`); Android's Kotlin layer never
+ * opens that database itself, only the embedded Python backend's own HTTP
+ * routes (see [LicensingCoordinator]'s class doc). `present_status()`
+ * (status_presenter.py) now includes `sync_relay_base_url` in the JSON
+ * `GET /api/licensing/status` returns -- present only when this device has
+ * actually learned one at activation, omitted entirely otherwise, the same
+ * pattern its pre-existing `installation_id` field uses -- specifically so
+ * this platform can learn it without touching licensing.db itself.
+ * [com.actionaura.retail.ui.AppRoot] reads that field and passes it as
+ * [start]'s `persistedRelayBaseUrl`, both on app boot and (since [start] is
+ * documented idempotent -- a repeat call while already running is a no-op)
+ * again right after a successful activation, so a device that activates
+ * mid-session starts syncing without needing a restart.
  */
 
 /** One half (push or pull) of this device's sync health. Immutable so a
@@ -114,6 +139,21 @@ object SyncCoordinator {
     @Volatile private var running = false
     @Volatile private var pushHealth = SyncHalfHealth()
     @Volatile private var pullHealth = SyncHalfHealth()
+    /** The relay base URL [start] actually resolved and is (or was) running
+     *  against -- see [resolveRelayBaseUrl]. Blank until [start] first
+     *  decides to run; read by [nudge] and the zero-arg [runOnce] instead
+     *  of either re-reading `BuildConfig.OWNER_SYNC_BASE_URL` directly, so
+     *  a persisted-discovery URL (once a route exists to supply one) is
+     *  used consistently for every tick, not just the first. */
+    @Volatile private var effectiveRelayBaseUrl: String = ""
+
+    /** [effectiveRelayBaseUrl], exposed `internal` purely so a plain-JVM
+     *  test can assert WHICH url [start]'s precedence actually picked, not
+     *  just whether the coordinator started at all -- "some valid url was
+     *  chosen" would pass identically whether precedence picked the right
+     *  one or the wrong one, since either candidate url in a precedence
+     *  test is independently valid. */
+    internal fun currentRelayBaseUrl(): String = effectiveRelayBaseUrl
     /** Per-stream outbox size, keyed by [SyncStream.label] -- summed (never
      *  overwritten wholesale) so one stream's freshly-read count can never
      *  clobber the other's; see [recordPending] and [SyncHealth]'s doc. */
@@ -137,9 +177,34 @@ object SyncCoordinator {
      * per-attempt `record.owner_installation_id` re-check on desktop. Must
      * be called after [ServerBootstrap.start] has completed (the embedded
      * Flask server, and therefore the `/_internal/...` routes, must already
-     * be serving). */
-    fun start(appContext: Context) {
-        if (BuildConfig.OWNER_SYNC_BASE_URL.isBlank()) return
+     * be serving).
+     *
+     * [persistedRelayBaseUrl] is the sync_relay_base_url Owner handed this
+     * device at activation, if the caller has one -- see this class's own
+     * doc comment for the precedence rule and for where
+     * [com.actionaura.retail.ui.AppRoot] actually reads it from. Passing
+     * null reproduces the exact pre-[persistedRelayBaseUrl] behavior: inert
+     * unless `BuildConfig.OWNER_SYNC_BASE_URL` is set -- callers that have
+     * no persisted value yet (never activated, licensing unconfigured, a
+     * failed local lookup) are expected to pass null rather than omit a
+     * genuine failure. */
+    fun start(appContext: Context, persistedRelayBaseUrl: String? = null) {
+        start(File(appContext.filesDir, "data"), BuildConfig.OWNER_SYNC_BASE_URL, persistedRelayBaseUrl)
+    }
+
+    /** Context-free core of [start] -- [buildConfigValue] and
+     *  [identityDir] are taken as plain parameters (rather than this
+     *  function reading `BuildConfig.OWNER_SYNC_BASE_URL` / `appContext
+     *  .filesDir` itself) purely so a plain-JVM test can drive every
+     *  precedence/validation branch, including a non-blank BuildConfig
+     *  value, without a real Android `Context` -- this module has neither
+     *  Robolectric nor Mockito, so `Context` cannot otherwise be
+     *  constructed or faked here. Mirrors why the 4-arg [runOnce] overload
+     *  takes `relayBaseUrl` as a parameter instead of reading BuildConfig
+     *  directly. `internal`, not `private`, for that one reason. */
+    internal fun start(identityDir: File, buildConfigValue: String, persistedRelayBaseUrl: String?) {
+        val resolved = resolveRelayBaseUrl(buildConfigValue, persistedRelayBaseUrl)
+        if (resolved.isBlank()) return
         synchronized(lock) {
             if (running) return
             // Same base dir LicensingCoordinator uses (File(filesDir, "data"))
@@ -149,9 +214,44 @@ object SyncCoordinator {
             // instance would hold a DIFFERENT key that Owner never activated,
             // and every signed push/pull would fail with INVALID_SIGNATURE
             // or DEVICE_KEY_REVOKED.
-            identity = DeviceIdentity(File(appContext.filesDir, "data"))
+            identity = DeviceIdentity(identityDir)
+            effectiveRelayBaseUrl = resolved
             running = true
             scheduleNext()
+        }
+    }
+
+    /** Precedence + validation for the relay base URL this coordinator
+     *  actually uses. [buildConfigValue] (an operator's explicit build-time
+     *  value) ALWAYS wins when non-blank -- a shop built against a specific
+     *  relay must never be silently redirected by whatever Owner told this
+     *  device at activation, so [persistedValue] is never even inspected in
+     *  that case. Otherwise [persistedValue] is used ONLY if it passes
+     *  [requireTransportIsSafe] -- the identical check a build-time value is
+     *  held to (lazily, at request time) by `SyncRelayClient.requestJson()`.
+     *  A discovered value that fails this check is never partially trusted:
+     *  this returns blank exactly as if nothing had been discovered, so
+     *  [start] stays inert instead of starting a timer that would fail
+     *  every tick against a URL already known to be unsafe before the first
+     *  attempt. `internal`, not `private`, so a plain-JVM test can drive
+     *  every branch directly -- mirrors why `requireTransportIsSafe` itself
+     *  is `internal` in SyncRelayClient.kt. */
+    internal fun resolveRelayBaseUrl(buildConfigValue: String, persistedValue: String?): String {
+        if (buildConfigValue.isNotBlank()) return buildConfigValue
+        val candidate = persistedValue?.trim().orEmpty()
+        if (candidate.isBlank()) return ""
+        return try {
+            requireTransportIsSafe(candidate)
+            candidate
+        } catch (exc: SyncRelayClientError) {
+            logError(
+                "Discovered sync relay URL failed the same transport-safety check a " +
+                    "build-time URL is held to (${exc.reasonCode}); ignoring it -- the " +
+                    "coordinator stays inert rather than starting a timer that would fail " +
+                    "every tick against a URL already known to be unsafe.",
+                exc,
+            )
+            ""
         }
     }
 
@@ -175,7 +275,7 @@ object SyncCoordinator {
         thread(isDaemon = true, name = "sync-nudge") {
             val localBaseUrl = ServerBootstrap.baseUrl()
             val internalSecret = ServerBootstrap.internalSecret()
-            val relayBaseUrl = BuildConfig.OWNER_SYNC_BASE_URL
+            val relayBaseUrl = effectiveRelayBaseUrl
             val identitySnapshot = currentIdentity()
             val failure = eachStreamCatching("nudge push") { stream ->
                 pushOnce(stream, localBaseUrl, internalSecret, relayBaseUrl, identitySnapshot)
@@ -238,7 +338,13 @@ object SyncCoordinator {
      *  exists so a failure is inspectable rather than invisible, and is the
      *  seam any future UI would read. */
     fun health(): SyncHealth = SyncHealth(
-        configured = BuildConfig.OWNER_SYNC_BASE_URL.isNotBlank(),
+        // The `||` matters: BuildConfig alone keeps reporting "configured"
+        // even before [start] has ever run (unchanged pre-existing
+        // behavior for a build-time relay), while effectiveRelayBaseUrl
+        // alone covers a persisted-discovery URL that [start] resolved and
+        // is now running against, which BuildConfig itself has no idea
+        // about.
+        configured = BuildConfig.OWNER_SYNC_BASE_URL.isNotBlank() || effectiveRelayBaseUrl.isNotBlank(),
         running = running, push = pushHealth, pull = pullHealth,
         pendingCount = pendingByStream.values.sum(),
     )
@@ -271,7 +377,7 @@ object SyncCoordinator {
         runOnce(
             localBaseUrl = ServerBootstrap.baseUrl(),
             internalSecret = ServerBootstrap.internalSecret(),
-            relayBaseUrl = BuildConfig.OWNER_SYNC_BASE_URL,
+            relayBaseUrl = effectiveRelayBaseUrl,
             identity = currentIdentity(),
         )
     }

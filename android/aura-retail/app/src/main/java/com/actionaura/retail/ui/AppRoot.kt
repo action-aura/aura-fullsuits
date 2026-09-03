@@ -128,10 +128,25 @@ fun AppRoot() {
             // Multi-device sync foundation (Task 9 wiring): starts the
             // background push/pull loop once the embedded server (and
             // therefore its /_internal/sync/* routes) is up. A no-op when
-            // OWNER_SYNC_BASE_URL is unconfigured (see SyncCoordinator.start()'s
-            // own doc comment) -- never blocks the phase transition below,
-            // since it only schedules a timer and returns immediately.
-            SyncCoordinator.start(ctx)
+            // neither BuildConfig.OWNER_SYNC_BASE_URL nor a persisted relay
+            // URL discovered at licence activation is available (see
+            // SyncCoordinator.start()'s own doc comment) -- never blocks the
+            // phase transition below, since it only schedules a timer and
+            // returns immediately.
+            //
+            // The persisted value is read from the same local
+            // /api/licensing/status route the activation gate below already
+            // calls -- present_status() (status_presenter.py) now includes
+            // sync_relay_base_url specifically so this platform, which never
+            // opens licensing.db itself, can learn it. Absent when this
+            // install has never activated, when licensing is unconfigured,
+            // or on any local-call failure -- SyncCoordinator.start()
+            // treats a null exactly like "nothing persisted", identical to
+            // this code path's pre-existing behavior.
+            val persistedSyncRelayBaseUrl = try {
+                com.actionaura.retail.licensing.LicensingCoordinator(ctx).status()["sync_relay_base_url"] as? String
+            } catch (e: Exception) { null }
+            SyncCoordinator.start(ctx, persistedSyncRelayBaseUrl)
 
             // Periodic licence check-in. Before this, checkIn() was reachable
             // only from LicensingScreen's manual "Check Now" button, so
@@ -194,7 +209,31 @@ fun AppRoot() {
                     Phase.LOADING -> LoadingScreen()
                     Phase.LICENSE -> LicensingScreen(
                         onBack = {}, snackbar = remember { SnackbarHostState() },
-                        onActivated = { scope.launch { phase = phaseAfterActivationGate() } },
+                        onActivated = {
+                            scope.launch {
+                                // Sync may have been inert until this exact
+                                // moment (no build-time relay, and this is
+                                // the device's first activation, so nothing
+                                // was persisted before now). Re-reading
+                                // /api/licensing/status here and giving
+                                // SyncCoordinator.start() another chance is
+                                // safe ONLY because that function is
+                                // documented idempotent -- a repeat call
+                                // while already running is a no-op -- so
+                                // this can never steal an already-running
+                                // loop away from its BuildConfig value or
+                                // whatever an earlier activation persisted.
+                                // The alternative (do nothing here, rely on
+                                // the next app launch to pick it up) is what
+                                // desktop does; this is strictly better and
+                                // cheap enough to just do.
+                                val persistedSyncRelayBaseUrl = try {
+                                    com.actionaura.retail.licensing.LicensingCoordinator(ctx).status()["sync_relay_base_url"] as? String
+                                } catch (e: Exception) { null }
+                                SyncCoordinator.start(ctx, persistedSyncRelayBaseUrl)
+                                phase = phaseAfterActivationGate()
+                            }
+                        },
                     )
                     // Both of these used to jump straight to Phase.READY, so a
                     // brand-new install that completed SETUP, or an account

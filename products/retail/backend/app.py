@@ -807,6 +807,53 @@ def _converge_and_refuse_to_serve_if_stuck():
         raise RuntimeError(reason)
 
 
+#: Set True at the end of `init_app()`. Read by the refusal guard below.
+#:
+#: WHY THIS EXISTS. `init_app()` runs every schema migration and is called
+#: only from this module's `__main__` block, so `python app.py` is the one
+#: correct way to start this server. Started any other way -- most plausibly
+#: `flask --app app run`, which imports the module-level `app` object and
+#: never calls this function -- the process comes up looking perfectly
+#: healthy: it binds its port, serves static files, and answers
+#: `GET /api/health` with 200. It then fails the first request that touches
+#: a table with `sqlite3.OperationalError: no such table: users`.
+#:
+#: That was observed for real while standing up a clean install, and it cost
+#: real time precisely because every signal available said the server was
+#: fine. A missing migration must announce itself as a missing migration, at
+#: the door, not as a confusing error from whichever query happens to run
+#: first.
+_INIT_APP_HAS_RUN = False
+
+
+@app.before_request
+def _refuse_to_serve_before_init_app():
+    """Answer every request with a clear 503 until `init_app()` has run.
+
+    Deliberately covers `/api/health` as well. Reporting healthy while the
+    databases have never been migrated is the exact lie this guard exists to
+    stop -- `launcher_support`'s readiness poll asks this endpoint whether the
+    server is ready to be shown to a user, and until the schema exists the
+    honest answer is no. The real launch path (`python app.py`) calls
+    `init_app()` before serving a single request, so nothing legitimate ever
+    sees this.
+    """
+    if _INIT_APP_HAS_RUN:
+        return None
+    return jsonify({
+        'status': 'error',
+        'reason_code': 'APP_NOT_INITIALISED',
+        'message': (
+            'Aura Retail was started without running its database migrations, '
+            'so no request can be served. Start it with "python app.py" (the '
+            'PORT environment variable selects the port). Starting it via '
+            '"flask --app app run" or any other WSGI entry point imports this '
+            'module without calling init_app(), which is what leaves the '
+            'schema uncreated.'
+        ),
+    }), 503
+
+
 def init_app():
     """Initialize the registry + retail schema, and start the background
     sync loop (if configured). Call once before serving.
@@ -842,6 +889,8 @@ def init_app():
     _resume_einvoicing_workers()
     _resume_notifications_workers()
     _resume_whatsapp_workers()
+    global _INIT_APP_HAS_RUN
+    _INIT_APP_HAS_RUN = True
     return app
 
 

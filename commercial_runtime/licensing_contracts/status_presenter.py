@@ -40,5 +40,20 @@ def present_status(record: Optional[LicenseStateRecord]) -> dict:
     if record.owner_installation_id:
         # Only the installation id, never any assertion/device secret material.
         result["installation_id"] = record.owner_installation_id
+    if record.sync_relay_base_url:
+        # The address Owner told this device to sync to, learned at
+        # activation. Exposed for the same reason `installation_id` above is:
+        # it is a PUBLIC server address, not secret material, and a client
+        # that has already authenticated to this local API needs it.
+        #
+        # ANDROID IS WHY THIS IS HERE. On Windows the value is read straight
+        # out of licensing.db by `products/retail/backend/config.py`. Android's
+        # Kotlin layer has no access to that file -- it reaches licence state
+        # only through this local HTTP surface -- so without this field the
+        # phone can never learn where to sync and its relay address stays
+        # frozen at whatever was compiled into the APK. Omitted entirely when
+        # unset, so an install that has never activated, or an Owner that
+        # never configured a relay, sees exactly the response it saw before.
+        result["sync_relay_base_url"] = record.sync_relay_base_url
 
     return result
