@@ -671,6 +671,10 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Sending" to "الإرسال",
     "Receiving" to "الاستلام",
     "Healthy" to "سليم",
+    // The third sync half-state. "Healthy" only after a real round trip has
+    // succeeded; a half that is running but has never completed one is
+    // Waiting, not healthy.
+    "Waiting" to "بالانتظار",
     "Failing" to "فاشل",
     "Last success" to "آخر نجاح",
     "never" to "أبدًا",

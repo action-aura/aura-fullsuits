@@ -336,6 +336,16 @@ private fun MainShell(onLogout: () -> Unit) {
         "aging" -> "Aging"
         "employees" -> "Employees"
         "retail_settings" -> "Settings"
+        // These three were falling through to the "Action Aura" default, so
+        // every one of them opened under the app's own name instead of its
+        // own -- spotted by opening Sync status on a real device and seeing
+        // the bar say "Action Aura". The fallback is deliberately a name and
+        // not a blank, which is exactly why the omission is invisible: the
+        // screen looks finished, just anonymous. Any new route needs a line
+        // here, and SyncStatusPresentationTest now pins this one.
+        "sync_status" -> "Sync status"
+        "backup" -> "Backup & restore"
+        "licensing" -> "Licensing"
         else -> tabs.firstOrNull { it.route == route }?.label ?: "Action Aura"
     }
 

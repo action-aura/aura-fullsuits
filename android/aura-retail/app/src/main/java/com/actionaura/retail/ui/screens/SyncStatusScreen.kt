@@ -70,8 +70,19 @@ fun SyncStatusScreen() {
         // all -- shown for every other tier, including NEVER_SYNCED, where a
         // nonzero count is itself informative (things are queued, waiting).
         if (tier != SyncTier.NOT_CONFIGURED) SyncPendingCard(health.pendingCount)
-        SectionHeader(tr("Detail"))
-        SyncBreakdownCard(health, now)
+        // The breakdown is HIDDEN, not merely relabelled, when there is no
+        // relay configured. Found by running the real screen on a real phone:
+        // it read "Sync is not set up" in the banner and then "Sending --
+        // Healthy / Receiving -- Healthy" directly underneath, because
+        // SyncHalfHealth.healthy defaults to true and nothing had ever failed.
+        // Both halves were literally accurate and together they said the
+        // opposite of the truth: "Healthy" reads as "working fine" to anyone
+        // who is not the person who wrote the data class. There is nothing to
+        // detail about a loop that has never run, so nothing is shown.
+        if (tier != SyncTier.NOT_CONFIGURED) {
+            SectionHeader(tr("Detail"))
+            SyncBreakdownCard(health, now)
+        }
     }
 }
 
@@ -162,8 +173,20 @@ private fun SyncHalfRow(label: String, half: SyncHalfHealth, now: Long) {
     Column {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(label, Modifier.weight(1f), fontWeight = FontWeight.Bold)
+            // THREE states, not two. "Healthy" is only honest once this half
+            // has actually succeeded at least once: a half that is configured
+            // and running but has never completed a round trip is Waiting, and
+            // calling that Healthy is the same overclaim the hidden-when-
+            // unconfigured branch above exists to undo. `healthy` is a
+            // default-true flag meaning "nothing has failed YET", which is not
+            // the same statement as "this works".
+            val state = when {
+                !half.healthy -> tr("Failing")
+                half.lastSuccessAtMillis == null -> tr("Waiting")
+                else -> tr("Healthy")
+            }
             Text(
-                if (half.healthy) tr("Healthy") else tr("Failing"),
+                state,
                 color = if (half.healthy) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
                 fontWeight = FontWeight.Medium,
             )

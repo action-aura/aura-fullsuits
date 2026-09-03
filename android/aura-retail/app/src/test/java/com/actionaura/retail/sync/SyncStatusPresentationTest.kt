@@ -233,4 +233,29 @@ class SyncStatusPresentationTest {
             .substringBefore("private fun MoreItem(")
         assertThat(moreScreenBody).contains("""onNavigate("sync_status")""")
     }
+
+    /**
+     * Every navigable route needs a line in AppRoot's title map, or it opens
+     * under the app's own name.
+     *
+     * Found by opening this screen on a real device: the bar said "Action
+     * Aura", not "Sync status". The map's fallback is a NAME rather than a
+     * blank, which is exactly what makes the omission invisible — the screen
+     * looks finished, just anonymous, so nothing about it reads as a bug in a
+     * screenshot or a code review.
+     *
+     * `backup` and `licensing` had been falling through the same way for
+     * longer; all three are asserted here so the next route that forgets is
+     * caught by the test that caught this one.
+     */
+    @Test
+    fun every_pushed_route_has_its_own_title() {
+        val appRootFile = File(File("."), "src/main/java/com/actionaura/retail/ui/AppRoot.kt")
+        assumeTrue("AppRoot.kt not reachable from this run context", appRootFile.exists())
+        val code = codeOnly(appRootFile.readText())
+
+        for (route in listOf("sync_status", "backup", "licensing")) {
+            assertThat(code).contains(""""$route" -> """")
+        }
+    }
 }
