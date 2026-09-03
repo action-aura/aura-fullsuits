@@ -3075,16 +3075,25 @@ def create_purchase_order():
     # `if amount_paid > 0.005:` guard below: they were never going to post a
     # payment either way.
     #
-    # Checked BEFORE get_retail_conn()/_next_ref() -- this route holds no
-    # explicit BEGIN IMMEDIATE, but _next_ref() is the first statement that
-    # writes (it increments doc_sequences), so the refusal has to run even
-    # earlier than that to have no side effect at all, same rule
+    # Checked BEFORE _ensure_credit_schema()/_next_ref() -- this route holds
+    # no explicit BEGIN IMMEDIATE, but _next_ref() is the first statement
+    # that writes (it increments doc_sequences), so the refusal has to run
+    # even earlier than that to have no side effect at all, same rule
     # void_payment's check documents relative to its own write.
-    amount_paid = _money(data.get('amount_paid', 0))
+    #
+    # `conn` IS opened here, ahead of that refusal -- narrower than it looks.
+    # get_retail_conn() is a bare sqlite3.connect(); _company_currency() is a
+    # single read-only SELECT that never raises (see its own docstring). No
+    # WRITE happens before the capability check below: _ensure_credit_schema
+    # and _next_ref, the two statements the comment above is actually about,
+    # both still run strictly after it, unchanged.
+    conn = get_retail_conn()
+    currency = _company_currency(conn, cid)
+    amount_paid = _money(data.get('amount_paid', 0), currency)
     if amount_paid > 0.005 and not session_has_capability(CAP_EMPLOYEES):
+        conn.close()
         return jsonify({'status': 'error', 'message': SUPPLIER_PAYMENT_DENIED_MESSAGE}), 403
 
-    conn = get_retail_conn()
     _ensure_credit_schema(conn)
     # 2026-08-28: defense-in-depth error containment, same shape and same
     # reasoning as delete_category's own Fix 4 comment (above, this file).
@@ -3206,7 +3215,7 @@ def create_purchase_order():
         # guaranteeing global uniqueness without altering the shared
         # _next_ref helper or its format for other doc types.
         po_number = f"{_next_ref(conn, cid, 'po')}-{str(cid)[:8]}-{_device_doc_discriminator()}"
-        total = _money(sum(float(i.get('unit_cost', 0)) * float(i.get('quantity', 0)) for i in items))
+        total = _money(sum(float(i.get('unit_cost', 0)) * float(i.get('quantity', 0)) for i in items), currency)
         # supplier_id was already resolved and validated above.
         payment_status = 'paid' if amount_paid >= total - 0.005 else ('partial' if amount_paid > 0.005 else 'unpaid')
         cur.execute("""
@@ -3227,10 +3236,10 @@ def create_purchase_order():
         if amount_paid > 0.005:
             _record_payment(conn, cid, 'supplier', supplier_id, 'out', amount_paid,
                             method=data.get('method', 'cash'), related_type='po', related_id=po_id,
-                            doc_type='supplier_payment')
-        balance = _money(total - amount_paid)
+                            doc_type='supplier_payment', currency=currency)
+        balance = _money(total - amount_paid, currency)
         if balance > 0.005 and supplier_id:
-            _adjust_credit(conn, 'suppliers', supplier_id, cid, balance)
+            _adjust_credit(conn, 'suppliers', supplier_id, cid, balance, currency)
         _audit(conn, 'PO_CREATED', 'purchase_order', po_id, po_number)
         conn.commit()
     except sqlite3.IntegrityError as exc:
@@ -3736,7 +3745,16 @@ def accept_reorder_request(rid):
         # would just duplicate that existing, already-synced FK.
         qty = max(float(product['reorder_level'] or 0), 1)
         unit_cost = float(product['cost_price'] or 0)
-        total = _money(unit_cost * qty)
+        # Same currency-aware quantization as create_purchase_order's own
+        # `total` -- this route writes the identical purchase_orders.total
+        # column through a second, independent mint site (see this route's
+        # po_number comment below), and pay_purchase_order later reads that
+        # stored total back through _money(po['total'], currency) to decide
+        # payment_status. Leaving THIS write on the old 2dp default would
+        # permanently truncate a JOD reorder-drafted PO's total at creation
+        # time -- no later read could recover the fils, because they were
+        # never stored.
+        total = _money(unit_cost * qty, _company_currency(conn, cid))
         supplier_id = product['supplier_id']
         # `req['branch_id']` is a trusted value from THIS company's own
         # reorder_requests row -- the fallback below only applies to a
@@ -8322,9 +8340,27 @@ def _seed_methods(conn, cid):
                          (cid, name, typ, i))
 
 def _record_payment(conn, cid, party_type, party_id, direction, amount, method='cash',
-                    related_type=None, related_id=None, notes='', device=None, doc_type='receipt'):
-    """Append one immutable money-movement row to the ledger. Returns its reference."""
-    amt = _money(amount)
+                    related_type=None, related_id=None, notes='', device=None, doc_type='receipt',
+                    currency=None):
+    """Append one immutable money-movement row to the ledger. Returns its reference.
+
+    `currency` is OPTIONAL and defaults to None, the same contract `_money`
+    itself carries (see its docstring): an un-converted caller (create_sale's
+    own retained-cash entry, still out of scope for this pass) keeps the
+    historical 2dp behaviour byte for byte. The four converted callers --
+    customer_payment, supplier_payment, pay_purchase_order,
+    create_purchase_order -- pass `_company_currency(conn, cid)` so the
+    amount PERSISTED here carries the same precision as the balance it is
+    about to move via `_adjust_credit`. Deliberately NOT re-derived from
+    `_settings()` in here: this function already reads `_settings(conn,
+    cid)['base_currency']` below for the `payments.currency` LABEL column,
+    but that call site is pre-existing and unrelated to this fix -- the
+    caller supplies the quantization currency explicitly instead, per
+    `_company_currency`'s own docstring on why `_settings()` must not be the
+    thing standing between a client's number and this function's narrow
+    `except Exception as e: ... 500` callers.
+    """
+    amt = _money(amount, currency)
     if amt <= 0:
         return None
     cur = _settings(conn, cid)['base_currency']
@@ -8377,7 +8413,7 @@ def _record_payment(conn, cid, party_type, party_id, direction, amount, method='
     })
     return ref
 
-def _adjust_credit(conn, table, pid, cid, delta):
+def _adjust_credit(conn, table, pid, cid, delta, currency=None):
     """Decimal-safe balance update (avoids SQL float accumulation). Returns new balance.
 
     launch-readiness Phase 6 stage 6a-i: `credit_balance` is a SECOND
@@ -8392,10 +8428,27 @@ def _adjust_credit(conn, table, pid, cid, delta):
     UPDATE deliberately touches ONLY `credit_balance`, so it correctly stays
     outside every row_version bump this stage adds -- there is nothing to
     change here, and that omission is the point, not an oversight.
+
+    `currency` is OPTIONAL and defaults to None, the identical contract
+    `_money` and `_record_payment` carry (see their own docstrings): this
+    function used to quantize to a HARDCODED `Decimal('0.01')` regardless of
+    what currency it was being asked about, which is the same class of bug
+    `_money`'s own default used to be -- and a more damaging copy of it,
+    because this is the SECOND stage a JOD payment's fils could be lost at.
+    Converting only `_money()` at the payment call sites was not sufficient
+    on its own: `_record_payment` could persist a payment of 12.345 JOD
+    correctly, and this function would still round the customer's/
+    supplier's `credit_balance` it is computed from to 12.35 the moment it
+    got here, because the quantum below never looked at the currency the
+    caller was working in. An un-converted caller (create_sale,
+    create_return -- still out of scope for this pass) keeps the historical
+    2dp behaviour byte for byte, same as everywhere else this contract is
+    used.
     """
     row = conn.execute(f"SELECT credit_balance FROM {table} WHERE id=? AND company_id=?", (pid, cid)).fetchone()
     base = Decimal(str(row['credit_balance'] if row and row['credit_balance'] is not None else 0))
-    newbal = (base + Decimal(str(delta))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    quant = tax_engine.currency_quantum(currency) if currency else Decimal('0.01')
+    newbal = (base + Decimal(str(delta))).quantize(quant, rounding=ROUND_HALF_UP)
     conn.execute(f"UPDATE {table} SET credit_balance=? WHERE id=? AND company_id=?", (float(newbal), pid, cid))
     return float(newbal)
 
@@ -9003,17 +9056,27 @@ def customer_statement(cust_id):
 @mt_require_capability(CAP_SELL)
 def customer_payment(cust_id):
     cid = _cid(); data = request.json or {}
-    amt = _money(data.get('amount', 0))
-    if amt <= 0:
-        return jsonify({'status': 'error', 'message': 'Amount must be positive'}), 400
     conn = get_retail_conn(); _ensure_credit_schema(conn)
+    # The shop's own currency, not cents -- a JOD payment carries fils, and
+    # the balance this payment is about to move (customers.credit_balance,
+    # via _adjust_credit below) must be moved by the same precision the
+    # payment is stored at, or the two drift apart by up to 5 fils per
+    # payment. Read ONCE and reused for both the validation quantization and
+    # the ledger write, the same "read once per request" rule
+    # _cash_session_report's own comment documents.
+    currency = _company_currency(conn, cid)
+    amt = _money(data.get('amount', 0), currency)
+    if amt <= 0:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Amount must be positive'}), 400
     cust = conn.execute("SELECT id,credit_balance FROM customers WHERE id=? AND company_id=?", (cust_id, cid)).fetchone()
     if not cust:
         conn.close(); return jsonify({'status': 'error', 'message': 'Customer not found'}), 404
     try:
         ref = _record_payment(conn, cid, 'customer', cust_id, 'in', amt, method=data.get('method', 'cash'),
-                              notes=data.get('notes', ''), device=data.get('device'), doc_type='receipt')
-        newbal = _adjust_credit(conn, 'customers', cust_id, cid, -amt)
+                              notes=data.get('notes', ''), device=data.get('device'), doc_type='receipt',
+                              currency=currency)
+        newbal = _adjust_credit(conn, 'customers', cust_id, cid, -amt, currency)
         _audit(conn, 'CUSTOMER_PAYMENT', 'customer', cust_id, f'{ref} amount={amt}')
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -9078,17 +9141,22 @@ def supplier_statement(sid):
 @mt_require_capability(CAP_EMPLOYEES)
 def supplier_payment(sid):
     cid = _cid(); data = request.json or {}
-    amt = _money(data.get('amount', 0))
-    if amt <= 0:
-        return jsonify({'status': 'error', 'message': 'Amount must be positive'}), 400
     conn = get_retail_conn(); _ensure_credit_schema(conn)
+    # See customer_payment's identical comment just above in this file --
+    # same reasoning, opposite direction of money.
+    currency = _company_currency(conn, cid)
+    amt = _money(data.get('amount', 0), currency)
+    if amt <= 0:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Amount must be positive'}), 400
     sup = conn.execute("SELECT id,credit_balance FROM suppliers WHERE id=? AND company_id=?", (sid, cid)).fetchone()
     if not sup:
         conn.close(); return jsonify({'status': 'error', 'message': 'Supplier not found'}), 404
     try:
         ref = _record_payment(conn, cid, 'supplier', sid, 'out', amt, method=data.get('method', 'cash'),
-                              notes=data.get('notes', ''), device=data.get('device'), doc_type='supplier_payment')
-        newbal = _adjust_credit(conn, 'suppliers', sid, cid, -amt)
+                              notes=data.get('notes', ''), device=data.get('device'), doc_type='supplier_payment',
+                              currency=currency)
+        newbal = _adjust_credit(conn, 'suppliers', sid, cid, -amt, currency)
         _audit(conn, 'SUPPLIER_PAYMENT', 'supplier', sid, f'{ref} amount={amt}')
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -9103,24 +9171,31 @@ def supplier_payment(sid):
 @mt_require_capability(CAP_EMPLOYEES)
 def pay_purchase_order(po_id):
     cid = _cid(); data = request.json or {}
-    amt = _money(data.get('amount', 0))
-    if amt <= 0:
-        return jsonify({'status': 'error', 'message': 'Amount must be positive'}), 400
     conn = get_retail_conn(); _ensure_credit_schema(conn)
+    # Read once, apply to every figure this route touches -- amt, new_paid
+    # and the total it is compared against all have to agree on precision or
+    # payment_status flips on rounding noise instead of real money, the same
+    # "every figure in one report/one arithmetic chain" rule
+    # _cash_session_report's own comment documents for the drawer.
+    currency = _company_currency(conn, cid)
+    amt = _money(data.get('amount', 0), currency)
+    if amt <= 0:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Amount must be positive'}), 400
     po = conn.execute("SELECT id,supplier_id,total,COALESCE(amount_paid,0) AS amount_paid,po_number FROM purchase_orders WHERE id=? AND company_id=?",
                       (po_id, cid)).fetchone()
     if not po:
         conn.close(); return jsonify({'status': 'error', 'message': 'PO not found'}), 404
     try:
-        new_paid = _money(po['amount_paid'] + amt)
-        status = 'paid' if new_paid >= _money(po['total']) - 0.005 else 'partial'
+        new_paid = _money(po['amount_paid'] + amt, currency)
+        status = 'paid' if new_paid >= _money(po['total'], currency) - 0.005 else 'partial'
         conn.execute("UPDATE purchase_orders SET amount_paid=?, payment_status=? WHERE id=? AND company_id=?",
                      (new_paid, status, po_id, cid))
         ref = _record_payment(conn, cid, 'supplier', po['supplier_id'], 'out', amt, method=data.get('method', 'cash'),
                               related_type='po', related_id=po_id, notes=data.get('notes', ''),
-                              device=data.get('device'), doc_type='supplier_payment')
+                              device=data.get('device'), doc_type='supplier_payment', currency=currency)
         if po['supplier_id']:
-            _adjust_credit(conn, 'suppliers', po['supplier_id'], cid, -amt)
+            _adjust_credit(conn, 'suppliers', po['supplier_id'], cid, -amt, currency)
         _audit(conn, 'PO_PAYMENT', 'purchase_order', po_id, f"{ref} amount={amt}")
         conn.commit(); conn.close()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
@@ -9546,7 +9621,17 @@ def void_payment(pid):
         if p['party_id'] and p['party_type'] in ('customer', 'supplier'):
             table = 'customers' if p['party_type'] == 'customer' else 'suppliers'
             # 'in' reduced AR / 'out' reduced AP, so voiding adds it back.
-            _adjust_credit(conn, table, p['party_id'], cid, _money(p['amount']))
+            # Quantized at the SHOP's currency, not hardcoded cents -- p['amount']
+            # was persisted at the shop's real precision by the (now currency-
+            # aware) customer_payment/supplier_payment/pay_purchase_order call
+            # sites above, and reversing it through the old 2dp default would
+            # silently truncate a JOD reversal by up to 5 fils. Both the
+            # amount being reversed AND the balance it lands in have to agree
+            # on precision -- _adjust_credit's own quantum, not just this
+            # call's delta -- or the same loss reappears one layer down (see
+            # _adjust_credit's own docstring for the identical fix there).
+            void_currency = _company_currency(conn, cid)
+            _adjust_credit(conn, table, p['party_id'], cid, _money(p['amount'], void_currency), void_currency)
         _audit(conn, 'PAYMENT_VOIDED', 'payment', pid, data.get('reason', ''))
         # AUDIT-032A fix (DEFECT 2): this route mutates `payments.status` in
         # place -- the ONE documented exception to Phase 5's "money is an
