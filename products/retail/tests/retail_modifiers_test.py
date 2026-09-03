@@ -261,14 +261,45 @@ def test_zero_modifiers_totals_are_byte_identical_to_todays_math(shop):
     """With zero modifier rows anywhere, a sale's stored figures must be
     EXACTLY what core.retail.pricing.calculate_line produces for the
     UNMODIFIED base price -- pricing.py is unmodified and unconsulted
-    differently by this change (design doc: 'pricing.py stays untouched')."""
+    differently by this change (design doc: 'pricing.py stays untouched').
+
+    THE CURRENCY MUST BE PASSED TO BOTH SIDES. `create_sale` calls
+    `calculate_line(..., currency=currency)`, so on a default install -- JOD,
+    three decimal places -- the sale is computed at fils precision. This test
+    used to call `calculate_line` with NO currency, which defaults to two, and
+    assert the two agreed. While the API also quantized its sums to a
+    hardcoded two decimals the mismatch was invisible; once the sum was
+    corrected to follow the shop's real currency this began failing with
+    `assert 15.997 == 16.0` -- 16% tax on 99.98 is 15.9968, which is 15.997 in
+    fils and 16.00 in cents.
+
+    So it was comparing the API's JOD arithmetic against a two-decimal
+    reference and calling the difference a defect. Identical in cause and fix
+    to `retail_promotions_test.py`'s own parity test, which is the sibling of
+    this one -- both were written to the same template, so both carried the
+    same latent assumption that money is always two decimals.
+
+    Nothing weakened: still exact equality, and the fixture's currency is now
+    PINNED below so a change to the product default is followed while an
+    accidental drift fails loudly instead of silently comparing the wrong two
+    numbers.
+    """
     cid, client = shop
     pid = _create_product(client, sell_price=49.99, tax_rate=16)
     r = _sale(client, [{'product_id': pid, 'quantity': 2}])
     assert r.status_code == 200, r.get_json()
     data = r.get_json()['data']
 
-    expected = pricing.calculate_line(49.99, 2, 0, 16, mode='after_discount')
+    # Read back from the same endpoint the API used rather than hardcoding
+    # 'JOD', so this follows a deliberate change to the default instead of
+    # breaking on one. This fixture writes no base_currency row.
+    shop_currency = client.get('/api/sub/retail/settings/tax').get_json()['data']['base_currency']
+    assert shop_currency == pricing.DEFAULT_BASE_CURRENCY, (
+        "fixture currency drifted from the product default; the comparison "
+        "below would be against the wrong precision")
+
+    expected = pricing.calculate_line(49.99, 2, 0, 16, mode='after_discount',
+                                      currency=shop_currency)
     assert data['subtotal'] == expected['gross']
     assert data['tax_amount'] == expected['tax']
     assert data['total'] == expected['total']
@@ -284,7 +315,13 @@ def test_zero_modifiers_totals_are_byte_identical_to_todays_math(shop):
     # pre-modifiers figure -- byte-identical to today.
     ret = _return(client, data['id'], [{'product_id': pid, 'quantity': 1}])
     assert ret.status_code == 200, ret.get_json()
-    single_line_expected = pricing.calculate_line(49.99, 1, 0, 16, mode='after_discount')
+    # Same currency omission as the expectation above -- this second call
+    # was missed on the first pass, and the test kept failing one
+    # assertion later, which is its own small lesson: a parity test with
+    # more than one reference computation has to have EVERY one of them
+    # speaking the same currency, not just the first.
+    single_line_expected = pricing.calculate_line(49.99, 1, 0, 16, mode='after_discount',
+                                                  currency=shop_currency)
     assert ret.get_json()['data']['refund_amount'] == single_line_expected['total']
 
 
