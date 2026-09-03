@@ -101,7 +101,9 @@ and the desktop sync?" turned out to have a longer answer than yes or no.
 | A customer can turn sync on | **DEFECT — no path exists** | Desktop reads the OS env var `AURA_SYNC_RELAY_URL`; the Inno Setup installer sets no environment variables at all. Android reads a build-time Gradle property. The only thing in the repo that sets either is `run_demo.py` |
 | The phone says whether it is syncing | **TESTED** | Added this cycle: More → Device → Sync status, reading `SyncCoordinator.health()`. Four tiers; on today's APK its honest answer is "Sync is not set up" |
 | Accounts sync between devices | **DESKTOP ONLY** | Two-stream design; Android builds only the retail stream, and `RETAIL_SYNC_ENTITY_TYPES` deliberately excludes `user`. A cashier made on the desktop cannot log in on the phone |
-| Two real devices syncing end to end | **UNVERIFIED** | The sync plan's own Task 11 (two devices, `adb reverse`, the test matrix) is unchecked, and no record of a real two-device run was found |
+| Two real devices syncing end to end | **RUN — WORKS** | 2026-09-03, first time ever. Two independent desktop installs (separate `AURA_APP_DATA`, ports 5101/5102) activated on the SAME licence key, each receiving its own `installation_id`. Catalogue crossed A→B (product `c0394392…`, same UUID both sides); a sale rung on B crossed to A (`SALE-000001-7e50f8eb-e3a325c0`) **with fils intact — subtotal 12.345, tax 1.975, total 14.320**, which is also this cycle's money work validated on a running system rather than in a test. No pairing step: activation on a shared key is the whole grouping mechanism |
+| Owner relay is live | **RUN — verified properly this time** | Owner started from source against a fresh Postgres database. Discriminating evidence, which the retracted line above lacked: a nonsense path returns **404** while `/api/sync/v1/push` returns **400** with Owner's own `{"reason_code":"INVALID_REQUEST"}` — different responses, so the route genuinely exists and is handling the request |
+| Clean-machine install and activation | **RUN — WORKS** | Fresh Owner (venv, migrations to head, RBAC 138 permissions + 5 roles, catalogue, offline policy, signing key generated and activated with a real sign/verify round-trip, `commercial preflight` fully clean). Fresh till: `needs_setup:true` → first admin → licence `ACTIVE_ONLINE`. Confirmed the gate is real: creating a product was refused before activation and succeeded after |
 
 ## Reachability — features with no doorway
 
@@ -154,9 +156,47 @@ closed, one added that is larger than the one it replaces.
 4. Employee creation ignoring the licence, which undercuts the per-device model
    the whole commercial design rests on.
 
-5. Nothing has ever been installed on a clean machine and activated end to end.
-   Every other line above is about code that works; this is the one about the
-   product being deliverable.
+5. ~~Nothing has ever been installed on a clean machine and activated end to
+   end.~~ **DONE 2026-09-03.** Owner built from source against a fresh
+   database, licence issued, two tills installed, activated on that one
+   licence, and data crossed both ways with money at fils precision. What the
+   rehearsal cost was four undocumented steps that would each have stopped an
+   installer dead — they are now written down (§ below) and are the real
+   deliverable of that exercise.
+
+### What the first clean install actually required
+
+Found by doing it. None of these are in any runbook, and each fails in a way
+that points somewhere other than the cause.
+
+1. **A fresh Owner cannot issue a licence at all.** `flask seed-catalog` seeds
+   products, platforms, channels, entitlements and add-ons — and **zero
+   plans**. A licence is issued against a plan, and there is no `seed-plans`
+   command, so the catalogue must be populated through the UI before the first
+   key can exist.
+2. **`AURA_OWNER_LICENSING_URL` and `AURA_SYNC_RELAY_URL` are NOT parallel,
+   despite looking it.** The licensing client appends only `/activations`, so
+   its variable must carry the full API base
+   (`https://host/api/licensing/v1`). The sync client appends the whole path
+   itself, so its variable must be the **bare host**. A host-only licensing URL
+   fails with `MALFORMED_RESPONSE: Response was not valid JSON`, which reads as
+   "Owner is broken" and is actually "you pointed at the wrong path".
+3. **`trust_anchor.json` does not exist in the repository and must be generated
+   per Owner instance**, by `scripts/generate_trust_anchor.py`, before any
+   activation can succeed. Without it activation reaches Owner, Owner signs the
+   assertion, and the client rejects its own answer with `UNKNOWN_SIGNING_KEY`.
+   Deliberate — the design refuses trust-on-first-use — but it means a build
+   cut against one Owner can never activate against another, and rotating the
+   signing key strands every existing build.
+4. **The app must be started as `python app.py`, not `flask --app app run`.**
+   `init_app()` — which runs every migration — is called only under
+   `__main__`. Started the Flask way the server boots happily, answers
+   `/api/health` with 200, and then fails the first real request with
+   `no such table: users`.
+
+Also observed, and correct: activation invalidates the current session (the
+company id is rebound to Owner's), so the very next request after activating
+returns 401 and the operator must log in again.
 
 **Pilotable with a shop you can babysit** — yes, and the condition that used to
 apply (no promotions, no VAT) is gone now that the phone stops claiming a total
