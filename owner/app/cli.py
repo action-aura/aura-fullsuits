@@ -11,7 +11,7 @@ from flask import Flask
 from sqlalchemy import select
 
 from app.audit.services import record as audit_record
-from app.catalog.services import import_release_manifest, seed_canonical_catalog
+from app.catalog.services import import_release_manifest, seed_canonical_catalog, seed_canonical_plans
 from app.extensions import db_session
 from app.licensing_service import signing as signing_service
 from app.licensing_service.offline_policy import seed_default_offline_policy
@@ -57,6 +57,22 @@ def register_cli(app: Flask) -> None:
         """Seed canonical products/platforms/release channels/entitlement
         definitions/DRAFT add-ons (idempotent, no fake customer data)."""
         result = seed_canonical_catalog()
+        click.echo(json.dumps(result))
+
+    @app.cli.command("seed-plans")
+    def seed_plans_cmd():
+        """Seed ONE minimal, immediately-sellable placeholder plan per
+        canonical product (idempotent). Run 'flask seed-catalog' first --
+        without a plan, `issue_license_direct` has nothing to issue against
+        and a fresh Owner cannot cut its first licence key.
+
+        PLACEHOLDER PRICING ONLY: $99.00 flat, ONE_TIME, per product. This is
+        not a real commercial price -- set real prices from the Owner UI
+        (catalog -> plan -> add price) before selling anything for real."""
+        try:
+            result = seed_canonical_plans()
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
         click.echo(json.dumps(result))
 
     @app.cli.command("create-superadmin")

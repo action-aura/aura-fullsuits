@@ -103,7 +103,7 @@ and the desktop sync?" turned out to have a longer answer than yes or no.
 | Accounts sync between devices | **DESKTOP ONLY** | Two-stream design; Android builds only the retail stream, and `RETAIL_SYNC_ENTITY_TYPES` deliberately excludes `user`. A cashier made on the desktop cannot log in on the phone |
 | Two real devices syncing end to end | **RUN — WORKS** | 2026-09-03, first time ever. Two independent desktop installs (separate `AURA_APP_DATA`, ports 5101/5102) activated on the SAME licence key, each receiving its own `installation_id`. Catalogue crossed A→B (product `c0394392…`, same UUID both sides); a sale rung on B crossed to A (`SALE-000001-7e50f8eb-e3a325c0`) **with fils intact — subtotal 12.345, tax 1.975, total 14.320**, which is also this cycle's money work validated on a running system rather than in a test. No pairing step: activation on a shared key is the whole grouping mechanism |
 | Owner relay is live | **RUN — verified properly this time** | Owner started from source against a fresh Postgres database. Discriminating evidence, which the retracted line above lacked: a nonsense path returns **404** while `/api/sync/v1/push` returns **400** with Owner's own `{"reason_code":"INVALID_REQUEST"}` — different responses, so the route genuinely exists and is handling the request |
-| Clean-machine install and activation | **RUN — WORKS** | Fresh Owner (venv, migrations to head, RBAC 138 permissions + 5 roles, catalogue, offline policy, signing key generated and activated with a real sign/verify round-trip, `commercial preflight` fully clean). Fresh till: `needs_setup:true` → first admin → licence `ACTIVE_ONLINE`. Confirmed the gate is real: creating a product was refused before activation and succeeded after |
+| Clean-machine install and activation | **RUN — WORKS** | Fresh Owner (venv, migrations to head, RBAC 138 permissions + 5 roles, catalogue, offline policy, signing key generated and activated with a real sign/verify round-trip, `commercial preflight` reporting 51 OK and one WARNING — **corrected: this originally said "fully clean", which was wrong.** The single warning was the missing trust anchor, and it was filtered out by a bad regex in the check meant to surface it. See step 3 of the section below). Fresh till: `needs_setup:true` → first admin → licence `ACTIVE_ONLINE`. Confirmed the gate is real: creating a product was refused before activation and succeeded after |
 
 ## Reachability — features with no doorway
 
@@ -190,6 +190,22 @@ that points somewhere other than the cause.
    Deliberate — the design refuses trust-on-first-use — but it means a build
    cut against one Owner can never activate against another, and rotating the
    signing key strands every existing build.
+
+   **CORRECTION, and the correction matters more than the finding.** This was
+   originally written as "nothing anywhere says this step exists". That is
+   false. `flask commercial preflight` *does* report it, as a WARNING, naming
+   the missing path and quoting the exact command to run. The product warned;
+   the warning was filtered out by a bad regex in the check that was supposed
+   to surface it (`"status": "(FAIL|WARN|ERROR)"` does not match `"WARNING"` —
+   the trailing quote), and preflight was then reported here as "fully clean".
+   Re-verified by moving the anchor aside and re-running: 51 OK, 1 WARNING,
+   and the warning is exactly the missing anchor.
+
+   So the real lesson is not that the product lacks a diagnostic. It is that a
+   filter written to find problems can hide the one problem it was pointed at,
+   and a clean report from a filter nobody proved is worth nothing. The same
+   mutation discipline this document applies to code applies to the greps used
+   to read it.
 4. **The app must be started as `python app.py`, not `flask --app app run`.**
    `init_app()` — which runs every migration — is called only under
    `__main__`. Started the Flask way the server boots happily, answers

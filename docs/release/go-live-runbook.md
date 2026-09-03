@@ -48,22 +48,54 @@ Treat those as *likely*, not certain. Preflight tells you the truth today.
 
     flask seed-rbac                      # roles + permissions, the fix preflight names
     flask create-superadmin              # a real admin account, if none exists
-    flask seed-catalog                   # plans / prices / add-ons
+    flask seed-catalog                   # products / platforms / release channels / entitlement defs / DRAFT add-ons
+    flask seed-plans                     # ONE placeholder $99 plan per product -- run AFTER seed-catalog
     flask seed-offline-policy            # how long an install may run unreachable
+
+Correction (launch-readiness W0.3, 2026-09-03): the line above used to read
+`flask seed-catalog # plans / prices / add-ons` — that is wrong.
+`seed-catalog` seeds products, platforms, release channels, entitlement
+definitions, and add-ons left DRAFT/PLANNED; it seeds **zero plans**. A
+licence is issued against a plan (`issue_license_direct(plan_id=...)`), so
+without a plan a fresh Owner cannot cut its very first key, and there was no
+`seed-plans` command to fix that — the only way through was building a plan
+by hand through the UI, with nothing telling you that step existed. Run
+`flask seed-plans` right after `seed-catalog`; it is idempotent and prints a
+JSON summary like the other seed commands. Its price ($99.00 flat, ONE_TIME,
+per product) is a **placeholder** — set the real price from the Owner UI
+(catalog → plan → add price) before selling anything for real.
 
 ### 1.3 Signing keys and the trust anchor
 
     flask licensing verify-signing-key-health
+    flask licensing generate-signing-key   # first boot only, if no key exists yet
+    flask licensing activate-signing-key <key_id>
     flask licensing export-public-keys
+    python scripts/generate_trust_anchor.py --owner-url https://owner.actionaura.me/api/licensing/v1 \
+        --out commercial_runtime/licensing_contracts/trust_anchor.json
 
-`export-public-keys` is what produces the material the PRODUCTS trust. If the
-anchor shipped inside the installer does not match the key Owner is signing
-with, **every activation fails and the failure looks like a customer problem.**
-Confirm these agree before issuing a single licence.
+`export-public-keys` is what produces the material the PRODUCTS trust, but
+printing it to stdout is not enough — a product installer only ever reads
+`commercial_runtime/licensing_contracts/trust_anchor.json`, a gitignored,
+build-time-only file that **nothing generates automatically.**
+`scripts/generate_trust_anchor.py` is the step that writes it, and it must be
+run **once per Owner instance**, before the first product build. Skip it and
+the failure is silent until the worst possible moment: activation reaches
+Owner, Owner signs the assertion correctly, and the client rejects its own
+Owner's answer with `UNKNOWN_SIGNING_KEY` — a signature-shaped error for a
+"you forgot a file" problem. `flask commercial preflight`'s
+`trust_anchor_matches_active_key` check exists specifically to catch this
+before it reaches a customer: WARNING if the file is simply missing (names
+the exact command above), FAIL if it exists but references a different key
+than the one Owner is currently signing with. Confirm the exported keys and
+the anchor file agree before issuing a single licence.
 
 If a key must be rotated: `generate-signing-key` → `activate-signing-key` →
-re-export → rebuild the installer. Rotation without re-shipping the anchor
-breaks every install that has not checked in yet.
+re-export → **re-run `scripts/generate_trust_anchor.py`** → rebuild the
+installer. Rotation without regenerating and re-shipping the anchor breaks
+every install that has not checked in yet — preflight will FAIL on
+`trust_anchor_matches_active_key` in exactly this state, which is the signal
+to regenerate before building anything.
 
 ### 1.4 The commercial model
 
