@@ -2257,27 +2257,65 @@ reproduces the old behaviour exactly, which is what makes the change safe:
 only the three cash-drawer sites whose defect a test demonstrates
 (`opening_float`, `counted`, `variance`) were switched over.
 
-**Still at hardcoded 2dp, deliberately deferred:** roughly 34 other `_money()`
-call sites, the largest groups being customer payments, supplier payments and
-purchase-order payments. Each needs its own test before it moves, because each
-sits on a different transaction and a different set of preconditions -- and
-`_company_currency()` exists precisely because the obvious `_settings()` read
-throws inside guards that mean something else (it broke 40 drawer tests on the
-first attempt).
+**UPDATE, same day: nearly all of this is now done.** The paragraph below used
+to read "roughly 34 other `_money()` call sites still at hardcoded 2dp,
+deliberately deferred". Leaving that standing would be the exact staleness
+this file keeps suffering from, so here is what actually landed, in three
+further waves:
 
-Not a silent gap: on a JOD install these round a payment to the nearest
-qirsh. It is the same defect as the drawer's, in the same file, awaiting the
-same treatment one call site at a time.
+- **Payments and credit balances.** `_record_payment`, `customer_payment`,
+  `supplier_payment`, `pay_purchase_order`, `create_purchase_order`,
+  `void_payment`, `accept_reorder_request`. Plus `_adjust_credit()`, which
+  carried its OWN independent hardcoded `Decimal('0.01')` -- converting only
+  the payment amount would have produced a correct-looking response while the
+  STORED BALANCE still lost fils.
+- **The sale path itself.** `create_sale` quantized its summed subtotal,
+  discount, tax and total to hardcoded cents even though it already passed the
+  currency to `calculate_line` per line -- so each line was computed at three
+  decimals and the sum rounded to two. `paid`, `change` and `balance_due` were
+  currency-blind too. Also `create_return`'s refund, `hold_sale`, cash
+  movements (float/paid in-out), and both statement `running_balance` figures,
+  which used a raw `.quantize(Decimal('0.01'))` that no `_money()` search
+  could find.
+- **The response boundary**, which would have defeated the rest silently:
+  `create_sale` returned `round(change, 2)` and `round(total, 2)`, and
+  `create_return` returned `round(refund, 2)`. The database row would have
+  been right and the till still told the wrong number.
 
-### WhatsApp's shift-close report formats money with `:.2f`
+**Genuinely still deferred**, and now a short list rather than a vague ~34:
+the two `_adjust_credit` calls in `create_sale` and `create_return` that omit
+`currency` (a documented pre-existing deferral, recorded in that function's
+own docstring), and the report/display aggregation sites in receivables,
+payables, daily cash and aging, where changing the formatting does not fix a
+stored value and would alter SUM rounding.
 
-`core/retail/whatsapp_hook.py` renders its Z-report figures with `:.2f`
-regardless of currency, so a JOD drawer holding 12.350 is reported as 12.35.
-The new email channel (`core/retail/email_hook.py`) reads `base_currency` and
-formats to that currency's real minor units instead; WhatsApp was left alone
-on purpose, because changing a second channel's formatting inside the commit
-that added a third trigger would have buried it. Straightforward to port --
-`email_hook._money()` is the model.
+One knock-on worth knowing: correcting the sale sum exposed
+`retail_promotions_test.py`, which computed its expectation via
+`pricing.calculate_line` with NO currency (two decimals) and asserted the API
+matched. It had been comparing JOD arithmetic against a cents reference and
+passing only because the API was also wrong. Both sides now get the same
+currency, and the fixture's currency is pinned so the comparison cannot
+silently drift again.
+
+### WhatsApp's shift-close report formats money with `:.2f` -- CLOSED same day
+
+WhatsApp rendered every money placeholder with a hardcoded `:.2f` while email
+was currency-aware, so one JOD close read `JD 12.350` by email and `12.35` by
+WhatsApp. That is worse than either channel simply being wrong: a shop can run
+both, and two different "correct" answers to "how much was in the drawer"
+leave the owner no way to tell which to believe.
+
+Fixed by EXTRACTING rather than copying: `core/retail/money_format.py` now
+owns `company_currency()` and `format_money()`, and both hooks call it, so the
+two cannot drift apart again. Eight `:.2f` sites converted -- the shift-close
+trio, the daily-sales trio, the two AR-overdue totals. The low-stock alert's
+`on_hand`/`reorder_level` keep `:g`; those are unit counts, not money.
+
+Worth remembering from that work: the first mutation proof came back GREEN on
+a broken code path, because the fixture opened and closed the drawer with the
+same amount, so a still-correct figure satisfied the check meant for the
+broken one. The test was tightened (two different amounts, indexed per-field
+equality) rather than accepted.
 
 ## Automatic email had one trigger; now it has two (2026-09-03)
 
@@ -2310,6 +2348,23 @@ but describes a service that never runs there. **Any Android sync UI must read
 `SyncCoordinator.health()`, not that route.**
 
 ## Accounts do not sync to the phone (2026-09-03)
+
+> **STATUS UPDATE, same day.** The BACKEND half of this is now built: the
+> Android branch of `app.py` constructs a second `SyncService` over
+> registry.db with `REGISTRY_SYNC_ENTITY_TYPES`, and
+> `make_sync_internal_blueprint` is parameterised (name + url_prefix,
+> defaulted to today's values) so a second blueprint can be registered under
+> `/api/registry-sync`. Ten tests cover it, including the allow-half: a `user`
+> event must reach registry.db and must NOT be applied to retail.db, and a
+> `product` event sent to the registry route must be applied to neither.
+>
+> **Accounts still do not sync end to end.** What remains is the Kotlin half --
+> `SyncCoordinator` driving BOTH streams, each with its own cursor and its own
+> outbox/ack endpoints, with per-stream failure isolation so a broken retail
+> outbox cannot starve the registry stream. The signing and health plumbing is
+> already stream-agnostic; what is missing is any notion of more than one
+> stream. The diagnosis below stays for the reasoning; steps 1 and 2 of "what
+> closing it takes" are done, 3 and 4 are not.
 
 **The gap, stated plainly: a cashier created on the desktop cannot log in on
 the Android app, and an account created on the phone never reaches the
