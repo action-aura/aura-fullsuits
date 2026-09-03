@@ -239,14 +239,48 @@ def test_zero_promotions_totals_are_byte_identical_to_todays_math(shop):
     EXACTLY what core.retail.pricing.calculate_line produces for the same
     manual discount -- not approximately, since pricing.py is unmodified
     and unconsulted differently by this change. Compared against an
-    INDEPENDENT call into pricing.py, not against the API's own internals."""
+    INDEPENDENT call into pricing.py, not against the API's own internals.
+
+    THE CURRENCY MUST BE PASSED TO BOTH SIDES, and the omission was a real
+    defect in this test rather than a detail.
+
+    `create_sale` calls `calculate_line(..., currency=currency)`, so on a
+    default install -- which is JOD, three decimal places -- every line is
+    computed at fils precision. This test used to call `calculate_line`
+    with NO currency, which defaults to two, and then assert the two agreed.
+    While the API also quantized its sums to a hardcoded two decimals the
+    mismatch was invisible; the moment the sum was corrected to follow the
+    shop's real currency, this test began failing with
+    `assert 44.996 == 45.0` -- a 15% discount on 299.97 is 44.9955, which is
+    44.996 in fils and 45.00 in cents.
+
+    So the test was comparing the API's JOD arithmetic against pricing.py's
+    two-decimal default and calling the difference a bug. Both sides now get
+    the same currency, which is what "compared against an INDEPENDENT call
+    into pricing.py" was always supposed to mean.
+
+    Nothing was weakened: the assertions are still exact equality, and the
+    fixture's currency is now PINNED below, so if the product's default ever
+    stops being JOD this fails loudly instead of silently comparing the
+    wrong two numbers again.
+    """
     cid, client = shop
     pid = _create_product(client, sell_price=99.99, tax_rate=16)
     r = _sale(client, [{'product_id': pid, 'quantity': 3, 'discount_pct': 15}])
     assert r.status_code == 200, r.get_json()
     data = r.get_json()['data']
 
-    expected = pricing.calculate_line(99.99, 3, 15, 16, mode='after_discount')
+    # Pinned, not assumed: this fixture writes no `base_currency` row, so the
+    # sale above ran on the product default. Read it back from the same
+    # source the API used rather than hardcoding 'JOD' here, so this test
+    # follows a deliberate change to that default instead of breaking on one.
+    shop_currency = client.get('/api/sub/retail/settings/tax').get_json()['data']['base_currency']
+    assert shop_currency == pricing.DEFAULT_BASE_CURRENCY, (
+        "fixture currency drifted from the product default; the comparison "
+        "below would be against the wrong precision")
+
+    expected = pricing.calculate_line(99.99, 3, 15, 16, mode='after_discount',
+                                      currency=shop_currency)
     assert data['subtotal'] == expected['gross']
     assert data['discount_amount'] == expected['discount_amount']
     assert data['tax_amount'] == expected['tax']
