@@ -4343,21 +4343,36 @@ def create_sale():
             tax      += Decimal(str(calc['tax']))
             total    += Decimal(str(calc['total']))
 
-        subtotal = float(subtotal.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
-        discount = float(discount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
-        tax      = float(tax.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
-        total    = float(total.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+        # Same currency the per-line pricing calls above already used
+        # (`currency`, read once at ~line 4058). The per-line calc was
+        # already quantized correctly; summing those lines and THEN
+        # re-quantizing the sum to a hardcoded 2dp threw away the very
+        # precision the per-line rounding had just protected -- a JOD sale
+        # whose lines individually carried three decimals had its persisted
+        # total silently coarsened back to two. See this function's own
+        # `currency` comment above and _cash_session_report's identical
+        # "read once, apply to every figure" rule.
+        _quant = tax_engine.currency_quantum(currency)
+        subtotal = float(subtotal.quantize(_quant, rounding=ROUND_HALF_UP))
+        discount = float(discount.quantize(_quant, rounding=ROUND_HALF_UP))
+        tax      = float(tax.quantize(_quant, rounding=ROUND_HALF_UP))
+        total    = float(total.quantize(_quant, rounding=ROUND_HALF_UP))
 
         # AUDIT-fix: amount_paid was never floored at 0. A negative value
         # (only reachable via a direct API call, never the POS UI, which
         # always sends Math.max(tendered, total)) inflated balance_due
         # beyond total, which could force is_credit=True and record a
         # customer owing MORE than the sale's own total.
-        paid      = max(0.0, _money(data.get('amount_paid', total)))
-        change    = max(0.0, _money(paid - total))
+        #
+        # `change` is physical cash handed back to the customer -- the same
+        # currency-blind 2dp default here shorted or overpaid a JOD
+        # customer by up to 5 fils on their change, the exact defect class
+        # `_money`'s own docstring warns about for a drawer count.
+        paid      = max(0.0, _money(data.get('amount_paid', total), currency))
+        change    = max(0.0, _money(paid - total, currency))
         pm        = data.get('payment_method', 'cash')
         customer_id = data.get('customer_id')
-        balance_due = _money(total - paid)
+        balance_due = _money(total - paid, currency)
 
         # ── Credit-sale rules (Accounts Receivable) ──────────────────────────
         # A credit sale leaves an unpaid balance owed by a NAMED customer. Walk-ins
@@ -4717,7 +4732,16 @@ def create_sale():
             'id': sale_id, 'sale_number': sale_number,
             'idempotency_key': idem, 'currency': _settings(conn, cid)['base_currency'],
             'subtotal': subtotal, 'discount_amount': discount, 'tax_amount': tax,
-            'change': round(change, 2), 'total': round(total, 2),
+            # `change`/`total` are already quantized to the company's own
+            # currency precision above (see that comment) and persisted at
+            # that precision in the INSERT just above -- a bare
+            # `round(x, 2)` here silently coarsened a correctly-computed JOD
+            # (3dp) total and change back to cents on their way out to the
+            # client, defeating the fix for the two figures the cashier and
+            # the customer actually read off the receipt. Same defect class
+            # as create_return's identical `round(refund, 2)` (see that
+            # site's own comment).
+            'change': change, 'total': total,
             'amount_paid': paid, 'balance_due': balance_due, 'warning': warning,
             'lines': resolved_lines, 'calculation_version': tax_engine.CALCULATION_VERSION,
             # Launch-readiness Phase 7 stage 7d-iii: NEVER silent. True only
@@ -5339,9 +5363,16 @@ def hold_sale():
         # Client-submitted, DISPLAY-ONLY -- never fed into a financial record
         # (see section banner above). Falls back to summing the cart's own
         # line_total figures if the client didn't send pre-computed totals.
+        # `_company_currency`, not `_settings()`: this function has no other
+        # reason to load settings, and `_company_currency`'s own docstring
+        # is explicit that its narrow-try/never-raise contract exists
+        # precisely so a settings-table hiccup here degrades to the product
+        # default instead of surfacing as some unrelated 400/500 to the
+        # cashier trying to hold a cart.
+        currency = _company_currency(conn, cid)
         item_count = len(items)
-        subtotal = _money(data.get('subtotal', sum(float(i.get('line_total', 0)) for i in items)))
-        total = _money(data.get('total', subtotal))
+        subtotal = _money(data.get('subtotal', sum(float(i.get('line_total', 0)) for i in items)), currency)
+        total = _money(data.get('total', subtotal), currency)
 
         snapshot = json.dumps({
             'items': items,
@@ -5705,7 +5736,11 @@ def create_return():
             })
             refund_total += Decimal(str(calc['total']))
 
-        refund = float(refund_total.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+        # Same currency-driven quantum as create_sale's identical sum-then-
+        # quantize step above (see that comment) -- a hardcoded 2dp here
+        # coarsened a JOD refund back to cents right after the per-line
+        # `calc` above had computed it correctly to fils.
+        refund = float(refund_total.quantize(tax_engine.currency_quantum(currency), rounding=ROUND_HALF_UP))
         # returns.return_number carries a bare (not company-scoped, not
         # device-scoped) UNIQUE constraint, but _next_ref()'s counter resets
         # per company AND is a per-DEVICE table (`doc_sequences` is never
@@ -5841,7 +5876,13 @@ def create_return():
         # balance is the real, final backstop -- it can never go below what
         # they'd otherwise be credited elsewhere).
         if sale['customer_id']:
-            original_balance_due = max(0.0, _money(float(sale['total']) - float(sale['amount_paid'] or 0)))
+            # `currency` is the SAME variable read once near the top of this
+            # function (~line 5578) -- the original sale's own total/paid
+            # figures were persisted in that same currency by create_sale's
+            # now-fixed quantization, so the balance derived from them here
+            # must be read back at the same precision, not silently
+            # coarsened to 2dp for a JOD company.
+            original_balance_due = max(0.0, _money(float(sale['total']) - float(sale['amount_paid'] or 0), currency))
             if original_balance_due > 0.005:
                 current_balance = cur.execute(
                     "SELECT COALESCE(credit_balance,0) FROM customers WHERE id=? AND company_id=?",
@@ -5855,7 +5896,13 @@ def create_return():
         conn.commit()
         _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
         return jsonify({'status': 'success', 'data': {
-            'id': ret_id, 'return_number': ret_num, 'refund_amount': round(refund, 2),
+            # `refund` is already quantized to the company's own currency
+            # precision above (see that comment) -- a bare `round(refund, 2)`
+            # here silently coarsened a correctly-computed JOD (3dp) refund
+            # back to cents on its way out to the client, defeating the fix
+            # a few lines up for the one figure the cashier and the customer
+            # actually see.
+            'id': ret_id, 'return_number': ret_num, 'refund_amount': refund,
             'idempotency_key': idem, 'items': resolved_items,
             'calculation_version': tax_engine.CALCULATION_VERSION,
         }})
@@ -7072,8 +7119,18 @@ def create_cash_movement(session_id):
             conn.close()
             return jsonify({'status': 'error',
                              'message': f"type must be one of {sorted(_CASH_MOVEMENT_TYPES)}."}), 400
+        # `_company_currency`, resolved OUTSIDE the narrow try/except below --
+        # that except's meaning is "the client sent a bad number", and
+        # `_settings()` has preconditions that can raise for an unrelated
+        # reason (see `_company_currency`'s own docstring on the 40-drawer-
+        # test regression this exact mistake caused once already). This is
+        # real drawer cash -- float_in/float_out/paid_in/paid_out -- and it
+        # was the one cash-movement figure still missed when the rest of the
+        # drawer (`_cash_session_report`'s `expected`, `_adjust_credit`) was
+        # converted to the shop's own currency precision.
+        currency = _company_currency(conn, cid)
         try:
-            amount = _money(data.get('amount'))
+            amount = _money(data.get('amount'), currency)
         except Exception:
             conn.close()
             return jsonify({'status': 'error', 'message': 'Invalid amount.'}), 400
@@ -9040,14 +9097,23 @@ def customer_statement(cust_id):
                             "AND direction='in' AND COALESCE(status,'active')='active'", (cid, cust_id)).fetchall()
     events = [dict(r) for r in charges] + [dict(r) for r in receipts]
     events.sort(key=lambda e: e.get('created_at') or '')
+    # Read ONCE, applied to every figure this statement returns -- same rule
+    # `_cash_session_report` and create_sale already follow: a running
+    # balance quantized coarser than the per-event amounts it is built from
+    # invents a discrepancy out of nowhere for a JOD account. This raw
+    # `run.quantize(Decimal('0.01'))` predates `_money` entirely (a
+    # `_money()`-only search would never find it), so it kept the hardcoded
+    # 2dp default even after the drawer and create_sale were converted.
+    currency = _company_currency(conn, cid)
+    quant = tax_engine.currency_quantum(currency)
     run = Decimal('0'); out = []
     for e in events:
         amt = Decimal(str(e['amount'] or 0))
         run = (run + amt) if e['kind'] == 'charge' else (run - amt)
         out.append({'ref': e['ref'], 'date': e['created_at'], 'kind': e['kind'], 'payment_id': e.get('id'),
-                    'amount': _money(e['amount']), 'running_balance': float(run.quantize(Decimal('0.01')))})
+                    'amount': _money(e['amount'], currency), 'running_balance': float(run.quantize(quant, rounding=ROUND_HALF_UP))})
     conn.close()
-    return jsonify({'status': 'success', 'data': {'customer': dict(cust), 'events': out, 'balance': _money(cust['credit_balance'])}})
+    return jsonify({'status': 'success', 'data': {'customer': dict(cust), 'events': out, 'balance': _money(cust['credit_balance'], currency)}})
 
 @retail_bp.route('/customers/<string:cust_id>/payments', methods=['POST'])
 @mt_login_required
@@ -9119,14 +9185,18 @@ def supplier_statement(sid):
                             "AND direction='out' AND COALESCE(status,'active')='active'", (cid, sid)).fetchall()
     events = [dict(r) for r in charges] + [dict(r) for r in payments]
     events.sort(key=lambda e: e.get('created_at') or '')
+    # Same treatment as customer_statement's identical loop above -- see
+    # that function's comment.
+    currency = _company_currency(conn, cid)
+    quant = tax_engine.currency_quantum(currency)
     run = Decimal('0'); out = []
     for e in events:
         amt = Decimal(str(e['amount'] or 0))
         run = (run + amt) if e['kind'] == 'charge' else (run - amt)
         out.append({'ref': e['ref'], 'date': e['created_at'], 'kind': e['kind'], 'payment_id': e.get('id'),
-                    'amount': _money(e['amount']), 'running_balance': float(run.quantize(Decimal('0.01')))})
+                    'amount': _money(e['amount'], currency), 'running_balance': float(run.quantize(quant, rounding=ROUND_HALF_UP))})
     conn.close()
-    return jsonify({'status': 'success', 'data': {'supplier': dict(sup), 'events': out, 'balance': _money(sup['credit_balance'])}})
+    return jsonify({'status': 'success', 'data': {'supplier': dict(sup), 'events': out, 'balance': _money(sup['credit_balance'], currency)}})
 
 @retail_bp.route('/suppliers/<string:sid>/payments', methods=['POST'])
 @mt_login_required
