@@ -44,8 +44,11 @@ import androidx.compose.ui.unit.dp
 import com.actionaura.retail.net.*
 import com.actionaura.retail.ui.components.EmptyState
 import com.actionaura.retail.ui.components.TillCard
+import com.actionaura.retail.ui.theme.Danger
+import com.actionaura.retail.ui.theme.OnAccent
 import com.actionaura.retail.ui.theme.Success
 import com.actionaura.retail.ui.theme.SuccessContainer
+import com.actionaura.retail.ui.theme.Warning
 import com.actionaura.retail.ui.i18n.amount
 import com.actionaura.retail.ui.i18n.fmtQty
 import com.actionaura.retail.ui.i18n.money
@@ -56,9 +59,36 @@ import kotlinx.coroutines.launch
 import java.util.UUID
 
 // ── Category color tiles (offline "product image" treatment) ──────────────────
+// DECORATIVE identity palette, not semantic -- these hues exist only so two
+// categories look different, and are exempt from the token layer for that
+// reason (ColorTokenContractTest.kt). They are however drawn TWICE:
+// as a quiet 18%-alpha tile backdrop AND as the full-strength colour of the
+// text/icon sitting on that same tile (see catColor's call sites below), so
+// the pairing still owes a WCAG check same as any other text-on-surface pair.
+// Measured against every surface this tile can land on (SurfaceRaised,
+// SurfaceTill, SurfacePanel, SurfaceApp) at both the 18%-tinted-backdrop
+// reading and the raw (category-name label, no tint) reading, four of the
+// original eight hues came in under the 4.5:1 floor:
+//   indigo 6366F1  worst 3.11 (tinted) / 3.62 (raw)
+//   pink   EC4899  worst 3.90 (tinted) / 4.59 (raw)   -- passed raw, failed tinted
+//   purple A855F7  worst 3.33 (tinted) / 4.09 (raw)
+//   red    EF4444  worst 3.60 (tinted) / 4.30 (raw)
+// Per the audit instructions, the fix is to lighten those ONE-BY-ONE minimally
+// (same hue, same saturation, HSL lightness nudged up just far enough to clear
+// 4.5:1 at the worst-case surface) rather than replace the palette -- the
+// point of these hues is that they differ, and after the nudge they still do.
+// teal/amber/emerald/sky were already compliant (4.74-7.55 worst-case) and are
+// untouched. avatarPalette in ui/components/Components.kt is the same eight
+// hues (different order) and got the identical nudge for the identical reason.
 private val catPalette = listOf(
-    Color(0xFF6366F1), Color(0xFF14B8A6), Color(0xFFF59E0B), Color(0xFFEC4899),
-    Color(0xFF10B981), Color(0xFF38BDF8), Color(0xFFA855F7), Color(0xFFEF4444),
+    Color(0xFF9597F5), // indigo, lightened from 6366F1 (was 3.11:1, now 4.53:1 worst-case)
+    Color(0xFF14B8A6), // teal, unchanged (4.78:1 worst-case)
+    Color(0xFFF59E0B), // amber, unchanged (5.38:1 worst-case)
+    Color(0xFFF073B1), // pink, lightened from EC4899 (was 3.73:1, now 4.50:1 worst-case)
+    Color(0xFF10B981), // emerald, unchanged (4.74:1 worst-case)
+    Color(0xFF38BDF8), // sky, unchanged (5.31:1 worst-case)
+    Color(0xFFC085F9), // purple, lightened from A855F7 (was 3.33:1, now 4.52:1 worst-case)
+    Color(0xFFF37777), // red, lightened from EF4444 (was 3.60:1, now 4.52:1 worst-case)
 )
 private fun catColor(key: String?): Color {
     val k = key ?: ""
@@ -584,13 +614,29 @@ private fun ProductTile(p: Product, inCart: Int, onAdd: () -> Unit) {
 
 @Composable
 private fun StockBadge(stock: Double, modifier: Modifier = Modifier) {
+    // SEMANTIC state colour, not decorative: out/low/in-stock is exactly what
+    // Danger/Warning/Success exist for. This badge sits on TOP of the
+    // ProductTile's category-colour gradient (any of catPalette's eight
+    // hues), so it must stay a fully OPAQUE solid fill to read reliably
+    // regardless of what is under it -- the quiet *Container tokens
+    // (SuccessContainer/DangerContainer) are translucent-over-surface by
+    // design and would take on whatever gradient is behind them here, so
+    // they are the wrong tool for this specific spot even though they are
+    // the right one in PaymentSuccess below. There is no WarningContainer
+    // token (Color.kt only has Success/DangerContainer), so all three
+    // branches use the same idiom for internal consistency: the *Text*
+    // token itself as the opaque fill, OnAccent (a dark, near-navy label
+    // already used for "text on a light/vivid fill" elsewhere) as the text
+    // colour. Measured: white text on the old literal fills was ALREADY
+    // broken (2.15:1 amber, 2.54:1 green, 3.76:1 red -- none reached AA);
+    // OnAccent on the token fills reaches 8.66-10.49:1.
     val (label, color) = when {
-        stock <= 0 -> tr("Out") to Color(0xFFEF4444)
-        stock <= 5 -> (tr("Low") + " · ${fmtQty(stock)}") to Color(0xFFF59E0B)
-        else -> tr("%s in stock").format(fmtQty(stock)) to Color(0xFF10B981)
+        stock <= 0 -> tr("Out") to Danger
+        stock <= 5 -> (tr("Low") + " · ${fmtQty(stock)}") to Warning
+        else -> tr("%s in stock").format(fmtQty(stock)) to Success
     }
     Surface(color = color, shape = RoundedCornerShape(20.dp), modifier = modifier) {
-        Text(label, color = Color.White, style = MaterialTheme.typography.labelSmall,
+        Text(label, color = OnAccent, style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
     }
 }

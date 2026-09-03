@@ -132,9 +132,25 @@ fun SectionHeader(title: String, actionText: String? = null, onAction: (() -> Un
 }
 
 // ── Avatar (initials) ────────────────────────────────────────────────────────
+// DECORATIVE identity palette, not semantic -- exempt from the token layer for
+// that reason (ColorTokenContractTest.kt), same eight hues as
+// RetailScreens.kt's catPalette (different order), used the same way: a quiet
+// 18%-alpha circle backdrop with the SAME full-strength colour as the
+// initials text on top, so the pairing still owes a WCAG check. Four of the
+// eight failed the worst-case surface (SurfaceTill, tinted) when this was
+// measured: indigo 3.11:1, pink 3.90:1, purple 3.33:1, red 3.60:1. Lightened
+// those four minimally (same hue/saturation, HSL lightness nudged up) rather
+// than replacing the palette -- see catPalette's comment for the full
+// before/after numbers, identical here since it is the identical fix.
 private val avatarPalette = listOf(
-    Color(0xFF14B8A6), Color(0xFF6366F1), Color(0xFFEC4899), Color(0xFFF59E0B),
-    Color(0xFF10B981), Color(0xFF38BDF8), Color(0xFFA855F7), Color(0xFFEF4444),
+    Color(0xFF14B8A6), // teal, unchanged (4.78:1 worst-case)
+    Color(0xFF9597F5), // indigo, lightened from 6366F1 (was 3.11:1, now 4.53:1 worst-case)
+    Color(0xFFF073B1), // pink, lightened from EC4899 (was 3.90:1, now 4.50:1 worst-case)
+    Color(0xFFF59E0B), // amber, unchanged (5.38:1 worst-case)
+    Color(0xFF10B981), // emerald, unchanged (4.74:1 worst-case)
+    Color(0xFF38BDF8), // sky, unchanged (5.31:1 worst-case)
+    Color(0xFFC085F9), // purple, lightened from A855F7 (was 3.33:1, now 4.52:1 worst-case)
+    Color(0xFFF37777), // red, lightened from EF4444 (was 3.60:1, now 4.52:1 worst-case)
 )
 
 @Composable

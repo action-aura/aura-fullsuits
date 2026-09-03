@@ -25,6 +25,12 @@ import com.actionaura.retail.licensing.PendingActivationStore
 import com.actionaura.retail.licensing.classifyActivationResult
 import com.actionaura.retail.licensing.reachedOwner
 import com.actionaura.retail.ui.i18n.tr
+import com.actionaura.retail.ui.theme.Danger
+import com.actionaura.retail.ui.theme.DangerContainer
+import com.actionaura.retail.ui.theme.Success
+import com.actionaura.retail.ui.theme.SuccessContainer
+import com.actionaura.retail.ui.theme.TextTertiary
+import com.actionaura.retail.ui.theme.Warning
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.DateFormat
@@ -54,22 +60,38 @@ import java.util.Date
  * table -- still needs a real Arabic pass.
  */
 
+// Every branch below used to be a raw hex literal bypassing the token layer
+// entirely (AUDIT: colour-token-parity). Measured against SurfaceApp, the app
+// shell's own background -- this AssistChip's container is transparent, so
+// its icon tint (the only place this Pair's colour lands) is read straight
+// off whatever the app surface is -- ALL FOUR of the original literals
+// failed WCAG AA (4.5:1 floor):
+//   #666666 (grey/neutral)  3.24:1
+//   #1A7A3D (green/active)  3.45:1
+//   #8A6100 (amber/warning) 3.36:1
+//   #A3231F (red/danger)    2.50:1
+// Not just the grey one the audit that found this started from -- every
+// state on this screen, including "Active", was under-contrast. Mapped to
+// the token whose MEANING matches each group (TextTertiary is the token
+// this codebase already uses for de-emphasised/meta status, which is what
+// "not yet configured / mid-activation / deactivated" are); all four now
+// measure 8.17-11.28:1 on SurfaceApp.
 private fun stateLabel(state: String): Pair<String, Color> = when (state) {
-    "NOT_CONFIGURED" -> "Not configured" to Color(0xFF666666)
-    "ACTIVATION_REQUIRED" -> "Activation required" to Color(0xFF666666)
-    "ACTIVATING" -> "Activating…" to Color(0xFF666666)
-    "ACTIVE_ONLINE" -> "Active" to Color(0xFF1A7A3D)
-    "ACTIVE_OFFLINE" -> "Active (offline)" to Color(0xFF1A7A3D)
-    "WARNING" -> "Check-in needed soon" to Color(0xFF8A6100)
-    "GRACE_PERIOD" -> "Offline grace period" to Color(0xFF8A6100)
-    "RESTRICTED" -> "Restricted" to Color(0xFFA3231F)
-    "SUSPENDED" -> "Suspended" to Color(0xFFA3231F)
-    "REVOKED" -> "Revoked" to Color(0xFFA3231F)
-    "EXPIRED" -> "Expired" to Color(0xFFA3231F)
-    "DEVICE_DEACTIVATED" -> "Device deactivated" to Color(0xFF666666)
-    "CLOCK_REVIEW_REQUIRED" -> "Clock review required" to Color(0xFF8A6100)
-    "LOCAL_STATE_CORRUPT" -> "Local state needs reset" to Color(0xFFA3231F)
-    else -> state to Color(0xFF666666)
+    "NOT_CONFIGURED" -> "Not configured" to TextTertiary
+    "ACTIVATION_REQUIRED" -> "Activation required" to TextTertiary
+    "ACTIVATING" -> "Activating…" to TextTertiary
+    "ACTIVE_ONLINE" -> "Active" to Success
+    "ACTIVE_OFFLINE" -> "Active (offline)" to Success
+    "WARNING" -> "Check-in needed soon" to Warning
+    "GRACE_PERIOD" -> "Offline grace period" to Warning
+    "RESTRICTED" -> "Restricted" to Danger
+    "SUSPENDED" -> "Suspended" to Danger
+    "REVOKED" -> "Revoked" to Danger
+    "EXPIRED" -> "Expired" to Danger
+    "DEVICE_DEACTIVATED" -> "Device deactivated" to TextTertiary
+    "CLOCK_REVIEW_REQUIRED" -> "Clock review required" to Warning
+    "LOCAL_STATE_CORRUPT" -> "Local state needs reset" to Danger
+    else -> state to TextTertiary
 }
 
 /**
@@ -556,8 +578,20 @@ private fun StatusRow(label: String, value: String) {
 
 @Composable
 private fun MessageBanner(text: String, isError: Boolean) {
-    val bg = if (isError) Color(0xFFFDE2E2) else Color(0xFFE0EDFF)
-    val fg = if (isError) Color(0xFFA3231F) else Color(0xFF1E429F)
+    // Was a light-theme banner (pale pink / pale blue fill, dark text) hard-
+    // coded into an app whose theme is deliberately NOT DayNight (Theme.kt) --
+    // it would have rendered as a jarring light card on every other screen's
+    // near-black surface. isError=false is only ever used for a completed-
+    // action confirmation ("Activation successful.", "This device has been
+    // deactivated.", "Check-in complete…", see the infoMessage call sites
+    // below), i.e. it is a SUCCESS notice, not a neutral "info" one -- so it
+    // takes Success/SuccessContainer, the same quiet-badge idiom PaymentSuccess
+    // already uses, rather than a colour with no matching token here.
+    // Danger/DangerContainer (7.89:1) and Success/SuccessContainer (8.37:1)
+    // both clear the 4.5:1 floor by a wide margin; the original pair was never
+    // measured against a dark surface because it was never meant to sit on one.
+    val bg = if (isError) DangerContainer else SuccessContainer
+    val fg = if (isError) Danger else Success
     Surface(color = bg, contentColor = fg, shape = MaterialTheme.shapes.small) {
         Text(text, Modifier.padding(12.dp))
     }
