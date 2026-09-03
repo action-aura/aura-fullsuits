@@ -25,6 +25,22 @@ Registered only when `LICENSING_PLATFORM == 'ANDROID'` and an
 `internal_shared_secret` was generated (see products/retail/backend/app.py) --
 inert (not registered at all) on Windows, where `SyncService` drives its own
 push/pull loop directly via `SyncRelayClient`'s Python signer.
+
+Two-stream Android wiring (sync backend follow-up, closing the same gap
+`REGISTRY_SYNC_ENTITY_TYPES` documents on Windows -- see its comment in
+sync_service.py for the desktop half of this wound before it read
+`user_permission`): `make_sync_internal_blueprint` is called TWICE on
+Android, once per `SyncService` instance/database, using the
+`blueprint_name`/`url_prefix` parameters below to avoid colliding with each
+other on the same Flask app -- one over retail.db (`RETAIL_SYNC_ENTITY_TYPES`,
+the original/default registration this module has always had), one over
+registry.db (`REGISTRY_SYNC_ENTITY_TYPES`, `user`/`user_permission`). Without
+the second registration, a `user` event reaching an Android install's Kotlin
+pull loop had nowhere to be applied at all: the one existing instance is
+gated to `RETAIL_SYNC_ENTITY_TYPES`, which excludes `user`, so `_apply_event`
+silently dropped it (cursor still advancing past it, per that gate's own
+comment) -- a cashier account created elsewhere simply never arrived on that
+device, with no error anywhere to point at.
 """
 from __future__ import annotations
 
@@ -33,8 +49,31 @@ import hmac
 from flask import Blueprint, jsonify, request
 
 
-def make_sync_internal_blueprint(*, sync_service, get_conn, state_repository, shared_secret: str) -> Blueprint:
-    bp = Blueprint("sync_internal", __name__, url_prefix="/api/sync")
+def make_sync_internal_blueprint(
+    *,
+    sync_service,
+    get_conn,
+    state_repository,
+    shared_secret: str,
+    blueprint_name: str = "sync_internal",
+    url_prefix: str = "/api/sync",
+) -> Blueprint:
+    """`blueprint_name`/`url_prefix` default to the ONLY values this
+    function has ever used, so the existing (retail-stream) call site in
+    products/retail/backend/app.py's ANDROID branch, and every existing test
+    in test_internal_routes.py, are byte-for-byte unchanged -- neither
+    passes these arguments at all.
+
+    Parameterized (Android registry-stream wiring, sync backend follow-up)
+    because Android now builds a SECOND internal blueprint alongside this
+    one -- one per SyncService instance/database (retail.db, registry.db;
+    see products/retail/backend/app.py's ANDROID branch) -- and Flask
+    refuses to register two blueprints sharing a name, or two routes sharing
+    a URL prefix, on the same app. Both parameters must be overridden
+    together for the second instance: a distinct `blueprint_name` alone
+    would still collide on `url_prefix`, and vice versa.
+    """
+    bp = Blueprint(blueprint_name, __name__, url_prefix=url_prefix)
 
     def _authorized() -> bool:
         provided = request.headers.get("X-Aura-Internal-Secret", "")

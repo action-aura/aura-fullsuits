@@ -631,6 +631,7 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
     # the shared retail_api.py nudge() call sites.
     from commercial_runtime.licensing_contracts.state_repository import LicenseStateRepository
     from commercial_runtime.sync.sync_service import (
+        REGISTRY_SYNC_ENTITY_TYPES,
         SyncFreshnessStore,
         SyncService,
         local_company_id_from_registry,
@@ -651,11 +652,11 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
     # timer can).
     #
     # local_freshness_store: same reasoning as the Windows branch above --
-    # this instance's `_sync_get_conn` is retail.db too (Android has no
-    # separate registry-stream SyncService of its own), so it carries the
-    # `sync_freshness` table (schema v18) exactly like the Windows instance
-    # does, and gets the same collaborator -- including `record_offline_
-    # override` (schema v19, stage 7c-ii; see the Windows branch above).
+    # this instance's `_sync_get_conn` is retail.db, so it carries the
+    # `sync_freshness` table (schema v18) exactly like the Windows retail
+    # instance does, and gets the same collaborator -- including
+    # `record_offline_override` (schema v19, stage 7c-ii; see the Windows
+    # branch above).
     # stock_exception_recorder: same reasoning as the Windows branch above
     # -- this instance's `_sync_get_conn` is retail.db too, so it carries
     # `stock_exceptions` (schema v20) exactly like the Windows instance
@@ -671,6 +672,65 @@ elif LICENSING_PLATFORM == 'ANDROID' and LICENSING_INTERNAL_SHARED_SECRET:
         get_conn=_sync_get_conn,
         state_repository=_sync_state_repository,
         shared_secret=LICENSING_INTERNAL_SHARED_SECRET,
+    ))
+
+    # Sync backend follow-up (Android registry stream): the ANDROID mirror of
+    # the Windows branch's `_registry_sync_service` above -- see that
+    # instance's own comment block for the full "Two-stream design" reasoning
+    # (sync_service.py's module docstring) and the exact bug this closes (a
+    # `user`/`user_permission` event arriving from Kotlin's pull loop had no
+    # instance gated to apply it at all: the ONE Android SyncService built
+    # above is `RETAIL_SYNC_ENTITY_TYPES`-gated, which excludes both, so
+    # `_apply_event` silently dropped them, cursor still advancing past --
+    # see that gate's own comment in sync_service.py).
+    #
+    # `get_conn` is registry.db's own `get_conn`, never `_sync_get_conn`
+    # above -- exactly the same registry.db-vs-retail.db split the Windows
+    # branch's `_registry_sync_get_conn` makes, for the identical reason:
+    # `users`/`user_permissions` live in registry.db, not retail.db.
+    #
+    # `client_factory=None`, exactly like `_android_sync_service` above --
+    # this process never holds the device signing key (Kotlin does; see the
+    # branch-opening comment), so nothing here ever calls push()/pull()
+    # itself. `.start()` is deliberately never called (mirrors
+    # `_android_sync_service`, and `init_app()`'s own docstring on why: a
+    # started timer would call this `client_factory` and crash on the first
+    # tick), and this instance is deliberately never passed to
+    # `register_active_service()` either -- same reasoning as the Windows
+    # `_registry_sync_service`: that global slot must stay pointed at
+    # whatever drains the RETAIL outbox (on Android, nothing -- Kotlin's
+    # SyncCoordinator drains both databases' outboxes itself via the two
+    # `/_internal/sync/*` blueprints), never silently redirected.
+    #
+    # `local_ensure_schema`/`local_freshness_store`/`stock_exception_recorder`
+    # are all deliberately omitted, mirroring the Windows `_registry_sync_
+    # service` exactly and for the identical reason -- `_ensure_credit_
+    # schema`, `sync_freshness` (schema v18) and `stock_exceptions` (schema
+    # v20) are all retail.db-only concerns (AR/AP columns, retail's own
+    # freshness/stock-exception tables). registry.db has none of them, and
+    # this instance's apply loop never reaches a branch that would need them
+    # anyway: `inventory_movement` (the only entity type that ever touches
+    # `local_ensure_schema`/the freshness store/the stock-exception
+    # recorder) is not in `REGISTRY_SYNC_ENTITY_TYPES`.
+    #
+    # Registered under its OWN blueprint name/url_prefix -- Flask refuses two
+    # blueprints sharing a name, or two routes sharing a prefix, on the same
+    # app, and `_android_sync_service`'s blueprint above already claimed the
+    # defaults (`"sync_internal"` / `/api/sync`).
+    def _android_registry_sync_get_conn():
+        from commercial_runtime.identity.registry_db import get_conn as _registry_get_conn
+        return _registry_get_conn()
+
+    _android_registry_sync_service = SyncService(
+        None, _android_registry_sync_get_conn, local_company_id_from_registry,
+        handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES)  # client_factory never used -- see comment above
+    app.register_blueprint(make_sync_internal_blueprint(
+        sync_service=_android_registry_sync_service,
+        get_conn=_android_registry_sync_get_conn,
+        state_repository=_sync_state_repository,
+        shared_secret=LICENSING_INTERNAL_SHARED_SECRET,
+        blueprint_name="registry_sync_internal",
+        url_prefix="/api/registry-sync",
     ))
 
 
