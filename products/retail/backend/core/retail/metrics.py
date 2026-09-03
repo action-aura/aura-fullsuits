@@ -356,6 +356,7 @@ import sqlite3
 import zoneinfo
 from collections import namedtuple
 from datetime import date, datetime, timedelta, timezone
+from decimal import ROUND_HALF_UP, Decimal
 
 from core.retail import pricing
 
@@ -936,8 +937,34 @@ def _scope(cid, period, boundary, branch_id=None, alias=None):
     return sql, params
 
 
-def _money(value):
-    return round(float(value or 0), 2)
+def _money(value, currency=None):
+    """Round one metric figure to the currency's real precision.
+
+    `currency` is OPTIONAL and defaults to None, which quantizes to 2dp --
+    the same target this function always had. That default is what keeps
+    every call site in this module that has not been threaded through yet
+    (there should be none left after this pass, but the default is the
+    safety net for the next one that gets added) answering the same 2dp
+    figure it always did.
+
+    What DOES change, even for a currency=None caller: the rounding rule
+    moves from Python's `round()` (banker's rounding -- round-half-to-even
+    on an exact tie) to Decimal/ROUND_HALF_UP, matching the posture
+    api/retail_api.py::_money and core/retail/pricing.py already use for
+    every other figure on the money path. A report screen and the sale
+    total sitting next to it must not round the identical .005 tie in two
+    different directions; that is a real (if rare) disagreement, and fixing
+    it is the point of switching helpers rather than merely widening this
+    one's precision.
+
+    Threaded in from api/retail_api.py's `_company_currency(conn, cid)`,
+    same as `_money`/`_adjust_credit` there -- see this module's own
+    docstring, item on JOD's three decimal places (fils), for why a metric
+    quantized to a hardcoded 2dp disagreed with the receipts, drawer counts
+    and statements it was supposed to summarize.
+    """
+    quant = pricing.currency_quantum(currency) if currency else Decimal('0.01')
+    return float(Decimal(str(value or 0)).quantize(quant, rounding=ROUND_HALF_UP))
 
 
 def _missing_table(exc):
@@ -999,40 +1026,42 @@ def _tax_mode(conn, cid):
 
 # ── Scalars ───────────────────────────────────────────────────────────────────
 
-def gross_sales(conn, cid, period, branch_id=None):
+def gross_sales(conn, cid, period, branch_id=None, currency=None):
     """Money rung up, BEFORE refunds. Almost nothing should want this --
     see #1. Exposed only so a screen that genuinely means "gross" can say so
     out loud rather than quietly re-writing SUM(total) for the eighth time."""
     where, params = _scope(cid, period, business_day(conn, cid), branch_id)
     row = conn.execute(f'SELECT COALESCE(SUM(total),0) FROM sales WHERE {where}', params).fetchone()
-    return _money(row[0])
+    return _money(row[0], currency)
 
 
-def refunds(conn, cid, period, branch_id=None):
+def refunds(conn, cid, period, branch_id=None, currency=None):
     where, params = _scope(cid, period, business_day(conn, cid), branch_id)
     rows = _returns_query(conn, f'SELECT COALESCE(SUM(refund_amount),0) FROM returns WHERE {where}', params)
-    return _money(rows[0][0]) if rows else 0.0
+    return _money(rows[0][0], currency) if rows else 0.0
 
 
 def transactions(conn, cid, period, branch_id=None):
-    """Sale count, never netted -- see #2."""
+    """Sale count, never netted -- see #2. Not money -- a count has no
+    currency precision to thread."""
     where, params = _scope(cid, period, business_day(conn, cid), branch_id)
     return int(conn.execute(f'SELECT COUNT(*) FROM sales WHERE {where}', params).fetchone()[0] or 0)
 
 
-def revenue(conn, cid, period, branch_id=None):
+def revenue(conn, cid, period, branch_id=None, currency=None):
     """THE revenue figure -- net of returns, always (#1)."""
-    return _money(gross_sales(conn, cid, period, branch_id) - refunds(conn, cid, period, branch_id))
+    return _money(gross_sales(conn, cid, period, branch_id, currency) -
+                  refunds(conn, cid, period, branch_id, currency), currency)
 
 
-def avg_ticket(net_revenue, txn_count):
+def avg_ticket(net_revenue, txn_count, currency=None):
     """Net revenue / transactions (#3). Pure arithmetic on figures already
     computed above, so it is structurally incapable of disagreeing with the
     revenue and transaction numbers printed next to it."""
-    return _money(net_revenue / txn_count) if txn_count else 0.0
+    return _money(net_revenue / txn_count, currency) if txn_count else 0.0
 
 
-def cogs(conn, cid, period, branch_id=None):
+def cogs(conn, cid, period, branch_id=None, currency=None):
     """Cost of goods sold, NET of returned units.
 
     Netting the returns side matters and is easy to get wrong: revenue is
@@ -1073,10 +1102,10 @@ def cogs(conn, cid, period, branch_id=None):
         WHERE {ret_where}
     """, ret_params)
     returned = rows[0][0] if rows else 0
-    return _money(float(sold or 0) - float(returned or 0))
+    return _money(float(sold or 0) - float(returned or 0), currency)
 
 
-def inventory_value(conn, cid):
+def inventory_value(conn, cid, currency=None):
     """Stock on hand at current cost. Not period- or branch-scoped: it is a
     snapshot of right now, which is why it takes no Period.
 
@@ -1090,7 +1119,7 @@ def inventory_value(conn, cid):
         FROM inventory_balances b JOIN products p ON b.product_id=p.id
         WHERE b.company_id=? AND p.status='active' AND p.deleted_at_utc IS NULL
     """, (cid,)).fetchone()
-    return _money(row[0])
+    return _money(row[0], currency)
 
 
 # ── Breakdowns ────────────────────────────────────────────────────────────────
@@ -1128,7 +1157,7 @@ def inventory_value(conn, cid):
 # Anything ADDED to this section is expected to satisfy the identity unless
 # it says here why it cannot.
 
-def _merge_buckets(sale_rows, refund_rows):
+def _merge_buckets(sale_rows, refund_rows, currency=None):
     """sale_rows: (key, gross, count). refund_rows: (key, refunds).
     Returns {key: {'gross','refunds','revenue','count'}} over the union."""
     out = {}
@@ -1138,13 +1167,13 @@ def _merge_buckets(sale_rows, refund_rows):
         out.setdefault(key, {'gross': 0.0, 'refunds': 0.0, 'count': 0})
         out[key]['refunds'] += float(refund or 0)
     for bucket in out.values():
-        bucket['revenue'] = _money(bucket['gross'] - bucket['refunds'])
-        bucket['gross'] = _money(bucket['gross'])
-        bucket['refunds'] = _money(bucket['refunds'])
+        bucket['revenue'] = _money(bucket['gross'] - bucket['refunds'], currency)
+        bucket['gross'] = _money(bucket['gross'], currency)
+        bucket['refunds'] = _money(bucket['refunds'], currency)
     return out
 
 
-def _bucketed(conn, cid, period, branch_id, sales_key, returns_key, boundary):
+def _bucketed(conn, cid, period, branch_id, sales_key, returns_key, boundary, currency=None):
     """Shared shape for the day/hour/payment-method/branch/employee
     breakdowns: one key expression grouped over `sales`, its counterpart
     grouped over `returns`, merged into net buckets.
@@ -1167,10 +1196,10 @@ def _bucketed(conn, cid, period, branch_id, sales_key, returns_key, boundary):
         conn,
         f'SELECT {returns_key} AS k, COALESCE(SUM(refund_amount),0) '
         f'FROM returns WHERE {where} GROUP BY k', params)
-    return _merge_buckets([(r[0], r[1], r[2]) for r in sales], [(r[0], r[1]) for r in rets])
+    return _merge_buckets([(r[0], r[1], r[2]) for r in sales], [(r[0], r[1]) for r in rets], currency)
 
 
-def revenue_by_day(conn, cid, period, branch_id=None):
+def revenue_by_day(conn, cid, period, branch_id=None, currency=None):
     """Net revenue per SHOP BUSINESS day (#5), ascending. Powers the
     sales-trend chart, whose day totals now sum to exactly the Revenue KPI
     beside it.
@@ -1180,15 +1209,15 @@ def revenue_by_day(conn, cid, period, branch_id=None):
     and then bucket to a day the chart does not draw."""
     boundary = business_day(conn, cid)
     day_key = _day_key(boundary, period)
-    buckets = _bucketed(conn, cid, period, branch_id, day_key, day_key, boundary)
+    buckets = _bucketed(conn, cid, period, branch_id, day_key, day_key, boundary, currency)
     return [{'day': day,
              'revenue': buckets[day]['revenue'],
              'transactions': buckets[day]['count'],
-             'avg_ticket': avg_ticket(buckets[day]['revenue'], buckets[day]['count'])}
+             'avg_ticket': avg_ticket(buckets[day]['revenue'], buckets[day]['count'], currency)}
             for day in sorted(buckets)]
 
 
-def revenue_by_hour(conn, cid, period, branch_id=None):
+def revenue_by_hour(conn, cid, period, branch_id=None, currency=None):
     """Net revenue keyed by two-digit hour ('00'..'23') on the SHOP's wall
     clock (#5). Zero-filling the quiet hours is the caller's job (the
     dashboard has to know how far into the day "now" is); this only reports
@@ -1201,11 +1230,11 @@ def revenue_by_hour(conn, cid, period, branch_id=None):
     aggregates hour-of-day across days, exactly as it always has."""
     boundary = business_day(conn, cid)
     hour_key = _hour_key(boundary, period)
-    buckets = _bucketed(conn, cid, period, branch_id, hour_key, hour_key, boundary)
+    buckets = _bucketed(conn, cid, period, branch_id, hour_key, hour_key, boundary, currency)
     return {hour: buckets[hour]['revenue'] for hour in buckets}
 
 
-def revenue_by_payment_method(conn, cid, period, branch_id=None):
+def revenue_by_payment_method(conn, cid, period, branch_id=None, currency=None):
     """Net revenue per tender type, highest first.
 
     A refund is netted against the method it was PAID BACK IN
@@ -1215,7 +1244,7 @@ def revenue_by_payment_method(conn, cid, period, branch_id=None):
     assumes (_cash_expected subtracts cash refunds from the cash float), so
     this keeps the chart and the drawer telling the same story."""
     buckets = _bucketed(conn, cid, period, branch_id,
-                        'payment_method', 'refund_method', business_day(conn, cid))
+                        'payment_method', 'refund_method', business_day(conn, cid), currency)
     rows = [{'payment_method': method,
              'count': buckets[method]['count'],
              'revenue': buckets[method]['revenue']}
@@ -1224,7 +1253,7 @@ def revenue_by_payment_method(conn, cid, period, branch_id=None):
     return rows
 
 
-def revenue_by_employee(conn, cid, period, branch_id=None):
+def revenue_by_employee(conn, cid, period, branch_id=None, currency=None):
     """Takings and transaction count per employee, over the period (#8).
 
     Grouped on `actor_user_uid` -- the v13 identity column -- and never on
@@ -1259,13 +1288,13 @@ def revenue_by_employee(conn, cid, period, branch_id=None):
     table, a different database on a connection this module does not hold
     (#8). The route joins it."""
     buckets = _bucketed(conn, cid, period, branch_id,
-                        'actor_user_uid', 'actor_user_uid', business_day(conn, cid))
+                        'actor_user_uid', 'actor_user_uid', business_day(conn, cid), currency)
     rows = [{'actor_user_uid': uid,
              'transactions': buckets[uid]['count'],
              'gross_sales': buckets[uid]['gross'],
              'refunds': buckets[uid]['refunds'],
              'revenue': buckets[uid]['revenue'],
-             'avg_ticket': avg_ticket(buckets[uid]['revenue'], buckets[uid]['count'])}
+             'avg_ticket': avg_ticket(buckets[uid]['revenue'], buckets[uid]['count'], currency)}
             for uid in buckets]
     # Tie-break on the uid so the order is stable across calls; `or ''`
     # because the unattributed bucket's key is None and None does not
@@ -1274,7 +1303,7 @@ def revenue_by_employee(conn, cid, period, branch_id=None):
     return rows
 
 
-def top_products(conn, cid, period, branch_id=None, limit=10):
+def top_products(conn, cid, period, branch_id=None, limit=10, currency=None):
     """Best sellers WITHIN the period (#5) -- this is the fix for the route
     that had no date filter at all and could out-earn the page it sat on.
 
@@ -1370,16 +1399,18 @@ def top_products(conn, cid, period, branch_id=None, limit=10):
         info = meta.get(pid)
         if info is None:
             continue  # product hard-deleted out from under its sale lines
-        cost = _money(entry['units'] * float(info['cost_price'] or 0))
+        cost = _money(entry['units'] * float(info['cost_price'] or 0), currency)
         rows.append({'product_id': pid, 'name': info['name'], 'sku': info['sku'],
+                     # NOT money -- a unit count, currency-precision does not
+                     # apply, kept at the module's existing 2dp rounding.
                      'units_sold': round(entry['units'], 2),
-                     'revenue': _money(entry['revenue']),
+                     'revenue': _money(entry['revenue'], currency),
                      'cost': cost,
-                     'profit': _money(entry['revenue'] - cost)})
+                     'profit': _money(entry['revenue'] - cost, currency)})
     return rows
 
 
-def revenue_by_branch(conn, cid, period):
+def revenue_by_branch(conn, cid, period, currency=None):
     """Every ACTIVE branch, including ones that sold nothing in the window
     (a zero bar is a real, visible fact in a comparison chart; a missing bar
     is a lie). Deliberately takes no branch_id -- see #6's exception."""
@@ -1387,38 +1418,40 @@ def revenue_by_branch(conn, cid, period):
         "SELECT id, name FROM branches WHERE company_id=? AND status='active' ORDER BY name",
         (cid,)).fetchall()
     buckets = _bucketed(conn, cid, period, None, 'branch_id', 'branch_id',
-                        business_day(conn, cid))
+                        business_day(conn, cid), currency)
     rows = []
     for branch in branches:
         bucket = buckets.get(branch['id'], {'revenue': 0.0, 'count': 0})
         rows.append({'branch_id': branch['id'], 'branch_name': branch['name'],
                      'revenue': bucket['revenue'],
                      'transactions': bucket['count'],
-                     'avg_ticket': avg_ticket(bucket['revenue'], bucket['count'])})
+                     'avg_ticket': avg_ticket(bucket['revenue'], bucket['count'], currency)})
     return rows
 
 
-def summary(conn, cid, period, branch_id=None):
+def summary(conn, cid, period, branch_id=None, currency=None):
     """The Reports page KPI cards, and the body of the emailed/WhatsApped
     report. Every figure here is one of the definitions above -- nothing is
     recomputed locally, which is what guarantees the cards agree with the
     charts drawn from the breakdowns."""
     prev = preceding_period(period)
-    cur_rev = revenue(conn, cid, period, branch_id)
-    prev_rev = revenue(conn, cid, prev, branch_id)
+    cur_rev = revenue(conn, cid, period, branch_id, currency)
+    prev_rev = revenue(conn, cid, prev, branch_id, currency)
     cur_txns = transactions(conn, cid, period, branch_id)
-    cur_cost = cogs(conn, cid, period, branch_id)
-    gross_profit = _money(cur_rev - cur_cost)
+    cur_cost = cogs(conn, cid, period, branch_id, currency)
+    gross_profit = _money(cur_rev - cur_cost, currency)
 
     return {
         'period_days': period.days,
         'revenue': cur_rev,
         'prev_revenue': prev_rev,
+        # NOT money -- a percentage change, no currency precision applies.
         'revenue_change': round((cur_rev - prev_rev) / prev_rev * 100, 1) if prev_rev > 0 else 0,
         'transactions': cur_txns,
-        'avg_ticket': avg_ticket(cur_rev, cur_txns),
+        'avg_ticket': avg_ticket(cur_rev, cur_txns, currency),
         'cogs': cur_cost,
         'gross_profit': gross_profit,
+        # NOT money -- a percentage, no currency precision applies.
         'margin_pct': round(gross_profit / cur_rev * 100, 1) if cur_rev > 0 else 0,
-        'inventory_value': inventory_value(conn, cid),
+        'inventory_value': inventory_value(conn, cid, currency),
     }

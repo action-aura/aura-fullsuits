@@ -1169,13 +1169,26 @@ def dashboard_stats():
     yest_p  = metrics.period_yesterday(shop_now)
     month_p = metrics.period_month_to_date(shop_now)
 
-    today_sales    = metrics.revenue(conn, cid, today_p, branch_id)
+    # Read ONCE for the whole response -- every metrics call below shares
+    # this scope, the same "read it once per request" rule _company_currency
+    # itself documents. Computed here, BEFORE the metrics calls, not down by
+    # `conn.close()` where this line used to sit: metrics.revenue()/
+    # refunds()/revenue_by_hour()/revenue_by_payment_method() must receive
+    # the real currency THEMSELVES now that core/retail/metrics.py's own
+    # `_money` is currency-aware, or the value they hand back has already
+    # been coarsened to 2dp before it ever reaches the `_money(value,
+    # currency)` calls in the jsonify payload below -- re-quantizing an
+    # already-wrong number to 3dp does not restore the fils that were
+    # already rounded away.
+    currency = _company_currency(conn, cid)
+
+    today_sales    = metrics.revenue(conn, cid, today_p, branch_id, currency)
     today_txns     = metrics.transactions(conn, cid, today_p, branch_id)
-    today_returns  = metrics.refunds(conn, cid, today_p, branch_id)
-    yest_sales     = metrics.revenue(conn, cid, yest_p, branch_id)
-    month_sales    = metrics.revenue(conn, cid, month_p, branch_id)
+    today_returns  = metrics.refunds(conn, cid, today_p, branch_id, currency)
+    yest_sales     = metrics.revenue(conn, cid, yest_p, branch_id, currency)
+    month_sales    = metrics.revenue(conn, cid, month_p, branch_id, currency)
     month_txns     = metrics.transactions(conn, cid, month_p, branch_id)
-    month_returns  = metrics.refunds(conn, cid, month_p, branch_id)
+    month_returns  = metrics.refunds(conn, cid, month_p, branch_id, currency)
 
     # launch-readiness Phase 6 stage 6b-iii-a: `deleted_at_utc IS NULL` added
     # to all three counts below. `total_customers` carried no `status` filter
@@ -1222,7 +1235,7 @@ def dashboard_stats():
     # Unconfigured shops -- the overwhelming majority, since nothing wrote
     # these settings until this release -- have zone None and day_start 0, so
     # this collapses to the identical `range(device_hour + 1)` list as before.
-    hourly_by_hr = metrics.revenue_by_hour(conn, cid, today_p, branch_id)
+    hourly_by_hr = metrics.revenue_by_hour(conn, cid, today_p, branch_id, currency)
 
     def _trading_position(hour_key):
         """Where a wall-clock hour sits in THIS shop's trading day: 0 is the
@@ -1255,7 +1268,7 @@ def dashboard_stats():
     # Payment method breakdown today -- net of refunds, keyed by the tender
     # the refund was paid back in (see metrics.revenue_by_payment_method).
     pay_methods = {r['payment_method']: {'count': r['count'], 'revenue': r['revenue']}
-                   for r in metrics.revenue_by_payment_method(conn, cid, today_p, branch_id)}
+                   for r in metrics.revenue_by_payment_method(conn, cid, today_p, branch_id, currency)}
 
     # Recent sales -- a list of documents, not a revenue figure, so it is
     # deliberately not period-scoped; it does honour branch_id so the whole
@@ -1276,17 +1289,35 @@ def dashboard_stats():
     recent_sql += " GROUP BY s.id ORDER BY s.created_at DESC LIMIT 8"
     recent = conn.execute(recent_sql, recent_params).fetchall()
 
+    # `currency` was already read above, before the metrics calls -- see that
+    # comment. These jsonify-payload `_money(value, currency)` calls below
+    # are what this block was originally about: it used to be the last
+    # `round(x, 2)` in the product still applied to real customer money, and
+    # it survived the whole money-precision pass because an audit of
+    # `_money()`/`.quantize()` call sites structurally cannot see a bare
+    # `round()`. Found afterwards by grepping the OPERATION rather than the
+    # helper -- the same way `create_sale`'s `round(change, 2)`
+    # response-boundary defect was found.
+    #
+    # Display-only: nothing here is persisted. But it is the DASHBOARD, the
+    # first screen anyone opens, so leaving it at cents while every receipt,
+    # drawer count and statement underneath it carries fils is the one
+    # remaining place the product visibly disagrees with itself -- a shop
+    # owner totalling their own receipts against this figure would find it
+    # short by up to 5 fils and have no way to explain why.
     conn.close()
+    # NOT money: a percentage change, which has no currency and keeps its own
+    # single decimal place.
     sales_change = round(((today_sales - yest_sales) / yest_sales * 100) if yest_sales > 0 else 0, 1)
 
     return jsonify({'status': 'success', 'data': {
-        'today_sales':      round(today_sales, 2),
+        'today_sales':      _money(today_sales, currency),
         'today_transactions': today_txns,
-        'today_returns':    round(today_returns, 2),
-        'month_returns':    round(month_returns, 2),
-        'yesterday_sales':  round(yest_sales, 2),
+        'today_returns':    _money(today_returns, currency),
+        'month_returns':    _money(month_returns, currency),
+        'yesterday_sales':  _money(yest_sales, currency),
         'sales_change_pct': sales_change,
-        'month_sales':      round(month_sales, 2),
+        'month_sales':      _money(month_sales, currency),
         'month_transactions': month_txns,
         'low_stock_alerts': low_stock,
         'total_customers':  total_customers,
@@ -7625,7 +7656,8 @@ def report_sales_trend():
     if _scope_err:
         conn.close()
         return _scope_err
-    rows = metrics.revenue_by_day(conn, cid, metrics.period_days(days, metrics.business_now(conn, cid, datetime.now())), branch_id)
+    currency = _company_currency(conn, cid)
+    rows = metrics.revenue_by_day(conn, cid, metrics.period_days(days, metrics.business_now(conn, cid, datetime.now())), branch_id, currency)
     conn.close()
     return jsonify({'success': True,
                     'labels': [r['day'] for r in rows],
@@ -7657,10 +7689,11 @@ def report_top_products():
     if _scope_err:
         conn.close()
         return _scope_err
+    currency = _company_currency(conn, cid)
     rows = metrics.top_products(
         conn, cid,
         metrics.period_days(days, metrics.business_now(conn, cid, datetime.now())),
-        branch_id, limit)
+        branch_id, limit, currency)
     conn.close()
     return jsonify({'success': True,
                     'labels': [r['name'] for r in rows],
@@ -7686,10 +7719,11 @@ def report_payment_methods():
     if _scope_err:
         conn.close()
         return _scope_err
+    currency = _company_currency(conn, cid)
     rows = metrics.revenue_by_payment_method(
         conn, cid,
         metrics.period_days(days, metrics.business_now(conn, cid, datetime.now())),
-        branch_id)
+        branch_id, currency)
     conn.close()
     return jsonify({'success': True, 'data': rows})
 
@@ -7761,10 +7795,11 @@ def report_by_employee():
     # because revenue_by_employee buckets its rows there (rule 2): a takings-
     # per-employee figure that silently omitted the shift currently on the
     # floor is a payroll number, not a rounding difference.
+    currency = _company_currency(conn, cid)
     rows = metrics.revenue_by_employee(
         conn, cid,
         metrics.period_days(days, metrics.business_now(conn, cid, datetime.now())),
-        branch_id)
+        branch_id, currency)
     conn.close()
 
     identities = _resolve_actor_identities(cid, [r['actor_user_uid'] for r in rows])
@@ -7805,10 +7840,11 @@ def _compute_report_summary(conn, cid, days, branch_id=None):
     daily summary calls this with `days=1` -- a one-day window, where being
     off by a day reports the wrong day outright rather than merely trimming
     an end off a fortnight."""
+    currency = _company_currency(conn, cid)
     return metrics.summary(
         conn, cid,
         metrics.period_days(days, metrics.business_now(conn, cid, datetime.now())),
-        branch_id)
+        branch_id, currency)
 
 @retail_bp.route('/reports/summary', methods=['GET'])
 @mt_login_required
@@ -8007,9 +8043,11 @@ def report_by_branch():
     cid  = _cid()
     days = int(request.args.get('days', 30))
     conn = get_retail_conn()
+    currency = _company_currency(conn, cid)
     rows = metrics.revenue_by_branch(
         conn, cid,
-        metrics.period_days(days, metrics.business_now(conn, cid, datetime.now())))
+        metrics.period_days(days, metrics.business_now(conn, cid, datetime.now())),
+        currency)
     conn.close()
     return jsonify({'success': True,
                     'labels':        [r['branch_name'] for r in rows],
@@ -10978,9 +11016,10 @@ def _ai_context_sales(conn, cid):
     # sentence on different days.
     now = metrics.business_now(conn, cid, datetime.now())
     today_p = metrics.period_today(now)
-    revenue = metrics.revenue(conn, cid, today_p)
+    currency = _company_currency(conn, cid)
+    revenue = metrics.revenue(conn, cid, today_p, currency=currency)
     txns = metrics.transactions(conn, cid, today_p)
-    top = metrics.top_products(conn, cid, metrics.period_all_time(now), limit=3)
+    top = metrics.top_products(conn, cid, metrics.period_all_time(now), limit=3, currency=currency)
     text = f"Today's sales: {revenue:.2f} total across {txns} transaction(s)."
     if top:
         text += " Top-selling products overall: " + ', '.join(

@@ -541,3 +541,182 @@ def test_supplier_statement_two_decimal_currency_still_gets_two(client):
 
     assert data['events'][0]['running_balance'] == -12.35, f"got {data['events'][0]['running_balance']!r}"
     assert data['balance'] == -12.35
+
+
+# ── Dashboard metrics: the last `round(x, 2)` on real customer money ────────
+#
+# These figures lived in a plain `round(x, 2)` in the jsonify payload, which is
+# why they outlived the whole money-precision pass: an audit of `_money()` and
+# `.quantize()` call sites structurally cannot see a bare `round()`. Found by
+# grepping the OPERATION rather than the helper -- the same way `create_sale`'s
+# `round(change, 2)` response-boundary defect was found.
+
+def _dashboard(c):
+    r = c.get(f'{API}/dashboard/stats')
+    assert r.status_code == 200, r.get_json()
+    return r.get_json()['data']
+
+
+def test_dashboard_default_install_reports_sales_in_fils(client):
+    """A JOD shop's dashboard must agree with its own receipts.
+
+    Rings a sale totalling 12.345 on a default install (no base_currency row).
+    Under the old `round(today_sales, 2)` the dashboard reported 12.35 while
+    the sale itself stored 12.345 -- so an owner totalling receipts against
+    the first screen they open would find it short, with nothing to explain
+    the difference. Display-only, but it was the one remaining place the
+    product visibly disagreed with itself.
+    """
+    _two_line_sale(client)
+    data = _dashboard(client)
+    assert float(data['today_sales']) == 12.345, (
+        "dashboard coarsened a JOD total to cents: today_sales=%r"
+        % (data['today_sales'],))
+
+
+def test_dashboard_two_decimal_currency_still_gets_two(client):
+    """THE ALLOW-HALF: currency-DRIVEN, not 'always three decimals'.
+
+    A USD shop's dashboard must still report cents. Without this, a fix that
+    simply hardcoded three decimals would pass the test above and be just as
+    wrong as what it replaced, in the other direction.
+    """
+    _set_currency(client.test_company_id, 'USD')
+    pid = _seed_product(client, name='Dollar Widget', sell_price=12.34)
+    r = client.post(f'{API}/sales', json={
+        'items': [{'product_id': pid, 'quantity': 1}],
+        'payment_method': 'cash', 'amount_paid': 12.34,
+        'idempotency_key': str(uuid.uuid4())})
+    assert r.status_code == 200, r.get_json()
+
+    data = _dashboard(client)
+    assert float(data['today_sales']) == 12.34, (
+        "a dollar shop must report cents: today_sales=%r" % (data['today_sales'],))
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# 6. Reports page -- /reports/payment-methods and /reports/sales-trend.
+#
+#    core/retail/metrics.py carried its OWN THIRD `_money`, hardcoded to two
+#    decimals, entirely separate from this file's own defect class
+#    (api/retail_api.py's `_money`) and from core/retail/pricing.py's
+#    `format_money`. Every metrics.py breakdown -- revenue_by_payment_method,
+#    revenue_by_day, revenue_by_hour, revenue_by_employee, revenue_by_branch,
+#    top_products, summary -- flowed through it, so JOD reports disagreed
+#    with the receipts, drawer counts and statements underneath them exactly
+#    as the dashboard tests above did, on every Reports-page widget at once.
+#
+#    Fixing only api/retail_api.py's OWN `_money` (as dashboard_stats's own
+#    fix does for its jsonify payload) would NOT have fixed these two
+#    routes: neither re-quantizes metrics.py's return value through that
+#    helper at all -- the metrics figure IS the response body. A route-level
+#    fix here would have re-quantized an already-2dp-coarsened value to 3dp
+#    and restored nothing, the same "arrives already coarsened" failure mode
+#    the module docstring above describes for the dashboard.
+#
+#    Two of the module's several money-returning surfaces, picked to be
+#    structurally different from each other and from the dashboard tests
+#    above: one is a dict-of-rows breakdown (`revenue_by_payment_method`),
+#    the other a day-bucketed list summed across buckets (`revenue_by_day`).
+# ═════════════════════════════════════════════════════════════════════════
+
+def test_report_payment_methods_default_install_reports_fils(client):
+    """A JOD shop's payment-method breakdown must agree with the sale that
+    fed it -- core/retail/metrics.py::revenue_by_payment_method()."""
+    _two_line_sale(client)
+    data = client.get(f'{API}/reports/payment-methods?days=1').get_json()['data']
+    cash = next(row for row in data if row['payment_method'] == 'cash')
+    assert cash['revenue'] == 12.345, (
+        "payment-methods report coarsened a JOD total to cents: "
+        f"revenue={cash['revenue']!r}")
+
+
+def test_report_payment_methods_two_decimal_currency_still_gets_two(client):
+    """THE ALLOW-HALF: a USD shop's payment-method breakdown must still
+    report cents, proving the fix reads the shop's real currency rather
+    than always keeping three decimals."""
+    _set_currency(client.test_company_id, 'USD')
+    _two_line_sale(client)
+    data = client.get(f'{API}/reports/payment-methods?days=1').get_json()['data']
+    cash = next(row for row in data if row['payment_method'] == 'cash')
+    assert cash['revenue'] == 12.34, f"got {cash['revenue']!r}"
+
+
+def test_report_sales_trend_default_install_reports_fils(client):
+    """A JOD shop's sales-trend chart must agree with the sale that fed it
+    -- core/retail/metrics.py::revenue_by_day()."""
+    _two_line_sale(client)
+    body = client.get(f'{API}/reports/sales-trend?days=1').get_json()
+    assert sum(body['data']) == 12.345, (
+        "sales-trend coarsened a JOD total to cents: data=%r" % (body['data'],))
+
+
+def test_report_sales_trend_two_decimal_currency_still_gets_two(client):
+    """THE ALLOW-HALF: a USD shop's sales-trend chart must still report
+    cents."""
+    _set_currency(client.test_company_id, 'USD')
+    _two_line_sale(client)
+    body = client.get(f'{API}/reports/sales-trend?days=1').get_json()
+    assert sum(body['data']) == 12.34, f"got {body['data']!r}"
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# 7. /reports/top-products -- core/retail/metrics.py::top_products()'s
+#    `profit` field, which is revenue MINUS `quantity_sold * products.
+#    cost_price`.
+#
+#    WHY THIS SURFACE, SPECIFICALLY: every test above (dashboard, payment-
+#    methods, sales-trend) sums or echoes a `sales.total` that
+#    create_sale() ALREADY quantized to the shop's currency the moment the
+#    sale was rung -- so the number arriving at metrics.py is, by
+#    construction, already exact at that currency's own precision, and a
+#    SUM of already-exact values stays exact. That makes those three
+#    surfaces provably correct for the fils-survive half, but structurally
+#    UNABLE to catch a metrics.py that quantizes to the WRONG fixed
+#    precision on a 2-decimal-currency company: 12.34 quantized to three
+#    decimals is 12.340, and float(12.340) == 12.34 -- the extra digit is
+#    always a trailing zero, invisible at the JSON/float boundary.
+#
+#    `cost_price` breaks that coincidence: it is a raw product field with
+#    NO currency precision of its own (nothing quantizes it on write), so
+#    `quantity_sold * cost_price` can and does need genuine rounding
+#    regardless of which currency the shop uses. 0.333 has no clean
+#    2-decimal form to accidentally agree with -- this is what makes this
+#    pair the one that actually DISTINGUISHES "quantize to the currency's
+#    real precision" from "quantize to a different hardcoded precision",
+#    both directions, rather than merely re-confirming the SUM-based
+#    surfaces above.
+# ═════════════════════════════════════════════════════════════════════════
+
+def _cost_precision_sale(c):
+    pid = _seed_product(c, name='Cost Precision Widget',
+                         sell_price=100.0, cost_price=0.333, tax_rate=0)
+    r = c.post(f'{API}/sales', json={
+        'items': [{'product_id': pid, 'quantity': 1}],
+        'payment_method': 'cash', 'amount_paid': 100.0,
+        'idempotency_key': str(uuid.uuid4())})
+    assert r.status_code == 200, r.get_json()
+
+
+def test_report_top_products_default_install_reports_fils(client):
+    """A JOD shop's top-products profit column must reflect the real cost,
+    not a 2dp-coarsened one: 1 unit at 100.00 revenue, cost_price 0.333 (no
+    rounding needed at JOD's own 3dp precision) -> profit == 99.667."""
+    _cost_precision_sale(client)
+    rows = client.get(f'{API}/reports/top-products?days=1').get_json()
+    idx = rows['labels'].index('Cost Precision Widget')
+    assert rows['profit'][idx] == 99.667, (
+        "top-products profit coarsened cost_price to cents: "
+        f"profit={rows['profit'][idx]!r}")
+
+
+def test_report_top_products_two_decimal_currency_still_gets_two(client):
+    """THE ALLOW-HALF: a USD shop must round cost_price to cents (0.333 ->
+    0.33) BEFORE subtracting it from revenue, giving profit == 99.67 -- not
+    99.667, which is what a metrics.py hardcoded to three decimals
+    regardless of currency would report for a USD shop too."""
+    _set_currency(client.test_company_id, 'USD')
+    _cost_precision_sale(client)
+    rows = client.get(f'{API}/reports/top-products?days=1').get_json()
+    idx = rows['labels'].index('Cost Precision Widget')
+    assert rows['profit'][idx] == 99.67, f"got {rows['profit'][idx]!r}"

@@ -36,6 +36,7 @@ import sys
 import tempfile
 import uuid
 from datetime import datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 import pytest
@@ -66,6 +67,7 @@ from database import schema as schema_module  # noqa: E402
 from database.schema import get_retail_conn  # noqa: E402
 from commercial_runtime.security.passwords import hash_password  # noqa: E402
 from core.retail import metrics  # noqa: E402
+from core.retail import pricing  # noqa: E402
 
 PRICE = 50.0
 COST = 10.0
@@ -256,7 +258,21 @@ def test_average_ticket_is_one_definition_across_trend_summary_and_branches(seed
     trend/by-branch routes returned AVG(sales.total) (gross, ignoring
     refunds) and summary returned net revenue / transactions. Canonically
     it is net revenue / transactions, everywhere. Every sale here is dated
-    today, so the single trend day must equal the page-level figure."""
+    today, so the single trend day must equal the page-level figure.
+
+    `branch_avg['Main']` is 287.50 / 3, a genuinely 3-decimal-place figure
+    (95.8333...). This assertion used to be `round(287.5 / 3, 2)` --
+    95.83 -- which silently assumed every currency has two decimal places.
+    This fixture writes no explicit `base_currency`, so the ledger above ran
+    on the product default, which is JOD (three decimal places, fils): the
+    real, correct answer core/retail/metrics.py's now currency-aware
+    avg_ticket() computes is 95.833, and a test asserting 95.83 was the same
+    class of bug already found and fixed in retail_promotions_test.py /
+    retail_modifiers_test.py -- comparing API output against a hardcoded 2dp
+    assumption instead of the shop's real currency precision. Pinned, not
+    assumed: read the currency back from the same source the API used
+    rather than hardcoding 'JOD' here, so this follows a deliberate change
+    to the product default instead of breaking on one."""
     client = seeded['client']
     summary = client.get('/api/sub/retail/reports/summary?days=365').get_json()['data']
     trend = client.get('/api/sub/retail/reports/sales-trend?days=365').get_json()
@@ -264,8 +280,16 @@ def test_average_ticket_is_one_definition_across_trend_summary_and_branches(seed
 
     assert summary['avg_ticket'] == 126.5          # 632.50 / 5, NOT 690 / 5 == 138
     assert trend['avg_ticket'] == [126.5]
+
+    shop_currency = client.get('/api/sub/retail/settings/tax').get_json()['data']['base_currency']
+    assert shop_currency == pricing.DEFAULT_BASE_CURRENCY, (
+        "fixture currency drifted from the product default; the comparison "
+        "below would be against the wrong precision")
+    quant = pricing.currency_quantum(shop_currency)
+    main_avg = float(Decimal(str(287.5 / 3)).quantize(quant, rounding=ROUND_HALF_UP))
+
     branch_avg = dict(zip(by_branch['labels'], by_branch['avg_ticket']))
-    assert branch_avg['Main'] == round(287.5 / 3, 2)
+    assert branch_avg['Main'] == main_avg
     assert branch_avg['Downtown'] == 172.5
 
 
