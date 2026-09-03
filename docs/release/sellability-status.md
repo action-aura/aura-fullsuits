@@ -98,7 +98,7 @@ and the desktop sync?" turned out to have a longer answer than yes or no.
 | Sync engine, desktop | **TESTED** | `retail_sync_starts_when_configured_test.py` 10 passed, `retail_sync_inert_when_unconfigured_test.py` 5 passed, each run alone |
 | Sync engine, Android | **TESTED** | Kotlin `SyncCoordinator` + `SyncRelayClientTest`; roles are split by design — Kotlin holds the signing key and pushes, embedded Python serves only the internal seam |
 | Owner relay is live | **RETRACTED — never verified** | This line previously read "**RUN** — `POST /api/sync/v1/push` and `/pull` on the local Owner both answer 403 to an unsigned request, correctly rejecting, not failing". **That was wrong.** No Owner instance was running. Port 5000 belongs to `DentaCareService.exe`, an unrelated third-party service that returns **403 to every path** — `/zzz/not/a/real/route` answers 403 exactly as `/api/sync/v1/push` does. A status code was read as proof of identity: it showed only that *something* refused, never that the relay existed. Corrected 2026-09-03. The relay's behaviour remains **UNVERIFIED** until an Owner instance is started and answers on a port confirmed to belong to it |
-| A customer can turn sync on | **DEFECT — no path exists** | Desktop reads the OS env var `AURA_SYNC_RELAY_URL`; the Inno Setup installer sets no environment variables at all. Android reads a build-time Gradle property. The only thing in the repo that sets either is `run_demo.py` |
+| A customer can turn sync on | **FIXED — desktop, proven live** | 2026-09-03. Owner now returns `sync_relay_base_url` in the activation response when `OWNER_SYNC_RELAY_PUBLIC_URL` is configured; the device persists it and uses it when no env var is set. Demonstrated on the rehearsal: a third till installed with **no `AURA_SYNC_RELAY_URL` anywhere** activated, learned the address, and on its next launch pulled the shop's catalogue by itself. An operator's explicit env var still wins, and a discovered URL passes the same https/loopback validation a typed one does — both mutation-proved. **Takes effect at next launch** (config is read at import; hot-start is deliberately out of scope). Android still takes a build-time property — that is the remaining half |
 | The phone says whether it is syncing | **TESTED** | Added this cycle: More → Device → Sync status, reading `SyncCoordinator.health()`. Four tiers; on today's APK its honest answer is "Sync is not set up" |
 | Accounts sync between devices | **DESKTOP ONLY** | Two-stream design; Android builds only the retail stream, and `RETAIL_SYNC_ENTITY_TYPES` deliberately excludes `user`. A cashier made on the desktop cannot log in on the phone |
 | Two real devices syncing end to end | **RUN — WORKS** | 2026-09-03, first time ever. Two independent desktop installs (separate `AURA_APP_DATA`, ports 5101/5102) activated on the SAME licence key, each receiving its own `installation_id`. Catalogue crossed A→B (product `c0394392…`, same UUID both sides); a sale rung on B crossed to A (`SALE-000001-7e50f8eb-e3a325c0`) **with fils intact — subtotal 12.345, tax 1.975, total 14.320**, which is also this cycle's money work validated on a running system rather than in a test. No pairing step: activation on a shared key is the whole grouping mechanism |
@@ -140,21 +140,23 @@ closed, one added that is larger than the one it replaces.
    cannot show the final figure before charging, which is a real limitation
    and now an admitted one.
 
-2. **NEW, and the biggest one: multi-device cannot be switched on.** The sync
-   engine works on both surfaces and Owner's relay answers correctly, but no
-   shipped build is configured to use it and there is no screen, installer
-   prompt or documented step for a customer or an installer to supply the
-   relay address. A product sold on multi-device sync currently ships with it
-   silently off. The clean fix is for Owner to hand back the relay URL at
-   activation, the way it already issues the licence — not built here, because
-   `owner/` is the collaborator's area and coordinating first is the rule.
+2. ~~**Multi-device cannot be switched on.**~~ **FIXED 2026-09-03, desktop,
+   and proven on the running rehearsal.** Owner now hands back the relay
+   address in the activation response, exactly as recommended here — the
+   owner of this product approved touching `owner/` for it. A third till was
+   installed with no relay environment variable anywhere, activated, and on
+   its next launch pulled the shop's catalogue by itself. **Remaining half:
+   Android still takes its relay address as a build-time Gradle property, so
+   a phone cannot yet learn it from activation.**
 
-3. **Accounts do not sync to the phone.** Even once (2) is fixed, each Android
-   device keeps its own login list, so the admin/manager/cashier accounts a
-   shop sets up on the desktop do not exist on its phone till.
+3. **Accounts do not sync to the phone.** Both halves are now wired and
+   unit-tested, and desktop-to-desktop sync is proven — but no account has
+   been watched crossing to an actual phone.
 
-4. Employee creation ignoring the licence, which undercuts the per-device model
-   the whole commercial design rests on.
+4. ~~Employee creation ignoring the licence.~~ **FIXED 2026-09-03.** Eight
+   admin-mutation routes now require an active licence; the seven onboarding
+   and account-recovery routes stay deliberately exempt so a fresh install can
+   still create its first admin and recover a login.
 
 5. ~~Nothing has ever been installed on a clean machine and activated end to
    end.~~ **DONE 2026-09-03.** Owner built from source against a fresh
