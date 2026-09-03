@@ -54,7 +54,7 @@ val AccentSoft = Color(0xFF1C2A44)     // tinted BACKDROP (selected tab), not a 
 
 // ── BORDERS — named by weight of separation ──────────────────────────────────
 val BorderDefault = Color(0xFF2E3947)  // cards, inputs, the normal case
-val BorderHairline = Color(0xFF222B37) // row rules, dividers
+val BorderHairline = Color(0xFF232B37) // row rules, dividers
 
 // ── SEMANTIC STATE — one meaning per colour (desktop dark set) ───────────────
 // *Text* variants: AA on every surface. The *Container* variants are their
