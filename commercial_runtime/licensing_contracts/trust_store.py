@@ -201,6 +201,66 @@ class OwnerTrustStore:
             )
         self._save()
 
+    def admit_bundled_anchor(self, anchor_json: dict) -> bool:
+        """Guarded re-anchor: LAST-RESORT recovery for an install whose trust
+        store predates a DISCONTINUOUS Owner key. Returns True if it actually
+        admitted something new.
+
+        Why this exists (2026-09-04, approved deliberately rather than assumed).
+        bootstrap_from_anchor() refuses once keys exist, and routes.py only
+        calls it when trust_store.json is absent, so a store seeded on first run
+        permanently shadows every corrected anchor shipped afterwards. When
+        Owner's key rotates WITH continuity that is fine -- admit_manifest()'s
+        countersigning bridge carries trust forward. When a fresh Owner deploy
+        has no bridge (it holds only its new key, so nothing this install trusts
+        can countersign), the device is stranded for good: a real Mi Note 10 was,
+        and no reinstall could fix it because app data survives.
+
+        Three properties keep this from being a TOFU hole:
+
+        * ADD-ONLY. A key_id already present is never overwritten, so a tampered
+          anchor cannot silently swap the public key behind a key_id this store
+          already trusts -- it can only introduce an id that means nothing yet.
+        * MERGE, NOT REPLACE. Keys admitted from a rotation manifest are kept,
+          so an install that has legitimately rotated FORWARD past its build's
+          anchor is never dragged back to it. This matches admit_manifest(),
+          which is itself additive and prunes only explicit REVOKED entries.
+        * CALLED ONLY FROM THE STRANDED PATH. activation.py invokes this solely
+          after a real UNKNOWN_SIGNING_KEY that a manifest refresh could not
+          repair -- never speculatively, never on a healthy install.
+
+        On the threat model: the anchor is build material, not network material.
+        On Android it lives inside the APK, so replacing it already requires the
+        original app-signing key (and an uninstall wipes app data anyway). On
+        Windows it sits in the install directory while trust_store.json sits in
+        app data -- so an attacker who can write the anchor is strictly more
+        privileged than one who can already delete trust_store.json and force a
+        fresh bootstrap from it today. This grants no capability that deleting
+        one file did not already grant.
+
+        Residual risk, stated rather than hidden: an anchor from an old build
+        can re-admit a key Owner has since REVOKED. That only matters to an
+        attacker holding that revoked private key AND able to answer as Owner,
+        against a device that is already non-functional -- and the next
+        successfully-admitted manifest re-applies the revocation.
+        """
+        admitted = False
+        for entry in anchor_json.get("keys", []):
+            key_id = entry["key_id"]
+            if key_id in self._keys:
+                continue
+            self._keys[key_id] = TrustedKey(
+                key_id=key_id,
+                public_key_b64=entry["public_key"],
+                algorithm=entry.get("algorithm", "ed25519"),
+                status="ACTIVE",
+                source="BUNDLED_ANCHOR",
+            )
+            admitted = True
+        if admitted:
+            self._save()
+        return admitted
+
     def revoke_locally(self, key_id: str) -> None:
         """Emergency local-only revocation (e.g. staff-initiated, out of
         band from a manifest) -- removes trust immediately without waiting

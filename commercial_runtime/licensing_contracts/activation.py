@@ -19,6 +19,7 @@ from .events import LicensingEventRecorder
 from .state_machine import LicenseState
 from .state_repository import LICENSING_SCHEMA_VERSION, LicenseStateRecord, LicenseStateRepository
 from .trusted_time import cache_fresh_anchor
+from .trust_anchor_loader import load_bundled_trust_anchor
 from .trust_store import OwnerTrustStore
 
 
@@ -109,6 +110,31 @@ def make_trust_manifest_refresher(client: LicensingClient, trust_store: OwnerTru
     return _refresh
 
 
+def make_bundled_anchor_recovery(trust_anchor_path, trust_store: OwnerTrustStore) -> Callable[[], bool]:
+    """Last-resort recovery for a store stranded on a discontinuous rotation.
+
+    Re-reads the anchor THIS BUILD shipped with and merges anything new into
+    the trust store -- see OwnerTrustStore.admit_bundled_anchor for the three
+    properties that keep it from being a trust-on-first-use hole, and for the
+    residual risk it knowingly accepts.
+
+    Returns whether anything was admitted, so the caller can skip a re-verify
+    that would deterministically fail again. Errors are swallowed and reported
+    as "admitted nothing": a missing or malformed anchor must leave the
+    original verification failure as the outcome the customer sees, never be
+    replaced by a file-io error (same rule make_trust_manifest_refresher
+    follows).
+    """
+
+    def _recover() -> bool:
+        try:
+            return trust_store.admit_bundled_anchor(load_bundled_trust_anchor(trust_anchor_path))
+        except Exception:
+            return False
+
+    return _recover
+
+
 def perform_activation(
     *,
     client: LicensingClient,
@@ -122,6 +148,7 @@ def perform_activation(
     release_channel: Optional[str],
     license_key: str,
     device_public_key_fingerprint: str,
+    anchor_recovery: Optional[Callable[[], bool]] = None,
 ) -> ActivationResult:
     """Windows path: this process owns the device key, so it also owns the
     HTTP call. Calls Owner directly, then delegates to
@@ -160,6 +187,7 @@ def perform_activation(
         platform=platform,
         device_public_key_fingerprint=device_public_key_fingerprint,
         trust_refresher=make_trust_manifest_refresher(client, trust_store),
+        anchor_recovery=anchor_recovery,
     )
 
 
@@ -173,6 +201,7 @@ def ingest_activation_response(
     platform: str,
     device_public_key_fingerprint: str,
     trust_refresher: Optional[Callable[[], None]] = None,
+    anchor_recovery: Optional[Callable[[], bool]] = None,
 ) -> ActivationResult:
     """Android path (Part U): the Kotlin layer already made the signed HTTP
     call to Owner (it holds the AndroidKeystore-wrapped device key, this
@@ -245,11 +274,35 @@ def ingest_activation_response(
         except AssertionVerificationError as retry_exc:
             # After the refresh: if this is STILL UNKNOWN_SIGNING_KEY, the
             # manifest could not vouch for Owner's current key with anything
-            # this install trusts -- the unrecoverable case. trusted_key_ids()
-            # is re-read here, post-refresh, so it reflects what the store
-            # actually ended up with rather than what it started as.
-            event_recorder.record("ACTIVATION_FAILED", _failure_details(retry_exc.reason_code, envelope, trust_store))
-            raise ActivationFailed(retry_exc.reason_code, str(retry_exc)) from retry_exc
+            # this install trusts -- the stranded case. Owner rotated with no
+            # continuity bridge (a fresh deploy holding only its new key), so
+            # no amount of retrying or refreshing can ever help.
+            #
+            # Last resort: re-read the anchor this BUILD shipped with. See
+            # OwnerTrustStore.admit_bundled_anchor for why that is safe (add-
+            # only, merge-not-replace, build material rather than network
+            # material) and for the residual risk it accepts. Deliberately
+            # gated behind BOTH a real UNKNOWN_SIGNING_KEY and a failed
+            # manifest refresh, so a healthy install never reaches it.
+            if retry_exc.reason_code != "UNKNOWN_SIGNING_KEY" or anchor_recovery is None:
+                event_recorder.record("ACTIVATION_FAILED", _failure_details(retry_exc.reason_code, envelope, trust_store))
+                raise ActivationFailed(retry_exc.reason_code, str(retry_exc)) from retry_exc
+
+            if not anchor_recovery():
+                # The anchor added nothing this store did not already have, so
+                # re-verifying would repeat an identical deterministic failure.
+                event_recorder.record("ACTIVATION_FAILED", _failure_details(retry_exc.reason_code, envelope, trust_store))
+                raise ActivationFailed(retry_exc.reason_code, str(retry_exc)) from retry_exc
+
+            event_recorder.record("TRUST_ANCHOR_READMITTED", {"trusted_key_ids": trust_store.trusted_key_ids()})
+            try:
+                verified = _verify()
+            except AssertionVerificationError as anchor_exc:
+                # The bundled anchor did not know Owner's key either. Report
+                # the ORIGINAL failure shape, not a third variant -- nothing
+                # about this attempt changed what is wrong.
+                event_recorder.record("ACTIVATION_FAILED", _failure_details(anchor_exc.reason_code, envelope, trust_store))
+                raise ActivationFailed(anchor_exc.reason_code, str(anchor_exc)) from anchor_exc
 
     payload = verified.payload
     record = LicenseStateRecord(

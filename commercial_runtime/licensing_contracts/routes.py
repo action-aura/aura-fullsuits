@@ -27,6 +27,7 @@ from .activation import (
     ActivationFailed,
     ActivationPending,
     ingest_activation_response,
+    make_bundled_anchor_recovery,
     make_trust_manifest_refresher,
     perform_activation,
 )
@@ -162,6 +163,11 @@ def make_licensing_blueprint(
                 release_channel=release_channel,
                 license_key=license_key,
                 device_public_key_fingerprint=_device_fingerprint(signer),
+                # Same last-resort recovery the Android path gets below: an
+                # install stranded by a DISCONTINUOUS Owner rotation cannot be
+                # rescued by a manifest (nothing it trusts can countersign),
+                # only by the anchor its own build shipped with.
+                anchor_recovery=make_bundled_anchor_recovery(trust_anchor_path, trust_store),
             )
         except ActivationPending as exc:
             return jsonify({"result": "PENDING", "reason_code": exc.reason_code, "installation_id": exc.installation_id, "detail": str(exc)}), 202
@@ -233,7 +239,7 @@ def make_licensing_blueprint(
     if internal_shared_secret:
         _register_internal_sync_routes(
             bp, internal_shared_secret, _build_context, product_code, platform,
-            on_activation_success,
+            on_activation_success, trust_anchor_path,
         )
 
     return bp
@@ -260,6 +266,7 @@ def _run_activation_hook(hook: Optional[Callable[[], object]]) -> None:
 def _register_internal_sync_routes(
     bp: Blueprint, shared_secret: str, build_context, product_code: str, platform: str,
     on_activation_success: Optional[Callable[[], object]] = None,
+    trust_anchor_path=None,
 ) -> None:
     def _authorized() -> bool:
         provided = request.headers.get("X-Aura-Internal-Secret", "")
@@ -297,6 +304,11 @@ def _register_internal_sync_routes(
                 # the same allowance the Windows path gets. Kotlin never
                 # supplies trust material.
                 trust_refresher=make_trust_manifest_refresher(client, trust_store),
+                # Last resort when even that refresh cannot help, because
+                # Owner's new key has no continuity bridge to anything this
+                # install trusts. Kotlin still supplies no trust material: the
+                # anchor read here is this build's own bundled file.
+                anchor_recovery=make_bundled_anchor_recovery(trust_anchor_path, trust_store),
             )
         except ActivationPending as exc:
             return jsonify({"result": "PENDING", "reason_code": exc.reason_code, "installation_id": exc.installation_id, "detail": str(exc)}), 202

@@ -428,3 +428,149 @@ def test_other_failures_keep_the_bare_reason_code(owner_key, trust_store, state_
 
     failed = [e for e in events.recent() if e.event_type == "ACTIVATION_FAILED"]
     assert failed[0].details == {"reason_code": "ASSERTION_PRODUCT_MISMATCH"}
+
+
+# ── Guarded re-anchor (2026-09-04) ────────────────────────────────────────────
+# A store stranded by a DISCONTINUOUS Owner rotation -- a fresh deploy holding
+# only its new key, so nothing this install trusts can countersign a manifest --
+# had no recovery at all. Reinstalling did not help (app data survives), which
+# is how a real Mi Note 10 stayed unlicensable. These cover both halves: it must
+# rescue that device, and it must stay useless to anything the bundled anchor
+# does not itself name.
+
+
+def _anchor_file(tmp_path, name, *entries):
+    import json as json_mod
+
+    path = tmp_path / name
+    path.write_text(
+        json_mod.dumps({"keys": [
+            {"key_id": key_id, "public_key": _b64_pub(key), "algorithm": "ed25519"}
+            for key_id, key in entries
+        ]}),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_a_discontinuous_rotation_recovers_from_the_bundled_anchor(owner_key, trust_store, state_repo, events, tmp_path):
+    """The allow-half, and the whole reason this exists."""
+    from commercial_runtime.licensing_contracts.activation import make_bundled_anchor_recovery
+
+    fresh_owner = Ed25519PrivateKey.generate()
+    envelope = _envelope(fresh_owner, "owner-2-fresh-deploy", _payload("owner-assigned-inst-1"))
+    client = FakeClient(response={
+        "result": "SUCCESS",
+        "installation_id": "owner-assigned-inst-1",
+        "signed_assertion": envelope,
+    })
+    anchor = _anchor_file(tmp_path, "trust_anchor.json", ("owner-2-fresh-deploy", fresh_owner))
+
+    result = _activate(
+        client, trust_store, state_repo, events,
+        anchor_recovery=make_bundled_anchor_recovery(anchor, trust_store),
+    )
+
+    assert result.state == LicenseState.ACTIVE_ONLINE
+    assert trust_store.is_trusted("owner-2-fresh-deploy") is True
+    # MERGE, not replace: an install that had legitimately rotated forward must
+    # never be dragged back to its build's anchor.
+    assert trust_store.is_trusted("owner-1") is True
+    assert any(e.event_type == "TRUST_ANCHOR_READMITTED" for e in events.recent()), (
+        "a re-anchor is security-relevant and must never happen silently"
+    )
+
+
+def test_recovery_never_admits_a_signer_the_bundled_anchor_does_not_name(owner_key, trust_store, state_repo, events, tmp_path):
+    """The deny-half. Recovery is not "trust whoever answered": the anchor is
+    the only thing that can introduce a key, so a forged assertion from a key
+    named nowhere is still refused, and nothing is admitted."""
+    from commercial_runtime.licensing_contracts.activation import make_bundled_anchor_recovery
+
+    attacker = Ed25519PrivateKey.generate()
+    envelope = _envelope(attacker, "attacker-key", _payload("owner-assigned-inst-1"))
+    client = FakeClient(response={
+        "result": "SUCCESS",
+        "installation_id": "owner-assigned-inst-1",
+        "signed_assertion": envelope,
+    })
+    # A legitimate anchor: it names the key this store already has, so recovery
+    # can admit nothing new.
+    anchor = _anchor_file(tmp_path, "trust_anchor.json", ("owner-1", owner_key))
+
+    with pytest.raises(ActivationFailed) as exc:
+        _activate(
+            client, trust_store, state_repo, events,
+            anchor_recovery=make_bundled_anchor_recovery(anchor, trust_store),
+        )
+
+    assert exc.value.reason_code == "UNKNOWN_SIGNING_KEY"
+    assert trust_store.is_trusted("attacker-key") is False
+    assert state_repo.load() is None
+    assert not any(e.event_type == "TRUST_ANCHOR_READMITTED" for e in events.recent())
+
+
+def test_the_anchor_cannot_swap_the_key_material_behind_a_trusted_key_id(owner_key, trust_store, state_repo, events, tmp_path):
+    """Add-only, and the sharpest edge of the whole change.
+
+    A tampered anchor that REUSES a key_id this store already trusts must not
+    replace the public key behind it -- otherwise editing one file would
+    silently re-point an established identity at an attacker's key, which is
+    exactly the trust-on-first-use hole the seed-once rule existed to prevent.
+    Recovery has to actually RUN for this to prove anything. An assertion
+    signed with a key id the store already knows fails as
+    ASSERTION_VERIFICATION_FAILED, which never reaches the re-anchor branch at
+    all -- a version of this test written that way passed while exercising
+    nothing. So the assertion is signed by a genuinely unknown key (forcing
+    UNKNOWN_SIGNING_KEY and therefore recovery), and the anchor smuggles a
+    SECOND entry that tries to re-point the established id.
+    """
+    from commercial_runtime.licensing_contracts.activation import make_bundled_anchor_recovery
+
+    fresh_owner = Ed25519PrivateKey.generate()
+    attacker = Ed25519PrivateKey.generate()
+    envelope = _envelope(fresh_owner, "owner-2-fresh-deploy", _payload("owner-assigned-inst-1"))
+    client = FakeClient(response={
+        "result": "SUCCESS",
+        "installation_id": "owner-assigned-inst-1",
+        "signed_assertion": envelope,
+    })
+    anchor = _anchor_file(
+        tmp_path, "trust_anchor.json",
+        ("owner-2-fresh-deploy", fresh_owner),   # the legitimate new key
+        ("owner-1", attacker),                   # the smuggled re-point
+    )
+
+    result = _activate(
+        client, trust_store, state_repo, events,
+        anchor_recovery=make_bundled_anchor_recovery(anchor, trust_store),
+    )
+
+    # Recovery ran and did its job for the genuinely new key...
+    assert result.state == LicenseState.ACTIVE_ONLINE
+    assert trust_store.is_trusted("owner-2-fresh-deploy") is True
+    # ...while the established identity keeps its ORIGINAL key material.
+    assert trust_store.get_public_key_b64("owner-1") == _b64_pub(owner_key)
+    assert trust_store.get_public_key_b64("owner-1") != _b64_pub(attacker)
+
+
+def test_a_missing_bundled_anchor_leaves_the_original_failure_intact(owner_key, trust_store, state_repo, events, tmp_path):
+    """A build with no anchor file must report why verification failed, never
+    a file-io error the customer cannot act on."""
+    from commercial_runtime.licensing_contracts.activation import make_bundled_anchor_recovery
+
+    fresh_owner = Ed25519PrivateKey.generate()
+    envelope = _envelope(fresh_owner, "owner-2-fresh-deploy", _payload("owner-assigned-inst-1"))
+    client = FakeClient(response={
+        "result": "SUCCESS",
+        "installation_id": "owner-assigned-inst-1",
+        "signed_assertion": envelope,
+    })
+
+    with pytest.raises(ActivationFailed) as exc:
+        _activate(
+            client, trust_store, state_repo, events,
+            anchor_recovery=make_bundled_anchor_recovery(tmp_path / "does-not-exist.json", trust_store),
+        )
+
+    assert exc.value.reason_code == "UNKNOWN_SIGNING_KEY"

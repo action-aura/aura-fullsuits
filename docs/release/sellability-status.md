@@ -197,21 +197,48 @@ closed, one added that is larger than the one it replaces.
    tcp:5551`, and the device was disconnected) — so this is "the cause is
    removed and verified", not "activation observed succeeding".
 
-   **The open decision, and it is a real launch risk, not a test artefact:** an
-   install whose trust store predates a *discontinuous* Owner key can never
-   recover on its own. Reinstalling the app does not help (app data survives);
-   only clearing app data or deleting that one file does. That is fine when
-   Owner rotates *with* continuity — the countersigning path handles it — but a
-   fresh Owner deploy stranded a real device permanently, and would strand a
-   customer's the same way. A guarded re-anchor (accept a newer bundled anchor
-   when the store can verify nothing Owner is producing) would fix it, but
-   deliberately loosens the TOFU rule this design protects, so it is an owner
-   decision rather than a silent code change. On Android the loosening is close
-   to free — replacing the APK already requires the original signing key, and an
-   uninstall wipes app data anyway — but the same module ships on Windows, where
-   overwriting `trust_anchor.json` on disk is materially easier. Left
-   unimplemented on purpose. **At minimum, a supported, audited "reset licensing
-   trust" support action should exist, because right now the only cure is adb.**
+   **GUARDED RE-ANCHOR — decided and implemented 2026-09-04.** An install whose
+   trust store predated a *discontinuous* Owner key could never recover on its
+   own: reinstalling does not help (app data survives), so only clearing app
+   data or deleting that one file did. Fine when Owner rotates *with*
+   continuity — the countersigning path handles that — but a fresh Owner deploy
+   stranded a real device permanently, and would strand a customer's the same
+   way. Approved as an explicit owner decision rather than assumed, because it
+   loosens the seed-once rule.
+
+   `OwnerTrustStore.admit_bundled_anchor()` now re-reads the anchor the build
+   shipped with, and `activation.py` calls it as a last resort. Three
+   properties keep it from becoming trust-on-first-use:
+
+   * **Add-only** — a `key_id` already present is never overwritten, so a
+     tampered anchor cannot re-point an established identity at another key.
+   * **Merge, not replace** — keys admitted from a rotation manifest survive, so
+     an install that legitimately rotated *forward* is never dragged back to its
+     build's anchor. Matches `admit_manifest()`, which is itself additive.
+   * **Stranded path only** — reached solely after a real `UNKNOWN_SIGNING_KEY`
+     that a manifest refresh could not repair. Never speculative.
+
+   It grants no capability that did not already exist: the anchor is build
+   material, not network material. On Android it lives inside the APK (replacing
+   it needs the original app-signing key; an uninstall wipes app data anyway).
+   On Windows it sits in the install directory while `trust_store.json` sits in
+   app data — so an attacker able to write the anchor is strictly *more*
+   privileged than one who can already delete `trust_store.json` and force a
+   fresh bootstrap from it today. Every re-anchor records a
+   `TRUST_ANCHOR_READMITTED` event; one that nobody can explain is worth
+   investigating.
+
+   **Residual risk, stated rather than hidden:** an anchor from an old build can
+   re-admit a key Owner has since REVOKED. That only matters to an attacker
+   holding that revoked private key *and* able to answer as Owner, against a
+   device that is already non-functional — and the next successfully-admitted
+   manifest re-applies the revocation.
+
+   **Known gap, deliberately not closed:** only the *activation* path recovers.
+   A device already ACTIVE when Owner rotates discontinuously still fails
+   check-in and degrades to RESTRICTED. It is not permanently bricked —
+   re-activating now recovers it — but the degradation is avoidable and
+   `checkin_scheduler.py` should get the same last-resort step.
 
    The original investigation record follows, kept because its eliminations
    remain valid and its wrong prediction is instructive.
