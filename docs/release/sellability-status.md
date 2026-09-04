@@ -149,9 +149,49 @@ closed, one added that is larger than the one it replaces.
    Android still takes its relay address as a build-time Gradle property, so
    a phone cannot yet learn it from activation.**
 
-3. **Accounts do not sync to the phone.** Both halves are now wired and
-   unit-tested, and desktop-to-desktop sync is proven — but no account has
-   been watched crossing to an actual phone.
+3. **A PHONE CANNOT BE LICENSED AT ALL.** Found 2026-09-04 on a real Mi Note
+   10, and it is now the top blocker — it outranks everything below it,
+   because an Android till that cannot activate cannot legally do anything.
+
+   Activation reaches Owner and **Owner approves it**: the installation is
+   recorded `ACTIVE`, platform `ANDROID`, in `owner_installations`. The device
+   then refuses its own signed assertion — *"Action Aura approved this
+   activation, but this device could not verify the signed licence it
+   received."* Reproducible on demand; reproduced twice.
+
+   **Ruled out by measurement, not assumption.** This list is the deliverable:
+   it is what stops the next person re-checking the same five things.
+   * **Trust anchor** — the file ON THE DEVICE
+     (`files/chaquopy/AssetFinder/app/.../trust_anchor.json`) carries exactly
+     Owner's ACTIVE key id and public key, byte for byte.
+   * **Clock skew** — phone and laptop `date +%s` returned the **identical**
+     epoch second, despite the on-screen message pointing at date and time.
+   * **The licence key** — Owner approved it, and the same key activated
+     three desktop installs successfully.
+   * **Kotlin re-serialisation** — `LicensingCoordinator.activate()` forwards
+     Owner's response body VERBATIM to `/_internal/sync-activation`, which is
+     the documented fix for the known Gson `30` → `30.0` hazard. Intact.
+   * **Device key / metadata divergence** — `device_public_key.txt` decodes to
+     a valid 32-byte Ed25519 key whose SHA-256 equals the
+     `publicKeyFingerprint` in `device_key_meta.json` exactly.
+
+   **What has NOT been checked**, and is where to look next: the specific
+   reason code returned by `/_internal/sync-activation`. It is not in logcat
+   and is not persisted (the failed activation leaves `licensing_state`
+   empty), so it needs temporary instrumentation on the Python verify path.
+   The candidates left after the eliminations above are
+   `ASSERTION_INSTALLATION_MISMATCH`, `ASSERTION_DEVICE_MISMATCH` and a plain
+   `ASSERTION_VERIFICATION_FAILED`.
+
+   Worth noting how long this hid: three desktop installs activated cleanly
+   against the same Owner and the same key. Nothing short of a physical
+   handset would have found it.
+
+4. **Accounts do not sync to the phone.** Both halves are wired and
+   unit-tested, and desktop-to-desktop sync is proven — including staff
+   accounts, watched crossing between two tills. The phone leg is **blocked by
+   (3)**: an unlicensed device never starts its sync loop, so this could not
+   be tested rather than tested and failed.
 
 4. ~~Employee creation ignoring the licence.~~ **FIXED 2026-09-03.** Eight
    admin-mutation routes now require an active licence; the seven onboarding
