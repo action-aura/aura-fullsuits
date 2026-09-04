@@ -140,12 +140,14 @@ one action each:
   `OWNER_*` lines. It deliberately stops short of linking billing — that is a
   decision to be charged, made in the console, and the script names the exact
   page.
-- `phone_roundtrip.ps1 -Pepper <value>` — with the phone plugged in: `adb
-  reverse`, Owner on 127.0.0.1:5551 over **HTTP** (the APK is baked to
-  `http://`) against `aura_owner_rehearsal`, launches the app, and reads the
-  verdict off the device's own `licensing_events`. The phone's installation is
-  already ACTIVE on that Owner (`b857c7d5…`, device key `c80edc2a…` matches
-  the handset), so nothing is re-issued.
+- `phone_roundtrip.ps1` — **RUN 2026-09-05, and the phone activated** (see
+  blocker 3). With the phone plugged in: `adb reverse`, Owner on
+  127.0.0.1:5551 over **HTTP** (the APK is baked to `http://`) against
+  `aura_owner_rehearsal`, launches the app, and reads the verdict off the
+  device's own `licensing_events`. Without `-Pepper` it re-issues a licence via
+  `rehearsal_reissue.py`; with `--keep-device` (the mode actually used) the
+  phone's existing installation is re-parented onto the new licence so nothing
+  on the phone is wiped or re-keyed.
 - `verify_pepper.py <db> <licence-key>` — activation validates the licence key
   against `OWNER_LICENSE_PEPPER`, and the rehearsal's pepper is recorded
   nowhere on this machine (not in any env file, shell history, or session
@@ -205,10 +207,32 @@ closed, one added that is larger than the one it replaces.
    supplied, so a shipped phone can be pointed at a relay without a rebuild.
    This line was stale for a day — re-measured 2026-09-04.
 
-3. **A PHONE CANNOT BE LICENSED AT ALL.** Found 2026-09-04 on a real Mi Note
-   10. **ROOT CAUSE CONFIRMED AND CLEARED ON THE DEVICE the same day** — read
-   off the handset's own event log rather than inferred. The mechanism is
-   below; what remains is a design decision, not an investigation.
+3. ~~**A PHONE CANNOT BE LICENSED AT ALL.**~~ **CLOSED 2026-09-05 02:40 — the
+   round-trip was RUN on the real Mi Note 10 and it activated.** Verdict read
+   off the handset's own `licensing_events`, not the screen:
+   `ACTIVATION_SUCCEEDED` 23:40:23.555Z, `ASSERTION_ACCEPTED` 23:40:23.560Z,
+   `licensing_state` = **ACTIVE_ONLINE**, installation `b857c7d5…`,
+   `last_sync_result` SUCCESS. Owner's side agrees: installation ACTIVE,
+   `activation_count` 3 (the two earlier failures plus this success), a third
+   signed assertion issued 02:40:24, last request `ACTIVATION_APPROVED`.
+   Against the local rehearsal Owner on `127.0.0.1:5551` over HTTP through
+   `adb reverse`, driven entirely over adb while the owner slept.
+
+   **How, given nobody had the rehearsal's pepper or licence key:** a fresh
+   licence was issued under a known pepper and the phone's *existing*
+   installation was re-parented onto it (`rehearsal_reissue.py --keep-device`,
+   proven on a DB clone first), so Owner took its same-device idempotent path
+   — no wipe, no new keypair, no `DEVICE_ALREADY_REGISTERED`. The phone kept
+   its data and its device key `c80edc2a…`. This also closes the loop on the
+   2026-09-04 trust-store fix: the device verified an assertion signed by
+   `cdcaa65b` for the first time.
+
+   Blocker 4 below is therefore no longer blocked — an ACTIVE_ONLINE phone can
+   start its sync loop, so "accounts do not sync to the phone" is now testable
+   rather than untestable.
+
+   The investigation record follows unchanged: the root cause was confirmed
+   and cleared on the device on 2026-09-04, and the mechanism is worth keeping.
 
    **The answer: `UNKNOWN_SIGNING_KEY`.** Not any of the three codes this
    entry originally predicted. Taken from `licensing_events` in the device's

@@ -39,6 +39,14 @@ def main() -> int:
     parser.add_argument("--tag", default=date.today().strftime("%Y%m%d"))
     parser.add_argument("--plan-code", default="REHEARSAL-RETAIL")
     parser.add_argument("--customer-name", default="Rehearsal phone shop")
+    parser.add_argument(
+        "--keep-device", action="store_true",
+        help="Do NOT release/revoke the phone's registration. Instead RE-PARENT its existing ACTIVE "
+             "ANDROID installation (and device key) onto the newly issued licence, so the phone keeps its "
+             "keypair AND its local data: activation then hits Owner's idempotent same-device path and "
+             "returns the signed assertion without a fresh enrolment. Non-destructive; preferred when the "
+             "phone still holds a healthy device key -- which it does after the 2026-09-04 trust fix.",
+    )
     args = parser.parse_args()
 
     from sqlalchemy import select
@@ -72,13 +80,14 @@ def main() -> int:
             stale = db_session.execute(
                 select(Installation).where(Installation.platform_id == android.id, Installation.status == "ACTIVE")
             ).scalars().all()
-        for installation in stale:
-            key = device_identity.get_active_device_key(installation.id)
-            if key is not None:
-                device_identity.revoke_device_key(key, actor.id)
-            release_device_slot(installation, reason=f"rehearsal re-issue {args.tag}: phone re-enrols fresh",
-                                actor_staff_user_id=actor.id)
-            print(f"released ANDROID installation {installation.id} (key revoked: {key is not None})")
+        if not args.keep_device:
+            for installation in stale:
+                key = device_identity.get_active_device_key(installation.id)
+                if key is not None:
+                    device_identity.revoke_device_key(key, actor.id)
+                release_device_slot(installation, reason=f"rehearsal re-issue {args.tag}: phone re-enrols fresh",
+                                    actor_staff_user_id=actor.id)
+                print(f"released ANDROID installation {installation.id} (key revoked: {key is not None})")
 
         result = issue_license_direct(
             new_customer_legal_name=args.customer_name,
@@ -88,6 +97,19 @@ def main() -> int:
             actor_staff_user_id=actor.id,
             license_pepper=args.pepper,
         )
+
+        if args.keep_device:
+            # Move the phone's live registration under the new licence. Owner's
+            # activation then takes the "same device retrying on THIS licence"
+            # branch (activation.py: existing_device_key ACTIVE and
+            # installation.license_id == locked_license.id) and reuses the
+            # installation instead of counting a new slot -- no revocation, no
+            # fingerprint UNIQUE collision, no wipe on the phone.
+            for installation in stale:
+                installation.license_id = result["license_id"]
+                installation.subscription_id = result["subscription_id"]
+                installation.customer_id = result["customer_id"]
+                print(f"re-parented ANDROID installation {installation.id} onto licence {result['license_id']}")
         db_session.commit()
 
     print("PEPPER_USED:", args.pepper)
