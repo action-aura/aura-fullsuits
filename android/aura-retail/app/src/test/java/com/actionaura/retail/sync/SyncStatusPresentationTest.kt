@@ -232,6 +232,25 @@ class SyncStatusPresentationTest {
             .substringAfter("fun MoreScreen(")
             .substringBefore("private fun MoreItem(")
         assertThat(moreScreenBody).contains("""onNavigate("sync_status")""")
+
+        // LICENCE MUST BE REACHABLE IN EVERY STATE, not only when the boot
+        // gate decides to show it.
+        //
+        // Found on a real handset: that device's licence state was
+        // "LOCAL_STATE_CORRUPT", which is not in AppRoot's
+        // NEEDS_ACTIVATION_STATES ("NOT_CONFIGURED", "ACTIVATION_REQUIRED",
+        // "ACTIVATING"). The gate therefore never fired, the app booted
+        // straight to the dashboard, every mutation was refused by the
+        // capability guard with no explanation, and nothing anywhere in the
+        // UI could reach activation to fix it. LicensingScreen even carries a
+        // label for that exact state ("Local state needs reset") -- it was
+        // built to be seen in a state it could not be reached in.
+        //
+        // Asserting the permanent doorway rather than the contents of
+        // NEEDS_ACTIVATION_STATES is deliberate: widening that set would pin
+        // the one state someone already thought of, while this pins the
+        // property that actually matters -- there is always a way in.
+        assertThat(moreScreenBody).contains("""onNavigate("licensing")""")
     }
 
     /**

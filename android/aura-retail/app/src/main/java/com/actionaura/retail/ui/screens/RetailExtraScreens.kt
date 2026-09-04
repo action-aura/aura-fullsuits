@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -126,6 +127,28 @@ fun MoreScreen(onNavigate: (String) -> Unit, onLogout: () -> Unit = {}) {
         // EmployeesWiringContractTest, EmployeeSalesWiringContractTest).
         SectionHeader(tr("Device"))
         MoreItem(tr("Sync status"), tr("Whether this device is reaching your others"), Icons.Default.Sync) { onNavigate("sync_status") }
+        // LICENCE IS REACHABLE FROM HERE IN EVERY STATE, and that is the whole
+        // point of this entry rather than a convenience.
+        //
+        // LicensingScreen used to be reachable ONLY through AppRoot's boot
+        // gate, which shows it when the state is in NEEDS_ACTIVATION_STATES --
+        // "NOT_CONFIGURED", "ACTIVATION_REQUIRED", "ACTIVATING". Found on a
+        // real handset: that device's state was "LOCAL_STATE_CORRUPT", which
+        // is in none of them. So the gate never fired, the app booted straight
+        // to the dashboard, every mutation was refused by the capability guard
+        // with no explanation, and there was NO route anywhere in the UI back
+        // to activation. The screen even has a label for that exact state
+        // ("Local state needs reset") -- it was designed to be seen in it, and
+        // could not be.
+        //
+        // Deliberately fixed as a permanent doorway rather than by adding one
+        // more string to NEEDS_ACTIVATION_STATES. Widening that set fixes the
+        // one state somebody thought of; a door that is always there fixes the
+        // next one nobody thought of, and licence state is exactly the kind of
+        // thing that acquires new values over time. Also note the shape of the
+        // bug: a complete, working screen with no way in, which is this
+        // repo's recurring defect class.
+        MoreItem(tr("Licence"), tr("Activation, status and device registration"), Icons.Default.VerifiedUser) { onNavigate("licensing") }
 
         // One overflow surface now, not two.
         SectionHeader(tr("Session"))

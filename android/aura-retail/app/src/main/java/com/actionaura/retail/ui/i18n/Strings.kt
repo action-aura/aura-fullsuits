@@ -655,6 +655,11 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     // exactly why this block is not optional: a gap here is silent.
     "Device" to "الجهاز",
     "Sync status" to "حالة المزامنة",
+    // The permanent Licence doorway in More -> Device. Added after a real
+    // handset was found stranded in LOCAL_STATE_CORRUPT with no route to
+    // activation anywhere in the UI.
+    "Licence" to "الترخيص",
+    "Activation, status and device registration" to "التفعيل والحالة وتسجيل الجهاز",
     "Whether this device is reaching your others" to "هل يصل هذا الجهاز إلى أجهزتك الأخرى",
     "Sync is not set up" to "المزامنة غير مُفعّلة",
     "This build has no relay address, so this device never sends or receives. Other devices will not see its sales." to
