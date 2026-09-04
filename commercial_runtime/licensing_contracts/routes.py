@@ -201,6 +201,10 @@ def make_licensing_blueprint(
             product_code=product_code,
             platform=platform,
             device_public_key_fingerprint=_device_fingerprint(signer),
+            # A discontinuous Owner rotation strands an already-ACTIVE install
+            # exactly as it strands a new one; without this it would grind down
+            # to RESTRICTED on a licence that is perfectly valid.
+            anchor_recovery=make_bundled_anchor_recovery(trust_anchor_path, trust_store),
         )
         scheduler.run_once()
         # present_status() only reflects the currently-persisted snapshot --
@@ -341,6 +345,9 @@ def _register_internal_sync_routes(
             product_code=product_code,
             platform=platform,
             device_public_key_fingerprint=_device_fingerprint(signer),
+            # Same last resort as the Windows path above -- Kotlin supplies no
+            # trust material; the anchor read here is this build's own file.
+            anchor_recovery=make_bundled_anchor_recovery(trust_anchor_path, trust_store),
         )
         # The twin of /_internal/sync-activation's identical line, and it must
         # stay that way. Kotlin made the Owner call, but this process still

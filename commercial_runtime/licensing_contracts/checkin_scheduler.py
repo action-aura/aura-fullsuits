@@ -177,6 +177,7 @@ class LicenseCheckInScheduler:
         platform: str,
         device_public_key_fingerprint: str,
         local_safety_ceiling_seconds: Optional[int] = None,
+        anchor_recovery: Optional[Callable[[], bool]] = None,
     ):
         self._client = client
         self._signer = signer
@@ -187,8 +188,42 @@ class LicenseCheckInScheduler:
         self._platform = platform
         self._device_fingerprint = device_public_key_fingerprint
         self._safety_ceiling = local_safety_ceiling_seconds
+        # Last-resort trust recovery for a DISCONTINUOUS Owner rotation, the
+        # one case _refresh_trust_manifest_best_effort() provably cannot fix:
+        # a fresh Owner deploy holds only its new key, so no manifest it can
+        # produce is countersigned by anything this install trusts. Without
+        # this, an already-ACTIVE device fails every check-in from that moment
+        # on and degrades to RESTRICTED with no way back except re-activating.
+        # See OwnerTrustStore.admit_bundled_anchor for why it is safe.
+        self._anchor_recovery = anchor_recovery
         self._timer: Optional[threading.Timer] = None
         self._stopped = threading.Event()
+
+    def _recover_via_bundled_anchor(self, verify: Callable[[], object]):
+        """Last resort after a manifest refresh could not resolve an
+        UNKNOWN_SIGNING_KEY: re-read the anchor this build shipped with and
+        verify once more. Returns the verified assertion, or None.
+
+        The counterpart of activation.py's re-anchor step, and needed for the
+        same reason: the manifest bridge cannot cross a DISCONTINUOUS rotation,
+        because a fresh Owner deploy holds no key this install ever trusted and
+        therefore cannot countersign anything. Without this, activation could
+        recover but an already-ACTIVE device could not, and it would grind down
+        to RESTRICTED on a licence that is perfectly valid.
+
+        Callers must gate this on the reason code themselves -- see the call
+        sites. Recording the event here rather than at each call site keeps a
+        re-anchor from ever being silent on this path either.
+        """
+        if self._anchor_recovery is None:
+            return None
+        if not self._anchor_recovery():
+            return None  # anchor added nothing; re-verifying would repeat itself
+        self._events.record("TRUST_ANCHOR_READMITTED", {"trusted_key_ids": self._trust_store.trusted_key_ids()})
+        try:
+            return verify()
+        except AssertionVerificationError:
+            return None
 
     def run_once(self) -> LicenseState:
         """Windows path: this process owns the device key, so it also owns
@@ -282,6 +317,13 @@ class LicenseCheckInScheduler:
                         verified = _verify()
                     except AssertionVerificationError:
                         verified = None
+
+                # Gated on the reason code, NOT merely on "verified is None":
+                # this block is reached for every AssertionVerificationError,
+                # and an expired or device-mismatched assertion must never
+                # trigger a trust change.
+                if verified is None and exc.reason_code == "UNKNOWN_SIGNING_KEY":
+                    verified = self._recover_via_bundled_anchor(_verify)
 
             if verified is None:
                 # Retain the previous valid assertion (Part L) -- do not

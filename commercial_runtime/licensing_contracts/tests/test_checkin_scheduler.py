@@ -650,3 +650,76 @@ def test_reevaluate_only_before_activation_is_noop(trust_store, state_repo, even
     )
     scheduler = _scheduler(FakeClient(), trust_store, state_repo, events)
     assert scheduler.reevaluate_only() == LicenseState.ACTIVATION_REQUIRED
+
+
+# ── Guarded re-anchor on the check-in path (2026-09-04) ───────────────────────
+# Activation could already recover from a DISCONTINUOUS Owner rotation; an
+# already-ACTIVE device could not, and would grind down to RESTRICTED on a
+# licence that is perfectly valid. Both halves below.
+
+
+def _anchor_with(tmp_path, name, key_id, key):
+    import json as json_mod
+
+    path = tmp_path / name
+    path.write_text(
+        json_mod.dumps({"keys": [{"key_id": key_id, "public_key": _b64_pub(key), "algorithm": "ed25519"}]}),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_an_active_device_survives_a_discontinuous_rotation(owner_key, trust_store, state_repo, events, tmp_path):
+    """The allow-half. Owner redeploys with a brand-new key that nothing in
+    this store can countersign, so the manifest bridge is useless -- the
+    bundled anchor is the only way back."""
+    from commercial_runtime.licensing_contracts.activation import make_bundled_anchor_recovery
+
+    _seed_activated_record(state_repo, current_state="ACTIVE_ONLINE", assertion_envelope_json=None)
+    fresh_owner = Ed25519PrivateKey.generate()
+    envelope = _envelope(fresh_owner, "owner-2-fresh-deploy", _payload())
+    client = FakeClient(checkin_responses=[{"result": "SUCCESS", "signed_assertion": envelope}])
+    anchor = _anchor_with(tmp_path, "trust_anchor.json", "owner-2-fresh-deploy", fresh_owner)
+
+    scheduler = _scheduler(
+        client, trust_store, state_repo, events,
+        anchor_recovery=make_bundled_anchor_recovery(anchor, trust_store),
+    )
+    result = scheduler.run_once()
+
+    assert result == LicenseState.ACTIVE_ONLINE
+    assert trust_store.is_trusted("owner-2-fresh-deploy") is True
+    assert trust_store.is_trusted("owner-1") is True  # merge, not replace
+    assert "TRUST_ANCHOR_READMITTED" in [e.event_type for e in events.recent()]
+
+
+def test_check_in_re_anchor_fires_only_for_an_unknown_signing_key(owner_key, trust_store, state_repo, events, tmp_path):
+    """The deny-half, and the one this nearly got wrong.
+
+    The recovery hook sits inside a block reached by EVERY
+    AssertionVerificationError, so gating it on "we still have no verified
+    assertion" alone would let an expired or device-mismatched assertion
+    trigger a trust change. It must gate on the reason code.
+
+    Here the assertion is signed by a key the store already trusts but is for
+    the wrong product, so it fails ASSERTION_PRODUCT_MISMATCH -- a real failure
+    that must leave trust completely untouched.
+    """
+    from commercial_runtime.licensing_contracts.activation import make_bundled_anchor_recovery
+
+    _seed_activated_record(state_repo, current_state="ACTIVE_ONLINE", assertion_envelope_json=None)
+    envelope = _envelope(owner_key, "owner-1", _payload(product_code="AURA_CLINIC"))
+    client = FakeClient(checkin_responses=[{"result": "SUCCESS", "signed_assertion": envelope}])
+    # An anchor that WOULD admit something, so this fails loudly if the gate is
+    # ever widened -- an empty anchor would pass either way and prove nothing.
+    other_key = Ed25519PrivateKey.generate()
+    anchor = _anchor_with(tmp_path, "trust_anchor.json", "owner-9-unrelated", other_key)
+
+    scheduler = _scheduler(
+        client, trust_store, state_repo, events,
+        anchor_recovery=make_bundled_anchor_recovery(anchor, trust_store),
+    )
+    scheduler.run_once()
+
+    assert trust_store.is_trusted("owner-9-unrelated") is False
+    assert "TRUST_ANCHOR_READMITTED" not in [e.event_type for e in events.recent()]

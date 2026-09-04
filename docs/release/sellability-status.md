@@ -234,11 +234,21 @@ closed, one added that is larger than the one it replaces.
    device that is already non-functional — and the next successfully-admitted
    manifest re-applies the revocation.
 
-   **Known gap, deliberately not closed:** only the *activation* path recovers.
-   A device already ACTIVE when Owner rotates discontinuously still fails
-   check-in and degrades to RESTRICTED. It is not permanently bricked —
-   re-activating now recovers it — but the degradation is avoidable and
-   `checkin_scheduler.py` should get the same last-resort step.
+   **Check-in path closed too (same day).** `LicenseCheckInScheduler` takes the
+   same `anchor_recovery` and applies it after its manifest refresh fails, so a
+   device already ACTIVE when Owner rotates discontinuously no longer grinds
+   down to RESTRICTED on a licence that is perfectly valid. Windows
+   (`run_once`) and Android (`ingest_checkin_response`) both get it from one
+   constructor argument; `reevaluate_only()` deliberately does **not**, because
+   it re-verifies a *stored* assertion signed by a key the store still holds —
+   nothing to recover.
+
+   That gate is on the **reason code**, not on "we still have no verified
+   assertion". The recovery hook sits inside a block reached by *every*
+   `AssertionVerificationError`, so the looser condition would let an expired or
+   device-mismatched assertion trigger a trust change. Both halves are
+   mutation-proven: dropping the reason-code gate fails the deny test, and
+   disabling recovery fails the allow test.
 
    The original investigation record follows, kept because its eliminations
    remain valid and its wrong prediction is instructive.
