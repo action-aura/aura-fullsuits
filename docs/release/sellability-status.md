@@ -145,9 +145,13 @@ closed, one added that is larger than the one it replaces.
    address in the activation response, exactly as recommended here — the
    owner of this product approved touching `owner/` for it. A third till was
    installed with no relay environment variable anywhere, activated, and on
-   its next launch pulled the shop's catalogue by itself. **Remaining half:
+   its next launch pulled the shop's catalogue by itself. ~~**Remaining half:
    Android still takes its relay address as a build-time Gradle property, so
-   a phone cannot yet learn it from activation.**
+   a phone cannot yet learn it from activation.**~~ **That half closed the same
+   night** in `c37b15c`: `AppRoot.kt` reads `sync_relay_base_url` off
+   `GET /api/licensing/status` and uses it whenever no build-time value was
+   supplied, so a shipped phone can be pointed at a relay without a rebuild.
+   This line was stale for a day — re-measured 2026-09-04.
 
 3. **A PHONE CANNOT BE LICENSED AT ALL.** Found 2026-09-04 on a real Mi Note
    10. **ROOT CAUSE CONFIRMED AND CLEARED ON THE DEVICE the same day** — read
