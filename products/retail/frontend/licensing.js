@@ -102,19 +102,43 @@
     LOCAL_STATE_CORRUPT: 1,
   };
 
+  // The only members of the set above a customer can resolve without support,
+  // and so the only ones for which "check the date and time" is true advice.
+  const CLOCK_FIXABLE_REASON_CODES = {
+    ASSERTION_EXPIRED: 1,
+    ASSERTION_NOT_YET_VALID: 1,
+    CLOCK_ROLLBACK_SUSPECTED: 1,
+  };
+
   // Deliberately says nothing about the key. It is not the key -- Owner said
-  // yes. Clock is called out first because ASSERTION_EXPIRED /
-  // ASSERTION_NOT_YET_VALID / CLOCK_ROLLBACK_SUSPECTED are the only members
-  // of this set the customer can fix themselves.
+  // yes.
+  //
+  // WHY THIS IS SPLIT (2026-09-04). One message served all twelve codes and
+  // told every one of them to check the date and time. For nine that is not
+  // just unhelpful, it is false and it misdirects: a real handset stranded on
+  // UNKNOWN_SIGNING_KEY sent an investigation to compare clocks (they matched
+  // to the identical epoch second) while the actual cause was a trust store
+  // seeded once and never refreshed. Keep in step with LicensingMessages.kt
+  // and app-shell.js::_activationFailureMessage.
   const LOCAL_VERIFICATION_MESSAGE = 'Action Aura approved this activation, but this computer could not verify '
     + 'the signed licence it received, so it has not been applied yet. Your license key is not the problem — do not '
     + 'replace it. Check that this computer’s date and time are correct; if they are, contact support.';
+
+  // Everything else needs support, and gets the reason code to quote -- the
+  // fastest route to the cause, and the thing whose absence forced reading it
+  // out of a database by hand.
+  function localVerificationMessage(reason) {
+    if (CLOCK_FIXABLE_REASON_CODES[reason]) return LOCAL_VERIFICATION_MESSAGE;
+    return 'Action Aura approved this activation, but this computer could not verify the signed licence it '
+      + 'received, so it has not been applied yet. Your license key is not the problem — do not replace it, and '
+      + 're-entering it cannot help. Please contact support and quote this code: ' + (reason || 'UNKNOWN') + '.';
+  }
 
   // One place that decides what a reason_code is allowed to SAY, so the
   // "local failure is not an Owner verdict" rule cannot be honoured on one
   // screen and quietly forgotten on the next.
   function reasonMessage(reason) {
-    if (LOCAL_VERIFICATION_REASON_CODES[reason]) return LOCAL_VERIFICATION_MESSAGE;
+    if (LOCAL_VERIFICATION_REASON_CODES[reason]) return localVerificationMessage(reason);
     return REASON_MESSAGES[reason] || REASON_MESSAGES.ACTIVATION_REJECTED;
   }
 
@@ -574,7 +598,7 @@
     // already approved would leave the screen claiming "still waiting" for a
     // wait that is over.
     if (LOCAL_VERIFICATION_REASON_CODES[reason]) {
-      showMessage(LOCAL_VERIFICATION_MESSAGE, 'error');
+      showMessage(localVerificationMessage(reason), 'error');
       return;
     }
 

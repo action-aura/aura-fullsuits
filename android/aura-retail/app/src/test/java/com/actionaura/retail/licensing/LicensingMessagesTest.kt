@@ -99,11 +99,40 @@ class LicensingMessagesTest {
         // to re-check their key here is actively false and unfixable by them.
         for (code in LicensingMessages.LOCAL_VERIFICATION_REASON_CODES) {
             val message = LicensingMessages.reasonMessage(code)
-            assertThat(message).isEqualTo(LicensingMessages.LOCAL_VERIFICATION_MESSAGE)
+            assertThat(message).isEqualTo(LicensingMessages.localVerificationMessage(code))
             assertThat(message).doesNotContain("Double-check the key")
+            assertThat(message).contains("not the problem")
         }
         assertThat(LicensingMessages.LOCAL_VERIFICATION_REASON_CODES).contains("UNKNOWN_SIGNING_KEY")
         assertThat(LicensingMessages.LOCAL_VERIFICATION_REASON_CODES).contains("ASSERTION_VERIFICATION_FAILED")
+    }
+
+    @Test
+    fun clock_advice_is_given_only_where_a_clock_can_actually_be_the_cause() {
+        // 2026-09-04: one message served all twelve codes and told everyone to
+        // check the date and time. On a real handset stranded on
+        // UNKNOWN_SIGNING_KEY that advice was false, and it sent the
+        // investigation to compare clocks that already matched exactly.
+        for (code in LicensingMessages.CLOCK_FIXABLE_REASON_CODES) {
+            assertThat(LicensingMessages.reasonMessage(code)).contains("date and time")
+        }
+
+        val notClockFixable =
+            LicensingMessages.LOCAL_VERIFICATION_REASON_CODES - LicensingMessages.CLOCK_FIXABLE_REASON_CODES
+        assertThat(notClockFixable).isNotEmpty()
+        for (code in notClockFixable) {
+            val message = LicensingMessages.reasonMessage(code)!!
+            assertThat(message).doesNotContain("date and time")
+            // The code is the fastest route to the cause and is also written
+            // to licensing_events -- withholding it is what forced pulling a
+            // database off the device to learn it.
+            assertThat(message).contains(code)
+        }
+
+        // Every clock-fixable code must really be in the bucket it qualifies
+        // the message for, or this test guards an empty intersection.
+        assertThat(LicensingMessages.LOCAL_VERIFICATION_REASON_CODES)
+            .containsAtLeastElementsIn(LicensingMessages.CLOCK_FIXABLE_REASON_CODES)
     }
 
     @Test

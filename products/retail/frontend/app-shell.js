@@ -1523,6 +1523,15 @@ const SubsystemApp = {
     LOCAL_STATE_CORRUPT: 1,
   },
 
+  // The only members of the set above a customer can resolve without support,
+  // and so the only ones "check the date and time" is true advice for. Mirrors
+  // CLOCK_FIXABLE_REASON_CODES in licensing.js and LicensingMessages.kt.
+  ACTIVATION_CLOCK_FIXABLE_REASONS: {
+    ASSERTION_EXPIRED: 1,
+    ASSERTION_NOT_YET_VALID: 1,
+    CLOCK_ROLLBACK_SUSPECTED: 1,
+  },
+
   _activationFailureMessage(activation) {
     const a = activation || {};
     if (a.result === 'NETWORK_ERROR') {
@@ -1535,14 +1544,24 @@ const SubsystemApp = {
     }
     // Deliberately ahead of the `a.detail` fallback, and deliberately says
     // nothing about the key: Owner said yes, so a new key cannot help and
-    // asking for one is actively harmful advice. The clock is called out
-    // because ASSERTION_EXPIRED / ASSERTION_NOT_YET_VALID /
-    // CLOCK_ROLLBACK_SUSPECTED are the only members of this set the customer
-    // can resolve without support.
+    // asking for one is actively harmful advice.
+    //
+    // Clock advice is given ONLY for the three codes a clock can actually
+    // cause. It used to be given for all twelve, and on a real handset
+    // stranded at UNKNOWN_SIGNING_KEY that sent an investigation off to
+    // compare clocks which already matched to the identical second, while the
+    // true cause was a trust store seeded once and never refreshed. Everything
+    // else gets the reason code to quote to support -- the fastest route to
+    // the cause. Keep in step with licensing.js and LicensingMessages.kt.
     if (this.ACTIVATION_LOCAL_VERIFICATION_REASONS[a.reason_code]) {
-      return 'Action Aura approved this activation, but this computer could not verify the signed '
-        + 'licence it received, so it has not been applied yet. Your license key is not the problem — '
-        + 'do not replace it. Check that this computer’s date and time are correct; if they are, contact support.';
+      const opening = 'Action Aura approved this activation, but this computer could not verify the signed '
+        + 'licence it received, so it has not been applied yet. Your license key is not the problem — ';
+      if (this.ACTIVATION_CLOCK_FIXABLE_REASONS[a.reason_code]) {
+        return opening
+          + 'do not replace it. Check that this computer’s date and time are correct; if they are, contact support.';
+      }
+      return opening + 'do not replace it, and re-entering it cannot help. Please contact support and quote '
+        + 'this code: ' + (a.reason_code || 'UNKNOWN') + '.';
     }
     // A real verdict from Owner. `detail` is Owner-supplied text; every caller
     // renders it through _esc().

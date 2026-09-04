@@ -56,15 +56,48 @@ object LicensingMessages {
     )
 
     /**
-     * Deliberately says nothing about the key. It is not the key -- Owner
-     * said yes. Clock is named first because ASSERTION_EXPIRED /
-     * ASSERTION_NOT_YET_VALID / CLOCK_ROLLBACK_SUSPECTED are the only
-     * members of the set above the customer can fix themselves.
+     * The three members of [LOCAL_VERIFICATION_REASON_CODES] a customer can
+     * actually resolve without support -- and the ONLY ones for which "check
+     * the date and time" is true advice.
      */
-    const val LOCAL_VERIFICATION_MESSAGE: String =
+    val CLOCK_FIXABLE_REASON_CODES: Set<String> = setOf(
+        "ASSERTION_EXPIRED",
+        "ASSERTION_NOT_YET_VALID",
+        "CLOCK_ROLLBACK_SUSPECTED",
+    )
+
+    /**
+     * Deliberately says nothing about the key. It is not the key -- Owner
+     * said yes.
+     *
+     * WHY THIS IS SPLIT (2026-09-04). One message used to serve all twelve
+     * codes and it told everyone to "check that this device's date and time
+     * are correct". For nine of them that is not merely unhelpful, it is
+     * false, and it actively misdirects: a real Mi Note 10 stranded on
+     * UNKNOWN_SIGNING_KEY sent an investigation to compare clocks -- they
+     * matched to the identical epoch second -- while the actual cause was a
+     * trust_store.json seeded once in 2026-08 that permanently shadowed every
+     * corrected anchor shipped since. The screen cost more time than the bug.
+     *
+     * So clock advice is now given only where a clock can be the cause. Every
+     * other local failure needs support, and gets the reason code to quote:
+     * that code is the single fastest route to the cause (it is also written
+     * to licensing_events), and withholding it just means someone has to pull
+     * a database off the handset to learn it -- which is exactly what
+     * happened.
+     */
+    const val LOCAL_VERIFICATION_MESSAGE_CLOCK: String =
         "Action Aura approved this activation, but this device could not verify the signed licence it " +
             "received, so it has not been applied yet. Your license key is not the problem — do not " +
             "replace it. Check that this device's date and time are correct; if they are, contact support."
+
+    fun localVerificationMessage(reason: String?): String {
+        if (reason != null && reason in CLOCK_FIXABLE_REASON_CODES) return LOCAL_VERIFICATION_MESSAGE_CLOCK
+        return "Action Aura approved this activation, but this device could not verify the signed licence it " +
+            "received, so it has not been applied yet. Your license key is not the problem — do not " +
+            "replace it, and re-entering it cannot help. Please contact support and quote this code: " +
+            "${reason ?: "UNKNOWN"}."
+    }
 
     /**
      * "We could not get an answer", never "the answer is no". A held
@@ -215,7 +248,7 @@ object LicensingMessages {
      */
     fun reasonMessage(reason: String?): String? {
         if (reason == null) return null
-        if (reason in LOCAL_VERIFICATION_REASON_CODES) return LOCAL_VERIFICATION_MESSAGE
+        if (reason in LOCAL_VERIFICATION_REASON_CODES) return localVerificationMessage(reason)
         return REASON_MESSAGES[reason]
     }
 }
