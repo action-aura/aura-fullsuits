@@ -16,7 +16,7 @@
     <input id="leads-new-email" name="email" type="email" maxlength="200">
     <label for="leads-new-source">{{ _("Source") }}</label>
     <select id="leads-new-source" name="source">
-      {% for s in ["WEBSITE","REFERRAL","COLD_OUTREACH","EVENT","OTHER"] %}
+      {% for s in ["WEBSITE","REFERRAL","COLD_OUTREACH","EVENT","MAPS_DISCOVERY","OTHER"] %}
       <option value="{{ s }}">{{ lead_source_label(s) }}</option>
       {% endfor %}
     </select>

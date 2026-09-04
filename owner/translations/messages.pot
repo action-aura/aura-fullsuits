@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-09-04 23:57+0300\n"
+"POT-Creation-Date: 2026-09-05 01:21+0300\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -51,8 +51,8 @@ msgstr ""
 
 #: app/i18n_labels.py:25 app/i18n_labels.py:55 app/i18n_labels.py:67
 #: app/i18n_labels.py:72 app/i18n_labels.py:125 app/i18n_labels.py:139
-#: app/i18n_labels.py:152 app/i18n_labels.py:167 app/i18n_labels.py:295
-#: app/i18n_labels.py:347 app/i18n_labels.py:356 app/i18n_labels.py:521
+#: app/i18n_labels.py:152 app/i18n_labels.py:167 app/i18n_labels.py:296
+#: app/i18n_labels.py:348 app/i18n_labels.py:357 app/i18n_labels.py:522
 #: app/templates/employees/detail.html:21
 #: app/templates/employees/detail.html:126
 #: app/templates/profile/sessions.html:18
@@ -70,7 +70,7 @@ msgid "Terminated"
 msgstr ""
 
 #: app/i18n_labels.py:28 app/i18n_labels.py:170 app/i18n_labels.py:186
-#: app/i18n_labels.py:1030 app/templates/employees/dashboard.html:17
+#: app/i18n_labels.py:1031 app/templates/employees/dashboard.html:17
 msgid "Archived"
 msgstr ""
 
@@ -112,8 +112,8 @@ msgstr ""
 msgid "Disabled"
 msgstr ""
 
-#: app/i18n_labels.py:72 app/i18n_labels.py:141 app/i18n_labels.py:349
-#: app/i18n_labels.py:357 app/i18n_labels.py:522
+#: app/i18n_labels.py:72 app/i18n_labels.py:141 app/i18n_labels.py:350
+#: app/i18n_labels.py:358 app/i18n_labels.py:523
 #: app/templates/commercial_ops/emergency_extension_detail.html:16
 #: app/templates/employees/detail.html:126
 #: app/templates/profile/sessions.html:17
@@ -135,16 +135,16 @@ msgid "Not enrolled"
 msgstr ""
 
 #: app/i18n_labels.py:82 app/i18n_labels.py:128 app/i18n_labels.py:142
-#: app/i18n_labels.py:801 app/i18n_labels.py:850
+#: app/i18n_labels.py:802 app/i18n_labels.py:851
 msgid "Expired"
 msgstr ""
 
-#: app/i18n_labels.py:82 app/i18n_labels.py:228 app/i18n_labels.py:317
-#: app/i18n_labels.py:1027
+#: app/i18n_labels.py:82 app/i18n_labels.py:229 app/i18n_labels.py:318
+#: app/i18n_labels.py:1028
 msgid "Open"
 msgstr ""
 
-#: app/i18n_labels.py:87 app/i18n_labels.py:672
+#: app/i18n_labels.py:87 app/i18n_labels.py:673
 msgid "Employee profile created"
 msgstr ""
 
@@ -152,7 +152,7 @@ msgstr ""
 msgid "Employee profile updated"
 msgstr ""
 
-#: app/i18n_labels.py:89 app/i18n_labels.py:673
+#: app/i18n_labels.py:89 app/i18n_labels.py:674
 msgid "Employee activated"
 msgstr ""
 
@@ -184,44 +184,44 @@ msgstr ""
 msgid "Session revoked"
 msgstr ""
 
-#: app/i18n_labels.py:97 app/i18n_labels.py:652
+#: app/i18n_labels.py:97 app/i18n_labels.py:653
 #: app/templates/staff/invitation_created.html:2
 msgid "Invitation created"
 msgstr ""
 
-#: app/i18n_labels.py:98 app/i18n_labels.py:654
+#: app/i18n_labels.py:98 app/i18n_labels.py:655
 msgid "Invitation revoked"
 msgstr ""
 
-#: app/i18n_labels.py:99 app/i18n_labels.py:653
+#: app/i18n_labels.py:99 app/i18n_labels.py:654
 msgid "Invitation accepted"
 msgstr ""
 
-#: app/i18n_labels.py:100 app/i18n_labels.py:651
+#: app/i18n_labels.py:100 app/i18n_labels.py:652
 msgid "Roles changed"
 msgstr ""
 
-#: app/i18n_labels.py:101 app/i18n_labels.py:649
+#: app/i18n_labels.py:101 app/i18n_labels.py:650
 msgid "Account disabled"
 msgstr ""
 
-#: app/i18n_labels.py:102 app/i18n_labels.py:650
+#: app/i18n_labels.py:102 app/i18n_labels.py:651
 msgid "MFA reset"
 msgstr ""
 
-#: app/i18n_labels.py:103 app/i18n_labels.py:645
+#: app/i18n_labels.py:103 app/i18n_labels.py:646
 msgid "Signed in"
 msgstr ""
 
-#: app/i18n_labels.py:104 app/i18n_labels.py:646
+#: app/i18n_labels.py:104 app/i18n_labels.py:647
 msgid "Signed in with MFA"
 msgstr ""
 
-#: app/i18n_labels.py:105 app/i18n_labels.py:647
+#: app/i18n_labels.py:105 app/i18n_labels.py:648
 msgid "Signed out"
 msgstr ""
 
-#: app/i18n_labels.py:106 app/i18n_labels.py:648
+#: app/i18n_labels.py:106 app/i18n_labels.py:649
 msgid "Password changed"
 msgstr ""
 
@@ -246,20 +246,20 @@ msgstr ""
 msgid "Employees"
 msgstr ""
 
-#: app/i18n_labels.py:123 app/i18n_labels.py:137 app/i18n_labels.py:275
-#: app/i18n_labels.py:293 app/i18n_labels.py:346 app/i18n_labels.py:576
-#: app/i18n_labels.py:587 app/i18n_labels.py:598 app/i18n_labels.py:797
-#: app/i18n_labels.py:810 app/i18n_labels.py:821 app/i18n_labels.py:835
-#: app/i18n_labels.py:872 app/i18n_labels.py:958 app/i18n_labels.py:1003
+#: app/i18n_labels.py:123 app/i18n_labels.py:137 app/i18n_labels.py:276
+#: app/i18n_labels.py:294 app/i18n_labels.py:347 app/i18n_labels.py:577
+#: app/i18n_labels.py:588 app/i18n_labels.py:599 app/i18n_labels.py:798
+#: app/i18n_labels.py:811 app/i18n_labels.py:822 app/i18n_labels.py:836
+#: app/i18n_labels.py:873 app/i18n_labels.py:959 app/i18n_labels.py:1004
 msgid "Draft"
 msgstr ""
 
 #: app/commercial_ops/ui_routes.py:311 app/commercial_ops/ui_routes.py:319
 #: app/commercial_ops/ui_routes.py:345 app/commercial_ops/ui_routes.py:362
 #: app/commercial_ops/ui_routes.py:382 app/commercial_ops/ui_routes.py:405
-#: app/i18n_labels.py:124 app/i18n_labels.py:166 app/i18n_labels.py:504
-#: app/i18n_labels.py:568 app/i18n_labels.py:578 app/i18n_labels.py:589
-#: app/i18n_labels.py:600 app/templates/commercial_ops/pilot_detail.html:2
+#: app/i18n_labels.py:124 app/i18n_labels.py:166 app/i18n_labels.py:505
+#: app/i18n_labels.py:569 app/i18n_labels.py:579 app/i18n_labels.py:590
+#: app/i18n_labels.py:601 app/templates/commercial_ops/pilot_detail.html:2
 msgid "Pilot"
 msgstr ""
 
@@ -267,17 +267,17 @@ msgstr ""
 msgid "Past Due"
 msgstr ""
 
-#: app/i18n_labels.py:129 app/i18n_labels.py:229 app/i18n_labels.py:298
+#: app/i18n_labels.py:129 app/i18n_labels.py:230 app/i18n_labels.py:299
 msgid "Completed"
 msgstr ""
 
-#: app/i18n_labels.py:130 app/i18n_labels.py:230 app/i18n_labels.py:283
-#: app/i18n_labels.py:299 app/i18n_labels.py:802 app/i18n_labels.py:812
-#: app/i18n_labels.py:849 app/i18n_labels.py:863 app/i18n_labels.py:976
+#: app/i18n_labels.py:130 app/i18n_labels.py:231 app/i18n_labels.py:284
+#: app/i18n_labels.py:300 app/i18n_labels.py:803 app/i18n_labels.py:813
+#: app/i18n_labels.py:850 app/i18n_labels.py:864 app/i18n_labels.py:977
 msgid "Cancelled"
 msgstr ""
 
-#: app/i18n_labels.py:138 app/i18n_labels.py:822
+#: app/i18n_labels.py:138 app/i18n_labels.py:823
 msgid "Issued"
 msgstr ""
 
@@ -305,7 +305,7 @@ msgstr ""
 msgid "Prospect"
 msgstr ""
 
-#: app/i18n_labels.py:169 app/i18n_labels.py:1009
+#: app/i18n_labels.py:169 app/i18n_labels.py:1010
 msgid "Closed"
 msgstr ""
 
@@ -333,7 +333,7 @@ msgstr ""
 msgid "Qualified"
 msgstr ""
 
-#: app/i18n_labels.py:184 app/i18n_labels.py:610 app/i18n_labels.py:811
+#: app/i18n_labels.py:184 app/i18n_labels.py:611 app/i18n_labels.py:812
 #: app/templates/commercial_sales/order_detail.html:27
 msgid "Confirmed"
 msgstr ""
@@ -342,7 +342,7 @@ msgstr ""
 msgid "Lost"
 msgstr ""
 
-#: app/i18n_labels.py:194
+#: app/i18n_labels.py:194 app/templates/leads/discover.html:51
 msgid "Website"
 msgstr ""
 
@@ -358,28 +358,32 @@ msgstr ""
 msgid "Event"
 msgstr ""
 
-#: app/i18n_labels.py:198 app/i18n_labels.py:220 app/i18n_labels.py:987
+#: app/i18n_labels.py:198 app/i18n_labels.py:221 app/i18n_labels.py:988
 #: app/templates/commercial_sales/payment_new.html:23
 msgid "Other"
 msgstr ""
 
-#: app/i18n_labels.py:206 app/i18n_labels.py:1047
-msgid "Low"
+#: app/i18n_labels.py:199
+msgid "Map discovery"
 msgstr ""
 
 #: app/i18n_labels.py:207 app/i18n_labels.py:1048
-msgid "Medium"
+msgid "Low"
 msgstr ""
 
 #: app/i18n_labels.py:208 app/i18n_labels.py:1049
+msgid "Medium"
+msgstr ""
+
+#: app/i18n_labels.py:209 app/i18n_labels.py:1050
 msgid "High"
 msgstr ""
 
-#: app/i18n_labels.py:216
+#: app/i18n_labels.py:217
 msgid "Call"
 msgstr ""
 
-#: app/i18n_labels.py:217 app/templates/auth/accept_invitation.html:14
+#: app/i18n_labels.py:218 app/templates/auth/accept_invitation.html:14
 #: app/templates/auth/login.html:14 app/templates/customers/detail.html:211
 #: app/templates/customers/detail.html:224
 #: app/templates/employees/detail.html:20
@@ -393,282 +397,282 @@ msgstr ""
 msgid "Email"
 msgstr ""
 
-#: app/i18n_labels.py:218
+#: app/i18n_labels.py:219
 msgid "Meeting"
 msgstr ""
 
-#: app/i18n_labels.py:219
+#: app/i18n_labels.py:220
 msgid "WhatsApp (manual note)"
 msgstr ""
 
-#: app/i18n_labels.py:238
+#: app/i18n_labels.py:239
 msgid "Only me"
 msgstr ""
 
-#: app/i18n_labels.py:239
+#: app/i18n_labels.py:240
 msgid "Anyone with record access"
 msgstr ""
 
-#: app/i18n_labels.py:240 app/i18n_labels.py:1038
+#: app/i18n_labels.py:241 app/i18n_labels.py:1039
 msgid "Management only"
 msgstr ""
 
-#: app/i18n_labels.py:248
+#: app/i18n_labels.py:249
 msgid "Device location (GPS)"
 msgstr ""
 
-#: app/i18n_labels.py:249
+#: app/i18n_labels.py:250
 msgid "Approximate (network)"
 msgstr ""
 
-#: app/i18n_labels.py:250
+#: app/i18n_labels.py:251
 msgid "Manually entered"
 msgstr ""
 
-#: app/i18n_labels.py:251 app/templates/catalog/index.html:98
+#: app/i18n_labels.py:252 app/templates/catalog/index.html:98
 msgid "Imported"
 msgstr ""
 
-#: app/i18n_labels.py:259
+#: app/i18n_labels.py:260
 msgid "Verified"
 msgstr ""
 
-#: app/i18n_labels.py:259
+#: app/i18n_labels.py:260
 msgid "Unverified"
 msgstr ""
 
-#: app/i18n_labels.py:266
+#: app/i18n_labels.py:267
 msgid "Possible existing record -- requires management review"
 msgstr ""
 
-#: app/i18n_labels.py:276
+#: app/i18n_labels.py:277
 msgid "Quoted"
 msgstr ""
 
-#: app/i18n_labels.py:277
+#: app/i18n_labels.py:278
 msgid "Awaiting Confirmation"
 msgstr ""
 
-#: app/i18n_labels.py:278
+#: app/i18n_labels.py:279
 msgid "Awaiting Payment"
 msgstr ""
 
-#: app/i18n_labels.py:279
+#: app/i18n_labels.py:280
 msgid "Payment Recorded"
 msgstr ""
 
-#: app/i18n_labels.py:280 app/i18n_labels.py:294 app/i18n_labels.py:329
-#: app/i18n_labels.py:836 app/i18n_labels.py:847 app/i18n_labels.py:860
-#: app/i18n_labels.py:873 app/i18n_labels.py:961 app/i18n_labels.py:973
-#: app/i18n_labels.py:1006 app/templates/commercial_sales/refund_detail.html:15
+#: app/i18n_labels.py:281 app/i18n_labels.py:295 app/i18n_labels.py:330
+#: app/i18n_labels.py:837 app/i18n_labels.py:848 app/i18n_labels.py:861
+#: app/i18n_labels.py:874 app/i18n_labels.py:962 app/i18n_labels.py:974
+#: app/i18n_labels.py:1007 app/templates/commercial_sales/refund_detail.html:15
 msgid "Approved"
 msgstr ""
 
-#: app/i18n_labels.py:281
+#: app/i18n_labels.py:282
 msgid "Applied"
 msgstr ""
 
-#: app/i18n_labels.py:282 app/i18n_labels.py:330 app/i18n_labels.py:629
-#: app/i18n_labels.py:800 app/i18n_labels.py:848 app/i18n_labels.py:964
-#: app/i18n_labels.py:974 app/i18n_labels.py:1007
+#: app/i18n_labels.py:283 app/i18n_labels.py:331 app/i18n_labels.py:630
+#: app/i18n_labels.py:801 app/i18n_labels.py:849 app/i18n_labels.py:965
+#: app/i18n_labels.py:975 app/i18n_labels.py:1008
 msgid "Rejected"
 msgstr ""
 
-#: app/i18n_labels.py:284 app/i18n_labels.py:613
+#: app/i18n_labels.py:285 app/i18n_labels.py:614
 msgid "Voided"
 msgstr ""
 
-#: app/i18n_labels.py:296
+#: app/i18n_labels.py:297
 msgid "Extended"
 msgstr ""
 
-#: app/i18n_labels.py:297 app/templates/leads/dashboard.html:29
+#: app/i18n_labels.py:298 app/templates/leads/dashboard.html:29
 msgid "Converted"
 msgstr ""
 
-#: app/i18n_labels.py:306
+#: app/i18n_labels.py:307
 msgid "Info"
 msgstr ""
 
-#: app/i18n_labels.py:307
+#: app/i18n_labels.py:308
 msgid "Warning"
 msgstr ""
 
-#: app/i18n_labels.py:308
+#: app/i18n_labels.py:309
 msgid "Critical"
 msgstr ""
 
-#: app/i18n_labels.py:318 app/i18n_labels.py:339
+#: app/i18n_labels.py:319 app/i18n_labels.py:340
 msgid "In Progress"
 msgstr ""
 
-#: app/i18n_labels.py:319
+#: app/i18n_labels.py:320
 msgid "Acknowledged"
 msgstr ""
 
-#: app/i18n_labels.py:320
+#: app/i18n_labels.py:321
 msgid "Resolved"
 msgstr ""
 
-#: app/i18n_labels.py:321
+#: app/i18n_labels.py:322
 msgid "Dismissed"
 msgstr ""
 
-#: app/i18n_labels.py:328 app/i18n_labels.py:630
+#: app/i18n_labels.py:329 app/i18n_labels.py:631
 msgid "Pending Review"
 msgstr ""
 
-#: app/i18n_labels.py:337 app/i18n_labels.py:620 app/i18n_labels.py:631
+#: app/i18n_labels.py:338 app/i18n_labels.py:621 app/i18n_labels.py:632
 msgid "Success"
 msgstr ""
 
-#: app/i18n_labels.py:338 app/i18n_labels.py:611
+#: app/i18n_labels.py:339 app/i18n_labels.py:612
 msgid "Failed"
 msgstr ""
 
-#: app/i18n_labels.py:348 app/i18n_labels.py:580 app/i18n_labels.py:591
-#: app/i18n_labels.py:602
+#: app/i18n_labels.py:349 app/i18n_labels.py:581 app/i18n_labels.py:592
+#: app/i18n_labels.py:603
 #: app/templates/commercial_ops/activation_policy.html:39
 #: app/templates/licensing_admin/signing_keys.html:24
 msgid "Retired"
 msgstr ""
 
-#: app/i18n_labels.py:364 app/i18n_labels.py:529 app/i18n_labels.py:609
-#: app/i18n_labels.py:846 app/i18n_labels.py:858 app/i18n_labels.py:972
+#: app/i18n_labels.py:365 app/i18n_labels.py:530 app/i18n_labels.py:610
+#: app/i18n_labels.py:847 app/i18n_labels.py:859 app/i18n_labels.py:973
 msgid "Pending"
 msgstr ""
 
-#: app/i18n_labels.py:365
+#: app/i18n_labels.py:366
 msgid "Replayed"
 msgstr ""
 
-#: app/i18n_labels.py:366
+#: app/i18n_labels.py:367
 msgid "Discarded"
 msgstr ""
 
-#: app/i18n_labels.py:379
+#: app/i18n_labels.py:380
 #, python-format
 msgid ""
 "Subscription must already be in PILOT status to create a pilot record "
 "(was %(current_status)s)."
 msgstr ""
 
-#: app/i18n_labels.py:380
+#: app/i18n_labels.py:381
 msgid "Pilot end date must be after the pilot start date."
 msgstr ""
 
-#: app/i18n_labels.py:381
+#: app/i18n_labels.py:382
 msgid "A reason is required to extend a pilot."
 msgstr ""
 
-#: app/i18n_labels.py:382
+#: app/i18n_labels.py:383
 #, python-format
 msgid ""
 "Pilot has already been extended %(count)s time(s) (maximum allowed: "
 "%(max)s). No indefinite rolling pilot."
 msgstr ""
 
-#: app/i18n_labels.py:383
+#: app/i18n_labels.py:384
 msgid "The new end date must be after the current pilot end date."
 msgstr ""
 
-#: app/i18n_labels.py:384
+#: app/i18n_labels.py:385
 msgid ""
 "The renewal request must be applied before this pilot can be marked "
 "converted."
 msgstr ""
 
-#: app/i18n_labels.py:385
+#: app/i18n_labels.py:386
 msgid "This renewal request does not belong to this pilot's subscription."
 msgstr ""
 
-#: app/i18n_labels.py:386
+#: app/i18n_labels.py:387
 msgid "A reason is required to cancel a pilot."
-msgstr ""
-
-#: app/i18n_labels.py:396
-#, python-format
-msgid "Cannot change the pilot status from %(from_status)s to %(to_status)s."
 msgstr ""
 
 #: app/i18n_labels.py:397
 #, python-format
-msgid "Cannot extend a pilot in status %(status)s."
+msgid "Cannot change the pilot status from %(from_status)s to %(to_status)s."
 msgstr ""
 
 #: app/i18n_labels.py:398
 #, python-format
+msgid "Cannot extend a pilot in status %(status)s."
+msgstr ""
+
+#: app/i18n_labels.py:399
+#, python-format
 msgid "Cannot convert a pilot in status %(status)s."
 msgstr ""
 
-#: app/i18n_labels.py:409
+#: app/i18n_labels.py:410
 #, python-format
 msgid ""
 "Cannot change the renewal request status from %(from_status)s to "
 "%(to_status)s."
 msgstr ""
 
-#: app/i18n_labels.py:410
+#: app/i18n_labels.py:411
 msgid "Use the approve action to move this renewal request to Approved."
 msgstr ""
 
-#: app/i18n_labels.py:411
+#: app/i18n_labels.py:412
 #, python-format
 msgid "Cannot approve a renewal request in status %(status)s."
 msgstr ""
 
-#: app/i18n_labels.py:412
+#: app/i18n_labels.py:413
 #, python-format
 msgid ""
 "Cannot apply a renewal request in status %(status)s; it must be Approved "
 "first."
 msgstr ""
 
-#: app/i18n_labels.py:423
+#: app/i18n_labels.py:424
 msgid "A reason is required to release a device slot."
 msgstr ""
 
-#: app/i18n_labels.py:424
+#: app/i18n_labels.py:425
 msgid "A reason is required to replace a device slot."
 msgstr ""
 
-#: app/i18n_labels.py:425
+#: app/i18n_labels.py:426
 msgid "Extra slots must be a positive number."
 msgstr ""
 
-#: app/i18n_labels.py:426
+#: app/i18n_labels.py:427
 msgid "A reason is required to create a device slot exception."
 msgstr ""
 
-#: app/i18n_labels.py:427
+#: app/i18n_labels.py:428
 msgid "The expiry date must be after the start date."
 msgstr ""
 
-#: app/i18n_labels.py:428
+#: app/i18n_labels.py:429
 #, python-format
 msgid ""
 "Device slot exceptions may not exceed %(max_days)s days -- temporary "
 "means temporary."
 msgstr ""
 
-#: app/i18n_labels.py:429
+#: app/i18n_labels.py:430
 #, python-format
 msgid "Cannot revoke a device slot exception in status %(status)s."
 msgstr ""
 
-#: app/i18n_labels.py:430
+#: app/i18n_labels.py:431
 msgid "A reason is required to revoke a device slot exception."
 msgstr ""
 
-#: app/i18n_labels.py:431
+#: app/i18n_labels.py:432
 msgid "Enter a positive number of devices to add."
 msgstr ""
 
-#: app/i18n_labels.py:432
+#: app/i18n_labels.py:433
 msgid "A reason is required to add devices to a license."
 msgstr ""
 
-#: app/i18n_labels.py:434
+#: app/i18n_labels.py:435
 #, python-format
 msgid ""
 "Cannot set this license's device limit to %(new_limit)s -- "
@@ -676,87 +680,87 @@ msgid ""
 "to cover current usage."
 msgstr ""
 
-#: app/i18n_labels.py:437
+#: app/i18n_labels.py:438
 msgid "License not found."
 msgstr ""
 
-#: app/i18n_labels.py:438
+#: app/i18n_labels.py:439
 msgid "Subscription not found for this license."
 msgstr ""
 
-#: app/i18n_labels.py:448
+#: app/i18n_labels.py:449
 msgid "A reason is required to create an emergency extension."
 msgstr ""
 
-#: app/i18n_labels.py:449
+#: app/i18n_labels.py:450
 #, python-format
 msgid ""
 "Duration must be between 1 and %(max_hours)s hours (explicit, short-lived"
 " only)."
 msgstr ""
 
-#: app/i18n_labels.py:450
+#: app/i18n_labels.py:451
 msgid "Cannot create an emergency extension for a revoked license."
 msgstr ""
 
-#: app/i18n_labels.py:451
+#: app/i18n_labels.py:452
 #, python-format
 msgid ""
 "This subscription already has an active emergency extension until "
 "%(expires_at)s."
 msgstr ""
 
-#: app/i18n_labels.py:452
+#: app/i18n_labels.py:453
 #, python-format
 msgid "Cannot revoke an emergency extension in status %(status)s."
 msgstr ""
 
-#: app/i18n_labels.py:453
+#: app/i18n_labels.py:454
 msgid "A reason is required to revoke an emergency extension."
 msgstr ""
 
-#: app/i18n_labels.py:464
+#: app/i18n_labels.py:465
 #, python-format
 msgid "Cannot approve a pending activation in status %(status)s."
 msgstr ""
 
-#: app/i18n_labels.py:465
+#: app/i18n_labels.py:466
 msgid "This installation is no longer awaiting activation."
 msgstr ""
 
-#: app/i18n_labels.py:466
+#: app/i18n_labels.py:467
 msgid "The license for this pending activation could not be found."
 msgstr ""
 
-#: app/i18n_labels.py:467
+#: app/i18n_labels.py:468
 msgid "This license has already reached its device limit."
 msgstr ""
 
-#: app/i18n_labels.py:468
+#: app/i18n_labels.py:469
 #, python-format
 msgid "Cannot reject a pending activation in status %(status)s."
 msgstr ""
 
-#: app/i18n_labels.py:469
+#: app/i18n_labels.py:470
 msgid "A reason is required to reject a pending activation."
 msgstr ""
 
-#: app/i18n_labels.py:479
+#: app/i18n_labels.py:480
 #, python-format
 msgid "Unknown activation mode: %(mode)s"
 msgstr ""
 
-#: app/i18n_labels.py:489
+#: app/i18n_labels.py:490
 #, python-format
 msgid "Cannot acknowledge a notification in status %(status)s."
 msgstr ""
 
-#: app/i18n_labels.py:490
+#: app/i18n_labels.py:491
 #, python-format
 msgid "This notification is already %(status)s."
 msgstr ""
 
-#: app/commercial_ops/ui_routes.py:765 app/i18n_labels.py:500
+#: app/commercial_ops/ui_routes.py:765 app/i18n_labels.py:501
 #: app/templates/commercial_ops/emergency_extension_detail.html:8
 #: app/templates/commercial_ops/emergency_extensions_list.html:16
 #: app/templates/commercial_ops/pilot_detail.html:8
@@ -769,7 +773,7 @@ msgid "Subscription"
 msgstr ""
 
 #: app/command_palette/service.py:238 app/commercial_ops/ui_routes.py:612
-#: app/commercial_ops/ui_routes.py:626 app/i18n_labels.py:501
+#: app/commercial_ops/ui_routes.py:626 app/i18n_labels.py:502
 #: app/templates/commercial_ops/emergency_extension_detail.html:9
 #: app/templates/commercial_ops/pending_activation_detail.html:9
 #: app/templates/installations/new.html:8 app/templates/licensing/detail.html:3
@@ -778,7 +782,7 @@ msgid "License"
 msgstr ""
 
 #: app/command_palette/service.py:275 app/commercial_ops/ui_routes.py:585
-#: app/commercial_ops/ui_routes.py:599 app/i18n_labels.py:502
+#: app/commercial_ops/ui_routes.py:599 app/i18n_labels.py:503
 #: app/templates/commercial_ops/pending_activation_detail.html:8
 #: app/templates/commercial_ops/pending_activations_list.html:16
 #: app/templates/installations/detail.html:2
@@ -787,523 +791,523 @@ msgstr ""
 msgid "Installation"
 msgstr ""
 
-#: app/i18n_labels.py:503 app/templates/commercial_ops/renewal_detail.html:2
+#: app/i18n_labels.py:504 app/templates/commercial_ops/renewal_detail.html:2
 msgid "Renewal"
 msgstr ""
 
 #: app/commercial_ops/ui_routes.py:689 app/commercial_ops/ui_routes.py:701
-#: app/commercial_ops/ui_routes.py:716 app/i18n_labels.py:505
+#: app/commercial_ops/ui_routes.py:716 app/i18n_labels.py:506
 msgid "Notification"
 msgstr ""
 
-#: app/i18n_labels.py:512
+#: app/i18n_labels.py:513
 msgid "Automatic"
 msgstr ""
 
-#: app/i18n_labels.py:513
+#: app/i18n_labels.py:514
 msgid "Manual Approval"
 msgstr ""
 
-#: app/i18n_labels.py:514
+#: app/i18n_labels.py:515
 msgid "Risk Review"
 msgstr ""
 
-#: app/i18n_labels.py:530
+#: app/i18n_labels.py:531
 msgid "Convert"
 msgstr ""
 
-#: app/i18n_labels.py:531
+#: app/i18n_labels.py:532
 msgid "Do Not Convert"
 msgstr ""
 
-#: app/i18n_labels.py:538 app/templates/commercial_ops/renewals_new.html:16
+#: app/i18n_labels.py:539 app/templates/commercial_ops/renewals_new.html:16
 msgid "Early renewal (from current end date)"
 msgstr ""
 
-#: app/i18n_labels.py:539 app/templates/commercial_ops/renewals_new.html:17
+#: app/i18n_labels.py:540 app/templates/commercial_ops/renewals_new.html:17
 msgid "Late renewal (from approval date)"
 msgstr ""
 
-#: app/i18n_labels.py:546
+#: app/i18n_labels.py:547
 msgid "Activation"
 msgstr ""
 
-#: app/i18n_labels.py:547
+#: app/i18n_labels.py:548
 msgid "Check-in"
 msgstr ""
 
-#: app/i18n_labels.py:548
+#: app/i18n_labels.py:549
 msgid "Deactivation"
 msgstr ""
 
-#: app/i18n_labels.py:555 app/templates/audit/verify_chain.html:7
+#: app/i18n_labels.py:556 app/templates/audit/verify_chain.html:7
 msgid "OK"
 msgstr ""
 
-#: app/i18n_labels.py:556
+#: app/i18n_labels.py:557
 msgid "Degraded"
 msgstr ""
 
-#: app/i18n_labels.py:557
+#: app/i18n_labels.py:558
 msgid "Down"
 msgstr ""
 
-#: app/i18n_labels.py:558
+#: app/i18n_labels.py:559
 msgid "Unknown"
 msgstr ""
 
-#: app/i18n_labels.py:565
+#: app/i18n_labels.py:566
 msgid "One-time"
 msgstr ""
 
-#: app/i18n_labels.py:566
+#: app/i18n_labels.py:567
 msgid "Monthly"
 msgstr ""
 
-#: app/i18n_labels.py:567
+#: app/i18n_labels.py:568
 msgid "Annual"
 msgstr ""
 
-#: app/i18n_labels.py:569
+#: app/i18n_labels.py:570
 msgid "Custom"
 msgstr ""
 
-#: app/i18n_labels.py:577 app/i18n_labels.py:588 app/i18n_labels.py:599
+#: app/i18n_labels.py:578 app/i18n_labels.py:589 app/i18n_labels.py:600
 msgid "Planned"
 msgstr ""
 
-#: app/i18n_labels.py:579 app/i18n_labels.py:590 app/i18n_labels.py:601
+#: app/i18n_labels.py:580 app/i18n_labels.py:591 app/i18n_labels.py:602
 msgid "Available"
 msgstr ""
 
-#: app/i18n_labels.py:612 app/i18n_labels.py:826
+#: app/i18n_labels.py:613 app/i18n_labels.py:827
 msgid "Refunded"
 msgstr ""
 
-#: app/i18n_labels.py:621 app/i18n_labels.py:632
+#: app/i18n_labels.py:622 app/i18n_labels.py:633
 msgid "Failure"
 msgstr ""
 
-#: app/i18n_labels.py:628 app/i18n_labels.py:799
+#: app/i18n_labels.py:629 app/i18n_labels.py:800
 msgid "Accepted"
 msgstr ""
 
-#: app/i18n_labels.py:655
+#: app/i18n_labels.py:656
 msgid "Customer created"
 msgstr ""
 
-#: app/i18n_labels.py:656
+#: app/i18n_labels.py:657
 msgid "Customer updated"
 msgstr ""
 
-#: app/i18n_labels.py:657
+#: app/i18n_labels.py:658
 msgid "Customer archived"
 msgstr ""
 
-#: app/customers/customer_360.py:315 app/i18n_labels.py:658
+#: app/customers/customer_360.py:315 app/i18n_labels.py:659
 msgid "Subscription created"
 msgstr ""
 
-#: app/i18n_labels.py:659
+#: app/i18n_labels.py:660
 msgid "Subscription status changed"
 msgstr ""
 
-#: app/i18n_labels.py:660
+#: app/i18n_labels.py:661
 msgid "Subscription renewed"
 msgstr ""
 
-#: app/i18n_labels.py:661
+#: app/i18n_labels.py:662
 msgid "Payment recorded"
 msgstr ""
 
-#: app/i18n_labels.py:662
+#: app/i18n_labels.py:663
 msgid "Payment corrected"
 msgstr ""
 
-#: app/i18n_labels.py:663
+#: app/i18n_labels.py:664
 msgid "License issued"
 msgstr ""
 
-#: app/i18n_labels.py:664
+#: app/i18n_labels.py:665
 msgid "License status changed"
 msgstr ""
 
-#: app/i18n_labels.py:665
+#: app/i18n_labels.py:666
 msgid "License replaced"
 msgstr ""
 
-#: app/i18n_labels.py:666
+#: app/i18n_labels.py:667
 msgid "License created"
 msgstr ""
 
-#: app/i18n_labels.py:667
+#: app/i18n_labels.py:668
 msgid "License key issued"
 msgstr ""
 
-#: app/i18n_labels.py:668
+#: app/i18n_labels.py:669
 msgid "Installation registered"
 msgstr ""
 
-#: app/i18n_labels.py:669
+#: app/i18n_labels.py:670
 msgid "Installation status changed"
 msgstr ""
 
-#: app/i18n_labels.py:670
+#: app/i18n_labels.py:671
 msgid "Backup created"
 msgstr ""
 
-#: app/i18n_labels.py:671
+#: app/i18n_labels.py:672
 msgid "Backup restored"
 msgstr ""
 
-#: app/i18n_labels.py:674
+#: app/i18n_labels.py:675
 msgid "Check-in accepted"
 msgstr ""
 
-#: app/i18n_labels.py:675
+#: app/i18n_labels.py:676
 msgid "Activation accepted"
 msgstr ""
 
-#: app/i18n_labels.py:676
+#: app/i18n_labels.py:677
 msgid "Device-slot exception created"
 msgstr ""
 
-#: app/i18n_labels.py:678
+#: app/i18n_labels.py:679
 msgid "Expense created"
 msgstr ""
 
-#: app/i18n_labels.py:679
+#: app/i18n_labels.py:680
 msgid "Expense submitted for approval"
 msgstr ""
 
-#: app/i18n_labels.py:680
+#: app/i18n_labels.py:681
 msgid "Expense revised"
 msgstr ""
 
-#: app/i18n_labels.py:681
+#: app/i18n_labels.py:682
 msgid "Expense voided"
 msgstr ""
 
-#: app/i18n_labels.py:682
+#: app/i18n_labels.py:683
 msgid "Expense approved"
 msgstr ""
 
-#: app/i18n_labels.py:683
+#: app/i18n_labels.py:684
 msgid "Expense rejected"
 msgstr ""
 
-#: app/i18n_labels.py:684
+#: app/i18n_labels.py:685
 msgid "Expense returned for correction"
 msgstr ""
 
-#: app/i18n_labels.py:685
+#: app/i18n_labels.py:686
 msgid "Expense approval request cancelled"
 msgstr ""
 
-#: app/i18n_labels.py:686
+#: app/i18n_labels.py:687
 msgid "Expense payment recorded"
 msgstr ""
 
-#: app/i18n_labels.py:687
+#: app/i18n_labels.py:688
 msgid "Expense payment reversed"
 msgstr ""
 
-#: app/i18n_labels.py:688
+#: app/i18n_labels.py:689
 msgid "Expense attachment uploaded"
 msgstr ""
 
-#: app/i18n_labels.py:689
+#: app/i18n_labels.py:690
 msgid "Expense attachment downloaded"
 msgstr ""
 
-#: app/i18n_labels.py:690
+#: app/i18n_labels.py:691
 msgid "Expense attachment archived"
 msgstr ""
 
-#: app/i18n_labels.py:691
+#: app/i18n_labels.py:692
 msgid "Expense payee created"
 msgstr ""
 
-#: app/i18n_labels.py:692
+#: app/i18n_labels.py:693
 msgid "Expense payee deactivated"
 msgstr ""
 
-#: app/i18n_labels.py:693
+#: app/i18n_labels.py:694
 msgid "Duplicate-expense warning overridden"
 msgstr ""
 
-#: app/i18n_labels.py:695
+#: app/i18n_labels.py:696
 msgid "Cash closing created"
 msgstr ""
 
-#: app/i18n_labels.py:696
+#: app/i18n_labels.py:697
 msgid "Cash closing submitted"
 msgstr ""
 
-#: app/i18n_labels.py:697
+#: app/i18n_labels.py:698
 msgid "Cash closing approved"
 msgstr ""
 
-#: app/i18n_labels.py:698
+#: app/i18n_labels.py:699
 msgid "Cash closing rejected"
 msgstr ""
 
-#: app/i18n_labels.py:699
+#: app/i18n_labels.py:700
 msgid "Cash closing closed"
 msgstr ""
 
-#: app/i18n_labels.py:700
+#: app/i18n_labels.py:701
 msgid "Cash closing reopened"
 msgstr ""
 
-#: app/i18n_labels.py:701
+#: app/i18n_labels.py:702
 msgid "Cash closing adjustment created"
 msgstr ""
 
-#: app/i18n_labels.py:702
+#: app/i18n_labels.py:703
 msgid "Cash closing adjustment approved"
 msgstr ""
 
-#: app/i18n_labels.py:704
+#: app/i18n_labels.py:705
 msgid "Report snapshot generated"
 msgstr ""
 
-#: app/i18n_labels.py:705
+#: app/i18n_labels.py:706
 msgid "Report snapshot regenerated"
 msgstr ""
 
-#: app/i18n_labels.py:707
+#: app/i18n_labels.py:708
 msgid "Management note created"
 msgstr ""
 
-#: app/i18n_labels.py:708
+#: app/i18n_labels.py:709
 msgid "Management note updated"
 msgstr ""
 
-#: app/i18n_labels.py:709
+#: app/i18n_labels.py:710
 msgid "Management note assigned"
 msgstr ""
 
-#: app/i18n_labels.py:710
+#: app/i18n_labels.py:711
 msgid "Management note status changed"
 msgstr ""
 
-#: app/i18n_labels.py:711
+#: app/i18n_labels.py:712
 msgid "Comment added to management note"
 msgstr ""
 
-#: app/i18n_labels.py:721
+#: app/i18n_labels.py:722
 #, python-format
 msgid "Cannot change lead status from %(from_status)s to %(to_status)s."
 msgstr ""
 
-#: app/i18n_labels.py:722
+#: app/i18n_labels.py:723
 msgid "A reason is required to mark a lead as lost."
 msgstr ""
 
-#: app/i18n_labels.py:723
+#: app/i18n_labels.py:724
 msgid "This lead was changed by someone else. Reload and try again."
 msgstr ""
 
-#: app/i18n_labels.py:724
+#: app/i18n_labels.py:725
 msgid "Lead not found."
 msgstr ""
 
-#: app/i18n_labels.py:725
+#: app/i18n_labels.py:726
 msgid "You do not have access to this lead."
 msgstr ""
 
-#: app/i18n_labels.py:726
+#: app/i18n_labels.py:727
 msgid "Cannot assign a lead to an inactive employee."
 msgstr ""
 
-#: app/i18n_labels.py:727
+#: app/i18n_labels.py:728
 msgid "A reason is required to reassign a lead."
 msgstr ""
 
-#: app/i18n_labels.py:728
-msgid "A prospect or organization name is required."
-msgstr ""
-
 #: app/i18n_labels.py:729
-#, python-format
-msgid "Name must be at most %(max_len)s characters."
+msgid "A prospect or organization name is required."
 msgstr ""
 
 #: app/i18n_labels.py:730
 #, python-format
-msgid "Phone must be at most %(max_len)s characters."
+msgid "Name must be at most %(max_len)s characters."
 msgstr ""
 
 #: app/i18n_labels.py:731
-msgid "Enter a valid email address."
+#, python-format
+msgid "Phone must be at most %(max_len)s characters."
 msgstr ""
 
 #: app/i18n_labels.py:732
-msgid "At least one contact method (phone or email) is required."
+msgid "Enter a valid email address."
 msgstr ""
 
 #: app/i18n_labels.py:733
-#, python-format
-msgid "Unknown lead source: %(source)s."
+msgid "At least one contact method (phone or email) is required."
 msgstr ""
 
 #: app/i18n_labels.py:734
 #, python-format
-msgid "Unknown lead priority: %(priority)s."
+msgid "Unknown lead source: %(source)s."
 msgstr ""
 
 #: app/i18n_labels.py:735
-msgid "Estimated value must be a non-negative number."
+#, python-format
+msgid "Unknown lead priority: %(priority)s."
 msgstr ""
 
 #: app/i18n_labels.py:736
-msgid "A 3-letter currency code is required when an estimated value is set."
+msgid "Estimated value must be a non-negative number."
 msgstr ""
 
 #: app/i18n_labels.py:737
+msgid "A 3-letter currency code is required when an estimated value is set."
+msgstr ""
+
+#: app/i18n_labels.py:738
 #, python-format
 msgid "Location summary must be at most %(max_len)s characters."
 msgstr ""
 
-#: app/i18n_labels.py:738 app/i18n_labels.py:907 app/i18n_labels.py:1085
+#: app/i18n_labels.py:739 app/i18n_labels.py:908 app/i18n_labels.py:1086
 msgid ""
 "This request conflicts with an earlier request using the same idempotency"
 " key."
 msgstr ""
 
-#: app/i18n_labels.py:739
+#: app/i18n_labels.py:740
 #, python-format
 msgid "Unknown interaction type: %(interaction_type)s."
 msgstr ""
 
-#: app/i18n_labels.py:740
+#: app/i18n_labels.py:741
 #, python-format
 msgid "Summary must be at most %(max_len)s characters."
 msgstr ""
 
-#: app/i18n_labels.py:741
+#: app/i18n_labels.py:742
 msgid "Interaction time cannot be in the future."
 msgstr ""
 
-#: app/i18n_labels.py:742
+#: app/i18n_labels.py:743
 msgid "A due date/time is required for a follow-up."
 msgstr ""
 
-#: app/i18n_labels.py:743
+#: app/i18n_labels.py:744
 msgid "This follow-up was already cancelled."
 msgstr ""
 
-#: app/i18n_labels.py:744
+#: app/i18n_labels.py:745
 msgid "This follow-up was already completed."
 msgstr ""
 
-#: app/i18n_labels.py:745
+#: app/i18n_labels.py:746
 msgid "A reason is required to cancel a follow-up."
 msgstr ""
 
-#: app/i18n_labels.py:746
+#: app/i18n_labels.py:747
 msgid "Contact name is required."
 msgstr ""
 
-#: app/i18n_labels.py:747
+#: app/i18n_labels.py:748
 #, python-format
 msgid "Contact name must be at most %(max_len)s characters."
 msgstr ""
 
-#: app/i18n_labels.py:748 app/i18n_labels.py:766
+#: app/i18n_labels.py:749 app/i18n_labels.py:767
 #, python-format
 msgid "Unknown note visibility: %(visibility)s."
 msgstr ""
 
-#: app/i18n_labels.py:749
+#: app/i18n_labels.py:750
 #, python-format
 msgid "Note must be at most %(max_len)s characters."
 msgstr ""
 
-#: app/i18n_labels.py:750
+#: app/i18n_labels.py:751
 msgid "Note text is required."
 msgstr ""
 
-#: app/i18n_labels.py:762
+#: app/i18n_labels.py:763
 msgid "This customer was changed by someone else. Reload and try again."
 msgstr ""
 
-#: app/i18n_labels.py:763
+#: app/i18n_labels.py:764
 msgid "You do not have access to this customer."
 msgstr ""
 
-#: app/i18n_labels.py:764
+#: app/i18n_labels.py:765
 msgid "Cannot assign a customer to an inactive employee."
 msgstr ""
 
-#: app/i18n_labels.py:765
+#: app/i18n_labels.py:766
 msgid "A reason is required to reassign a customer."
 msgstr ""
 
-#: app/i18n_labels.py:780
+#: app/i18n_labels.py:781
 msgid "Latitude must be a finite number between -90 and 90."
 msgstr ""
 
-#: app/i18n_labels.py:781
+#: app/i18n_labels.py:782
 msgid "Longitude must be a finite number between -180 and 180."
 msgstr ""
 
-#: app/i18n_labels.py:782
+#: app/i18n_labels.py:783
 msgid "Accuracy must be a finite number greater than or equal to zero."
 msgstr ""
 
-#: app/i18n_labels.py:783
+#: app/i18n_labels.py:784
 #, python-format
 msgid "Unknown location source: %(source)s."
 msgstr ""
 
-#: app/i18n_labels.py:784
+#: app/i18n_labels.py:785
 msgid "Client-reported capture time is too far from server time."
 msgstr ""
 
-#: app/i18n_labels.py:785
+#: app/i18n_labels.py:786
 msgid "Manual address is too long."
 msgstr ""
 
-#: app/i18n_labels.py:786
+#: app/i18n_labels.py:787
 msgid "A reason is required to verify or revoke a location."
 msgstr ""
 
-#: app/i18n_labels.py:798
+#: app/i18n_labels.py:799
 msgid "Sent"
 msgstr ""
 
-#: app/i18n_labels.py:813
+#: app/i18n_labels.py:814
 msgid "Fulfilled"
 msgstr ""
 
-#: app/i18n_labels.py:823 app/i18n_labels.py:962
+#: app/i18n_labels.py:824 app/i18n_labels.py:963
 msgid "Partially paid"
 msgstr ""
 
-#: app/i18n_labels.py:824 app/i18n_labels.py:837 app/i18n_labels.py:861
-#: app/i18n_labels.py:874 app/i18n_labels.py:963
+#: app/i18n_labels.py:825 app/i18n_labels.py:838 app/i18n_labels.py:862
+#: app/i18n_labels.py:875 app/i18n_labels.py:964
 #: app/templates/commercial_sales/refund_detail.html:17
 msgid "Paid"
 msgstr ""
 
-#: app/i18n_labels.py:825 app/i18n_labels.py:838 app/i18n_labels.py:965
+#: app/i18n_labels.py:826 app/i18n_labels.py:839 app/i18n_labels.py:966
 #: app/templates/commercial_sales/refund_detail.html:35
 #: app/templates/operations_ui/expense_detail.html:127
 msgid "Void"
 msgstr ""
 
-#: app/i18n_labels.py:827
+#: app/i18n_labels.py:828
 msgid "Partially refunded"
 msgstr ""
 
-#: app/i18n_labels.py:859
+#: app/i18n_labels.py:860
 #: app/templates/commercial_sales/commissions_list.html:15
 msgid "Earned"
 msgstr ""
 
-#: app/i18n_labels.py:862
+#: app/i18n_labels.py:863
 #: app/templates/commercial_sales/employee_dashboard.html:42
 #: app/templates/commercial_sales/employee_dashboard.html:54
 #: app/templates/commercial_sales/invoice_detail.html:79
@@ -1311,523 +1315,523 @@ msgstr ""
 msgid "Reversed"
 msgstr ""
 
-#: app/i18n_labels.py:864
+#: app/i18n_labels.py:865
 msgid "Disputed"
 msgstr ""
 
-#: app/i18n_labels.py:888
+#: app/i18n_labels.py:889
 msgid "Quantity must be a positive whole number."
 msgstr ""
 
-#: app/i18n_labels.py:889
+#: app/i18n_labels.py:890
 msgid "Amount must be a finite number."
 msgstr ""
 
-#: app/i18n_labels.py:890
+#: app/i18n_labels.py:891
 msgid "Document total cannot be negative."
 msgstr ""
 
-#: app/i18n_labels.py:891
+#: app/i18n_labels.py:892
 msgid "Discount cannot exceed the applicable gross amount."
 msgstr ""
 
-#: app/i18n_labels.py:892
+#: app/i18n_labels.py:893
 #, python-format
 msgid ""
 "Refund amount (%(amount)s) exceeds the refundable balance "
 "(%(refundable)s)."
 msgstr ""
 
-#: app/i18n_labels.py:893
+#: app/i18n_labels.py:894
 #, python-format
 msgid ""
 "Allocation amount (%(amount)s) exceeds the unallocated payment balance "
 "(%(available)s)."
 msgstr ""
 
-#: app/i18n_labels.py:894
+#: app/i18n_labels.py:895
 #, python-format
 msgid ""
 "Allocation amount (%(amount)s) exceeds the invoice outstanding balance "
 "(%(outstanding)s)."
 msgstr ""
 
-#: app/i18n_labels.py:895
+#: app/i18n_labels.py:896
 #, python-format
 msgid "Currency %(given)s does not match the required currency %(expected)s."
 msgstr ""
 
-#: app/i18n_labels.py:896
+#: app/i18n_labels.py:897
 msgid "This payment belongs to a different customer than the invoice."
 msgstr ""
 
-#: app/i18n_labels.py:897 app/i18n_labels.py:1065
+#: app/i18n_labels.py:898 app/i18n_labels.py:1066
 msgid "Currency must be a 3-letter ISO 4217 code."
 msgstr ""
 
-#: app/i18n_labels.py:898
-msgid "A document must have at least one line."
-msgstr ""
-
 #: app/i18n_labels.py:899
-#, python-format
-msgid "Cannot change quote status from %(from_status)s to %(to_status)s."
+msgid "A document must have at least one line."
 msgstr ""
 
 #: app/i18n_labels.py:900
 #, python-format
-msgid "Cannot change order status from %(from_status)s to %(to_status)s."
+msgid "Cannot change quote status from %(from_status)s to %(to_status)s."
 msgstr ""
 
 #: app/i18n_labels.py:901
 #, python-format
-msgid "Cannot change invoice status from %(from_status)s to %(to_status)s."
+msgid "Cannot change order status from %(from_status)s to %(to_status)s."
 msgstr ""
 
 #: app/i18n_labels.py:902
 #, python-format
+msgid "Cannot change invoice status from %(from_status)s to %(to_status)s."
+msgstr ""
+
+#: app/i18n_labels.py:903
+#, python-format
 msgid "Cannot change refund status from %(from_status)s to %(to_status)s."
 msgstr ""
 
-#: app/i18n_labels.py:903 app/i18n_labels.py:1072
+#: app/i18n_labels.py:904 app/i18n_labels.py:1073
 #, python-format
 msgid "Cannot change approval status from %(from_status)s to %(to_status)s."
 msgstr ""
 
-#: app/i18n_labels.py:904
+#: app/i18n_labels.py:905
 msgid "This record was changed by someone else. Reload and try again."
 msgstr ""
 
-#: app/i18n_labels.py:905 app/i18n_labels.py:1061 app/i18n_labels.py:1124
+#: app/i18n_labels.py:906 app/i18n_labels.py:1062 app/i18n_labels.py:1125
 #: app/templates/commercial_sales/not_found.html:4
 msgid "Record not found."
 msgstr ""
 
-#: app/i18n_labels.py:906 app/i18n_labels.py:1062 app/i18n_labels.py:1125
+#: app/i18n_labels.py:907 app/i18n_labels.py:1063 app/i18n_labels.py:1126
 msgid "You do not have access to this record."
 msgstr ""
 
-#: app/i18n_labels.py:908 app/i18n_labels.py:1060
+#: app/i18n_labels.py:909 app/i18n_labels.py:1061
 msgid "A reason is required for this action."
 msgstr ""
 
-#: app/i18n_labels.py:909
+#: app/i18n_labels.py:910
 msgid "Payment method must be one of the allowed values."
 msgstr ""
 
-#: app/i18n_labels.py:910
+#: app/i18n_labels.py:911
 msgid "You cannot approve your own request."
 msgstr ""
 
-#: app/i18n_labels.py:911
+#: app/i18n_labels.py:912
 msgid "This action requires approval before it can proceed."
 msgstr ""
 
-#: app/i18n_labels.py:912
+#: app/i18n_labels.py:913
 msgid "The approval no longer matches the current version of this record."
 msgstr ""
 
-#: app/i18n_labels.py:913
+#: app/i18n_labels.py:914
 msgid "Discount exceeds your permitted limit and requires approval."
 msgstr ""
 
-#: app/i18n_labels.py:914
+#: app/i18n_labels.py:915
 msgid "A custom price requires approval."
 msgstr ""
 
-#: app/i18n_labels.py:915
+#: app/i18n_labels.py:916
 msgid "A zero-price line requires approval."
 msgstr ""
 
-#: app/i18n_labels.py:916
+#: app/i18n_labels.py:917
 msgid "The quote must be accepted before an order can be created."
 msgstr ""
 
-#: app/i18n_labels.py:917
+#: app/i18n_labels.py:918
 msgid "A confirmed customer is required before an order can be created."
 msgstr ""
 
-#: app/i18n_labels.py:918
+#: app/i18n_labels.py:919
 msgid "This product or plan is not currently sellable."
 msgstr ""
 
-#: app/i18n_labels.py:919
+#: app/i18n_labels.py:920
 msgid "This price is no longer effective."
 msgstr ""
 
-#: app/i18n_labels.py:920
+#: app/i18n_labels.py:921
 msgid "The payment must be confirmed before it can be allocated."
 msgstr ""
 
-#: app/i18n_labels.py:921
+#: app/i18n_labels.py:922
 msgid "This payment has already been confirmed."
 msgstr ""
 
-#: app/i18n_labels.py:922
+#: app/i18n_labels.py:923
 msgid "You cannot confirm a payment you submitted yourself."
 msgstr ""
 
-#: app/i18n_labels.py:923
+#: app/i18n_labels.py:924
 #, python-format
 msgid "This order is not eligible for fulfillment yet: %(reason)s."
 msgstr ""
 
-#: app/i18n_labels.py:924
+#: app/i18n_labels.py:925
 msgid "This order line has already been fulfilled."
 msgstr ""
 
-#: app/i18n_labels.py:925 app/i18n_labels.py:1111
+#: app/i18n_labels.py:926 app/i18n_labels.py:1112
 msgid "This action requires a real employee profile."
 msgstr ""
 
-#: app/i18n_labels.py:938
+#: app/i18n_labels.py:939
 #, python-format
 msgid "Commission rule type %(rule_type)s is not implemented in this phase."
 msgstr ""
 
-#: app/i18n_labels.py:939
+#: app/i18n_labels.py:940
 msgid "Commission rate must be a percentage greater than 0 and at most 100."
 msgstr ""
 
-#: app/i18n_labels.py:940
+#: app/i18n_labels.py:941
 msgid "Commission fixed amount must be a positive value with a valid currency."
 msgstr ""
 
-#: app/i18n_labels.py:941
+#: app/i18n_labels.py:942
 msgid "The employee has no active commission plan/rule assignment for this date."
 msgstr ""
 
-#: app/i18n_labels.py:942
+#: app/i18n_labels.py:943
 msgid "A commission entry already exists for this payment allocation."
 msgstr ""
 
-#: app/i18n_labels.py:943
+#: app/i18n_labels.py:944
 #, python-format
 msgid ""
 "Cannot change commission entry status from %(from_status)s to "
 "%(to_status)s."
 msgstr ""
 
-#: app/i18n_labels.py:944
+#: app/i18n_labels.py:945
 msgid "You cannot approve or adjust your own commission entry."
 msgstr ""
 
-#: app/i18n_labels.py:945
+#: app/i18n_labels.py:946
 msgid "An external payout reference is required to record a commission payout."
 msgstr ""
 
-#: app/i18n_labels.py:946
+#: app/i18n_labels.py:947
 msgid "A reason is required for this commission action."
 msgstr ""
 
-#: app/i18n_labels.py:947
+#: app/i18n_labels.py:948
 msgid "This commission entry is already included in a payout batch."
 msgstr ""
 
-#: app/i18n_labels.py:959 app/i18n_labels.py:1004
+#: app/i18n_labels.py:960 app/i18n_labels.py:1005
 msgid "Submitted"
 msgstr ""
 
-#: app/i18n_labels.py:960
+#: app/i18n_labels.py:961
 msgid "Returned for correction"
 msgstr ""
 
-#: app/i18n_labels.py:975
+#: app/i18n_labels.py:976
 msgid "Returned"
 msgstr ""
 
-#: app/i18n_labels.py:983 app/templates/commercial_sales/payment_new.html:19
+#: app/i18n_labels.py:984 app/templates/commercial_sales/payment_new.html:19
 msgid "Cash"
 msgstr ""
 
-#: app/i18n_labels.py:984 app/templates/commercial_sales/payment_new.html:20
+#: app/i18n_labels.py:985 app/templates/commercial_sales/payment_new.html:20
 msgid "Bank transfer"
 msgstr ""
 
-#: app/i18n_labels.py:985 app/templates/commercial_sales/payment_new.html:21
+#: app/i18n_labels.py:986 app/templates/commercial_sales/payment_new.html:21
 msgid "Card (offline)"
 msgstr ""
 
-#: app/i18n_labels.py:986 app/templates/commercial_sales/payment_new.html:22
+#: app/i18n_labels.py:987 app/templates/commercial_sales/payment_new.html:22
 msgid "Cheque"
 msgstr ""
 
-#: app/i18n_labels.py:994
+#: app/i18n_labels.py:995
 msgid "External vendor"
 msgstr ""
 
-#: app/i18n_labels.py:995
+#: app/i18n_labels.py:996
 msgid "Employee beneficiary"
 msgstr ""
 
-#: app/i18n_labels.py:1005
+#: app/i18n_labels.py:1006
 msgid "Review required"
 msgstr ""
 
-#: app/i18n_labels.py:1008
+#: app/i18n_labels.py:1009
 msgid "Reopened"
 msgstr ""
 
-#: app/i18n_labels.py:1016
+#: app/i18n_labels.py:1017
 msgid "Daily operational summary"
 msgstr ""
 
-#: app/i18n_labels.py:1017
+#: app/i18n_labels.py:1018
 msgid "Daily cash closing exceptions"
 msgstr ""
 
-#: app/i18n_labels.py:1018
+#: app/i18n_labels.py:1019
 msgid "Weekly operational summary"
 msgstr ""
 
-#: app/i18n_labels.py:1019
+#: app/i18n_labels.py:1020
 msgid "Monthly operational summary"
 msgstr ""
 
-#: app/i18n_labels.py:1028
+#: app/i18n_labels.py:1029
 msgid "In progress"
 msgstr ""
 
-#: app/i18n_labels.py:1029
+#: app/i18n_labels.py:1030
 msgid "Done"
 msgstr ""
 
-#: app/i18n_labels.py:1039
+#: app/i18n_labels.py:1040
 msgid "Specific employees"
 msgstr ""
 
-#: app/i18n_labels.py:1040
+#: app/i18n_labels.py:1041
 msgid "All staff"
 msgstr ""
 
-#: app/i18n_labels.py:1059
+#: app/i18n_labels.py:1060
 #, python-format
 msgid "Cannot change expense status from %(from_status)s to %(to_status)s."
 msgstr ""
 
-#: app/i18n_labels.py:1063
+#: app/i18n_labels.py:1064
 msgid "Amount must be a finite, positive number."
 msgstr ""
 
-#: app/i18n_labels.py:1064
+#: app/i18n_labels.py:1065
 #, python-format
 msgid "Currency %(given)s does not match the expense currency %(expected)s."
 msgstr ""
 
-#: app/i18n_labels.py:1066
+#: app/i18n_labels.py:1067
 msgid "A payee is required."
 msgstr ""
 
-#: app/i18n_labels.py:1067
+#: app/i18n_labels.py:1068
 msgid "This payee is not active."
 msgstr ""
 
-#: app/i18n_labels.py:1068
+#: app/i18n_labels.py:1069
 msgid "This expense category is not active."
 msgstr ""
 
-#: app/i18n_labels.py:1069
+#: app/i18n_labels.py:1070
 msgid "Payee type must be EXTERNAL or EMPLOYEE."
 msgstr ""
 
-#: app/i18n_labels.py:1070
+#: app/i18n_labels.py:1071
 msgid "An employee is required for an employee-beneficiary payee."
 msgstr ""
 
-#: app/i18n_labels.py:1071
+#: app/i18n_labels.py:1072
 msgid "An employee-beneficiary payee cannot have an external contact reference."
 msgstr ""
 
-#: app/i18n_labels.py:1073
+#: app/i18n_labels.py:1074
 msgid "You cannot approve your own expense request."
 msgstr ""
 
-#: app/i18n_labels.py:1074
+#: app/i18n_labels.py:1075
 msgid "You cannot approve an expense where you are the recorded beneficiary."
 msgstr ""
 
-#: app/i18n_labels.py:1075
+#: app/i18n_labels.py:1076
 msgid ""
 "This expense was changed after the approval was requested. Reload and try"
 " again."
 msgstr ""
 
-#: app/i18n_labels.py:1076
+#: app/i18n_labels.py:1077
 #, python-format
 msgid ""
 "Approved amount (%(approved)s) cannot exceed the requested amount "
 "(%(requested)s)."
 msgstr ""
 
-#: app/i18n_labels.py:1077
+#: app/i18n_labels.py:1078
 #, python-format
 msgid "This account is not eligible to approve this expense: %(reason)s."
 msgstr ""
 
-#: app/i18n_labels.py:1078
+#: app/i18n_labels.py:1079
 msgid "This account does not have permission to approve expenses."
 msgstr ""
 
-#: app/i18n_labels.py:1079
+#: app/i18n_labels.py:1080
 msgid "This approver employee profile is suspended or terminated."
 msgstr ""
 
-#: app/i18n_labels.py:1080
+#: app/i18n_labels.py:1081
 msgid "This approver has no active employee profile."
 msgstr ""
 
-#: app/i18n_labels.py:1081
+#: app/i18n_labels.py:1082
 msgid "This expense has no pending approval request."
 msgstr ""
 
-#: app/i18n_labels.py:1082
+#: app/i18n_labels.py:1083
 msgid "The expense must be approved before a payment can be recorded."
 msgstr ""
 
-#: app/i18n_labels.py:1083
+#: app/i18n_labels.py:1084
 #, python-format
 msgid "This expense is in a terminal state (%(status)s) and cannot be paid."
 msgstr ""
 
-#: app/i18n_labels.py:1084
+#: app/i18n_labels.py:1085
 #, python-format
 msgid ""
 "Payment amount (%(amount)s) exceeds the outstanding approved balance "
 "(%(outstanding)s)."
 msgstr ""
 
-#: app/i18n_labels.py:1086
+#: app/i18n_labels.py:1087
 msgid "This payment has already been reversed."
 msgstr ""
 
-#: app/i18n_labels.py:1087
+#: app/i18n_labels.py:1088
 msgid "You cannot record payment for your own expense request."
 msgstr ""
 
-#: app/i18n_labels.py:1088
+#: app/i18n_labels.py:1089
 msgid "Attachment exceeds the maximum allowed size."
 msgstr ""
 
-#: app/i18n_labels.py:1089
+#: app/i18n_labels.py:1090
 msgid "This file type is not allowed for attachments."
 msgstr ""
 
-#: app/i18n_labels.py:1090
+#: app/i18n_labels.py:1091
 msgid "The file actual content does not match its declared type."
 msgstr ""
 
-#: app/i18n_labels.py:1091
+#: app/i18n_labels.py:1092
 msgid "Attachment file is empty."
 msgstr ""
 
-#: app/i18n_labels.py:1092
+#: app/i18n_labels.py:1093
 msgid "Attachment not found."
 msgstr ""
 
-#: app/i18n_labels.py:1093
+#: app/i18n_labels.py:1094
 msgid "You do not have access to this attachment."
 msgstr ""
 
-#: app/i18n_labels.py:1094
+#: app/i18n_labels.py:1095
 msgid "This attachment has been archived."
 msgstr ""
 
-#: app/i18n_labels.py:1095
-msgid "Invalid storage key."
-msgstr ""
-
 #: app/i18n_labels.py:1096
-#, python-format
-msgid "Cannot change cash closing status from %(from_status)s to %(to_status)s."
+msgid "Invalid storage key."
 msgstr ""
 
 #: app/i18n_labels.py:1097
 #, python-format
-msgid "A cash closing already exists for %(business_date)s %(currency)s."
+msgid "Cannot change cash closing status from %(from_status)s to %(to_status)s."
 msgstr ""
 
 #: app/i18n_labels.py:1098
-msgid "A manual opening-cash override requires a reason."
+#, python-format
+msgid "A cash closing already exists for %(business_date)s %(currency)s."
 msgstr ""
 
 #: app/i18n_labels.py:1099
-msgid "You do not have permission to override opening cash."
+msgid "A manual opening-cash override requires a reason."
 msgstr ""
 
 #: app/i18n_labels.py:1100
-msgid "A nonzero variance requires an explanation."
+msgid "You do not have permission to override opening cash."
 msgstr ""
 
 #: app/i18n_labels.py:1101
-msgid "You cannot approve a cash closing you prepared."
+msgid "A nonzero variance requires an explanation."
 msgstr ""
 
 #: app/i18n_labels.py:1102
+msgid "You cannot approve a cash closing you prepared."
+msgstr ""
+
+#: app/i18n_labels.py:1103
 msgid ""
 "This cash closing is approved or closed and cannot be edited directly -- "
 "reopen it first."
 msgstr ""
 
-#: app/i18n_labels.py:1103
+#: app/i18n_labels.py:1104
 msgid "Reopening a cash closing requires a reason."
 msgstr ""
 
-#: app/i18n_labels.py:1104
+#: app/i18n_labels.py:1105
 msgid "You do not have permission to reopen a cash closing."
 msgstr ""
 
-#: app/i18n_labels.py:1105
+#: app/i18n_labels.py:1106
 msgid "Reopening a cash closing requires recent re-authentication."
 msgstr ""
 
-#: app/i18n_labels.py:1106
+#: app/i18n_labels.py:1107
 msgid ""
 "A closed business date requires reopening the closing before recording a "
 "late transaction."
 msgstr ""
 
-#: app/i18n_labels.py:1107
+#: app/i18n_labels.py:1108
 msgid "Overriding a duplicate-expense warning requires a reason."
 msgstr ""
 
-#: app/i18n_labels.py:1108
+#: app/i18n_labels.py:1109
 msgid "A snapshot already exists for this canonical key."
 msgstr ""
 
-#: app/i18n_labels.py:1109
+#: app/i18n_labels.py:1110
 msgid "You do not have permission to regenerate a report snapshot."
 msgstr ""
 
-#: app/i18n_labels.py:1110
+#: app/i18n_labels.py:1111
 msgid "Regenerating a report snapshot requires a reason."
 msgstr ""
 
-#: app/i18n_labels.py:1123
+#: app/i18n_labels.py:1124
 #, python-format
 msgid "Cannot change note status from %(from_status)s to %(to_status)s."
 msgstr ""
 
-#: app/i18n_labels.py:1126
+#: app/i18n_labels.py:1127
 msgid "Visibility must be Management only, Specific employees, or All staff."
 msgstr ""
 
-#: app/i18n_labels.py:1127
+#: app/i18n_labels.py:1128
 msgid "Specific-employees visibility requires at least one employee grant."
 msgstr ""
 
-#: app/i18n_labels.py:1128
+#: app/i18n_labels.py:1129
 msgid "A title is required."
 msgstr ""
 
-#: app/i18n_labels.py:1129
+#: app/i18n_labels.py:1130
 msgid "A body is required."
 msgstr ""
 
-#: app/i18n_labels.py:1130
+#: app/i18n_labels.py:1131
 msgid "This note was changed by someone else. Reload and try again."
 msgstr ""
 
-#: app/i18n_labels.py:1131
+#: app/i18n_labels.py:1132
 msgid "The author cannot be supplied by the client."
 msgstr ""
 
@@ -2535,6 +2539,46 @@ msgstr ""
 msgid "Refund processed: %(amount)s %(currency)s"
 msgstr ""
 
+#: app/leads/routes.py:71
+msgid "Check the segment and area and try again."
+msgstr ""
+
+#: app/leads/routes.py:72
+msgid "The map service is busy -- try again in a minute."
+msgstr ""
+
+#: app/leads/routes.py:73 app/leads/routes.py:75
+msgid "The map service could not be reached."
+msgstr ""
+
+#: app/leads/routes.py:245
+msgid "Enter both a segment and an area, each 120 characters or fewer."
+msgstr ""
+
+#: app/leads/routes.py:281
+msgid "That employee profile ID is not a valid UUID."
+msgstr ""
+
+#: app/leads/routes.py:314
+#, python-format
+msgid "Row %(row)d is missing its place ID or name and was not imported."
+msgstr ""
+
+#: app/leads/routes.py:338
+#, python-format
+msgid "%(count)d lead(s) imported or already present."
+msgstr ""
+
+#: app/leads/routes.py:340
+#, python-format
+msgid "%(count)d row(s) skipped -- no phone listed."
+msgstr ""
+
+#: app/leads/routes.py:342
+#, python-format
+msgid "Some rows could not be imported: %(errors)s"
+msgstr ""
+
 #: app/licensing/issuance_routes.py:121
 msgid "An idempotency key is required to issue a license."
 msgstr ""
@@ -2941,7 +2985,8 @@ msgstr ""
 #: app/templates/customers/detail.html:211
 #: app/templates/customers/detail.html:222 app/templates/employees/list.html:64
 #: app/templates/employees/list.html:94 app/templates/leads/detail.html:115
-#: app/templates/leads/detail.html:125 app/templates/leads/list.html:13
+#: app/templates/leads/detail.html:125 app/templates/leads/discover.html:48
+#: app/templates/leads/list.html:16
 #: app/templates/operations_ui/payees_list.html:8
 #: app/templates/operations_ui/payees_list.html:11
 #: app/templates/staff/list.html:14
@@ -3019,7 +3064,7 @@ msgstr ""
 #: app/templates/employees/list.html:40 app/templates/employees/list.html:67
 #: app/templates/employees/list.html:95
 #: app/templates/installations/list.html:17
-#: app/templates/leads/dashboard.html:16 app/templates/leads/list.html:16
+#: app/templates/leads/dashboard.html:16 app/templates/leads/list.html:19
 #: app/templates/licensing/list.html:31
 #: app/templates/licensing_admin/device_keys.html:14
 #: app/templates/licensing_admin/signing_keys.html:24
@@ -3557,7 +3602,7 @@ msgstr ""
 #: app/templates/customers/detail.html:338
 #: app/templates/customers/detail.html:357
 #: app/templates/employees/detail.html:120 app/templates/leads/detail.html:23
-#: app/templates/leads/list.html:12 app/templates/profile/sessions.html:9
+#: app/templates/leads/list.html:15 app/templates/profile/sessions.html:9
 msgid "Created"
 msgstr ""
 
@@ -4485,7 +4530,7 @@ msgstr ""
 #: app/templates/components/table.html:120 app/templates/customers/list.html:10
 #: app/templates/employees/list.html:31 app/templates/employees/list.html:77
 #: app/templates/installations/list.html:9 app/templates/layout/base.html:80
-#: app/templates/leads/list.html:10 app/templates/licensing/list.html:23
+#: app/templates/leads/list.html:13 app/templates/licensing/list.html:23
 #: app/templates/operations_ui/expenses_list.html:9
 #: app/templates/staff/list.html:9 app/templates/subscriptions/list.html:9
 msgid "Search"
@@ -5105,7 +5150,8 @@ msgstr ""
 #: app/templates/employees/detail.html:12 app/templates/employees/new.html:19
 #: app/templates/leads/detail.html:19 app/templates/leads/detail.html:79
 #: app/templates/leads/detail.html:115 app/templates/leads/detail.html:127
-#: app/templates/leads/new.html:13 app/templates/profile/index.html:28
+#: app/templates/leads/discover.html:49 app/templates/leads/new.html:13
+#: app/templates/profile/index.html:28
 msgid "Phone"
 msgstr ""
 
@@ -6324,7 +6370,8 @@ msgid "Source"
 msgstr ""
 
 #: app/templates/leads/detail.html:22 app/templates/leads/detail.html:89
-#: app/templates/leads/list.html:15 app/templates/leads/new.html:23
+#: app/templates/leads/discover.html:21 app/templates/leads/list.html:18
+#: app/templates/leads/new.html:23
 #: app/templates/operations_ui/management_note_new.html:13
 #: app/templates/operations_ui/management_notes_list.html:10
 #: app/templates/operations_ui/management_notes_list.html:17
@@ -6364,7 +6411,7 @@ msgstr ""
 msgid "Primary contact name"
 msgstr ""
 
-#: app/templates/leads/detail.html:104
+#: app/templates/leads/detail.html:104 app/templates/leads/discover.html:27
 msgid "Assign to (employee profile UUID)"
 msgstr ""
 
@@ -6372,20 +6419,86 @@ msgstr ""
 msgid "Assign"
 msgstr ""
 
+#: app/templates/leads/discover.html:2 app/templates/leads/discover.html:5
+msgid "Discover leads"
+msgstr ""
+
+#: app/templates/leads/discover.html:6
+msgid ""
+"Results come from Google Places exactly as listed there -- nothing is "
+"invented. Only places with a listed phone number can be imported, and re-"
+"importing the same place never creates a duplicate lead."
+msgstr ""
+
+#: app/templates/leads/discover.html:12
+msgid ""
+"Map-based lead discovery is not configured for this install. An "
+"administrator must set OWNER_LEAD_DISCOVERY_PROVIDER=google_places and "
+"OWNER_GOOGLE_PLACES_API_KEY before it can be used here."
+msgstr ""
+
+#: app/templates/leads/discover.html:17
+msgid "Target segment"
+msgstr ""
+
+#: app/templates/leads/discover.html:18
+msgid "e.g. pharmacies"
+msgstr ""
+
+#: app/templates/leads/discover.html:19
+msgid "Area"
+msgstr ""
+
+#: app/templates/leads/discover.html:20
+msgid "e.g. Irbid, Jordan"
+msgstr ""
+
+#: app/templates/leads/discover.html:29
+msgid "Search Google Places"
+msgstr ""
+
+#: app/templates/leads/discover.html:36
+msgid "Results"
+msgstr ""
+
+#: app/templates/leads/discover.html:39
+msgid "Import the selected places as new leads?"
+msgstr ""
+
+#: app/templates/leads/discover.html:50
+msgid "Address"
+msgstr ""
+
+#: app/templates/leads/discover.html:69
+msgid "No phone listed -- cannot be imported"
+msgstr ""
+
+#: app/templates/leads/discover.html:81
+msgid "Import selected as leads"
+msgstr ""
+
+#: app/templates/leads/discover.html:84
+msgid "No places found for that search."
+msgstr ""
+
 #: app/templates/leads/list.html:6 app/templates/leads/new.html:2
 #: app/templates/leads/new.html:5
 msgid "New lead"
 msgstr ""
 
-#: app/templates/leads/list.html:10
+#: app/templates/leads/list.html:8
+msgid "Discover leads from a map search"
+msgstr ""
+
+#: app/templates/leads/list.html:13
 msgid "Organization, contact, phone, or email"
 msgstr ""
 
-#: app/templates/leads/list.html:14 app/templates/leads/list.html:39
+#: app/templates/leads/list.html:17 app/templates/leads/list.html:42
 msgid "Next follow-up"
 msgstr ""
 
-#: app/templates/leads/list.html:42
+#: app/templates/leads/list.html:45
 msgid "No leads yet."
 msgstr ""
 

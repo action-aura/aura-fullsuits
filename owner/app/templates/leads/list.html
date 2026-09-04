@@ -4,6 +4,9 @@
 {% block content %}
 <div class="card">
   {{ table.toolbar(_("Leads"), new_url=url_for('leads.new_form'), new_label=_("New lead"), new_permission="leads.create") }}
+  {% if discovery_enabled and has_permission("leads.discover") %}
+  <p><a class="btn secondary" href="{{ url_for('leads.discover_form') }}">{{ _("Discover leads from a map search") }}</a></p>
+  {% endif %}
   {{ table.filter_bar(
        status_options=["NEW", "POTENTIAL", "FOLLOW_UP", "UNDER_OBSERVATION", "QUALIFIED", "NOT_INTERESTED_NOW", "CONFIRMED", "LOST", "ARCHIVED"],
        status_value=status_filter, status_label_fn=lead_status_label,

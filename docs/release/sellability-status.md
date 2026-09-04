@@ -124,6 +124,18 @@ and the desktop sync?" turned out to have a longer answer than yes or no.
 
 ---
 
+## What the owner asked for on 2026-09-04 (WhatsApp)
+
+Three things, in his order. Each line says how it was checked.
+
+| Ask | State | How |
+|---|---|---|
+| **1. Present the employee system, then create staff accounts on the spot so they can log in** | **TESTED — works** | `retail_onboarding_wave0_test.py` 8/8 and `retail_employee_management_test.py` green, run through the canonical isolated runner. Running three retail files in one process produced 7 spurious failures (`no such table: users`) — that is the documented shared-process pollution `run_all_tests.py` exists to avoid, not a defect; each file passes alone. Nothing in code blocks the presentation |
+| **2. Products next — Ahmed starts POS-vendor meetings Sunday** | **TESTED — works** | Lookup 20/20, barcode uniqueness 4/4, variants 11/11, import/export 25/25, each run alone (60 passed, 0 failed). The combined-process run showed 23 failures for the same pollution reason as above |
+| **3. AI lead discovery — give it a segment and an area, get real contact details for sales to call** | **BUILT — off until a key is set** | New Owner CRM feature, `owner/app/leads/discovery.py` + `/leads/discover`. **Deliberately NOT the cousin's KIMI approach:** an LLM asked for "phone numbers of pharmacies in Irbid" invents some, and a sales team dialling fabricated numbers is worse than no feature. This reads the **Google Places API** — the same data he copies off Google Maps by hand — and imports only what is listed there. Guards: a place with no listed phone is shown but cannot be imported (a lead must have a phone or email); re-importing a place never duplicates it (Places `id` is the idempotency key, mutation-proven); results capped at 20 per search as a cost ceiling; the API key can never reach an error message (mutation-proven); a `javascript:` website is never rendered as a link. 22 pure unit tests + 12 HTTP route tests. **Off by default** — costs nothing until `OWNER_LEAD_DISCOVERY_PROVIDER=google_places` and `OWNER_GOOGLE_PLACES_API_KEY` are set; the owner must create that key (Google's free tier covers roughly 6,000 searches a month at Text Search pricing) |
+
+Two crafted-request defects were found in review of the agent-built routes and closed before commit: an empty `place_id` collapsed every such row into ONE lead through a shared idempotency key, and `count` was an unbounded loop driven by a hidden input. Both are now refused per row / clamped, each with its own test.
+
 ## The honest answer
 
 **Not yet sellable to a paying customer.** Updated 2026-09-03 — one blocker

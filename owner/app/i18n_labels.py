@@ -196,6 +196,7 @@ def lead_source_label(code: str) -> str:
         "COLD_OUTREACH": _("Cold outreach"),
         "EVENT": _("Event"),
         "OTHER": _("Other"),
+        "MAPS_DISCOVERY": _("Map discovery"),
     }
     return labels.get(code, code)
 

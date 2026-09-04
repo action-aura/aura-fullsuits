@@ -1,0 +1,88 @@
+{% extends "layout/base.html" %}
+{% block title %}{{ _("Discover leads") }}{% endblock %}
+{% block content %}
+<div class="card">
+  <h2>{{ _("Discover leads") }}</h2>
+  <p>{{ _("Results come from Google Places exactly as listed there -- nothing is invented. Only places with a listed phone number can be imported, and re-importing the same place never creates a duplicate lead.") }}</p>
+
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+  {% if not enabled %}
+  <p class="empty">
+    {{ _("Map-based lead discovery is not configured for this install. An administrator must set OWNER_LEAD_DISCOVERY_PROVIDER=google_places and OWNER_GOOGLE_PLACES_API_KEY before it can be used here.") }}
+  </p>
+  {% else %}
+  <form method="post" action="{{ url_for('leads.discover_search') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="leads-discover-segment">{{ _("Target segment") }}</label>
+    <input id="leads-discover-segment" name="segment" required maxlength="120" value="{{ segment or '' }}" placeholder="{{ _('e.g. pharmacies') }}">
+    <label for="leads-discover-area">{{ _("Area") }}</label>
+    <input id="leads-discover-area" name="area" required maxlength="120" value="{{ area or '' }}" placeholder="{{ _('e.g. Irbid, Jordan') }}">
+    <label for="leads-discover-priority">{{ _("Priority") }}</label>
+    <select id="leads-discover-priority" name="priority">
+      {% for p in ["LOW","MEDIUM","HIGH"] %}
+      <option value="{{ p }}" {% if p == (priority or "MEDIUM") %}selected{% endif %}>{{ lead_priority_label(p) }}</option>
+      {% endfor %}
+    </select>
+    <label for="leads-discover-assigned-employee-profile-id">{{ _("Assign to (employee profile UUID)") }}</label>
+    <input id="leads-discover-assigned-employee-profile-id" name="assigned_employee_profile_id" value="{{ assigned_employee_profile_id or '' }}">
+    <div style="margin-top:0.75rem;"><button type="submit">{{ _("Search Google Places") }}</button></div>
+  </form>
+  {% endif %}
+</div>
+
+{% if enabled and results is not none %}
+<div class="card">
+  <h3>{{ _("Results") }}</h3>
+  {% if results %}
+  <form method="post" action="{{ url_for('leads.discover_import') }}"
+        data-confirm="{{ _('Import the selected places as new leads?') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="count" value="{{ results|length }}">
+    <input type="hidden" name="priority" value="{{ priority or 'MEDIUM' }}">
+    <input type="hidden" name="assigned_employee_profile_id" value="{{ assigned_employee_profile_id or '' }}">
+    <table class="responsive-table">
+      <thead>
+        <tr>
+          <th></th>
+          <th>{{ _("Name") }}</th>
+          <th>{{ _("Phone") }}</th>
+          <th>{{ _("Address") }}</th>
+          <th>{{ _("Website") }}</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for r in results %}
+      {% set n = loop.index0 %}
+      <tr>
+        <td>
+          <input type="checkbox" name="select-{{ n }}" id="leads-discover-select-{{ n }}" {% if r.phone %}checked{% else %}disabled{% endif %}>
+          <input type="hidden" name="place_id-{{ n }}" value="{{ r.place_id }}">
+          <input type="hidden" name="name-{{ n }}" value="{{ r.name }}">
+          <input type="hidden" name="phone-{{ n }}" value="{{ r.phone or '' }}">
+          <input type="hidden" name="address-{{ n }}" value="{{ r.address or '' }}">
+          <input type="hidden" name="website-{{ n }}" value="{{ r.website or '' }}">
+        </td>
+        <td><label for="leads-discover-select-{{ n }}">{{ r.name }}</label></td>
+        <td>
+          {% if r.phone %}<bdi dir="ltr">{{ r.phone }}</bdi>
+          {% else %}<span class="small">{{ _("No phone listed -- cannot be imported") }}</span>{% endif %}
+        </td>
+        <td>{{ r.address or "-" }}</td>
+        {# Linked only for http(s). The value is external data from the map
+           provider; Jinja escaping stops an attribute breakout, but it would
+           not stop a javascript: URL from becoming a clickable link. Anything
+           else is shown as plain text. #}
+        <td>{% if r.website and (r.website.startswith('https://') or r.website.startswith('http://')) %}<a href="{{ r.website }}" target="_blank" rel="noopener noreferrer">{{ r.website }}</a>{% elif r.website %}{{ r.website }}{% else %}-{% endif %}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <div style="margin-top:0.75rem;"><button type="submit">{{ _("Import selected as leads") }}</button></div>
+  </form>
+  {% else %}
+  <p class="empty">{{ _("No places found for that search.") }}</p>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

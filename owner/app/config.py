@@ -68,6 +68,10 @@ KNOWN_CONFIG_ENV_VARS = frozenset(
         "OWNER_STRICT_CONFIG",
         # Launch-readiness (2026-09-03)
         "OWNER_SYNC_RELAY_PUBLIC_URL",
+        # Lead discovery (2026-09)
+        "OWNER_LEAD_DISCOVERY_PROVIDER",
+        "OWNER_GOOGLE_PLACES_API_KEY",
+        "OWNER_LEAD_DISCOVERY_TIMEOUT_SECONDS",
         # Read directly by other modules (not by this Config class), but
         # still legitimate OWNER_* variables -- must not trip the unknown-key
         # check in strict mode.
@@ -230,6 +234,12 @@ class BaseConfig:
     # explicitly for whichever single process is meant to own it -- no
     # environment may rely on the default silently deciding.
     SCHEDULER_ROLE = os.environ.get("OWNER_SCHEDULER_ROLE", "worker")
+
+    # -- Lead discovery (2026-09): Google Places (New) Text Search, off
+    # unless both are set -- see app/leads/discovery.py's module docstring.
+    LEAD_DISCOVERY_PROVIDER = os.environ.get("OWNER_LEAD_DISCOVERY_PROVIDER", "")   # "" (disabled) | "google_places"
+    GOOGLE_PLACES_API_KEY = os.environ.get("OWNER_GOOGLE_PLACES_API_KEY", "")
+    LEAD_DISCOVERY_TIMEOUT_SECONDS = float(os.environ.get("OWNER_LEAD_DISCOVERY_TIMEOUT_SECONDS", "10"))
     # M2: when true, validate() also rejects any OWNER_* environment variable
     # that isn't in KNOWN_CONFIG_ENV_VARS (catches typos like a misspelled
     # override that would otherwise silently fall back to a default). Off by
