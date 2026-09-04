@@ -114,6 +114,46 @@ and the desktop sync?" turned out to have a longer answer than yes or no.
 
 ## Operations — all BLOCKED on the owner
 
+**Found 2026-09-04, and it outranks everything else in this section: the
+DigitalOcean account is LOCKED and both droplets are OFF.** Measured with the
+authenticated `doctl` on this machine, not inferred from a timeout:
+
+- `doctl account get` → status **`locked`**
+- `doctl balance get` → account balance **$46.16** (the August invoice, unpaid); month-to-date $52.59
+- `doctl compute droplet list` → `aura-retail-demo` (Owner production, 161.35.219.243) **off**; `aura-llm-demo` (the Ollama server Retail's AI assistant points at, 104.248.35.215) **off**
+- `doctl compute droplet-action power-on` on both → `403 There is currently a lock on the account, please log in to the control panel and contact support.`
+
+So production Owner and the AI endpoint have been down all day for an unpaid
+$46.16. Nothing on this list below can be done on the droplet until that is
+cleared, and it cannot be cleared from here — it needs the account holder's
+login and card. **The one action:** sign in at cloud.digitalocean.com, pay the
+$46.16, and if the lock does not lift on its own, open the support ticket the
+message asks for. Then `doctl compute droplet-action power-on 591801885` and
+`... 591806146`, or the console's Power button.
+
+Three scripts were added under `scripts/ops/` so the remaining human steps are
+one action each:
+
+- `setup_places_key.ps1` — after the owner runs `gcloud auth login` once (browser
+  sign-in; gcloud 583 is installed on this machine), it creates the project,
+  enables the Places API, mints a key restricted to that API and prints the two
+  `OWNER_*` lines. It deliberately stops short of linking billing — that is a
+  decision to be charged, made in the console, and the script names the exact
+  page.
+- `phone_roundtrip.ps1 -Pepper <value>` — with the phone plugged in: `adb
+  reverse`, Owner on 127.0.0.1:5551 over **HTTP** (the APK is baked to
+  `http://`) against `aura_owner_rehearsal`, launches the app, and reads the
+  verdict off the device's own `licensing_events`. The phone's installation is
+  already ACTIVE on that Owner (`b857c7d5…`, device key `c80edc2a…` matches
+  the handset), so nothing is re-issued.
+- `verify_pepper.py <db> <licence-key>` — activation validates the licence key
+  against `OWNER_LICENSE_PEPPER`, and the rehearsal's pepper is recorded
+  nowhere on this machine (not in any env file, shell history, or session
+  artefact). The dev config defaults to
+  `dev-only-insecure-pepper-do-not-use-in-production` when unset, which a local
+  rehearsal most plausibly used; this proves it against a stored HMAC instead
+  of assuming it.
+
 - Droplet bring-up and the clean-machine rehearsal (`go-live-runbook.md` Parts 1–2)
 - `EXTRA_DEVICE` priced and set `AVAILABLE`
 - A systemd timer for `flask sync prune-events`
