@@ -57,6 +57,35 @@
     {% endif %}
   </div>
 
+  {# Offline policy could be listed but never ASSIGNED from the UI, and the
+     resolved entitlements it feeds could never be previewed -- both backends
+     complete and permission-gated (see test_route_reachability.py). The
+     recent-auth split below mirrors "Add devices" above because
+     assign_offline_policy carries the same @require_recent_auth.
+     policy_code is a free-text code rather than a select: the licence detail
+     view does not load the policy table, so the list is linked instead of
+     duplicated into this page's context. #}
+  {% if has_permission("offline_policies.manage") %}
+  <div class="card--action">
+    <h3>{{ _("Offline policy") }}</h3>
+    <p><a href="{{ url_for('licensing_admin.offline_policies') }}">{{ _("Browse offline policies") }}</a></p>
+    {% if recent_auth_ok %}
+    <form method="post" action="{{ url_for('licensing_admin.assign_offline_policy', license_id=license.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label for="licensing-detail-policy-code">{{ _("Policy code") }}</label>
+      <input id="licensing-detail-policy-code" name="policy_code" required>
+      <div style="margin-top:0.5rem;"><button type="submit">{{ _("Assign offline policy (requires recent authentication)") }}</button></div>
+    </form>
+    {% else %}
+    <p><a href="{{ url_for('auth.reauth_form', next=url_for('licensing.detail', license_id=license.id)) }}">{{ _("Assign offline policy (requires recent authentication)") }}</a></p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if has_permission("entitlement_resolution.preview") %}
+  <p><a href="{{ url_for('licensing_admin.entitlement_preview', license_id=license.id) }}">{{ _("Preview resolved entitlements") }}</a></p>
+  {% endif %}
+
   {% if license.status == "DRAFT" %}
   <div class="card--action">
     <h3>{{ _("Issue key") }}</h3>

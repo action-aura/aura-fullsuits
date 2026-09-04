@@ -566,3 +566,50 @@ def test_subscription_timeline_shows_events(app, client, seeded):
     # timeline_category_label() for localization -- "Subscription" (title
     # case), not the raw "SUBSCRIPTION" code.
     assert b"Subscription" in resp.data
+
+
+def test_subscription_detail_lists_payments_and_offers_the_correction_control(app, client, seeded):
+    """Reachability of subscriptions.correct_payment_route, proven by RENDER.
+
+    The route-reachability scanner greps templates for `url_for(...)`, which
+    cannot tell a control that renders from one that never does. This page
+    could always RECORD a payment but never listed one, so the correction
+    handler -- complete and permission-gated -- had no payment id to act on and
+    was unreachable in practice.
+
+    An earlier version of this check asserted only `status_code == 200` and was
+    worthless: Jinja treats an undefined name in a `{% for %}` as an EMPTY
+    sequence, so renaming the context variable to a typo still rendered a 200
+    with the empty-state row. It has to assert the payment's own data appears.
+    """
+    from app.extensions import db_session
+    from app.models.subscriptions import PaymentRecord, Subscription
+
+    staff_id = make_staff(app, "8v-paylist@example.com", role_codes=["FINANCE"])
+    sub_id, *_ = _make_subscription(app, staff_id)
+
+    with app.app_context():
+        sub = db_session.get(Subscription, sub_id)
+        db_session.add(PaymentRecord(
+            customer_id=sub.customer_id, subscription_id=sub.id,
+            amount=1234.56, currency="USD", method="BANK_TRANSFER",
+            payment_date=date(2026, 8, 14), reference="PAY-REF-8V-001",
+            status="PENDING", recorded_by_staff_user_id=staff_id,
+        ))
+        db_session.commit()
+
+    force_login(client, app, staff_id)
+    resp = client.get(f"/subscriptions/{sub_id}")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+
+    # The row itself rendered -- not the empty-state fallback.
+    assert "PAY-REF-8V-001" in body
+    assert "1234.56" in body
+    assert "No payments recorded yet." not in body
+    # ...and the correction control points at the real endpoint for THIS payment.
+    with app.app_context():
+        payment = db_session.execute(
+            db_session.query(PaymentRecord).filter_by(reference="PAY-REF-8V-001").statement
+        ).scalars().one()
+    assert f"/subscriptions/payments/{payment.id}/correct" in body

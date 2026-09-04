@@ -48,6 +48,31 @@
 </div>
 {% endif %}
 
+{# Revoking the DEVICE KEY is a different action from the two slot operations
+   above, which is exactly why this was missed: the page already had a
+   "replace" control (commercial_ops_ui.replace_installation -- device SLOT
+   replacement) so the absence of this one did not look like a hole.
+   licensing_admin.replace_device revokes the installation's active
+   cryptographic key, forcing the device to enrol again. Offered as a link
+   rather than a form when auth is stale: this route is @require_recent_auth,
+   and the decorator's fallback redirects to reauth with next=request.path,
+   which 405s coming back to a POST-only endpoint. #}
+{% if has_permission("installations.replace_device") %}
+<div class="card card--action">
+  <h3>{{ _("Revoke device key") }}</h3>
+  <p>{{ _("Revokes this installation's active device key. The device cannot check in again until it re-enrols, and no data is deleted. Requires a fresh MFA confirmation.") }}</p>
+  {% if recent_auth_ok %}
+  <form method="post" action="{{ url_for('licensing_admin.replace_device', installation_id=installation.id) }}"
+        data-confirm="{{ _('Revoke this device key? The device must re-enrol before it can check in again.') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="danger">{{ _("Revoke device key (requires recent authentication)") }}</button>
+  </form>
+  {% else %}
+  <p><a href="{{ url_for('auth.reauth_form', next=url_for('installations.detail', installation_id=installation.id)) }}">{{ _("Revoke device key (requires recent authentication)") }}</a></p>
+  {% endif %}
+</div>
+{% endif %}
+
 {# Real, previously-missing status-history table (InstallationStatusHistory)
    -- Subscriptions and Licenses already show their own equivalent history
    table; Installations only showed "Activation events" (a distinct,

@@ -98,6 +98,31 @@
     <input name="reason" placeholder="{{ _('Reason (required when reassigning)') }}">
     <button type="submit">{{ _("Reassign") }}</button>
   </form>
+
+  {# customers.update had a complete, permission-gated handler and no form
+     anywhere -- every one of these fields rendered read-only above, so a
+     customer's own name could never be corrected through the UI.
+     lifecycle_status and commercial_registration_reference are deliberately
+     ABSENT: the handler filters to exactly these four keys, and status changes
+     belong to the archive route under its own narrower permission (see
+     customers/routes.py::update). #}
+  {% if has_permission("customers.update") %}
+  <details style="margin-top:0.75rem;">
+    <summary>{{ _("Edit customer details") }}</summary>
+    <form method="post" action="{{ url_for('customers.update', customer_id=customer.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label for="customers-edit-legal-name">{{ _("Legal name") }}</label>
+      <input id="customers-edit-legal-name" name="legal_name" value="{{ customer.legal_name or '' }}" required maxlength="200">
+      <label for="customers-edit-trade-name">{{ _("Trade name") }}</label>
+      <input id="customers-edit-trade-name" name="trade_name" value="{{ customer.trade_name or '' }}" maxlength="200">
+      <label for="customers-edit-country">{{ _("Country") }}</label>
+      <input id="customers-edit-country" name="country" value="{{ customer.country or '' }}" maxlength="100">
+      <label for="customers-edit-city">{{ _("City") }}</label>
+      <input id="customers-edit-city" name="city" value="{{ customer.city or '' }}" maxlength="100">
+      <div style="margin-top:0.75rem;"><button type="submit">{{ _("Save changes") }}</button></div>
+    </form>
+  </details>
+  {% endif %}
 </div>
 
 {# ================= Real ARIA tabs (progressively enhanced from plain
@@ -283,6 +308,13 @@
         <form method="post" action="{{ url_for('crm_shared.complete_followup', followup_id=f.id) }}" style="display:inline;">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit">{{ _("Complete") }}</button>
+        </form>
+        {# Same pair as leads/detail.html: the backend closes a follow-up as
+           either completed or cancelled, but only "complete" was rendered. #}
+        <form method="post" action="{{ url_for('crm_shared.cancel_followup', followup_id=f.id) }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input name="reason" placeholder="{{ _('Reason') }}">
+          <button type="submit" class="secondary">{{ _("Cancel follow-up") }}</button>
         </form>
         {% endif %}
       </p>

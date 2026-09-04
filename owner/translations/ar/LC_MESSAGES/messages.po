@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-09-04 19:38+0300\n"
+"POT-Creation-Date: 2026-09-04 23:57+0300\n"
 "PO-Revision-Date: 2026-08-01 11:16+0300\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: ar\n"
@@ -386,16 +386,16 @@ msgid "Call"
 msgstr "مكالمة"
 
 #: app/i18n_labels.py:217 app/templates/auth/accept_invitation.html:14
-#: app/templates/auth/login.html:14 app/templates/customers/detail.html:186
-#: app/templates/customers/detail.html:199
+#: app/templates/auth/login.html:14 app/templates/customers/detail.html:211
+#: app/templates/customers/detail.html:224
 #: app/templates/employees/detail.html:20
 #: app/templates/employees/invitations.html:9
 #: app/templates/employees/new.html:10 app/templates/leads/detail.html:20
-#: app/templates/leads/detail.html:53 app/templates/leads/detail.html:64
-#: app/templates/leads/new.html:15 app/templates/profile/index.html:38
-#: app/templates/staff/detail.html:7 app/templates/staff/list.html:15
-#: app/templates/staff/list.html:43 app/templates/staff/list.html:62
-#: app/templates/staff/list.html:66
+#: app/templates/leads/detail.html:81 app/templates/leads/detail.html:115
+#: app/templates/leads/detail.html:126 app/templates/leads/new.html:15
+#: app/templates/profile/index.html:38 app/templates/staff/detail.html:7
+#: app/templates/staff/list.html:15 app/templates/staff/list.html:43
+#: app/templates/staff/list.html:62 app/templates/staff/list.html:66
 msgid "Email"
 msgstr "البريد الإلكتروني"
 
@@ -431,7 +431,7 @@ msgstr "تقريبي (عبر الشبكة)"
 msgid "Manually entered"
 msgstr "مُدخل يدويًا"
 
-#: app/i18n_labels.py:251 app/templates/catalog/index.html:87
+#: app/i18n_labels.py:251 app/templates/catalog/index.html:98
 msgid "Imported"
 msgstr "تاريخ الاستيراد"
 
@@ -2121,7 +2121,7 @@ msgstr "تثبيت لـ %(name)s"
 msgid "Quick Create"
 msgstr "إنشاء سريع"
 
-#: app/command_palette/service.py:343 app/templates/customers/detail.html:109
+#: app/command_palette/service.py:343 app/templates/customers/detail.html:134
 #: app/templates/dashboard/index.html:100
 #: app/templates/dashboard/index.html:153
 #: app/templates/layout/_nav_model.html:59
@@ -2183,7 +2183,7 @@ msgstr "العملاء"
 #: app/templates/commercial_sales/quotes_list.html:6
 #: app/templates/commercial_sales/quotes_list.html:18
 #: app/templates/customers/detail.html:49
-#: app/templates/customers/detail.html:113
+#: app/templates/customers/detail.html:138
 #: app/templates/layout/_nav_model.html:75
 msgid "Quotes"
 msgstr "عروض الأسعار"
@@ -2198,7 +2198,7 @@ msgstr "طلبات المبيعات"
 #: app/templates/commercial_sales/invoices_list.html:3
 #: app/templates/commercial_sales/invoices_list.html:6
 #: app/templates/commercial_sales/invoices_list.html:18
-#: app/templates/customers/detail.html:115
+#: app/templates/customers/detail.html:140
 #: app/templates/layout/_nav_model.html:81
 msgid "Invoices"
 msgstr "الفواتير"
@@ -2207,7 +2207,7 @@ msgstr "الفواتير"
 #: app/templates/commercial_sales/payments_list.html:3
 #: app/templates/commercial_sales/payments_list.html:6
 #: app/templates/commercial_sales/payments_list.html:18
-#: app/templates/customers/detail.html:116
+#: app/templates/customers/detail.html:141
 #: app/templates/layout/_nav_model.html:84
 msgid "Payments"
 msgstr "المدفوعات"
@@ -2293,7 +2293,7 @@ msgstr "لوحة المالية التشغيلية"
 msgid "Catalog"
 msgstr "الكتالوج"
 
-#: app/command_palette/service.py:406 app/templates/customers/detail.html:117
+#: app/command_palette/service.py:406 app/templates/customers/detail.html:142
 #: app/templates/layout/_nav_model.html:135
 #: app/templates/subscriptions/list.html:3
 #: app/templates/subscriptions/list.html:6
@@ -2301,13 +2301,13 @@ msgstr "الكتالوج"
 msgid "Subscriptions"
 msgstr "الاشتراكات"
 
-#: app/command_palette/service.py:408 app/templates/customers/detail.html:118
+#: app/command_palette/service.py:408 app/templates/customers/detail.html:143
 #: app/templates/layout/_nav_model.html:138 app/templates/licensing/list.html:3
 #: app/templates/licensing/list.html:17 app/templates/licensing/list.html:34
 msgid "Licenses"
 msgstr "التراخيص"
 
-#: app/command_palette/service.py:410 app/templates/customers/detail.html:119
+#: app/command_palette/service.py:410 app/templates/customers/detail.html:144
 #: app/templates/installations/list.html:3
 #: app/templates/installations/list.html:6
 #: app/templates/installations/list.html:20
@@ -2676,13 +2676,13 @@ msgstr "تصدير CSV"
 #: app/templates/commercial_ops/pilot_detail.html:88
 #: app/templates/commercial_ops/renewal_detail.html:68
 #: app/templates/commercial_ops/timeline.html:8
-#: app/templates/customers/detail.html:167
+#: app/templates/customers/detail.html:192
 #: app/templates/dashboard/index.html:332
 #: app/templates/employees/detail.html:146
-#: app/templates/installations/detail.html:59
-#: app/templates/installations/detail.html:72
-#: app/templates/leads/detail.html:174 app/templates/leads/detail.html:186
-#: app/templates/licensing/detail.html:109
+#: app/templates/installations/detail.html:84
+#: app/templates/installations/detail.html:97
+#: app/templates/leads/detail.html:244 app/templates/leads/detail.html:256
+#: app/templates/licensing/detail.html:138
 #: app/templates/licensing_admin/requests.html:13
 #: app/templates/subscriptions/detail.html:44
 #: app/templates/system/backups.html:14
@@ -2704,7 +2704,7 @@ msgstr "الإجراء"
 msgid "Entity"
 msgstr "الكيان"
 
-#: app/templates/audit/list.html:16 app/templates/installations/detail.html:72
+#: app/templates/audit/list.html:16 app/templates/installations/detail.html:97
 #: app/templates/licensing_admin/requests.html:15
 msgid "Result"
 msgstr "النتيجة"
@@ -2728,7 +2728,7 @@ msgstr "أحداث الأمان (أحدث 500 حدث)"
 #: app/templates/audit/security_events.html:7
 #: app/templates/catalog/index.html:75
 #: app/templates/commercial_ops/notifications_list.html:30
-#: app/templates/installations/detail.html:72
+#: app/templates/installations/detail.html:97
 #: app/templates/licensing_admin/requests.html:14
 #: app/templates/operations_ui/payees_list.html:8
 #: app/templates/operations_ui/payees_list.html:11
@@ -2948,7 +2948,7 @@ msgid "6-digit code (or a recovery code)"
 msgstr "رمز مكوّن من 6 أرقام (أو رمز استرداد)"
 
 #: app/templates/auth/mfa_verify.html:16
-#: app/templates/customers/detail.html:220 app/templates/leads/detail.html:146
+#: app/templates/customers/detail.html:245 app/templates/leads/detail.html:216
 msgid "Verify"
 msgstr "تأكيد"
 
@@ -2973,6 +2973,7 @@ msgid "Confirm"
 msgstr "تأكيد"
 
 #: app/templates/catalog/channels.html:2 app/templates/catalog/channels.html:5
+#: app/templates/catalog/index.html:95
 msgid "Release channels"
 msgstr "قنوات الإصدار"
 
@@ -2987,10 +2988,10 @@ msgstr "الرمز"
 #: app/templates/catalog/channels.html:7 app/templates/catalog/index.html:7
 #: app/templates/catalog/index.html:22 app/templates/catalog/index.html:36
 #: app/templates/catalog/plan_new.html:14
-#: app/templates/customers/detail.html:186
-#: app/templates/customers/detail.html:197 app/templates/employees/list.html:64
-#: app/templates/employees/list.html:94 app/templates/leads/detail.html:53
-#: app/templates/leads/detail.html:63 app/templates/leads/list.html:13
+#: app/templates/customers/detail.html:211
+#: app/templates/customers/detail.html:222 app/templates/employees/list.html:64
+#: app/templates/employees/list.html:94 app/templates/leads/detail.html:115
+#: app/templates/leads/detail.html:125 app/templates/leads/list.html:13
 #: app/templates/operations_ui/payees_list.html:8
 #: app/templates/operations_ui/payees_list.html:11
 #: app/templates/staff/list.html:14
@@ -3010,7 +3011,7 @@ msgid "Sellable"
 msgstr "قابل للبيع"
 
 #: app/templates/catalog/index.html:10 app/templates/catalog/versions.html:13
-#: app/templates/customers/detail.html:189 app/templates/leads/detail.html:56
+#: app/templates/customers/detail.html:214 app/templates/leads/detail.html:118
 #: app/templates/licensing_admin/status.html:7
 #: app/templates/staff/detail.html:9 app/templates/staff/list.html:29
 msgid "Yes"
@@ -3056,13 +3057,13 @@ msgstr "نموذج الفوترة"
 #: app/templates/commercial_sales/refunds_list.html:14
 #: app/templates/components/commercial_record.html:29
 #: app/templates/components/table.html:88
-#: app/templates/customers/detail.html:306
-#: app/templates/customers/detail.html:325
-#: app/templates/customers/detail.html:344
-#: app/templates/customers/detail.html:363
-#: app/templates/customers/detail.html:382
-#: app/templates/customers/detail.html:402
-#: app/templates/customers/detail.html:421 app/templates/customers/list.html:17
+#: app/templates/customers/detail.html:338
+#: app/templates/customers/detail.html:357
+#: app/templates/customers/detail.html:376
+#: app/templates/customers/detail.html:395
+#: app/templates/customers/detail.html:414
+#: app/templates/customers/detail.html:434
+#: app/templates/customers/detail.html:453 app/templates/customers/list.html:17
 #: app/templates/employees/detail.html:120
 #: app/templates/employees/invitations.html:9
 #: app/templates/employees/list.html:40 app/templates/employees/list.html:67
@@ -3078,6 +3079,8 @@ msgstr "نموذج الفوترة"
 #: app/templates/operations_ui/management_notes_list.html:15
 #: app/templates/profile/sessions.html:9 app/templates/staff/detail.html:8
 #: app/templates/staff/list.html:16 app/templates/subscriptions/detail.html:65
+#: app/templates/subscriptions/detail.html:83
+#: app/templates/subscriptions/detail.html:99
 #: app/templates/subscriptions/list.html:16
 #: app/templates/sync/quarantine_list.html:17
 #: app/templates/system/backups.html:14
@@ -3111,9 +3114,9 @@ msgstr "الإجراءات"
 #: app/templates/commercial_ops/emergency_extensions_list.html:25
 #: app/templates/commercial_ops/pilots_list.html:24
 #: app/templates/commercial_ops/renewals_list.html:28
-#: app/templates/customers/detail.html:389
-#: app/templates/customers/detail.html:408
-#: app/templates/customers/detail.html:427 app/templates/customers/list.html:30
+#: app/templates/customers/detail.html:421
+#: app/templates/customers/detail.html:440
+#: app/templates/customers/detail.html:459 app/templates/customers/list.html:30
 #: app/templates/employees/list.html:111
 #: app/templates/installations/list.html:26
 #: app/templates/licensing/list.html:41 app/templates/staff/list.html:31
@@ -3149,22 +3152,26 @@ msgstr "الوصف"
 msgid "Recently imported versions"
 msgstr "الإصدارات المستوردة مؤخرًا"
 
-#: app/templates/catalog/index.html:87 app/templates/catalog/plan_new.html:8
+#: app/templates/catalog/index.html:93
+msgid "All product versions"
+msgstr "جميع إصدارات المنتج"
+
+#: app/templates/catalog/index.html:98 app/templates/catalog/plan_new.html:8
 #: app/templates/catalog/versions.html:7
 #: app/templates/commercial_ops/activation_policy.html:8
 #: app/templates/commercial_ops/activation_policy.html:39
 #: app/templates/commercial_ops/pending_activation_detail.html:10
 #: app/templates/commercial_ops/renewal_detail.html:9
-#: app/templates/customers/detail.html:382
-#: app/templates/customers/detail.html:402
-#: app/templates/customers/detail.html:421
+#: app/templates/customers/detail.html:414
+#: app/templates/customers/detail.html:434
+#: app/templates/customers/detail.html:453
 #: app/templates/installations/detail.html:9
 #: app/templates/installations/list.html:15
 #: app/templates/licensing/list.html:29
 msgid "Product"
 msgstr "المنتج"
 
-#: app/templates/catalog/index.html:87 app/templates/catalog/versions.html:7
+#: app/templates/catalog/index.html:98 app/templates/catalog/versions.html:7
 #: app/templates/commercial_ops/pending_activation_detail.html:11
 #: app/templates/employees/detail.html:120
 #: app/templates/installations/new.html:12
@@ -3172,18 +3179,18 @@ msgstr "المنتج"
 msgid "Platform"
 msgstr "المنصة"
 
-#: app/templates/catalog/index.html:87 app/templates/catalog/versions.html:7
-#: app/templates/operations_ui/report_snapshots_list.html:7
-#: app/templates/operations_ui/report_snapshots_list.html:14
+#: app/templates/catalog/index.html:98 app/templates/catalog/versions.html:7
+#: app/templates/operations_ui/report_snapshots_list.html:12
+#: app/templates/operations_ui/report_snapshots_list.html:20
 msgid "Version"
 msgstr "الإصدار"
 
-#: app/templates/catalog/index.html:87 app/templates/catalog/versions.html:7
+#: app/templates/catalog/index.html:98 app/templates/catalog/versions.html:7
 #: app/templates/system/backups.html:14
 msgid "Checksum"
 msgstr "المجموع التحققي"
 
-#: app/templates/catalog/index.html:92
+#: app/templates/catalog/index.html:103
 msgid "No versions imported yet -- use"
 msgstr "لم يتم استيراد أي إصدارات بعد -- استخدم"
 
@@ -3217,9 +3224,9 @@ msgstr "السعر الأساسي"
 #: app/templates/operations_ui/dashboard_finance.html:12
 #: app/templates/operations_ui/dashboard_management.html:10
 #: app/templates/operations_ui/expense_new.html:19
-#: app/templates/operations_ui/report_snapshots_list.html:7
-#: app/templates/operations_ui/report_snapshots_list.html:13
-#: app/templates/operations_ui/report_snapshots_list.html:33
+#: app/templates/operations_ui/report_snapshots_list.html:12
+#: app/templates/operations_ui/report_snapshots_list.html:19
+#: app/templates/operations_ui/report_snapshots_list.html:49
 #: app/templates/subscriptions/detail.html:61
 msgid "Currency"
 msgstr "العملة"
@@ -3316,6 +3323,7 @@ msgid ""
 msgstr "تغيير سياسة التفعيل؟ يؤثر هذا على كل تفعيل مستقبلي للمنتج المحدد."
 
 #: app/templates/commercial_ops/activation_policy.html:21
+#: app/templates/licensing/detail.html:75
 msgid "Policy code"
 msgstr "رمز السياسة"
 
@@ -3341,9 +3349,9 @@ msgstr "تاريخ السريان"
 #: app/templates/commercial_ops/renewal_detail.html:22
 #: app/templates/commercial_ops/renewals_new.html:30
 #: app/templates/commercial_sales/quote_new.html:15
-#: app/templates/customers/detail.html:120
-#: app/templates/customers/detail.html:295 app/templates/leads/detail.html:108
-#: app/templates/leads/detail.html:114
+#: app/templates/customers/detail.html:145
+#: app/templates/customers/detail.html:327 app/templates/leads/detail.html:178
+#: app/templates/leads/detail.html:184
 msgid "Notes"
 msgstr "ملاحظات"
 
@@ -3397,17 +3405,20 @@ msgstr "(كل التراخيص في هذا الاشتراك)"
 #: app/templates/commercial_sales/refund_detail.html:12
 #: app/templates/commercial_sales/refunds_list.html:9
 #: app/templates/commercial_sales/refunds_list.html:15
-#: app/templates/customers/detail.html:167
+#: app/templates/customers/detail.html:192
+#: app/templates/customers/detail.html:316
 #: app/templates/employees/detail.html:146
 #: app/templates/installations/detail.html:26
-#: app/templates/installations/detail.html:59
-#: app/templates/leads/detail.html:174 app/templates/leads/detail.html:186
-#: app/templates/licensing/detail.html:89
-#: app/templates/licensing/detail.html:109
+#: app/templates/installations/detail.html:84
+#: app/templates/leads/detail.html:61 app/templates/leads/detail.html:106
+#: app/templates/leads/detail.html:168 app/templates/leads/detail.html:244
+#: app/templates/leads/detail.html:256 app/templates/licensing/detail.html:118
+#: app/templates/licensing/detail.html:138
 #: app/templates/licensing_admin/requests.html:16
 #: app/templates/operations_ui/cash_closing_detail.html:51
 #: app/templates/operations_ui/cash_closing_detail.html:77
 #: app/templates/operations_ui/expense_detail.html:126
+#: app/templates/operations_ui/report_snapshots_list.html:26
 #: app/templates/subscriptions/detail.html:36
 #: app/templates/subscriptions/detail.html:44
 #: app/templates/sync/quarantine_list.html:16
@@ -3586,8 +3597,8 @@ msgid "Filter"
 msgstr "تصفية"
 
 #: app/templates/commercial_ops/notifications_list.html:30
-#: app/templates/customers/detail.html:186
-#: app/templates/customers/detail.html:198 app/templates/employees/list.html:94
+#: app/templates/customers/detail.html:211
+#: app/templates/customers/detail.html:223 app/templates/employees/list.html:94
 #: app/templates/operations_ui/management_note_new.html:9
 #: app/templates/operations_ui/management_notes_list.html:10
 #: app/templates/operations_ui/management_notes_list.html:14
@@ -3602,8 +3613,8 @@ msgstr "المسمى"
 #: app/templates/commercial_sales/quotes_list.html:16
 #: app/templates/commercial_sales/refund_detail.html:13
 #: app/templates/commercial_sales/refunds_list.html:16
-#: app/templates/customers/detail.html:306
-#: app/templates/customers/detail.html:325
+#: app/templates/customers/detail.html:338
+#: app/templates/customers/detail.html:357
 #: app/templates/employees/detail.html:120 app/templates/leads/detail.html:23
 #: app/templates/leads/list.html:12 app/templates/profile/sessions.html:9
 msgid "Created"
@@ -3908,32 +3919,32 @@ msgstr "لا توجد تمديدات بعد."
 
 #: app/templates/commercial_ops/pilot_detail.html:86
 #: app/templates/commercial_ops/renewal_detail.html:66
-#: app/templates/installations/detail.html:57
-#: app/templates/leads/detail.html:172 app/templates/licensing/detail.html:107
+#: app/templates/installations/detail.html:82
+#: app/templates/leads/detail.html:242 app/templates/licensing/detail.html:136
 #: app/templates/subscriptions/detail.html:42
 msgid "Status history"
 msgstr "سجل الحالات"
 
 #: app/templates/commercial_ops/pilot_detail.html:88
 #: app/templates/commercial_ops/renewal_detail.html:68
-#: app/templates/installations/detail.html:59
-#: app/templates/leads/detail.html:174 app/templates/licensing/detail.html:109
+#: app/templates/installations/detail.html:84
+#: app/templates/leads/detail.html:244 app/templates/licensing/detail.html:138
 #: app/templates/subscriptions/detail.html:44
 msgid "From"
 msgstr "من"
 
 #: app/templates/commercial_ops/pilot_detail.html:88
 #: app/templates/commercial_ops/renewal_detail.html:68
-#: app/templates/installations/detail.html:59
-#: app/templates/leads/detail.html:174 app/templates/licensing/detail.html:109
+#: app/templates/installations/detail.html:84
+#: app/templates/leads/detail.html:244 app/templates/licensing/detail.html:138
 #: app/templates/subscriptions/detail.html:44
 msgid "To"
 msgstr "إلى"
 
 #: app/templates/commercial_ops/pilot_detail.html:92
 #: app/templates/commercial_ops/renewal_detail.html:72
-#: app/templates/installations/detail.html:63
-#: app/templates/licensing/detail.html:113
+#: app/templates/installations/detail.html:88
+#: app/templates/licensing/detail.html:142
 #: app/templates/subscriptions/detail.html:48
 msgid "No status changes yet."
 msgstr "لا توجد تغييرات حالة بعد."
@@ -4249,8 +4260,8 @@ msgid "No exceptions."
 msgstr "لا توجد استثناءات."
 
 #: app/templates/commercial_ops/timeline.html:2
-#: app/templates/customers/detail.html:121
-#: app/templates/customers/detail.html:467
+#: app/templates/customers/detail.html:146
+#: app/templates/customers/detail.html:499
 msgid "Timeline"
 msgstr "المخطط الزمني"
 
@@ -4285,11 +4296,12 @@ msgstr "لم يتم تسجيل أي أحداث تجارية بعد."
 #: app/templates/commercial_sales/payout_batches_list.html:53
 #: app/templates/commercial_sales/payout_batches_list.html:57
 #: app/templates/commercial_sales/refunds_list.html:13
-#: app/templates/customers/detail.html:363
+#: app/templates/customers/detail.html:395
 #: app/templates/operations_ui/expense_detail.html:81
 #: app/templates/operations_ui/expense_new.html:17
 #: app/templates/operations_ui/expenses_list.html:15
 #: app/templates/subscriptions/detail.html:60
+#: app/templates/subscriptions/detail.html:82
 msgid "Amount"
 msgstr "المبلغ"
 
@@ -4311,7 +4323,7 @@ msgstr "تتطلب هذه الصفحة ملف موظف حقيقي."
 
 #: app/templates/commercial_sales/employee_dashboard.html:13
 #: app/templates/commercial_sales/finance_dashboard.html:10
-#: app/templates/customers/detail.html:114
+#: app/templates/customers/detail.html:139
 msgid "Orders"
 msgstr "طلبات المبيعات"
 
@@ -4402,9 +4414,9 @@ msgstr "الضريبة"
 #: app/templates/commercial_sales/orders_list.html:15
 #: app/templates/commercial_sales/quote_detail.html:15
 #: app/templates/commercial_sales/quotes_list.html:15
-#: app/templates/customers/detail.html:306
-#: app/templates/customers/detail.html:325
-#: app/templates/customers/detail.html:344
+#: app/templates/customers/detail.html:338
+#: app/templates/customers/detail.html:357
+#: app/templates/customers/detail.html:376
 msgid "Total"
 msgstr "الإجمالي"
 
@@ -4418,8 +4430,8 @@ msgstr "القابل للاسترداد"
 
 #: app/templates/commercial_sales/invoice_detail.html:18
 #: app/templates/commercial_sales/invoices_list.html:16
-#: app/templates/customers/detail.html:294
-#: app/templates/customers/detail.html:344 app/templates/leads/detail.html:107
+#: app/templates/customers/detail.html:326
+#: app/templates/customers/detail.html:376 app/templates/leads/detail.html:177
 msgid "Due"
 msgstr "الاستحقاق"
 
@@ -4555,9 +4567,9 @@ msgstr "رقم الفاتورة"
 #: app/templates/commercial_sales/invoices_list.html:13
 #: app/templates/commercial_sales/orders_list.html:13
 #: app/templates/commercial_sales/quotes_list.html:13
-#: app/templates/customers/detail.html:306
-#: app/templates/customers/detail.html:325
-#: app/templates/customers/detail.html:344
+#: app/templates/customers/detail.html:338
+#: app/templates/customers/detail.html:357
+#: app/templates/customers/detail.html:376
 #: app/templates/operations_ui/expenses_list.html:13
 msgid "Number"
 msgstr "الرقم"
@@ -4637,14 +4649,15 @@ msgstr "لا توجد طلبات بعد."
 #: app/templates/commercial_sales/payment_detail.html:12
 #: app/templates/commercial_sales/payment_new.html:17
 #: app/templates/commercial_sales/payments_list.html:14
-#: app/templates/customers/detail.html:363
+#: app/templates/customers/detail.html:395
 #: app/templates/subscriptions/detail.html:62
+#: app/templates/subscriptions/detail.html:82
 msgid "Method"
 msgstr "الطريقة"
 
 #: app/templates/commercial_sales/payment_detail.html:13
 #: app/templates/commercial_sales/payments_list.html:16
-#: app/templates/customers/detail.html:363
+#: app/templates/customers/detail.html:395
 #: app/templates/operations_ui/expenses_list.html:16
 msgid "Date"
 msgstr "التاريخ"
@@ -4654,6 +4667,7 @@ msgstr "التاريخ"
 #: app/templates/commercial_sales/payments_list.html:9
 #: app/templates/commercial_sales/payout_batches_list.html:24
 #: app/templates/subscriptions/detail.html:64
+#: app/templates/subscriptions/detail.html:83
 msgid "Reference"
 msgstr "المرجع"
 
@@ -4703,6 +4717,7 @@ msgstr "تسجيل الدفعة"
 
 #: app/templates/commercial_sales/payment_new.html:25
 #: app/templates/subscriptions/detail.html:63
+#: app/templates/subscriptions/detail.html:82
 msgid "Payment date"
 msgstr "تاريخ الدفع"
 
@@ -4733,12 +4748,12 @@ msgid "Batch reference"
 msgstr "مرجع الدفعة"
 
 #: app/templates/commercial_sales/payout_batches_list.html:12
-#: app/templates/operations_ui/report_snapshots_list.html:29
+#: app/templates/operations_ui/report_snapshots_list.html:45
 msgid "Period start"
 msgstr "بداية الفترة"
 
 #: app/templates/commercial_sales/payout_batches_list.html:14
-#: app/templates/operations_ui/report_snapshots_list.html:31
+#: app/templates/operations_ui/report_snapshots_list.html:47
 msgid "Period end"
 msgstr "نهاية الفترة"
 
@@ -4747,8 +4762,8 @@ msgid "Create batch"
 msgstr "إنشاء دفعة"
 
 #: app/templates/commercial_sales/payout_batches_list.html:25
-#: app/templates/operations_ui/report_snapshots_list.html:7
 #: app/templates/operations_ui/report_snapshots_list.html:12
+#: app/templates/operations_ui/report_snapshots_list.html:18
 msgid "Period"
 msgstr "الفترة"
 
@@ -4828,7 +4843,7 @@ msgid "No lines yet."
 msgstr "لا توجد بنود بعد."
 
 #: app/templates/commercial_sales/quote_detail.html:93
-#: app/templates/customers/detail.html:382
+#: app/templates/customers/detail.html:414
 #: app/templates/subscriptions/list.html:15
 #: app/templates/subscriptions/new.html:12
 msgid "Plan"
@@ -4959,42 +4974,43 @@ msgid "Comfortable view"
 msgstr "عرض مريح"
 
 #: app/templates/customers/detail.html:24
-#: app/templates/customers/detail.html:131
+#: app/templates/customers/detail.html:156
 msgid "Assigned employee"
 msgstr "الموظف المسؤول"
 
 #: app/templates/customers/detail.html:24
-#: app/templates/customers/detail.html:131
+#: app/templates/customers/detail.html:156
 msgid "Unassigned"
 msgstr "غير مسند"
 
 #: app/templates/customers/detail.html:25
-#: app/templates/customers/detail.html:132
+#: app/templates/customers/detail.html:157
 msgid "Primary contact"
 msgstr "جهة الاتصال الرئيسية"
 
 #: app/templates/customers/detail.html:31
-#: app/templates/customers/detail.html:133
+#: app/templates/customers/detail.html:158
 msgid "Customer since"
 msgstr "عميل منذ"
 
 #: app/templates/customers/detail.html:32
-#: app/templates/customers/detail.html:134
+#: app/templates/customers/detail.html:159
 msgid "Archive state"
 msgstr "حالة الأرشفة"
 
 #: app/templates/customers/detail.html:33
-#: app/templates/customers/detail.html:134
+#: app/templates/customers/detail.html:159
 #, python-format
 msgid "Archived on %(date)s"
 msgstr "تمت الأرشفة في %(date)s"
 
 #: app/templates/customers/detail.html:33
-#: app/templates/customers/detail.html:134
+#: app/templates/customers/detail.html:159
 msgid "Not archived"
 msgstr "غير مؤرشف"
 
-#: app/templates/customers/detail.html:34 app/templates/customers/new.html:17
+#: app/templates/customers/detail.html:34
+#: app/templates/customers/detail.html:116 app/templates/customers/new.html:17
 msgid "Trade name"
 msgstr "الاسم التجاري"
 
@@ -5041,7 +5057,7 @@ msgstr "التثبيتات النشطة"
 msgid "Archive this customer? Records are kept, not deleted."
 msgstr "أرشفة هذا العميل؟ يتم الاحتفاظ بالسجلات دون حذفها."
 
-#: app/templates/customers/detail.html:80
+#: app/templates/customers/detail.html:80 app/templates/leads/detail.html:62
 msgid "Archive"
 msgstr "أرشفة"
 
@@ -5066,274 +5082,301 @@ msgstr "السبب (مطلوب عند إعادة الإسناد)"
 msgid "Reassign"
 msgstr "إعادة الإسناد"
 
-#: app/templates/customers/detail.html:108
+#: app/templates/customers/detail.html:111
+msgid "Edit customer details"
+msgstr "تعديل بيانات العميل"
+
+#: app/templates/customers/detail.html:114 app/templates/customers/list.html:15
+#: app/templates/customers/new.html:15
+msgid "Legal name"
+msgstr "الاسم القانوني"
+
+#: app/templates/customers/detail.html:118 app/templates/customers/list.html:16
+#: app/templates/customers/new.html:21
+msgid "Country"
+msgstr "الدولة"
+
+#: app/templates/customers/detail.html:120 app/templates/customers/new.html:23
+msgid "City"
+msgstr "المدينة"
+
+#: app/templates/customers/detail.html:122
+#: app/templates/employees/detail.html:68 app/templates/leads/detail.html:95
+msgid "Save changes"
+msgstr "حفظ التغييرات"
+
+#: app/templates/customers/detail.html:133
 msgid "Customer sections"
 msgstr "أقسام العميل"
 
-#: app/templates/customers/detail.html:110
-#: app/templates/customers/detail.html:184 app/templates/leads/detail.html:51
+#: app/templates/customers/detail.html:135
+#: app/templates/customers/detail.html:209 app/templates/leads/detail.html:113
 msgid "Contacts"
 msgstr "جهات الاتصال"
 
-#: app/templates/customers/detail.html:111
-#: app/templates/customers/detail.html:251 app/templates/leads/detail.html:71
+#: app/templates/customers/detail.html:136
+#: app/templates/customers/detail.html:276 app/templates/leads/detail.html:133
 msgid "Interactions"
 msgstr "التفاعلات"
 
-#: app/templates/customers/detail.html:112
-#: app/templates/customers/detail.html:275 app/templates/leads/detail.html:89
+#: app/templates/customers/detail.html:137
+#: app/templates/customers/detail.html:300 app/templates/leads/detail.html:151
 msgid "Follow-ups"
 msgstr "المتابعات"
 
-#: app/templates/customers/detail.html:129
-#: app/templates/customers/detail.html:264 app/templates/leads/detail.html:83
+#: app/templates/customers/detail.html:154
+#: app/templates/customers/detail.html:289 app/templates/leads/detail.html:145
 msgid "Summary"
 msgstr "الملخص"
 
-#: app/templates/customers/detail.html:139
+#: app/templates/customers/detail.html:164
 msgid "Open items"
 msgstr "العناصر المفتوحة"
 
-#: app/templates/customers/detail.html:141
+#: app/templates/customers/detail.html:166
 #, python-format
 msgid "Next follow-up due: %(when)s"
 msgstr "المتابعة القادمة مستحقة في: %(when)s"
 
-#: app/templates/customers/detail.html:141
-#: app/templates/customers/detail.html:280 app/templates/leads/detail.html:94
+#: app/templates/customers/detail.html:166
+#: app/templates/customers/detail.html:305 app/templates/leads/detail.html:156
 msgid "Overdue"
 msgstr "متأخرة"
 
-#: app/templates/customers/detail.html:144
+#: app/templates/customers/detail.html:169
 msgid "Open quote:"
 msgstr "عرض سعر مفتوح:"
 
-#: app/templates/customers/detail.html:149
+#: app/templates/customers/detail.html:174
 msgid "Recent activity"
 msgstr "النشاط الأخير"
 
-#: app/templates/customers/detail.html:159
+#: app/templates/customers/detail.html:184
 msgid "View full timeline"
 msgstr "عرض السجل الزمني الكامل"
 
-#: app/templates/customers/detail.html:161
+#: app/templates/customers/detail.html:186
 msgid "No activity recorded yet."
 msgstr "لم يُسجَّل أي نشاط بعد."
 
-#: app/templates/customers/detail.html:165 app/templates/leads/detail.html:184
+#: app/templates/customers/detail.html:190 app/templates/leads/detail.html:254
 msgid "Assignment history"
 msgstr "سجل الإسناد"
 
-#: app/templates/customers/detail.html:167 app/templates/leads/detail.html:186
+#: app/templates/customers/detail.html:192 app/templates/leads/detail.html:256
 msgid "Assigned to"
 msgstr "مُسند إلى"
 
-#: app/templates/customers/detail.html:171
+#: app/templates/customers/detail.html:196
 msgid "No reassignments yet."
 msgstr "لا توجد عمليات إعادة إسناد بعد."
 
-#: app/templates/customers/detail.html:186
-#: app/templates/customers/detail.html:200
+#: app/templates/customers/detail.html:211
+#: app/templates/customers/detail.html:225
 #: app/templates/employees/detail.html:12 app/templates/employees/new.html:19
-#: app/templates/leads/detail.html:19 app/templates/leads/detail.html:53
-#: app/templates/leads/detail.html:65 app/templates/leads/new.html:13
-#: app/templates/profile/index.html:28
+#: app/templates/leads/detail.html:19 app/templates/leads/detail.html:79
+#: app/templates/leads/detail.html:115 app/templates/leads/detail.html:127
+#: app/templates/leads/new.html:13 app/templates/profile/index.html:28
 msgid "Phone"
 msgstr "رقم الهاتف"
 
-#: app/templates/customers/detail.html:186 app/templates/layout/base.html:31
-#: app/templates/leads/detail.html:53
+#: app/templates/customers/detail.html:211 app/templates/layout/base.html:31
+#: app/templates/leads/detail.html:115
 msgid "Primary"
 msgstr "أساسي"
 
-#: app/templates/customers/detail.html:190 app/templates/leads/detail.html:57
+#: app/templates/customers/detail.html:215 app/templates/leads/detail.html:119
 msgid "No contacts yet."
 msgstr "لا توجد جهات اتصال بعد."
 
-#: app/templates/customers/detail.html:201 app/templates/leads/detail.html:66
+#: app/templates/customers/detail.html:226 app/templates/leads/detail.html:128
 msgid "Add contact"
 msgstr "إضافة جهة اتصال"
 
-#: app/templates/customers/detail.html:206 app/templates/leads/detail.html:132
+#: app/templates/customers/detail.html:231 app/templates/leads/detail.html:202
 msgid "Location"
 msgstr "الموقع"
 
-#: app/templates/customers/detail.html:219 app/templates/leads/detail.html:145
+#: app/templates/customers/detail.html:244 app/templates/leads/detail.html:215
 msgid "Verification reason"
 msgstr "سبب التوثيق"
 
-#: app/templates/customers/detail.html:224 app/templates/leads/detail.html:150
+#: app/templates/customers/detail.html:249 app/templates/leads/detail.html:220
 msgid "No location captured yet."
 msgstr "لم يتم التقاط أي موقع بعد."
 
-#: app/templates/customers/detail.html:228 app/templates/leads/detail.html:153
+#: app/templates/customers/detail.html:253 app/templates/leads/detail.html:223
 msgid "Geolocation is not supported by this browser."
 msgstr "تحديد الموقع الجغرافي غير مدعوم في هذا المتصفح."
 
-#: app/templates/customers/detail.html:229 app/templates/leads/detail.html:154
+#: app/templates/customers/detail.html:254 app/templates/leads/detail.html:224
 msgid "Location permission was denied or unavailable."
 msgstr "تم رفض إذن الموقع أو أنه غير متاح."
 
-#: app/templates/customers/detail.html:229 app/templates/leads/detail.html:154
+#: app/templates/customers/detail.html:254 app/templates/leads/detail.html:224
 msgid "Capture current location"
 msgstr "التقاط الموقع الحالي"
 
-#: app/templates/customers/detail.html:240 app/templates/leads/detail.html:165
+#: app/templates/customers/detail.html:265 app/templates/leads/detail.html:235
 msgid "Manual address"
 msgstr "عنوان يدوي"
 
-#: app/templates/customers/detail.html:242 app/templates/leads/detail.html:167
+#: app/templates/customers/detail.html:267 app/templates/leads/detail.html:237
 msgid "Save address"
 msgstr "حفظ العنوان"
 
-#: app/templates/customers/detail.html:254 app/templates/leads/detail.html:74
+#: app/templates/customers/detail.html:279 app/templates/leads/detail.html:136
 msgid "No interactions logged yet."
 msgstr "لا توجد تفاعلات مسجَّلة بعد."
 
-#: app/templates/customers/detail.html:259 app/templates/leads/detail.html:78
+#: app/templates/customers/detail.html:284 app/templates/leads/detail.html:140
 msgid "Interaction type"
 msgstr "نوع التفاعل"
 
-#: app/templates/customers/detail.html:265 app/templates/leads/detail.html:84
+#: app/templates/customers/detail.html:290 app/templates/leads/detail.html:146
 msgid "Log interaction"
 msgstr "تسجيل تفاعل"
 
-#: app/templates/customers/detail.html:285 app/templates/leads/detail.html:99
+#: app/templates/customers/detail.html:310 app/templates/leads/detail.html:161
 msgid "Complete"
 msgstr "إكمال"
 
-#: app/templates/customers/detail.html:289 app/templates/leads/detail.html:103
+#: app/templates/customers/detail.html:317 app/templates/leads/detail.html:169
+msgid "Cancel follow-up"
+msgstr "إلغاء المتابعة"
+
+#: app/templates/customers/detail.html:321 app/templates/leads/detail.html:173
 msgid "No follow-ups yet."
 msgstr "لا توجد متابعات بعد."
 
-#: app/templates/customers/detail.html:296 app/templates/leads/detail.html:109
+#: app/templates/customers/detail.html:328 app/templates/leads/detail.html:179
 msgid "Add follow-up"
 msgstr "إضافة متابعة"
 
-#: app/templates/customers/detail.html:306
+#: app/templates/customers/detail.html:338
 msgid "No quotes for this customer yet."
 msgstr "لا توجد عروض أسعار لهذا العميل بعد."
 
-#: app/templates/customers/detail.html:306
+#: app/templates/customers/detail.html:338
 msgid "Quotes for this customer"
 msgstr "عروض الأسعار لهذا العميل"
 
-#: app/templates/customers/detail.html:316
+#: app/templates/customers/detail.html:348
 msgid "Showing the most recent 50 quotes."
 msgstr "يتم عرض أحدث 50 عرض سعر."
 
-#: app/templates/customers/detail.html:325
+#: app/templates/customers/detail.html:357
 msgid "No sales orders for this customer yet."
 msgstr "لا توجد طلبات مبيعات لهذا العميل بعد."
 
-#: app/templates/customers/detail.html:325
+#: app/templates/customers/detail.html:357
 msgid "Sales orders for this customer"
 msgstr "طلبات المبيعات لهذا العميل"
 
-#: app/templates/customers/detail.html:335
+#: app/templates/customers/detail.html:367
 msgid "Showing the most recent 50 orders."
 msgstr "يتم عرض أحدث 50 طلبًا."
 
-#: app/templates/customers/detail.html:344
+#: app/templates/customers/detail.html:376
 msgid "No invoices for this customer yet."
 msgstr "لا توجد فواتير لهذا العميل بعد."
 
-#: app/templates/customers/detail.html:344
+#: app/templates/customers/detail.html:376
 msgid "Invoices for this customer"
 msgstr "الفواتير لهذا العميل"
 
-#: app/templates/customers/detail.html:354
+#: app/templates/customers/detail.html:386
 msgid "Showing the most recent 50 invoices."
 msgstr "يتم عرض أحدث 50 فاتورة."
 
-#: app/templates/customers/detail.html:363
+#: app/templates/customers/detail.html:395
 msgid "No payments for this customer yet."
 msgstr "لا توجد دفعات لهذا العميل بعد."
 
-#: app/templates/customers/detail.html:363
+#: app/templates/customers/detail.html:395
 msgid "Payments for this customer"
 msgstr "الدفعات لهذا العميل"
 
-#: app/templates/customers/detail.html:373
+#: app/templates/customers/detail.html:405
 msgid "Showing the most recent 50 payments."
 msgstr "يتم عرض أحدث 50 دفعة."
 
-#: app/templates/customers/detail.html:382
+#: app/templates/customers/detail.html:414
 #: app/templates/subscriptions/list.html:17
 msgid "End date"
 msgstr "تاريخ الانتهاء"
 
-#: app/templates/customers/detail.html:382
+#: app/templates/customers/detail.html:414
 msgid "No subscriptions for this customer yet."
 msgstr "لا توجد اشتراكات لهذا العميل بعد."
 
-#: app/templates/customers/detail.html:382
+#: app/templates/customers/detail.html:414
 msgid "Subscriptions for this customer"
 msgstr "الاشتراكات لهذا العميل"
 
-#: app/templates/customers/detail.html:393
+#: app/templates/customers/detail.html:425
 msgid "Showing the most recent 50 subscriptions."
 msgstr "يتم عرض أحدث 50 اشتراكًا."
 
-#: app/templates/customers/detail.html:402 app/templates/licensing/list.html:30
+#: app/templates/customers/detail.html:434 app/templates/licensing/list.html:30
 msgid "Key"
 msgstr "المفتاح"
 
-#: app/templates/customers/detail.html:402
+#: app/templates/customers/detail.html:434
 msgid "No licenses for this customer yet."
 msgstr "لا توجد تراخيص لهذا العميل بعد."
 
-#: app/templates/customers/detail.html:402
+#: app/templates/customers/detail.html:434
 msgid "Licenses for this customer"
 msgstr "التراخيص لهذا العميل"
 
-#: app/templates/customers/detail.html:406
+#: app/templates/customers/detail.html:438
 #: app/templates/licensing/detail.html:24 app/templates/licensing/list.html:39
 msgid "not issued"
 msgstr "لم يُصدر بعد"
 
-#: app/templates/customers/detail.html:412
+#: app/templates/customers/detail.html:444
 msgid "Showing the most recent 50 licenses."
 msgstr "يتم عرض أحدث 50 ترخيصًا."
 
-#: app/templates/customers/detail.html:421
+#: app/templates/customers/detail.html:453
 #: app/templates/installations/list.html:16
 msgid "Label"
 msgstr "التسمية"
 
-#: app/templates/customers/detail.html:421
+#: app/templates/customers/detail.html:453
 msgid "No installations for this customer yet."
 msgstr "لا توجد تثبيتات لهذا العميل بعد."
 
-#: app/templates/customers/detail.html:421
+#: app/templates/customers/detail.html:453
 msgid "Installations for this customer"
 msgstr "التثبيتات لهذا العميل"
 
-#: app/templates/customers/detail.html:431
+#: app/templates/customers/detail.html:463
 msgid "Showing the most recent 50 installations."
 msgstr "يتم عرض أحدث 50 تثبيتًا."
 
-#: app/templates/customers/detail.html:441
+#: app/templates/customers/detail.html:473
 msgid "Internal notes"
 msgstr "ملاحظات داخلية"
 
-#: app/templates/customers/detail.html:444 app/templates/leads/detail.html:117
+#: app/templates/customers/detail.html:476 app/templates/leads/detail.html:187
 msgid "No notes yet."
 msgstr "لا توجد ملاحظات بعد."
 
-#: app/templates/customers/detail.html:450 app/templates/leads/detail.html:122
+#: app/templates/customers/detail.html:482 app/templates/leads/detail.html:192
 msgid "Note visibility"
 msgstr "مستوى ظهور الملاحظة"
 
-#: app/templates/customers/detail.html:455 app/templates/leads/detail.html:127
+#: app/templates/customers/detail.html:487 app/templates/leads/detail.html:197
 msgid "Add note"
 msgstr "إضافة ملاحظة"
 
-#: app/templates/customers/detail.html:477
+#: app/templates/customers/detail.html:509
 msgid "Showing the most recent 50 events."
 msgstr "يتم عرض أحدث 50 حدثًا."
 
-#: app/templates/customers/detail.html:479
+#: app/templates/customers/detail.html:511
 msgid "No timeline events yet."
 msgstr "لا توجد أحداث في السجل الزمني بعد."
 
@@ -5348,14 +5391,6 @@ msgstr "عميل جديد"
 #: app/templates/customers/list.html:10
 msgid "Legal or trade name"
 msgstr "الاسم القانوني أو التجاري"
-
-#: app/templates/customers/list.html:15 app/templates/customers/new.html:15
-msgid "Legal name"
-msgstr "الاسم القانوني"
-
-#: app/templates/customers/list.html:16 app/templates/customers/new.html:21
-msgid "Country"
-msgstr "الدولة"
 
 #: app/templates/customers/list.html:21
 msgid "No customers yet."
@@ -5376,10 +5411,6 @@ msgstr "أرسل مرة أخرى لتأكيد أن هذه مؤسسة مختلف�
 #: app/templates/customers/new.html:19
 msgid "Organization type"
 msgstr "نوع المؤسسة"
-
-#: app/templates/customers/new.html:23
-msgid "City"
-msgstr "المدينة"
 
 #: app/templates/customers/new.html:25
 msgid "Commercial registration reference"
@@ -5724,16 +5755,12 @@ msgstr "الاسم الكامل"
 msgid "None"
 msgstr "لا يوجد"
 
-#: app/templates/employees/detail.html:68
-msgid "Save changes"
-msgstr "حفظ التغييرات"
-
 #: app/templates/employees/detail.html:71
 msgid "You do not have permission to edit this profile."
 msgstr "ليس لديك إذن لتعديل هذا الملف الشخصي."
 
 #: app/templates/employees/detail.html:76
-#: app/templates/licensing/detail.html:79
+#: app/templates/licensing/detail.html:108
 msgid "Lifecycle actions"
 msgstr "إجراءات دورة العمل"
 
@@ -5921,7 +5948,7 @@ msgid "Last check-in"
 msgstr "آخر تسجيل حضور"
 
 #: app/templates/installations/detail.html:19
-#: app/templates/leads/detail.html:29 app/templates/licensing/detail.html:82
+#: app/templates/leads/detail.html:29 app/templates/licensing/detail.html:111
 msgid "Change status"
 msgstr "تغيير الحالة"
 
@@ -5930,7 +5957,7 @@ msgid "Change installation status?"
 msgstr "تغيير حالة التثبيت؟"
 
 #: app/templates/installations/detail.html:23
-#: app/templates/licensing/detail.html:86
+#: app/templates/licensing/detail.html:115
 #: app/templates/operations_ui/management_note_detail.html:12
 #: app/templates/subscriptions/detail.html:20
 msgid "Change status to"
@@ -5975,11 +6002,38 @@ msgstr "وضع علامة كمُستبدَل -- السبب (مطلوب)"
 msgid "Mark replaced"
 msgstr "وضع علامة كمُستبدَل"
 
-#: app/templates/installations/detail.html:70
+#: app/templates/installations/detail.html:62
+msgid "Revoke device key"
+msgstr "إبطال مفتاح الجهاز"
+
+#: app/templates/installations/detail.html:63
+msgid ""
+"Revokes this installation's active device key. The device cannot check in"
+" again until it re-enrols, and no data is deleted. Requires a fresh MFA "
+"confirmation."
+msgstr ""
+"يُبطل مفتاح الجهاز النشط لهذا التثبيت. لن يتمكن الجهاز من تسجيل الاتصال "
+"مرة أخرى حتى يعيد التسجيل، ولا تُحذف أي بيانات. يتطلب تأكيدًا حديثًا "
+"بالمصادقة الثنائية."
+
+#: app/templates/installations/detail.html:66
+msgid ""
+"Revoke this device key? The device must re-enrol before it can check in "
+"again."
+msgstr ""
+"إبطال مفتاح الجهاز هذا؟ يجب أن يعيد الجهاز التسجيل قبل أن يتمكن من تسجيل "
+"الاتصال مرة أخرى."
+
+#: app/templates/installations/detail.html:68
+#: app/templates/installations/detail.html:71
+msgid "Revoke device key (requires recent authentication)"
+msgstr "إبطال مفتاح الجهاز (يتطلب مصادقة حديثة)"
+
+#: app/templates/installations/detail.html:95
 msgid "Activation events"
 msgstr "أحداث التفعيل"
 
-#: app/templates/installations/detail.html:76
+#: app/templates/installations/detail.html:101
 msgid "No activation events yet."
 msgstr "لا توجد أحداث تفعيل بعد."
 
@@ -6361,13 +6415,14 @@ msgstr "عميل محتمل التكرار"
 msgid "Contact"
 msgstr "جهة الاتصال"
 
-#: app/templates/leads/detail.html:21 app/templates/leads/new.html:17
+#: app/templates/leads/detail.html:21 app/templates/leads/detail.html:83
+#: app/templates/leads/new.html:17
 #: app/templates/licensing_admin/entitlement_preview.html:7
 msgid "Source"
 msgstr "المصدر"
 
-#: app/templates/leads/detail.html:22 app/templates/leads/list.html:15
-#: app/templates/leads/new.html:23
+#: app/templates/leads/detail.html:22 app/templates/leads/detail.html:89
+#: app/templates/leads/list.html:15 app/templates/leads/new.html:23
 #: app/templates/operations_ui/management_note_new.html:13
 #: app/templates/operations_ui/management_notes_list.html:10
 #: app/templates/operations_ui/management_notes_list.html:17
@@ -6391,6 +6446,30 @@ msgstr "هل تريد تحويل هذا العميل المحتمل إلى عم�
 msgid "Convert to customer"
 msgstr "تحويل إلى عميل"
 
+#: app/templates/leads/detail.html:59
+msgid "Archive this lead? Records are kept, not deleted."
+msgstr "أرشفة هذا العميل المحتمل؟ يتم الاحتفاظ بالسجلات ولا تُحذف."
+
+#: app/templates/leads/detail.html:69
+msgid "Edit lead details"
+msgstr "تعديل بيانات العميل المحتمل"
+
+#: app/templates/leads/detail.html:73 app/templates/leads/new.html:9
+msgid "Prospect or organization name"
+msgstr "اسم العميل المحتمل أو المؤسسة"
+
+#: app/templates/leads/detail.html:76 app/templates/leads/new.html:11
+msgid "Primary contact name"
+msgstr "اسم جهة الاتصال الأساسية"
+
+#: app/templates/leads/detail.html:104
+msgid "Assign to (employee profile UUID)"
+msgstr "الإسناد إلى (معرّف ملف الموظف UUID)"
+
+#: app/templates/leads/detail.html:107
+msgid "Assign"
+msgstr "إسناد"
+
 #: app/templates/leads/list.html:6 app/templates/leads/new.html:2
 #: app/templates/leads/new.html:5
 msgid "New lead"
@@ -6407,14 +6486,6 @@ msgstr "المتابعة التالية"
 #: app/templates/leads/list.html:42
 msgid "No leads yet."
 msgstr "لا يوجد عملاء محتملون بعد."
-
-#: app/templates/leads/new.html:9
-msgid "Prospect or organization name"
-msgstr "اسم العميل المحتمل أو المؤسسة"
-
-#: app/templates/leads/new.html:11
-msgid "Primary contact name"
-msgstr "اسم جهة الاتصال الأساسية"
 
 #: app/templates/leads/new.html:29
 msgid "Create lead"
@@ -6498,11 +6569,28 @@ msgstr "الأجهزة المراد إضافتها"
 msgid "Add devices (requires recent authentication)"
 msgstr "إضافة أجهزة (يتطلب مصادقة حديثة)"
 
-#: app/templates/licensing/detail.html:62
+#: app/templates/licensing/detail.html:70
+msgid "Offline policy"
+msgstr "سياسة العمل دون اتصال"
+
+#: app/templates/licensing/detail.html:71
+msgid "Browse offline policies"
+msgstr "استعراض سياسات العمل دون اتصال"
+
+#: app/templates/licensing/detail.html:77
+#: app/templates/licensing/detail.html:80
+msgid "Assign offline policy (requires recent authentication)"
+msgstr "إسناد سياسة العمل دون اتصال (يتطلب مصادقة حديثة)"
+
+#: app/templates/licensing/detail.html:86
+msgid "Preview resolved entitlements"
+msgstr "معاينة الاستحقاقات المحسوبة"
+
+#: app/templates/licensing/detail.html:91
 msgid "Issue key"
 msgstr "إصدار المفتاح"
 
-#: app/templates/licensing/detail.html:63
+#: app/templates/licensing/detail.html:92
 msgid ""
 "Issuing requires a fresh MFA confirmation. The full key is shown exactly "
 "once."
@@ -6510,26 +6598,26 @@ msgstr ""
 "يتطلب الإصدار تأكيد مصادقة ثنائية حديث. يُعرض المفتاح الكامل مرة واحدة "
 "بالضبط."
 
-#: app/templates/licensing/detail.html:68
-#: app/templates/licensing/detail.html:71
+#: app/templates/licensing/detail.html:97
+#: app/templates/licensing/detail.html:100
 #: app/templates/licensing/issuance.html:77
 #: app/templates/licensing/issuance.html:80
 msgid "Issue license key (requires recent authentication)"
 msgstr "إصدار مفتاح الترخيص (يتطلب مصادقة حديثة)"
 
-#: app/templates/licensing/detail.html:84
+#: app/templates/licensing/detail.html:113
 msgid "Change license status? This may affect any activated installation."
 msgstr "تغيير حالة الترخيص؟ قد يؤثر هذا على أي تثبيت مُفعَّل."
 
-#: app/templates/licensing/detail.html:90
+#: app/templates/licensing/detail.html:119
 msgid "Apply (requires recent authentication)"
 msgstr "تطبيق (يتطلب مصادقة حديثة)"
 
-#: app/templates/licensing/detail.html:95
+#: app/templates/licensing/detail.html:124
 msgid "Replace license"
 msgstr "استبدال الترخيص"
 
-#: app/templates/licensing/detail.html:96
+#: app/templates/licensing/detail.html:125
 msgid ""
 "Creates a new DRAFT license and revokes/replaces this one. Requires a "
 "fresh MFA confirmation."
@@ -6537,11 +6625,11 @@ msgstr ""
 "ينشئ ترخيصًا جديدًا بحالة مسودة ويلغي/يستبدل هذا الترخيص. يتطلب تأكيدًا "
 "حديثًا للمصادقة الثنائية."
 
-#: app/templates/licensing/detail.html:98
+#: app/templates/licensing/detail.html:127
 msgid "Replace this license with a new one?"
 msgstr "استبدال هذا الترخيص بترخيص جديد؟"
 
-#: app/templates/licensing/detail.html:100
+#: app/templates/licensing/detail.html:129
 msgid "Replace"
 msgstr "استبدال"
 
@@ -7386,24 +7474,38 @@ msgstr "مرجع الاتصال الخارجي (اختياري)"
 msgid "Create payee"
 msgstr "إنشاء مستفيد"
 
-#: app/templates/operations_ui/report_snapshots_list.html:7
-#: app/templates/operations_ui/report_snapshots_list.html:11
+#: app/templates/operations_ui/report_snapshots_list.html:12
+#: app/templates/operations_ui/report_snapshots_list.html:17
 msgid "Report"
 msgstr "التقرير"
 
-#: app/templates/operations_ui/report_snapshots_list.html:16
+#: app/templates/operations_ui/report_snapshots_list.html:13
+#: app/templates/operations_ui/report_snapshots_list.html:22
+#: app/templates/operations_ui/report_snapshots_list.html:27
+msgid "Regenerate"
+msgstr "إعادة الإنشاء"
+
+#: app/templates/operations_ui/report_snapshots_list.html:24
+msgid ""
+"Regenerate this report? A new version supersedes the current one; the "
+"existing snapshot is kept."
+msgstr ""
+"إعادة إنشاء هذا التقرير؟ ستحل نسخة جديدة محل النسخة الحالية، مع الاحتفاظ "
+"باللقطة الموجودة."
+
+#: app/templates/operations_ui/report_snapshots_list.html:32
 msgid "No report snapshots yet."
 msgstr "لا توجد لقطات تقارير بعد."
 
-#: app/templates/operations_ui/report_snapshots_list.html:22
+#: app/templates/operations_ui/report_snapshots_list.html:38
 msgid "Generate a snapshot"
 msgstr "توليد لقطة"
 
-#: app/templates/operations_ui/report_snapshots_list.html:25
+#: app/templates/operations_ui/report_snapshots_list.html:41
 msgid "Report type"
 msgstr "نوع التقرير"
 
-#: app/templates/operations_ui/report_snapshots_list.html:35
+#: app/templates/operations_ui/report_snapshots_list.html:51
 msgid "Generate"
 msgstr "توليد"
 
@@ -7557,6 +7659,29 @@ msgstr "تاريخ الانتهاء الجديد"
 #: app/templates/subscriptions/detail.html:37
 msgid "Record renewal"
 msgstr "تسجيل التجديد"
+
+#: app/templates/subscriptions/detail.html:79
+msgid "Recorded payments"
+msgstr "المدفوعات المسجلة"
+
+#: app/templates/subscriptions/detail.html:84
+#: app/templates/subscriptions/detail.html:106
+msgid "Correct"
+msgstr "تصحيح"
+
+#: app/templates/subscriptions/detail.html:97
+msgid ""
+"Correct this payment? The previous status and note are preserved as a "
+"correction record."
+msgstr "تصحيح هذه الدفعة؟ يتم الاحتفاظ بالحالة والملاحظة السابقتين كسجل تصحيح."
+
+#: app/templates/subscriptions/detail.html:105
+msgid "Correction note"
+msgstr "ملاحظة التصحيح"
+
+#: app/templates/subscriptions/detail.html:112
+msgid "No payments recorded yet."
+msgstr "لا توجد مدفوعات مسجلة بعد."
 
 #: app/templates/subscriptions/list.html:9
 msgid "Customer name"

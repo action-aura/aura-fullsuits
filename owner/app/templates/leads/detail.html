@@ -45,6 +45,68 @@
     <button type="submit">{{ _("Convert to customer") }}</button>
   </form>
   {% endif %}
+
+  {# Edit / assign / archive. These three backends were complete and
+     permission-gated from the start but had no control anywhere -- the page's
+     action set was extended for status/convert and never for these (see
+     test_route_reachability.py's KNOWN_GAPS). customers/detail.html already
+     wires its own archive, and that asymmetry is what flagged it. Field names,
+     enum values and the optimistic `version` hidden input mirror leads/new.html
+     and the status form above so all four post the same shape. #}
+  {% if has_permission("leads.archive") and lead.status != "ARCHIVED" %}
+  <div class="aura-quick-actions" style="display:flex;flex-wrap:wrap;gap:0.75rem;align-items:center;margin-block-start:0.75rem;">
+    <form method="post" action="{{ url_for('leads.archive', lead_id=lead.id) }}"
+          data-confirm="{{ _('Archive this lead? Records are kept, not deleted.') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input name="reason" placeholder="{{ _('Reason') }}">
+      <button type="submit" class="danger">{{ _("Archive") }}</button>
+    </form>
+  </div>
+  {% endif %}
+
+  {% if has_any_permission("leads.update_own", "leads.update_all") %}
+  <details style="margin-top:0.75rem;">
+    <summary>{{ _("Edit lead details") }}</summary>
+    <form method="post" action="{{ url_for('leads.update', lead_id=lead.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="version" value="{{ lead.version }}">
+      <label for="leads-edit-organization-or-prospect-name">{{ _("Prospect or organization name") }}</label>
+      <input id="leads-edit-organization-or-prospect-name" name="organization_or_prospect_name"
+             value="{{ lead.organization_or_prospect_name or '' }}" required maxlength="200">
+      <label for="leads-edit-primary-contact-name">{{ _("Primary contact name") }}</label>
+      <input id="leads-edit-primary-contact-name" name="primary_contact_name"
+             value="{{ lead.primary_contact_name or '' }}" maxlength="200">
+      <label for="leads-edit-phone">{{ _("Phone") }}</label>
+      <input id="leads-edit-phone" name="phone" value="{{ lead.phone or '' }}" maxlength="32">
+      <label for="leads-edit-email">{{ _("Email") }}</label>
+      <input id="leads-edit-email" name="email" type="email" value="{{ lead.email or '' }}" maxlength="200">
+      <label for="leads-edit-source">{{ _("Source") }}</label>
+      <select id="leads-edit-source" name="source">
+        {% for s in ["WEBSITE","REFERRAL","COLD_OUTREACH","EVENT","OTHER"] %}
+        <option value="{{ s }}" {% if s == lead.source %}selected{% endif %}>{{ lead_source_label(s) }}</option>
+        {% endfor %}
+      </select>
+      <label for="leads-edit-priority">{{ _("Priority") }}</label>
+      <select id="leads-edit-priority" name="priority">
+        {% for p in ["LOW","MEDIUM","HIGH"] %}
+        <option value="{{ p }}" {% if p == lead.priority %}selected{% endif %}>{{ lead_priority_label(p) }}</option>
+        {% endfor %}
+      </select>
+      <div style="margin-top:0.75rem;"><button type="submit">{{ _("Save changes") }}</button></div>
+    </form>
+  </details>
+  {% endif %}
+
+  {% if has_permission("leads.assign") %}
+  <form method="post" action="{{ url_for('leads.assign', lead_id=lead.id) }}" style="margin-top:0.75rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="version" value="{{ lead.version }}">
+    <label for="leads-assign-employee-profile-id">{{ _("Assign to (employee profile UUID)") }}</label>
+    <input id="leads-assign-employee-profile-id" name="assigned_employee_profile_id">
+    <input name="reason" placeholder="{{ _('Reason') }}">
+    <button type="submit">{{ _("Assign") }}</button>
+  </form>
+  {% endif %}
 </div>
 
 <div class="card">
@@ -97,6 +159,14 @@
     <form method="post" action="{{ url_for('crm_shared.complete_followup', followup_id=f.id) }}" style="display:inline;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit">{{ _("Complete") }}</button>
+    </form>
+    {# The backend supports both outcomes identically, but only "complete" was
+       ever rendered -- so an open follow-up that should not have been raised
+       could only be closed by claiming it was done. #}
+    <form method="post" action="{{ url_for('crm_shared.cancel_followup', followup_id=f.id) }}" style="display:inline;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input name="reason" placeholder="{{ _('Reason') }}">
+      <button type="submit" class="secondary">{{ _("Cancel follow-up") }}</button>
     </form>
     {% endif %}
   </p>

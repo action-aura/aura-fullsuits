@@ -69,4 +69,49 @@
     <div style="margin-top:0.5rem;"><button type="submit">{{ _("Record payment") }}</button></div>
   </form>
 </div>
+
+{# Recorded payments, and the correction control that had no page to live on.
+   correct_payment_route was complete and permission-gated but unreachable
+   because nothing here ever rendered a payment id. Correcting does NOT
+   overwrite history -- services.correct_payment writes a correction row
+   preserving the prior status/note (Phase 8 Part F). #}
+<div class="card">
+  <h3>{{ _("Recorded payments") }}</h3>
+  <table class="responsive-table">
+    <thead><tr>
+      <th>{{ _("Payment date") }}</th><th>{{ _("Amount") }}</th><th>{{ _("Method") }}</th>
+      <th>{{ _("Reference") }}</th><th>{{ _("Status") }}</th>
+      {% if has_permission("payments.correct") %}<th>{{ _("Correct") }}</th>{% endif %}
+    </tr></thead>
+    <tbody>
+    {% for p in payments %}
+      <tr>
+        <td>{{ format_owner_date(p.payment_date) if p.payment_date else "-" }}</td>
+        <td><bdi dir="ltr">{{ p.amount }} {{ p.currency }}</bdi></td>
+        <td>{{ p.method or "-" }}</td>
+        <td><bdi dir="ltr">{{ p.reference or "-" }}</bdi></td>
+        <td><span class="badge">{{ payment_status_label(p.status) }}</span></td>
+        {% if has_permission("payments.correct") %}
+        <td>
+          <form method="post" action="{{ url_for('subscriptions.correct_payment_route', payment_id=p.id) }}"
+                data-confirm="{{ _('Correct this payment? The previous status and note are preserved as a correction record.') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label class="visually-hidden" for="payment-correct-status-{{ p.id }}">{{ _("Status") }}</label>
+            <select id="payment-correct-status-{{ p.id }}" name="status">
+              {% for s in ["PENDING","CONFIRMED","FAILED","REFUNDED","VOIDED"] %}
+              <option value="{{ s }}" {% if s == p.status %}selected{% endif %}>{{ payment_status_label(s) }}</option>
+              {% endfor %}
+            </select>
+            <input name="note" placeholder="{{ _('Correction note') }}">
+            <button type="submit">{{ _("Correct") }}</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+    {% else %}
+      <tr><td colspan="{{ 6 if has_permission('payments.correct') else 5 }}" class="empty">{{ _("No payments recorded yet.") }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endblock %}

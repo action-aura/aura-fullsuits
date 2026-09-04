@@ -110,7 +110,7 @@ and the desktop sync?" turned out to have a longer answer than yes or no.
 | Surface | State | How |
 |---|---|---|
 | Retail | **TESTED, list empty** | `retail_route_reachability_test.py`. Six defects found and closed this cycle; `KNOWN_GAPS` is now empty |
-| Owner | **TESTED, 12 open** | `owner/tests/test_route_reachability.py`. 402 routes; 12 complete backends with no UI — including `customers.update`, three lead actions, and `subscriptions.correct_payment` |
+| Owner | **TESTED, list empty** | `owner/tests/test_route_reachability.py`. All 12 gaps closed 2026-09-04: customer/lead edit, lead assign + archive, follow-up cancel, device-key revoke, offline-policy assign, entitlement preview, snapshot regenerate, product-version + release-channel links, and payment correction (which needed a payments list before it had an id to act on). `KNOWN_GAPS` is now empty on both surfaces |
 
 ## Operations — all BLOCKED on the owner
 

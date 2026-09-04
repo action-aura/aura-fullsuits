@@ -6,7 +6,7 @@ from __future__ import annotations
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import select
 
-from app.auth.session import load_current_staff
+from app.auth.session import has_recent_auth, load_current_staff
 from app.extensions import db_session
 from app.installations import list_queries
 from app.installations.services import (
@@ -75,7 +75,15 @@ def detail(installation_id):
     if installation is None:
         return jsonify({"error": "not_found"}), 404
     allowed_transitions = sorted(VALID_TRANSITIONS.get(installation.status, set()))
-    return render_template("installations/detail.html", installation=installation, allowed_transitions=allowed_transitions)
+    # recent_auth_ok drives the same split licensing/detail.html uses: a
+    # @require_recent_auth route must be offered as a LINK to the reauth form
+    # when auth is stale, never as a POST form. The decorator's own fallback
+    # redirects to reauth with next=request.path, and for a POST-only endpoint
+    # that path 405s on the way back -- the dead-end fixed in 2ebe9fb.
+    return render_template(
+        "installations/detail.html", installation=installation,
+        allowed_transitions=allowed_transitions, recent_auth_ok=has_recent_auth(),
+    )
 
 
 @bp.route("/<uuid:installation_id>/transition", methods=["POST"])

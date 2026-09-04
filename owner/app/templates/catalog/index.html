@@ -83,6 +83,17 @@
 
 <div class="card">
   <h2>{{ _("Recently imported versions") }}</h2>
+  {# releases.versions and releases.channels are real, permission-gated pages
+     with real templates that nothing linked to from anywhere in the app, so
+     they could only be reached by typing the URL (see
+     test_route_reachability.py's KNOWN_GAPS). This card shows a truncated
+     recent list, which makes it the place a reader already looks for the
+     full one. #}
+  <p>
+    <a href="{{ url_for('releases.versions') }}">{{ _("All product versions") }}</a>
+    &middot;
+    <a href="{{ url_for('releases.channels') }}">{{ _("Release channels") }}</a>
+  </p>
   <table class="responsive-table">
     <thead><tr><th>{{ _("Product") }}</th><th>{{ _("Platform") }}</th><th>{{ _("Version") }}</th><th>{{ _("Checksum") }}</th><th>{{ _("Imported") }}</th></tr></thead>
     <tbody>
