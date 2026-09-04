@@ -175,13 +175,57 @@ closed, one added that is larger than the one it replaces.
      a valid 32-byte Ed25519 key whose SHA-256 equals the
      `publicKeyFingerprint` in `device_key_meta.json` exactly.
 
-   **What has NOT been checked**, and is where to look next: the specific
-   reason code returned by `/_internal/sync-activation`. It is not in logcat
-   and is not persisted (the failed activation leaves `licensing_state`
-   empty), so it needs temporary instrumentation on the Python verify path.
-   The candidates left after the eliminations above are
-   `ASSERTION_INSTALLATION_MISMATCH`, `ASSERTION_DEVICE_MISMATCH` and a plain
-   `ASSERTION_VERIFICATION_FAILED`.
+   **A server-side defect that produces exactly this symptom was found and
+   fixed on 2026-09-04** (`owner/app/licensing_service/activation.py`).
+   Activation's existing-installation branch read:
+
+   ```python
+   if active_device_key is not None and active_device_key.fingerprint != ...:
+       raise ActivationRejected("DEVICE_KEY_MISMATCH")
+   ```
+
+   A **`None`** key passes that guard silently. `register_device_key()` is
+   only called on the *other* branch, so nothing re-registered one either, and
+   the assertion was then signed with `device_key_fingerprint = None`. Owner
+   answered `SUCCESS` and recorded the installation `ACTIVE`; the device
+   compared that null against its own real fingerprint and raised
+   `ASSERTION_DEVICE_MISMATCH`. No retry could ever help — the outcome is
+   deterministic — and **nothing on the server side looked wrong**, which is
+   why three clean desktop activations told us nothing.
+
+   The state that triggers it is reached by revoking a device key from
+   `licensing_admin` — which deliberately leaves `installation.status`
+   `ACTIVE`. Activation was the **only** protocol surface that failed to
+   reject it: `checkin.py`, `deactivation.py`, `sync/routes.py` and
+   `releases/distribution.py` all already returned `DEVICE_KEY_REVOKED` for
+   precisely this. Activation now does too, and `build_assertion_payload()`
+   refuses outright to sign an assertion with no device fingerprint, so any
+   future route to the same state is a visible server error rather than
+   another silently bricked device.
+
+   Proven, not assumed — on the real HTTP surface against real Postgres:
+   before the fix, the second activation returned `200 SUCCESS` carrying
+   `device_key_fingerprint: null`; after it, `400 DEVICE_KEY_REVOKED`. Both
+   guards are mutation-proven, and the client half is pinned independently in
+   `test_assertion_verifier.py::test_null_device_fingerprint_rejected`.
+
+   **Still to confirm on the handset**, and it is now a one-line check rather
+   than instrumentation: whether the Mi Note 10 actually took *this* path. The
+   earlier note that the reason code "is not persisted" was **wrong** — the
+   failed activation leaves `licensing_state` empty, but
+   `ingest_activation_response()` records `ACTIVATION_FAILED` with its
+   `reason_code` into the `licensing_events` table of the device's own
+   `licensing.db`, which survives the failure. Read it off the device:
+
+   ```sql
+   SELECT occurred_at, event_type, details_json FROM licensing_events
+   ORDER BY id DESC LIMIT 20;
+   ```
+
+   `ASSERTION_DEVICE_MISMATCH` there confirms this was the cause.
+   `ASSERTION_INSTALLATION_MISMATCH` or a plain
+   `ASSERTION_VERIFICATION_FAILED` means a second, separate defect remains and
+   the eliminations above still stand.
 
    Worth noting how long this hid: three desktop installs activated cleanly
    against the same Owner and the same key. Nothing short of a physical

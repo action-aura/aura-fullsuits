@@ -210,7 +210,28 @@ def process_activation(body: dict, *, source_ip: str | None, config: dict) -> di
         # reuse someone else's installation_id is rejected at the device-key
         # binding check.
         active_device_key = device_identity.get_active_device_key(existing_installation.id)
-        if active_device_key is not None and active_device_key.fingerprint != device_identity.fingerprint_of(body["device_public_key"]):
+        # Launch-readiness (2026-09-04): a revoked key must be rejected HERE,
+        # not fall through. Revoking a device key (licensing_admin/routes.py)
+        # deliberately leaves installation.status ACTIVE, so this branch is
+        # reached with no active key at all. The guard below used to read
+        # `if active_device_key is not None and ... != ...`, which a None key
+        # passes silently; register_device_key() is only called on the other
+        # branch, so nothing re-registered it either, and the assertion was
+        # then signed with device_key_fingerprint = None.
+        #
+        # Owner answered SUCCESS and recorded the installation ACTIVE while
+        # the device -- which independently re-verifies every assertion --
+        # compared None against its own real fingerprint and raised
+        # ASSERTION_DEVICE_MISMATCH. The device could never activate, no
+        # retry could ever help, and nothing on the server side looked
+        # wrong. Reject instead, with the same code check-in
+        # (checkin.py::DEVICE_KEY_REVOKED), deactivation, sync and
+        # release-download already return for this exact state; re-enrolling
+        # a revoked device is a deliberate staff action
+        # (replace_device_slot()), never a side effect of it asking again.
+        if active_device_key is None:
+            raise ActivationRejected("DEVICE_KEY_REVOKED")
+        if active_device_key.fingerprint != device_identity.fingerprint_of(body["device_public_key"]):
             raise ActivationRejected("DEVICE_KEY_MISMATCH")
         installation = existing_installation
     else:
