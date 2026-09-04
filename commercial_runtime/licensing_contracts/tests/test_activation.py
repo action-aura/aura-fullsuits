@@ -373,3 +373,58 @@ def test_ingest_activation_response_pending_raises_and_persists_nothing(trust_st
         )
     assert exc.value.installation_id == "owner-assigned-inst-3"
     assert state_repo.load() is None
+
+
+def test_unknown_signing_key_failure_records_both_key_ids(owner_key, trust_store, state_repo, events):
+    """The stranded-trust-store diagnostic (2026-09-04, Mi Note 10).
+
+    A device whose trust_store.json predates Owner's current signing key fails
+    every activation with UNKNOWN_SIGNING_KEY and nothing else -- no hint that
+    the cause is a stale trust store rather than a bad assertion. The obvious
+    check (trust_anchor.json, which was correct) actively misleads, because the
+    anchor is only ever read when trust_store.json does NOT exist.
+
+    Record which key signed and which keys this install actually trusts, so the
+    next occurrence is a glance instead of a multi-session dig.
+    """
+    rotated_owner_key = Ed25519PrivateKey.generate()
+    envelope = _envelope(rotated_owner_key, "owner-2-rotated", _payload("owner-assigned-inst-1"))
+    client = FakeClient(response={
+        "result": "SUCCESS",
+        "installation_id": "owner-assigned-inst-1",
+        "signed_assertion": envelope,
+    })
+
+    with pytest.raises(ActivationFailed) as exc:
+        _activate(client, trust_store, state_repo, events)
+    assert exc.value.reason_code == "UNKNOWN_SIGNING_KEY"
+
+    failed = [e for e in events.recent() if e.event_type == "ACTIVATION_FAILED"]
+    assert len(failed) == 1
+    details = failed[0].details
+    assert details["reason_code"] == "UNKNOWN_SIGNING_KEY"
+    # Both sides of the disagreement, which is the entire point.
+    assert details["assertion_signing_key_id"] == "owner-2-rotated"
+    assert details["trusted_key_ids"] == ["owner-1"]
+
+
+def test_other_failures_keep_the_bare_reason_code(owner_key, trust_store, state_repo, events):
+    """The allow-half: the diagnostic is scoped to UNKNOWN_SIGNING_KEY alone.
+
+    Without this, a _failure_details() that attached key ids to EVERY failure
+    would satisfy the test above while quietly widening what every unrelated
+    failure writes into the local event log.
+    """
+    envelope = _envelope(owner_key, "owner-1", _payload("owner-assigned-inst-1", product_code="AURA_CLINIC"))
+    client = FakeClient(response={
+        "result": "SUCCESS",
+        "installation_id": "owner-assigned-inst-1",
+        "signed_assertion": envelope,
+    })
+
+    with pytest.raises(ActivationFailed) as exc:
+        _activate(client, trust_store, state_repo, events)
+    assert exc.value.reason_code == "ASSERTION_PRODUCT_MISMATCH"
+
+    failed = [e for e in events.recent() if e.event_type == "ACTIVATION_FAILED"]
+    assert failed[0].details == {"reason_code": "ASSERTION_PRODUCT_MISMATCH"}

@@ -150,8 +150,71 @@ closed, one added that is larger than the one it replaces.
    a phone cannot yet learn it from activation.**
 
 3. **A PHONE CANNOT BE LICENSED AT ALL.** Found 2026-09-04 on a real Mi Note
-   10, and it is now the top blocker — it outranks everything below it,
-   because an Android till that cannot activate cannot legally do anything.
+   10. **ROOT CAUSE CONFIRMED AND CLEARED ON THE DEVICE the same day** — read
+   off the handset's own event log rather than inferred. The mechanism is
+   below; what remains is a design decision, not an investigation.
+
+   **The answer: `UNKNOWN_SIGNING_KEY`.** Not any of the three codes this
+   entry originally predicted. Taken from `licensing_events` in the device's
+   own `licensing.db`, twice, at 00:01:34Z and 00:21:24Z — matching
+   "reproduced twice" exactly.
+
+   | | key id | when |
+   |---|---|---|
+   | device `trust_store.json` (the runtime authority) | `owner-…20260815T131202Z-6567e3c6` | written **2026-08-18** |
+   | APK `trust_anchor.json` (bundled) | `owner-…20260903T160641Z-cdcaa65b` | correct |
+   | Owner `aura_owner_rehearsal`, its only key | `owner-…20260903T160641Z-cdcaa65b` | ACTIVE |
+
+   Owner signs with `cdcaa65b`; the device trusted only `6567e3c6`;
+   `is_trusted()` returned False. **The trust store is seeded exactly once and
+   never again** — `routes.py` bootstraps only `if not trust_store.json
+   .exists()`, and `bootstrap_from_anchor()` itself refuses when keys are
+   already present (deliberately, to prevent a TOFU reset). So a store written
+   on 2026-08-18 permanently shadows every corrected anchor shipped since, no
+   matter how many builds are installed over it.
+
+   That is why the elimination list below was accurate and still pointed the
+   wrong way: it verified `trust_anchor.json` byte-for-byte, but the anchor is
+   not what verification consults.
+
+   The built-in recovery could not help either. `admit_manifest()` requires the
+   key-set manifest to be countersigned by a key the install already trusts,
+   and the rehearsal Owner holds *only* `cdcaa65b` — it has no `6567e3c6` with
+   which to countersign. A deterministic dead end on every retry.
+
+   Underlying cause: the phone's trust store came from the **droplet** lineage
+   (the 2026-08-15 rotation), while the build pointed it at a **locally
+   provisioned rehearsal Owner** created 2026-09-03 with a brand-new key and no
+   continuity. Two different Owner lineages.
+
+   **Cleared on the device 2026-09-04 12:55** by deleting
+   `files/data/licensing/trust_store.json`; the next app launch re-bootstrapped
+   it from the bundled anchor and it now carries `cdcaa65b`
+   (`source: BUNDLED_ANCHOR`). The device keypair was untouched — `device_key
+   .enc`, `device_key_meta.json` and `device_public_key.txt` are still the
+   originals, so the handset keeps its registered identity. The full activation
+   round-trip was **not** re-run (it needs Owner live behind `adb reverse
+   tcp:5551`, and the device was disconnected) — so this is "the cause is
+   removed and verified", not "activation observed succeeding".
+
+   **The open decision, and it is a real launch risk, not a test artefact:** an
+   install whose trust store predates a *discontinuous* Owner key can never
+   recover on its own. Reinstalling the app does not help (app data survives);
+   only clearing app data or deleting that one file does. That is fine when
+   Owner rotates *with* continuity — the countersigning path handles it — but a
+   fresh Owner deploy stranded a real device permanently, and would strand a
+   customer's the same way. A guarded re-anchor (accept a newer bundled anchor
+   when the store can verify nothing Owner is producing) would fix it, but
+   deliberately loosens the TOFU rule this design protects, so it is an owner
+   decision rather than a silent code change. On Android the loosening is close
+   to free — replacing the APK already requires the original signing key, and an
+   uninstall wipes app data anyway — but the same module ships on Windows, where
+   overwriting `trust_anchor.json` on disk is materially easier. Left
+   unimplemented on purpose. **At minimum, a supported, audited "reset licensing
+   trust" support action should exist, because right now the only cure is adb.**
+
+   The original investigation record follows, kept because its eliminations
+   remain valid and its wrong prediction is instructive.
 
    Activation reaches Owner and **Owner approves it**: the installation is
    recorded `ACTIVE`, platform `ANDROID`, in `owner_installations`. The device
@@ -175,8 +238,12 @@ closed, one added that is larger than the one it replaces.
      a valid 32-byte Ed25519 key whose SHA-256 equals the
      `publicKeyFingerprint` in `device_key_meta.json` exactly.
 
-   **A server-side defect that produces exactly this symptom was found and
-   fixed on 2026-09-04** (`owner/app/licensing_service/activation.py`).
+   **A separate server-side defect was found and fixed while chasing this
+   one.** It is real, it produces an indistinguishable symptom, and it was
+   **not** what stranded this handset — the device's event log says
+   `UNKNOWN_SIGNING_KEY`, not `ASSERTION_DEVICE_MISMATCH`. Recorded here
+   because it is a genuine latent bug on the same path, not because it explains
+   the blocker above (`owner/app/licensing_service/activation.py`).
    Activation's existing-installation branch read:
 
    ```python
@@ -209,27 +276,32 @@ closed, one added that is larger than the one it replaces.
    guards are mutation-proven, and the client half is pinned independently in
    `test_assertion_verifier.py::test_null_device_fingerprint_rejected`.
 
-   **Still to confirm on the handset**, and it is now a one-line check rather
-   than instrumentation: whether the Mi Note 10 actually took *this* path. The
-   earlier note that the reason code "is not persisted" was **wrong** — the
-   failed activation leaves `licensing_state` empty, but
-   `ingest_activation_response()` records `ACTIVATION_FAILED` with its
-   `reason_code` into the `licensing_events` table of the device's own
-   `licensing.db`, which survives the failure. Read it off the device:
+   **Checked on the handset, and it was NOT this.** The device reported
+   `UNKNOWN_SIGNING_KEY`, so the null-fingerprint defect above is a real latent
+   bug that this handset never hit. Recorded plainly rather than quietly
+   dropped, because "a fix that plausibly explains the symptom" is exactly the
+   thing that stops an investigation one step early.
 
-   ```sql
-   SELECT occurred_at, event_type, details_json FROM licensing_events
-   ORDER BY id DESC LIMIT 20;
+   The way to check, for next time — the earlier note that the reason code "is
+   not persisted" was **wrong**. The failed activation leaves `licensing_state`
+   empty, but `ingest_activation_response()` records `ACTIVATION_FAILED` with
+   its `reason_code` into `licensing_events` in the device's own
+   `licensing.db`, which survives. No instrumentation needed:
+
+   ```bash
+   adb exec-out "run-as com.actionaura.retail.debug \
+     cat files/data/database/subsystems/licensing.db" > licensing.db
+   # then: SELECT occurred_at, event_type, details_json
+   #       FROM licensing_events ORDER BY id DESC LIMIT 20;
    ```
 
-   `ASSERTION_DEVICE_MISMATCH` there confirms this was the cause.
-   `ASSERTION_INSTALLATION_MISMATCH` or a plain
-   `ASSERTION_VERIFICATION_FAILED` means a second, separate defect remains and
-   the eliminations above still stand.
+   The device has no `sqlite3` binary, so pull the file and read it on the
+   host. `licensing.db-wal` was empty (already checkpointed), but pull it and
+   `-shm` alongside anyway.
 
-   Worth noting how long this hid: three desktop installs activated cleanly
-   against the same Owner and the same key. Nothing short of a physical
-   handset would have found it.
+   Worth noting how long the null-fingerprint bug hid: three desktop installs
+   activated cleanly against the same Owner and the same key. It is still
+   unshipped-untested territory on any path that revokes a device key.
 
 4. **Accounts do not sync to the phone.** Both halves are wired and
    unit-tested, and desktop-to-desktop sync is proven — including staff

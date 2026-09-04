@@ -112,6 +112,18 @@ class OwnerTrustStore:
         key = self._keys.get(key_id)
         return key.public_key_b64 if key else None
 
+    def trusted_key_ids(self) -> list[str]:
+        """Key IDs only -- never public key material, never the file itself.
+
+        Diagnostics only (see activation.py::_failure_details). A key id is a
+        public, non-secret identifier that Owner already publishes in every
+        assertion envelope it signs, so recording one in the LOCAL event log
+        leaks nothing; the corresponding public keys are deliberately NOT
+        exposed here, because nothing outside this class needs them to explain
+        a failure.
+        """
+        return sorted(self._keys)
+
     def admit_manifest(self, manifest: dict) -> None:
         """Part D step 3: admit a signed key-set manifest only if it is
         itself signed by a key already in this trust store. A manifest whose

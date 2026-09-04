@@ -56,6 +56,31 @@ class ActivationResult:
     owner_installation_id: str
 
 
+def _failure_details(reason_code: str, envelope, trust_store: OwnerTrustStore) -> dict:
+    """Event details for a failed activation.
+
+    UNKNOWN_SIGNING_KEY is the one failure whose cause is invisible from the
+    reason code alone, and it cost a multi-session investigation on a real
+    handset (2026-09-04, Mi Note 10) to answer a question two key ids would
+    have settled at a glance: Owner had rotated onto a key this install had
+    never trusted, because trust_store.json is seeded ONCE and thereafter
+    shadows every corrected trust_anchor.json shipped in every later build.
+    Verifying the bundled anchor -- the obvious check, and the one that was
+    made -- proves nothing about what the device actually trusts.
+
+    So record both sides whenever they disagree. Key ids only: they are public
+    identifiers Owner already puts in the clear in every envelope it signs, so
+    this leaks nothing into a log that Part W keeps strictly local anyway.
+    Every other reason code already explains itself and gets the bare code,
+    unchanged.
+    """
+    details: dict = {"reason_code": reason_code}
+    if reason_code == "UNKNOWN_SIGNING_KEY":
+        details["assertion_signing_key_id"] = envelope.get("signing_key_id") if isinstance(envelope, dict) else None
+        details["trusted_key_ids"] = trust_store.trusted_key_ids()
+    return details
+
+
 def make_trust_manifest_refresher(client: LicensingClient, trust_store: OwnerTrustStore) -> Callable[[], None]:
     """Best-effort "catch this install's trust store up with Owner" step, for
     the one case activation could not previously survive: a BUNDLED anchor
@@ -203,10 +228,12 @@ def ingest_activation_response(
         # reason_code means the assertion itself is wrong, and refreshing
         # trust could not possibly change that -- fail immediately.
         if exc.reason_code != "UNKNOWN_SIGNING_KEY" or trust_refresher is None:
+            # Reached with UNKNOWN_SIGNING_KEY whenever no refresher was
+            # supplied, so the diagnostic matters on this branch too.
             # A "successful" activation whose assertion doesn't verify is
             # not trusted -- never activate on an unverifiable response,
             # regardless of what result/reason_code the envelope claimed.
-            event_recorder.record("ACTIVATION_FAILED", {"reason_code": exc.reason_code})
+            event_recorder.record("ACTIVATION_FAILED", _failure_details(exc.reason_code, envelope, trust_store))
             raise ActivationFailed(exc.reason_code, str(exc)) from exc
 
         trust_refresher()
@@ -216,7 +243,12 @@ def ingest_activation_response(
             # same deterministic verification against the same trust store.
             verified = _verify()
         except AssertionVerificationError as retry_exc:
-            event_recorder.record("ACTIVATION_FAILED", {"reason_code": retry_exc.reason_code})
+            # After the refresh: if this is STILL UNKNOWN_SIGNING_KEY, the
+            # manifest could not vouch for Owner's current key with anything
+            # this install trusts -- the unrecoverable case. trusted_key_ids()
+            # is re-read here, post-refresh, so it reflects what the store
+            # actually ended up with rather than what it started as.
+            event_recorder.record("ACTIVATION_FAILED", _failure_details(retry_exc.reason_code, envelope, trust_store))
             raise ActivationFailed(retry_exc.reason_code, str(retry_exc)) from retry_exc
 
     payload = verified.payload
