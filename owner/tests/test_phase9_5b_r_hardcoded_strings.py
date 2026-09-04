@@ -42,6 +42,25 @@ _JINJA_RE = re.compile(r"\{\{.*?\}\}|\{%.*?%\}|\{#.*?#\}", re.DOTALL)
 # CSS/JS block CONTENT is never a translatable text node -- stripped whole,
 # not just their tags, per the governing spec's own "skip CSS" instruction.
 _STYLE_OR_SCRIPT_BLOCK_RE = re.compile(r"<(style|script)\b[^>]*>.*?</\1>", re.DOTALL | re.IGNORECASE)
+# <kbd> CONTENT is a KEYCAP LEGEND -- the label physically printed on a key --
+# not prose, so it is stripped whole for the same reason style/script blocks
+# are, rather than being exempted string by string.
+#
+# This resolves a real conflict between two guards rather than relaxing either.
+# `<kbd>Ctrl</kbd>` in layout/_shortcuts_cheatsheet.html failed the scan below,
+# but wrapping it in _() is worse: the honest Arabic value for the Ctrl keycap
+# IS the Latin string "Ctrl" (it is printed that way on an Arabic keyboard, and
+# the sibling <kbd>K</kbd>/<kbd>?</kbd> were never translatable either), so the
+# catalog gains an entry whose translation equals its source -- exactly what
+# test_arabic_translations_are_real_arabic_not_placeholder_text exists to
+# reject. One guard could only be satisfied by breaking the other.
+#
+# Deliberately structural, not an allowlist entry: ALLOWLISTED_TEXT would fix
+# "Ctrl" and leave the next keycap to fail. Verified safe by inspection --
+# every <kbd> in this template tree holds a single key name or glyph, never a
+# sentence -- and prose elsewhere in the same file is still scanned, which
+# test_the_kbd_exemption_does_not_blanket_disable_the_scan below pins.
+_KBD_BLOCK_RE = re.compile(r"<kbd\b[^>]*>.*?</kbd>", re.DOTALL | re.IGNORECASE)
 
 # A small, reviewed allowlist of literal text that is legitimately not
 # translated: brand name, technical placeholders, punctuation-only content.
@@ -76,7 +95,8 @@ def _extract_text_nodes(html: str) -> list[str]:
     that would render as-is (a real, if simple, indicator of an untranslated
     hardcoded string)."""
     no_style_or_script = _STYLE_OR_SCRIPT_BLOCK_RE.sub("", html)
-    no_jinja = _JINJA_RE.sub("", no_style_or_script)
+    no_keycaps = _KBD_BLOCK_RE.sub("", no_style_or_script)
+    no_jinja = _JINJA_RE.sub("", no_keycaps)
     no_tags = _TAG_RE.sub("\n", no_jinja)
     nodes = []
     for line in no_tags.splitlines():
@@ -135,3 +155,35 @@ def test_all_real_template_directories_are_now_gated():
         if os.path.isdir(dir_path) and any(n.endswith(".html") for n in os.listdir(dir_path)):
             dirs_with_templates.add(d)
     assert dirs_with_templates == set(GATED_DIRS)
+
+
+def test_the_kbd_exemption_does_not_blanket_disable_the_scan():
+    """The keycap exemption must remove keycaps and nothing else.
+
+    Stripping a whole element by regex is the kind of change that quietly
+    swallows more than intended -- a greedy pattern would eat everything
+    between the FIRST <kbd> and the LAST </kbd>, taking real prose with it and
+    turning the scanner into a no-op for any file containing two keycaps. That
+    failure is invisible: the suite goes green precisely because nothing is
+    being checked any more.
+
+    So assert both directions on markup shaped exactly like the cheatsheet's.
+    """
+    hardcoded = "Open search or command palette"
+    html = (
+        "<ul>\n"
+        f"  <li><kbd>Ctrl</kbd> + <kbd>K</kbd> -- {hardcoded}</li>\n"
+        "  <li><kbd>?</kbd> -- {{ _(\"Show this cheatsheet\") }}</li>\n"
+        "</ul>\n"
+    )
+    nodes = _extract_text_nodes(html)
+    flat = " ".join(nodes)
+
+    # The keycaps are gone...
+    assert "Ctrl" not in flat, nodes
+    assert "?" not in flat, nodes
+    # ...and the prose sitting BETWEEN two of them on the same line is not.
+    assert hardcoded in flat, (
+        "the <kbd> strip is greedy: it consumed real text between two keycaps, "
+        "which would silently disable this scanner"
+    )

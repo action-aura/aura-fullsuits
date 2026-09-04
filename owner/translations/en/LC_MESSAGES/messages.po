@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-08-19 16:07+0300\n"
+"POT-Creation-Date: 2026-09-04 19:38+0300\n"
 "PO-Revision-Date: 2026-08-01 11:16+0300\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: en\n"
@@ -30,11 +30,11 @@ msgstr ""
 "You don't have permission to view this page. If you believe this is "
 "wrong, contact your administrator."
 
-#: app/errors.py:35 app/errors.py:36
+#: app/errors.py:48 app/errors.py:49
 msgid "Session check failed"
 msgstr "Session check failed"
 
-#: app/errors.py:37
+#: app/errors.py:50
 msgid ""
 "This page took too long to submit, or your session changed in another "
 "tab. Go back and try again."
@@ -42,11 +42,11 @@ msgstr ""
 "This page took too long to submit, or your session changed in another "
 "tab. Go back and try again."
 
-#: app/errors.py:46 app/errors.py:47
+#: app/errors.py:59 app/errors.py:60
 msgid "Sign-in required"
 msgstr "Sign-in required"
 
-#: app/errors.py:48
+#: app/errors.py:61
 msgid "You need to sign in to view this page."
 msgstr "You need to sign in to view this page."
 
@@ -57,7 +57,7 @@ msgstr "Setup Pending"
 #: app/i18n_labels.py:25 app/i18n_labels.py:55 app/i18n_labels.py:67
 #: app/i18n_labels.py:72 app/i18n_labels.py:125 app/i18n_labels.py:139
 #: app/i18n_labels.py:152 app/i18n_labels.py:167 app/i18n_labels.py:295
-#: app/i18n_labels.py:347 app/i18n_labels.py:356 app/i18n_labels.py:504
+#: app/i18n_labels.py:347 app/i18n_labels.py:356 app/i18n_labels.py:521
 #: app/templates/employees/detail.html:21
 #: app/templates/employees/detail.html:126
 #: app/templates/profile/sessions.html:18
@@ -75,7 +75,7 @@ msgid "Terminated"
 msgstr "Terminated"
 
 #: app/i18n_labels.py:28 app/i18n_labels.py:170 app/i18n_labels.py:186
-#: app/i18n_labels.py:1013 app/templates/employees/dashboard.html:17
+#: app/i18n_labels.py:1030 app/templates/employees/dashboard.html:17
 msgid "Archived"
 msgstr "Archived"
 
@@ -118,7 +118,7 @@ msgid "Disabled"
 msgstr "Disabled"
 
 #: app/i18n_labels.py:72 app/i18n_labels.py:141 app/i18n_labels.py:349
-#: app/i18n_labels.py:357 app/i18n_labels.py:505
+#: app/i18n_labels.py:357 app/i18n_labels.py:522
 #: app/templates/commercial_ops/emergency_extension_detail.html:16
 #: app/templates/employees/detail.html:126
 #: app/templates/profile/sessions.html:17
@@ -140,16 +140,16 @@ msgid "Not enrolled"
 msgstr "Not enrolled"
 
 #: app/i18n_labels.py:82 app/i18n_labels.py:128 app/i18n_labels.py:142
-#: app/i18n_labels.py:784 app/i18n_labels.py:833
+#: app/i18n_labels.py:801 app/i18n_labels.py:850
 msgid "Expired"
 msgstr "Expired"
 
 #: app/i18n_labels.py:82 app/i18n_labels.py:228 app/i18n_labels.py:317
-#: app/i18n_labels.py:1010
+#: app/i18n_labels.py:1027
 msgid "Open"
 msgstr "Open"
 
-#: app/i18n_labels.py:87 app/i18n_labels.py:655
+#: app/i18n_labels.py:87 app/i18n_labels.py:672
 msgid "Employee profile created"
 msgstr "Employee profile created"
 
@@ -157,7 +157,7 @@ msgstr "Employee profile created"
 msgid "Employee profile updated"
 msgstr "Employee profile updated"
 
-#: app/i18n_labels.py:89 app/i18n_labels.py:656
+#: app/i18n_labels.py:89 app/i18n_labels.py:673
 msgid "Employee activated"
 msgstr "Employee activated"
 
@@ -189,44 +189,44 @@ msgstr "All sessions revoked"
 msgid "Session revoked"
 msgstr "Session revoked"
 
-#: app/i18n_labels.py:97 app/i18n_labels.py:635
+#: app/i18n_labels.py:97 app/i18n_labels.py:652
 #: app/templates/staff/invitation_created.html:2
 msgid "Invitation created"
 msgstr "Invitation created"
 
-#: app/i18n_labels.py:98 app/i18n_labels.py:637
+#: app/i18n_labels.py:98 app/i18n_labels.py:654
 msgid "Invitation revoked"
 msgstr "Invitation revoked"
 
-#: app/i18n_labels.py:99 app/i18n_labels.py:636
+#: app/i18n_labels.py:99 app/i18n_labels.py:653
 msgid "Invitation accepted"
 msgstr "Invitation accepted"
 
-#: app/i18n_labels.py:100 app/i18n_labels.py:634
+#: app/i18n_labels.py:100 app/i18n_labels.py:651
 msgid "Roles changed"
 msgstr "Roles changed"
 
-#: app/i18n_labels.py:101 app/i18n_labels.py:632
+#: app/i18n_labels.py:101 app/i18n_labels.py:649
 msgid "Account disabled"
 msgstr "Account disabled"
 
-#: app/i18n_labels.py:102 app/i18n_labels.py:633
+#: app/i18n_labels.py:102 app/i18n_labels.py:650
 msgid "MFA reset"
 msgstr "MFA reset"
 
-#: app/i18n_labels.py:103 app/i18n_labels.py:628
+#: app/i18n_labels.py:103 app/i18n_labels.py:645
 msgid "Signed in"
 msgstr "Signed in"
 
-#: app/i18n_labels.py:104 app/i18n_labels.py:629
+#: app/i18n_labels.py:104 app/i18n_labels.py:646
 msgid "Signed in with MFA"
 msgstr "Signed in with MFA"
 
-#: app/i18n_labels.py:105 app/i18n_labels.py:630
+#: app/i18n_labels.py:105 app/i18n_labels.py:647
 msgid "Signed out"
 msgstr "Signed out"
 
-#: app/i18n_labels.py:106 app/i18n_labels.py:631
+#: app/i18n_labels.py:106 app/i18n_labels.py:648
 msgid "Password changed"
 msgstr "Password changed"
 
@@ -246,25 +246,25 @@ msgstr "Staff"
 
 #: app/command_palette/service.py:431 app/i18n_labels.py:116
 #: app/templates/employees/list.html:3 app/templates/employees/list.html:6
-#: app/templates/employees/list.html:90
+#: app/templates/employees/list.html:97
 #: app/templates/layout/_nav_model.html:173
 msgid "Employees"
 msgstr "Employees"
 
 #: app/i18n_labels.py:123 app/i18n_labels.py:137 app/i18n_labels.py:275
-#: app/i18n_labels.py:293 app/i18n_labels.py:346 app/i18n_labels.py:559
-#: app/i18n_labels.py:570 app/i18n_labels.py:581 app/i18n_labels.py:780
-#: app/i18n_labels.py:793 app/i18n_labels.py:804 app/i18n_labels.py:818
-#: app/i18n_labels.py:855 app/i18n_labels.py:941 app/i18n_labels.py:986
+#: app/i18n_labels.py:293 app/i18n_labels.py:346 app/i18n_labels.py:576
+#: app/i18n_labels.py:587 app/i18n_labels.py:598 app/i18n_labels.py:797
+#: app/i18n_labels.py:810 app/i18n_labels.py:821 app/i18n_labels.py:835
+#: app/i18n_labels.py:872 app/i18n_labels.py:958 app/i18n_labels.py:1003
 msgid "Draft"
 msgstr "Draft"
 
 #: app/commercial_ops/ui_routes.py:311 app/commercial_ops/ui_routes.py:319
 #: app/commercial_ops/ui_routes.py:345 app/commercial_ops/ui_routes.py:362
 #: app/commercial_ops/ui_routes.py:382 app/commercial_ops/ui_routes.py:405
-#: app/i18n_labels.py:124 app/i18n_labels.py:166 app/i18n_labels.py:487
-#: app/i18n_labels.py:551 app/i18n_labels.py:561 app/i18n_labels.py:572
-#: app/i18n_labels.py:583 app/templates/commercial_ops/pilot_detail.html:2
+#: app/i18n_labels.py:124 app/i18n_labels.py:166 app/i18n_labels.py:504
+#: app/i18n_labels.py:568 app/i18n_labels.py:578 app/i18n_labels.py:589
+#: app/i18n_labels.py:600 app/templates/commercial_ops/pilot_detail.html:2
 msgid "Pilot"
 msgstr "Pilot"
 
@@ -277,12 +277,12 @@ msgid "Completed"
 msgstr "Completed"
 
 #: app/i18n_labels.py:130 app/i18n_labels.py:230 app/i18n_labels.py:283
-#: app/i18n_labels.py:299 app/i18n_labels.py:785 app/i18n_labels.py:795
-#: app/i18n_labels.py:832 app/i18n_labels.py:846 app/i18n_labels.py:959
+#: app/i18n_labels.py:299 app/i18n_labels.py:802 app/i18n_labels.py:812
+#: app/i18n_labels.py:849 app/i18n_labels.py:863 app/i18n_labels.py:976
 msgid "Cancelled"
 msgstr "Cancelled"
 
-#: app/i18n_labels.py:138 app/i18n_labels.py:805
+#: app/i18n_labels.py:138 app/i18n_labels.py:822
 msgid "Issued"
 msgstr "Issued"
 
@@ -310,7 +310,7 @@ msgstr "Lead"
 msgid "Prospect"
 msgstr "Prospect"
 
-#: app/i18n_labels.py:169 app/i18n_labels.py:992
+#: app/i18n_labels.py:169 app/i18n_labels.py:1009
 msgid "Closed"
 msgstr "Closed"
 
@@ -338,8 +338,8 @@ msgstr "Under observation"
 msgid "Qualified"
 msgstr "Qualified"
 
-#: app/i18n_labels.py:184 app/i18n_labels.py:593 app/i18n_labels.py:794
-#: app/templates/commercial_sales/order_detail.html:14
+#: app/i18n_labels.py:184 app/i18n_labels.py:610 app/i18n_labels.py:811
+#: app/templates/commercial_sales/order_detail.html:27
 msgid "Confirmed"
 msgstr "Confirmed"
 
@@ -363,20 +363,20 @@ msgstr "Cold outreach"
 msgid "Event"
 msgstr "Event"
 
-#: app/i18n_labels.py:198 app/i18n_labels.py:220 app/i18n_labels.py:970
+#: app/i18n_labels.py:198 app/i18n_labels.py:220 app/i18n_labels.py:987
 #: app/templates/commercial_sales/payment_new.html:23
 msgid "Other"
 msgstr "Other"
 
-#: app/i18n_labels.py:206 app/i18n_labels.py:1030
+#: app/i18n_labels.py:206 app/i18n_labels.py:1047
 msgid "Low"
 msgstr "Low"
 
-#: app/i18n_labels.py:207 app/i18n_labels.py:1031
+#: app/i18n_labels.py:207 app/i18n_labels.py:1048
 msgid "Medium"
 msgstr "Medium"
 
-#: app/i18n_labels.py:208 app/i18n_labels.py:1032
+#: app/i18n_labels.py:208 app/i18n_labels.py:1049
 msgid "High"
 msgstr "High"
 
@@ -414,7 +414,7 @@ msgstr "Only me"
 msgid "Anyone with record access"
 msgstr "Anyone with record access"
 
-#: app/i18n_labels.py:240 app/i18n_labels.py:1021
+#: app/i18n_labels.py:240 app/i18n_labels.py:1038
 msgid "Management only"
 msgstr "Management only"
 
@@ -430,7 +430,7 @@ msgstr "Approximate (network)"
 msgid "Manually entered"
 msgstr "Manually entered"
 
-#: app/i18n_labels.py:251 app/templates/catalog/index.html:73
+#: app/i18n_labels.py:251 app/templates/catalog/index.html:87
 msgid "Imported"
 msgstr "Imported"
 
@@ -463,9 +463,9 @@ msgid "Payment Recorded"
 msgstr "Payment Recorded"
 
 #: app/i18n_labels.py:280 app/i18n_labels.py:294 app/i18n_labels.py:329
-#: app/i18n_labels.py:819 app/i18n_labels.py:830 app/i18n_labels.py:843
-#: app/i18n_labels.py:856 app/i18n_labels.py:944 app/i18n_labels.py:956
-#: app/i18n_labels.py:989 app/templates/commercial_sales/refund_detail.html:15
+#: app/i18n_labels.py:836 app/i18n_labels.py:847 app/i18n_labels.py:860
+#: app/i18n_labels.py:873 app/i18n_labels.py:961 app/i18n_labels.py:973
+#: app/i18n_labels.py:1006 app/templates/commercial_sales/refund_detail.html:15
 msgid "Approved"
 msgstr "Approved"
 
@@ -473,13 +473,13 @@ msgstr "Approved"
 msgid "Applied"
 msgstr "Applied"
 
-#: app/i18n_labels.py:282 app/i18n_labels.py:330 app/i18n_labels.py:612
-#: app/i18n_labels.py:783 app/i18n_labels.py:831 app/i18n_labels.py:947
-#: app/i18n_labels.py:957 app/i18n_labels.py:990
+#: app/i18n_labels.py:282 app/i18n_labels.py:330 app/i18n_labels.py:629
+#: app/i18n_labels.py:800 app/i18n_labels.py:848 app/i18n_labels.py:964
+#: app/i18n_labels.py:974 app/i18n_labels.py:1007
 msgid "Rejected"
 msgstr "Rejected"
 
-#: app/i18n_labels.py:284 app/i18n_labels.py:596
+#: app/i18n_labels.py:284 app/i18n_labels.py:613
 msgid "Voided"
 msgstr "Voided"
 
@@ -519,26 +519,39 @@ msgstr "Resolved"
 msgid "Dismissed"
 msgstr "Dismissed"
 
-#: app/i18n_labels.py:328 app/i18n_labels.py:613
+#: app/i18n_labels.py:328 app/i18n_labels.py:630
 msgid "Pending Review"
 msgstr "Pending Review"
 
-#: app/i18n_labels.py:337 app/i18n_labels.py:603 app/i18n_labels.py:614
+#: app/i18n_labels.py:337 app/i18n_labels.py:620 app/i18n_labels.py:631
 msgid "Success"
 msgstr "Success"
 
-#: app/i18n_labels.py:338 app/i18n_labels.py:594
+#: app/i18n_labels.py:338 app/i18n_labels.py:611
 msgid "Failed"
 msgstr "Failed"
 
-#: app/i18n_labels.py:348 app/i18n_labels.py:563 app/i18n_labels.py:574
-#: app/i18n_labels.py:585
+#: app/i18n_labels.py:348 app/i18n_labels.py:580 app/i18n_labels.py:591
+#: app/i18n_labels.py:602
 #: app/templates/commercial_ops/activation_policy.html:39
 #: app/templates/licensing_admin/signing_keys.html:24
 msgid "Retired"
 msgstr "Retired"
 
-#: app/i18n_labels.py:370
+#: app/i18n_labels.py:364 app/i18n_labels.py:529 app/i18n_labels.py:609
+#: app/i18n_labels.py:846 app/i18n_labels.py:858 app/i18n_labels.py:972
+msgid "Pending"
+msgstr "Pending"
+
+#: app/i18n_labels.py:365
+msgid "Replayed"
+msgstr "Replayed"
+
+#: app/i18n_labels.py:366
+msgid "Discarded"
+msgstr "Discarded"
+
+#: app/i18n_labels.py:379
 #, python-format
 msgid ""
 "Subscription must already be in PILOT status to create a pilot record "
@@ -547,15 +560,15 @@ msgstr ""
 "Subscription must already be in PILOT status to create a pilot record "
 "(was %(current_status)s)."
 
-#: app/i18n_labels.py:371
+#: app/i18n_labels.py:380
 msgid "Pilot end date must be after the pilot start date."
 msgstr "Pilot end date must be after the pilot start date."
 
-#: app/i18n_labels.py:372
+#: app/i18n_labels.py:381
 msgid "A reason is required to extend a pilot."
 msgstr "A reason is required to extend a pilot."
 
-#: app/i18n_labels.py:373
+#: app/i18n_labels.py:382
 #, python-format
 msgid ""
 "Pilot has already been extended %(count)s time(s) (maximum allowed: "
@@ -564,11 +577,11 @@ msgstr ""
 "Pilot has already been extended %(count)s time(s) (maximum allowed: "
 "%(max)s). No indefinite rolling pilot."
 
-#: app/i18n_labels.py:374
+#: app/i18n_labels.py:383
 msgid "The new end date must be after the current pilot end date."
 msgstr "The new end date must be after the current pilot end date."
 
-#: app/i18n_labels.py:375
+#: app/i18n_labels.py:384
 msgid ""
 "The renewal request must be applied before this pilot can be marked "
 "converted."
@@ -576,30 +589,30 @@ msgstr ""
 "The renewal request must be applied before this pilot can be marked "
 "converted."
 
-#: app/i18n_labels.py:376
+#: app/i18n_labels.py:385
 msgid "This renewal request does not belong to this pilot's subscription."
 msgstr "This renewal request does not belong to this pilot's subscription."
 
-#: app/i18n_labels.py:377
+#: app/i18n_labels.py:386
 msgid "A reason is required to cancel a pilot."
 msgstr "A reason is required to cancel a pilot."
 
-#: app/i18n_labels.py:387
+#: app/i18n_labels.py:396
 #, python-format
 msgid "Cannot change the pilot status from %(from_status)s to %(to_status)s."
 msgstr "Cannot change the pilot status from %(from_status)s to %(to_status)s."
 
-#: app/i18n_labels.py:388
+#: app/i18n_labels.py:397
 #, python-format
 msgid "Cannot extend a pilot in status %(status)s."
 msgstr "Cannot extend a pilot in status %(status)s."
 
-#: app/i18n_labels.py:389
+#: app/i18n_labels.py:398
 #, python-format
 msgid "Cannot convert a pilot in status %(status)s."
 msgstr "Cannot convert a pilot in status %(status)s."
 
-#: app/i18n_labels.py:400
+#: app/i18n_labels.py:409
 #, python-format
 msgid ""
 "Cannot change the renewal request status from %(from_status)s to "
@@ -608,16 +621,16 @@ msgstr ""
 "Cannot change the renewal request status from %(from_status)s to "
 "%(to_status)s."
 
-#: app/i18n_labels.py:401
+#: app/i18n_labels.py:410
 msgid "Use the approve action to move this renewal request to Approved."
 msgstr "Use the approve action to move this renewal request to Approved."
 
-#: app/i18n_labels.py:402
+#: app/i18n_labels.py:411
 #, python-format
 msgid "Cannot approve a renewal request in status %(status)s."
 msgstr "Cannot approve a renewal request in status %(status)s."
 
-#: app/i18n_labels.py:403
+#: app/i18n_labels.py:412
 #, python-format
 msgid ""
 "Cannot apply a renewal request in status %(status)s; it must be Approved "
@@ -626,27 +639,27 @@ msgstr ""
 "Cannot apply a renewal request in status %(status)s; it must be Approved "
 "first."
 
-#: app/i18n_labels.py:414
+#: app/i18n_labels.py:423
 msgid "A reason is required to release a device slot."
 msgstr "A reason is required to release a device slot."
 
-#: app/i18n_labels.py:415
+#: app/i18n_labels.py:424
 msgid "A reason is required to replace a device slot."
 msgstr "A reason is required to replace a device slot."
 
-#: app/i18n_labels.py:416
+#: app/i18n_labels.py:425
 msgid "Extra slots must be a positive number."
 msgstr "Extra slots must be a positive number."
 
-#: app/i18n_labels.py:417
+#: app/i18n_labels.py:426
 msgid "A reason is required to create a device slot exception."
 msgstr "A reason is required to create a device slot exception."
 
-#: app/i18n_labels.py:418
+#: app/i18n_labels.py:427
 msgid "The expiry date must be after the start date."
 msgstr "The expiry date must be after the start date."
 
-#: app/i18n_labels.py:419
+#: app/i18n_labels.py:428
 #, python-format
 msgid ""
 "Device slot exceptions may not exceed %(max_days)s days -- temporary "
@@ -655,506 +668,529 @@ msgstr ""
 "Device slot exceptions may not exceed %(max_days)s days -- temporary "
 "means temporary."
 
-#: app/i18n_labels.py:420
+#: app/i18n_labels.py:429
 #, python-format
 msgid "Cannot revoke a device slot exception in status %(status)s."
 msgstr "Cannot revoke a device slot exception in status %(status)s."
 
-#: app/i18n_labels.py:421
+#: app/i18n_labels.py:430
 msgid "A reason is required to revoke a device slot exception."
 msgstr "A reason is required to revoke a device slot exception."
 
 #: app/i18n_labels.py:431
-msgid "A reason is required to create an emergency extension."
-msgstr "A reason is required to create an emergency extension."
+msgid "Enter a positive number of devices to add."
+msgstr "Enter a positive number of devices to add."
 
 #: app/i18n_labels.py:432
-#, python-format
-msgid ""
-"Duration must be between 1 and %(max_hours)s hours (explicit, short-lived"
-" only)."
-msgstr ""
-"Duration must be between 1 and %(max_hours)s hours (explicit, short-lived"
-" only)."
-
-#: app/i18n_labels.py:433
-msgid "Cannot create an emergency extension for a revoked license."
-msgstr "Cannot create an emergency extension for a revoked license."
+msgid "A reason is required to add devices to a license."
+msgstr "A reason is required to add devices to a license."
 
 #: app/i18n_labels.py:434
 #, python-format
 msgid ""
+"Cannot set this license's device limit to %(new_limit)s -- "
+"%(active_count)s device(s) are already active on it. Add enough devices "
+"to cover current usage."
+msgstr ""
+"Cannot set this license's device limit to %(new_limit)s -- "
+"%(active_count)s device(s) are already active on it. Add enough devices "
+"to cover current usage."
+
+#: app/i18n_labels.py:437
+msgid "License not found."
+msgstr "License not found."
+
+#: app/i18n_labels.py:438
+msgid "Subscription not found for this license."
+msgstr "Subscription not found for this license."
+
+#: app/i18n_labels.py:448
+msgid "A reason is required to create an emergency extension."
+msgstr "A reason is required to create an emergency extension."
+
+#: app/i18n_labels.py:449
+#, python-format
+msgid ""
+"Duration must be between 1 and %(max_hours)s hours (explicit, short-lived"
+" only)."
+msgstr ""
+"Duration must be between 1 and %(max_hours)s hours (explicit, short-lived"
+" only)."
+
+#: app/i18n_labels.py:450
+msgid "Cannot create an emergency extension for a revoked license."
+msgstr "Cannot create an emergency extension for a revoked license."
+
+#: app/i18n_labels.py:451
+#, python-format
+msgid ""
 "This subscription already has an active emergency extension until "
 "%(expires_at)s."
 msgstr ""
 "This subscription already has an active emergency extension until "
 "%(expires_at)s."
 
-#: app/i18n_labels.py:435
+#: app/i18n_labels.py:452
 #, python-format
 msgid "Cannot revoke an emergency extension in status %(status)s."
 msgstr "Cannot revoke an emergency extension in status %(status)s."
 
-#: app/i18n_labels.py:436
+#: app/i18n_labels.py:453
 msgid "A reason is required to revoke an emergency extension."
 msgstr "A reason is required to revoke an emergency extension."
 
-#: app/i18n_labels.py:447
+#: app/i18n_labels.py:464
 #, python-format
 msgid "Cannot approve a pending activation in status %(status)s."
 msgstr "Cannot approve a pending activation in status %(status)s."
 
-#: app/i18n_labels.py:448
+#: app/i18n_labels.py:465
 msgid "This installation is no longer awaiting activation."
 msgstr "This installation is no longer awaiting activation."
 
-#: app/i18n_labels.py:449
+#: app/i18n_labels.py:466
 msgid "The license for this pending activation could not be found."
 msgstr "The license for this pending activation could not be found."
 
-#: app/i18n_labels.py:450
+#: app/i18n_labels.py:467
 msgid "This license has already reached its device limit."
 msgstr "This license has already reached its device limit."
 
-#: app/i18n_labels.py:451
+#: app/i18n_labels.py:468
 #, python-format
 msgid "Cannot reject a pending activation in status %(status)s."
 msgstr "Cannot reject a pending activation in status %(status)s."
 
-#: app/i18n_labels.py:452
+#: app/i18n_labels.py:469
 msgid "A reason is required to reject a pending activation."
 msgstr "A reason is required to reject a pending activation."
 
-#: app/i18n_labels.py:462
+#: app/i18n_labels.py:479
 #, python-format
 msgid "Unknown activation mode: %(mode)s"
 msgstr "Unknown activation mode: %(mode)s"
 
-#: app/i18n_labels.py:472
+#: app/i18n_labels.py:489
 #, python-format
 msgid "Cannot acknowledge a notification in status %(status)s."
 msgstr "Cannot acknowledge a notification in status %(status)s."
 
-#: app/i18n_labels.py:473
+#: app/i18n_labels.py:490
 #, python-format
 msgid "This notification is already %(status)s."
 msgstr "This notification is already %(status)s."
 
-#: app/commercial_ops/ui_routes.py:765 app/i18n_labels.py:483
+#: app/commercial_ops/ui_routes.py:765 app/i18n_labels.py:500
 #: app/templates/commercial_ops/emergency_extension_detail.html:8
-#: app/templates/commercial_ops/emergency_extensions_list.html:17
+#: app/templates/commercial_ops/emergency_extensions_list.html:16
 #: app/templates/commercial_ops/pilot_detail.html:8
-#: app/templates/commercial_ops/pilots_list.html:18
+#: app/templates/commercial_ops/pilots_list.html:15
 #: app/templates/commercial_ops/renewal_detail.html:8
-#: app/templates/commercial_ops/renewals_list.html:18
-#: app/templates/licensing/detail.html:30 app/templates/licensing/new.html:8
+#: app/templates/commercial_ops/renewals_list.html:19
+#: app/templates/licensing/detail.html:35 app/templates/licensing/new.html:8
 #: app/templates/subscriptions/detail.html:2
 msgid "Subscription"
 msgstr "Subscription"
 
 #: app/command_palette/service.py:238 app/commercial_ops/ui_routes.py:612
-#: app/commercial_ops/ui_routes.py:626 app/i18n_labels.py:484
+#: app/commercial_ops/ui_routes.py:626 app/i18n_labels.py:501
 #: app/templates/commercial_ops/emergency_extension_detail.html:9
 #: app/templates/commercial_ops/pending_activation_detail.html:9
 #: app/templates/installations/new.html:8 app/templates/licensing/detail.html:3
+#: app/templates/sync/quarantine_list.html:13
 msgid "License"
 msgstr "License"
 
 #: app/command_palette/service.py:275 app/commercial_ops/ui_routes.py:585
-#: app/commercial_ops/ui_routes.py:599 app/i18n_labels.py:485
+#: app/commercial_ops/ui_routes.py:599 app/i18n_labels.py:502
 #: app/templates/commercial_ops/pending_activation_detail.html:8
-#: app/templates/commercial_ops/pending_activations_list.html:17
+#: app/templates/commercial_ops/pending_activations_list.html:16
 #: app/templates/installations/detail.html:2
 #: app/templates/licensing_admin/device_keys.html:15
 #: app/templates/licensing_admin/requests.html:17
 msgid "Installation"
 msgstr "Installation"
 
-#: app/i18n_labels.py:486 app/templates/commercial_ops/renewal_detail.html:2
+#: app/i18n_labels.py:503 app/templates/commercial_ops/renewal_detail.html:2
 msgid "Renewal"
 msgstr "Renewal"
 
 #: app/commercial_ops/ui_routes.py:689 app/commercial_ops/ui_routes.py:701
-#: app/commercial_ops/ui_routes.py:716 app/i18n_labels.py:488
+#: app/commercial_ops/ui_routes.py:716 app/i18n_labels.py:505
 msgid "Notification"
 msgstr "Notification"
 
-#: app/i18n_labels.py:495
+#: app/i18n_labels.py:512
 msgid "Automatic"
 msgstr "Automatic"
 
-#: app/i18n_labels.py:496
+#: app/i18n_labels.py:513
 msgid "Manual Approval"
 msgstr "Manual Approval"
 
-#: app/i18n_labels.py:497
+#: app/i18n_labels.py:514
 msgid "Risk Review"
 msgstr "Risk Review"
 
-#: app/i18n_labels.py:512 app/i18n_labels.py:592 app/i18n_labels.py:829
-#: app/i18n_labels.py:841 app/i18n_labels.py:955
-msgid "Pending"
-msgstr "Pending"
-
-#: app/i18n_labels.py:513
+#: app/i18n_labels.py:530
 msgid "Convert"
 msgstr "Convert"
 
-#: app/i18n_labels.py:514
+#: app/i18n_labels.py:531
 msgid "Do Not Convert"
 msgstr "Do Not Convert"
 
-#: app/i18n_labels.py:521 app/templates/commercial_ops/renewals_new.html:16
+#: app/i18n_labels.py:538 app/templates/commercial_ops/renewals_new.html:16
 msgid "Early renewal (from current end date)"
 msgstr "Early renewal (from current end date)"
 
-#: app/i18n_labels.py:522 app/templates/commercial_ops/renewals_new.html:17
+#: app/i18n_labels.py:539 app/templates/commercial_ops/renewals_new.html:17
 msgid "Late renewal (from approval date)"
 msgstr "Late renewal (from approval date)"
 
-#: app/i18n_labels.py:529
+#: app/i18n_labels.py:546
 msgid "Activation"
 msgstr "Activation"
 
-#: app/i18n_labels.py:530
+#: app/i18n_labels.py:547
 msgid "Check-in"
 msgstr "Check-in"
 
-#: app/i18n_labels.py:531
+#: app/i18n_labels.py:548
 msgid "Deactivation"
 msgstr "Deactivation"
 
-#: app/i18n_labels.py:538 app/templates/audit/verify_chain.html:7
+#: app/i18n_labels.py:555 app/templates/audit/verify_chain.html:7
 msgid "OK"
 msgstr "OK"
 
-#: app/i18n_labels.py:539
+#: app/i18n_labels.py:556
 msgid "Degraded"
 msgstr "Degraded"
 
-#: app/i18n_labels.py:540
+#: app/i18n_labels.py:557
 msgid "Down"
 msgstr "Down"
 
-#: app/i18n_labels.py:541
+#: app/i18n_labels.py:558
 msgid "Unknown"
 msgstr "Unknown"
 
-#: app/i18n_labels.py:548
+#: app/i18n_labels.py:565
 msgid "One-time"
 msgstr "One-time"
 
-#: app/i18n_labels.py:549
+#: app/i18n_labels.py:566
 msgid "Monthly"
 msgstr "Monthly"
 
-#: app/i18n_labels.py:550
+#: app/i18n_labels.py:567
 msgid "Annual"
 msgstr "Annual"
 
-#: app/i18n_labels.py:552
+#: app/i18n_labels.py:569
 msgid "Custom"
 msgstr "Custom"
 
-#: app/i18n_labels.py:560 app/i18n_labels.py:571 app/i18n_labels.py:582
+#: app/i18n_labels.py:577 app/i18n_labels.py:588 app/i18n_labels.py:599
 msgid "Planned"
 msgstr "Planned"
 
-#: app/i18n_labels.py:562 app/i18n_labels.py:573 app/i18n_labels.py:584
+#: app/i18n_labels.py:579 app/i18n_labels.py:590 app/i18n_labels.py:601
 msgid "Available"
 msgstr "Available"
 
-#: app/i18n_labels.py:595 app/i18n_labels.py:809
+#: app/i18n_labels.py:612 app/i18n_labels.py:826
 msgid "Refunded"
 msgstr "Refunded"
 
-#: app/i18n_labels.py:604 app/i18n_labels.py:615
+#: app/i18n_labels.py:621 app/i18n_labels.py:632
 msgid "Failure"
 msgstr "Failure"
 
-#: app/i18n_labels.py:611 app/i18n_labels.py:782
+#: app/i18n_labels.py:628 app/i18n_labels.py:799
 msgid "Accepted"
 msgstr "Accepted"
 
-#: app/i18n_labels.py:638
+#: app/i18n_labels.py:655
 msgid "Customer created"
 msgstr "Customer created"
 
-#: app/i18n_labels.py:639
+#: app/i18n_labels.py:656
 msgid "Customer updated"
 msgstr "Customer updated"
 
-#: app/i18n_labels.py:640
+#: app/i18n_labels.py:657
 msgid "Customer archived"
 msgstr "Customer archived"
 
-#: app/customers/customer_360.py:315 app/i18n_labels.py:641
+#: app/customers/customer_360.py:315 app/i18n_labels.py:658
 msgid "Subscription created"
 msgstr "Subscription created"
 
-#: app/i18n_labels.py:642
+#: app/i18n_labels.py:659
 msgid "Subscription status changed"
 msgstr "Subscription status changed"
 
-#: app/i18n_labels.py:643
+#: app/i18n_labels.py:660
 msgid "Subscription renewed"
 msgstr "Subscription renewed"
 
-#: app/i18n_labels.py:644
+#: app/i18n_labels.py:661
 msgid "Payment recorded"
 msgstr "Payment recorded"
 
-#: app/i18n_labels.py:645
+#: app/i18n_labels.py:662
 msgid "Payment corrected"
 msgstr "Payment corrected"
 
-#: app/i18n_labels.py:646
+#: app/i18n_labels.py:663
 msgid "License issued"
 msgstr "License issued"
 
-#: app/i18n_labels.py:647
+#: app/i18n_labels.py:664
 msgid "License status changed"
 msgstr "License status changed"
 
-#: app/i18n_labels.py:648
+#: app/i18n_labels.py:665
 msgid "License replaced"
 msgstr "License replaced"
 
-#: app/i18n_labels.py:649
+#: app/i18n_labels.py:666
 msgid "License created"
 msgstr "License created"
 
-#: app/i18n_labels.py:650
+#: app/i18n_labels.py:667
 msgid "License key issued"
 msgstr "License key issued"
 
-#: app/i18n_labels.py:651
+#: app/i18n_labels.py:668
 msgid "Installation registered"
 msgstr "Installation registered"
 
-#: app/i18n_labels.py:652
+#: app/i18n_labels.py:669
 msgid "Installation status changed"
 msgstr "Installation status changed"
 
-#: app/i18n_labels.py:653
+#: app/i18n_labels.py:670
 msgid "Backup created"
 msgstr "Backup created"
 
-#: app/i18n_labels.py:654
+#: app/i18n_labels.py:671
 msgid "Backup restored"
 msgstr "Backup restored"
 
-#: app/i18n_labels.py:657
+#: app/i18n_labels.py:674
 msgid "Check-in accepted"
 msgstr "Check-in accepted"
 
-#: app/i18n_labels.py:658
+#: app/i18n_labels.py:675
 msgid "Activation accepted"
 msgstr "Activation accepted"
 
-#: app/i18n_labels.py:659
+#: app/i18n_labels.py:676
 msgid "Device-slot exception created"
 msgstr "Device-slot exception created"
 
-#: app/i18n_labels.py:661
+#: app/i18n_labels.py:678
 msgid "Expense created"
 msgstr "Expense created"
 
-#: app/i18n_labels.py:662
+#: app/i18n_labels.py:679
 msgid "Expense submitted for approval"
 msgstr "Expense submitted for approval"
 
-#: app/i18n_labels.py:663
+#: app/i18n_labels.py:680
 msgid "Expense revised"
 msgstr "Expense revised"
 
-#: app/i18n_labels.py:664
+#: app/i18n_labels.py:681
 msgid "Expense voided"
 msgstr "Expense voided"
 
-#: app/i18n_labels.py:665
+#: app/i18n_labels.py:682
 msgid "Expense approved"
 msgstr "Expense approved"
 
-#: app/i18n_labels.py:666
+#: app/i18n_labels.py:683
 msgid "Expense rejected"
 msgstr "Expense rejected"
 
-#: app/i18n_labels.py:667
+#: app/i18n_labels.py:684
 msgid "Expense returned for correction"
 msgstr "Expense returned for correction"
 
-#: app/i18n_labels.py:668
+#: app/i18n_labels.py:685
 msgid "Expense approval request cancelled"
 msgstr "Expense approval request cancelled"
 
-#: app/i18n_labels.py:669
+#: app/i18n_labels.py:686
 msgid "Expense payment recorded"
 msgstr "Expense payment recorded"
 
-#: app/i18n_labels.py:670
+#: app/i18n_labels.py:687
 msgid "Expense payment reversed"
 msgstr "Expense payment reversed"
 
-#: app/i18n_labels.py:671
+#: app/i18n_labels.py:688
 msgid "Expense attachment uploaded"
 msgstr "Expense attachment uploaded"
 
-#: app/i18n_labels.py:672
+#: app/i18n_labels.py:689
 msgid "Expense attachment downloaded"
 msgstr "Expense attachment downloaded"
 
-#: app/i18n_labels.py:673
+#: app/i18n_labels.py:690
 msgid "Expense attachment archived"
 msgstr "Expense attachment archived"
 
-#: app/i18n_labels.py:674
+#: app/i18n_labels.py:691
 msgid "Expense payee created"
 msgstr "Expense payee created"
 
-#: app/i18n_labels.py:675
+#: app/i18n_labels.py:692
 msgid "Expense payee deactivated"
 msgstr "Expense payee deactivated"
 
-#: app/i18n_labels.py:676
+#: app/i18n_labels.py:693
 msgid "Duplicate-expense warning overridden"
 msgstr "Duplicate-expense warning overridden"
 
-#: app/i18n_labels.py:678
+#: app/i18n_labels.py:695
 msgid "Cash closing created"
 msgstr "Cash closing created"
 
-#: app/i18n_labels.py:679
+#: app/i18n_labels.py:696
 msgid "Cash closing submitted"
 msgstr "Cash closing submitted"
 
-#: app/i18n_labels.py:680
+#: app/i18n_labels.py:697
 msgid "Cash closing approved"
 msgstr "Cash closing approved"
 
-#: app/i18n_labels.py:681
+#: app/i18n_labels.py:698
 msgid "Cash closing rejected"
 msgstr "Cash closing rejected"
 
-#: app/i18n_labels.py:682
+#: app/i18n_labels.py:699
 msgid "Cash closing closed"
 msgstr "Cash closing closed"
 
-#: app/i18n_labels.py:683
+#: app/i18n_labels.py:700
 msgid "Cash closing reopened"
 msgstr "Cash closing reopened"
 
-#: app/i18n_labels.py:684
+#: app/i18n_labels.py:701
 msgid "Cash closing adjustment created"
 msgstr "Cash closing adjustment created"
 
-#: app/i18n_labels.py:685
+#: app/i18n_labels.py:702
 msgid "Cash closing adjustment approved"
 msgstr "Cash closing adjustment approved"
 
-#: app/i18n_labels.py:687
+#: app/i18n_labels.py:704
 msgid "Report snapshot generated"
 msgstr "Report snapshot generated"
 
-#: app/i18n_labels.py:688
+#: app/i18n_labels.py:705
 msgid "Report snapshot regenerated"
 msgstr "Report snapshot regenerated"
 
-#: app/i18n_labels.py:690
+#: app/i18n_labels.py:707
 msgid "Management note created"
 msgstr "Management note created"
 
-#: app/i18n_labels.py:691
+#: app/i18n_labels.py:708
 msgid "Management note updated"
 msgstr "Management note updated"
 
-#: app/i18n_labels.py:692
+#: app/i18n_labels.py:709
 msgid "Management note assigned"
 msgstr "Management note assigned"
 
-#: app/i18n_labels.py:693
+#: app/i18n_labels.py:710
 msgid "Management note status changed"
 msgstr "Management note status changed"
 
-#: app/i18n_labels.py:694
+#: app/i18n_labels.py:711
 msgid "Comment added to management note"
 msgstr "Comment added to management note"
 
-#: app/i18n_labels.py:704
+#: app/i18n_labels.py:721
 #, python-format
 msgid "Cannot change lead status from %(from_status)s to %(to_status)s."
 msgstr "Cannot change lead status from %(from_status)s to %(to_status)s."
 
-#: app/i18n_labels.py:705
+#: app/i18n_labels.py:722
 msgid "A reason is required to mark a lead as lost."
 msgstr "A reason is required to mark a lead as lost."
 
-#: app/i18n_labels.py:706
+#: app/i18n_labels.py:723
 msgid "This lead was changed by someone else. Reload and try again."
 msgstr "This lead was changed by someone else. Reload and try again."
 
-#: app/i18n_labels.py:707
+#: app/i18n_labels.py:724
 msgid "Lead not found."
 msgstr "Lead not found."
 
-#: app/i18n_labels.py:708
+#: app/i18n_labels.py:725
 msgid "You do not have access to this lead."
 msgstr "You do not have access to this lead."
 
-#: app/i18n_labels.py:709
+#: app/i18n_labels.py:726
 msgid "Cannot assign a lead to an inactive employee."
 msgstr "Cannot assign a lead to an inactive employee."
 
-#: app/i18n_labels.py:710
+#: app/i18n_labels.py:727
 msgid "A reason is required to reassign a lead."
 msgstr "A reason is required to reassign a lead."
 
-#: app/i18n_labels.py:711
+#: app/i18n_labels.py:728
 msgid "A prospect or organization name is required."
 msgstr "A prospect or organization name is required."
 
-#: app/i18n_labels.py:712
+#: app/i18n_labels.py:729
 #, python-format
 msgid "Name must be at most %(max_len)s characters."
 msgstr "Name must be at most %(max_len)s characters."
 
-#: app/i18n_labels.py:713
+#: app/i18n_labels.py:730
 #, python-format
 msgid "Phone must be at most %(max_len)s characters."
 msgstr "Phone must be at most %(max_len)s characters."
 
-#: app/i18n_labels.py:714
+#: app/i18n_labels.py:731
 msgid "Enter a valid email address."
 msgstr "Enter a valid email address."
 
-#: app/i18n_labels.py:715
+#: app/i18n_labels.py:732
 msgid "At least one contact method (phone or email) is required."
 msgstr "At least one contact method (phone or email) is required."
 
-#: app/i18n_labels.py:716
+#: app/i18n_labels.py:733
 #, python-format
 msgid "Unknown lead source: %(source)s."
 msgstr "Unknown lead source: %(source)s."
 
-#: app/i18n_labels.py:717
+#: app/i18n_labels.py:734
 #, python-format
 msgid "Unknown lead priority: %(priority)s."
 msgstr "Unknown lead priority: %(priority)s."
 
-#: app/i18n_labels.py:718
+#: app/i18n_labels.py:735
 msgid "Estimated value must be a non-negative number."
 msgstr "Estimated value must be a non-negative number."
 
-#: app/i18n_labels.py:719
+#: app/i18n_labels.py:736
 msgid "A 3-letter currency code is required when an estimated value is set."
 msgstr "A 3-letter currency code is required when an estimated value is set."
 
-#: app/i18n_labels.py:720
+#: app/i18n_labels.py:737
 #, python-format
 msgid "Location summary must be at most %(max_len)s characters."
 msgstr "Location summary must be at most %(max_len)s characters."
 
-#: app/i18n_labels.py:721 app/i18n_labels.py:890 app/i18n_labels.py:1068
+#: app/i18n_labels.py:738 app/i18n_labels.py:907 app/i18n_labels.py:1085
 msgid ""
 "This request conflicts with an earlier request using the same idempotency"
 " key."
@@ -1162,165 +1198,166 @@ msgstr ""
 "This request conflicts with an earlier request using the same idempotency"
 " key."
 
-#: app/i18n_labels.py:722
+#: app/i18n_labels.py:739
 #, python-format
 msgid "Unknown interaction type: %(interaction_type)s."
 msgstr "Unknown interaction type: %(interaction_type)s."
 
-#: app/i18n_labels.py:723
+#: app/i18n_labels.py:740
 #, python-format
 msgid "Summary must be at most %(max_len)s characters."
 msgstr "Summary must be at most %(max_len)s characters."
 
-#: app/i18n_labels.py:724
+#: app/i18n_labels.py:741
 msgid "Interaction time cannot be in the future."
 msgstr "Interaction time cannot be in the future."
 
-#: app/i18n_labels.py:725
+#: app/i18n_labels.py:742
 msgid "A due date/time is required for a follow-up."
 msgstr "A due date/time is required for a follow-up."
 
-#: app/i18n_labels.py:726
+#: app/i18n_labels.py:743
 msgid "This follow-up was already cancelled."
 msgstr "This follow-up was already cancelled."
 
-#: app/i18n_labels.py:727
+#: app/i18n_labels.py:744
 msgid "This follow-up was already completed."
 msgstr "This follow-up was already completed."
 
-#: app/i18n_labels.py:728
+#: app/i18n_labels.py:745
 msgid "A reason is required to cancel a follow-up."
 msgstr "A reason is required to cancel a follow-up."
 
-#: app/i18n_labels.py:729
+#: app/i18n_labels.py:746
 msgid "Contact name is required."
 msgstr "Contact name is required."
 
-#: app/i18n_labels.py:730
+#: app/i18n_labels.py:747
 #, python-format
 msgid "Contact name must be at most %(max_len)s characters."
 msgstr "Contact name must be at most %(max_len)s characters."
 
-#: app/i18n_labels.py:731 app/i18n_labels.py:749
+#: app/i18n_labels.py:748 app/i18n_labels.py:766
 #, python-format
 msgid "Unknown note visibility: %(visibility)s."
 msgstr "Unknown note visibility: %(visibility)s."
 
-#: app/i18n_labels.py:732
+#: app/i18n_labels.py:749
 #, python-format
 msgid "Note must be at most %(max_len)s characters."
 msgstr "Note must be at most %(max_len)s characters."
 
-#: app/i18n_labels.py:733
+#: app/i18n_labels.py:750
 msgid "Note text is required."
 msgstr "Note text is required."
 
-#: app/i18n_labels.py:745
+#: app/i18n_labels.py:762
 msgid "This customer was changed by someone else. Reload and try again."
 msgstr "This customer was changed by someone else. Reload and try again."
 
-#: app/i18n_labels.py:746
+#: app/i18n_labels.py:763
 msgid "You do not have access to this customer."
 msgstr "You do not have access to this customer."
 
-#: app/i18n_labels.py:747
+#: app/i18n_labels.py:764
 msgid "Cannot assign a customer to an inactive employee."
 msgstr "Cannot assign a customer to an inactive employee."
 
-#: app/i18n_labels.py:748
+#: app/i18n_labels.py:765
 msgid "A reason is required to reassign a customer."
 msgstr "A reason is required to reassign a customer."
 
-#: app/i18n_labels.py:763
+#: app/i18n_labels.py:780
 msgid "Latitude must be a finite number between -90 and 90."
 msgstr "Latitude must be a finite number between -90 and 90."
 
-#: app/i18n_labels.py:764
+#: app/i18n_labels.py:781
 msgid "Longitude must be a finite number between -180 and 180."
 msgstr "Longitude must be a finite number between -180 and 180."
 
-#: app/i18n_labels.py:765
+#: app/i18n_labels.py:782
 msgid "Accuracy must be a finite number greater than or equal to zero."
 msgstr "Accuracy must be a finite number greater than or equal to zero."
 
-#: app/i18n_labels.py:766
+#: app/i18n_labels.py:783
 #, python-format
 msgid "Unknown location source: %(source)s."
 msgstr "Unknown location source: %(source)s."
 
-#: app/i18n_labels.py:767
+#: app/i18n_labels.py:784
 msgid "Client-reported capture time is too far from server time."
 msgstr "Client-reported capture time is too far from server time."
 
-#: app/i18n_labels.py:768
+#: app/i18n_labels.py:785
 msgid "Manual address is too long."
 msgstr "Manual address is too long."
 
-#: app/i18n_labels.py:769
+#: app/i18n_labels.py:786
 msgid "A reason is required to verify or revoke a location."
 msgstr "A reason is required to verify or revoke a location."
 
-#: app/i18n_labels.py:781
+#: app/i18n_labels.py:798
 msgid "Sent"
 msgstr "Sent"
 
-#: app/i18n_labels.py:796
+#: app/i18n_labels.py:813
 msgid "Fulfilled"
 msgstr "Fulfilled"
 
-#: app/i18n_labels.py:806 app/i18n_labels.py:945
+#: app/i18n_labels.py:823 app/i18n_labels.py:962
 msgid "Partially paid"
 msgstr "Partially paid"
 
-#: app/i18n_labels.py:807 app/i18n_labels.py:820 app/i18n_labels.py:844
-#: app/i18n_labels.py:857 app/i18n_labels.py:946
+#: app/i18n_labels.py:824 app/i18n_labels.py:837 app/i18n_labels.py:861
+#: app/i18n_labels.py:874 app/i18n_labels.py:963
 #: app/templates/commercial_sales/refund_detail.html:17
 msgid "Paid"
 msgstr "Paid"
 
-#: app/i18n_labels.py:808 app/i18n_labels.py:821 app/i18n_labels.py:948
+#: app/i18n_labels.py:825 app/i18n_labels.py:838 app/i18n_labels.py:965
 #: app/templates/commercial_sales/refund_detail.html:35
-#: app/templates/operations_ui/expense_detail.html:120
+#: app/templates/operations_ui/expense_detail.html:127
 msgid "Void"
 msgstr "Void"
 
-#: app/i18n_labels.py:810
+#: app/i18n_labels.py:827
 msgid "Partially refunded"
 msgstr "Partially refunded"
 
-#: app/i18n_labels.py:842
+#: app/i18n_labels.py:859
 #: app/templates/commercial_sales/commissions_list.html:15
 msgid "Earned"
 msgstr "Earned"
 
-#: app/i18n_labels.py:845
-#: app/templates/commercial_sales/employee_dashboard.html:26
+#: app/i18n_labels.py:862
+#: app/templates/commercial_sales/employee_dashboard.html:42
+#: app/templates/commercial_sales/employee_dashboard.html:54
 #: app/templates/commercial_sales/invoice_detail.html:79
 #: app/templates/commercial_sales/payment_detail.html:52
 msgid "Reversed"
 msgstr "Reversed"
 
-#: app/i18n_labels.py:847
+#: app/i18n_labels.py:864
 msgid "Disputed"
 msgstr "Disputed"
 
-#: app/i18n_labels.py:871
+#: app/i18n_labels.py:888
 msgid "Quantity must be a positive whole number."
 msgstr "Quantity must be a positive whole number."
 
-#: app/i18n_labels.py:872
+#: app/i18n_labels.py:889
 msgid "Amount must be a finite number."
 msgstr "Amount must be a finite number."
 
-#: app/i18n_labels.py:873
+#: app/i18n_labels.py:890
 msgid "Document total cannot be negative."
 msgstr "Document total cannot be negative."
 
-#: app/i18n_labels.py:874
+#: app/i18n_labels.py:891
 msgid "Discount cannot exceed the applicable gross amount."
 msgstr "Discount cannot exceed the applicable gross amount."
 
-#: app/i18n_labels.py:875
+#: app/i18n_labels.py:892
 #, python-format
 msgid ""
 "Refund amount (%(amount)s) exceeds the refundable balance "
@@ -1329,7 +1366,7 @@ msgstr ""
 "Refund amount (%(amount)s) exceeds the refundable balance "
 "(%(refundable)s)."
 
-#: app/i18n_labels.py:876
+#: app/i18n_labels.py:893
 #, python-format
 msgid ""
 "Allocation amount (%(amount)s) exceeds the unallocated payment balance "
@@ -1338,7 +1375,7 @@ msgstr ""
 "Allocation amount (%(amount)s) exceeds the unallocated payment balance "
 "(%(available)s)."
 
-#: app/i18n_labels.py:877
+#: app/i18n_labels.py:894
 #, python-format
 msgid ""
 "Allocation amount (%(amount)s) exceeds the invoice outstanding balance "
@@ -1347,156 +1384,156 @@ msgstr ""
 "Allocation amount (%(amount)s) exceeds the invoice outstanding balance "
 "(%(outstanding)s)."
 
-#: app/i18n_labels.py:878
+#: app/i18n_labels.py:895
 #, python-format
 msgid "Currency %(given)s does not match the required currency %(expected)s."
 msgstr "Currency %(given)s does not match the required currency %(expected)s."
 
-#: app/i18n_labels.py:879
+#: app/i18n_labels.py:896
 msgid "This payment belongs to a different customer than the invoice."
 msgstr "This payment belongs to a different customer than the invoice."
 
-#: app/i18n_labels.py:880 app/i18n_labels.py:1048
+#: app/i18n_labels.py:897 app/i18n_labels.py:1065
 msgid "Currency must be a 3-letter ISO 4217 code."
 msgstr "Currency must be a 3-letter ISO 4217 code."
 
-#: app/i18n_labels.py:881
+#: app/i18n_labels.py:898
 msgid "A document must have at least one line."
 msgstr "A document must have at least one line."
 
-#: app/i18n_labels.py:882
+#: app/i18n_labels.py:899
 #, python-format
 msgid "Cannot change quote status from %(from_status)s to %(to_status)s."
 msgstr "Cannot change quote status from %(from_status)s to %(to_status)s."
 
-#: app/i18n_labels.py:883
+#: app/i18n_labels.py:900
 #, python-format
 msgid "Cannot change order status from %(from_status)s to %(to_status)s."
 msgstr "Cannot change order status from %(from_status)s to %(to_status)s."
 
-#: app/i18n_labels.py:884
+#: app/i18n_labels.py:901
 #, python-format
 msgid "Cannot change invoice status from %(from_status)s to %(to_status)s."
 msgstr "Cannot change invoice status from %(from_status)s to %(to_status)s."
 
-#: app/i18n_labels.py:885
+#: app/i18n_labels.py:902
 #, python-format
 msgid "Cannot change refund status from %(from_status)s to %(to_status)s."
 msgstr "Cannot change refund status from %(from_status)s to %(to_status)s."
 
-#: app/i18n_labels.py:886 app/i18n_labels.py:1055
+#: app/i18n_labels.py:903 app/i18n_labels.py:1072
 #, python-format
 msgid "Cannot change approval status from %(from_status)s to %(to_status)s."
 msgstr "Cannot change approval status from %(from_status)s to %(to_status)s."
 
-#: app/i18n_labels.py:887
+#: app/i18n_labels.py:904
 msgid "This record was changed by someone else. Reload and try again."
 msgstr "This record was changed by someone else. Reload and try again."
 
-#: app/i18n_labels.py:888 app/i18n_labels.py:1044 app/i18n_labels.py:1107
+#: app/i18n_labels.py:905 app/i18n_labels.py:1061 app/i18n_labels.py:1124
 #: app/templates/commercial_sales/not_found.html:4
 msgid "Record not found."
 msgstr "Record not found."
 
-#: app/i18n_labels.py:889 app/i18n_labels.py:1045 app/i18n_labels.py:1108
+#: app/i18n_labels.py:906 app/i18n_labels.py:1062 app/i18n_labels.py:1125
 msgid "You do not have access to this record."
 msgstr "You do not have access to this record."
 
-#: app/i18n_labels.py:891 app/i18n_labels.py:1043
+#: app/i18n_labels.py:908 app/i18n_labels.py:1060
 msgid "A reason is required for this action."
 msgstr "A reason is required for this action."
 
-#: app/i18n_labels.py:892
+#: app/i18n_labels.py:909
 msgid "Payment method must be one of the allowed values."
 msgstr "Payment method must be one of the allowed values."
 
-#: app/i18n_labels.py:893
+#: app/i18n_labels.py:910
 msgid "You cannot approve your own request."
 msgstr "You cannot approve your own request."
 
-#: app/i18n_labels.py:894
+#: app/i18n_labels.py:911
 msgid "This action requires approval before it can proceed."
 msgstr "This action requires approval before it can proceed."
 
-#: app/i18n_labels.py:895
+#: app/i18n_labels.py:912
 msgid "The approval no longer matches the current version of this record."
 msgstr "The approval no longer matches the current version of this record."
 
-#: app/i18n_labels.py:896
+#: app/i18n_labels.py:913
 msgid "Discount exceeds your permitted limit and requires approval."
 msgstr "Discount exceeds your permitted limit and requires approval."
 
-#: app/i18n_labels.py:897
+#: app/i18n_labels.py:914
 msgid "A custom price requires approval."
 msgstr "A custom price requires approval."
 
-#: app/i18n_labels.py:898
+#: app/i18n_labels.py:915
 msgid "A zero-price line requires approval."
 msgstr "A zero-price line requires approval."
 
-#: app/i18n_labels.py:899
+#: app/i18n_labels.py:916
 msgid "The quote must be accepted before an order can be created."
 msgstr "The quote must be accepted before an order can be created."
 
-#: app/i18n_labels.py:900
+#: app/i18n_labels.py:917
 msgid "A confirmed customer is required before an order can be created."
 msgstr "A confirmed customer is required before an order can be created."
 
-#: app/i18n_labels.py:901
+#: app/i18n_labels.py:918
 msgid "This product or plan is not currently sellable."
 msgstr "This product or plan is not currently sellable."
 
-#: app/i18n_labels.py:902
+#: app/i18n_labels.py:919
 msgid "This price is no longer effective."
 msgstr "This price is no longer effective."
 
-#: app/i18n_labels.py:903
+#: app/i18n_labels.py:920
 msgid "The payment must be confirmed before it can be allocated."
 msgstr "The payment must be confirmed before it can be allocated."
 
-#: app/i18n_labels.py:904
+#: app/i18n_labels.py:921
 msgid "This payment has already been confirmed."
 msgstr "This payment has already been confirmed."
 
-#: app/i18n_labels.py:905
+#: app/i18n_labels.py:922
 msgid "You cannot confirm a payment you submitted yourself."
 msgstr "You cannot confirm a payment you submitted yourself."
 
-#: app/i18n_labels.py:906
+#: app/i18n_labels.py:923
 #, python-format
 msgid "This order is not eligible for fulfillment yet: %(reason)s."
 msgstr "This order is not eligible for fulfillment yet: %(reason)s."
 
-#: app/i18n_labels.py:907
+#: app/i18n_labels.py:924
 msgid "This order line has already been fulfilled."
 msgstr "This order line has already been fulfilled."
 
-#: app/i18n_labels.py:908 app/i18n_labels.py:1094
+#: app/i18n_labels.py:925 app/i18n_labels.py:1111
 msgid "This action requires a real employee profile."
 msgstr "This action requires a real employee profile."
 
-#: app/i18n_labels.py:921
+#: app/i18n_labels.py:938
 #, python-format
 msgid "Commission rule type %(rule_type)s is not implemented in this phase."
 msgstr "Commission rule type %(rule_type)s is not implemented in this phase."
 
-#: app/i18n_labels.py:922
+#: app/i18n_labels.py:939
 msgid "Commission rate must be a percentage greater than 0 and at most 100."
 msgstr "Commission rate must be a percentage greater than 0 and at most 100."
 
-#: app/i18n_labels.py:923
+#: app/i18n_labels.py:940
 msgid "Commission fixed amount must be a positive value with a valid currency."
 msgstr "Commission fixed amount must be a positive value with a valid currency."
 
-#: app/i18n_labels.py:924
+#: app/i18n_labels.py:941
 msgid "The employee has no active commission plan/rule assignment for this date."
 msgstr "The employee has no active commission plan/rule assignment for this date."
 
-#: app/i18n_labels.py:925
+#: app/i18n_labels.py:942
 msgid "A commission entry already exists for this payment allocation."
 msgstr "A commission entry already exists for this payment allocation."
 
-#: app/i18n_labels.py:926
+#: app/i18n_labels.py:943
 #, python-format
 msgid ""
 "Cannot change commission entry status from %(from_status)s to "
@@ -1505,145 +1542,145 @@ msgstr ""
 "Cannot change commission entry status from %(from_status)s to "
 "%(to_status)s."
 
-#: app/i18n_labels.py:927
+#: app/i18n_labels.py:944
 msgid "You cannot approve or adjust your own commission entry."
 msgstr "You cannot approve or adjust your own commission entry."
 
-#: app/i18n_labels.py:928
+#: app/i18n_labels.py:945
 msgid "An external payout reference is required to record a commission payout."
 msgstr "An external payout reference is required to record a commission payout."
 
-#: app/i18n_labels.py:929
+#: app/i18n_labels.py:946
 msgid "A reason is required for this commission action."
 msgstr "A reason is required for this commission action."
 
-#: app/i18n_labels.py:930
+#: app/i18n_labels.py:947
 msgid "This commission entry is already included in a payout batch."
 msgstr "This commission entry is already included in a payout batch."
 
-#: app/i18n_labels.py:942 app/i18n_labels.py:987
+#: app/i18n_labels.py:959 app/i18n_labels.py:1004
 msgid "Submitted"
 msgstr "Submitted"
 
-#: app/i18n_labels.py:943
+#: app/i18n_labels.py:960
 msgid "Returned for correction"
 msgstr "Returned for correction"
 
-#: app/i18n_labels.py:958
+#: app/i18n_labels.py:975
 msgid "Returned"
 msgstr "Returned"
 
-#: app/i18n_labels.py:966 app/templates/commercial_sales/payment_new.html:19
+#: app/i18n_labels.py:983 app/templates/commercial_sales/payment_new.html:19
 msgid "Cash"
 msgstr "Cash"
 
-#: app/i18n_labels.py:967 app/templates/commercial_sales/payment_new.html:20
+#: app/i18n_labels.py:984 app/templates/commercial_sales/payment_new.html:20
 msgid "Bank transfer"
 msgstr "Bank transfer"
 
-#: app/i18n_labels.py:968 app/templates/commercial_sales/payment_new.html:21
+#: app/i18n_labels.py:985 app/templates/commercial_sales/payment_new.html:21
 msgid "Card (offline)"
 msgstr "Card (offline)"
 
-#: app/i18n_labels.py:969 app/templates/commercial_sales/payment_new.html:22
+#: app/i18n_labels.py:986 app/templates/commercial_sales/payment_new.html:22
 msgid "Cheque"
 msgstr "Cheque"
 
-#: app/i18n_labels.py:977
+#: app/i18n_labels.py:994
 msgid "External vendor"
 msgstr "External vendor"
 
-#: app/i18n_labels.py:978
+#: app/i18n_labels.py:995
 msgid "Employee beneficiary"
 msgstr "Employee beneficiary"
 
-#: app/i18n_labels.py:988
+#: app/i18n_labels.py:1005
 msgid "Review required"
 msgstr "Review required"
 
-#: app/i18n_labels.py:991
+#: app/i18n_labels.py:1008
 msgid "Reopened"
 msgstr "Reopened"
 
-#: app/i18n_labels.py:999
+#: app/i18n_labels.py:1016
 msgid "Daily operational summary"
 msgstr "Daily operational summary"
 
-#: app/i18n_labels.py:1000
+#: app/i18n_labels.py:1017
 msgid "Daily cash closing exceptions"
 msgstr "Daily cash closing exceptions"
 
-#: app/i18n_labels.py:1001
+#: app/i18n_labels.py:1018
 msgid "Weekly operational summary"
 msgstr "Weekly operational summary"
 
-#: app/i18n_labels.py:1002
+#: app/i18n_labels.py:1019
 msgid "Monthly operational summary"
 msgstr "Monthly operational summary"
 
-#: app/i18n_labels.py:1011
+#: app/i18n_labels.py:1028
 msgid "In progress"
 msgstr "In progress"
 
-#: app/i18n_labels.py:1012
+#: app/i18n_labels.py:1029
 msgid "Done"
 msgstr "Done"
 
-#: app/i18n_labels.py:1022
+#: app/i18n_labels.py:1039
 msgid "Specific employees"
 msgstr "Specific employees"
 
-#: app/i18n_labels.py:1023
+#: app/i18n_labels.py:1040
 msgid "All staff"
 msgstr "All staff"
 
-#: app/i18n_labels.py:1042
+#: app/i18n_labels.py:1059
 #, python-format
 msgid "Cannot change expense status from %(from_status)s to %(to_status)s."
 msgstr "Cannot change expense status from %(from_status)s to %(to_status)s."
 
-#: app/i18n_labels.py:1046
+#: app/i18n_labels.py:1063
 msgid "Amount must be a finite, positive number."
 msgstr "Amount must be a finite, positive number."
 
-#: app/i18n_labels.py:1047
+#: app/i18n_labels.py:1064
 #, python-format
 msgid "Currency %(given)s does not match the expense currency %(expected)s."
 msgstr "Currency %(given)s does not match the expense currency %(expected)s."
 
-#: app/i18n_labels.py:1049
+#: app/i18n_labels.py:1066
 msgid "A payee is required."
 msgstr "A payee is required."
 
-#: app/i18n_labels.py:1050
+#: app/i18n_labels.py:1067
 msgid "This payee is not active."
 msgstr "This payee is not active."
 
-#: app/i18n_labels.py:1051
+#: app/i18n_labels.py:1068
 msgid "This expense category is not active."
 msgstr "This expense category is not active."
 
-#: app/i18n_labels.py:1052
+#: app/i18n_labels.py:1069
 msgid "Payee type must be EXTERNAL or EMPLOYEE."
 msgstr "Payee type must be EXTERNAL or EMPLOYEE."
 
-#: app/i18n_labels.py:1053
+#: app/i18n_labels.py:1070
 msgid "An employee is required for an employee-beneficiary payee."
 msgstr "An employee is required for an employee-beneficiary payee."
 
-#: app/i18n_labels.py:1054
+#: app/i18n_labels.py:1071
 msgid "An employee-beneficiary payee cannot have an external contact reference."
 msgstr "An employee-beneficiary payee cannot have an external contact reference."
 
-#: app/i18n_labels.py:1056
+#: app/i18n_labels.py:1073
 msgid "You cannot approve your own expense request."
 msgstr "You cannot approve your own expense request."
 
-#: app/i18n_labels.py:1057
+#: app/i18n_labels.py:1074
 msgid "You cannot approve an expense where you are the recorded beneficiary."
 msgstr "You cannot approve an expense where you are the recorded beneficiary."
 
-#: app/i18n_labels.py:1058
+#: app/i18n_labels.py:1075
 msgid ""
 "This expense was changed after the approval was requested. Reload and try"
 " again."
@@ -1651,7 +1688,7 @@ msgstr ""
 "This expense was changed after the approval was requested. Reload and try"
 " again."
 
-#: app/i18n_labels.py:1059
+#: app/i18n_labels.py:1076
 #, python-format
 msgid ""
 "Approved amount (%(approved)s) cannot exceed the requested amount "
@@ -1660,37 +1697,37 @@ msgstr ""
 "Approved amount (%(approved)s) cannot exceed the requested amount "
 "(%(requested)s)."
 
-#: app/i18n_labels.py:1060
+#: app/i18n_labels.py:1077
 #, python-format
 msgid "This account is not eligible to approve this expense: %(reason)s."
 msgstr "This account is not eligible to approve this expense: %(reason)s."
 
-#: app/i18n_labels.py:1061
+#: app/i18n_labels.py:1078
 msgid "This account does not have permission to approve expenses."
 msgstr "This account does not have permission to approve expenses."
 
-#: app/i18n_labels.py:1062
+#: app/i18n_labels.py:1079
 msgid "This approver employee profile is suspended or terminated."
 msgstr "This approver employee profile is suspended or terminated."
 
-#: app/i18n_labels.py:1063
+#: app/i18n_labels.py:1080
 msgid "This approver has no active employee profile."
 msgstr "This approver has no active employee profile."
 
-#: app/i18n_labels.py:1064
+#: app/i18n_labels.py:1081
 msgid "This expense has no pending approval request."
 msgstr "This expense has no pending approval request."
 
-#: app/i18n_labels.py:1065
+#: app/i18n_labels.py:1082
 msgid "The expense must be approved before a payment can be recorded."
 msgstr "The expense must be approved before a payment can be recorded."
 
-#: app/i18n_labels.py:1066
+#: app/i18n_labels.py:1083
 #, python-format
 msgid "This expense is in a terminal state (%(status)s) and cannot be paid."
 msgstr "This expense is in a terminal state (%(status)s) and cannot be paid."
 
-#: app/i18n_labels.py:1067
+#: app/i18n_labels.py:1084
 #, python-format
 msgid ""
 "Payment amount (%(amount)s) exceeds the outstanding approved balance "
@@ -1699,73 +1736,73 @@ msgstr ""
 "Payment amount (%(amount)s) exceeds the outstanding approved balance "
 "(%(outstanding)s)."
 
-#: app/i18n_labels.py:1069
+#: app/i18n_labels.py:1086
 msgid "This payment has already been reversed."
 msgstr "This payment has already been reversed."
 
-#: app/i18n_labels.py:1070
+#: app/i18n_labels.py:1087
 msgid "You cannot record payment for your own expense request."
 msgstr "You cannot record payment for your own expense request."
 
-#: app/i18n_labels.py:1071
+#: app/i18n_labels.py:1088
 msgid "Attachment exceeds the maximum allowed size."
 msgstr "Attachment exceeds the maximum allowed size."
 
-#: app/i18n_labels.py:1072
+#: app/i18n_labels.py:1089
 msgid "This file type is not allowed for attachments."
 msgstr "This file type is not allowed for attachments."
 
-#: app/i18n_labels.py:1073
+#: app/i18n_labels.py:1090
 msgid "The file actual content does not match its declared type."
 msgstr "The file actual content does not match its declared type."
 
-#: app/i18n_labels.py:1074
+#: app/i18n_labels.py:1091
 msgid "Attachment file is empty."
 msgstr "Attachment file is empty."
 
-#: app/i18n_labels.py:1075
+#: app/i18n_labels.py:1092
 msgid "Attachment not found."
 msgstr "Attachment not found."
 
-#: app/i18n_labels.py:1076
+#: app/i18n_labels.py:1093
 msgid "You do not have access to this attachment."
 msgstr "You do not have access to this attachment."
 
-#: app/i18n_labels.py:1077
+#: app/i18n_labels.py:1094
 msgid "This attachment has been archived."
 msgstr "This attachment has been archived."
 
-#: app/i18n_labels.py:1078
+#: app/i18n_labels.py:1095
 msgid "Invalid storage key."
 msgstr "Invalid storage key."
 
-#: app/i18n_labels.py:1079
+#: app/i18n_labels.py:1096
 #, python-format
 msgid "Cannot change cash closing status from %(from_status)s to %(to_status)s."
 msgstr "Cannot change cash closing status from %(from_status)s to %(to_status)s."
 
-#: app/i18n_labels.py:1080
+#: app/i18n_labels.py:1097
 #, python-format
 msgid "A cash closing already exists for %(business_date)s %(currency)s."
 msgstr "A cash closing already exists for %(business_date)s %(currency)s."
 
-#: app/i18n_labels.py:1081
+#: app/i18n_labels.py:1098
 msgid "A manual opening-cash override requires a reason."
 msgstr "A manual opening-cash override requires a reason."
 
-#: app/i18n_labels.py:1082
+#: app/i18n_labels.py:1099
 msgid "You do not have permission to override opening cash."
 msgstr "You do not have permission to override opening cash."
 
-#: app/i18n_labels.py:1083
+#: app/i18n_labels.py:1100
 msgid "A nonzero variance requires an explanation."
 msgstr "A nonzero variance requires an explanation."
 
-#: app/i18n_labels.py:1084
+#: app/i18n_labels.py:1101
 msgid "You cannot approve a cash closing you prepared."
 msgstr "You cannot approve a cash closing you prepared."
 
-#: app/i18n_labels.py:1085
+#: app/i18n_labels.py:1102
 msgid ""
 "This cash closing is approved or closed and cannot be edited directly -- "
 "reopen it first."
@@ -1773,19 +1810,19 @@ msgstr ""
 "This cash closing is approved or closed and cannot be edited directly -- "
 "reopen it first."
 
-#: app/i18n_labels.py:1086
+#: app/i18n_labels.py:1103
 msgid "Reopening a cash closing requires a reason."
 msgstr "Reopening a cash closing requires a reason."
 
-#: app/i18n_labels.py:1087
+#: app/i18n_labels.py:1104
 msgid "You do not have permission to reopen a cash closing."
 msgstr "You do not have permission to reopen a cash closing."
 
-#: app/i18n_labels.py:1088
+#: app/i18n_labels.py:1105
 msgid "Reopening a cash closing requires recent re-authentication."
 msgstr "Reopening a cash closing requires recent re-authentication."
 
-#: app/i18n_labels.py:1089
+#: app/i18n_labels.py:1106
 msgid ""
 "A closed business date requires reopening the closing before recording a "
 "late transaction."
@@ -1793,131 +1830,131 @@ msgstr ""
 "A closed business date requires reopening the closing before recording a "
 "late transaction."
 
-#: app/i18n_labels.py:1090
+#: app/i18n_labels.py:1107
 msgid "Overriding a duplicate-expense warning requires a reason."
 msgstr "Overriding a duplicate-expense warning requires a reason."
 
-#: app/i18n_labels.py:1091
+#: app/i18n_labels.py:1108
 msgid "A snapshot already exists for this canonical key."
 msgstr "A snapshot already exists for this canonical key."
 
-#: app/i18n_labels.py:1092
+#: app/i18n_labels.py:1109
 msgid "You do not have permission to regenerate a report snapshot."
 msgstr "You do not have permission to regenerate a report snapshot."
 
-#: app/i18n_labels.py:1093
+#: app/i18n_labels.py:1110
 msgid "Regenerating a report snapshot requires a reason."
 msgstr "Regenerating a report snapshot requires a reason."
 
-#: app/i18n_labels.py:1106
+#: app/i18n_labels.py:1123
 #, python-format
 msgid "Cannot change note status from %(from_status)s to %(to_status)s."
 msgstr "Cannot change note status from %(from_status)s to %(to_status)s."
 
-#: app/i18n_labels.py:1109
+#: app/i18n_labels.py:1126
 msgid "Visibility must be Management only, Specific employees, or All staff."
 msgstr "Visibility must be Management only, Specific employees, or All staff."
 
-#: app/i18n_labels.py:1110
+#: app/i18n_labels.py:1127
 msgid "Specific-employees visibility requires at least one employee grant."
 msgstr "Specific-employees visibility requires at least one employee grant."
 
-#: app/i18n_labels.py:1111
+#: app/i18n_labels.py:1128
 msgid "A title is required."
 msgstr "A title is required."
 
-#: app/i18n_labels.py:1112
+#: app/i18n_labels.py:1129
 msgid "A body is required."
 msgstr "A body is required."
 
-#: app/i18n_labels.py:1113
+#: app/i18n_labels.py:1130
 msgid "This note was changed by someone else. Reload and try again."
 msgstr "This note was changed by someone else. Reload and try again."
 
-#: app/i18n_labels.py:1114
+#: app/i18n_labels.py:1131
 msgid "The author cannot be supplied by the client."
 msgstr "The author cannot be supplied by the client."
 
-#: app/attention/service.py:111
+#: app/attention/service.py:110
 #, python-format
 msgid "%(count)d day(s)"
 msgstr "%(count)d day(s)"
 
-#: app/attention/service.py:114
+#: app/attention/service.py:113
 #, python-format
 msgid "%(count)d hour(s)"
 msgstr "%(count)d hour(s)"
 
-#: app/attention/service.py:116
+#: app/attention/service.py:115
 #, python-format
 msgid "%(count)d minute(s)"
 msgstr "%(count)d minute(s)"
 
-#: app/attention/service.py:167 app/attention/service.py:201
+#: app/attention/service.py:166 app/attention/service.py:200
 #, python-format
 msgid "Follow-up overdue: %(name)s"
 msgstr "Follow-up overdue: %(name)s"
 
-#: app/attention/service.py:168 app/attention/service.py:202
+#: app/attention/service.py:167 app/attention/service.py:201
 #, python-format
 msgid "%(duration)s overdue"
 msgstr "%(duration)s overdue"
 
-#: app/attention/service.py:171 app/attention/service.py:174
-#: app/attention/service.py:205 app/attention/service.py:208
+#: app/attention/service.py:170 app/attention/service.py:173
+#: app/attention/service.py:204 app/attention/service.py:207
 msgid "Overdue Follow-ups"
 msgstr "Overdue Follow-ups"
 
-#: app/attention/service.py:173
+#: app/attention/service.py:172
 msgid "Open lead"
 msgstr "Open lead"
 
-#: app/attention/service.py:207
+#: app/attention/service.py:206
 msgid "Open customer"
 msgstr "Open customer"
 
-#: app/attention/service.py:235
+#: app/attention/service.py:252
 #, python-format
 msgid "Quote %(number)s awaiting approval"
 msgstr "Quote %(number)s awaiting approval"
 
-#: app/attention/service.py:236
+#: app/attention/service.py:253
 #, python-format
 msgid "Price override requested, pending %(duration)s"
 msgstr "Price override requested, pending %(duration)s"
 
-#: app/attention/service.py:239 app/attention/service.py:242
+#: app/attention/service.py:256 app/attention/service.py:259
 msgid "Quotes Waiting for Approval"
 msgstr "Quotes Waiting for Approval"
 
-#: app/attention/service.py:241
+#: app/attention/service.py:258
 msgid "Review quote"
 msgstr "Review quote"
 
-#: app/attention/service.py:283
+#: app/attention/service.py:324
 #, python-format
 msgid "Invoice %(number)s overdue"
 msgstr "Invoice %(number)s overdue"
 
-#: app/attention/service.py:285
+#: app/attention/service.py:326
 #, python-format
 msgid "%(days)d day(s) overdue, %(amount)s %(currency)s outstanding"
 msgstr "%(days)d day(s) overdue, %(amount)s %(currency)s outstanding"
 
-#: app/attention/service.py:290 app/attention/service.py:293
-#: app/templates/operations_ui/dashboard_management.html:29
+#: app/attention/service.py:331 app/attention/service.py:334
+#: app/templates/operations_ui/dashboard_management.html:33
 msgid "Overdue Invoices"
 msgstr "Overdue Invoices"
 
-#: app/attention/service.py:292
+#: app/attention/service.py:333
 msgid "Open invoice"
 msgstr "Open invoice"
 
-#: app/attention/service.py:314
+#: app/attention/service.py:369
 msgid "Unallocated payment from customer"
 msgstr "Unallocated payment from customer"
 
-#: app/attention/service.py:316
+#: app/attention/service.py:371
 #, python-format
 msgid ""
 "%(balance)s %(currency)s of %(amount)s %(currency)s unallocated, "
@@ -1926,111 +1963,111 @@ msgstr ""
 "%(balance)s %(currency)s of %(amount)s %(currency)s unallocated, "
 "confirmed %(duration)s ago"
 
-#: app/attention/service.py:321 app/attention/service.py:324
-#: app/templates/operations_ui/dashboard_finance.html:18
+#: app/attention/service.py:376 app/attention/service.py:379
+#: app/templates/operations_ui/dashboard_finance.html:24
 msgid "Unallocated Payments"
 msgstr "Unallocated Payments"
 
-#: app/attention/service.py:323
+#: app/attention/service.py:378
 #: app/templates/commercial_sales/invoice_detail.html:94
 msgid "Allocate payment"
 msgstr "Allocate payment"
 
-#: app/attention/service.py:355
+#: app/attention/service.py:410
 #, python-format
 msgid "Expense %(number)s awaiting approval"
 msgstr "Expense %(number)s awaiting approval"
 
-#: app/attention/service.py:357
+#: app/attention/service.py:412
 #, python-format
 msgid "%(amount)s %(currency)s requested, pending %(duration)s"
 msgstr "%(amount)s %(currency)s requested, pending %(duration)s"
 
-#: app/attention/service.py:362 app/attention/service.py:365
+#: app/attention/service.py:417 app/attention/service.py:420
 msgid "Pending Expenses"
 msgstr "Pending Expenses"
 
-#: app/attention/service.py:364
+#: app/attention/service.py:419
 msgid "Review expense"
 msgstr "Review expense"
 
-#: app/attention/service.py:402
+#: app/attention/service.py:467
 #, python-format
 msgid "Commission for %(name)s awaiting approval"
 msgstr "Commission for %(name)s awaiting approval"
 
-#: app/attention/service.py:404
+#: app/attention/service.py:469
 #, python-format
 msgid "%(amount)s %(currency)s, earned %(duration)s ago"
 msgstr "%(amount)s %(currency)s, earned %(duration)s ago"
 
-#: app/attention/service.py:409 app/attention/service.py:412
+#: app/attention/service.py:474 app/attention/service.py:478
 msgid "Pending Commission Approvals"
 msgstr "Pending Commission Approvals"
 
-#: app/attention/service.py:411
+#: app/attention/service.py:476
 msgid "Review commissions"
 msgstr "Review commissions"
 
-#: app/attention/service.py:438
+#: app/attention/service.py:504
 #, python-format
 msgid "License expiring for %(name)s"
 msgstr "License expiring for %(name)s"
 
-#: app/attention/service.py:439
+#: app/attention/service.py:505
 #, python-format
 msgid "Expires in %(days)d day(s)"
 msgstr "Expires in %(days)d day(s)"
 
-#: app/attention/service.py:442 app/attention/service.py:445
+#: app/attention/service.py:508 app/attention/service.py:511
 msgid "Expiring Licenses"
 msgstr "Expiring Licenses"
 
-#: app/attention/service.py:444 app/attention/service.py:474
+#: app/attention/service.py:510 app/attention/service.py:551
 msgid "Open license"
 msgstr "Open license"
 
-#: app/attention/service.py:468
+#: app/attention/service.py:545
 #, python-format
 msgid "License suspended for %(name)s"
 msgstr "License suspended for %(name)s"
 
-#: app/attention/service.py:469
+#: app/attention/service.py:546
 #, python-format
 msgid "Suspended %(duration)s ago"
 msgstr "Suspended %(duration)s ago"
 
-#: app/attention/service.py:472 app/attention/service.py:475
+#: app/attention/service.py:549 app/attention/service.py:552
 msgid "Suspended Licenses"
 msgstr "Suspended Licenses"
 
-#: app/attention/service.py:503
+#: app/attention/service.py:580
 #, python-format
 msgid "Open %(duration)s -- %(message)s"
 msgstr "Open %(duration)s -- %(message)s"
 
-#: app/attention/service.py:506 app/attention/service.py:509
+#: app/attention/service.py:583 app/attention/service.py:586
 msgid "Device-Limit Events"
 msgstr "Device-Limit Events"
 
-#: app/attention/service.py:508 app/templates/dashboard/index.html:197
+#: app/attention/service.py:585 app/templates/dashboard/index.html:190
 msgid "Open notifications"
 msgstr "Open notifications"
 
-#: app/attention/service.py:525
+#: app/attention/service.py:602
 msgid "Most recent database backup failed"
 msgstr "Most recent database backup failed"
 
-#: app/attention/service.py:526
+#: app/attention/service.py:603
 #, python-format
 msgid "Failed %(duration)s ago -- no successful backup since"
 msgstr "Failed %(duration)s ago -- no successful backup since"
 
-#: app/attention/service.py:529 app/attention/service.py:532
+#: app/attention/service.py:606 app/attention/service.py:609
 msgid "Failed Backups"
 msgstr "Failed Backups"
 
-#: app/attention/service.py:531
+#: app/attention/service.py:608
 msgid "Open backups"
 msgstr "Open backups"
 
@@ -2038,15 +2075,15 @@ msgstr "Open backups"
 msgid "Your session ended. Sign in again to continue."
 msgstr "Your session ended. Sign in again to continue."
 
-#: app/auth/routes.py:395
+#: app/auth/routes.py:406
 msgid "Invitation is invalid or has expired."
 msgstr "Invitation is invalid or has expired."
 
 #: app/command_palette/service.py:105
-#: app/templates/commercial_ops/pilots_list.html:18
-#: app/templates/commercial_ops/renewals_list.html:18
+#: app/templates/commercial_ops/pilots_list.html:15
+#: app/templates/commercial_ops/renewals_list.html:19
 #: app/templates/commercial_sales/invoice_detail.html:23
-#: app/templates/commercial_sales/order_detail.html:20
+#: app/templates/commercial_sales/order_detail.html:33
 #: app/templates/commercial_sales/payment_detail.html:21
 #: app/templates/commercial_sales/payment_new.html:9
 #: app/templates/commercial_sales/quote_detail.html:22
@@ -2054,7 +2091,7 @@ msgstr "Invitation is invalid or has expired."
 #: app/templates/commercial_sales/refund_detail.html:21
 #: app/templates/installations/detail.html:8
 #: app/templates/installations/list.html:14
-#: app/templates/licensing/detail.html:29 app/templates/licensing/list.html:14
+#: app/templates/licensing/detail.html:34 app/templates/licensing/list.html:28
 #: app/templates/subscriptions/list.html:14
 #: app/templates/subscriptions/new.html:8
 msgid "Customer"
@@ -2075,7 +2112,7 @@ msgid "Sales Order"
 msgstr "Sales Order"
 
 #: app/command_palette/service.py:207
-#: app/templates/commercial_sales/order_detail.html:22
+#: app/templates/commercial_sales/order_detail.html:35
 #: app/templates/commercial_sales/payment_detail.html:41
 #: app/templates/commercial_sales/payment_detail.html:46
 #: app/templates/commercial_sales/refund_detail.html:22
@@ -2107,7 +2144,7 @@ msgstr "Quick Create"
 
 #: app/command_palette/service.py:343 app/templates/customers/detail.html:109
 #: app/templates/dashboard/index.html:100
-#: app/templates/dashboard/index.html:160
+#: app/templates/dashboard/index.html:153
 #: app/templates/layout/_nav_model.html:59
 msgid "Overview"
 msgstr "Overview"
@@ -2134,7 +2171,7 @@ msgid "System"
 msgstr "System"
 
 #: app/command_palette/service.py:352 app/templates/dashboard/index.html:3
-#: app/templates/employees/list.html:112
+#: app/templates/employees/list.html:119
 #: app/templates/layout/_nav_model.html:55
 msgid "Dashboard"
 msgstr "Dashboard"
@@ -2287,7 +2324,7 @@ msgstr "Subscriptions"
 
 #: app/command_palette/service.py:408 app/templates/customers/detail.html:118
 #: app/templates/layout/_nav_model.html:138 app/templates/licensing/list.html:3
-#: app/templates/licensing/list.html:6 app/templates/licensing/list.html:20
+#: app/templates/licensing/list.html:17 app/templates/licensing/list.html:34
 msgid "Licenses"
 msgstr "Licenses"
 
@@ -2300,14 +2337,14 @@ msgid "Installations"
 msgstr "Installations"
 
 #: app/command_palette/service.py:412
-#: app/templates/commercial_ops/renewals_list.html:2
+#: app/templates/commercial_ops/renewals_list.html:3
 #: app/templates/layout/_nav_model.html:144
 msgid "Renewals"
 msgstr "Renewals"
 
 #: app/command_palette/service.py:414
-#: app/templates/commercial_ops/pilots_list.html:2
-#: app/templates/commercial_ops/pilots_list.html:5
+#: app/templates/commercial_ops/pilots_list.html:3
+#: app/templates/commercial_ops/pilots_list.html:6
 #: app/templates/layout/_nav_model.html:147
 msgid "Pilots"
 msgstr "Pilots"
@@ -2544,6 +2581,14 @@ msgstr "Installation activated"
 msgid "Refund processed: %(amount)s %(currency)s"
 msgstr "Refund processed: %(amount)s %(currency)s"
 
+#: app/licensing/issuance_routes.py:121
+msgid "An idempotency key is required to issue a license."
+msgstr "An idempotency key is required to issue a license."
+
+#: app/licensing/issuance_routes.py:130
+msgid "Extra devices must be a whole number."
+msgstr "Extra devices must be a whole number."
+
 #: app/operations_ui/routes.py:149
 msgid "Invalid input."
 msgstr "Invalid input."
@@ -2556,6 +2601,32 @@ msgstr "Password must be at least %(min_length)s characters."
 #: app/security/passwords.py:39
 msgid "Password must mix at least 3 of: lowercase, uppercase, digit, symbol."
 msgstr "Password must mix at least 3 of: lowercase, uppercase, digit, symbol."
+
+#: app/sync/quarantine_routes.py:61
+msgid "This event was already resolved."
+msgstr "This event was already resolved."
+
+#: app/sync/quarantine_routes.py:72
+#, python-format
+msgid "Replay failed -- payload is still invalid: %(reason)s"
+msgstr "Replay failed -- payload is still invalid: %(reason)s"
+
+#: app/sync/quarantine_routes.py:111
+msgid "Event was already present -- marked as replayed."
+msgstr "Event was already present -- marked as replayed."
+
+#: app/sync/quarantine_routes.py:121
+#, python-format
+msgid "Replay failed: %(reason)s"
+msgstr "Replay failed: %(reason)s"
+
+#: app/sync/quarantine_routes.py:128
+msgid "Event replayed successfully."
+msgstr "Event replayed successfully."
+
+#: app/sync/quarantine_routes.py:148
+msgid "Event discarded."
+msgstr "Event discarded."
 
 #: app/templates/attention/index.html:20
 msgid "Urgent"
@@ -2621,12 +2692,12 @@ msgstr "Export CSV"
 #: app/templates/commercial_ops/renewal_detail.html:68
 #: app/templates/commercial_ops/timeline.html:8
 #: app/templates/customers/detail.html:167
-#: app/templates/dashboard/index.html:330
+#: app/templates/dashboard/index.html:332
 #: app/templates/employees/detail.html:146
 #: app/templates/installations/detail.html:59
 #: app/templates/installations/detail.html:72
 #: app/templates/leads/detail.html:174 app/templates/leads/detail.html:186
-#: app/templates/licensing/detail.html:80
+#: app/templates/licensing/detail.html:109
 #: app/templates/licensing_admin/requests.html:13
 #: app/templates/subscriptions/detail.html:44
 #: app/templates/system/backups.html:14
@@ -2637,14 +2708,14 @@ msgstr "When"
 msgid "Actor"
 msgstr "Actor"
 
-#: app/templates/audit/list.html:16 app/templates/dashboard/index.html:330
+#: app/templates/audit/list.html:16 app/templates/dashboard/index.html:332
 #: app/templates/employees/detail.html:146
 msgid "Action"
 msgstr "Action"
 
 #: app/templates/audit/list.html:16
 #: app/templates/commercial_ops/reconciliation.html:26
-#: app/templates/dashboard/index.html:330
+#: app/templates/dashboard/index.html:332
 msgid "Entity"
 msgstr "Entity"
 
@@ -2670,7 +2741,7 @@ msgid "Security events (most recent 500)"
 msgstr "Security events (most recent 500)"
 
 #: app/templates/audit/security_events.html:7
-#: app/templates/catalog/index.html:61
+#: app/templates/catalog/index.html:75
 #: app/templates/commercial_ops/notifications_list.html:30
 #: app/templates/installations/detail.html:72
 #: app/templates/licensing_admin/requests.html:14
@@ -2922,7 +2993,7 @@ msgstr "Release channels"
 
 #: app/templates/catalog/channels.html:7 app/templates/catalog/index.html:7
 #: app/templates/catalog/index.html:22 app/templates/catalog/index.html:36
-#: app/templates/catalog/index.html:61
+#: app/templates/catalog/index.html:75
 #: app/templates/commercial_ops/activation_policy.html:39
 #: app/templates/licensing_admin/offline_policies.html:7
 msgid "Code"
@@ -2932,8 +3003,8 @@ msgstr "Code"
 #: app/templates/catalog/index.html:22 app/templates/catalog/index.html:36
 #: app/templates/catalog/plan_new.html:14
 #: app/templates/customers/detail.html:186
-#: app/templates/customers/detail.html:197 app/templates/employees/list.html:57
-#: app/templates/employees/list.html:87 app/templates/leads/detail.html:53
+#: app/templates/customers/detail.html:197 app/templates/employees/list.html:64
+#: app/templates/employees/list.html:94 app/templates/leads/detail.html:53
 #: app/templates/leads/detail.html:63 app/templates/leads/list.html:13
 #: app/templates/operations_ui/payees_list.html:8
 #: app/templates/operations_ui/payees_list.html:11
@@ -2980,16 +3051,12 @@ msgid "Billing model"
 msgstr "Billing model"
 
 #: app/templates/catalog/index.html:22 app/templates/catalog/plan_detail.html:8
-#: app/templates/commercial_ops/emergency_extensions_list.html:8
-#: app/templates/commercial_ops/emergency_extensions_list.html:17
+#: app/templates/commercial_ops/emergency_extensions_list.html:16
 #: app/templates/commercial_ops/notifications_list.html:9
 #: app/templates/commercial_ops/notifications_list.html:30
-#: app/templates/commercial_ops/pending_activations_list.html:8
-#: app/templates/commercial_ops/pending_activations_list.html:17
-#: app/templates/commercial_ops/pilots_list.html:8
-#: app/templates/commercial_ops/pilots_list.html:18
-#: app/templates/commercial_ops/renewals_list.html:8
-#: app/templates/commercial_ops/renewals_list.html:18
+#: app/templates/commercial_ops/pending_activations_list.html:16
+#: app/templates/commercial_ops/pilots_list.html:15
+#: app/templates/commercial_ops/renewals_list.html:19
 #: app/templates/commercial_ops/slot_exceptions.html:27
 #: app/templates/commercial_sales/commissions_list.html:14
 #: app/templates/commercial_sales/invoice_detail.html:102
@@ -3003,7 +3070,7 @@ msgstr "Billing model"
 #: app/templates/commercial_sales/quotes_list.html:14
 #: app/templates/commercial_sales/refunds_list.html:14
 #: app/templates/components/commercial_record.html:29
-#: app/templates/components/table.html:71
+#: app/templates/components/table.html:88
 #: app/templates/customers/detail.html:306
 #: app/templates/customers/detail.html:325
 #: app/templates/customers/detail.html:344
@@ -3013,11 +3080,11 @@ msgstr "Billing model"
 #: app/templates/customers/detail.html:421 app/templates/customers/list.html:17
 #: app/templates/employees/detail.html:120
 #: app/templates/employees/invitations.html:9
-#: app/templates/employees/list.html:33 app/templates/employees/list.html:60
-#: app/templates/employees/list.html:88
+#: app/templates/employees/list.html:40 app/templates/employees/list.html:67
+#: app/templates/employees/list.html:95
 #: app/templates/installations/list.html:17
 #: app/templates/leads/dashboard.html:16 app/templates/leads/list.html:16
-#: app/templates/licensing/list.html:17
+#: app/templates/licensing/list.html:31
 #: app/templates/licensing_admin/device_keys.html:14
 #: app/templates/licensing_admin/signing_keys.html:24
 #: app/templates/operations_ui/cash_closings_list.html:18
@@ -3027,25 +3094,26 @@ msgstr "Billing model"
 #: app/templates/profile/sessions.html:9 app/templates/staff/detail.html:8
 #: app/templates/staff/list.html:16 app/templates/subscriptions/detail.html:65
 #: app/templates/subscriptions/list.html:16
+#: app/templates/sync/quarantine_list.html:17
 #: app/templates/system/backups.html:14
 msgid "Status"
 msgstr "Status"
 
-#: app/templates/catalog/index.html:22 app/templates/catalog/index.html:36
-#: app/templates/commercial_ops/emergency_extensions_list.html:17
+#: app/templates/catalog/index.html:22
+#: app/templates/commercial_ops/emergency_extensions_list.html:16
 #: app/templates/commercial_ops/notifications_list.html:30
-#: app/templates/commercial_ops/pending_activations_list.html:17
+#: app/templates/commercial_ops/pending_activations_list.html:16
 #: app/templates/commercial_ops/pilot_detail.html:24
-#: app/templates/commercial_ops/pilots_list.html:18
+#: app/templates/commercial_ops/pilots_list.html:15
 #: app/templates/commercial_ops/renewal_detail.html:30
-#: app/templates/commercial_ops/renewals_list.html:18
+#: app/templates/commercial_ops/renewals_list.html:19
 #: app/templates/commercial_ops/slot_exceptions.html:27
 #: app/templates/commercial_sales/invoice_detail.html:65
 #: app/templates/commercial_sales/invoice_detail.html:102
 #: app/templates/commercial_sales/payout_batches_list.html:53
 #: app/templates/commercial_sales/quote_detail.html:67
 #: app/templates/commercial_sales/quote_detail.html:114
-#: app/templates/components/table.html:153
+#: app/templates/components/table.html:175
 #: app/templates/employees/detail.html:120
 #: app/templates/employees/invitations.html:9
 #: app/templates/licensing_admin/signing_keys.html:24
@@ -3055,15 +3123,15 @@ msgid "Actions"
 msgstr "Actions"
 
 #: app/templates/catalog/index.html:26
-#: app/templates/commercial_ops/emergency_extensions_list.html:26
-#: app/templates/commercial_ops/pilots_list.html:27
-#: app/templates/commercial_ops/renewals_list.html:27
+#: app/templates/commercial_ops/emergency_extensions_list.html:25
+#: app/templates/commercial_ops/pilots_list.html:24
+#: app/templates/commercial_ops/renewals_list.html:28
 #: app/templates/customers/detail.html:389
 #: app/templates/customers/detail.html:408
 #: app/templates/customers/detail.html:427 app/templates/customers/list.html:30
-#: app/templates/employees/list.html:104
+#: app/templates/employees/list.html:111
 #: app/templates/installations/list.html:26
-#: app/templates/licensing/list.html:27 app/templates/staff/list.html:31
+#: app/templates/licensing/list.html:41 app/templates/staff/list.html:31
 #: app/templates/subscriptions/list.html:28
 msgid "View"
 msgstr "View"
@@ -3080,23 +3148,23 @@ msgstr "Add-ons"
 msgid "Availability"
 msgstr "Availability"
 
-#: app/templates/catalog/index.html:45
+#: app/templates/catalog/index.html:58
 msgid "Change availability status"
 msgstr "Change availability status"
 
-#: app/templates/catalog/index.html:59
+#: app/templates/catalog/index.html:73
 msgid "Entitlement definitions"
 msgstr "Entitlement definitions"
 
-#: app/templates/catalog/index.html:61
+#: app/templates/catalog/index.html:75
 msgid "Description"
 msgstr "Description"
 
-#: app/templates/catalog/index.html:71
+#: app/templates/catalog/index.html:85
 msgid "Recently imported versions"
 msgstr "Recently imported versions"
 
-#: app/templates/catalog/index.html:73 app/templates/catalog/plan_new.html:8
+#: app/templates/catalog/index.html:87 app/templates/catalog/plan_new.html:8
 #: app/templates/catalog/versions.html:7
 #: app/templates/commercial_ops/activation_policy.html:8
 #: app/templates/commercial_ops/activation_policy.html:39
@@ -3107,11 +3175,11 @@ msgstr "Recently imported versions"
 #: app/templates/customers/detail.html:421
 #: app/templates/installations/detail.html:9
 #: app/templates/installations/list.html:15
-#: app/templates/licensing/list.html:15
+#: app/templates/licensing/list.html:29
 msgid "Product"
 msgstr "Product"
 
-#: app/templates/catalog/index.html:73 app/templates/catalog/versions.html:7
+#: app/templates/catalog/index.html:87 app/templates/catalog/versions.html:7
 #: app/templates/commercial_ops/pending_activation_detail.html:11
 #: app/templates/employees/detail.html:120
 #: app/templates/installations/new.html:12
@@ -3119,18 +3187,18 @@ msgstr "Product"
 msgid "Platform"
 msgstr "Platform"
 
-#: app/templates/catalog/index.html:73 app/templates/catalog/versions.html:7
+#: app/templates/catalog/index.html:87 app/templates/catalog/versions.html:7
 #: app/templates/operations_ui/report_snapshots_list.html:7
 #: app/templates/operations_ui/report_snapshots_list.html:14
 msgid "Version"
 msgstr "Version"
 
-#: app/templates/catalog/index.html:73 app/templates/catalog/versions.html:7
+#: app/templates/catalog/index.html:87 app/templates/catalog/versions.html:7
 #: app/templates/system/backups.html:14
 msgid "Checksum"
 msgstr "Checksum"
 
-#: app/templates/catalog/index.html:78
+#: app/templates/catalog/index.html:92
 msgid "No versions imported yet -- use"
 msgstr "No versions imported yet -- use"
 
@@ -3153,14 +3221,16 @@ msgstr "Base price"
 #: app/templates/catalog/plan_new.html:20
 #: app/templates/commercial_ops/pilot_convert.html:16
 #: app/templates/commercial_ops/renewals_new.html:21
+#: app/templates/commercial_sales/employee_dashboard.html:34
+#: app/templates/commercial_sales/employee_dashboard.html:50
 #: app/templates/commercial_sales/invoice_detail.html:12
-#: app/templates/commercial_sales/order_detail.html:12
+#: app/templates/commercial_sales/order_detail.html:25
 #: app/templates/commercial_sales/payment_new.html:15
 #: app/templates/commercial_sales/quote_detail.html:12
 #: app/templates/commercial_sales/quote_new.html:13
 #: app/templates/operations_ui/cash_closing_new.html:11
-#: app/templates/operations_ui/dashboard_finance.html:7
-#: app/templates/operations_ui/dashboard_management.html:7
+#: app/templates/operations_ui/dashboard_finance.html:12
+#: app/templates/operations_ui/dashboard_management.html:10
 #: app/templates/operations_ui/expense_new.html:19
 #: app/templates/operations_ui/report_snapshots_list.html:7
 #: app/templates/operations_ui/report_snapshots_list.html:13
@@ -3276,7 +3346,7 @@ msgstr "-- global default --"
 
 #: app/templates/commercial_ops/activation_policy.html:24
 #: app/templates/commercial_ops/activation_policy.html:39
-#: app/templates/commercial_ops/pending_activations_list.html:17
+#: app/templates/commercial_ops/pending_activations_list.html:16
 msgid "Mode"
 msgstr "Mode"
 
@@ -3319,7 +3389,7 @@ msgid "(all licenses on this subscription)"
 msgstr "(all licenses on this subscription)"
 
 #: app/templates/commercial_ops/emergency_extension_detail.html:10
-#: app/templates/commercial_ops/emergency_extensions_list.html:17
+#: app/templates/commercial_ops/emergency_extensions_list.html:16
 #: app/templates/commercial_ops/pilot_detail.html:76
 #: app/templates/commercial_ops/pilot_detail.html:88
 #: app/templates/commercial_ops/renewal_detail.html:21
@@ -3334,7 +3404,7 @@ msgstr "(all licenses on this subscription)"
 #: app/templates/commercial_sales/invoice_detail.html:102
 #: app/templates/commercial_sales/invoice_detail.html:108
 #: app/templates/commercial_sales/invoice_detail.html:121
-#: app/templates/commercial_sales/order_detail.html:36
+#: app/templates/commercial_sales/order_detail.html:49
 #: app/templates/commercial_sales/payment_detail.html:31
 #: app/templates/commercial_sales/quote_detail.html:35
 #: app/templates/commercial_sales/quote_detail.html:51
@@ -3349,14 +3419,15 @@ msgstr "(all licenses on this subscription)"
 #: app/templates/installations/detail.html:26
 #: app/templates/installations/detail.html:59
 #: app/templates/leads/detail.html:174 app/templates/leads/detail.html:186
-#: app/templates/licensing/detail.html:59
-#: app/templates/licensing/detail.html:80
+#: app/templates/licensing/detail.html:89
+#: app/templates/licensing/detail.html:109
 #: app/templates/licensing_admin/requests.html:16
 #: app/templates/operations_ui/cash_closing_detail.html:51
 #: app/templates/operations_ui/cash_closing_detail.html:77
-#: app/templates/operations_ui/expense_detail.html:119
+#: app/templates/operations_ui/expense_detail.html:126
 #: app/templates/subscriptions/detail.html:36
 #: app/templates/subscriptions/detail.html:44
+#: app/templates/sync/quarantine_list.html:16
 msgid "Reason"
 msgstr "Reason"
 
@@ -3365,12 +3436,12 @@ msgid "Incident reference"
 msgstr "Incident reference"
 
 #: app/templates/commercial_ops/emergency_extension_detail.html:12
-#: app/templates/commercial_ops/emergency_extensions_list.html:17
+#: app/templates/commercial_ops/emergency_extensions_list.html:16
 msgid "Starts"
 msgstr "Starts"
 
 #: app/templates/commercial_ops/emergency_extension_detail.html:13
-#: app/templates/commercial_ops/emergency_extensions_list.html:17
+#: app/templates/commercial_ops/emergency_extensions_list.html:16
 #: app/templates/employees/invitations.html:9 app/templates/staff/list.html:62
 #: app/templates/staff/list.html:68
 msgid "Expires"
@@ -3391,7 +3462,7 @@ msgstr "no (expired)"
 #: app/templates/commercial_ops/emergency_extension_detail.html:15
 #: app/templates/commercial_ops/renewal_detail.html:18
 #: app/templates/commercial_sales/invoice_detail.html:19
-#: app/templates/commercial_sales/order_detail.html:16
+#: app/templates/commercial_sales/order_detail.html:29
 #: app/templates/commercial_sales/quote_detail.html:18
 #: app/templates/commercial_sales/refund_detail.html:14
 msgid "Created by"
@@ -3431,27 +3502,16 @@ msgstr "Revoke this emergency extension now?"
 #: app/templates/commercial_ops/pilot_detail.html:66
 #: app/templates/commercial_ops/slot_exceptions.html:18
 #: app/templates/commercial_ops/slot_exceptions.html:39
+#: app/templates/licensing/detail.html:51
 msgid "Reason (required)"
 msgstr "Reason (required)"
 
-#: app/templates/commercial_ops/emergency_extensions_list.html:2
-#: app/templates/commercial_ops/emergency_extensions_list.html:5
+#: app/templates/commercial_ops/emergency_extensions_list.html:3
+#: app/templates/commercial_ops/emergency_extensions_list.html:6
 msgid "Emergency extensions"
 msgstr "Emergency extensions"
 
-#: app/templates/commercial_ops/emergency_extensions_list.html:11
-#: app/templates/commercial_ops/notifications_list.html:18
-#: app/templates/commercial_ops/notifications_list.html:23
-#: app/templates/commercial_ops/pending_activations_list.html:11
-#: app/templates/commercial_ops/pilots_list.html:10
-#: app/templates/commercial_ops/renewals_list.html:10
-#: app/templates/components/table.html:73 app/templates/employees/list.html:29
-#: app/templates/employees/list.html:35 app/templates/employees/list.html:43
-#: app/templates/employees/list.html:49
-msgid "All"
-msgstr "All"
-
-#: app/templates/commercial_ops/emergency_extensions_list.html:28
+#: app/templates/commercial_ops/emergency_extensions_list.html:27
 msgid "No emergency extensions."
 msgstr "No emergency extensions."
 
@@ -3525,18 +3585,27 @@ msgstr "Open/in-progress/acknowledged"
 msgid "Severity"
 msgstr "Severity"
 
+#: app/templates/commercial_ops/notifications_list.html:18
+#: app/templates/commercial_ops/notifications_list.html:23
+#: app/templates/components/table.html:90 app/templates/employees/list.html:36
+#: app/templates/employees/list.html:42 app/templates/employees/list.html:50
+#: app/templates/employees/list.html:56
+msgid "All"
+msgstr "All"
+
 #: app/templates/commercial_ops/notifications_list.html:21
 #: app/templates/commercial_ops/notifications_list.html:30
 msgid "Assigned role"
 msgstr "Assigned role"
 
 #: app/templates/commercial_ops/notifications_list.html:26
+#: app/templates/components/table.html:120
 msgid "Filter"
 msgstr "Filter"
 
 #: app/templates/commercial_ops/notifications_list.html:30
 #: app/templates/customers/detail.html:186
-#: app/templates/customers/detail.html:198 app/templates/employees/list.html:87
+#: app/templates/customers/detail.html:198 app/templates/employees/list.html:94
 #: app/templates/operations_ui/management_note_new.html:9
 #: app/templates/operations_ui/management_notes_list.html:10
 #: app/templates/operations_ui/management_notes_list.html:14
@@ -3544,8 +3613,8 @@ msgid "Title"
 msgstr "Title"
 
 #: app/templates/commercial_ops/notifications_list.html:30
-#: app/templates/commercial_ops/renewals_list.html:18
-#: app/templates/commercial_sales/order_detail.html:15
+#: app/templates/commercial_ops/renewals_list.html:19
+#: app/templates/commercial_sales/order_detail.html:28
 #: app/templates/commercial_sales/orders_list.html:16
 #: app/templates/commercial_sales/quote_detail.html:17
 #: app/templates/commercial_sales/quotes_list.html:16
@@ -3597,7 +3666,7 @@ msgid "Gating mode"
 msgstr "Gating mode"
 
 #: app/templates/commercial_ops/pending_activation_detail.html:15
-#: app/templates/commercial_ops/pending_activations_list.html:17
+#: app/templates/commercial_ops/pending_activations_list.html:16
 #: app/templates/commercial_sales/quote_detail.html:114
 #: app/templates/commercial_sales/quote_detail.html:120
 msgid "Requested"
@@ -3650,19 +3719,19 @@ msgstr "Reject this activation?"
 msgid "Reject"
 msgstr "Reject"
 
-#: app/templates/commercial_ops/pending_activations_list.html:2
+#: app/templates/commercial_ops/pending_activations_list.html:3
 msgid "Activation reviews"
 msgstr "Activation reviews"
 
-#: app/templates/commercial_ops/pending_activations_list.html:5
+#: app/templates/commercial_ops/pending_activations_list.html:6
 msgid "Pending activation reviews"
 msgstr "Pending activation reviews"
 
-#: app/templates/commercial_ops/pending_activations_list.html:25
+#: app/templates/commercial_ops/pending_activations_list.html:24
 msgid "Review"
 msgstr "Review"
 
-#: app/templates/commercial_ops/pending_activations_list.html:27
+#: app/templates/commercial_ops/pending_activations_list.html:26
 msgid "No activation reviews."
 msgstr "No activation reviews."
 
@@ -3856,7 +3925,7 @@ msgstr "No extensions yet."
 #: app/templates/commercial_ops/pilot_detail.html:86
 #: app/templates/commercial_ops/renewal_detail.html:66
 #: app/templates/installations/detail.html:57
-#: app/templates/leads/detail.html:172 app/templates/licensing/detail.html:78
+#: app/templates/leads/detail.html:172 app/templates/licensing/detail.html:107
 #: app/templates/subscriptions/detail.html:42
 msgid "Status history"
 msgstr "Status history"
@@ -3864,7 +3933,7 @@ msgstr "Status history"
 #: app/templates/commercial_ops/pilot_detail.html:88
 #: app/templates/commercial_ops/renewal_detail.html:68
 #: app/templates/installations/detail.html:59
-#: app/templates/leads/detail.html:174 app/templates/licensing/detail.html:80
+#: app/templates/leads/detail.html:174 app/templates/licensing/detail.html:109
 #: app/templates/subscriptions/detail.html:44
 msgid "From"
 msgstr "From"
@@ -3872,7 +3941,7 @@ msgstr "From"
 #: app/templates/commercial_ops/pilot_detail.html:88
 #: app/templates/commercial_ops/renewal_detail.html:68
 #: app/templates/installations/detail.html:59
-#: app/templates/leads/detail.html:174 app/templates/licensing/detail.html:80
+#: app/templates/leads/detail.html:174 app/templates/licensing/detail.html:109
 #: app/templates/subscriptions/detail.html:44
 msgid "To"
 msgstr "To"
@@ -3880,20 +3949,20 @@ msgstr "To"
 #: app/templates/commercial_ops/pilot_detail.html:92
 #: app/templates/commercial_ops/renewal_detail.html:72
 #: app/templates/installations/detail.html:63
-#: app/templates/licensing/detail.html:84
+#: app/templates/licensing/detail.html:113
 #: app/templates/subscriptions/detail.html:48
 msgid "No status changes yet."
 msgstr "No status changes yet."
 
-#: app/templates/commercial_ops/pilots_list.html:18
+#: app/templates/commercial_ops/pilots_list.html:15
 msgid "Pilot window"
 msgstr "Pilot window"
 
-#: app/templates/commercial_ops/pilots_list.html:18
+#: app/templates/commercial_ops/pilots_list.html:15
 msgid "Extensions"
 msgstr "Extensions"
 
-#: app/templates/commercial_ops/pilots_list.html:29
+#: app/templates/commercial_ops/pilots_list.html:26
 msgid "No pilots yet."
 msgstr "No pilots yet."
 
@@ -4027,7 +4096,7 @@ msgid "Current term"
 msgstr "Current term"
 
 #: app/templates/commercial_ops/renewal_detail.html:13
-#: app/templates/commercial_ops/renewals_list.html:18
+#: app/templates/commercial_ops/renewals_list.html:19
 msgid "Proposed term"
 msgstr "Proposed term"
 
@@ -4090,7 +4159,10 @@ msgid "Apply this renewal now? The subscription term will change immediately."
 msgstr "Apply this renewal now? The subscription term will change immediately."
 
 #: app/templates/commercial_ops/renewal_detail.html:58
+#: app/templates/commercial_sales/employee_dashboard.html:36
 #: app/templates/installations/detail.html:27
+#: app/templates/operations_ui/dashboard_finance.html:14
+#: app/templates/operations_ui/dashboard_management.html:12
 #: app/templates/subscriptions/detail.html:26
 msgid "Apply"
 msgstr "Apply"
@@ -4110,11 +4182,11 @@ msgstr ""
 msgid "Apply renewal"
 msgstr "Apply renewal"
 
-#: app/templates/commercial_ops/renewals_list.html:5
+#: app/templates/commercial_ops/renewals_list.html:6
 msgid "Renewal requests"
 msgstr "Renewal requests"
 
-#: app/templates/commercial_ops/renewals_list.html:29
+#: app/templates/commercial_ops/renewals_list.html:30
 msgid "No renewal requests yet."
 msgstr "No renewal requests yet."
 
@@ -4264,29 +4336,37 @@ msgstr "This view requires a real employee profile."
 msgid "Orders"
 msgstr "Orders"
 
-#: app/templates/commercial_sales/employee_dashboard.html:21
+#: app/templates/commercial_sales/employee_dashboard.html:32
 msgid "My commission earnings"
 msgstr "My commission earnings"
+
+#: app/templates/commercial_sales/employee_dashboard.html:39
+#: app/templates/commercial_sales/employee_dashboard.html:51
+msgid "Earned, awaiting approval"
+msgstr "Earned, awaiting approval"
+
+#: app/templates/commercial_sales/employee_dashboard.html:40
+#: app/templates/commercial_sales/employee_dashboard.html:52
+msgid "Approved, awaiting payout"
+msgstr "Approved, awaiting payout"
+
+#: app/templates/commercial_sales/employee_dashboard.html:41
+#: app/templates/commercial_sales/employee_dashboard.html:53
+msgid "Paid to date"
+msgstr "Paid to date"
+
+#: app/templates/commercial_sales/employee_dashboard.html:43
+msgid "Pending approval requests"
+msgstr "Pending approval requests"
 
 #: app/templates/commercial_sales/employee_dashboard.html:46
 msgid "My commission earnings by currency"
 msgstr "My commission earnings by currency"
 
-#: app/templates/commercial_sales/employee_dashboard.html:23
-msgid "Earned, awaiting approval"
-msgstr "Earned, awaiting approval"
-
-#: app/templates/commercial_sales/employee_dashboard.html:24
-msgid "Approved, awaiting payout"
-msgstr "Approved, awaiting payout"
-
-#: app/templates/commercial_sales/employee_dashboard.html:25
-msgid "Paid to date"
-msgstr "Paid to date"
-
-#: app/templates/commercial_sales/employee_dashboard.html:27
-msgid "Pending approval requests"
-msgstr "Pending approval requests"
+#: app/templates/commercial_sales/employee_dashboard.html:67
+#: app/templates/operations_ui/dashboard_management.html:20
+msgid "No data."
+msgstr "No data."
 
 #: app/templates/commercial_sales/finance_dashboard.html:2
 msgid "Finance dashboard"
@@ -4320,7 +4400,7 @@ msgstr "Commissions approved, awaiting payout"
 msgid "Payout batches pending approval"
 msgstr "Payout batches pending approval"
 
-#: app/templates/commercial_sales/finance_dashboard.html:28
+#: app/templates/commercial_sales/finance_dashboard.html:37
 msgid "Outstanding invoice total"
 msgstr "Outstanding invoice total"
 
@@ -4339,7 +4419,7 @@ msgstr "Tax"
 
 #: app/templates/commercial_sales/invoice_detail.html:15
 #: app/templates/commercial_sales/invoices_list.html:15
-#: app/templates/commercial_sales/order_detail.html:13
+#: app/templates/commercial_sales/order_detail.html:26
 #: app/templates/commercial_sales/orders_list.html:15
 #: app/templates/commercial_sales/quote_detail.html:15
 #: app/templates/commercial_sales/quotes_list.html:15
@@ -4378,15 +4458,15 @@ msgid "Void invoice"
 msgstr "Void invoice"
 
 #: app/templates/commercial_sales/invoice_detail.html:45
-#: app/templates/commercial_sales/order_detail.html:56
+#: app/templates/commercial_sales/order_detail.html:69
 #: app/templates/commercial_sales/quote_detail.html:65
 msgid "Lines"
 msgstr "Lines"
 
 #: app/templates/commercial_sales/invoice_detail.html:47
 #: app/templates/commercial_sales/invoice_detail.html:51
-#: app/templates/commercial_sales/order_detail.html:58
-#: app/templates/commercial_sales/order_detail.html:62
+#: app/templates/commercial_sales/order_detail.html:71
+#: app/templates/commercial_sales/order_detail.html:75
 #: app/templates/commercial_sales/quote_detail.html:67
 #: app/templates/commercial_sales/quote_detail.html:71
 msgid "Item"
@@ -4394,8 +4474,8 @@ msgstr "Item"
 
 #: app/templates/commercial_sales/invoice_detail.html:47
 #: app/templates/commercial_sales/invoice_detail.html:52
-#: app/templates/commercial_sales/order_detail.html:58
-#: app/templates/commercial_sales/order_detail.html:63
+#: app/templates/commercial_sales/order_detail.html:71
+#: app/templates/commercial_sales/order_detail.html:76
 #: app/templates/commercial_sales/quote_detail.html:67
 #: app/templates/commercial_sales/quote_detail.html:72
 #: app/templates/commercial_sales/quote_detail.html:97
@@ -4404,8 +4484,8 @@ msgstr "Quantity"
 
 #: app/templates/commercial_sales/invoice_detail.html:47
 #: app/templates/commercial_sales/invoice_detail.html:53
-#: app/templates/commercial_sales/order_detail.html:58
-#: app/templates/commercial_sales/order_detail.html:64
+#: app/templates/commercial_sales/order_detail.html:71
+#: app/templates/commercial_sales/order_detail.html:77
 #: app/templates/commercial_sales/quote_detail.html:67
 #: app/templates/commercial_sales/quote_detail.html:73
 msgid "Unit price"
@@ -4413,15 +4493,15 @@ msgstr "Unit price"
 
 #: app/templates/commercial_sales/invoice_detail.html:47
 #: app/templates/commercial_sales/invoice_detail.html:54
-#: app/templates/commercial_sales/order_detail.html:58
-#: app/templates/commercial_sales/order_detail.html:65
+#: app/templates/commercial_sales/order_detail.html:71
+#: app/templates/commercial_sales/order_detail.html:78
 #: app/templates/commercial_sales/quote_detail.html:67
 #: app/templates/commercial_sales/quote_detail.html:75
 msgid "Line total"
 msgstr "Line total"
 
 #: app/templates/commercial_sales/invoice_detail.html:56
-#: app/templates/commercial_sales/order_detail.html:67
+#: app/templates/commercial_sales/order_detail.html:80
 msgid "No lines."
 msgstr "No lines."
 
@@ -4480,10 +4560,10 @@ msgstr "Request refund"
 #: app/templates/commercial_sales/payout_batches_list.html:21
 #: app/templates/commercial_sales/quotes_list.html:9
 #: app/templates/commercial_sales/refunds_list.html:9
-#: app/templates/components/table.html:98 app/templates/customers/list.html:10
-#: app/templates/employees/list.html:24 app/templates/employees/list.html:70
+#: app/templates/components/table.html:120 app/templates/customers/list.html:10
+#: app/templates/employees/list.html:31 app/templates/employees/list.html:77
 #: app/templates/installations/list.html:9 app/templates/layout/base.html:80
-#: app/templates/leads/list.html:10 app/templates/licensing/list.html:9
+#: app/templates/leads/list.html:10 app/templates/licensing/list.html:23
 #: app/templates/operations_ui/expenses_list.html:9
 #: app/templates/staff/list.html:9 app/templates/subscriptions/list.html:9
 msgid "Search"
@@ -4507,36 +4587,56 @@ msgstr "Number"
 msgid "No invoices yet."
 msgstr "No invoices yet."
 
-#: app/templates/commercial_sales/order_detail.html:21
+#: app/templates/commercial_sales/order_detail.html:9
+#: app/templates/licensing/detail.html:7
+#: app/templates/licensing/issuance.html:6
+msgid "License key -- shown once"
+msgstr "License key -- shown once"
+
+#: app/templates/commercial_sales/order_detail.html:10
+#: app/templates/licensing/detail.html:8
+#: app/templates/licensing/issuance.html:7
+msgid "Copy this now. It will never be displayed again."
+msgstr "Copy this now. It will never be displayed again."
+
+#: app/templates/commercial_sales/order_detail.html:15
+msgid ""
+"This order was already fulfilled and a license was already issued. The "
+"key was shown once at that time and cannot be retrieved again."
+msgstr ""
+"This order was already fulfilled and a license was already issued. The "
+"key was shown once at that time and cannot be retrieved again."
+
+#: app/templates/commercial_sales/order_detail.html:34
 msgid "Originating quote"
 msgstr "Originating quote"
 
-#: app/templates/commercial_sales/order_detail.html:22
+#: app/templates/commercial_sales/order_detail.html:35
 #: app/templates/commercial_sales/quote_detail.html:23
 msgid "Not yet created"
 msgstr "Not yet created"
 
-#: app/templates/commercial_sales/order_detail.html:26
+#: app/templates/commercial_sales/order_detail.html:39
 msgid "Confirm this order?"
 msgstr "Confirm this order?"
 
-#: app/templates/commercial_sales/order_detail.html:29
+#: app/templates/commercial_sales/order_detail.html:42
 msgid "Confirm order"
 msgstr "Confirm order"
 
-#: app/templates/commercial_sales/order_detail.html:37
+#: app/templates/commercial_sales/order_detail.html:50
 msgid "Cancel order"
 msgstr "Cancel order"
 
-#: app/templates/commercial_sales/order_detail.html:41
+#: app/templates/commercial_sales/order_detail.html:54
 msgid "Fulfill this order? This provisions the subscription and license."
 msgstr "Fulfill this order? This provisions the subscription and license."
 
-#: app/templates/commercial_sales/order_detail.html:43
+#: app/templates/commercial_sales/order_detail.html:56
 msgid "Fulfill order"
 msgstr "Fulfill order"
 
-#: app/templates/commercial_sales/order_detail.html:50
+#: app/templates/commercial_sales/order_detail.html:63
 msgid "Create invoice"
 msgstr "Create invoice"
 
@@ -4826,56 +4926,56 @@ msgstr "Confirm paid"
 msgid "No refunds yet."
 msgstr "No refunds yet."
 
-#: app/templates/components/table.html:82 app/templates/employees/list.html:55
+#: app/templates/components/table.html:99 app/templates/employees/list.html:62
 msgid "Sort by"
 msgstr "Sort by"
 
-#: app/templates/components/table.html:90
+#: app/templates/components/table.html:107
 msgid "Direction"
 msgstr "Direction"
 
-#: app/templates/components/table.html:92
+#: app/templates/components/table.html:109
 msgid "Ascending"
 msgstr "Ascending"
 
-#: app/templates/components/table.html:93
+#: app/templates/components/table.html:110
 msgid "Descending"
 msgstr "Descending"
 
-#: app/templates/components/table.html:161
+#: app/templates/components/table.html:183
 msgid "No records found."
 msgstr "No records found."
 
-#: app/templates/components/table.html:187
+#: app/templates/components/table.html:209
 msgid "Pagination"
 msgstr "Pagination"
 
-#: app/templates/components/table.html:188
+#: app/templates/components/table.html:210
 #, python-format
 msgid "Page %(page)s of %(total_pages)s — %(total)s total"
 msgstr "Page %(page)s of %(total_pages)s — %(total)s total"
 
-#: app/templates/components/table.html:192
-#: app/templates/components/table.html:194
+#: app/templates/components/table.html:214
+#: app/templates/components/table.html:216
 msgid "Previous page"
 msgstr "Previous page"
 
-#: app/templates/components/table.html:216
-#: app/templates/components/table.html:218
+#: app/templates/components/table.html:238
+#: app/templates/components/table.html:240
 msgid "Next page"
 msgstr "Next page"
 
-#: app/templates/components/table.html:224
+#: app/templates/components/table.html:246
 #, python-format
 msgid "%(total)s total"
 msgstr "%(total)s total"
 
-#: app/templates/components/table.html:239
-#: app/templates/components/table.html:240
+#: app/templates/components/table.html:261
+#: app/templates/components/table.html:262
 msgid "Compact view"
 msgstr "Compact view"
 
-#: app/templates/components/table.html:239
+#: app/templates/components/table.html:261
 msgid "Comfortable view"
 msgstr "Comfortable view"
 
@@ -4942,19 +5042,19 @@ msgstr "Open invoices (%(count)s)"
 
 #: app/templates/customers/detail.html:58
 #: app/templates/dashboard/index.html:130
-#: app/templates/dashboard/index.html:177
+#: app/templates/dashboard/index.html:170
 msgid "Active subscriptions"
 msgstr "Active subscriptions"
 
 #: app/templates/customers/detail.html:61
 #: app/templates/dashboard/index.html:137
-#: app/templates/dashboard/index.html:286
+#: app/templates/dashboard/index.html:279
 msgid "Active licenses"
 msgstr "Active licenses"
 
 #: app/templates/customers/detail.html:64
 #: app/templates/dashboard/index.html:140
-#: app/templates/dashboard/index.html:305
+#: app/templates/dashboard/index.html:298
 msgid "Active installations"
 msgstr "Active installations"
 
@@ -4967,8 +5067,8 @@ msgid "Archive"
 msgstr "Archive"
 
 #: app/templates/customers/detail.html:90
-#: app/templates/dashboard/index.html:244
-#: app/templates/dashboard/index.html:274
+#: app/templates/dashboard/index.html:237
+#: app/templates/dashboard/index.html:267
 #: app/templates/subscriptions/list.html:6
 #: app/templates/subscriptions/new.html:2
 #: app/templates/subscriptions/new.html:5
@@ -5196,7 +5296,7 @@ msgstr "Subscriptions for this customer"
 msgid "Showing the most recent 50 subscriptions."
 msgstr "Showing the most recent 50 subscriptions."
 
-#: app/templates/customers/detail.html:402 app/templates/licensing/list.html:16
+#: app/templates/customers/detail.html:402 app/templates/licensing/list.html:30
 msgid "Key"
 msgstr "Key"
 
@@ -5209,7 +5309,7 @@ msgid "Licenses for this customer"
 msgstr "Licenses for this customer"
 
 #: app/templates/customers/detail.html:406
-#: app/templates/licensing/detail.html:19 app/templates/licensing/list.html:25
+#: app/templates/licensing/detail.html:24 app/templates/licensing/list.html:39
 msgid "not issued"
 msgstr "not issued"
 
@@ -5333,164 +5433,170 @@ msgid "Key metrics"
 msgstr "Key metrics"
 
 #: app/templates/dashboard/index.html:127
-#: app/templates/dashboard/index.html:168
+#: app/templates/dashboard/index.html:161
 msgid "Active customers"
 msgstr "Active customers"
 
 #: app/templates/dashboard/index.html:130
-#: app/templates/dashboard/index.html:177
+#: app/templates/dashboard/index.html:170
 #, python-format
 msgid "%(share)s%% of all subscriptions"
 msgstr "%(share)s%% of all subscriptions"
 
 #: app/templates/dashboard/index.html:131
-#: app/templates/dashboard/index.html:181
+#: app/templates/dashboard/index.html:174
 msgid "Expiring in 30 days"
 msgstr "Expiring in 30 days"
 
 #: app/templates/dashboard/index.html:134
-#: app/templates/dashboard/index.html:195
+#: app/templates/dashboard/index.html:188
 msgid "Open items awaiting action"
 msgstr "Open items awaiting action"
 
 #: app/templates/dashboard/index.html:143
-#: app/templates/dashboard/index.html:198
+#: app/templates/dashboard/index.html:191
 msgid "Renewals awaiting finance approval"
 msgstr "Renewals awaiting finance approval"
 
 #: app/templates/dashboard/index.html:146
-#: app/templates/dashboard/index.html:204
+#: app/templates/dashboard/index.html:197
 msgid "Activations pending manual review"
 msgstr "Activations pending manual review"
 
-#: app/templates/dashboard/index.html:166
+#: app/templates/dashboard/index.html:159
 msgid "Total customers"
 msgstr "Total customers"
 
-#: app/templates/dashboard/index.html:167
+#: app/templates/dashboard/index.html:160
 msgid "Pilot customers"
 msgstr "Pilot customers"
 
-#: app/templates/dashboard/index.html:171
+#: app/templates/dashboard/index.html:164
 msgid "Total subscriptions"
 msgstr "Total subscriptions"
 
-#: app/templates/dashboard/index.html:180
-#: app/templates/dashboard/index.html:266
+#: app/templates/dashboard/index.html:173
+#: app/templates/dashboard/index.html:259
 msgid "Expiring in 7 days"
 msgstr "Expiring in 7 days"
 
-#: app/templates/dashboard/index.html:189
+#: app/templates/dashboard/index.html:182
 msgid "Commercial operations"
 msgstr "Commercial operations"
 
-#: app/templates/dashboard/index.html:201
+#: app/templates/dashboard/index.html:194
 msgid "Pilots needing action"
 msgstr "Pilots needing action"
 
-#: app/templates/dashboard/index.html:207
+#: app/templates/dashboard/index.html:200
 msgid "Active emergency extensions"
 msgstr "Active emergency extensions"
 
-#: app/templates/dashboard/index.html:210
+#: app/templates/dashboard/index.html:203
 msgid "Active device-slot exceptions"
 msgstr "Active device-slot exceptions"
 
-#: app/templates/dashboard/index.html:226
+#: app/templates/dashboard/index.html:219
 msgid "Chart colors"
 msgstr "Chart colors"
 
-#: app/templates/dashboard/index.html:228
+#: app/templates/dashboard/index.html:221
 msgid "Brand"
 msgstr "Brand"
 
-#: app/templates/dashboard/index.html:229
+#: app/templates/dashboard/index.html:222
 msgid "Vivid"
 msgstr "Vivid"
 
-#: app/templates/dashboard/index.html:230
+#: app/templates/dashboard/index.html:223
 msgid "Colorblind-safe"
 msgstr "Colorblind-safe"
 
-#: app/templates/dashboard/index.html:237
+#: app/templates/dashboard/index.html:230
 msgid "Subscriptions by product"
 msgstr "Subscriptions by product"
 
-#: app/templates/dashboard/index.html:242
+#: app/templates/dashboard/index.html:235
 msgid ""
 "Subscriptions appear here grouped by product as soon as the first one is "
 "created."
-msgstr "Subscriptions appear here grouped by product as soon as the first one is created."
+msgstr ""
+"Subscriptions appear here grouped by product as soon as the first one is "
+"created."
 
-#: app/templates/dashboard/index.html:248
+#: app/templates/dashboard/index.html:241
 msgid "Renewal pipeline"
 msgstr "Renewal pipeline"
 
-#: app/templates/dashboard/index.html:267
+#: app/templates/dashboard/index.html:260
 msgid "Expiring in 8-30 days"
 msgstr "Expiring in 8-30 days"
 
-#: app/templates/dashboard/index.html:268
+#: app/templates/dashboard/index.html:261
 msgid "Not expiring within 30 days"
 msgstr "Not expiring within 30 days"
 
-#: app/templates/dashboard/index.html:272
+#: app/templates/dashboard/index.html:265
 msgid "Active subscriptions appear here grouped by how close they are to renewal."
 msgstr "Active subscriptions appear here grouped by how close they are to renewal."
 
-#: app/templates/dashboard/index.html:280
+#: app/templates/dashboard/index.html:273
 msgid "Licenses by status"
 msgstr "Licenses by status"
 
-#: app/templates/dashboard/index.html:285
+#: app/templates/dashboard/index.html:278
 msgid "Total licenses"
 msgstr "Total licenses"
 
-#: app/templates/dashboard/index.html:293
+#: app/templates/dashboard/index.html:286
 msgid ""
 "Licenses appear here grouped by status as soon as the first one is "
 "created."
-msgstr "Licenses appear here grouped by status as soon as the first one is created."
+msgstr ""
+"Licenses appear here grouped by status as soon as the first one is "
+"created."
 
-#: app/templates/dashboard/index.html:295 app/templates/licensing/list.html:6
-#: app/templates/licensing/new.html:2 app/templates/licensing/new.html:5
+#: app/templates/dashboard/index.html:288 app/templates/licensing/new.html:2
+#: app/templates/licensing/new.html:5
 msgid "New license"
 msgstr "New license"
 
-#: app/templates/dashboard/index.html:301
+#: app/templates/dashboard/index.html:294
 msgid "Active installations by product"
 msgstr "Active installations by product"
 
-#: app/templates/dashboard/index.html:308
+#: app/templates/dashboard/index.html:301
 msgid "Products with active installations"
 msgstr "Products with active installations"
 
-#: app/templates/dashboard/index.html:311
+#: app/templates/dashboard/index.html:304
 msgid ""
 "Active installations appear here grouped by product once devices start "
 "activating."
-msgstr "Active installations appear here grouped by product once devices start activating."
+msgstr ""
+"Active installations appear here grouped by product once devices start "
+"activating."
 
-#: app/templates/dashboard/index.html:313
+#: app/templates/dashboard/index.html:306
 #: app/templates/installations/list.html:6
 #: app/templates/installations/new.html:2
 #: app/templates/installations/new.html:5
 msgid "Register installation"
 msgstr "Register installation"
 
-#: app/templates/dashboard/index.html:319
+#: app/templates/dashboard/index.html:321
 msgid "Latest Owner database backup"
 msgstr "Latest Owner database backup"
 
-#: app/templates/dashboard/index.html:322
+#: app/templates/dashboard/index.html:324
 msgid "No backup has been taken yet."
 msgstr "No backup has been taken yet."
 
-#: app/templates/dashboard/index.html:328
+#: app/templates/dashboard/index.html:330
 msgid "Recent staff actions"
 msgstr "Recent staff actions"
 
-#: app/templates/dashboard/index.html:334
+#: app/templates/dashboard/index.html:336
 msgid "No activity yet."
 msgstr "No activity yet."
 
@@ -5560,7 +5666,7 @@ msgid "Job title"
 msgstr "Job title"
 
 #: app/templates/employees/detail.html:9 app/templates/employees/detail.html:61
-#: app/templates/employees/list.html:27 app/templates/employees/list.html:87
+#: app/templates/employees/list.html:34 app/templates/employees/list.html:94
 #: app/templates/employees/new.html:25 app/templates/profile/index.html:11
 msgid "Department"
 msgstr "Department"
@@ -5576,8 +5682,8 @@ msgstr "Manager"
 msgid "Employment start date"
 msgstr "Employment start date"
 
-#: app/templates/employees/detail.html:13 app/templates/employees/list.html:47
-#: app/templates/employees/list.html:88 app/templates/profile/index.html:15
+#: app/templates/employees/detail.html:13 app/templates/employees/list.html:54
+#: app/templates/employees/list.html:95 app/templates/profile/index.html:15
 msgid "Presence"
 msgstr "Presence"
 
@@ -5655,6 +5761,7 @@ msgid "You do not have permission to edit this profile."
 msgstr "You do not have permission to edit this profile."
 
 #: app/templates/employees/detail.html:76
+#: app/templates/licensing/detail.html:79
 msgid "Lifecycle actions"
 msgstr "Lifecycle actions"
 
@@ -5776,31 +5883,31 @@ msgstr "No pending invitations."
 msgid "Add employee"
 msgstr "Add employee"
 
-#: app/templates/employees/list.html:25
+#: app/templates/employees/list.html:32
 msgid "Name or employee number"
 msgstr "Name or employee number"
 
-#: app/templates/employees/list.html:41
+#: app/templates/employees/list.html:48
 msgid "Role"
 msgstr "Role"
 
-#: app/templates/employees/list.html:58 app/templates/employees/list.html:87
+#: app/templates/employees/list.html:65 app/templates/employees/list.html:94
 msgid "Employee #"
 msgstr "Employee #"
 
-#: app/templates/employees/list.html:59 app/templates/employees/list.html:88
+#: app/templates/employees/list.html:66 app/templates/employees/list.html:95
 msgid "Start date"
 msgstr "Start date"
 
-#: app/templates/employees/list.html:67
+#: app/templates/employees/list.html:74
 msgid "Include archived"
 msgstr "Include archived"
 
-#: app/templates/employees/list.html:90
+#: app/templates/employees/list.html:97
 msgid "No employees match these filters."
 msgstr "No employees match these filters."
 
-#: app/templates/employees/list.html:114 app/templates/staff/list.html:59
+#: app/templates/employees/list.html:121 app/templates/staff/list.html:59
 msgid "Pending invitations"
 msgstr "Pending invitations"
 
@@ -5842,7 +5949,7 @@ msgid "Last check-in"
 msgstr "Last check-in"
 
 #: app/templates/installations/detail.html:19
-#: app/templates/leads/detail.html:29 app/templates/licensing/detail.html:52
+#: app/templates/leads/detail.html:29 app/templates/licensing/detail.html:82
 msgid "Change status"
 msgstr "Change status"
 
@@ -5851,7 +5958,7 @@ msgid "Change installation status?"
 msgstr "Change installation status?"
 
 #: app/templates/installations/detail.html:23
-#: app/templates/licensing/detail.html:56
+#: app/templates/licensing/detail.html:86
 #: app/templates/operations_ui/management_note_detail.html:12
 #: app/templates/subscriptions/detail.html:20
 msgid "Change status to"
@@ -6001,32 +6108,31 @@ msgstr "%(count)d function(s)"
 msgid "Keyboard shortcuts"
 msgstr "Keyboard shortcuts"
 
-
-#: app/templates/layout/_shortcuts_cheatsheet.html:15
+#: app/templates/layout/_shortcuts_cheatsheet.html:23
 msgid "Open search / command palette"
 msgstr "Open search / command palette"
 
-#: app/templates/layout/_shortcuts_cheatsheet.html:16
+#: app/templates/layout/_shortcuts_cheatsheet.html:24
 msgid "Show this cheatsheet"
 msgstr "Show this cheatsheet"
 
-#: app/templates/layout/_shortcuts_cheatsheet.html:17
+#: app/templates/layout/_shortcuts_cheatsheet.html:25
 msgid "Go to Dashboard"
 msgstr "Go to Dashboard"
 
-#: app/templates/layout/_shortcuts_cheatsheet.html:19
+#: app/templates/layout/_shortcuts_cheatsheet.html:27
 msgid "Go to Customers"
 msgstr "Go to Customers"
 
-#: app/templates/layout/_shortcuts_cheatsheet.html:22
+#: app/templates/layout/_shortcuts_cheatsheet.html:30
 msgid "Go to Leads"
 msgstr "Go to Leads"
 
-#: app/templates/layout/_shortcuts_cheatsheet.html:25
+#: app/templates/layout/_shortcuts_cheatsheet.html:33
 msgid "Go to Sales (Quotes)"
 msgstr "Go to Sales (Quotes)"
 
-#: app/templates/layout/_shortcuts_cheatsheet.html:28
+#: app/templates/layout/_shortcuts_cheatsheet.html:36
 msgid "Go to Expenses"
 msgstr "Go to Expenses"
 
@@ -6347,55 +6453,89 @@ msgstr "Primary contact name"
 msgid "Create lead"
 msgstr "Create lead"
 
-#: app/templates/licensing/detail.html:7
-msgid "License key -- shown once"
-msgstr "License key -- shown once"
+#: app/templates/licensing/detail.html:12
+#: app/templates/licensing/detail.html:13
+#: app/templates/licensing/issuance.html:12
+#: app/templates/licensing/issuance.html:13
+msgid "Copy key"
+msgstr "Copy key"
 
-#: app/templates/licensing/detail.html:8
-msgid "Copy this now. It will never be displayed again."
-msgstr "Copy this now. It will never be displayed again."
+#: app/templates/licensing/detail.html:12
+#: app/templates/licensing/issuance.html:12
+#: app/templates/licensing/issuance.html:19
+msgid "Copied"
+msgstr "Copied"
 
-#: app/templates/licensing/detail.html:19
+#: app/templates/licensing/detail.html:13
+#: app/templates/licensing/issuance.html:13
+#: app/templates/licensing/issuance.html:20
+msgid "Selected -- press Ctrl+C"
+msgstr "Selected -- press Ctrl+C"
+
+#: app/templates/licensing/detail.html:24
 msgid "Masked key"
 msgstr "Masked key"
 
-#: app/templates/licensing/detail.html:20
+#: app/templates/licensing/detail.html:25
 msgid "Allowed platforms"
 msgstr "Allowed platforms"
 
-#: app/templates/licensing/detail.html:21 app/templates/licensing/new.html:14
+#: app/templates/licensing/detail.html:26 app/templates/licensing/new.html:14
 msgid "Device limit"
 msgstr "Device limit"
 
-#: app/templates/licensing/detail.html:22
+#: app/templates/licensing/detail.html:27
 msgid "Valid from / until"
 msgstr "Valid from / until"
 
-#: app/templates/licensing/detail.html:24
+#: app/templates/licensing/detail.html:29
 msgid "Revocation reason"
 msgstr "Revocation reason"
 
-#: app/templates/licensing/detail.html:31
+#: app/templates/licensing/detail.html:36
 msgid "Replacement license"
 msgstr "Replacement license"
 
-#: app/templates/licensing/detail.html:32
+#: app/templates/licensing/detail.html:37
 msgid "View replacement"
 msgstr "View replacement"
 
-#: app/templates/licensing/detail.html:32
+#: app/templates/licensing/detail.html:37
 msgid "Not replaced"
 msgstr "Not replaced"
 
-#: app/templates/licensing/detail.html:35
+#: app/templates/licensing/detail.html:40
 msgid "Device-slot exceptions"
 msgstr "Device-slot exceptions"
 
-#: app/templates/licensing/detail.html:40
+#: app/templates/licensing/detail.html:43
+msgid "Add devices"
+msgstr "Add devices"
+
+#: app/templates/licensing/detail.html:44
+msgid ""
+"Permanently raises this license's device limit and mirrors the new "
+"allowance onto its subscription. Requires a fresh MFA confirmation. Never"
+" lowers the limit below devices already active."
+msgstr ""
+"Permanently raises this license's device limit and mirrors the new "
+"allowance onto its subscription. Requires a fresh MFA confirmation. Never"
+" lowers the limit below devices already active."
+
+#: app/templates/licensing/detail.html:49
+msgid "Devices to add"
+msgstr "Devices to add"
+
+#: app/templates/licensing/detail.html:53
+#: app/templates/licensing/detail.html:56
+msgid "Add devices (requires recent authentication)"
+msgstr "Add devices (requires recent authentication)"
+
+#: app/templates/licensing/detail.html:62
 msgid "Issue key"
 msgstr "Issue key"
 
-#: app/templates/licensing/detail.html:41
+#: app/templates/licensing/detail.html:63
 msgid ""
 "Issuing requires a fresh MFA confirmation. The full key is shown exactly "
 "once."
@@ -6403,23 +6543,26 @@ msgstr ""
 "Issuing requires a fresh MFA confirmation. The full key is shown exactly "
 "once."
 
-#: app/templates/licensing/detail.html:45
+#: app/templates/licensing/detail.html:68
+#: app/templates/licensing/detail.html:71
+#: app/templates/licensing/issuance.html:77
+#: app/templates/licensing/issuance.html:80
 msgid "Issue license key (requires recent authentication)"
 msgstr "Issue license key (requires recent authentication)"
 
-#: app/templates/licensing/detail.html:54
+#: app/templates/licensing/detail.html:84
 msgid "Change license status? This may affect any activated installation."
 msgstr "Change license status? This may affect any activated installation."
 
-#: app/templates/licensing/detail.html:60
+#: app/templates/licensing/detail.html:90
 msgid "Apply (requires recent authentication)"
 msgstr "Apply (requires recent authentication)"
 
-#: app/templates/licensing/detail.html:67
+#: app/templates/licensing/detail.html:95
 msgid "Replace license"
 msgstr "Replace license"
 
-#: app/templates/licensing/detail.html:68
+#: app/templates/licensing/detail.html:96
 msgid ""
 "Creates a new DRAFT license and revokes/replaces this one. Requires a "
 "fresh MFA confirmation."
@@ -6427,19 +6570,135 @@ msgstr ""
 "Creates a new DRAFT license and revokes/replaces this one. Requires a "
 "fresh MFA confirmation."
 
-#: app/templates/licensing/detail.html:70
+#: app/templates/licensing/detail.html:98
 msgid "Replace this license with a new one?"
 msgstr "Replace this license with a new one?"
 
-#: app/templates/licensing/detail.html:72
+#: app/templates/licensing/detail.html:100
 msgid "Replace"
 msgstr "Replace"
 
-#: app/templates/licensing/list.html:9
+#: app/templates/licensing/issuance.html:2
+#: app/templates/licensing/issuance.html:39
+#: app/templates/licensing/list.html:17
+msgid "Issue license"
+msgstr "Issue license"
+
+#: app/templates/licensing/issuance.html:15
+msgid "Pre-composed WhatsApp message (English + Arabic)"
+msgstr "Pre-composed WhatsApp message (English + Arabic)"
+
+#: app/templates/licensing/issuance.html:19
+#: app/templates/licensing/issuance.html:20
+msgid "Copy message"
+msgstr "Copy message"
+
+#: app/templates/licensing/issuance.html:23
+msgid ""
+"This idempotency key was already used -- the license was already issued "
+"and its key was shown once, then. It cannot be shown again."
+msgstr ""
+"This idempotency key was already used -- the license was already issued "
+"and its key was shown once, then. It cannot be shown again."
+
+#: app/templates/licensing/issuance.html:28
+#: app/templates/subscriptions/detail.html:55
+msgid "Record a payment"
+msgstr "Record a payment"
+
+#: app/templates/licensing/issuance.html:29
+msgid "Payment can be recorded now or later -- issuance is never blocked on it."
+msgstr "Payment can be recorded now or later -- issuance is never blocked on it."
+
+#: app/templates/licensing/issuance.html:30
+msgid "Go to subscription to record payment"
+msgstr "Go to subscription to record payment"
+
+#: app/templates/licensing/issuance.html:34
+msgid "View license record"
+msgstr "View license record"
+
+#: app/templates/licensing/issuance.html:35
+msgid "Issue another license"
+msgstr "Issue another license"
+
+#: app/templates/licensing/issuance.html:40
+msgid ""
+"Three acts: pick or create the customer, pick the package and any extra "
+"devices, then press Issue. The key is revealed once, with a ready-to-send"
+" WhatsApp message."
+msgstr ""
+"Three acts: pick or create the customer, pick the package and any extra "
+"devices, then press Issue. The key is revealed once, with a ready-to-send"
+" WhatsApp message."
+
+#: app/templates/licensing/issuance.html:52
+msgid "1. Customer"
+msgstr "1. Customer"
+
+#: app/templates/licensing/issuance.html:53
+msgid "Existing customer"
+msgstr "Existing customer"
+
+#: app/templates/licensing/issuance.html:55
+msgid "-- New customer --"
+msgstr "-- New customer --"
+
+#: app/templates/licensing/issuance.html:58
+msgid "Or: legal name of a new customer"
+msgstr "Or: legal name of a new customer"
+
+#: app/templates/licensing/issuance.html:59
+msgid "Only used when no existing customer is selected above"
+msgstr "Only used when no existing customer is selected above"
+
+#: app/templates/licensing/issuance.html:61
+msgid "2. Package"
+msgstr "2. Package"
+
+#: app/templates/licensing/issuance.html:62
+msgid "Package"
+msgstr "Package"
+
+#: app/templates/licensing/issuance.html:65
+msgid "devices included"
+msgstr "devices included"
+
+#: app/templates/licensing/issuance.html:67
+msgid ""
+"No sellable packages yet -- set an effective date and current price on a "
+"plan first."
+msgstr ""
+"No sellable packages yet -- set an effective date and current price on a "
+"plan first."
+
+#: app/templates/licensing/issuance.html:71
+msgid ""
+"Term is set automatically from the package: ONE_TIME is perpetual (no "
+"expiry), ANNUAL/MONTHLY get a term from the package's billing interval, "
+"PILOT gets a 30-day trial."
+msgstr ""
+"Term is set automatically from the package: ONE_TIME is perpetual (no "
+"expiry), ANNUAL/MONTHLY get a term from the package's billing interval, "
+"PILOT gets a 30-day trial."
+
+#: app/templates/licensing/issuance.html:73
+msgid "Extra devices beyond the package's included count"
+msgstr "Extra devices beyond the package's included count"
+
+#: app/templates/licensing/issuance.html:76
+msgid "3. Issue"
+msgstr "3. Issue"
+
+#: app/templates/licensing/list.html:19
+msgid "Create a draft license instead (advanced)"
+msgstr "Create a draft license instead (advanced)"
+
+#: app/templates/licensing/list.html:23
 msgid "Customer name or key prefix"
 msgstr "Customer name or key prefix"
 
-#: app/templates/licensing/list.html:20
+#: app/templates/licensing/list.html:34
 msgid "No licenses yet."
 msgstr "No licenses yet."
 
@@ -6686,6 +6945,11 @@ msgstr "Device keys"
 msgid "Offline policies"
 msgstr "Offline policies"
 
+#: app/templates/licensing_admin/status.html:36
+#: app/templates/sync/quarantine_list.html:3
+msgid "Sync Quarantine"
+msgstr "Sync Quarantine"
+
 #: app/templates/operations_ui/cash_closing_detail.html:11
 msgid "Prior closing"
 msgstr "Prior closing"
@@ -6827,50 +7091,50 @@ msgstr "Required actions"
 msgid "View my expenses"
 msgstr "View my expenses"
 
-#: app/templates/operations_ui/dashboard_finance.html:12
+#: app/templates/operations_ui/dashboard_finance.html:18
 msgid "Expense approvals pending"
 msgstr "Expense approvals pending"
 
-#: app/templates/operations_ui/dashboard_finance.html:13
-#: app/templates/operations_ui/dashboard_management.html:26
+#: app/templates/operations_ui/dashboard_finance.html:19
+#: app/templates/operations_ui/dashboard_management.html:30
 msgid "Approved unpaid Expenses"
 msgstr "Approved unpaid Expenses"
 
-#: app/templates/operations_ui/dashboard_finance.html:14
+#: app/templates/operations_ui/dashboard_finance.html:20
 msgid "Expense-payment queue"
 msgstr "Expense-payment queue"
 
-#: app/templates/operations_ui/dashboard_finance.html:15
+#: app/templates/operations_ui/dashboard_finance.html:21
 msgid "Partial settlements"
 msgstr "Partial settlements"
 
-#: app/templates/operations_ui/dashboard_finance.html:16
-#: app/templates/operations_ui/dashboard_management.html:28
+#: app/templates/operations_ui/dashboard_finance.html:22
+#: app/templates/operations_ui/dashboard_management.html:32
 msgid "Closing-variance queue"
 msgstr "Closing-variance queue"
 
-#: app/templates/operations_ui/dashboard_finance.html:17
+#: app/templates/operations_ui/dashboard_finance.html:23
 msgid "Payment confirmations pending"
 msgstr "Payment confirmations pending"
 
-#: app/templates/operations_ui/dashboard_finance.html:19
+#: app/templates/operations_ui/dashboard_finance.html:25
 msgid "Refund queue"
 msgstr "Refund queue"
 
-#: app/templates/operations_ui/dashboard_finance.html:20
+#: app/templates/operations_ui/dashboard_finance.html:26
 msgid "Commission-payout queue"
 msgstr "Commission-payout queue"
 
-#: app/templates/operations_ui/dashboard_finance.html:21
-#: app/templates/operations_ui/dashboard_management.html:42
+#: app/templates/operations_ui/dashboard_finance.html:27
+#: app/templates/operations_ui/dashboard_management.html:46
 msgid "Net operational cash movement"
 msgstr "Net operational cash movement"
 
-#: app/templates/operations_ui/dashboard_finance.html:25
+#: app/templates/operations_ui/dashboard_finance.html:31
 msgid "Today's Cash Closing"
 msgstr "Today's Cash Closing"
 
-#: app/templates/operations_ui/dashboard_finance.html:28
+#: app/templates/operations_ui/dashboard_finance.html:34
 msgid "No cash closing created for today yet."
 msgstr "No cash closing created for today yet."
 
@@ -6879,59 +7143,55 @@ msgstr "No cash closing created for today yet."
 msgid "Management Dashboard"
 msgstr "Management Dashboard"
 
-#: app/templates/operations_ui/dashboard_management.html:11
+#: app/templates/operations_ui/dashboard_management.html:15
 msgid "Expense totals by Category"
 msgstr "Expense totals by Category"
 
-#: app/templates/operations_ui/dashboard_management.html:16
-msgid "No data."
-msgstr "No data."
-
-#: app/templates/operations_ui/dashboard_management.html:21
+#: app/templates/operations_ui/dashboard_management.html:25
 msgid "Queues"
 msgstr "Queues"
 
-#: app/templates/operations_ui/dashboard_management.html:24
+#: app/templates/operations_ui/dashboard_management.html:28
 msgid "Approval queue"
 msgstr "Approval queue"
 
-#: app/templates/operations_ui/dashboard_management.html:25
+#: app/templates/operations_ui/dashboard_management.html:29
 msgid "Duplicate-review queue"
 msgstr "Duplicate-review queue"
 
-#: app/templates/operations_ui/dashboard_management.html:27
+#: app/templates/operations_ui/dashboard_management.html:31
 msgid "Partially paid Expenses"
 msgstr "Partially paid Expenses"
 
-#: app/templates/operations_ui/dashboard_management.html:30
+#: app/templates/operations_ui/dashboard_management.html:34
 msgid "Fulfillment exceptions"
 msgstr "Fulfillment exceptions"
 
-#: app/templates/operations_ui/dashboard_management.html:31
+#: app/templates/operations_ui/dashboard_management.html:35
 msgid "Management Notes requiring action"
 msgstr "Management Notes requiring action"
 
-#: app/templates/operations_ui/dashboard_management.html:35
+#: app/templates/operations_ui/dashboard_management.html:39
 msgid "Operational cash movement (month to date)"
 msgstr "Operational cash movement (month to date)"
 
-#: app/templates/operations_ui/dashboard_management.html:38
+#: app/templates/operations_ui/dashboard_management.html:42
 msgid "Confirmed collections"
 msgstr "Confirmed collections"
 
-#: app/templates/operations_ui/dashboard_management.html:39
+#: app/templates/operations_ui/dashboard_management.html:43
 msgid "Confirmed Refunds"
 msgstr "Confirmed Refunds"
 
-#: app/templates/operations_ui/dashboard_management.html:40
+#: app/templates/operations_ui/dashboard_management.html:44
 msgid "Paid Expenses"
 msgstr "Paid Expenses"
 
-#: app/templates/operations_ui/dashboard_management.html:41
+#: app/templates/operations_ui/dashboard_management.html:45
 msgid "Recorded Commission payouts"
 msgstr "Recorded Commission payouts"
 
-#: app/templates/operations_ui/dashboard_management.html:43
+#: app/templates/operations_ui/dashboard_management.html:47
 msgid "Outstanding Receivables"
 msgstr "Outstanding Receivables"
 
@@ -7060,7 +7320,7 @@ msgstr "No attachments."
 msgid "Upload receipt"
 msgstr "Upload receipt"
 
-#: app/templates/operations_ui/expense_detail.html:117
+#: app/templates/operations_ui/expense_detail.html:124
 msgid "Void this expense?"
 msgstr "Void this expense?"
 
@@ -7337,10 +7597,6 @@ msgstr "New end date"
 msgid "Record renewal"
 msgstr "Record renewal"
 
-#: app/templates/subscriptions/detail.html:55
-msgid "Record a payment"
-msgstr "Record a payment"
-
 #: app/templates/subscriptions/list.html:9
 msgid "Customer name"
 msgstr "Customer name"
@@ -7360,6 +7616,51 @@ msgstr "e.g. annual"
 #: app/templates/subscriptions/new.html:20
 msgid "Create (starts as DRAFT)"
 msgstr "Create (starts as DRAFT)"
+
+#: app/templates/sync/quarantine_list.html:6
+#: app/templates/sync/quarantine_list.html:21
+msgid "Quarantined sync events"
+msgstr "Quarantined sync events"
+
+#: app/templates/sync/quarantine_list.html:14
+msgid "Device"
+msgstr "Device"
+
+#: app/templates/sync/quarantine_list.html:15
+msgid "Batch #"
+msgstr "Batch #"
+
+#: app/templates/sync/quarantine_list.html:18
+msgid "Quarantined"
+msgstr "Quarantined"
+
+#: app/templates/sync/quarantine_list.html:21
+msgid "No quarantined sync events."
+msgstr "No quarantined sync events."
+
+#: app/templates/sync/quarantine_list.html:35
+msgid ""
+"Replay this event? It will be re-validated and, if it now passes, applied"
+" as a real sync event."
+msgstr ""
+"Replay this event? It will be re-validated and, if it now passes, applied"
+" as a real sync event."
+
+#: app/templates/sync/quarantine_list.html:37
+msgid "Replay"
+msgstr "Replay"
+
+#: app/templates/sync/quarantine_list.html:42
+msgid ""
+"Discard this event? It stays visible under the Discarded filter, but will"
+" never be applied."
+msgstr ""
+"Discard this event? It stays visible under the Discarded filter, but will"
+" never be applied."
+
+#: app/templates/sync/quarantine_list.html:44
+msgid "Discard"
+msgstr "Discard"
 
 #: app/templates/system/backups.html:2 app/templates/system/backups.html:6
 msgid "Owner database backups"
@@ -7392,78 +7693,6 @@ msgstr "Restore"
 #: app/templates/system/backups.html:32
 msgid "No backups taken yet."
 msgstr "No backups taken yet."
-
-#: app/i18n_labels.py:364
-msgid "Replayed"
-msgstr "Replayed"
-
-#: app/i18n_labels.py:365
-msgid "Discarded"
-msgstr "Discarded"
-
-#: app/sync/quarantine_routes.py
-msgid "This event was already resolved."
-msgstr "This event was already resolved."
-
-#: app/sync/quarantine_routes.py
-msgid "Replay failed -- payload is still invalid: %(reason)s"
-msgstr "Replay failed -- payload is still invalid: %(reason)s"
-
-#: app/sync/quarantine_routes.py
-msgid "Event was already present -- marked as replayed."
-msgstr "Event was already present -- marked as replayed."
-
-#: app/sync/quarantine_routes.py
-msgid "Replay failed: %(reason)s"
-msgstr "Replay failed: %(reason)s"
-
-#: app/sync/quarantine_routes.py
-msgid "Event replayed successfully."
-msgstr "Event replayed successfully."
-
-#: app/sync/quarantine_routes.py
-msgid "Event discarded."
-msgstr "Event discarded."
-
-#: app/templates/sync/quarantine_list.html:3
-msgid "Sync Quarantine"
-msgstr "Sync Quarantine"
-
-#: app/templates/sync/quarantine_list.html
-msgid "Quarantined sync events"
-msgstr "Quarantined sync events"
-
-#: app/templates/sync/quarantine_list.html
-msgid "Device"
-msgstr "Device"
-
-#: app/templates/sync/quarantine_list.html
-msgid "Batch #"
-msgstr "Batch #"
-
-#: app/templates/sync/quarantine_list.html
-msgid "Quarantined"
-msgstr "Quarantined"
-
-#: app/templates/sync/quarantine_list.html
-msgid "No quarantined sync events."
-msgstr "No quarantined sync events."
-
-#: app/templates/sync/quarantine_list.html
-msgid "Replay this event? It will be re-validated and, if it now passes, applied as a real sync event."
-msgstr "Replay this event? It will be re-validated and, if it now passes, applied as a real sync event."
-
-#: app/templates/sync/quarantine_list.html
-msgid "Replay"
-msgstr "Replay"
-
-#: app/templates/sync/quarantine_list.html
-msgid "Discard this event? It stays visible under the Discarded filter, but will never be applied."
-msgstr "Discard this event? It stays visible under the Discarded filter, but will never be applied."
-
-#: app/templates/sync/quarantine_list.html
-msgid "Discard"
-msgstr "Discard"
 
 #~ msgid ""
 #~ "Each code can be used once if "

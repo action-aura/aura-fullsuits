@@ -346,10 +346,19 @@ closed, one added that is larger than the one it replaces.
    (3)**: an unlicensed device never starts its sync loop, so this could not
    be tested rather than tested and failed.
 
-5. **Owner CI is red on i18n catalog drift — not licensing.** Three failures,
-   one cause: the translation catalogs were never regenerated after the
-   licence-key-copy and typography work (`a3bb5ea` and the Stage D/E UI wave).
-   Measured 2026-09-04, and smaller than the raw counts suggest:
+5. ~~**Owner CI is red on i18n catalog drift — not licensing.**~~ **FIXED
+   2026-09-04.** All three failures resolved: catalogs regenerated and the 37
+   untranslated/fuzzy entries translated into Arabic (terminology matched to
+   the 1,573 existing entries — License = الترخيص, Device limit = حد الأجهزة,
+   Customer = العميل), the `<kbd>` keycap conflict resolved structurally, and
+   the implicit-string-concatenation blind spot closed in the drift scanner.
+   Two defects were found along the way and are described at the end of this
+   entry. The original diagnosis is kept below because its measurements are
+   what made the fix small.
+
+   Three failures, one cause: the translation catalogs were never regenerated
+   after the licence-key-copy and typography work (`a3bb5ea` and the Stage D/E
+   UI wave). Measured 2026-09-04, and smaller than the raw counts suggest:
 
    * `messages.pot` carries exactly **one** stale entry, `'Ctrl'`, left from
      when that keycap was still wrapped in `_()`.
@@ -377,12 +386,38 @@ closed, one added that is larger than the one it replaces.
    pybabel compile -d translations
    ```
 
-   Regeneration alone is **not** sufficient and will trade one red for another:
-   the 48 new entries land untranslated, and the "real Arabic, not placeholder"
-   guard rejects Arabic that merely echoes the English. They need actual
-   translations. Left to whoever owns Owner i18n rather than done here —
-   1,573 existing entries set a terminology precedent worth matching, and this
-   is a shared, actively-developed area.
+   Regeneration alone is **not** sufficient and trades one red for another: the
+   new entries land untranslated, and the "real Arabic, not placeholder" guard
+   rejects Arabic that merely echoes the English. Done together, therefore —
+   the 48 source literals collapsed to **37** catalog entries once duplicates
+   across templates were merged.
+
+   **Two defects surfaced while fixing this, both worth keeping:**
+
+   * **A duplicated Arabic string, user-visible.** The pilot "maximum
+     extensions" message stored its *entire* Arabic sentence **twice**,
+     concatenated with no separator — two renderings of the same English merged
+     by accident. Every Arabic user saw it doubled. Found by counting
+     placeholders per message (the duplication doubled `%(max)s` too), now
+     pinned by `test_every_translation_preserves_its_source_placeholders_exactly`.
+     That guard matters beyond cosmetics: these messages are interpolated with
+     `% {...}`, so a translator inventing a placeholder the caller never
+     supplies raises `KeyError` at request time, **in Arabic only** — the least
+     likely place to catch it before a customer does.
+   * **The drift scanner could not see wrapped strings.** Its regex read only
+     the first fragment of an implicitly-concatenated literal, while pybabel
+     extracts the joined whole — so any message wrapped across two lines
+     reported a msgid that exists neither in the source nor the catalog, and
+     could never be fixed by translating it. `i18n_labels.py`'s device-limit
+     message was exactly that. The scanner now joins continuation fragments the
+     way Python and pybabel do.
+
+   The `<kbd>` conflict was resolved **structurally** rather than by allowlist:
+   `<kbd>` content is stripped as a keycap legend, the same way `<style>`/
+   `<script>` blocks already are. An allowlist entry would have fixed `"Ctrl"`
+   and left the next keycap to fail. A companion test pins that the strip is
+   non-greedy — a greedy one would swallow prose between two keycaps and
+   silently turn the whole scanner into a no-op.
 
    Four other failures seen locally in the same run were **environment, not
    CI**: three from `requests` missing in a hand-rolled `.venv-owner` (CI
