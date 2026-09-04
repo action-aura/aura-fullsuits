@@ -346,6 +346,50 @@ closed, one added that is larger than the one it replaces.
    (3)**: an unlicensed device never starts its sync loop, so this could not
    be tested rather than tested and failed.
 
+5. **Owner CI is red on i18n catalog drift — not licensing.** Three failures,
+   one cause: the translation catalogs were never regenerated after the
+   licence-key-copy and typography work (`a3bb5ea` and the Stage D/E UI wave).
+   Measured 2026-09-04, and smaller than the raw counts suggest:
+
+   * `messages.pot` carries exactly **one** stale entry, `'Ctrl'`, left from
+     when that keycap was still wrapped in `_()`.
+   * **48** real user-facing literals exist in source with no catalog entry, so
+     the Arabic UI renders them in English. They are concentrated:
+     `templates/licensing/issuance.html` (29), `templates/licensing/detail.html`
+     (9), plus a handful in `commercial_ops/device_ops_routes.py`,
+     `licensing/issuance_routes.py` and two other templates. Real prose —
+     *"Copy key"*, *"Add devices (requires recent authentication)"*, the
+     already-issued-key warning — not keycaps.
+   * `_shortcuts_cheatsheet.html`'s bare `<kbd>Ctrl</kbd>` fails the
+     hardcoded-string guard. This one is a genuine **test-vs-test conflict**,
+     not an oversight: wrapping it in `_()` forces an Arabic catalog entry whose
+     only honest value is the Latin `"Ctrl"`, which then trips
+     `test_arabic_translations_are_real_arabic_not_placeholder_text`. The
+     template already documents the tradeoff in a comment. The principled fix is
+     to teach the hardcoded-string guard that text inside `<kbd>` is a keycap
+     legend rather than prose — **not** a per-string allowlist entry.
+
+   Fix (from `docs/owner/phase9_5b_r/i18n-technology-adr.md`), run in `owner/`:
+
+   ```
+   pybabel extract -F babel.cfg -o translations/messages.pot .
+   pybabel update -i translations/messages.pot -d translations
+   pybabel compile -d translations
+   ```
+
+   Regeneration alone is **not** sufficient and will trade one red for another:
+   the 48 new entries land untranslated, and the "real Arabic, not placeholder"
+   guard rejects Arabic that merely echoes the English. They need actual
+   translations. Left to whoever owns Owner i18n rather than done here —
+   1,573 existing entries set a terminology precedent worth matching, and this
+   is a shared, actively-developed area.
+
+   Four other failures seen locally in the same run were **environment, not
+   CI**: three from `requests` missing in a hand-rolled `.venv-owner` (CI
+   installs `requirements/development.txt`, which pulls it via `base.txt`) and
+   one from `test_phase9_5e_dev_server_port_isolation` expecting a `.venv/` that
+   a git worktree does not carry. Neither is a product defect.
+
 4. ~~Employee creation ignoring the licence.~~ **FIXED 2026-09-03.** Eight
    admin-mutation routes now require an active licence; the seven onboarding
    and account-recovery routes stay deliberately exempt so a fresh install can
