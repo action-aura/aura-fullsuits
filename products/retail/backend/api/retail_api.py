@@ -9129,8 +9129,13 @@ def customers_receivables():
     # longer equals the sum of the rows actually shown to the user.
     total = conn.execute("SELECT COALESCE(SUM(credit_balance),0) FROM customers "
                          "WHERE company_id=? AND COALESCE(credit_balance,0) > 0.005", (cid,)).fetchone()[0]
+    # Currency-aware since 2026-09-05: this total was the last family of
+    # figures still quantized to 0.01 after the 2026-09-03 waves, so a JOD
+    # shop's "what am I owed" was wrong by up to 5 fils while every row
+    # under it was right. See ROADMAP "Money precision beyond the cash drawer".
+    currency = _company_currency(conn, cid)
     conn.close()
-    return jsonify({'status': 'success', 'total_receivable': _money(total), 'data': [dict(r) for r in rows]})
+    return jsonify({'status': 'success', 'total_receivable': _money(total, currency), 'data': [dict(r) for r in rows]})
 
 @retail_bp.route('/customers/<string:cust_id>/statement', methods=['GET'])
 @mt_login_required
@@ -9225,8 +9230,9 @@ def suppliers_payables():
     # silently net against and understate the total_payable shown to the user.
     total = conn.execute("SELECT COALESCE(SUM(credit_balance),0) FROM suppliers "
                          "WHERE company_id=? AND COALESCE(credit_balance,0) > 0.005", (cid,)).fetchone()[0]
+    currency = _company_currency(conn, cid)
     conn.close()
-    return jsonify({'status': 'success', 'total_payable': _money(total), 'data': [dict(r) for r in rows]})
+    return jsonify({'status': 'success', 'total_payable': _money(total, currency), 'data': [dict(r) for r in rows]})
 
 @retail_bp.route('/suppliers/<string:sid>/statement', methods=['GET'])
 @mt_login_required
@@ -9345,11 +9351,12 @@ def daily_cash():
     rows = conn.execute("""SELECT direction, method, COALESCE(SUM(amount),0) AS amount, COUNT(*) AS count
         FROM payments WHERE company_id=? AND date(created_at)=? AND COALESCE(status,'active')='active'
         GROUP BY direction, method""", (cid, day)).fetchall()
-    cash_in = _money(sum(r['amount'] for r in rows if r['direction'] == 'in'))
-    cash_out = _money(sum(r['amount'] for r in rows if r['direction'] == 'out'))
+    currency = _company_currency(conn, cid)
+    cash_in = _money(sum(r['amount'] for r in rows if r['direction'] == 'in'), currency)
+    cash_out = _money(sum(r['amount'] for r in rows if r['direction'] == 'out'), currency)
     conn.close()
     return jsonify({'status': 'success', 'data': {
-        'date': day, 'cash_in': cash_in, 'cash_out': cash_out, 'net': _money(cash_in - cash_out),
+        'date': day, 'cash_in': cash_in, 'cash_out': cash_out, 'net': _money(cash_in - cash_out, currency),
         'by_method': [dict(r) for r in rows],
     }})
 
@@ -9381,8 +9388,9 @@ def aging_report():
         bal = float(p['credit_balance'] or 0)
         key = 'current' if days <= 0 else '1_30' if days <= 30 else '31_60' if days <= 60 else '61_90' if days <= 90 else '90_plus'
         buckets[key] += bal
+    currency = _company_currency(conn, cid)
     conn.close()
-    return jsonify({'status': 'success', 'type': kind, 'data': {k: _money(v) for k, v in buckets.items()}})
+    return jsonify({'status': 'success', 'type': kind, 'data': {k: _money(v, currency) for k, v in buckets.items()}})
 
 # ── Accounting export -- CSV, for a finance department's own ERP/auditor ──────
 #
@@ -9412,7 +9420,7 @@ def aging_report():
 _EXPORT_CSV_BATCH_SIZE = 500
 
 
-def _export_money(value):
+def _export_money(value, currency=None):
     """Format one exported money cell with the SAME rounding rule the ledger
     itself is written with -- core/retail/pricing.py's `_money`, imported
     here as `tax_engine._money`, NOT a second hand-rolled implementation.
@@ -9426,10 +9434,15 @@ def _export_money(value):
     older install never populated -- is left blank rather than coerced into
     a false "0.00"; a blank cell tells a bookkeeper "no value", a zero tells
     them "value was zero", and those are not the same claim.
+
+    `currency` now selects the same quantum the ledger it exports was written
+    at (JOD's 3dp, not a hardcoded 2dp) -- see the receivables/payables/
+    daily-cash/aging fix this accompanies; an export that quietly rounded a
+    3dp ledger to 2dp would disagree with the books it is supposed to mirror.
     """
     if value is None:
         return ''
-    return tax_engine._money(Decimal(str(value)))
+    return tax_engine._money(Decimal(str(value)), tax_engine.currency_quantum(currency))
 
 
 def _export_date_range():
@@ -9453,12 +9466,18 @@ def _export_date_range():
     return date_from, date_to, None
 
 
-def _stream_csv_export(conn, sql, params, header, money_columns, filename):
+def _stream_csv_export(conn, sql, params, header, money_columns, filename, currency=None):
     """Turn one company-scoped, date-ranged SELECT into a streamed CSV
     response. `money_columns` names the header columns (by label, not
     index, so a route's own column order can change without silently
     formatting the wrong cell) that get `_export_money`'s rounding; every
     other cell is written through unchanged.
+
+    `currency` is read by the caller (it has `cid`; this function does not)
+    BEFORE handing `conn` off here, the same "read once, own connection"
+    shape every other route in this file follows, and is forwarded to
+    every `_export_money` call so the export rounds to the same quantum the
+    ledger it mirrors was written at.
 
     `conn` is owned by this function from here on -- opened by the caller,
     closed in the generator's `finally` so it lives exactly as long as the
@@ -9483,7 +9502,7 @@ def _stream_csv_export(conn, sql, params, header, money_columns, filename):
                 for row in batch:
                     values = list(row)
                     for idx in money_idx:
-                        values[idx] = _export_money(values[idx])
+                        values[idx] = _export_money(values[idx], currency)
                     writer.writerow(values)
                 yield buf.getvalue()
                 buf.seek(0)
@@ -9547,9 +9566,10 @@ def export_sales_csv():
         "ORDER BY s.id, si.id"
     )
     conn = get_retail_conn()
+    currency = _company_currency(conn, cid)
     return _stream_csv_export(
         conn, sql, (cid, date_from, date_to), header, money_columns,
-        f'sales_export_{date_from}_{date_to}.csv',
+        f'sales_export_{date_from}_{date_to}.csv', currency,
     )
 
 
@@ -9576,6 +9596,7 @@ def export_payments_csv():
         return err
     conn = get_retail_conn()
     _ensure_credit_schema(conn)
+    currency = _company_currency(conn, cid)
     header = [
         'payment_id', 'created_at', 'direction', 'method', 'amount', 'currency',
         'party_type', 'party_id', 'sale_id', 'related_type', 'related_id',
@@ -9592,7 +9613,7 @@ def export_payments_csv():
     )
     return _stream_csv_export(
         conn, sql, (cid, date_from, date_to), header, money_columns,
-        f'payments_export_{date_from}_{date_to}.csv',
+        f'payments_export_{date_from}_{date_to}.csv', currency,
     )
 
 
@@ -9640,9 +9661,10 @@ def export_cash_sessions_csv():
         "ORDER BY closed_at"
     )
     conn = get_retail_conn()
+    currency = _company_currency(conn, cid)
     return _stream_csv_export(
         conn, sql, (cid, date_from, date_to), header, money_columns,
-        f'cash_session_zreports_{date_from}_{date_to}.csv',
+        f'cash_session_zreports_{date_from}_{date_to}.csv', currency,
     )
 
 # ── Void (immutability: never edit/delete, only reverse) ──────────────────────
