@@ -37,7 +37,7 @@ Legend:
 |---|---|---|
 | Device limit enforced | **TESTED** | Server-side, `owner/tests/test_commercial_ops_add_devices.py`, `DEVICE_LIMIT_REACHED` |
 | Unlicensed install is read-only | **TESTED** | `test_pre_activation_states_deny_new_mutation`; documented in CLAUDE.md |
-| `POST /api/admin/employees` has NO licence guard | **RUN — GAP** | Zero `require_license_capability` in `onboarding_routes.py`. A restricted licence can still add staff. Shared with Clinic, so the fix needs a scoping decision |
+| ~~`POST /api/admin/employees` has NO licence guard~~ | **STALE — the guard exists, RUN 2026-09-05** | This line said "zero `require_license_capability` in `onboarding_routes.py`". There are nine now, `create_employee` included. Measured on a fresh, unactivated third till: creating a cashier answered `403 {"reason_code": "LICENSE_INACTIVE"}`; after activation the same call succeeds. Staff cannot be added on an install that has no licence |
 | `EXTRA_DEVICE` add-on is sellable | **RUN — NOT READY** | Exists in the catalog but sits at `PLANNED`, not `AVAILABLE`. This is the 50 JOD one-time fee |
 | Licence activation end to end, on a clean machine | **UNVERIFIED** | Needs the clean-machine rehearsal in `go-live-runbook.md` Part 2 |
 
@@ -470,11 +470,23 @@ closed, one added that is larger than the one it replaces.
    the real Compose sign-in screen driven over adb, landing on the Dashboard.
    Create staff on one device, they sign in on another: proven.
 
-   One nuance worth knowing for the demo: the desktop's *admin* account
-   (created by first-run setup, BEFORE activation) did **not** propagate to the
-   phone; only the cashier created *after* activation did. Rows written before
-   the tenant key is bound at activation carry the pre-rebind company and stay
-   local. Create staff accounts after activating the till, not before.
+   One nuance, re-measured 2026-09-05 (the first version of this paragraph
+   guessed the cause and got it wrong): the desktop's *admin* account did
+   **not** propagate to the phone, but not because it was created before
+   activation. Its `user` event was queued and pushed (Owner seq 66); the
+   phone REFUSED it — `sync_apply_quarantine` reason `duplicate_employee_id`:
+   "`ADMIN-0001` already registered under company …". Every install mints
+   its own `ADMIN-0001` at first run, so after both join one licence the two
+   owner rows collide on `(company_id, employee_id)`, and the admin's eight
+   permission events then quarantine as `missing_parent:user` behind it —
+   nine harmless-but-noisy rows per peer per admin. The design assumes one
+   admin per till (phase5-waveb2 speaks of "two admins … on two tills"), so
+   this is a decision, not a bug: **should one owner account exist on every
+   device, or does each till keep its own admin login?** Until decided, the
+   owner logs into each device with that device's own admin. Staff are
+   unaffected: a cashier cannot even be created before activation (licence
+   gate, `403 LICENSE_INACTIVE`, measured on a fresh third till), and one
+   created after it reaches the phone in seconds — see below.
 
    Also observed, not diagnosed: the phone's first sign-in attempt ~8 s after a
    cold start reported "Couldn't reach the server" while its backend (which
