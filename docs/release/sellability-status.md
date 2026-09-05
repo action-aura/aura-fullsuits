@@ -47,7 +47,7 @@ Legend:
 |---|---|---|
 | Outbox, cursors, quarantine, pruning | **TESTED** | Owner suite; `owner/app/sync/pruning.py` has its own tests |
 | `flask sync prune-events` scheduled | **BLOCKED** | Code and tests exist. Nothing schedules it. Needs a systemd timer on the droplet |
-| Two real devices converging on one shop | **UNVERIFIED** | Never exercised with two physical installs |
+| Two real devices converging on one shop | **RUN — WORKS: accounts, customers, catalogue, stock and sales** | 2026-09-05, a real Mi Note 10 and a desktop till on one licence, every step through the real HTTP API of the real artefact: a cashier created on the desktop signed in on the phone; a customer created on each device reached the other; a product created on the desktop with stock 10 appeared on the phone with the **same UUID** and stock 10; that cashier opened a drawer and rang a sale of 2 **on the phone** (`SALE-000004-69e67d3f-570e4413`, 24.69); the phone's stock read 8; the desktop then listed that sale number and read stock **8**. Sale and stock crossed phone → desktop within the 90 s poll |
 | Business day is configurable | **RUN** | Was unreachable — no client could set it, so every install bucketed on each writing device's own clock. Now a card in Admin Center, proved against the real route |
 
 ## The three surfaces
@@ -100,7 +100,7 @@ and the desktop sync?" turned out to have a longer answer than yes or no.
 | Owner relay is live | **RETRACTED — never verified** | This line previously read "**RUN** — `POST /api/sync/v1/push` and `/pull` on the local Owner both answer 403 to an unsigned request, correctly rejecting, not failing". **That was wrong.** No Owner instance was running. Port 5000 belongs to `DentaCareService.exe`, an unrelated third-party service that returns **403 to every path** — `/zzz/not/a/real/route` answers 403 exactly as `/api/sync/v1/push` does. A status code was read as proof of identity: it showed only that *something* refused, never that the relay existed. Corrected 2026-09-03. The relay's behaviour remains **UNVERIFIED** until an Owner instance is started and answers on a port confirmed to belong to it |
 | A customer can turn sync on | **FIXED — desktop, proven live** | 2026-09-03. Owner now returns `sync_relay_base_url` in the activation response when `OWNER_SYNC_RELAY_PUBLIC_URL` is configured; the device persists it and uses it when no env var is set. Demonstrated on the rehearsal: a third till installed with **no `AURA_SYNC_RELAY_URL` anywhere** activated, learned the address, and on its next launch pulled the shop's catalogue by itself. An operator's explicit env var still wins, and a discovered URL passes the same https/loopback validation a typed one does — both mutation-proved. **Takes effect at next launch** (config is read at import; hot-start is deliberately out of scope). Android still takes a build-time property — that is the remaining half |
 | The phone says whether it is syncing | **TESTED** | Added this cycle: More → Device → Sync status, reading `SyncCoordinator.health()`. Four tiers; on today's APK its honest answer is "Sync is not set up" |
-| Accounts sync between devices | **DESKTOP ONLY** | Two-stream design; Android builds only the retail stream, and `RETAIL_SYNC_ENTITY_TYPES` deliberately excludes `user`. A cashier made on the desktop cannot log in on the phone |
+| Accounts sync between devices | **RUN — WORKS, phone included** | This line said "DESKTOP ONLY … a cashier made on the desktop cannot log in on the phone" until 2026-09-05, when exactly that was done on the Mi Note 10: the desktop-created cashier arrived in the phone's `registry.db` in ~5 s, its password setup followed as an update, and it signed in on the phone's own screen. Blocker 4 below has the evidence |
 | Two real devices syncing end to end | **RUN — WORKS** | 2026-09-03, first time ever. Two independent desktop installs (separate `AURA_APP_DATA`, ports 5101/5102) activated on the SAME licence key, each receiving its own `installation_id`. Catalogue crossed A→B (product `c0394392…`, same UUID both sides); a sale rung on B crossed to A (`SALE-000001-7e50f8eb-e3a325c0`) **with fils intact — subtotal 12.345, tax 1.975, total 14.320**, which is also this cycle's money work validated on a running system rather than in a test. No pairing step: activation on a shared key is the whole grouping mechanism |
 | Owner relay is live | **RUN — verified properly this time** | Owner started from source against a fresh Postgres database. Discriminating evidence, which the retracted line above lacked: a nonsense path returns **404** while `/api/sync/v1/push` returns **400** with Owner's own `{"reason_code":"INVALID_REQUEST"}` — different responses, so the route genuinely exists and is handling the request |
 | Clean-machine install and activation | **RUN — WORKS** | Fresh Owner (venv, migrations to head, RBAC 138 permissions + 5 roles, catalogue, offline policy, signing key generated and activated with a real sign/verify round-trip, `commercial preflight` reporting 51 OK and one WARNING — **corrected: this originally said "fully clean", which was wrong.** The single warning was the missing trust anchor, and it was filtered out by a bad regex in the check meant to surface it. See step 3 of the section below). Fresh till: `needs_setup:true` → first admin → licence `ACTIVE_ONLINE`. Confirmed the gate is real: creating a product was refused before activation and succeeded after |
@@ -172,7 +172,7 @@ Three things, in his order. Each line says how it was checked.
 
 | Ask | State | How |
 |---|---|---|
-| **1. Present the employee system, then create staff accounts on the spot so they can log in** | **WAS WRONG — FIXED 2026-09-05** | The previous entry here said "TESTED — works … nothing in code blocks the presentation" on the strength of green suites. Running the product found otherwise: a cashier created from the Employees screen could **log in and do nothing** — every retail route answered `403 Access denied to retail. Contact your Admin.` (phone UI: "Blocked by your subscription/license: …"), on the desktop and on the phone alike. The blanket subsystem gate demanded a legacy `retail` row that nothing in the product ever writes; 27 test fixtures hand-inserted it, which is why every suite was green. Fixed at the root (`user_accounts.user_holds_subsystem`: a granted `retail.*` capability now satisfies the gate; an explicit revocation still locks out), mutation-proven both directions, and re-probed on the restarted till as the very account that was refused (200/200). Full record: `docs/corrections/identity/employee-locked-out-of-retail-root-cause-analysis.md`. The phone gets the fix with the next APK install |
+| **1. Present the employee system, then create staff accounts on the spot so they can log in** | **WAS WRONG — FIXED 2026-09-05** | The previous entry here said "TESTED — works … nothing in code blocks the presentation" on the strength of green suites. Running the product found otherwise: a cashier created from the Employees screen could **log in and do nothing** — every retail route answered `403 Access denied to retail. Contact your Admin.` (phone UI: "Blocked by your subscription/license: …"), on the desktop and on the phone alike. The blanket subsystem gate demanded a legacy `retail` row that nothing in the product ever writes; 27 test fixtures hand-inserted it, which is why every suite was green. Fixed at the root (`user_accounts.user_holds_subsystem`: a granted `retail.*` capability now satisfies the gate; an explicit revocation still locks out), mutation-proven both directions, and re-probed on the restarted till as the very account that was refused (200/200). Full record: `docs/corrections/identity/employee-locked-out-of-retail-root-cause-analysis.md`. APK rebuilt and installed the same night; the phone's cashier then listed and created customers |
 | **2. Products next — Ahmed starts POS-vendor meetings Sunday** | **TESTED — works** | Lookup 20/20, barcode uniqueness 4/4, variants 11/11, import/export 25/25, each run alone (60 passed, 0 failed). The combined-process run showed 23 failures for the same pollution reason as above |
 | **3. AI lead discovery — give it a segment and an area, get real contact details for sales to call** | **BUILT — off until a key is set** | New Owner CRM feature, `owner/app/leads/discovery.py` + `/leads/discover`. **Deliberately NOT the cousin's KIMI approach:** an LLM asked for "phone numbers of pharmacies in Irbid" invents some, and a sales team dialling fabricated numbers is worse than no feature. This reads the **Google Places API** — the same data he copies off Google Maps by hand — and imports only what is listed there. Guards: a place with no listed phone is shown but cannot be imported (a lead must have a phone or email); re-importing a place never duplicates it (Places `id` is the idempotency key, mutation-proven); results capped at 20 per search as a cost ceiling; the API key can never reach an error message (mutation-proven); a `javascript:` website is never rendered as a link. 22 pure unit tests + 12 HTTP route tests. **Off by default** — costs nothing until `OWNER_LEAD_DISCOVERY_PROVIDER=google_places` and `OWNER_GOOGLE_PLACES_API_KEY` are set; the owner must create that key (Google's free tier covers roughly 6,000 searches a month at Text Search pricing) |
 
@@ -496,9 +496,28 @@ closed, one added that is larger than the one it replaces.
    account. "Add customer" → "Phone Customer 0905" → "Customer added"; the
    desktop till listed it within the 45-second poll (`created_at
    2026-09-05 02:07:36`). Customers now converge in both directions, created
-   by a screen-created cashier on either device. Stock/sale convergence
-   between the two is still not run; the "two devices converging on one
-   shop" row in the Sync table stays honest about that.
+   by a screen-created cashier on either device.
+
+   **Stock and sales, RUN the same morning:** a product created on the
+   desktop (`SYNC-0905C`, stock 10 via the real stock-adjust route) appeared
+   on the phone with the same UUID and `total_stock 10`; the cashier opened a
+   drawer and rang a sale of 2 on the phone's own backend
+   (`SALE-000004-69e67d3f-570e4413`, 24.69 — the rehearsal company is set to
+   USD, hence 2dp); the phone read stock 8; the desktop listed that sale
+   number and read stock 8 within 90 s. That is the "two devices converging
+   on one shop" row, now RUN for every entity the product sells with.
+
+   One trap on the way, worth knowing for any phone rehearsal: the phone
+   reaches the relay through `adb reverse tcp:5551`, and that tunnel does
+   NOT survive the laptop hibernating (USB re-enumerates). The phone's
+   coordinator then logs `NETWORK_UNAVAILABLE … ECONNREFUSED 127.0.0.1:5551`
+   and backs off exponentially (ticks ~3.5 min apart after six failures), so
+   the product "never arrived" for ten minutes while the desktop's pulls
+   filled the Owner log and looked like the phone's. Re-run `adb reverse`
+   and restart the app to reset the backoff; the cursor jumped 85 → 89 in
+   under a minute. A real deployment uses a public relay URL, so this is a
+   rehearsal artefact — but the backoff behaviour after any outage is real
+   and correct.
 
    Side observation, explained: the phone's dashboard rendered "JD 0.000"
    while the gate was still refusing and "$0.00" / "owes $22.00" once it
