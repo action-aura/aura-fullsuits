@@ -103,5 +103,16 @@ def test_app_module_gate_disables_sync_for_an_invalid_url_without_refusing_to_bo
     assert _app_module._sync_service is None
     app = _app_module.app
     app.config["TESTING"] = True
+    # `init_app()` first, as the real launch path does: since the
+    # APP_NOT_INITIALISED guard landed (app.py's
+    # `_refuse_to_serve_before_init_app`, after a clean install that looked
+    # healthy with no schema), EVERY request -- /api/health included -- is
+    # refused with 503 until the migrations have run. Asserting 200 on a bare
+    # `import app` asserted the exact lie that guard exists to stop, and this
+    # test had been red since then (re-measured 2026-09-05 on a clean
+    # checkout). What the test proves is unchanged and now real: an invalid
+    # relay URL leaves sync OFF (`_sync_service is None` above) while the app
+    # still initialises and serves.
+    _app_module.init_app()
     with app.test_client() as client:
         assert client.get('/api/health').status_code == 200

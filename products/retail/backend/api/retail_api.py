@@ -8371,6 +8371,43 @@ _DEFAULT_METHODS = [('Cash', 'cash'), ('Card', 'card'), ('Bank Transfer', 'bank'
 _SETTINGS_BLOB_PREFIX = 'blob_'
 _BRANDING_LOGO_KEY = _SETTINGS_BLOB_PREFIX + 'branding_logo'
 
+#: Stable per-key identity for a synced shop setting. Owner requires
+#: `entity_id` to be a UUID, and a setting has no row uid of its own -- the
+#: real key is (company, skey). uuid5 of the key name makes every device
+#: mint the SAME entity_id for the same setting, so Owner sees one identity
+#: per setting rather than one per write.
+_RETAIL_SETTING_SYNC_NAMESPACE = _uuid.UUID('6f1a1c2e-4d2b-4b7e-9a0e-5c3d8a7b2f10')
+
+
+def _retail_setting_entity_id(skey):
+    return str(_uuid.uuid5(_RETAIL_SETTING_SYNC_NAMESPACE, f"retail_setting:{skey}"))
+
+
+def _queue_setting_sync_event(cur, skey, svalue):
+    """Queue one `retail_setting` sync event for a shop-level setting.
+
+    Why this exists (2026-09-05): one licence, two devices, and the phone
+    showed "$" while the desktop showed "JD" -- `retail_settings` was never a
+    synced entity, so currency, tax mode, credit defaults, business day and
+    branding text were per DEVICE when every one of them describes the SHOP.
+    A cashier reading a dinar shop's prices in dollars on the phone is the
+    same defect as the dollar bug that opened this release cycle, just one
+    device further along.
+
+    `svalue is None` means the setting was cleared (business-day routes
+    DELETE the row) and travels as a `delete`; everything else is an
+    `update` -- create/update are the same upsert on the receiver, exactly
+    as `user_permission` treats them. Blob-prefixed keys (the branding logo)
+    are refused here rather than trusted to callers: a logo is kilobytes of
+    base64 that has no business in a sync payload and is deliberately kept
+    out of `_settings()` for the same reason.
+    """
+    if not skey or str(skey).startswith(_SETTINGS_BLOB_PREFIX):
+        return
+    event_type = 'delete' if svalue is None else 'update'
+    _queue_sync_event(cur, 'retail_setting', _retail_setting_entity_id(skey), event_type,
+                      {'skey': skey, 'svalue': None if svalue is None else str(svalue)})
+
 _CREDIT_SCHEMA_READY = False
 def _ensure_credit_schema(conn):
     """Idempotent migration. Extends the existing retail tables; safe on live data."""
@@ -8592,7 +8629,11 @@ def credit_settings_set():
             conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
                          "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",
                          (cid, k, str(data[k])))
+            # Multi-device sync (2026-09-05): see _queue_setting_sync_event's
+            # docstring for the "$" vs "JOD" defect this closes.
+            _queue_setting_sync_event(conn, k, str(data[k]))
     conn.commit(); s = _settings(conn, cid); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     return jsonify({'status': 'success', 'data': s})
 
 # ── Settings (tax calculation policy) ─────────────────────────────────────────
@@ -8643,7 +8684,11 @@ def tax_settings_set():
     conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
                  "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",
                  (cid, 'tax_calculation_mode', mode))
+    # Multi-device sync (2026-09-05): see _queue_setting_sync_event's
+    # docstring for the "$" vs "JOD" defect this closes.
+    _queue_setting_sync_event(conn, 'tax_calculation_mode', mode)
     conn.commit(); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     try:
         from commercial_runtime.security.audit import record as _sec_audit
         _sec_audit(cid, _uid(), 'RETAIL_TAX_MODE_CHANGED', entity_type='SETTINGS',
@@ -8890,9 +8935,15 @@ def business_day_settings_set():
             conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
                          "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",
                          (cid, skey, svalue))
+        # Multi-device sync (2026-09-05): see _queue_setting_sync_event's
+        # docstring for the "$" vs "JOD" defect this closes. `svalue` is
+        # already None-or-string here, matching the helper's own delete/
+        # update split exactly.
+        _queue_setting_sync_event(conn, skey, svalue)
     conn.commit()
     boundary = metrics.business_day(conn, cid)
     conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
 
     effective = {'business_timezone': getattr(boundary.zone, 'key', None),
                  'business_day_start_hour': boundary.day_start_hour}
@@ -8989,7 +9040,11 @@ def branding_settings_set():
             conn.execute("INSERT INTO retail_settings (company_id,skey,svalue) VALUES (?,?,?) "
                          "ON CONFLICT(company_id,skey) DO UPDATE SET svalue=excluded.svalue",
                          (cid, k, str(data[k] or '')))
+            # Multi-device sync (2026-09-05): see _queue_setting_sync_event's
+            # docstring for the "$" vs "JOD" defect this closes.
+            _queue_setting_sync_event(conn, k, str(data[k] or ''))
     conn.commit(); s = _settings(conn, cid); conn.close()
+    _sync_nudge()  # best-effort immediate push -- see commercial_runtime/sync/sync_service.py
     try:
         from commercial_runtime.security.audit import record as _sec_audit
         _sec_audit(cid, _uid(), 'RETAIL_BRANDING_UPDATED', entity_type='SETTINGS',

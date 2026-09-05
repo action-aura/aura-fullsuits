@@ -303,6 +303,9 @@ RETAIL_SYNC_ENTITY_TYPES = frozenset({
     "category", "product", "customer", "supplier", "reorder_request",
     "sale", "sale_item", "payment", "return", "return_item",
     "inventory_movement", "branch",
+    # Shop-level settings (currency, tax mode, credit defaults, business day,
+    # branding text) -- see retail_api.py's _queue_setting_sync_event.
+    "retail_setting",
 })
 
 #: Phase 5 wave B2 (docs/launch-readiness/phase5-waveb2-user-sync.md) -- the
@@ -1366,6 +1369,50 @@ class SyncService:
                         "SELECT company_id FROM categories WHERE id=?)",
                         (p.get("id"), p.get("id")),
                     )
+        elif entity_type == "retail_setting":
+            # 2026-09-05: shop-level settings travel between the shop's
+            # devices (see retail_api.py::_queue_setting_sync_event for the
+            # defect that made this necessary). Only reachable from the
+            # RETAIL-configured instance -- `retail_settings` lives in
+            # retail.db. Written under THIS device's own company_id, never
+            # the payload's (the payload carries none), identical to every
+            # other company-scoped branch here.
+            #
+            # Plain last-write-wins, NOT row_version-gated: like
+            # `user_permissions`, this table has no version column, settings
+            # edits are rare and deliberate, and the admin who changes a
+            # currency sees the result on the next screen load. Documented
+            # residual risk, same as the user_permission branch's.
+            if event_type not in ("create", "update", "delete"):
+                return True
+            skey = p.get("skey")
+            if not isinstance(skey, str) or not skey or len(skey) > 64 or skey.startswith("blob_"):
+                # A malformed key can never become valid on retry, and the
+                # blob prefix is refused on the emit side too -- belt and
+                # braces, because a kilobyte logo must never be written
+                # through this path. Skipped, not quarantined.
+                #
+                # "blob_" is retail_api.py's `_SETTINGS_BLOB_PREFIX` literal,
+                # hardcoded here rather than imported -- sync_service must
+                # not import retail_api. The two literals must match.
+                return True
+            # `local_company_id` is the batch-level eager fetch, and
+            # apply_pull_result only performs it for batches that carry a
+            # create/update -- a DELETE-ONLY batch (an admin cleared the
+            # business day and nothing else changed) arrives with None, and
+            # `DELETE ... WHERE company_id=NULL` matches nothing, silently.
+            # Caught by test_retail_setting_sync_apply.py's delete-only case
+            # before it shipped; resolve it here when the batch did not.
+            company_id = local_company_id or self._get_local_company_id()
+            if event_type == "delete":
+                conn.execute("DELETE FROM retail_settings WHERE company_id=? AND skey=?", (company_id, skey))
+                return True
+            svalue = p.get("svalue")
+            conn.execute(
+                "INSERT INTO retail_settings (company_id, skey, svalue) VALUES (?,?,?) "
+                "ON CONFLICT(company_id, skey) DO UPDATE SET svalue=excluded.svalue",
+                (company_id, skey, "" if svalue is None else str(svalue)),
+            )
         elif entity_type == "product":
             if event_type in ("create", "update"):
                 # AUDIT-follow-up (2026-08-10): supplier_id and status were both
