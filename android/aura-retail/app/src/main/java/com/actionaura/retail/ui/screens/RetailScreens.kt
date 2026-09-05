@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import com.actionaura.retail.net.*
 import com.actionaura.retail.ui.components.EmptyState
 import com.actionaura.retail.ui.components.TillCard
+import com.actionaura.retail.ui.theme.CategoryPalette
 import com.actionaura.retail.ui.theme.Danger
 import com.actionaura.retail.ui.theme.OnAccent
 import com.actionaura.retail.ui.theme.Success
@@ -80,16 +81,10 @@ import java.util.UUID
 // teal/amber/emerald/sky were already compliant (4.74-7.55 worst-case) and are
 // untouched. avatarPalette in ui/components/Components.kt is the same eight
 // hues (different order) and got the identical nudge for the identical reason.
-private val catPalette = listOf(
-    Color(0xFF9597F5), // indigo, lightened from 6366F1 (was 3.11:1, now 4.53:1 worst-case)
-    Color(0xFF14B8A6), // teal, unchanged (4.78:1 worst-case)
-    Color(0xFFF59E0B), // amber, unchanged (5.38:1 worst-case)
-    Color(0xFFF073B1), // pink, lightened from EC4899 (was 3.73:1, now 4.50:1 worst-case)
-    Color(0xFF10B981), // emerald, unchanged (4.74:1 worst-case)
-    Color(0xFF38BDF8), // sky, unchanged (5.31:1 worst-case)
-    Color(0xFFC085F9), // purple, lightened from A855F7 (was 3.33:1, now 4.52:1 worst-case)
-    Color(0xFFF37777), // red, lightened from EF4444 (was 3.60:1, now 4.52:1 worst-case)
-)
+// The values themselves moved to ui/theme/Color.kt (CategoryPalette) on
+// 2026-09-06 so that every colour in the app is painted from one file; the
+// measurements above are repeated there next to the numbers.
+private val catPalette = CategoryPalette
 private fun catColor(key: String?): Color {
     val k = key ?: ""
     return catPalette[(k.hashCode().let { if (it < 0) -it else it }) % catPalette.size]

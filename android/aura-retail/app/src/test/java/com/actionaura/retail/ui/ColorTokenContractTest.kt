@@ -6,56 +6,40 @@ import org.junit.Test
 import java.io.File
 
 /**
- * Every colour in RetailScreens.kt, LicensingScreen.kt and Components.kt must
- * come from ui/theme/Color.kt's token layer, not a raw hex literal.
+ * Every colour in the app comes from ui/theme/Color.kt. No `Color(0x......)`
+ * literal anywhere else in `src/main` -- no allowlist, no exemptions.
  *
  * WHY THIS EXISTS
  *
- * All three files painted colours as `Color(0x......)` literals, bypassing
- * the token layer entirely. This was not a tidiness problem: the app is
- * DARK-ONLY (Theme.kt is deliberately not DayNight), and measured against the
- * app's own dark surfaces every one of LicensingScreen's `stateLabel` literals
- * failed WCAG AA's 4.5:1 floor for text --
+ * RetailScreens.kt, LicensingScreen.kt and Components.kt used to paint
+ * colours as raw hex literals, bypassing the token layer. This was not a
+ * tidiness problem: the app is DARK-ONLY (Theme.kt is deliberately not
+ * DayNight), and measured against the app's own dark surfaces every one of
+ * LicensingScreen's `stateLabel` literals failed WCAG AA's 4.5:1 floor --
  *
  *     #666666 (grey)   3.24:1
  *     #1A7A3D (green)  3.45:1
  *     #8A6100 (amber)  3.36:1
  *     #A3231F (red)    2.50:1
  *
- * -- and `MessageBanner` was a light-theme banner (pale pink / pale blue
- * fill, dark text) hard-coded into a dark-only app, on the licensing screen
- * every customer sees when activating the product. Fixed by routing through
- * TextTertiary/Success/Warning/Danger/SuccessContainer/DangerContainer (see
- * LicensingScreen.kt's `stateLabel` and `MessageBanner`, and RetailScreens.kt's
- * `StockBadge`, for the full before/after numbers at each call site).
+ * -- and `MessageBanner` was a light-theme banner hard-coded into a dark-only
+ * app, on the screen every customer sees when activating. Those were routed
+ * through the semantic tokens.
+ *
+ * The last sixteen literals outside Color.kt were the two decorative
+ * identity palettes (avatar initials, category chips). Until 2026-09-06 this
+ * test ALLOWLISTED them by file, which left the app with two places to paint
+ * from and a guard that had to be told what to ignore. They now live in
+ * Color.kt as `AvatarPalette` and `CategoryPalette`, so the contract can be
+ * the simple one: outside Color.kt, zero literals. The palettes themselves
+ * are pinned below by exact value AND order, because an avatar's colour is
+ * `palette[hash % size]` -- reordering would silently recolour every
+ * customer's initials and every category chip, and each value was
+ * contrast-measured one by one (see Color.kt's comments for the numbers).
  *
  * No Compose test runner and no device in this environment, so this is a
  * source-reading contract test, same shape and justification as
- * OverflowNavigationContractTest: "does this screen still read its colours
- * from the token layer" is exactly the regression that stays invisible until
- * a customer sees a low-contrast screen, because the app renders correctly
- * (it compiles, it draws SOMETHING) right up until a human looks at it.
- *
- * TWO KINDS OF LITERAL
- *
- *  - DECORATIVE identity-palette literals: the eight-hue avatar/category tile
- *    sets (RetailScreens.kt's `catPalette`, Components.kt's `avatarPalette`).
- *    These are deliberately a spread of distinct hues so two categories look
- *    different, and are not collapsed onto a semantic token for that reason.
- *    They are allowed, but only the SPECIFIC values now in the palettes --
- *    [ALLOWED_DECORATIVE_LITERALS] below -- each one contrast-measured (see
- *    the comments at catPalette/avatarPalette's own declarations for the
- *    worst-case numbers): four of the original eight hues read as text on
- *    their own 18%-tinted tile came in under 4.5:1 and were lightened
- *    (indigo, pink, purple, red); the other four were already compliant and
- *    are unchanged. A literal that is a colour but NOT one of these eight
- *    exact values is not on the list and fails this test -- so replacing the
- *    palette, or adding a ninth hue, is a decision this test forces someone
- *    to come update deliberately rather than one that slides through mute.
- *  - Everything else is SEMANTIC (text, background, border, status colour)
- *    and must come from Color.kt. Any `Color(0x......)` in the three files
- *    below that is not on the allowlist fails this test, naming the file and
- *    the literal.
+ * OverflowNavigationContractTest.
  */
 class ColorTokenContractTest {
 
@@ -67,98 +51,97 @@ class ColorTokenContractTest {
         return file.readText()
     }
 
-    private val retailScreens get() =
-        source("src/main/java/com/actionaura/retail/ui/screens/RetailScreens.kt")
-    private val licensingScreen get() =
-        source("src/main/java/com/actionaura/retail/ui/screens/LicensingScreen.kt")
-    private val components get() =
-        source("src/main/java/com/actionaura/retail/ui/components/Components.kt")
-
-    /** Every eight-hue decorative identity palette, keyed by owning file. */
-    private val ALLOWED_DECORATIVE_LITERALS: Map<String, Set<String>> = mapOf(
-        "RetailScreens.kt" to setOf(
-            "Color(0xFF9597F5)", // indigo, lightened -- 4.53:1 worst-case (was 3.11:1)
-            "Color(0xFF14B8A6)", // teal, unchanged -- 4.78:1 worst-case
-            "Color(0xFFF59E0B)", // amber, unchanged -- 5.38:1 worst-case
-            "Color(0xFFF073B1)", // pink, lightened -- 4.50:1 worst-case (was 3.73:1)
-            "Color(0xFF10B981)", // emerald, unchanged -- 4.74:1 worst-case
-            "Color(0xFF38BDF8)", // sky, unchanged -- 5.31:1 worst-case
-            "Color(0xFFC085F9)", // purple, lightened -- 4.52:1 worst-case (was 3.33:1)
-            "Color(0xFFF37777)", // red, lightened -- 4.52:1 worst-case (was 3.60:1)
-        ),
-        "Components.kt" to setOf(
-            "Color(0xFF14B8A6)", // teal, unchanged -- 4.78:1 worst-case
-            "Color(0xFF9597F5)", // indigo, lightened -- 4.53:1 worst-case (was 3.11:1)
-            "Color(0xFFF073B1)", // pink, lightened -- 4.50:1 worst-case (was 3.90:1)
-            "Color(0xFFF59E0B)", // amber, unchanged -- 5.38:1 worst-case
-            "Color(0xFF10B981)", // emerald, unchanged -- 4.74:1 worst-case
-            "Color(0xFF38BDF8)", // sky, unchanged -- 5.31:1 worst-case
-            "Color(0xFFC085F9)", // purple, lightened -- 4.52:1 worst-case (was 3.33:1)
-            "Color(0xFFF37777)", // red, lightened -- 4.52:1 worst-case (was 3.60:1)
-        ),
-        // LicensingScreen.kt: none. stateLabel and MessageBanner were the only
-        // two call sites with literals in this file and both are now tokens.
-        "LicensingScreen.kt" to emptySet(),
-    )
+    private val mainRoot = "src/main/java"
+    private val tokenFile = "src/main/java/com/actionaura/retail/ui/theme/Color.kt"
 
     private val colorLiteral = Regex("""Color\(0x[0-9A-Fa-f]{6,8}\)""")
 
     private fun literalsIn(src: String): List<String> = colorLiteral.findAll(codeOnly(src)).map { it.value }.toList()
 
+    /** Every Kotlin source under src/main, path relative to the module root. */
+    private fun mainSources(): List<String> {
+        val root = File(moduleRoot, mainRoot)
+        assumeTrue("$mainRoot not reachable from this run context", root.isDirectory)
+        return root.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .map { it.relativeTo(moduleRoot).path.replace('\\', '/') }
+            .sorted()
+            .toList()
+    }
+
+    private val expectedAvatarPalette = listOf(
+        "Color(0xFF14B8A6)", // teal, unchanged -- 4.78:1 worst-case
+        "Color(0xFF9597F5)", // indigo, lightened -- 4.53:1 worst-case (was 3.11:1)
+        "Color(0xFFF073B1)", // pink, lightened -- 4.50:1 worst-case (was 3.90:1)
+        "Color(0xFFF59E0B)", // amber, unchanged -- 5.38:1 worst-case
+        "Color(0xFF10B981)", // emerald, unchanged -- 4.74:1 worst-case
+        "Color(0xFF38BDF8)", // sky, unchanged -- 5.31:1 worst-case
+        "Color(0xFFC085F9)", // purple, lightened -- 4.52:1 worst-case (was 3.33:1)
+        "Color(0xFFF37777)", // red, lightened -- 4.52:1 worst-case (was 3.60:1)
+    )
+    private val expectedCategoryPalette = listOf(
+        "Color(0xFF9597F5)", // indigo, lightened -- 4.53:1 worst-case (was 3.11:1)
+        "Color(0xFF14B8A6)", // teal, unchanged -- 4.78:1 worst-case
+        "Color(0xFFF59E0B)", // amber, unchanged -- 5.38:1 worst-case
+        "Color(0xFFF073B1)", // pink, lightened -- 4.50:1 worst-case (was 3.73:1)
+        "Color(0xFF10B981)", // emerald, unchanged -- 4.74:1 worst-case
+        "Color(0xFF38BDF8)", // sky, unchanged -- 5.31:1 worst-case
+        "Color(0xFFC085F9)", // purple, lightened -- 4.52:1 worst-case (was 3.33:1)
+        "Color(0xFFF37777)", // red, lightened -- 4.52:1 worst-case (was 3.60:1)
+    )
+
+    /** The literals inside `val <name>: List<Color> = listOf( ... )`, in source order. */
+    private fun paletteLiterals(colorKt: String, name: String): List<String> {
+        val start = colorKt.indexOf("val $name")
+        assertThat(start).isAtLeast(0)
+        val open = colorKt.indexOf("listOf(", start)
+        val close = colorKt.indexOf("\n)", open)
+        assertThat(open).isAtLeast(0)
+        assertThat(close).isGreaterThan(open)
+        return literalsIn(colorKt.substring(open, close))
+    }
+
     // ── The guard ────────────────────────────────────────────────────────────
 
     @Test
-    fun no_colour_literal_outside_the_decorative_allowlist_bypasses_the_token_layer() {
-        val files = mapOf(
-            "RetailScreens.kt" to retailScreens,
-            "LicensingScreen.kt" to licensingScreen,
-            "Components.kt" to components,
-        )
+    fun no_colour_literal_outside_the_token_file() {
+        val violations = mainSources()
+            .filterNot { it == tokenFile }
+            .flatMap { path -> literalsIn(source(path)).map { "$path: $it" } }
 
-        val violations = files.flatMap { (name, src) ->
-            val allowed = ALLOWED_DECORATIVE_LITERALS.getValue(name)
-            literalsIn(src).filterNot { it in allowed }.map { "$name: $it" }
-        }
-
-        // The whole finding in one assertion: a semantic colour reintroduced
-        // as a raw hex literal -- in a `stateLabel` branch, a new banner, a
-        // border tint, anything that is not one of the eight allowlisted
-        // decorative hues -- is named here, file and literal both.
+        // The whole finding in one assertion: a colour reintroduced as a raw
+        // hex literal anywhere in the app -- a `stateLabel` branch, a new
+        // banner, a border tint, a ninth avatar hue typed in place -- is
+        // named here, file and literal both. There is no allowlist to widen;
+        // the fix is always to name the colour in Color.kt.
         assertThat(violations).isEmpty()
+    }
+
+    @Test
+    fun the_avatar_palette_keeps_its_measured_values_and_order() {
+        assertThat(paletteLiterals(source(tokenFile), "AvatarPalette"))
+            .containsExactlyElementsIn(expectedAvatarPalette).inOrder()
+    }
+
+    @Test
+    fun the_category_palette_keeps_its_measured_values_and_order() {
+        assertThat(paletteLiterals(source(tokenFile), "CategoryPalette"))
+            .containsExactlyElementsIn(expectedCategoryPalette).inOrder()
     }
 
     // ── Guards the guard ─────────────────────────────────────────────────────
 
     @Test
-    fun the_allowlist_names_only_literals_that_are_actually_still_in_the_source() {
-        // A stale allowlist entry (the literal it names was since edited or
-        // removed) would silently narrow what the test above can catch --
-        // the same shape of blind spot the pathSites() completeness tests in
-        // CompiledTestSuiteRollCallTest exist to catch for a different scan.
-        val files = mapOf(
-            "RetailScreens.kt" to retailScreens,
-            "LicensingScreen.kt" to licensingScreen,
-            "Components.kt" to components,
-        )
-
-        val stale = ALLOWED_DECORATIVE_LITERALS.flatMap { (name, allowed) ->
-            val present = literalsIn(files.getValue(name)).toSet()
-            allowed.filterNot { it in present }.map { "$name: $it" }
-        }
-
-        assertThat(stale).isEmpty()
-    }
-
-    @Test
     fun the_scan_is_not_silently_finding_nothing() {
-        // A regex that stopped matching (renamed the shared helper, changed
-        // the literal's spelling, codeOnly() started eating more than
-        // comments) would leave the assertion above inspecting an empty list
-        // and reporting green over a scan that saw nothing. Sixteen decorative
-        // literals exist today (eight in catPalette, eight in avatarPalette);
-        // pinned as "at least" rather than "equal to" so a NEW compliant
-        // decorative literal does not itself break this self-check.
-        val total = literalsIn(retailScreens).size + literalsIn(licensingScreen).size + literalsIn(components).size
-        assertThat(total).isAtLeast(16)
+        // A regex that stopped matching, a walk that found no files, or a
+        // codeOnly() that started eating code would leave the assertion above
+        // inspecting an empty list and reporting green over a scan that saw
+        // nothing. Color.kt alone carries the 21 semantic tokens plus the two
+        // eight-hue palettes; and the walk must actually reach the screens.
+        assertThat(literalsIn(source(tokenFile)).size).isAtLeast(37)
+        val files = mainSources()
+        assertThat(files.size).isAtLeast(10)
+        assertThat(files).contains("src/main/java/com/actionaura/retail/ui/screens/RetailScreens.kt")
+        assertThat(files).contains("src/main/java/com/actionaura/retail/ui/components/Components.kt")
     }
 }

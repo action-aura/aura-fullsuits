@@ -65,3 +65,46 @@ val Danger = Color(0xFFFF9D94)
 val Info = Color(0xFF8AB5F8)
 val SuccessContainer = Color(0xFF12301F)
 val DangerContainer = Color(0xFF3D1713)
+
+// ── IDENTITY PALETTES — decorative, not semantic ─────────────────────────────
+// Eight hues that give avatars (initials circles) and product categories a
+// stable, distinguishable colour from a hash of their name. They are NOT
+// meaning-bearing like the semantic set above, and they were the last colours
+// painted outside this file (Components.kt / RetailScreens.kt, 2026-09-06)
+// -- which meant the parity guard could see every token and nothing painted
+// around them. Now every Color(0x...) in the app lives here, which
+// ColorTokenContractTest pins with no exemptions.
+//
+// Each is used as an 18%-alpha backdrop with the SAME full-strength colour as
+// the text on top, so the pairing owes a WCAG check against the worst-case
+// (tinted) surface. Four of the original eight failed it when measured --
+// indigo 6366F1 3.11:1, pink EC4899 3.90:1, purple A855F7 3.33:1, red EF4444
+// 3.60:1 -- and were lightened ONE BY ONE, minimally (same hue and saturation,
+// HSL lightness nudged up just far enough to clear 4.5:1) rather than
+// replaced: the point of these hues is that they differ, and after the nudge
+// they still do. The other four were already compliant and are untouched.
+//
+// Two orders are kept on purpose: an avatar's colour is
+// `palette[hash % size]`, so reordering would silently recolour every
+// customer's initials and every category chip. Values identical, orders
+// identical to where they came from.
+val AvatarPalette: List<Color> = listOf(
+    Color(0xFF14B8A6), // teal, unchanged (4.78:1 worst-case)
+    Color(0xFF9597F5), // indigo, lightened from 6366F1 (was 3.11:1, now 4.53:1 worst-case)
+    Color(0xFFF073B1), // pink, lightened from EC4899 (was 3.90:1, now 4.50:1 worst-case)
+    Color(0xFFF59E0B), // amber, unchanged (5.38:1 worst-case)
+    Color(0xFF10B981), // emerald, unchanged (4.74:1 worst-case)
+    Color(0xFF38BDF8), // sky, unchanged (5.31:1 worst-case)
+    Color(0xFFC085F9), // purple, lightened from A855F7 (was 3.33:1, now 4.52:1 worst-case)
+    Color(0xFFF37777), // red, lightened from EF4444 (was 3.60:1, now 4.52:1 worst-case)
+)
+val CategoryPalette: List<Color> = listOf(
+    Color(0xFF9597F5), // indigo, lightened from 6366F1 (was 3.11:1, now 4.53:1 worst-case)
+    Color(0xFF14B8A6), // teal, unchanged (4.78:1 worst-case)
+    Color(0xFFF59E0B), // amber, unchanged (5.38:1 worst-case)
+    Color(0xFFF073B1), // pink, lightened from EC4899 (was 3.73:1, now 4.50:1 worst-case)
+    Color(0xFF10B981), // emerald, unchanged (4.74:1 worst-case)
+    Color(0xFF38BDF8), // sky, unchanged (5.31:1 worst-case)
+    Color(0xFFC085F9), // purple, lightened from A855F7 (was 3.33:1, now 4.52:1 worst-case)
+    Color(0xFFF37777), // red, lightened from EF4444 (was 3.60:1, now 4.52:1 worst-case)
+)
