@@ -479,6 +479,26 @@ def _read_capability(user_id, code) -> bool:
         raise CapabilityLookupError(str(exc)) from exc
 
 
+def _read_subsystem(user_id, subsystem) -> bool:
+    """Does `user_id` hold the coarse `subsystem` gate? Raises
+    CapabilityLookupError if the registry cannot be read.
+
+    Delegates to `user_accounts.user_holds_subsystem` -- the rule that a
+    granted namespaced code implies the subsystem, and that an explicit
+    legacy row still overrides it, is stated there and only there. Same
+    deferred import as `_read_capability`, for the same reason.
+    """
+    from commercial_runtime.identity import user_accounts
+    try:
+        conn = _get_registry_conn()
+        try:
+            return user_accounts.user_holds_subsystem(conn, user_id, subsystem)
+        finally:
+            conn.close()
+    except Exception as exc:
+        raise CapabilityLookupError(str(exc)) from exc
+
+
 #: The one route-level refusal string. A fixed literal, not an f-string
 #: naming the code: 'retail.stock.adjust' is a developer-facing identifier, it
 #: is not in the translation catalogs, and interpolating it would both leak
@@ -723,6 +743,15 @@ def mt_require_subsystem(subsystem):
     request, so refusing THIS one is the whole of the requirement, and
     clearing the session would turn a couple of seconds of lock contention
     into every till in the shop being logged out mid-sale for nothing.
+
+    What "holds the subsystem" means is decided by
+    `user_accounts.user_holds_subsystem`, not by a bare `subsystem='retail'`
+    row: the product never writes that legacy row (create_employee and
+    seed_capabilities_for_user write only the eight namespaced codes), so
+    demanding it here refused every screen-created employee on every retail
+    route while `retail.sell` was granted -- a shipped lockout seen on a real
+    phone and desktop on 2026-09-05. A granted `<subsystem>.<code>` now
+    satisfies this gate; an explicit legacy 'none' row still revokes it.
     """
     def decorator(f):
         @wraps(f)
@@ -744,26 +773,19 @@ def mt_require_subsystem(subsystem):
                 return f(*args, **kwargs)
 
             try:
-                conn = _get_registry_conn()
-                try:
-                    row = conn.execute(
-                        "SELECT access_level FROM user_permissions WHERE user_id=? AND subsystem=?",
-                        (user_id, subsystem)
-                    ).fetchone()
-                finally:
-                    conn.close()
-            except Exception as exc:
+                held = _read_subsystem(user_id, subsystem)
+            except CapabilityLookupError as exc:
                 # Logged, not silently swallowed -- see mt_login_required's
                 # identical reasoning: a fail-closed decorator that says
                 # nothing turns a database fault into an unexplained wave of
                 # 403s with nothing to debug from.
                 log.warning(
                     "mt_require_subsystem(%s): refusing request -- registry lookup "
-                    "for user %s failed: %s: %s", subsystem, user_id, type(exc).__name__, exc,
+                    "for user %s failed: %s", subsystem, user_id, exc,
                 )
                 return _subsystem_denied_response(subsystem)
 
-            if not row or row['access_level'] == 'none':
+            if not held:
                 return _subsystem_denied_response(subsystem)
 
             return f(*args, **kwargs)

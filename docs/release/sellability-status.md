@@ -172,7 +172,7 @@ Three things, in his order. Each line says how it was checked.
 
 | Ask | State | How |
 |---|---|---|
-| **1. Present the employee system, then create staff accounts on the spot so they can log in** | **TESTED — works** | `retail_onboarding_wave0_test.py` 8/8 and `retail_employee_management_test.py` green, run through the canonical isolated runner. Running three retail files in one process produced 7 spurious failures (`no such table: users`) — that is the documented shared-process pollution `run_all_tests.py` exists to avoid, not a defect; each file passes alone. Nothing in code blocks the presentation |
+| **1. Present the employee system, then create staff accounts on the spot so they can log in** | **WAS WRONG — FIXED 2026-09-05** | The previous entry here said "TESTED — works … nothing in code blocks the presentation" on the strength of green suites. Running the product found otherwise: a cashier created from the Employees screen could **log in and do nothing** — every retail route answered `403 Access denied to retail. Contact your Admin.` (phone UI: "Blocked by your subscription/license: …"), on the desktop and on the phone alike. The blanket subsystem gate demanded a legacy `retail` row that nothing in the product ever writes; 27 test fixtures hand-inserted it, which is why every suite was green. Fixed at the root (`user_accounts.user_holds_subsystem`: a granted `retail.*` capability now satisfies the gate; an explicit revocation still locks out), mutation-proven both directions, and re-probed on the restarted till as the very account that was refused (200/200). Full record: `docs/corrections/identity/employee-locked-out-of-retail-root-cause-analysis.md`. The phone gets the fix with the next APK install |
 | **2. Products next — Ahmed starts POS-vendor meetings Sunday** | **TESTED — works** | Lookup 20/20, barcode uniqueness 4/4, variants 11/11, import/export 25/25, each run alone (60 passed, 0 failed). The combined-process run showed 23 failures for the same pollution reason as above |
 | **3. AI lead discovery — give it a segment and an area, get real contact details for sales to call** | **BUILT — off until a key is set** | New Owner CRM feature, `owner/app/leads/discovery.py` + `/leads/discover`. **Deliberately NOT the cousin's KIMI approach:** an LLM asked for "phone numbers of pharmacies in Irbid" invents some, and a sales team dialling fabricated numbers is worse than no feature. This reads the **Google Places API** — the same data he copies off Google Maps by hand — and imports only what is listed there. Guards: a place with no listed phone is shown but cannot be imported (a lead must have a phone or email); re-importing a place never duplicates it (Places `id` is the idempotency key, mutation-proven); results capped at 20 per search as a cost ceiling; the API key can never reach an error message (mutation-proven); a `javascript:` website is never rendered as a link. 22 pure unit tests + 12 HTTP route tests. **Off by default** — costs nothing until `OWNER_LEAD_DISCOVERY_PROVIDER=google_places` and `OWNER_GOOGLE_PLACES_API_KEY` are set; the owner must create that key (Google's free tier covers roughly 6,000 searches a month at Text Search pricing) |
 
@@ -482,9 +482,17 @@ closed, one added that is larger than the one it replaces.
    through an adb forward; a retry after ~20 s succeeded. Looks like a
    boot-timing race in the UI, not a backend fault.
 
-   Not yet run: the reverse leg (phone → desktop) and stock/sale convergence
-   between the two — the "two devices converging on one shop" row in the Sync
-   table stays honest about that.
+   **Reverse leg (phone → desktop), partly observed:** the customer "tareq"
+   created on the phone on 2026-09-02 is in the desktop till's customer list
+   (arrived 2026-09-05 00:30:48, right after the till activated), so a phone
+   row does reach a desktop. The attempt to create a NEW customer on the phone
+   as the synced cashier, watched from the desktop, never became a sync test
+   at all: the phone refused the save with "Blocked by your
+   subscription/license: Access denied to retail" — the employee lockout
+   recorded under owner's ask 1 above, which turned out to affect the desktop
+   equally. Stock/sale convergence between the two is still not run; the
+   "two devices converging on one shop" row in the Sync table stays honest
+   about that.
 
 5. ~~**Owner CI is red on i18n catalog drift — not licensing.**~~ **FIXED
    2026-09-04.** All three failures resolved: catalogs regenerated and the 37

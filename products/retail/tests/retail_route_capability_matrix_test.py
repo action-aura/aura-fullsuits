@@ -1599,12 +1599,24 @@ IMPORT_POST_ROUTES = (
 
 
 def _make_user_without_retail_module(role, *, company_id):
-    """Same shape as _make_user, but WITHOUT the legacy retail subsystem
-    grant every other _make_user call seeds -- the exact account shape
-    mt_require_subsystem('retail') exists to refuse. role='manager' (not
-    'admin', which bypasses this specific check; not 'cashier', which would
-    also be refused by the capability gate and so would not isolate which
-    gate actually fired)."""
+    """Same shape as _make_user, but with the legacy retail subsystem grant
+    explicitly REVOKED (`subsystem='retail', access_level='none'`) -- the
+    account shape mt_require_subsystem('retail') exists to refuse.
+    role='manager' (not 'admin', which bypasses this specific check; not
+    'cashier', which would also be refused by the capability gate and so
+    would not isolate which gate actually fired).
+
+    Until 2026-09-05 this helper wrote NO legacy row at all, and the test
+    below passed because the gate demanded a row production never wrote --
+    which was the shipped lockout of every screen-created employee
+    (docs/corrections/identity/employee-locked-out-of-retail-root-cause-
+    analysis.md). A granted namespaced code now satisfies the gate, so "no
+    legacy row" is the ALLOWED shape, pinned by
+    retail_employee_created_via_screen_can_work_test.py, and the only way
+    an account holding retail.stock.adjust can still be refused here is an
+    explicit revocation. What this test can therefore no longer catch: an
+    import route reachable by a manager who carries no legacy row -- that is
+    now correct behaviour, not a gap."""
     email = f"cap-nosubsys-{uuid.uuid4().hex[:10]}@test.local"
     password = "CapMatrixPW1"
     user_id = str(uuid.uuid4())
@@ -1615,6 +1627,10 @@ def _make_user_without_retail_module(role, *, company_id):
         (user_id, company_id, f"EMP-{uuid.uuid4().hex[:6]}", email, hash_password(password), role, "active"),
     )
     user_accounts.seed_capabilities_for_user(conn, user_id, role)
+    conn.execute(
+        "INSERT INTO user_permissions (id, user_id, subsystem, access_level) VALUES (?,?,?,?)",
+        (str(uuid.uuid4()), user_id, "retail", "none"),
+    )
     conn.commit()
     conn.close()
 
@@ -1626,10 +1642,12 @@ def _make_user_without_retail_module(role, *, company_id):
 
 def test_import_routes_now_carry_the_subsystem_gate(shop):
     """A manager -- HAS retail.stock.adjust, so the capability gate alone
-    would let them through -- but built WITHOUT the legacy retail subsystem
-    row, must be refused on all five import POSTs. Before this fix these
-    five routes had no such gate at all, so this account shape sailed
-    through every one of them."""
+    would let them through -- but with the legacy retail subsystem row
+    explicitly revoked, must be refused on all five import POSTs. Before
+    this fix these five routes had no such gate at all, so this account
+    shape sailed through every one of them. (The refusal is the 403 the
+    SUBSYSTEM gate returns, which is what proves that gate ran: the
+    capability gate would have answered 400 from the handler.)"""
     _admin, company_id, _product_id = shop
     denied = _make_user_without_retail_module('manager', company_id=company_id)
     for path in IMPORT_POST_ROUTES:

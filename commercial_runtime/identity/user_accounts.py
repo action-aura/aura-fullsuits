@@ -330,6 +330,59 @@ def user_has_capability(conn: sqlite3.Connection, user_id: str, code: str) -> bo
     return row[0] not in (None, '', ACCESS_NONE)
 
 
+def user_holds_subsystem(conn: sqlite3.Connection, user_id: str, subsystem: str) -> bool:
+    """Does `user_id` hold the coarse `subsystem` gate ('retail' / 'clinic')
+    that `mt_auth.mt_require_subsystem` reads on ~80 routes?
+
+    THE one reader for that gate, the same way `user_has_capability` is for
+    the namespaced codes -- and it exists because of a real, shipped lockout:
+
+    Nothing the product writes ever produced the legacy `subsystem='retail'`
+    row that gate used to demand. `create_employee` inserts only what the
+    request body's `permissions` carries, and both real screens (the desktop
+    Employees page, employees.js, and the Android EmployeesScreen) send
+    `{email, role}` and nothing else; `seed_capabilities_for_user` writes the
+    eight namespaced codes and nothing else. So every cashier and manager
+    created through the product's own screens logged in holding
+    `retail.sell=full` and was refused every retail route with "Access denied
+    to retail" -- on the desktop AND on the phone, same account, same reason
+    (observed 2026-09-05 on a two-device rehearsal). Twenty-seven retail test
+    fixtures hid it by hand-inserting `('retail', 'full')` before every
+    request, manufacturing exactly the row production never has.
+
+    multi-device-design.md §3 says the blanket literal is REPLACED by the
+    capability codes. This makes the blanket gate a derived view of them:
+
+      1. An explicit row for `subsystem` itself decides. A 'none' there is a
+         revocation an admin made on purpose through `update_perms` (which
+         still accepts the legacy values), and a revocation must keep working.
+      2. No such row: held iff at least one `<subsystem>.<code>` row is
+         granted. A cashier who may sell may reach the app that sells.
+      3. No rows at all: False. Silence is not consent -- identical reasoning
+         to `user_has_capability` above.
+
+    Prefix matching is done in Python on `startswith(subsystem + '.')` after
+    a LIKE prefilter, so a LIKE wildcard in a value can never widen the match
+    and 'retailx.sell' can never count towards 'retail'.
+    """
+    rows = conn.execute(
+        "SELECT subsystem, access_level FROM user_permissions "
+        "WHERE user_id=? AND (subsystem=? OR subsystem LIKE ?)",
+        (user_id, subsystem, subsystem + '.%'),
+    ).fetchall()
+    prefix = subsystem + '.'
+    any_code_granted = False
+    for row in rows:
+        # Positional, not by name -- see user_has_capability for why.
+        name, level = row[0], row[1]
+        granted = level not in (None, '', ACCESS_NONE)
+        if name == subsystem:
+            return granted
+        if name.startswith(prefix) and granted:
+            any_code_granted = True
+    return any_code_granted
+
+
 # ── PINs ─────────────────────────────────────────────────────────────────────
 #
 # THE RULE, from design §3, restated here because this is where it is
