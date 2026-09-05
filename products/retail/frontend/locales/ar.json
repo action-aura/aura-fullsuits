@@ -748,5 +748,6 @@
   "Send To (optional)": "إرسال إلى (اختياري)",
   "Queue Report Email": "إضافة بريد التقرير إلى قائمة الإرسال",
   "Queuing…": "جارٍ الإضافة…",
-  "Report email queued.": "تمت إضافة بريد التقرير إلى قائمة الإرسال."
+  "Report email queued.": "تمت إضافة بريد التقرير إلى قائمة الإرسال.",
+  "Your licence has reached its branch limit. Ask Aura to add a branch.": "وصل ترخيصك إلى الحد الأقصى للفروع. اطلب من Aura إضافة فرع."
 }

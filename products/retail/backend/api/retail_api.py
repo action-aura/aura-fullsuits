@@ -41,7 +41,7 @@ from commercial_runtime.identity.user_accounts import (
 )
 from commercial_runtime.identity import device_context
 from commercial_runtime.identity.registry_db import get_conn as _registry_conn
-from commercial_runtime.licensing_contracts.flask_guard import make_capability_guard
+from commercial_runtime.licensing_contracts.flask_guard import make_capability_guard, make_entitlement_reader
 from commercial_runtime.sync.sync_service import nudge as _sync_nudge
 from commercial_runtime.sync.sync_service import get_active_health as _sync_get_active_health
 from commercial_runtime.sync.sync_service import SYNC_STALE_THRESHOLD_SECONDS as _SYNC_STALE_THRESHOLD_SECONDS
@@ -135,6 +135,7 @@ log = logging.getLogger(__name__)
 # mapping and the reasoning behind each allow/block decision (grounded in
 # reading these handlers, not assumed).
 require_license_capability = make_capability_guard(os.path.dirname(DATABASE_DIR))
+read_license_entitlements = make_entitlement_reader(os.path.dirname(DATABASE_DIR))
 
 # Capabilities that remain available once licensing enters a restricted
 # state. Read access plus returns (server-authoritative reversal of an
@@ -8091,6 +8092,30 @@ def list_branches():
     conn.close()
     return jsonify({'status': 'success', 'data': [dict(r) for r in rows]})
 
+#: Fixed literal, not an f-string with the number: this sentence is the key
+#: the locale catalogs translate (see i18n.js's t()); the numbers travel in
+#: `data` so the screen can show them without breaking translation.
+BRANCH_LIMIT_MESSAGE = 'Your licence has reached its branch limit. Ask Aura to add a branch.'
+
+
+def _branch_limit():
+    """The licence's `max_branches` entitlement as a positive int, or None
+    for "no limit". None for absent (a licence issued before this
+    entitlement existed) AND for 0 or less (Owner's deny-by-default value
+    for a plan that never set it): the business owner's 2026-09-05 price
+    list makes a branch a PAID add-on, but a rule that locked every existing
+    shop out of its own branches the day the entitlement was seeded would be
+    the wrong kind of enforcement. Non-numeric junk reads as no limit too --
+    a malformed entitlement must degrade, never block (same posture as
+    tax_engine.currency_quantum)."""
+    try:
+        raw = read_license_entitlements().get('max_branches')
+        limit = int(raw) if raw is not None else 0
+    except (TypeError, ValueError):
+        return None
+    return limit if limit > 0 else None
+
+
 @retail_bp.route('/branches', methods=['POST'])
 @mt_login_required
 @mt_require_subsystem('retail')
@@ -8102,6 +8127,19 @@ def create_branch():
         return jsonify({'status': 'error', 'message': 'Branch name required'}), 400
     cid = _cid()
     conn = get_retail_conn()
+    limit = _branch_limit()
+    if limit is not None:
+        active = conn.execute(
+            "SELECT COUNT(*) FROM branches WHERE company_id=? AND COALESCE(status,'active')='active'",
+            (cid,),
+        ).fetchone()[0]
+        if active >= limit:
+            conn.close()
+            # 403 with a reason_code, the shape flask_guard's own licence
+            # refusals use, so the phone's apiErrorMessage() names the
+            # subscription rather than the network.
+            return jsonify({'status': 'error', 'reason_code': 'BRANCH_LIMIT', 'message': BRANCH_LIMIT_MESSAGE,
+                            'data': {'limit': limit, 'branches': active}}), 403
     cur  = conn.cursor()
     # v13 `uid` -- the same wire identity _default_branch's self-healed branch
     # gets, so a branch is named identically on the wire however it came into

@@ -45,6 +45,11 @@ _CANONICAL_ENTITLEMENTS = [
     ("sms_notifications_enabled", "boolean", "SMS notifications (not yet built)"),
     ("digital_receipts_enabled", "boolean", "Digital receipts (not yet built)"),
     ("owner_dashboard_enabled", "boolean", "Customer-facing Owner dashboard (not yet built)"),
+    # 2026-09-05 price list: a new branch is a paid add-on (EXTRA_BRANCH,
+    # 250 JOD). Enforced entirely by the retail till's create_branch, which
+    # reads this off the stored assertion (0/absent = no limit -- see
+    # retail_api.py's _branch_limit()).
+    ("max_branches", "integer", "Maximum branches the licence may run (0 = no limit; the till treats absent/0 as unlimited)"),
 ]
 # (addon_code, product_code, name, availability_status) -- status is never AVAILABLE
 # for a feature that has not actually been built anywhere in this codebase (Part J).

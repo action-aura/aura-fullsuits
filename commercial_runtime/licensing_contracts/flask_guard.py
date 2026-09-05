@@ -151,3 +151,30 @@ def make_capability_guard(app_data_dir: str) -> Callable:
         return decorator
 
     return require_license_capability
+
+
+def make_entitlement_reader(app_data_dir: str) -> Callable[[], dict]:
+    """Returns a zero-argument reader of THIS product's current licence
+    entitlements -- the `entitlements` dict the signed assertion carried,
+    as stored by activation/check-in -- for routes that gate on a VALUE
+    (an integer limit) rather than on a capability. `make_capability_guard`
+    already json-loads the same column per request; this is the same read
+    without the decision, so a limit-shaped rule lives next to the route
+    that owns the count it compares against. `{}` when there is no record,
+    no entitlements, or the column cannot be parsed: an unreadable licence
+    state must never raise inside a business route -- the capability guard
+    stacked above the route is what refuses a broken state, and it already
+    ran."""
+    db_path = Path(app_data_dir) / "database" / "subsystems" / "licensing.db"
+
+    def read_entitlements() -> dict:
+        try:
+            record = LicenseStateRepository(db_path).load()
+            if record is None or not record.entitlements_json:
+                return {}
+            value = json.loads(record.entitlements_json)
+            return value if isinstance(value, dict) else {}
+        except Exception:  # noqa: BLE001 -- see docstring: never raise here
+            return {}
+
+    return read_entitlements

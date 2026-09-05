@@ -70,6 +70,19 @@ def test_unbuilt_addons_are_not_marked_available_by_seed(app, seeded):
         assert db_session.query(Addon).filter_by(availability_status="AVAILABLE").count() == 0
 
 
+def test_seed_defines_the_branch_limit_entitlement(app, seeded):
+    """The 2026-09-05 price list sells a branch as a paid add-on -- enforced
+    entirely by the retail till reading this entitlement off the stored
+    assertion (see retail_api.py's _branch_limit())."""
+    with app.app_context():
+        from app.extensions import db_session
+        from app.models.catalog import EntitlementDefinition
+
+        row = db_session.query(EntitlementDefinition).filter_by(entitlement_code="max_branches").first()
+        assert row is not None
+        assert row.value_type == "integer"
+
+
 # -- launch-readiness W0.3 Part A: seed_canonical_plans --------------------
 # Without a seeded plan, a brand-new Owner deployment cannot issue a single
 # licence (`owner_plans` stays empty after seed-catalog, and issuance is
