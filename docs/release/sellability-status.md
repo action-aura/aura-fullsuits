@@ -482,17 +482,30 @@ closed, one added that is larger than the one it replaces.
    through an adb forward; a retry after ~20 s succeeded. Looks like a
    boot-timing race in the UI, not a backend fault.
 
-   **Reverse leg (phone → desktop), partly observed:** the customer "tareq"
-   created on the phone on 2026-09-02 is in the desktop till's customer list
-   (arrived 2026-09-05 00:30:48, right after the till activated), so a phone
-   row does reach a desktop. The attempt to create a NEW customer on the phone
-   as the synced cashier, watched from the desktop, never became a sync test
-   at all: the phone refused the save with "Blocked by your
+   **Reverse leg (phone → desktop): PROVEN 2026-09-05, after a detour.** The
+   first attempt to create a customer on the phone as the synced cashier
+   never became a sync test: the phone refused the save with "Blocked by your
    subscription/license: Access denied to retail" — the employee lockout
    recorded under owner's ask 1 above, which turned out to affect the desktop
-   equally. Stock/sale convergence between the two is still not run; the
-   "two devices converging on one shop" row in the Sync table stays honest
-   about that.
+   equally. After the fix: desktop till restarted on the fixed code, APK
+   rebuilt from the same tree (`assembleDebug`, 6 min) and installed over the
+   existing app with its data kept. Then, on the phone, signed in as that
+   cashier: the Customers list loaded (it had shown "No customers yet"
+   because the list call itself was 403), and it already contained "Desk
+   Cashier Customer 0905", created on the desktop minutes earlier by the same
+   account. "Add customer" → "Phone Customer 0905" → "Customer added"; the
+   desktop till listed it within the 45-second poll (`created_at
+   2026-09-05 02:07:36`). Customers now converge in both directions, created
+   by a screen-created cashier on either device. Stock/sale convergence
+   between the two is still not run; the "two devices converging on one
+   shop" row in the Sync table stays honest about that.
+
+   Side observation, explained: the phone's dashboard rendered "JD 0.000"
+   while the gate was still refusing and "$0.00" / "owes $22.00" once it
+   passed. The app's built-in default is "JD" (`ui/i18n/Num.kt`) and
+   `AppRoot` overrides it from the tax-settings call's `currency_symbol` —
+   which was one of the refused calls, and which on this rehearsal company is
+   set to "$". Not a defect; set the currency in Settings before the demo.
 
 5. ~~**Owner CI is red on i18n catalog drift — not licensing.**~~ **FIXED
    2026-09-04.** All three failures resolved: catalogs regenerated and the 37

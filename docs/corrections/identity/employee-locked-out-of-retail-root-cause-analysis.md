@@ -129,6 +129,11 @@ handler). It no longer catches "a manager with no legacy row reaches an
 import route", because that is now the intended behaviour, pinned by the
 can-work test.
 
-Not verified here: the phone. Its embedded backend is baked into the APK at
-build time, so the Mi Note 10 keeps the old gate until the APK is rebuilt and
-reinstalled — tracked in `docs/release/sellability-status.md`.
+**On the phone:** the embedded backend is baked into the APK at build time,
+so the Mi Note 10 kept the old gate until `assembleDebug` was rebuilt from
+this tree (the staged copy was checked to contain `user_holds_subsystem`) and
+installed over the running app with its data kept. Signed in as the same
+cashier, the Customers screen went from "No customers yet" (the list call
+was 403) to a populated list, and "Add customer" saved ("Customer added") —
+the row then reached the desktop till through the sync relay within 45 s.
+Same account, both devices, both directions.
