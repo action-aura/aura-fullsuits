@@ -420,11 +420,71 @@ closed, one added that is larger than the one it replaces.
    activated cleanly against the same Owner and the same key. It is still
    unshipped-untested territory on any path that revokes a device key.
 
-4. **Accounts do not sync to the phone.** Both halves are wired and
-   unit-tested, and desktop-to-desktop sync is proven — including staff
-   accounts, watched crossing between two tills. The phone leg is **blocked by
-   (3)**: an unlicensed device never starts its sync loop, so this could not
-   be tested rather than tested and failed.
+4. ~~**Accounts do not sync to the phone.**~~ **CLOSED 2026-09-05 — RUN on two
+   real installs, desktop → phone, account arrived in five seconds.** A fresh
+   desktop till was booted on this laptop (`products/retail/backend/app.py`,
+   port 5010, `AURA_OWNER_LICENSING_URL` + `AURA_SYNC_RELAY_URL` both at the
+   rehearsal Owner), set up through its real HTTP API, activated on the **same
+   licence as the phone** (Owner installation `3a206cae…`, ACTIVE_ONLINE, relay
+   learned at activation), and `POST /api/admin/employees` created
+   `synced-cashier-1788568313@rehearsal.local`. On the Mi Note 10, read out of
+   `registry.db` (WAL-aware — see the note below):
+
+   ```
+   users: email synced-cashier-1788568313@rehearsal.local
+          company_id 69e67d3f…  (the shared tenant key — same as the desktop's rebind)
+          employee_id EMP-0003 · role cashier · status pending_setup
+          updated_at_utc 00:31:55 (desktop) → created_at 00:32:00 (phone)
+   ```
+
+   Owner's log agrees: `POST /api/sync/v1/push → 200` at 00:32:00.8 from the
+   desktop, and the phone had been polling `/api/sync/v1/pull` every ~10 s
+   since it learned the relay (312 pulls by then). The phone's own
+   `licensing_state` carries `sync_relay_base_url = http://127.0.0.1:5551`,
+   handed to it at activation exactly as designed in `ad4116f`/`c37b15c`.
+
+   Two things this needed that were not in place before tonight: the rehearsal
+   Owner had to be started with `OWNER_SYNC_RELAY_PUBLIC_URL` (without it the
+   phone learns no relay and its loop stays inert — the phone was ACTIVE for
+   twenty minutes with `sync_relay_base_url = null` before that was spotted),
+   and the phone licence's device allowance had to be raised 1 → 3
+   (`device_slot_ops.add_devices`, audited) so a second install could join.
+
+   Also found and worth stating: activation on the desktop **revokes the
+   current session** (the tenant key is rebound, so this is correct), which is
+   why a script that logs in, activates and then creates a user gets a 401 on
+   the third call. Log in again after activating.
+
+   **A trap that cost two false readings tonight:** the app opens its SQLite
+   files in WAL mode, so `adb … cat licensing.db` alone returns STALE data —
+   it reported "no state" on an activated phone twice. Pull `-wal` and `-shm`
+   alongside under the same base name; SQLite merges them on open.
+   `phone_roundtrip.ps1` was fixed to do this.
+
+   **Then the part that makes it the owner's Sunday demo:** the cashier's setup
+   was completed on the desktop (`POST /api/auth/employee/setup` with the invite
+   token → `200`), the resulting `pbkdf2_sha256` hash reached the phone as an
+   UPDATE (`row_version 1 → 2`, `status pending_setup → active`, 01:04:04), and
+   that account then **logged in on the phone** — first against its embedded
+   backend through an adb forward (`POST /api/auth/login → 200`), then through
+   the real Compose sign-in screen driven over adb, landing on the Dashboard.
+   Create staff on one device, they sign in on another: proven.
+
+   One nuance worth knowing for the demo: the desktop's *admin* account
+   (created by first-run setup, BEFORE activation) did **not** propagate to the
+   phone; only the cashier created *after* activation did. Rows written before
+   the tenant key is bound at activation carry the pre-rebind company and stay
+   local. Create staff accounts after activating the till, not before.
+
+   Also observed, not diagnosed: the phone's first sign-in attempt ~8 s after a
+   cold start reported "Couldn't reach the server" while its backend (which
+   came up on port 5001, not the 5000 it asks for) answered `/api/health` fine
+   through an adb forward; a retry after ~20 s succeeded. Looks like a
+   boot-timing race in the UI, not a backend fault.
+
+   Not yet run: the reverse leg (phone → desktop) and stock/sale convergence
+   between the two — the "two devices converging on one shop" row in the Sync
+   table stays honest about that.
 
 5. ~~**Owner CI is red on i18n catalog drift — not licensing.**~~ **FIXED
    2026-09-04.** All three failures resolved: catalogs regenerated and the 37

@@ -110,7 +110,18 @@ if (-not $ready) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinu
 Write-Host "Owner is up; signing-keys manifest served."
 
 # 3. Baseline event count, then launch the app and let it retry activation.
-function Pull-Db { & $adb exec-out "run-as $pkg cat $dbFile" 2>$null > (Join-Path $env:TEMP "phone-licensing.db") }
+function Pull-Db {
+    # The app opens licensing.db in WAL mode, so the newest rows sit in
+    # licensing.db-wal until a checkpoint. Pulling the main file alone reads
+    # STALE data with no error -- it reported "no state" on an activated phone
+    # twice on 2026-09-05. Pull all three side by side under the same base
+    # name; SQLite merges the WAL on open.
+    foreach ($suffix in @("", "-wal", "-shm")) {
+        $local = Join-Path $env:TEMP "phone-licensing.db$suffix"
+        & $adb exec-out "run-as $pkg cat $dbFile$suffix" 2>$null > $local
+        if ((Get-Item $local -ErrorAction SilentlyContinue).Length -eq 0) { Remove-Item $local -ErrorAction SilentlyContinue }
+    }
+}
 function Count-Events {
     # After `pm clear` (re-issue mode) the app has no licensing.db until it
     # boots and touches licensing, so an absent/empty file simply means "no
