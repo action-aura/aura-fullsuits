@@ -79,6 +79,17 @@ CREATE TABLE categories (
     updated_at_utc TEXT,
     deleted_at_utc TEXT
 );
+-- launch-readiness "product variants, wave 1" (schema v25): `parent_product_id`/
+-- `variant_label` added below, the SAME "this fixture predates the new
+-- column" update this file's own history already made for row_version/
+-- updated_at_utc/deleted_at_utc above. This is the hand copy of the real
+-- `products` table (products/retail/backend/database/schema.py) that MUST be
+-- kept in step with every column the `product` branch of `_apply_event`
+-- writes -- on 2026-09-05 it lagged v25 by these exact two columns, and the
+-- gap didn't show up as a wrong assertion, it showed up as
+-- `sqlite3.OperationalError: table products has no column named
+-- parent_product_id` fired from inside the INSERT, hiding 14 real test
+-- failures behind a schema mismatch for weeks.
 CREATE TABLE products (
     id TEXT PRIMARY KEY,
     company_id INTEGER DEFAULT 1,
@@ -94,6 +105,8 @@ CREATE TABLE products (
     reorder_level INTEGER DEFAULT 5,
     reorder_method TEXT DEFAULT 'none',
     status TEXT DEFAULT 'active',
+    parent_product_id TEXT,
+    variant_label TEXT,
     row_version INTEGER NOT NULL DEFAULT 1,
     updated_at_utc TEXT,
     deleted_at_utc TEXT
