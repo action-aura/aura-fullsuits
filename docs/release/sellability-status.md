@@ -184,6 +184,20 @@ Three things, in his order. Each line says how it was checked.
 
 Two crafted-request defects were found in review of the agent-built routes and closed before commit: an empty `place_id` collapsed every such row into ONE lead through a shared idempotency key, and `count` was an unbounded loop driven by a hidden input. Both are now refused per row / clamped, each with its own test.
 
+### What the owner said on 2026-09-05 (WhatsApp, second chat) — the commercial model
+
+His words, and what the product holds against each:
+
+| He said | State | How |
+|---|---|---|
+| The lead finder is for us, in Aura Owner, not for customers | **MATCHES** | Built in Owner CRM, permission `leads.discover` granted to the SALES role; off until the Google key is set (ask 3 above) |
+| A licence is made on our sales staff's side; the first device it lands on is the shop owner's/manager's; changing that later goes through us | **MOSTLY** | Owner CC is our staff's tool; activation binds the first device; device-key revoke/replace routes exist for "through us". **Open reading:** the SALES role today can *create* a licence record but not *issue the key* (`licenses.issue` is admin/ops) — if he means sales staff hand out keys themselves, that is one permission line in `seed_data.py`; not changed on one sentence |
+| Every licence includes **two devices** by default — the manager's (usually his phone) and one cashier | **WAS 1 — now 2** | `Plan.included_device_count` was 1 in the placeholder seed and on the rehearsal plan. Placeholder seed now 2 with his reasoning in the comment; rehearsal plan set to 2 through the same data path the UI uses (`scripts/ops/owner_rehearsal_pricing.py`). `device_limit = included + extras` at issuance (`licensing/issuance.py`) |
+| Each extra device **50 JOD** | **DONE (data)** | `EXTRA_DEVICE` add-on: was PLANNED, no price, USD → **AVAILABLE, 50.00 JOD** on the rehearsal Owner. Enforced today: slot limits and the audited `add_devices` operation exist |
+| Price ladder: till + manager's phone **250**, + 2 tills **300**, 3 tills **350**, and so on | **DONE (data), one question** | Rehearsal plan re-priced 250 JOD from 2026-09-05 (the 500 JOD placeholder row closed, history kept); the ladder follows from 250 + 50 per extra device. **Question: 250 JOD per what — per year (the plan is ANNUAL) or one-time?** |
+| A new **branch 250 JOD** | **CATALOGUE ONLY** | `EXTRA_BRANCH` add-on added (PLANNED, 250 JOD). **Nothing enforces a branch limit in either product** — no `max_branches` entitlement, no gate on branch creation — so it must not be sold until that is built (a day's work: entitlement + assertion field + `POST /branches` gate + tests) |
+| WhatsApp: each shop owner with **his own number** | **DESKTOP YES, PHONE NO** | Per-shop WhatsApp settings (number id + token + recipients) exist behind `/api/whatsapp/settings` with a desktop screen. The Android app takes its WhatsApp credentials at **build time** (`build.gradle` `AURA_WHATSAPP_*`), so a phone cannot hold a per-shop number until it reads the same settings table. **Question for him:** does "his own number" mean each shop registers with Meta's API (business verification per shop), or a number we add under Aura's business — the onboarding effort differs a lot |
+
 ## The honest answer
 
 **Not yet sellable to a paying customer.** Updated 2026-09-03 — one blocker

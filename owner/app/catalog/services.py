@@ -58,6 +58,13 @@ _CANONICAL_ADDONS = [
     ("CLOUD_BACKUP", "AURA_RETAIL", "Cloud Backup", "DRAFT"),
     ("EXTRA_DEVICE", "AURA_RETAIL", "Extra Device", "PLANNED"),
     ("PRIORITY_SUPPORT", "AURA_RETAIL", "Priority Support", "PLANNED"),
+    # The business owner's price list, 2026-09-05: a new branch is a paid
+    # add-on (250 JOD). Seeded PLANNED like everything else here -- nothing
+    # in either product enforces a branch limit yet (no `max_branches`
+    # entitlement, no gate on branch creation), so it must not read as
+    # sellable until that is built. Price and availability are data, set
+    # from the Owner UI, never here.
+    ("EXTRA_BRANCH", "AURA_RETAIL", "Extra Branch", "PLANNED"),
 ]
 
 
@@ -207,7 +214,12 @@ def seed_canonical_plans() -> dict:
                 # date.
                 billing_model="ONE_TIME",
                 currency=_PLACEHOLDER_CURRENCY,
-                included_device_count=1,
+                # 2, not 1: the business owner's rule (2026-09-05) is that
+                # every licence includes two devices by default -- the
+                # manager's own device (usually a phone) and one cashier
+                # till -- and each device beyond that is a paid extra. A
+                # plan created from the UI can still choose otherwise.
+                included_device_count=2,
                 effective_date=today,
             )
             db_session.add(plan)
