@@ -77,6 +77,11 @@ Audit log · Stock accuracy · Exceptions queue · E-invoicing
 Two things believed missing are actually present: **Employees** (a real route,
 gated on `RetailSession.isAdmin`) and **Settings**.
 
+**Decided 2026-09-05 by the owner: the phone is a till.** It is sold as the
+device that sells, takes payment and runs the drawer; the eight back-office
+screens stay on the desktop and are added only when a customer asks for a
+specific one. The table below is therefore a description, not a backlog.
+
 **The shape matters more than the count, and it changes the sales pitch.**
 Every one of the eight is configuration or reporting. Not one is on the money
 path: the phone rings sales, takes payment, opens and closes a drawer, and
@@ -480,14 +485,31 @@ closed, one added that is larger than the one it replaces.
    its own `ADMIN-0001` at first run, so after both join one licence the two
    owner rows collide on `(company_id, employee_id)`, and the admin's eight
    permission events then quarantine as `missing_parent:user` behind it —
-   nine harmless-but-noisy rows per peer per admin. The design assumes one
-   admin per till (phase5-waveb2 speaks of "two admins … on two tills"), so
-   this is a decision, not a bug: **should one owner account exist on every
-   device, or does each till keep its own admin login?** Until decided, the
-   owner logs into each device with that device's own admin. Staff are
-   unaffected: a cashier cannot even be created before activation (licence
-   gate, `403 LICENSE_INACTIVE`, measured on a fresh third till), and one
-   created after it reaches the phone in seconds — see below.
+   nine harmless-but-noisy rows per peer per admin. The design assumed one
+   admin per till (phase5-waveb2 speaks of "two admins … on two tills").
+
+   **Decided by the owner 2026-09-05: one owner login on every device. Built
+   and proven the same evening.** The employee code is a per-device display
+   label (`ADMIN-0001`, `EMP-{count+1}`), not the identity (`uid` is), so
+   `SyncService._resolve_employee_code` now re-numbers a code that collides
+   with a *different* person on arrival (`ADMIN-0001` → `ADMIN-0002`; a code
+   with no numeric tail gets a uid suffix; a later update keeps the code the
+   receiver already shows). This also closes the general case of two tills
+   hiring offline and both minting `EMP-0002`. The quarantine on
+   `duplicate_employee_id` stays only as a last-resort race guard. Proven on
+   two real tills on one licence, whose quarantine retry applied the parked
+   owner rows on the first pull after restart: the desktop's owner logged in
+   on the third till and the third till's owner on the desktop (both `200`,
+   both shown as `ADMIN-0002` on the other device), and both quarantine
+   tables are empty (`scripts/ops/two_till_owner_login.py`). Six apply tests
+   replace the one that pinned the old refusal; its docstring says what it
+   can no longer catch. Each device's own first-run admin remains — the
+   second device still has to create one to activate — which is a UX item
+   for later, not a blocker.
+
+   Staff are unaffected: a cashier cannot even be created before activation
+   (licence gate, `403 LICENSE_INACTIVE`, measured on a fresh third till),
+   and one created after it reaches the phone in seconds — see below.
 
    Also observed, not diagnosed: the phone's first sign-in attempt ~8 s after a
    cold start reported "Couldn't reach the server" while its backend (which

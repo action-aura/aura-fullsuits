@@ -2293,6 +2293,16 @@ class SyncService:
             # means ("every branch"), so an old sender can never force a
             # scope onto a receiver that only understands NULL.
             uid = p.get("uid")
+            # 2026-09-05, the owner's decision "one owner login on every
+            # device": the employee CODE is a per-device display label that
+            # every install mints on its own (`ADMIN-0001` at first run,
+            # `EMP-{count+1}` per hire), never the wire identity -- `uid`
+            # is. So a code that collides with a DIFFERENT person locally is
+            # re-numbered here, not refused: before this, the owner's own
+            # account arrived on every second device as
+            # `duplicate_employee_id` and was parked, and its eight
+            # permission events piled up behind it as `missing_parent:user`.
+            employee_id = self._resolve_employee_code(conn, local_company_id, uid, p.get("employee_id"))
             try:
                 conn.execute(
                     "INSERT INTO users (id, company_id, uid, employee_id, email, role, status, "
@@ -2307,7 +2317,7 @@ class SyncService:
                     "session_version=MAX(COALESCE(users.session_version,0), COALESCE(excluded.session_version,0)), "
                     "branch_scope_uid=excluded.branch_scope_uid "
                     "WHERE excluded.row_version > users.row_version",
-                    (str(uuid.uuid4()), local_company_id, uid, p.get("employee_id"), p.get("email"),
+                    (str(uuid.uuid4()), local_company_id, uid, employee_id, p.get("email"),
                      p.get("role", "cashier"), p.get("status", "active"),
                      p.get("require_password_change", 1), p.get("language", "en"),
                      p.get("password_hash"), p.get("pin_hash"), p.get("row_version", 1),
@@ -2343,6 +2353,12 @@ class SyncService:
                         detail=f"email={p.get('email')!r} already registered to a different "
                                f"account locally (incoming uid={uid!r})")
                 if "users.company_id, users.employee_id" in msg:
+                    # Last resort only since 2026-09-05: `_resolve_employee_
+                    # code` above re-numbers a colliding code before the
+                    # INSERT, so this is reachable only if a local write
+                    # takes the chosen code between that SELECT and this
+                    # statement. Parked, retried on the next pull, resolves
+                    # to the next free number then.
                     return self._quarantine_apply_event(
                         conn, ev, reason="duplicate_employee_id",
                         detail=f"employee_id={p.get('employee_id')!r} already registered under "
@@ -2608,6 +2624,60 @@ class SyncService:
                     branch_uid, local_company_id, default_id,
                 )
         return default_id
+
+    @staticmethod
+    def _resolve_employee_code(conn, local_company_id, uid, incoming):
+        """The `employee_id` a pulled `user` row is written with.
+
+        Every install mints its own codes -- `ADMIN-0001` for the first-run
+        owner, `EMP-{count+1:04d}` per hire (onboarding_routes.py) -- with no
+        coordination, so two devices of one shop produce the same code for
+        different people as a matter of course. Until 2026-09-05 the second
+        device parked such a row as `duplicate_employee_id`, which meant the
+        owner's own account never arrived on their phone (measured: the
+        desktop's `ADMIN-0001` parked on the Mi Note 10 with its eight
+        permission events stuck behind it). The owner's decision that day:
+        one owner login on every device. The code is a display label, `uid`
+        is the identity, so a collision with a DIFFERENT person is resolved
+        by numbering, never by refusing the person.
+
+          1. no incoming code, or no local holder of it -> as sent
+          2. the local holder IS this uid -> as sent (an ordinary update)
+          3. held by someone else and this uid already has a row -> keep the
+             code this device already shows for them (a later `update` from
+             the sender must not re-collide on every delivery)
+          4. held by someone else and this uid is new here -> the next free
+             number in the same series (`ADMIN-0001` -> `ADMIN-0002`), or
+             `<code>-<uid[:8]>` when the code carries no numeric tail
+
+        Positional indexing throughout -- registry connections arrive with
+        and without `row_factory`, same as user_accounts.py's own readers.
+        """
+        if not incoming or not uid:
+            return incoming
+        holder = conn.execute(
+            "SELECT uid FROM users WHERE company_id=? AND employee_id=?",
+            (local_company_id, incoming),
+        ).fetchone()
+        if holder is None or holder[0] == uid:
+            return incoming
+        mine = conn.execute("SELECT employee_id FROM users WHERE uid=?", (uid,)).fetchone()
+        if mine is not None and mine[0]:
+            return mine[0]
+        tail = len(incoming) - len(incoming.rstrip("0123456789"))
+        if tail:
+            prefix, width = incoming[:-tail], tail
+            number = int(incoming[-tail:]) + 1
+            for _ in range(10000):
+                candidate = f"{prefix}{number:0{width}d}"
+                taken = conn.execute(
+                    "SELECT 1 FROM users WHERE company_id=? AND employee_id=?",
+                    (local_company_id, candidate),
+                ).fetchone()
+                if taken is None:
+                    return candidate
+                number += 1
+        return f"{incoming}-{uid[:8]}"
 
     @staticmethod
     def _quarantine_apply_event(conn, ev: dict, reason: str, detail: str) -> bool:

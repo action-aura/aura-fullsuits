@@ -431,26 +431,141 @@ def test_duplicate_email_from_a_second_device_is_quarantined(registry_env):
     assert rows[0]["reason"] == "duplicate_email"
 
 
-def test_duplicate_employee_id_from_a_second_device_is_quarantined(registry_env):
-    existing_uid = _seed_local_user(registry_env, email="a@x.com", employee_id="SHARED-EMP")
-    service = _registry_service(registry_env)
-    new_uid = str(uuid.uuid4())
-    dup_ev = _user_event(
-        new_uid, event_type="create", row_version=1,
-        email="b@x.com", employee_id="SHARED-EMP",
-    )
+# ── 2026-09-05: a colliding employee CODE is re-numbered, never parked ─────
+#
+# Until this date the test here was `test_duplicate_employee_id_from_a_second_
+# device_is_quarantined`, pinning the opposite behaviour. What it pinned was
+# the mechanism that kept the owner's own account off their phone: every
+# install mints `ADMIN-0001` at first run, so the desktop's owner arrived on
+# the Mi Note 10 as `duplicate_employee_id` and was parked, with eight
+# permission events stuck behind it as `missing_parent:user` (measured on the
+# device). The owner decided: one owner login on every device. The code is a
+# per-device display label; `uid` is the identity; so a collision with a
+# different person is resolved by numbering. What the old test can no longer
+# catch -- "a second device's colliding code is refused" -- is exactly the
+# behaviour that was wrong.
+
+def _apply(registry_env, service, ev):
     conn = registry_env()
     try:
-        handled = service._apply_event(conn, dup_ev, local_company_id=RECEIVER_COMPANY_ID)
+        handled = service._apply_event(conn, ev, local_company_id=RECEIVER_COMPANY_ID)
         conn.commit()
+        return handled
     finally:
         conn.close()
 
-    assert handled is False
-    assert _fetch_user(registry_env, new_uid) is None
-    rows = _quarantine_rows(registry_env)
-    assert len(rows) == 1
-    assert rows[0]["reason"] == "duplicate_employee_id"
+
+def test_a_colliding_admin_code_from_a_second_device_is_renumbered_not_parked(registry_env):
+    """The owner's desktop account lands on a phone that already minted its
+    own ADMIN-0001: applied, under the next free code, with the credentials
+    as sent -- the person can now log in here."""
+    local_admin_uid = _seed_local_user(registry_env, email="phone-admin@x.com",
+                                       employee_id="ADMIN-0001", role="admin")
+    service = _registry_service(registry_env)
+    owner_uid = str(uuid.uuid4())
+    ev = _user_event(owner_uid, event_type="create", row_version=1,
+                     email="owner@x.com", employee_id="ADMIN-0001", role="admin",
+                     password_hash="OWNER_HASH")
+
+    handled = _apply(registry_env, service, ev)
+
+    assert handled is True
+    arrived = _fetch_user(registry_env, owner_uid)
+    assert arrived is not None, "the owner's account must land, not be parked"
+    assert arrived["employee_id"] == "ADMIN-0002"
+    assert arrived["role"] == "admin"
+    assert arrived["password_hash"] == "OWNER_HASH"
+    assert _fetch_user(registry_env, local_admin_uid)["employee_id"] == "ADMIN-0001", \
+        "the local first-run admin keeps its own code untouched"
+    assert _quarantine_rows(registry_env) == []
+
+
+def test_a_later_update_for_the_renumbered_person_keeps_their_local_code(registry_env):
+    """The sender keeps calling them ADMIN-0001 forever. Every later update
+    must keep the code THIS device gave them, or each delivery would
+    re-collide and the person would freeze at their first version."""
+    _seed_local_user(registry_env, email="phone-admin@x.com", employee_id="ADMIN-0001", role="admin")
+    service = _registry_service(registry_env)
+    owner_uid = str(uuid.uuid4())
+    _apply(registry_env, service, _user_event(owner_uid, event_type="create", row_version=1,
+                                              email="owner@x.com", employee_id="ADMIN-0001",
+                                              role="admin", status="active"))
+
+    handled = _apply(registry_env, service, _user_event(owner_uid, event_type="update", row_version=2,
+                                                        email="owner@x.com", employee_id="ADMIN-0001",
+                                                        role="admin", status="suspended"))
+
+    assert handled is True
+    row = _fetch_user(registry_env, owner_uid)
+    assert row["employee_id"] == "ADMIN-0002", "the local code survives the update"
+    assert row["status"] == "suspended", "the rest of the update still lands"
+    assert row["row_version"] == 2
+    assert _quarantine_rows(registry_env) == []
+
+
+def test_the_next_free_number_skips_codes_already_taken(registry_env):
+    _seed_local_user(registry_env, email="a@x.com", employee_id="EMP-0002")
+    _seed_local_user(registry_env, email="b@x.com", employee_id="EMP-0003")
+    service = _registry_service(registry_env)
+    new_uid = str(uuid.uuid4())
+
+    _apply(registry_env, service, _user_event(new_uid, event_type="create", row_version=1,
+                                              email="c@x.com", employee_id="EMP-0002"))
+
+    assert _fetch_user(registry_env, new_uid)["employee_id"] == "EMP-0004"
+
+
+def test_a_code_with_no_numeric_tail_gets_a_uid_suffix(registry_env):
+    _seed_local_user(registry_env, email="a@x.com", employee_id="SHARED-EMP")
+    service = _registry_service(registry_env)
+    new_uid = str(uuid.uuid4())
+
+    handled = _apply(registry_env, service, _user_event(new_uid, event_type="create", row_version=1,
+                                                        email="b@x.com", employee_id="SHARED-EMP"))
+
+    assert handled is True
+    assert _fetch_user(registry_env, new_uid)["employee_id"] == f"SHARED-EMP-{new_uid[:8]}"
+    assert _quarantine_rows(registry_env) == []
+
+
+def test_the_same_person_keeps_their_code_on_an_ordinary_update(registry_env):
+    """Rule 2: the holder of the code IS this uid -- no renumbering, no
+    change; a plain update must not invent a new code for someone."""
+    uid = _seed_local_user(registry_env, email="a@x.com", employee_id="EMP-0007", row_version=1)
+    service = _registry_service(registry_env)
+
+    _apply(registry_env, service, _user_event(uid, event_type="update", row_version=2,
+                                              email="a@x.com", employee_id="EMP-0007", status="suspended"))
+
+    row = _fetch_user(registry_env, uid)
+    assert row["employee_id"] == "EMP-0007"
+    assert row["status"] == "suspended"
+
+
+def test_the_owners_permissions_apply_once_their_account_has_landed(registry_env):
+    """The consequence that mattered on the phone: the eight permission
+    events that used to quarantine as missing_parent:user now find their
+    parent. The permission stream is applied by the same registry instance."""
+    _seed_local_user(registry_env, email="phone-admin@x.com", employee_id="ADMIN-0001", role="admin")
+    service = _registry_service(registry_env)
+    owner_uid = str(uuid.uuid4())
+    _apply(registry_env, service, _user_event(owner_uid, event_type="create", row_version=1,
+                                              email="owner@x.com", employee_id="ADMIN-0001", role="admin"))
+
+    perm_ev = {"entity_type": "user_permission", "entity_id": str(uuid.uuid4()), "event_type": "create",
+               "payload": {"user_uid": owner_uid, "subsystem": "retail.employees", "access_level": "full"}}
+    handled = _apply(registry_env, service, perm_ev)
+
+    assert handled is True
+    local_id = _fetch_user(registry_env, owner_uid)["id"]
+    conn = registry_env()
+    try:
+        row = conn.execute("SELECT access_level FROM user_permissions WHERE user_id=? AND subsystem=?",
+                           (local_id, "retail.employees")).fetchone()
+    finally:
+        conn.close()
+    assert row is not None and row[0] == "full"
+    assert _quarantine_rows(registry_env) == []
 
 
 def test_quarantine_does_not_wedge_the_cursor_and_unrelated_events_still_land(registry_env):
