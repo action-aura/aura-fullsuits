@@ -45,6 +45,7 @@ Accounts that exist on the rehearsal licence (`AURA-RET-1-5P2G-39EP-XQ9T-K8ZC-FE
 | Laptop owner (admin) | `desk-owner@rehearsal.local` | laptop till, second till **and the phone** |
 | Second-till owner (admin) | `third-owner@rehearsal.local` | everywhere |
 | Cashier | `synced-cashier-1788568313@rehearsal.local` | everywhere |
+| Cashier invited through the real dialog on 2026-09-06 | `cashier.demo@rehearsal.local` | everywhere — password `DemoCashier2026!` was set on the invite page; a ready-made account if step 1 is skipped on stage |
 
 Passwords are in `scripts/ops/two_till_owner_login.py` — rehearsal only.
 
