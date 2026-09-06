@@ -205,6 +205,23 @@ Two people work in this repo. Git identity vs. GitHub login is *not*
   should follow the e-invoicing outbox pattern — proven, already in
   production — rather than a bespoke one-off integration.
 
+## Themes and brand (2026-09-07)
+
+Five sanctioned themes on both clients, same keys: `light` (Day), `sand`,
+`dark` (Calm — the phone's original palette), `night`, `dusk`. A theme is
+a block of TOKEN VALUES ONLY: on the desktop, `html[data-theme="…"]` blocks
+in `css/main.css` between `[design-tokens-<name>:begin/end]` markers,
+guarded by `retail_design_theme_safety_test.js` (structure, one sanitizer
+over the frozen `THEME_NAMES` allowlist, boot mirror) and
+`retail_design_contrast_test.js` (palette cross-products and the rendered
+corpus, per theme); on Android, `AuraColors` palettes in `ui/theme/Color.kt`
+behind the unchanged token names (getters over `AuraPalette.current`),
+`DesktopTokenParityContractTest` comparing each palette to its desktop
+block. Never add a theme-scoped paint rule, never a colour literal outside
+`Color.kt`, never a second allowlist. Brand assets (mark, app icon, lockup,
+intro) live under `products/retail/frontend/brand/` and are not yet wired
+into any screen.
+
 ## What's real and solid right now
 
 Barcode scanning (real hardware-scanner support, not a stub), AR/AP

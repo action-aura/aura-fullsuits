@@ -2538,13 +2538,26 @@ the artefact, never inferred from a green suite. Full per-line evidence in
   dashboard as `ADMIN-0001`; no admin created; second witness by HTTP
   against the handset's own backend (`scripts/ops/phone_join_door.py`).
   Done on both clients. No security change.
-- **Seeded payment-method names stay English in Arabic mode.** Seen on the
-  phone's Settings and POS cart with the app in Arabic (2026-09-06 evening):
-  "Cash / Card / Bank Transfer / Mobile Wallet / Check" are rows in
-  `payment_methods` seeded by name, so `tr()` never sees them. Small fix:
-  seed a stable `code` per default method and translate by code on both
-  clients (the desktop has the same rows). Not a Sunday problem, but the
-  first thing an Arabic-speaking cashier reads at the Charge step.
+- **Themes and brand, 2026-09-07 (owner's ask that night: "bring the night
+  mode back, some themes for both, an intro and a logo").** Shipped: five
+  themes on both clients — Day, Sand, Calm, Night, Dusk — as token blocks
+  held to the dark theme's safety argument, with the desktop's two design
+  guards and the phone's parity test running per theme. First cut of the
+  brand under `products/retail/frontend/brand/` (mark, app icon, lockup,
+  six-second intro; showcase artifact "Aura Brand"). Still open: wire the
+  mark into the sign-in and first-run screens and the shell header (the
+  bolt and bag icons are still there), give the desktop launcher and the
+  phone a splash that plays the intro, and convert the lockup's wordmark
+  text to paths so the SVG does not depend on Outfit being installed.
+- **Seeded payment-method names stayed English in Arabic mode — FIXED on
+  the phone 2026-09-07.** Seen on the phone's Settings and POS cart with the
+  app in Arabic (2026-09-06 evening): "Cash / Card / Bank Transfer / Mobile
+  Wallet / Check" are `payment_methods` rows seeded by name. The phone
+  already routed the chip label through `tr()` but only Cash and Card had
+  entries; the three missing entries and the Settings list are in, pinned
+  against `retail_api.py`'s `_DEFAULT_METHODS`. The desktop was already
+  right (نقدًا / بطاقة / … measured). A shop's custom method names still
+  show as typed, which is correct.
 - **The default "Main Branch" is a different wire entity on every device.**
   Found 2026-09-06 while proving the join door: a freshly joined till logged
   nine pulled rows whose `branch_uid` "did not resolve to any local branch"
