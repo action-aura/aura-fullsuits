@@ -201,3 +201,11 @@ Join, enter the rehearsal key, and read the verdict off the handset's
 `registry.db users` (one row: the owner, `ADMIN-0001` from the desktop) and
 `licensing_events` (`ACTIVATION_SUCCEEDED`). If the owner has to type anything
 other than the key and their own password, it is not done.
+
+`scripts/ops/phone_join_door.py` is that run as one command (uiautomator
+finds every button by its text, no coordinates): `pm clear`, key, Activate,
+"Yes — connect to my shop", sign in as the desktop's owner through the UI,
+then a second witness over adb forward. It is deliberately manual — it wipes
+the handset's app data — and needs one free device slot first (a wiped phone
+is a new device to Owner). Written before the phone was back, so its first
+run may need a button-text tweak; it prints what it saw at every step.
