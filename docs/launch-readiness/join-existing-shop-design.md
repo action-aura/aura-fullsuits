@@ -142,6 +142,20 @@ Two states follow, and both need words on screen:
 | Tests | `products/retail/tests/retail_join_existing_shop_test.py`; a Kotlin contract test for the AppRoot phase | activate with no users → status flips to `needs_setup:false` once a synced admin row is applied (seed it through `SyncService._apply_event`); a wrong key returns the reason; `create_admin` stays gated |
 | Docs | `sellability-status.md` blocker 4 paragraph, `sunday-demo-runbook.md` §1 | remove the "each device still creates its own admin" caveat once run on the phone |
 
+## Measured on a real fresh till, 2026-09-06 13:50
+
+`scripts/ops/join_e2e.py` against a fourth desktop till (`:5012`, empty data
+directory, no relay URL configured, one extra device slot added through the
+audited `add_devices` op): `needs_setup: true` with zero users → `POST
+/api/licensing/activate` with the shop's key and **no session** → `SUCCESS`,
+and `company_settings` on the till read back as the licence id → restart
+(the discovered relay address takes effect at launch) → on the very first
+status read after boot `needs_setup` was already `false`, the registry held
+the shop's four accounts (both owners as `ADMIN-0001`/`ADMIN-0002`, both
+cashiers, all under the licence id) → the desktop's owner signed in on the
+fresh till: `200`, `ADMIN-0001`, `admin`. No placeholder admin anywhere.
+What remains is the door on each client.
+
 ## What to measure before calling it done
 
 Run it on the real phone: wipe the app's data (or a fresh device), choose
