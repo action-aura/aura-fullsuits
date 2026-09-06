@@ -99,10 +99,27 @@ to regenerate before building anything.
 
 ### 1.4 The commercial model
 
-The paid meter is **devices**: 2 included, 50 JOD per additional device. The
-device limit is ALREADY enforced server-side at activation
-(`DEVICE_LIMIT_REACHED`), and an `EXTRA_DEVICE` add-on already sits PLANNED in
-the catalog. Pricing it is a catalog action, not a code change.
+The owner's price list (WhatsApp, 2026-09-05): a licence includes **two
+devices** (the manager's phone + one till) at **250 JOD**; each extra device
+**50 JOD**; a new **branch 250 JOD**. Both meters are enforced — devices
+server-side at activation (`DEVICE_LIMIT_REACHED`), branches on the till
+through the `max_branches` entitlement (`403 BRANCH_LIMIT`) — and every
+number is **catalogue data, not code**. On a fresh Owner the seed gives you
+the definitions and inert add-ons only; the values are set once, in this
+order (the rehearsal did it through the same services with
+`scripts/ops/owner_rehearsal_pricing.py` and `owner_rehearsal_branch_entitlements.py`):
+
+1. Plan: `included_device_count = 2`, current price **250 JOD** (the
+   placeholder plan seeds 2 devices and a 99 USD price — re-price it or
+   create the real plan from the catalogue UI). Confirm the billing period
+   with the owner (annual vs one-time is an open question).
+2. Plan entitlement `max_branches = 1`.
+3. Add-on `EXTRA_DEVICE`: price 50 JOD, status **AVAILABLE**.
+4. Add-on `EXTRA_BRANCH`: price 250 JOD, entitlement `max_branches = 2`,
+   status **AVAILABLE**. A customer with more branches gets a per-licence
+   `max_branches` override. Attaching the add-on to the subscription is what
+   raises the till's limit at its next check-in — verified end to end on
+   2026-09-06 (`scripts/ops/branch_limit_e2e.py`).
 
     flask commercial device-limit-scan   # who is at or over their limit
 
