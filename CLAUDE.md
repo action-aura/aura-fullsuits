@@ -114,6 +114,15 @@ coexist.
   `RETAIL_RESTRICTED_ALLOWLIST` — restricted/expired license state allows
   read-only operations (view, reports, backup, returns, customer payments),
   blocks mutations.
+- **Value-shaped limits ride the assertion's `entitlements` dict**, not a
+  new column: Owner's `resolve_entitlements` merges plan → add-on →
+  per-licence override, the signed assertion carries the dict, the till
+  stores it in `licensing_state.entitlements_json`, and a route reads it
+  through `flask_guard.make_entitlement_reader`. `max_branches` (2026-09-06,
+  the 250 JOD branch add-on) is the worked example: `create_branch` refuses
+  past it with `403 BRANCH_LIMIT`; absent or 0 means no limit. Adding a new
+  paid limit is a seeded definition, a plan/add-on value, and one gate —
+  no migration anywhere.
 
 ## E-invoicing (Jordan JoFotara/ISTD)
 

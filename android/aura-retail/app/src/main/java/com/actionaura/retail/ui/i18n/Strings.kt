@@ -167,6 +167,10 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     // Arabic instead of falling back to the English server string.
     "Blocked by your subscription/license:" to "محظور بسبب اشتراكك/ترخيصك:",
     "This action is not available in the current licensing state." to "هذا الإجراء غير متاح في حالة الترخيص الحالية.",
+    // retail_api.py's BRANCH_LIMIT refusal (2026-09-06): the branch add-on is
+    // enforced by the till, and apiErrorMessage() appends the server's own
+    // sentence -- same key as products/retail/frontend/locales/ar.json.
+    "Your licence has reached its branch limit. Ask Aura to add a branch." to "وصل ترخيصك إلى الحد الأقصى للفروع. اطلب من Aura إضافة فرع.",
     "Your session has expired. Please log in again." to "انتهت صلاحية جلستك. يرجى تسجيل الدخول مرة أخرى.",
     "Server error" to "خطأ في الخادم",
     "Unexpected error" to "خطأ غير متوقع",
