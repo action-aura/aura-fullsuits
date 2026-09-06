@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.actionaura.retail.ui.theme.AuraColors
+import com.actionaura.retail.ui.theme.AuraPalette
 
 /**
  * Lightweight in-app localization for the retail (Aura POS) UI.
@@ -42,6 +44,30 @@ object AppLocale {
     fun set(ctx: Context, value: AppLang) {
         lang = value
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY, value.tag).apply()
+    }
+}
+
+/**
+ * The active till theme, one of [AuraPalette.ALL] (Day, Sand, Calm, Night,
+ * Dusk -- owner request, 2026-09: "night mode back" + "themes for both mobile
+ * and desktop"). Same persistence shape as [AppLocale] right above: a plain
+ * String in the same "aura_prefs" SharedPreferences, restored before the
+ * first composition and switched instantly through [AuraPalette.current]'s
+ * observable Compose state -- no Activity restart, no per-screen wiring.
+ */
+object AppTheme {
+    private const val PREFS = "aura_prefs"
+    private const val KEY = "app_theme"
+
+    /** Restores the saved theme, or Calm (this app's original palette) if none was ever saved. */
+    fun load(ctx: Context) {
+        val name = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY, "dark")
+        AuraPalette.current = AuraPalette.byName(name)
+    }
+
+    fun set(ctx: Context, palette: AuraColors) {
+        AuraPalette.current = palette
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY, palette.name).apply()
     }
 }
 
@@ -525,6 +551,16 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Appearance" to "المظهر",
     "Theme" to "السمة",
     "System default" to "افتراضي النظام",
+    // The five sanctioned till themes (owner request, 2026-09: "night mode
+    // back" + "themes for both mobile and desktop") -- same names and same
+    // choice as the desktop's theme switcher, see ui/theme/Color.kt's
+    // AuraPalette. "Choose theme" mirrors "Choose language" right below.
+    "Day" to "نهاري",
+    "Sand" to "رملي",
+    "Calm" to "هادئ",
+    "Night" to "ليلي",
+    "Dusk" to "غسق",
+    "Choose theme" to "اختر المظهر",
     "Language" to "اللغة",
     "Notifications" to "الإشعارات",
     "Reminders & alerts" to "التذكيرات والتنبيهات",

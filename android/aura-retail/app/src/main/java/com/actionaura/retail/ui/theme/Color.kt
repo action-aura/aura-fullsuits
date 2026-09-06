@@ -1,9 +1,12 @@
 package com.actionaura.retail.ui.theme
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OPERATIONAL CALM, dark — the phone edition of the desktop till's token layer.
+// OPERATIONAL CALM — the phone edition of the desktop till's token layer.
 //
 // The desktop (products/retail/frontend/css/main.css, [design-tokens]) went
 // through a deliberate, contrast-TESTED redesign: one accent used semantically,
@@ -16,55 +19,253 @@ import androidx.compose.ui.graphics.Color
 // AuroraCyan was rose-400, AuroraViolet was rose-300 — a theme file that lied
 // to whoever read it.
 //
-// These values are the desktop's OWN dark-mode palette (the dark token set
-// solved by the same WCAG math as retail_design_contrast_test.js: every text
-// token AA 4.5:1 against every surface it can land on, accent label 4.5:1 on
-// the accent fill). Owner's requirement, verbatim: "the desktop retail and the
+// These values are the desktop's OWN palettes (each theme's block solved by
+// the same WCAG math as retail_design_contrast_test.js: every text token AA
+// 4.5:1 against every surface it can land on, accent label 4.5:1 on the
+// accent fill). Owner's requirement, verbatim: "the desktop retail and the
 // phone should look close like basically they supposed to be known for
 // eachother". Same surfaces, same accent, same state colours = same product.
 //
 // NAMING RULE (inherited from the desktop token layer): a token is named for
 // WHAT IT IS FOR, never for what it looks like. If the palette is ever
 // re-themed, these names stay true.
+//
+// FIVE PALETTES, ONE ACTIVE (owner request, 2026-09: "night mode back" +
+// "themes for both mobile and desktop"). The phone used to hold ONE fixed
+// dark palette as top-level `val`s; it now mirrors the desktop's five themes
+// (Day, Sand, Calm, Night, Dusk) as five [AuraColors] instances under
+// [AuraPalette], with [AuraPalette.current] naming which one is live. Every
+// token NAME the app already reads (`SurfaceApp`, `TextPrimary`, ...) is kept
+// as a top-level `val`, unchanged at every one of its ~150 call sites, but is
+// now a GETTER over the active palette rather than a literal — so a call
+// site that reads `SurfaceApp` inside a composable recomposes automatically
+// the moment [AuraPalette.current] changes, exactly the way it already
+// recomposes when [com.actionaura.retail.ui.i18n.AppLocale.lang] changes.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ── SURFACES — ordered by elevation, named by job ────────────────────────────
-val SurfaceApp = Color(0xFF0F1319)     // outermost shell; the window background
-val SurfaceSunken = Color(0xFF0B0F15)  // wells, inputs, anything you type into
-val SurfacePanel = Color(0xFF151A23)   // chrome: top bar, tab bar
-val SurfaceRaised = Color(0xFF171D27)  // cards lifted off the shell
-val SurfaceTill = Color(0xFF1A212C)    // THE working surface: cart, active list
-val SurfaceHover = Color(0xFF212936)   // finger is over it
-val SurfaceActive = Color(0xFF273140)  // pressed / selected row
+/**
+ * One theme's full token set. Every field is a literal [Color] — never a
+ * reference to another palette or to [AuraPalette.current] — so the parity
+ * test in ui/theme/DesktopTokenParityContractTest.kt can compare a named
+ * instance (e.g. [AuraPalette.NIGHT]) against the desktop's CSS block for
+ * that theme without the comparison depending on which palette happens to be
+ * active.
+ */
+class AuraColors(
+    /** Matches the SharedPreferences value AppTheme persists ("dark", "light", "night", "dusk", "sand"). */
+    val name: String,
+    /** Picks darkColorScheme vs lightColorScheme in Theme.kt's schemeFor(). */
+    val isDark: Boolean,
+    // ── SURFACES — ordered by elevation, named by job ────────────────────────
+    val surfaceApp: Color,
+    val surfaceSunken: Color,
+    val surfacePanel: Color,
+    val surfaceRaised: Color,
+    val surfaceTill: Color,
+    val surfaceHover: Color,
+    val surfaceActive: Color,
+    // ── TEXT — three weights of emphasis, all AA+ on every surface above ─────
+    val textPrimary: Color,
+    val textSecondary: Color,
+    val textTertiary: Color,
+    // ── ACCENT — ONE accent, and it means "this is the action you take" ──────
+    val accentAction: Color,
+    val onAccent: Color,
+    val accentSoft: Color,
+    // ── BORDERS — named by weight of separation ───────────────────────────────
+    val borderDefault: Color,
+    val borderHairline: Color,
+    // ── SEMANTIC STATE — one meaning per colour ───────────────────────────────
+    val success: Color,
+    val warning: Color,
+    val danger: Color,
+    val info: Color,
+    val successContainer: Color,
+    val dangerContainer: Color,
+)
 
-// ── TEXT — three weights of emphasis, all AA+ on every surface above ─────────
-val TextPrimary = Color(0xFFEDF2F8)    // headings, values, anything load-bearing
-val TextSecondary = Color(0xFFC3CDDB)  // body copy, labels
-val TextTertiary = Color(0xFF9FADC0)   // meta: timestamps, hints, captions
+object AuraPalette {
+    // Operational Calm, dark — the ORIGINAL phone palette, and the desktop's
+    // own `html[data-theme="dark"]` block. Values unchanged from this file's
+    // previous single-palette form; see DesktopTokenParityContractTest for
+    // the token-by-token parity proof against main.css.
+    val CALM = AuraColors(
+        name = "dark",
+        isDark = true,
+        surfaceApp = Color(0xFF0F1319),
+        surfaceSunken = Color(0xFF0B0F15),
+        surfacePanel = Color(0xFF151A23),
+        surfaceRaised = Color(0xFF171D27),
+        surfaceTill = Color(0xFF1A212C),
+        surfaceHover = Color(0xFF212936),
+        surfaceActive = Color(0xFF273140),
+        textPrimary = Color(0xFFEDF2F8),
+        textSecondary = Color(0xFFC3CDDB),
+        textTertiary = Color(0xFF9FADC0),
+        accentAction = Color(0xFF6EA8FF),
+        onAccent = Color(0xFF0D1B2E),
+        accentSoft = Color(0xFF1C2A44),
+        borderDefault = Color(0xFF2E3947),
+        borderHairline = Color(0xFF232B37),
+        success = Color(0xFF7BD9A2),
+        warning = Color(0xFFE6C67A),
+        danger = Color(0xFFFF9D94),
+        info = Color(0xFF8AB5F8),
+        successContainer = Color(0xFF12301F),
+        dangerContainer = Color(0xFF3D1713),
+    )
 
-// ── ACCENT — ONE accent, and it means "this is the action you take" ──────────
-// Same hue as the desktop's --accent-action, lightened for dark surfaces the
-// way the desktop's own dark set does. Deliberately NOT rose: the previous
-// rose accent sat in the refusal/danger hue, so "act here" and "something is
-// wrong" were the same colour at a glance — on a till, the one ambiguity that
-// costs real money.
-val AccentAction = Color(0xFF6EA8FF)
-val OnAccent = Color(0xFF0D1B2E)       // label on an accent fill (4.5:1+)
-val AccentSoft = Color(0xFF1C2A44)     // tinted BACKDROP (selected tab), not a fill
+    // Day — the desktop's LIGHT `:root` block (main.css [design-tokens]),
+    // light-first, high contrast, one accent used semantically.
+    val DAY = AuraColors(
+        name = "light",
+        isDark = false,
+        surfaceApp = Color(0xFFEAEEF3),
+        surfaceSunken = Color(0xFFF2F5F8),
+        surfacePanel = Color(0xFFFFFFFF),
+        surfaceRaised = Color(0xFFF8FAFC),
+        surfaceTill = Color(0xFFFFFFFF),
+        surfaceHover = Color(0xFFEEF2F7),
+        surfaceActive = Color(0xFFE6EAF0),
+        textPrimary = Color(0xFF141A24),
+        textSecondary = Color(0xFF3D4859),
+        textTertiary = Color(0xFF566071),
+        accentAction = Color(0xFF1745A9),
+        onAccent = Color(0xFFFFFFFF),
+        accentSoft = Color(0xFFE8EEFB),
+        borderDefault = Color(0xFFD3DAE3),
+        borderHairline = Color(0xFFE3E8EF),
+        success = Color(0xFF0A5832),
+        warning = Color(0xFF6E4300),
+        danger = Color(0xFF98170F),
+        info = Color(0xFF1745A9),
+        successContainer = Color(0xFFE7F4ED),
+        dangerContainer = Color(0xFFFDECEA),
+    )
 
-// ── BORDERS — named by weight of separation ──────────────────────────────────
-val BorderDefault = Color(0xFF2E3947)  // cards, inputs, the normal case
-val BorderHairline = Color(0xFF232B37) // row rules, dividers
+    // Night — desktop `html[data-theme="night"]`: deeper ink ground than Calm,
+    // aurora-teal accent.
+    val NIGHT = AuraColors(
+        name = "night",
+        isDark = true,
+        surfaceApp = Color(0xFF070B12),
+        surfaceSunken = Color(0xFF04070C),
+        surfacePanel = Color(0xFF0B111B),
+        surfaceRaised = Color(0xFF0E1520),
+        surfaceTill = Color(0xFF111A27),
+        surfaceHover = Color(0xFF172233),
+        surfaceActive = Color(0xFF1D2B3F),
+        textPrimary = Color(0xFFE9F1FB),
+        textSecondary = Color(0xFFBFCBDB),
+        textTertiary = Color(0xFF9AAABD),
+        accentAction = Color(0xFF5FE3D0),
+        onAccent = Color(0xFF04201D),
+        accentSoft = Color(0xFF0F2A30),
+        borderDefault = Color(0xFF26344A),
+        borderHairline = Color(0xFF1A2432),
+        success = Color(0xFF7FDFA9),
+        warning = Color(0xFFE9C97E),
+        danger = Color(0xFFFF9B92),
+        info = Color(0xFF8FBAFF),
+        successContainer = Color(0xFF0F2D1F),
+        dangerContainer = Color(0xFF3B1512),
+    )
 
-// ── SEMANTIC STATE — one meaning per colour (desktop dark set) ───────────────
-// *Text* variants: AA on every surface. The *Container* variants are their
-// quiet backdrops (badge fills), each pairing AA with its own text colour.
-val Success = Color(0xFF7BD9A2)
-val Warning = Color(0xFFE6C67A)
-val Danger = Color(0xFFFF9D94)
-val Info = Color(0xFF8AB5F8)
-val SuccessContainer = Color(0xFF12301F)
-val DangerContainer = Color(0xFF3D1713)
+    // Dusk — desktop `html[data-theme="dusk"]`: violet-charcoal ground,
+    // lavender accent, the calm-dark family at its warmest hue.
+    val DUSK = AuraColors(
+        name = "dusk",
+        isDark = true,
+        surfaceApp = Color(0xFF13111C),
+        surfaceSunken = Color(0xFF0E0C16),
+        surfacePanel = Color(0xFF191626),
+        surfaceRaised = Color(0xFF1C192A),
+        surfaceTill = Color(0xFF211D31),
+        surfaceHover = Color(0xFF29253D),
+        surfaceActive = Color(0xFF312C49),
+        textPrimary = Color(0xFFF0EDF9),
+        textSecondary = Color(0xFFC9C3DC),
+        textTertiary = Color(0xFFA49DBD),
+        accentAction = Color(0xFFB9A6FF),
+        onAccent = Color(0xFF150F2E),
+        accentSoft = Color(0xFF2A2350),
+        borderDefault = Color(0xFF34304C),
+        borderHairline = Color(0xFF26223A),
+        success = Color(0xFF86DFA8),
+        warning = Color(0xFFEBC97F),
+        danger = Color(0xFFFF9D94),
+        info = Color(0xFF9DBCFF),
+        successContainer = Color(0xFF132D22),
+        dangerContainer = Color(0xFF3E1717),
+    )
+
+    // Sand — desktop `html[data-theme="sand"]`: warm paper ground, amber ink.
+    // A LIGHT theme, not a member of the dark family.
+    val SAND = AuraColors(
+        name = "sand",
+        isDark = false,
+        surfaceApp = Color(0xFFEFE8DC),
+        surfaceSunken = Color(0xFFF4EEE4),
+        surfacePanel = Color(0xFFFBF7F0),
+        surfaceRaised = Color(0xFFFAF6EE),
+        surfaceTill = Color(0xFFFFFDF8),
+        surfaceHover = Color(0xFFF1EADF),
+        surfaceActive = Color(0xFFE8E0D2),
+        textPrimary = Color(0xFF2A2119),
+        textSecondary = Color(0xFF4D4034),
+        textTertiary = Color(0xFF63564A),
+        accentAction = Color(0xFF9A4F12),
+        onAccent = Color(0xFFFFFFFF),
+        accentSoft = Color(0xFFF6E7D3),
+        borderDefault = Color(0xFFD4CABB),
+        borderHairline = Color(0xFFE4DCCF),
+        success = Color(0xFF1D5A34),
+        warning = Color(0xFF6E4300),
+        danger = Color(0xFF9A1F14),
+        info = Color(0xFF1C4A9E),
+        successContainer = Color(0xFFE5F1E6),
+        dangerContainer = Color(0xFFF9E6E1),
+    )
+
+    /** The picker's order: two light, then three dark, day-to-night by feel. */
+    val ALL = listOf(DAY, SAND, CALM, NIGHT, DUSK)   // the picker's order
+
+    /** The active palette. Reading this inside a composable makes it recompose on change. */
+    var current by mutableStateOf(CALM)
+
+    /** Falls back to [CALM] (this app's original, still-shipping default) for an unknown or missing name. */
+    fun byName(n: String?) = ALL.firstOrNull { it.name == n } ?: CALM
+}
+
+// ── TOKEN GETTERS — same names every call site already uses, now reading the
+// active palette instead of a literal, so every screen recomposes on a theme
+// change without any call site changing. ────────────────────────────────────
+
+val SurfaceApp: Color get() = AuraPalette.current.surfaceApp
+val SurfaceSunken: Color get() = AuraPalette.current.surfaceSunken
+val SurfacePanel: Color get() = AuraPalette.current.surfacePanel
+val SurfaceRaised: Color get() = AuraPalette.current.surfaceRaised
+val SurfaceTill: Color get() = AuraPalette.current.surfaceTill
+val SurfaceHover: Color get() = AuraPalette.current.surfaceHover
+val SurfaceActive: Color get() = AuraPalette.current.surfaceActive
+
+val TextPrimary: Color get() = AuraPalette.current.textPrimary
+val TextSecondary: Color get() = AuraPalette.current.textSecondary
+val TextTertiary: Color get() = AuraPalette.current.textTertiary
+
+val AccentAction: Color get() = AuraPalette.current.accentAction
+val OnAccent: Color get() = AuraPalette.current.onAccent
+val AccentSoft: Color get() = AuraPalette.current.accentSoft
+
+val BorderDefault: Color get() = AuraPalette.current.borderDefault
+val BorderHairline: Color get() = AuraPalette.current.borderHairline
+
+val Success: Color get() = AuraPalette.current.success
+val Warning: Color get() = AuraPalette.current.warning
+val Danger: Color get() = AuraPalette.current.danger
+val Info: Color get() = AuraPalette.current.info
+val SuccessContainer: Color get() = AuraPalette.current.successContainer
+val DangerContainer: Color get() = AuraPalette.current.dangerContainer
 
 // ── IDENTITY PALETTES — decorative, not semantic ─────────────────────────────
 // Eight hues that give avatars (initials circles) and product categories a
@@ -73,7 +274,9 @@ val DangerContainer = Color(0xFF3D1713)
 // painted outside this file (Components.kt / RetailScreens.kt, 2026-09-06)
 // -- which meant the parity guard could see every token and nothing painted
 // around them. Now every Color(0x...) in the app lives here, which
-// ColorTokenContractTest pins with no exemptions.
+// ColorTokenContractTest pins with no exemptions. Deliberately NOT re-themed
+// per palette: an avatar's colour must stay the same person's colour whatever
+// theme the till is running.
 //
 // Each is used as an 18%-alpha backdrop with the SAME full-strength colour as
 // the text on top, so the pairing owes a WCAG check against the worst-case

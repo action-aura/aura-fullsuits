@@ -10,12 +10,14 @@ import androidx.activity.enableEdgeToEdge
 import com.actionaura.retail.barcode.HidScanBus
 import com.actionaura.retail.ui.AppRoot
 import com.actionaura.retail.ui.i18n.AppLocale
+import com.actionaura.retail.ui.i18n.AppTheme
 import com.actionaura.retail.ui.theme.AuraTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
-        // Restore the user's chosen language before composing any UI.
+        // Restore the user's chosen language and theme before composing any UI.
         AppLocale.load(this)
+        AppTheme.load(this)
         super.onCreate(savedInstanceState)
         // The app's identity is fixed-dark (see ui/theme/Theme.kt), so the
         // system bars must always use LIGHT icons. The no-arg overload picks

@@ -2,6 +2,8 @@
 
 package com.actionaura.retail.ui.screens
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -50,15 +52,20 @@ import com.actionaura.retail.ui.components.SectionHeader
 import com.actionaura.retail.ui.components.SkeletonList
 import com.actionaura.retail.ui.i18n.AppLang
 import com.actionaura.retail.ui.i18n.AppLocale
+import com.actionaura.retail.ui.i18n.AppTheme
 import com.actionaura.retail.ui.i18n.fmtQty
 import com.actionaura.retail.ui.i18n.parseNum
 import com.actionaura.retail.ui.i18n.tr
 import com.actionaura.retail.ui.CAP_EMPLOYEES
 import com.actionaura.retail.ui.CAP_REPORTS
 import com.actionaura.retail.ui.RetailSession
+import com.actionaura.retail.ui.theme.AuraColors
+import com.actionaura.retail.ui.theme.AuraPalette
 import com.actionaura.retail.ui.theme.Info
 import com.actionaura.retail.ui.theme.Success
 import com.actionaura.retail.ui.theme.Warning
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.CircleShape
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
 import java.util.UUID
@@ -1238,6 +1245,16 @@ fun AgingScreen(snackbar: SnackbarHostState) {
     }
 }
 
+/** The translated label for one of [AuraPalette.ALL]'s five theme choices. */
+private fun themeLabel(p: AuraColors): String = when (p) {
+    AuraPalette.DAY -> tr("Day")
+    AuraPalette.SAND -> tr("Sand")
+    AuraPalette.CALM -> tr("Calm")
+    AuraPalette.NIGHT -> tr("Night")
+    AuraPalette.DUSK -> tr("Dusk")
+    else -> p.name
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  RETAIL SETTINGS — credit enforcement, defaults, currency, payment methods
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1261,6 +1278,7 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
     // reachability guard this history earned.
     val ctx = LocalContext.current
     var showLanguage by remember { mutableStateOf(false) }
+    var showTheme by remember { mutableStateOf(false) }
     var s by remember { mutableStateOf(CreditSettings()) }
     var methods by remember { mutableStateOf<List<PayMethod>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -1327,6 +1345,23 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
             ) {
                 Text(tr("Language"), Modifier.weight(1f))
                 Text(AppLocale.lang.nativeName, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(8.dp))
+                Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        // Theme row -- owner request, 2026-09: "night mode back" + "themes
+        // for both mobile and desktop". Same picker pattern as Language right
+        // above; the five choices are AuraPalette.ALL, in the same order the
+        // desktop's own switcher offers them.
+        SectionHeader(tr("Theme"))
+        TillCard(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.fillMaxWidth().clickable { showTheme = true }.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(tr("Theme"), Modifier.weight(1f))
+                Text(themeLabel(AuraPalette.current), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.width(8.dp))
                 Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -1533,6 +1568,47 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
             },
             confirmButton = {
                 TextButton(onClick = { showLanguage = false }) { Text(tr("Done")) }
+            },
+        )
+    }
+
+    if (showTheme) {
+        AlertDialog(
+            onDismissRequest = { showTheme = false },
+            title = { Text(tr("Choose theme")) },
+            text = {
+                Column {
+                    AuraPalette.ALL.forEach { palette ->
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .selectable(selected = AuraPalette.current === palette, onClick = {
+                                    AppTheme.set(ctx, palette)
+                                    showTheme = false
+                                })
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = AuraPalette.current === palette, onClick = {
+                                AppTheme.set(ctx, palette); showTheme = false
+                            })
+                            Spacer(Modifier.width(8.dp))
+                            // A small swatch so the label ("Night", "Dusk", ...)
+                            // is not the only cue -- a glance at the dot tells a
+                            // cashier which theme is which without reading.
+                            Box(
+                                Modifier.size(14.dp)
+                                    .clip(CircleShape)
+                                    .background(palette.surfaceApp)
+                                    .border(1.dp, palette.accentAction, CircleShape),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(themeLabel(palette), style = MaterialTheme.typography.bodyLarge)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showTheme = false }) { Text(tr("Done")) }
             },
         )
     }
