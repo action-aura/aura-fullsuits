@@ -2523,8 +2523,11 @@ the artefact, never inferred from a green suite. Full per-line evidence in
 - **Retiring a branch** (only rename exists): touches stock balances, the
   per-device branch pin and open cash drawers — its own design.
 - **"Join an existing shop" first run**: a second device still creates its
-  own placeholder admin because activation needs a signed-in user; cosmetic
-  now that the owner's real account arrives, but a cleaner flow exists.
+  own placeholder admin — not because activation needs a signed-in user (it
+  does not, measured) but because first run offers no other door. Designed,
+  with every premise checked against the code, in
+  `docs/launch-readiness/join-existing-shop-design.md`: a morning's work,
+  a screen change on each client, no security change.
 - **Per-shop WhatsApp on Android**: credentials are build-time on the phone;
   moot while the phone is a till (reports go out from the desktop), revisit
   if that changes.
