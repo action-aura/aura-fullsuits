@@ -201,8 +201,33 @@ His words, and what the product holds against each:
 
 ## The honest answer
 
-**Not yet sellable to a paying customer.** Updated 2026-09-03 — one blocker
-closed, one added that is larger than the one it replaces.
+**Not yet sellable to a paying customer — but no longer for product
+reasons.** Updated 2026-09-06 04:30, after two nights on real hardware.
+
+What is now proven on a real phone and real tills, every step through the
+real artefact and read back: a phone can be licensed; the owner's account
+works on every device; staff created on one device sign in on another; the
+catalogue, stock, sales, customers and shop settings converge both ways;
+the money keeps its fils end to end; the owner's price list is in the
+catalogue and every line of it is enforced (two devices included, extra
+device 50 JOD, branch 250 JOD with a real branch limit); a branch can be
+renamed and the rename converges. The regression state behind that:
+retail runner 170/170, Owner suite 1262 passed with the same three known
+failures as before.
+
+What still stands between this and a paying customer is **outside the
+code**, and each item is one action for the owner: the production Owner
+and AI droplets are off behind an unpaid $46.16; the Google key for lead
+discovery; a real WhatsApp business number (and the choice of onboarding
+path); reactivating the demo shop's subscription; and two one-word
+answers (250 JOD per year or one-time; do sales staff issue keys). After
+those, the clean-machine rehearsal on the real droplet (`go-live-runbook.md`
+Part 2) is the last gate — the same steps have been run on this laptop,
+not yet on the server.
+
+The record below is kept as it was written, blocker by blocker, so the
+reasoning can be audited; the numbered items are closed in the order they
+were found.
 
 1. ~~The phone till quoting a different number than it charges.~~ **CLOSED.**
    The cart called a pre-tax preview "Total" while the server charged the taxed
