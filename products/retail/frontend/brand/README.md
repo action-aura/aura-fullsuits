@@ -1,0 +1,27 @@
+# Aura brand assets — first cut, 2026-09-07
+
+One mark for the suite: a ring that has just been lit, open where the spark
+sits, around an A that stays legible at 16 px. The ring's gradient (ink blue
+`#1745A9` → aura blue `#3F7BE6` → aura teal `#5FE3D0`) is the brand colour;
+ink blue is already the product's action colour, the teal is new and is the
+Night theme's accent.
+
+| File | What it is |
+|---|---|
+| `aura-mark.svg` | the mark on light surfaces (ink A) |
+| `aura-mark-on-dark.svg` | the mark on dark surfaces (off-white A, soft glow) |
+| `aura-app-icon.svg` | 512 px rounded-square app icon, night ground |
+| `aura-lockup.svg` | mark + AURA / RETAIL wordmark; the wordmark uses Outfit and falls back to a system face where it is not installed |
+| `intro.html` | the intro: ~6 s, self-contained, reduced-motion aware; sized for a launcher splash |
+
+Type: **Outfit** (wordmark, headings; Google Fonts) and **Inter Tight** (UI
+copy). Product lines — RETAIL, CLINIC, OWNER — sit under the wordmark in the
+light weight.
+
+Rules: clear space of one ring-stroke width; mark alone at 16 px minimum,
+lockup at 120 px; one-colour use is ink on light and off-white on dark; never
+close the ring, move the spark, rotate the mark, or put text inside it.
+
+Not yet wired into the apps: the sign-in screens still show the old bolt
+icon and the shell its bag icon; the launcher has no splash. The showcase
+page (with the intro playable) is published as the "Aura Brand" artifact.

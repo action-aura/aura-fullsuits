@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="t d">
+  <title id="t">Aura mark</title>
+  <desc id="d">A luminous ring, open at the top right where a spark sits, around an upward A.</desc>
+  <defs>
+    <linearGradient id="aura-ring" x1="0.15" y1="0.9" x2="0.85" y2="0.1">
+      <stop offset="0" stop-color="#1745a9"/>
+      <stop offset="0.55" stop-color="#3f7be6"/>
+      <stop offset="1" stop-color="#5fe3d0"/>
+    </linearGradient>
+    <radialGradient id="aura-spark" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.45" stop-color="#bff7ee"/>
+      <stop offset="1" stop-color="#5fe3d0" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- The ring: one stroke, 300 degrees, thinning nowhere -- the gap is the
+       point of the mark. It opens where the spark sits, so the ring reads as
+       something that has just been lit rather than a closed badge. -->
+  <circle cx="128" cy="128" r="94" fill="none" stroke="url(#aura-ring)" stroke-width="15"
+          stroke-linecap="round" stroke-dasharray="492 99" stroke-dashoffset="-32"
+          transform="rotate(-90 128 128)"/>
+  <!-- The spark, at the ring's opening. -->
+  <circle cx="196" cy="60" r="20" fill="url(#aura-spark)"/>
+  <circle cx="196" cy="60" r="6.5" fill="#ffffff"/>
+  <!-- The A: a peak with a short bar. Ink, not gradient -- it must survive
+       one-colour printing and a 16 px favicon. -->
+  <path d="M 80 178 L 128 76 L 176 178" fill="none" stroke="#0f1319" stroke-width="19"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 106 142 L 150 142" fill="none" stroke="#0f1319" stroke-width="15" stroke-linecap="round"/>
+</svg>

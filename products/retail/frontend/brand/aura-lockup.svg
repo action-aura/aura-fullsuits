@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 200" width="640" height="200" role="img" aria-labelledby="t d">
+  <title id="t">Aura Retail lockup</title>
+  <desc id="d">The Aura mark beside the AURA wordmark with RETAIL beneath it.</desc>
+  <defs>
+    <linearGradient id="lk-ring" x1="0.15" y1="0.9" x2="0.85" y2="0.1">
+      <stop offset="0" stop-color="#1745a9"/>
+      <stop offset="0.55" stop-color="#3f7be6"/>
+      <stop offset="1" stop-color="#5fe3d0"/>
+    </linearGradient>
+    <radialGradient id="lk-spark" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.45" stop-color="#bff7ee"/>
+      <stop offset="1" stop-color="#5fe3d0" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g transform="translate(20 20) scale(0.625)">
+    <circle cx="128" cy="128" r="94" fill="none" stroke="url(#lk-ring)" stroke-width="15"
+            stroke-linecap="round" stroke-dasharray="492 99" stroke-dashoffset="-32"
+            transform="rotate(-90 128 128)"/>
+    <circle cx="196" cy="60" r="20" fill="url(#lk-spark)"/>
+    <circle cx="196" cy="60" r="6.5" fill="#ffffff"/>
+    <path d="M 80 178 L 128 76 L 176 178" fill="none" stroke="#0f1319" stroke-width="19"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 106 142 L 150 142" fill="none" stroke="#0f1319" stroke-width="15" stroke-linecap="round"/>
+  </g>
+  <!-- Wordmark: geometric, wide-tracked, ink. Product line lighter and
+       smaller, aligned to the wordmark's left edge. -->
+  <text x="210" y="112" font-family="Outfit, 'Segoe UI', system-ui, sans-serif" font-size="88" font-weight="700"
+        letter-spacing="14" fill="#0f1319">AURA</text>
+  <text x="214" y="158" font-family="Outfit, 'Segoe UI', system-ui, sans-serif" font-size="30" font-weight="400"
+        letter-spacing="15" fill="#1745a9">RETAIL</text>
+</svg>
