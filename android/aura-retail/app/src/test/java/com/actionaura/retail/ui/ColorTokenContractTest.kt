@@ -51,17 +51,29 @@ class ColorTokenContractTest {
         return file.readText()
     }
 
-    private val mainRoot = "src/main/java"
     private val tokenFile = "src/main/java/com/actionaura/retail/ui/theme/Color.kt"
+
+    // Spelled as a literal at the call, not through [tokenFile]: this file
+    // can skip itself (every `source()` guard can), and
+    // CompiledTestSuiteRollCallTest's completeness scan only credits a guard
+    // with "opens a path I can see" when the path is a string literal at a
+    // helper call or at a root-anchored constructor call. A variable here made
+    // this file invisible to that scan -- found by that scan, 2026-09-06.
+    private val colorKt: String get() = source("src/main/java/com/actionaura/retail/ui/theme/Color.kt")
 
     private val colorLiteral = Regex("""Color\(0x[0-9A-Fa-f]{6,8}\)""")
 
     private fun literalsIn(src: String): List<String> = colorLiteral.findAll(codeOnly(src)).map { it.value }.toList()
 
-    /** Every Kotlin source under src/main, path relative to the module root. */
+    /** Every Kotlin source under src/main, path relative to the module root.
+     *  Built with `resolve`, not with the java.io constructor: the roll-call
+     *  scan classifies every constructor call it finds -- comments included --
+     *  as a file somebody opens, and a directory walked is not one. The path
+     *  this test is credited with opening is the literal Color.kt in
+     *  [colorKt]. */
     private fun mainSources(): List<String> {
-        val root = File(moduleRoot, mainRoot)
-        assumeTrue("$mainRoot not reachable from this run context", root.isDirectory)
+        val root = moduleRoot.resolve("src/main/java")
+        assumeTrue("src/main/java not reachable from this run context", root.isDirectory)
         return root.walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
             .map { it.relativeTo(moduleRoot).path.replace('\\', '/') }
@@ -119,13 +131,13 @@ class ColorTokenContractTest {
 
     @Test
     fun the_avatar_palette_keeps_its_measured_values_and_order() {
-        assertThat(paletteLiterals(source(tokenFile), "AvatarPalette"))
+        assertThat(paletteLiterals(colorKt, "AvatarPalette"))
             .containsExactlyElementsIn(expectedAvatarPalette).inOrder()
     }
 
     @Test
     fun the_category_palette_keeps_its_measured_values_and_order() {
-        assertThat(paletteLiterals(source(tokenFile), "CategoryPalette"))
+        assertThat(paletteLiterals(colorKt, "CategoryPalette"))
             .containsExactlyElementsIn(expectedCategoryPalette).inOrder()
     }
 
@@ -138,7 +150,7 @@ class ColorTokenContractTest {
         // inspecting an empty list and reporting green over a scan that saw
         // nothing. Color.kt alone carries the 21 semantic tokens plus the two
         // eight-hue palettes; and the walk must actually reach the screens.
-        assertThat(literalsIn(source(tokenFile)).size).isAtLeast(37)
+        assertThat(literalsIn(colorKt).size).isAtLeast(37)
         val files = mainSources()
         assertThat(files.size).isAtLeast(10)
         assertThat(files).contains("src/main/java/com/actionaura/retail/ui/screens/RetailScreens.kt")
