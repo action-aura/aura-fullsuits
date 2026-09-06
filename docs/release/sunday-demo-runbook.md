@@ -48,10 +48,13 @@ Run on 2026-09-05 end to end, including on the phone's own screen.
    (Employees, same screen) and sign in on the laptop. Exercised through the
    phone's API on 2026-09-06 (`scripts/ops/phone_offline_and_staff.py`).
 
-What to say if asked "why does the phone have its own admin?": every device
-creates its first admin at setup because activation needs a signed-in user;
-after that the owner's real account works on every device. Cosmetic leftover,
-on the list.
+What to say if asked "why does the phone have its own admin?": the phone was
+set up before the "join an existing shop" door existed, so it created a first
+admin of its own; the owner's real account works on every device regardless.
+On the laptop that door now exists (first-run screen → "Already have a shop?
+Join it with your licence key", proven in a real browser on 2026-09-06); the
+phone gets the same door with its next update. Cosmetic leftover on this
+handset, on the list.
 
 ## 2. Products: create on the laptop, find on the phone, sell on the phone
 
