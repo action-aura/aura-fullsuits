@@ -138,7 +138,7 @@ Two states follow, and both need words on screen:
 | Activation hook — **built** | `commercial_runtime/identity/company_rebind.py::seed_company_settings_for_joining_device`, called from `rebind_company_id_after_activation` (shared by Retail and Clinic) | premise 5: seed `company_settings` with the Owner-issued id when no company and no admin exist; five tests in `test_registry_v4_company_rebind.py`, an install WITH an admin proven untouched |
 | Desktop first run — **built** | `products/retail/frontend/app-shell.js`: `_toggleJoinMode`, `_joinSubmit`, `_openFirstRun`, `_isJoinedDevice`, `_waitForShopAccount` | the join mode of the setup modal, the restart message, the next-launch wait; both `init()` and `checkAuthAndSetup()` go through `_openFirstRun()` |
 | Desktop sync start | `products/retail/backend/app.py` | relies on the restart (the "Connected to your shop. Restart Aura" screen); in-process start not attempted |
-| Android first run — **in progress** | `ui/FirstRunDecision.kt` (pure decision), `ui/screens/JoinShopScreens.kt` (choice + waiting screens), `AppRoot.kt` phases `JOIN_CHOICE`/`JOINING` | on Android the key comes BEFORE the account, so after activation the app cannot tell a new shop's first device from a joining one: it asks once; the waiting screen polls `needs_setup` and never calls `createAdmin` |
+| Android first run — **built 2026-09-06, not yet run on the handset** | `ui/FirstRunDecision.kt` (pure decision), `ui/screens/JoinShopScreens.kt` (choice + waiting screens), `AppRoot.kt` phases `JOIN_CHOICE`/`JOINING` | on Android the key comes BEFORE the account, so after activation the app cannot tell a new shop's first device from a joining one: it asks once ("Is your shop already set up on another device?"); the waiting screen polls `needs_setup` every 2 s with a 120 s ceiling and never calls `createAdmin`. 303 unit tests green; the installation-id term of the decision is mutation-proved (three checks go red without it). APK assembled; the phone runner installs it when the handset is next plugged in |
 | Tests — **built** | `products/retail/tests/retail_join_shop_modal_test.js` (15 checks, drives `init()` itself); `FirstRunDecisionTest.kt` + `JoinShopWiringContractTest.kt` (Android) | the desktop checks include the no-Owner, pending-approval and boot-path cases the first cut missed; `create_admin` stays gated (never called by the join path, measured in the browser) |
 | Proof drivers | `scripts/ops/join_e2e.py` (API, fourth till), `scripts/ops/join_door_e2e.py` (Chromium, fifth and sixth tills) | run against a fresh till on `:5013`/`:5014`; a device slot per till through the audited `add_devices` op (`scripts/ops/owner_rehearsal_add_one_device.py`) |
 | Docs | `sellability-status.md` (row added), `sunday-demo-runbook.md` §1 (caveat reworded) | the phone's own admin caveat stays until the Android door is run on the handset |
@@ -191,7 +191,8 @@ before being offered setup. The guard now keys off the status payload's
 Owner-issued `installation_id`, minus the pending-approval state
 (`_isJoinedDevice()`); both halves are mutation-proved.
 
-What remains is the Android door (AppRoot first-run).
+The Android door is built the same afternoon (see the files table) and waits
+for the handset.
 
 ## What to measure before calling it done
 

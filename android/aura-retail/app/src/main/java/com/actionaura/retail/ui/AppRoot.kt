@@ -54,7 +54,7 @@ import kotlinx.coroutines.withContext
 // stranded the user on a login screen that could never succeed (there is no
 // server behind it to authenticate against) with zero diagnostics anywhere:
 // no log line, no message, just a form that rejects every attempt.
-private enum class Phase { LOADING, LICENSE, SETUP, LOGIN, READY, ERROR }
+private enum class Phase { LOADING, LICENSE, SETUP, JOIN_CHOICE, JOINING, LOGIN, READY, ERROR }
 
 private const val TAG = "AppRoot"
 
@@ -108,9 +108,27 @@ private suspend fun adoptSession(): SessionResponse? {
 // existed, just factored out so both the initial boot check and the
 // post-activation callback (LicensingScreen's onActivated) can reach the
 // same setup/login/ready decision without duplicating it.
-private suspend fun phaseAfterActivationGate(): Phase {
+//
+// The needs_setup branch used to go straight to Phase.SETUP -- correct for a
+// brand-new install, wrong for a second device joining a shop that already
+// exists: its owner's account arrives by sync a few seconds after activation,
+// not from a form on this screen. FirstRunDecision is the one place that
+// tells the two apart (see its doc comment), so both callers below now route
+// through it instead of re-deciding inline -- the same discipline
+// adoptSession()'s doc comment calls out for capabilities, and the same
+// two-caller shape as the desktop's `_openFirstRun()` / `_isJoinedDevice()`
+// twins in products/retail/frontend/app-shell.js. See docs/launch-readiness/
+// join-existing-shop-design.md for the feature this implements.
+private suspend fun phaseAfterActivationGate(ctx: android.content.Context, licensingConfigured: Boolean): Phase {
     val needsSetup = try { ApiClient.get().onboardingStatus().needs_setup } catch (e: Exception) { false }
-    if (needsSetup) return Phase.SETUP
+    val licensingStatus = if (!licensingConfigured) null else try {
+        com.actionaura.retail.licensing.LicensingCoordinator(ctx).status()
+    } catch (e: Exception) { null }
+    when (FirstRunDecision.decide(needsSetup, licensingStatus, com.actionaura.retail.ui.screens.NEEDS_ACTIVATION_STATES)) {
+        FirstRun.SETUP -> return Phase.SETUP
+        FirstRun.JOIN_CHOICE -> return Phase.JOIN_CHOICE
+        FirstRun.NONE -> {}
+    }
     val session = adoptSession()
     return if (session?.authenticated == true) Phase.READY else Phase.LOGIN
 }
@@ -121,6 +139,11 @@ fun AppRoot() {
     var phase by remember { mutableStateOf(Phase.LOADING) }
     var startupDiagnostic by remember { mutableStateOf<String?>(null) }
     var bootAttempt by remember { mutableIntStateOf(0) }
+    // Hoisted out of the boot LaunchedEffect below so LicensingScreen's
+    // onActivated callback -- a second caller of phaseAfterActivationGate()
+    // that never runs the boot block -- reads the same value rather than
+    // recomputing it from BuildConfig a second time.
+    val licensingConfigured = remember { com.actionaura.retail.BuildConfig.OWNER_LICENSING_BASE_URL.isNotBlank() }
 
     LaunchedEffect(bootAttempt) {
         phase = try {
@@ -169,7 +192,6 @@ fun AppRoot() {
             // OWNER_LICENSING_BASE_URL's own documented behavior) -- an
             // unlicensed dev/test build behaves exactly as before this gate
             // existed.
-            val licensingConfigured = com.actionaura.retail.BuildConfig.OWNER_LICENSING_BASE_URL.isNotBlank()
             val needsActivation = if (!licensingConfigured) false else {
                 val state = try {
                     com.actionaura.retail.licensing.LicensingCoordinator(ctx).status()["current_state"] as? String
@@ -177,7 +199,7 @@ fun AppRoot() {
                 state in NEEDS_ACTIVATION_STATES
             }
 
-            if (needsActivation) Phase.LICENSE else phaseAfterActivationGate()
+            if (needsActivation) Phase.LICENSE else phaseAfterActivationGate(ctx, licensingConfigured)
         } catch (e: Exception) {
             // A real diagnostic, in two places, because neither alone is
             // enough: logcat is the only thing a developer with the device in
@@ -231,7 +253,7 @@ fun AppRoot() {
                                     com.actionaura.retail.licensing.LicensingCoordinator(ctx).status()["sync_relay_base_url"] as? String
                                 } catch (e: Exception) { null }
                                 SyncCoordinator.start(ctx, persistedSyncRelayBaseUrl)
-                                phase = phaseAfterActivationGate()
+                                phase = phaseAfterActivationGate(ctx, licensingConfigured)
                             }
                         },
                     )
@@ -247,6 +269,19 @@ fun AppRoot() {
                     // login modal's success handler re-runs init() rather than
                     // rendering first and catching up afterwards).
                     Phase.SETUP -> SetupScreen(onDone = { scope.launch { adoptSession(); phase = Phase.READY } })
+                    // A device joining an existing shop: JOIN_CHOICE asks the
+                    // one question AppRoot cannot answer on its own, JOINING
+                    // then waits for the owner's account to arrive by sync
+                    // rather than inventing one (see ui/screens/
+                    // JoinShopScreens.kt's doc comment).
+                    Phase.JOIN_CHOICE -> JoinChoiceScreen(
+                        onJoin = { phase = Phase.JOINING },
+                        onSetup = { phase = Phase.SETUP },
+                    )
+                    Phase.JOINING -> JoiningScreen(
+                        onConnected = { phase = Phase.LOGIN },
+                        onSetupInstead = { phase = Phase.SETUP },
+                    )
                     Phase.LOGIN -> LoginScreen(onLoggedIn = { scope.launch { adoptSession(); phase = Phase.READY } })
                     Phase.READY -> MainShell(onLogout = { phase = Phase.LOGIN })
                     Phase.ERROR -> StartupErrorScreen(

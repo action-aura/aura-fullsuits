@@ -172,6 +172,22 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     // sentence -- same key as products/retail/frontend/locales/ar.json.
     "Your licence has reached its branch limit. Ask Aura to add a branch." to "وصل ترخيصك إلى الحد الأقصى للفروع. اطلب من Aura إضافة فرع.",
     "Your session has expired. Please log in again." to "انتهت صلاحية جلستك. يرجى تسجيل الدخول مرة أخرى.",
+
+    // ── Join-existing-shop (ui/screens/JoinShopScreens.kt) -- same keys as
+    // products/retail/frontend/locales/ar.json, where the desktop has the
+    // same sentence.
+    "Licence activated" to "تم تفعيل الترخيص",
+    "Is your shop already set up on another device?" to "هل محلك مُجهَّز بالفعل على جهاز آخر؟",
+    "Yes — connect to my shop" to "نعم — اربطني بمحلي",
+    "No — this is the shop's first device" to "لا — هذا أول جهاز للمحل",
+    "Connecting brings your existing owner and staff accounts to this phone. No new account is created."
+        to "الربط يجلب حسابات المالك والموظفين الموجودة إلى هذا الهاتف. لا يُنشأ أي حساب جديد.",
+    "Connecting to your shop…" to "جارٍ الاتصال بمحلك…",
+    "Your account is on its way from your shop's other device." to "حسابك في الطريق من الجهاز الآخر لمحلك.",
+    "Still waiting for your account. Check the connection, or set up a new shop instead."
+        to "ما زلنا ننتظر حسابك. تحقق من الاتصال، أو أنشئ محلاً جديداً بدلاً من ذلك.",
+    "Keep waiting" to "متابعة الانتظار",
+    "Set up a new shop instead" to "إنشاء محل جديد بدلاً من ذلك",
     "Server error" to "خطأ في الخادم",
     "Unexpected error" to "خطأ غير متوقع",
 

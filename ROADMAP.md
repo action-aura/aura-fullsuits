@@ -2530,8 +2530,11 @@ the artefact, never inferred from a green suite. Full per-line evidence in
   on the desktop** (2026-09-06: the seed row, then the first-run modal's
   "join" mode driven in a real browser on two fresh tills — key in,
   "Connected to your shop", restart, the owner signs in, zero
-  `create-admin` calls). What remains is the Android first-run equivalent
-  (`AppRoot.kt`), which needs the phone. No security change.
+  `create-admin` calls). **The Android door is built too** (same day:
+  `FirstRunDecision`, `JoinChoiceScreen`/`JoiningScreen`, phases
+  `JOIN_CHOICE`/`JOINING`; 303 unit tests, decision mutation-proved, APK
+  assembled) and waits only for the handset to prove it on a wiped install.
+  No security change.
 - **The default "Main Branch" is a different wire entity on every device.**
   Found 2026-09-06 while proving the join door: a freshly joined till logged
   nine pulled rows whose `branch_uid` "did not resolve to any local branch"
