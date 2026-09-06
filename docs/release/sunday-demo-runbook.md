@@ -112,6 +112,20 @@ same night; the Android debug APK at `android/aura-retail/app/build/outputs/
 apk/debug/app-debug.apk` was built from that tree and carries the same
 backend.
 
+## Test rows the rehearsal left behind
+
+The night's proofs wrote real rows on the laptop till (and, through sync, on
+the phone): products `SYNC-0905A/B/C` ("Sync Test Product …"), customers
+"Phone Customer 0905" and "Desk Cashier Customer 0905", a second branch named
+"Branch test after-addon …", and the sales `SALE-000004…` and the offline
+one. They are honest history and can stay for a rehearsal audience; for the
+real demo delete the products and customers from the laptop (Products /
+Customers screens — the deletions sync out). The branch is the exception:
+there is **no route to rename or remove a branch** yet (`/branches` has only
+GET and POST — a small gap found writing this), so either leave it or fix the
+name directly in the till's `branches` table. The presentation package under
+`aura-retail-demo/` has its own data folder and is unaffected.
+
 ## If something looks wrong
 
 - "Access denied to retail" on a staff account → the app on that device is
