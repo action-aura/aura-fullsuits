@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import uuid
 
 
 class CompanyRebindError(Exception):
@@ -454,6 +455,36 @@ def _migrate_rebind_registry_company_id_to_owner_issued(conn):
         }
 
 
+def seed_company_settings_for_joining_device(conn, new_company_id):
+    """Give a device that JOINED a shop -- activated a licence without ever
+    creating a local admin -- the one row that lets it receive the shop's
+    accounts. (docs/launch-readiness/join-existing-shop-design.md, premise 5)
+
+    `sync_service.local_company_id_from_registry()` answers this device's
+    company id from `company_settings`, then from the admin row, else None;
+    and `_apply_event` parks every pulled row while it is None. `create_admin`
+    is what used to guarantee one of the two exists. A joining device has
+    neither, and the admin it is waiting for arrives BY sync -- so without
+    this row the owner's account could never land and first run would wait
+    forever. Once activated the tenant key IS the licence id (the rebind
+    above moves every existing row onto exactly this value), so seeding it
+    here is not a guess.
+
+    Deliberately narrow: only when there is no admin AND no company_settings
+    row. An ordinary install -- admin created first, activated later -- has
+    both after the rebind and is not touched. Idempotent by construction
+    (the second call finds the row). Returns True when it seeded."""
+    if not new_company_id:
+        return False
+    has_admin = conn.execute("SELECT 1 FROM users WHERE role='admin' LIMIT 1").fetchone()
+    has_settings = conn.execute("SELECT 1 FROM company_settings LIMIT 1").fetchone()
+    if has_admin or has_settings:
+        return False
+    conn.execute("INSERT INTO company_settings (id, company_id) VALUES (?, ?)",
+                 (str(uuid.uuid4()), new_company_id))
+    return True
+
+
 def rebind_company_id_after_activation():
     """Activation-time entry point: called after a licence activation
     succeeds, so an install that activates months after it migrated gets
@@ -469,6 +500,14 @@ def rebind_company_id_after_activation():
     `registry_db.DB_PATH` -- that constant is cached at import time (see
     `_app_data_dir`'s docstring), which is exactly wrong for a function that
     has to find whatever `AURA_APP_DATA` currently points at.
+
+    Also seeds `company_settings` for a device that JOINED a shop and never
+    created a local admin -- see `seed_company_settings_for_joining_device`'s
+    docstring and docs/launch-readiness/join-existing-shop-design.md,
+    premise 5. The result dict's `seeded_company_settings` key reports
+    whether that happened; it is `False` for every other outcome
+    (already-bound installs, no licence, or a failure) so the shape is
+    uniform regardless of status.
 
     NEVER RAISES. A licence activation that genuinely succeeded at Owner
     must not be reported back to the customer as a failure because a local
@@ -488,10 +527,12 @@ def rebind_company_id_after_activation():
                 'old_company_id': None,
                 'new_company_id': None,
                 'tables': (),
+                'seeded_company_settings': False,
             }
         conn = sqlite3.connect(registry_db_path(), timeout=30)
         try:
             result = rebind_company_id(conn, new_company_id)
+            result['seeded_company_settings'] = seed_company_settings_for_joining_device(conn, new_company_id)
             conn.commit()
             return result
         finally:
@@ -504,4 +545,5 @@ def rebind_company_id_after_activation():
             'old_company_id': None,
             'new_company_id': None,
             'tables': (),
+            'seeded_company_settings': False,
         }

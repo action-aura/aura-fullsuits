@@ -626,3 +626,143 @@ def test_the_v4_rebind_step_actually_runs_inside_the_migration_chain():
         'later activates a licence would migrate straight past the only step that can '
         'move it onto its Owner-issued tenant key at migration time'
     )
+
+
+# ── 7. "join an existing shop" -- seeding company_settings for a device that
+# activated without ever creating a local admin (docs/launch-readiness/
+# join-existing-shop-design.md, premise 5) ──────────────────────────────────
+
+def test_a_joining_device_with_no_admin_gets_company_settings_seeded():
+    """The whole point: a device that never ran create_admin (no users row,
+    no company_settings row) still ends up with the one row
+    local_company_id_from_registry() needs, once activated."""
+    tmp = _fresh_app_data('aura-registry-v4-join-seed-')
+    registry_db.init_registry_db()
+    _write_licence_state(tmp, 'lic-join-1')
+
+    result = rebind_company_id_after_activation()
+
+    assert result['seeded_company_settings'] is True, result
+
+    conn = sqlite3.connect(registry_db.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute('SELECT company_id FROM company_settings').fetchall()
+    conn.close()
+    assert len(rows) == 1, f'expected exactly one company_settings row, found {len(rows)}'
+    assert rows[0]['company_id'] == 'lic-join-1'
+
+    from commercial_runtime.sync.sync_service import local_company_id_from_registry
+    assert local_company_id_from_registry() == 'lic-join-1', (
+        'the resolver sync applies pulled rows under must now answer the licence id'
+    )
+
+
+def test_an_install_with_an_admin_is_not_seeded():
+    """An ordinary install -- admin created first, licence activated later --
+    already has both an admin and a company_settings row after the rebind.
+    It must not be touched a second time."""
+    tmp, conn = _fresh_registry('aura-registry-v4-join-has-admin-')
+    conn.close()
+    _write_licence_state(tmp, 'lic-join-2')
+
+    conn = sqlite3.connect(registry_db.DB_PATH)
+    before = conn.execute('SELECT COUNT(*) FROM company_settings').fetchone()[0]
+    conn.close()
+
+    result = rebind_company_id_after_activation()
+
+    assert result['seeded_company_settings'] is False, result
+    conn = sqlite3.connect(registry_db.DB_PATH)
+    after = conn.execute('SELECT COUNT(*) FROM company_settings').fetchone()[0]
+    conn.close()
+    assert after == before, 'an install that already had an admin had its company_settings row count change'
+
+
+def test_seeding_is_idempotent():
+    tmp = _fresh_app_data('aura-registry-v4-join-idem-')
+    registry_db.init_registry_db()
+    _write_licence_state(tmp, 'lic-join-3')
+
+    first = rebind_company_id_after_activation()
+    second = rebind_company_id_after_activation()
+
+    assert first['seeded_company_settings'] is True, first
+    assert second['seeded_company_settings'] is False, second
+
+    conn = sqlite3.connect(registry_db.DB_PATH)
+    count = conn.execute('SELECT COUNT(*) FROM company_settings').fetchone()[0]
+    conn.close()
+    assert count == 1, f'the second call created a duplicate row: {count}'
+
+
+def test_no_owner_issued_id_seeds_nothing():
+    tmp = _fresh_app_data('aura-registry-v4-join-noid-')
+    registry_db.init_registry_db()
+
+    result = rebind_company_id_after_activation()
+
+    assert result['status'] == 'skipped', result
+    assert result['seeded_company_settings'] is False, result
+    conn = sqlite3.connect(registry_db.DB_PATH)
+    count = conn.execute('SELECT COUNT(*) FROM company_settings').fetchone()[0]
+    conn.close()
+    assert count == 0
+
+
+def test_a_pulled_owner_row_applies_on_a_seeded_joining_device():
+    """The whole point of the seed row: a `user` create event for the owner's
+    admin account, applied through the real SyncService apply path, must
+    land under the licence id -- proving the owner's account can reach a
+    device that never created one of its own."""
+    tmp = _fresh_app_data('aura-registry-v4-join-apply-')
+    registry_db.init_registry_db()
+    _write_licence_state(tmp, 'lic-join-5')
+
+    seed_result = rebind_company_id_after_activation()
+    assert seed_result['seeded_company_settings'] is True, seed_result
+
+    from commercial_runtime.sync.sync_service import (
+        REGISTRY_SYNC_ENTITY_TYPES,
+        SyncService,
+        local_company_id_from_registry,
+    )
+
+    service = SyncService(
+        client_factory=lambda: None,
+        get_conn=registry_db.get_conn,
+        local_company_id_provider=local_company_id_from_registry,
+        handled_entity_types=REGISTRY_SYNC_ENTITY_TYPES,
+    )
+    owner_uid = str(uuid.uuid4())
+    event = {
+        'entity_type': 'user',
+        'entity_id': owner_uid,
+        'event_type': 'create',
+        'payload': {
+            'uid': owner_uid,
+            'email': 'owner@test.local',
+            'role': 'admin',
+            'password_hash': 'H',
+            'employee_id': 'ADMIN-0001',
+            'row_version': 1,
+            'status': 'active',
+        },
+    }
+
+    conn = registry_db.get_conn()
+    try:
+        handled = service._apply_event(conn, event, local_company_id=local_company_id_from_registry())
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert handled is True, 'the owner row must apply, not be parked'
+
+    conn = registry_db.get_conn()
+    try:
+        row = conn.execute('SELECT company_id, role FROM users WHERE uid=?', (owner_uid,)).fetchone()
+    finally:
+        conn.close()
+    assert row is not None, 'the owner account never landed on the joining device'
+    assert row['company_id'] == 'lic-join-5'
+    assert row['role'] == 'admin'
