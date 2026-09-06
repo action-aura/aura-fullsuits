@@ -2538,6 +2538,13 @@ the artefact, never inferred from a green suite. Full per-line evidence in
   dashboard as `ADMIN-0001`; no admin created; second witness by HTTP
   against the handset's own backend (`scripts/ops/phone_join_door.py`).
   Done on both clients. No security change.
+- **Seeded payment-method names stay English in Arabic mode.** Seen on the
+  phone's Settings and POS cart with the app in Arabic (2026-09-06 evening):
+  "Cash / Card / Bank Transfer / Mobile Wallet / Check" are rows in
+  `payment_methods` seeded by name, so `tr()` never sees them. Small fix:
+  seed a stable `code` per default method and translate by code on both
+  clients (the desktop has the same rows). Not a Sunday problem, but the
+  first thing an Arabic-speaking cashier reads at the Charge step.
 - **The default "Main Branch" is a different wire entity on every device.**
   Found 2026-09-06 while proving the join door: a freshly joined till logged
   nine pulled rows whose `branch_uid` "did not resolve to any local branch"
