@@ -80,7 +80,12 @@ protected **minting**.
 
 ## What was left
 
-The one-process run of `commercial_runtime/identity/tests` shows failures
-of the "An admin account already exists" shape that do not reproduce when
-the same files run alone; recorded in the commit rather than hidden, and
-being checked file by file.
+The one-process run of `commercial_runtime/identity/tests` shows ten
+failures of the "An admin account already exists" shape, all in
+`test_registry_v4_session_invalidation.py` (6) and
+`test_registry_v4_window.py` (4). Both files pass alone (6 and 6 — checked
+2026-09-06 18:40). That is the cross-file fixture pollution the canonical
+runner exists to avoid (one pytest process per file; see
+`products/run_all_tests.py`'s docstring) and it predates this change, which
+touches only the employee-code allocator; noted here so the next person who
+runs the directory in one process does not chase it as a regression.

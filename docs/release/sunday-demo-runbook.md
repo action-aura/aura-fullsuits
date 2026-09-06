@@ -24,6 +24,20 @@ cable** in this rehearsal (the app is baked to `http://127.0.0.1:5551`); if
 the phone was unplugged or the laptop slept, run the command above again —
 the tunnel does not survive that, and the phone then backs off for minutes.
 
+Then sign in on the laptop as the owner and look at the bottom of the
+screen. If a dark banner says **"This device is not yet your store's admin
+device"**, click **Make this the admin device** — otherwise Settings, the
+Audit Log, Employees and Branches stay hidden from the menu. It was needed
+on the evening of 2026-09-06 after the tills were restarted (measured:
+`/api/devices/me` answered `can_claim_admin: true`; one click through the
+real banner flipped it and the six entries appeared). One device per shop
+holds this; the phone should not be it.
+
+Two things the phone will NOT show a cashier, on purpose: the dashboard's
+money figures (it says "Ready to sell" instead, same as the laptop) and the
+"Add Product" button — creating products is a manager's capability. If the
+demo needs those on the phone, sign in there as the owner.
+
 Accounts that exist on the rehearsal licence (`AURA-RET-1-5P2G-39EP-XQ9T-K8ZC-FEZG`):
 
 | Who | Email | Where it works |
