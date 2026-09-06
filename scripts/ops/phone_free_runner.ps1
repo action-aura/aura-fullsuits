@@ -23,6 +23,13 @@ if (-not $ready) { Log "no authorised device within 8 hours; giving up"; exit 0 
 Log "device ready"
 
 & $adb reverse tcp:5551 tcp:5551 | Out-Null
+$apk = Join-Path $root "android\aura-retail\app\build\outputs\apk\debug\app-debug.apk"
+if (Test-Path $apk) {
+    # The APK on disk is whatever the last build produced; installing over
+    # the running app keeps its data (the watcher does the same).
+    $inst = & $adb install -r $apk 2>&1
+    Log "install: $($inst -join ' ')"
+}
 & $adb shell monkey -p com.actionaura.retail.debug -c android.intent.category.LAUNCHER 1 2>$null | Out-Null
 Start-Sleep -Seconds 35
 Log "app pid: $(& $adb shell pidof com.actionaura.retail.debug)"

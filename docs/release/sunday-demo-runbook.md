@@ -103,6 +103,15 @@ Already in the rehearsal Owner's catalogue: a licence includes **two devices**
 until the product enforces a branch limit. Open: whether 250 JOD is per year
 or one-time.
 
+## State of the code this runbook describes
+
+As of 2026-09-06 03:40: the canonical retail runner passed **170 of 170**
+files on the branch (`python products/run_all_tests.py retail`), including
+the settings-sync, owner-login re-numbering and branch-limit work from the
+same night; the Android debug APK at `android/aura-retail/app/build/outputs/
+apk/debug/app-debug.apk` was built from that tree and carries the same
+backend.
+
 ## If something looks wrong
 
 - "Access denied to retail" on a staff account → the app on that device is
