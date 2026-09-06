@@ -227,6 +227,10 @@ retail_api.py, not from memory:
 - **No inter-branch stock transfer workflow.** `branches` exist and stock is
   branch-scoped, but the word `transfer` does not appear in retail's schema or
   API at all.
+- **A branch cannot be renamed or retired.** `/branches` has only GET and
+  POST (found 2026-09-06 while writing the demo runbook); a mistyped branch
+  name lives forever and syncs everywhere. The paid branch *limit* is
+  enforced (see the licensing section), the branch *edit* is the gap.
 - **No SMS and no push.** See the correction below — WhatsApp and email do
   exist, so this is now a narrow gap rather than a blanket one.
 - **iOS build requires a macOS host** that does not exist in this dev
