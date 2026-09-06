@@ -105,29 +105,28 @@ or one-time.
 
 ## State of the code this runbook describes
 
-As of 2026-09-06 03:40: the canonical retail runner passed **170 of 170**
-files on the branch (`python products/run_all_tests.py retail`), including
-the settings-sync, owner-login re-numbering and branch-limit work from the
-same night; the Android debug APK at `android/aura-retail/app/build/outputs/
-apk/debug/app-debug.apk` was built from that tree and carries the same
-backend. The full Owner suite the same night: 1262 passed, 3 failed — the
+As of 2026-09-06 05:45: the canonical retail runner passed **172 of 172**
+files on the finished tree (`python products/run_all_tests.py retail`),
+including the settings-sync, owner-login re-numbering, branch-limit and
+branch-rename work from the same night; the full Android unit suite is green;
+the Android debug APK at `android/aura-retail/app/build/outputs/apk/debug/
+app-debug.apk` was built from that tree and carries the same backend. The full Owner suite the same night: 1262 passed, 3 failed — the
 same three known failures as the day before (two tests that assume the day
 does not change mid-run, and one that looks for a venv at the main checkout
 path when run from a worktree), none from the night's changes.
 
 ## Test rows the rehearsal left behind
 
-The night's proofs wrote real rows on the laptop till (and, through sync, on
-the phone): products `SYNC-0905A/B/C` ("Sync Test Product …"), customers
-"Phone Customer 0905" and "Desk Cashier Customer 0905", a second branch named
-"Branch test after-addon …", and the sales `SALE-000004…` and the offline
-one. They are honest history and can stay for a rehearsal audience; for the
-real demo delete the products and customers from the laptop (Products /
-Customers screens — the deletions sync out). The test branch was already
-renamed to "Second Branch" through the Edit control that was added the same
-night (Branches → Edit; the rename reached the second till in 10 s) — a
-branch cannot be *retired* yet, only edited. The presentation package under
-`aura-retail-demo/` has its own data folder and is unaffected.
+The night's proofs wrote real rows on the laptop till. Cleaned up on
+2026-09-06 05:40 through the real routes, which doubled as one more proof:
+the three `SYNC-0905*` products and the two "… 0905" customers were deleted
+on the laptop (soft-deletes) and vanished from the second till within 5 s
+(`scripts/ops/cleanup_test_rows.py`); the test branch was renamed to "Second
+Branch" through the new Edit control (a branch cannot be *retired* yet, only
+edited). What remains is honest history: the sales `SALE-000004…` and the
+offline one, the customer "tareq", "Second Branch", and the staff accounts.
+The phone receives the same deletions on its next sync. The presentation
+package under `aura-retail-demo/` has its own data folder and is unaffected.
 
 ## If something looks wrong
 
