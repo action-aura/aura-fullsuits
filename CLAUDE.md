@@ -123,6 +123,20 @@ coexist.
   past it with `403 BRANCH_LIMIT`; absent or 0 means no limit. Adding a new
   paid limit is a seeded definition, a plan/add-on value, and one gate —
   no migration anywhere.
+- **A second device joins a shop with the key alone — it must not create an
+  admin.** `POST /api/licensing/activate` needs no session; the identity
+  rebind seeds `company_settings` with the licence id when no admin exists
+  (`company_rebind.seed_company_settings_for_joining_device`), and the
+  owner's real account then arrives by sync. The desktop first-run modal
+  has a join mode for this (`app-shell.js` `_openFirstRun` /
+  `_isJoinedDevice`, both `init()` and the 401 path go through it) and
+  Android asks once after activation (`FirstRunDecision`,
+  `JoinChoiceScreen`/`JoiningScreen`). "Device holds an Owner-issued
+  `installation_id` and is not in a pre-activation state" is the signal on
+  both — a data fact from `status_presenter.py`, never a hand-typed list of
+  active states (the backend never emits a bare `ACTIVE`). Proven in a real
+  browser on fresh tills 2026-09-06; design and measurements in
+  `docs/launch-readiness/join-existing-shop-design.md`.
 
 ## E-invoicing (Jordan JoFotara/ISTD)
 
