@@ -135,12 +135,13 @@ Two states follow, and both need words on screen:
 
 | Layer | File | Change |
 |---|---|---|
-| Activation hook | `products/retail/backend/app.py::_on_licence_activated` (+ Clinic's) | premise 5: seed `company_settings` with the Owner-issued id when no company and no admin exist; mutation-prove that an install WITH an admin is untouched |
-| Desktop first run | `products/retail/frontend/onboarding.js` (or wherever `needs_setup` is rendered — grep `needs_setup`) | the second choice, the key form, the polling state, the two messages |
-| Desktop sync start | `products/retail/backend/app.py` | (b) above, or rely on the restart |
-| Android first run | `android/aura-retail/app/src/main/java/com/actionaura/retail/ui/AppRoot.kt` | the same second choice on the setup phase; the coordinator already starts on the status read |
-| Tests | `products/retail/tests/retail_join_existing_shop_test.py`; a Kotlin contract test for the AppRoot phase | activate with no users → status flips to `needs_setup:false` once a synced admin row is applied (seed it through `SyncService._apply_event`); a wrong key returns the reason; `create_admin` stays gated |
-| Docs | `sellability-status.md` blocker 4 paragraph, `sunday-demo-runbook.md` §1 | remove the "each device still creates its own admin" caveat once run on the phone |
+| Activation hook — **built** | `commercial_runtime/identity/company_rebind.py::seed_company_settings_for_joining_device`, called from `rebind_company_id_after_activation` (shared by Retail and Clinic) | premise 5: seed `company_settings` with the Owner-issued id when no company and no admin exist; five tests in `test_registry_v4_company_rebind.py`, an install WITH an admin proven untouched |
+| Desktop first run — **built** | `products/retail/frontend/app-shell.js`: `_toggleJoinMode`, `_joinSubmit`, `_openFirstRun`, `_isJoinedDevice`, `_waitForShopAccount` | the join mode of the setup modal, the restart message, the next-launch wait; both `init()` and `checkAuthAndSetup()` go through `_openFirstRun()` |
+| Desktop sync start | `products/retail/backend/app.py` | relies on the restart (the "Connected to your shop. Restart Aura" screen); in-process start not attempted |
+| Android first run — **in progress** | `ui/FirstRunDecision.kt` (pure decision), `ui/screens/JoinShopScreens.kt` (choice + waiting screens), `AppRoot.kt` phases `JOIN_CHOICE`/`JOINING` | on Android the key comes BEFORE the account, so after activation the app cannot tell a new shop's first device from a joining one: it asks once; the waiting screen polls `needs_setup` and never calls `createAdmin` |
+| Tests — **built** | `products/retail/tests/retail_join_shop_modal_test.js` (15 checks, drives `init()` itself); `FirstRunDecisionTest.kt` + `JoinShopWiringContractTest.kt` (Android) | the desktop checks include the no-Owner, pending-approval and boot-path cases the first cut missed; `create_admin` stays gated (never called by the join path, measured in the browser) |
+| Proof drivers | `scripts/ops/join_e2e.py` (API, fourth till), `scripts/ops/join_door_e2e.py` (Chromium, fifth and sixth tills) | run against a fresh till on `:5013`/`:5014`; a device slot per till through the audited `add_devices` op (`scripts/ops/owner_rehearsal_add_one_device.py`) |
+| Docs | `sellability-status.md` (row added), `sunday-demo-runbook.md` §1 (caveat reworded) | the phone's own admin caveat stays until the Android door is run on the handset |
 
 ## Measured on a real fresh till, 2026-09-06 13:50
 
