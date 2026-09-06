@@ -85,17 +85,20 @@
  *     green tree. The ratio is now the assertion; the count stays alongside it,
  *     because "the blind spot grew" is a different fact from any one ratio.
  *
- *  7. ALL OF IT, AGAIN, IN DARK. Since 2026-09 the product ships a second
- *     sanctioned theme: the html[data-theme="dark"] block in main.css, token
- *     VALUES only, zero dark-scoped rules. Property 1 therefore re-runs on the
- *     merged dark map (same cross-products, same AA/AAA floors), property 2
- *     re-resolves the ENTIRE rendered corpus through the dark values (sound
- *     because the rule table and cascade winners are theme-independent by
- *     construction -- only the map changes, exactly as in the browser), the
- *     badge self-containment re-checks with dark state pairs, and a polarity
- *     check refuses the one cheap green: a "dark" block that is a paste of the
- *     light values. The first dark theme died of a failure no token scan could
- *     see; the dark rendered tier is the check that would have caught it.
+ *  7. ALL OF IT, AGAIN, FOR EVERY NON-LIGHT THEME. Since 2026-09 the product
+ *     ships four more sanctioned themes beyond base Light: Dark, then (a
+ *     second owner request the same month) Night, Dusk and Sand -- each its
+ *     own html[data-theme="<name>"] block in main.css, token VALUES only,
+ *     zero theme-scoped rules. Property 1 therefore re-runs on each theme's
+ *     merged map (same cross-products, same AA/AAA floors), property 2
+ *     re-resolves the ENTIRE rendered corpus through each theme's values
+ *     (sound because the rule table and cascade winners are theme-independent
+ *     by construction -- only the map changes, exactly as in the browser),
+ *     the badge self-containment re-checks with each theme's state pairs, and
+ *     a polarity check refuses the one cheap green: a block that is a paste
+ *     of the light values (or, for Sand -- a light theme -- a paste of a dark
+ *     one). The first dark theme died of a failure no token scan could see;
+ *     these per-theme rendered tiers are the check that would have caught it.
  *
  * ANTI-VACUITY
  * Every assertion here is a loop. A loop over nothing passes. So the palette
@@ -292,30 +295,34 @@ function readTokenBlock() {
   return afterHeaderComment(css.slice(start, end));
 }
 
-/* The dark theme's whole existence is the html[data-theme="dark"] block between
-   these markers: token VALUES only, no rules, so every check that holds for the
-   light palette must hold for these values on the same rule set. The dark map
-   returned here is light OVERLAID with dark, which is exactly the cascade a
-   dark document resolves -- and it is also what makes a MISSING override
-   self-detecting: a --surface-* the dark block forgot stays light-valued, dark
-   text lands on it, and the AA/AAA cross-products below go red rather than
-   quietly testing a smaller palette. */
-function readDarkTokenBlock() {
+/* Every non-light theme's whole existence is the html[data-theme="<name>"]
+   block between its markers: token VALUES only, no rules, so every check that
+   holds for the light palette must hold for these values on the same rule
+   set. The merged map returned here is light OVERLAID with the theme, which
+   is exactly the cascade a document in that theme resolves -- and it is also
+   what makes a MISSING override self-detecting: a --surface-* a theme block
+   forgot stays light-valued, dark text lands on it, and the AA/AAA
+   cross-products below go red rather than quietly testing a smaller palette.
+   ('dark' uses the original [design-tokens-dark:*] markers; night/dusk/sand
+   each get their own [design-tokens-<name>:*] pair.) */
+function readThemeTokenBlock(name) {
   const css = fs.readFileSync(CSS_FILE, 'utf8');
-  const start = css.indexOf('[design-tokens-dark:begin]');
-  const end = css.indexOf('[design-tokens-dark:end]');
-  assert.ok(start !== -1, 'main.css is missing the [design-tokens-dark:begin] marker — the dark theme has no palette to test');
-  assert.ok(end > start, '[design-tokens-dark:end] is missing or appears before its begin marker');
+  const beginMarker = `[design-tokens-${name}:begin]`;
+  const endMarker = `[design-tokens-${name}:end]`;
+  const start = css.indexOf(beginMarker);
+  const end = css.indexOf(endMarker);
+  assert.ok(start !== -1, `main.css is missing the ${beginMarker} marker — the ${name} theme has no palette to test`);
+  assert.ok(end > start, `${endMarker} is missing or appears before its begin marker`);
   return afterHeaderComment(css.slice(start, end));
 }
 
-function darkTokenMaps(lightTokens) {
-  const overrides = parseTokens(readDarkTokenBlock());
+function themeTokenMaps(lightTokens, name) {
+  const overrides = parseTokens(readThemeTokenBlock(name));
   assert.ok(
     overrides.size >= 30,
-    `The dark token block defines only ${overrides.size} tokens. The light palette has ` +
-    'over 30 colour tokens; a dark block this thin means most of the theme still ' +
-    'resolves to light values, i.e. the dark theme is mostly not a theme.'
+    `The ${name} token block defines only ${overrides.size} tokens. The light palette has ` +
+    `over 30 colour tokens; a ${name} block this thin means most of the theme still ` +
+    `resolves to light values, i.e. the ${name} theme is mostly not a theme.`
   );
   const merged = new Map(lightTokens);
   for (const [k, v] of overrides) merged.set(k, v);
@@ -514,7 +521,7 @@ function testTextOnAccentReachesAA(tokens, groups, label = 'light') {
    cannot fake: in light the working surface out-luminates its text, in dark
    the text out-luminates its surface. Both directions are asserted, against
    the values, not the names. */
-function testDarkPaletteIsActuallyDark(lightTokens, darkMerged) {
+function testDarkPaletteIsActuallyDark(lightTokens, darkMerged, themeLabel = 'dark') {
   const lumOf = (map, name) => {
     const v = map.get(name);
     assert.ok(v && parseHex(v), `${name} missing or not hex ("${v}")`);
@@ -524,6 +531,7 @@ function testDarkPaletteIsActuallyDark(lightTokens, darkMerged) {
   const lightText = lumOf(lightTokens, '--text-primary');
   const darkSurface = lumOf(darkMerged, '--surface-till');
   const darkText = lumOf(darkMerged, '--text-primary');
+  const upper = themeLabel.toUpperCase();
 
   assert.ok(
     lightSurface > lightText,
@@ -532,18 +540,42 @@ function testDarkPaletteIsActuallyDark(lightTokens, darkMerged) {
   );
   assert.ok(
     darkText > darkSurface,
-    `The DARK working surface (luminance ${darkSurface.toFixed(3)}) is not darker than its own ` +
-    `body text (${darkText.toFixed(3)}). A dark block whose values render a light screen is ` +
-    'light mode wearing data-theme="dark" — the exact non-theme this check exists to refuse.'
+    `The ${upper} working surface (luminance ${darkSurface.toFixed(3)}) is not darker than its own ` +
+    `body text (${darkText.toFixed(3)}). A ${themeLabel} block whose values render a light screen is ` +
+    `light mode wearing data-theme="${themeLabel}" — the exact non-theme this check exists to refuse.`
   );
   assert.ok(
     darkSurface < 0.2,
-    `--surface-till resolves to luminance ${darkSurface.toFixed(3)} in dark — that is not a ` +
+    `--surface-till resolves to luminance ${darkSurface.toFixed(3)} in ${themeLabel} — that is not a ` +
     'dark surface (the floor here is generous: 0.2 is already a mid grey).'
   );
   console.log(
-    `PASS: the dark palette is genuinely dark (till surface luminance ` +
+    `PASS: the ${themeLabel} palette is genuinely dark (till surface luminance ` +
     `${darkSurface.toFixed(3)} vs text ${darkText.toFixed(3)}; light is the inverse)`
+  );
+}
+
+/* SAND IS A LIGHT THEME, NOT A DARK ONE WEARING PAPER COLOURS. Same polarity
+   argument as testDarkPaletteIsActuallyDark, inverted: a light theme's
+   working surface must OUT-LUMINATE its own body text, the same way the base
+   light palette's does above. */
+function testLightFamilyPaletteIsActuallyLight(merged, themeLabel) {
+  const lumOf = (name) => {
+    const v = merged.get(name);
+    assert.ok(v && parseHex(v), `${name} missing or not hex ("${v}")`);
+    return relativeLuminance(parseHex(v));
+  };
+  const surface = lumOf('--surface-till');
+  const text = lumOf('--text-primary');
+  assert.ok(
+    surface > text,
+    `The ${themeLabel.toUpperCase()} working surface (luminance ${surface.toFixed(3)}) is not ` +
+    `lighter than its own body text (${text.toFixed(3)}) — a light theme needs a light surface ` +
+    'and dark text, the same polarity the base light palette has.'
+  );
+  console.log(
+    `PASS: the ${themeLabel} palette is genuinely light (till surface luminance ` +
+    `${surface.toFixed(3)} vs text ${text.toFixed(3)})`
   );
 }
 
@@ -1224,13 +1256,23 @@ async function runAll(checks) {
   return failures;
 }
 
+/* The closed set of sanctioned non-light themes. dark/night/dusk are the dark
+   family (working surface out-luminated by its own text); sand is a LIGHT
+   theme (paper ground, ink text) and gets the inverse polarity check. Every
+   TIER 1 and TIER 2 dark-family/alt-theme check below is a loop over this
+   list, so a sixth theme changes coverage by construction. */
+const BLOCK_THEMES = ['dark', 'night', 'dusk', 'sand'];
+
 /* How many checks this file is known to contain. The list below is built
    conditionally — a token block that will not parse, or a corpus that will not
    build, removes the checks that consume it — and a conditionally built list can
    be built EMPTY, at which point runAll() loops over nothing, collects no
    failures and the file exits 0 having compared not one colour. Every other
-   guard in this file has an anti-vacuity floor; so does the runner. */
-const EXPECTED_CHECKS = 19;
+   guard in this file has an anti-vacuity floor; so does the runner.
+
+   5 (light TIER 1) + 4 themes x 5 (per-theme TIER 1) + 6 (light TIER 2-5
+   rendered) + 4 themes x 3 (per-theme TIER 2 rendered) = 43. */
+const EXPECTED_CHECKS = 43;
 
 async function main() {
   const checks = [];
@@ -1261,31 +1303,47 @@ async function main() {
     );
   }
 
-  // TIER 1, DARK. The dark theme is token values only (html[data-theme="dark"]
-  // in main.css) applied to the identical rule set, so the palette obligations
-  // are identical: the same cross-products, the same AA/AAA floors, on the
-  // merged (light overlaid with dark) map a dark document actually resolves.
-  let darkMerged = null;
-  let darkGroups = null;
-  if (tokens) {
-    try {
-      darkMerged = darkTokenMaps(tokens).merged;
-      darkGroups = groupTokens(darkMerged);
-    } catch (err) {
-      setupFailed('dark token block parse (4 dark palette checks could not run)', err);
+  // TIER 1, EVERY NON-LIGHT THEME. Each is token values only
+  // (html[data-theme="<name>"] in main.css) applied to the identical rule set,
+  // so the palette obligations are identical for every one of them: the same
+  // cross-products, the same AA/AAA floors, on the merged (light overlaid
+  // with the theme) map a document in that theme actually resolves. Sand is a
+  // LIGHT theme (paper ground, ink text) so it gets the light-polarity check
+  // instead of the dark one; dark/night/dusk are the dark family.
+  const themeMerged = {};
+  for (const themeName of BLOCK_THEMES) {
+    let merged = null;
+    let themeGroups = null;
+    if (tokens) {
+      try {
+        merged = themeTokenMaps(tokens, themeName).merged;
+        themeGroups = groupTokens(merged);
+      } catch (err) {
+        setupFailed(`${themeName} token block parse (5 ${themeName} palette checks could not run)`, err);
+      }
+    } else {
+      setupFailed(`${themeName} token block parse (5 ${themeName} palette checks could not run)`,
+        new Error('light token parse already failed, so the theme overlay has no base'));
     }
-  } else {
-    setupFailed('dark token block parse (4 dark palette checks could not run)',
-      new Error('light token parse already failed, so the dark overlay has no base'));
-  }
-  if (darkGroups) {
-    checks.push(
-      ['the dark parse found a real palette', () => testParseFoundARealPalette(darkGroups, 'dark')],
-      ['every DARK text-on-surface pairing reaches AA', () => testEveryTextOnSurfaceReachesAA(darkGroups, 'dark')],
-      ['DARK money reaches AAA', () => testMoneyReachesAAA(darkGroups, 'dark')],
-      ['DARK --text-on-accent reaches AA on the dark accent fills', () => testTextOnAccentReachesAA(darkMerged, darkGroups, 'dark')],
-      ['the dark palette is actually dark, not a re-badged light one', () => testDarkPaletteIsActuallyDark(tokens, darkMerged)],
-    );
+    themeMerged[themeName] = merged;
+    if (themeGroups) {
+      const upper = themeName.toUpperCase();
+      checks.push(
+        [`the ${themeName} parse found a real palette`, () => testParseFoundARealPalette(themeGroups, themeName)],
+        [`every ${upper} text-on-surface pairing reaches AA`, () => testEveryTextOnSurfaceReachesAA(themeGroups, themeName)],
+        [`${upper} money reaches AAA`, () => testMoneyReachesAAA(themeGroups, themeName)],
+        [`${upper} --text-on-accent reaches AA on the ${themeName} accent fills`, () => testTextOnAccentReachesAA(merged, themeGroups, themeName)],
+      );
+      if (themeName === 'sand') {
+        checks.push(
+          [`the ${themeName} palette is actually light, not a re-badged dark one`, () => testLightFamilyPaletteIsActuallyLight(merged, themeName)],
+        );
+      } else {
+        checks.push(
+          [`the ${themeName} palette is actually dark, not a re-badged light one`, () => testDarkPaletteIsActuallyDark(tokens, merged, themeName)],
+        );
+      }
+    }
   }
 
   // TIER 2-5 setup: the rendered corpus.
@@ -1310,28 +1368,32 @@ async function main() {
       ['unexercised chrome is measured, not assumed fine', () => testUnexercisedChromeIsCountedNotAssumedFine(h)],
     );
 
-    // TIER 2, DARK — the whole rendered corpus again, resolved through the
-    // dark map. This is the tier that would have caught the ORIGINAL dark
-    // theme (whose failure was never in a token block): every element, every
-    // screen, every state, with the values a dark document serves. It is
-    // possible at this cost precisely because the theme difference is token
-    // values only — the rule table, the cascade, and the winners are shared,
-    // so the dark document differs from the light one in nothing but the map
-    // handed to the resolver, exactly as in the browser.
-    if (darkMerged) {
-      const darkTokensObj = Object.assign(Object.create(null), h.tokens);
-      for (const [k, v] of parseTokens(readDarkTokenBlock())) darkTokensObj[k] = v;
-      const hDark = Object.assign({}, h, { tokens: darkTokensObj });
-      let renderedDarkCache = null;
-      const renderedDark = () => (renderedDarkCache || (renderedDarkCache = resolveRenderedPairings(hDark)));
-      checks.push(
-        ['every RENDERED pairing reaches AA in DARK', () => testEveryRenderedPairingReachesAA(hDark, renderedDark(), 'dark')],
-        ['nothing resolves to unknown in silence in DARK', () => testNothingResolvesToUnknownInSilence(hDark, renderedDark().unresolved, 'dark')],
-        ['badge variants are self-contained in DARK', () => testBadgeVariantsAreSelfContained(hDark, 'dark')],
-      );
-    } else {
-      setupFailed('dark rendered tier (3 checks could not run)',
-        new Error('the dark token map failed to build, so the rendered corpus cannot be resolved in dark'));
+    // TIER 2, EVERY NON-LIGHT THEME — the whole rendered corpus again,
+    // resolved through each theme's map. This is the tier that would have
+    // caught the ORIGINAL dark theme (whose failure was never in a token
+    // block): every element, every screen, every state, with the values that
+    // theme's document serves. It is possible at this cost precisely because
+    // the theme difference is token values only — the rule table, the
+    // cascade, and the winners are shared, so a themed document differs from
+    // the light one in nothing but the map handed to the resolver, exactly as
+    // in the browser.
+    for (const themeName of BLOCK_THEMES) {
+      if (themeMerged[themeName]) {
+        const themeTokensObj = Object.assign(Object.create(null), h.tokens);
+        for (const [k, v] of parseTokens(readThemeTokenBlock(themeName))) themeTokensObj[k] = v;
+        const hTheme = Object.assign({}, h, { tokens: themeTokensObj });
+        let renderedThemeCache = null;
+        const renderedTheme = () => (renderedThemeCache || (renderedThemeCache = resolveRenderedPairings(hTheme)));
+        const upper = themeName.toUpperCase();
+        checks.push(
+          [`every RENDERED pairing reaches AA in ${upper}`, () => testEveryRenderedPairingReachesAA(hTheme, renderedTheme(), themeName)],
+          [`nothing resolves to unknown in silence in ${upper}`, () => testNothingResolvesToUnknownInSilence(hTheme, renderedTheme().unresolved, themeName)],
+          [`badge variants are self-contained in ${upper}`, () => testBadgeVariantsAreSelfContained(hTheme, themeName)],
+        );
+      } else {
+        setupFailed(`${themeName} rendered tier (3 checks could not run)`,
+          new Error(`the ${themeName} token map failed to build, so the rendered corpus cannot be resolved in ${themeName}`));
+      }
     }
   }
 

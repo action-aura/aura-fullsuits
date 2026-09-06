@@ -6,9 +6,9 @@
   <title>Aura Retail</title>
   <link rel="icon" href="data:,">
   <script>
-    // OPERATIONAL CALM: two sanctioned themes, and this boot line VALIDATES the
-    // saved choice instead of trusting it. Runs before main.css so first paint
-    // is already in the right theme (no flash).
+    // OPERATIONAL CALM: five sanctioned themes, and this boot line VALIDATES
+    // the saved choice instead of trusting it. Runs before main.css so first
+    // paint is already in the right theme (no flash).
     //
     // HISTORY -- read before "simplifying" this. The first dark theme was
     // killed here for cause: the compatibility layer in main.css was scoped to
@@ -25,20 +25,37 @@
     //
     //   1. A NEW KEY. 'aura_theme_v2' has never held a value written by the
     //      broken era, so nothing stale can be misread as a choice.
-    //   2. EXACT-MATCH VALIDATION. Only the exact string 'dark' produces dark.
-    //      Any other value -- absent, corrupt, or a leftover the old accent
-    //      picker's vocabulary ('midnight', 'carbon', ...) could ever leak in --
-    //      resolves to light, the base palette.
+    //   2. ALLOWLIST VALIDATION, mirrored from ThemeEngine. Only a name in
+    //      the allowlist resolves to itself. Any other value -- absent,
+    //      corrupt, or a leftover the old accent picker's vocabulary
+    //      ('midnight', 'carbon', ...) could ever leak in -- resolves to
+    //      light, the base palette. This array is hand-mirrored, not
+    //      imported (this script runs before any <script src> loads,
+    //      app-shell.js included), and retail_design_theme_safety_test.js
+    //      pins the two lists equal.
     //   3. THE OLD KEY STAYS BANISHED. 'aura_theme' is still REMOVED, never
     //      read: a dark preference from the broken era must not resurrect
     //      itself; the user re-opts-in once through the picker, deliberately.
     //
-    // retail_design_theme_safety_test.js pins all three guards by name.
+    // NAME THIS ARRAY WITH AN AURA_BOOT_ PREFIX -- NEVER GIVE IT THE SAME
+    // BARE NAME app-shell.js USES FOR ITS OWN ALLOWLIST. This script and
+    // app-shell.js are both plain global-scope <script> tags on the same
+    // page (no modules, no IIFE wrapper around either), so a second
+    // top-level declaration of a name app-shell.js already owns at that
+    // same scope is a SyntaxError the instant both parse -- which does not
+    // fail loud, it fails as "app-shell.js never ran, SubsystemApp is not
+    // defined", because the redeclaration kills that whole script before
+    // its first statement. Every global this file introduces must be unique
+    // across every script tag the page loads.
+    // retail_design_theme_safety_test.js pins all three guards above by
+    // name, AND separately pins that this file never (re)declares that
+    // bare app-shell.js identifier at global scope.
     try {
       var savedTheme = null;
       try { savedTheme = localStorage.getItem('aura_theme_v2'); } catch (e) {}
+      var AURA_BOOT_THEME_NAMES = ['light', 'sand', 'dark', 'night', 'dusk'];
       document.documentElement.setAttribute('data-theme',
-        savedTheme === 'dark' ? 'dark' : 'light');
+        AURA_BOOT_THEME_NAMES.indexOf(savedTheme) !== -1 ? savedTheme : 'light');
       localStorage.removeItem('aura_theme');
     } catch(e) {}
     // This build only ever serves Retail — the shell skips the multi-subsystem

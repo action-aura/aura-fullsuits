@@ -421,6 +421,191 @@ html[data-theme="dark"] {
 }
 /*                                                     [design-tokens-dark:end] */
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   OPERATIONAL CALM — NIGHT PALETTE                  [design-tokens-night:begin]
+   ───────────────────────────────────────────────────────────────────────────
+   Third sanctioned theme (owner request, 2026-09): a deeper ink ground than
+   Dark with an aurora-teal accent, for shops that want the calm-dark family
+   at its coldest. The dark block's whole safety argument applies here
+   verbatim -- TOKEN VALUES ONLY, no theme-scoped paint rule anywhere, pinned
+   by retail_design_theme_safety_test.js's per-theme checks.
+
+   CONTRAST IS COMPUTED, NOT EYEBALLED: every text-on-surface pairing here
+   clears WCAG AA (4.5:1) and --text-primary clears well past AAA, verified by
+   retail_design_contrast_test.js's per-theme dark-family tier.
+   ═══════════════════════════════════════════════════════════════════════════ */
+html[data-theme="night"] {
+  color-scheme: dark;
+  --surface-app: #070b12;
+  --surface-till: #111a27;
+  --surface-panel: #0b111b;
+  --surface-sunken: #04070c;
+  --surface-raised: #0e1520;
+  --surface-hover: #172233;
+  --surface-active: #1d2b3f;
+  --text-primary: #e9f1fb;
+  --text-secondary: #bfcbdb;
+  --text-tertiary: #9aaabd;
+  --text-on-accent: #04201d;
+  --text-money: #e9f1fb;
+  --text-money-positive: #8fe8bd;
+  --text-money-negative: #ffb0a6;
+  --state-success-text: #7fdfa9;
+  --state-warning-text: #e9c97e;
+  --state-danger-text: #ff9b92;
+  --state-info-text: #8fbaff;
+  --state-success-surface: #0f2d1f;
+  --state-warning-surface: #30250d;
+  --state-danger-surface: #3b1512;
+  --state-info-surface: #12223c;
+  --state-success-border: #1c4a33;
+  --state-warning-border: #544119;
+  --state-danger-border: #63241e;
+  --state-info-border: #233f6a;
+  --accent-action: #5fe3d0;
+  --accent-action-hover: #7cebdb;
+  --accent-action-active: #49d2bf;
+  --surface-accent-soft: #0f2a30;
+  --border-hairline: #1a2432;
+  --border-default: #26344a;
+  --border-strong: #3f5271;
+  --focus-ring-color: #5fe3d0;
+  --surface-scrim: rgba(1, 4, 9, 0.74);
+  --focus-ring-halo: #000000;
+  --elevation-card:  0 1px 2px rgba(0, 0, 0, 0.55), 0 4px 12px rgba(0, 0, 0, 0.45);
+  --elevation-panel: 0 8px 28px rgba(0, 0, 0, 0.55);
+  --elevation-modal: 0 24px 64px rgba(0, 0, 0, 0.70);
+  --sheet-scrim: rgba(0, 0, 0, 0.62);
+  --sub-accent-rgb: 95, 227, 208;
+}
+/*                                                    [design-tokens-night:end] */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   OPERATIONAL CALM — DUSK PALETTE                     [design-tokens-dusk:begin]
+   ───────────────────────────────────────────────────────────────────────────
+   Fourth sanctioned theme (owner request, 2026-09): violet-charcoal ground
+   with a lavender accent -- the calm-dark family at its warmest hue. Same
+   safety argument as Dark and Night, verbatim: TOKEN VALUES ONLY, no
+   theme-scoped paint rule anywhere, pinned by
+   retail_design_theme_safety_test.js's per-theme checks.
+
+   CONTRAST IS COMPUTED, NOT EYEBALLED: every text-on-surface pairing here
+   clears WCAG AA (4.5:1) and --text-primary clears well past AAA, verified by
+   retail_design_contrast_test.js's per-theme dark-family tier.
+   ═══════════════════════════════════════════════════════════════════════════ */
+html[data-theme="dusk"] {
+  color-scheme: dark;
+  --surface-app: #13111c;
+  --surface-till: #211d31;
+  --surface-panel: #191626;
+  --surface-sunken: #0e0c16;
+  --surface-raised: #1c192a;
+  --surface-hover: #29253d;
+  --surface-active: #312c49;
+  --text-primary: #f0edf9;
+  --text-secondary: #c9c3dc;
+  --text-tertiary: #a49dbd;
+  --text-on-accent: #150f2e;
+  --text-money: #f0edf9;
+  --text-money-positive: #95e6b6;
+  --text-money-negative: #ffb0a6;
+  --state-success-text: #86dfa8;
+  --state-warning-text: #ebc97f;
+  --state-danger-text: #ff9d94;
+  --state-info-text: #9dbcff;
+  --state-success-surface: #132d22;
+  --state-warning-surface: #332711;
+  --state-danger-surface: #3e1717;
+  --state-info-surface: #16233f;
+  --state-success-border: #1f4a36;
+  --state-warning-border: #57431c;
+  --state-danger-border: #672622;
+  --state-info-border: #27406d;
+  --accent-action: #b9a6ff;
+  --accent-action-hover: #c9baff;
+  --accent-action-active: #a793f6;
+  --surface-accent-soft: #2a2350;
+  --border-hairline: #26223a;
+  --border-default: #34304c;
+  --border-strong: #4d4870;
+  --focus-ring-color: #b9a6ff;
+  --surface-scrim: rgba(6, 4, 14, 0.74);
+  --focus-ring-halo: #000000;
+  --elevation-card:  0 1px 2px rgba(0, 0, 0, 0.55), 0 4px 12px rgba(0, 0, 0, 0.45);
+  --elevation-panel: 0 8px 28px rgba(0, 0, 0, 0.55);
+  --elevation-modal: 0 24px 64px rgba(0, 0, 0, 0.70);
+  --sheet-scrim: rgba(0, 0, 0, 0.62);
+  --sub-accent-rgb: 185, 166, 255;
+}
+/*                                                     [design-tokens-dusk:end] */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   OPERATIONAL CALM — SAND PALETTE                     [design-tokens-sand:begin]
+   ───────────────────────────────────────────────────────────────────────────
+   Fifth sanctioned theme (owner request, 2026-09): warm paper ground with
+   amber ink -- a LIGHT theme, not a member of the dark family, for shops that
+   find the cool grey of the base Light palette too clinical. Same safety
+   argument as every other theme block: TOKEN VALUES ONLY, no theme-scoped
+   paint rule anywhere, pinned by retail_design_theme_safety_test.js's
+   per-theme checks.
+
+   CONTRAST IS COMPUTED, NOT EYEBALLED: every text-on-surface pairing here
+   clears WCAG AA (4.5:1) and --text-primary clears well past AAA, verified by
+   retail_design_contrast_test.js's per-theme tier (checked for LIGHT
+   polarity, not dark, since Sand's working surface must stay brighter than
+   its own text -- see testSandPaletteIsActuallyLight).
+   ═══════════════════════════════════════════════════════════════════════════ */
+html[data-theme="sand"] {
+  --surface-app: #efe8dc;
+  --surface-till: #fffdf8;
+  --surface-panel: #fbf7f0;
+  --surface-sunken: #f4eee4;
+  --surface-raised: #faf6ee;
+  --surface-hover: #f1eadf;
+  --surface-active: #e8e0d2;
+  --text-primary: #2a2119;
+  --text-secondary: #4d4034;
+  --text-tertiary: #63564a;
+  --text-on-accent: #ffffff;
+  --text-money: #2a2119;
+  /* Darker than --state-success-text/--state-danger-text below on purpose:
+     money is held to WCAG AAA (7:1) against EVERY solid surface, not just AA,
+     and --surface-active (this palette's darkest surface) put the shared
+     #1d5a34/#9a1f14 hue at 6.2-6.3:1 -- AA-clearing but short of the money
+     floor. Same hue, darkened until --surface-active (the worst case) clears
+     7:1 with margin (7.18:1); every lighter sand surface clears higher still. */
+  --text-money-positive: #1a502e;
+  --text-money-negative: #891b12;
+  --state-success-text: #1d5a34;
+  --state-warning-text: #6e4300;
+  --state-danger-text: #9a1f14;
+  --state-info-text: #1c4a9e;
+  --state-success-surface: #e5f1e6;
+  --state-warning-surface: #f8edd6;
+  --state-danger-surface: #f9e6e1;
+  --state-info-surface: #e6ecf7;
+  --state-success-border: #b3d6bb;
+  --state-warning-border: #e3c896;
+  --state-danger-border: #efc0b8;
+  --state-info-border: #bccbe8;
+  --accent-action: #9a4f12;
+  --accent-action-hover: #84420d;
+  --accent-action-active: #6d3609;
+  --surface-accent-soft: #f6e7d3;
+  --border-hairline: #e4dccf;
+  --border-default: #d4cabb;
+  --border-strong: #b7ab99;
+  --focus-ring-color: #9a4f12;
+  --surface-scrim: rgba(40, 30, 18, 0.45);
+  --focus-ring-halo: #ffffff;
+  --elevation-card:  0 1px 2px rgba(60, 45, 25, 0.10), 0 4px 12px rgba(60, 45, 25, 0.08);
+  --elevation-panel: 0 8px 28px rgba(60, 45, 25, 0.14);
+  --elevation-modal: 0 24px 64px rgba(60, 45, 25, 0.22);
+  --sheet-scrim: rgba(40, 30, 18, 0.40);
+  --sub-accent-rgb: 154, 79, 18;
+}
+/*                                                     [design-tokens-sand:end] */
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 

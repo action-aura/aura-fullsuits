@@ -27,6 +27,16 @@
 //
 // retail_design_theme_safety_test.js pins the validation and the key hygiene;
 // retail_design_contrast_test.js proves the palette both of these values land on.
+//
+// THE one allowlist. Five sanctioned themes (owner request, 2026-09: "night
+// mode back" + "some themes for both mobile and desktop"), mirrored by
+// index.html's boot script -- which cannot import this file, since it runs
+// before any <script src> loads -- and pinned equal to it by
+// retail_design_theme_safety_test.js, so the two lists cannot drift apart the
+// way the old exact-match-on-'dark' form never risked but a hand-copied list
+// always can.
+const THEME_NAMES = Object.freeze(['light', 'sand', 'dark', 'night', 'dusk']);
+
 const ThemeEngine = {
   KEY: 'aura_theme_v2',   // NEVER 'aura_theme' -- that key belongs to the broken era
   current: 'light',
@@ -35,14 +45,17 @@ const ThemeEngine = {
   // --surface-app / --surface-panel), not styling -- the same reason the
   // .theme-swatch exemption exists in retail_design_tokens_test.js.
   themes: {
-    light: { label: 'Light', dot: '#eaeef3', edge: '#b3bfcd' },
-    dark:  { label: 'Dark',  dot: '#0f1319', edge: '#47566a' },
+    light: { label: 'Day',   dot: '#eaeef3', edge: '#b3bfcd' },
+    sand:  { label: 'Sand',  dot: '#efe8dc', edge: '#b7ab99' },
+    dark:  { label: 'Calm',  dot: '#0f1319', edge: '#47566a' },
+    night: { label: 'Night', dot: '#070b12', edge: '#5fe3d0' },
+    dusk:  { label: 'Dusk',  dot: '#13111c', edge: '#b9a6ff' },
   },
 
   // THE one sanitizer. Every path that turns a stored/argument value into a
-  // data-theme write goes through here, so "anything but the exact string
-  // 'dark' is light" is a property of the engine, not of each caller's care.
-  _sanitize(name) { return name === 'dark' ? 'dark' : 'light'; },
+  // data-theme write goes through here, so "anything outside the allowlist is
+  // light" is a property of the engine, not of each caller's care.
+  _sanitize(name) { return THEME_NAMES.includes(name) ? name : 'light'; },
 
   apply(name) {
     const theme = this._sanitize(name);
