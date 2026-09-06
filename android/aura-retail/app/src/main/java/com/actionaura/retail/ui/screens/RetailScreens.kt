@@ -416,7 +416,11 @@ fun PosScreen(snackbar: SnackbarHostState) {
                 Spacer(Modifier.height(6.dp))
                 // Tenders come from the configurable payment-methods list (Settings); "Credit"
                 // (on account) is always appended. Falls back to a basic set if none load.
-                // The display label is translated; the value sent to the server stays English.
+                // The VALUE (it.lowercase()) is the wire code sent to the server and must
+                // never change; only the LABEL passed to tr() below is translated. The five
+                // names retail_api.py seeds (_DEFAULT_METHODS) have Arabic entries in
+                // Strings.kt; a shop's own custom method name has none and tr() falls back
+                // to that name itself, so nothing breaks for it.
                 val payOptions = (
                     if (payMethods.isNotEmpty()) payMethods.mapNotNull { it.name }.map { it to it.lowercase() }
                     else listOf("Cash" to "cash", "Card" to "card", "Transfer" to "transfer")

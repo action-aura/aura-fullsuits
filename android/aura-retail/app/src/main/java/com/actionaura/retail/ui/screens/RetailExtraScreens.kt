@@ -1461,7 +1461,9 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
         methods.forEach { m ->
             TillCard(Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(m.name ?: "—", Modifier.weight(1f), fontWeight = FontWeight.Medium)
+                    // Translated the same way the Charge-step tender chips are: the name is
+                    // display-only here (the wire code lives in m.type, untouched below).
+                    Text(tr(m.name ?: "—"), Modifier.weight(1f), fontWeight = FontWeight.Medium)
                     Text(m.type ?: "", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
