@@ -2526,12 +2526,12 @@ the artefact, never inferred from a green suite. Full per-line evidence in
   own placeholder admin — not because activation needs a signed-in user (it
   does not, measured) but because first run offers no other door. Designed,
   with every premise checked against the code, in
-  `docs/launch-readiness/join-existing-shop-design.md`. **The seed row is
-  built and proven** (2026-09-06: a fresh fourth till activated by key with
-  no session, restarted, and held the shop's four accounts on its first
-  status read; the owner signed in there). What remains is the door on each
-  client — the desktop modal's "join" mode and the Android first-run
-  equivalent. No security change.
+  `docs/launch-readiness/join-existing-shop-design.md`. **Built and proven
+  on the desktop** (2026-09-06: the seed row, then the first-run modal's
+  "join" mode driven in a real browser on two fresh tills — key in,
+  "Connected to your shop", restart, the owner signs in, zero
+  `create-admin` calls). What remains is the Android first-run equivalent
+  (`AppRoot.kt`), which needs the phone. No security change.
 - **Per-shop WhatsApp on Android**: credentials are build-time on the phone;
   moot while the phone is a till (reports go out from the desktop), revisit
   if that changes.

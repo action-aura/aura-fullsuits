@@ -751,5 +751,20 @@
   "Queue Report Email": "Queue Report Email",
   "Queuing…": "Queuing…",
   "Report email queued.": "Report email queued.",
-  "Your licence has reached its branch limit. Ask Aura to add a branch.": "Your licence has reached its branch limit. Ask Aura to add a branch."
+  "Your licence has reached its branch limit. Ask Aura to add a branch.": "Your licence has reached its branch limit. Ask Aura to add a branch.",
+  "Already have a shop? Join it with your licence key": "Already have a shop? Join it with your licence key",
+  "Join your shop": "Join your shop",
+  "Enter the licence key your shop already uses. Your account will arrive from your shop's other device.": "Enter the licence key your shop already uses. Your account will arrive from your shop's other device.",
+  "Join shop": "Join shop",
+  "Set up a new shop instead": "Set up a new shop instead",
+  "Joining…": "Joining…",
+  "Connected to your shop": "Connected to your shop",
+  "Restart Aura to finish joining. Your account is on its way from your shop's other device.": "Restart Aura to finish joining. Your account is on its way from your shop's other device.",
+  "I restarted — continue": "I restarted — continue",
+  "Connecting to your shop…": "Connecting to your shop…",
+  "This takes a few seconds once the app has restarted.": "This takes a few seconds once the app has restarted.",
+  "Your shop is connected. Sign in with your account.": "Your shop is connected. Sign in with your account.",
+  "Still waiting for your account. Check the connection, or set up a new shop instead.": "Still waiting for your account. Check the connection, or set up a new shop instead.",
+  "Keep waiting": "Keep waiting",
+  "The same key your shop's other device was activated with. It is in your Aura order confirmation.": "The same key your shop's other device was activated with. It is in your Aura order confirmation."
 }

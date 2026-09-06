@@ -481,6 +481,25 @@ const SubsystemApp = {
       || (lic.current_state === 'NOT_CONFIGURED' && !lic.detail);
   },
 
+  // "This device has already joined a licensed shop": the honest signal is a
+  // DATA fact, not a state list. status_presenter.py exposes `installation_id`
+  // only once Owner has issued one, so a build with no Owner wired up
+  // (NOT_CONFIGURED + detail), a fresh install (ACTIVATION_REQUIRED), or a
+  // null payload can never satisfy it. The `_needsActivation()` half then
+  // removes the one installation-bearing state that is still pre-activation:
+  // ACTIVATING, where Owner has the device pending approval and the owner's
+  // account cannot arrive yet.
+  //
+  // The first cut of the join door used `!_needsActivation(lic)` alone --
+  // which is also true for a never-licensed install, so a plain dev/demo
+  // build with needs_setup would have sat on "Connecting to your shop…" for
+  // the full 120 s before being offered setup at all. Pinned by
+  // retail_join_shop_modal_test.js (no-Owner and pending-approval checks).
+  _isJoinedDevice(lic) {
+    if (!lic || !lic.installation_id) return false;
+    return !this._needsActivation(lic);
+  },
+
   // ── "A key was already submitted, Owner hasn't ruled on it yet" marker ────
   // POST /api/licensing/activate can answer 202 PENDING -- Owner is holding
   // this activation for a human to approve, which is neither success nor
@@ -870,7 +889,11 @@ const SubsystemApp = {
       }
     }
     if (needsSetup) {
-      this.showSetupModal();
+      // Not showSetupModal() directly: a device that has just JOINED a shop
+      // is needs_setup too, and must wait for its owner's account instead of
+      // being asked to create one. _openFirstRun() is the one place that
+      // tells the two apart -- see its comment for the launch this got wrong.
+      await this._openFirstRun();
       return;
     }
 
@@ -1248,7 +1271,10 @@ const SubsystemApp = {
       const status = await fetch('/api/onboarding/status', { cache: 'no-store' })
         .then(r => r.json()).catch(() => ({ needs_setup: false }));
       if (status.needs_setup) {
-        this.showSetupModal();
+        // Same decision as init()'s boot path -- setup modal, or the
+        // "Connecting to your shop…" wait for a device that has already
+        // joined -- made in ONE place so the two callers cannot disagree.
+        await this._openFirstRun();
       } else {
         this.showReloginModal(errorMsg || 'Your session has expired. Please log in again.');
       }
@@ -1265,6 +1291,11 @@ const SubsystemApp = {
   async showSetupModal() {
     document.getElementById('aura-relogin-modal')?.remove();
     this._authModalOpen = true;
+    // Always render into the ordinary (non-join) layout. _toggleJoinMode()
+    // below flips this to true in place without a re-render; the one path
+    // back to the setup form re-renders from here, which is what makes
+    // resetting it here sufficient to undo everything the toggle changed.
+    this._joinMode = false;
     this._applyAccent(this.systems.retail);
 
     // AUDIT-fix 2026-08-17: registration now collects the license key
@@ -1303,11 +1334,12 @@ const SubsystemApp = {
         <button onclick="AuraI18n.toggle()" title="Language / اللغة" class="auth-lang-btn">EN | ع</button>
         <div class="auth-head">
           <div class="auth-icon">${AuraIcons.render('zap', 32)}</div>
-          <h2 class="auth-title">${t('Welcome to Action Aura')}</h2>
-          <p class="auth-sub">${t('Create your administrator account to get started.')}</p>
-          <p class="auth-note">This setup runs <strong>only once</strong>. Your credentials will be saved permanently.</p>
+          <h2 class="auth-title" id="su-title">${t('Welcome to Action Aura')}</h2>
+          <p class="auth-sub" id="su-sub">${t('Create your administrator account to get started.')}</p>
+          <p class="auth-note" data-role="setup-only">This setup runs <strong>only once</strong>. Your credentials will be saved permanently.</p>
+          ${needsKey ? `<p class="auth-foot" style="margin:4px 0 0"><a href="#" id="su-join-link" onclick="SubsystemApp._toggleJoinMode(event)">${t('Already have a shop? Join it with your licence key')}</a></p>` : ''}
         </div>
-        <div class="auth-grid-2">
+        <div class="auth-grid-2" data-role="setup-only">
           <div class="auth-field">
             <label for="su-name">Full Name *</label>
             <input id="su-name" type="text" placeholder="Your full name" autocomplete="name"
@@ -1319,7 +1351,7 @@ const SubsystemApp = {
               onkeydown="if(event.key==='Enter')document.getElementById('su-email').focus()" />
           </div>
         </div>
-        <div class="auth-field">
+        <div class="auth-field" data-role="setup-only">
           <label for="su-email">Email Address *</label>
           <input id="su-email" type="email" placeholder="admin@yourcompany.com" autocomplete="email"
             onkeydown="if(event.key==='Enter')document.getElementById('su-pass').focus()" />
@@ -1329,9 +1361,9 @@ const SubsystemApp = {
           <label for="su-key">License Key *</label>
           <input id="su-key" type="text" placeholder="AURA-RETAIL-XXXX-YYYY-ZZZZ" autocomplete="off"
             style="text-transform:uppercase" onkeydown="if(event.key==='Enter')document.getElementById('su-pass').focus()" />
-          <p class="hint" style="margin:4px 0 0;font-size:12px;color:var(--text-muted)">${t('From your Aura order confirmation. Activated together with your account below.')}</p>
+          <p class="hint" id="su-key-hint" style="margin:4px 0 0;font-size:12px;color:var(--text-muted)">${t('From your Aura order confirmation. Activated together with your account below.')}</p>
         </div>` : ''}
-        <div class="auth-grid-2">
+        <div class="auth-grid-2" data-role="setup-only">
           <div class="auth-field">
             <label for="su-pass">Password *</label>
             <input id="su-pass" type="password" placeholder="Min. 6 characters" autocomplete="new-password"
@@ -1469,6 +1501,223 @@ const SubsystemApp = {
 
     } catch(e) {
       showErr('Network error. Make sure the server is running.');
+    }
+  },
+
+  // ── First run: set up a new shop, or wait for a joined shop's account ──────
+  // The ONE place that decides what a needs_setup device sees. Both callers
+  // -- init() at boot and checkAuthAndSetup() on a 401 -- go through it.
+  //
+  // The first cut of the join door wired this branch into checkAuthAndSetup()
+  // only, and its test called that function directly, so it passed. On a real
+  // launch init() runs FIRST, read needs_setup itself and opened the setup
+  // modal straight away -- so a till that had just joined a shop was offered
+  // "Create your administrator account" a second time, the exact leftover
+  // the door exists to remove. Measured in Chromium on a fresh till
+  // (scripts/ops/join_door_e2e.py, after-restart phase, 2026-09-06); pinned
+  // by retail_join_shop_modal_test.js driving init() itself.
+  //
+  // A device that already activated via /api/licensing/activate with no
+  // admin session yet is ACTIVE and needs_setup at the same time: its
+  // owner's account simply has not synced down yet, which is the
+  // join-existing-shop-design.md waiting state, not a fresh install that
+  // still needs a key. _isJoinedDevice() tells the two apart from the status
+  // payload's Owner-issued installation_id, minus the pending-approval state.
+  async _openFirstRun() {
+    try {
+      const lic = await fetch('/api/licensing/status', { cache: 'no-store' }).then(r => r.json());
+      if (this._isJoinedDevice(lic)) {
+        return this._waitForShopAccount();
+      }
+    } catch (e) {
+      // Fail open, same as every other best-effort licensing check in this
+      // file: fall through to the ordinary setup modal below.
+    }
+    this.showSetupModal();
+  },
+
+  // ── JOIN AN EXISTING SHOP (second device / phone) ──────────────────────────
+  // docs/launch-readiness/join-existing-shop-design.md. A device joining a
+  // shop that already exists on another till needs nothing this modal
+  // otherwise collects -- no name, no email, no password -- because there is
+  // no new admin to create: POST /api/licensing/activate takes no session,
+  // the identity rebind it triggers seeds company_settings for a device that
+  // activates with no admin, and the owner's real account then arrives by
+  // sync. The only input this flow needs is the key already in the form.
+  //
+  // Reached from the "Already have a shop?" link showSetupModal() renders
+  // above (only when this build even carries a key field -- an install with
+  // no Owner wired up has no shop to join), and toggled back the same way.
+  _joinMode: false,
+
+  // Turning join mode ON hides the setup-only fields IN PLACE -- same
+  // overlay, same DOM nodes, so anything already typed survives a mind
+  // change -- via the `data-role="setup-only"` wrappers showSetupModal()'s
+  // template carries on both `.auth-grid-2` blocks and the email field.
+  // Turning it back OFF re-renders the whole modal from scratch through
+  // showSetupModal() instead of hand-restoring every title/button/link string
+  // this mutates below -- simpler, and showSetupModal() resets `_joinMode`
+  // itself, re-fetches /api/licensing/status (idempotent) and is the exact
+  // function this overlay was built by in the first place.
+  _toggleJoinMode(ev) {
+    if (ev && ev.preventDefault) ev.preventDefault();
+    const overlay = document.getElementById('aura-relogin-modal');
+    if (!overlay) return;
+    if (this._joinMode) {
+      return this.showSetupModal();
+    }
+    this._joinMode = true;
+    overlay.querySelectorAll('[data-role="setup-only"]').forEach(el => { el.style.display = 'none'; });
+    const titleEl = document.getElementById('su-title');
+    const subEl   = document.getElementById('su-sub');
+    const btnEl   = document.getElementById('su-btn');
+    const linkEl  = document.getElementById('su-join-link');
+    const hintEl  = document.getElementById('su-key-hint');
+    if (titleEl) titleEl.textContent = t('Join your shop');
+    if (subEl)   subEl.textContent = t("Enter the licence key your shop already uses. Your account will arrive from your shop's other device.");
+    // The setup layout's key hint ends "activated together with your account
+    // below" -- there is no account form below in join mode (seen in the
+    // Chromium run's screenshot, 2026-09-06), so say what the key IS instead.
+    if (hintEl)  hintEl.textContent = t("The same key your shop's other device was activated with. It is in your Aura order confirmation.");
+    if (btnEl) {
+      btnEl.textContent = t('Join shop');
+      btnEl.setAttribute('onclick', 'SubsystemApp._joinSubmit()');
+    }
+    if (linkEl) linkEl.textContent = t('Set up a new shop instead');
+  },
+
+  async _joinSubmit() {
+    const key   = document.getElementById('su-key')?.value.trim().toUpperCase();
+    const errEl = document.getElementById('su-error');
+    const btn   = document.getElementById('su-btn');
+    const showErr = (msg) => { if(errEl){errEl.textContent=msg;errEl.style.display='block';} if(btn){btn.textContent=t('Join shop');btn.disabled=false;} };
+
+    if (!key) return showErr('A license key is required.');
+
+    if (btn) { btn.textContent = t('Joining…'); btn.disabled = true; }
+    if (errEl) errEl.style.display = 'none';
+
+    // Activation only -- deliberately no /api/onboarding/create-admin call
+    // anywhere in this function. There is no admin to create on this device;
+    // the one this join is FOR already exists on the shop's other till and
+    // arrives by sync once this device is trusted.
+    let activation = null;
+    try {
+      const res = await fetch('/api/licensing/activate', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ license_key: key }),
+      });
+      activation = await res.json();
+      activation._status = res.status;
+    } catch (e) {
+      activation = { result: 'NETWORK_ERROR' };
+    }
+
+    if (activation.result !== 'SUCCESS') {
+      // Same reason-code mapping _setupSubmit's own activation branch uses --
+      // one table, not a second copy that can drift from it.
+      return showErr(this._activationFailureMessage(activation));
+    }
+
+    // Activated -- but the relay address this device just learned only takes
+    // effect at the NEXT launch (read at import, see the design doc), so the
+    // honest instruction is to restart, not to carry on in this process
+    // pretending the new wiring is already live.
+    const overlay = document.getElementById('aura-relogin-modal');
+    if (overlay) {
+      overlay.querySelector('.auth-card').innerHTML = `
+        <div class="auth-head">
+          <div class="auth-icon">${AuraIcons.render('circle-check-big', 32, { animate: 'pop' })}</div>
+          <h2 class="auth-title">${t('Connected to your shop')}</h2>
+          <p class="auth-sub">${t("Restart Aura to finish joining. Your account is on its way from your shop's other device.")}</p>
+        </div>
+        <button id="su-join-continue-btn" class="auth-submit" onclick="SubsystemApp._waitForShopAccount()">${t('I restarted — continue')}</button>`;
+    }
+  },
+
+  // ── Waiting for the owner's account to arrive by sync ───────────────────────
+  // Reached two ways: right after _joinSubmit() above ("I restarted --
+  // continue"), and by checkAuthAndSetup() below on the VERY NEXT launch, for
+  // a device that is already ACTIVE but still has no admin session -- the
+  // owner's account just hasn't synced down yet, which is not the same thing
+  // as a fresh install that still needs a key.
+  //
+  // `intervalMs`/`ceilingMs` default to the design's real 3s/120s and are
+  // parameters ONLY so a test can drive this with a short real ceiling --
+  // this frontend has no test framework and no fake-timer shim (see this
+  // file's other standalone Node tests), so a short REAL wait is the only
+  // way to exercise the timeout branch without a 120-second test. Production
+  // call sites never pass either argument.
+  _waitApprovalTimer: null,
+  _waitApprovalElapsedMs: 0,
+
+  _waitForShopAccount(intervalMs, ceilingMs) {
+    const interval = intervalMs || 3000;
+    const ceiling  = ceilingMs  || 120000;
+    // Two very different entry states share this function: _joinSubmit()
+    // above calls it into an overlay that already exists (its own "Connected"
+    // screen), while checkAuthAndSetup() below calls it at boot, before ANY
+    // modal has been created -- there is nothing on screen yet for an ACTIVE,
+    // no-admin-yet device's very first render. Build the overlay ourselves
+    // when it is missing, the same way showSetupModal()/showReloginModal() do.
+    let overlay = document.getElementById('aura-relogin-modal');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'aura-relogin-modal';
+      overlay.className = 'auth-overlay';
+      overlay.innerHTML = '<div class="auth-card"></div>';
+      document.body.appendChild(overlay);
+    }
+    this._authModalOpen = true;
+    this._applyAccent(this.systems.retail);
+    this._waitApprovalElapsedMs = 0;
+    overlay.querySelector('.auth-card').innerHTML = `
+      <div class="auth-head">
+        <div class="auth-icon">${AuraIcons.render('key-round', 32)}</div>
+        <h2 class="auth-title">${t('Connecting to your shop…')}</h2>
+        <p class="auth-sub">${t('This takes a few seconds once the app has restarted.')}</p>
+      </div>`;
+    this._stopWaitForShopAccountPoll();
+    this._waitApprovalTimer = setInterval(() => this._pollShopAccount(interval, ceiling), interval);
+  },
+
+  _stopWaitForShopAccountPoll() {
+    if (this._waitApprovalTimer) {
+      clearInterval(this._waitApprovalTimer);
+      this._waitApprovalTimer = null;
+    }
+  },
+
+  async _pollShopAccount(interval, ceiling) {
+    this._waitApprovalElapsedMs += interval;
+    let status = null;
+    try {
+      status = await fetch('/api/onboarding/status', { cache: 'no-store' }).then(r => r.json());
+    } catch (e) {
+      // Transient -- keep waiting silently, same fail-open convention every
+      // other best-effort poll in this file follows.
+    }
+    if (status && status.needs_setup === false) {
+      this._stopWaitForShopAccountPoll();
+      document.getElementById('aura-relogin-modal')?.remove();
+      this._authModalOpen = false;
+      this.showReloginModal(t('Your shop is connected. Sign in with your account.'));
+      return;
+    }
+    if (this._waitApprovalElapsedMs >= ceiling) {
+      this._stopWaitForShopAccountPoll();
+      const overlay = document.getElementById('aura-relogin-modal');
+      const card = overlay && overlay.querySelector('.auth-card');
+      if (card) {
+        card.innerHTML = `
+          <div class="auth-head">
+            <div class="auth-icon">${AuraIcons.render('key-round', 32)}</div>
+            <h2 class="auth-title">${t('Still waiting for your account. Check the connection, or set up a new shop instead.')}</h2>
+          </div>
+          <button id="su-wait-retry-btn" class="auth-submit" onclick="SubsystemApp._waitForShopAccount(${interval}, ${ceiling})">${t('Keep waiting')}</button>
+          <button id="su-wait-setup-btn" class="auth-submit" style="margin-top:8px" onclick="SubsystemApp.showSetupModal()">${t('Set up a new shop instead')}</button>`;
+      }
     }
   },
 

@@ -154,7 +154,43 @@ status read after boot `needs_setup` was already `false`, the registry held
 the shop's four accounts (both owners as `ADMIN-0001`/`ADMIN-0002`, both
 cashiers, all under the licence id) → the desktop's owner signed in on the
 fresh till: `200`, `ADMIN-0001`, `admin`. No placeholder admin anywhere.
-What remains is the door on each client.
+
+## The desktop door, measured in a real browser, 2026-09-06 15:20
+
+`scripts/ops/join_door_e2e.py` drives the real page in Chromium (Playwright)
+on a fresh till, recording every `/api/` request the page makes:
+
+- **join phase** (fifth and sixth tills): first-run modal → "Already have a
+  shop? Join it with your licence key" → title becomes "Join your shop",
+  name/email/password hidden, key field kept → "Join shop" → "Connected to
+  your shop. Restart Aura to finish joining." `create-admin` calls: **0**;
+  `activate` calls: **1**; `company_settings` on the till = the licence id;
+  `users` empty.
+- **after-restart phase**, first attempt (fifth till): **caught a real
+  defect.** The page opened the setup modal AGAIN. The join-aware branch
+  had been wired into `checkAuthAndSetup()` (the 401 path) only, and its
+  unit test called that function directly, so it passed — while on a real
+  launch `init()` reads `needs_setup` first and opened the setup modal
+  itself. Fixed by making `_openFirstRun()` the one decision both callers
+  go through; `retail_join_shop_modal_test.js` now drives `init()` itself,
+  and re-creating the defect turns that check red with the exact symptom.
+- **after-restart phase**, second attempt (sixth till, fixed build): the
+  next launch came up straight on the ordinary sign-in screen — the owner's
+  account had synced before the page finished loading — and the desktop's
+  owner signed in there through the real form; the shell rendered; zero
+  `create-admin` calls across both launches. The "Connecting to your shop…"
+  wait was not observed live for that reason; it is pinned by the unit test
+  driving `init()` with `needs_setup: true` and an `ACTIVE_ONLINE` payload.
+
+One more thing the first cut got wrong, caught by reading the guard rather
+than the test: it entered the wait for every state that was not
+pre-activation — so a build with no Owner wired up (`NOT_CONFIGURED` with a
+`detail`) would have sat on "Connecting to your shop…" for the full 120 s
+before being offered setup. The guard now keys off the status payload's
+Owner-issued `installation_id`, minus the pending-approval state
+(`_isJoinedDevice()`); both halves are mutation-proved.
+
+What remains is the Android door (AppRoot first-run).
 
 ## What to measure before calling it done
 

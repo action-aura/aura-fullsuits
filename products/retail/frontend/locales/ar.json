@@ -751,5 +751,20 @@
   "Queue Report Email": "إضافة بريد التقرير إلى قائمة الإرسال",
   "Queuing…": "جارٍ الإضافة…",
   "Report email queued.": "تمت إضافة بريد التقرير إلى قائمة الإرسال.",
-  "Your licence has reached its branch limit. Ask Aura to add a branch.": "وصل ترخيصك إلى الحد الأقصى للفروع. اطلب من Aura إضافة فرع."
+  "Your licence has reached its branch limit. Ask Aura to add a branch.": "وصل ترخيصك إلى الحد الأقصى للفروع. اطلب من Aura إضافة فرع.",
+  "Already have a shop? Join it with your licence key": "عندك محل مسجّل؟ انضم إليه بمفتاح الترخيص",
+  "Join your shop": "الانضمام إلى محلك",
+  "Enter the licence key your shop already uses. Your account will arrive from your shop's other device.": "أدخل مفتاح الترخيص الذي يستخدمه محلك. سيصل حسابك من الجهاز الآخر لمحلك.",
+  "Join shop": "انضمام",
+  "Set up a new shop instead": "إنشاء محل جديد بدلاً من ذلك",
+  "Joining…": "جارٍ الانضمام…",
+  "Connected to your shop": "تم الاتصال بمحلك",
+  "Restart Aura to finish joining. Your account is on its way from your shop's other device.": "أعد تشغيل Aura لإكمال الانضمام. حسابك في الطريق من الجهاز الآخر لمحلك.",
+  "I restarted — continue": "أعدت التشغيل — متابعة",
+  "Connecting to your shop…": "جارٍ الاتصال بمحلك…",
+  "This takes a few seconds once the app has restarted.": "يستغرق هذا بضع ثوانٍ بعد إعادة تشغيل التطبيق.",
+  "Your shop is connected. Sign in with your account.": "تم ربط محلك. سجّل الدخول بحسابك.",
+  "Still waiting for your account. Check the connection, or set up a new shop instead.": "ما زلنا ننتظر حسابك. تحقق من الاتصال، أو أنشئ محلاً جديداً بدلاً من ذلك.",
+  "Keep waiting": "متابعة الانتظار",
+  "The same key your shop's other device was activated with. It is in your Aura order confirmation.": "المفتاح نفسه الذي فُعِّل به جهاز محلك الآخر. تجده في تأكيد طلب Aura."
 }
