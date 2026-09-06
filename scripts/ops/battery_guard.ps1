@@ -16,7 +16,14 @@ while ($true) {
             Write-Output "BATTERY $pct% -- HIBERNATING NOW"
             Start-Sleep -Seconds 5
             shutdown /h
-            exit 0
+            # Do NOT exit. The process survives hibernation and resumes here
+            # when the laptop wakes (measured 2026-09-06: hibernated 06:55,
+            # resumed ~12:10, the earlier version had exited and left the
+            # next unplug unguarded). Wait out the resume, then keep guarding;
+            # if the laptop wakes still discharging at <=15%, the next loop
+            # iteration hibernates it again, which is the intended behaviour.
+            Start-Sleep -Seconds 120
+            "$(Get-Date -Format s) resumed; guarding again" | Add-Content $log
         }
         if ($pct -le 20 -and $discharging) { Write-Output "BATTERY LOW $pct% (discharging) -- hibernate at 15%" }
     }
