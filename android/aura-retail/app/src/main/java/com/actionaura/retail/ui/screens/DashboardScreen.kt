@@ -30,6 +30,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.actionaura.retail.net.ApiClient
 import com.actionaura.retail.net.RetailStats
+import com.actionaura.retail.ui.CAP_REPORTS
+import com.actionaura.retail.ui.RetailSession
 import com.actionaura.retail.ui.components.*
 import com.actionaura.retail.ui.i18n.money
 import com.actionaura.retail.ui.i18n.tr
@@ -42,6 +44,14 @@ import java.util.Calendar
 fun DashboardScreen(onNavigate: (String) -> Unit) {
     var pos by remember { mutableStateOf<RetailStats?>(null) }
     var loading by remember { mutableStateOf(true) }
+    // Never fires a fetch it already knows will be refused: measured on the
+    // Mi Note 10 (2026-09-06), GET /api/sub/retail/dashboard/stats answers
+    // 403 for a cashier -- deliberately, gated on retail.reports -- and the
+    // old code rendered the model's zero defaults (RetailStats()) straight
+    // over that refusal, so "TODAY'S SALES JD 0.000" read as a fact minutes
+    // after a real JD 18.000 sale. Mirrors the desktop shell's "Ready to
+    // sell" card (subsystem-retail.js) instead of painting a 403 as zero.
+    val canSeeFigures = RetailSession.hasCapability(CAP_REPORTS)
 
     // Re-fetch whenever the Dashboard becomes visible again (e.g. after making a sale),
     // so the KPIs reflect the latest transactions/stock instead of a one-time load.
@@ -55,7 +65,15 @@ fun DashboardScreen(onNavigate: (String) -> Unit) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
     LaunchedEffect(refreshKey) {
+        if (!canSeeFigures) {
+            // No round trip to be told what the session already knows.
+            pos = null
+            loading = false
+            return@LaunchedEffect
+        }
         if (pos == null) loading = true   // skeleton only on first load
+        // On failure keep whatever loaded before; a never-loaded null renders
+        // the "Figures unavailable" card below, never zero defaults.
         pos = try { ApiClient.get().retailStats().data } catch (e: Exception) { pos }
         loading = false
     }
@@ -85,10 +103,43 @@ fun DashboardScreen(onNavigate: (String) -> Unit) {
             QuickAction(tr("Products"), Icons.Default.Inventory2, Modifier.weight(1f)) { onNavigate("products") }
         }
 
-        SectionHeader(tr("Today"))
+        SectionHeader(if (canSeeFigures) tr("Today") else tr("Till"))
         Crossfade(targetState = loading, label = "metrics") { isLoading ->
-            if (isLoading) SkeletonMetrics()
-            else RetailMetrics(pos ?: RetailStats())
+            val stats = pos
+            when {
+                isLoading -> SkeletonMetrics()
+                // Deliberate 403 (retail.reports) -- a cashier has no "today"
+                // figures to head, so there is nothing to render here at all.
+                !canSeeFigures -> ReadyToSellCard(
+                    tr("Ready to sell"),
+                    tr("Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales."),
+                )
+                // The fetch failed and nothing was ever loaded -- never fall
+                // back to RetailStats()'s zero defaults, which is exactly how
+                // a refusal used to get painted as a fact.
+                stats == null -> ReadyToSellCard(
+                    tr("Figures unavailable"),
+                    tr("Could not load today's figures. Pull to refresh or check the connection."),
+                )
+                else -> RetailMetrics(stats)
+            }
+        }
+    }
+}
+
+/**
+ * The honest stand-in for [RetailMetrics] when there is nothing to show it --
+ * either the account cannot see figures at all, or the last fetch failed and
+ * nothing was ever loaded. Same card shape both times so the layout does not
+ * jump between the two reasons; only the title and body change.
+ */
+@Composable
+private fun ReadyToSellCard(title: String, body: String) {
+    TillCard(accent = MaterialTheme.colorScheme.primary) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(body, style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

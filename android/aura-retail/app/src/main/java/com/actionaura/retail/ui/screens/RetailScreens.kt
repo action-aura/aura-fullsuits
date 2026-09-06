@@ -42,6 +42,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.actionaura.retail.net.*
+import com.actionaura.retail.ui.CAP_STOCK_ADJUST
+import com.actionaura.retail.ui.RetailSession
 import com.actionaura.retail.ui.components.EmptyState
 import com.actionaura.retail.ui.components.TillCard
 import com.actionaura.retail.ui.theme.CategoryPalette
@@ -733,6 +735,10 @@ fun ProductsScreen(snackbar: SnackbarHostState) {
     var showAdd by remember { mutableStateOf(false) }
     var editProduct by remember { mutableStateOf<Product?>(null) }
     val scope = rememberCoroutineScope()
+    // A cashier's server-side grant set is sell/refund/cash-close only -- it
+    // does not include CAP_STOCK_ADJUST, so POST /api/sub/retail/products
+    // refuses them. Do not show a control that can only fail with a 403.
+    val canAddProduct = RetailSession.hasCapability(CAP_STOCK_ADJUST)
 
     suspend fun load() { products = try { ApiClient.get().products().data } catch (e: Exception) { emptyList() } }
     LaunchedEffect(Unit) { loading = true; load(); loading = false }
@@ -744,7 +750,8 @@ fun ProductsScreen(snackbar: SnackbarHostState) {
                 icon = Icons.Default.Inventory2,
                 title = tr("No products yet"),
                 subtitle = tr("Add your first product to start selling."),
-                ctaText = tr("Add Product"), onCta = { showAdd = true },
+                ctaText = if (canAddProduct) tr("Add Product") else null,
+                onCta = if (canAddProduct) ({ showAdd = true }) else null,
             )
             else -> LazyColumn(contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 96.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -776,11 +783,13 @@ fun ProductsScreen(snackbar: SnackbarHostState) {
             }
         }
 
-        ExtendedFloatingActionButton(
-            onClick = { showAdd = true },
-            icon = { Icon(Icons.Default.Add, null) }, text = { Text(tr("Add Product")) },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
-        )
+        if (canAddProduct) {
+            ExtendedFloatingActionButton(
+                onClick = { showAdd = true },
+                icon = { Icon(Icons.Default.Add, null) }, text = { Text(tr("Add Product")) },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
+            )
+        }
     }
 
     if (showAdd) {

@@ -49,6 +49,22 @@ const val CAP_REPORTS = "retail.reports"
 const val CAP_EMPLOYEES = "retail.employees"
 
 /**
+ * "Create a product, or adjust stock on hand" -- the capability
+ * `POST /api/sub/retail/products` and the stock-adjust route gate on
+ * server-side (`commercial_runtime/identity/user_accounts.py::CAP_STOCK_ADJUST`,
+ * `'retail.stock.adjust'`). `ROLE_MANAGER` and the owner hold it;
+ * `ROLE_CASHIER` does not -- a cashier's grant set is sell/refund/cash-close
+ * only.
+ *
+ * Spelled here as a constant for the same reason [CAP_REPORTS] is: a
+ * capability code that has drifted from the server's does not fail loudly --
+ * it silently shows a control to a role that can only watch it fail, or hides
+ * it from a role that should have it. Pinned against the server's string by
+ * ProductsWiringContractTest.
+ */
+const val CAP_STOCK_ADJUST = "retail.stock.adjust"
+
+/**
  * True if `capabilities` grants `code`.
  *
  * RENDERING ADVICE ONLY, and a deliberate mirror of app-shell.js's

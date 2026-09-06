@@ -172,6 +172,16 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     // sentence -- same key as products/retail/frontend/locales/ar.json.
     "Your licence has reached its branch limit. Ask Aura to add a branch." to "وصل ترخيصك إلى الحد الأقصى للفروع. اطلب من Aura إضافة فرع.",
     "Your session has expired. Please log in again." to "انتهت صلاحية جلستك. يرجى تسجيل الدخول مرة أخرى.",
+    // ── Dashboard: cashier gate + failed-figures honesty (2026-09-06) --
+    // same two keys, same sentences, as products/retail/frontend/locales/ar.json's
+    // desktop "Ready to sell" card. See DashboardScreen.kt's gate comment.
+    "Ready to sell" to "جاهز للبيع",
+    "Sales totals and reports are limited to managers and the store owner. Open the till to start ringing sales." to
+        "إجماليات المبيعات والتقارير متاحة للمديرين ومالك المتجر فقط. افتح نقطة البيع لبدء تسجيل المبيعات.",
+    "Figures unavailable" to "الأرقام غير متاحة",
+    "Could not load today's figures. Pull to refresh or check the connection." to
+        "تعذّر تحميل أرقام اليوم. اسحب للتحديث أو تحقق من الاتصال.",
+    "Till" to "نقطة البيع",
 
     // ── Join-existing-shop (ui/screens/JoinShopScreens.kt) -- same keys as
     // products/retail/frontend/locales/ar.json, where the desktop has the
