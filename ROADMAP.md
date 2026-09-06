@@ -2526,8 +2526,11 @@ the artefact, never inferred from a green suite. Full per-line evidence in
   own placeholder admin — not because activation needs a signed-in user (it
   does not, measured) but because first run offers no other door. Designed,
   with every premise checked against the code, in
-  `docs/launch-readiness/join-existing-shop-design.md`: a morning's work,
-  a screen change on each client, no security change.
+  `docs/launch-readiness/join-existing-shop-design.md`: a day's work — a
+  screen change on each client plus ONE seed row at activation (an empty
+  device has no company id until an admin exists, and the admin arrives by
+  sync; the licence id is the tenant key once activated). No security
+  change.
 - **Per-shop WhatsApp on Android**: credentials are build-time on the phone;
   moot while the phone is a till (reports go out from the desktop), revisit
   if that changes.

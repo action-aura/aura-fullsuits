@@ -38,7 +38,29 @@ Employees screen of every device (it syncs).
    `sync_relay_base_url` off `/api/licensing/status` and starts syncing
    immediately.
 
-So the missing piece is a *door*, not a mechanism.
+5. **One real gap, found by reading the resolver rather than assuming:** the
+   sync applies a pulled `user` row under THIS device's own company id, and
+   `local_company_id_from_registry()` (`commercial_runtime/sync/
+   sync_service.py:~345`) takes it from `company_settings`, falling back to
+   the admin row, and returns `None` when neither exists — which
+   `_apply_event` treats as "cannot apply yet". `create_admin` is what
+   writes `company_settings` today. So on a device that joined WITHOUT
+   creating an admin, the owner's row could never land: the receiver has
+   no company id until an admin exists, and the admin arrives by sync.
+   Activation does not seed it either: the identity rebind
+   (`company_rebind.rebind_company_id_after_activation`) MOVES rows onto the
+   Owner-issued key and answers `already_bound` for an install with none.
+
+   The fix is small and principled: **once activated, the tenant key IS the
+   licence id.** In `products/retail/backend/app.py::_on_licence_activated`
+   (and Clinic's twin), after the rebind: if `company_settings` has no row
+   and no admin exists, insert `company_settings.company_id =
+   owner_issued_company_id()` (`company_rebind.py:92`, the same value the
+   rebind targets). Then the resolver answers the licence id, the owner's
+   row applies under it, and `needs_setup` flips to `false`. A device that
+   *did* create an admin is untouched (the row exists; the rebind moved it).
+
+So the missing pieces are a *door* and one seed row, not a mechanism.
 
 ## The flow
 
@@ -75,10 +97,11 @@ Nothing is created on the joining device: no placeholder admin, no
 - Must not skip the device-limit rule: joining consumes a device slot exactly
   as activating does today (it IS activating).
 
-## Files it touches (estimate: one morning)
+## Files it touches (estimate: one day — the seed row and its tests are the half that must be adversarially verified)
 
 | Layer | File | Change |
 |---|---|---|
+| Activation hook | `products/retail/backend/app.py::_on_licence_activated` (+ Clinic's) | premise 5: seed `company_settings` with the Owner-issued id when no company and no admin exist; mutation-prove that an install WITH an admin is untouched |
 | Desktop first run | `products/retail/frontend/onboarding.js` (or wherever `needs_setup` is rendered — grep `needs_setup`) | the second choice, the key form, the polling state, the two messages |
 | Desktop sync start | `products/retail/backend/app.py` | (b) above, or rely on the restart |
 | Android first run | `android/aura-retail/app/src/main/java/com/actionaura/retail/ui/AppRoot.kt` | the same second choice on the setup phase; the coordinator already starts on the status read |
