@@ -1,0 +1,4 @@
+Product Name,SKU / Item Code,Barcode,Category,Cost Price,Selling Price,Tax Rate (%),Unit (pcs/kg/box),Reorder Level,Opening Stock Qty
+Pepsi 330ml,AHM-PEPSI-330,6281000000011,Drinks,0.250,0.500,16,pcs,12,48
+Chips Salt 45g,AHM-CHIPS-45,6281000000028,Snacks,0.200,0.350,16,pcs,20,60
+Water 1.5L,AHM-WATER-1500,6281000000035,Drinks,0.300,0.450,16,pcs,12,36
