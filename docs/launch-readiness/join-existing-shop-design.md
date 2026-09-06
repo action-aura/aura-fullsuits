@@ -86,6 +86,35 @@ First-run screen gains a second choice next to "Set up a new shop":
 Nothing is created on the joining device: no placeholder admin, no
 `ADMIN-0001` collision, no extra row on anyone's Employees screen.
 
+## The desktop screen, as it actually is (read 2026-09-06)
+
+`products/retail/frontend/app-shell.js`: `checkAuthAndSetup()` (~1243) asks
+`/api/onboarding/status` and shows `showSetupModal()` (~1265) when
+`needs_setup` is true. That modal already collects the licence key next to
+the account fields when `_needsActivation(lic)` says so, and `_setupSubmit()`
+(~1354) creates the admin and THEN activates. So "Join" is a **mode of the
+same modal**, not a new screen: a link under the title — "Already have a
+shop? Join it with your licence key" — hides name/company/email/password,
+keeps the key field, and submits to `/api/licensing/activate` alone.
+
+Two states follow, and both need words on screen:
+
+- **Activation failed** → stay in join mode, show the server's reason (the
+  activation screen's existing mapping), offer "Set up a new shop instead".
+- **Activation succeeded** → on Android the coordinator starts on the next
+  status read and the owner's row lands in seconds, so polling
+  `/api/onboarding/status` until `needs_setup` is `false` (90 s ceiling) and
+  then showing sign-in is enough. On the desktop the discovered relay
+  address only takes effect at the **next launch**, so the honest sequence
+  is: "Connected to your shop. Restart Aura to finish joining." — and, on
+  that next launch, a device that is ACTIVE but still has no admin must show
+  "Connecting to your shop…" (polling `needs_setup`) instead of the setup
+  modal again. Without that waiting state the user would be offered setup a
+  second time while their account is seconds away. Starting the sync
+  services in-process after activation would remove the restart; read
+  `app.py`'s `_SYNC_RELAY_URL_IS_USABLE` block before deciding, and prefer
+  the restart if that block resists.
+
 ## What it must NOT do
 
 - Must not weaken `create_admin`'s gate ("no valid admin exists yet") — the
