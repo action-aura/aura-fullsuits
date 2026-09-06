@@ -155,7 +155,7 @@ the shop's four accounts (both owners as `ADMIN-0001`/`ADMIN-0002`, both
 cashiers, all under the licence id) → the desktop's owner signed in on the
 fresh till: `200`, `ADMIN-0001`, `admin`. No placeholder admin anywhere.
 
-## The desktop door, measured in a real browser, 2026-09-06 15:20
+## The desktop door, measured in a real browser, 2026-09-06 13:45
 
 `scripts/ops/join_door_e2e.py` drives the real page in Chromium (Playwright)
 on a fresh till, recording every `/api/` request the page makes:

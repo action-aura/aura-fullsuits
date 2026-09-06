@@ -2532,6 +2532,26 @@ the artefact, never inferred from a green suite. Full per-line evidence in
   "Connected to your shop", restart, the owner signs in, zero
   `create-admin` calls). What remains is the Android first-run equivalent
   (`AppRoot.kt`), which needs the phone. No security change.
+- **The default "Main Branch" is a different wire entity on every device.**
+  Found 2026-09-06 while proving the join door: a freshly joined till logged
+  nine pulled rows whose `branch_uid` "did not resolve to any local branch"
+  and were filed under its default branch. Traced through the relay
+  (`owner_sync_events`): seven were the phone's own Main Branch sales and
+  stock movements, two the desktop's — each install self-heals its Main
+  Branch with a fresh `uuid4` (`_default_branch()` / `_resolve_branch_id`'s
+  self-heal), so the same physical shop floor has N uids across N devices.
+  The fallback maps them all onto the receiving device's branch 1, which is
+  the right answer for a one-location shop, so nothing is mis-filed today
+  and this is NOT a bug in the fallback. It becomes one the first time
+  someone renames Main Branch: the `branch` update event carries the
+  desktop's uid, which the phone does not hold, so the phone would gain a
+  third branch called by the new name while its own stays "Main Branch".
+  Principled fix, deferred: mint the self-healed default branch's uid
+  deterministically from the tenant — `uuid5(namespace, f"{company_id}:main")`
+  — on every device, plus a one-off migration that rewrites an existing
+  random uid on branch 1 to the deterministic one where branch 1 is the
+  self-healed row. Needs a schema version claim in writing first (see
+  "reserve single-writer resources") and a two-device rename proof after.
 - **Per-shop WhatsApp on Android**: credentials are build-time on the phone;
   moot while the phone is a till (reports go out from the desktop), revisit
   if that changes.
