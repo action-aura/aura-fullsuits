@@ -73,6 +73,13 @@ def main():
         time.sleep(1.2)
         print("tapped", args[0], args[1])
         dump()
+    elif verb == "swipe":
+        # swipe [up|down] -- scroll a list by most of the screen height.
+        direction = args[0] if args else "up"
+        y1, y2 = ("1900", "500") if direction == "up" else ("500", "1900")
+        d.adb("shell", "input", "swipe", "540", y1, "540", y2, "300")
+        time.sleep(1.2)
+        dump()
     elif verb == "type":
         d.adb("shell", "input", "text", args[0].replace(" ", "%s"))
         print("typed")
