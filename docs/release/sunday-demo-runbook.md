@@ -110,7 +110,10 @@ files on the branch (`python products/run_all_tests.py retail`), including
 the settings-sync, owner-login re-numbering and branch-limit work from the
 same night; the Android debug APK at `android/aura-retail/app/build/outputs/
 apk/debug/app-debug.apk` was built from that tree and carries the same
-backend.
+backend. The full Owner suite the same night: 1262 passed, 3 failed — the
+same three known failures as the day before (two tests that assume the day
+does not change mid-run, and one that looks for a venv at the main checkout
+path when run from a worktree), none from the night's changes.
 
 ## Test rows the rehearsal left behind
 
