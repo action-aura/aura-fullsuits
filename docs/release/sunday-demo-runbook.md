@@ -82,6 +82,13 @@ device is added: the key and your own password, nothing else.
 
 ## 2. Products: create on the laptop, find on the phone, sell on the phone
 
+State on the morning of 2026-09-07: the catalogue holds exactly two
+products on every device — `cake` (71 in stock) and `Demo Water 500ml`
+(JD 0.750, stock 10, created through the laptop's Add Product dialog on the
+evening of the 6th and seen on the phone). Tonight's proof products were
+deleted through the real route and the deletions reached the second till
+in 10 s and the phone on its next pull.
+
 Run on 2026-09-05 (`scripts/ops/two_device_convergence.py`).
 
 1. Laptop: **Products → Add**. Name, SKU, price (three decimals — the dinar
