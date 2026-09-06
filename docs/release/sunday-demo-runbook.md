@@ -54,7 +54,16 @@ Run on 2026-09-05 end to end, including on the phone's own screen.
 
 1. Laptop till (`http://127.0.0.1:5010`), signed in as the owner: **Employees →
    Invite**. Email, role **Cashier**, Create. A setup link appears.
-2. Open the setup link, set a password (20 seconds).
+2. Open the setup link **on the laptop** (it points at `127.0.0.1:5010`,
+   the laptop's own till). It opens a "Set your password" page: password,
+   confirm, **Set password** → "Your password is set. Sign in with your
+   email and this password, on this device or the phone." (20 seconds.)
+   Until the evening of 2026-09-06 this link opened the plain sign-in
+   screen — the page did not exist and every earlier rehearsal had set the
+   password over the API; first walked for real that evening, invite
+   created in the dialog, link opened in a fresh browser, password set on
+   the page, cashier signed in on the phone (`docs/corrections/identity/
+   employee-setup-link-dead-end-root-cause-analysis.md`).
 3. Phone: sign in with that email and password. The account arrives on the
    phone within about 5 seconds of step 1; the password within seconds of
    step 2.

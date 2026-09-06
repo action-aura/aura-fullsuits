@@ -766,5 +766,13 @@
   "Your shop is connected. Sign in with your account.": "تم ربط محلك. سجّل الدخول بحسابك.",
   "Still waiting for your account. Check the connection, or set up a new shop instead.": "ما زلنا ننتظر حسابك. تحقق من الاتصال، أو أنشئ محلاً جديداً بدلاً من ذلك.",
   "Keep waiting": "متابعة الانتظار",
-  "The same key your shop's other device was activated with. It is in your Aura order confirmation.": "المفتاح نفسه الذي فُعِّل به جهاز محلك الآخر. تجده في تأكيد طلب Aura."
+  "The same key your shop's other device was activated with. It is in your Aura order confirmation.": "المفتاح نفسه الذي فُعِّل به جهاز محلك الآخر. تجده في تأكيد طلب Aura.",
+  "Set password": "تعيين كلمة المرور",
+  "Continue to sign in": "متابعة لتسجيل الدخول",
+  "Set your password": "عيّن كلمة المرور",
+  "Choose the password you will sign in with. Your email is already on file.": "اختر كلمة المرور التي ستسجّل الدخول بها. بريدك الإلكتروني مسجّل بالفعل.",
+  "Confirm password": "تأكيد كلمة المرور",
+  "Your password is set": "تم تعيين كلمة المرور",
+  "Sign in with your email and this password, on this device or the phone.": "سجّل الدخول ببريدك الإلكتروني وكلمة المرور هذه، على هذا الجهاز أو على الهاتف.",
+  "This setup link is invalid or has expired. Ask your admin for a new one.": "رابط الإعداد هذا غير صالح أو منتهي الصلاحية. اطلب رابطاً جديداً من المسؤول."
 }

@@ -766,5 +766,13 @@
   "Your shop is connected. Sign in with your account.": "Your shop is connected. Sign in with your account.",
   "Still waiting for your account. Check the connection, or set up a new shop instead.": "Still waiting for your account. Check the connection, or set up a new shop instead.",
   "Keep waiting": "Keep waiting",
-  "The same key your shop's other device was activated with. It is in your Aura order confirmation.": "The same key your shop's other device was activated with. It is in your Aura order confirmation."
+  "The same key your shop's other device was activated with. It is in your Aura order confirmation.": "The same key your shop's other device was activated with. It is in your Aura order confirmation.",
+  "Set password": "Set password",
+  "Continue to sign in": "Continue to sign in",
+  "Set your password": "Set your password",
+  "Choose the password you will sign in with. Your email is already on file.": "Choose the password you will sign in with. Your email is already on file.",
+  "Confirm password": "Confirm password",
+  "Your password is set": "Your password is set",
+  "Sign in with your email and this password, on this device or the phone.": "Sign in with your email and this password, on this device or the phone.",
+  "This setup link is invalid or has expired. Ask your admin for a new one.": "This setup link is invalid or has expired. Ask your admin for a new one."
 }

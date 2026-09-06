@@ -868,6 +868,10 @@ const SubsystemApp = {
       this._showResetPasswordScreen(hash.slice('#reset-password/'.length));
       return;
     }
+    if (hash.startsWith('#setup/')) {
+      this._showEmployeeSetupScreen(hash.slice('#setup/'.length));
+      return;
+    }
 
     // ── Onboarding status ───────────────────────────────────────────────────
     // AUDIT-fix 2026-08-17: must run BEFORE the device-activation gate that
@@ -2250,6 +2254,82 @@ const SubsystemApp = {
             <div class="auth-icon">${AuraIcons.render('circle-check-big', 32, { animate: 'pop' })}</div>
             <h2 class="auth-title">${t('Password updated')}</h2>
             <p class="auth-sub">${t('You can now sign in with your new password.')}</p>
+          </div>
+          <button class="auth-submit" onclick="location.hash='';SubsystemApp.init();">${t('Continue to sign in')}</button>`;
+      }
+    } catch (e) {
+      showErr('Network error. Make sure the server is running.');
+    }
+  },
+
+  // ── EMPLOYEE SETUP LANDING SCREEN (from #setup/<token>) ────────────────────
+  // Measured 2026-09-06: the Employees screen's "+ Add Employee" dialog issues
+  // an invite link of the form http://<host>/#setup/<token> ("This link works
+  // once and expires in 7 days"), but init() only ever handled
+  // #verify-email/<token> and #reset-password/<token> -- opening a setup link
+  // in a fresh browser fell through to the ordinary sign-in modal, and a
+  // brand-new employee with no password had nowhere to set one. The backend
+  // route (POST /api/auth/employee/setup, commercial_runtime/identity/
+  // onboarding_routes.py) already existed -- its own comment called the
+  // invite link "currently frontend-unwired". This pair mirrors
+  // _showResetPasswordScreen/_resetPasswordSubmit exactly, on purpose: same
+  // shape, so the two one-time-link screens cannot silently drift apart.
+  _showEmployeeSetupScreen(token) {
+    this._applyAccent(this.systems.retail);
+    const overlay = document.createElement('div');
+    overlay.id = 'aura-employee-setup-screen';
+    overlay.className = 'auth-overlay';
+    overlay.innerHTML = `
+      <div class="auth-card auth-card-compact">
+        <div class="auth-head">
+          <div class="auth-icon">${AuraIcons.render('key-round', 32)}</div>
+          <h2 class="auth-title">${t('Set your password')}</h2>
+          <p class="auth-sub">${t('Choose the password you will sign in with. Your email is already on file.')}</p>
+        </div>
+        <div class="auth-field">
+          <label for="es-pass">${t('Password')}</label>
+          <input id="es-pass" type="password" placeholder="Min. 6 characters" autocomplete="new-password"
+            onkeydown="if(event.key==='Enter')document.getElementById('es-pass2').focus()" />
+        </div>
+        <div class="auth-field" style="margin-bottom:20px;">
+          <label for="es-pass2">${t('Confirm password')}</label>
+          <input id="es-pass2" type="password" placeholder="Repeat password" autocomplete="new-password"
+            onkeydown="if(event.key==='Enter')SubsystemApp._employeeSetupSubmit('${token}')" />
+        </div>
+        <div id="es-error" class="auth-error"></div>
+        <button id="es-btn" class="auth-submit" onclick="SubsystemApp._employeeSetupSubmit('${token}')">${t('Set password')}</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    setTimeout(() => document.getElementById('es-pass')?.focus(), 100);
+  },
+
+  async _employeeSetupSubmit(token) {
+    const pass  = document.getElementById('es-pass')?.value;
+    const pass2 = document.getElementById('es-pass2')?.value;
+    const errEl = document.getElementById('es-error');
+    const btn   = document.getElementById('es-btn');
+    const showErr = (msg) => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } if (btn) { btn.textContent = 'Set password'; btn.disabled = false; } };
+    if (!pass || pass.length < 6) return showErr('Password must be at least 6 characters.');
+    if (pass !== pass2) return showErr('Passwords do not match.');
+
+    if (btn) { btn.textContent = t('Saving…'); btn.disabled = true; }
+    if (errEl) errEl.style.display = 'none';
+    try {
+      const res = await fetch('/api/auth/employee/setup', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, password: pass }),
+      });
+      const data = await res.json();
+      if (!data.success) return showErr(data.error || t('This setup link is invalid or has expired. Ask your admin for a new one.'));
+
+      const overlay = document.getElementById('aura-employee-setup-screen');
+      if (overlay) {
+        overlay.querySelector('.auth-card').innerHTML = `
+          <div class="auth-head">
+            <div class="auth-icon">${AuraIcons.render('circle-check-big', 32, { animate: 'pop' })}</div>
+            <h2 class="auth-title">${t('Your password is set')}</h2>
+            <p class="auth-sub">${t('Sign in with your email and this password, on this device or the phone.')}</p>
           </div>
           <button class="auth-submit" onclick="location.hash='';SubsystemApp.init();">${t('Continue to sign in')}</button>`;
       }
