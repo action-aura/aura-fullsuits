@@ -123,10 +123,10 @@ the phone): products `SYNC-0905A/B/C` ("Sync Test Product …"), customers
 "Branch test after-addon …", and the sales `SALE-000004…` and the offline
 one. They are honest history and can stay for a rehearsal audience; for the
 real demo delete the products and customers from the laptop (Products /
-Customers screens — the deletions sync out). The branch is the exception:
-there is **no route to rename or remove a branch** yet (`/branches` has only
-GET and POST — a small gap found writing this), so either leave it or fix the
-name directly in the till's `branches` table. The presentation package under
+Customers screens — the deletions sync out). The test branch was already
+renamed to "Second Branch" through the Edit control that was added the same
+night (Branches → Edit; the rename reached the second till in 10 s) — a
+branch cannot be *retired* yet, only edited. The presentation package under
 `aura-retail-demo/` has its own data folder and is unaffected.
 
 ## If something looks wrong

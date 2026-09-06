@@ -28,11 +28,14 @@
  *   6. The pin-your-tills guidance appears once more than one branch exists,
  *      and NOT when there is only one.
  *
- * Scope is deliberately narrow, matching the API surface exactly: GET
- * /branches and POST /branches, no PATCH, no DELETE. Rename/deactivate are
- * NOT tested here because they are not built -- a branch carries stock
- * balances, sale history, scoped user accounts and pinned tills, so "what
- * happens to those" is a real design question, not a CRUD gap.
+ * UPDATE (2026-09-06): PUT /branches/<id> (update_branch, retail_api.py) now
+ * exists too -- rename / fix address / fix phone, name/address/phone ONLY.
+ * Covered below as (7) and (8): the rendered Edit control, and that saving
+ * the edit modal for an existing branch PUTs rather than POSTs. Deactivate
+ * is still NOT built -- a branch carries stock balances, sale history,
+ * scoped user accounts and pinned tills, so "what happens to those on
+ * retirement" remains a real design question, not a CRUD gap, and is
+ * intentionally out of scope for this route and this file.
  *
  * ── MUTATION-PROVED ─────────────────────────────────────────────────────────
  * Every behavioural claim below is re-run against a DELIBERATELY BROKEN copy
@@ -83,6 +86,7 @@ const ONE_BRANCH_OK = { status: 'success', data: [BRANCH_MAIN] };
 const TWO_BRANCHES_OK = { status: 'success', data: [BRANCH_MAIN, BRANCH_DOWNTOWN] };
 const EMPTY_OK = { status: 'success', data: [] };
 const CREATE_OK = { status: 'success', data: { id: 3 } };
+const UPDATE_OK = { status: 'success', data: { id: 2 } };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE SANDBOX — the real subsystem-retail.js, never a reimplementation
@@ -130,6 +134,8 @@ function loadRetailSystem(opts) {
         payload = o.list === undefined ? EMPTY_OK : o.list;
       } else if (u.indexOf(BRANCHES_URL) === 0 && method === 'POST') {
         payload = o.create === undefined ? CREATE_OK : o.create;
+      } else if (u.indexOf(BRANCHES_URL) === 0 && method === 'PUT') {
+        payload = o.update === undefined ? UPDATE_OK : o.update;
       } else {
         payload = { status: 'error', message: 'unmapped fixture route: ' + method + ' ' + u };
       }
@@ -198,6 +204,10 @@ async function renderScreen(opts) {
 
 function postsTo(calls, url) {
   return calls.filter((c) => c.method === 'POST' && c.url.indexOf(url) === 0);
+}
+
+function putsTo(calls, url) {
+  return calls.filter((c) => c.method === 'PUT' && c.url.indexOf(url) === 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -369,6 +379,53 @@ async function testPinGuidanceOnlyWithMultipleBranches(src) {
   console.log('PASS: the pin-your-tills guidance appears only once more than one branch exists');
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// (7) EDIT CONTROL — every rendered row carries its own Edit button
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function testEditControlRenderedPerBranch(src) {
+  const ctx = await renderScreen({ source: src, list: TWO_BRANCHES_OK });
+  const tbody = ctx.tbodyHtml();
+  const editCalls = tbody.match(/_openEditBranch\('[^']+'\)/g) || [];
+  assert.strictEqual(editCalls.length, 2,
+    `Expected exactly 2 Edit controls (one per fixture branch), found ${editCalls.length}. Table body:\n${tbody}`);
+  assert.ok(tbody.indexOf(`_openEditBranch('${BRANCH_MAIN.id}')`) !== -1,
+    `No Edit control found for branch id ${BRANCH_MAIN.id}. Table body:\n${tbody}`);
+  assert.ok(tbody.indexOf(`_openEditBranch('${BRANCH_DOWNTOWN.id}')`) !== -1,
+    `No Edit control found for branch id ${BRANCH_DOWNTOWN.id}. Table body:\n${tbody}`);
+  console.log('PASS: each rendered branch row carries its own Edit control');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (8) EDIT SAVE — PUTs to /api/sub/retail/branches/<id> with the typed fields
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function testEditSavePutsToBranchIdWithTypedFields(src) {
+  const ctx = await renderScreen({ source: src, list: TWO_BRANCHES_OK, update: UPDATE_OK });
+  // Through the same entry point the rendered Edit button calls -- resolves
+  // the record from this._branches, same as _openEditCategory.
+  ctx.rs._openEditBranch(BRANCH_DOWNTOWN.id);
+  ctx.getEl('brm-name').value = 'Downtown Renamed';
+  ctx.getEl('brm-address').value = '99 New St';
+  ctx.getEl('brm-phone').value = '0700000099';
+  await ctx.rs._saveBranch(BRANCH_DOWNTOWN.id);
+  await settle();
+
+  const url = `${BRANCHES_URL}/${BRANCH_DOWNTOWN.id}`;
+  const puts = putsTo(ctx.calls, url);
+  assert.strictEqual(puts.length, 1,
+    `Expected exactly 1 PUT to ${url}, saw ${puts.length}. Calls:\n${JSON.stringify(ctx.calls, null, 2)}`);
+  assert.strictEqual(puts[0].body.name, 'Downtown Renamed',
+    `The PUT body's name did not carry the typed value. Body: ${JSON.stringify(puts[0].body)}`);
+  assert.strictEqual(puts[0].body.address, '99 New St');
+  assert.strictEqual(puts[0].body.phone, '0700000099');
+
+  // Allow-half: editing an existing branch must not ALSO create a new one.
+  assert.strictEqual(postsTo(ctx.calls, BRANCHES_URL).length, 0,
+    `Editing an existing branch also POSTed a new one. Calls:\n${JSON.stringify(ctx.calls, null, 2)}`);
+  console.log('PASS: saving the edit modal for an existing branch PUTs to /api/sub/retail/branches/<id> with the typed fields');
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // MAIN
 // ═════════════════════════════════════════════════════════════════════════════
@@ -394,6 +451,8 @@ async function main() {
   await run('testCreatePostsWithTypedName', () => testCreatePostsWithTypedName(SRC));
   await run('testBlankNameRefusedClientSide', () => testBlankNameRefusedClientSide(SRC));
   await run('testPinGuidanceOnlyWithMultipleBranches', () => testPinGuidanceOnlyWithMultipleBranches(SRC));
+  await run('testEditControlRenderedPerBranch', () => testEditControlRenderedPerBranch(SRC));
+  await run('testEditSavePutsToBranchIdWithTypedFields', () => testEditSavePutsToBranchIdWithTypedFields(SRC));
 
   // ── Mutation proofs — M1-M4 from the ci-hardening-w0.3 brief, plus M5/M6
   //    (ENGINEERING.md: mutation-prove every guard, not only the four named
@@ -411,8 +470,8 @@ async function main() {
   // M2: make create() not POST => test (2) FAILS.
   await run('M2: create() stops POSTing => testCreatePostsWithTypedName FAILS', async () => {
     const broken = mutate(SRC, [[
-      "      const d = await this._post('/api/sub/retail/branches', payload);",
-      "      const d = { status: 'success', data: { id: 999 } }; // MUTATED: no network call",
+      "        : await this._post('/api/sub/retail/branches', payload);",
+      "        : { status: 'success', data: { id: 999 } }; // MUTATED: no network call",
     ]]);
     return provesMutation('M2 create() does not POST', broken, (b) => testCreatePostsWithTypedName(b));
   });
@@ -459,6 +518,18 @@ async function main() {
       '    if (false) { // MUTATED: capability gate disabled',
     ]]);
     return provesMutation('M6 capability gate disabled', broken, (b) => testCapabilityGateHidesScreenFromNonEmployee(b));
+  });
+
+  // M7 (2026-09-06, PUT /branches/<id>): make the edit path fall through to
+  // POST instead of PUT => test (8) FAILS. The allow/deny counterpart of M2:
+  // M2 proves create still hits the network, this proves EDIT hits the
+  // RIGHT verb/URL rather than silently creating a duplicate branch.
+  await run('M7: edit path POSTs instead of PUTing => testEditSavePutsToBranchIdWithTypedFields FAILS', async () => {
+    const broken = mutate(SRC, [[
+      "      const d = branchId\n        ? await this._put(`/api/sub/retail/branches/${branchId}`, payload)\n        : await this._post('/api/sub/retail/branches', payload);",
+      "      const d = await this._post('/api/sub/retail/branches', payload); // MUTATED: edit falls through to create",
+    ]]);
+    return provesMutation('M7 edit path POSTs instead of PUTing', broken, (b) => testEditSavePutsToBranchIdWithTypedFields(b));
   });
 
   console.log(results.join('\n'));

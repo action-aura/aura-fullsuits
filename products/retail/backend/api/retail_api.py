@@ -8159,6 +8159,60 @@ def create_branch():
     _sync_nudge()
     return jsonify({'status': 'success', 'data': {'id': nid}})
 
+
+@retail_bp.route('/branches/<int:branch_id>', methods=['PUT'])
+@mt_login_required
+@mt_require_subsystem('retail')
+@require_license_capability("retail.settings.update", restricted_mode_allowlist=RETAIL_RESTRICTED_ALLOWLIST)
+@mt_require_capability(CAP_EMPLOYEES)
+def update_branch(branch_id):
+    """Rename a branch / fix its address or phone. Found 2026-09-06 writing
+    the demo runbook: /branches had only GET and POST, so a mistyped name
+    lived forever -- and, since Wave B, synced everywhere. Deliberately
+    name/address/phone ONLY: retiring a branch touches stock balances, the
+    per-device branch pin and open cash drawers, and is its own design.
+
+    Tenant-scoped on (id, company_id) -> 404 for anyone else's branch, the
+    same way every other per-row route in this file resolves its row.
+    Emits the `branch` sync event as `update` with the row's uid --
+    sync_service.py's branch handler upserts on uid, so the rename converges
+    on every other device of the shop (a legacy row with no uid is given
+    one here first, exactly like _default_branch's self-heal)."""
+    data = request.json or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'status': 'error', 'message': 'Branch name required'}), 400
+    cid = _cid()
+    conn = get_retail_conn()
+    row = conn.execute("SELECT id, uid, status FROM branches WHERE id=? AND company_id=?",
+                        (branch_id, cid)).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({'status': 'error', 'message': 'Branch not found'}), 404
+    cur = conn.cursor()
+    branch_uid = row['uid']
+    if not branch_uid:
+        # Legacy row predating v13 `uid` -- self-heal exactly like
+        # _default_branch does, so this branch gets the same wire identity
+        # a branch created (or self-healed) today gets before it is ever
+        # named in a sync event.
+        branch_uid = _new_uid()
+        cur.execute("UPDATE branches SET uid=? WHERE id=?", (branch_uid, branch_id))
+    address = data.get('address', '')
+    phone = data.get('phone', '')
+    cur.execute("UPDATE branches SET name=?, address=?, phone=? WHERE id=? AND company_id=?",
+                (name, address, phone, branch_id, cid))
+    # Wave B: `update` converges on every other device of this shop the same
+    # way `create` seeds it there in the first place -- see sync_service.py's
+    # branch handler and create_branch's identical emission above.
+    _queue_sync_event(cur, 'branch', branch_uid, 'update', {
+        'uid': branch_uid, 'name': name, 'address': address,
+        'phone': phone, 'status': row['status'],
+    })
+    conn.commit(); conn.close()
+    _sync_nudge()
+    return jsonify({'status': 'success', 'data': {'id': branch_id}})
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  CREDIT & PAYMENTS — lightweight AR/AP ledger (Phase 1)
 #  • Every money movement lives in the unified `payments` ledger (the existing

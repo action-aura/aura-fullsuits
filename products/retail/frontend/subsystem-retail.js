@@ -159,9 +159,9 @@ const RetailSystem = {
   async _patch(url, body) {
     return (await this._fetch(url, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })).json();
   },
-  // Categories are the one resource whose update route is PUT, not PATCH
-  // (see products/retail/backend/api/retail_api.py's update_category) --
-  // this mirrors _patch exactly, just with the method the backend expects.
+  // Categories (update_category) and Branches (update_branch) are PUT, not
+  // PATCH -- see products/retail/backend/api/retail_api.py -- this mirrors
+  // _patch exactly, just with the method those backend routes expect.
   async _put(url, body) {
     return (await this._fetch(url, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })).json();
   },
@@ -5449,8 +5449,8 @@ const RetailSystem = {
       <div class="sub-chart-card">
         <div style="overflow-x:auto">
           <table class="ret-table" id="branch-table">
-            <thead><tr><th>${t('Branch Name')}</th><th>${t('Address')}</th><th>${t('Phone')}</th><th>${t('Status')}</th></tr></thead>
-            <tbody><tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
+            <thead><tr><th>${t('Branch Name')}</th><th>${t('Address')}</th><th>${t('Phone')}</th><th>${t('Status')}</th><th>${t('Actions')}</th></tr></thead>
+            <tbody><tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:30px">${t('Loading…')}</td></tr></tbody>
           </table>
         </div>
       </div>`;
@@ -5478,37 +5478,50 @@ const RetailSystem = {
       const tbody = document.querySelector('#branch-table tbody');
       if (!tbody) return;
       if (!data.length) {
-        tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:30px">${t('No branches found.')}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:30px">${t('No branches found.')}</td></tr>`;
         return;
       }
       // Every interpolated value here is escaped (this._esc): `branch` is a
       // synced entity type (Wave B, sync_service.py) so a row can arrive
       // from ANOTHER DEVICE over the sync relay -- the same trust boundary
-      // Category/Supplier/Customer already cross.
+      // Category/Supplier/Customer already cross. The Edit button passes
+      // only the (escaped) id -- same convention as _loadCategories' own
+      // Edit/Delete buttons -- so _openEditBranch looks the record up from
+      // this._branches rather than splicing a remote-authored name/address
+      // into an inline onclick string.
       tbody.innerHTML = data.map(b => `<tr>
         <td style="font-weight:600">${this._esc(b.name)}</td>
         <td style="color:var(--text-muted)">${b.address ? this._esc(b.address) : '—'}</td>
         <td style="color:var(--text-muted)">${b.phone ? this._esc(b.phone) : '—'}</td>
         <td>${this._badge(b.status === 'active' ? t('Active') : t('Inactive'), b.status === 'active' ? 'green' : 'red')}</td>
+        <td><button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditBranch('${this._esc(b.id)}')">${t('Edit')}</button></td>
       </tr>`).join('');
     } catch (e) { console.error(e); }
   },
 
   _openAddBranch() { this._showBranchModal(); },
+  _openEditBranch(id) {
+    const b = (this._branches || []).find(x => String(x.id) === String(id));
+    if (b) this._showBranchModal(b);
+  },
 
-  _showBranchModal() {
+  // `branch` is undefined for Add, a record (from this._branches) for Edit --
+  // same shape as _showCategoryModal(cat), the established convention in
+  // this file for a single modal serving both create and rename.
+  _showBranchModal(branch) {
+    const isEdit = !!(branch && branch.id);
     const overlay = document.createElement('div');
     overlay.className = 'ret-modal-overlay';
     overlay.id = 'ret-branch-modal';
     overlay.innerHTML = `
       <div class="ret-modal" style="width:440px">
-        <h3>🏦 ${t('Add Branch')}</h3>
-        <div class="ret-field"><label>${t('Branch Name')} *</label><input id="brm-name" /></div>
-        <div class="ret-field"><label>${t('Address')}</label><input id="brm-address" /></div>
-        <div class="ret-field"><label>${t('Phone')}</label><input id="brm-phone" /></div>
+        <h3>${isEdit ? '✏️ ' + t('Edit Branch') : '🏦 ' + t('Add Branch')}</h3>
+        <div class="ret-field"><label>${t('Branch Name')} *</label><input id="brm-name" value="${isEdit ? this._esc(branch.name) : ''}" /></div>
+        <div class="ret-field"><label>${t('Address')}</label><input id="brm-address" value="${isEdit ? this._esc(branch.address) : ''}" /></div>
+        <div class="ret-field"><label>${t('Phone')}</label><input id="brm-phone" value="${isEdit ? this._esc(branch.phone) : ''}" /></div>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-branch-modal').remove()">${t('Cancel')}</button>
-          <button class="ret-btn ret-btn-primary" id="brm-btn" onclick="RetailSystem._saveBranch()">${t('Add Branch')}</button>
+          <button class="ret-btn ret-btn-primary" id="brm-btn" onclick="RetailSystem._saveBranch(${isEdit ? `'${this._esc(branch.id)}'` : 'null'})">${isEdit ? t('Save') : t('Add Branch')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -5516,12 +5529,12 @@ const RetailSystem = {
     document.getElementById('brm-name')?.focus();
   },
 
-  async _saveBranch() {
-    // Client-side refusal BEFORE the network call: create_branch 400s on a
-    // blank name (retail_api.py) -- this guard means the operator sees an
-    // immediate inline refusal instead of a round trip just to be told the
-    // same thing. See the mutation proof on this exact guard in
-    // retail_branches_test.js.
+  async _saveBranch(branchId) {
+    // Client-side refusal BEFORE the network call: create_branch/update_branch
+    // both 400 on a blank name (retail_api.py) -- this guard means the
+    // operator sees an immediate inline refusal instead of a round trip just
+    // to be told the same thing. See the mutation proof on this exact guard
+    // in retail_branches_test.js.
     const name = document.getElementById('brm-name')?.value.trim();
     if (!name) { SubsystemApp.showToast(t('Name required'), 'error'); return; }
     const btn = document.getElementById('brm-btn');
@@ -5532,17 +5545,19 @@ const RetailSystem = {
       phone: document.getElementById('brm-phone')?.value || '',
     };
     try {
-      const d = await this._post('/api/sub/retail/branches', payload);
+      const d = branchId
+        ? await this._put(`/api/sub/retail/branches/${branchId}`, payload)
+        : await this._post('/api/sub/retail/branches', payload);
       if (d.status === 'success') {
-        SubsystemApp.showToast(t('Branch added'), 'success');
+        SubsystemApp.showToast(branchId ? t('Branch updated') : t('Branch added'), 'success');
         document.getElementById('ret-branch-modal')?.remove();
         this._loadBranches();
       } else {
         SubsystemApp.showToast(d.message || t('Error'), 'error');
-        if (btn) { btn.disabled = false; btn.textContent = t('Add Branch'); }
+        if (btn) { btn.disabled = false; btn.textContent = branchId ? t('Save') : t('Add Branch'); }
       }
     } catch (e) {
-      if (btn) { btn.disabled = false; btn.textContent = t('Add Branch'); }
+      if (btn) { btn.disabled = false; btn.textContent = branchId ? t('Save') : t('Add Branch'); }
     }
   },
 

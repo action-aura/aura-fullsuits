@@ -196,6 +196,7 @@ EXPECTED_MUTATION_CAPABILITIES = {
 
     # ── Owner administration of the shop itself: retail.employees ────────────
     'create_branch': CAP_EMPLOYEES,
+    'update_branch': CAP_EMPLOYEES,
     'credit_settings_set': CAP_EMPLOYEES,
     'tax_settings_set': CAP_EMPLOYEES,
     # Launch-readiness chain wave C1 (ROADMAP.md's 2026-08-30 "the

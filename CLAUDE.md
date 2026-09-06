@@ -227,10 +227,11 @@ retail_api.py, not from memory:
 - **No inter-branch stock transfer workflow.** `branches` exist and stock is
   branch-scoped, but the word `transfer` does not appear in retail's schema or
   API at all.
-- **A branch cannot be renamed or retired.** `/branches` has only GET and
-  POST (found 2026-09-06 while writing the demo runbook); a mistyped branch
-  name lives forever and syncs everywhere. The paid branch *limit* is
-  enforced (see the licensing section), the branch *edit* is the gap.
+- **A branch cannot be retired.** Rename/address/phone edits exist since
+  2026-09-06 (`PUT /branches/<id>`, an Edit control on the desktop screen,
+  the rename converges to other devices through the existing `branch`
+  update event). Retiring one touches stock balances, the per-device branch
+  pin and open cash drawers, and is still its own design.
 - **No SMS and no push.** See the correction below — WhatsApp and email do
   exist, so this is now a narrow gap rather than a blanket one.
 - **iOS build requires a macOS host** that does not exist in this dev

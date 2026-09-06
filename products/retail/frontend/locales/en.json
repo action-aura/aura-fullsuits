@@ -681,6 +681,8 @@
   "Branch Name": "Branch Name",
   "No branches found.": "No branches found.",
   "Branch added": "Branch added",
+  "Edit Branch": "Edit Branch",
+  "Branch not found": "Branch not found",
   "Managing branches is limited to managers and the store owner. Open the till to start ringing sales.": "Managing branches is limited to managers and the store owner. Open the till to start ringing sales.",
   "Every till now needs its own branch pin, or its sales silently file under your first branch -- set it per device in Settings, under This Device's Branch.": "Every till now needs its own branch pin, or its sales silently file under your first branch -- set it per device in Settings, under This Device's Branch.",
   "Email Notifications": "Email Notifications",
