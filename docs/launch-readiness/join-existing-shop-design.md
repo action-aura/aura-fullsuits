@@ -138,7 +138,7 @@ Two states follow, and both need words on screen:
 | Activation hook — **built** | `commercial_runtime/identity/company_rebind.py::seed_company_settings_for_joining_device`, called from `rebind_company_id_after_activation` (shared by Retail and Clinic) | premise 5: seed `company_settings` with the Owner-issued id when no company and no admin exist; five tests in `test_registry_v4_company_rebind.py`, an install WITH an admin proven untouched |
 | Desktop first run — **built** | `products/retail/frontend/app-shell.js`: `_toggleJoinMode`, `_joinSubmit`, `_openFirstRun`, `_isJoinedDevice`, `_waitForShopAccount` | the join mode of the setup modal, the restart message, the next-launch wait; both `init()` and `checkAuthAndSetup()` go through `_openFirstRun()` |
 | Desktop sync start | `products/retail/backend/app.py` | relies on the restart (the "Connected to your shop. Restart Aura" screen). Option (b) was read and deferred, not forgotten: `SYNC_RELAY_BASE_URL` is resolved at import (`config._PERSISTED_SYNC_RELAY_BASE_URL`), `_SYNC_RELAY_URL_IS_USABLE` is a module constant, and both `SyncService` objects plus their client factory are built only inside that import-time block — starting them after activation means re-resolving and re-validating the address and constructing both services inside `_on_licence_activated`, which "never raises" by contract. A day's refactor with its own tests, not a bolt-on; the restart is proven and honest |
-| Android first run — **built 2026-09-06, not yet run on the handset** | `ui/FirstRunDecision.kt` (pure decision), `ui/screens/JoinShopScreens.kt` (choice + waiting screens), `AppRoot.kt` phases `JOIN_CHOICE`/`JOINING` | on Android the key comes BEFORE the account, so after activation the app cannot tell a new shop's first device from a joining one: it asks once ("Is your shop already set up on another device?"); the waiting screen polls `needs_setup` every 2 s with a 120 s ceiling and never calls `createAdmin`. 303 unit tests green; the installation-id term of the decision is mutation-proved (three checks go red without it). APK assembled; the phone runner installs it when the handset is next plugged in |
+| Android first run — **built and proven on the handset, 2026-09-06** | `ui/FirstRunDecision.kt` (pure decision), `ui/screens/JoinShopScreens.kt` (choice + waiting screens), `AppRoot.kt` phases `JOIN_CHOICE`/`JOINING` | on Android the key comes BEFORE the account, so after activation the app cannot tell a new shop's first device from a joining one: it asks once ("Is your shop already set up on another device?"); the waiting screen polls `needs_setup` every 2 s with a 120 s ceiling and never calls `createAdmin`. 303 unit tests green; the installation-id term of the decision is mutation-proved (three checks go red without it). APK assembled; the phone runner installs it when the handset is next plugged in |
 | Tests — **built** | `products/retail/tests/retail_join_shop_modal_test.js` (15 checks, drives `init()` itself); `FirstRunDecisionTest.kt` + `JoinShopWiringContractTest.kt` (Android) | the desktop checks include the no-Owner, pending-approval and boot-path cases the first cut missed; `create_admin` stays gated (never called by the join path, measured in the browser) |
 | Proof drivers | `scripts/ops/join_e2e.py` (API, fourth till), `scripts/ops/join_door_e2e.py` (Chromium, fifth and sixth tills) | run against a fresh till on `:5013`/`:5014`; a device slot per till through the audited `add_devices` op (`scripts/ops/owner_rehearsal_add_one_device.py`) |
 | Docs | `sellability-status.md` (row added), `sunday-demo-runbook.md` §1 (caveat reworded) | the phone's own admin caveat stays until the Android door is run on the handset |
@@ -209,3 +209,21 @@ then a second witness over adb forward. It is deliberately manual — it wipes
 the handset's app data — and needs one free device slot first (a wiped phone
 is a new device to Owner). Written before the phone was back, so its first
 run may need a button-text tweak; it prints what it saw at every step.
+
+## Measured on the phone, 2026-09-06 17:30 (Mi Note 10, wiped install)
+
+`pm clear` → launch → licence key typed, **Activate** → the new screen "Is
+your shop already set up on another device?" → **Yes — connect to my shop**
+→ "Connecting to your shop…" → the ordinary sign-in screen once the owner's
+row had synced → desk-owner signed in through the real form → the till's
+dashboard ("Your store at a glance", JD 0.000, 1 product). Second witness
+over adb forward against the handset's own backend: `needs_setup: false`,
+and desk-owner by HTTP → `200`, `ADMIN-0001`, `admin`. The owner typed
+nothing but the key and their own password. No admin was created on the
+phone — which is also why the owner is `ADMIN-0001` here now rather than
+the `ADMIN-0003` the re-numbering had to give them on the old, self-set-up
+install. Three tweaks the first live run needed, all in the script, none in
+the app: exact-word match for **Activate** (the screen's sub-sentence also
+contains "activate"), match the sign-in button by label (a Compose button is
+not an Android Button class), and hide the soft keyboard before tapping (it
+covered the button). Each wipe costs a device slot (allowance now 7).

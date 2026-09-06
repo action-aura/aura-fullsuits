@@ -2533,8 +2533,11 @@ the artefact, never inferred from a green suite. Full per-line evidence in
   `create-admin` calls). **The Android door is built too** (same day:
   `FirstRunDecision`, `JoinChoiceScreen`/`JoiningScreen`, phases
   `JOIN_CHOICE`/`JOINING`; 303 unit tests, decision mutation-proved, APK
-  assembled) and waits only for the handset to prove it on a wiped install.
-  No security change.
+  assembled) **and proven on the wiped Mi Note 10 the same evening**: key,
+  "Yes — connect to my shop", "Connecting to your shop…", sign-in, the
+  dashboard as `ADMIN-0001`; no admin created; second witness by HTTP
+  against the handset's own backend (`scripts/ops/phone_join_door.py`).
+  Done on both clients. No security change.
 - **The default "Main Branch" is a different wire entity on every device.**
   Found 2026-09-06 while proving the join door: a freshly joined till logged
   nine pulled rows whose `branch_uid` "did not resolve to any local branch"

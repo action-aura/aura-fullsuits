@@ -48,13 +48,13 @@ Run on 2026-09-05 end to end, including on the phone's own screen.
    (Employees, same screen) and sign in on the laptop. Exercised through the
    phone's API on 2026-09-06 (`scripts/ops/phone_offline_and_staff.py`).
 
-What to say if asked "why does the phone have its own admin?": the phone was
-set up before the "join an existing shop" door existed, so it created a first
-admin of its own; the owner's real account works on every device regardless.
-On the laptop that door now exists (first-run screen → "Already have a shop?
-Join it with your licence key", proven in a real browser on 2026-09-06); the
-phone gets the same door with its next update. Cosmetic leftover on this
-handset, on the list.
+The phone no longer has an admin of its own: on the evening of 2026-09-06 it
+was wiped and joined the shop through the new first-run door (licence key →
+"Is your shop already set up on another device?" → Yes → "Connecting to your
+shop…" → the ordinary sign-in), so the owner is `ADMIN-0001` on the handset
+exactly as on the laptop. The laptop's first-run screen has the same door
+("Already have a shop? Join it with your licence key"). If asked how a second
+device is added: the key and your own password, nothing else.
 
 ## 2. Products: create on the laptop, find on the phone, sell on the phone
 

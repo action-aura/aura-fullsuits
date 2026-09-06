@@ -39,21 +39,38 @@ PKG = "com.actionaura.retail.debug"
 KEY = "AURA-RET-1-5P2G-39EP-XQ9T-K8ZC-FEZG"
 OWNER = {"email": "desk-owner@rehearsal.local", "password": "DeskOwner2026!Pass"}
 OWNER_PORT = 5551          # the rehearsal Owner, reached from the phone via adb reverse
-PHONE_HTTP = 5001          # local port forwarded to the phone's embedded backend
+PHONE_HTTP = 5002          # local port forwarded to the phone's embedded backend (5001 is a till here)
 UI_XML = "/sdcard/aura-ui.xml"
 
 
 def adb(*args, check=True, timeout=60):
-    r = subprocess.run([ADB, *args], capture_output=True, text=True, timeout=timeout)
+    # utf-8 with replacement, never the console code page: dumpsys and the
+    # UI hierarchy (Arabic labels) both carry bytes cp1252 cannot decode.
+    r = subprocess.run([ADB, *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
     if check and r.returncode != 0:
         sys.exit(f"adb {' '.join(args)} failed: {r.stderr.strip() or r.stdout.strip()}")
     return r.stdout
 
 
 def ui_nodes():
-    """Every node of the current screen as (text, content-desc, class, bounds)."""
-    adb("shell", "uiautomator", "dump", UI_XML)
-    raw = adb("shell", "cat", UI_XML)
+    """Every node of the current screen as (text, content-desc, class, bounds).
+
+    On this MIUI handset `uiautomator dump` prints a theme-loader stack trace
+    to stderr on every call and still exits 0 -- and right after a launch it
+    can exit 0 having written nothing while the app is not yet idle. So the
+    return code is ignored, the old file is removed first, and the dump is
+    retried until the file actually appears (measured 2026-09-06: the first
+    cut trusted one dump and died on `cat: No such file`)."""
+    adb("shell", "rm", "-f", UI_XML, check=False)
+    raw = ""
+    for _ in range(8):
+        adb("shell", "uiautomator", "dump", UI_XML, check=False)
+        raw = adb("exec-out", "cat", UI_XML, check=False)
+        if raw.lstrip().startswith("<"):
+            break
+        time.sleep(1.5)
+    if not raw.lstrip().startswith("<"):
+        sys.exit("uiautomator never produced a hierarchy; is the screen unlocked?")
     out = []
     for node in ET.fromstring(raw).iter("node"):
         b = node.get("bounds", "")
@@ -123,6 +140,15 @@ def main():
         sys.exit("no authorised device -- plug the phone in and accept the prompt")
 
     adb("reverse", f"tcp:{OWNER_PORT}", f"tcp:{OWNER_PORT}")     # phone -> rehearsal Owner
+    if len(sys.argv) > 1 and sys.argv[1] == "witness":
+        witness()
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "resume":
+        # Steps 1-3 already happened on the handset (a wipe costs a device
+        # slot, so a failed step 4 must not restart from the wipe).
+        sign_in("resume, step 4")
+        witness()
+        return
     print("step 1: wiping app data and launching")
     adb("shell", "pm", "clear", PKG)
     adb("shell", "monkey", "-p", PKG, "-c", "android.intent.category.LAUNCHER", "1")
@@ -130,7 +156,10 @@ def main():
     print("step 2: licence key")
     key_field = find(lambda n: n[2].endswith("EditText") and n[3], timeout=90, what="the licence key field")
     type_into(key_field, KEY)
-    activate = find(by_text("activat"), what="an Activate button")
+    # Exact word, not a fragment: the screen's own sub-sentence ("...license
+    # key to activate this installation.") also contains it, and the first
+    # run tapped that sentence instead of the button.
+    activate = find(lambda n: (n[0] or "").strip().lower() == "activate", what="the Activate button")
     print("  tapping:", activate[0] or activate[1])
     tap(activate)
 
@@ -143,7 +172,11 @@ def main():
                 timeout=60, what="the waiting or sign-in screen")
     print("  after Yes:", seen[0] or seen[1])
 
-    print("step 4: signing in as the desktop's owner through the UI")
+    sign_in(f"step 4")
+
+
+def sign_in(label):
+    print(label + ": signing in as the desktop's owner through the UI")
     fields = None
     deadline = time.time() + 150
     while time.time() < deadline:
@@ -153,22 +186,58 @@ def main():
         time.sleep(2)
     if not fields or len(fields) < 2:
         sys.exit("sign-in fields never appeared")
-    type_into(fields[0], OWNER["email"])
-    type_into(fields[1], OWNER["password"])
-    button = find(lambda n: n[2].endswith("Button") and (by_text("sign in")(n) or by_text("log in")(n)),
+    # `resume` lands here with the fields already filled by an earlier run.
+    if (fields[0][0] or "").strip().lower() != OWNER["email"]:
+        type_into(fields[0], OWNER["email"])
+        type_into(fields[1], OWNER["password"])
+    # The soft keyboard covers the button after typing (measured: the tap
+    # landed on the Arabic keyboard), so hide it first. BACK closes only the
+    # keyboard while it is shown -- checked, never sent blind, because with
+    # no keyboard up BACK would leave the app.
+    hide_keyboard()
+    # A Compose Button is NOT an android.widget.Button to uiautomator (the
+    # first run saw the node as a plain View with text "Sign In"), so match
+    # the exact label, not the class.
+    button = find(lambda n: (n[0] or "").strip().lower() in ("sign in", "log in", "login"),
                   what="the sign-in button")
     tap(button)
+
+
+def hide_keyboard():
+    for _ in range(3):
+        shown = "mInputShown=true" in adb("shell", "dumpsys", "input_method", check=False)
+        if not shown:
+            return
+        adb("shell", "input", "keyevent", "4")
+        time.sleep(0.8)
     shell = find(lambda n: by_text("dashboard")(n) or by_text("pos")(n) or by_text("sales")(n),
                  timeout=60, what="the till after sign-in")
     print("  till shows:", shell[0] or shell[1])
+    witness()
 
+
+def witness():
     print("step 5: second witness over HTTP")
-    adb("forward", f"tcp:{PHONE_HTTP}", "tcp:5000")
-    c = Client(f"http://127.0.0.1:{PHONE_HTTP}")
-    status, body = c.call("GET", "/api/onboarding/status")
+    # The embedded backend flips between device ports 5000 and 5001 across
+    # relaunches (see project memory); a forward to the wrong one answers
+    # with a closed connection, not an HTTP status, so try both and catch
+    # everything.
+    c = None
+    status, body = None, None
+    for device_port in (5000, 5001):
+        adb("forward", "--remove", f"tcp:{PHONE_HTTP}", check=False)
+        adb("forward", f"tcp:{PHONE_HTTP}", f"tcp:{device_port}")
+        c = Client(f"http://127.0.0.1:{PHONE_HTTP}")
+        try:
+            status, body = c.call("GET", "/api/onboarding/status")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  device port {device_port}: {exc.__class__.__name__}")
+            continue
+        if status == 200:
+            print(f"  phone backend reached on device port {device_port}")
+            break
     if status != 200:
-        adb("forward", f"tcp:{PHONE_HTTP}", "tcp:5001")
-        status, body = c.call("GET", "/api/onboarding/status")
+        sys.exit("could not reach the phone's backend on 5000 or 5001")
     print("  onboarding/status:", status, body)
     status, body = c.call("POST", "/api/auth/login", OWNER)
     user = body.get("user") or {}
