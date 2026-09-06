@@ -2465,6 +2465,68 @@ defensible product position, and a very different statement from "the phone is
 missing features". If that framing is accepted, the fix for most of the table
 above is to stop implying otherwise rather than to build eight more screens.
 
-Related and recorded separately above: accounts do not sync to the phone, so
-even the back-office screens that DO exist there manage a user list local to
-that device.
+Related and recorded separately above — and **superseded on 2026-09-05**, see
+the next section: accounts now sync to the phone (a cashier made on the
+desktop signed in on the Mi Note 10, and the owner's own account followed a
+day later). The sentence that stood here said they did not; it was true when
+written. The framing above was then accepted by the owner: the phone is a
+till.
+
+## 2026-09-06 — two nights on real hardware: shipped, decided, deferred
+
+Everything in this section was RUN on a real Mi Note 10 and one or two real
+desktop tills against the local rehearsal Owner, every result read back from
+the artefact, never inferred from a green suite. Full per-line evidence in
+`docs/release/sellability-status.md`; the demo sequence in
+`docs/release/sunday-demo-runbook.md`.
+
+### Shipped (each with tests that were mutation-proved)
+
+- **A phone can be licensed.** `trust_store.json` was seeded once and shadowed
+  every corrected anchor; a guarded add-only re-anchor now recovers the
+  stranded path (`TRUST_ANCHOR_READMITTED`).
+- **Screen-created employees can use the app.** `mt_require_subsystem` demanded
+  a legacy `retail` row nothing ever wrote; the gate is now a derived view of
+  the capability codes (`user_holds_subsystem`). This had locked every cashier
+  out of every retail route on every device. Record:
+  `docs/corrections/identity/employee-locked-out-of-retail-root-cause-analysis.md`.
+- **One owner login on every device.** A colliding employee code from another
+  device is re-numbered on arrival instead of parked (`_resolve_employee_code`).
+- **Shop settings sync** (`retail_setting` events): currency, tax mode, credit
+  defaults, business day, branding text. The logo blob deliberately does not.
+- **The last currency-blind money figures** (receivable/payable totals, daily
+  cash, aging, CSV export) keep the fils.
+- **The owner's price list is data in the catalogue and enforced:** two
+  devices included (250 JOD), extra device 50 JOD, branch 250 JOD behind a
+  real `max_branches` entitlement that rides the assertion with no schema
+  change (`flask_guard.make_entitlement_reader`, `create_branch` → `403
+  BRANCH_LIMIT`; absent/0 = no limit).
+- **A branch can be renamed** (`PUT /branches/<id>`, desktop Edit control);
+  the rename converges through the existing `branch` update event.
+- Every colour on Android painted from `Color.kt`; a stale test fixture that
+  hid 14 sync-service failures for weeks repaired; `retail_sync_relay_url_
+  validation_test` repaired (it asserted the lie the APP_NOT_INITIALISED guard
+  exists to refuse).
+- Ops: `scripts/ops/rehearsal_up.ps1` (whole rehearsal, idempotent),
+  `phone_watcher.ps1`/`phone_free_runner.ps1`, `battery_guard.ps1`, and the
+  proof scripts under `scripts/ops/`.
+
+### Decided by the owner (2026-09-05)
+
+- The phone is a **till**; the eight back-office screens in the table above
+  are added only on request. That table is now a description, not a backlog.
+- One owner login everywhere (built, above).
+- Prices: 250 base with two devices, +50 per device, 250 per branch.
+
+### Deferred, deliberately
+
+- **Retiring a branch** (only rename exists): touches stock balances, the
+  per-device branch pin and open cash drawers — its own design.
+- **"Join an existing shop" first run**: a second device still creates its
+  own placeholder admin because activation needs a signed-in user; cosmetic
+  now that the owner's real account arrives, but a cleaner flow exists.
+- **Per-shop WhatsApp on Android**: credentials are build-time on the phone;
+  moot while the phone is a till (reports go out from the desktop), revisit
+  if that changes.
+- **`licenses.issue` for the SALES role** and **250 JOD per year vs one-time**:
+  the owner's two open answers.
