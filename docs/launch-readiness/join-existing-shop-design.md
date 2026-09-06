@@ -60,6 +60,11 @@ Employees screen of every device (it syncs).
    row applies under it, and `needs_setup` flips to `false`. A device that
    *did* create an admin is untouched (the row exists; the rebind moved it).
 
+   **Built 2026-09-06** (`company_rebind.seed_company_settings_for_joining_
+   device`, called from `rebind_company_id_after_activation`; five tests,
+   including "a pulled owner row applies on the seeded device"; disabling
+   the seed turns three red). The remaining half is the door on each client.
+
 So the missing pieces are a *door* and one seed row, not a mechanism.
 
 ## The flow
