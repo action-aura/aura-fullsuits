@@ -826,6 +826,41 @@ def get_employees():
         conn.close()
 
 
+def _next_employee_number(conn, company_id):
+    """The NNNN of the next `EMP-NNNN` this device mints:
+    `max(COUNT(users), highest existing EMP suffix) + 1`.
+
+    Until 2026-09-06 this was `COUNT(*) + 1`, which assumes every code in the
+    table was minted HERE, one after another. A multi-device shop breaks
+    that the moment one row arrives by sync: the Mi Note 10, freshly joined
+    with five synced accounts (ADMIN-0001, ADMIN-0002, EMP-0002, EMP-0003,
+    EMP-0006), counted five, minted EMP-0006, and `INSERT INTO users` died
+    on `UNIQUE(company_id, employee_id)` -- a 500 from the Employees screen.
+    The demo laptop held the same five rows and answered 500 to the same
+    request (measured against the running till, 2026-09-06 17:52), the day
+    before it was to invite a cashier on stage.
+
+    Why `max(count, highest)` and not `highest` alone: on a fresh install the
+    only row is ADMIN-0001, whose suffix is not an EMP suffix, and the first
+    invite has always been EMP-0002 (= count+1). Keeping the count in the
+    max makes this byte-for-byte the old answer wherever the old answer was
+    not a collision, so no existing single-device install changes numbering.
+    Codes with a non-numeric tail (the sync apply's uid-suffixed re-numbering)
+    are skipped, not parsed. Two devices minting the same number offline is
+    still possible and is the sync apply's job on arrival
+    (`SyncService._resolve_employee_code`) -- the two halves of one rule.
+    Pinned by products/retail/tests/retail_employee_code_after_sync_test.py.
+    """
+    count = conn.execute("SELECT COUNT(*) FROM users WHERE company_id=?", (company_id,)).fetchone()[0]
+    highest = 0
+    for (code,) in conn.execute(
+            "SELECT employee_id FROM users WHERE company_id=? AND employee_id LIKE 'EMP-%'", (company_id,)):
+        tail = str(code or '').rsplit('-', 1)[-1]
+        if tail.isdigit():
+            highest = max(highest, int(tail))
+    return max(count, highest) + 1
+
+
 def _delegated_employee_id_fragment():
     """`dev4` for `EMP-<dev4>-NNNN` -- design §2.4, AUDIT-032B's pattern,
     third application after `sale_number`/`return_number`/`po_number`'s
@@ -1010,13 +1045,15 @@ def create_employee():
 
         company_id = session.get('company_id', 'local')
         user_id = str(uuid.uuid4())
-        count = conn.execute("SELECT COUNT(*) FROM users WHERE company_id=?", (company_id,)).fetchone()[0]
-        # D0 (design §2.4): the admin arm's format is UNTOUCHED --
-        # `EMP-{count+1:04d}`, byte-for-byte, so Clinic and every existing
-        # Retail install keep minting the identical id (§9 point 3). Only
-        # the delegated arm gains the device fragment.
-        emp_id = (f"EMP-{count + 1:04d}" if is_admin
-                  else f"EMP-{_delegated_employee_id_fragment()}-{count + 1:04d}")
+        number = _next_employee_number(conn, company_id)
+        # D0 (design §2.4): the admin arm's FORMAT is untouched --
+        # `EMP-NNNN`, byte-for-byte, so Clinic and every existing Retail
+        # install keep minting the identical id (§9 point 3). Only the
+        # delegated arm gains the device fragment. The NUMBER comes from
+        # `_next_employee_number` since 2026-09-06 -- see its docstring for
+        # the multi-device collision `COUNT(*)+1` produced.
+        emp_id = (f"EMP-{number:04d}" if is_admin
+                  else f"EMP-{_delegated_employee_id_fragment()}-{number:04d}")
 
         cur = conn.cursor()
         cur.execute("""

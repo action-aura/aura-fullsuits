@@ -85,6 +85,12 @@ token = body.get("setup_token") or body.get("token")
 link = body.get("setup_link", "")
 if not token and "token=" in link:
     token = link.split("token=")[-1]
+if not token and "#setup/" in link:
+    # The real shape (onboarding_routes.py: `setup_link` is
+    # ".../#setup/<token>", no query string). Missed by the first cut, which
+    # then skipped the password step and reported the cashier's laptop login
+    # as a failure -- a 401 for an account with no password yet is correct.
+    token = link.rsplit("/", 1)[-1]
 if token:
     status, body = phone.call("POST", "/api/auth/employee/setup", {"token": token, "password": NEW_PASS})
     print("A. set password ON PHONE:", status, json.dumps(body)[:100])
@@ -93,20 +99,52 @@ else:
 
 
 def desk_has_it():
+    # Arrival is what this measures; the status is printed, not demanded --
+    # a row lands as pending_setup until the setup link sets a password.
     s, b = desk.call("GET", "/api/admin/employees")
-    return s == 200 and any(e.get("email") == NEW_EMAIL and e.get("status") == "active" for e in b.get("employees", []))
+    row = next((e for e in b.get("employees", []) if e.get("email") == NEW_EMAIL), None) if s == 200 else None
+    if row:
+        print("     laptop row status:", row.get("status"))
+    return row is not None
 
 
-poll(desk_has_it, "A. cashier (active) visible on the LAPTOP")
+poll(desk_has_it, "A. cashier visible on the LAPTOP")
 c = Client(DESK)
 s, b = c.call("POST", "/api/auth/login", {"email": NEW_EMAIL, "password": NEW_PASS})
 print("A. phone-made cashier logs in on the LAPTOP:", s, (b.get("user") or {}).get("employee_id"))
 
 # ── B. offline sale ────────────────────────────────────────────────────────
-s, b = phone.call("GET", "/api/sub/retail/products?q=SYNC-0905C")
-prod = next((p for p in b.get("data", []) if p.get("sku") == "SYNC-0905C"), None) if s == 200 else None
-if not prod:
-    sys.exit("B. product SYNC-0905C not on the phone; cannot ring")
+# A FRESH product made on the laptop for this run, not a fixture from an
+# earlier night: the first cut leaned on SYNC-0905C, which the 2026-09-06
+# clean-up had soft-deleted, and reported "not on the phone" as a failure.
+B_SKU = f"OFFLINE-{TAG}"
+s, b = desk.call("POST", "/api/sub/retail/products", {
+    "name": f"Offline sale product {TAG}", "sku": B_SKU, "sell_price": 12.345, "price": 12.345,
+    "cost_price": 8.0, "stock": 10, "stock_quantity": 10, "quantity": 10, "category": "Sync test", "unit": "pc",
+})
+print("B. laptop creates a product for this run:", s, json.dumps(b)[:120])
+s, b = desk.call("GET", "/api/sub/retail/products")
+desk_prod = next((p for p in b.get("data", []) if str(p.get("sku", "")).upper() == B_SKU), None) if s == 200 else None
+if not desk_prod:
+    sys.exit("B. the laptop does not list the product it just created")
+s, b = desk.call("POST", f"/api/sub/retail/products/{desk_prod['id']}/stock-adjust",
+                 {"quantity": 10, "reason": "phone offline-sale proof"})
+print("B. laptop stock-adjust +10:", s)
+
+
+def phone_has_product():
+    # The product row and its stock movement are two events; the link is cut
+    # right after this, so wait for the STOCK too, or the offline sale is
+    # refused for insufficient stock (measured: "stock after sale: 0", 400).
+    s2, b2 = phone.call("GET", "/api/sub/retail/products")
+    return s2 == 200 and any(str(p.get("sku", "")).upper() == B_SKU and (p.get("total_stock") or 0) >= 10
+                             for p in b2.get("data", []))
+
+
+if not poll(phone_has_product, "B. product AND its stock reached the phone"):
+    sys.exit("B. product/stock never reached the phone; cannot ring")
+s, b = phone.call("GET", "/api/sub/retail/products")
+prod = next(p for p in b.get("data", []) if str(p.get("sku", "")).upper() == B_SKU)
 pid = prod["id"]
 print("B. cutting the phone's link to the relay")
 adb("reverse", "--remove", "tcp:5551")
@@ -118,8 +156,8 @@ s, b = phone.call("POST", "/api/sub/retail/sales", {
 })
 sale_no = (b.get("data") or {}).get("sale_number")
 print("B. sale rung OFFLINE on the phone:", s, sale_no)
-s, b = phone.call("GET", "/api/sub/retail/products?q=SYNC-0905C")
-print("B. phone stock after sale:", next((p.get("total_stock") for p in b.get("data", []) if p.get("sku") == "SYNC-0905C"), None))
+s, b = phone.call("GET", "/api/sub/retail/products")
+print("B. phone stock after sale:", next((p.get("total_stock") for p in b.get("data", []) if str(p.get("sku", "")).upper() == B_SKU), None))
 time.sleep(20)
 s, b = desk.call("GET", "/api/sub/retail/sales/recent")
 print("B. laptop sees it while phone is offline (should be False):", any(x.get("sale_number") == sale_no for x in b.get("data", [])))
@@ -134,5 +172,5 @@ def desk_has_sale():
 
 
 ok = poll(desk_has_sale, "B. laptop sees the offline sale after reconnect")
-s, b = desk.call("GET", "/api/sub/retail/products?q=SYNC-0905C")
-print("B. laptop stock now:", next((p.get("total_stock") for p in b.get("data", []) if p.get("sku") == "SYNC-0905C"), None))
+s, b = desk.call("GET", "/api/sub/retail/products")
+print("B. laptop stock now:", next((p.get("total_stock") for p in b.get("data", []) if str(p.get("sku", "")).upper() == B_SKU), None))
