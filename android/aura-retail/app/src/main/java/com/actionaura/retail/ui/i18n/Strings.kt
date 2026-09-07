@@ -286,6 +286,12 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Email" to "البريد الإلكتروني",
     "Password" to "كلمة المرور",
     "Sign In" to "تسجيل الدخول",
+    // The sign-in screen's redesign (2026-09-08, DESIGN.md §3 brand tagline +
+    // a password-visibility toggle). "One shop. Every device." is the brand's
+    // fixed tagline (§3) -- same English/Arabic pair everywhere it appears.
+    "One shop. Every device." to "متجر واحد. كل الأجهزة.",
+    "Show password" to "إظهار كلمة المرور",
+    "Hide password" to "إخفاء كلمة المرور",
     "Email and a 6+ char password required" to "البريد الإلكتروني وكلمة مرور من 6 أحرف على الأقل مطلوبة",
     "Couldn't create account" to "تعذّر إنشاء الحساب",
     "Welcome to Action Aura" to "مرحبًا بك في Action Aura",

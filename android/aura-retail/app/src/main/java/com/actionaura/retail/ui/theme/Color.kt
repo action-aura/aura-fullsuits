@@ -330,4 +330,25 @@ object AuraBrand {
     val SparkHalo: Color = Color(0xFFBFF7EE)
     /** The halo's outer edge: the ring's end colour, fully transparent. */
     val SparkFade: Color = RingEnd.copy(alpha = 0f)
+
+    /**
+     * Second pass on the sign-in redesign (2026-09-08): the button's fill
+     * became the ring's own RingMid -> RingEnd gradient instead of a flat
+     * `AccentAction` slab (LoginScreen.kt's `SignInButton`), and that
+     * gradient is light at BOTH ends -- so the label needs a fixed dark ink,
+     * not `OnAccent` (which assumes a single, per-theme accent fill) and not
+     * white (both stops are already close to white). Fixed to the Night
+     * ground itself (DESIGN.md §3, "Night ground `#070B12`, the intro's and
+     * app icon's ground") -- the same deep ink the mark already sits on in
+     * `ic_launcher_background.xml` -- rather than inventing a new literal.
+     *
+     * `RingStart` was tried first, since it is already the darkest of the
+     * three ring stops, and rejected: measured WCAG contrast is 2.11:1
+     * against RingMid (both are the same blue family, so they sit too close
+     * in lightness) against a required 4.5:1 -- it would have read as
+     * legible on the RingEnd half of the button and nearly invisible on the
+     * RingMid half. `OnBrand` measures 4.87:1 against RingMid and 12.56:1
+     * against RingEnd, so it clears AA at both ends of the gradient.
+     */
+    val OnBrand: Color = Color(0xFF070B12)
 }

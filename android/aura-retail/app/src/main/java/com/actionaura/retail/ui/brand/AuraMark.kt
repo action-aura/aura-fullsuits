@@ -1,11 +1,19 @@
 package com.actionaura.retail.ui.brand
 
+import android.content.Context
+import android.provider.Settings
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -14,6 +22,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -21,6 +30,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.actionaura.retail.ui.theme.AuraBrand
+import com.actionaura.retail.ui.theme.AuraPalette
 import com.actionaura.retail.ui.theme.TextPrimary
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -44,6 +54,18 @@ import com.actionaura.retail.ui.theme.TextPrimary
 
 
 /**
+ * True when the system has turned off all animations (Settings >
+ * Accessibility > Remove animations, or a test harness that pins the
+ * animator duration scale to 0 to make waits deterministic). DESIGN.md §6:
+ * "Reduced motion is respected everywhere." Compose has no direct
+ * `prefers-reduced-motion` query on Android, so this reads the same system
+ * setting Android's own animation framework honours before letting anything
+ * animate.
+ */
+private fun systemAnimationsDisabled(context: Context): Boolean =
+    Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
+
+/**
  * The Aura mark: the lit ring, its spark, and the upward A -- drawn in
  * Compose so it renders crisp at any size instead of shipping as a raster.
  *
@@ -52,13 +74,37 @@ import com.actionaura.retail.ui.theme.TextPrimary
  * branching on which one is active; callers on a fixed-dark ground (e.g. the
  * launcher icon, which is a separate vector asset) are not affected by this
  * default since they never call this composable.
+ *
+ * `animate` draws the mark in on first composition -- the ring's sweep from
+ * 0° to its full 300° and the A's stroke fading from transparent to `ink` --
+ * instead of appearing already complete. Defaults to false so every existing
+ * caller (AppRoot's first-run/loading header, this file's own default) keeps
+ * rendering the finished mark exactly as before; only LoginScreen opts in.
+ * DESIGN.md §6: animate transform/opacity only (a sweep angle and a stroke
+ * alpha, here, not layout), and respect reduced motion -- when the system
+ * has animations off ([systemAnimationsDisabled]) this jumps straight to the
+ * final frame rather than animating one out.
  */
 @Composable
-fun AuraMark(size: Dp, modifier: Modifier = Modifier, ink: Color = TextPrimary) {
+fun AuraMark(size: Dp, modifier: Modifier = Modifier, ink: Color = TextPrimary, animate: Boolean = false) {
+    val context = LocalContext.current
+    val reduceMotion = remember { systemAnimationsDisabled(context) }
+    val shouldAnimate = animate && !reduceMotion
+    // One progress value drives both the ring's sweep and the A's alpha
+    // together, so they draw in as a single gesture rather than two
+    // independently-timed ones.
+    val progress = remember { Animatable(if (shouldAnimate) 0f else 1f) }
+    LaunchedEffect(shouldAnimate) {
+        if (shouldAnimate) {
+            progress.animateTo(1f, animationSpec = tween(durationMillis = 900, easing = LinearOutSlowInEasing))
+        }
+    }
+
     Canvas(modifier = modifier.size(size)) {
         val u = size.toPx() / 256f
         val w = size.toPx()
         val h = size.toPx()
+        val drawnFraction = progress.value
 
         // Ring -- 300° sweep, gap open at the top, right end 19.5° past
         // twelve. Compose's arc angles start at 3 o'clock and go clockwise,
@@ -71,7 +117,7 @@ fun AuraMark(size: Dp, modifier: Modifier = Modifier, ink: Color = TextPrimary) 
                 end = Offset(0.85f * w, 0.1f * h),
             ),
             startAngle = -70.5f,
-            sweepAngle = 300f,
+            sweepAngle = 300f * drawnFraction,
             useCenter = false,
             topLeft = Offset((128 - 94) * u, (128 - 94) * u),
             size = Size(188 * u, 188 * u),
@@ -93,7 +139,9 @@ fun AuraMark(size: Dp, modifier: Modifier = Modifier, ink: Color = TextPrimary) 
         drawCircle(Color.White, radius = 6.5f * u, center = Offset(196 * u, 60 * u))
 
         // The A -- plain ink so it survives one-colour printing and a 16px
-        // favicon (DESIGN.md §3). Follows the theme's text colour via `ink`.
+        // favicon (DESIGN.md §3). Follows the theme's text colour via `ink`,
+        // fading in with `drawnFraction` when animating.
+        val inkDuringDraw = ink.copy(alpha = ink.alpha * drawnFraction)
         val stem = Path().apply {
             moveTo(80 * u, 178 * u)
             lineTo(128 * u, 76 * u)
@@ -101,7 +149,7 @@ fun AuraMark(size: Dp, modifier: Modifier = Modifier, ink: Color = TextPrimary) 
         }
         drawPath(
             path = stem,
-            color = ink,
+            color = inkDuringDraw,
             style = Stroke(width = 19 * u, cap = StrokeCap.Round, join = StrokeJoin.Round),
         )
         val bar = Path().apply {
@@ -110,7 +158,7 @@ fun AuraMark(size: Dp, modifier: Modifier = Modifier, ink: Color = TextPrimary) 
         }
         drawPath(
             path = bar,
-            color = ink,
+            color = inkDuringDraw,
             style = Stroke(width = 15 * u, cap = StrokeCap.Round, join = StrokeJoin.Round),
         )
     }
@@ -130,4 +178,53 @@ fun AuraWordmark(product: String = "Retail") {
         withStyle(SpanStyle(fontWeight = FontWeight.Light)) { append(product) }
     }
     Text(text = text, style = MaterialTheme.typography.headlineMedium, color = TextPrimary)
+}
+
+/**
+ * The brand's atmosphere behind a screen's content: two soft radial washes
+ * echoing `products/retail/frontend/brand/intro.html`'s `.aurora` layer --
+ * teal near the top-right, blue near the bottom-left (DESIGN.md §3's ring
+ * gradient stops, reused here as an ambient wash rather than a stroke).
+ * Named in PascalCase like [AuraMark]/[AuraWordmark] rather than the usual
+ * lowerCamelCase modifier-factory convention, on purpose: it is one of this
+ * file's three brand-drawing exports, not a generic layout modifier.
+ *
+ * `strength` is the wash's peak alpha and is theme-aware by default: a wash
+ * bright enough to read against a near-black Night/Calm/Dusk ground would
+ * tint the light Day/Sand grounds instead of whispering behind them, so dark
+ * themes default to roughly double the alpha of light ones -- the same
+ * "computed, not eyeballed" discipline DESIGN.md §2.6 asks of colour
+ * everywhere else. No grain layer: intro.html adds a bitmap noise texture on
+ * top of its aurora, but that is a full-screen bitmap decode held in memory
+ * for an effect this subtle on a phone's sign-in screen -- not worth it here,
+ * so this stays two flat gradients.
+ *
+ * Second pass (2026-09-08): the first pass's teal wash sat at
+ * `(0.75w, 0.20h)` -- close enough inside the frame that its centre, not
+ * just its falloff, was visible, which read as a swampy green cast at the
+ * top of the screen once layered over the blue wash below it. Two fixes:
+ * the dark-theme strength dropped 0.22 -> 0.14 (light kept proportionally
+ * lower, 0.10 -> 0.07, same ~2x ratio as before), and the teal wash's centre
+ * moved off-canvas to the top-right corner (`1.05w, -0.05h`) so only its
+ * outer falloff -- a hint of teal in the corner, never the full hue --
+ * enters the frame. The blue wash (bottom-left) is unchanged.
+ */
+fun Modifier.AuraAurora(
+    strength: Float = if (AuraPalette.current.isDark) 0.14f else 0.07f,
+): Modifier = drawBehind {
+    val radius = minOf(size.width, size.height) * 0.9f
+    drawRect(
+        brush = Brush.radialGradient(
+            colors = listOf(AuraBrand.RingEnd.copy(alpha = strength), Color.Transparent),
+            center = Offset(size.width * 1.05f, size.height * -0.05f),
+            radius = radius,
+        ),
+    )
+    drawRect(
+        brush = Brush.radialGradient(
+            colors = listOf(AuraBrand.RingMid.copy(alpha = strength), Color.Transparent),
+            center = Offset(size.width * 0.15f, size.height * 0.85f),
+            radius = radius,
+        ),
+    )
 }

@@ -35,6 +35,7 @@ class BrandMarkWiringContractTest {
     private val appRoot get() = source("src/main/java/com/actionaura/retail/ui/AppRoot.kt")
     private val auraMark get() = source("src/main/java/com/actionaura/retail/ui/brand/AuraMark.kt")
     private val colorKt get() = source("src/main/java/com/actionaura/retail/ui/theme/Color.kt")
+    private val stringsKt get() = source("src/main/java/com/actionaura/retail/ui/i18n/Strings.kt")
 
     /**
      * Held in a variable rather than spelled as a quoted literal at the call
@@ -144,4 +145,151 @@ class BrandMarkWiringContractTest {
         val fg = source("src/main/res/drawable/ic_launcher_foreground.xml")
         assertThat(fg).contains("A 94 94 0 1 1")
     }
+
+    // ── (5) The 2026-09-08 redesign: the sign-in screen is no longer the
+    // Material-defaults screen the owner called dull ("i find the log in
+    // page on the phone so dull... the sign in button looks cliché") ────────
+
+    @Test
+    fun login_screen_no_longer_uses_the_stock_material_card_or_pill_button() {
+        // ElevatedCard was the "Material defaults on a flat ground" the
+        // owner was reacting to; a full-width, fully-rounded button is the
+        // literal shape he called cliché. Neither may come back.
+        assertThat(loginScreen).doesNotContain("ElevatedCard")
+        assertThat(loginScreen).doesNotContain("CircleShape")
+        assertThat(loginScreen).doesNotContain("RoundedCornerShape(50)")
+    }
+
+    @Test
+    fun login_screen_sign_in_button_uses_the_redesigned_shape() {
+        // NOT a pill (RoundedCornerShape(50) / CircleShape, asserted absent
+        // above) -- a 14dp rounded rectangle, per the redesign brief.
+        assertThat(loginScreen).contains("RoundedCornerShape(14.dp)")
+    }
+
+    @Test
+    fun login_screen_paints_the_brand_aurora_behind_its_content() {
+        assertThat(loginScreen).contains("AuraAurora")
+    }
+
+    @Test
+    fun login_screen_password_field_submits_on_done() {
+        assertThat(loginScreen).contains("ImeAction.Done")
+        assertThat(loginScreen).contains("KeyboardActions")
+    }
+
+    @Test
+    fun aura_mark_supports_an_opt_in_draw_in_animation() {
+        // Spelled with the exact spacing of the parameter declaration so this
+        // fails if the default silently changes (e.g. to `true`, which would
+        // animate every existing caller -- AppRoot's loading header among
+        // them -- that never asked for it).
+        assertThat(auraMark).contains("animate: Boolean = false")
+        assertThat(auraMark).contains("AuraAurora")
+    }
+
+    @Test
+    fun strings_kt_carries_the_new_login_redesign_keys_with_arabic_values() {
+        // Each pair checked for both the English key and a non-English
+        // (Arabic) value, the same "is it actually translated, not just
+        // present" shape as the rest of this test file's siblings
+        // (retail_localization_test.py checks the desktop catalog the same
+        // way).
+        assertThat(stringsKt).contains("\"One shop. Every device.\"")
+        assertThat(stringsKt).contains("متجر واحد")
+        assertThat(stringsKt).contains("\"Show password\"")
+        assertThat(stringsKt).contains("إظهار كلمة المرور")
+        assertThat(stringsKt).contains("\"Hide password\"")
+        assertThat(stringsKt).contains("إخفاء كلمة المرور")
+    }
+
+    // ── (6) The 2026-09-08 SECOND pass: the critique of the first pass's
+    // own screenshot (owner: cliché button fill, swampy-green aurora,
+    // invisible card edge, placeholders that repeat their labels) ──────────
+
+    @Test
+    fun sign_in_button_is_filled_with_the_brand_gradient_not_a_flat_accent_slab() {
+        // The literal call this implementation uses for the button's fill --
+        // see SignInButton's doc comment in LoginScreen.kt. Asserted as this
+        // exact string (not just "AuraBrand.RingMid" alone) so a future
+        // rewrite that keeps the ring colours but drops back to a solid fill
+        // still fails this test.
+        assertThat(loginScreen).contains("Brush.linearGradient(listOf(AuraBrand.RingMid, AuraBrand.RingEnd))")
+        // The retired flat fill this replaces -- must not come back.
+        assertThat(loginScreen).doesNotContain("containerColor = AccentAction")
+    }
+
+    @Test
+    fun sign_in_button_label_uses_the_verified_dark_ink_on_the_gradient() {
+        // OnBrand is the fixed dark ink measured (see Color.kt's doc
+        // comment) at >=4.5:1 against both RingMid and RingEnd -- OnAccent
+        // and a bare white label are both wrong here (OnAccent assumes a
+        // single flat accent fill; white is too close to both gradient
+        // stops to read).
+        assertThat(loginScreen).contains("AuraBrand.OnBrand")
+        assertThat(colorKt).contains("val OnBrand: Color = Color(0xFF070B12)")
+    }
+
+    @Test
+    fun aurora_strength_constants_are_the_second_pass_values() {
+        // 0.22f/0.10f (first pass) read as a swampy green wash at the top of
+        // the screen once the teal centre sat inside the frame -- see this
+        // test class's mutation proof in its class doc comment for how this
+        // assertion was verified to actually fail on the retired values.
+        assertThat(auraMark).contains("0.14f")
+        assertThat(auraMark).contains("0.07f")
+        assertThat(auraMark).doesNotContain("0.22f")
+        assertThat(auraMark).doesNotContain("0.10f")
+    }
+
+    @Test
+    fun login_screen_placeholders_are_examples_not_the_labels_above_them() {
+        // "EMAIL" / "Email" and "PASSWORD" / "Password" said nothing twice.
+        assertThat(loginScreen).contains("tr(\"name@shop.com\")")
+        assertThat(loginScreen).contains("••••••••")
+        assertThat(loginScreen).doesNotContain("placeholder = { Text(tr(\"Email\")) }")
+        assertThat(loginScreen).doesNotContain("placeholder = { Text(tr(\"Password\")) }")
+    }
+
+    @Test
+    fun login_card_paints_a_top_edge_highlight_inside_its_clip() {
+        // The card's only edge treatment used to be the 1dp BorderHairline,
+        // which read as invisible against the aurora ground -- this proves
+        // the highlight wash actually exists in source, theme-aware and
+        // sized to the ~40dp the design brief specified.
+        assertThat(loginScreen).contains("topHighlightAlpha")
+        assertThat(loginScreen).contains("0.06f")
+        assertThat(loginScreen).contains("0.5f")
+        assertThat(loginScreen).contains("40.dp.toPx()")
+    }
 }
+
+/*
+ * MUTATION PROOF (defect 2's aurora strength constants), actually run for
+ * this pass, not left as a claim -- ENGINEERING.md's "a passing test is not
+ * evidence" applies to a wiring-guard string match exactly the same as to
+ * any other assertion:
+ *
+ *   1. Baseline: `gradlew.bat :app:testDebugUnitTest --tests
+ *      "com.actionaura.retail.ui.BrandMarkWiringContractTest"` against the
+ *      real 0.14f/0.07f values -- PASSED, "19 tests, 0 skipped", 0 failed.
+ *   2. AuraMark.kt's `AuraAurora` default mutated back to
+ *      `if (AuraPalette.current.isDark) 0.22f else 0.07f` (the retired
+ *      dark-theme value; light left alone to isolate the one constant).
+ *   3. Same test filter re-run against that mutation -- RESULT: FAILED,
+ *      "19 tests completed, 1 failed". The JUnit XML result, verbatim:
+ *
+ *        value of:
+ *            getAuraMark()
+ *        expected to contain:
+ *            0.14f
+ *        but was:
+ *            [... AuraMark.kt's full source, including
+ *             "strength: Float = if (AuraPalette.current.isDark) 0.22f else 0.07f," ...]
+ *
+ *      i.e. `assertThat(auraMark).contains("0.14f")` caught the reverted
+ *      constant and failed before the chain reached its `doesNotContain
+ *      ("0.22f")` sibling -- exactly the failure this test exists to catch.
+ *   4. AuraMark.kt restored to `0.14f`/`0.07f`.
+ *   5. Re-ran the same test filter: PASSED, "19 tests, 0 skipped", 0 failed.
+ */
