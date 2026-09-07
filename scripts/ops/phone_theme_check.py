@@ -28,7 +28,13 @@ def texts():
 
 
 def tap_text(label, exact=True):
-    node = d.find(lambda n: ((n[0] or "").strip() == label) if exact else (label.lower() in (n[0] or "").lower()),
+    # Match text OR content-description: icon buttons such as the "Back"
+    # arrow carry only a content-description (measured 2026-09-07:
+    # "never saw 'Back'" while the dump listed it).
+    def _label(n):
+        return (n[0] or n[1] or "").strip()
+
+    node = d.find(lambda n: (_label(n) == label) if exact else (label.lower() in _label(n).lower()),
                   timeout=20, what=label)
     d.tap(node)
 
@@ -57,7 +63,14 @@ def main():
         d.adb("shell", "input", "swipe", "540", "1900", "540", "500", "300")
         time.sleep(1.0)
         tap_text("Settings")
-        tap_text("Theme", exact=True)
+        # The Settings screen carries TWO nodes reading "Theme": the section
+        # header and the row title. The first one uiautomator lists is the
+        # header, and tapping a header opens nothing (measured 2026-09-07:
+        # "never saw 'Day'", picker closed). The row's trailing value is the
+        # current theme name, and that text exists exactly once on the
+        # screen, so tap that instead.
+        row_value = d.find(lambda n: (n[0] or "").strip() in THEMES, timeout=20, what="theme row value")
+        d.tap(row_value)
         tap_text(theme)
         time.sleep(0.8)
         seen = [t for t in texts() if t in THEMES]
