@@ -212,10 +212,31 @@ jobs:
       # paths (Windows dev machines see backslashes); nothing else is
       # excluded. Version pinned because a newer detect-secrets can rewrite
       # the baseline's `filters_used` and exit 3.
+      #
+      # Exit 3 is NOT a failure here, and that distinction is the whole point:
+      # the hook returns 1 when it finds a secret that is not in the baseline
+      # (the thing this gate exists to stop) and 3 when it merely rewrote the
+      # baseline's bookkeeping -- "probably to keep line numbers of secrets
+      # up-to-date", in its own words. Measured 2026-09-07 on run 34155921625:
+      # the job failed with exit 3 and ZERO findings, because one entry in
+      # THIS file had moved from line 211 to 216 when the step above it was
+      # edited. Failing the build for that teaches everyone to ignore the
+      # gate. New secrets are still checked first and still exit 1, so
+      # tolerating 3 costs no detection -- what it gives up is forcing the
+      # committed baseline to stay line-accurate, which the notice below asks
+      # for instead.
       - name: Secret scanning
         run: |
           pip install detect-secrets==1.5.0
+          set +e
           detect-secrets-hook --baseline .secrets.baseline $(git ls-files)
+          status=$?
+          set -e
+          if [ "$status" = "3" ]; then
+            echo "::notice::.secrets.baseline drifted (line numbers moved, or an entry disappeared). No new secret was found. Regenerate it with the command in this workflow's comment and commit it."
+            exit 0
+          fi
+          exit "$status"
 
       - name: Dependency scanning
         run: |
