@@ -102,5 +102,9 @@ class CommercialSalesError(StableCodeError):
         # Fulfillment
         "FULFILLMENT_NOT_ELIGIBLE": "This order is not eligible for fulfillment yet: {reason}.",
         "FULFILLMENT_ALREADY_COMPLETE": "This order line has already been fulfilled.",
+        # Raised by fulfillment.py::_hold_fulfillment_lock when the per-order
+        # advisory lock is not acquired within lock_timeout: the winner is
+        # still running, the caller retries once it finishes. Never a duplicate.
+        "FULFILLMENT_IN_PROGRESS": "Another fulfillment of this order is still running; retry once it finishes.",
         # Commission
     }

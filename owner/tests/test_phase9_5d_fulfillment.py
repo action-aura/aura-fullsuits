@@ -319,11 +319,44 @@ def test_item2_subscription_and_license_exist_result_write_crashes_retry_reconci
         assert order.status == "FULFILLED"
 
 
-def test_item3_concurrent_fulfillment_requests_only_one_creates_subscription(app, seeded):
+def test_item3_concurrent_fulfillment_requests_only_one_creates_subscription(app, seeded, monkeypatch):
     """Item #3: two concurrent fulfillment requests for the same order --
-    the SELECT ... FOR UPDATE row lock must serialize them so exactly one
-    Subscription is ever created, never two."""
+    a real lock must serialize them so exactly one Subscription (and one
+    License) is ever created, never two, and the four losers must be
+    refused BY THE GUARD (FULFILLMENT_ALREADY_COMPLETE), not by some other
+    accident.
+
+    Measured CI defect (run 34138397829, 2026-09-07): the comment this test
+    used to trust claimed `db_session.refresh(order, with_for_update=True)`
+    serialized concurrent callers. It does not -- the row lock it takes is
+    released by the very next statement, `audit_record(...
+    "FULFILLMENT_STARTED" ...)`, which commits, and every service called
+    afterwards (create_subscription/transition_subscription/create_license/
+    issue_license_key) commits again. On GitHub Actions this test got
+    `AssertionError: expected exactly 1 Subscription, got 4`. Locally it
+    passed 3/3 runs purely by thread-scheduling luck, which is why it was
+    never caught before CI ran it. `create_subscription` is now
+    monkeypatched with a 0.75s sleep before delegating to the real
+    implementation, so every one of the 5 threads is deliberately pushed
+    into the race window between "no Subscription exists yet" and the
+    insert -- this reproduces the duplicate on every run, on every machine,
+    instead of depending on timing.
+
+    Mutation proof (both directions, `fulfill_order`'s
+    `with _hold_fulfillment_lock(order.id):` swapped for
+    `with contextlib.nullcontext():`, this exact test run with
+    `-k item3_concurrent`):
+
+    RED (guard removed):
+        FAILED owner/tests/test_phase9_5d_fulfillment.py::test_item3_concurrent_fulfillment_requests_only_one_creates_subscription
+        AssertionError: expected exactly 1 Subscription, got 5
+        assert 5 == 1
+
+    GREEN (guard restored):
+        1 passed, 17 deselected in 20.31s
+    """
     import threading
+    import time
 
     staff_id, profile_id = _seed_sales_employee(app, "fulfillt@example.com")
     finance_id, _ = _seed_sales_employee(app, "fulfillu@example.com", role_codes=["FINANCE"])
@@ -334,6 +367,21 @@ def test_item3_concurrent_fulfillment_requests_only_one_creates_subscription(app
     with app.app_context():
         order, invoice = _make_paid_order(app, staff_id, profile_id, customer_id, plan_id, finance_id)
         order_id_holder["id"] = order.id
+
+    # Widen the race window deterministically: patched in the fulfillment
+    # MODULE's namespace, since that is what `fulfill_order` actually calls
+    # (`from app.subscriptions.services import create_subscription` binds a
+    # local name in app.commercial_sales.fulfillment -- patching
+    # app.subscriptions.services.create_subscription would not touch it).
+    import app.commercial_sales.fulfillment as fulfillment_module
+
+    real_create_subscription = fulfillment_module.create_subscription
+
+    def _slow_create_subscription(*args, **kwargs):
+        time.sleep(0.75)
+        return real_create_subscription(*args, **kwargs)
+
+    monkeypatch.setattr(fulfillment_module, "create_subscription", _slow_create_subscription)
 
     results = []
     errors = []
@@ -368,16 +416,31 @@ def test_item3_concurrent_fulfillment_requests_only_one_creates_subscription(app
         t.join(timeout=30)
 
     with app.app_context():
+        from app.commercial_sales.errors import CommercialSalesError
         from app.extensions import db_session
+        from app.models.licensing import License
         from app.models.subscriptions import Subscription
 
         subscription_count = db_session.query(Subscription).filter_by(sales_order_id=order_id_holder["id"]).count()
         assert subscription_count == 1, f"expected exactly 1 Subscription, got {subscription_count}"
 
-    # Every thread either succeeded (reusing/creating the one real
-    # Subscription) or failed with a real, distinguishable error (e.g.
-    # FULFILLMENT_ALREADY_COMPLETE once serialized behind the winner) --
-    # never an unhandled crash.
+        winning_subscription = db_session.query(Subscription).filter_by(sales_order_id=order_id_holder["id"]).one()
+        license_count = db_session.query(License).filter_by(subscription_id=winning_subscription.id).count()
+        assert license_count == 1, f"expected exactly 1 License, got {license_count}"
+
+    # Every thread either succeeded (exactly one) or failed (exactly four)
+    # -- never an unhandled crash, and never a duplicate that happened to
+    # not raise.
+    assert len(results) == 1
+    assert len(errors) == 4
+    # The important assertion: the four losers were refused BY THE GUARD,
+    # not by something else that happened to also produce one row (e.g. a
+    # unique-constraint IntegrityError from two racing inserts, or a lock
+    # timeout). Proves the check ran, not merely that the outcome looked
+    # right.
+    for exc in errors:
+        assert isinstance(exc, CommercialSalesError), f"expected CommercialSalesError, got {type(exc).__name__}: {exc}"
+        assert exc.code == "FULFILLMENT_ALREADY_COMPLETE", f"expected FULFILLMENT_ALREADY_COMPLETE, got {exc.code}"
     assert len(results) + len(errors) == 5
 
 

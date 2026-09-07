@@ -923,6 +923,7 @@ def localize_commercial_sales_error(code: str, **params) -> str:
         "SELF_CONFIRMATION_FORBIDDEN": _("You cannot confirm a payment you submitted yourself."),
         "FULFILLMENT_NOT_ELIGIBLE": _("This order is not eligible for fulfillment yet: %(reason)s."),
         "FULFILLMENT_ALREADY_COMPLETE": _("This order line has already been fulfilled."),
+        "FULFILLMENT_IN_PROGRESS": _("Another fulfillment of this order is still running; retry once it finishes."),
         "EMPLOYEE_PROFILE_REQUIRED": _("This action requires a real employee profile."),
     }
     template = messages.get(code)

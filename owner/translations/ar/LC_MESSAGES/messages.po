@@ -1501,6 +1501,10 @@ msgstr "هذا الطلب غير مؤهل للتنفيذ بعد: %(reason)s."
 msgid "This order line has already been fulfilled."
 msgstr "تم تنفيذ بند الطلب هذا بالفعل."
 
+#: app/i18n_labels.py:926
+msgid "Another fulfillment of this order is still running; retry once it finishes."
+msgstr "هناك عملية تنفيذ أخرى لهذا الطلب لا تزال جارية؛ أعد المحاولة بعد انتهائها."
+
 #: app/i18n_labels.py:926 app/i18n_labels.py:1112
 msgid "This action requires a real employee profile."
 msgstr "يتطلب هذا الإجراء ملف موظف حقيقي."

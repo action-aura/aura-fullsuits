@@ -2583,3 +2583,7 @@ the artefact, never inferred from a green suite. Full per-line evidence in
   if that changes.
 - **`licenses.issue` for the SALES role** and **250 JOD per year vs one-time**:
   the owner's two open answers.
+- Owner: partial UNIQUE index on subscriptions.sales_order_id (belt-and-braces
+  for fulfill_order's advisory lock; needs an Alembic migration, coordinate the
+  head first) — see docs/corrections/owner/fulfillment-lock-released-by-nested-
+  commits-root-cause-analysis.md

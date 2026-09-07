@@ -1512,6 +1512,10 @@ msgstr "This order is not eligible for fulfillment yet: %(reason)s."
 msgid "This order line has already been fulfilled."
 msgstr "This order line has already been fulfilled."
 
+#: app/i18n_labels.py:926
+msgid "Another fulfillment of this order is still running; retry once it finishes."
+msgstr "Another fulfillment of this order is still running; retry once it finishes."
+
 #: app/i18n_labels.py:926 app/i18n_labels.py:1112
 msgid "This action requires a real employee profile."
 msgstr "This action requires a real employee profile."
