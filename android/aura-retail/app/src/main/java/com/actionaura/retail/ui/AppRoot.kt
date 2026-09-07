@@ -40,6 +40,8 @@ import com.actionaura.retail.net.TerminalIdentity
 import com.actionaura.retail.net.apiErrorMessage
 import com.actionaura.retail.server.ServerBootstrap
 import com.actionaura.retail.sync.SyncCoordinator
+import com.actionaura.retail.ui.brand.AuraMark
+import com.actionaura.retail.ui.brand.AuraWordmark
 import com.actionaura.retail.ui.components.AppBackground
 import com.actionaura.retail.ui.i18n.AppLocale
 import com.actionaura.retail.ui.i18n.tr
@@ -298,18 +300,9 @@ fun AppRoot() {
 private fun LoadingScreen() {
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center) {
-        Surface(
-            shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier.size(96.dp),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text("A", style = MaterialTheme.typography.displaySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.ExtraBold)
-            }
-        }
+        AuraMark(96.dp)
         Spacer(Modifier.height(28.dp))
-        Text("Action Aura", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.ExtraBold)
+        AuraWordmark()
         Spacer(Modifier.height(18.dp))
         Text(tr("Starting…"), color = MaterialTheme.colorScheme.onSurfaceVariant)
     }

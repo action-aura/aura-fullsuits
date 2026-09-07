@@ -311,3 +311,23 @@ val CategoryPalette: List<Color> = listOf(
     Color(0xFFC085F9), // purple, lightened from A855F7 (was 3.33:1, now 4.52:1 worst-case)
     Color(0xFFF37777), // red, lightened from EF4444 (was 3.60:1, now 4.52:1 worst-case)
 )
+
+// ── Brand: fixed, NOT theme tokens ───────────────────────────────────────
+// The Aura mark's own colours (DESIGN.md §3): the ring's gradient and the
+// spark. They never move with the theme -- a Day till and a Night till show
+// the same ring, the same values as products/retail/frontend/brand/
+// aura-mark.svg -- which is exactly why they are in no AuraColors palette
+// above. They are named HERE rather than in ui/brand/AuraMark.kt because
+// ColorTokenContractTest allows no colour literal outside this file and
+// deliberately has no allowlist to widen; AuraMark.kt is their only
+// consumer. The letter A is deliberately absent: it takes the current text
+// colour (TextPrimary by default) so it stays visible on every ground, the
+// way the desktop's inline mark uses currentColor.
+object AuraBrand {
+    val RingStart: Color = Color(0xFF1745A9)
+    val RingMid: Color = Color(0xFF3F7BE6)
+    val RingEnd: Color = Color(0xFF5FE3D0)
+    val SparkHalo: Color = Color(0xFFBFF7EE)
+    /** The halo's outer edge: the ring's end colour, fully transparent. */
+    val SparkFade: Color = RingEnd.copy(alpha = 0f)
+}

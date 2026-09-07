@@ -1,19 +1,19 @@
 package com.actionaura.retail.ui.screens
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.actionaura.retail.net.ApiClient
 import com.actionaura.retail.net.LoginRequest
+import com.actionaura.retail.ui.brand.AuraMark
+import com.actionaura.retail.ui.brand.AuraWordmark
 import com.actionaura.retail.ui.i18n.tr
 import kotlinx.coroutines.launch
 
@@ -49,17 +49,9 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer,
-                modifier = Modifier.size(72.dp)) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text("A", style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.ExtraBold)
-                }
-            }
+            AuraMark(72.dp)
             Spacer(Modifier.height(20.dp))
-            Text("Action Aura", style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.ExtraBold)
+            AuraWordmark()
             Spacer(Modifier.height(6.dp))
             Text(tr("Sign in to your workspace"), style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
