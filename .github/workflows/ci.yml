@@ -254,8 +254,23 @@ jobs:
           pip install cyclonedx-bom
           python -m cyclonedx_py environment --output-format json --output-file sbom.json
 
+      # `docker compose config` resolves every `env_file:` before it will
+      # validate anything, and .env.staging is deliberately NOT in the repo --
+      # it holds the staging secrets, and the compose file's own header says to
+      # create it from the example. Without it the step died on
+      # "env file /home/runner/work/.../.env.staging not found" (run
+      # 34160439798, the first run ever to reach this step). Copying the
+      # committed example gives the resolver the KEYS it needs so the compose
+      # file's structure is really validated; the placeholder VALUES in it are
+      # never used to start anything -- this step only renders the config, and
+      # Non-Negotiable Principle 9 (see this file's header) keeps any real
+      # deployment out of CI entirely.
       - name: Staging deployment package creation
-        run: docker compose -f docker-compose.staging.yml config
+        run: |
+          cp deploy/staging/.env.staging.example .env.staging
+          docker compose -f docker-compose.staging.yml config > /dev/null
+          rm -f .env.staging
+          echo "docker-compose.staging.yml resolves and validates"
 
       - uses: actions/upload-artifact@v4
         with:
