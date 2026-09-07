@@ -220,7 +220,9 @@ behind the unchanged token names (getters over `AuraPalette.current`),
 block. Never add a theme-scoped paint rule, never a colour literal outside
 `Color.kt`, never a second allowlist. Brand assets (mark, app icon, lockup,
 intro) live under `products/retail/frontend/brand/` and are not yet wired
-into any screen.
+into any screen. The full design brief — philosophy, brand geometry, every
+theme's token values, the recipe for adding a theme, and the open design
+work — is `DESIGN.md` at the repo root; read it before any visual change.
 
 ## What's real and solid right now
 

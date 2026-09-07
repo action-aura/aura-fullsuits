@@ -8,6 +8,10 @@ A lightweight, independently deployable commercial suite containing:
 
 This is a fast commercial distribution layer extracted from the Action Aura Enterprise monorepo — not a rewrite. Retail and Clinic are the same working products, repackaged to run independently and be sold sooner. See `docs/migration/` for the extraction record.
 
+Designing for Aura — the brand, the five themes with exact token values, the
+rules and the tests that hold them, and the design work still open — is
+`DESIGN.md`. Building for Aura is `CLAUDE.md`.
+
 ## What this is not
 
 - Not the full Aura Core / Aura Hub architecture (see `docs/AURA_CORE_ARCHITECTURE.md` in the source repo — unrelated to this project).
