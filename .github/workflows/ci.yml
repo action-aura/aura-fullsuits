@@ -195,11 +195,16 @@ jobs:
       # strings in locale files. So a zero-findings gate can only ever be
       # red. The standard shape instead: those known findings live in
       # .secrets.baseline (regenerate with
-      #   detect-secrets scan --exclude-files '^owner[\\\\/]migrations[\\\\/]versions[\\\\/]' > .secrets.baseline
+      #   python -X utf8 -m detect_secrets scan \
+      #     --exclude-files '^owner[\\\\/]migrations[\\\\/]versions[\\\\/]' \
+      #     --exclude-files '^\.secrets\.baseline$' > .secrets.baseline
       # (four backslashes in the shell so the regex class holds a backslash
-      # AND a slash) then re-review the diff; on Windows also turn the
-      # result's backslash paths into forward slashes or the hook here
-      # matches nothing), and the
+      # AND a slash; `-X utf8` is REQUIRED on Windows -- without it
+      # detect-secrets opens files in the console codepage and silently skips
+      # every file with Arabic or a dash in it, which is how the first
+      # baseline missed 46 files that Linux then reported as new; and on
+      # Windows also turn the result's backslash paths into forward slashes or
+      # the hook here matches nothing) then re-review the diff, and the
       # hook fails ONLY on a finding that is not in the baseline -- i.e.
       # something newly committed. Migration files are excluded because every
       # Alembic revision id is a hex string the entropy detector flags, and the
