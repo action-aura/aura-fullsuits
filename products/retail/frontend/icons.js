@@ -49,6 +49,17 @@
 // rather than hardcoding a class list, so a non-directional icon (a clock,
 // a target, a padlock, a trend arrow that tracks a NUMBER not a reading
 // direction) can never be mirrored by accident.
+//
+// CHROME REDESIGN (owner, 2026-09-07 -- "why is the 2 ai assistant buttons
+// ... did you create the responsive animated icons"): four more real Lucide
+// v0.469.0 icons -- sparkles, palette, languages, log-out -- replace the
+// last raw emoji glyphs left in app-shell.js's chrome (🤖/🎨/🌐/🔑/⏻), same
+// fetched-not-drawn rule as the six above. AuraIcons.mark(size, opts), added
+// alongside render()/svg() below, is a different thing from an icon: it is
+// the Aura BRAND MARK (products/retail/frontend/brand/aura-mark.svg)
+// reproduced inline so the shell's brand slot and sign-in screen can render
+// it at any size and have its "A" inherit the surrounding text colour --
+// see the comment on mark() itself for why and for the gradient-id caveat.
 window.AuraIcons = (function () {
   var LIGHT_WEIGHT = 1.5;
   var HEAVY_WEIGHT = 2.25;
@@ -509,6 +520,45 @@ window.AuraIcons = (function () {
       "<path d=\"M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3\" />"
     ],
     heavy: [3]
+  },
+  'sparkles': {  // the four-point burst -- the AI-assist tell; the two companion sparkles stay light
+    el: [
+      "<path d=\"M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z\" />",
+      "<path d=\"M20 3v4\" />",
+      "<path d=\"M22 5h-4\" />",
+      "<path d=\"M4 17v2\" />",
+      "<path d=\"M5 18H3\" />"
+    ],
+    heavy: [0]
+  },
+  'palette': {  // outline heavy; the four colour dots already ship fill=currentColor in the original Lucide data, left as-is -- same convention as tag/key-round above
+    el: [
+      "<circle cx=\"13.5\" cy=\"6.5\" r=\".5\" fill=\"currentColor\" />",
+      "<circle cx=\"17.5\" cy=\"10.5\" r=\".5\" fill=\"currentColor\" />",
+      "<circle cx=\"8.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\" />",
+      "<circle cx=\"6.5\" cy=\"12.5\" r=\".5\" fill=\"currentColor\" />",
+      "<path d=\"M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z\" />"
+    ],
+    heavy: [4]
+  },
+  'languages': {  // the Latin A's peak -- the second alphabet, the pairing that reads as translation rather than one logogram
+    el: [
+      "<path d=\"m5 8 6 6\" />",
+      "<path d=\"m4 14 6-6 2-3\" />",
+      "<path d=\"M2 5h12\" />",
+      "<path d=\"M7 2h1\" />",
+      "<path d=\"m22 22-5-10-5 10\" />",
+      "<path d=\"M14 18h6\" />"
+    ],
+    heavy: [4]
+  },
+  'log-out': {  // the arrowhead -- same choice as download/upload above, the direction is the meaning
+    el: [
+      "<path d=\"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4\" />",
+      "<polyline points=\"16 17 21 12 16 7\" />",
+      "<line x1=\"21\" x2=\"9\" y1=\"12\" y2=\"12\" />"
+    ],
+    heavy: [1]
   }
   };
 
@@ -624,5 +674,66 @@ window.AuraIcons = (function () {
   var PATHS = {};
   Object.keys(ICONS).forEach(function (name) { PATHS[name] = ICONS[name].el.join('\n  '); });
 
-  return { svg: svg, render: render, PATHS: PATHS, EMOJI: EMOJI, ICONS: ICONS };
+  // mark(size, opts) -- the Aura BRAND MARK, not an icon from ICONS above.
+  // Geometry copied verbatim from products/retail/frontend/brand/aura-mark.svg
+  // (viewBox, ring, spark, A, bar -- every coordinate the same file the brand
+  // asset itself defines); this is not a second source of truth for that
+  // geometry, it is the same numbers inlined so the shell can render the
+  // mark at an arbitrary size without an <img> request. Two deliberate
+  // departures from the static file:
+  //
+  //   1. The A and its bar stroke `currentColor` instead of the asset's
+  //      fixed #0f1319 ink. The static brand/ directory ships a SECOND file
+  //      (aura-mark-on-dark.svg) purely to swap that one colour for dark
+  //      surfaces; a mark that inherits the surrounding text colour makes
+  //      that second file unnecessary here, and it can never go stale
+  //      against whichever of the five sanctioned themes (THEME_NAMES in
+  //      app-shell.js) is active -- there were only ever two files for what
+  //      is now five palettes.
+  //   2. Every gradient id carries a per-call counter (aura-ring-N /
+  //      aura-spark-N), never the static file's bare "aura-ring"/
+  //      "aura-spark". SVG gradient ids are ONE flat namespace across the
+  //      whole document, not scoped to their own <svg>; this shell renders
+  //      the mark more than once per page (sidebar brand slot + sign-in
+  //      overlay, at minimum), and two fragments both defining #aura-ring
+  //      would collide -- the SECOND one's stroke="url(#aura-ring)" would
+  //      silently resolve to the FIRST fragment's gradient (duplicate ids
+  //      resolve to the first match), so the mark would render with the
+  //      wrong ring and no error at all.
+  //
+  // The gradient colour literals below are allowed by
+  // retail_design_tokens_test.js's `.aura-logo` exemption -- fixed brand
+  // colour, not a themed surface (see that file's EXEMPTIONS list).
+  var markCounter = 0;
+  function mark(size, opts) {
+    opts = opts || {};
+    size = size || 40;
+    var n = ++markCounter;
+    var ringId = 'aura-ring-' + n;
+    var sparkId = 'aura-spark-' + n;
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="' + size + '" height="' + size +
+      '" class="aura-ic aura-mark" data-aura-mark="1" aria-hidden="true" focusable="false">' +
+        '<defs>' +
+          '<linearGradient id="' + ringId + '" x1="0.15" y1="0.9" x2="0.85" y2="0.1">' +
+            '<stop offset="0" stop-color="#1745a9" />' +
+            '<stop offset="0.55" stop-color="#3f7be6" />' +
+            '<stop offset="1" stop-color="#5fe3d0" />' +
+          '</linearGradient>' +
+          '<radialGradient id="' + sparkId + '" cx="0.5" cy="0.5" r="0.5">' +
+            '<stop offset="0" stop-color="#ffffff" />' +
+            '<stop offset="0.45" stop-color="#bff7ee" />' +
+            '<stop offset="1" stop-color="#5fe3d0" stop-opacity="0" />' +
+          '</radialGradient>' +
+        '</defs>' +
+        '<circle cx="128" cy="128" r="94" fill="none" stroke="url(#' + ringId + ')" stroke-width="15" ' +
+          'stroke-linecap="round" stroke-dasharray="492 99" stroke-dashoffset="-32" transform="rotate(-90 128 128)" />' +
+        '<circle cx="196" cy="60" r="20" fill="url(#' + sparkId + ')" />' +
+        '<circle cx="196" cy="60" r="6.5" fill="#ffffff" />' +
+        '<path d="M 80 178 L 128 76 L 176 178" fill="none" stroke="currentColor" stroke-width="19" ' +
+          'stroke-linecap="round" stroke-linejoin="round" />' +
+        '<path d="M 106 142 L 150 142" fill="none" stroke="currentColor" stroke-width="15" stroke-linecap="round" />' +
+      '</svg>';
+  }
+
+  return { svg: svg, render: render, mark: mark, PATHS: PATHS, EMOJI: EMOJI, ICONS: ICONS };
 })();

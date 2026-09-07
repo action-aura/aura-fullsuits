@@ -37,6 +37,13 @@
 // always can.
 const THEME_NAMES = Object.freeze(['light', 'sand', 'dark', 'night', 'dusk']);
 
+// Sidebar brand lockup's second word ("Aura" + this), keyed by systemId --
+// deliberately NOT sys.name ("Retail & POS"/"Clinic..."): the lockup is a
+// two-word brand mark next to the Aura mark icon, not the nav's full product
+// title. Falls back to t(sys.name) in _renderShell for any systemId this
+// map does not know about, so a future subsystem still renders something.
+const SYSTEM_PRODUCT_WORDS = { retail: 'Retail', clinic: 'Clinic' };
+
 const ThemeEngine = {
   KEY: 'aura_theme_v2',   // NEVER 'aura_theme' -- that key belongs to the broken era
   current: 'light',
@@ -1350,7 +1357,17 @@ const SubsystemApp = {
       <div class="auth-card">
         <button onclick="AuraI18n.toggle()" title="Language / اللغة" class="auth-lang-btn">EN | ع</button>
         <div class="auth-head">
-          <div class="auth-icon">${AuraIcons.render('zap', 32)}</div>
+          <!-- Guarded on the METHOD, not on the module: window.AuraIcons
+               alone is truthy for a partially-loaded or older icons.js, and
+               this line then throws inside the template literal and the
+               first-run modal never renders at all. That is exactly what
+               happened to retail_join_shop_modal_test.js when mark() was
+               added (2026-09-08, "AuraIcons.mark is not a function"), and a
+               shop meeting it would see a blank first run with no way
+               forward. NOTE: never put a backtick in a comment inside a
+               template literal -- it ends the literal, which is how this
+               very comment first broke the whole file. -->
+          <div class="auth-icon">${window.AuraIcons && AuraIcons.mark ? AuraIcons.mark(40) : ''}</div>
           <h2 class="auth-title" id="su-title">${t('Welcome to Action Aura')}</h2>
           <p class="auth-sub" id="su-sub">${t('Create your administrator account to get started.')}</p>
           <p class="auth-note" data-role="setup-only">This setup runs <strong>only once</strong>. Your credentials will be saved permanently.</p>
@@ -2431,17 +2448,25 @@ const SubsystemApp = {
       <!-- Subsystem Sidebar -->
       <aside class="sub-sidebar" id="sub-sidebar">
         <div class="sub-sidebar-brand aura-logo" title="Return to Home">
-          <div class="sub-brand-icon">${window.AuraIcons ? AuraIcons.render(sys.icon, 22) : sys.icon}</div>
+          <!-- The Aura mark itself, not a boxed sys.icon emoji -- the owner's
+               "shouldn't the logo be where it says aura retail" complaint,
+               2026-09-07. AuraIcons.mark() (icons.js) inlines the same
+               geometry as brand/aura-mark.svg; see that function's own
+               comment for why it is inlined rather than an <img>. -->
+          <div class="sub-brand-icon">${window.AuraIcons && AuraIcons.mark ? AuraIcons.mark(40) : ''}</div>
           <div class="sub-brand-text">
-            <!-- Configured business name (whatever institute/co-op/foundation
-                 bought this install) when one is set, falling back to the
-                 current product name (sys.name) exactly as it always has --
-                 this.branding is loaded once in init() (_loadBranding) and
-                 is operator-entered text, so it is escaped like every other
+            <!-- Line 1: the "Aura <Product>" lockup. Line 2 (below): the
+                 configured business name, or nothing -- the old second line
+                 here ("ActionAura", always shown) was the redundant repeat
+                 of the product name the owner's complaint above was about;
+                 dropping it means the brand slot names the product exactly
+                 once. -->
+            <span class="aura-lockup"><span class="aura-wordmark">Aura</span><span class="aura-product">${this._esc(SYSTEM_PRODUCT_WORDS[systemId] || t(sys.name))}</span></span>
+            <!-- this.branding is loaded once in init() (_loadBranding) and is
+                 operator-entered text, so it is escaped like every other
                  shop-typed string this file interpolates (see _esc's own
                  comment). -->
-            <span class="sub-system-name">${(this.branding && this.branding.branding_business_name) ? this._esc(this.branding.branding_business_name) : t(sys.name)}</span>
-            <span class="logo-name" style="font-size:11px;color:var(--text-muted)">Action<strong>Aura</strong></span>
+            ${(this.branding && this.branding.branding_business_name) ? `<span class="sub-system-name">${this._esc(this.branding.branding_business_name)}</span>` : ''}
           </div>
         </div>
 
@@ -2452,15 +2477,15 @@ const SubsystemApp = {
         <div class="sub-sidebar-bottom">
           ${hasAI ? `
           <button class="sub-ai-btn" onclick="SubAI.open('${systemId}')">
-            <span>🤖</span> <span>${t('AI Assistant')}</span>
+            <span>${window.AuraIcons ? AuraIcons.render('sparkles', 18) : '🤖'}</span> <span>${t('AI Assistant')}</span>
             <span class="ai-pulse"></span>
           </button>
           ` : ''}
           <button class="sub-exit-btn" onclick="SubsystemApp.openLicensing()" title="Device license activation and status">
-            <span>🔑</span> <span>${t('License')}</span>
+            <span>${window.AuraIcons ? AuraIcons.render('key-round', 18) : '🔑'}</span> <span>${t('License')}</span>
           </button>
           <button class="sub-exit-btn" onclick="SubsystemApp.logout()" style="background:var(--state-danger-surface);border-color:var(--state-danger-border);color:var(--state-danger-text);margin-top:4px;">
-            <span>⏻</span> <span>${t('Log Out')}</span>
+            <span>${window.AuraIcons ? AuraIcons.render('log-out', 18) : '⏻'}</span> <span>${t('Log Out')}</span>
           </button>
         </div>
       </aside>
@@ -2469,7 +2494,20 @@ const SubsystemApp = {
       <div class="sub-main">
         <header class="sub-header">
           <div class="sub-header-left">
-            <h2 class="sub-header-title" id="sub-header-title">${t(sys.name)}</h2>
+            <!-- #sub-header-section IS the header's title now -- the separate
+                 sub-header-title <h2> this pass deleted used to sit here AND
+                 repeat a few px away in a header badge; the owner's "why is
+                 ... a 'Retail & POS' badge repeating the title" complaint
+                 (2026-09-07) removed the badge, and this element (restyled in
+                 main.css to the old h2's typography, no chip look) is what
+                 shows "which section am I on" instead. The id/element itself
+                 is UNCHANGED on purpose: _navigate() has always written the
+                 section label into #sub-header-section (below, unchanged),
+                 and eleven scripts/ops + ui-sweep Playwright scripts and
+                 docs/design/phone-ui-redesign.md's own ≤640px plan (§"Header
+                 at ≤640px", now made the ONE header for every width) already
+                 wait on #sub-header-section as the "shell is ready" selector
+                 -- moving the id would have broken all of them silently. -->
             <span class="sub-header-section" id="sub-header-section">${t('Dashboard')}</span>
           </div>
           <div class="sub-header-right">
@@ -2479,14 +2517,7 @@ const SubsystemApp = {
                  engine itself); dark v2 is token-value-only, so this can no
                  longer produce the historical white-on-white state -- see
                  index.html's boot comment for that postmortem. -->
-            <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="Change UI theme" style="font-size:15px;">🎨</button>
-            <!-- Rides the semantic accent tokens, not sys.accent (#f43f5e, a
-                 rose the token layer retired): the literal was ~3.3:1 on the
-                 light header and would not flip with the theme at all. -->
-            <div class="sub-header-badge" style="background:rgba(var(--sub-accent-rgb),0.15);border-color:var(--sub-accent);color:var(--accent-action)">
-              ${window.AuraIcons ? AuraIcons.render(sys.icon, 14) : sys.icon} ${t(sys.name)}
-            </div>
-            ${hasAI ? `<button class="sub-header-btn" onclick="SubAI.open('${systemId}')" title="AI Assistant">🤖</button>` : ''}
+            <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="Change UI theme">${window.AuraIcons ? AuraIcons.render('palette', 18) : '🎨'}</button>
           </div>
         </header>
 
@@ -2533,7 +2564,10 @@ const SubsystemApp = {
     // sheet row triggered it, closes it.
     this._closeMoreSheet();
 
-    // Update header
+    // Update header -- unchanged: #sub-header-section has always been the
+    // element this writes into (see _renderShell's header comment for why
+    // that id could not move even though this element is now the header's
+    // ONLY title, not a chip next to a separate one).
     const sys = this.systems[this.active];
     const navItem = sys?.nav.find(n => n.id === sectionId);
     document.getElementById('sub-header-section')?.innerText &&
@@ -2671,28 +2705,28 @@ const SubsystemApp = {
     const footerRows = [
       hasAI ? `
             <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();SubAI.open('${this.active}')">
-              <span class="sub-more-row-icon">🤖</span>
+              <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('sparkles', 20) : '🤖'}</span>
               <span>${t('AI Assistant')}</span>
             </button>` : '',
       `
             <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();AuraI18n.toggle()">
-              <span class="sub-more-row-icon">🌐</span>
+              <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('languages', 20) : '🌐'}</span>
               <span>${t('Language')}</span>
               <span class="sub-more-row-value">${window.AuraI18n && AuraI18n.current === 'ar' ? 'EN' : 'ع'}</span>
             </button>`,
       `
             <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();ThemeEngine.openPicker()">
-              <span class="sub-more-row-icon">🎨</span>
+              <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('palette', 20) : '🎨'}</span>
               <span>${t('Theme')}</span>
             </button>`,
       `
             <button class="sub-more-row" onclick="SubsystemApp._closeMoreSheet();SubsystemApp.openLicensing()">
-              <span class="sub-more-row-icon">🔑</span>
+              <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('key-round', 20) : '🔑'}</span>
               <span>${t('License')}</span>
             </button>`,
       `
             <button class="sub-more-row danger" onclick="SubsystemApp._closeMoreSheet();SubsystemApp.logout()">
-              <span class="sub-more-row-icon">⏻</span>
+              <span class="sub-more-row-icon">${window.AuraIcons ? AuraIcons.render('log-out', 20) : '⏻'}</span>
               <span>${t('Log Out')}</span>
             </button>`,
     ].join('');

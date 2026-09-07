@@ -2597,19 +2597,39 @@ html[data-theme="light"] {
   cursor: pointer;
 }
 .sub-brand-icon {
-  font-size: 24px; width: 42px; height: 42px;
-  background: var(--surface-sunken);
-  border: 1px solid var(--border-default);
-  border-radius: 10px;
+  /* No box: this holds the Aura mark (icons.js AuraIcons.mark()) now, not a
+     boxed emoji -- the mark IS the visual weight, a surface/border behind it
+     is a second frame around a frame. color is the mark's A/bar stroke
+     (stroke="currentColor" in mark()); the ring/spark keep their own fixed
+     brand gradient regardless (see mark()'s own comment). */
+  width: 40px; height: 40px;
+  color: var(--text-primary);
   display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0; transition: background 0.3s;
+  flex-shrink: 0; transition: transform 160ms cubic-bezier(.4,0,.2,1);
 }
-.sub-sidebar-brand:hover .sub-brand-icon { background: rgba(var(--sub-accent-rgb),0.1); }
+.sub-sidebar-brand:hover .sub-brand-icon { transform: scale(1.04); }
 .sub-brand-text { display: flex; flex-direction: column; overflow: hidden; }
+/* The "Aura <Product>" lockup -- see _renderShell's brand-slot comment.
+   aura-wordmark carries the weight; aura-product is intentionally lighter
+   and offset, the same "brand word heavier, descriptor lighter" pairing the
+   mark's own ring/spark-vs-A weighting uses. */
+.aura-wordmark, .aura-product { font-size: 15px; color: var(--text-primary); }
+.aura-wordmark { font-weight: 700; }
+/* Physical margin-left, and the lockup pinned to LTR below, ON PURPOSE. This
+   is a BRAND NAME, not sentence text: it is always the Latin "Aura Retail" in
+   that order, in Arabic as in English. With margin-inline-start the gap
+   flipped to the other side under body.rtl and the two words rendered as
+   "AuraRetail" with the space stranded next to the mark -- measured in the
+   real till on 2026-09-08 by switching the shell to Arabic. */
+.aura-product { font-weight: 300; margin-left: 5px; }
+.aura-lockup { direction: ltr; unicode-bidi: isolate; }
 .sub-system-name {
-  font-weight: 700; font-size: 13px;
+  /* The configured business name, when one is set -- now the ONLY second
+     line in the brand slot (the old bold/accent product-name styling this
+     rule carried moved to .aura-wordmark/.aura-product above; this line is
+     deliberately quieter than the lockup it sits under). */
+  font-size: 11px; color: var(--text-muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  color: var(--sub-accent, var(--accent-action));
 }
 
 .sub-nav { flex: 1; padding: 12px 10px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
@@ -2724,11 +2744,13 @@ html[data-theme="light"] {
   flex-shrink: 0;
 }
 .sub-header-left { display: flex; align-items: baseline; gap: 14px; }
-.sub-header-title { font-size: 18px; font-weight: 700; color: var(--text-primary); }
-.sub-header-section {
-  font-size: 12px; color: var(--text-tertiary);
-  background: var(--surface-sunken); padding: 3px 10px; border-radius: 12px;
-}
+/* This IS the header's title now -- the old separate .sub-header-title <h2>
+   is gone (app-shell.js's header comment explains why the element/id could
+   not move: _navigate() and several repo scripts/docs wait on
+   #sub-header-section). Promoted to the h2's old typography, chip look
+   (background/padding/border-radius) dropped -- a title does not need a
+   pill around it. */
+.sub-header-section { font-size: 18px; font-weight: 700; color: var(--text-primary); }
 .sub-header-right { display: flex; align-items: center; gap: 12px; }
 .sub-header-badge {
   font-size: 11px; font-weight: 700; padding: 5px 12px;
@@ -3895,7 +3917,6 @@ body[data-domain="banking"] {
 html[data-theme] body { background: var(--app-bg); color: var(--text); }
 html[data-theme] .sub-sidebar { background: var(--surface); border-right-color: var(--border-soft); }
 html[data-theme] .sub-sidebar-brand { border-bottom-color: var(--border-soft); }
-html[data-theme] .sub-brand-icon { background: var(--surface-soft); border-color: var(--border-soft); }
 html[data-theme] .sub-nav-item { color: var(--text-dim); }
 html[data-theme] .sub-nav-item:hover { background: var(--surface-soft); color: var(--text); }
 html[data-theme] .sub-nav-item.active { color: var(--text); }
@@ -3903,8 +3924,7 @@ html[data-theme] .sub-sidebar-bottom { border-top-color: var(--border-soft); }
 html[data-theme] .sub-exit-btn { background: var(--surface-soft); border-color: var(--border-soft); color: var(--text-dim); }
 html[data-theme] .sub-exit-btn:hover { background: var(--surface-hover); color: var(--text); }
 html[data-theme] .sub-header { background: var(--surface); border-bottom-color: var(--border-soft); }
-html[data-theme] .sub-header-title { color: var(--text); }
-html[data-theme] .sub-header-section { background: var(--surface-soft); color: var(--text-dim); }
+html[data-theme] .sub-header-section { color: var(--text); }
 html[data-theme] .sub-header-btn { background: var(--surface-soft); border-color: var(--border-soft); color: var(--text); }
 html[data-theme] .sub-header-btn:hover { background: var(--surface-hover); }
 html[data-theme] .sub-content { background: var(--content-bg); }
@@ -3962,7 +3982,7 @@ html[data-theme] .sub-spinner { border-color: var(--border-mid); border-top-colo
 }
 /* Phone / very narrow: stack section headers and their action rows. */
 @media (max-width: 560px) {
-  .sub-header-title { font-size: 15px; }
+  .sub-header-section { font-size: 15px; }
   .sub-header { flex-wrap: wrap; gap: 8px; }
   .cl-section-header, .sub-section-header { flex-direction: column; align-items: flex-start; }
   .cl-section-header > div, .sub-section-header > div { width: 100%; }
@@ -4987,13 +5007,24 @@ textarea:disabled, .sub-import-btn:disabled, .ai-send-btn:disabled {
 .aura-ic-pop  { animation: aura-ic-pop 200ms var(--motion-ease-out, ease-out) both; }
 .aura-ic-flip { animation: aura-ic-flip 220ms var(--motion-ease-out, ease-out) both; }
 
+/* Sidebar nav icon motion (owner, 2026-09-07: "did you create the responsive
+   animated icons to the left" -- the answer had been no, they were static).
+   Transform/opacity only, never layout (DESIGN.md §6): a hover nudge, and the
+   existing one-shot aura-ic-pop confirming which item is now active on
+   click -- reused, not a new keyframe, so "just became active" always means
+   the same motion everywhere it appears. */
+.sub-nav-item .aura-ic { transition: transform 160ms cubic-bezier(.4,0,.2,1); }
+.sub-nav-item:hover .aura-ic { transform: translateY(-1px) scale(1.08); }
+.sub-nav-item.active .aura-ic { animation: aura-ic-pop 200ms cubic-bezier(.4,0,.2,1) both; }
+
 /* ── MOTION ───────────────────────────────────────────────────────────────────
    Respect the OS setting. A till that animates through a queue is wasting
    everyone's time, and vestibular triggers do not belong in a workplace tool. */
 @media (prefers-reduced-motion: reduce) {
   .money, .btn-primary, .btn-secondary, .sub-btn-primary, .sub-btn-secondary,
   .nav-item, .sub-nav-item, .kpi-card, .sub-kpi-card,
-  .aura-ic-pop, .aura-ic-flip {
+  .aura-ic-pop, .aura-ic-flip,
+  .sub-nav-item .aura-ic, .sub-nav-item.active .aura-ic {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
   }

@@ -337,8 +337,15 @@ async function testEveryGuardIsProvenByBreakingIt() {
   proved.push(await provesMutation(
     'M2. drop the reduced-motion guard for the icon animation classes',
     MAIN_CSS_SRC,
-    '  .aura-ic-pop, .aura-ic-flip {',
-    '  .aura-ic-pop, .aura-ic-flip-MUTATED-OUT {',
+    // Re-anchored 2026-09-08: the reduced-motion selector list GREW (the
+    // sidebar nav icons' hover/active motion was added to it), so this line
+    // no longer ends the list and its old `{` anchor matched zero times.
+    // The harness caught that itself and refused to run a proof that proves
+    // nothing -- which is the whole reason it counts its hits. The guard is
+    // unchanged: strike the icon classes out of the block and the
+    // reduced-motion check must fail.
+    '  .aura-ic-pop, .aura-ic-flip,',
+    '  .aura-ic-pop-MUTATED-OUT, .aura-ic-flip-MUTATED-OUT,',
     async (broken) => checkReducedMotionDisablesAnimation(broken)));
 
   proved.push(await provesMutation(

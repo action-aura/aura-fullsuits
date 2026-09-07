@@ -340,7 +340,15 @@ function loadApp(opts) {
   const sandbox = {
     console,
     t: (s) => s, // identity stub -- catalog coverage is retail_localization_test.py's job
-    AuraIcons: { render: () => '' },
+    // Faithful double of window.AuraIcons: it must expose every method the
+    // shell calls, or this sandbox proves the shell works against an icons
+    // module that does not exist. `mark` was added to icons.js on 2026-09-08
+    // (the brand mark, rendered inline in the sidebar and the setup modal)
+    // and this stub did not follow, so showSetupModal threw
+    // "AuraIcons.mark is not a function" -- a real crash the shell's own
+    // window.AuraIcons guards would not have caught, because a PARTIAL
+    // module is truthy.
+    AuraIcons: { render: () => '', mark: () => '' },
     fetch: fetchFn,
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
     navigator: { userAgent: 'Mozilla/5.0 (test)' },
