@@ -1,4 +1,5 @@
 import sqlite3
+import sys
 
 import pytest
 from flask import Flask
@@ -7,6 +8,17 @@ from commercial_runtime.einvoicing.outbox import OutboxRepository
 from commercial_runtime.einvoicing.providers.mock import MockProvider
 from commercial_runtime.einvoicing.routes import make_einvoicing_blueprint
 from commercial_runtime.einvoicing.schema import apply_einvoicing_schema
+
+# `platform` reaches routes.py for exactly one thing: get_secret_box picks
+# the Windows DPAPI box for 'WINDOWS' and the portable app-secret AES-GCM box
+# for anything else. The DPAPI box is real crypt32 and cannot run on Linux
+# (CI, 2026-09-07: "module 'ctypes' has no attribute 'windll'" in the three
+# credential route tests). Every route behaviour this file proves -- the
+# secret is never echoed, wipe really wipes, enable/disable drive the worker
+# -- is backend-independent, so the fixture follows the host: the same
+# routes run against DPAPI on Windows and against the portable box on Linux,
+# instead of being skipped there.
+PLATFORM = 'WINDOWS' if sys.platform == 'win32' else 'ANDROID'
 
 
 @pytest.fixture
@@ -27,7 +39,7 @@ def app_and_db(tmp_path):
     app.config['SECRET_KEY'] = 'test-secret'
     app.config['TESTING'] = True
     bp = make_einvoicing_blueprint(
-        product_code='AURA_TEST', platform='WINDOWS', app_data_dir=str(tmp_path),
+        product_code='AURA_TEST', platform=PLATFORM, app_data_dir=str(tmp_path),
         conn_factory=conn_factory, get_worker=None, provider=MockProvider(),
     )
     app.register_blueprint(bp)
@@ -76,7 +88,7 @@ def app_with_worker_registry(tmp_path):
     app.config['SECRET_KEY'] = 'test-secret'
     app.config['TESTING'] = True
     bp = make_einvoicing_blueprint(
-        product_code='AURA_TEST', platform='WINDOWS', app_data_dir=str(tmp_path),
+        product_code='AURA_TEST', platform=PLATFORM, app_data_dir=str(tmp_path),
         conn_factory=conn_factory, get_worker=get_worker, provider=MockProvider(),
     )
     app.register_blueprint(bp)
