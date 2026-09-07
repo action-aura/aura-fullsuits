@@ -79,6 +79,10 @@ Legend:
 | Desktop and phone read as one product | **TESTED — palette aligned** | 2026-09-03. This line previously claimed the accent matched at `#F43F5E` and that surfaces did not; both halves were wrong. Neither surface uses that rose any more (retired for measuring ~3.3:1), and the phone had already been rewritten to mirror the desktop's dark block. All 21 shared tokens compared value by value: 20 matched, and `BorderHairline` was off by one hex digit (`#222B37` vs `#232B37`), so every list drew its dividers a shade apart. Now pinned by `DesktopTokenParityContractTest`, which PARSES `main.css` at test time rather than holding a second copy of the values, so it fails when either surface moves |
 | Colours painted outside the token layer | **PINNED — zero literals outside `Color.kt`, 2026-09-06** | This row was stale in both directions: the `#666666`/`#1A7A3D`/`#A3231F` labels had already been routed through the semantic tokens, and a `ColorTokenContractTest` already existed — but it *allowlisted* the last sixteen literals (the avatar and category palettes) by file, so the app still painted from two places. Both palettes now live in `Color.kt` as `AvatarPalette`/`CategoryPalette` (same values, same orders — an avatar's colour is `palette[hash % size]`, so order is behaviour), and the test scans every file under `src/main` with no allowlist and pins both palettes by value and order. Verified visually on the handset before the change (the watcher's screenshots) and the values are byte-identical, so nothing on screen moves |
 | Android Sign In contrast | **RUN — 7.18:1 measured on the device, 2026-09-06** | The unknown below is closed: a screenshot taken on the Mi Note 10 at 00:37 (the watcher's, after the APK install) was sampled by `scripts/ops/signin_contrast.py` — the button fill reads back as exactly `#6EA8FF` (100% of declared, no dimming on this device with the new palette) and the darkest "Sign In" glyph as `#0D1B2E`, so the measured ratio equals the declared **7.18:1**, above the 4.5:1 normal-text floor. Earlier reasoning kept for the record: 2026-09-03. The button takes `colorScheme.primary`/`onPrimary`, which `Theme.kt` maps to `AccentAction`/`OnAccent` — now `#0D1B2E` on `#6EA8FF`, a **declared 7.18:1**, against the retired rose palette's 4.45 declared / 2.81 observed. **But the original defect was not the declared colour**: the device rendered the rose fill at roughly 72% of its declared value, and dark text on a darkened fill is what lost the contrast. Computed against that same behaviour, the new pair gives 5.21:1 at 85% dimming, **3.88:1 at 72%** — still under the 4.5 floor for normal text (`labelLarge`, ~14sp), though comfortably over the 3.0 large-text floor. So the palette change alone does NOT prove this fixed. **What to measure when a device is next available:** screenshot the login screen, sample the darkest glyph pixel and the dominant button fill, and compare the sampled fill against `#6EA8FF`. If the fill reads back at or near `#6EA8FF`, this is 7.18:1 and closed. If it reads back materially darker, the dimming is real and general, and the fix is to lighten `OnAccent` toward the fill or darken the text — computed, not guessed |
+| The product carries its own brand | **RUN 2026-09-07/08 on both clients** | The mark is IN the products, not only in `brand/`: the desktop sidebar (beside an "Aura Retail" lockup, replacing a generic bag glyph and a redundant "ActionAura" line) and the first-run modal render it inline through `AuraIcons.mark()`; the phone's sign-in and first-run headers draw it in Compose (`ui/brand/AuraMark.kt`); the Windows favicon and the Android adaptive launcher icon are the real asset. The A takes the surrounding text colour on both clients, so one mark serves all five themes |
+| The desktop's corners | **RUN 2026-09-08 — measured, changed, re-measured on the running till** | Owner's complaint: four controls in the header, one a badge repeating the title beside the title; the AI assistant present twice; five raw emoji as chrome; static nav icons. Now: two header controls, one AI entry, real icons throughout, and nav icons that lift on hover and pop on activation (transform/opacity only, in the reduced-motion block). Counted in the live page: 1 AI button, 0 badges, 1 mark, 0 emoji |
+| The phone's sign-in | **RUN 2026-09-08, two passes, judged on the handset each time** | Owner: "so dull ... the sign in button looks cliché". Now the brand's aurora wash, the mark drawing itself once, labelled fields with example placeholders, a show/hide toggle, and a button carrying the mark's own blue-to-teal gradient — label contrast measured 4.87:1 and 12.56:1 against the two stops |
+| The brand lockup in Arabic | **WAS BROKEN, FIXED and RUN 2026-09-08** | `margin-inline-start` flipped the word gap to the far side of the mark, so the sidebar read "AuraRetail" under `body.rtl`. A brand name is not sentence text: the lockup is pinned LTR with a physical margin. Found by switching the real till to Arabic and screenshotting the slot, not by a test |
 | Web button contrast, both themes | **TESTED — no defect** | 2026-09-03. A carried-forward report of 2.14:1 on `.ret-btn-primary` in dark mode does not reproduce on this branch: measured 7.18:1 dark, 8.53:1 light, with danger, ghost and the four badges all 7.3:1 or better. The old number was real — mutating the rule's colour to `var(--text-primary)` reproduces `#edf2f8` on `#6ea8ff` at exactly 2.14:1 — but commit `3832af6` fixed it. Now pinned by `retail_btn_primary_contrast_test.js`, mutation-proved |
 
 ## Feature parity
@@ -216,6 +220,35 @@ His words, and what the product holds against each:
 | WhatsApp: each shop owner with **his own number** | **DESKTOP YES (per-install config), PHONE MOOT** | Re-read the code rather than the earlier summary: the **number id and token are per-install environment config** (`AURA_WHATSAPP_PHONE_NUMBER_ID` / `AURA_WHATSAPP_ACCESS_TOKEN`, `whatsapp_client.py`), set in the desktop install's config file — there is no screen for the credentials. The `/api/whatsapp/settings` screen holds the on/off switch, template names and interval; recipients are their own table. So "his own number" is already the model: each install carries its own credentials. With the owner's "phone is a till" decision, reports go out from the desktop back office, so the phone's build-time credentials no longer matter. **Question for him:** does "his own number" mean each shop registers with Meta's API (business verification per shop), or a number we add under Aura's business — the onboarding effort differs a lot |
 
 ## The honest answer
+
+**CORRECTED 2026-09-08: "no longer for product reasons" was wrong, and it
+was the most comfortable sentence in this file.** Three product-side
+blockers were found the same night, none of them a feature and all three
+measured rather than assumed:
+
+- **The cash drawer cannot be opened by the software.** `_printReceipt`
+  hands an HTML page to the OS spooler; a drawer opens only on the ESC/POS
+  `ESC p` byte sequence, which a spooled page never contains. Every sale
+  in every shop needs the drawer opened by hand today.
+- **E-invoicing defaults OFF, and Jordan has mandated it since
+  2024-05-31.** The exemptions are narrow and revenue-based (groceries,
+  bookshops and bakeries under 75,000 JOD a year; other licensed trades
+  under 30,000). Clearance is real-time and the returned QR belongs on the
+  customer's paper. Penalties run 200–500 JOD per violation, and an
+  uncleared invoice is not a valid tax document for the buyer either.
+- **The Android app cannot print at all**, which rules out the cheapest
+  and most common hardware in this market: an Android all-in-one with the
+  printer built in. Those need the vendor's own SDK (Sunmi exposes a bound
+  AIDL service, iMin ships a Gradle library) plus a generic ESC/POS
+  fallback.
+
+The rest of the section below stands: everything it claims was measured,
+and the owner-side items are still owed. What changed is only the claim
+that nothing product-side remained. Ranked fix order and the market
+evidence behind these three are in the published launch assessment
+(artifact `c71c4f52-d29a-43a8-a62a-1d6f7a975fe4`).
+
+---
 
 **Not yet sellable to a paying customer — but no longer for product
 reasons.** Updated 2026-09-06 04:30, after two nights on real hardware.
