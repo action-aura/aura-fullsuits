@@ -138,13 +138,18 @@ SUITES = {
     # what the client is told, and the tri-state `capabilities` value the whole
     # gate is built on -- was not checked at all.
     #
-    # Note this was never a total blind spot: .github/workflows/ci.yml also
-    # runs a separate `python -m pytest commercial_runtime` step, which DOES
-    # collect both directories. But that step is one pytest process over every
-    # suite at once, which is precisely the cross-file import-caching hazard
-    # this whole runner exists to avoid (see the module docstring) -- so the
-    # only isolation-correct path to these tests skipped them, and the path
-    # that reached them is the fragile one.
+    # Note this was never a total blind spot: .github/workflows/ci.yml used
+    # to run a separate `python -m pytest commercial_runtime` step, which DID
+    # collect both directories. But that step was one pytest process over
+    # every suite at once, which is precisely the cross-file import-caching
+    # hazard this whole runner exists to avoid (see the module docstring) --
+    # so the only isolation-correct path to these tests skipped them, and the
+    # path that reached them was the fragile one. Measured 2026-09-07:
+    # identity in one process = 10 failed / 305 passed ("no such table:
+    # users", "An admin account already exists"); one file per process =
+    # 315 / 315. Since 2026-09-07 ci.yml calls THIS runner with every key
+    # under commercial_runtime spelled out instead; a new domain package
+    # therefore needs a key here AND in ci.yml, or its tests run nowhere.
     'identity': ROOT / 'commercial_runtime' / 'identity' / 'tests',
     'notifications': ROOT / 'commercial_runtime' / 'notifications' / 'tests',
 }

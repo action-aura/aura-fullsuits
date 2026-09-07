@@ -74,8 +74,32 @@ jobs:
       - name: Owner tests
         run: python -m pytest owner/tests -q --no-header
 
-      - name: commercial_runtime tests
-        run: python -m pytest commercial_runtime -q --no-header
+      # One pytest process per test FILE, never one process over the whole
+      # tree. Every identity test module sets AURA_APP_DATA to its own temp
+      # directory and calls init_app() at import time, and registry_db.py /
+      # mt_auth.py / schema.py resolve that path once per process -- by
+      # design, see products/run_all_tests.py's module docstring (AUDIT-010:
+      # process isolation was chosen over re-resolving the path in production
+      # modules for test convenience). Collected into one process, every
+      # module after the first operates on the FIRST module's registry.
+      # Measured 2026-09-07: `python -m pytest commercial_runtime/identity`
+      # in one process = 10 failed / 305 passed ("no such table: users",
+      # "An admin account already exists. Please login."); the same files
+      # one per process = 315 / 315. The old `python -m pytest
+      # commercial_runtime` step that stood here was exactly the fragile path
+      # the runner's own comments warned about, and the only reason it never
+      # showed was that CI had not got past the pip step since 2026-08-06
+      # (segno pin conflict, fixed in the commit before this one).
+      #
+      # Every `<package>/tests` directory under commercial_runtime is listed
+      # by name: the runner discovers ONLY the keys it is given (its
+      # `commercial_runtime` key means commercial_runtime/tests alone), so a
+      # new domain package needs a new key there AND here, or its tests run
+      # nowhere. The one `test_*.py` outside these directories,
+      # commercial_runtime/licensing_contracts/test_support.py, is a helper
+      # with no tests in it and is deliberately not collected.
+      - name: commercial_runtime tests (canonical runner, one process per file)
+        run: python products/run_all_tests.py commercial_runtime licensing_contracts sync einvoicing identity notifications
 
       - name: Retail tests (canonical runner -- see retail-test-isolation-resolution.md; now includes the *_test.js files under products/retail/tests, see run_all_tests.py)
         run: python products/run_all_tests.py retail
