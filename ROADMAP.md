@@ -2587,3 +2587,20 @@ the artefact, never inferred from a green suite. Full per-line evidence in
   for fulfill_order's advisory lock; needs an Alembic migration, coordinate the
   head first) — see docs/corrections/owner/fulfillment-lock-released-by-nested-
   commits-root-cause-analysis.md
+- **Cash-drawer kick, byte layer only (2026-09-08).** Measured: the till prints
+  via a hidden iframe + `window.print()` (`subsystem-retail.js::_printReceipt`),
+  which sends a rendered page to the OS spooler and never emits the ESC/POS
+  drawer-kick bytes a real thermal printer's drawer connector needs — so a
+  shopkeeper opens the drawer by hand on every sale today. Built and
+  mutation-proved (money precision, both directions of the kick guard):
+  `core/retail/escpos_receipt.py` (pure sale-dict-to-bytes renderer — init,
+  header, line items, totals via `money_format` for real JOD 3dp precision,
+  payment/change, an e-invoicing `GS ( k` QR block, partial-cut, and an
+  opt-in `drawer_kick()`) and `core/retail/escpos_transport.py` (Windows RAW
+  spooler transport via `ctypes` against `winspool.drv`, guarded to import
+  cleanly and fail with a named error off Windows). Still needed before this
+  reaches a shop: (a) a settings key for which printer to use, (b) a POS
+  code path that calls these instead of `window.print()`, (c) proof on real
+  hardware — an actual 80 mm printer and drawer, which nothing in this dev
+  environment can supply — and (d) the Arabic raster/graphics path, which
+  the text-only byte layer explicitly does not attempt.
