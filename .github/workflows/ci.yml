@@ -157,8 +157,15 @@ jobs:
       # local evidence for Android unit/lint/build exists from Phase 8V-P9
       # and was not re-run this phase (no product source changed).
 
+      # `-k localization` selected nothing -- no Owner test carries that word
+      # -- so pytest exited 5 ("no tests collected") and the step failed the
+      # first time it ran (2026-09-07). The i18n/RTL suites are named
+      # i18n_preflight, locale_security, catalog_completeness, catalog_drift,
+      # domain_labels; this selector collects 70 of them (measured with
+      # --collect-only). They also run inside "Owner tests" above; this step
+      # keeps the localization gate visible on its own.
       - name: Localization checks
-        run: python -m pytest owner/tests -k localization -q --no-header
+        run: python -m pytest owner/tests -k "i18n or locale or catalog or localization" -q --no-header
 
       - name: Lint / static checks (bandit)
         run: |
@@ -166,17 +173,44 @@ jobs:
           bandit -r owner/app -f json -o bandit-results.json || true
           python -c "import json,sys; d=json.load(open('bandit-results.json')); h=[r for r in d['results'] if r['issue_severity'] in ('HIGH','MEDIUM')]; sys.exit(1 if h else 0)"
 
+      # owner/migrations/env.py reads OWNER_DATABASE_URL (or alembic.ini's
+      # `driver://` placeholder, which cannot load a dialect) -- the test suite
+      # sets it for its own alembic subprocess in conftest.py, this step has to
+      # do the same. Measured locally 2026-09-07 without it:
+      # "Can't load plugin: sqlalchemy.dialects:driver"; with it:
+      # "No new upgrade operations detected."
       - name: Migration check
+        env:
+          OWNER_DATABASE_URL: ${{ env.OWNER_TEST_DATABASE_URL }}
         run: |
           cd owner
           python -m alembic upgrade head
           python -m alembic check
 
+      # The original step asserted the scan found NOTHING. Measured
+      # 2026-09-07, the first time it could run: 280 findings in 200 files,
+      # every one reviewed, none a live secret -- rehearsal/test passwords in
+      # tests and ops scripts, Ed25519 test vectors, public verification
+      # keys, the dev database URL, alembic's placeholder, "password" label
+      # strings in locale files. So a zero-findings gate can only ever be
+      # red. The standard shape instead: those known findings live in
+      # .secrets.baseline (regenerate with
+      #   detect-secrets scan --exclude-files '^owner[\\\\/]migrations[\\\\/]versions[\\\\/]' > .secrets.baseline
+      # (four backslashes in the shell so the regex class holds a backslash
+      # AND a slash) then re-review the diff; on Windows also turn the
+      # result's backslash paths into forward slashes or the hook here
+      # matches nothing), and the
+      # hook fails ONLY on a finding that is not in the baseline -- i.e.
+      # something newly committed. Migration files are excluded because every
+      # Alembic revision id is a hex string the entropy detector flags, and the
+      # pattern accepts either separator because detect-secrets reports OS
+      # paths (Windows dev machines see backslashes); nothing else is
+      # excluded. Version pinned because a newer detect-secrets can rewrite
+      # the baseline's `filters_used` and exit 3.
       - name: Secret scanning
         run: |
-          pip install detect-secrets
-          detect-secrets scan --all-files > secrets-baseline.json
-          python -c "import json; d=json.load(open('secrets-baseline.json')); assert not d.get('results'), 'potential secret found -- see secrets-baseline.json'"
+          pip install detect-secrets==1.5.0
+          detect-secrets-hook --baseline .secrets.baseline $(git ls-files)
 
       - name: Dependency scanning
         run: |

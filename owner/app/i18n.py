@@ -307,6 +307,11 @@ def init_app(app) -> None:
         (never itself translated or reversed)."""
         if value is None:
             return ""
-        from markupsafe import Markup, escape
+        from markupsafe import Markup
 
-        return Markup(f'<bdi dir="ltr">{escape(value)}</bdi>')
+        # Markup.format escapes every argument itself, so the value can never
+        # reach the page unescaped. This used to be Markup(f"...{escape(value)}...")
+        # -- the same output, but a Markup() call around a non-literal is the
+        # exact shape bandit B704 flags (CI's bandit gate, 2026-09-07), and a
+        # reader had to check the f-string to see the escape was there.
+        return Markup('<bdi dir="ltr">{}</bdi>').format(value)

@@ -97,9 +97,16 @@ def _urllib_http_post(url: str, headers: dict, body: bytes, timeout: float) -> t
     so the sanitization in that one place is the only place that has to be
     right.
     """
+    # urlopen also speaks file:// and ftp://; the only URL this transport is
+    # ever handed is the provider's https endpoint, so refuse anything else
+    # here rather than trust every future caller. The `nosec B310` below is
+    # bandit's "audit url open for permitted schemes" finding (CI's bandit
+    # gate, 2026-09-07): the scheme is pinned right here, so it is audited.
+    if not url.lower().startswith("https://"):
+        raise ValueError(f"lead discovery transport only speaks https, got scheme of {url[:12]!r}")
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
             return response.getcode(), response.read()
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read()
