@@ -33,6 +33,14 @@ on the evening of 2026-09-06 after the tills were restarted (measured:
 real banner flipped it and the six entries appeared). One device per shop
 holds this; the phone should not be it.
 
+Themes (new on 2026-09-07): the laptop opens in **Day** unless someone
+picked another theme on that browser (the 🎨 button top right: Day, Sand,
+Calm, Night, Dusk; the choice is remembered per browser). For the demo,
+Night reads well on a projector in a dim room and Day in daylight; pick one
+before the audience arrives, not during. The phone's Theme row (Settings →
+Theme) is in the build that installs on its next plug-in; until then the
+phone is Calm, as it always was.
+
 Two things the phone will NOT show a cashier, on purpose: the dashboard's
 money figures (it says "Ready to sell" instead, same as the laptop) and the
 "Add Product" button — creating products is a manager's capability. If the
