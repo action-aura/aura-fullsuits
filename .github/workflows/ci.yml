@@ -22,7 +22,12 @@ on:
 
 env:
   # Real test-time-only values, never real secrets -- matches
-  # owner/tests/conftest.py's own OWNER_TEST_DATABASE_URL default.
+  # owner/tests/conftest.py's own OWNER_TEST_DATABASE_URL default. The
+  # `aura_owner` role this names is NOT the service container's bootstrap
+  # superuser: it is created by the "Unprivileged application role" step
+  # below with exactly the dev machine's privileges (NOSUPERUSER,
+  # NOCREATEROLE, CREATEDB), because test_phase9r_postgresql_hardening.py
+  # refuses a superuser connection and only CI's bootstrap role was one.
   OWNER_TEST_DATABASE_URL: postgresql+psycopg://aura_owner:aura_owner_dev@localhost:5432/aura_owner_test
   OWNER_ENV: testing
   # Explicit "opposite" of the local-developer escape hatch documented in
@@ -41,13 +46,16 @@ jobs:
     services:
       postgres:
         image: postgres:17
+        # The bootstrap role a postgres image creates is always a superuser,
+        # so it gets a name nothing under test ever connects as; the tests'
+        # `aura_owner` role is created unprivileged by a step below.
         env:
-          POSTGRES_USER: aura_owner
-          POSTGRES_PASSWORD: aura_owner_dev
+          POSTGRES_USER: aura_admin
+          POSTGRES_PASSWORD: aura_admin_dev
           POSTGRES_DB: aura_owner_test
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U aura_owner -d aura_owner_test"
+          --health-cmd "pg_isready -U aura_admin -d aura_owner_test"
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - name: Source checkout
@@ -70,6 +78,41 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+
+      # pg_dump/pg_restore must match the postgres:17 service above: ubuntu-latest
+      # ships the PostgreSQL 16 client, and pg_dump refuses a newer server outright
+      # ("aborting because of server version mismatch") -- six backup/restore tests
+      # failed on exactly that on 2026-09-07, the first run to get past pip since
+      # 2026-08-06. Production is PostgreSQL 17 (docs/owner/phase5/), so the client
+      # is raised to 17 rather than the service lowered to 16. OWNER_PG_BIN_DIR is
+      # app/system/backup.py's explicit override, used instead of trusting Debian's
+      # pg_wrapper to pick the right major version off PATH.
+      - name: PostgreSQL 17 client tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -qq postgresql-client-17
+          /usr/lib/postgresql/17/bin/pg_dump --version
+          echo "OWNER_PG_BIN_DIR=/usr/lib/postgresql/17/bin" >> "$GITHUB_ENV"
+
+      # The Owner app must never connect as a superuser: test_phase9r_postgresql_hardening.py
+      # refuses it (rolsuper and rolcreaterole must both be false), and production never does.
+      # A postgres image's bootstrap role is a superuser by construction, so that role is
+      # named aura_admin above and used only here; the tests connect as `aura_owner`, created
+      # with exactly the dev machine's privileges (measured 2026-09-07 on the local Postgres
+      # 17.10: rolsuper=false, rolcreaterole=false, rolcreatedb=true). CREATEDB is not a
+      # relaxation of the hardening test -- test_database.py and test_phase6_migration.py
+      # each `CREATE DATABASE aura_owner_migration_scratch OWNER aura_owner` over a second
+      # connection to the `postgres` database, and naming yourself as OWNER needs nothing
+      # beyond CREATEDB. Owning aura_owner_test covers Alembic, TRUNCATE and
+      # pg_dump/pg_restore (`--clean --if-exists --no-owner`, app/system/backup.py).
+      - name: Unprivileged application role for the test database
+        run: |
+          psql "postgresql://aura_admin:aura_admin_dev@localhost:5432/aura_owner_test" -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE aura_owner LOGIN PASSWORD 'aura_owner_dev' NOSUPERUSER NOCREATEROLE CREATEDB;" \
+            -c "ALTER DATABASE aura_owner_test OWNER TO aura_owner;" \
+            -c "SELECT rolname, rolsuper, rolcreaterole, rolcreatedb FROM pg_roles WHERE rolname IN ('aura_admin', 'aura_owner');"
 
       - name: Owner tests
         run: python -m pytest owner/tests -q --no-header
