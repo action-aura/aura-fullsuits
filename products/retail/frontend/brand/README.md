@@ -6,6 +6,26 @@ sits, around an A that stays legible at 16 px. The ring's gradient (ink blue
 ink blue is already the product's action colour, the teal is new and is the
 Night theme's accent.
 
+**That last clause stopped being true on 2026-09-08 and the sentence is left
+standing so the divergence is visible rather than quietly resolved.** The
+interface palette was re-grounded away from the cyan/teal family that day:
+Night's accent is now `#59AEF8`, and no theme declares `#5FE3D0` any more — the
+value survives in `main.css` only inside the comment recording its retirement.
+So the mark and `intro.html` are the last teal in the product, and the brand no
+longer matches the interface it sits in.
+
+Not corrected here, because it is a design decision rather than a typo: either
+the mark moves to the new accents, or the teal is kept deliberately as a brand
+colour that the UI does not use. DESIGN.md §4.3 carries the five themes' exact
+values; whoever decides should read that first. Two further facts worth having
+before deciding, both measured rather than assumed. The gradient loses about a
+third of the ring under a thermal printer's 1-bit threshold, which is why
+`aura-mark-1bit.svg` exists as a flat-ink variant. And Android's `AuraMark.kt`
+redraws this file's geometry by hand in Compose, so any change to the shape has
+to be made in both places — `MarkGeometryParityContractTest` now fails the
+Android build when they disagree, but it compares numbers, not colours, so a
+palette change to the mark still has to be carried across by hand.
+
 | File | What it is |
 |---|---|
 | `aura-mark.svg` | the mark on light surfaces (ink A) |
