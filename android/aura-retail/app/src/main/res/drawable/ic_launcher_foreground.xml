@@ -11,6 +11,13 @@
 
     The whole mark is scaled 0.30x and offset (15.6, 15.6) so the ring (188
     units, 56.4dp) sits inside the adaptive icon's 66dp safe zone.
+
+    2026-09-08: the A's stroke weights raised (peak 19->26, bar 15->20) and
+    its apex narrowed/raised (base 80/176->84/172, apex y 76->70), and the
+    old radial-gradient spark (a blurred glow plus a white dot) replaced by
+    a flat diamond in the SAME fixed ink as the A — same reasoning as
+    aura-mark.svg and AuraMark.kt's MARK EVOLUTION comments; the ring here
+    is unchanged.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
@@ -24,7 +31,7 @@
         android:translateX="15.6"
         android:translateY="15.6">
 
-        <!-- Ring: 300 degree sweep, gap open top-right where the spark sits. -->
+        <!-- Ring: 300 degree sweep, gap open top-right where the beacon sits. -->
         <path
             android:pathData="M 159.4 39.4 A 94 94 0 1 1 66.95 56.5"
             android:strokeWidth="15"
@@ -43,37 +50,24 @@
             </aapt:attr>
         </path>
 
-        <!-- Spark glow. -->
-        <path android:pathData="M 176 60 a 20 20 0 1 0 40 0 a 20 20 0 1 0 -40 0">
-            <aapt:attr name="android:fillColor">
-                <gradient
-                    android:type="radial"
-                    android:centerX="196"
-                    android:centerY="60"
-                    android:gradientRadius="20">
-                    <item android:offset="0" android:color="#FFFFFFFF" />
-                    <item android:offset="0.45" android:color="#FFBFF7EE" />
-                    <item android:offset="1" android:color="#005FE3D0" />
-                </gradient>
-            </aapt:attr>
-        </path>
-
-        <!-- Spark core. -->
+        <!-- Beacon: a flat diamond in the same fixed ink as the A, at the
+             ring's opening — no blur, no gradient (replaces the old
+             radial-gradient spark). -->
         <path
-            android:pathData="M 189.5 60 a 6.5 6.5 0 1 0 13 0 a 6.5 6.5 0 1 0 -13 0"
-            android:fillColor="#FFFFFFFF" />
+            android:pathData="M 196 45 L 211 60 L 196 75 L 181 60 Z"
+            android:fillColor="#FFEDF2F8" />
 
         <!-- The A: fixed light ink (#EDF2F8), the launcher ground is always dark. -->
         <path
-            android:pathData="M 80 178 L 128 76 L 176 178"
+            android:pathData="M 84 178 L 128 70 L 172 178"
             android:strokeColor="#FFEDF2F8"
-            android:strokeWidth="19"
+            android:strokeWidth="26"
             android:strokeLineCap="round"
             android:strokeLineJoin="round" />
         <path
-            android:pathData="M 106 142 L 150 142"
+            android:pathData="M 108 142 L 148 142"
             android:strokeColor="#FFEDF2F8"
-            android:strokeWidth="15"
+            android:strokeWidth="20"
             android:strokeLineCap="round" />
     </group>
 </vector>

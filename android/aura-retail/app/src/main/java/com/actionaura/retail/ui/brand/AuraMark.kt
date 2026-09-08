@@ -36,20 +36,22 @@ import com.actionaura.retail.ui.theme.TextPrimary
 // ─────────────────────────────────────────────────────────────────────────────
 // THE MARK -- DESIGN.md §3 ("The brand"), the geometry this file draws is a
 // MEASUREMENT, not a redesign: a ring that has just been lit, open at the
-// top-right where a spark sits, around an upward A with a short bar. It is
-// drawn on a fixed 256x256 design box and scaled by `u = size.toPx() / 256f`
-// so every stroke, radius and offset stays in the same proportion the SVG at
-// products/retail/frontend/brand/aura-mark.svg was measured from.
+// top-right where a beacon sits, around a bold upward A with a short bar. It
+// is drawn on a fixed 256x256 design box and scaled by `u = size.toPx() /
+// 256f` so every stroke, radius and offset stays in the same proportion the
+// SVG at products/retail/frontend/brand/aura-mark.svg was measured from.
 //
-// The ring and spark colours are the brand's FIXED identity colours, not
-// product tokens -- DESIGN.md §3 lists them by name and role -- and they
-// are named in ui/theme/Color.kt as `AuraBrand`, because
-// ColorTokenContractTest allows no colour literal outside that file and has
-// no allowlist to widen; this file holds no hex at all. Everything else
-// this composable touches (`ink`, defaulted to TextPrimary) is a token
-// getter, so the A follows the active theme's text colour exactly the way
-// the desktop's inline mark follows `currentColor` -- dark ink on Day/Sand,
-// light ink on Calm/Night/Dusk -- without this file ever naming a theme.
+// The ring's colours are the brand's FIXED identity colours, not product
+// tokens -- DESIGN.md §3 lists them by name and role -- and they are named
+// in ui/theme/Color.kt as `AuraBrand`, because ColorTokenContractTest
+// allows no colour literal outside that file and has no allowlist to
+// widen; this file holds no hex at all. Everything else this composable
+// touches (`ink`, defaulted to TextPrimary, and the beacon below which now
+// shares it -- 2026-09-08, see that section's own comment) is a token
+// getter, so the A and beacon follow the active theme's text colour exactly
+// the way the desktop's inline mark follows `currentColor` -- dark ink on
+// Day/Sand, light ink on Calm/Night/Dusk -- without this file ever naming a
+// theme.
 // ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -124,42 +126,50 @@ fun AuraMark(size: Dp, modifier: Modifier = Modifier, ink: Color = TextPrimary, 
             style = Stroke(width = 15 * u, cap = StrokeCap.Round),
         )
 
-        // Spark -- the glow, then the solid white core on top of it.
-        drawCircle(
-            brush = Brush.radialGradient(
-                0f to Color.White,
-                0.45f to AuraBrand.SparkHalo,
-                1f to AuraBrand.SparkFade,
-                center = Offset(196 * u, 60 * u),
-                radius = 20 * u,
-            ),
-            radius = 20 * u,
-            center = Offset(196 * u, 60 * u),
-        )
-        drawCircle(Color.White, radius = 6.5f * u, center = Offset(196 * u, 60 * u))
-
         // The A -- plain ink so it survives one-colour printing and a 16px
         // favicon (DESIGN.md §3). Follows the theme's text colour via `ink`,
-        // fading in with `drawnFraction` when animating.
+        // fading in with `drawnFraction` when animating. 2026-09-08: stroke
+        // weights raised (peak 19->26, bar 15->20) and the apex
+        // narrowed/raised (base 80/176->84/172, apex y 76->70) so the A --
+        // not the ring -- is the first thing read; same silhouette, same
+        // 256-unit box (see icons.js's MARK EVOLUTION comment and
+        // products/retail/frontend/brand/aura-mark.svg for the full
+        // reasoning, proven there with a real 1-bit render).
         val inkDuringDraw = ink.copy(alpha = ink.alpha * drawnFraction)
+
+        // The beacon, at the ring's opening: a flat diamond in the SAME ink
+        // as the A, not the old radial-gradient spark (a blurred glow plus
+        // a white dot, which read as a generic tech/crypto glow). No blur,
+        // no gradient brush -- a hard-edged geometric vertex that shares
+        // the A's own colour and fade, so it can never band or vanish under
+        // a one-colour print threshold the way the old glow did.
+        val beacon = Path().apply {
+            moveTo(196 * u, 45 * u)
+            lineTo(211 * u, 60 * u)
+            lineTo(196 * u, 75 * u)
+            lineTo(181 * u, 60 * u)
+            close()
+        }
+        drawPath(path = beacon, color = inkDuringDraw)
+
         val stem = Path().apply {
-            moveTo(80 * u, 178 * u)
-            lineTo(128 * u, 76 * u)
-            lineTo(176 * u, 178 * u)
+            moveTo(84 * u, 178 * u)
+            lineTo(128 * u, 70 * u)
+            lineTo(172 * u, 178 * u)
         }
         drawPath(
             path = stem,
             color = inkDuringDraw,
-            style = Stroke(width = 19 * u, cap = StrokeCap.Round, join = StrokeJoin.Round),
+            style = Stroke(width = 26 * u, cap = StrokeCap.Round, join = StrokeJoin.Round),
         )
         val bar = Path().apply {
-            moveTo(106 * u, 142 * u)
-            lineTo(150 * u, 142 * u)
+            moveTo(108 * u, 142 * u)
+            lineTo(148 * u, 142 * u)
         }
         drawPath(
             path = bar,
             color = inkDuringDraw,
-            style = Stroke(width = 15 * u, cap = StrokeCap.Round, join = StrokeJoin.Round),
+            style = Stroke(width = 20 * u, cap = StrokeCap.Round, join = StrokeJoin.Round),
         )
     }
 }

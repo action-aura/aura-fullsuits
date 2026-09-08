@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;700&display=swap">
 <style>
   /* Aura intro -- one scene, about six seconds, self-contained.
-     A luminous ring is drawn around an A, a spark lights at the ring's
+     A luminous ring is drawn around an A, a beacon lights at the ring's
      opening, the wordmark settles from wide tracking, one line of copy.
      Reduced motion: the final frame, no drawing. */
   :root {
@@ -40,7 +40,6 @@
   .mark { width: clamp(140px, 24vw, 220px); height: auto; }
   .ring { stroke-dasharray: 492 99; stroke-dashoffset: 460; animation: ring-draw var(--t-ring) 500ms cubic-bezier(.65,0,.2,1) forwards; }
   .spark { opacity: 0; transform-origin: 196px 60px; animation: spark-in 700ms 1750ms cubic-bezier(.2,.9,.3,1.4) forwards; }
-  .spark-glow { opacity: 0; transform-origin: 196px 60px; animation: glow-in 900ms 1800ms ease-out forwards, glow-breathe 3.2s 2700ms ease-in-out infinite alternate; }
   .a-peak { stroke-dasharray: 230; stroke-dashoffset: 230; animation: a-draw var(--t-a) 1150ms cubic-bezier(.4,0,.2,1) forwards; }
   .a-bar { stroke-dasharray: 46; stroke-dashoffset: 46; animation: a-draw 300ms 1800ms ease-out forwards; }
   .words { display: grid; gap: 6px; }
@@ -60,16 +59,14 @@
   }
   @keyframes ring-draw { to { stroke-dashoffset: -32; } }
   @keyframes spark-in { from { opacity: 0; transform: scale(.2); } to { opacity: 1; transform: scale(1); } }
-  @keyframes glow-in { from { opacity: 0; transform: scale(.4); } to { opacity: 1; transform: scale(1); } }
-  @keyframes glow-breathe { from { transform: scale(1); } to { transform: scale(1.18); } }
   @keyframes a-draw { to { stroke-dashoffset: 0; } }
   @keyframes word-in { to { opacity: 1; transform: translateY(0); letter-spacing: .16em; } }
   @keyframes fade-in { to { opacity: 1; } }
   @keyframes aurora-in { to { opacity: 1; } }
   @keyframes aurora-drift { from { transform: translate3d(0,0,0) rotate(0deg); } to { transform: translate3d(2%, -3%, 0) rotate(3deg); } }
   @media (prefers-reduced-motion: reduce) {
-    .aurora, .ring, .spark, .spark-glow, .a-peak, .a-bar, .word, .product, .line { animation: none !important; }
-    .aurora { opacity: 1; } .ring { stroke-dashoffset: -32; } .spark, .spark-glow, .product, .line { opacity: 1; }
+    .aurora, .ring, .spark, .a-peak, .a-bar, .word, .product, .line { animation: none !important; }
+    .aurora { opacity: 1; } .ring { stroke-dashoffset: -32; } .spark, .product, .line { opacity: 1; }
     .a-peak, .a-bar { stroke-dashoffset: 0; } .word { opacity: 1; transform: none; letter-spacing: .16em; }
   }
 </style>
@@ -84,15 +81,11 @@
         <linearGradient id="ring-g" x1="0.15" y1="0.9" x2="0.85" y2="0.1">
           <stop offset="0" stop-color="#3f7be6"/><stop offset="0.55" stop-color="#6ea8ff"/><stop offset="1" stop-color="#5fe3d0"/>
         </linearGradient>
-        <radialGradient id="spark-g" cx="0.5" cy="0.5" r="0.5">
-          <stop offset="0" stop-color="#ffffff"/><stop offset="0.45" stop-color="#bff7ee"/><stop offset="1" stop-color="#5fe3d0" stop-opacity="0"/>
-        </radialGradient>
       </defs>
       <circle class="ring" cx="128" cy="128" r="94" fill="none" stroke="url(#ring-g)" stroke-width="15" stroke-linecap="round" transform="rotate(-90 128 128)"/>
-      <circle class="spark-glow" cx="196" cy="60" r="26" fill="url(#spark-g)"/>
-      <circle class="spark" cx="196" cy="60" r="6.5" fill="#ffffff"/>
-      <path class="a-peak" d="M 80 178 L 128 76 L 176 178" fill="none" stroke="#edf2f8" stroke-width="19" stroke-linecap="round" stroke-linejoin="round"/>
-      <path class="a-bar" d="M 106 142 L 150 142" fill="none" stroke="#edf2f8" stroke-width="15" stroke-linecap="round"/>
+      <path class="spark" d="M 196 45 L 211 60 L 196 75 L 181 60 Z" fill="#edf2f8"/>
+      <path class="a-peak" d="M 84 178 L 128 70 L 172 178" fill="none" stroke="#edf2f8" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+      <path class="a-bar" d="M 108 142 L 148 142" fill="none" stroke="#edf2f8" stroke-width="20" stroke-linecap="round"/>
     </svg>
     <div class="words">
       <div class="word">AURA</div>

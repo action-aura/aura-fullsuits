@@ -60,6 +60,39 @@
 // reproduced inline so the shell's brand slot and sign-in screen can render
 // it at any size and have its "A" inherit the surrounding text colour --
 // see the comment on mark() itself for why and for the gradient-id caveat.
+//
+// MARK EVOLUTION (2026-09-08 -- the owner read the mark as a generic tech/
+// crypto token, not a retail tool): two changes to mark(), applied
+// identically everywhere this geometry is duplicated (the five brand SVGs,
+// this function, AuraMark.kt, and the launcher vector) -- (1) the A's
+// stroke weights raised (peak 19->26, bar 15->20) and its apex narrowed and
+// raised (base 80/176->84/172, apex y 76->70) so the A, not the ring, is
+// the thing you see first; (2) the soft radial-gradient spark (a blurred
+// glow plus a white dot) replaced by a flat, hard-edged diamond in the same
+// ink as the A -- no blur, no gradient. Proven, not asserted: rendering the
+// OLD aura-mark.svg to a canvas and thresholding it to pure black/white at
+// 50% vanished roughly a third of the ring's own sweep (the gradient's teal
+// end crosses the threshold), which is why a dedicated
+// products/retail/frontend/brand/aura-mark-1bit.svg (one flat ink, no
+// gradients) now exists for that print path; the RING here is unchanged --
+// this pass touches only the A and the spark.
+//
+// LOUD FALLBACK (2026-09-08 -- measured on the running till: all eleven
+// sections showed emoji on screen, and U+1F4BE/U+1F4E7 rendered as raw
+// glyphs on every one of them): render()'s old fallback returned an
+// unresolved value AS-IS, so an icon nobody mapped looked exactly as "fine"
+// to the author as one that was -- the raw character just shipped. It now
+// renders a neutral placeholder (the 'circle-help' entry below) and
+// console.warns the unresolved value BY NAME, so the gap is loud in the
+// console the moment it ships instead of invisible on the till screen. The
+// two confirmed culprits (💾 backup-export, 📧 email-notifications --
+// app-shell.js nav items feeding every one of the eleven sections' shared
+// chrome) are now mapped below. A third, ☰ (the More-tab hamburger,
+// app-shell.js's tabIcon('☰')), turned up by actually running
+// retail_shell_chrome_test.js against this fix and reading its own
+// console.warn output -- exactly the loud failure this pass exists to
+// produce, so it counts as the fallback working, not a miss to feel bad
+// about. 'smartphone' and 'ticket' are for another agent's payment grid.
 window.AuraIcons = (function () {
   var LIGHT_WEIGHT = 1.5;
   var HEAVY_WEIGHT = 2.25;
@@ -559,6 +592,47 @@ window.AuraIcons = (function () {
       "<line x1=\"21\" x2=\"9\" y1=\"12\" y2=\"12\" />"
     ],
     heavy: [1]
+  },
+  'save': {  // the label rectangle -- the floppy-specific tell, not the folded-corner body
+    el: [
+      "<path d=\"M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z\" />",
+      "<path d=\"M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7\" />",
+      "<path d=\"M7 3v4a1 1 0 0 0 1 1h7\" />"
+    ],
+    heavy: [1]
+  },
+  'smartphone': {  // the home button dot (zero-length path, boosted stroke not fill -- same convention as flashlight's lens)
+    el: [
+      "<rect width=\"14\" height=\"20\" x=\"5\" y=\"2\" rx=\"2\" ry=\"2\" />",
+      "<path d=\"M12 18h.01\" />"
+    ],
+    heavy: [1]
+  },
+  'ticket': {  // the perforation dashes -- the tear-line is what makes it a ticket, not a rounded card
+    el: [
+      "<path d=\"M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z\" />",
+      "<path d=\"M13 5v2\" />",
+      "<path d=\"M13 17v2\" />",
+      "<path d=\"M13 11v2\" />"
+    ],
+    heavy: [1, 2, 3]
+  },
+  'circle-help': {  // the question mark's stem+dot, one feature (same bundling as triangle-alert); the ring stays light --
+                     // this is render()'s LOUD FALLBACK placeholder, never a name the app maps an emoji to
+    el: [
+      "<circle cx=\"12\" cy=\"12\" r=\"10\" />",
+      "<path d=\"M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3\" />",
+      "<path d=\"M12 17h.01\" />"
+    ],
+    heavy: [1, 2]
+  },
+  'menu': {  // the top bar brought forward; the other two recede -- same asymmetry choice as 'waves' (3 identical bars, nothing else to contrast)
+    el: [
+      "<line x1=\"4\" x2=\"20\" y1=\"12\" y2=\"12\" />",
+      "<line x1=\"4\" x2=\"20\" y1=\"6\" y2=\"6\" />",
+      "<line x1=\"4\" x2=\"20\" y1=\"18\" y2=\"18\" />"
+    ],
+    heavy: [1]
   }
   };
 
@@ -612,7 +686,10 @@ window.AuraIcons = (function () {
     "🎁": "gift",
     "🔦": "flashlight",
     "📜": "scroll-text",
-    "⚠️": "triangle-alert"
+    "⚠️": "triangle-alert",
+    "💾": "save",
+    "📧": "mail",
+    "☰": "menu"
   };
 
   // Every element is one self-closing tag (<path .../>, <circle .../>,
@@ -655,15 +732,22 @@ window.AuraIcons = (function () {
   }
 
   // Render an icon value: if it's a known emoji, return the signature SVG;
-  // if it's a known Lucide-style name, same; else return it as-is (the
-  // untouched fallback this always had -- an unrecognised value, emoji or
-  // plain text, must still show SOMETHING rather than go blank).
+  // if it's a known Lucide-style name, same; otherwise the caller handed us
+  // something nobody mapped. Returning that value AS-IS (the pre-2026-09-08
+  // behaviour) is exactly how all eleven sections quietly shipped raw emoji
+  // to the till screen and nobody noticed -- an unmapped icon looked just
+  // as "fine" to the author as a mapped one, because it still rendered
+  // something. Render the neutral placeholder instead and warn loudly, BY
+  // NAME, so the gap is visible in the console the moment it ships rather
+  // than staying invisible on screen.
   function render(val, size, opts) {
     if (val == null) return '';
     var name = EMOJI[val];
     if (name) return svg(name, size, opts);
     if (ICONS[val]) return svg(val, size, opts);
-    return String(val);
+    console.warn('AuraIcons.render(): no icon mapped for ' + JSON.stringify(val) +
+      ' -- rendering the placeholder glyph instead of the raw value.');
+    return svg('circle-help', size, opts);
   }
 
   // Back-compat surface: the pre-redesign file exposed PATHS as name -> raw
@@ -690,18 +774,28 @@ window.AuraIcons = (function () {
   //      against whichever of the five sanctioned themes (THEME_NAMES in
   //      app-shell.js) is active -- there were only ever two files for what
   //      is now five palettes.
-  //   2. Every gradient id carries a per-call counter (aura-ring-N /
-  //      aura-spark-N), never the static file's bare "aura-ring"/
-  //      "aura-spark". SVG gradient ids are ONE flat namespace across the
-  //      whole document, not scoped to their own <svg>; this shell renders
-  //      the mark more than once per page (sidebar brand slot + sign-in
-  //      overlay, at minimum), and two fragments both defining #aura-ring
-  //      would collide -- the SECOND one's stroke="url(#aura-ring)" would
-  //      silently resolve to the FIRST fragment's gradient (duplicate ids
-  //      resolve to the first match), so the mark would render with the
-  //      wrong ring and no error at all.
+  //   2. The ring's gradient id carries a per-call counter (aura-ring-N),
+  //      never the static file's bare "aura-ring". SVG gradient ids are ONE
+  //      flat namespace across the whole document, not scoped to their own
+  //      <svg>; this shell renders the mark more than once per page
+  //      (sidebar brand slot + sign-in overlay, at minimum), and two
+  //      fragments both defining #aura-ring would collide -- the SECOND
+  //      one's stroke="url(#aura-ring)" would silently resolve to the
+  //      FIRST fragment's gradient (duplicate ids resolve to the first
+  //      match), so the mark would render with the wrong ring and no error
+  //      at all. The beacon (below) needs no such id: it is a flat
+  //      `currentColor` fill, not a gradient, so it cannot collide.
   //
-  // The gradient colour literals below are allowed by
+  // 2026-09-08: the A's stroke weights and apex were raised/tightened, and
+  // the old radial-gradient spark (a blurred glow plus a white dot) was
+  // replaced by a flat `currentColor` diamond at the same point -- see the
+  // MARK EVOLUTION comment above this IIFE for the full reasoning and the
+  // measurement that proves the old gradient spark's softness had nothing
+  // to do with print safety (a `currentColor` fill has none of the
+  // gradient ring's banding problem; only the ring itself needs the
+  // dedicated aura-mark-1bit.svg for that path).
+  //
+  // The ring gradient colour literals below are allowed by
   // retail_design_tokens_test.js's `.aura-logo` exemption -- fixed brand
   // colour, not a themed surface (see that file's EXEMPTIONS list).
   var markCounter = 0;
@@ -710,7 +804,6 @@ window.AuraIcons = (function () {
     size = size || 40;
     var n = ++markCounter;
     var ringId = 'aura-ring-' + n;
-    var sparkId = 'aura-spark-' + n;
     return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="' + size + '" height="' + size +
       '" class="aura-ic aura-mark" data-aura-mark="1" aria-hidden="true" focusable="false">' +
         '<defs>' +
@@ -719,19 +812,13 @@ window.AuraIcons = (function () {
             '<stop offset="0.55" stop-color="#3f7be6" />' +
             '<stop offset="1" stop-color="#5fe3d0" />' +
           '</linearGradient>' +
-          '<radialGradient id="' + sparkId + '" cx="0.5" cy="0.5" r="0.5">' +
-            '<stop offset="0" stop-color="#ffffff" />' +
-            '<stop offset="0.45" stop-color="#bff7ee" />' +
-            '<stop offset="1" stop-color="#5fe3d0" stop-opacity="0" />' +
-          '</radialGradient>' +
         '</defs>' +
         '<circle cx="128" cy="128" r="94" fill="none" stroke="url(#' + ringId + ')" stroke-width="15" ' +
           'stroke-linecap="round" stroke-dasharray="492 99" stroke-dashoffset="-32" transform="rotate(-90 128 128)" />' +
-        '<circle cx="196" cy="60" r="20" fill="url(#' + sparkId + ')" />' +
-        '<circle cx="196" cy="60" r="6.5" fill="#ffffff" />' +
-        '<path d="M 80 178 L 128 76 L 176 178" fill="none" stroke="currentColor" stroke-width="19" ' +
+        '<path d="M 196 45 L 211 60 L 196 75 L 181 60 Z" fill="currentColor" />' +
+        '<path d="M 84 178 L 128 70 L 172 178" fill="none" stroke="currentColor" stroke-width="26" ' +
           'stroke-linecap="round" stroke-linejoin="round" />' +
-        '<path d="M 106 142 L 150 142" fill="none" stroke="currentColor" stroke-width="15" stroke-linecap="round" />' +
+        '<path d="M 108 142 L 148 142" fill="none" stroke="currentColor" stroke-width="20" stroke-linecap="round" />' +
       '</svg>';
   }
 

@@ -52,9 +52,17 @@ const CASH_DRAWER_SRC = fs.readFileSync(CASH_DRAWER_FILE, 'utf8');
 const RETAIL_SRC = fs.readFileSync(RETAIL_FILE, 'utf8');
 
 /** Load icons.js (or a mutated copy of its source) into a fresh sandbox and
- *  return window.AuraIcons. */
-function loadIcons(src) {
-  const sandbox = { window: {}, console };
+ *  return window.AuraIcons. When `warnLog` is passed, console.warn calls are
+ *  captured into it (as joined-argument strings) instead of reaching the
+ *  real console -- log/error still pass through so a genuine crash is still
+ *  visible. */
+function loadIcons(src, warnLog) {
+  const sandbox = {
+    window: {},
+    console: warnLog
+      ? { log: console.log, error: console.error, warn: (...args) => warnLog.push(args.map(String).join(' ')) }
+      : console,
+  };
   vm.createContext(sandbox);
   vm.runInContext(src || ICONS_SRC, sandbox, { filename: ICONS_FILE });
   assert.ok(sandbox.window.AuraIcons, 'icons.js did not expose window.AuraIcons');
@@ -172,15 +180,41 @@ function checkTwoWeightTreatment(src) {
     `-- no light/heavy contrast survives: ${noContrast.join(', ')}`);
 }
 
-/** (3) An unknown name/emoji still degrades to its input, exactly as
- *  before the redesign. */
-function checkUnknownValueDegradesToInput(src) {
-  const A = loadIcons(src);
-  assert.strictEqual(A.render('totally-unknown-icon-xyz', 18), 'totally-unknown-icon-xyz',
-    'An unrecognised Lucide-style name must fall through to the literal string, unchanged.');
-  assert.strictEqual(A.render('🦄', 18), '🦄',
-    'An unmapped emoji must fall through to the literal emoji, unchanged.');
-  assert.strictEqual(A.render(null, 18), '', 'A null value should render as the empty string, as before.');
+/** (3) 2026-09-08: an unresolved name/emoji no longer degrades to the raw
+ *  input (the pre-2026-09-08 behaviour that shipped 💾/📧/☰ as literal
+ *  glyphs across all eleven sections without anyone noticing, because an
+ *  unmapped icon looked exactly as "fine" as a mapped one). It must instead
+ *  render the neutral 'circle-help' placeholder AND console.warn the
+ *  unresolved value BY NAME -- never the raw character, in the markup or
+ *  left silent. `null` is unchanged: it is an explicit "no icon" sentinel
+ *  many callers pass on purpose, not an unmapped value. */
+function checkUnknownValueRendersPlaceholderAndWarns(src) {
+  const warnLog = [];
+  const A = loadIcons(src, warnLog);
+
+  const unknownName = A.render('totally-unknown-icon-xyz', 18);
+  assert.ok(/^<svg[\s\S]*<\/svg>$/.test(unknownName),
+    'An unresolved icon name must still render a real <svg> placeholder, not go blank.');
+  assert.ok(!unknownName.includes('totally-unknown-icon-xyz'),
+    'The raw unresolved NAME leaked into the rendered markup -- it must render the neutral placeholder instead.');
+  assert.ok(warnLog.some((line) => line.includes('totally-unknown-icon-xyz')),
+    'render() did not console.warn the unresolved name.');
+
+  warnLog.length = 0;
+  const unknownEmoji = A.render('🦄', 18);
+  assert.ok(/^<svg[\s\S]*<\/svg>$/.test(unknownEmoji),
+    'An unmapped emoji must still render a real <svg> placeholder, not the raw glyph.');
+  assert.ok(!unknownEmoji.includes('🦄'),
+    'The raw unmapped EMOJI leaked into the rendered markup -- it must render the neutral placeholder instead.');
+  assert.ok(warnLog.some((line) => line.includes('🦄')),
+    'render() did not console.warn the unmapped emoji.');
+
+  // Both unresolved inputs above render the exact same placeholder shape --
+  // the fallback does not try to be clever per-input, just loud.
+  assert.strictEqual(unknownName, unknownEmoji,
+    'Two different unresolved inputs rendered different placeholder markup.');
+
+  assert.strictEqual(A.render(null, 18), '', 'A null value should still render as the empty string.');
 }
 
 /** (4) Directional icons mirror under RTL; non-directional ones do not --
@@ -377,6 +411,19 @@ async function testEveryGuardIsProvenByBreakingIt() {
     '  function render(val, size, opts) {\n    return \'\'; // MUTATED: renders nothing, ever\n    if (val == null) return \'\';',
     async (broken) => checkEveryNameAndEmojiRenders(broken)));
 
+  proved.push(await provesMutation(
+    'M5. revert the loud fallback to the pre-2026-09-08 raw-value passthrough',
+    ICONS_SRC,
+    '    if (ICONS[val]) return svg(val, size, opts);\n' +
+    '    console.warn(\'AuraIcons.render(): no icon mapped for \' + JSON.stringify(val) +\n' +
+    '      \' -- rendering the placeholder glyph instead of the raw value.\');\n' +
+    '    return svg(\'circle-help\', size, opts);\n' +
+    '  }',
+    '    if (ICONS[val]) return svg(val, size, opts);\n' +
+    '    return String(val); // MUTATED: back to the raw-value leak this pass fixed\n' +
+    '  }',
+    async (broken) => checkUnknownValueRendersPlaceholderAndWarns(broken)));
+
   console.log(`PASS: ${proved.length} guards proved by breaking the behaviour they watch:`);
   for (const p of proved) console.log('      ' + p);
 }
@@ -392,8 +439,8 @@ async function main() {
   checkTwoWeightTreatment(ICONS_SRC);
   console.log('PASS: the two-weight signature (light structure, one heavy element) is structurally present');
 
-  checkUnknownValueDegradesToInput(ICONS_SRC);
-  console.log('PASS: an unknown name/emoji still degrades to its own input, unchanged');
+  checkUnknownValueRendersPlaceholderAndWarns(ICONS_SRC);
+  console.log('PASS: an unresolved name/emoji renders the neutral placeholder and warns loudly, never the raw value');
 
   checkDirectionalMirroring(ICONS_SRC);
   console.log('PASS: only the directional icon (undo-2) carries the RTL mirror flag, and rtl.css mirrors it');

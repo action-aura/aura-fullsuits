@@ -38,6 +38,23 @@ class BrandMarkWiringContractTest {
     private val stringsKt get() = source("src/main/java/com/actionaura/retail/ui/i18n/Strings.kt")
 
     /**
+     * Just the `AuraMark` composable's own body (from `fun AuraMark(` up to
+     * the next top-level `fun `, i.e. `AuraWordmark`), not the whole file.
+     * The file's OTHER composable, `AuraAurora`, legitimately uses
+     * `Brush.radialGradient` for its ambient wash (unrelated to the mark's
+     * beacon), so a "no radialGradient" guard scoped to the whole file would
+     * false-positive against that unrelated usage -- exactly the mistake
+     * this scoping avoids.
+     */
+    private val auraMarkFunctionBody: String get() {
+        val start = auraMark.indexOf("fun AuraMark(")
+        val end = auraMark.indexOf("fun AuraWordmark(", start)
+        assertThat(start).isGreaterThan(-1)
+        assertThat(end).isGreaterThan(start)
+        return auraMark.substring(start, end)
+    }
+
+    /**
      * Held in a variable rather than spelled as a quoted literal at the call
      * site below, the same way BranchPinWiringContractTest's `orphanPath` is:
      * this path is SUPPOSED to be gone, and CompiledTestSuiteRollCallTest's
@@ -95,9 +112,9 @@ class BrandMarkWiringContractTest {
 
     @Test
     fun aura_mark_takes_its_brand_colours_from_color_kt_and_a_theme_following_ink() {
-        // DESIGN.md §3, "Brand colours" -- the ring's three stops and the
-        // spark. They are FIXED identity colours, so they live as named
-        // constants (AuraBrand) in ui/theme/Color.kt -- the one file
+        // DESIGN.md §3, "Brand colours" -- the ring's three stops. They are
+        // FIXED identity colours, so they live as named constants
+        // (AuraBrand) in ui/theme/Color.kt -- the one file
         // ColorTokenContractTest lets a colour literal live in -- and the
         // mark reads them by name. A hex typed back into AuraMark.kt would
         // trip that guard AND this one.
@@ -112,6 +129,56 @@ class BrandMarkWiringContractTest {
         // theme's text colour, exactly like the desktop's inline mark
         // follows currentColor.
         assertThat(auraMark).contains("ink: Color = TextPrimary")
+    }
+
+    // ── (3b) 2026-09-08: the beacon (formerly a soft radial-gradient spark)
+    // is a flat diamond in the SAME ink as the A -- not a second fixed
+    // AuraBrand colour, not a gradient brush ───────────────────────────────
+
+    @Test
+    fun aura_mark_beacon_is_a_flat_diamond_following_ink_not_a_gradient_spark() {
+        // The old spark drew two circles through a radial-gradient Brush
+        // (a blurred glow plus a solid white core) -- the owner read that
+        // softness as a generic tech/crypto glow. Neither may come back.
+        // Scoped to AuraMark()'s own body: AuraAurora (below, in the same
+        // file) legitimately uses Brush.radialGradient for its unrelated
+        // ambient wash, so an unscoped check here would false-positive.
+        assertThat(auraMarkFunctionBody).doesNotContain("Brush.radialGradient")
+        // AuraBrand.SparkHalo/SparkFade -- asserted absent from AuraMark.kt
+        // here until 2026-09-08 -- no longer exist anywhere in Color.kt
+        // (removed as dead constants once this test proved they had no
+        // consumer left), so asserting AuraMark.kt doesn't reference them
+        // would be asserting silence about a name nothing can any longer
+        // reference. The geometry checks below are what actually pins the
+        // beacon is a flat diamond, not a gradient.
+        // The beacon's own geometry: a closed diamond at the ring's
+        // opening, filled (no Stroke style) with the same `inkDuringDraw`
+        // the A strokes use -- proving it follows the theme, not a fixed
+        // hex or a second AuraBrand colour.
+        assertThat(auraMark).contains("moveTo(196 * u, 45 * u)")
+        assertThat(auraMark).contains("lineTo(211 * u, 60 * u)")
+        assertThat(auraMark).contains("lineTo(196 * u, 75 * u)")
+        assertThat(auraMark).contains("lineTo(181 * u, 60 * u)")
+        assertThat(auraMark).contains("drawPath(path = beacon, color = inkDuringDraw)")
+    }
+
+    // ── (3c) 2026-09-08: the A's raised stroke weights and tightened apex ──
+
+    @Test
+    fun aura_mark_a_uses_the_2026_09_08_raised_weights_and_tightened_apex() {
+        // Same silhouette, same 256-unit box -- only the stroke widths and
+        // the apex/base coordinates moved (peak 19->26, bar 15->20; base
+        // 80/176->84/172, apex y 76->70). Pinned so a future edit can't
+        // quietly drift back to the old, thinner A -- see aura-mark.svg and
+        // icons.js's MARK EVOLUTION comment for the full reasoning and the
+        // 1-bit-render measurement behind it.
+        assertThat(auraMark).contains("moveTo(84 * u, 178 * u)")
+        assertThat(auraMark).contains("lineTo(128 * u, 70 * u)")
+        assertThat(auraMark).contains("lineTo(172 * u, 178 * u)")
+        assertThat(auraMark).contains("width = 26 * u")
+        assertThat(auraMark).contains("moveTo(108 * u, 142 * u)")
+        assertThat(auraMark).contains("lineTo(148 * u, 142 * u)")
+        assertThat(auraMark).contains("width = 20 * u")
     }
 
     // ── (4) Adaptive launcher icon points at vector layers, not the PNG ────
@@ -144,6 +211,22 @@ class BrandMarkWiringContractTest {
     fun the_vector_foreground_draws_the_rings_arc() {
         val fg = source("src/main/res/drawable/ic_launcher_foreground.xml")
         assertThat(fg).contains("A 94 94 0 1 1")
+    }
+
+    @Test
+    fun the_vector_foreground_draws_the_2026_09_08_a_and_flat_beacon() {
+        // Same pass as AuraMark.kt's -- re-anchored here to the SAME
+        // strictness, not deleted: raised A stroke weights/tightened apex,
+        // and the old radial-gradient spark replaced by a flat diamond
+        // fillColor (the launcher's fixed ink, not a Composable `ink`,
+        // since adaptive icons cannot host one).
+        val fg = source("src/main/res/drawable/ic_launcher_foreground.xml")
+        assertThat(fg).contains("M 84 178 L 128 70 L 172 178")
+        assertThat(fg).contains("android:strokeWidth=\"26\"")
+        assertThat(fg).contains("M 108 142 L 148 142")
+        assertThat(fg).contains("android:strokeWidth=\"20\"")
+        assertThat(fg).contains("M 196 45 L 211 60 L 196 75 L 181 60 Z")
+        assertThat(fg).doesNotContain("android:type=\"radial\"")
     }
 
     // ── (5) The 2026-09-08 redesign: the sign-in screen is no longer the

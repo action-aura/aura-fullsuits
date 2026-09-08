@@ -33,10 +33,15 @@
  *      selector -- moving it would have broken all of them silently.
  *   6. index.html's favicon points at the real brand icon, not a blank
  *      data: URI.
- *   7. AuraIcons.mark() -- the A strokes currentColor (so it survives every
- *      theme, not just the ink the static brand/aura-mark.svg hardcodes),
- *      and two calls never collide on a gradient id (see icons.js mark()'s
- *      own comment on why a collision there fails silently, not loudly).
+ *   7. AuraIcons.mark() -- the A and its beacon stroke/fill currentColor (so
+ *      they survive every theme, not just the ink the static
+ *      brand/aura-mark.svg hardcodes), and two calls never collide on the
+ *      ring's gradient id (see icons.js mark()'s own comment on why a
+ *      collision there fails silently, not loudly). 2026-09-08: the A's
+ *      weight/apex and the beacon's shape (flat diamond, not a soft
+ *      radial-gradient spark) both changed -- see icons.js's own MARK
+ *      EVOLUTION comment; this file's case 7 was re-anchored to the new
+ *      geometry, not deleted.
  *
  * MUTATION-PROVED: case 1 (no header AI button) is re-run against a
  * deliberately mutated copy of app-shell.js that re-adds exactly the header
@@ -375,8 +380,9 @@ function testMarkStrokesCurrentColorAndUsesUniqueGradientIds() {
   const m1 = A.mark(40);
   const m2 = A.mark(40);
   assert.ok(
-    /<path d="M 80 178 L 128 76 L 176 178" fill="none" stroke="currentColor" stroke-width="19"/.test(m1),
-    'AuraIcons.mark()\'s A path does not stroke currentColor -- it would not survive a theme change.'
+    /<path d="M 84 178 L 128 70 L 172 178" fill="none" stroke="currentColor" stroke-width="26"/.test(m1),
+    'AuraIcons.mark()\'s A path does not stroke currentColor at the 2026-09-08 weight/geometry -- ' +
+    'it would not survive a theme change, or it has drifted from the redesigned A.'
   );
   const ring1 = m1.match(/aura-ring-(\d+)/);
   const ring2 = m2.match(/aura-ring-(\d+)/);
@@ -386,9 +392,19 @@ function testMarkStrokesCurrentColorAndUsesUniqueGradientIds() {
     'Two AuraIcons.mark() calls produced the SAME gradient id -- a second <svg> on the same page would silently ' +
     'reuse the first fragment\'s gradient (duplicate ids resolve to the first match), not fail loudly.'
   );
-  const spark1 = m1.match(/aura-spark-(\d+)/);
-  assert.ok(spark1, 'AuraIcons.mark() output is missing an aura-spark-N gradient id.');
-  console.log('PASS: AuraIcons.mark() strokes currentColor on the A and never reuses a gradient id across calls');
+  // The beacon (formerly a soft radial-gradient spark) is now a flat
+  // currentColor diamond -- no gradient, so no id to collide on. Pin BOTH
+  // that the diamond is there and that no radialGradient survives, so a
+  // regression back to the soft blur fails loudly here.
+  assert.ok(
+    /<path d="M 196 45 L 211 60 L 196 75 L 181 60 Z" fill="currentColor" \/>/.test(m1),
+    'AuraIcons.mark() does not render the flat currentColor beacon diamond at the ring\'s opening.'
+  );
+  assert.ok(
+    !/radialGradient/.test(m1),
+    'AuraIcons.mark() still defines a radialGradient -- the beacon must be a flat, hard-edged shape, not a soft glow.'
+  );
+  console.log('PASS: AuraIcons.mark() strokes currentColor on the A/beacon and never reuses a gradient id across calls');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
