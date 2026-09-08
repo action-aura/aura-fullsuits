@@ -34,6 +34,35 @@
 #   * NOT established: the Inno Setup installer (aura_retail_setup.iss). Inno Setup
 #     is not installed on this dev machine, so setup.exe remains unbuilt and
 #     unverified -- see the runbook.
+#
+# RUN-VERIFIED 2026-09-08. Both "NOT established" bullets above are now closed,
+# and they are left standing rather than deleted so the sequence stays legible:
+# packaging was proved first, running second, a month apart.
+#
+# The build was made from a `git archive HEAD` snapshot rather than the working
+# tree, so no half-finished edit could get into it, and the exe was launched with
+# every inherited AURA_* variable stripped and AURA_APP_DATA pointed at a
+# directory that had never existed -- a dev box's leftover environment is exactly
+# how a packaging defect hides.
+#
+#     launcher starting -> no secret key found, generating one
+#     server on 127.0.0.1:5001, ready after 3 attempts, 5.87s
+#     GET /api/version -> 200   GET / -> 200, 5939 bytes
+#     retail.db migrated v0 -> v26, 46 tables, pre-migration backup taken
+#     stderr: empty
+#
+# The migration chain is the part worth noting: ensure_schema_version() ran
+# inside the frozen build and took its integrity-checked backup before touching
+# anything, which is the behaviour the whole migration_safety module exists for
+# and the thing most likely to be silently missing from a packaged app.
+#
+# The installer was then built (Inno Setup 6 is now installed) and exercised end
+# to end: silent install exit 0, 920 files / 93.3 MB, the INSTALLED copy served
+# GET / -> 200, silent uninstall exit 0, program files gone, business data kept.
+#
+# Still NOT established: behaviour on a machine that is not this one. Everything
+# above removes the dev environment from the picture; it cannot remove the dev
+# MACHINE. A second Windows box remains step 2.2's real remainder.
 
 import os
 

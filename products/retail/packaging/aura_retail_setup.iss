@@ -83,6 +83,27 @@ begin
   // permanently delete business data with no human in the loop at all,
   // directly violating "never silently delete customer data." A silent
   // uninstall must never even ask; it must always default to preserving data.
+  //
+  // MUTATION-PROVED 2026-09-08, because a guard this consequential should not
+  // be believed on the strength of its own comment. The three lines below were
+  // deleted, the installer recompiled, and both versions were run through an
+  // identical install + `unins000.exe /VERYSILENT /SUPPRESSMSGBOXES` cycle
+  // against the real %LOCALAPPDATA%\AuraRetail (backed up first, restored
+  // after -- testing this at any other path proves nothing, since that path is
+  // the only one DelTree below ever names):
+  //
+  //     guard removed : uninstaller still running after 180s, killed
+  //     guard present : uninstaller exit 0 after 4.6s, data 9 files -> 9 files
+  //
+  // So the guard is load-bearing and stays. One correction to the paragraph
+  // above, which predicted the failure differently: with the guard removed the
+  // uninstall did not silently auto-confirm and delete. It BLOCKED, on a
+  // process named _unins.tmp holding a window titled "Uninstall" -- the first
+  // MsgBox, waiting for a click that a scripted uninstall will never provide.
+  // Data survived only because the uninstall never got past the question.
+  // Either way a managed uninstall is broken without this line; the mechanism
+  // is recorded because the next reader will otherwise trust a prediction that
+  // this environment did not reproduce.
   if UninstallSilent() then
   begin
     Exit;
