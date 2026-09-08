@@ -842,7 +842,7 @@ def _panel_string_regions():
     the shared one -- `_renderCashierLanding` writes its own markup and its own
     strings, and reading only the shared method is what left it unchecked."""
     src = RETAIL_JS.read_text(encoding='utf-8')
-    lit = lambda blob: {m.replace("\\'", "'") for m in _T_LITERAL.findall(blob)}
+    lit = _t_string_literals
     bodies = set()
     for signature in REFUSAL_PANELS:
         bodies |= lit(_method_body(src, signature))
@@ -1115,99 +1115,137 @@ def test_refusal_panel_callers_pass_title_and_message_through_t():
 #: catalogs against each other, and two catalogs that both lack a string are
 #: in perfect parity.
 #:
-#: Three features are affected: the Audit Log viewer (Timestamp/User/Action/
+#: Three features were affected: the Audit Log viewer (Timestamp/User/Action/
 #: Entity, its filter controls and its pager), the low-stock reorder-request
-#: panel, and the WhatsApp reports entry point. Each belongs to whoever owns
-#: that area; translating 41 strings across three features was not this
-#: change's job, and doing it silently would bury them.
+#: panel, and the WhatsApp reports entry point. Each belonged to whoever owned
+#: that area; translating 41 strings across three features was not the job of
+#: the change that recorded them, and doing it silently would have buried them.
+#:
+#: AS OF 2026-09-08 THE SET IS EMPTY -- every one of them is translated. The
+#: note inside the frozenset keeps the record of what was there and why, so
+#: the list reads as finished rather than as never-having-existed. Do not
+#: delete the constant: it is what the ratchet subtracts, and an empty
+#: frozenset is now the CLAIM.
 #:
 #: The point of the list is the ratchet below: this baseline may shrink, never
 #: grow. A new untranslated string fails immediately, at the wave that adds
 #: it, instead of being discovered by an Arabic-speaking user.
 KNOWN_UNTRANSLATED_BASELINE = frozenset({
-    # Ten entries were removed here on 2026-08-23 -- the audit log's From/To/
-    # Action/Entity/Timestamp/User labels, its two 'All ...' options and its
-    # two pager buttons. They were found by widening the render corpus to
-    # screens no test had ever built, and are now in both catalogs with real
-    # Arabic. This list is a RATCHET: an entry may leave it, never rejoin it.
-    'Accept',
-    'Accept this request and draft a local purchase order?',
-    # 'Audit Log' was here and is deliberately gone. It is the TITLE of the
-    # capability-refusal panel (rendered twice, <h2> and <h3>) whose message
-    # and button were translated in the previous pass, so leaving it exempt
-    # kept that panel half-Arabic while the change that produced it read as
-    # complete. It is also the Audit Log screen's own heading and its nav
-    # label, so translating it improves those too -- the rest of that screen's
-    # strings stay listed below, because they belong to whoever owns that
-    # feature and 41 strings was never this change's job.
-    'Automatically drafted when a sale drops a product at or below its reorder level. '
-    'Accept drafts a local purchase order for this device; Decline dismisses it.',
-    # 'Branch' was here and is deliberately gone (2026-08-23). Phase 3's Stock
-    # accuracy screen renders it as a column header -- "which (product, branch)
-    # disagree" is the question that screen exists to answer, so a permanently
-    # English header sat in the middle of it -- and it is now in both catalogs
-    # with real Arabic. Every other consumer of the bare word gets it too,
-    # because i18n.js's DOM sweep matches any node whose full trimmed text is a
-    # catalog key. Same ratchet rule as the entries above: an entry may leave
-    # this list, never rejoin it.
-    'Category deleted',
-    # 'Clear' was here and is deliberately gone. The Sales History screen now
-    # renders it through t() (its own "Clear filters" button), so it is a
-    # catalog key in both files. The Audit Log's identical button gets the
-    # translation for free -- the point of a shared catalog.
-    'Could not accept this request.',
-    'Could not decline this request.',
-    'Could not delete this category.',
-    'Could not delete this customer.',
-    'Could not delete this supplier.',
-    'Could not load the audit log.',
-    'Customer deleted',
-    'Decline',
-    'Decline this reorder request?',
-    'Low-Stock Reorder Requests',
-    'Manage WhatsApp Reports',
-    'No audit entries match these filters.',
-    'No pending reorder requests.',
-    # 'Note' was here and is deliberately gone. The combined exceptions screen
-    # (`fa5a89b`) put it in both catalogs with real Arabic -- it labels the
-    # REQUIRED explanation an owner writes when resolving an oversell, which is
-    # the one field on that form the server refuses without. The ratchet caught
-    # this on the full sweep, not on any targeted run: adding the key was what
-    # made the baseline stale, and nothing in the exceptions work would have
-    # noticed. An entry may leave this list, never rejoin it.
-    'Page',
-    'Purchase order drafted',
-    'Request accepted',
-    'Request declined',
-    'Requested',
-    'Send daily sales, shift-close, low-stock, and overdue-balance reports to multiple '
-    'phone numbers by role or branch. Off by default.',
-    'Supplier deleted',
-    'WhatsApp Reports',
-    'of',
-    'total entries',
+    # EMPTY, 2026-09-08, and that is the ratchet finishing rather than the
+    # ratchet being switched off.
+    #
+    # This list held 25 strings across three features -- the Audit Log viewer
+    # (its column labels, filter controls and pager: 'Page', 'of',
+    # 'total entries', 'No audit entries match these filters.', 'Could not
+    # load the audit log.'), the low-stock reorder-request panel ('Accept',
+    # 'Decline', 'Accept this request and draft a local purchase order?',
+    # 'Decline this reorder request?', 'Low-Stock Reorder Requests', 'No
+    # pending reorder requests.', 'Purchase order drafted', 'Request
+    # accepted', 'Request declined', 'Requested', the long 'Automatically
+    # drafted when a sale drops a product...' explainer), the WhatsApp
+    # reports entry point ('WhatsApp Reports', 'Manage WhatsApp Reports', its
+    # 'Send daily sales, shift-close...' description) and the delete/failure
+    # toasts around them ('Category deleted', 'Customer deleted', 'Supplier
+    # deleted', 'Could not accept/decline this request.', 'Could not delete
+    # this category/customer/supplier.'). Each entry said, in writing, that
+    # it belonged to whoever owned that feature and that translating 41
+    # strings was not the job of the change that recorded them.
+    #
+    # They are now all in BOTH catalogs with real Arabic, and the reverse
+    # ratchet below is what found that out: 'Accept' and 'Decline' went in
+    # with commit 06f7115 and the rest with the localization pass on
+    # 2026-09-08, neither of which ran this file. An entry may leave this
+    # list, NEVER rejoin it -- so this set staying empty is now the claim,
+    # and any new untranslated string fails
+    # test_no_new_untranslated_ui_strings immediately, at the wave that adds
+    # it, instead of reaching an Arabic-speaking user.
+    #
+    # A future entry needs the same thing every entry above had: a written
+    # per-string reason naming the feature and its owner. "It is not
+    # translated yet" is the condition, not a reason.
 })
 
-#: t('...') with a single-quoted literal. Template-literal and variable
+#: t('...') / t("...") with a STRING literal. Template-literal and variable
 #: arguments are skipped deliberately -- a t(`...${x}...`) call has no fixed
 #: key to look up, and treating one as a key would report a phantom.
-_T_LITERAL = re.compile(r"\bt\(\s*'((?:[^'\\]|\\.)*)'\s*\)")
+#:
+#: Double quotes accepted since 2026-09-08. The single-quote-only pattern was
+#: not a style rule this codebase enforces anywhere, it was an assumption --
+#: and app-shell.js and sub-ai.js each carried a double-quoted call the
+#: ratchet could not see. One invisible string is one permanently-English
+#: screen.
+_T_LITERAL = re.compile(
+    r"""\bt\(\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")\s*\)"""
+)
+
+
+def _t_string_literals(blob):
+    """The set of t() string-literal keys in `blob`, either quote style,
+    unescaped. One helper because both the refusal-panel scrape above and the
+    whole-frontend ratchet below must agree on what counts as a key -- two
+    copies of this regex is how the double-quote gap survived in the first
+    place."""
+    return {
+        (single if single else double).replace("\\'", "'").replace('\\"', '"')
+        for single, double in _T_LITERAL.findall(blob)
+    }
+
+
+#: Every frontend script the ratchet scans -- discovered, not listed.
+#:
+#: It used to be subsystem-retail.js alone, and the gap that hid behind that
+#: was the worst possible one: app-shell.js is the PRE-LOGIN shell (sign-in,
+#: "Forgot password?", "New password", "License Key", "Activate", "Check your
+#: email") -- literally the first screen an Arabic customer ever sees -- and
+#: it renders an EN | ع toggle of its own (app-shell.js:1412, :2215) while
+#: defining `t` as AuraI18n.t (app-shell.js:1214) over the same catalogs. It
+#: was never a "deliberately standalone screen" exempt from translation; it
+#: was simply never scanned. sub-ai.js was in the same position.
+#:
+#: Globbing rather than naming files is the point: a screen added next month
+#: is covered on arrival, instead of on the day someone remembers to extend a
+#: list here. Files with no t() call at all contribute nothing and cost
+#: nothing.
+_T_SOURCES = sorted(FRONTEND_DIR.glob('*.js'))
 
 
 def _t_literals():
-    return {m.replace("\\'", "'") for m in _T_LITERAL.findall(RETAIL_JS.read_text(encoding='utf-8'))}
+    """{string: [file, ...]} -- every t() string literal and where it is
+    called, so a failure names the screen instead of just the string."""
+    found = {}
+    for src_path in _T_SOURCES:
+        for single, double in _T_LITERAL.findall(src_path.read_text(encoding='utf-8')):
+            raw = single if single else double
+            key = raw.replace("\\'", "'").replace('\\"', '"')
+            found.setdefault(key, []).append(src_path.name)
+    return found
 
 
 def test_no_new_untranslated_ui_strings():
-    """Ratchet. Every t() literal in subsystem-retail.js must be a catalog key,
-    except the baseline above."""
+    """Ratchet. Every t() literal in EVERY frontend script -- not just
+    subsystem-retail.js -- must be a catalog key, except the baseline above.
+
+    Widened 2026-09-08 from RETAIL_JS alone. Measured against the catalogs of
+    that day, the old scan was blind to 30 single-quoted plus 1 double-quoted
+    literal in app-shell.js and 7 plus 1 in sub-ai.js, none of them
+    baselined: 'Forgot password?', 'New password', 'License Key', 'Check your
+    email', 'Activate', 'Reset your password' among them. Nothing else caught
+    them either -- retail_localization_test.py compares the two catalogs
+    against each other and never scans a t() call in any screen file, and two
+    catalogs that both lack a string are in perfect parity."""
     en = _en()
-    gaps = {s for s in _t_literals() if s not in en} - KNOWN_UNTRANSLATED_BASELINE
+    literals = _t_literals()
+    gaps = {s for s in literals if s not in en} - KNOWN_UNTRANSLATED_BASELINE
+    detail = sorted(f"{s!r} ({', '.join(sorted(set(literals[s])))})" for s in gaps)
     assert gaps == set(), (
         f"t() is called with {len(gaps)} string(s) that exist in neither catalog: "
-        f"{sorted(gaps)}. t() returns its argument unchanged for an unknown key, so "
+        f"{detail}. t() returns its argument unchanged for an unknown key, so "
         "these render as English on an Arabic page while looking localized in the "
-        "source. Add them to BOTH locales/en.json and locales/ar.json."
+        "source. Add them to BOTH locales/en.json and locales/ar.json. Adding "
+        "them to KNOWN_UNTRANSLATED_BASELINE instead needs the same per-entry "
+        "written reason every entry there already carries -- and none of the "
+        "pre-login shell's strings can earn one: that screen is the first thing "
+        "an Arabic customer sees and it offers its own EN | ع toggle."
     )
 
 

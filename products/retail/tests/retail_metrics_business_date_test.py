@@ -95,27 +95,39 @@ of how much money they move:
 THIS FILE CARRIES ITS OWN TZ DATABASE -- ON PURPOSE
 ====================================================
 `zoneinfo` is stdlib and always imports, but the DATA it reads is not
-bundled with CPython. On Windows there is no `/usr/share/zoneinfo`, `TZPATH`
-is empty, and the `tzdata` PyPI package is in none of `requirements/*.txt`.
-Measured on this project's interpreter: `available_timezones()` returns
-ZERO, and `ZoneInfo('America/New_York')` raises `ZoneInfoNotFoundError`.
+bundled with CPython: on Windows there is no `/usr/share/zoneinfo` and
+`TZPATH` is empty, while on a Linux CI runner the system zoneinfo satisfies
+every lookup. So what a DST proof written against `America/New_York`
+measures depends entirely on the HOST -- it would error on one machine and
+pass on another, which is worse than no proof, and worse still on the
+runner where it passes for a reason the product does not ship.
 
-So a DST proof written against `America/New_York` would not run here -- it
-would ERROR on a dev box and pass in CI or vice versa, which is worse than
-no proof. Instead this file WRITES ITS OWN TZif files (`_install_test_zones`
-below) and prepends them to `TZPATH`. The rules are then stated in this
-file rather than assumed from the host, the production lookup path
-(`ZoneInfo(<key from retail_settings>)`) is exercised unchanged, and the
-result is identical on a machine with a full tz database and on one with
-none.
+Instead this file WRITES ITS OWN TZif files (`_install_test_zones` below)
+and prepends them to `TZPATH`, so the proof never depends on the host's tz
+database, on any platform. The rules are stated in this file rather than
+assumed, the production lookup path (`ZoneInfo(<key from retail_settings>)`)
+is exercised unchanged, and the result is identical on a machine with a full
+tz database and on one with none.
 
-That is a test-fixture answer, not a product answer. THE PRODUCT STILL
-NEEDS `tzdata` DECLARED -- in requirements/base.txt, in the Chaquopy pip
-block for the Android build, and collected by the PyInstaller spec.
-Until it is, `business_timezone` resolves nothing on Windows, on Android or
-in the packaged .exe, and every install degrades to unconfigured with a
-WARNING (which is pinned below, `test_a_machine_with_no_tz_database...`, so
-the degradation is at least loud).
+That is a test-fixture answer, and the product answer is now shipped
+separately, in the three places an install can get its data from
+(re-measured 2026-09-08 -- an earlier version of this docstring said all
+three were still missing, which stopped being true and was not updated):
+
+  * `requirements/retail.txt:33` -- `tzdata==2026.1`. retail.txt, not
+    base.txt, deliberately: nothing under products/clinic reads a business
+    timezone, and a shared dependency is a shared upgrade obligation (the
+    reasoning is written at requirements/retail.txt:14).
+  * `android/aura-retail/app/build.gradle:294` -- the Chaquopy pip block's
+    `install "tzdata==2026.1"`.
+  * `products/retail/packaging/aura_retail.spec:117` --
+    `collect_data_files('tzdata')`, folded into `datas` at line 125.
+
+This interpreter now returns 598 zones from `available_timezones()`. The
+degradation path is still pinned below (`test_a_machine_with_no_tz_database
+...`) because a packaging regression can take any of those three away
+again, and the failure is silent by nature -- reports quietly revert to
+device-local bucketing -- so the WARNING is the only thing on screen.
 
 Run:
     pytest products/retail/tests/retail_metrics_business_date_test.py -v

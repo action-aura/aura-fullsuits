@@ -49,6 +49,43 @@ onboarding_bp = Blueprint('onboarding', __name__)
 #: grepping their logs for one should find both halves under one name.
 log = logging.getLogger('aura.security.identity')
 
+
+def _audit_write_failed(action, entity_type, entity_id):
+    """Call from inside an `except` around an `audit_logs` INSERT.
+
+    THE SWALLOW STAYS, deliberately -- promoting a role must not fail
+    because the audit table is full, locked or corrupt, and the same
+    reasoning products/retail/backend/api/retail_api.py::_audit spells out
+    for a till applies here. What was wrong is that seven of the inserts in
+    this file swallowed with a bare `pass`: no log line, no counter, no
+    trace. These are the PRIVILEGE-CHANGE records -- PASSWORD_RESET,
+    CREATE_EMPLOYEE, UPDATE_BRANCH_SCOPE, UPDATE_ROLE, SET_PIN/CLEAR_PIN,
+    UPDATE_CLINIC_ROLE, EMPLOYEE_SETUP_COMPLETE -- so a lost one is a lost
+    answer to "who gave this account that authority". The file was even
+    internally inconsistent about it: UPDATE_STATUS and UPDATE_PERM were
+    never wrapped at all.
+
+    It compounds with a second gap: the registry `audit_logs` table is read
+    only by GET /api/admin/audit and GET /api/admin/stats, and no shipped
+    client calls either (Retail's Admin Center Audit Log screen reads a
+    DIFFERENT table, retail.db's `audit_log`, via GET
+    /api/sub/retail/audit-log). So a silently-lost identity row has no
+    reader to miss it. A log line is the only place it can currently
+    surface.
+
+    log.exception, not log.warning: the traceback is what separates a locked
+    database from schema drift, and those need different answers from
+    different people.
+
+    `new_value_json` is deliberately NOT passed in or logged -- it carries
+    emails, role names and PIN state, and the log has a wider audience and a
+    longer life than the audit table the value was bound for. Action, entity
+    type and entity id are enough to find the missing row.
+    """
+    log.exception(
+        'audit write FAILED and was swallowed: action=%r entity_type=%r entity_id=%r',
+        action, entity_type, entity_id)
+
 # ── Licence gate (AUDIT: account administration had none) ──────────────────
 #
 # `/api/admin/employees` and its siblings below were gated on
@@ -507,7 +544,7 @@ def reset_password():
                 (str(uuid.uuid4()), link['company_id'], user['id'], 'PASSWORD_RESET', 'USER', user['id'], '{}'),
             )
         except Exception:
-            pass
+            _audit_write_failed('PASSWORD_RESET', 'USER', user['id'])
         conn.commit()
         return jsonify({'success': True})
     finally:
@@ -1124,7 +1161,7 @@ def create_employee():
                 (str(uuid.uuid4()), company_id, session['mt_user_id'], 'CREATE_EMPLOYEE', 'USER', str(user_id), json.dumps({'email': email}))
             )
         except Exception:
-            pass
+            _audit_write_failed('CREATE_EMPLOYEE', 'USER', str(user_id))
 
         conn.commit()
 
@@ -1349,7 +1386,7 @@ def update_branch_scope(user_id):
                  'UPDATE_BRANCH_SCOPE', 'USER', user_id, json.dumps({'branch_scope_uid': scope_uid})),
             )
         except Exception:
-            pass
+            _audit_write_failed('UPDATE_BRANCH_SCOPE', 'USER', user_id)
         conn.commit()
         return jsonify({'success': True, 'branch_scope_uid': scope_uid})
     finally:
@@ -1484,7 +1521,7 @@ def update_role(user_id):
                  json.dumps({'from': row['role'], 'to': role})),
             )
         except Exception:
-            pass
+            _audit_write_failed('UPDATE_ROLE', 'USER', user_id)
         conn.commit()
         return jsonify({'success': True, 'role': role})
     finally:
@@ -1586,7 +1623,7 @@ def update_pin(user_id):
                  action, 'USER', user_id, json.dumps({'has_pin': has_pin})),
             )
         except Exception:
-            pass
+            _audit_write_failed(action, 'USER', user_id)
         conn.commit()
         return jsonify({'success': True, 'has_pin': has_pin})
     finally:
@@ -1632,7 +1669,7 @@ def update_clinic_role(user_id):
                  'UPDATE_CLINIC_ROLE', 'USER', user_id, json.dumps({'clinic_role': clinic_role}))
             )
         except Exception:
-            pass
+            _audit_write_failed('UPDATE_CLINIC_ROLE', 'USER', user_id)
         conn.commit()
         return jsonify({'success': True, 'clinic_role': clinic_role})
     finally:
@@ -1955,7 +1992,7 @@ def employee_setup():
                 "INSERT INTO audit_logs (id, company_id, user_id, action, entity_type, entity_id, new_value_json) VALUES (?,?,?,?,?,?,?)",
                 (str(uuid.uuid4()), 'SYSTEM', user['id'], 'EMPLOYEE_SETUP_COMPLETE', 'USER', user['id'], '{}'))
         except Exception:
-            pass
+            _audit_write_failed('EMPLOYEE_SETUP_COMPLETE', 'USER', user['id'])
 
         conn.commit()
         return jsonify({'success': True})

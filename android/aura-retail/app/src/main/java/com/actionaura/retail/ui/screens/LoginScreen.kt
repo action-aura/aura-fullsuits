@@ -44,6 +44,7 @@ import com.actionaura.retail.net.LoginRequest
 import com.actionaura.retail.ui.brand.AuraAurora
 import com.actionaura.retail.ui.brand.AuraMark
 import com.actionaura.retail.ui.brand.AuraWordmark
+import com.actionaura.retail.ui.i18n.ltrIsolate
 import com.actionaura.retail.ui.i18n.tr
 import com.actionaura.retail.ui.theme.AccentAction
 import com.actionaura.retail.ui.theme.AuraBrand
@@ -159,8 +160,14 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
             // BuildConfig.VERSION_NAME is reachable from this module (already
             // read the same way in RetailExtraScreens.kt's About row), so the
             // footer is real build metadata, never a hardcoded string.
+            //
+            // ltrIsolate, because Arabic reordered it. Rendered bare in an RTL
+            // paragraph the bidi algorithm lays "1.0.0-rc.5" out as
+            // "rc.5-1.0.0" -- seen on a real Mi Note 10, 2026-09-09. No test
+            // caught it: the string this code passes in is correct, and the
+            // damage happens inside the text engine.
             Text(
-                com.actionaura.retail.BuildConfig.VERSION_NAME,
+                ltrIsolate(com.actionaura.retail.BuildConfig.VERSION_NAME),
                 style = MaterialTheme.typography.labelSmall,
                 color = TextTertiary,
             )

@@ -156,7 +156,23 @@ const ThemeEngine = {
 
     const label = document.createElement('div');
     label.className = 'theme-picker-label';
-    label.textContent = '🎨 ' + t('Theme');
+    // An ELEMENT PAIR, not one string. Two reasons, both real:
+    //   * The button that OPENS this panel (the header .sub-header-btn) and
+    //     the More-sheet row were both migrated to AuraIcons.render('palette')
+    //     with '🎨' kept only as the no-icons.js fallback -- so the palette
+    //     appeared twice, one click apart, in two different visual languages.
+    //     '🎨' (U+1F3A8) is in retail_shell_chrome_test.js's RAW_GLYPHS ban
+    //     list and that test PASSED, because it renders the shell and the More
+    //     sheet and this panel is neither. It does now.
+    //   * `'🎨 ' + t('Theme')` also put a glyph in the same text node as a
+    //     translated word, which is the shape that makes i18n.js's DOM sweep
+    //     unable to rescue the node -- the "🛒 Open POS" defect again.
+    const labelIcon = document.createElement('span');
+    labelIcon.setAttribute('aria-hidden', 'true');
+    if (window.AuraIcons) labelIcon.innerHTML = AuraIcons.render('palette', 16);
+    else labelIcon.textContent = '🎨';
+    label.appendChild(labelIcon);
+    label.appendChild(document.createTextNode(' ' + t('Theme')));
     panel.appendChild(label);
 
     // A <button>, not the old click-wired <div>: Enter/Space and focus come
@@ -1148,7 +1164,15 @@ const SubsystemApp = {
 
     const bar = document.createElement('div');
     bar.id = 'aura-admin-device-claim';
-    bar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:var(--overlay-inset-block-end,24px);z-index:99998;display:flex;align-items:center;gap:14px;flex-wrap:wrap;max-width:min(680px,92vw);padding:14px 18px;border-radius:14px;background:#1e1e2e;border:1px solid rgba(244,63,94,.45);box-shadow:0 10px 30px rgba(0,0,0,.45);color:#e8e8f0;font-size:13px;line-height:1.5;';
+    // The fourth site that was still on the pre-token HUD palette (#1e1e2e
+    // ground, #e8e8f0 text, a hardcoded rose border and a #f43f5e button)
+    // after the sync pill and the toast were converted. Danger triad: this
+    // bar exists because the install is in a state that hides Settings and
+    // the Audit Log until it is resolved. `left:50%` stays physical on
+    // purpose -- it is a CENTERING offset paired with translateX(-50%), the
+    // same direction-neutral pair retail_design_rtl_test.js's own budget
+    // excludes, not a leading-edge pin.
+    bar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:var(--overlay-inset-block-end,24px);z-index:99998;display:flex;align-items:center;gap:14px;flex-wrap:wrap;max-width:min(680px,92vw);padding:14px 18px;border-radius:14px;background:var(--state-danger-surface);border:1px solid var(--state-danger-border);box-shadow:0 10px 30px rgba(0,0,0,.45);color:var(--state-danger-text);font-size:13px;line-height:1.5;';
     // textContent (not innerHTML) for the message, and every button built as
     // a real element: nothing here interpolates a server-supplied string
     // into markup.
@@ -1163,10 +1187,14 @@ const SubsystemApp = {
     msg.textContent = 'This device is not yet your store\'s admin device. Settings and the Audit Log stay hidden until one device is chosen.';
     const claim = document.createElement('button');
     claim.className = 'btn btn-primary';
-    claim.style.cssText = 'white-space:nowrap;padding:8px 16px;border-radius:9px;border:none;background:#f43f5e;color:#fff;font-size:13px;font-weight:600;cursor:pointer;';
+    // The one action on this bar, so it takes the accent -- "this is the
+    // action you take" (DESIGN.md §2.1) -- rather than a second red that
+    // would compete with the bar's own danger ground. --text-on-accent is
+    // the only text token allowed on an accent fill.
+    claim.style.cssText = 'white-space:nowrap;padding:8px 16px;border-radius:9px;border:none;background:var(--accent-action);color:var(--text-on-accent);font-size:13px;font-weight:600;cursor:pointer;';
     claim.textContent = 'Make this the admin device';
     const later = document.createElement('button');
-    later.style.cssText = 'background:none;border:none;color:#9aa0b4;font-size:13px;cursor:pointer;padding:8px;';
+    later.style.cssText = 'background:none;border:none;color:var(--text-tertiary);font-size:13px;cursor:pointer;padding:8px;';
     later.textContent = 'Not now';
 
     claim.addEventListener('click', () => this._claimAdminDevice(claim));
@@ -1430,12 +1458,12 @@ const SubsystemApp = {
         <div class="auth-grid-2" data-role="setup-only">
           <div class="auth-field">
             <label for="su-name">Full Name *</label>
-            <input id="su-name" type="text" placeholder="Your full name" autocomplete="name"
+            <input id="su-name" type="text" data-i18n-ph="Your full name" placeholder="${t('Your full name')}" autocomplete="name"
               onkeydown="if(event.key==='Enter')document.getElementById('su-company').focus()" />
           </div>
           <div class="auth-field">
             <label for="su-company">Company Name</label>
-            <input id="su-company" type="text" placeholder="Your company" autocomplete="organization"
+            <input id="su-company" type="text" data-i18n-ph="Your company" placeholder="${t('Your company')}" autocomplete="organization"
               onkeydown="if(event.key==='Enter')document.getElementById('su-email').focus()" />
           </div>
         </div>
@@ -1454,12 +1482,12 @@ const SubsystemApp = {
         <div class="auth-grid-2" data-role="setup-only">
           <div class="auth-field">
             <label for="su-pass">Password *</label>
-            <input id="su-pass" type="password" placeholder="Min. 6 characters" autocomplete="new-password"
+            <input id="su-pass" type="password" data-i18n-ph="Min. 6 characters" placeholder="${t('Min. 6 characters')}" autocomplete="new-password"
               onkeydown="if(event.key==='Enter')document.getElementById('su-pass2').focus()" />
           </div>
           <div class="auth-field">
             <label for="su-pass2">Confirm Password *</label>
-            <input id="su-pass2" type="password" placeholder="Repeat password" autocomplete="new-password"
+            <input id="su-pass2" type="password" data-i18n-ph="Repeat password" placeholder="${t('Repeat password')}" autocomplete="new-password"
               onkeydown="if(event.key==='Enter')SubsystemApp._setupSubmit()" />
           </div>
         </div>
@@ -2400,12 +2428,12 @@ const SubsystemApp = {
         </div>
         <div class="auth-field">
           <label for="rp-pass">${t('New password')}</label>
-          <input id="rp-pass" type="password" placeholder="Min. 6 characters" autocomplete="new-password"
+          <input id="rp-pass" type="password" data-i18n-ph="Min. 6 characters" placeholder="${t('Min. 6 characters')}" autocomplete="new-password"
             onkeydown="if(event.key==='Enter')document.getElementById('rp-pass2').focus()" />
         </div>
         <div class="auth-field" style="margin-bottom:20px;">
           <label for="rp-pass2">${t('Confirm new password')}</label>
-          <input id="rp-pass2" type="password" placeholder="Repeat password" autocomplete="new-password"
+          <input id="rp-pass2" type="password" data-i18n-ph="Repeat password" placeholder="${t('Repeat password')}" autocomplete="new-password"
             onkeydown="if(event.key==='Enter')SubsystemApp._resetPasswordSubmit('${token}')" />
         </div>
         <div id="rp-error" class="auth-error"></div>
@@ -2476,12 +2504,12 @@ const SubsystemApp = {
         </div>
         <div class="auth-field">
           <label for="es-pass">${t('Password')}</label>
-          <input id="es-pass" type="password" placeholder="Min. 6 characters" autocomplete="new-password"
+          <input id="es-pass" type="password" data-i18n-ph="Min. 6 characters" placeholder="${t('Min. 6 characters')}" autocomplete="new-password"
             onkeydown="if(event.key==='Enter')document.getElementById('es-pass2').focus()" />
         </div>
         <div class="auth-field" style="margin-bottom:20px;">
           <label for="es-pass2">${t('Confirm password')}</label>
-          <input id="es-pass2" type="password" placeholder="Repeat password" autocomplete="new-password"
+          <input id="es-pass2" type="password" data-i18n-ph="Repeat password" placeholder="${t('Repeat password')}" autocomplete="new-password"
             onkeydown="if(event.key==='Enter')SubsystemApp._employeeSetupSubmit('${token}')" />
         </div>
         <div id="es-error" class="auth-error"></div>
@@ -2605,7 +2633,7 @@ const SubsystemApp = {
     shell.innerHTML = `
       <!-- Subsystem Sidebar -->
       <aside class="sub-sidebar" id="sub-sidebar">
-        <div class="sub-sidebar-brand aura-logo" title="Return to Home">
+        <div class="sub-sidebar-brand aura-logo" title="${t('Return to Home')}">
           <!-- The Aura mark itself, not a boxed sys.icon emoji -- the owner's
                "shouldn't the logo be where it says aura retail" complaint,
                2026-09-07. AuraIcons.mark() (icons.js) inlines the same
@@ -2639,7 +2667,7 @@ const SubsystemApp = {
             <span class="ai-pulse"></span>
           </button>
           ` : ''}
-          <button class="sub-exit-btn" onclick="SubsystemApp.openLicensing()" title="Device license activation and status">
+          <button class="sub-exit-btn" onclick="SubsystemApp.openLicensing()" title="${t('Device license activation and status')}">
             <span>${window.AuraIcons ? AuraIcons.render('key-round', 18) : '🔑'}</span> <span>${t('License')}</span>
           </button>
           <button class="sub-exit-btn" onclick="SubsystemApp.logout()" style="background:var(--state-danger-surface);border-color:var(--state-danger-border);color:var(--state-danger-text);margin-top:4px;">
@@ -2675,7 +2703,7 @@ const SubsystemApp = {
                  engine itself); dark v2 is token-value-only, so this can no
                  longer produce the historical white-on-white state -- see
                  index.html's boot comment for that postmortem. -->
-            <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="Change UI theme">${window.AuraIcons ? AuraIcons.render('palette', 18) : '🎨'}</button>
+            <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="${t('Change UI theme')}">${window.AuraIcons ? AuraIcons.render('palette', 18) : '🎨'}</button>
           </div>
         </header>
 
@@ -2792,12 +2820,22 @@ const SubsystemApp = {
 
       } catch (err) {
         const c = document.getElementById('sub-content');
+        // The screen shown when ANY nav section throws, in a file that makes
+        // ~100 t() calls everywhere else. Three separate i18n defects lived
+        // here: 'Failed to load' and 'An unexpected error occurred.' were in
+        // neither catalog, and 'Retry' IS a key (ar 'إعادة المحاولة') that
+        // could never reach the screen because the ↻ glyph shared its text
+        // node -- i18n.js's sweep matches only when the FULL trimmed text is
+        // a key. That is the "🛒 Open POS" defect this product has now
+        // shipped three times. The section name is an internal nav id, not
+        // copy, so it stays OUT of the translated sentence.
+        const failIcon = (name, size, fallback) => (window.AuraIcons ? AuraIcons.render(name, size) : fallback);
         if (c) c.innerHTML = `
           <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;padding:60px;text-align:center;">
-            <div style="font-size:48px;margin-bottom:20px;">⚠️</div>
-            <h3 style="color:var(--state-danger-text);margin-bottom:12px;font-size:20px;">Failed to load ${sectionId}</h3>
-            <p style="color:var(--text-secondary);max-width:500px;line-height:1.6;font-size:14px;">${err.message || 'An unexpected error occurred.'}</p>
-            <button onclick="SubsystemApp._navigate('${sectionId}')" style="margin-top:24px;padding:10px 24px;background:var(--accent-action);border:none;border-radius:8px;color:var(--text-on-accent);font-weight:600;cursor:pointer;font-size:14px;">↻ Retry</button>
+            <div style="font-size:48px;margin-bottom:20px;" aria-hidden="true">${failIcon('triangle-alert', 48, '⚠️')}</div>
+            <h3 style="color:var(--state-danger-text);margin-bottom:12px;font-size:20px;">${t('Failed to load')} <bdi dir="ltr">${this._esc(sectionId)}</bdi></h3>
+            <p style="color:var(--text-secondary);max-width:500px;line-height:1.6;font-size:14px;">${this._esc(err.message || t('An unexpected error occurred.'))}</p>
+            <button onclick="SubsystemApp._navigate('${sectionId}')" style="margin-top:24px;padding:10px 24px;background:var(--accent-action);border:none;border-radius:8px;color:var(--text-on-accent);font-weight:600;cursor:pointer;font-size:14px;"><span aria-hidden="true">${failIcon('repeat', 16, '↻')}</span> ${t('Retry')}</button>
           </div>`;
         console.error('[SubsystemApp] Error in ' + this.active + '/' + sectionId + ':', err);
       }
@@ -3210,11 +3248,22 @@ const SubsystemApp = {
       this._esc(String(pending)) + ' ' + t('unsynced');
 
     el.title = '';
-    el.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#1e1e2e;'
-      + 'border-bottom:2px solid #60a5fa;color:white;padding:9px 18px;font-size:13px;'
+    // State tokens, not the old HUD literals (#1e1e2e ground, #60a5fa accent,
+    // color:white). This tier is INFORMATIONAL -- nothing is erroring, the
+    // device is merely behind -- so it takes the info triad, the same one
+    // showToast()'s 'info' type uses. DESIGN.md §4.4 forbids a colour literal
+    // outside the token block and #FFFFFF text in a dark theme; the three
+    // banner tiers were simply not converted when the calm pill and the toast
+    // were, and retail_design_tokens_test.js scans css/main.css only, so it
+    // reported "no stray colour literals" while these sat in JavaScript.
+    // inset-inline:0 rather than left:0;right:0 for the same reason the toast
+    // uses inset-inline-end -- see showToast()'s comment.
+    el.style.cssText = 'position:fixed;top:0;inset-inline:0;background:var(--state-info-surface);'
+      + 'border-bottom:2px solid var(--state-info-border);color:var(--state-info-text);'
+      + 'padding:9px 18px;font-size:13px;'
       + 'line-height:1.45;text-align:center;z-index:99998;'
       + 'box-shadow:0 4px 18px rgba(0,0,0,.35);';
-    el.innerHTML = '<span style="color:#60a5fa;font-weight:700;display:inline-flex;align-items:center;gap:6px;">'
+    el.innerHTML = '<span style="color:var(--state-info-text);font-weight:700;display:inline-flex;align-items:center;gap:6px;">'
       + this._syncIcon('cloud-off', changed) + headline + '</span>';
   },
 
@@ -3245,13 +3294,20 @@ const SubsystemApp = {
     const detail = t("This device has not synced with your other devices in over 24 hours. Reconnect it as soon as you can.");
 
     el.title = '';
-    el.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#1e1e2e;'
-      + 'border-bottom:3px solid #ef4444;color:white;padding:9px 18px;font-size:13px;'
+    // The escalated tier takes the DANGER triad where the plain "behind" tier
+    // above takes INFO -- still visibly stronger (a heavier border and
+    // font-weight, the red family instead of the blue one), but now through
+    // tokens that are contrast-proven in all five themes rather than a fixed
+    // #ef4444 on a fixed near-black. margin-inline-start, not margin-left: in
+    // Arabic the row reverses and a physical margin lands on the outer edge.
+    el.style.cssText = 'position:fixed;top:0;inset-inline:0;background:var(--state-danger-surface);'
+      + 'border-bottom:3px solid var(--state-danger-border);color:var(--state-danger-text);'
+      + 'padding:9px 18px;font-size:13px;'
       + 'line-height:1.45;text-align:center;z-index:99998;'
       + 'box-shadow:0 4px 18px rgba(0,0,0,.35);';
-    el.innerHTML = '<span style="color:#ef4444;font-weight:800;display:inline-flex;align-items:center;gap:6px;">'
+    el.innerHTML = '<span style="color:var(--state-danger-text);font-weight:800;display:inline-flex;align-items:center;gap:6px;">'
       + this._syncIcon('triangle-alert', changed) + headline + '</span>'
-      + '<span style="opacity:.85;margin-left:10px;">' + detail + '</span>';
+      + '<span style="opacity:.85;margin-inline-start:10px;">' + detail + '</span>';
   },
 
   // The original failure-only banner, unchanged in look and behavior: full-
@@ -3266,8 +3322,14 @@ const SubsystemApp = {
     else                    headline = t("This device isn't receiving updates from your other devices right now");
     const detail = t("This device is still working normally. Everything will catch up automatically once the connection comes back.");
 
-    el.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#1e1e2e;'
-      + 'border-bottom:2px solid #fbbf24;color:white;padding:9px 18px;font-size:13px;'
+    // WARNING triad: sync is actively failing, but nothing is lost and no
+    // write is refused, so this is amber rather than the danger red the 24h
+    // tier carries -- one meaning, one colour (DESIGN.md §2.2). Tokens, not
+    // the old #fbbf24-on-#1e1e2e, for the reason spelled out on the "behind"
+    // tier above.
+    el.style.cssText = 'position:fixed;top:0;inset-inline:0;background:var(--state-warning-surface);'
+      + 'border-bottom:2px solid var(--state-warning-border);color:var(--state-warning-text);'
+      + 'padding:9px 18px;font-size:13px;'
       + 'line-height:1.45;text-align:center;z-index:99998;'
       + 'box-shadow:0 4px 18px rgba(0,0,0,.35);';
     // last_failure_reason goes ONLY in title= -- support can hover for the
@@ -3275,9 +3337,9 @@ const SubsystemApp = {
     const reason = (pushBad ? data.push.last_failure_reason : data.pull.last_failure_reason) || '';
     el.title = reason ? ('Sync detail: ' + reason) : '';
     el.innerHTML =
-      '<span style="color:#fbbf24;font-weight:700;display:inline-flex;align-items:center;gap:6px;">'
+      '<span style="color:var(--state-warning-text);font-weight:700;display:inline-flex;align-items:center;gap:6px;">'
       + this._syncIcon('triangle-alert', changed) + headline + '</span>'
-      + '<span style="opacity:.8;margin-left:10px;">' + detail + '</span>';
+      + '<span style="opacity:.8;margin-inline-start:10px;">' + detail + '</span>';
   },
 
   // New calm state: a small, unobtrusive bottom-right pill -- ambient
@@ -3291,7 +3353,13 @@ const SubsystemApp = {
   // its own sake on the one tier that should feel like nothing is happening.
   _renderSyncCalmState(data, changed) {
     const el = this._syncBannerEl;
-    el.style.cssText = 'position:fixed;bottom:14px;right:14px;display:inline-flex;'
+    // inset-inline-end, not `right`: the pill floats over the shell and the
+    // shell mirrors in Arabic, so a physical corner sends the pill to the
+    // bottom-LEFT of the reading order while showToast() -- 186 lines below,
+    // already logical -- correctly moves with the language. Same blind spot
+    // as the toast's: retail_design_rtl_test.js ratchets physical properties
+    // in css/main.css and cannot see a style string built in JavaScript.
+    el.style.cssText = 'position:fixed;bottom:14px;inset-inline-end:14px;display:inline-flex;'
       + 'align-items:center;gap:7px;padding:6px 12px;border-radius:20px;'
       // State tokens, not the old HUD mint (#a7f3d0 on a 10% green tint was
       // ~1.5:1 over the light shell). An opaque state pair is self-contained,

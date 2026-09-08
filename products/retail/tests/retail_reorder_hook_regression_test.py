@@ -66,9 +66,21 @@ def teardown_module(module):
 # Decision 1") -- exactly the "real, deliberate checkout-response contract
 # change" this comment already anticipated. Reorder automation still never
 # adds a key; that claim is unaffected.
+#
+# `einvoice` added 2026-09-08 -- the second such contract change, and this
+# one couples a NEIGHBOURING best-effort hook into this file's assertions.
+# E-invoicing now defaults ON (commercial_runtime/einvoicing/settings.py
+# DEFAULTS 'enabled': '1'), so create_sale reaches the enqueue block at
+# retail_api.py:4816 -- the block immediately ABOVE the reorder hook this
+# file guards, sharing its "own connection, broad try/except, never fails
+# the sale" shape. The difference is that e-invoicing sets
+# response_data['einvoice'] when enqueue_sale(...) returns truthy, so a
+# failed or skipped enqueue now shows up here as a reorder-hook key-set
+# failure. The claim this file actually makes is still narrow and still
+# true: the REORDER hook adds no key, whether it fires, no-ops or raises.
 SALE_RESPONSE_KEYS = [
     'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
-    'discount_amount', 'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
+    'discount_amount', 'einvoice', 'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
     'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
 ]
 
@@ -200,11 +212,29 @@ def test_hook_exception_produces_the_identical_response_a_successful_hook_would_
     monkeypatch.setattr(reorder_hook, 'maybe_trigger_reorder', _boom)
     fail_response = _sell(client_fail, pid_fail, 2).get_json()['data']
 
-    excluded = {'id', 'sale_number', 'idempotency_key', 'lines'}
+    # 'einvoice' is per-sale-unique for the same reason 'id' is: its
+    # invoice_ref is f'AURA_RETAIL:sale:{sale_id}' (retail_api.py:4818), so
+    # two different sales can never compare equal and a raw == on it could
+    # only ever fail. Excluding it costs this loop the ability to notice a
+    # change in the einvoice payload's SHAPE, so that is asserted
+    # explicitly below against each response's own id instead.
+    excluded = {'id', 'sale_number', 'idempotency_key', 'lines', 'einvoice'}
     for key in SALE_RESPONSE_KEYS:
         if key in excluded:
             continue
         assert ok_response[key] == fail_response[key], f"divergence on {key!r}"
+
+    # The excluded key, checked the only way it can be. This matters here
+    # more than anywhere: the e-invoicing enqueue sits in the try/except
+    # DIRECTLY ABOVE the reorder hook being blown up, so "a raising reorder
+    # hook took e-invoicing down with it" is a real, adjacent failure mode
+    # and the key-set assertion cannot see it (it would still pass if BOTH
+    # responses lost the key).
+    for label, data in (('hook ok', ok_response), ('hook raising', fail_response)):
+        assert data['einvoice'] == {
+            'invoice_ref': f"AURA_RETAIL:sale:{data['id']}",
+            'status': 'queued',
+        }, f"e-invoice payload wrong with the reorder {label}: {data['einvoice']!r}"
 
     # `lines` differs only in product_id/branch_id (a different product AND
     # a different auto-created branch per client/company) -- every OTHER

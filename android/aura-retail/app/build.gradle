@@ -111,10 +111,17 @@ def releaseRequiredConfig = [
         headline: 'AURA_SYNC_RELAY_URL is not set -- this build never syncs.',
         consequence: """\
    SyncCoordinator.start() returns before scheduling a single tick, so this
-   device never pushes or pulls anything. Nothing surfaces that: the app has
-   no sync UI at all (SyncCoordinator.health() exists precisely because no
-   screen consumes it), so a multi-device customer sees a device that simply
-   never agrees with their others, with no error anywhere to explain why.""",
+   device never pushes and never pulls: whatever is rung up on it stays on
+   it, permanently, and nothing another device does ever arrives.
+   The failure is at least VISIBLE. More > Sync status polls
+   SyncCoordinator.health() and has a dedicated NOT_CONFIGURED tier that
+   hides the per-half breakdown and says sync is not set up -- added exactly
+   because 'Sending Healthy / Receiving Healthy' under an unconfigured relay
+   read as the opposite of the truth. (This entry used to say the app had no
+   sync UI at all; SyncStatusScreen.kt has been registered and reachable
+   since, pinned by SyncStatusPresentationTest.)
+   Release-blocking regardless: an honest 'not set up' on a device that is
+   permanently alone is a diagnosis, not a working multi-device install.""",
     ],
     [
         gradleProperty: 'aiBearerToken',

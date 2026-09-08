@@ -4,9 +4,27 @@
          WebView layout it styled: MainActivity has been pure Compose since the
          native rewrite and never inflated activity_main.xml, so those colours
          could only ever describe a screen no user has seen. -->
-    <!-- Pre-compose window background; MUST match ui/theme/Color.kt's
-         SurfaceApp or cold start flashes the wrong colour before the first
-         Compose frame. -->
+    <!-- PREVIEW-WINDOW FALLBACK, not a value that matches every theme.
+         This comment used to claim the resource "MUST match ui/theme/Color.kt's
+         SurfaceApp". Since the five-theme switch there is no single SurfaceApp
+         (Day #EAEEF3, Sand #EFE8DC, Calm #0F1319, Night #070B12, Dusk #13111C),
+         so that invariant was unsatisfiable by construction and a Day or Sand
+         user got a near-black frame on cold start.
+
+         What it actually is: Calm's surfaceApp (this app's original and
+         still-default palette) serving the system's starting/preview window,
+         which the framework draws from the manifest theme BEFORE this process
+         draws anything. From window attach onwards MainActivity repaints the
+         ground with the palette AppTheme.load() restored, so the mismatch is
+         bounded to that one framework-drawn frame. Removing it entirely needs
+         per-palette launch themes.
+
+         The dead ic_launcher_background colour that sat below is gone: nothing
+         referenced it (both mipmap-anydpi-v26 adaptive icons point at
+         @drawable/ic_launcher_background, a different resource whose own header
+         records the replacement), the name collided exactly with that live
+         drawable, and its #1A1A1A was neither a brand nor a token colour. The
+         real launcher ground is the drawable's own dark gradient, pinned by
+         BrandMarkWiringContractTest. -->
     <color name="window_background">#FF0F1319</color>
-    <color name="ic_launcher_background">#1A1A1A</color>
 </resources>

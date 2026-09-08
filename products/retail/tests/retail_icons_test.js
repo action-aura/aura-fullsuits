@@ -428,6 +428,112 @@ async function testEveryGuardIsProvenByBreakingIt() {
   for (const p of proved) console.log('      ' + p);
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// EVERY VALUE THE PRODUCT ACTUALLY ASKS FOR RESOLVES
+//
+// checkEveryNameAndEmojiRenders() above iterates the ICONS and EMOJI maps and
+// asks "does everything we MAPPED render?". That is the wrong direction for
+// the failure this product keeps having, which is a CALL SITE asking for
+// something nobody mapped:
+//
+//   * eleven sections shipped a mapped-looking icon that was actually a raw
+//     emoji, because render() used to fall through to its own argument (see
+//     this file's LOUD FALLBACK note and icons.js's module comment);
+//   * _renderPOSGrid's ten category tiles asked for 💻 👕 🍔 🥤 💍 👟 ⚽ 💄, of
+//     which NONE was in EMOJI -- eight system emoji on the busiest screen in
+//     the product;
+//   * _renderCapabilityRestricted's 🔒 default asked for a glyph that had a
+//     perfectly good 'lock' icon behind it and no EMOJI entry pointing there.
+//
+// Since 2026-09-08 an unresolved value renders circle-help and console.warns,
+// so the defect is loud AT RUNTIME -- but only for whoever happens to have the
+// console open on the right screen. This check harvests the values from the
+// SOURCE and refuses them here instead.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/* Every literal handed to a render helper anywhere in the frontend.
+   `_icon(name, size, fallback)` / `_stkaIcon` / `_exqIcon` / `_syncIcon` all
+   forward their first argument to AuraIcons.render(), so they are harvested
+   together with direct render() calls. The FALLBACK argument is deliberately
+   NOT harvested: it is the glyph shown when icons.js failed to load at all,
+   which is exactly the case where nothing can resolve. */
+const HELPER = '(?:AuraIcons\\.render|(?:this\\.)?_icon|(?:this\\.)?_stkaIcon|(?:this\\.)?_exqIcon|(?:this\\.)?_syncIcon)';
+
+/* Four shapes, because a regex over only the simplest one would have missed
+   the very defect this check was written for. The POS category tiles were the
+   worst case in the product -- eight unmapped emoji on its busiest screen --
+   and they are NOT written as `_icon('laptop', …)`; they are a lookup table
+   resolved into a variable. Harvesting only the literal-first-argument form
+   would have reported a clean bill of health over exactly that gap. */
+const CALL_SITE_PATTERNS = [
+  // _icon('name', …)
+  new RegExp(HELPER + "\\(\\s*'([^']+)'", 'g'),
+  // _icon(cond ? 'a' : 'b', …)  — both branches
+  new RegExp(HELPER + "\\([^()']*\\?\\s*'([^']+)'\\s*:\\s*'([^']+)'", 'g'),
+  // _icon(o.icon || 'lock', …)  — the documented default
+  new RegExp(HELPER + "\\(\\s*[\\w.$]+\\s*\\|\\|\\s*'([^']+)'", 'g'),
+  // the POS grid's category -> icon-name lookup table, resolved at 2541 and
+  // handed to _icon() at the tile. Anchored on the table's own name so this
+  // cannot silently start matching some unrelated object literal.
+  /_ICONS\s*=\s*\{([^}]*)\}/g,
+];
+
+function harvestRequestedIconValues() {
+  const files = fs.readdirSync(FRONTEND_DIR).filter((f) => f.endsWith('.js') && f !== 'icons.js');
+  const requested = new Map();   // value -> "file:line"
+  for (const f of files) {
+    const src = fs.readFileSync(path.join(FRONTEND_DIR, f), 'utf8');
+    for (const re of CALL_SITE_PATTERNS) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(src)) !== null) {
+        const line = src.slice(0, m.index).split('\n').length;
+        // The _ICONS table capture is a whole object body; every quoted VALUE
+        // in it is a requested icon name (the keys are category names).
+        const values = re.source.startsWith('_ICONS')
+          ? (m[1].match(/:\s*'([^']+)'/g) || []).map((s) => s.replace(/^:\s*'|'$/g, ''))
+          : m.slice(1).filter(Boolean);
+        for (const v of values) if (!requested.has(v)) requested.set(v, `${f}:${line}`);
+      }
+    }
+  }
+  return requested;
+}
+
+function checkEveryRequestedValueResolves(src) {
+  const requested = harvestRequestedIconValues();
+  // ANTI-VACUITY: the harvest finding nothing would make every claim below
+  // true of the empty set. The shell alone carries well over twenty.
+  assert.ok(
+    requested.size >= 30,
+    `Only ${requested.size} icon value(s) harvested from the frontend call sites. The shell, the ` +
+    'POS grid, the state panels and the modals carry far more than that, so treat this as a ' +
+    'harness failure rather than a clean result.'
+  );
+
+  const warns = [];
+  const AuraIcons = loadIcons(src, warns);
+  const unresolved = [];
+  for (const [value, where] of requested) {
+    const before = warns.length;
+    const out = AuraIcons.render(value, 24);
+    const isSvg = /^<svg[\s>]/.test(out) && out.includes('</svg>');
+    const fellBack = warns.length > before || out.includes('circle-help');
+    if (!isSvg || fellBack) {
+      unresolved.push(`${JSON.stringify(value)} (${where}) — ${fellBack ? 'circle-help placeholder + console.warn' : JSON.stringify(out.slice(0, 60))}`);
+    }
+  }
+  assert.deepStrictEqual(
+    unresolved, [],
+    `${unresolved.length} value(s) the product actually asks for do not resolve to a real icon:\n  ` +
+    unresolved.join('\n  ') +
+    '\n\nAdding an icon is two steps (icons.js\'s own module comment): a Lucide name in ICONS with ' +
+    'geometry fetched verbatim from unpkg.com/lucide-static, and -- if it stands in for an emoji ' +
+    'the app already uses -- an EMOJI entry pointing at it. Never hand-draw the path.'
+  );
+  return requested.size;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────────────────────────────────────
@@ -435,6 +541,9 @@ async function testEveryGuardIsProvenByBreakingIt() {
 async function main() {
   checkEveryNameAndEmojiRenders(ICONS_SRC);
   console.log('PASS: every icon name and emoji the app maps today renders a real <svg>');
+
+  const requestedCount = checkEveryRequestedValueResolves(ICONS_SRC);
+  console.log(`PASS: all ${requestedCount} icon value(s) the frontend actually requests resolve to a real <svg>, none to the placeholder`);
 
   checkTwoWeightTreatment(ICONS_SRC);
   console.log('PASS: the two-weight signature (light structure, one heavy element) is structurally present');
@@ -453,7 +562,7 @@ async function main() {
 
   await testEveryGuardIsProvenByBreakingIt();
 
-  console.log('PASS: retail_icons_test.js — 7 checks');
+  console.log('PASS: retail_icons_test.js — 8 checks');
 }
 
 main().catch((err) => {

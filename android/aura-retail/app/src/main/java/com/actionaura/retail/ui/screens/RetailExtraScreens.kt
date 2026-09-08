@@ -54,6 +54,7 @@ import com.actionaura.retail.ui.i18n.AppLang
 import com.actionaura.retail.ui.i18n.AppLocale
 import com.actionaura.retail.ui.i18n.AppTheme
 import com.actionaura.retail.ui.i18n.fmtQty
+import com.actionaura.retail.ui.i18n.ltrIsolate
 import com.actionaura.retail.ui.i18n.parseNum
 import com.actionaura.retail.ui.i18n.tr
 import com.actionaura.retail.ui.CAP_EMPLOYEES
@@ -191,11 +192,60 @@ internal val reportPeriods = listOf(
     ReportPeriod("90 days", 90), ReportPeriod("1 year", 365),
 )
 
+/**
+ * The DISPLAY NAME for a payment method the server grouped a report by.
+ *
+ * The sales-report breakdown does not carry a name; it carries whatever
+ * string the sale stored in `sales.payment_method`, verbatim. retail_api.py
+ * takes that straight off the request body (`data.get('payment_method',
+ * 'cash')`) with no normalisation anywhere, and this client sends the
+ * configured method's NAME lowercased (RetailScreens.kt's payOptions,
+ * `it.lowercase()`), so a Bank Transfer sale is stored as the literal
+ * "bank transfer".
+ *
+ * That is a wire CODE, not a catalogue key: the Arabic catalogue is keyed on
+ * the seeded names ("Cash", "Card", "Bank Transfer", "Mobile Wallet",
+ * "Check"), so `tr("bank transfer")` misses every one of them and the whole
+ * column stayed English on an Arabic till while the tender chips beside it
+ * translated. Capitalising the first letter -- what this site used to do --
+ * only ever produced "Bank transfer" and "Mobile wallet", wrong in English
+ * too.
+ *
+ * So: resolve the code back to a configured method's name first (case-
+ * insensitively, which is the only relationship the two ends actually share),
+ * and let the CALLER translate the result. Returning the untranslated name
+ * keeps this function pure and testable, and matches the rule
+ * PaymentMethodLabelsContractTest already pins for the Charge-step chips --
+ * only the visible label goes through [tr], never the stored value.
+ *
+ * Falls back to the stored string with its first letter capitalised for
+ * anything the configured list has no entry for: a shop's own custom method,
+ * a method that has since been deleted, "credit" (which the Charge step
+ * always appends and which the server never seeds as a method row), or a
+ * legacy code from before the list existed. Those were never translated
+ * either way, so nothing regresses for them.
+ */
+internal fun paymentMethodName(storedCode: String?, configured: List<PayMethod>): String {
+    val code = storedCode?.trim().orEmpty()
+    if (code.isEmpty()) return "—"
+    configured.mapNotNull { it.name }
+        .firstOrNull { it.trim().equals(code, ignoreCase = true) }
+        ?.let { return it.trim() }
+    return code.replaceFirstChar { it.uppercase() }
+}
+
 @Composable
 fun ReportsScreen(snackbar: SnackbarHostState, onNavigate: (String) -> Unit) {
     var days by remember { mutableStateOf(30) }
     var summary by remember { mutableStateOf<ReportSummary?>(null) }
     var payments by remember { mutableStateOf<List<PaymentMethodStat>>(emptyList()) }
+    // The configured tender list, fetched for its NAMES only. The breakdown
+    // below arrives keyed by the lowercased wire CODE the sale stored, which
+    // is not a translation key and not a display name -- see
+    // paymentMethodName()'s docstring. Loaded once (it does not depend on the
+    // report period) and best-effort: an empty list just means every row falls
+    // back to the stored string, which is what shipped before this fix.
+    var configuredMethods by remember { mutableStateOf<List<PayMethod>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
 
     // Refetch whenever the chosen period changes (or the screen first loads).
@@ -204,6 +254,9 @@ fun ReportsScreen(snackbar: SnackbarHostState, onNavigate: (String) -> Unit) {
         summary = try { ApiClient.get().reportSummary(days).data } catch (e: Exception) { null }
         payments = try { ApiClient.get().reportPaymentMethods(days).data } catch (e: Exception) { emptyList() }
         loading = false
+    }
+    LaunchedEffect(Unit) {
+        configuredMethods = try { ApiClient.get().payMethods().data } catch (e: Exception) { emptyList() }
     }
 
     val s = summary ?: ReportSummary()
@@ -262,7 +315,8 @@ fun ReportsScreen(snackbar: SnackbarHostState, onNavigate: (String) -> Unit) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         payments.forEach { pm ->
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Text((pm.payment_method ?: "—").replaceFirstChar { it.uppercase() }, Modifier.weight(1f))
+                                Text(tr(paymentMethodName(pm.payment_method, configuredMethods)),
+                                    Modifier.weight(1f))
                                 Text("${pm.count}×", style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Spacer(Modifier.width(12.dp))
@@ -1536,7 +1590,13 @@ fun RetailSettingsScreen(snackbar: SnackbarHostState, onOpenBackup: () -> Unit =
         TillCard(Modifier.fillMaxWidth()) {
             Row(Modifier.padding(16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(tr("Version"), Modifier.weight(1f))
-                Text(com.actionaura.retail.BuildConfig.VERSION_NAME, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // ltrIsolate: bare, Arabic's bidi algorithm lays "1.0.0-rc.5"
+                // out as "rc.5-1.0.0". Same fix as the sign-in footer; see
+                // ltrIsolate's own comment for the measurement.
+                Text(
+                    ltrIsolate(com.actionaura.retail.BuildConfig.VERSION_NAME),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

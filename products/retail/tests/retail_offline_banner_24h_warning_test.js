@@ -179,9 +179,17 @@ function testBehindByOver24hShowsTheEscalatedBanner() {
     'The escalated banner is missing its explanatory detail sentence about being behind ' +
     'over 24 hours. Got: ' + bannerHtml
   );
+  // Re-anchored 2026-09-08 from the literal '#ef4444' to the DANGER TOKEN
+  // FAMILY, because the banner tiers were moved off hardcoded hex onto
+  // --state-* tokens (DESIGN.md §4.4: no colour literal outside the token
+  // block). What this can no longer catch: the exact hex value. What it still
+  // catches -- which is all it ever actually asserted -- is that the escalated
+  // tier paints itself from a DIFFERENT, stronger state family than the plain
+  // "behind" tier, which now resolves through --state-info-*. The negative
+  // half at the bottom of this file pins the other direction.
   assert.ok(
-    bannerHtml.includes('#ef4444'),
-    'The escalated banner did not use its own visibly-stronger colour. Got: ' + bannerHtml
+    bannerHtml.includes('--state-danger-'),
+    'The escalated banner did not use its own visibly-stronger colour family. Got: ' + bannerHtml
   );
   assert.ok(
     !bannerHtml.includes('Offline since'),
@@ -236,9 +244,11 @@ function testBehindByUnder24hStillShowsTheOrdinaryBanner() {
     !/over 24 hours/i.test(bannerHtml),
     'A device behind by only 2 hours incorrectly rendered the 24h-warning detail sentence. Got: ' + bannerHtml
   );
+  // Same re-anchor as the escalated half above, and the same trade: the exact
+  // hex is no longer pinned, the SEPARATION between the two tiers still is.
   assert.ok(
-    !bannerHtml.includes('#ef4444'),
-    'A device behind by only 2 hours incorrectly used the escalated tier\'s colour. Got: ' + bannerHtml
+    !bannerHtml.includes('--state-danger-'),
+    'A device behind by only 2 hours incorrectly used the escalated tier\'s colour family. Got: ' + bannerHtml
   );
 
   console.log('PASS: a device behind by less than 24 hours still shows the ordinary 7b banner (allow-half)');

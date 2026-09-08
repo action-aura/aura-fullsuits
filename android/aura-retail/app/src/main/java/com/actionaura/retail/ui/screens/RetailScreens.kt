@@ -704,7 +704,20 @@ private fun shareReceipt(ctx: android.content.Context, sale: com.actionaura.reta
         type = "text/plain"
         putExtra(android.content.Intent.EXTRA_TEXT, text)
     }
-    ctx.startActivity(android.content.Intent.createChooser(intent, "Share receipt"))
+    // The chooser TITLE is ordinary UI copy on an otherwise fully translated
+    // screen and simply missed tr() -- it stayed English while the button that
+    // opens it (tr("Share Receipt"), above) translated. Reuses that same
+    // catalogue key deliberately rather than minting a near-duplicate
+    // "Share receipt": two entries differing only in case is how a catalogue
+    // starts drifting from itself.
+    //
+    // The receipt BODY's own labels are still English literals. That is not an
+    // oversight to fix here: DESIGN.md §9 item 3 owns the bilingual receipt
+    // template (thermal 58/80 mm and A4, the mark, the fils, the e-invoicing
+    // QR) and translating seven labels ahead of it would ship half of a
+    // designed artefact. "Aura Retail" stays English regardless -- it is the
+    // product name, brand rather than copy.
+    ctx.startActivity(android.content.Intent.createChooser(intent, tr("Share Receipt")))
 }
 
 @Composable

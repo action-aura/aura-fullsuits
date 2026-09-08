@@ -175,6 +175,38 @@ for (const name of BLOCK_THEMES) {
       const close = block.indexOf('*/');
       if (close !== -1) block = block.slice(close + 2);
       block = block.replace(/\/\*[\s\S]*?\*\//g, '');
+
+      // A LEFTOVER CLOSER MEANS A DECLARATION WAS EATEN. Added 2026-09-08,
+      // the same guard as retail_design_contrast_test.js's parseTokens and
+      // for the same measured reason: on that day a comment in main.css
+      // described a token family with a wildcard written immediately before
+      // a slash, which ended the comment four lines early; the CSS parser
+      // took the leaked prose AND the `--surface-accent-soft: #eaedf9;`
+      // after it as one invalid declaration, so the browser had no such
+      // token on :root. This scan is byte-identical in kind to the one over
+      // there -- text, with no model of declaration boundaries -- so it read
+      // the swallowed declaration straight out of the prose and reported the
+      // theme complete. Every check in this file was green against a
+      // stylesheet whose default theme was missing a token.
+      //
+      // The strip above is non-greedy, i.e. first-close-wins exactly as a
+      // CSS parser pairs them, so anything still holding a closer after it
+      // is prose that leaked out of a comment. That is a structural fact a
+      // text scan CAN see, unlike the discarded declaration itself, so this
+      // refuses instead of guessing. The whole-file, brace-tracking version
+      // lives in retail_design_css_parse_test.js; this is the local guard
+      // for the marker SLICE this closure was handed.
+      const orphan = block.indexOf('*' + '/');
+      assert(orphan === -1,
+        `${begin}: a stray comment closer survives comment-stripping at line ` +
+        `${block.slice(0, orphan).split('\n').length} of the block. A CSS ` +
+        'comment ends at the FIRST closing sequence, so a surplus closer means ' +
+        'a comment ended mid-sentence and the browser discarded the leaked prose ' +
+        'together with the declaration after it -- while this scan still reports ' +
+        'that token present and every check below passes on a palette the product ' +
+        'does not have. Fix the stylesheet (write "the surface and text tokens", ' +
+        'never a star immediately followed by a slash); do not relax this check.');
+
       const out = new Map();
       for (const m of block.matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/gi)) out.set(m[1], m[2].trim());
       return out;

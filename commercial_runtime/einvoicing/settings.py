@@ -49,9 +49,33 @@ DEFAULTS = {
     'default_payment_type': 'cash',       # 'cash' | 'credit'
     'seller_tin': '',
     'seller_name': '',
+    # KNOWN GAP, written down rather than left to be rediscovered: this key
+    # accepts a value and nothing reads it, because no client offers a field
+    # for it. Both products' e-invoicing pages tell the shop to "enter the
+    # Client-ID, Secret-Key and activity number" JoFotara issues
+    # (products/retail/frontend/einvoicing.js, clinic's identical line, and
+    # providers/unconfigured.py's _NOT_CONFIGURED_MESSAGE), but the settings
+    # form collects only invoice_family/seller_name/seller_tin/currency and
+    # the credentials form only client_id/client_secret. The key already
+    # validates, so closing this is one label, one input and one payload
+    # field per product -- frontend work, tracked outside this module.
     'seller_activity_code': '',
     'currency': 'JOD',
-    'buyer_id_required': '1',
+    # `buyer_id_required` USED TO LIVE HERE, defaulting to '1', and was read
+    # by nothing anywhere in the repo. Removed rather than wired, because
+    # wiring it would have been the wrong fix: the only thing that could
+    # honour it is document.require_buyer_id(), which RAISES when a buyer has
+    # no identifier on file, and both adapters deliberately call
+    # select_buyer_id() instead so a walk-in cash sale still files (see
+    # products/retail/backend/core/retail/einvoice_adapter.py's docstring).
+    # Turning the setting on would therefore have blocked exactly the sales
+    # Phase 1 decided must never be blocked.
+    #
+    # THE PHASE 1 DECISION, in writing so a later reader does not trust a
+    # name that promises enforcement: always select_buyer_id, never require.
+    # A setting whose name asserts an enforcement the product does not
+    # perform is worse than no setting -- an operator who found it would
+    # believe invoices without a buyer ID were being refused.
     'submit_interval_seconds': '60',
     'max_attempts': '20',
     'enabled_at': '',

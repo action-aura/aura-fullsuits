@@ -337,11 +337,54 @@ function themeTokenMaps(lightTokens, name) {
   return { overrides, merged };
 }
 
+// Never written as a literal in this file: the whole subject below is a
+// two-character sequence that ends a CSS comment, and it must not appear in a
+// JS string that could later be pasted into a stylesheet comment.
+const COMMENT_CLOSE = '*' + '/';
+
 function parseTokens(block) {
   const tokens = new Map();
   // Strip comments first: the token block is heavily commented and a comment
   // containing a `#` or a `;` would otherwise be parsed as a declaration.
   const clean = block.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  // A LEFTOVER CLOSER MEANS A DECLARATION WAS EATEN. Added 2026-09-08 after
+  // this function reported a token the browser did not have.
+  //
+  // The regex above is non-greedy, so it pairs openers and closers the way a
+  // CSS parser does -- first close wins. What survives it, then, is prose that
+  // leaked OUT of a comment that ended early, and the parser hands that prose
+  // to the declaration grammar, where it swallows itself plus whatever follows
+  // as one invalid declaration. Measured on main.css that day: a comment
+  // describing a token family with a wildcard written immediately before a
+  // slash closed four lines early and took `--surface-accent-soft: #eaedf9;`
+  // out of :root. Edge reported [] for that token on :root; THIS function,
+  // scanning text with no model of declaration boundaries, happily returned
+  // "#eaedf9" -- and 3,240 contrast pairings were then computed against a
+  // value the product does not have, and printed PASS.
+  //
+  // A text scanner cannot tell a live declaration from a discarded one. It CAN
+  // tell that the comment structure is broken, which is the same signal one
+  // step earlier, so it refuses rather than guessing. retail_design_css_parse_
+  // test.js implements the structural version of this over whole stylesheets
+  // (its testNoCommentClosesEarly, plus a brace-tracking walk that proves which
+  // token was lost); this is the cheap local guard for the SLICE this function
+  // was handed, which that file's whole-file check does not cover.
+  const orphan = clean.indexOf(COMMENT_CLOSE);
+  if (orphan !== -1) {
+    const line = clean.slice(0, orphan).split('\n').length;
+    assert.fail(
+      `a stray comment closer survives comment-stripping at line ${line} of this ` +
+      `token block: ...${JSON.stringify(clean.slice(Math.max(0, orphan - 70), orphan + 4))}. ` +
+      'A CSS comment ends at the FIRST closing sequence, so a surplus closer ' +
+      'means a comment ended mid-sentence and the browser discarded the leaked ' +
+      'prose together with the next declaration -- while this text scan still ' +
+      'reports that declaration present and every contrast pairing below is ' +
+      'computed against a value the product does not have. Fix the stylesheet ' +
+      '(write "the surface and text tokens", never a star immediately followed ' +
+      'by a slash); do not relax this check.');
+  }
+
   const re = /(--[a-z0-9-]+)\s*:\s*([^;]+);/gi;
   let m;
   while ((m = re.exec(clean)) !== null) tokens.set(m[1], m[2].trim());

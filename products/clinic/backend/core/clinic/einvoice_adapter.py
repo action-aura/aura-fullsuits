@@ -87,7 +87,22 @@ def build_document(conn, outbox_row) -> EInvoiceDocument:
     ]
 
     buyer_name, buyer_id = _fetch_buyer(conn, company_id, invoice['patient_id'])
-    invoice_family = settings.get_setting(conn, company_id, 'invoice_family')
+    # The outbox row's OWN invoice_family, not a fresh settings read -- this
+    # was a live settings read, which is the one hazard Retail's adapter
+    # spells out at length (see products/retail/backend/core/retail/
+    # einvoice_adapter.py, same line). _enqueue_on_conn below reads
+    # invoice_family ONCE and uses that single value both to allocate
+    # einvoice_no (different families are different number series) and to
+    # stamp the outbox row, committed together in one BEGIN IMMEDIATE. A
+    # company that changes the setting between enqueue and worker submission
+    # would otherwise file a document whose declared family disagrees with
+    # the series already baked into its own einvoice_no. NOT one of the "two
+    # real differences from Retail" this module's docstring enumerates -- it
+    # was unintentional drift.
+    #
+    # `payment_type` a few lines down IS deliberately re-derived here: it
+    # depends on amount_paid, which legitimately changes after enqueue.
+    invoice_family = outbox_row['invoice_family']
     currency = settings.get_setting(conn, company_id, 'currency')
     seller_name = settings.get_setting(conn, company_id, 'seller_name') or 'Aura Clinic Merchant'
     seller_tin = settings.get_setting(conn, company_id, 'seller_tin')

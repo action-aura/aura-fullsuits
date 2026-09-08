@@ -36,6 +36,16 @@
   const SEND_ID = 'sub-ai-send';
   const TYPING_ID = 'sub-ai-typing';
 
+  // Guarded AuraIcons.render(), the shape every other file in this frontend
+  // uses. This panel kept four raw emoji longer than anywhere else -- 🙂/🤖
+  // as the chat avatars and 🗑/➤ as its ONLY TWO CONTROLS -- so the one
+  // surface in the product that is meant to feel like part of the app was
+  // drawing its buttons in the OS emoji font. 'bot', 'trash-2' and 'send'
+  // were added to icons.js for these (real Lucide geometry, fetched not
+  // drawn); 🙂 maps to the 'user-round' icon that already existed.
+  const _icon = (name, size, fallback) =>
+    (window.AuraIcons ? AuraIcons.render(name, size) : (fallback || ''));
+
   // 2026-08-13 (speed pass): with the response now streamed (see send()
   // below), a healthy reply can legitimately run past 50s of WALL time
   // while visibly producing text -- a one-shot response made 50s a TOTAL
@@ -306,7 +316,12 @@
       row.className = 'ai-msg' + (role === 'user' ? ' user' : '');
       const avatar = document.createElement('div');
       avatar.className = 'ai-msg-avatar';
-      avatar.textContent = role === 'user' ? '🙂' : '🤖';
+      // Avatars through AuraIcons, not raw emoji: a system emoji's
+      // appearance belongs to the OS font and cannot take a theme token,
+      // and these two are the only faces in the product. innerHTML (not
+      // textContent) because render() returns an <svg>; the values are
+      // constants from this file, never user input.
+      avatar.innerHTML = _icon(role === 'user' ? 'user-round' : 'bot', 18, role === 'user' ? '🙂' : '🤖');
       const bubble = document.createElement('div');
       bubble.className = 'ai-msg-bubble';
       bubble.setAttribute('dir', 'auto');
@@ -354,7 +369,7 @@
           typing = document.createElement('div');
           typing.id = TYPING_ID;
           typing.className = 'ai-msg';
-          typing.innerHTML = '<div class="ai-msg-avatar">🤖</div>'
+          typing.innerHTML = '<div class="ai-msg-avatar">' + _icon('bot', 18, '🤖') + '</div>'
             + '<div class="ai-msg-bubble typing-dots"><span>.</span><span>.</span><span>.</span></div>';
           msgs.appendChild(typing);
           msgs.scrollTop = msgs.scrollHeight;
@@ -366,7 +381,7 @@
 
     _panelHTML() {
       return `
-        <div class="ai-panel sub-ai-panel hidden" id="${PANEL_ID}" role="dialog" aria-label="AI Assistant" aria-hidden="true">
+        <div class="ai-panel sub-ai-panel hidden" id="${PANEL_ID}" role="dialog" aria-label="${t('AI Assistant')}" aria-hidden="true">
           <div class="ai-panel-header">
             <div class="ai-panel-title">
               <div class="ai-orb" id="${ORB_ID}"></div>
@@ -376,14 +391,14 @@
               </div>
             </div>
             <div class="ai-header-actions">
-              <button class="ai-hdr-btn" onclick="SubAI.clear()" title="${t('Clear chat')}" aria-label="${t('Clear chat')}">🗑</button>
+              <button class="ai-hdr-btn" onclick="SubAI.clear()" title="${t('Clear chat')}" aria-label="${t('Clear chat')}">${_icon('trash-2', 16, '🗑')}</button>
               <button class="ai-hdr-btn" onclick="SubAI.close()" title="${t('Close')}" aria-label="${t('Close')}">✕</button>
             </div>
           </div>
           <div class="ai-messages" id="${MESSAGES_ID}"></div>
           <div class="ai-input-bar">
             <textarea id="${INPUT_ID}" rows="1" dir="auto" placeholder="${t('Ask me anything...')}"></textarea>
-            <button class="ai-send-btn" id="${SEND_ID}" onclick="SubAI.send()" title="${t('Send')}" aria-label="${t('Send')}">➤</button>
+            <button class="ai-send-btn" id="${SEND_ID}" onclick="SubAI.send()" title="${t('Send')}" aria-label="${t('Send')}">${_icon('send', 16, '➤')}</button>
           </div>
         </div>
       `;

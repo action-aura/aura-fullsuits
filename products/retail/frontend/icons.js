@@ -633,6 +633,131 @@ window.AuraIcons = (function () {
       "<line x1=\"4\" x2=\"20\" y1=\"18\" y2=\"18\" />"
     ],
     heavy: [1]
+  },
+  // ── 2026-09-08, the last raw emoji left in a rendered surface ────────────
+  // Twelve more real Lucide v0.469.0 icons, geometry fetched verbatim from
+  // unpkg.com/lucide-static and never hand-drawn -- the same rule the six
+  // state icons and the four chrome icons above were added under, and the
+  // same reason (nobody in this pipeline can render an SVG to check it).
+  //
+  // They close four surfaces that were still drawing SYSTEM EMOJI, whose
+  // appearance belongs to the OS font and which cannot take a theme token:
+  //   inbox                     the Stock Accuracy "nothing to check" panel,
+  //                             the one _stka* state the Exceptions screen's
+  //                             equivalent (_exqEmpty) had no name for.
+  //   bot / trash-2 / send      the AI panel's assistant avatar and its only
+  //                             two controls.
+  //   laptop / shirt / sandwich / cup-soda / gem / footprints / dumbbell /
+  //   flower                    the ten POS category tiles -- the busiest
+  //                             screen in the product, where only 🛒 and 📦
+  //                             of the ten resolved.
+  'inbox': {  // the tray's fold line -- an open box is just a box without it
+    el: [
+      "<polyline points=\"22 12 16 12 14 15 10 15 8 12 2 12\" />",
+      "<path d=\"M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z\" />"
+    ],
+    heavy: [0]
+  },
+  'bot': {  // the two eyes -- what makes the rounded box a face rather than a crate
+    el: [
+      "<path d=\"M12 8V4H8\" />",
+      "<rect width=\"16\" height=\"12\" x=\"4\" y=\"8\" rx=\"2\" />",
+      "<path d=\"M2 14h2\" />",
+      "<path d=\"M20 14h2\" />",
+      "<path d=\"M15 13v2\" />",
+      "<path d=\"M9 13v2\" />"
+    ],
+    heavy: [4, 5]
+  },
+  'trash-2': {  // the lid bar -- the tell that separates a bin from a cup
+    el: [
+      "<path d=\"M3 6h18\" />",
+      "<path d=\"M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6\" />",
+      "<path d=\"M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2\" />",
+      "<line x1=\"10\" x2=\"10\" y1=\"11\" y2=\"17\" />",
+      "<line x1=\"14\" x2=\"14\" y1=\"11\" y2=\"17\" />"
+    ],
+    heavy: [0]
+  },
+  'send': {  // the paper plane's body; the crease stays light
+    el: [
+      "<path d=\"M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z\" />",
+      "<path d=\"m21.854 2.147-10.94 10.939\" />"
+    ],
+    heavy: [0]
+  },
+  'laptop': {  // single element -- nothing to contrast against, so it IS the heavy one
+    el: [
+      "<path d=\"M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16\" />"
+    ],
+    heavy: [0]
+  },
+  'shirt': {  // single element, same as laptop
+    el: [
+      "<path d=\"M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z\" />"
+    ],
+    heavy: [0]
+  },
+  'sandwich': {  // the filling bar -- the layer that makes it a sandwich, not a roof
+    el: [
+      "<path d=\"m2.37 11.223 8.372-6.777a2 2 0 0 1 2.516 0l8.371 6.777\" />",
+      "<path d=\"M21 15a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-5.25\" />",
+      "<path d=\"M3 15a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h9\" />",
+      "<path d=\"m6.67 15 6.13 4.6a2 2 0 0 0 2.8-.4l3.15-4.2\" />",
+      "<rect width=\"20\" height=\"4\" x=\"2\" y=\"11\" rx=\"1\" />"
+    ],
+    heavy: [4]
+  },
+  'cup-soda': {  // the straw -- a tapered cup without it is a plant pot
+    el: [
+      "<path d=\"m6 8 1.75 12.28a2 2 0 0 0 2 1.72h4.54a2 2 0 0 0 2-1.72L18 8\" />",
+      "<path d=\"M5 8h14\" />",
+      "<path d=\"M7 15a6.47 6.47 0 0 1 5 0 6.47 6.47 0 0 0 5 0\" />",
+      "<path d=\"m12 8 1-6h2\" />"
+    ],
+    heavy: [3]
+  },
+  'gem': {  // the crown facets -- the cut is the meaning; the outline stays light
+    el: [
+      "<path d=\"M6 3h12l4 6-10 13L2 9Z\" />",
+      "<path d=\"M11 3 8 9l4 13 4-13-3-6\" />",
+      "<path d=\"M2 9h20\" />"
+    ],
+    heavy: [1]
+  },
+  'footprints': {  // the toe bars -- what turns two blobs into footprints
+    el: [
+      "<path d=\"M4 16v-2.38C4 11.5 2.97 10.5 3 8c.03-2.72 1.49-6 4.5-6C9.37 2 10 3.8 10 5.5c0 3.11-2 5.66-2 8.68V16a2 2 0 1 1-4 0Z\" />",
+      "<path d=\"M20 20v-2.38c0-2.12 1.03-3.12 1-5.62-.03-2.72-1.49-6-4.5-6C14.63 6 14 7.8 14 9.5c0 3.11 2 5.66 2 8.68V20a2 2 0 1 0 4 0Z\" />",
+      "<path d=\"M16 17h4\" />",
+      "<path d=\"M4 13h4\" />"
+    ],
+    heavy: [2, 3]
+  },
+  'dumbbell': {  // the bar -- the two plates read as anything without it
+    el: [
+      "<path d=\"M14.4 14.4 9.6 9.6\" />",
+      "<path d=\"M18.657 21.485a2 2 0 1 1-2.829-2.828l-1.767 1.768a2 2 0 1 1-2.829-2.829l6.364-6.364a2 2 0 1 1 2.829 2.829l-1.768 1.767a2 2 0 1 1 2.828 2.829z\" />",
+      "<path d=\"m21.5 21.5-1.4-1.4\" />",
+      "<path d=\"M3.9 3.9 2.5 2.5\" />",
+      "<path d=\"M6.404 12.768a2 2 0 1 1-2.829-2.829l1.768-1.767a2 2 0 1 1-2.828-2.829l2.828-2.828a2 2 0 1 1 2.829 2.828l1.767-1.768a2 2 0 1 1 2.829 2.829z\" />"
+    ],
+    heavy: [0]
+  },
+  'flower': {  // the centre -- the pistil is the one feature the eight petals frame
+    el: [
+      "<circle cx=\"12\" cy=\"12\" r=\"3\" />",
+      "<path d=\"M12 16.5A4.5 4.5 0 1 1 7.5 12 4.5 4.5 0 1 1 12 7.5a4.5 4.5 0 1 1 4.5 4.5 4.5 4.5 0 1 1-4.5 4.5\" />",
+      "<path d=\"M12 7.5V9\" />",
+      "<path d=\"M7.5 12H9\" />",
+      "<path d=\"M16.5 12H15\" />",
+      "<path d=\"M12 16.5V15\" />",
+      "<path d=\"m8 8 1.88 1.88\" />",
+      "<path d=\"M14.12 9.88 16 8\" />",
+      "<path d=\"m8 16 1.88-1.88\" />",
+      "<path d=\"M14.12 14.12 16 16\" />"
+    ],
+    heavy: [0]
   }
   };
 
@@ -689,7 +814,27 @@ window.AuraIcons = (function () {
     "⚠️": "triangle-alert",
     "💾": "save",
     "📧": "mail",
-    "☰": "menu"
+    "☰": "menu",
+    // 2026-09-08 -- the glyphs still being drawn raw in a rendered surface.
+    // 🔒 is the one that surprises: 'lock' has been in ICONS since the first
+    // port, but no EMOJI entry pointed at it, so every capability-restricted
+    // screen (the panel a cashier sees INSTEAD of a 403) drew a 40px system
+    // padlock. The rest are new geometry added just above.
+    "🔒": "lock",
+    "📭": "inbox",
+    "🤖": "bot",
+    "🗑": "trash-2",
+    "🗑️": "trash-2",
+    "➤": "send",
+    "🙂": "user-round",
+    "💻": "laptop",
+    "👕": "shirt",
+    "🍔": "sandwich",
+    "🥤": "cup-soda",
+    "💍": "gem",
+    "👟": "footprints",
+    "⚽": "dumbbell",
+    "💄": "flower"
   };
 
   // Every element is one self-closing tag (<path .../>, <circle .../>,

@@ -472,6 +472,30 @@ private val AR_STRINGS: Map<String, String> = mapOf(
     "Failed" to "فشل",
     "Pay" to "دفع",
 
+    // ── Categories screen ──────────────────────────────────────────────
+    // The whole screen (ui/screens/CategoriesScreen.kt) routes every visible
+    // string through tr(), and 11 of its 12 keys had no entry here -- only
+    // "Couldn't save" did -- so an Arabic till reached it from a fully
+    // translated More-hub row ("الفئات") and then rendered the entire screen
+    // in English. Exactly the silent tr() fallback the "Categories" entry in
+    // the More-hub section above was added for, one screen further in.
+    // TranslationCatalogueCoverageTest now scans EVERY screen for this shape
+    // rather than one screen at a time.
+    "No categories yet" to "لا توجد فئات بعد",
+    "Group products so they're easy to find and filter." to "جمّع المنتجات ليسهل العثور عليها وتصفيتها.",
+    "Add Category" to "إضافة فئة",
+    "Edit Category" to "تعديل فئة",
+    "Category added" to "تمت إضافة الفئة",
+    "Category updated" to "تم تحديث الفئة",
+    "Category name *" to "اسم الفئة *",
+    "Category name is required" to "اسم الفئة مطلوب",
+    "Description" to "الوصف",
+    "Save Category" to "حفظ الفئة",
+    // Rendered as "${c.product_count} " + tr("items") -- Arabic counts a bare
+    // singular after a numeral here, the same form "%d item(s)" already uses
+    // in the POS held-sales list.
+    "items" to "صنف",
+
     // ── Suppliers ─────────────────────────────────────────────────────────────
     "No suppliers yet" to "لا يوجد موردون بعد",
     "Add the vendors you buy stock from." to "أضف الموردين الذين تشتري منهم البضائع.",

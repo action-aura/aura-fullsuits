@@ -16,8 +16,15 @@ _owned() helper below (see its docstring).
 """
 import os
 import time, requests
-from decimal import Decimal, ROUND_HALF_UP
+# ROUND_HALF_UP is no longer named here: every money quantization in this
+# module now goes through commercial_runtime.currency.quantize_money, which
+# applies it (and the right quantum) in one place.
+from decimal import Decimal
 from flask import Blueprint, request, jsonify, session
+from commercial_runtime.currency import (
+    DEFAULT_BASE_CURRENCY, currency_decimals, currency_quantum, quantize_money,
+)
+from commercial_runtime.einvoicing import settings as _einvoicing_settings
 from commercial_runtime.identity.mt_auth import mt_login_required, mt_require_subsystem, require_clinic_role
 from commercial_runtime.licensing_contracts.flask_guard import make_capability_guard
 from database.schema import get_clinic_conn, sub_create, init_clinic
@@ -66,13 +73,72 @@ except Exception as _e:
 def _cid(): return session.get('company_id') or session.get('mt_company_id', 1)
 def _uid(): return session.get('mt_user_id') or session.get('user_id', 'system')
 
+def _company_currency(conn, cid):
+    """The ISO 4217 code this company's money is denominated in.
+
+    Clinic has no settings table of its own (unlike Retail's
+    `retail_settings`), so `einvoice_settings.currency` -- part of the clinic
+    schema since v2, defaulting to 'JOD' -- is the ONLY place a clinic
+    records this. Reading it here rather than inventing a second source is
+    the point: the same value already decides
+    `<cbc:DocumentCurrencyCode>` on the document filed with the tax
+    authority (core/clinic/einvoice_adapter.py), so if billing rounded to a
+    different currency's precision than the document declares, the filed
+    document would contradict the row it was built from. That is exactly the
+    defect this function exists to close: tax and total were rounded to a
+    hardcoded 2 decimals while the currency said JOD, which has THREE (see
+    commercial_runtime/currency.py for the measurements).
+
+    Never raises. A very old database with no einvoice_settings table, or a
+    settings row holding something unrecognisable, degrades to
+    DEFAULT_BASE_CURRENCY / the 2-decimal default -- same posture as
+    `currency_quantum` itself. A clinic that cannot bill because someone
+    typoed a currency code would be a far worse defect than rounding at the
+    wrong precision.
+    """
+    try:
+        return _einvoicing_settings.get_setting(conn, cid, 'currency') or DEFAULT_BASE_CURRENCY
+    except Exception:
+        return DEFAULT_BASE_CURRENCY
+
 def _audit(conn, action, entity, entity_id, details=''):
     try:
         conn.execute(
             'INSERT INTO clinic_audit_log (company_id,user_id,action,entity,entity_id,details) VALUES (?,?,?,?,?,?)',
             (_cid(), _uid(), action, entity, entity_id, details)
         )
-    except Exception: pass
+    except Exception:
+        # STILL SWALLOWED, deliberately -- same shape and same reasoning as
+        # products/retail/backend/api/retail_api.py::_audit, which got this
+        # treatment first: a clinic must not fail to record a visit because
+        # the audit table is full, locked or corrupt. Refusing to treat a
+        # patient in order to record that you treated them is the wrong
+        # answer, and anything stronger here (raising, retrying, queueing)
+        # buys accountability with the clinic's day.
+        #
+        # But it must not be INVISIBLE, which it was until now -- and this is
+        # the ONLY audit path in the product, called from every patient,
+        # visit, note, prescription, invoice, payment and lab-expense
+        # mutation. A clinic handles medical records; a silently-stopped
+        # trail costs more here than in a shop. If these writes start
+        # failing the clinic keeps operating and keeps believing it has a
+        # trail, and the gap is found by somebody looking for an entry that
+        # was never written -- the most expensive possible moment.
+        #
+        # log.exception, not log.warning: the traceback is what separates a
+        # locked database from schema drift, and those need different
+        # answers from different people.
+        #
+        # `details` is deliberately NOT logged. It carries clinical and
+        # business content and the log has a wider audience and a longer life
+        # than the audit table it was bound for (see
+        # docs/privacy/clinic-sensitive-data-boundary.md, which this module
+        # already cites three times). Action/entity/id are enough to find the
+        # missing row.
+        import logging
+        logging.getLogger('aura.clinic').exception(
+            'audit write FAILED and was swallowed: action=%r entity=%r entity_id=%r',
+            action, entity, entity_id)
 
 def _emit(event, payload):
     """Best-effort local event emission. See products/retail/backend/api/retail_api.py's
@@ -816,14 +882,43 @@ def create_invoice():
         # equivalent _next_ref() call.
         inv_no = _next_clinic_ref(conn, cid, 'invoice')
         items = data.get('items', [])
-        subtotal = sum(i.get('qty', 1) * i.get('unit_price', 0) for i in items)
+        # MONEY PRECISION (mirrors Retail's AUDIT-006 correction, which
+        # Clinic never received): every figure below is computed in Decimal
+        # and quantized at THIS COMPANY'S CURRENCY's minor unit, not at a
+        # hardcoded 2 decimals.
+        #
+        # What was wrong, reproduced with the real 16% VAT rate on a 12.345
+        # JOD service: `round(taxable * rate, 2)` answered 1.98 where the
+        # exact tax is 1.975, and `round(taxable + tax, 2)` answered 14.33
+        # where the exact total is 14.320 -- and because `subtotal` was
+        # persisted UNROUNDED, the stored row then disagreed with ITSELF
+        # (12.345 + 1.98 = 14.325, not the 14.33 in the total column). JOD
+        # has three decimals; see commercial_runtime/currency.py.
+        #
+        # round() also had the second half of the AUDIT-006 defect: it is
+        # banker's rounding, so it disagreed with every other money figure in
+        # the suite at exact half-unit boundaries. quantize_money() is
+        # ROUND_HALF_UP throughout.
+        #
+        # Line totals are quantized individually and the subtotal is their
+        # SUM, so `subtotal == sum(line_total)` holds exactly -- the invariant
+        # the e-invoicing document depends on when it renders each line's
+        # LineExtensionAmount beside the document's own.
+        currency = _company_currency(conn, cid)
+        line_totals = [
+            quantize_money(Decimal(str(i.get('qty', 1))) * Decimal(str(i.get('unit_price', 0))), currency)
+            for i in items
+        ]
+        subtotal_dec = quantize_money(sum(line_totals, Decimal(0)), currency)
         # Discount applied before tax (tax-after-discount), mirroring the POS fix.
-        discount = float(data.get('discount') or 0)
-        if discount < 0: discount = 0
-        if discount > subtotal: discount = subtotal
-        taxable = subtotal - discount
-        tax = round(taxable * float(data.get('tax_rate') or 0), 2)
-        total = round(taxable + tax, 2)
+        discount_dec = quantize_money(data.get('discount') or 0, currency)
+        if discount_dec < 0: discount_dec = Decimal(0)
+        if discount_dec > subtotal_dec: discount_dec = subtotal_dec
+        taxable_dec = subtotal_dec - discount_dec
+        tax_dec = quantize_money(taxable_dec * Decimal(str(data.get('tax_rate') or 0)), currency)
+        total_dec = quantize_money(taxable_dec + tax_dec, currency)
+        subtotal, discount = float(subtotal_dec), float(discount_dec)
+        taxable, tax, total = float(taxable_dec), float(tax_dec), float(total_dec)
         cur.execute("""INSERT INTO clinic_invoices
             (company_id,invoice_number,patient_id,visit_id,subtotal,discount,tax,total,status,notes,prescription_id,created_by)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
@@ -834,10 +929,13 @@ def create_invoice():
         if data.get('prescription_id'):
             conn.execute("UPDATE clinic_prescriptions SET invoice_id=? WHERE id=? AND company_id=?",
                          (inv_id, data['prescription_id'], cid))
-        for item in items:
+        for item, line_total in zip(items, line_totals):
+            # `line_total` is the already-quantized figure the subtotal above
+            # was summed from -- recomputing the product here would let the
+            # header and its own lines disagree by a fils.
             cur.execute("INSERT INTO clinic_invoice_items (invoice_id,service_id,description,qty,unit_price,line_total) VALUES (?,?,?,?,?,?)",
                         (inv_id, item.get('service_id'), item.get('description',''), item.get('qty',1),
-                         item.get('unit_price',0), item.get('qty',1)*item.get('unit_price',0)))
+                         item.get('unit_price',0), float(line_total)))
         _audit(conn, 'InvoiceCreated', 'invoice', inv_id)
         conn.commit()
     except Exception as e:
@@ -992,7 +1090,22 @@ def record_payment():
     if amount_dec <= 0:
         conn.close()
         return jsonify({'status': 'error', 'message': 'Payment amount must be greater than zero.'}), 400
-    amount = float(amount_dec.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+    # Quantize at THIS COMPANY'S CURRENCY's minor unit, not at a hardcoded
+    # 0.01. This quantization happens on INGEST -- the value below is what
+    # gets INSERTed into clinic_payments.amount_paid and what updates
+    # clinic_invoices.amount_paid -- so at 2 decimals a receptionist who
+    # took 12.345 JOD in cash had 12.35 recorded against the patient, and
+    # the 5 fils came from nowhere. JOD has three decimals; see
+    # commercial_runtime/currency.py. Retail closed this class on its own
+    # payment path (AUDIT-006); Clinic never did.
+    currency = _company_currency(conn, cid)
+    quant = currency_quantum(currency)
+    digits = currency_decimals(currency)
+    #: Half a minor unit -- half a FILS in JOD, not half a cent. The
+    #: comparison tolerances below have to move with the quantum or they stop
+    #: matching the precision the amounts are actually stored at.
+    half_unit = float(quant) / 2
+    amount = float(quantize_money(amount_dec, currency))
 
     try:
         # BEGIN IMMEDIATE: two payment requests against the same invoice
@@ -1009,11 +1122,15 @@ def record_payment():
             (invoice_id, cid)
         ).fetchone()[0]
         total_dec = Decimal(str(inv['total']))
-        outstanding = float((total_dec - Decimal(str(already_paid))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
-        if amount > outstanding + 0.005:
+        outstanding = float(quantize_money(total_dec - Decimal(str(already_paid)), currency))
+        if amount > outstanding + half_unit:
             conn.rollback(); conn.close()
+            # Formatted at the currency's own precision, so the sentence
+            # quotes back what the receptionist actually typed. At a fixed
+            # :.2f a rejected 99.999 JOD payment was reported as '100.00',
+            # i.e. an amount the customer never offered.
             return jsonify({'status': 'error', 'message':
-                f'Payment of {amount:.2f} exceeds the outstanding balance of {outstanding:.2f}. '
+                f'Payment of {amount:.{digits}f} exceeds the outstanding balance of {outstanding:.{digits}f}. '
                 'This product has no customer-credit ledger, so overpayment cannot be accepted.'}), 400
 
         cur = conn.cursor()
@@ -1022,8 +1139,8 @@ def record_payment():
             "VALUES (?,?,?,?,?,?,?)",
             (cid, invoice_id, amount, data.get('method', 'cash'), data.get('reference', ''), _uid(), idem))
         pay_id = cur.lastrowid
-        paid = float((Decimal(str(already_paid)) + Decimal(str(amount))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
-        status = 'paid' if paid >= float(total_dec) - 0.005 else 'partial'
+        paid = float(quantize_money(Decimal(str(already_paid)) + Decimal(str(amount)), currency))
+        status = 'paid' if paid >= float(total_dec) - half_unit else 'partial'
         conn.execute("UPDATE clinic_invoices SET status=?, amount_paid=? WHERE id=? AND company_id=?",
                      (status, paid, invoice_id, cid))
         _audit(conn, 'PaymentRecorded', 'payment', pay_id)
@@ -1040,7 +1157,7 @@ def record_payment():
     _emit('ClinicPaymentReceived', {'payment_id': pay_id, 'amount': amount})
     return jsonify({'status': 'success', 'data': {
         'id': pay_id, 'invoice_id': invoice_id, 'amount': amount, 'total_paid': paid,
-        'outstanding_balance': round(float(total_dec) - paid, 2),
+        'outstanding_balance': float(quantize_money(total_dec - Decimal(str(paid)), currency)),
         'invoice_status': status, 'idempotency_key': idem,
     }})
 

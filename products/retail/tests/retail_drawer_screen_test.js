@@ -558,6 +558,23 @@ function testEveryDrawerPairingClearsAA() {
     ['.cd-table td', tableTdText, '--surface-accent-soft'],
     ['.cd-table th', tableThText, '--surface-panel'],
   ];
+  // Same anti-vacuity shape as the assert above, for the OTHER half of every
+  // pairing. The check above guards the foreground tokens; the surfaces were
+  // unguarded, so a token missing from the stylesheet reached
+  // `tokens[surfaceToken].trim()` in the map below and threw a bare
+  // "Cannot read properties of undefined (reading 'trim')" with no token name
+  // in it. That is exactly what happened on 2026-09-08, when a mis-closed CSS
+  // comment swallowed --surface-accent-soft out of :root: the sibling test
+  // named the missing token outright while this one read as a harness crash,
+  // and a crash is easy to mistake for a broken test rather than a broken
+  // stylesheet. Fail here instead, naming it.
+  const missingSurfaces = [...new Set(inheritedContexts.map(([, , s]) => s))]
+    .filter((surfaceToken) => typeof tokens[surfaceToken] !== 'string');
+  assert.deepStrictEqual(missingSurfaces, [],
+    `the drawer's inherited backgrounds are not defined in the stylesheet: ` +
+    `${missingSurfaces.join(', ')}. Every pairing that uses one is unchecked, ` +
+    'and in the browser the element inherits whatever sits behind it instead.');
+
   const inheritedFailures = inheritedContexts
     .map(([selector, textToken, surfaceToken]) => ({
       selector, textToken, surfaceToken,

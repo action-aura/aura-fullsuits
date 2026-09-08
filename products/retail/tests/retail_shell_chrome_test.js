@@ -260,11 +260,19 @@ function testExactlyOneAIButtonInMoreSheet() {
 }
 
 async function testHeaderAIButtonMutationIsCaught() {
+  // Anchor re-stated 2026-09-08 when the theme button's title= moved from a
+  // bare English literal to `title="${t('Change UI theme')}"` -- i18n.js
+  // sweeps [data-i18n] and [data-i18n-ph] only, never a title, so a hardcoded
+  // one had no path to Arabic at all. This is an ANCHOR update, not an
+  // assertion change: the mutation still injects the same duplicate header AI
+  // button and the same check still has to catch it. mutate() requires the
+  // anchor to occur exactly once, which is why a stale one fails loudly here
+  // instead of silently no-opping.
   const mutated = mutate(SHELL_SRC, [[
-    `            <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="Change UI theme">${'${window.AuraIcons ? AuraIcons.render(\'palette\', 18) : \'🎨\'}'}</button>
+    `            <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="${'${t(\'Change UI theme\')}'}">${'${window.AuraIcons ? AuraIcons.render(\'palette\', 18) : \'🎨\'}'}</button>
           </div>
         </header>`,
-    `            <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="Change UI theme">${'${window.AuraIcons ? AuraIcons.render(\'palette\', 18) : \'🎨\'}'}</button>
+    `            <button class="sub-header-btn" onclick="ThemeEngine.openPicker()" title="${'${t(\'Change UI theme\')}'}">${'${window.AuraIcons ? AuraIcons.render(\'palette\', 18) : \'🎨\'}'}</button>
             <button class="sub-header-btn" onclick="SubAI.open('${'${systemId}'}')" title="AI Assistant">🤖</button>
           </div>
         </header>`,
@@ -314,14 +322,75 @@ function testBrandSlotRendersTheMark() {
 // 4 — none of the raw glyphs remain in the shell chrome or the More sheet
 // ═════════════════════════════════════════════════════════════════════════════
 
+// The theme picker's own panel is built as a TREE (createElement +
+// appendChild + createTextNode), not as an innerHTML string, so the string
+// stubs above cannot see a single character of it. That is exactly how
+// `label.textContent = '🎨 ' + t('Theme')` survived while '🎨' sat in
+// RAW_GLYPHS and this test passed: the ban list reached the button that OPENS
+// the picker and the More-sheet row, and never the panel one click later --
+// the palette therefore appeared twice, in two different visual languages.
+//
+// This recording stub is deliberately narrow: it records children and
+// serialises their text and innerHTML, which is all a glyph ban needs. It is
+// NOT a DOM, and nothing else in this file uses it.
+function makeRecordingStub(tag) {
+  const el = makeElementStub();
+  el.tagName = String(tag || 'div').toUpperCase();
+  el.children = [];
+  el.appendChild = (child) => { el.children.push(child); return child; };
+  return el;
+}
+
+function serializeTree(el) {
+  if (!el) return '';
+  if (el.nodeValue !== undefined) return String(el.nodeValue);   // text node
+  const own = String(el.textContent || '') + String(el.innerHTML || '');
+  return own + (el.children || []).map(serializeTree).join('');
+}
+
+function renderThemePickerText() {
+  const sandbox = loadShell();
+  const appended = [];
+  sandbox.document.createElement = (tag) => makeRecordingStub(tag);
+  sandbox.document.createTextNode = (text) => ({ nodeValue: String(text) });
+  sandbox.document.getElementById = () => null;   // picker not already open
+  sandbox.document.body = Object.assign(makeElementStub(), {
+    appendChild(el) { appended.push(el); return el; },
+  });
+  // `const ThemeEngine` is a top-level lexical binding, so it never becomes a
+  // property of the global object -- reachable as a bare identifier from an
+  // onclick in the browser, and only through the context here.
+  const engine = vm.runInContext('ThemeEngine', sandbox);
+  assert.ok(engine && typeof engine.openPicker === 'function',
+    'app-shell.js did not define a ThemeEngine with an openPicker() -- the fixture is asserting about nothing.');
+  engine.current = 'light';
+  engine.openPicker();
+  const text = appended.map(serializeTree).join('');
+  // ANTI-VACUITY: a picker that appended nothing, or whose panel serialised
+  // empty, would satisfy every "glyph absent" assertion below having rendered
+  // nothing at all -- which is the exact failure this extension exists to end.
+  assert.ok(appended.length >= 1, 'ThemeEngine.openPicker() appended nothing to document.body.');
+  assert.ok(/Theme/.test(text),
+    `The serialised theme picker does not contain its own "Theme" heading, so this scan is ` +
+    `not looking at the panel. Got: ${JSON.stringify(text.slice(0, 300))}`);
+  assert.ok(/<svg/.test(text),
+    `The serialised theme picker contains no <svg> at all -- its heading icon is missing, not ` +
+    `merely un-emoji'd. Got: ${JSON.stringify(text.slice(0, 300))}`);
+  return text;
+}
+
 function testNoRawGlyphsAnywhereInChrome() {
   const { sandbox, App, html } = renderShellHTML();
   const sheetHTML = renderMoreSheetHTML(sandbox, App);
+  const pickerText = renderThemePickerText();
   for (const g of RAW_GLYPHS) {
     assert.ok(!html.includes(g), `Raw glyph ${JSON.stringify(g)} still appears in the rendered desktop shell.`);
     assert.ok(!sheetHTML.includes(g), `Raw glyph ${JSON.stringify(g)} still appears in the rendered More sheet.`);
+    assert.ok(!pickerText.includes(g),
+      `Raw glyph ${JSON.stringify(g)} still appears in ThemeEngine.openPicker()'s panel -- one ` +
+      'click away from the button that opens it, which already renders an AuraIcons palette.');
   }
-  console.log('PASS: no raw emoji glyphs remain in the shell chrome or the More sheet');
+  console.log('PASS: no raw emoji glyphs remain in the shell chrome, the More sheet, or the theme picker');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

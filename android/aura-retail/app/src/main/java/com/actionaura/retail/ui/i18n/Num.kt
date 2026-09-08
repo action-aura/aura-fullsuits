@@ -137,3 +137,39 @@ fun fmtQty(v: Double): String {
     if (r == Math.floor(r) && !r.isInfinite()) return r.toLong().toString()
     return String.format(Locale.US, "%.3f", r).trimEnd('0').trimEnd('.')
 }
+
+private const val LRI = '⁦'   // LEFT-TO-RIGHT ISOLATE
+private const val PDI = '⁩'   // POP DIRECTIONAL ISOLATE
+
+/**
+ * Wrap a strictly left-to-right token so Arabic cannot reorder its insides.
+ *
+ * A version string is the worked example and the reason this exists. In an
+ * RTL paragraph, Unicode's bidirectional algorithm treats `1.0.0-rc.5` as
+ * neutral-separated runs and lays them out right to left, so the app's own
+ * footer rendered **`rc.5-1.0.0`** in Arabic. Seen on a real Mi Note 10 on
+ * 2026-09-09 -- not caught by any test, because every test asserts the string
+ * the code passes in, and the code passes in the correct one. The damage
+ * happens in the text engine, which only a screenshot can see.
+ *
+ * The desktop hit the identical bug in the same week: the brand lockup read
+ * "AuraRetail" in Arabic until `direction: ltr; unicode-bidi: isolate` was put
+ * on it. This is that fix, spelled the way a string can carry itself.
+ *
+ * Isolate rather than the older LRM/RLM embedding marks: an isolate also stops
+ * the token from disturbing the direction of the text AROUND it, which
+ * embedding does not, so this stays correct if the version is ever dropped
+ * into the middle of a sentence rather than sitting alone in a footer.
+ *
+ * Apply to identifiers, versions, codes, URLs, phone numbers and file paths.
+ * NOT to money or quantities: those are formatted by [fmtQty] and friends and
+ * are meant to follow the paragraph, which is what an Arabic reader expects.
+ */
+fun ltrIsolate(s: String?): String {
+    val text = s ?: return ""
+    if (text.isEmpty()) return ""
+    // Idempotent: wrapping twice would nest isolates and is a no-op visually,
+    // but it makes the string compare unequal to itself in tests and logs.
+    if (text.first() == LRI && text.last() == PDI) return text
+    return "$LRI$text$PDI"
+}

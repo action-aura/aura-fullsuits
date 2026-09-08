@@ -104,6 +104,21 @@ const RetailEmployees = {
   async _put(url, body) { return RetailSystem._put(url, body); },
   async _del(url) { return RetailSystem._del(url); },
   _esc(v) { return RetailSystem._esc(v); },
+  // One guarded AuraIcons call for the whole file rather than a
+  // `window.AuraIcons ? ... : ...` ternary at each of the three sites. NOT
+  // delegated to RetailSystem._icon the way _esc above is delegated: this
+  // screen's own harness (retail_employees_screen_test.js) loads employees.js
+  // against a small RetailSystem stub, and reaching for a method that stub
+  // does not carry would make the screen unrenderable there. The guard is
+  // window.AuraIcons, exactly as in app-shell.js and sub-ai.js.
+  //
+  // This screen is otherwise exemplary -- 132 t() calls, zero paint literals
+  // -- which is what made three leftover raw emoji (🔒 at 40px on the
+  // owner-only refusal, 👤 in the invite modal, ✅ on the invite-created
+  // heading) easy to miss: nothing else on it looked wrong beside them.
+  _icon(name, size, fallback) {
+    return window.AuraIcons ? AuraIcons.render(name, size) : (fallback || '');
+  },
 
   // ── Refusals ──────────────────────────────────────────────────────────────
   //
@@ -296,7 +311,7 @@ const RetailEmployees = {
     return `
       <div class="ret-hdr"><h2 class="ret-title">${t('Employees')}</h2></div>
       <div class="sub-chart-card" style="text-align:center;padding:48px 32px">
-        <div style="font-size:40px;margin-bottom:14px">🔒</div>
+        <div style="font-size:40px;margin-bottom:14px" aria-hidden="true">${this._icon('lock', 40, '🔒')}</div>
         <h3 style="color:var(--text);margin:0 0 10px;font-size:17px">${t('Employee management is available to the store owner only.')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0;line-height:1.7">
           ${t('You are signed in with an employee account. Ask the store owner to add or change staff accounts.')}
@@ -575,7 +590,7 @@ const RetailEmployees = {
           </p>
         </div>`;
     this._modal('emp-invite-modal', `
-      <h3>👤 ${reduced ? t('Invite a cashier') : t('Invite an employee')}</h3>
+      <h3><span aria-hidden="true">${this._icon('user', 18, '👤')}</span> ${reduced ? t('Invite a cashier') : t('Invite an employee')}</h3>
       <p style="color:var(--text-muted);font-size:13px;margin:-14px 0 20px;line-height:1.7">
         ${t('They receive a one-time setup link and choose their own password. No password is set for them here.')}
       </p>
@@ -634,7 +649,7 @@ const RetailEmployees = {
   // says so rather than leaving them to discover it.
   _showInviteLink(email, link) {
     this._modal('emp-link-modal', `
-      <h3>✅ ${t('Invite created')}</h3>
+      <h3><span aria-hidden="true">${this._icon('circle-check-big', 18, '✅')}</span> ${t('Invite created')}</h3>
       <p style="color:var(--text-muted);font-size:13px;margin:-14px 0 16px;line-height:1.7">
         ${t('Send this link to')} <b style="color:var(--text)">${this._esc(email)}</b>.
       </p>

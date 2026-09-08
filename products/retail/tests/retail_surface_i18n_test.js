@@ -424,6 +424,10 @@ const LOCALIZED_SURFACES = new Set([
   'hourly chart empty state', 'payment chart empty state',
   'dashboard bound values', 'POS bound values',
   'sales history', 'sales history rows', 'audit log', 'audit log rows',
+  // Localized 2026-09-08. It is on the money path -- it is what the till shows
+  // the instant a sale is rung -- so it belongs under the catalog requirement,
+  // not in the un-localized ledger below.
+  'sale complete modal',
 ]);
 
 /* Offenders on the surfaces this programme never localized, at the time of
@@ -545,6 +549,27 @@ async function renderAllSurfaces() {
     fragments.push(['held sales modal', overlay ? overlay.innerHTML : '']);
     fragments.push(['held sales list', ctx.els['held-list'] ? ctx.els['held-list'].innerHTML : '']);
   }
+  {
+    // The modal shown after EVERY completed sale, and the last thing a cashier
+    // reads before the next customer. It was absent from this corpus and had
+    // zero t() calls: "Sale Complete!", "Receipt #S-1001", "Print" and "New
+    // Sale" were bare literals in neither catalog, and the receipt number was
+    // glued into the sentence -- the "312 active products" shape this file's
+    // header documents. `_viewSale` builds the OTHER, similarly-named modal
+    // ("sale detail modal" above), which is why the gap read as covered.
+    const ctx = loadRetailSystem();
+    ctx.RetailSystem._showReceipt({
+      sale_number: 'S-1001',
+      total: 12.345,
+      change: 2.655,
+      // A product name already in RENDERED_DATA_VALUES, so this fixture adds
+      // no new "is it data or copy?" exemption to that set.
+      lines: [{ name: 'Espresso Beans', quantity: 2, line_total: 9.0, product_id: 7 }],
+    });
+    await settle();
+    const overlay = ctx.overlays[ctx.overlays.length - 1];
+    fragments.push(['sale complete modal', overlay ? overlay.innerHTML : '']);
+  }
 
   return fragments;
 }
@@ -562,7 +587,7 @@ const DECLARED_SURFACES = [
   'customers', 'customer rows', 'suppliers', 'supplier rows',
   'audit log', 'audit log rows',
   'customer modal', 'customer purchase history', 'sale detail modal',
-  'held sales modal', 'held sales list',
+  'held sales modal', 'held sales list', 'sale complete modal',
 ];
 
 function testTheCorpusIsTheCorpusItDeclares(fragments) {

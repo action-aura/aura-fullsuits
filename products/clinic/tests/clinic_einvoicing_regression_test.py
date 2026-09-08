@@ -193,10 +193,41 @@ def test_einvoice_outbox_gets_exactly_one_row_for_the_invoice_not_the_payment():
     assert rows[0][0] == 'clinic_invoice' and rows[0][1] == inv['id'], "the one row must be the invoice itself, not the payment"
 
 
-def test_no_background_thread_exists_when_feature_never_enabled():
+def test_no_worker_thread_starts_for_a_company_with_no_enqueued_rows_at_boot():
+    """AUDIT (2026-09-08): renamed from
+    test_no_background_thread_exists_when_feature_never_enabled -- see the
+    retail mirror's identical rewrite for the full rationale. Short form:
+    e-invoicing defaults ON, so "never enabled" described no fixture that
+    exists here (the test above asserts `'einvoice' in inv`), and the old
+    failure message therefore said something untrue about its own setup.
+
+    What is pinned instead is the boot sweep, _resume_einvoicing_workers()
+    at app.py:209. It runs once inside init_app() (import time, top of this
+    file) over a database that was empty at that moment, so it starts zero
+    threads; the invoice below then enqueues a real row and starts nothing,
+    because enqueue_invoice writes the outbox and never touches the worker
+    registry. Same process-global scope caveat as the retail mirror:
+    threading.enumerate() cannot attribute a thread to `cid`."""
     client, cid, patient_id = _make_admin_and_patient()
     _create_invoice(client, patient_id)
+
+    # Anti-vacuity, same as the retail mirror: "no worker started" proves
+    # nothing unless the invoice above really did enqueue.
+    conn = get_clinic_conn()
+    queued = conn.execute(
+        "SELECT COUNT(*) c FROM einvoice_outbox WHERE company_id=?", (cid,)
+    ).fetchone()['c']
+    conn.close()
+    assert queued == 1, (
+        f"fixture is not exercising the thing under test: {queued} outbox row(s) "
+        "for this company."
+    )
+
     names = {t.name for t in threading.enumerate()}
     assert names.issubset(BASELINE_THREAD_NAMES | {'MainThread'}), (
-        f"unexpected background thread(s) present with e-invoicing never enabled: {names - BASELINE_THREAD_NAMES}"
+        "an e-invoicing worker thread is running in a process whose boot sweep "
+        "(_resume_einvoicing_workers, app.py:209) found an empty outbox: "
+        f"{names - BASELINE_THREAD_NAMES}. Either that gate regressed, or "
+        "enqueueing now starts a worker -- if the latter is deliberate, rewrite "
+        "this test to pin the new rule; do not widen BASELINE_THREAD_NAMES."
     )

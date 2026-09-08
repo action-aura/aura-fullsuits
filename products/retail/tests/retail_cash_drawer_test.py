@@ -58,9 +58,24 @@ def teardown_module(module):
 # recorded on-hand figure), not a reason to "fix" this test by editing it
 # away. Cash-drawer state still never affects its value -- the equality
 # loop below covers it like every other key.
+#
+# `einvoice` added 2026-09-08, and it brings a coupling worth stating here
+# because this file is about cash drawers, not tax authorities. E-invoicing
+# now defaults ON (commercial_runtime/einvoicing/settings.py DEFAULTS
+# 'enabled': '1'), so create_sale reaches the enqueue block at
+# retail_api.py:4816 on every sale. That block is wrapped in a broad
+# try/except and sets `response_data['einvoice']` ONLY when
+# enqueue_sale(...) returns truthy -- so from now on, a failed or skipped
+# e-invoicing enqueue makes THIS cash-drawer test fail with a key-set diff,
+# not an e-invoicing test. That is the honest reading of the contract (the
+# response really does carry the key now) and the reason the four sibling
+# copies of this list were all missed when the default flipped: only
+# retail_einvoicing_regression_test.py was updated with it. If this list
+# ever disagrees with the live response again, check the e-invoicing
+# settings default and that enqueue path FIRST.
 SALE_RESPONSE_KEYS = [
     'amount_paid', 'balance_due', 'calculation_version', 'change', 'currency',
-    'discount_amount', 'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
+    'discount_amount', 'einvoice', 'id', 'idempotency_key', 'lines', 'oversold_past_recorded_stock',
     'sale_number', 'subtotal', 'tax_amount', 'total', 'warning',
 ]
 RETURN_RESPONSE_KEYS = [
@@ -353,11 +368,33 @@ def test_create_sale_response_byte_for_byte_unchanged_whether_or_not_a_cash_sess
     data_closed = _sell_cash(client_closed, pid_closed, qty=1, amount_paid=75.0).get_json()['data']
 
     assert sorted(data_open.keys()) == sorted(data_closed.keys()) == sorted(SALE_RESPONSE_KEYS)
-    excluded = {'id', 'sale_number', 'idempotency_key', 'lines'}
+    # 'einvoice' joins the per-sale-unique exclusions for the same reason
+    # 'id' and 'sale_number' are already here, not to get this green: its
+    # invoice_ref is literally f'AURA_RETAIL:sale:{sale_id}'
+    # (retail_api.py:4818), so two DIFFERENT sales can never produce an
+    # equal value and a raw == here could only ever fail. What that gives
+    # up is the ability to catch a change in the einvoice payload's shape
+    # from this loop -- so it is checked explicitly below instead, against
+    # each response's own id, which is a stronger statement than equality
+    # would have been.
+    excluded = {'id', 'sale_number', 'idempotency_key', 'lines', 'einvoice'}
     for key in SALE_RESPONSE_KEYS:
         if key in excluded:
             continue
         assert data_open[key] == data_closed[key], f"divergence on {key!r}"
+
+    # The excluded 'einvoice' key, checked the only way it can be: the
+    # drawer must not change WHETHER the sale enqueued, nor the ref it
+    # enqueued under. A missing key here means the enqueue silently failed
+    # for the session-open till but not the session-closed one (or the
+    # reverse) -- exactly the drawer-coupled divergence this test exists to
+    # refuse, and invisible to the key-set assertion above, which would
+    # still pass if BOTH lost the key.
+    for label, data in (('session open', data_open), ('session closed', data_closed)):
+        assert data['einvoice'] == {
+            'invoice_ref': f"AURA_RETAIL:sale:{data['id']}",
+            'status': 'queued',
+        }, f"e-invoice payload wrong with a cash {label}: {data['einvoice']!r}"
 
     line_open = data_open['lines'][0]
     line_closed = data_closed['lines'][0]

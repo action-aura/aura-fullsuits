@@ -268,7 +268,12 @@ const RetailSystem = {
          The token is the fix; the sweep's accounting is fixed separately. */
       .ret-table { width:100%;border-collapse:collapse;color:var(--text);font-size:13px; }
       .ret-table th { color:var(--text-muted);font-weight:500;padding:10px 12px;border-bottom:1px solid var(--border-soft);text-align:left; }
-      .ret-table td { padding:11px 12px;border-bottom:1px solid var(--border-subtle, var(--border-soft));vertical-align:middle; }
+      /* --border-subtle was never defined anywhere -- this was its only
+         reference in the repository, so every table row in the product has
+         always painted from the --border-soft fallback. Removed rather than
+         defined: leaving a live-looking name that nothing sets means whoever
+         later defines it silently re-colours every row rule at once. */
+      .ret-table td { padding:11px 12px;border-bottom:1px solid var(--border-soft);vertical-align:middle; }
       .ret-table tr:last-child td { border:none; }
       /* :focus-within, not only :hover. A clickable row is now a row CONTAINING
          a button (see _saleOpenerButton), and a keyboard or barcode-scanner
@@ -2493,8 +2498,20 @@ const RetailSystem = {
   _renderPOSGrid() {
     const grid = document.getElementById('pos-product-grid');
     if (!grid) return;
-    const _ICONS = { Electronics:'💻', Clothing:'👕', 'Food & Beverages':'🍔', Beverages:'🥤',
-      Groceries:'🛒', Accessories:'💍', Footwear:'👟', Sports:'⚽', Beauty:'💄', Default:'📦' };
+    // AuraIcons names, not emoji glyphs. This map used to hold ten emoji and
+    // emit them RAW at the tile below, of which only 🛒 and 📦 were in
+    // icons.js's EMOJI map -- so eight of the ten tiles on the busiest screen
+    // in the product drew a SYSTEM emoji whose appearance is the OS font's and
+    // which cannot follow the theme. Nothing caught it:
+    // retail_surface_i18n_test.js's emoji check flags only an emoji SHARING a
+    // node with translatable words, and this one sits alone in an aria-hidden
+    // span, so it is exempt by construction. The eight missing icons were
+    // added to icons.js at the same time (geometry fetched from
+    // lucide-static, never hand-drawn -- see that file's rule); naming them
+    // here rather than routing emoji through render() matters, because since
+    // 2026-09-08 an unresolved value renders circle-help and console.warns.
+    const _ICONS = { Electronics:'laptop', Clothing:'shirt', 'Food & Beverages':'sandwich', Beverages:'cup-soda',
+      Groceries:'shopping-cart', Accessories:'gem', Footwear:'footprints', Sports:'dumbbell', Beauty:'flower', Default:'package' };
     // Text search moved server-side (_filterPOS/_runPOSSearch below) --
     // this._products IS the current result set already. Category is the
     // one filter the backend does not offer, so it still happens here,
@@ -2608,7 +2625,7 @@ const RetailSystem = {
       return `<button type="button" class="pos-card${(outOfStock && !variantCount)?' pos-card-outofstock':''}"
           ${(outOfStock && !variantCount) ? 'aria-disabled="true"' : ''}
           onclick="${clickAction}">
-        <span class="pos-card-icon" aria-hidden="true">${icon}</span>
+        <span class="pos-card-icon" aria-hidden="true">${this._icon(icon, 26, '📦')}</span>
         <span class="pos-card-name" title="${this._esc(p.name)}">${this._esc(p.name)}</span>
         <span class="pos-card-price">${this._money(p.sell_price)}</span>
         ${variantCount ? `<span class="pos-card-stock" style="color:var(--text-muted)">${variantCount} ${t('options')}</span>` : `<span class="pos-card-stock${stockCls}">
@@ -2813,7 +2830,7 @@ const RetailSystem = {
         </p>
         <div class="ret-field">
           <label>Note (optional — e.g. "Table 4", customer name)</label>
-          <input id="hold-label" placeholder="Helps you find it later" maxlength="200" />
+          <input id="hold-label" data-i18n-ph="Helps you find it later" placeholder="${t('Helps you find it later')}" maxlength="200" />
         </div>
         <div class="ret-modal-footer">
           <button class="ret-btn ret-btn-ghost" onclick="document.getElementById('ret-hold-modal').remove()">Cancel</button>
@@ -3884,8 +3901,16 @@ const RetailSystem = {
     overlay.innerHTML = `
       <div class="ret-modal" style="width:380px;text-align:center">
         <div style="font-size:52px;margin-bottom:12px">${this._icon('circle-check-big', 52, '✅', { animate: 'pop' })}</div>
-        <h3 style="margin:0 0 6px">Sale Complete!</h3>
-        <p style="color:var(--text-muted);margin:0 0 20px">Receipt #${saleData.sale_number}</p>
+        <h3 style="margin:0 0 6px">${t('Sale Complete!')}</h3>
+        <!-- The receipt number is DATA and stays OUT of the translated
+             sentence. "Receipt #S-1001" as one text node is the exact
+             "312 active products" shape retail_surface_i18n_test.js's header
+             documents: i18n.js's DOM sweep only rescues a node whose FULL
+             trimmed text is a catalog key, so a number welded to words is
+             permanently English no matter what the catalog says. The number
+             is also a neutral run with no strong direction of its own, so it
+             goes in <bdi dir="ltr"> or it reorders on an Arabic page. -->
+        <p style="color:var(--text-muted);margin:0 0 20px">${t('Receipt #')}<bdi dir="ltr">${this._esc(saleData.sale_number)}</bdi></p>
         <div style="background:var(--surface-sunken);border-radius:10px;padding:16px;text-align:left;margin-bottom:20px">
           ${(saleData.lines||[]).map(i=>`<div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px">
             <span style="color:var(--text-secondary)">${this._esc(i.name || ('#'+i.product_id))} ×${i.quantity}</span>
@@ -3901,8 +3926,8 @@ const RetailSystem = {
           </div>
         </div>
         <div style="display:flex;gap:10px">
-          <button class="ret-btn ret-btn-ghost" style="flex:1" onclick="RetailSystem._printReceipt(RetailSystem._lastSaleData)">${this._icon('printer', 16, '🖨️')} Print</button>
-          <button class="ret-btn ret-btn-primary" style="flex:1" onclick="this.closest('.ret-modal-overlay').remove()">New Sale</button>
+          <button class="ret-btn ret-btn-ghost" style="flex:1" onclick="RetailSystem._printReceipt(RetailSystem._lastSaleData)"><span aria-hidden="true">${this._icon('printer', 16, '🖨️')}</span> ${t('Print')}</button>
+          <button class="ret-btn ret-btn-primary" style="flex:1" onclick="this.closest('.ret-modal-overlay').remove()">${t('New Sale')}</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -4059,7 +4084,7 @@ const RetailSystem = {
       <div class="ret-hdr">
         <h2 class="ret-title">Products & Inventory</h2>
         <div style="display:flex;gap:10px">
-          <input class="ret-search" id="prod-search" placeholder="Search products…" oninput="RetailSystem._filterProducts()" />
+          <input class="ret-search" id="prod-search" data-i18n-ph="Search products…" placeholder="${t('Search products…')}" oninput="RetailSystem._filterProducts()" />
           <button class="ret-btn ret-btn-ghost" onclick="ImportWizard.open('retail','products',()=>RetailSystem._renderProducts(document.getElementById('sub-content')))">⬆ Import</button>
           <button class="sub-btn-primary" onclick="RetailSystem._openAddProduct()">+ Add Product</button>
         </div>
@@ -4214,14 +4239,14 @@ const RetailSystem = {
       <div class="ret-modal">
         <h3>${isEdit ? '✏️ Edit Product' : '➕ Add Product'}</h3>
         <div class="ret-field-row">
-          <div class="ret-field"><label>Product Name *</label><input id="pm-name" value="${p.name||''}" placeholder="e.g. Blue T-Shirt" /></div>
+          <div class="ret-field"><label>Product Name *</label><input id="pm-name" value="${p.name||''}" data-i18n-ph="e.g. Blue T-Shirt" placeholder="${t('e.g. Blue T-Shirt')}" /></div>
           <div class="ret-field"><label>SKU *</label><input id="pm-sku" value="${p.sku||''}" placeholder="SKU-001" /></div>
         </div>
         <div class="ret-field-row">
           <div class="ret-field"><label>Barcode</label>
             <div style="display:flex;gap:8px">
-              <input id="pm-barcode" value="${p.barcode||''}" placeholder="Type or scan…" style="flex:1" />
-              <button type="button" class="ret-btn ret-btn-ghost" id="pm-scan-btn" onclick="RetailSystem._captureBarcodeField()" title="Scan barcode into this field">📷 Scan</button>
+              <input id="pm-barcode" value="${p.barcode||''}" data-i18n-ph="Type or scan…" placeholder="${t('Type or scan…')}" style="flex:1" />
+              <button type="button" class="ret-btn ret-btn-ghost" id="pm-scan-btn" onclick="RetailSystem._captureBarcodeField()" title="${t('Scan barcode into this field')}">📷 Scan</button>
             </div>
           </div>
           <div class="ret-field"><label>Category</label><select id="pm-cat"><option value="">None</option>${catOpts}</select></div>
@@ -4415,7 +4440,7 @@ const RetailSystem = {
         <td style="color:var(--text-muted)">${this._esc(cat.product_count||0)}</td>
         <td>
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditCategory('${this._esc(cat.id)}')">${t('Edit')}</button>
-          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._deleteCategory('${this._esc(cat.id)}')">${t('Delete')}</button>
+          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._deleteCategory('${this._esc(cat.id)}')">${t('Delete')}</button>
         </td>
       </tr>`).join('');
     } catch(e) { console.error(e); }
@@ -4502,7 +4527,7 @@ const RetailSystem = {
       <div class="ret-hdr">
         <h2 class="ret-title">Customers</h2>
         <div style="display:flex;gap:10px">
-          <input class="ret-search" id="cust-search" placeholder="Search name, phone, email…" oninput="RetailSystem._filterCustomers()" />
+          <input class="ret-search" id="cust-search" data-i18n-ph="Search name, phone, email…" placeholder="${t('Search name, phone, email…')}" oninput="RetailSystem._filterCustomers()" />
           <button class="ret-btn ret-btn-ghost" onclick="ImportWizard.open('retail','customers',()=>RetailSystem._loadCustomers())">⬆ Import</button>
           <button class="sub-btn-primary" onclick="RetailSystem._openAddCustomer()">+ Add Customer</button>
         </div>
@@ -4542,7 +4567,7 @@ const RetailSystem = {
         <td style="color:var(--text-muted)">${this._esc(cu.order_count||0)}</td>
         <td onclick="event.stopPropagation()">
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditCustomer('${this._esc(cu.id)}')">Edit</button>
-          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._deleteCustomer('${this._esc(cu.id)}')">${t('Delete')}</button>
+          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._deleteCustomer('${this._esc(cu.id)}')">${t('Delete')}</button>
         </td>
       </tr>`).join('');
     } catch(e) { console.error(e); }
@@ -4792,7 +4817,7 @@ const RetailSystem = {
           <td>${this._badge(isActive ? t('Active') : t('Inactive'), isActive ? 'green' : 'red')}</td>
           <td>
             <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditPromotion('${this._esc(p.id)}')">${t('Edit')}</button>
-            <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._deletePromotion('${this._esc(p.id)}')">${t('Deactivate')}</button>
+            <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._deletePromotion('${this._esc(p.id)}')">${t('Deactivate')}</button>
           </td>
         </tr>`;
       }).join('');
@@ -4989,8 +5014,8 @@ const RetailSystem = {
         <td>${this._esc(s.order_count||0)}</td>
         <td>
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditSupplier('${this._esc(s.id)}','${this._esc(s.name.replace(/'/g,"\\'"))}','${this._esc(s.phone||'')}','${this._esc(s.email||'')}','${this._esc(s.address||'')}')">Edit</button>
-          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._deleteSupplier('${this._esc(s.id)}','${this._esc(s.name.replace(/'/g,"\\'"))}')">${t('Delete')}</button>
-          <button class="ret-btn ret-btn-primary ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._openCreatePO('${this._esc(s.id)}','${this._esc(s.name.replace(/'/g,"\\'"))}')">+ PO</button>
+          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._deleteSupplier('${this._esc(s.id)}','${this._esc(s.name.replace(/'/g,"\\'"))}')">${t('Delete')}</button>
+          <button class="ret-btn ret-btn-primary ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._openCreatePO('${this._esc(s.id)}','${this._esc(s.name.replace(/'/g,"\\'"))}')">+ PO</button>
         </td>
       </tr>`).join('');
     } catch(e) { console.error(e); }
@@ -5101,7 +5126,7 @@ const RetailSystem = {
         <td style="color:var(--text-muted)">${this._esc(c.channel_preference||'—')}<div style="font-size:11px">${this._esc(c.email||c.phone||c.whatsapp||'—')}</div></td>
         <td>
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._openEditSupplierContact('${this._esc(sid)}','${this._esc(c.id)}')">${t('Edit')}</button>
-          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._deleteSupplierContact('${this._esc(sid)}','${this._esc(c.id)}','${this._esc(c.name.replace(/'/g,"\\'"))}')">${t('Delete')}</button>
+          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._deleteSupplierContact('${this._esc(sid)}','${this._esc(c.id)}','${this._esc(c.name.replace(/'/g,"\\'"))}')">${t('Delete')}</button>
         </td>
       </tr>`).join('')}</tbody>
     </table>`;
@@ -5298,7 +5323,7 @@ const RetailSystem = {
         <td style="color:var(--text-muted)">${po.received_at||'—'}</td>
         <td>
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._viewPO(${po.id})">View</button>
-          ${po.status==='pending'?`<button class="ret-btn ret-btn-primary ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._receivePO(${po.id},'${po.po_number}')">Receive</button>`:''}
+          ${po.status==='pending'?`<button class="ret-btn ret-btn-primary ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._receivePO(${po.id},'${po.po_number}')">Receive</button>`:''}
         </td>
       </tr>`).join('');
     } catch(e) { console.error(e); }
@@ -6172,7 +6197,7 @@ const RetailSystem = {
         <td style="color:var(--text-muted)">${r.created_at ? this._bdi(new Date(r.created_at).toLocaleString()) : '—'}</td>
         <td>
           <button class="ret-btn ret-btn-primary ret-btn-sm" onclick="RetailSystem._acceptReorderRequest('${this._esc(r.id)}')">${t('Accept')}</button>
-          <button class="ret-btn ret-btn-ghost ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._declineReorderRequest('${this._esc(r.id)}')">${t('Decline')}</button>
+          <button class="ret-btn ret-btn-ghost ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._declineReorderRequest('${this._esc(r.id)}')">${t('Decline')}</button>
         </td>
       </tr>`).join('');
     } catch(e) { console.error(e); }
@@ -6560,7 +6585,7 @@ const RetailSystem = {
           <span id="aud-summary" style="color:var(--text-muted);font-size:12px"></span>
           <div>
             <button class="ret-btn ret-btn-ghost ret-btn-sm" id="aud-prev" onclick="RetailSystem._auditPage(-1)">${t('‹ Prev')}</button>
-            <button class="ret-btn ret-btn-ghost ret-btn-sm" id="aud-next" style="margin-left:6px" onclick="RetailSystem._auditPage(1)">${t('Next ›')}</button>
+            <button class="ret-btn ret-btn-ghost ret-btn-sm" id="aud-next" style="margin-inline-start:6px" onclick="RetailSystem._auditPage(1)">${t('Next ›')}</button>
           </div>
         </div>
       </div>`;
@@ -7393,12 +7418,20 @@ const RetailSystem = {
         <h2 class="ret-title">${o.title}</h2>
       </div>
       <div class="sub-chart-card" style="text-align:center;padding:56px 32px">
-        <div style="font-size:40px;margin-bottom:14px">${o.icon || '🔒'}</div>
+        <!-- These are the screens a cashier hits most often: they are what the
+             product shows INSTEAD of a 403. Every one of the eleven call sites
+             passes an emoji glyph, and until 2026-09-08 they were injected raw,
+             so each drew a 40px SYSTEM emoji whose appearance belongs to the OS
+             font and which cannot take a theme token. Eight of the eleven
+             (🎁 🏦 📧 📜 📊 ⚠️ ⚖️ 💾) were already in icons.js's EMOJI map and
+             would have resolved; the 🔒 default was the one gap, now closed by
+             an EMOJI entry pointing at the 'lock' icon that already existed. -->
+        <div style="font-size:40px;margin-bottom:14px" aria-hidden="true">${this._icon(o.icon || 'lock', 40, o.icon || '🔒')}</div>
         <h3 style="color:var(--text);margin:0 0 10px;font-size:18px">${o.title}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 24px;line-height:1.7;max-width:420px;margin-left:auto;margin-right:auto">
           ${o.message}
         </p>
-        <button class="sub-btn-primary" onclick="SubsystemApp._navigate('pos')">🛒 ${t('Point of Sale')}</button>
+        <button class="sub-btn-primary" onclick="SubsystemApp._navigate('pos')"><span aria-hidden="true">${this._icon('shopping-cart', 16, '🛒')}</span> ${t('Point of Sale')}</button>
       </div>`;
   },
 
@@ -8220,10 +8253,25 @@ const RetailSystem = {
     return `<span class="num">${this._bdi(text)}</span>`;
   },
 
+  // The Exceptions screen's state vocabulary and this one's are the SAME
+  // vocabulary -- checking / failed / empty / clean -- and icons.js's module
+  // comment names those Exceptions panels as the reason cloud-off and
+  // triangle-alert were added at all, "so three real, shipped states ... can
+  // be told apart by SHAPE, not just by colour or a raw emoji glyph". Stock
+  // Accuracy was simply not converted with them and kept rendering raw
+  // emoji, which is also what made _exqEmpty's comment ("the same
+  // circle-check-big treatment _stkaClean() gives a reconciled shop") false
+  // on the day it was written. Same guarded shape as _exqIcon: some
+  // harnesses load this file without icons.js, so a bare AuraIcons.render
+  // would throw ReferenceError instead of degrading.
+  _stkaIcon(name, fallback) {
+    return window.AuraIcons ? AuraIcons.render(name, 34) : (fallback || '');
+  },
+
   _stkaChecking() {
     return `
       <div class="sub-chart-card" data-sa-state="checking" style="text-align:center;padding:48px 32px">
-        <div style="font-size:34px;margin-bottom:12px" aria-hidden="true">⏳</div>
+        <div style="margin-bottom:12px" aria-hidden="true">${this._stkaIcon('timer', '⏳')}</div>
         <h3 style="color:var(--text);margin:0 0 8px;font-size:17px">${t('Comparing every stock figure against the ledger…')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0;line-height:1.7">${t('Nothing has been compared yet, so this screen has no result to show.')}</p>
       </div>`;
@@ -8233,7 +8281,7 @@ const RetailSystem = {
     const s = this._stockAccuracy || {};
     return `
       <div class="sub-chart-card" data-sa-state="failed" style="text-align:center;padding:48px 32px;border:1px solid var(--state-danger-border)">
-        <div style="font-size:34px;margin-bottom:12px" aria-hidden="true">⚠️</div>
+        <div style="margin-bottom:12px" aria-hidden="true">${this._stkaIcon('triangle-alert', '⚠️')}</div>
         <h3 style="color:var(--state-danger-text);margin:0 0 8px;font-size:17px">${t('The stock accuracy check did not run.')}</h3>
         <p style="color:var(--text);font-size:13px;margin:0 0 8px;line-height:1.7">${this._esc(s.error || '')}</p>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 20px;line-height:1.7;max-width:520px;margin-left:auto;margin-right:auto">${t('This is not the same as finding no problems. Nothing was compared, so nothing is known.')}</p>
@@ -8247,7 +8295,7 @@ const RetailSystem = {
   _stkaNothingToCheck() {
     return `
       <div class="sub-chart-card" data-sa-state="nothing" style="text-align:center;padding:48px 32px">
-        <div style="font-size:34px;margin-bottom:12px" aria-hidden="true">📭</div>
+        <div style="margin-bottom:12px" aria-hidden="true">${this._stkaIcon('inbox', '📭')}</div>
         <h3 style="color:var(--text);margin:0 0 8px;font-size:17px">${t('There is nothing to check yet.')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0;line-height:1.7;max-width:520px;margin-left:auto;margin-right:auto">${t('This company has no stock records, so the check compared nothing. That is not the same as being accurate.')}</p>
       </div>`;
@@ -8257,7 +8305,7 @@ const RetailSystem = {
     const d = (this._stockAccuracy && this._stockAccuracy.data) || {};
     return `
       <div class="sub-chart-card" data-sa-state="clean" style="text-align:center;padding:48px 32px">
-        <div style="font-size:34px;margin-bottom:12px" aria-hidden="true">✅</div>
+        <div style="margin-bottom:12px" aria-hidden="true">${this._stkaIcon('circle-check-big', '✅')}</div>
         <h3 style="color:var(--text);margin:0 0 8px;font-size:17px">${t('Every stock figure agrees with the ledger.')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0;line-height:1.7">
           <span>${t('Product and branch pairs compared')}</span>
@@ -8269,7 +8317,7 @@ const RetailSystem = {
   _stkaUnknownState(state) {
     return `
       <div class="sub-chart-card" data-sa-state="unknown" style="text-align:center;padding:48px 32px;border:1px solid var(--state-danger-border)">
-        <div style="font-size:34px;margin-bottom:12px" aria-hidden="true">⚠️</div>
+        <div style="margin-bottom:12px" aria-hidden="true">${this._stkaIcon('triangle-alert', '⚠️')}</div>
         <h3 style="color:var(--state-danger-text);margin:0 0 8px;font-size:17px">${t('This screen lost track of what it was showing.')}</h3>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 20px;line-height:1.7">
           <span>${t('Unrecognised state')}</span>
@@ -8445,7 +8493,7 @@ const RetailSystem = {
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 10px;line-height:1.7;max-width:760px">${t('The repair also refuses any balance the ledger has no history for at all, because the ledger saying nothing is not the ledger saying zero. Whatever it refuses is listed when it finishes.')}</p>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 18px;line-height:1.7;max-width:760px">${t('Each rewrite is written to the audit log with the figure it replaced and the figure it wrote.')}</p>
         <button class="ret-btn ret-btn-ghost" onclick="RetailSystem._cancelRepairStockAccuracy()">${t('Cancel')}</button>
-        <button class="ret-btn ret-btn-primary" style="margin-left:8px" id="stka-confirm-btn"
+        <button class="ret-btn ret-btn-primary" style="margin-inline-start:8px" id="stka-confirm-btn"
                 onclick="RetailSystem._repairStockAccuracy()">${t('Rewrite the balances')}</button>
       </div>`;
   },
@@ -8471,7 +8519,7 @@ const RetailSystem = {
       .join('');
     return `
       <div class="sub-chart-card" data-sa-state="repaired" style="padding:40px 32px">
-        <div style="font-size:34px;margin-bottom:12px" aria-hidden="true">🧾</div>
+        <div style="margin-bottom:12px" aria-hidden="true">${this._stkaIcon('receipt', '🧾')}</div>
         <h3 style="color:var(--text);margin:0 0 16px;font-size:17px">${t('The repair finished.')}</h3>
         <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;max-width:760px">
           ${this._stkaTally(t('Cached balances rewritten'), r.repaired_count)}
@@ -8491,7 +8539,7 @@ const RetailSystem = {
     const s = this._stockAccuracy || {};
     return `
       <div class="sub-chart-card" data-sa-state="repair-failed" style="text-align:center;padding:48px 32px;border:1px solid var(--state-danger-border)">
-        <div style="font-size:34px;margin-bottom:12px" aria-hidden="true">⚠️</div>
+        <div style="margin-bottom:12px" aria-hidden="true">${this._stkaIcon('triangle-alert', '⚠️')}</div>
         <h3 style="color:var(--state-danger-text);margin:0 0 8px;font-size:17px">${t('The repair did not run.')}</h3>
         <p style="color:var(--text);font-size:13px;margin:0 0 8px;line-height:1.7">${this._esc(s.error || '')}</p>
         <p style="color:var(--text-muted);font-size:13px;margin:0 0 20px;line-height:1.7;max-width:520px;margin-left:auto;margin-right:auto">${t('No cached balance was changed. The figures are exactly as the check last found them.')}</p>
@@ -8933,7 +8981,7 @@ const RetailSystem = {
         <td style="color:var(--text-muted)">${b.modified_at ? this._bdi(new Date(b.modified_at * 1000).toLocaleString()) : '—'}</td>
         <td style="white-space:nowrap">
           <button class="ret-btn ret-btn-ghost ret-btn-sm" onclick="RetailSystem._downloadUrl('/api/backup/download/${encodeURIComponent(b.filename)}')">${t('Download')}</button>
-          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-left:6px" onclick="RetailSystem._openRestoreConfirm('${this._esc(b.filename).replace(/'/g,"\\'")}')">${t('Restore')}</button>
+          <button class="ret-btn ret-btn-danger ret-btn-sm" style="margin-inline-start:6px" onclick="RetailSystem._openRestoreConfirm('${this._esc(b.filename).replace(/'/g,"\\'")}')">${t('Restore')}</button>
         </td>
       </tr>`).join('');
     } catch (e) { console.error(e); }
@@ -9096,7 +9144,7 @@ const RetailSystem = {
                  shopkeeper tabs to when testing a scanner. Only the LAYOUT
                  stays inline; the paint, the focus ring and both touch axes
                  come from .ret-input. -->
-            <input id="sc-test-value" class="ret-input" readonly placeholder="Captured value will appear here…"
+            <input id="sc-test-value" class="ret-input" readonly data-i18n-ph="Captured value will appear here…" placeholder="${t('Captured value will appear here…')}"
               style="flex:1;font-family:monospace" />
             <button class="ret-btn ret-btn-primary" id="sc-test-btn" onclick="RetailSystem._armTestScan()">Start Test</button>
           </div>
@@ -9141,8 +9189,8 @@ const RetailSystem = {
           </div>
 
           <div class="ret-field-row">
-            <div class="ret-field"><label>Prefix (stripped)</label><input id="sc-prefix" value="${cfg.prefix || ''}" placeholder="None" /></div>
-            <div class="ret-field"><label>Suffix (stripped)</label><input id="sc-suffix" value="${cfg.suffix || ''}" placeholder="None" /></div>
+            <div class="ret-field"><label>Prefix (stripped)</label><input id="sc-prefix" value="${cfg.prefix || ''}" data-i18n-ph="None" placeholder="${t('None')}" /></div>
+            <div class="ret-field"><label>Suffix (stripped)</label><input id="sc-suffix" value="${cfg.suffix || ''}" data-i18n-ph="None" placeholder="${t('None')}" /></div>
           </div>
 
           <div class="ret-field">

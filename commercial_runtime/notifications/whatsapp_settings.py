@@ -44,20 +44,32 @@ DEFAULTS = {
     # sent. Defaults match the exact wording handed to the business owner at
     # feature-launch time; kept here only as the starting reference text, not
     # re-synced from anywhere.
+    #
+    # NO CURRENCY LITERAL BELONGS IN THESE BODIES. Every money placeholder
+    # arrives already formatted with the company's own currency mark by
+    # core/retail/money_format.format_money (whatsapp_hook.py:136-138,
+    # 179-181, since 2026-09-03), so {{3}} substitutes as 'JD 12.345', not
+    # '12.345'. These bodies used to append a literal ' JOD' after each
+    # money placeholder, which -- as SUGGESTED WORDING an owner copies into
+    # Meta Business Manager -- makes them submit a template that renders
+    # 'JD 12.345 JOD' for a Jordanian shop and '$12.35 JOD' for any other.
+    # Nothing renders that at runtime (the bodies are not a code path; see
+    # the paragraph above), but the owner ships the mistake to Meta and only
+    # finds out when a customer-facing message goes out wrong.
     'daily_sales_template_body': (
-        'Aura Retail daily summary for {{1}} — {{2}}. Revenue: {{3}} JOD across {{4}} '
-        'transactions (avg ticket {{5}} JOD). Gross profit: {{6}} JOD.'
+        'Aura Retail daily summary for {{1}} — {{2}}. Revenue: {{3}} across {{4}} '
+        'transactions (avg ticket {{5}}). Gross profit: {{6}}.'
     ),
     'shift_close_template_body': (
-        'Shift closed at {{1}} on {{2}}. Expected cash: {{3}} JOD. Counted: {{4}} JOD. '
-        'Variance: {{5}} JOD.'
+        'Shift closed at {{1}} on {{2}}. Expected cash: {{3}}. Counted: {{4}}. '
+        'Variance: {{5}}.'
     ),
     'low_stock_template_body': (
         'Low stock alert: {{1}} is down to {{2}} units (reorder level {{3}}) at {{4}}. '
         "Review the reorder request in Aura Retail's Admin Center."
     ),
     'ar_overdue_template_body': (
-        'Receivables alert: {{1}} JOD is overdue from {{2}} customers, including {{3}} JOD '
+        'Receivables alert: {{1}} is overdue from {{2}} customers, including {{3}} '
         'outstanding more than 90 days.'
     ),
     'default_language_code': 'en_US',
