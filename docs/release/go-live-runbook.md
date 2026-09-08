@@ -163,6 +163,26 @@ Not a dev box. A machine that has never had Python, the repo, or an app-data
 directory. Half of what this catches is "it only worked because the dev machine
 already had X".
 
+**Steps 1 and 2 are now closed. Steps 3 to 10 are not.** Recorded here on
+2026-09-08 so nobody re-does the easy half or assumes the hard half is done.
+
+What was actually measured: the installer was built from a `git archive HEAD`
+snapshot rather than the working tree, installed silently to a fresh prefix
+(exit 0, 920 files, 93.3 MB), and the INSTALLED copy launched with every
+inherited `AURA_*` variable stripped and `AURA_APP_DATA` pointed at a directory
+that had never existed. It served `GET /api/health` and `GET /` -> 200, and
+`retail.db` migrated v0 -> v26 with `ensure_schema_version()` taking its
+integrity-checked backup first. Silent uninstall exit 0, program files gone,
+business data kept. The guard that keeps a scripted uninstall from deleting
+that data was mutation-proved: removed, the uninstall blocks on a hidden modal
+until killed at 180s; present, it exits 0 in 4.6s.
+
+What that does NOT establish: this removed the dev ENVIRONMENT from the
+picture, not the dev MACHINE. It still ran on the build laptop, which has
+WebView2, VC++ runtimes and a display stack a customer's machine may not. So
+the sentence above — "not a dev box" — is still owed, and steps 3 to 10 have
+never been run anywhere. Expect step 4 to be the first thing that breaks.
+
 1. **Install** from the installer. Not from source.
 2. **Launch.** It should open its own window (pywebview, falling back to
    Edge/Chrome `--app`, then the default browser).
